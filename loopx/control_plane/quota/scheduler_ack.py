@@ -355,6 +355,9 @@ def record_quota_scheduler_ack_for_decision(
             execute=execute,
             generated_at=generated_at or now_local_iso(),
             applied_rrule=applied_rrule,
+            observed_host_rrule=(stateful_backoff.get("host_observation") or {}).get(
+                "current_rrule"
+            ),
             host_match_observed=host_match_observed,
         )
         return _run_native_followup(

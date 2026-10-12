@@ -106,8 +106,35 @@ def test_duplicate_targets_reuse_snapshot_and_preserve_ordinary_files(tmp_path):
     assert (restored / "runtime-root/database-link").is_symlink()
     assert "runtime-root/notes-wal" in names
     assert (restored / "runtime-root/not-a-database.sqlite").read_text() == "ordinary text"
-    assert (Path(payload["archive_path"]).stat().st_mode & 0o777) == 0o600
-    assert (Path(payload["manifest_path"]).stat().st_mode & 0o777) == 0o600
+    if sys.platform != "win32":
+        # Windows stat reports 0o666 for every writable file and has no owner-only mode.
+        assert (Path(payload["archive_path"]).stat().st_mode & 0o777) == 0o600
+        assert (Path(payload["manifest_path"]).stat().st_mode & 0o777) == 0o600
+
+
+def test_backup_does_not_walk_or_archive_junction_targets(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    state = project / ".loopx"
+    redirected = state / "redirect"
+    redirected.mkdir(parents=True)
+    outside_secret = redirected / "secret.txt"
+    outside_secret.write_text("outside backup scope")
+
+    def is_junction(path: Path) -> bool:
+        return path == redirected
+
+    monkeypatch.setattr(Path, "is_junction", is_junction, raising=False)
+
+    plan = backup_plan(tmp_path)
+    state_target = next(
+        item for item in plan["included"] if item["archive_path"] == "project/.loopx"
+    )
+    assert state_target["stats"]["files"] == 0
+    assert state_target["stats"]["symlinks"] == 1
+
+    payload = execute_state_backup_plan(plan)
+    with tarfile.open(payload["archive_path"]) as archive:
+        assert "project/.loopx/redirect/secret.txt" not in archive.getnames()
 
 
 def test_invalid_sqlite_fails_without_replacing_previous_backup(tmp_path):

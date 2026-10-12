@@ -18,7 +18,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 
 [中文版](STATUS.zh-CN.md) is the semantic mirror of this file.
 
-## Accepted (42)
+## Accepted (44)
 
 | RFC | Header status | Supersedes / closes | Ledger |
 | --- | --- | --- | --- |
@@ -29,10 +29,11 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Automatic Execution Admission (v0)](automatic-execution-admission-v0.md) | Accepted | none | — |
 | [RFC: Benchmark Study Upload and Dashboard Projection v0](benchmark-study-upload-dashboard-v0.md) | Accepted | none | — |
 | [RFC: Capable Agent Manager and Semantic Work Handoff (v0)](capable-manager-semantic-handoff-v0.md) | Accepted | [Personal Follow-through independent proposal](personal-follow-through-v0.md) | [2 entries](ledger/capable-manager-semantic-handoff-v0/) |
+| [RFC: Complete State Recovery and Controlled Reactivation (v0)](complete-state-recovery-v0.md) | Accepted | none | — |
 | [RFC: Composable State Machines and Recovery Verification (v0)](composable-state-machines-recovery-verification-v0.md) | Accepted | none | — |
 | [Explicit Todo continuation: Stage A](cross-session-memory-substrate-v0.md) | Accepted | none | — |
 | [RFC: LoopX Desktop Execution Frontends v0](desktop-execution-frontends-v0.md) | Accepted | none | — |
-| [RFC: External Evidence Research Capability v0](external-evidence-research-capability-v0.md) | Accepted | none | [2 entries](ledger/external-evidence-research-capability-v0/) |
+| [RFC: External Evidence Research Capability v0](external-evidence-research-capability-v0.md) | Accepted | none | [3 entries](ledger/external-evidence-research-capability-v0/) |
 | [RFC: Frontier Science Research Program v0](frontier-science-research-program-v0.md) | Accepted | none | — |
 | [RFC: Goal Artifact Lifecycle Projection (milestone / guard / next-transition) v0](goal-artifact-lifecycle-projection-v0.md) | Accepted | none | — |
 | [RFC: Goal Channel Collaboration v0](goal-channel-collaboration-v0.md) | Accepted | none | — |
@@ -41,6 +42,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [Goal Instance Identity and Orphan Recovery (v0)](goal-instance-identity-and-orphan-recovery-v0.md) | Accepted | none | — |
 | [RFC: Goal-scoped Capability Portfolio and Connector Lifecycle (v0)](goal-scoped-capability-portfolio-v0.md) | Accepted | none | — |
 | [RFC: Per-Goal Usage, Token, and Cost Surfacing v0](goal-usage-token-cost-v0.md) | Accepted | none | — |
+| [RFC: Goal Workspace Surface v0](goal-workspace-surface-v0.md) | Accepted | none | — |
 | [DSH / Pi: L1 Observation and Managed Runtime Selection](harness-selection-dsh-pi-v0.md) | Accepted | none | — |
 | [RFC: Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.md) | Accepted | none | — |
 | [RFC: Human Attention Wishlist v0](human-attention-wishlist-v0.md) | Accepted | none | — |

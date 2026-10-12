@@ -500,6 +500,12 @@ def test_public_cli_delivers_state_review_without_claiming_it_was_performed(caps
     ):
         assert obligation in budget_rule
     assert packet["pull_requests"]
+    instruction_rule = requirements["observable_semantics"]["decision_text_assessment"]
+    assert "decision_text_assessment" in requirements["observable_semantics"]["fields"]
+    assert instruction_rule["blocking_verdicts"] == ["unintended_drift", "not_yet_proven"]
+    for obligation in ("temporal ordering", "evidence provenance", "scope qualifiers",
+                       "Equal enums", "independent obligation", "limit increase"):
+        assert obligation in instruction_rule["rule"]
     reviewed_code = False
     for item in packet["pull_requests"]:
         if not item["review_action_kind"]:

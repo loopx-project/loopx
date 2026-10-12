@@ -60,6 +60,7 @@ def execution_payload(
         }} if not execute else {}),
         "result_kind": journal.get("result_kind"),
         "validation": journal.get("task_validation"),
+        **({"validation_stage": journal["validation_stage"]} if journal.get("validation_stage") else {}),
         "receipt": journal.get("receipt"),
         "scheduler": journal.get("scheduler"),
         **subagent.subagent_execution_payload_projection(journal),

@@ -123,7 +123,9 @@ def _commit_source(
     journal: dict[str, Any],
     admission: FirstPartyHostGoalAdmission,
 ) -> None:
-    with admission.source_journal_admission() as source_admission:
+    with admission.source_journal_admission(
+        runtime_root=path.parents[3],
+    ) as source_admission:
         assert source_admission is not None
         write_turn_journal_checkpoint(
             path,

@@ -97,3 +97,38 @@ def test_attached_session_uses_existing_host_not_managed_adapter(tmp_path, monke
     assert created and turn["status"] == "queued"
     assert not runtime.adapters
     runtime.close()
+
+
+def test_workspace_only_session_pins_private_home_and_resumes_exact_thread(tmp_path, monkeypatch):
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    runtime = controller(tmp_path, monkeypatch)
+    runtime.project_contexts = ChatProjectContexts([tmp_path], filesystem_scope="workspace_only")
+    ref = runtime.project_contexts.available()[0]["project_ref"]
+    session, _ = runtime.open_session(goal_id=None, agent_id="codex", work_dir=tmp_path,
+        objective="fixture", mode="new", project_ref=ref)
+    assert session["codex_home"] == str(tmp_path / "bound" / "loopx-projects" / f"{ref}.local" / ".codex")
+    runtime.adapters.clear()
+    calls = []
+    monkeypatch.setattr(runtime, "_start_adapter", lambda **kwargs: calls.append(kwargs) or Adapter())
+    resumed = runtime.resume_session(session_id=session["session_id"], work_dir=tmp_path, objective="fixture")
+    assert resumed["codex_home"] == session["codex_home"]
+    assert calls[0]["resume_thread_id"] == "fixture-thread"
+    assert resumed["upstream_thread_id"] == "fixture-thread"
+    runtime.close()
+
+
+@pytest.mark.parametrize("old_home", [None, "shared"])
+def test_workspace_only_old_shared_context_refuses_rebind_before_any_spawn(tmp_path, monkeypatch, old_home):
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    runtime = controller(tmp_path, monkeypatch)
+    context = ChatProjectContexts([tmp_path], filesystem_scope="workspace_only").available()[0]
+    session = runtime.store.create_session(goal_id=None, agent_id="codex", adapter_kind="codex_app_server",
+        upstream_thread_id="old-thread", upstream_mode="chat", channel_id=f"project.{context['project_ref']}",
+        project_context=context, codex_home=str(runtime.codex_home) if old_home else None)
+    before = runtime.store.load_session(session["session_id"])
+    monkeypatch.setattr(runtime, "_start_adapter", lambda **kwargs: pytest.fail("must not resume or replace thread"))
+    with pytest.raises(CodexChatAgentError) as error:
+        runtime.resume_session(session_id=session["session_id"], work_dir=tmp_path, objective="fixture")
+    assert error.value.error_code == "codex_home_mismatch"
+    assert runtime.store.load_session(session["session_id"]) == before
+    runtime.close()

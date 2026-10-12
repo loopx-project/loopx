@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from loopx.control_plane import effect_runtime
+from loopx.control_plane.runtime import node_probe
 from loopx.doctor import collect_doctor, render_doctor_markdown
 
 
@@ -187,7 +188,7 @@ def test_runtime_source_churn_has_a_stable_readiness_diagnostic(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     scans = _install_persistent_stat_read_churn(tmp_path, monkeypatch)
-    monkeypatch.setattr(effect_runtime.shutil, "which", lambda _name: "node")
+    monkeypatch.setattr(node_probe.shutil, "which", lambda _name: "node")
     monkeypatch.setattr(
         effect_runtime.subprocess,
         "run",
@@ -228,7 +229,7 @@ def test_runtime_request_source_churn_raises_a_stable_startup_diagnostic(
 def test_missing_node_blocks_the_typescript_control_plane_and_is_actionable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(effect_runtime.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(node_probe.shutil, "which", lambda _name: None)
 
     result = effect_runtime.collect_effect_runtime_readiness()
 
@@ -244,7 +245,7 @@ def test_missing_node_request_raises_startup_diagnostic(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path)
-    monkeypatch.setattr(effect_runtime.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(node_probe.shutil, "which", lambda _name: None)
 
     with pytest.raises(effect_runtime.EffectRuntimeStartupError) as error:
         effect_runtime.effect_runtime_result("runtime.ping", {})
@@ -258,7 +259,7 @@ def test_old_node_is_reported_without_running_semantic_probe(
     version: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(effect_runtime.shutil, "which", lambda _name: "node")
+    monkeypatch.setattr(node_probe.shutil, "which", lambda _name: "node")
     monkeypatch.setattr(
         effect_runtime.subprocess,
         "run",
@@ -277,7 +278,7 @@ def test_current_node_standard_probe_does_not_execute_rule(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path)
-    monkeypatch.setattr(effect_runtime.shutil, "which", lambda _name: "node")
+    monkeypatch.setattr(node_probe.shutil, "which", lambda _name: "node")
     monkeypatch.setattr(
         effect_runtime.subprocess,
         "run",
@@ -304,7 +305,7 @@ def test_deep_probe_executes_packaged_semantics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, dict[str, Any]]] = []
-    monkeypatch.setattr(effect_runtime.shutil, "which", lambda _name: "node")
+    monkeypatch.setattr(node_probe.shutil, "which", lambda _name: "node")
     monkeypatch.setattr(
         effect_runtime.subprocess,
         "run",
@@ -338,7 +339,7 @@ def test_deep_probe_executes_packaged_semantics(
 def test_deep_probe_failure_is_public_safe_and_actionable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(effect_runtime.shutil, "which", lambda _name: "node")
+    monkeypatch.setattr(node_probe.shutil, "which", lambda _name: "node")
     monkeypatch.setattr(
         effect_runtime.subprocess,
         "run",

@@ -191,8 +191,6 @@ def complete_todo_via_cli(
     journal_capabilities: list[str],
     write_state: Callable[[Path], None],
 ) -> tuple[dict[str, object], Path, Path]:
-    """Run the real todo complete dispatch and return payload plus paths."""
-
     project = tmp_path / "repo"
     project.mkdir()
     runtime = tmp_path / "runtime"
@@ -202,6 +200,16 @@ def complete_todo_via_cli(
     write_successor_run_history(runtime)
     write_turn_heartbeat_receipt(runtime)
     write_turn_journal(runtime, observed=journal_capabilities)
+
+    captured = run_todo_completion_via_cli(registry_path, runtime)
+    return captured, registry_path, runtime
+
+
+def run_todo_completion_via_cli(
+    registry_path: Path,
+    runtime: Path,
+) -> dict[str, object]:
+    """Run todo completion against an existing settlement fixture."""
 
     args = build_parser().parse_args(
         [
@@ -237,4 +245,4 @@ def complete_todo_via_cli(
     )
     assert exit_code == 0
     assert captured.get("ok") is True, captured
-    return captured, registry_path, runtime
+    return captured

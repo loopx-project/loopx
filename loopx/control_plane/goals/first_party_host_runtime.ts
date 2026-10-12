@@ -19,6 +19,7 @@ type RejectionCode =
   | "goal_not_registered"
   | "goal_authority_unavailable"
   | "goal_instance_id_missing"
+  | "goal_stopped"
   | "stale_goal_instance"
   | "legacy_host_state"
   | "host_state_goal_instance_mismatch"
@@ -32,7 +33,11 @@ export type FirstPartyHostRuntimeDecision =
   | Readonly<{ kind: "reject"; code: RejectionCode }>;
 
 type Authority =
-  | Readonly<{ kind: "present"; goalRef: ExactGoalRef }>
+  | Readonly<{
+    kind: "present";
+    goalRef: ExactGoalRef;
+    activationState: "active" | "stopped";
+  }>
   | Readonly<{ kind: "absent" }>
   | Readonly<{ kind: "unavailable" }>
   | Readonly<{ kind: "missing_instance" }>;
@@ -73,7 +78,15 @@ function authority(value: unknown): Authority {
     case "present": {
       const parsed = parseExactGoalRef(raw.goal_ref);
       if (parsed.kind === "parsed") {
-        return { kind: "present", goalRef: parsed.value };
+        const activationState = raw.activation_state ?? "active";
+        if (activationState !== "active" && activationState !== "stopped") {
+          return { kind: "unavailable" };
+        }
+        return {
+          kind: "present",
+          goalRef: parsed.value,
+          activationState,
+        };
       }
       return parsed.issue === "missing_goal_instance_id"
         ? { kind: "missing_instance" }
@@ -152,6 +165,9 @@ export function decideFirstPartyHostRuntime(
     case "present":
       if (!sameGoalRef(planned.value, current.goalRef)) {
         return { kind: "reject", code: "stale_goal_instance" };
+      }
+      if (current.activationState === "stopped") {
+        return { kind: "reject", code: "goal_stopped" };
       }
       break;
     default:

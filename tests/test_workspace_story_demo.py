@@ -8,6 +8,7 @@ import sys
 import pytest
 
 from demo.workspace.__main__ import prepare
+from loopx.control_plane.todos.handoff_mode import show_goal_handoff_mode
 from loopx.todos import list_goal_todos
 
 
@@ -47,6 +48,18 @@ def test_real_state_replay_is_local_and_repeatable(tmp_path, monkeypatch):
     manifest = prepare_from_cli()
     assert prepare_from_cli() == manifest
     assert len(manifest["goals"]) == 3
+    assert {
+        goal["id"]: show_goal_handoff_mode(
+            registry_path=root / "registry.json",
+            goal_id=goal["id"],
+            runtime_root_arg=str(root / "runtime"),
+        )["handoff_mode"]
+        for goal in manifest["goals"]
+    } == {
+        "community-day": "soft_claim",
+        "research-brief": "soft_claim",
+        "neighborhood-site": "soft_claim",
+    }
 
     def todos(goal_id):
         return list_goal_todos(

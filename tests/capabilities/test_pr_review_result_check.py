@@ -52,12 +52,20 @@ def _review(*, area="product_runtime"):
                 for dimension in ("long_horizon", "user_experience")
             }
         if key == "observable_semantics":
+            row["decision_text_assessment"] = {"verdict": "not_applicable",
+                "checked_scope": "Synthetic local formatter and its unchanged callers.",
+                "reason": "No agent-consumed decision text changes in this consistency fixture."}
             row["scope_coverage"] = {"decision": "not_applicable",
                 "reason": "Synthetic local formatter has no eligibility gate or covered subjects."}
         if key == "code_volume":
             row["compatibility_assessment"] = {
                 "decision": "not_applicable",
                 "reason": "Local formatting fixture; no protocol, adapter or persisted format change.",
+            }
+        if key == "change_proportionality":
+            row["architecture_assessment"] = {
+                "decision": "not_applicable",
+                "reason": "Inspected local formatter; no mechanism ownership, default or phase changes.",
             }
         if key == "semantic_alignment":
             row.update(
@@ -580,6 +588,68 @@ def test_semantic_alignment_cannot_hide_unknown_or_invalid_candidate(
 
     assert blocker in checked["approval_blockers"]
     assert not checked["approval_consistent"]
+
+
+def _decision_text_review():
+    packet, result = _review()
+    result["evidence"]["observable_semantics"]["decision_text_assessment"] = {
+        "verdict": "equivalent",
+        "checked_scope": "Recommended action before a long Todo lane, both quota and Turn projections.",
+        "reason": "A formatting-only edit preserves the independently specified ordering obligation.",
+        "consumer": "Agent deciding whether it may continue its current Todo.",
+        "clause_comparisons": [{
+            "baseline_clause": "Replan before continuing the lane.",
+            "head_clause": "Before continuing the lane, replan.",
+            "obligation_or_condition": "Replan precedes continuation.",
+            "assessment": "Same actor, prerequisite and continuation scope.",
+        }],
+        "counterfactuals": [{
+            "triggering_state": "Long lane still has a runnable Todo and an unresolved replan.",
+            "expected_obligation": "Replan first; a runnable Todo does not waive the prerequisite.",
+            "observed_result": "Synthetic fixture declares both caller readbacks carry that instruction.",
+            "evidence_ref": "observable_semantics.comparison_rows",
+            "status": "passed",
+        }],
+        "evidence_refs": ["observable_semantics", "validation_matrix"],
+    }
+    return packet, result
+
+
+@pytest.mark.parametrize("mutation", ["omitted", "fields_only", "empty_clauses", "empty_counterfactuals",
+                                      "unverified", "failed", "lost_ordering", "unproved_equivalence"])
+def test_green_validation_cannot_approve_missing_or_lost_instruction_semantics(mutation):
+    packet, result = _decision_text_review()
+    assert check_review_result(packet, result)["approval_consistent"]
+    observation = result["evidence"]["observable_semantics"]
+    row = observation["decision_text_assessment"]
+    if mutation == "omitted":
+        del observation["decision_text_assessment"]
+    elif mutation == "fields_only":
+        observation["decision_text_assessment"] = {
+            "verdict": "equivalent", "checked_scope": "Quota JSON",
+            "reason": "Fields, enums and size tests are unchanged/green.",
+        }
+    elif mutation.startswith("empty_"):
+        row["clause_comparisons" if mutation == "empty_clauses" else "counterfactuals"] = []
+    elif mutation in ("unverified", "failed"):
+        row["counterfactuals"][0]["status"] = mutation
+    else:
+        row["verdict"] = "unintended_drift" if mutation == "lost_ordering" else "not_yet_proven"
+        row["clause_comparisons"][0]["head_clause"] = "Replan; continue the lane."
+    checked = check_review_result(packet, result)
+    assert not checked["approval_consistent"]
+    assert any(x.startswith("observable_semantics:decision_text_assessment")
+               for x in checked["approval_blockers"])
+
+
+def test_semantic_change_needs_authorization_beyond_a_compression_target():
+    packet, result = _decision_text_review()
+    row = result["evidence"]["observable_semantics"]["decision_text_assessment"]
+    row["verdict"] = "intentional_change_validated"
+    assert not check_review_result(packet, result)["approval_consistent"]
+    row["authorization_basis"] = "Synthetic accepted caller contract explicitly changes ordering."
+    assert check_review_result(packet, result)["approval_consistent"]
+    assert not check_review_result(packet, result)["evidence_truth_verified"]
 
 
 def test_no_candidate_exits_after_scope_and_reason() -> None:

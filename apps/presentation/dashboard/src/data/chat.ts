@@ -504,10 +504,12 @@ export async function previewTypedAction(request: TypedActionPreviewRequest) {
   return typedActionEnvelopeSchema.parse(payload).proposal;
 }
 
-export async function loadTypedAction(proposalId: string) {
-  return typedActionEnvelopeSchema.parse(
-    await requestJson<unknown>(`/api/actions/${encodeURIComponent(proposalId)}`),
+export async function loadTypedAction(proposalId: string, signal?: AbortSignal) {
+  const proposal = typedActionEnvelopeSchema.parse(
+    await requestJson<unknown>(`/api/actions/${encodeURIComponent(proposalId)}`, { signal }),
   ).proposal;
+  if (proposal.proposal_id !== proposalId) throw new Error("Proposal readback identity mismatch");
+  return proposal;
 }
 
 const typedActionListEnvelopeSchema = z.object({
@@ -559,7 +561,7 @@ export async function transitionTypedAction(
   ).proposal;
 }
 
-async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
+export async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
     response = await fetch(chatApiUrl(url), {
@@ -1125,7 +1127,7 @@ export function fetchLoopXMode(sessionId: string) {
 export type DelegationInventory = {
   items: Array<{record_id: string; operation_id: string | null; agent_id?: string; todo_id?: string;
     status: string; worker_active?: boolean; recovery_required: boolean | null;
-    artifacts?: Array<{ref: string; sha256: string}>}>;
+    artifacts?: Array<{ref: string; sha256: string}>; current_use?: DelegationReadback["current_use"]}>;
   has_more: boolean; next_cursor: string | null; page_readback_complete: boolean;
 };
 export type {DelegationPreflight} from "./delegation-preflight.js";
@@ -1146,11 +1148,22 @@ export type DelegationReadback = {
   validation?: {source: "goal_acceptance" | "todo_validation"; basis_sha256: string;
     check_count: number; pinned_file_count: number; checked_at?: string;
     output_versions?: Array<{ref: string; sha256: string}>};
+  task_failure?: {stage: "task_postcondition"; status: "failed" | "inconclusive" | "unavailable";
+    recovery_kind: "repair_required" | "replan_required"; summary: string; validator_kind: string;
+    turn_key: string; resume_mode: "revalidate_cached_result"};
+  current_use?: {state: "current" | "unavailable"; checked_operation_count: number;
+    reason?: "input_unavailable" | "source_unavailable" | "source_version_changed" | "dependency_cycle" | "verification_budget_exhausted";
+    blocking_operation_id?: string; blocking_input_ref?: string; path?: string[]};
   dependencies?: DelegationDependency[]; adoptions?: DelegationAdoption[];
 };
 export function readLoopXTeamWork(sessionId: string, operationId: string) {
   return requestJson<DelegationReadback>(`/api/chat/sessions/${sessionId}/loopx`, {
     method: "POST", body: JSON.stringify({operation: "read", operation_id: operationId}),
+  });
+}
+export function revalidateLoopXTeamWork(sessionId: string, operationId: string) {
+  return requestJson<DelegationReadback>(`/api/chat/sessions/${sessionId}/loopx`, {
+    method: "POST", body: JSON.stringify({operation: "revalidate", operation_id: operationId}),
   });
 }
 export type ManagedGoalResultRow = {
@@ -1177,11 +1190,12 @@ export function readManagedGoalResult(goalId: string, todoId: string) {
 }
 export type DelegationState = "unavailable" | "accepted" | "rejected" | "recovery_required"
   | "stopped" | "executing" | "validating" | "dispatched" | "unknown";
-type DelegationStateFacts = {status: string; worker_active?: boolean; recovery_required: boolean | null};
+type DelegationStateFacts = {status: string; worker_active?: boolean; recovery_required: boolean | null;
+  current_use?: DelegationReadback["current_use"]};
 // Keep inventory and selected-operation labels consistent; unknown states stay unknown.
 export function delegationState(row: DelegationStateFacts): DelegationState {
   if (row.status === "unavailable") return "unavailable";
-  if (row.status === "accepted") return "accepted";
+  if (row.status === "accepted") return row.current_use?.state === "unavailable" ? "unavailable" : "accepted";
   if (row.status === "rejected") return "rejected";
   // A recorded stop precedes recovery: only the separate stop receipt proves
   // the original execution released its Host group, so the stored status alone
@@ -1648,6 +1662,20 @@ export const capabilityConfigurationEditorSchema = z.object({
   read_only_reason: z.string().optional(),
 });
 
+export const progressReviewObservationSchema = z.object({
+  mode: z.string(), read_state: z.enum(["observed", "missing", "unavailable"]), read_error: z.string().optional(),
+  receipt_count: z.number(), rejected_receipts: z.number(), stale_receipts: z.number(),
+  contract_revision: z.string().nullable(), authority: z.literal("none"),
+  latest: z.object({status: z.string(), event_id: z.string(), evidence_id: z.string(),
+    judgments: z.object({choice: z.object({relation: z.string().nullable(), increment: z.string().nullable()}).nullable(),
+      noul: z.object({serves_acceptance: z.number().nullable(), evidence_increment: z.number().nullable(), behavior_change: z.number().nullable()}).nullable()}),
+    criterion_current: z.boolean().optional(),
+    evidence_scope: z.object({coverage: z.literal("declared_file_net_change"), files: z.array(z.string()),
+      criterion_binding: z.object({origin: z.enum(["operator_study", "goal_acceptance"]), criteria_sha256: z.string(),
+        todo_id: z.string().optional(), contract_digest: z.string().optional(), contract_revision: z.number().optional(),
+        criterion_ids: z.array(z.string()).optional()})}).optional(),
+  }).nullable(),
+});
 export const capabilityConfigurationCatalogSchema = z.object({
   schema_version: z.literal("capability_configuration_catalog_v0"),
   capabilities: z.array(z.object({
@@ -1673,6 +1701,7 @@ export const capabilityConfigurationCatalogSchema = z.object({
       effective_revision: z.string(),
     }).optional(),
     documentation: z.record(z.string(), z.unknown()).optional(),
+    observation: progressReviewObservationSchema.optional(),
     context_contribution: z.object({
       supported_phases: z.array(z.enum(["before_plan", "before_delegate", "after_delegate_result"])),
       target: z.literal("coordinator"),
@@ -1888,7 +1917,39 @@ const automationCadenceSourceSchema = z.object({
   agent_id: z.string().nullable(),
   automation_id: z.string().nullable(),
   min_interval_minutes: z.number().int().nonnegative(),
+  revision: z.number().int().nonnegative(),
 });
+
+const automationCadenceEligibilitySchema = z.discriminatedUnion("state", [
+  z.object({
+    state: z.literal("unconfigured"),
+    reason: z.literal("unconfigured"),
+    eligible_now: z.null(),
+    next_eligible_at_ms: z.null(),
+  }),
+  z.object({
+    state: z.literal("eligible"),
+    reason: z.literal("owner_minimum_interval"),
+    eligible_now: z.literal(true),
+    next_eligible_at_ms: z.number().int().nonnegative().nullable(),
+  }),
+  z.object({
+    state: z.literal("waiting"),
+    reason: z.literal("minimum_interval_wait"),
+    eligible_now: z.literal(false),
+    next_eligible_at_ms: z.number().int().nonnegative(),
+  }),
+  z.object({
+    state: z.literal("unavailable"),
+    reason: z.enum([
+      "agent_scope_required",
+      "runtime_root_unavailable",
+      "owner_read_failed",
+    ]),
+    eligible_now: z.null(),
+    next_eligible_at_ms: z.null(),
+  }),
+]);
 
 export const automationCadenceSchema = z.object({
   ok: z.literal(true),
@@ -1898,6 +1959,7 @@ export const automationCadenceSchema = z.object({
   automation_id: z.string().nullable(),
   configuration_revision: z.number().int().nonnegative(),
   min_interval_minutes: z.number().int().nonnegative(),
+  eligibility: automationCadenceEligibilitySchema,
   enabled: z.boolean(),
   enforcement: z.string(),
   pre_model_admission: z.string(),
@@ -2179,7 +2241,7 @@ export type LarkPermissionGuidance = {
 
 const larkGroupChatsSchema = z.object({
   ok: z.literal(true),
-  chats: z.array(z.object({ chat_id: z.string(), chat_name: z.string() })),
+  chats: z.array(z.object({ chat_id: z.string(), chat_name: z.string(), selected: z.boolean().default(false) })),
 });
 
 export async function fetchLarkGroupChats(appRef: string, query?: string) {
@@ -2400,20 +2462,25 @@ const privateConversationSchema = z.object({
   project_ref: z.string(), project_title: z.string(), context_available: z.boolean(), executor_endpoint_id: z.string(),
   grant: z.enum(["workspace_read", "workspace_write", "portfolio_read"]), goal_count: z.number().int().default(0), listener_status: z.string(),
   goal_scope: z.enum(["all_registered", "selected"]).nullable().optional(),
+  audience: z.enum(["owner", "group"]).default("owner"), group_count: z.number().int().default(0),
   pending_count: z.number().int(), recovery_count: z.number().int(),
   agent_candidates: z.array(privateAgentSessionSchema).default([]), agent_targets: z.array(privateAgentTargetSchema).default([]),
 });
+const privateConversationStopRecoverySchema = z.object({binding_id: z.string(), project_ref: z.string(),
+  project_title: z.string(), pending_count: z.number().int().positive()});
+export type PrivateConversationStopRecovery = z.infer<typeof privateConversationStopRecoverySchema>;
 const privateConversationsSchema = z.object({ok: z.literal(true), revision: z.number().int(),
-  connections: z.array(privateConversationSchema)});
+  connections: z.array(privateConversationSchema), stop_recoveries: z.array(privateConversationStopRecoverySchema).default([])});
 export type PrivateConversation = z.infer<typeof privateConversationSchema>;
 export async function fetchPrivateConversations() {
   return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations"));
 }
-export async function connectPrivateConversation(appRef: string, projectRef: string, executor: string, contextKind: "project" | "steward" = "project", projectGrant: "workspace_read" | "workspace_write" = "workspace_write") {
+export async function connectPrivateConversation(appRef: string, projectRef: string, executor: string, contextKind: "project" | "steward" = "project", projectGrant: "workspace_read" | "workspace_write" = "workspace_write", groupIds?: string[]) {
   return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations", {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({app_ref: appRef, project_ref: projectRef, executor_endpoint_id: executor, context_kind: contextKind, project_grant: projectGrant,
-      ...(contextKind === "steward" ? {goal_scope: "all_registered"} : {})}),
+      ...(contextKind === "steward" ? {goal_scope: "all_registered"} : {}),
+      ...(groupIds !== undefined ? {audience: "group", group_ids: groupIds} : {})}),
   }));
 }
 export async function disconnectPrivateConversation(bindingId: string, revision: number) {
@@ -2426,4 +2493,25 @@ export async function changePrivateAgentTarget(bindingId: string, revision: numb
   return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations/agent-targets", {
     method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({binding_id: bindingId, revision, ...target}),
   }));
+}
+
+// Display validation only; finding status semantics remain owned by Explore.
+const exploreResultPageSchema = z.object({
+  ok: z.literal(true), goal_id: z.string(), total: z.number().int().nonnegative(),
+  next_cursor: z.string().nullable(),
+  items: z.array(z.object({
+    finding_id: z.string(), finding: z.string(), summary: z.string(), status: z.string(),
+    node_id: z.string(), question: z.string(), scope: z.string(), agent_id: z.string(),
+    evidence_refs: z.array(z.string()), last_updated_at: z.string(),
+    linked_todos: z.array(z.object({
+      todo_id: z.string(), text: z.string(), status: z.string(), claimed_by: z.string(),
+    })),
+  })),
+});
+export type ExploreResultPage = z.infer<typeof exploreResultPageSchema>;
+export async function fetchExploreResults(goalId: string, cursor?: string) {
+  const query = new URLSearchParams({goal_id: goalId, ...(cursor ? {cursor} : {})});
+  const page = exploreResultPageSchema.parse(await requestJson<unknown>(`/api/chat/explore-results?${query}`));
+  if (page.goal_id !== goalId) throw new Error("Explore result Goal mismatch");
+  return page;
 }

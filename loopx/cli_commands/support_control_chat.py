@@ -74,6 +74,12 @@ def register_chat_and_dashboard_commands(
         help="Ordinary project Chat workspace access. Defaults to workspace_write; workspace_read prevents App write grants.",
     )
     chat_parser.add_argument(
+        "--project-filesystem-scope",
+        choices=("host_default", "workspace_only"),
+        default="host_default",
+        help="Restrict project Codex filesystem tools to the workspace with minimal system reads; workspace_only also disables tool network access. Does not isolate host-loaded skills or context.",
+    )
+    chat_parser.add_argument(
         "--global-registry",
         action="store_true",
         help="Use the shared global registry even when the command runs in a project directory.",

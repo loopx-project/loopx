@@ -13,6 +13,7 @@ import pytest
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from loopx.control_plane.collaboration import delegation_validation
 from loopx.control_plane.turn_driver import build_loopx_turn_plan
 from loopx.control_plane.turn_driver.executor import (
     LOOPX_TURN_JOURNAL_SCHEMA_VERSION,
@@ -876,7 +877,7 @@ def test_exact_validated_turn_can_reopen_a_false_terminal_observation(
     }))
 
     binding = runner.binding("analysis", require_active=True)
-    assert runner._recover_validated_settlement(path, row, binding) is True
+    assert delegation_validation.recover_validated_settlement(runner, path, row, binding) is True
     recovered = json.loads(path.read_text())
     assert recovered["status"] == "turn_returned"
     assert recovered["turn_key"] == turn_key

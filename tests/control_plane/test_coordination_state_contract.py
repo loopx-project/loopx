@@ -146,9 +146,7 @@ def test_domain_projection_split_keeps_archival_as_a_task_fact() -> None:
     from loopx.control_plane.coordination.local_authority import (
         canonical_todo_summary_fields,
     )
-    from loopx.control_plane.todos.todo_summary import (
-        todo_item_is_succession_tracked_completion,
-    )
+    from loopx.control_plane.todos.succession_warning import project_succession
 
     assert "archive_state" in TODO_DOMAIN_RECORD_FIELDS
     assert set(TODO_PROJECTION_METADATA_FIELDS) == {"source_section", "index"}
@@ -160,8 +158,8 @@ def test_domain_projection_split_keeps_archival_as_a_task_fact() -> None:
         "archive_state": "active", "task_class": "advancement_task",
         "claimed_by": "agent-a",
     }
-    assert todo_item_is_succession_tracked_completion(todo)
-    assert not todo_item_is_succession_tracked_completion({**todo, "archive_state": "archive"})
+    assert project_succession([todo])[0]["tracked_completion"] is True
+    assert project_succession([{**todo, "archive_state": "archive"}])[0]["tracked_completion"] is False
     summary = canonical_todo_summary_fields([todo])
     assert summary["agent_todos"]["source_section"] == "Agent Todo"
     assert "source_section" not in todo and "index" not in todo

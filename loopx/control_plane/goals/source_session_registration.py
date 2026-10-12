@@ -18,7 +18,7 @@ from ..projects.registry_codec import (
     source_session_registry_transaction,
 )
 from ..runtime.time import now_local_iso
-from ..todos.active_state_editing import atomic_write_state_text
+from ..runtime.document_io import atomic_write_state_text
 from .source_session_registry_state import (
     GOAL_INSTANCE_ID,
     alias_digest,

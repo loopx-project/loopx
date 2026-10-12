@@ -4,6 +4,7 @@ from typing import Any
 
 from ..todos.contract import normalize_todo_id
 from ..todos.handoff_note import compact_todo_continuation_hint
+from ..todos.summary_item import todo_text_content_revision
 from ..work_items.primary_action import protocol_action_text
 
 SELECTED_TODO_COMPACT_FIELDS = (
@@ -29,6 +30,7 @@ SELECTED_TODO_COMPACT_FIELDS = (
     "target_key",
     "next_due_at",
     "expires_at",
+    "content_revision",
 )
 SELECTED_TODO_AGENT_FIELDS = (
     "agent_id",
@@ -129,9 +131,21 @@ def _compact_selected_todo(
         selected["todo_id"] = todo_id
     if text:
         selected["text"] = text
+        selected["_context_text_display_only"] = True
+    snapshot = item.get("_context_text_sha256")
+    if isinstance(snapshot, str):
+        selected["_context_text_sha256"] = snapshot
     for key in SELECTED_TODO_AGENT_FIELDS:
         if item.get(key) is not None:
             selected[key] = item.get(key)
+    content_revision = item.get("content_revision")
+    if not content_revision:
+        # Deferred-resume candidates can reach this boundary without the
+        # summary metadata. Hash their source text before the display copy is
+        # compacted so the exact read can validate the selected content.
+        content_revision = todo_text_content_revision(item.get("text"))
+    if content_revision:
+        selected["content_revision"] = content_revision
     if (
         item.get("task_class") == "advancement_task"
         and item.get("status") == "open"

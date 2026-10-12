@@ -1,10 +1,10 @@
 """Per-value meaning ratchet for the ``cross_runtime`` vocabulary tier.
 
 ``tests/architecture/test_semantic_vocabulary_drift.py`` already requires a
-``value_notes`` entry for every value of the six kernel vocabularies (#4625 for
-the four canonical Turn vocabularies, #4626 for ``effective_action`` and
-``lease_action``). That ratchet stops at the tier boundary, so the 20
-``cross_runtime`` vocabularies could grow a value that no diff ever explains.
+``value_notes`` entry for every value of the live kernel vocabularies (#4625 for
+the four canonical Turn vocabularies, #4626 for ``effective_action``).
+M4 retired the unused Python ``lease_action`` input and registered the live
+native lifecycle request owner; its values carry the same note obligation here.
 
 This file is the same obligation for the other tier, kept separate on purpose:
 the kernel ratchet sits at the end of a file that several open branches already

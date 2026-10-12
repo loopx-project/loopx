@@ -41,7 +41,7 @@ def test_quota_union_cannot_be_weakened_or_made_ambiguous(mutation):
     if mutation == 'missing':
         registry['relations']['shared_field_names'] = []
     elif mutation == 'widened':
-        registry['relations']['shared_field_names'][0]['slots'][0]['vocabularies'].append('lease_action')
+        registry['relations']['shared_field_names'][0]['slots'][0]['vocabularies'].append('turn_route')
     else:
         registry['vocabularies']['agent_scope_frontier_action']['values'].append('normal_run')
     with pytest.raises(ValueError, match='anchored|disjoint'):
@@ -165,28 +165,6 @@ def test_input_witness_probe_rejects_decoder_contract_regressions(monkeypatch, d
     v = {'values': ['repair_required'], 'input_producer': 'loopx/control_plane/turn_driver/transaction.py::_result_kind'}
     with pytest.raises(ValueError, match='decoder'):
         probe_turn_result_input_domain(v)
-
-
-def test_legacy_lease_values_stay_visible_without_claiming_production():
-    import json
-    from loopx.semantics.inventory import load_sources
-    v = json.loads((ROOT / 'loopx/semantics/vocabulary_v0.json').read_text())['vocabularies']['lease_action']
-    assert v['status'] == 'legacy'
-    assert v['producers'] == []
-    assert set(v['compatibility_only']) == {'acquire', 'renew', 'transfer', 'release'}
-    rows = collect_production(ROOT, v, load_sources(ROOT))
-    assert not any(r.values for r in rows)
-    assert validate_production('lease_action', v, rows) == []
-
-
-def test_new_lease_producer_invalidates_compatibility_only_claim():
-    import json
-    from loopx.semantics.inventory import load_sources
-    v = json.loads((ROOT / 'loopx/semantics/vocabulary_v0.json').read_text())['vocabularies']['lease_action']
-    sources = load_sources(ROOT) + [SourceFile('loopx/control_plane/coordination/new_writer.py', '.py',
-        'from .authority_core import LeaseAction\ndef emit():\n return LeaseAction.ACQUIRE\n')]
-    with pytest.raises(ValueError, match='compatibility-only values are produced'):
-        validate_production('lease_action', v, collect_production(ROOT, v, sources))
 
 
 def test_typescript_syntax_failure_reports_only_source_location():

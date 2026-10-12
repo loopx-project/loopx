@@ -1,14 +1,26 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 
 import {
   goalHeartbeatReceiptsFromSnapshot,
   readGoalRolloutEventSnapshot,
   strictGoalRolloutEvents,
 } from "../../loopx/control_plane/rollout_receipt_log.ts";
+import {
+  acquireFileMutationLock,
+  releaseFileMutationLock,
+} from "../../loopx/control_plane/effect_runtime_io.ts";
 import {
   evaluateSchedulerHeartbeatFollowup,
   SCHEDULER_HEARTBEAT_FOLLOWUP_REQUEST_SCHEMA,
@@ -89,6 +101,7 @@ function request(
       progression_minutes: [15, 30, 60],
       expected_rrule: "FREQ=MINUTELY;INTERVAL=15",
       applied_rrule: "FREQ=MINUTELY;INTERVAL=15",
+      observed_host_rrule: "FREQ=MINUTELY;INTERVAL=15",
       cadence_class: "active_work",
       generated_at: "2026-08-27T06:30:00Z",
       execute: true,
@@ -180,14 +193,63 @@ test("missing or superseded heartbeat receipt rejects before scheduler mutation"
   await assert.rejects(readFile(path, "utf8"), { code: "ENOENT" });
 
   await appendReceipt(runtimeRoot, "turn-followup-1");
+  const seeded = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot));
+  assert.equal(seeded.ok, true);
+  const legacyPath = join(
+    runtimeRoot,
+    "goals",
+    scope.goal_id,
+    "scheduler-state",
+    scope.agent_id,
+    scope.surface,
+    "8a41f410c67e7c0e.json",
+  );
+  await mkdir(dirname(legacyPath), { recursive: true });
+  await rename(path, legacyPath);
+  const held = await acquireFileMutationLock(path);
+  let released = false;
+  t.after(async () => {
+    if (!released) await releaseFileMutationLock(held.targetPath, held.token);
+  });
+  const inFlight = evaluateSchedulerHeartbeatFollowup(request(runtimeRoot));
+  await delay(250);
   await appendReceipt(runtimeRoot, "turn-followup-2");
-  const stale = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot));
+  released = await releaseFileMutationLock(held.targetPath, held.token);
+  const stale = await inFlight;
   assert.equal(stale.ok, false);
   assert.equal(stale.status, "heartbeat_receipt_stale");
   assert.equal(
     stale.error_code,
     "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE",
   );
+  await assert.rejects(readFile(path, "utf8"), { code: "ENOENT" });
+  assert.equal(JSON.parse(await readFile(legacyPath, "utf8")).goal_id, scope.goal_id);
+});
+
+test("receipt-bound ACK rechecks freshness after waiting for the scheduler lock", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await appendReceipt(runtimeRoot, "turn-followup-1");
+  const path = schedulerStatePath(runtimeRoot, {
+    goalId: scope.goal_id,
+    agentId: scope.agent_id,
+    surface: scope.surface,
+    stateKey: scope.state_key,
+  });
+  const held = await acquireFileMutationLock(path);
+  let released = false;
+  t.after(async () => {
+    if (!released) await releaseFileMutationLock(held.targetPath, held.token);
+  });
+
+  const inFlight = evaluateSchedulerHeartbeatFollowup(request(runtimeRoot));
+  await delay(250);
+  await appendReceipt(runtimeRoot, "turn-followup-2");
+  released = await releaseFileMutationLock(held.targetPath, held.token);
+
+  const stale = await inFlight;
+  assert.equal(stale.ok, false);
+  assert.equal(stale.status, "heartbeat_receipt_stale");
+  assert.equal(stale.scheduler_state_mutated, false);
   await assert.rejects(readFile(path, "utf8"), { code: "ENOENT" });
 });
 
@@ -261,6 +323,42 @@ test("another Agent receipt cannot supersede ACK or host-failure writeback", asy
   });
   assert.equal(failed.ok, true);
   assert.equal(failed.failure_count, 1);
+});
+
+test("a successful identity-less quota guard supersedes an older host receipt", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await appendReceipt(runtimeRoot, "turn-followup-1");
+  await writeFile(receiptPath(runtimeRoot), `${JSON.stringify({
+    schema_version: "loopx_rollout_event_v0",
+    event_kind: "quota_should_run",
+    goal_id: scope.goal_id,
+    agent_id: scope.agent_id,
+    status: "normal_run",
+    details: { ok: true, should_run: true },
+  })}\n`, { flag: "a" });
+
+  const stale = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot));
+  assert.equal(stale.error_code, "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE");
+  assert.equal(stale.scheduler_state_mutated, false);
+  assert.equal(stale.write_performed, false);
+  assert.equal(stale.appended, false);
+});
+
+test("an identity-less quota guard from another Agent does not supersede a receipt", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await appendReceipt(runtimeRoot, "turn-followup-1");
+  await writeFile(receiptPath(runtimeRoot), `${JSON.stringify({
+    schema_version: "loopx_rollout_event_v0",
+    event_kind: "quota_should_run",
+    goal_id: scope.goal_id,
+    agent_id: "other-agent",
+    status: "normal_run",
+    details: { ok: true, should_run: true },
+  })}\n`, { flag: "a" });
+
+  const acknowledged = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot));
+  assert.equal(acknowledged.ok, true);
+  assert.equal((acknowledged.scheduler_commit as Record<string, unknown>).status, "written");
 });
 
 test("a quota audit cannot manufacture a missing heartbeat receipt", async (t) => {

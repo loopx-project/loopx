@@ -79,7 +79,7 @@ def test_normal_envelope_retires_redundant_cold_path_inventory():
     assert envelope["compaction"]["envelope_utf8_bytes"] == len(_wire(envelope))
 
 
-def test_context_high_water_keeps_legal_scope_and_recovers_headroom():
+def test_context_high_water_warns_without_losing_scope_reads_or_legal_route():
     source = _full_decision()
     scopes = [f"public/{i:02}/" + "x" * 160 for i in range(16)]
     source["goal_boundary"]["write_scope"] = scopes
@@ -89,7 +89,21 @@ def test_context_high_water_keeps_legal_scope_and_recovers_headroom():
     envelope = build_turn_envelope(source)
     assert envelope["agent_context"]["detail_ref"]
     assert envelope["boundary"]["write_scope"] == scopes
-    assert len(_wire(envelope)) <= 8192
+    metric = envelope["compaction"]
+    assert metric["within_budget"] is False
+    assert metric["envelope_utf8_bytes"] == len(_wire(envelope))
+    assert metric["warning"]["code"] == "turn_envelope_budget_exceeded"
+    assert metric["warning"]["excess_bytes"] == len(_wire(envelope)) - 8192
+    assert envelope["required_reads"] == baseline["required_reads"]
+    assert quota_action_signature_document(
+        source
+    ) == turn_envelope_action_signature_document(envelope)
+    plan = build_loopx_turn_plan(
+        envelope, host="codex-cli", execution_mode="interactive-visible"
+    )
+    assert plan["ok"] is True
+    assert plan["route"]["would_invoke_host"] is True
+    assert "WARNING" in render_loopx_turn_plan_markdown(plan)
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -170,7 +184,10 @@ def test_installed_skill_defers_delegation_policy_to_enabled_provider(tmp_path):
     }
 
 
-def test_interaction_and_native_envelope_preserve_all_required_commands():
+@pytest.mark.parametrize("existing_selected_read", [False, True])
+def test_interaction_and_native_envelope_keep_hooks_and_one_exact_todo_read(
+    existing_selected_read,
+):
     from loopx.control_plane.work_items.interaction_contract import build_interaction_contract
 
     source = _full_decision()
@@ -178,9 +195,33 @@ def test_interaction_and_native_envelope_preserve_all_required_commands():
               "source": "turn_start_capability_hook", "reason": "Read before work",
               "command": "loopx --registry '/" + "workspace  dir/" * 45 + f"registry.json' inspect --item {i}"}
              for i in range(6)]
+    selected_command = (
+        "loopx --format json todo list --goal-id fixture-goal "
+        "--todo-id todo_fixture0001"
+    )
+    if existing_selected_read:
+        reads.append({"source": "selected_todo", "command": selected_command,
+                      "reason": "Read full current work requirements"})
+    original_reads = deepcopy(reads)
+    expected_commands = [read["command"] for read in reads]
+    if not existing_selected_read:
+        expected_commands.append(selected_command)
     source["required_reads"] = reads
     source["interaction_contract"] = build_interaction_contract(source)
     envelope = build_turn_envelope(source)
-    assert [x["command"] for x in source["interaction_contract"]["agent_channel"]["required_reads"]] == [x["command"] for x in reads]
-    assert [x["command"] for x in envelope["required_reads"]] == [x["command"] for x in reads]
+    assert reads == original_reads
+    assert [read["command"] for read in source["interaction_contract"]["agent_channel"]["required_reads"]] == expected_commands
+    assert [read["command"] for read in envelope["required_reads"]] == expected_commands
+    assert expected_commands.count(selected_command) == 1
     assert envelope["action_signature"]["matches"] is True
+    assert quota_action_signature_document(
+        source
+    ) == turn_envelope_action_signature_document(envelope)
+    tampered = deepcopy(envelope)
+    tampered["required_reads"] = [
+        read for read in tampered["required_reads"]
+        if read["command"] != selected_command
+    ]
+    assert quota_action_signature_document(
+        source
+    ) != turn_envelope_action_signature_document(tampered)

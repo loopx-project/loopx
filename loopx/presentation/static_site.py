@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import quote, urljoin, urlparse
 from urllib.request import urlopen
 
+from ..control_plane.content_digest import BARE_SHA256_PATTERN
 from .public_safety import (
     PUBLIC_BOUNDARY_PATTERNS,
     public_safe_boundary,
@@ -248,6 +249,95 @@ def _copy_declared_files(
         destination = target / relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source / relative_path, destination)
+
+
+def _validate_retained_revision_files(
+    revision_dir: Path,
+    value: object,
+) -> list[dict[str, object]]:
+    if not isinstance(value, list) or not value:
+        raise StaticSiteContractError(
+            "rollback revision does not contain a file manifest"
+        )
+    if revision_dir.parent.is_symlink() or revision_dir.is_symlink():
+        raise StaticSiteContractError(
+            "rollback revision must not use symlinked storage"
+        )
+
+    files: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            raise StaticSiteContractError(
+                f"rollback revision file entry {index} must be an object"
+            )
+        raw_path = item.get("path")
+        if not isinstance(raw_path, str):
+            raise StaticSiteContractError(
+                f"rollback revision file path must be a string at index {index}"
+            )
+        relative = Path(raw_path)
+        if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+            raise StaticSiteContractError(
+                f"revision file path must stay inside the retained revision: {raw_path!r}"
+            )
+        relative_path = relative.as_posix()
+        if (
+            relative_path.split("/", 1)[0] in _RESERVED_TOP_LEVEL
+            or relative_path in seen
+        ):
+            raise StaticSiteContractError(
+                f"revision file path is reserved or duplicated: {relative_path}"
+            )
+
+        expected_digest = item.get("sha256")
+        expected_size = item.get("size")
+        if (
+            not isinstance(expected_digest, str)
+            or not BARE_SHA256_PATTERN.fullmatch(expected_digest)
+            or (
+                not isinstance(expected_size, int)
+                or isinstance(expected_size, bool)
+                or expected_size < 0
+            )
+        ):
+            raise StaticSiteContractError(
+                f"rollback revision file metadata is invalid: {relative_path}"
+            )
+
+        source = revision_dir
+        for part in relative.parts:
+            source /= part
+            if source.is_symlink():
+                raise StaticSiteContractError(
+                    f"rollback revision file must not use symlinks: {relative_path}"
+                )
+        if not source.is_file():
+            raise StaticSiteContractError(
+                f"rollback revision file is missing: {relative_path}"
+            )
+        try:
+            content = source.read_bytes()
+        except OSError as exc:
+            raise StaticSiteContractError(
+                f"cannot read rollback revision file {relative_path}: {exc}"
+            ) from exc
+        if (
+            len(content) != expected_size
+            or hashlib.sha256(content).hexdigest() != expected_digest
+        ):
+            raise StaticSiteContractError(
+                f"rollback revision file integrity mismatch: {relative_path}"
+            )
+        seen.add(relative_path)
+        files.append(
+            {
+                "path": relative_path,
+                "sha256": expected_digest,
+                "size": expected_size,
+            }
+        )
+    return files
 
 
 def _append_state_event(state_dir: Path, payload: Mapping[str, object]) -> Path:
@@ -490,11 +580,32 @@ def rollback_static_site(
         raise StaticSiteContractError(
             f"rollback revision is missing or invalid: {target_revision}"
         )
-    files = metadata.get("files")
-    if not isinstance(files, list):
+    if (
+        metadata.get("site_id") != manifest.get("site_id")
+        or metadata.get("revision") != target_revision
+    ):
         raise StaticSiteContractError(
-            "rollback revision does not contain a file manifest"
+            f"rollback revision metadata binding is invalid: {target_revision}"
         )
+    files = _validate_retained_revision_files(target_dir, metadata.get("files"))
+    semantic_digest = str(metadata.get("semantic_digest") or "")
+    if semantic_digest != _semantic_digest(files):
+        raise StaticSiteContractError(
+            f"rollback revision semantic integrity mismatch: {target_revision}"
+        )
+    entry_path = _validate_entry_path(str(metadata.get("entry_path") or ""))
+    if entry_path not in {str(item["path"]) for item in files}:
+        raise StaticSiteContractError(
+            f"rollback revision entry is missing from the file manifest: {entry_path}"
+        )
+    validation_state = metadata.get("validation")
+    if not isinstance(validation_state, Mapping):
+        raise StaticSiteContractError("rollback revision validation receipt is missing")
+    validation = _validation_receipt(
+        desktop_visual_check=str(validation_state.get("desktop_visual_check") or ""),
+        mobile_visual_check=str(validation_state.get("mobile_visual_check") or ""),
+        link_check=str(validation_state.get("link_check") or ""),
+    )
 
     publisher_state = (
         manifest.get("publisher") if isinstance(manifest.get("publisher"), dict) else {}
@@ -506,8 +617,6 @@ def rollback_static_site(
         else None,
         revision=target_revision,
     )
-    semantic_digest = str(metadata.get("semantic_digest") or "")
-    entry_path = _validate_entry_path(str(metadata.get("entry_path") or ""))
     new_manifest = {
         **manifest,
         "semantic_digest": semantic_digest,
@@ -517,7 +626,7 @@ def rollback_static_site(
         "latest_entry_path": entry_path,
         "revision_entry_path": f"{REVISION_DIR}/{target_revision}/{entry_path}",
         "publisher": publisher,
-        "validation": metadata.get("validation"),
+        "validation": validation,
         "files": files,
     }
     deploy_receipt = _receipt(

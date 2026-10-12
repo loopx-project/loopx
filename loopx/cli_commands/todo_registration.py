@@ -4,11 +4,13 @@ import argparse
 from collections.abc import Callable
 
 from ..control_plane.todos.contract import TODO_CONTINUATION_POLICY_VALUES
-from ..todos import ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE
+from ..control_plane.todos.mutation_api import ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE
 from .todo_argument_validation import (
+    TODO_ACTION_FIELDS,
     register_todo_linkage_arguments,
     register_todo_successor_creation_arguments,
 )
+from .action_help import install_action_help
 
 
 def register_todo_command(
@@ -481,3 +483,6 @@ def register_todo_command(
             "into the Todo section markers."
         ),
     )
+    install_action_help(todo_parser, command_dest="todo_command",
+                        action_fields=TODO_ACTION_FIELDS,
+                        common_fields=frozenset({"goal_id", "subcommand_format"}))

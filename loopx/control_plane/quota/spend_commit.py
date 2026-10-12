@@ -5,7 +5,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from ...file_lock import exclusive_file_lock
+from ...file_lock import exclusive_cross_runtime_file_lock
+from ..coordination.shadow_management import (
+    runtime_artifact_lock_target,
+    shadow_maintenance_lock_target,
+)
 from ..effect_runtime import (
     EffectRuntimeConflict,
     EffectRuntimeRejected,
@@ -226,38 +230,60 @@ def record_quota_slot_spend_from_preview(
     ):
         raise ValueError("quota spend preview index basis must be a string or null")
     if execute:
-        index_path = runtime_root / "goals" / safe_goal_id / "runs" / "index.jsonl"
-        if registry_path is None and goal_ref is None:
-            with exclusive_file_lock(
-                index_path,
-                operation="quota_spend_commit",
-            ):
-                result = _quota_spend_commit_result(
-                    preview,
-                    source=source,
-                    generated_at=None,
-                    execute=True,
-                    runtime_root=runtime_root,
-                    expected_index_digest=expected_index_digest,
-                )
-        else:
-            with quota_accounting_admission(
+        resolved_runtime_root = runtime_root.resolve()
+        artifact_target = runtime_artifact_lock_target(
+            resolved_runtime_root,
+            safe_goal_id,
+        )
+        maintenance_target = shadow_maintenance_lock_target(
+            resolved_runtime_root,
+            safe_goal_id,
+        )
+
+        def commit(source_admission: Mapping[str, Any] | None) -> Mapping[str, Any]:
+            return _quota_spend_commit_result(
+                preview,
+                source=source,
+                generated_at=None,
+                execute=True,
                 runtime_root=runtime_root,
-                registry_path=registry_path,
-                goal_id=safe_goal_id,
+                expected_index_digest=expected_index_digest,
                 goal_ref=goal_ref,
-                operation="quota_spend_commit",
-            ) as source_admission:
-                result = _quota_spend_commit_result(
-                    preview,
-                    source=source,
-                    generated_at=None,
-                    execute=True,
+                source_admission=source_admission,
+            )
+
+        with exclusive_cross_runtime_file_lock(
+            artifact_target,
+            operation="quota_spend_runtime_artifact_guard",
+        ):
+            # Legacy commits have no source-lifetime guard, so maintenance must
+            # precede their index lock. Exact commits retain index -> source -> M.
+            if goal_ref is None:
+                with exclusive_cross_runtime_file_lock(
+                    maintenance_target,
+                    operation="quota_spend_runtime_artifact_commit",
+                ):
+                    with quota_accounting_admission(
+                        runtime_root=runtime_root,
+                        registry_path=registry_path,
+                        goal_id=safe_goal_id,
+                        goal_ref=None,
+                        operation="quota_spend_commit",
+                    ) as source_admission:
+                        result = commit(source_admission)
+            else:
+                with quota_accounting_admission(
                     runtime_root=runtime_root,
-                    expected_index_digest=expected_index_digest,
+                    registry_path=registry_path,
+                    goal_id=safe_goal_id,
                     goal_ref=goal_ref,
-                    source_admission=source_admission,
-                )
+                    operation="quota_spend_commit",
+                ) as source_admission:
+                    with exclusive_cross_runtime_file_lock(
+                        maintenance_target,
+                        operation="quota_spend_runtime_artifact_commit",
+                    ):
+                        result = commit(source_admission)
     else:
         result = _quota_spend_commit_result(
             preview,

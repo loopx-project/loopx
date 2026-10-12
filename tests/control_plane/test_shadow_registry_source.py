@@ -71,6 +71,38 @@ def bootstrap(runtime, goal, projection, snapshot):
     )
 
 
+@pytest.mark.parametrize("kind", ["unsupported_name", "file_symlink", "directory_symlink", "parent_symlink", "non_file"])
+def test_real_cli_rejects_unsafe_lease_source_before_bootstrap(tmp_path: Path, kind):
+    ws = cli_workspace(tmp_path / "workspace", bootstrap=False)
+    directory = ws.runtime / "goals" / ws.goal / "task-leases"
+    directory.mkdir(parents=True)
+    outside = tmp_path / "retained-source"
+    outside.mkdir()
+    original = json.dumps({"goal_id": ws.goal, "todo_id": "todo_retained", "status": "released", "version": 4, "lease_epoch": 2})
+    retained = outside / "todo_retained.json"
+    retained.write_text(original)
+    if kind == "unsupported_name":
+        (directory / "unexpected lease.json").write_text(original)
+    elif kind == "file_symlink":
+        (directory / retained.name).symlink_to(retained)
+    elif kind == "non_file":
+        (directory / retained.name).mkdir()
+    elif kind == "directory_symlink":
+        directory.rmdir()
+        directory.symlink_to(outside, target_is_directory=True)
+    else:
+        directory.rmdir()
+        directory.parent.rmdir()
+        directory.parent.symlink_to(outside, target_is_directory=True)
+    result = ws.cli("coordination-shadow", "bootstrap", "--execute", success=False)
+    assert result["ok"] is False, result
+    assert "source_lease_inventory_invalid" in result["error"]
+    assert not (ws.runtime / "authority-shadow" / "file-v0").exists()
+    assert not (ws.runtime / "authority-transition").exists()
+    assert retained.read_text() == original
+    assert list(outside.iterdir()) == [retained]
+
+
 @pytest.mark.parametrize("extension", [
     {}, {"future_extension": None}, {"future_extension": False},
     {"future_extension": {"missing_value": None, "flag": False}},
@@ -149,11 +181,14 @@ def test_terminal_lease_survives_public_cutover_and_original_recovery(tmp_path: 
     original = json.dumps(expected, indent=2).encode()
     lease.write_bytes(original)
     if provider == "sqlite":
-        subprocess.run([os.environ.get("LOOPX_CONTROL_PLANE_NODE", "node"),
+        selection = subprocess.run([os.environ.get("LOOPX_CONTROL_PLANE_NODE", "node"),
             "--no-warnings", "--experimental-strip-types", "--experimental-sqlite",
-            "loopx/control_plane/coordination/local_authority_provider.ts", "--runtime-root",
+            str((REPO / "loopx/control_plane/coordination/local_authority_provider.ts").resolve()), "--runtime-root",
             str(ws.runtime), "--goal-id", ws.goal, "--execute"], cwd=REPO,
             capture_output=True, text=True, timeout=45, check=True)
+        assert json.loads(selection.stdout) == {
+            "ok": True, "provider": "sqlite", "changed": True, "executed": True,
+        }
     assert ws.cli("coordination-shadow", "bootstrap", "--execute")["bootstrap"]["status"] == "applied"
     for index in range(3):
         ws.add(f"Independent migration work {index}")
@@ -171,7 +206,7 @@ def test_terminal_lease_survives_public_cutover_and_original_recovery(tmp_path: 
     assert recovered["promotion"]["status"] == "replayed", recovered
     assert ws.cli("task-lease", "inspect", "--todo-id", todo_id)["lease"] == expected
     retained = ws.cli("todo", "list", "--todo-id", later["todo_id"])
-    assert retained["todos"][0]["text"] == "Later canonical work must survive recovery"
+    assert retained["todo"]["text"] == "Later canonical work must survive recovery"
     assert lease.read_bytes() == original
     assert not ws.state.exists()
 
@@ -215,7 +250,7 @@ def test_stale_caller_goal_is_not_bound_to_a_new_registry_digest(tmp_path: Path)
 def test_registry_change_during_python_projection_is_rejected(
     tmp_path: Path, monkeypatch
 ):
-    from loopx.control_plane.coordination import runtime_shadow
+    from loopx.control_plane.coordination import authority_source_capture as runtime_shadow
 
     state, runtime, registry, goal, data = workspace(tmp_path)
     original = runtime_shadow._build_runtime_shadow_source_snapshot

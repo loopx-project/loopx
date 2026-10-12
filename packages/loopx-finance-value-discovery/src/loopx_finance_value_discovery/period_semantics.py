@@ -15,6 +15,7 @@ from typing import Any
 
 FINANCE_PERIOD_ENCODING_SCHEMA_VERSION = "finance_period_encoding_assessment_v1"
 FINANCE_PERIOD_COMPARISON_INPUT_SCHEMA_VERSION = "finance_period_comparison_input_v1"
+FINANCE_PERIOD_COMPARISON_INPUT_V2_SCHEMA_VERSION = "finance_period_comparison_input_v2"
 FINANCE_PERIOD_COMPARISON_SCHEMA_VERSION = "finance_period_comparison_assessment_v1"
 _LITERAL = re.compile(
     r"(?P<date>[0-9]{4}-[0-9]{2}-[0-9]{2})"
@@ -38,6 +39,10 @@ def _boundary(
         raise ValueError("period boundary requires a bounded date/dateTime string")
     match = _LITERAL.fullmatch(literal.strip())
     if not match or (explicit_time and not match["time"]):
+        raise ValueError("unsupported period date/dateTime encoding")
+    # Python 3.14 accepts 24:00:00 in fromisoformat. This finite source
+    # contract has always excluded it; interpreter upgrades must not widen it.
+    if match["time"] and int(match["time"][:2]) > 23:
         raise ValueError("unsupported period date/dateTime encoding")
     zone = match["zone"]
     tz = None
@@ -250,6 +255,10 @@ def assess_period_comparison(payload: Mapping[str, Any]) -> dict[str, Any]:
     match the current immutable payload/pin, subject, metric, unit, lifecycle,
     purpose and cutoffs. A checksum or evidence reference is not authentication.
     """
+    if isinstance(payload, Mapping) and payload.get("schema_version") == FINANCE_PERIOD_COMPARISON_INPUT_V2_SCHEMA_VERSION:
+        from .statement_basis import assess_statement_comparison
+
+        return assess_statement_comparison(payload)
     if not isinstance(payload, Mapping) or set(payload) != {
         "schema_version",
         "left",

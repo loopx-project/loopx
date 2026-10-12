@@ -1,9 +1,17 @@
 ---
 name: loopx-performance-diagnosis
-description: Diagnose an owned slow command or runtime with language-appropriate profilers, independent baseline measurements and local-private evidence. Use for demonstrated CPU, wall-time, allocation or IO regressions; profiling does not qualify a budget or grant execution authority.
+description: Diagnose demonstrated CPU, command latency, allocation or IO regressions in an owned process with controlled measurements and language-appropriate profilers. Route benchmark effectiveness, score growth and trajectory efficiency to loopx-benchmark; profiling does not qualify a budget or grant execution authority.
 ---
 
 # LoopX performance diagnosis
+
+First identify the question. For a LoopX-managed benchmark's outcome quality,
+score growth, useful progress per time/token, or agent trajectory, use
+[loopx-benchmark](../loopx-benchmark/SKILL.md). A flatter score curve, repeated
+reads or more tokens alone do not establish a process-performance regression.
+Keep that analysis with the benchmark owner; use this skill as a focused subtask
+only when evidence identifies a slow owned command or resource cost. Do not
+require a profiler before analyzing effectiveness or interaction overhead.
 
 Read the current Goal/Todo contract and repository optimization evidence rules.
 State the real user operation, observed failure and owning acceptance. Preserve

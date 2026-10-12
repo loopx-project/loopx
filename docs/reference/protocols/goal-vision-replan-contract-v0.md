@@ -27,6 +27,17 @@ vision drift or missing closeout satisfy, block, or wake another role.
 `goal_frontier_projection`. It should not grow per-agent vision storage,
 budgeting, dreaming, or product-specific replan logic.
 
+## Default review cadence
+
+Goals without an explicit Goal or device cadence use six settled effective work
+Turns per Agent, matching the benchmark runner default. The previous defaults
+were five and three Turns respectively. Existing explicit Turn and Todo values
+keep their unit and count; upgrading does not rewrite these overrides.
+The existing TypeScript replan history owner counts verified settlement receipts;
+no TurnEnvelope opt-in is needed. Quota and writeback resolve the same live
+configuration. See [Goal review cadence](../../quota-allocation.md#goal-review-cadence)
+for configuration precedence, rollback and independent review triggers.
+
 ## Replan ACK freshness
 
 An accepted ACK with a legal vision outcome covers gaps at or before its
@@ -83,6 +94,34 @@ replan 持久记录已接受的 `new_runnable_successor` 后，新一轮 quota �
 被显式选择。仅当前 Agent 最新已接受的 ACK 提供偏好；后续任务必须仍归属该
 Agent、匹配确切来源义务并通过准入。方案被替换或任务失效时恢复普通选择；
 显式选择、已绑定回执及现有 Gate 保持优先。纯文字 Vision 不能标识要推荐的任务。
+
+## Completed Todo lifecycle reentry
+
+An admitted lifecycle review retains its original Turn identity when its exact
+completed Todos are legally closed with `todo complete --no-follow-up`. The
+canonical completion identities and same-agent terminal-reentry facts must
+reconstruct the admitted obligation; ambiguous or changed sources fail closed.
+Lifecycle reentry updates `updated_at`, preserving the original completion time,
+identity and validation evidence. Terminal rows closed before admission are
+excluded. Recovery restores original
+completion order before the bounded trigger selection; it does not order sources
+by their later closeout times. Whole-second Todo timestamps allow a same-second
+closeout candidate only when the original obligation digest still matches.
+The shared typed replan owner projects settlement only, with a fresh
+evidence-linked Vision/path writeback still required before one quota debit.
+No original validator is rerun, no successor is executed in that Turn, and a
+new frontier remains the next Turn's responsibility. Lifecycle obligation
+identities now include Todo and completion identities; older ambiguous receipts
+are not rewritten or automatically admitted by this recovery.
+
+已准入的生命周期复核中，确切 Todo 合法执行 `--no-follow-up` 后，原轮身份保持
+不变。恢复须由同一 Agent 的规范终态及原完成身份重建原义务；来源不明确或
+变化时仍拒绝。恢复只允许收尾，仍须提交带证据的 Vision/path 回写后扣额一次；
+接续收尾更新 `updated_at`，保留原完成时间、身份及验证证据。准入前已收尾的
+历史记录须排除，来源按原完成顺序恢复后再截取触发项，不能按
+后来收尾的时间排序。Todo 时间戳精度为秒，同秒候选仍须匹配原义务摘要。
+不重跑原验证、不在本轮执行后续任务，也不抹除下一轮的新验收缺口。该类义务
+身份增加 Todo 与完成身份，旧的模糊回执不会被改写或自动放行。
 
 ## CLI Budget
 
@@ -227,7 +266,7 @@ other's active vision.
 
 ### Replan planning guidance
 
-The shared `replan_action_packet.planning_guidance` carries two short Agent
+The shared `replan_action_packet.planning_guidance` carries five Agent
 instructions through full/compact quota and the host Turn envelope:
 
 - Preserve the requested end state under current user direction. A bounded
@@ -239,6 +278,22 @@ instructions through full/compact quota and the host Turn envelope:
   Missing, stale or indirect evidence leaves completion unproven. An empty Todo
   list, a passing subset or a settled replan is insufficient; blocked, exhausted
   and superseded outcomes remain distinct from achievement.
+- Before `no_followup`, review unmet acceptance against the original authorized
+  goal and evidence. Continue or replan if a reasonable in-scope step remains,
+  even without an assigned successor. An empty queue does not limit scope;
+  otherwise explain why no step remains without inventing work, exceeding
+  authority or consuming budget just to remain active.
+- Preserve requested priorities and optimization direction. Distinguish user
+  requirements and hard constraints from provisional agent-created candidate
+  rules; reconsider the latter when they obstruct the goal. This cannot relax
+  frozen acceptance, authority, budgets or stops, or rewrite criteria after a
+  failure.
+- Compare expected progress toward the goal or information gain with the full
+  marginal cost of the next step. Before expanding repeated validation, verify
+  that the changed intervention reaches the executed path and current artifact.
+  Prefer a discriminating probe, keep negative evidence scoped to tested
+  conditions and proxies scoped to their coverage, and reuse still-applicable
+  evidence when no new uncertainty warrants repetition.
 
 This guidance is included by default whenever a replan action packet is
 projected. It is Agent judgment guidance, not a new machine-enforced acceptance
@@ -247,12 +302,27 @@ non-replan turns are unchanged. The existing TypeScript replan owner supplies
 the text; CLI and host projections preserve it without a new setting or editor.
 Transport tests prove delivery and unchanged gates, not improved model behavior.
 
-共享 replan action packet 默认携带两条简短指引，并在完整/精简 quota 与
-Turn envelope 中保留：不能为了容易通过测试而悄悄缩小目标；宣布 Goal 达成前，
-须逐项核对当前要求与实际状态的权威证据。阶段成果保留剩余要求，证据缺失、
-过期或间接时保留未证实的缺口；阻塞、探索耗尽及被替代不等于达成。
-用户授权的范围调整、权限、预算和停止条件仍有效。这是 Agent 判断指引，
-不新增机器验收门禁或配置，不改变已有语义写回规则；投影测试不代表模型效果提升。
+共享 replan action packet 默认携带五条指引，并在完整/精简 quota 与
+Turn envelope 中保留：
+
+- 不能为了容易通过测试而缩小目标；阶段成果保留剩余要求，遵守用户范围、
+  权限、预算和停止条件。
+- 宣布 Goal 达成前，逐项核对当前要求与实际状态的权威证据。空 Todo 队列、
+  部分测试通过或完成重规划都不构成证明；阻塞、探索耗尽及被替代不等于达成。
+- 在 `no_followup` 前，结合原始授权目标和证据复查未满足的验收。有合理的范围内
+  下一步就继续或重规划，无需等待指定 successor；空队列不缩小范围。否则说明
+  为什么已无下一步，不虚构工作、越权或仅为维持活跃而消耗预算。
+- 保留用户要求的优先级和优化方向，区分硬约束与 Agent 暂定的候选筛选规则；
+  后者阻碍目标时应重新审视。不能放宽冻结验收、权限、预算或停止条件，
+  也不能因失败而事后改写标准。
+- 将预期的目标推进或信息收益与下一步的完整边际成本一起比较。扩大重复验证前，
+  确认改动进入实际执行路径和当前产物。优先选择能区分剩余解释的探针；负证据
+  只覆盖已测条件，局部代理指标只覆盖其代表的范围。没有新不确定性时复用
+  仍然适用的证据。
+
+这是 Agent 判断指引，不新增机器验收门禁、配置或权限，不改变已有语义写回
+规则及非重规划 Turn。文本复用既有 TypeScript owner；投影测试证明送达和
+门禁保持，不能证明模型采用或效果提升。
 
 ### Path Delta
 
@@ -339,6 +409,15 @@ receipts retain their checkpoint semantics:
   "required_resolution": ["write_vision_patch", "record_unchanged_reason"]
 }
 ```
+
+CLI in-flight settlement omits the material-closeout Vision authoring schema.
+Use the projected continuation command and its original boundary/identity flags;
+this does not waive validation, writeback or debit rules. Material CLI closeout
+and MCP `complete_task` retain their evidence-linked Vision authoring contract.
+
+CLI 进行中结算不附带实质收尾的 Vision 编写结构。沿用投影命令及原边界、身份
+参数，仍须验证、写回与原 debit；实质 CLI 收尾和 MCP `complete_task` 保留
+证据关联的 Vision 编写契约。
 
 One explicit exception exists for in-flight delivery. When quota admits an
 open advancement Todo for normal delivery, its settlement guidance may add the
@@ -639,14 +718,36 @@ For the same `agent_id`, a newer satisfied checkpoint with `patched` or
 `unchanged_with_reason` supersedes older
 `missing_required` checkpoints; `not_required` does not.
 
-The ordinary CLI settlement plan now puts a compact material-closeout reminder
-in its existing writeback step, before the first write. The shared authoring
-example includes the acceptance claim, continuation path and evidence reference;
-replace its illustrative claims and reference with observed facts. Explicit
-`in_flight_continuation` plans retain their existing short writeback precondition.
-This changes guidance in CLI/TurnEnvelope and the shared MCP/replan authoring
-projection, not validation, admission or receipt authority. It does not establish
-lower model token cost or eliminate all replanning; those require live measurement.
+The ordinary Todo-bound CLI settlement plan carries `vision_authoring` in its
+existing durable-writeback step, including in-flight plans. It reuses the same
+TypeScript example and field limits as MCP and replan; it is authoring guidance,
+not a requirement to patch vision on every in-flight step. Replace example claims
+and references with observed facts and pass the packet via `--agent-vision-json`.
+`checkpoint-context` is recovery **after** the original committed Turn writeback,
+not a first-write preparation command. MCP removes the manual CLI settlement plan
+and retains its own authoring projection. The default quota CLI also retains
+autonomous replan's authoring schema. When an identical schema is already present
+in its durable-writeback step, the replan contract uses a same-response
+`vision_authoring_ref`; it never requires a diagnostic detail read for this input.
+Different schemas remain separate, and progress-only replan does not acquire a
+Vision requirement. TurnEnvelope preserves the ordinary plan's guidance.
+
+Shared `todo plan` and guided-start authoring steps also provide a routed exact
+readback command for each authored or reused Todo id. Inventory text is a bounded
+excerpt. Verify `todo_detail_projection.source_complete=true`, compare `.todo.text`
+with the intended requirements and check current status/claim before handoff;
+missing, ambiguous or changed work requires reinspection. Readback does not replace
+quota admission or lease authority. Lists remain compact and exact bodies lossless.
+
+These default guidance changes preserve validation, admission, original-Turn
+recovery and receipt authority. A larger self-contained packet can avoid discovery
+calls, but lower model cost or better outcomes still require live measurement.
+
+普通 Todo 结算包在写回步骤直接携带既有的 vision 示例和字段限制；示例须替换为实际
+事实与证据，不要求每个 in-flight 步骤都修改 vision。`checkpoint-context` 仅用于原
+Turn 写回后的恢复。规划与接续指引提供逐条精确读回命令，用完整 `.todo.text` 核对
+需求和当前状态，不能拿列表摘要判断正文丢失。读取不授予执行权限；准入、租约、
+恢复和单次记账规则保持不变。包体增量与模型效率、效果收益须分别测量。
 
 A satisfied checkpoint is protocol-complete, but a material closeout also has
 to qualify its relationship to the final outcome. A patched checkpoint must
@@ -892,6 +993,17 @@ The replan decision must not be disturbed by monitor quiet skip, scoped gate
 waiting, or a single agent having no runnable todo. Those may explain local
 lane state, but they cannot erase a required goal-level replan.
 
+Periodic review now shares the long-chain evidence-linked vision path: current
+validation may justify `continue`, `no_change`, or `replan` without inventing a
+successor, surface, or hypothesis. The projected command requests the existing
+vision packet; missing acceptance/evidence, explicit outcome restrictions, and
+acceptance-recovery holds still fail closed. This changes periodic-review
+qualification, not cadence, Todo completion, or execution authority.
+
+周期复查与长链复查共用证据关联的 Vision 路径：验证支持原路线时，可以保留路线，
+不必虚构 successor、surface 或 hypothesis。缺少接受标准或证据、显式结果限制及
+接受标准恢复约束仍由原规则拒绝；复查周期、Todo 完成及执行权限保持原有语义。
+
 Long-chain scope corrections (#4667, #5001): Agent-scoped counts exclude shared
 unclaimed candidates and continuous monitors. Shared candidates remain selectable,
 but a new long-chain duty requires at least 15 claimed advancement Todos. The former
@@ -1028,6 +1140,23 @@ ritual. A todo-specific evidence read remains useful as drill-down, but its
 receipt proves only context access. If projected evidence is empty, stale, or
 contradictory, the agent may use bounded public-safe search and write back
 source references with the typed observation.
+
+The default evidence display reduces a repeated accounting continuation only
+when a `quota_spend_commit_receipt_v0` matches the same complete
+`quota_settlement_identity_v0` as a typed work observation and their complete
+continuation text matches. The matching work must also be displayed. Different
+health or outcome evidence remains visible; a receipt-only row with no additional
+displayed facts can be omitted. Unpaired, legacy, mismatched and actual-progress
+rows retain their existing display. Grouped occurrences require a match for every
+underlying occurrence, rather than proof for only the newest one.
+
+This is presentation reduction at the existing TypeScript replan owner, not
+history deletion, quota accounting or a new completion rule. Source counts,
+coverage, obligation identity and immutable history reference resolution remain
+unchanged. Internal matching facts do not enter public reference digests. The
+codec transmits complete-text digests so equal bounded prefixes cannot hide
+different obligations in the tail. This adds no option or caller action to CLI,
+frontend or Lark, and does not establish model latency or task-quality gains.
 
 ## Write / Correction Mechanism
 

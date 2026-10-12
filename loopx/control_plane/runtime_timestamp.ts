@@ -69,9 +69,12 @@ export function parseTodoTimestampMicros(value: string): bigint | null {
     const parsed = /^(\d{2})(?:(:?)(\d{2})(?:\2(\d{2}))?)?(?:[.,](\d+))?$/.exec(raw);
     if (!parsed) return null;
     const hour = Number(parsed[1]), minute = Number(parsed[3] ?? 0), second = Number(parsed[4] ?? 0);
-    if (!offset && (hour > 23 || minute > 59 || second > 59)) return null;
+    const fraction = parsed[5] ?? "";
+    if (!offset && (
+      hour > 23 || minute > 59 || second > 59
+    )) return null;
     const seconds = hour * 3600 + minute * 60 + second;
-    const micros = BigInt(seconds) * 1000000n + BigInt((parsed[5] ?? "").padEnd(6, "0").slice(0, 6));
+    const micros = BigInt(seconds) * 1000000n + BigInt(fraction.padEnd(6, "0").slice(0, 6));
     if (offset && micros >= 86400000000n) return null;
     // Python treats an all-zero offset as UTC even with fractional seconds.
     return offset && seconds === 0 ? 0n : micros;

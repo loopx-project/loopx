@@ -7,6 +7,7 @@ import test from "node:test";
 import {nativeChildReportAdmission} from "../../loopx/control_plane/capabilities/native_child_admission.ts";
 import {settlementIdentity, settlementIdentityPayload} from "../../loopx/control_plane/effect_program.ts";
 import {QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA, readQuotaSettlement} from "../../loopx/control_plane/quota/settlement_readback.ts";
+import {heartbeatWorkRequalification} from "../../loopx/control_plane/quota/heartbeat_receipt_identity.ts";
 
 const proof = {
   ok: true, should_run: true, must_attempt_work: true,
@@ -142,5 +143,92 @@ test("exact binding resolution preserves explicit denials and conflicts", async 
     await assert.rejects(readQuotaSettlement({...request, infer_turn_instance_id: true}), /explicit Turn identity/);
     // Existing callers still require an explicit binding by default.
     assert.notEqual((await readQuotaSettlement({...request, resolve_original_binding: false})).identity.result.failure, null);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test("same-binding reentry appends only explicit work qualification and preserves original authority", async () => {
+  const {root, request, identity, event, log} = await fixture();
+  try {
+    const original = {...event, status: "successor_replan_required", details: {
+      ...event.details, delivery_allowed: false, quiet_noop_allowed: false,
+      semantic_replan_obligation_id: "replan-0000000000000001",
+      delivery_workspace_causality: {requirement: "required"},
+      pending_action_selection: {todo_id: todoId}, closeout_required: false,
+    }};
+    await writeFile(log, JSON.stringify(original) + "\n");
+    const current = {...event.details, semantic_replan_obligation_id: "",
+      delivery_workspace_causality: {requirement: "not_required"}, ignored_caller_fact: true};
+    const readback = await readQuotaSettlement({...request, heartbeat_reentry_guard: current});
+    assert.equal(readback.native_child_admission.report_permission, "not_admitted");
+    const qualification = readback.heartbeat_reentry_qualification;
+    assert.equal(qualification.append, true);
+    assert.deepEqual(qualification.details, {...original.details, ...proof,
+      closeout_required: true, settlement_receipt_revision: "work_admission"});
+    // A readback cannot commit or grant work by itself.
+    assert.equal((await readQuotaSettlement(request)).native_child_admission.report_permission, "not_admitted");
+    const corrected = {...original, event_id: "event-qualified", status: "normal_run",
+      details: qualification.details};
+    await appendFile(log, JSON.stringify(corrected) + "\n");
+    const cold = await readQuotaSettlement({...request, heartbeat_reentry_guard: current});
+    assert.equal(cold.heartbeat_receipt.event_id, "event-qualified");
+    assert.equal(cold.native_child_admission.report_permission, "new_operation");
+    assert.equal(cold.native_child_admission.settlement_effect_id, identity.effect_id);
+    assert.deepEqual(cold.heartbeat_reentry_qualification, {append: false, details: null});
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test("partial, denied or truthy current facts cannot requalify a negative guard", async (t) => {
+  const {root, identity, event} = await fixture();
+  try {
+    const original = {...event, details: {...event.details, delivery_allowed: false}};
+    for (const [label, facts] of [
+      ["legacy", {ok: true, should_run: true}], ["partial", {must_attempt_work: true}],
+      ["failed", {...proof, ok: false}], ["wait", {...proof, should_run: false}],
+      ["no obligation", {...proof, must_attempt_work: false}],
+      ["no delivery", {...proof, delivery_allowed: false}],
+      ["quiet", {...proof, quiet_noop_allowed: true}],
+      ["truthy", {...proof, delivery_allowed: "true"}],
+    ] as const) {
+      await t.test(label, () => {
+        const current = {...facts, todo_id: todoId, settlement_effect_id: identity.effect_id};
+        assert.deepEqual(heartbeatWorkRequalification(original, current, identity, "open", false),
+          {append: false, details: null});
+      });
+    }
+    for (const phase of ["settlement_pending", "settled"] as const) {
+      assert.equal(heartbeatWorkRequalification(original, event.details, identity, phase, false).append, false);
+    }
+    assert.equal(heartbeatWorkRequalification(original, event.details, identity, "open", true).append, false);
+    assert.equal(heartbeatWorkRequalification(event, event.details, identity, "open", false).append, false);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test("work requalification fails closed on binding and semantic guard conflicts", async () => {
+  const {root, identity, event} = await fixture();
+  try {
+    const original = {...event, details: {...event.details, delivery_allowed: false,
+      semantic_replan_obligation_id: "replan-0000000000000001"}};
+    for (const changed of [
+      {todo_id: "todo_other_validation"}, {settlement_effect_id: "different-effect"},
+      {replan_obligation_id: "replan-0000000000000002"},
+      {semantic_replan_obligation_id: "replan-0000000000000002"},
+    ]) {
+      assert.throws(() => heartbeatWorkRequalification(original, {...event.details, ...changed},
+        identity, "open", false), /binding|guard|conflicting/);
+    }
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test("begun closeout readback cannot promote a previously denied guard", async () => {
+  const {root, request, event, log, identity} = await fixture();
+  try {
+    const original = {...event, details: {...event.details, delivery_allowed: false}};
+    const writeback = {...event, event_id: "event-writeback", event_kind: "refresh_state",
+      details: {settlement_effect_id: identity.effect_id}};
+    await writeFile(log, [original, writeback].map(row => JSON.stringify(row)).join("\n") + "\n");
+    const result = await readQuotaSettlement({...request, heartbeat_reentry_guard: event.details});
+    assert.equal(result.heartbeat_reentry_qualification.append, false);
+    assert.equal(result.heartbeat_receipt.event_id, event.event_id);
+    assert.equal(result.native_child_admission.report_permission, "not_admitted");
   } finally {await rm(root, {recursive: true, force: true});}
 });

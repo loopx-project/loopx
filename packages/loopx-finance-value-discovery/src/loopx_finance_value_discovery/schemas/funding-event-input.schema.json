@@ -1,0 +1,401 @@
+{
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "finance_funding_event_pair_input_v1"
+    },
+    "decision_at": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "legs": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "object",
+                "properties": {
+                  "ref": {
+                    "$ref": "#/$defs/optionalReference"
+                  },
+                  "field_ref": {
+                    "$ref": "#/$defs/optionalReference"
+                  },
+                  "version_ref": {
+                    "$ref": "#/$defs/optionalReference"
+                  },
+                  "digest": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "producer_as_of": {
+                    "$ref": "#/$defs/optionalClock"
+                  },
+                  "capture_start": {
+                    "$ref": "#/$defs/optionalClock"
+                  },
+                  "capture_end": {
+                    "$ref": "#/$defs/optionalClock"
+                  }
+                },
+                "required": [
+                  "ref",
+                  "field_ref",
+                  "version_ref",
+                  "digest",
+                  "producer_as_of",
+                  "capture_start",
+                  "capture_end"
+                ],
+                "additionalProperties": false
+              },
+              "instrument": {
+                "type": "object",
+                "properties": {
+                  "venue_ref": {
+                    "$ref": "#/$defs/optionalReference"
+                  },
+                  "instrument_ref": {
+                    "$ref": "#/$defs/optionalReference"
+                  },
+                  "version_ref": {
+                    "$ref": "#/$defs/optionalReference"
+                  },
+                  "base_unit": {
+                    "$ref": "#/$defs/optionalReference"
+                  },
+                  "quote_currency": {
+                    "$ref": "#/$defs/optionalReference"
+                  },
+                  "evidence_ref": {
+                    "$ref": "#/$defs/optionalReference"
+                  },
+                  "mapping_kind": {
+                    "enum": [
+                      null,
+                      "linear_quote_notional",
+                      "inverse",
+                      "quanto"
+                    ]
+                  }
+                },
+                "required": [
+                  "venue_ref",
+                  "instrument_ref",
+                  "version_ref",
+                  "base_unit",
+                  "quote_currency",
+                  "evidence_ref",
+                  "mapping_kind"
+                ],
+                "additionalProperties": false
+              },
+              "side": {
+                "enum": [
+                  null,
+                  "long",
+                  "short"
+                ]
+              },
+              "rate": {
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "$ref": "#/$defs/optionalClock"
+                  },
+                  "unit": {
+                    "enum": [
+                      null,
+                      "fraction",
+                      "percent",
+                      "basis_points"
+                    ]
+                  },
+                  "kind": {
+                    "enum": [
+                      null,
+                      "forecast",
+                      "realized"
+                    ]
+                  },
+                  "period": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "start": {
+                            "$ref": "#/$defs/optionalClock"
+                          },
+                          "end": {
+                            "$ref": "#/$defs/optionalClock"
+                          },
+                          "event_relation": {
+                            "enum": [
+                              null,
+                              "accrual_ends_no_later_than_payment"
+                            ]
+                          },
+                          "evidence_ref": {
+                            "$ref": "#/$defs/optionalReference"
+                          }
+                        },
+                        "required": [
+                          "start",
+                          "end",
+                          "event_relation",
+                          "evidence_ref"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "event": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "ref": {
+                            "$ref": "#/$defs/optionalReference"
+                          },
+                          "settlement_at": {
+                            "$ref": "#/$defs/optionalClock"
+                          },
+                          "evidence_ref": {
+                            "$ref": "#/$defs/optionalReference"
+                          }
+                        },
+                        "required": [
+                          "ref",
+                          "settlement_at",
+                          "evidence_ref"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "payment_convention": {
+                    "enum": [
+                      null,
+                      "positive_long_pays",
+                      "positive_short_pays"
+                    ]
+                  },
+                  "evidence_ref": {
+                    "$ref": "#/$defs/optionalReference"
+                  },
+                  "original_literal": {
+                    "$ref": "#/$defs/optionalReference"
+                  }
+                },
+                "required": [
+                  "value",
+                  "unit",
+                  "kind",
+                  "period",
+                  "event",
+                  "payment_convention",
+                  "evidence_ref",
+                  "original_literal"
+                ],
+                "additionalProperties": false
+              },
+              "calculation_basis": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "quantity": {
+                        "$ref": "#/$defs/optionalClock"
+                      },
+                      "quantity_unit": {
+                        "$ref": "#/$defs/optionalReference"
+                      },
+                      "reference_price": {
+                        "$ref": "#/$defs/optionalClock"
+                      },
+                      "price_base_unit": {
+                        "$ref": "#/$defs/optionalReference"
+                      },
+                      "currency": {
+                        "$ref": "#/$defs/optionalReference"
+                      },
+                      "evidence_ref": {
+                        "$ref": "#/$defs/optionalReference"
+                      }
+                    },
+                    "required": [
+                      "quantity",
+                      "quantity_unit",
+                      "reference_price",
+                      "price_base_unit",
+                      "currency",
+                      "evidence_ref"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "settlement": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "payment_ref": {
+                        "$ref": "#/$defs/optionalReference"
+                      },
+                      "settled_at": {
+                        "$ref": "#/$defs/optionalClock"
+                      },
+                      "amount": {
+                        "$ref": "#/$defs/optionalClock"
+                      },
+                      "currency": {
+                        "$ref": "#/$defs/optionalReference"
+                      },
+                      "evidence_ref": {
+                        "$ref": "#/$defs/optionalReference"
+                      }
+                    },
+                    "required": [
+                      "payment_ref",
+                      "settled_at",
+                      "amount",
+                      "currency",
+                      "evidence_ref"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "source",
+              "instrument",
+              "side",
+              "rate",
+              "calculation_basis",
+              "settlement"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "costs": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "amount": {
+              "$ref": "#/$defs/optionalClock"
+            },
+            "currency": {
+              "$ref": "#/$defs/optionalReference"
+            },
+            "kind": {
+              "enum": [
+                null,
+                "conditional",
+                "realized"
+              ]
+            },
+            "observed_at": {
+              "$ref": "#/$defs/optionalClock"
+            },
+            "evidence_ref": {
+              "$ref": "#/$defs/optionalReference"
+            }
+          },
+          "required": [
+            "amount",
+            "currency",
+            "kind",
+            "observed_at",
+            "evidence_ref"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "decision_at",
+    "legs",
+    "costs"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loopx.dev/schemas/finance-funding-event-pair-input-v1.json",
+  "description": "Caller-declared funding events; semantic finite-number, clock, quantity and cash gates remain in the Finance provider. Nullable fields are unknown, not defaults.",
+  "$defs": {
+    "optionalReference": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "\\S"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "optionalClock": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "optionalDecimal": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

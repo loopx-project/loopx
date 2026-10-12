@@ -45,6 +45,7 @@ def _decision(*, effective_action: str, should_run: bool) -> dict[str, object]:
             "task_repository": "git:github.com/example/loopx",
             "claimed_by": "agent-a",
             "unblocks_todo_id": "todo_parent",
+            "content_revision": "sha256:" + "a" * 64,
             "agent_id": "agent-a",
             "selected_by": "current_agent_claimed_todo",
             "text": "Monitor a verbose external target without copying this text.",

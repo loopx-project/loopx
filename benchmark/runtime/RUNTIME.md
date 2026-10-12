@@ -5,6 +5,13 @@ LHTB, SWE-Marathon and other Harbor tasks use
 `PYTHONPATH`. This research runner is not another installed product package.
 Native tasks, environment, phases, feedback, verifier and scores stay in Harbor.
 
+The shared adapter reads `PATH` from the task container before installing its
+isolated profile. Worker and login shells retain those task toolchain directories;
+LoopX modes prepend their staged Node and CLI. No operator-host PATH or other
+ambient environment variables are copied. A missing/unreadable task PATH fails
+installation. This changes tool discovery for newly installed trials only; keep
+existing trials pinned when comparing runner versions.
+
 ## Configure the native job
 
 Use this agent in the benchmark's existing job config, retaining its dataset
@@ -17,13 +24,13 @@ agents:
     override_timeout_sec: 5400
     kwargs:
       execution_mode: heartbeat
-      task_entry: seeded-todo
+      task_entry: loopx-planned
       iteration_context: fresh
       reasoning_effort: max
       codex_sandbox: danger-full-access
       turn_timeout_sec: null
       scheduler_timeout_sec: 5080
-      replan_after_todos: 3
+      replan_after_turns: 6
 ```
 
 For an explicitly selected **heartbeat-only** context experiment, add
@@ -76,14 +83,18 @@ validator protection remains the environment owner's responsibility.
 
 `task_entry` is independent of the execution mode:
 
-- `seeded-todo` (the compatibility default) writes a generic execution Todo.
+- `seeded-todo` (explicit compatibility/ablation choice) writes a generic execution Todo.
   Follow-up phases update that Todo while it remains live and owned by this
   agent; completed or deferred work gets a new Todo. Updates preserve blocked
   state. The agent can still plan and replan during execution. The seed asks the
-  worker to read, implement and validate the task. It leaves task decomposition
-  to the worker and the existing task protocol. This removes the previous
-  unconditional successor instruction for newly seeded or updated phases.
-- `loopx-planned` runs the installed `$loopx` skill against the public
+  worker to read, implement and validate the task against the referenced task's
+  full requirements and acceptance criteria, keeping unmet requirements explicit.
+  It leaves task decomposition to the worker and the existing task protocol, and
+  removes the previous unconditional successor instruction for newly seeded or
+  updated phases; existing trials are unchanged. This is task-scoping guidance,
+  not a new completion gate, forced successor, or instruction to consume the
+  whole budget.
+- `loopx-planned` (the default for LoopX modes) runs the installed `$loopx` skill against the public
   `loopx todo plan` checkpoint before execution. The checkpoint shares the
   product's planner and continuation-aware Todo delta; it creates no planning
   Todo and starts no host loop. Select it only for heartbeat, Turn or LoopX Goal.
@@ -109,8 +120,11 @@ validates actual Todo readback. With `fresh`, each planning/execution invocation
 starts a new conversation. LoopX Goal planning uses a separate exec conversation
 because native Goal execution owns its app-server thread lifecycle. The runner
 does not claim exact equivalence to interactive `$loopx` startup.
-The default `planning_timeout_sec` is 300; planning and preparation consume the
-same `scheduler_timeout_sec` phase budget as execution. Planning sessions are
+Harbor's default `planning_timeout_sec` is 300; `null` removes that independent
+cap while retaining the total phase budget. SForge selects `null`: its planner
+and execution share one absolute trial deadline, including native resumes.
+Planning and preparation consume the same `scheduler_timeout_sec` phase budget
+as execution. Planning sessions are
 included in native session/token aggregation. No planning checkpoint is counted
 as a completed advancement Todo or settled work Turn.
 
@@ -157,7 +171,9 @@ Also set `CODEX_OFFLINE_DIR` (Codex, code-mode sidecar, rg),
 artifacts. The host import must come from that checkout, whose tracked files
 must match HEAD. Commit the candidate before real validation. Baselines stage only
 the runner/native transport, without installing LoopX skills or initializing
-its state. LoopX modes use the formal installer and doctor readback.
+its state. Best-only plain workers also stage the configured portable Python for
+the delivery hook, without installing LoopX. LoopX modes use the formal installer
+and doctor readback.
 
 Supply `OPENAI_BASE_URL`, `OPENAI_API_KEY` and optionally `CODEX_WIRE_API`
 (default `responses`), or stage standard Codex authentication using
@@ -233,7 +249,7 @@ By default, worker calls have no independent turn deadline. Harbor derives their
 ### Native SForge task entry
 
 The EdgeBench runner accepts `--task-entry seeded-todo|loopx-planned` for
-`heartbeat-resume` and `heartbeat-explore`; the default remains `seeded-todo`.
+`heartbeat-resume` and `heartbeat-explore`; the heartbeat default is `loopx-planned`.
 Official, single and native-Goal profiles reject planned entry before creating
 an attempt. Select only this flag for a task-entry ablation and keep all other
 inputs fixed. Runtime/profile receipts record the selected entry.
@@ -249,25 +265,36 @@ and native sessions when comparing planning cost; no active attempt is changed
 by selecting this option for a new run.
 
 
-### Explicit effective-Turn cadence
+### Default effective-Turn cadence
 
-Harbor `BenchmarkCodex` accepts `replan_after_turns: 3`; the native EdgeBench
-launcher accepts `--replan-after-turns 3` for `heartbeat-resume` and
-`heartbeat-explore`. This passes the existing Goal option
+Harbor LoopX modes (`heartbeat`, `turn`, `loopx-goal`) default to
+`replan_after_turns: 6`; native EdgeBench `heartbeat-resume` and
+`heartbeat-explore` default to `--replan-after-turns 6`. This passes the existing Goal option
 `--execution-replan-after-turns` and verifies the persisted
 `replan_after_effective_turns` value before execution. The shared TypeScript
 control plane still owns which settled work Turns count; adapters do not count
 records or completed Todos themselves.
 
-Omitting the option preserves the legacy three-completed-Todo setting. Harbor
-rejects simultaneous explicit Todo and Turn settings. To roll back, omit the
-Turn option in a new trial or select `replan_after_todos` in Harbor; do not alter
-an active matched trial. Receipts name the selected unit. Values must be integers
-from one through five, and non-LoopX profiles reject the option. No task, scoring,
-feedback, spawn permission, or total-budget change is implied. This adapter
-option alone does not enable SForge planned task entry.
+Omitting both cadence options selects six effective work Turns, matching the
+product default. The previous benchmark default was three effective work Turns;
+the previous product default was five. Explicit settings retain their values.
+Idle wakes, tool calls and the planning checkpoint do
+not count as effective work Turns; this is a deterministic threshold rather than
+a per-wake probability, and other replan triggers can act sooner.
+To retain the previous benchmark default in a new trial, pass
+`replan_after_turns: 3` in Harbor or `--replan-after-turns 3` in EdgeBench.
+For completed-Todo cadence, use `replan_after_todos` / `--replan-after-todos`.
+Explicit Turn/Todo settings are mutually
+exclusive; effective-Turn counts accept one through six and completed-Todo counts
+accept one through five. Resolved runtime and worker
+receipts name the selected unit even when no flag was supplied. Non-LoopX
+profiles retain their existing behavior. No active attempt, task, scoring, feedback,
+spawn permission, or total-budget change is implied.
 
 The two options are independent: `--task-entry` selects where the initial Todo
 comes from, while `--replan-after-turns` selects which cadence the shared control
 plane uses afterwards. A trial may set either, both, or neither; receipts record
 both selections so a comparison keeps every other input fixed.
+
+See [default settings and recommended ablations](SETTINGS.md) for explicit launch flags,
+matched controls and rollback.

@@ -107,7 +107,7 @@ def test_idle_conversation_adopts_model_preserving_context_and_authority(convers
     assert len(starts) == 2
 
 
-@pytest.mark.parametrize("turn_status", ["queued", "starting", "running", "interrupting"])
+@pytest.mark.parametrize("turn_status", ["starting", "running", "interrupting"])
 def test_model_edit_never_replaces_an_in_flight_turn(conversation, turn_status):
     root, store, runtime, session, starts = conversation
     # Store transitions are covered independently; this fixture models the
@@ -122,16 +122,19 @@ def test_model_edit_never_replaces_an_in_flight_turn(conversation, turn_status):
     assert store.load_turn(session["session_id"], turn["turn_id"])["status"] == turn_status
 
 
-def test_accepted_queued_turn_can_adopt_before_starting_upstream(conversation):
+@pytest.mark.parametrize("explicit_acceptance", [False, True])
+def test_accepted_queued_turn_can_adopt_before_starting_upstream(conversation, explicit_acceptance):
     root, store, runtime, session, starts = conversation
     turn, _ = store.create_turn(session["session_id"], client_turn_id="next", message="Continue.")
-    queued = store.load_session(session["session_id"])
+    queued = store.update_session(session["session_id"], active_turn_id=turn["turn_id"], status="busy")
     configure(root, model="gpt-6.1-sol", effort="high")
     with runtime._session_adapter_lock(session["session_id"]):
         runtime._ensure_adapter_locked(
-            queued, work_dir=root, objective="manager", accepted_turn_id=turn["turn_id"],
+            queued, work_dir=root, objective="manager",
+            **({"accepted_turn_id": turn["turn_id"]} if explicit_acceptance else {}),
         )
-    assert len(starts) == 2
+    assert len(starts) == 2 and starts[0][1].closed
+    assert store.load_session(session["session_id"])["active_turn_id"] == turn["turn_id"]
     assert starts[1][0]["executor_model"]["model"] == "gpt-6.1-sol"
     assert store.load_turn(session["session_id"], turn["turn_id"])["status"] == "queued"
 

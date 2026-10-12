@@ -165,12 +165,12 @@ elif stage == 'reward_write':
         return original(*args, **kwargs)
     feedback.atomic_write_state_text = write
 elif stage == 'handoff_write':
-    from loopx.control_plane.todos import active_state_editing
-    original = active_state_editing.atomic_write_state_text
+    from loopx.control_plane.runtime import document_io
+    original = document_io.atomic_write_state_text
     def write(*args, **kwargs):
         pause('handoff-write')
         return original(*args, **kwargs)
-    active_state_editing.atomic_write_state_text = write
+    document_io.atomic_write_state_text = write
 elif stage == 'handoff_k':
     from loopx import file_lock
     original = file_lock.exclusive_cross_runtime_file_lock
@@ -296,7 +296,23 @@ def test_native_fence_waits_for_public_prose_and_then_blocks_todo_writes(tmp_pat
             ws, "todo", "add", "--role", "agent", "--text", "Must now be fenced.",
             "--evidence", "Boundary check.",
         )
+        # The fence selects native create; its owner reads the complete head,
+        # rather than the retired Python list preflight. Missing authority must
+        # reject without falling through to this still-writable source document.
+        assert result["ok"] is False and result["added"] is False, result
         assert result["error_code"] == "local_authority_todo_list_unavailable", result
+        assert result["error"] == "canonical Todo authority is unavailable", result
+        assert result["status"] == "missing", result
+        assert result["source_authority"] == "file_v0", result
+        assert result["decision_read_from_provider"] is True, result
+        assert result["legacy_fallback_used"] is False, result
+        assert result["recovery"] == {
+            "action": "restore_canonical_authority",
+            "runtime_root": str(ws.runtime.resolve()),
+            "goal_id": ws.goal,
+            "legacy_markdown_fallback_allowed": False,
+            "retry_after": "canonical_provider_readback_loaded",
+        }, result
         assert ws.state.read_bytes() == before
         assert "Prose committed before the fence." in ws.state.read_text()
         assert len(index.read_text().splitlines()) == 2

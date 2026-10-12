@@ -216,6 +216,7 @@ def resolve_refresh_recommendation(
         context = lane_recommendation_context(source_context, agent_id=agent_id,
             selected_todo=selected, task=task,
             prior_resolution=latest_bound_recommendation(runs or [], agent_id),
+            settlement_identity=settlement_identity,
             write={"text": next_step, "expected_basis": next_step_basis} if next_step else None)
         if next_step:
             resolved = context["resolution"]

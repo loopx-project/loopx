@@ -45,7 +45,7 @@ from ..turn_driver.lane_fence import (
 )
 from ..work_items.local_lease_record import TaskLeaseError, read_lease
 from ..work_items.task_lease import lease_expires_at, normalize_goal_id, task_lease_path
-from .management_projection import projected_agent_goals
+from .management_projection import LEASE_STATUS_UNAVAILABLE, projected_agent_goals
 
 # One agent can hold one lane per Goal; the row reports the strongest fact.
 # Unknowns outrank a plain "not running": a reader must fail closed on them.
@@ -58,7 +58,6 @@ _LANE_PRECEDENCE = (
     TURN_LANE_ABSENT,
 )
 LEASE_STATUS_ACTIVE = "active"
-LEASE_STATUS_UNAVAILABLE = "unavailable"
 _LANE_HOLDER_FIELDS = ("host", "pid", "acquired_at")
 # Observations that still have a transition in the delegation owner
 # (`loopx/control_plane/collaboration/delegation.ts`); `accepted` and `rejected`
@@ -71,14 +70,14 @@ def _lane_rank(state: str) -> int:
 
 
 def _lease_rank(lease: Mapping[str, Any]) -> int:
-    """Fresher evidence first: an unexpired lease outranks an expired one."""
+    """Uncertainty on any open Todo cannot be hidden by another lease."""
 
     status = lease.get("status")
-    if status == LEASE_STATUS_ACTIVE:
-        return 0 if lease.get("expired") is False else 1
     if status == LEASE_STATUS_UNAVAILABLE:
-        return 3
-    return 2
+        return 0
+    if status == LEASE_STATUS_ACTIVE:
+        return 1 if lease.get("expired") is False else 2
+    return 3
 
 
 def _lane_fact(runtime_root: Path, *, goal_id: str, agent_id: str) -> dict[str, Any]:
@@ -168,8 +167,8 @@ def _delegation_worker_agents(
 
 def _open_todo_leases(
     runtime_root: Path, *, goal_id: str, todo_ids: set[str]
-) -> list[Mapping[str, Any]] | None:
-    """Leases on the Goal's open Todos; ``None`` when the lease authority is unreadable.
+) -> tuple[list[Mapping[str, Any]], set[str]] | None:
+    """Readable leases and unreadable Todo IDs; ``None`` if authority is unreadable.
 
     After cutover the canonical head is the only lease source; its failure is
     reported, never replaced by the local files it superseded. The failure
@@ -184,19 +183,22 @@ def _open_todo_leases(
         return None
     if canonical is not None:
         leases = [lease for lease in canonical.get("leases") or [] if isinstance(lease, Mapping)]
+        unreadable_todo_ids: set[str] = set()
     else:
         leases = []
+        unreadable_todo_ids = set()
         for todo_id in sorted(todo_ids):
             try:
                 lease = read_lease(
                     task_lease_path(runtime_root=runtime_root, goal_id=goal_id, todo_id=todo_id)
                 )
             except (TaskLeaseError, OSError):
-                # One corrupt peer lease must not hide the healthy ones.
+                # Keep the affected claimant uncertain without hiding healthy peers.
+                unreadable_todo_ids.add(todo_id)
                 continue
             if lease:
                 leases.append(lease)
-    return [lease for lease in leases if lease.get("todo_id") in todo_ids]
+    return [lease for lease in leases if lease.get("todo_id") in todo_ids], unreadable_todo_ids
 
 
 def _lease_fact(lease: Mapping[str, Any], *, at: datetime) -> dict[str, Any]:
@@ -249,7 +251,8 @@ def collect_agent_execution_facts(
             requesters=(spelling for work in agents.values() for spelling in work["spellings"]),
         )
         todo_ids = {todo_id for work in agents.values() for todo_id in work["open_todo_ids"]}
-        leases = _open_todo_leases(root, goal_id=goal_id, todo_ids=todo_ids) if todo_ids else []
+        observed_leases = _open_todo_leases(root, goal_id=goal_id, todo_ids=todo_ids) if todo_ids else ([], set())
+        leases, unreadable_todo_ids = observed_leases if observed_leases is not None else ([], set())
         for agent_id, work in agents.items():
             row = facts.setdefault(
                 agent_id, {"lane": TURN_LANE_ABSENT, "delegation_worker_active": False}
@@ -258,9 +261,11 @@ def collect_agent_execution_facts(
                 _merge_lane(row, _lane_fact(root, goal_id=goal_id, agent_id=spelling))
             if agent_id in workers:
                 row["delegation_worker_active"] = True
-            if leases is None and work["open_todo_ids"]:
+            if (observed_leases is None and work["open_todo_ids"]) or (
+                unreadable_todo_ids.intersection(work["open_todo_ids"])
+            ):
                 _merge_lease(row, {"status": LEASE_STATUS_UNAVAILABLE})
-        for lease in leases or []:
+        for lease in leases:
             owner = normalize_todo_claimed_by(lease.get("owner"))
             if owner in agents:
                 _merge_lease(facts[owner], _lease_fact(lease, at=at))

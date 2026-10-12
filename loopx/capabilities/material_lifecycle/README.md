@@ -98,6 +98,30 @@ Ordinary one-off reading, summarization, or web research does not require this
 capability unless the project has explicitly activated a managed material
 store.
 
+## Revising An Existing Candidate
+
+When a short preview is later fully read, revise the existing candidate instead
+of adding a duplicate. `build_material_candidate_revision_proposal` binds the
+current authority revision, previous record reference, replacement record
+reference and exact-read content digest. `apply_material_candidate_revision`
+uses the existing source owner's authorization, immutable staging, readback and
+CAS; `rollback_material_candidate_revision` restores the previous authority
+only while the applied revision is still current.
+
+The source implements `MaterialCandidateRevisionProvider` beside its existing
+intake methods. Reconciliation must preserve all stable identities, record
+counts, other records, lifecycle states, rankings and previous content. A
+revision cannot reactivate an archive. Metadata changes must be bound by the
+replacement record reference; source adapters must invalidate public-field
+reviews that no longer match the revised record/content. Ranking changes still
+use a separate Decision Context-backed settlement and receipt.
+
+This extends the existing Python material source apply boundary, without a new
+authority, scheduler, ranking policy or generic CLI writer. An SDK proposal
+does not authorize a write. Product/project adapters must expose the operation,
+publish the readable queues, persist receipts and verify their readback before
+reporting the user's workflow complete. Existing intake stays append-only.
+
 ## Single-Material Reranking
 
 `plan_material_single_move(ordered_material_refs, material_ref, to_rank)`
@@ -176,6 +200,16 @@ gate.
 3. **Exact-read decision evidence.**
    Promote only current, authoritative evidence; reject stale or secondary-only
    claims.
+   A rerank move or Explore topic may cite packet-known evidence only when its
+   changed fact is fresh and matches a current source revision, its recalled
+   claim is exact-read verified against a current source revision, or its
+   direct source/revision ref is backed by one of those same fresh changed facts
+   or exact-read verified claims. A current `source_revisions` scan row alone is
+   not action evidence. Policy evaluation receives a copy, so it cannot rewrite
+   the packet snapshot used to validate its returned actions.
+   Explicitly stale/rejected records cannot support an action. Unrelated stale
+   records remain visible, and opaque references not recognized in the packet
+   keep their existing caller-owned meaning.
 4. **Choose the smallest valid change.**
    Use lifecycle transition, bounded rerank, or structural rebuild as distinct
    operations.

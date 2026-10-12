@@ -738,7 +738,14 @@ class ChatSessionStore(ChatIngressStore):
         session_id: str,
         *,
         turn_id: str | None = None,
+        include_accepted_queued: bool = False,
     ) -> dict[str, Any] | None:
+        """Read the original request; acceptance/dispatch stays with its TS owner.
+
+        Session restoration may also replay a fully accepted active request
+        which is still queued. Interrupt recovery retains the prepared-only
+        default and cannot turn a terminal request into new work.
+        """
         session_token = _opaque_id(session_id, field="session_id")
         turn_token = (
             _opaque_id(turn_id, field="turn_id")
@@ -752,6 +759,8 @@ class ChatSessionStore(ChatIngressStore):
                 agent_id="loopx-chat",
                 operation="read_prepared_managed_chat_turn",
             ):
+                session = self.load_session(session_token)
+                active_id = (session or {}).get("active_turn_id")
                 prepared = [
                     payload
                     for path in (
@@ -760,7 +769,11 @@ class ChatSessionStore(ChatIngressStore):
                     if (
                         payload := _read_json(path)
                     ).get("schema_version") == CHAT_TURN_SCHEMA_VERSION
-                    and "_acceptance" in payload
+                    and ("_acceptance" in payload or (
+                        include_accepted_queued
+                        and payload.get("turn_id") == active_id
+                        and payload.get("status") == "queued"
+                    ))
                     and (
                         (
                             turn_token is not None
@@ -781,21 +794,25 @@ class ChatSessionStore(ChatIngressStore):
                     )
                 turn = prepared[0]
                 acceptance = turn.get("_acceptance")
-                if (
-                    not isinstance(acceptance, dict)
-                    or acceptance.get("schema_version")
-                    != CHAT_TURN_ACCEPTANCE_CAPSULE_SCHEMA
-                    or acceptance.get("phase") != "prepared"
-                    or not isinstance(turn.get("message"), str)
-                    or not isinstance(
-                        acceptance.get("display_message"),
-                        str,
-                    )
-                ):
-                    raise ValueError(
-                        "chat turn acceptance state is inconsistent"
-                    )
-                attachments = acceptance.get("attachments")
+                if acceptance is None:
+                    # Sealed acceptance keeps attachments/display text in its
+                    # committed transcript. Submit verifies its digests again.
+                    messages = [message for message in self.messages(session_token)
+                        if message.get("turn_id") == turn.get("turn_id")
+                        and message.get("role") == "user"]
+                    if len(messages) != 1:
+                        raise ValueError("chat turn acceptance state is inconsistent")
+                    attachments = messages[0].get("attachments")
+                    display_message = messages[0].get("text")
+                else:
+                    if (not isinstance(acceptance, dict)
+                        or acceptance.get("schema_version") != CHAT_TURN_ACCEPTANCE_CAPSULE_SCHEMA
+                        or acceptance.get("phase") != "prepared"):
+                        raise ValueError("chat turn acceptance state is inconsistent")
+                    attachments = acceptance.get("attachments")
+                    display_message = acceptance.get("display_message")
+                if not isinstance(turn.get("message"), str) or not isinstance(display_message, str):
+                    raise ValueError("chat turn acceptance state is inconsistent")
                 if attachments is not None and (
                     not isinstance(attachments, list)
                     or any(
@@ -829,7 +846,7 @@ class ChatSessionStore(ChatIngressStore):
                         turn.get("origin"),
                         field="origin",
                     ),
-                    "display_message": acceptance["display_message"],
+                    "display_message": display_message,
                     "loopx_execution": loopx_execution,
                     "loopx_request": loopx_request,
                 }

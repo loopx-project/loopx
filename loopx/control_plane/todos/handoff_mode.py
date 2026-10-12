@@ -33,6 +33,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
+from ...paths import effective_runtime_root
 from ..coordination.authority_core import (
     HandoffMode,
     OwnershipGate,
@@ -93,7 +94,7 @@ def _resolve_state(
     project: Path | None = None,
     state_file: Path | None = None,
 ) -> tuple[Path | None, Path]:
-    from ...todos import resolve_todo_state_path
+    from .path_resolution import resolve_todo_state_path
 
     return resolve_todo_state_path(
         registry_path=registry_path,
@@ -187,7 +188,7 @@ def enter_added_todo_ownership_handoff_gate(
     ``todo update --claimed-by``, which is the verb that owns that action.
     """
 
-    from ...todos import matching_todo_block  # loopx.todos, deferred: import cycle
+    from .addition import matching_todo_block
     from .active_state_editing import section_bounds
 
     bounds = section_bounds(lines, role)
@@ -243,11 +244,10 @@ def show_goal_handoff_mode(
     state_file: Path | None = None,
     runtime_root_arg: str | None = None,
 ) -> dict[str, Any]:
-    from ..work_items.task_lease import runtime_root_from_registry
     from .provider_handoff_mode import read_canonical_handoff_mode
 
     canonical = read_canonical_handoff_mode(
-        runtime_root=runtime_root_from_registry(registry_path, runtime_root_arg), goal_id=goal_id)
+        runtime_root=effective_runtime_root(registry_path, runtime_root_arg), goal_id=goal_id)
     if canonical is not None:
         return {"ok": True, "schema_version": HANDOFF_MODE_SCHEMA_VERSION, "action": "show",
                 "goal_id": goal_id, **canonical,
@@ -309,21 +309,13 @@ def set_goal_handoff_mode(
     Hand-editing frontmatter bypasses this check and is outside the contract.
     """
 
-    from ..work_items.task_lease import runtime_root_from_registry
-    from .handoff_mode_source import handoff_mode_source
     from ..coordination.legacy_writer_fence import (
         LegacyCoordinationWriterFenced,
-        legacy_todo_write_transaction,
         require_legacy_coordination_write_allowed,
     )
     from ..coordination.local_authority import (
         LocalCoordinationAuthorityRejection,
         LocalCoordinationAuthorityUnavailable,
-    )
-    from ..coordination.runtime_shadow_writer_adapter import (
-        write_captured_todo_state,
-        begin_todo_runtime_shadow_capture,
-        settle_todo_runtime_shadow_capture,
     )
 
     requested = normalize_handoff_mode(mode)
@@ -334,7 +326,7 @@ def set_goal_handoff_mode(
         )
     from .provider_handoff_mode import set_canonical_handoff_mode
 
-    runtime_root = runtime_root_from_registry(registry_path, runtime_root_arg)
+    runtime_root = effective_runtime_root(registry_path, runtime_root_arg)
     try:
         canonical = set_canonical_handoff_mode(
             runtime_root=runtime_root,
@@ -361,6 +353,16 @@ def set_goal_handoff_mode(
         return canonical
     if operation_id is not None:
         raise HandoffModeError("--operation-id requires canonical authority", code="handoff_mode_operation_id_unsupported")
+    # Compatibility source IO is needed only after canonical routing declines.
+    # Promoted commands and provider failures must survive producer retirement.
+    from .handoff_mode_source import handoff_mode_source
+    from ..coordination.legacy_writer_fence import legacy_todo_write_transaction
+    from ..coordination.runtime_shadow_writer_adapter import (
+        write_captured_todo_state,
+        begin_todo_runtime_shadow_capture,
+        settle_todo_runtime_shadow_capture,
+    )
+
     _project, resolved_state_file = _resolve_state(
         registry_path=registry_path,
         goal_id=goal_id,

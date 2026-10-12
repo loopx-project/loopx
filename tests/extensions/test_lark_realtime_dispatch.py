@@ -4,6 +4,8 @@ from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 import json
+import os
+from pathlib import Path
 import threading
 
 import pytest
@@ -12,6 +14,7 @@ from loopx.extensions.lark import goal_topic_runtime as runtime
 from loopx.extensions.lark.event_inbox import inspect_lark_event_inbox
 from loopx.extensions.lark.goal_channel_contracts import read_goal_channel_binding
 from loopx.extensions.lark.goal_channel_targets import read_goal_channel_targets
+from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
 from test_lark_goal_topic_runtime import _reply_runner, _seed_legacy_topic
 
 
@@ -56,6 +59,30 @@ class _Consumer:
     def wait(self, timeout=None):
         self.waited = True
         return 0
+
+
+class _IdleConsumer(_Consumer):
+    """A live pipe stays idle until its owning listener terminates it."""
+
+    def __init__(self):
+        reader, writer = os.pipe()
+        super().__init__(os.fdopen(reader, encoding="utf-8"))
+        self._writer = os.fdopen(writer, "w", encoding="utf-8", buffering=1)
+        self.terminated = threading.Event()
+
+    def send(self, line):
+        self._writer.write(line + "\n")
+
+    def poll(self):
+        return 0 if self.terminated.is_set() else None
+
+    def terminate(self):
+        self._writer.close()
+        self.terminated.set()
+
+    def close(self):
+        self.terminate()
+        self.stdout.close()
 
 
 def _thread_reply_runner():
@@ -312,3 +339,139 @@ def test_reader_failure_drains_active_work_and_cleans_up_without_accepting_buffe
     assert answers == ["om_alpha_first"]
     assert _processed(tmp_path) == 1
     assert not list((tmp_path / "runtime").rglob("om_alpha_waiting.json"))
+
+
+@pytest.mark.parametrize("active_answer", [False, True])
+def test_idle_handler_failure_unblocks_reader_and_retains_active_answer_ownership(
+    tmp_path, monkeypatch, active_answer
+):
+    snapshot = _snapshot(tmp_path)
+    active, release, failed = [threading.Event() for _ in range(3)]
+    health, answers = [], []
+    poll = runtime.poll_lark_goal_topic_profile_once
+
+    def failing_poll(**kwargs):
+        event = json.loads(kwargs["consume_runner"]([])["stdout"])
+        if event["message_id"] == "om_beta_failure":
+            failed.set()
+            raise OSError("synthetic handler failure")
+        return poll(**kwargs)
+
+    def answer(route, _text):
+        answers.append(route["message_id"])
+        active.set()
+        assert release.wait(8)
+        return "Public synthetic reply"
+
+    monkeypatch.setattr(runtime, "poll_lark_goal_topic_profile_once", failing_poll)
+    consumer = _IdleConsumer()
+    stop = threading.Event()
+    _unused, options = _start(tmp_path, snapshot, [], answer, stop, health)
+    options["process_factory"] = lambda _args: consumer
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(runtime.stream_lark_goal_topic_profile, **options)
+        try:
+            consumer.send("[event] ready event_key=im.message.receive_v1")
+            if active_answer:
+                consumer.send(json.dumps(_event("alpha_first")))
+                assert active.wait(5)
+                consumer.send(json.dumps(_event("alpha_waiting")))
+            consumer.send(json.dumps(_event("beta_failure", "beta")))
+            assert failed.wait(5)
+            # No subsequent line or provider disconnect may be needed to
+            # expose the failure and enter the existing service retry path.
+            assert consumer.terminated.wait(3), "Idle reader hid a handler failure"
+            assert health[-1]["status"] == "failed"
+            assert health[-1]["error_code"] == "lark_event_listener_failed"
+            assert not stop.is_set(), "Failure was mistaken for a requested stop"
+            if active_answer:
+                assert not future.done()
+                assert not consumer.waited
+        finally:
+            release.set()
+            consumer.terminate()
+        try:
+            with pytest.raises(OSError, match="synthetic handler failure"):
+                future.result(timeout=8)
+        finally:
+            consumer.close()
+    assert consumer.waited
+    assert answers == (["om_alpha_first"] if active_answer else [])
+    assert _processed(tmp_path) == int(active_answer)
+    assert not list((tmp_path / "runtime").rglob("om_alpha_waiting.json"))
+    assert not list((tmp_path / "runtime").rglob("om_beta_failure.json"))
+    assert health[-1]["status"] == "failed", "Late answer hid the listener failure"
+    assert "synthetic handler failure" not in json.dumps(health)
+
+
+def test_idle_handler_failure_reconnects_through_the_existing_service_owner(
+    tmp_path, monkeypatch
+):
+    snapshot = _snapshot(tmp_path)
+    consumer = _IdleConsumer()
+    stop = threading.Event()
+    attempts, health = [], []
+    stream = runtime.stream_lark_goal_topic_profile
+    poll = runtime.poll_lark_goal_topic_profile_once
+    service = LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: snapshot,
+        runtime_root=tmp_path / "runtime",
+        runtime_controller=object(),
+    )
+    # Keep the real machine/App lease in the fixture, never in the user's home.
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    update_health = service._update_health
+
+    def record_health(profile, **updates):
+        update_health(profile, **updates)
+        health.append(service.health_snapshot()[profile])
+
+    def failing_poll(**kwargs):
+        if not consumer.waited:
+            raise OSError("synthetic handler failure")
+        return poll(**kwargs)
+
+    def owned_stream(**kwargs):
+        attempts.append(len(attempts) + 1)
+        if len(attempts) == 1:
+            consumer.send("[event] ready event_key=im.message.receive_v1")
+            consumer.send(json.dumps(_event("beta_failure", "beta")))
+            return stream(**kwargs, process_factory=lambda _args: consumer)
+        assert consumer.waited, "New consumer started before the old owner settled"
+        replacement = _Consumer(
+            [
+                "[event] ready event_key=im.message.receive_v1\n",
+                "[event] exited (reason: timeout)\n",
+            ]
+        )
+        result = stream(**kwargs, process_factory=lambda _args: replacement)
+        assert result["ok"] and replacement.waited
+        stop.set()
+        service._closed.set()
+        return result
+
+    monkeypatch.setattr(service, "_update_health", record_health)
+    monkeypatch.setattr(runtime, "poll_lark_goal_topic_profile_once", failing_poll)
+    monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile", owned_stream)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(service._poll_profile, "mew", stop)
+            try:
+                future.result(timeout=6)
+            finally:
+                stop.set()
+                service._closed.set()
+                consumer.terminate()
+    finally:
+        consumer.close()
+    assert attempts == [1, 2]
+    assert any(row["status"] == "failed" for row in health)
+    assert any(
+        row["status"] == "retrying"
+        and row["restart_count"] == 1
+        and row["error_code"] == "lark_event_listener_failed"
+        for row in health
+    )
+    assert health[-1]["status"] == "listening"
+    assert health[-1]["restart_count"] == 1
+    assert _processed(tmp_path) == 0

@@ -42,7 +42,7 @@ def test_public_list_preserves_completed_dependency_after_archive(tmp_path: Path
     code, result = run_json_cli_result("todo", "list", "--goal-id", "goal-a", "--role", "agent",
         "--todo-id", "todo_successor", "--agent-id", "agent-a", registry_path=registry, runtime_root=runtime)
     assert code == 0, result
-    assert result["todos"][0]["resume_ready"] is True
+    assert result["todo"]["resume_ready"] is True
     assert state.read_bytes() == after
 
 
@@ -85,7 +85,7 @@ def test_capture_preserves_archived_dependency_for_real_canonical_cli_read(tmp_p
     code, result = run_json_cli_result("todo", "list", "--goal-id", "goal-a", "--role", "agent",
         "--todo-id", "todo_waiting", registry_path=registry, runtime_root=runtime)
     assert code == 0, result
-    assert result["todos"][0]["resume_ready"] is True
+    assert result["todo"]["resume_ready"] is True
     code, completed = run_json_cli_result("todo", "list", "--goal-id", "goal-a", "--role", "agent",
         "--status", "done", registry_path=registry, runtime_root=runtime)
     assert code == 0, completed

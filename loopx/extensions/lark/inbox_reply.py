@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from enum import Enum
@@ -41,13 +42,14 @@ class BotIdentityVerification(str, Enum):
     REJECTED = "rejected"
 
 
-def _default_runner(args: Sequence[str]) -> Mapping[str, Any]:
+def _default_runner(args: Sequence[str], *, cwd: Path | None = None) -> Mapping[str, Any]:
     result = subprocess.run(
         list(args),
         text=True, encoding="utf-8", errors="replace",
         capture_output=True,
         timeout=30,
         check=False,
+        cwd=cwd,
     )
     return {
         "returncode": result.returncode,
@@ -287,6 +289,8 @@ def _deliver_lark_inbox_outbound(
     delivery_attempt_recorder: Callable[[Mapping[str, str | None]], None] | None = None,
     short_message_limit: int | None = DEFAULT_LARK_TEXT_LIMIT,
     finalize_reactions: bool = True,
+    attachment_keys: tuple[str, ...] = (),
+    attachment_names: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Deliver through one inbox-configured bot with exact provider readback.
 
@@ -326,6 +330,9 @@ def _deliver_lark_inbox_outbound(
         raise ValueError("unsupported Lark reply content format")
     # Structured mentions retain the existing identity-verified text transport.
     markdown = content_format == "markdown" and not expected_lark_mention_identities(text)
+    if attachment_keys and (not markdown or len(attachment_keys) > 4
+                            or any(not re.fullmatch(r"file_[A-Za-z0-9_-]{1,240}", key) for key in attachment_keys)):
+        raise ValueError("result files require bounded post attachment keys")
     reply_text = normalize_lark_outbound_text(
         text,
         limit=None if source_event is not None else short_message_limit,
@@ -368,6 +375,7 @@ def _deliver_lark_inbox_outbound(
                 "placement": placement,
                 "text": reply_text,
                 **({"content_format": "markdown"} if markdown else {}),
+                **({"attachment_keys": attachment_keys} if attachment_keys else {}),
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -450,6 +458,8 @@ def _deliver_lark_inbox_outbound(
         ["--msg-type", "post", "--content", lark_markdown_post_content(reply_text)]
         if markdown else ["--text", reply_text]
     )
+    if attachment_keys:
+        content_args.extend(arg for key in attachment_keys for arg in ("--attachment", key))
     destination = (
         [
             "im",
@@ -484,7 +494,7 @@ def _deliver_lark_inbox_outbound(
     provider_preview_verified = bool(
         preview.get("returncode") == 0
         and (
-            lark_markdown_preview_matches(text=reply_text, payload=_json_object(preview.get("stdout")))
+            lark_markdown_preview_matches(text=reply_text, payload=_json_object(preview.get("stdout")), attachment_keys=attachment_keys)
             if markdown else lark_provider_preview_matches_outbound(
                 outbound_text=reply_text, payload=_json_object(preview.get("stdout")),
             )
@@ -513,6 +523,8 @@ def _deliver_lark_inbox_outbound(
             validate_lark_text_request_size(call["body"])
             body_bytes = len(json.dumps(call["body"], ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
             if markdown and body_bytes > LARK_POST_REQUEST_MAX_BYTES:
+                if attachment_keys:
+                    raise ValueError("result file post exceeds the provider message bound")
                 # No write has occurred. Preserve the full answer via the existing
                 # larger text transport rather than truncate or retry after send.
                 result = _deliver_lark_inbox_outbound(
@@ -674,7 +686,8 @@ def _deliver_lark_inbox_outbound(
     verified = bool(
         readback.get("returncode") == 0
         and readback_message is not None
-        and (lark_markdown_readback_matches(text=reply_text, message=readback_message)
+        and (lark_markdown_readback_matches(text=reply_text, message=readback_message, attachment_keys=attachment_keys,
+                                          attachment_names=attachment_names)
              if markdown else lark_readback_matches_outbound(
             outbound_text=reply_text,
             message=readback_message,
@@ -750,6 +763,8 @@ def reply_lark_event_inbox(
     delivery_attempt_recorder: Callable[[Mapping[str, str | None]], None] | None = None,
     short_message_limit: int | None = DEFAULT_LARK_TEXT_LIMIT,
     finalize_reactions: bool = True,
+    attachment_keys: tuple[str, ...] = (),
+    attachment_names: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Reply with the explicit inbox-configured bot and placement policy.
 
@@ -775,6 +790,8 @@ def reply_lark_event_inbox(
         delivery_attempt_recorder=delivery_attempt_recorder,
         short_message_limit=short_message_limit,
         finalize_reactions=finalize_reactions,
+        attachment_keys=attachment_keys,
+        attachment_names=attachment_names,
     )
 
     result.setdefault("content_format", "markdown" if content_format == "markdown"
@@ -792,6 +809,8 @@ def verify_lark_inbox_reply(
     runner: CommandRunner = _default_runner,
     source_membership_verifier: Callable[[], bool] | None = None,
     finalize_reactions: bool = True,
+    attachment_keys: tuple[str, ...] = (),
+    attachment_names: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Read back one prior Lark reply without sending another message."""
 
@@ -818,7 +837,7 @@ def verify_lark_inbox_reply(
     profile = str(reply_config.get("sender_profile") or "")
     chat_id = str(reply_config.get("chat_id") or "")
     preview = None
-    for content_format in ("markdown", "text"):
+    for content_format in (("markdown",) if attachment_keys else ("markdown", "text")):
         candidate = reply_lark_event_inbox(
             project=project,
             config_path=config_path,
@@ -827,6 +846,7 @@ def verify_lark_inbox_reply(
             content_format=content_format,
             execute=False,
             runner=runner,
+            attachment_keys=attachment_keys,
         )
         receipt = str(candidate.get("idempotency_key") or "")
         if (
@@ -924,7 +944,8 @@ def verify_lark_inbox_reply(
             "blocker": "provider_message_missing",
         }
     verified = (
-        lark_markdown_readback_matches(text=reply_text, message=message)
+        lark_markdown_readback_matches(text=reply_text, message=message, attachment_keys=attachment_keys,
+                                      attachment_names=attachment_names)
         if markdown
         else lark_readback_matches_outbound(
             outbound_text=reply_text,
@@ -1020,6 +1041,7 @@ def update_lark_inbox_reply(
     receipt = str(desired["idempotency_key"])
     updated_attempt = {**attempt, "provider_receipt": receipt,
                        "intent_digest": _intent_digest(profile, chat_id, receipt)}
+    edit_limit_reached = False
     if not lark_markdown_readback_matches(text=text, message=message):
         edit_args = [*base, "im", "+messages-edit", "--message-id", ref,
                      "--msg-type", "post", "--content", content, "--as", "bot", "--format", "json"]
@@ -1028,7 +1050,15 @@ def update_lark_inbox_reply(
             return {"ok": False, "reply_verified": False, "blocker": "provider_update_preview_mismatch"}
         if before_send(receipt).get("continue_delivery") is not True:
             return {"ok": False, "reply_verified": False, "blocker": "provider_update_deferred"}
-        _call(runner, edit_args)
+        edited = _call(runner, edit_args)
+        # The CLI reports API failures as JSON on stderr. Only this definite
+        # rejection permits falling back to a separate final message; unknown
+        # failures and lost acknowledgements still require exact readback.
+        edit_limit_reached = edited.get("returncode") != 0 and any(
+            isinstance(error := _json_object(edited.get(channel)).get("error"), Mapping)
+            and error.get("type") == "api" and error.get("code") == 230072
+            for channel in ("stdout", "stderr")
+        )
         # An error or timeout may follow an applied edit. Readback, not the
         # command return code, decides whether this exact body reached Lark.
         readback = _call(runner, read_args)
@@ -1037,6 +1067,8 @@ def update_lark_inbox_reply(
     if readback.get("returncode") != 0 or message is None:
         return {"ok": False, "reply_verified": False, "blocker": "provider_verification_unavailable"}
     if not lark_markdown_readback_matches(text=text, message=message):
+        if edit_limit_reached:
+            return {"ok": False, "reply_verified": False, "blocker": "provider_update_edit_limit"}
         return {"ok": False, "reply_verified": False, "blocker": "provider_delivery_mismatch"}
     return _verified_reply_result(project=project, config_path=config_path, message_id=message_id,
                                   runner=runner, finalize_reactions=finalize_reactions)

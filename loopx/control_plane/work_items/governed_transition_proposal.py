@@ -11,12 +11,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from ...todos import (
-    add_goal_todo,
-    complete_goal_todo,
-    list_goal_todos,
-    update_goal_todo,
-)
+from ...control_plane.todos.list_readback import list_goal_todos
+from ...control_plane.todos.mutation_api import add_goal_todo, complete_goal_todo, update_goal_todo
 from ..coordination.coordination_state_contract_generated import COORDINATION_STATE_CONTRACT
 from ..runtime.public_safety import validate_public_safe_value
 from ..content_digest import ENVELOPED_SHA256_PATTERN

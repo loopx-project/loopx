@@ -1,6 +1,7 @@
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
-import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
+import {requireInteger, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
+import {requireAutomationCadenceEligibility} from "../quota/automation_cadence.ts";
 import {normalizeProjectContext, normalizeStewardContext, normalizeStewardGoalScope} from "./conversation_scope.ts";
 
 /** Core owns the context and audience grant. A provider supplies verified,
@@ -28,6 +29,41 @@ function sessionIdentity(value: unknown, label: string): string {
   const result = requireNonEmptyString(value, label);
   if (!/^[A-Za-z0-9._-]{1,160}$/.test(result)) throw new EffectRuntimeRequestError(`${label} is invalid`);
   return result;
+}
+
+function automationCadenceStatus(value: unknown, recipient: JsonObject): JsonObject {
+  const row = requireJsonObject(value, "automation cadence observation");
+  if (row.goal_id !== recipient.goal_id || row.agent_id !== recipient.agent_id || row.automation_id !== null) {
+    throw new EffectRuntimeRequestError("automation cadence observation belongs to another Agent scope");
+  }
+  const eligibility = requireAutomationCadenceEligibility(row.eligibility);
+  const unavailable = eligibility.state === "unavailable";
+  if (unavailable) {
+    if (row.configuration_revision !== null || row.min_interval_minutes !== null) {
+      throw new EffectRuntimeRequestError("unavailable automation cadence observation cannot claim policy values");
+    }
+  } else {
+    for (const [field, label] of [
+      ["configuration_revision", "automation cadence configuration revision"],
+      ["min_interval_minutes", "automation cadence minimum interval"],
+    ] as const) {
+      const number = requireInteger(row[field], label);
+      if (!Number.isSafeInteger(number) || number < 0) {
+        throw new EffectRuntimeRequestError(`${label} must be a non-negative safe integer`);
+      }
+    }
+    if (Number(row.min_interval_minutes) > 525600) {
+      throw new EffectRuntimeRequestError("automation cadence minimum interval exceeds one year");
+    }
+  }
+  return {
+    goal_id: recipient.goal_id,
+    agent_id: recipient.agent_id,
+    automation_id: null,
+    configuration_revision: unavailable ? null : Number(row.configuration_revision),
+    min_interval_minutes: unavailable ? null : Number(row.min_interval_minutes),
+    eligibility,
+  };
 }
 
 function agentTarget(value: unknown): JsonObject {
@@ -86,6 +122,18 @@ function validateAgentTargetObservation(target: JsonObject, value: unknown, work
 
 function binding(value: unknown): JsonObject {
   const row = requireJsonObject(value, "conversation binding");
+  const group = row.audience === "group";
+  if (row.audience !== undefined && row.audience !== "group") {
+    throw new EffectRuntimeRequestError("unsupported conversation audience");
+  }
+  if (group && (row.context_kind !== "project" || row.executor_endpoint_id !== "codex")) {
+    throw new EffectRuntimeRequestError("group Chat requires a native project executor");
+  }
+  const groups = row.group_refs;
+  if (group ? !Array.isArray(groups) || groups.length === 0 || groups.length > 16
+      : groups !== undefined) throw new EffectRuntimeRequestError("invalid group audience grant");
+  const groupRefs = group ? [...new Set((groups as unknown[]).map(value => ref(value, "group reference")))].sort() : [];
+  if (group && groupRefs.length !== (groups as unknown[]).length) throw new EffectRuntimeRequestError("duplicate group audience grant");
   if (row.goal_scope !== undefined && (row.context_kind !== "steward"
       || !["all_registered", "selected"].includes(String(row.goal_scope)))) {
     throw new EffectRuntimeRequestError("unsupported steward Goal scope");
@@ -97,7 +145,7 @@ function binding(value: unknown): JsonObject {
   }
   const targets = row.agent_targets === undefined ? [] : row.agent_targets;
   if (!Array.isArray(targets) || targets.length > 16
-      || (row.context_kind !== "project" && targets.length !== 0)) {
+      || ((row.context_kind !== "project" || group) && targets.length !== 0)) {
     throw new EffectRuntimeRequestError("invalid Agent target grant set");
   }
   const agents = targets.map(agentTarget);
@@ -114,6 +162,7 @@ function binding(value: unknown): JsonObject {
     context_kind: row.context_kind, project_ref: ref(row.project_ref, "workspace reference"),
     executor_endpoint_id: token(row.executor_endpoint_id, "executor endpoint"),
     grant: row.grant, enabled: true,
+    ...(group ? {audience: "group", group_refs: groupRefs} : {}),
     ...(row.context_kind === "steward" ? {goal_ids: normalizeStewardGoalScope(row.goal_ids),
       ...(row.goal_scope !== undefined ? {goal_scope: row.goal_scope} : {})} : {}),
     ...(agents.length ? {agent_targets: agents} : {}),
@@ -161,6 +210,12 @@ export function planConversationBinding(params: JsonObject): JsonObject {
   if (params.operation === "configure") {
     const candidate = binding(params.binding);
     observed(candidate, params.observation);
+    if (candidate.audience === "group") {
+      if (!Array.isArray(params.available_group_refs)
+          || !(candidate.group_refs as string[]).every(group => (params.available_group_refs as unknown[]).includes(group))) {
+        throw new EffectRuntimeRequestError("selected groups are not independently verified under this App");
+      }
+    }
     const project = Array.isArray(params.available_projects)
       ? params.available_projects.map(normalizeProjectContext).find(row => row.project_ref === candidate.project_ref) : undefined;
     if (!project || (candidate.grant === "workspace_write" && project.grant !== "workspace_write")) {
@@ -179,7 +234,7 @@ export function planConversationBinding(params: JsonObject): JsonObject {
   } else if (params.operation === "grant_agent_target" || params.operation === "revoke_agent_target") {
     const id = ref(params.binding_id, "binding identity");
     const previous = current.bindings.find(row => row.binding_id === id);
-    if (!previous || previous.context_kind !== "project") throw new EffectRuntimeRequestError("Agent selection requires a project binding");
+    if (!previous || previous.context_kind !== "project" || previous.audience === "group") throw new EffectRuntimeRequestError("Agent selection requires a private project binding");
     observed(previous, params.observation);
     const existing = previous.agent_targets as JsonObject[] | undefined ?? [];
     let targets: JsonObject[];
@@ -231,7 +286,18 @@ export function resolveBoundConversation(params: JsonObject): JsonObject {
   if (!row) throw new EffectRuntimeRequestError("conversation binding is no longer authorized");
   observed(row, params.observation);
   const source = ref(params.source_ref, "source conversation identity");
-  if (params.sender_ref !== row.operator_ref || params.private_human_message !== true) {
+  const group = row.audience === "group";
+  let topic: JsonObject = {};
+  if (group) {
+    const groupRef = ref(params.group_ref, "group reference"), topicRef = ref(params.topic_ref, "topic reference");
+    ref(params.sender_ref, "group sender identity");
+    if (params.group_human_message !== true || params.private_human_message !== false || topicRef !== source
+        || !(row.group_refs as string[]).includes(groupRef)) {
+      throw new EffectRuntimeRequestError("message audience is outside the binding grant");
+    }
+    topic = {group_ref: groupRef, topic_ref: topicRef, filesystem_scope: "workspace_only"};
+  } else if (params.sender_ref !== row.operator_ref || params.private_human_message !== true
+      || params.group_ref !== undefined || params.topic_ref !== undefined || params.group_human_message === true) {
     throw new EffectRuntimeRequestError("message audience is outside the binding grant");
   }
   if (!Array.isArray(params.available_projects)) throw new EffectRuntimeRequestError("workspace grants unavailable");
@@ -242,9 +308,10 @@ export function resolveBoundConversation(params: JsonObject): JsonObject {
   }
   const goals = row.context_kind === "steward" && row.goal_scope === "all_registered"
     ? normalizeStewardGoalScope(params.available_goal_ids) : row.goal_ids;
-  const context = {...projects[0], audience: "bound_owner", binding_id: id, source_ref: source,
+  const rawContext = {...projects[0], ...topic, audience: group ? "bound_group" : "bound_owner", binding_id: id, source_ref: source,
     provider_ref: row.provider_ref, operator_ref: row.operator_ref, grant: row.grant,
     ...(row.context_kind === "steward" ? {kind: "bound_steward", grant: "portfolio_read", goal_ids: goals} : {})};
+  const context = group ? normalizeProjectContext(rawContext) : rawContext;
   if (params.session_context !== undefined) {
     const saved = requireJsonObject(params.session_context, "bound Session context");
     // New commissions may extend the same owner's scope. Workspace, role and
@@ -255,7 +322,12 @@ export function resolveBoundConversation(params: JsonObject): JsonObject {
       : JSON.stringify(saved) === JSON.stringify(context);
     if (!matches) throw new EffectRuntimeRequestError("bound Session context changed");
   }
-  return {binding: row, context, channel_id: row.context_kind === "steward"
+  // This is an audience proof, not a host-tool grant. Only the independently
+  // verified owner in this private source may inherit an explicit machine
+  // owner grant. Portfolio scope and project write grants do not imply it.
+  return {binding: row, context, owner_manager_audience: row.context_kind === "steward"
+      && projects[0].filesystem_scope !== "workspace_only",
+    channel_id: row.context_kind === "steward"
     ? `manager.external.native.${id}.${source}` : `project.external.${id}.${source}`};
 }
 
@@ -283,6 +355,9 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
     return {operation: "reply", session_id: session, turn_id: null, response_code: "unsupported_attachment"};
   }
   if (["agents", "select_agent", "select_project"].includes(String(command))) {
+    if (requireJsonObject(params.binding, "conversation binding").audience === "group") {
+      return {operation: "reply", session_id: session, turn_id: null, response_code: "group_recipient_unavailable"};
+    }
     return {operation: "select_recipient", session_id: null, turn_id: null};
   }
   if (params.agent_target !== undefined && params.agent_target !== null) {
@@ -345,6 +420,14 @@ function boundConversationStatus(params: JsonObject, current: JsonObject | null)
       throw new EffectRuntimeRequestError("status Session context changed");
     }
   }
+  const statusCommand = requireJsonObject(params.request, "external request").command === "status";
+  const cadenceExpected = statusCommand && recipient !== null;
+  if ((params.automation_cadence !== undefined) !== cadenceExpected) {
+    throw new EffectRuntimeRequestError("automation cadence observation requires an exact selected Agent status");
+  }
+  const cadence = cadenceExpected
+    ? automationCadenceStatus(params.automation_cadence, recipient as JsonObject)
+    : null;
   if (!Number.isSafeInteger(params.queued_count) || Number(params.queued_count) < 0
       || (!current && params.queued_count !== 0)) throw new EffectRuntimeRequestError("invalid canonical queue observation");
   const instant = requireNonEmptyString(params.observed_at, "status observation time");
@@ -359,9 +442,12 @@ function boundConversationStatus(params: JsonObject, current: JsonObject | null)
     }
   }
   return {schema_version: "loopx_chat_bound_status_v0", observed_at: instant,
-    context_kind: selected.context_kind, workspace_path: context.workspace_path,
+    context_kind: selected.context_kind,
+    workspace_path: selected.audience === "group" ? String(context.workspace_path).split(/[\\/]/).filter(Boolean).at(-1) : context.workspace_path,
+    ...(selected.audience === "group" ? {audience: "group"} : {}),
     executor_endpoint_id: recipient?.executor_endpoint_id ?? selected.executor_endpoint_id, grant: selected.grant,
     ...(recipient ? {recipient_agent_id: recipient.agent_id, recipient_goal_id: recipient.goal_id, recipient_mode: "attached_host"} : {}),
+    ...(cadence ? {automation_cadence: cadence} : {}),
     authorized_commission_count: steward ? (selected.goal_ids as string[]).length : 0,
     session_status: current?.status ?? null, active_turn_status: turn?.status ?? null,
     active_turn_observation_available: !current?.active_turn_id || turn !== null,

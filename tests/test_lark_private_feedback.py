@@ -29,7 +29,8 @@ def test_default_feedback_tracks_queue_execution_stop_and_app_isolation(ordinary
         assert ('notes-app', slow['message_id'], 'OnIt') in provider.reaction_creates
         assert ('notes-app', queued['message_id'], 'Get') in provider.reaction_creates
         assert ('notes-app', queued['message_id'], 'OnIt') not in provider.reaction_creates
-        assert provider.writes == [('notes-app', '正在处理前一条，这条已排队。')]
+        assert provider.writes == [('notes-app', '正在处理前一条，这条已排队。'),
+                                   ('notes-app', '⏳ **已开始处理**')]
         assert any(row[1:] == (slow['message_id'], 'OnIt') for row in provider.reactions.values())
         # A new provider instance reuses durable receipts, not in-memory emoji state.
         replay = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,

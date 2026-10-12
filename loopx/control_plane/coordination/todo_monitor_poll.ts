@@ -1,4 +1,3 @@
-import {projectTodoGateScopes} from "../todos/decision_scope.ts";
 import {monitorMutationRejection} from "./todo_monitor_cycle.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
 /** One canonical transaction for an observation and its independent successors.
@@ -8,14 +7,11 @@ import type {AuthorityStore} from "./authority_store.ts";
 import {AuthorityStoreProtocolError, canonicalAuthorityObject, canonicalAuthoritySha256, requireAuthorityStoreId} from "./authority_store_codec.ts";
 import {normalizeRegisteredTodoAgents, normalizeTodoAgent} from "./todo_agents.ts";
 import {indexCoordinationProjection, prepareCoordinationProjectionCommit, validateCoordinationTodoReadModel} from "./coordination_projection.ts";
-import {TODO_DOMAIN_ITEM_SCHEMA} from "./coordination_state_contract.ts";
-import {planCoordinationTodoCreate} from "./todo_create.ts";
-import {planMonitorMetadata, TODO_MONITOR_METADATA_REQUEST_SCHEMA} from "../todos/monitor_metadata.ts";
-import {planMonitorSuccessor, selectMonitorTodo, MONITOR_SUCCESSOR_REQUEST_SCHEMA} from "../scheduler/monitor_successor.ts";
-import {optionalNonEmptyString, requireBoolean} from "../runtime_decode.ts";
-import {planTodoAuthoringScope, TODO_AUTHORING_SCOPE_REQUEST_SCHEMA} from "../todos/authoring_scope.ts";
+import {requireBoolean} from "../runtime_decode.ts";
 import {CoordinationCommandReceipt} from "./command_receipt.ts";
 import {decodeTaskLeaseProof, type TaskLeaseProof} from "./task_lease_proof.ts";
+import {monitorPollRequestHash, normalizeMonitorPollFields, planMonitorBatch} from "../scheduler/monitor_batch.ts";
+export {monitorPollRequestHash} from "../scheduler/monitor_batch.ts";
 
 export const COORDINATION_MONITOR_POLL_REQUEST_SCHEMA = "loopx_coordination_monitor_poll_request_v0";
 export const COORDINATION_LEASED_MONITOR_POLL_REQUEST_SCHEMA = "loopx_coordination_monitor_poll_request_v1";
@@ -37,15 +33,6 @@ export interface CoordinationMonitorPollInput {
   gate_scope_guard?: boolean;
   /** Authority clock supplied by the runtime, never observation.generated_at. */
   now?: Date;
-}
-
-/** Intended effect identity for receipts/no-effect replies. The commit-time
- * dependency guard is admission, not a different observation or replay key. */
-export function monitorPollRequestHash(input: Pick<CoordinationMonitorPollInput,
-  "goal_id" | "observation" | "intent" | "actor_agent_id" | "dry_run" | "lease_proof">): string {
-  return canonicalAuthoritySha256({goal_id: input.goal_id, observation: input.observation,
-    intent: input.intent, actor_agent_id: input.actor_agent_id, dry_run: input.dry_run,
-    ...(input.lease_proof ? {lease_proof: input.lease_proof} : {})});
 }
 
 function failure(reason_code: string, reason: string): JsonObject & {schema_version: typeof COORDINATION_MONITOR_POLL_RESULT_SCHEMA} {
@@ -81,109 +68,27 @@ function normalize(raw: CoordinationMonitorPollInput): NormalizedMonitorPollInpu
     actor_agent_id: raw.actor_agent_id == null ? null : normalizeTodoAgent(raw.actor_agent_id, "actor_agent_id"),
     registered_agents: normalizeRegisteredTodoAgents(raw.registered_agents),
     dry_run: requireBoolean(raw.dry_run, "dry_run"),
-    observation: canonicalAuthorityObject(raw.observation, "Monitor observation"),
-    intent: canonicalAuthorityObject(raw.intent, "Monitor successor intent"),
+    ...normalizeMonitorPollFields(raw.observation, raw.intent),
     gate_scope_guard: raw.gate_scope_guard == null ? false : requireBoolean(raw.gate_scope_guard, "gate_scope_guard"),
     lease_proof: decodeTaskLeaseProof(raw.lease_proof), now: raw.now ?? new Date()};
-  const allowed = new Set(["todo_id", "target_key", "generated_at", "result_hash", "material_change", "cadence", "next_due_at", "reason_summary"]);
-  for (const key of Object.keys(input.observation)) if (!allowed.has(key)) throw new Error(`unsupported Monitor observation field: ${key}`);
-  const intentFields = new Set(["next_agent_todo", "next_action_kind", "next_task_repository", "next_required_capabilities",
-    "next_continuation_policy", "next_target_key", "next_claimed_by", "next_user_todo", "next_user_task_class"]);
-  for (const key of Object.keys(input.intent)) if (!intentFields.has(key)) throw new Error(`unsupported Monitor successor field: ${key}`);
   return input;
 }
 
 function planWriteback(input: NormalizedMonitorPollInput, head: JsonObject) {
   const indexed = indexCoordinationProjection(head, input.goal_id);
   validateCoordinationTodoReadModel(head, input.goal_id);
-  const observation = input.observation;
-  const monitor = selectMonitorTodo([...indexed.todos.values()],
-    optionalNonEmptyString(observation.todo_id, "todo_id"), optionalNonEmptyString(observation.target_key, "target_key"));
-  const actor = input.actor_agent_id;
-  if (input.gate_scope_guard) {
-    // The existing projection CAS below fences this exact head, including gates.
-    const scopes = projectTodoGateScopes({agent_id: actor, items: [monitor],
-      gates: [...indexed.todos.values()].filter(todo => todo.role === "user")
-        .map(todo => ({...todo, is_gate: todo.task_class === "user_gate"}))});
-    if ((scopes.items as JsonObject[])[0].state === "blocked") {
-      throw new Error("Monitor observation is blocked by current User gate dependencies");
-    }
-  }
-  const rejected = monitorMutationRejection({goal_id: input.goal_id, todo: monitor, lease: indexed.leases.get(String(monitor.todo_id)),
-    handoff_mode: head.handoff_mode, actor_agent_id: actor, registered_agents: input.registered_agents,
-    operation: "observe", proof: input.lease_proof, now: input.now});
-  if (rejected !== null) throw new Error(rejected.reason);
-  const successorPlan = planMonitorSuccessor({schema_version: MONITOR_SUCCESSOR_REQUEST_SCHEMA,
-    todo_id: monitor.todo_id, result_hash: observation.result_hash, source_task_repository: monitor.task_repository ?? null,
-    intent: {...input.intent, material_change: observation.material_change}});
-  const intent = canonicalAuthorityObject(successorPlan.intent, "Monitor successor intent");
-  const route = canonicalAuthorityObject(successorPlan.agent_route, "Monitor successor route");
-  const monitorPlan = planMonitorMetadata({schema_version: TODO_MONITOR_METADATA_REQUEST_SCHEMA,
-    existing: monitor, role: "agent", task_class: "continuous_monitor", enforce_boundedness: false,
-    observation: {...observation, monitor_effect_id: input.operation_id}});
-  const transition = canonicalAuthorityObject(monitorPlan.transition, "Monitor transition");
-  if ((intent.next_agent_todo || intent.next_user_todo) && transition.material_change_applied !== true) {
-    throw new Error("successor authoring requires a new material-change generation; poll without successor options for unchanged evidence");
-  }
-  const metadata = canonicalAuthorityObject(monitorPlan.metadata, "Monitor metadata");
-  // Generation is an integer in the persisted Todo contract. The older
-  // observation tokens remain strings (including "0" and "false"); retain
-  // their existing wire types so permanent Markdown projection is lossless.
-  if (metadata.material_change_generation != null) metadata.material_change_generation = Number(metadata.material_change_generation);
-  const updated: JsonObject = {...monitor, last_actor_agent_id: actor, updated_at: observation.generated_at};
-  for (const [key, value] of Object.entries(metadata)) {
-    if (value === null) delete updated[key]; else updated[key] = value;
-  }
-  const reason = optionalNonEmptyString(observation.reason_summary, "reason_summary");
-  if (reason) updated.reason = reason;
-  const nextTodos: JsonObject[] = [];
-  const plannedTodos = new Map(indexed.todos);
-  const mutations: {kind: "todo_upsert"; todo: JsonObject}[] = [{kind: "todo_upsert", todo: updated}];
   const readModel = canonicalAuthorityObject(head.todo_read_model, "Todo read model");
-  for (const role of ["agent", "user"] as const) {
-    const text = intent[role === "agent" ? "next_agent_todo" : "next_user_todo"];
-    if (!text) continue;
-    const id = `todo_${canonicalAuthoritySha256({monitor: monitor.todo_id,
-      generation: transition.material_change_generation, role}).slice(0, 24)}`;
-    const todo: JsonObject = {schema_version: TODO_DOMAIN_ITEM_SCHEMA, todo_id: id, role, text,
-      status: "open", done: false, archive_state: "active",
-      task_class: role === "agent" ? "advancement_task" : intent.next_user_task_class};
-    if (role === "agent") {
-      Object.assign(todo, Object.fromEntries(Object.entries(route).filter(([, value]) => value !== null)),
-        {unblocks_todo_id: monitor.todo_id});
-    } else {
-      // Reuse public authoring scope: an actor-bound gate, never an inferred
-      // all-agent/global gate. User actions retain their actor binding too.
-      const scope = planTodoAuthoringScope({schema_version: TODO_AUTHORING_SCOPE_REQUEST_SCHEMA,
-        command: "create", role, todo: {}, goal_id: input.goal_id, registered_agents: input.registered_agents,
-        intent: {task_class: todo.task_class, actor_agent_id: actor}});
-      for (const key of ["bound_agent", "blocks_agent", "goal_bound", "global_gate"]) {
-        if (scope[key] != null && scope[key] !== false) todo[key] = scope[key];
-      }
-      if (todo.task_class === "user_gate") Object.assign(todo, {action_kind: "gate", unblocks_todo_id: monitor.todo_id});
-    }
-    const created = planCoordinationTodoCreate({goal_id: input.goal_id, operation_id: input.operation_id,
-      actor_agent_id: actor, registered_agents: input.registered_agents, dry_run: input.dry_run,
-      now: new Date(String(observation.generated_at)), todo}, plannedTodos, readModel.schema_version);
-    if (created.status !== "planned" && created.status !== "no_change") throw new Error(String(created.reason));
-    const record = canonicalAuthorityObject(created.todo, "successor Todo");
-    nextTodos.push({...record, todo: record.text, ok: true, dry_run: input.dry_run});
-    if (created.status === "planned") mutations.push({kind: "todo_upsert", todo: record});
-    plannedTodos.set(String(record.todo_id), record);
-  }
-  const receiptFields = ["todo_id", "role", "task_class", "action_kind", "task_repository",
-    "continuation_policy", "required_capabilities", "claimed_by", "unblocks_todo_id", "target_key"];
-  const writeback: JsonObject = {schema_version: "monitor_poll_todo_writeback_v0", dry_run: input.dry_run,
-    goal_id: input.goal_id, todo_id: monitor.todo_id, monitor_effect_id: input.operation_id,
-    target_key: transition.target_key || null, result_hash: observation.result_hash,
-    material_change: observation.material_change, material_change_generation: transition.material_change_generation,
-    consecutive_no_change: transition.consecutive_no_change, last_checked_at: observation.generated_at,
-    next_due_at: transition.next_due_at ?? null, cadence: transition.cadence || null,
-    todo_update: {ok: true, todo_id: monitor.todo_id, monitor_poll_transition: transition},
-    ...(input.lease_proof ? {lease_proof: {...input.lease_proof}} : {}),
-    next_todos: nextTodos, successor_receipts: nextTodos.map(todo => Object.fromEntries(
-      receiptFields.filter(key => todo[key] != null).map(key => [key, todo[key]]))), provider_replayed: false};
-  return {mutations, writeback};
+  const result = planMonitorBatch({...input, todos: [...indexed.todos.values()],
+    read_model_schema: String(readModel.schema_version),
+    admit_monitor(monitor) {
+      const rejected = monitorMutationRejection({goal_id: input.goal_id, todo: monitor, todos: indexed.todos,
+        lease: indexed.leases.get(String(monitor.todo_id)), handoff_mode: head.handoff_mode,
+        actor_agent_id: input.actor_agent_id, registered_agents: input.registered_agents,
+        operation: "observe", proof: input.lease_proof, now: input.now});
+      if (rejected !== null) throw new Error(rejected.reason);
+    }});
+  return {mutations: result.mutations as {kind: "todo_upsert"; todo: JsonObject}[],
+    writeback: canonicalAuthorityObject(result.writeback, "Monitor writeback")};
 }
 
 export async function executeCoordinationMonitorPoll(store: AuthorityStore,

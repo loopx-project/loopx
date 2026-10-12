@@ -178,7 +178,7 @@ def collect_changed_sources(
 
     requested_untracked: set[str] = set()
     for supplied in explicit_untracked:
-        relative = _validated_source_path(supplied, root=root)
+        relative = _validated_source_path(Path(supplied).as_posix(), root=root)
         tracked = _run_git(
             repo_root,
             ["ls-files", "--error-unmatch", "--", relative],

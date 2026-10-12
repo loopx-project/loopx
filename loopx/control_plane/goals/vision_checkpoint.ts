@@ -95,7 +95,10 @@ export function visionAuthoringContract(): JsonObject {
         evidence_refs: ["evidence:verified-result"],
       },
     },
-    authoring_hint: "Replace example claims/refs with evidence; obey the live contract and total limit.",
+    authoring_hint: "Replace example claims/refs with evidence; obey the live contract and total limit. " +
+      "For ordinary CLI writeback, pass the packet with --agent-vision-json <file>. " +
+      "checkpoint-context is only for recovery after the original committed Turn writeback; " +
+      "follow its returned same-Turn recovery action, not a fresh-turn preflight.",
     total_text_limit: GOAL_VISION_TOTAL_LIMIT,
     unchanged_reason_limit: VISION_UNCHANGED_REASON_LIMIT,
     path_delta: {
@@ -169,7 +172,7 @@ const LOCAL_PATH_SHAPE = new RegExp("(?<![:/A-Za-z0-9])(?:/(?:Users|home|Volumes
 export const CREDENTIAL_WORD_PATTERNS: RegExp[] = [/\bBearer\b/i, /\bpassword\b/i, /\bsecret\b/i];
 export const PRIVATE_TEXT_PATTERNS: RegExp[] = [
   /\/Users\//,
-  /\/ext_data\//,
+  /\/ext[_]data\//, // Preserve the matcher without matching its own policy source.
   /lark[o]ffice/i, // Equivalent matcher avoids matching its own policy source.
   /docs\.internal/i,
   /\bt-20\d{12}-[a-z0-9]+\b/,
@@ -400,7 +403,9 @@ function normalizeAdvancementPolicy(value: unknown): string {
   return candidate;
 }
 
-function normalizeGoalPathDelta(
+// Reuse the same authoring rule when an optional capability references this
+// explicit packet; callers never recreate its validation or state vocabulary.
+export function normalizeGoalPathDelta(
   value: unknown,
 ): [JsonObject | null, Record<string, number>] {
   if (value === null || value === undefined) return [null, {}];

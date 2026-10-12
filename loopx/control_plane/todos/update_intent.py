@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from .monitor_metadata import MonitorPollObservation
-
 
 def build_canonical_update_intent(
     *,
@@ -26,6 +24,7 @@ def build_canonical_update_intent(
     required_capabilities: list[str] | None = None,
     target_capabilities: list[str] | None = None,
     explore_result_node_refs: list[str] | None = None,
+    append_explore_result_node_refs: list[str] | None = None,
     decision_scope: Any = None,
     required_decision_scopes: Any = None,
     claimed_by: str | None = None,
@@ -64,6 +63,7 @@ def build_canonical_update_intent(
         "required_capabilities": required_capabilities,
         "target_capabilities": target_capabilities,
         "explore_result_node_refs": explore_result_node_refs,
+        "append_explore_result_node_refs": append_explore_result_node_refs,
         "decision_scope": decision_scope,
         "required_decision_scopes": required_decision_scopes,
         "claimed_by": claimed_by,
@@ -82,28 +82,3 @@ def build_canonical_update_intent(
         "clear_claim": clear_claim if clear_claim else None,
     }
     return {key: value for key, value in values.items() if value is not None}
-
-
-def canonical_update_is_supported(
-    *,
-    text: str | None,
-    note: str | None,
-    intent: dict[str, Any],
-    monitor_metadata: Any,
-) -> bool:
-    """Whether an ordinary update can use the canonical transaction.
-
-    User completion is routed to the typed terminal owner; Monitor observations
-    carry a versioned effect intent instead of a raw metadata patch.
-    Ordinary metadata is validated by the typed transaction, including rejection
-    of unsupported fields; this transport must not duplicate its field catalog.
-    They must not silently fall back to Markdown after authority promotion.
-    """
-
-    if isinstance(monitor_metadata, MonitorPollObservation):
-        return True
-    # Empty notes are the long-standing compatibility spelling for omission;
-    # routing them to the canonical adapter would produce an empty patch and a
-    # less useful protocol error. Text still uses the normal non-empty text
-    # validator at the provider boundary.
-    return text is not None or (note is not None and bool(note.strip())) or bool(intent) or bool(monitor_metadata)

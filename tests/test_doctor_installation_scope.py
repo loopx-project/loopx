@@ -11,6 +11,42 @@ from loopx import doctor
 from loopx.control_plane.runtime import runtime_projection_route
 
 
+def test_python_distribution_does_not_require_release_installation_scripts(
+    tmp_path: Path,
+) -> None:
+    absent_script = tmp_path / "site-packages" / "scripts" / "install-windows.ps1"
+
+    check = doctor.optional_installation_script_check(
+        "install_script_exists",
+        exists=absent_script.exists(),
+        path=absent_script,
+        distribution_install=True,
+    )
+
+    assert check == {
+        "id": "install_script_exists",
+        "required": False,
+        "ok": True,
+        "applicable": False,
+        "detail": "not applicable: Python package installs do not include release installer scripts",
+    }
+
+
+def test_release_installation_still_reports_missing_scripts(tmp_path: Path) -> None:
+    absent_script = tmp_path / "release" / "scripts" / "install-windows.ps1"
+
+    check = doctor.optional_installation_script_check(
+        "install_script_exists",
+        exists=absent_script.exists(),
+        path=absent_script,
+        distribution_install=False,
+    )
+
+    assert check["ok"] is False
+    assert check["applicable"] is True
+    assert check["detail"] == str(absent_script)
+
+
 def test_doctor_cli_forwards_the_selected_registry_and_runtime(monkeypatch, tmp_path):
     import argparse
     from loopx.cli_commands import doctor as command

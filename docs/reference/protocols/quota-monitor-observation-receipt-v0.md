@@ -111,6 +111,49 @@ does not add a configuration switch, relax Monitor authority or retry external
 observations. Existing CLI/managed-Turn receipts provide the readback; no new
 frontend or Lark command/settings owner is introduced.
 
+### Legacy atomic observations and recovery
+
+For an unpromoted Goal, one locked atomic state replacement now stores the
+Monitor observation, both requested successor roles and its operation receipt.
+Retry the same `quota monitor-poll` invocation after a lost response. It returns
+the original successor IDs even if a task was renamed, completed or archived,
+or the Goal subsequently moved to canonical authority. Replaying an older poll
+after a later poll returns its original response without rewinding current state. Read them with
+`loopx todo list --goal-id "$GOAL" --todo-id "$TODO"`. Retained operation receipts
+remain outside the Todo sections so archival does not erase recovery identity.
+They include the original public mutation results, so retries preserve the
+business response as well as IDs. Receipts remain retained and increase the
+state file; this bounded recovery change does not qualify indefinite retention
+or sustained legacy polling.
+
+New pending provider plans freeze `legacy_batch_version: 1`. An older pending
+legacy operation without a business receipt stops for reconciliation: preserve
+its pending receipt and inspect the original Monitor and successor Todos;
+do not infer identity from text, delete the receipt or rerun known effects with
+a new identity. Canonical business receipts and completed quota receipts remain
+replayable without this marker. Drain pending batches before rolling back to a
+version without the atomic legacy adapter; do not disable writer fences.
+
+Fresh legacy batches share canonical Todo-create semantic-duplicate admission: same role/text with
+conflicting metadata is rejected before any business write. This replaces the
+old partial metadata upsert. Matching semantics reuse the existing Todo without
+rewriting its metadata; an omitted empty capabilities list is equivalent to
+`[]`, as in the existing public Todo contract. Current actor, User gate and source fences remain
+effective. The retained legacy `--next-claimed-by` option can assign a registered
+peer through its internal typed handoff policy; the observing actor is unchanged.
+Canonical Monitor and ordinary Todo create retain actor-owned claims. A fresh
+unknown owner is rejected before quota reservation or business writes. An exact
+committed receipt replays its frozen admission after registration changes; it
+grants no new adoption, lease or execution authority. No new frontend,
+Lark command or configuration switch is introduced.
+
+The nested Todo responses retain the public add/update fields. Dry-run write
+correctness and fresh shadow diagnostics describe one shared batch rather than
+three independent writes. Post-commit shadow diagnostics are not frozen into
+the business receipt. Before promotion, an ordinary retry drains any retained
+shadow outbox through its existing durable-readback recovery; after promotion,
+historical replay cannot project old legacy state into canonical authority.
+
 ### Canonical leased observations and recovery
 
 For a promoted Goal, an existing Monitor execution can supply its current lease
@@ -320,6 +363,38 @@ scoped-gate fallback 现在允许观察与 gate 独立的到期 Monitor，不再
 顺序均须保留一次主任务扣额、每个观察身份一个回执，以及当前到期／actor／租约
 准入。不新增配置开关、不放宽 Monitor 权限、不重新执行外部观察。CLI／managed
 Turn 复用现有回执读回；不另建前端或 Lark 命令／配置权威。
+
+### Legacy 原子观察与恢复
+
+未晋升 Goal 的 Monitor 观察、请求的两类 successor 和操作回执，现在在同一组锁内
+一次原子替换状态文件。响应丢失后重试相同的 `quota monitor-poll` 调用；即使任务
+后来被改名、完成或归档，或 Goal 已晋升，仍返回原 successor ID。后续观察已写入时，
+旧观察重放仍返回原响应，不回退当前状态。用
+`loopx todo list --goal-id "$GOAL" --todo-id "$TODO"` 读回任务。操作回执保留在
+Todo 区域外，归档不会删除恢复身份；保留回执会增加 legacy 状态文件的存储量。
+回执包含原公开 mutation 结果，重试同时保留业务响应与 ID。回执持续保留；本次
+有界恢复修复不代表无限保留或长期 legacy 轮询已通过验证。
+
+新 pending provider plan 冻结 `legacy_batch_version: 1`。旧 pending legacy 操作
+若没有不可变业务回执，就保留 pending 回执并要求核对原 Monitor 与 successor；
+不能从可变文本猜测身份、删除回执或换新 identity 重做已知效果。既有 canonical
+业务回执与已完成 quota 回执不依赖该字段，仍可重放。回滚到不支持原子 legacy
+适配器的版本前，应先完成 pending batch；不得关闭 writer fence 绕过恢复要求。
+
+新的 legacy batch 共享 canonical Todo-create 的语义去重判定：相同 role/text 的既有任务若
+元数据冲突，整笔写入前拒绝，替代原先的局部元数据更新。actor、User gate、源状态
+围栏保持生效。语义一致时复用既有 Todo，不重写元数据；缺省的空 capabilities
+列表与 `[]` 等价，沿用公开 Todo 契约。既有 legacy `--next-claimed-by` 通过内部
+类型化交接规则允许分配给已注册 peer，观察者 actor 保持不变；canonical Monitor
+及普通 Todo create 仍只允许 actor-owned claim。首次调用的未知 owner 在 quota
+预留及业务写入前拒绝。已提交回执按原 identity 重放冻结的准入，即使注册信息后来
+改变也不重做效果；重放不授予新接收确认、租约或执行权限。不增加前端、
+Lark 命令或配置开关。
+
+嵌套 Todo 响应保留公开 add/update 字段。dry-run 写入正确性和首次 shadow 诊断
+描述同一批次，不再表示三笔独立写入。提交后的 shadow 诊断不固化进业务回执。
+晋升前，普通重试通过现有持久读回恢复机制处理保留的 shadow outbox；晋升后，
+历史重放不能把旧 legacy 状态投影回 canonical authority。
 
 ### Canonical 带租约观察与恢复
 

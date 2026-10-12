@@ -980,3 +980,88 @@ def test_link_projection_deduplicates_urls_without_returning_message_body() -> N
     )
     assert evidence["owner_private_evidence_returned"] is True
     assert evidence["raw_message_content_returned"] is False
+
+
+def test_history_ingests_expanded_thread_replies_with_own_identity(
+    tmp_path: Path,
+) -> None:
+    project, config = _project(tmp_path)
+    root = {
+        **_message("om_thread_root", "Root request"),
+        "chat_id": "oc_fixture_a", "thread_id": "omt_fixture",
+    }
+    reply = {
+        **_message("om_thread_reply", "A human follow-up"),
+        "chat_id": "oc_fixture_a", "thread_id": "omt_fixture",
+        "parent_id": "om_thread_answer", "mentions": [], "mentioned": False,
+        "sender": {"sender_type": "user", "id": "ou_fixture_reply"},
+    }
+    own = {
+        **_message("om_thread_self", "Bot answer"),
+        "sender": {"sender_type": "app", "id": "cli_fixture_bot"},
+    }
+    root["thread_replies"] = [dict(root), own, reply]
+    page = {"messages": [root], "has_more": False, "page_token": ""}
+    preview = _catch_up(project, config, IdentityPageRunner(
+        [page], profile_app_id="cli_fixture_bot",
+    ))
+    assert preview["accepted_count"] == 2
+    assert preview["self_message_skipped_count"] == 1
+    assert not (project / ".loopx/inbox").exists()
+    receipt = _catch_up(project, config, IdentityPageRunner(
+        [page], profile_app_id="cli_fixture_bot",
+    ), execute=True)
+    assert receipt["ok"] is True
+    assert receipt["accepted_count"] == 2
+    assert receipt["readback"]["inbox_event_count_verified"] == 2
+    inbox = project / ".loopx/inbox/requirements-a"
+    observed = json.loads((inbox / "om_thread_reply.json").read_text())
+    assert observed["root_id"] == "om_thread_root"
+    assert observed["parent_id"] == "om_thread_answer"
+    assert observed["thread_id"] == "omt_fixture"
+    assert observed["sender_id"] == "ou_fixture_reply"
+    assert observed["addressed_to_bot"] is False
+    assert not (inbox / "om_thread_self.json").exists()
+    repeated = ingest_routed_lark_event_inbox(
+        project=project, config_path=config, events=[{**observed, "chat_id": "oc_fixture_a"}], execute=True,
+    )
+    assert repeated["accepted_count"] == 0
+    assert repeated["duplicate_count"] == 1
+
+
+@pytest.mark.parametrize("change", [
+    {"chat_id": "oc_other"}, {"thread_id": "omt_other"},
+    {"root_id": "om_other"},
+])
+def test_history_rejects_foreign_expanded_reply_before_cursor_commit(
+    tmp_path: Path, change: dict[str, str],
+) -> None:
+    project, config = _project(tmp_path)
+    root = {
+        **_message("om_bound_root", "Root"),
+        "chat_id": "oc_fixture_a", "thread_id": "omt_fixture",
+        "thread_replies": [{**_message("om_foreign_reply", "Reply"), **change}],
+    }
+    receipt = _catch_up(project, config, PageRunner([{
+        "messages": [root], "has_more": False, "page_token": "",
+    }]), execute=True)
+    assert receipt["ok"] is False
+    assert receipt["status"] == "group_history_provider_payload_invalid"
+    assert receipt["cursor_state_mutated"] is False
+    assert receipt["inbox_state_mutated"] is False
+    assert not (project / ".loopx/inbox").exists()
+
+
+@pytest.mark.parametrize("replies", [None, {}, ["malformed"]])
+def test_history_rejects_malformed_expansion_without_advancing_coverage(
+    tmp_path: Path, replies: object,
+) -> None:
+    project, config = _project(tmp_path)
+    root = {**_message("om_malformed_root", "Root"), "thread_replies": replies}
+    receipt = _catch_up(project, config, PageRunner([{
+        "messages": [root], "has_more": False, "page_token": "",
+    }]), execute=True)
+    assert receipt["ok"] is False
+    assert receipt["cursor_state_mutated"] is False
+    assert receipt["inbox_state_mutated"] is False
+    assert not (project / ".loopx/inbox").exists()

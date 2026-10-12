@@ -183,6 +183,22 @@ effect，并且外层 runner 能正确应用和 ACK scheduler state。这些正�
 成熟度的 extension / contribution surface；Agent 进程退出码或从 transcript 猜结果不能
 替代这些证明。
 
+### 观察正在运行的 Turn
+
+在第二个终端中，可以在 `run-once` 执行期间查看同一 Turn：
+
+```bash
+loopx --registry <registry.json> --runtime-root <runtime-root> turn inspect-journal \
+  --goal-id <goal-id> --agent-id <agent-id> --turn-key <sha256-turn-key> \
+  --watch --watch-interval 1 --format json
+```
+
+Watch 模式只在 journal 状态或已完成阶段列表变化时输出一条 JSON Lines 进度事件。
+事件仅包含 Turn 身份、journal 状态、已完成阶段和空 effects 列表，不包含 host 输出或
+session 内容。状态变为 `committed`、`stopped` 或 `failed` 后命令退出。该命令只读；
+提前停止可按 Ctrl-C。请在 Turn journal 创建后启动，并使用与 runner 相同的 registry 和
+runtime root。
+
 ## 验收清单
 
 在把集成称为“自主运行”前，至少证明：

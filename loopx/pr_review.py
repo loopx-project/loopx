@@ -860,16 +860,18 @@ def _review_conclusion(
             "invalid_reasons": reasons,
         }
 
-    latest_result = evaluate(reviews[0])
-    if (
-        str(reviews[0].get("state") or "").upper() == "COMMENTED"
-        and not latest_result["valid"]
-    ):
-        for earlier in reviews[1:]:
-            earlier_result = evaluate(earlier)
-            if earlier_result["valid"]:
-                return earlier_result
-    return latest_result
+    conclusions = [evaluate(review) for review in reviews]
+    if len(reviews) == 1:
+        return conclusions[0]
+    from .capabilities.pr_review_queue.approval_closeout import select_review_conclusion
+    index = select_review_conclusion({"head": head_oid, "author": pr_author,
+        "reviews": [{"state": conclusion["state"],
+            "login": str(_as_dict(review.get("author")).get("login") or ""),
+            "head": str(_as_dict(review.get("commit")).get("oid") or ""),
+            "time": _parse_updated_epoch(review.get("submittedAt")),
+            "conclusion": conclusion}
+            for review, conclusion in zip(reviews, conclusions)]})
+    return conclusions[index]
 
 
 def _review_sequence_entry(item: dict[str, Any], *, rank: int) -> dict[str, Any]:
@@ -1438,6 +1440,11 @@ def render_pr_review_markdown(payload: dict[str, Any]) -> str:
             ]
         )
         applicability = _as_dict(review_plan.get("applicability"))
+        memory = _as_dict(pr.get("repository_experience"))
+        if memory:
+            lines.extend(["", "### Repository experience (advisory)", "",
+                          "Compare this experience with the current review frame; context delivery does not establish adoption or utility.",
+                          "", "```json", json.dumps(memory, ensure_ascii=False, indent=2), "```", ""])
         if review_plan:
             lines.append(
                 "- review plan: "

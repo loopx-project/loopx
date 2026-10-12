@@ -1,6 +1,7 @@
 """Version-bound requester decisions through real Turn acceptance and durable IO."""
 import asyncio
 import json
+import os
 import subprocess
 import sys
 import time
@@ -108,7 +109,11 @@ def test_result_use_requires_exact_accepted_input_and_survives_reconnect(service
     assert adopted[0]["consumer_artifacts"][0]["sha256"] == result["artifacts"][0]["sha256"]
     reconnected = Delegations(runner.root, runner.registry, runner.goal_id, runner.agent_id, runner.config)
     async def reconnect_mcp():
-        params = StdioServerParameters(command=sys.executable, args=[
+        # Keep the MCP child on the same disposable authority runtime as its
+        # parent. The SDK's default environment omits these isolation controls.
+        params = StdioServerParameters(command=sys.executable, env={
+            key: os.environ[key] for key in ("NODE_OPTIONS", "TMPDIR", "TEMP", "TMP")
+            if key in os.environ}, args=[
             "-m", "loopx.collaboration_mcp", "--registry", str(runner.registry),
             "--runtime-root", str(runner.root), "--goal-id", runner.goal_id,
             "--agent-id", runner.agent_id, "--workspace", str(root / "lead"),
@@ -139,3 +144,113 @@ def test_result_use_requires_exact_accepted_input_and_survives_reconnect(service
     assert runner.read("analysis-1")["adoptions"][0]["state"] == "unavailable"
     with pytest.raises(ValueError, match="acceptance rejected"):
         runner.adopt_result("analysis-1", "synthesis-1")
+
+
+def accepted_chain(root, runner):
+    """Synthetic workers through production admission, validation and settlement."""
+    config = json.loads(runner.config.read_text())
+    template = config["bindings"][0]
+    config["bindings"] += [
+        {**template, "id": "middle", "agent_id": "analyst", "todo_id": "todo_analyst-corrected",
+         "workspace": str(root / "analyst/corrected")},
+        {**template, "id": "synthesis", "agent_id": "reviewer", "todo_id": "todo_reviewer-corrected",
+         "workspace": str(root / "reviewer/corrected")},
+    ]
+    runner.config.write_text(json.dumps(config))
+    runner.start("analysis", "analysis-1", brief())
+    source = wait(runner)
+
+    def linked_request(source, workspace):
+        artifact = source["artifacts"][0]
+        path = workspace / "declared-input.json"
+        path.write_text(artifact["text"])
+        return {**brief(), "inputs": [{"ref": path.name, "description": "Exact accepted source",
+            "sha256": artifact["sha256"], "delegation": {"operation_id": source["operation_id"],
+            "ref": artifact["ref"], "relation": "uses"}}]}
+
+    middle_brief = linked_request(source, root / "analyst/corrected")
+    runner.start("middle", "middle-1", middle_brief)
+    middle = wait(runner, "middle-1")
+    consumer_brief = linked_request(middle, root / "reviewer/corrected")
+    runner.start("synthesis", "synthesis-1", consumer_brief)
+    consumer = wait(runner, "synthesis-1")
+    assert consumer["status"] == "accepted"
+    return consumer_brief
+
+
+def test_transitive_current_use_withdraws_and_recovers_without_redispatch(service, monkeypatch):
+    """Real File/SQLite, workers and domain checks; historical output stays valid."""
+    root, runner = service
+    consumer_brief = accepted_chain(root, runner)
+    historical = {operation: runner.path(operation).read_bytes()
+                  for operation in ("analysis-1", "middle-1", "synthesis-1")}
+    middle_input = root / "analyst/corrected/declared-input.json"
+    saved = middle_input.read_bytes()
+    middle_input.write_text("{}")
+    reads = []
+    current_read = runner._read_current
+    def counted_read(operation):
+        reads.append(operation)
+        return current_read(operation)
+    with monkeypatch.context() as spy:
+        spy.setattr(runner, "_read_current", counted_read)
+        unavailable = runner.read("synthesis-1")
+    assert sorted(reads) == ["analysis-1", "middle-1", "synthesis-1"], "Each source is checked once per admission"
+    assert unavailable["status"] == "accepted", "Historical terminal outcome must survive"
+    assert unavailable["dependencies"][0]["state"] == "unavailable"
+    assert unavailable["current_use"]["state"] == "unavailable"
+    assert unavailable["current_use"]["blocking_operation_id"] == "middle-1"
+    assert unavailable["current_use"]["reason"] == "input_unavailable"
+    with pytest.raises(ValueError, match="input version unavailable"):
+        runner.start("synthesis", "synthesis-2", consumer_brief)
+    assert not runner.path("synthesis-2").exists()
+    with pytest.raises(Exception, match="exact current uses input"):
+        runner.adopt_result("middle-1", "synthesis-1")
+    assert runner.start("synthesis", "synthesis-1", consumer_brief)["current_use"]["state"] == "unavailable"
+    middle_input.write_bytes(saved)
+    assert runner.read("synthesis-1")["current_use"]["state"] == "current"
+    assert runner.adopt_result("middle-1", "synthesis-1")["adoptions"][0]["state"] == "current"
+    for operation in ("analysis-1", "synthesis-1"):
+        assert runner.path(operation).read_bytes() == historical[operation]
+    for workspace in (root / "analyst/initial", root / "analyst/corrected", root / "reviewer/corrected"):
+        assert (workspace / "host-invocations").read_text() == "1"
+
+
+def test_deadline_after_link_qualification_blocks_admission_and_adoption(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from loopx.control_plane.collaboration import delegation_results as module
+    version = "a" * 64
+    item = {"operation_id": "source", "ref": "out.json", "sha256": version,
+            "input_ref": "input.json", "input_available": True}
+    request = {"inputs": [{"delegation": {"operation_id": "source"}}]}
+    runner = SimpleNamespace(_read_current=lambda op: {"status": "accepted", "artifacts": [{"ref": "out.json", "sha256": version}]},
+        path=lambda op: tmp_path/op, _bound=lambda row: {})
+    monkeypatch.setattr(module._ResultUseRead, "inputs", lambda self, binding, brief: [item] if brief["inputs"] else [])
+    # Avoid a self edge; source IO has no ancestors, consumer does.
+    monkeypatch.setattr(module, "operation_brief", lambda service, row: request if row.get("consumer") else {"inputs": []})
+    monkeypatch.setattr(module, "_read", lambda path: {"consumer": path.name == "consumer"})
+    elapsed = [0]
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: elapsed[0]))
+    qualify = module._ResultUseRead.qualify
+    def expire_after_link(self, roots):
+        result = qualify(self, roots)
+        elapsed[0] = 16
+        return result
+    monkeypatch.setattr(module._ResultUseRead, "qualify", expire_after_link)
+    links, aggregate = module._dependency_observation(runner, {}, request)
+    assert aggregate["reason"] == "verification_budget_exhausted"
+    assert links[0]["state"] == "unavailable"
+    elapsed[0] = 0
+    with pytest.raises(ValueError, match="unavailable"):
+        module.require_dependencies(runner, {}, request)
+    elapsed[0] = 0
+    owner = module.effect_runtime_result
+    captured = []
+    def observe(method, params):
+        if method == "collaboration.delegation.adoption":
+            captured.append(params["inputs_current"])
+            return {}
+        return owner(method, params)
+    monkeypatch.setattr(module, "effect_runtime_result", observe)
+    module.adoption_evidence(runner, "source", "consumer")
+    assert captured == [False]

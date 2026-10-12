@@ -152,7 +152,7 @@ def test_bound_wait_recovers_original_turn_before_selecting_successor(
     assert rc == 0 and guard["should_run"] is True, guard
     rc, original = cli("todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
     assert rc == 0, original
-    digest = original["todos"][0]["completion_validation_sha256"]
+    digest = original["todo"]["completion_validation_sha256"]
     rc, wait = cli(
         "todo",
         "update",
@@ -273,7 +273,7 @@ def test_bound_wait_recovers_original_turn_before_selecting_successor(
     assert _spend_run_count(runtime) == 0
     rc, after = cli("todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
     assert rc == 0, after
-    todo = after["todos"][0]
+    todo = after["todo"]
     assert todo["status"] == "open" and todo["resume_ready"] is False
     assert todo["resume_when"] == f"{kind}:{MONITOR_ID}"
     assert todo["completion_validation_sha256"] == digest

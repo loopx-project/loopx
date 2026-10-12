@@ -1,6 +1,6 @@
 # RFC：结果后记忆效用归因 v0
 
-- 状态：已接受；Stage 1 已交付，Stage 2 由本 PR 交付，Stage 3+ 仍为提案
+- 状态：已接受；Stage 1 与 Stage 2 已实现，Stage 3+ 仍为提案
 - 替代 / 关闭：无
 - 日期：2026-08-15
 - 跟踪 issue：[#3214](https://github.com/huangruiteng/loopx/issues/3214)、[#3824](https://github.com/huangruiteng/loopx/issues/3824)
@@ -281,6 +281,38 @@ Stage 2 增加幂等 reducer 与只读 utility projection，不改变 provider r
 Stage 3 增加 OpenViking readback；只有 provider 协议真实存在时，才增加有界 rank-prior effect 与 readback receipt。
 
 Stage 4 先做有界 pilot、held-out 或 counterfactual evaluation，再考虑让排序影响 default-on。
+
+### 9.1 评审学习试点：先沉淀仓库经验，再证明效用
+
+以 [PR #5944](https://github.com/loopx-project/loopx/pull/5944)作为第一条
+[仓库持有的判断对照与经验](../../../loopx/capabilities/pr_review_queue/experiences/README.zh-CN.md)。
+先前机器评审覆盖恢复的技术设计，后续维护者指引下的模型评审要求明确第一个有用的
+恢复 Goal、更早的打包交互和恢复后有用结果。分别保留口径、actor 来源、API target
+commit、正文声明的 head、证据和未解决的结果。口径与 source head 差异意味着
+这不是受控实验，也不能自动生成金标准标签。
+
+试点第一阶段把公共蒸馏证据存入 Git，复用现有
+`procedural_experience_contract_v0`。`pull-request-review` 持有来源与只读文件
+adapter；`reward_memory` 保留资格化、recall 和 TypeScript 上下文投递判断。
+self-repair 指向同一个案例并修复原有工作流，不新建 store、共享 decision owner、
+utility 分数或 provider 写入。
+
+已注册 Agent 须具备资格化的 Reward Memory enablement、自动 recall 和明确的
+`pull_request_review.review` surface。可执行 PR packet 才可投递最多三条仓库匹配、
+精确回读的经验；历史 verdict 标签不进入检索输入。关闭、其他 surface、未资格化
+和无关仓库调用保持原行为；损坏或变化中的来源 fail-open。内置公共建议只扩展此
+opt-in caller 边界，不改变 provider ranking、配置、行动权限或 exact-head 选工。
+
+本阶段验收是版本化案例、合格经验、真实来源回读与生产 CLI 的 JSON/Markdown 投递，
+加关闭等价和失败对照。上下文投递不证明语义采用或评审质量变好。
+在现有 `problem_context` 判断中，用当前 head 证据说明采用、拒绝或不适用。
+
+下一阶段在 held-out 案例上固定共同的评审口径、产物 revision、模型和预算，比较
+baseline/experience 两组，包含合理内部前置阶段与误阻断对照。保留分歧，衡量每份
+被接受评审的可行动发现、错误 blocker、评审成本与人工注意力。
+维护者纠正是证据，不是无条件 reward。只有验证后的采用与工作结果 lineage 才能进入
+现有 utility observation/reducer；原案例没有该 lineage，效用仍未证明。
+此试点不关闭 Stage 3/4 排序资格或通用评审质量资格。
 
 ## 10. 验证标准
 

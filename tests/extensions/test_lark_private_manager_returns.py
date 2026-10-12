@@ -59,7 +59,9 @@ def private_return(steward, request, return_root, monkeypatch):  # noqa: F811
     _write(_root(return_root) / "policy.json", {"schema_version": POLICY_SCHEMA, "sources": {
         session["channel_id"]: {"local_delivery_scope": "selected", "sender_ids": [binding["operator_ref"]], "targets": [target]}}})
     source_id = row["request_ref"] if request.param == "native" else "lark:" + event["message_id"]
-    delivered = deliver(return_root, runtime.registry_path, session=session, turn=turn, request=target)
+    # Mirror Chat handoff: the trusted source store pins the original host.
+    delivered = deliver(return_root, runtime.registry_path, session=session, turn=turn,
+                        request=target, source_store=store)
     route = {**target, "request_id": delivered["request_id"], "session_id": session["session_id"], "source_id": source_id}
     original_runner = provider.__call__
     replies = []
@@ -170,7 +172,11 @@ def test_private_return_rejects_changed_authority_or_original_source(private_ret
     assert replies == []
 
 
-def test_production_pump_returns_to_original_private_source_after_restart(private_return):
+@pytest.mark.parametrize("conclusion", [
+    "Verified worker result for the original private audience",
+    "Verified worker result: contact @contributor.\\nDetails: <at unsupported>quoted</at>",
+])
+def test_production_pump_returns_to_original_private_source_after_restart(private_return, conclusion):
     sender, session, turn, route, _, provider, transport, replies = private_return
     controller = transport.core.controller
     store = controller.store
@@ -179,7 +185,7 @@ def test_production_pump_returns_to_original_private_source_after_restart(privat
     before_host_calls = capture.read_bytes()
     rid = route["request_id"]
     acknowledge(sender.root, route["goal_id"], route["agent_id"], rid, "adopt", "Receiver independently accepts this scope")
-    report(sender.root, route["goal_id"], route["agent_id"], rid, "conclusion", "Verified worker result for the original private audience")
+    report(sender.root, route["goal_id"], route["agent_id"], rid, "conclusion", conclusion)
     provider.verify_replies = False
     drain(sender.root, controller.registry_path, store, sender)
     assert len(replies) == 1
@@ -193,7 +199,12 @@ def test_production_pump_returns_to_original_private_source_after_restart(privat
     assert len(replies) == 1
     returned = [r for r in recovered.messages(session["session_id"]) if r.get("origin") == "manager_followup"]
     assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
-    assert "Verified worker result" in returned[0]["text"]
+    assert conclusion in returned[0]["text"]
+    if "@contributor" in conclusion:
+        content = replies[0][replies[0].index("--content") + 1]
+        assert "＠contributor" in content and "@contributor" not in content
+        assert "‹at unsupported>quoted‹/at>" in content
+        assert not any("+chat-members-list" in call for call in provider.calls)
     assert "Receiver independently" not in returned[0]["text"]
     assert sorted((store.root / "sessions" / session["session_id"] / "turns").glob("*.json")) == before_turns
     assert capture.read_bytes() == before_host_calls

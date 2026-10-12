@@ -20,6 +20,7 @@ from ..coordination.local_authority import (
 )
 from ..effect_runtime import (
     CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
+    EffectRuntimeResponseAmbiguous,
     effect_runtime_result,
 )
 from .contract import compact_todo_text
@@ -42,6 +43,35 @@ from .completion_validation_projection import (
 )
 from .path_resolution import resolve_todo_state_path
 from .monitor_metadata import MonitorPollObservation
+
+
+def _dispatch_canonical_todo_update(
+    request: dict[str, Any], *, registry_path: Path,
+) -> Any:
+    try:
+        return effect_runtime_result(
+            "coordination.local_authority.todo_update", request,
+            timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
+        )
+    except EffectRuntimeResponseAmbiguous as error:
+        # The request owns the identity even when no response can be verified.
+        # Expose only a read: a missing receipt cannot establish writer liveness
+        # or authorize another operation, and a found receipt is not a lease.
+        raise LocalCoordinationAuthorityUnavailable(
+            f"{error}. A missing receipt does not prove the original writer has stopped",
+            code=error.diagnostic_code,
+            payload={
+                "goal_id": request["goal_id"], "todo_id": request["todo_id"],
+                "operation_id": request["operation_id"],
+                "recovery_command": [
+                    "loopx", "--format", "json", "--registry",
+                    str(registry_path.expanduser().resolve()),
+                    "--runtime-root", request["runtime_root"],
+                    "todo", "receipt", "--goal-id", request["goal_id"],
+                    "--operation-id", request["operation_id"],
+                ],
+            },
+        ) from error
 
 
 def _completion_validation_revision_request(
@@ -228,10 +258,7 @@ def update_canonical_todo_if_promoted(
         prepare_completion_validation_declaration(
             runtime_root=runtime_root, goal_id=goal_id, declaration=completion_validation_revision
         )
-    result = effect_runtime_result(
-        "coordination.local_authority.todo_update", request,
-        timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
-    )
+    result = _dispatch_canonical_todo_update(request, registry_path=registry_path)
     completion_validation_executed = False
     if isinstance(result, dict) and result.get("status") == "execute_validation":
         if completion is None:
@@ -241,10 +268,7 @@ def update_canonical_todo_if_promoted(
             result, registry_path=registry_path, goal_id=goal_id))
         completion_validation_executed = True
         request["observed_at"] = now_local()
-        result = effect_runtime_result(
-            "coordination.local_authority.todo_update", request,
-            timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
-        )
+        result = _dispatch_canonical_todo_update(request, registry_path=registry_path)
     if isinstance(result, dict):
         failure = completion_validation_failure(result, goal_id=goal_id, todo_id=todo_id, dry_run=dry_run)
         if failure is not None:

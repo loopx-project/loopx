@@ -194,6 +194,113 @@ def test_dense_context_uses_shared_private_snapshot_transport(monkeypatch):
     assert project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=[_run()]) == expected
 
 
+def _settled_pair():
+    identity = {"schema_version": "quota_settlement_identity_v0", "goal_id": "evidence-goal",
+        "agent_id": "agent-a", "todo_id": "todo-a", "turn_instance_id": "turn-a", "effect_id": "settlement-a"}
+    work = _run(**{key: identity[key] for key in ("todo_id", "turn_instance_id")},
+        settlement_identity=identity, recommended_action="Retain the negative finding and try the next route.",
+        progress_observation={"schema_version": "typed_progress_observation_v0",
+            "result_class": "unchanged", "surface_id": "surface-a", "work_item_id": "todo-a"})
+    accounting = {key: value for key, value in work.items() if key != "progress_observation"}
+    accounting.update(classification="quota_slot_spent", generated_at="2026-08-18T01:00:01Z",
+        quota_spend_commit={"schema_version": "quota_spend_commit_receipt_v0",
+            "effect_id": "settlement-a#quota_spend"})
+    return work, accounting
+
+
+def test_matched_accounting_keeps_new_health_and_all_published_references(tmp_path):
+    work, accounting = _settled_pair()
+    # Obtain references through the original codec shape. Identity facts must not
+    # alter a published row's digest, even after the display can reduce repetition.
+    legacy = [{key: value for key, value in row.items()
+        if key not in ("settlement_identity", "quota_spend_commit", "turn_instance_id")}
+        for row in (work, accounting)]
+    old = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=legacy)
+    reduced = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=[work, accounting])
+    assert len(reduced["evidence"]) == 1
+    assert reduced["coverage_ledger"] == old["coverage_ledger"]
+    assert reduced["evidence_count"] == old["evidence_count"] == 2
+    # Different health is independent evidence, including failures: retain its
+    # complete summary while removing only the already shown continuation.
+    warning = {**accounting, "health_check": "The storage validation failed; repair before continuing."}
+    retained = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=[work, warning])
+    assert len(retained["evidence"]) == 2
+    assert retained["evidence"][0]["summary"] == warning["health_check"]
+    assert retained["evidence"][1]["summary"].endswith(work["recommended_action"])
+    runtime, registry = tmp_path / "runtime", tmp_path / "registry.json"
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
+        "id": "evidence-goal", "status": "active-read-only", "domain": "fixture"}]}))
+    index = runtime / "goals/evidence-goal/runs/index.jsonl"
+    index.parent.mkdir(parents=True)
+    source = "".join(json.dumps(row) + "\n" for row in (work, accounting))
+    index.write_text(source)
+    for row in old["evidence"]:
+        result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+            "--runtime-root", str(runtime), "--format", "json", "history", "--goal-id", "evidence-goal",
+            "--agent-id", "agent-a", "--evidence-ref", row["evidence_ref"]], capture_output=True, text=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert json.loads(result.stdout)["evidence"]["recommended_action"] == work["recommended_action"]
+    assert index.read_text() == source
+
+
+@pytest.mark.parametrize("change", [
+    {"settlement_identity": None}, {"quota_spend_commit": None}, {"turn_instance_id": "turn-b"},
+    {"quota_spend_commit": {"schema_version": "future", "effect_id": "settlement-a#quota_spend"}},
+    {"quota_spend_commit": {"schema_version": "quota_spend_commit_receipt_v0", "effect_id": "other#quota_spend"}},
+    {"classification": "future_accounting"}, {"recommended_action": "Keep an additional obligation."},
+    {"delivery_outcome": "outcome_failure"},
+])
+def test_unproven_or_different_accounting_preserves_full_context(change):
+    work, accounting = _settled_pair()
+    accounting.update(change)
+    with_identity = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=[work, accounting])
+    legacy = [{key: value for key, value in row.items()
+        if key not in ("settlement_identity", "quota_spend_commit", "turn_instance_id")}
+        for row in (work, accounting)]
+    assert with_identity == project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=legacy)
+
+
+def test_complete_continuation_identity_and_snapshot_parity(monkeypatch):
+    from loopx.control_plane.work_items import replan_history_codec
+    work, accounting = _settled_pair()
+    work["recommended_action"] = "Retain the accepted requirement. " * 20 + " Tail A."
+    accounting["recommended_action"] = work["recommended_action"][:-2] + "B."
+    context = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=[work, accounting])
+    assert len(context["evidence"]) == 2
+    assert context["evidence"][0]["summary"] == context["evidence"][1]["summary"]
+    monkeypatch.setattr(replan_history_codec, "MAX_REQUEST_BYTES", 1)
+    assert project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=[work, accounting]) == context
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_real_quota_cli_preserves_the_replan_obligation_while_reducing_accounting(tmp_path, monkeypatch, provider):
+    from test_replan_successor_guard_reentry import _fixture, _guard, GOAL, AGENT
+
+    call, runtime, index = _fixture(tmp_path, monkeypatch, provider)
+    work, accounting = _settled_pair()
+    for row in (work, accounting):
+        row.update(goal_id=GOAL, agent_id=AGENT)
+        row["settlement_identity"] = {**row["settlement_identity"], "goal_id": GOAL, "agent_id": AGENT}
+    # Keep the fixture's existing required-vision evidence. This changes only
+    # metadata in the disposable read model, never an active authority store.
+    prior = index.read_text()
+    legacy = [{key: value for key, value in row.items()
+        if key not in ("settlement_identity", "quota_spend_commit", "turn_instance_id")}
+        for row in (work, accounting)]
+    index.write_text(prior + "".join(json.dumps(row) + "\n" for row in legacy))
+    before = _guard(call, "turn-accounting-before")["autonomous_replan_obligation"]
+    index.write_text(prior + "".join(json.dumps(row) + "\n" for row in (work, accounting)))
+    source = index.read_bytes()
+    after = _guard(call, "turn-accounting-after")["autonomous_replan_obligation"]
+    assert after["obligation_id"] == before["obligation_id"]
+    assert after["triggers"] == before["triggers"]
+    left, right = before["replan_context"], after["replan_context"]
+    for key in ("core_goal", "coverage_ledger", "uncovered_frontier", "evidence_count"):
+        assert right[key] == left[key]
+    assert len(right["evidence"]) == len(left["evidence"]) - 1
+    assert index.read_bytes() == source
+
+
 def test_unscoped_replan_assignment_ignores_evidence_and_presentation_changes():
     from loopx.control_plane.goals.goal_frontier import autonomous_replan_scope_decision
 

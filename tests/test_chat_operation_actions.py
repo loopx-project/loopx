@@ -667,18 +667,20 @@ def test_agent_handoff_one_shot_consumption_survives_concurrent_retry_and_restar
     assert consume(99)["execution_allowed"] is False
 
 
-@pytest.mark.parametrize("change", ["expires", "rebound", "stopped", "payload"])
+@pytest.mark.parametrize("change", ["expires", "rebound", "stopped", "archived", "payload"])
 def test_agent_handoff_fails_closed_on_expiry_binding_activation_or_terms_drift(
     tmp_path: Path, change: str
 ) -> None:
     service, store = _service(tmp_path)
     proposal = _claim_agent_operation(service, store)
-    if change in {"rebound", "stopped"}:
+    if change in {"rebound", "stopped", "archived"}:
         registry = json.loads(service.registry_path.read_text())
         if change == "rebound":
             registry["goals"][0]["coordination"]["thread_agent_bindings"][0][
                 "thread_id"
             ] = "thread-replacement"
+        elif change == "archived":
+            registry["goals"][0]["status"] = "archived"
         else:
             registry["goals"][0]["activation_state"] = "stopped"
         service.registry_path.write_text(json.dumps(registry))
@@ -691,7 +693,11 @@ def test_agent_handoff_fails_closed_on_expiry_binding_activation_or_terms_drift(
             stored["normalized_parameters"]["payload"]["quantity"] = "2.00"
         store.path.write_text(json.dumps(data))
     before = store.path.read_bytes()
-    with pytest.raises(ActionConflictError):
+    expected_error = (
+        ValueError if change in {"stopped", "archived"} else ActionConflictError
+    )
+    expected_message = "stopped or archived" if expected_error is ValueError else None
+    with pytest.raises(expected_error, match=expected_message):
         agent_operation_action(
             store.root.parent.parent,
             service.registry_path,
@@ -1027,8 +1033,9 @@ def test_replacement_session_reconciles_under_its_current_binding_without_recons
     assert inspected["access"]["permission"] == "historical_evidence_only"
     assert inspected["outcome"] == unknown and not inspected["binding_current"]
     for attempt in ("attempt-1", "attempt-2"):
-        reason = "Goal is stopped" if historical else "original bound session"
-        with pytest.raises(ActionConflictError, match=reason):
+        expected_error = ValueError if historical else ActionConflictError
+        reason = "stopped or archived" if historical else "original bound session"
+        with pytest.raises(expected_error, match=reason):
             agent_operation_action(
                 runtime,
                 service.registry_path,

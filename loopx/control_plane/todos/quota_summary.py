@@ -11,22 +11,17 @@ from .contract import (
 )
 from .quota_selection import project_quota_planning
 from .frontier_deadline import todo_summary_frontier_deadline
-from .handoff_gate import build_todo_handoff_gate_lanes
 from .todo_semantics import (
-    todo_item_is_watch_only_monitor,
     todo_item_task_class,
     todo_presentation_sort_key,
-    todo_summary_monitor_schedule_gap_items,
     todo_summary_monitor_writeback_contract,
 )
-from .route_continuation import build_todo_route_continuation_lanes
 from .succession_warning import build_todo_succession_warning_lanes
 from .summary_item import (
-    compact_todo_summary_item,
+    compact_todo_summary_items,
     todo_planning_source_items,
     todo_summary_source_items,
 )
-from .user_gate import is_user_gate_todo_item
 
 MONITOR_DUE_ITEM_LIMIT = 1
 TODO_BACKLOG_ITEM_LIMIT = 8
@@ -72,6 +67,7 @@ QUOTA_PAYLOAD_ITEM_FIELDS = (
     "resume_monitor_generation",
     "resume_condition",
     "resume_ready",
+    "blocked_retry",
     "blocking_monitor_todo_id",
     "no_followup",
     "successor_todo_ids",
@@ -181,8 +177,10 @@ class _QuotaTodoLanes:
     open_items: list[dict[str, Any]]
     claim_scope: dict[str, Any] | None
     executable_items: list[dict[str, Any]]
+    gate_items: list[dict[str, Any]]
     monitor_items: list[dict[str, Any]]
     monitor_due_items: list[dict[str, Any]]
+    monitor_schedule_gap_items: list[dict[str, Any]]
     watch_only_monitor_items: list[dict[str, Any]]
     watch_only_monitor_due_items: list[dict[str, Any]]
     non_watch_only_monitor_due_items: list[dict[str, Any]]
@@ -192,146 +190,6 @@ class _QuotaTodoLanes:
     active_next_action_items: list[dict[str, Any]]
     active_next_action_executable_items: list[dict[str, Any]]
     open_count: Any
-
-
-def _strict_non_negative_int(value: Any) -> int | None:
-    if type(value) is not int or value < 0:
-        return None
-    return value
-
-
-def _terminal_closure_proof_is_valid(
-    value: dict[str, Any],
-    *,
-    counts: dict[str, int | None],
-    source_proof: dict[str, Any],
-) -> bool:
-    proof = value.get("terminal_closure_proof")
-    items = value.get("items")
-    total_count = counts["total_count"]
-    displayed_items_cover_source = bool(
-        isinstance(total_count, int)
-        and (
-            (total_count == 0 and items == [])
-            or (
-                total_count > 0
-                and isinstance(items, list)
-                and 0 < len(items) <= total_count
-            )
-        )
-    )
-    return bool(
-        value.get("schema_version") == "todo_summary_v0"
-        and isinstance(items, list)
-        and displayed_items_cover_source
-        and all(
-            isinstance(item, dict)
-            and (
-                (item.get("status") == "done" and item.get("done") is True)
-                or (
-                    todo_item_is_watch_only_monitor(item)
-                )
-            )
-            and item.get("route_continuation_replan_required") is not True
-            for item in items
-        )
-        and all(
-            isinstance(item, dict)
-            and todo_item_is_watch_only_monitor(item)
-            for item in (value.get("monitor_open_items") or [])
-        )
-        and value.get("deferred_items") == []
-        and value.get("deferred_resume_candidates") == []
-        and _strict_non_negative_int(
-            value.get("convergence_open_count", value.get("open_count"))
-        ) == 0
-        and _strict_non_negative_int(value.get("completed_without_successor_count", 0)) == 0
-        and _strict_non_negative_int(value.get("route_continuation_replan_count", 0)) == 0
-        and isinstance(proof, dict)
-        and proof.get("schema_version") == "todo_terminal_closure_proof_v0"
-        and proof.get("role") == source_proof.get("role")
-        and proof.get("source_section") == value.get("source_section")
-        and proof.get("item_count") == total_count
-        and (
-            proof.get("all_todos_done") is True
-            or proof.get("all_convergent_todos_done") is True
-        )
-        and _strict_non_negative_int(proof.get("monitor_open_count"))
-        == _strict_non_negative_int(proof.get("watch_only_monitor_count", 0))
-        and _strict_non_negative_int(proof.get("successor_gap_count")) == 0
-        and _strict_non_negative_int(proof.get("route_replan_count")) == 0
-        and _strict_non_negative_int(proof.get("no_followup_count")) is not None
-        and proof.get("derived") is True
-    )
-
-
-def validate_todo_source_contract(
-    value: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    proof = value.get("source_proof")
-    counts = {
-        key: _strict_non_negative_int(value.get(key))
-        for key in ("total_count", "open_count", "done_count", "deferred_count")
-    }
-    total_count = counts["total_count"]
-    open_count = counts["open_count"]
-    done_count = counts["done_count"]
-    deferred_count = counts["deferred_count"]
-    valid_counts = (
-        total_count is not None
-        and open_count is not None
-        and done_count is not None
-        and deferred_count is not None
-        and total_count == open_count + done_count + deferred_count
-    )
-    valid_proof = bool(
-        isinstance(proof, dict)
-        and proof.get("schema_version") == "todo_source_proof_v0"
-        and proof.get("role") in {"user", "agent"}
-        and proof.get("derived") is True
-        and bool(str(value.get("source_section") or "").strip())
-        and type(proof.get("item_count")) is int
-        and proof.get("item_count") == total_count
-    )
-    valid_terminal_closure = bool(
-        valid_counts
-        and valid_proof
-        and isinstance(proof, dict)
-        and _terminal_closure_proof_is_valid(
-            value,
-            counts=counts,
-            source_proof=proof,
-        )
-    )
-    completeness = {
-        "schema_version": "todo_source_completeness_v0",
-        "status": "valid" if valid_terminal_closure else "invalid",
-        "source": "structured_todo_projection",
-        "role": proof.get("role") if isinstance(proof, dict) else None,
-        "terminal_closure": "valid" if valid_terminal_closure else "invalid",
-    }
-
-    intent = value.get("closure_intent")
-    terminal_proof = value.get("terminal_closure_proof")
-    intent_count = intent.get("count") if isinstance(intent, dict) else None
-    valid_intent = bool(
-        valid_terminal_closure
-        and isinstance(intent, dict)
-        and intent.get("schema_version") == "todo_closure_intent_v0"
-        and intent.get("kind") == "no_followup"
-        and intent.get("derived") is True
-        and type(intent_count) is int
-        and done_count is not None
-        and 0 < intent_count <= done_count
-        and isinstance(terminal_proof, dict)
-        and intent_count == terminal_proof.get("no_followup_count")
-    )
-    closure_intent = (
-        {**intent, "source": "todo_no_followup"}
-        if valid_intent and isinstance(intent, dict)
-        else None
-    )
-    return completeness, closure_intent
 
 
 def summarize_user_todos_for_quota(
@@ -344,7 +202,6 @@ def summarize_user_todos_for_quota(
 ) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
-    source_completeness, closure_intent = validate_todo_source_contract(value)
     all_open_items = sorted(
         todo_summary_source_items(value),
         key=todo_presentation_sort_key,
@@ -361,17 +218,7 @@ def summarize_user_todos_for_quota(
     lanes = _QuotaTodoLanes(**planning["lanes"])
     resume_planning = planning["resume_planning"]
     value = {**value, **(resume_planning["capacity_fields"] or {})}
-    monitor_schedule_gap_items = todo_summary_monitor_schedule_gap_items(
-        {
-            "monitor_open_items": lanes.monitor_items,
-            "monitor_writeback": value.get("monitor_writeback"),
-        }
-    )
-    gate_items = [
-        item
-        for item in lanes.open_items
-        if is_user_gate_todo_item(item)
-    ]
+
     blocker_items = [
         item
         for item in lanes.all_open_items
@@ -380,12 +227,11 @@ def summarize_user_todos_for_quota(
         and str(item.get("reason") or "").strip()
     ]
     agent_id = str((agent_identity or {}).get("agent_id") or "").strip()
-    recent_completed_advancement_items = [
-        compact_todo_summary_item(item, text=str(item.get("text") or "").strip())
-        for item in (value.get("recent_completed_advancement_items") or [])
+    recent_completed_advancement_items = compact_todo_summary_items([
+        item for item in value.get("recent_completed_advancement_items") or []
         if isinstance(item, dict)
         if not agent_id or agent_scope_item_claimed_by(item) == agent_id
-    ]
+    ], strip_text=True)
     current_agent_blocker_items = [
         item
         for item in blocker_items
@@ -399,10 +245,10 @@ def summarize_user_todos_for_quota(
         "work_counts": planning["work_counts"],
         "done_count": value.get("done_count"),
         "deferred_count": value.get("deferred_count"),
-        "source_completeness": source_completeness,
+        "source_completeness": planning["source_completeness"],
         "first_open_items": lanes.display_open_items[:3],
         "first_executable_items": lanes.executable_items[:3],
-        "gate_open_items": gate_items[:3],
+        "gate_open_items": lanes.gate_items,
         "monitor_open_items": lanes.monitor_items,
         "monitor_due_count": len(lanes.monitor_due_items),
         "monitor_due_items": lanes.monitor_due_items[:MONITOR_DUE_ITEM_LIMIT],
@@ -420,8 +266,8 @@ def summarize_user_todos_for_quota(
         "monitor_capability_blocked_due_items": (
             lanes.monitor_capability_blocked_due_items
         ),
-        "monitor_schedule_gap_count": len(monitor_schedule_gap_items),
-        "monitor_schedule_gap_items": monitor_schedule_gap_items[:MONITOR_DUE_ITEM_LIMIT],
+        "monitor_schedule_gap_count": len(lanes.monitor_schedule_gap_items),
+        "monitor_schedule_gap_items": lanes.monitor_schedule_gap_items[:MONITOR_DUE_ITEM_LIMIT],
         "active_next_action_items": lanes.active_next_action_items,
         "active_next_action_executable_items": lanes.active_next_action_executable_items,
         "backlog_items": lanes.display_open_items[:TODO_BACKLOG_ITEM_LIMIT],
@@ -449,28 +295,20 @@ def summarize_user_todos_for_quota(
         summary["current_agent_blocker_items"] = current_agent_blocker_items[
             :QUOTA_PAYLOAD_DIAGNOSTIC_LANE_LIMIT
         ]
-    if closure_intent:
-        summary["closure_intent"] = closure_intent
+    if planning["closure_intent"]:
+        summary["closure_intent"] = planning["closure_intent"]
+    if planning.get("frontier_deadline"):
+        summary["frontier_deadline"] = planning["frontier_deadline"]
+    if planning.get("blocked_retry_wait"):
+        summary["blocked_retry_wait"] = planning["blocked_retry_wait"]
     monitor_writeback = todo_summary_monitor_writeback_contract(value)
     if monitor_writeback:
         summary["monitor_writeback"] = monitor_writeback
     summary.update(planning["claim_visibility"])
     summary.update(resume_planning["deferred_lanes"])
     summary.update(resume_planning["resume_blocked_lanes"])
-    summary.update(
-        build_todo_handoff_gate_lanes(
-            value,
-            agent_identity=agent_identity,
-            item_limit=TODO_BACKLOG_ITEM_LIMIT,
-        )
-    )
-    summary.update(
-        build_todo_route_continuation_lanes(
-            value,
-            agent_identity=agent_identity,
-            item_limit=TODO_BACKLOG_ITEM_LIMIT,
-        )
-    )
+    summary.update(planning["handoff_lanes"])
+    summary.update(planning["route_lanes"])
     summary.update(
         build_todo_succession_warning_lanes(
             value,
@@ -495,27 +333,17 @@ def summarize_user_todos_for_quota(
     if lanes.agent_scope_filter:
         summary["agent_scope_filter"] = lanes.agent_scope_filter
         summary["other_agent_scoped_open_count"] = len(lanes.other_agent_scoped_items)
-        summary["other_agent_scoped_items"] = [
-            compact_todo_summary_item(item, text=str(item.get("text") or "").strip())
-            for item in lanes.other_agent_scoped_items[:TODO_VISIBILITY_LANE_LIMIT]
-        ]
+        summary["other_agent_scoped_items"] = compact_todo_summary_items(lanes.other_agent_scoped_items[:TODO_VISIBILITY_LANE_LIMIT], strip_text=True)
     if filter_user_gate_blocks_agent and lanes.user_action_open_items:
         summary["user_action_open_count"] = len(lanes.user_action_open_items)
-        summary["user_action_items"] = [
-            compact_todo_summary_item(item, text=str(item.get("text") or "").strip())
-            for item in lanes.user_action_open_items[:TODO_VISIBILITY_LANE_LIMIT]
-        ]
+        summary["user_action_items"] = compact_todo_summary_items(lanes.user_action_open_items[:TODO_VISIBILITY_LANE_LIMIT], strip_text=True)
     if lanes.user_action_agent_scope_filter:
         summary["user_action_agent_scope_filter"] = lanes.user_action_agent_scope_filter
         summary["other_agent_bound_user_action_open_count"] = len(
             lanes.other_agent_bound_user_action_items
         )
-        summary["other_agent_bound_user_action_items"] = [
-            compact_todo_summary_item(item, text=str(item.get("text") or "").strip())
-            for item in lanes.other_agent_bound_user_action_items[
-                :TODO_VISIBILITY_LANE_LIMIT
-            ]
-        ]
+        summary["other_agent_bound_user_action_items"] = compact_todo_summary_items(
+            lanes.other_agent_bound_user_action_items[:TODO_VISIBILITY_LANE_LIMIT], strip_text=True)
     return summary
 
 
@@ -849,25 +677,17 @@ def summarize_project_asset_todos_for_quota(
         "backlog_items": lanes.display_open_items[:TODO_BACKLOG_ITEM_LIMIT],
         "executable_backlog_items": lanes.executable_items[:TODO_BACKLOG_ITEM_LIMIT],
     }
+    if planning.get("frontier_deadline"):
+        summary["frontier_deadline"] = planning["frontier_deadline"]
+    if planning.get("blocked_retry_wait"):
+        summary["blocked_retry_wait"] = planning["blocked_retry_wait"]
     monitor_writeback = todo_summary_monitor_writeback_contract(value)
     if monitor_writeback:
         summary["monitor_writeback"] = monitor_writeback
     summary.update(planning["claim_visibility"])
     summary.update(resume_planning["deferred_lanes"])
-    summary.update(
-        build_todo_handoff_gate_lanes(
-            value,
-            agent_identity=agent_identity,
-            item_limit=TODO_BACKLOG_ITEM_LIMIT,
-        )
-    )
-    summary.update(
-        build_todo_route_continuation_lanes(
-            value,
-            agent_identity=agent_identity,
-            item_limit=TODO_BACKLOG_ITEM_LIMIT,
-        )
-    )
+    summary.update(planning["handoff_lanes"])
+    summary.update(planning["route_lanes"])
     source_claimed_open_count = None if filter_user_gate_blocks_agent else value.get("claimed_open_count")
     if lanes.claimed_open_items or source_claimed_open_count:
         summary["claimed_open_count"] = source_claimed_open_count or len(lanes.claimed_open_items)
@@ -885,27 +705,17 @@ def summarize_project_asset_todos_for_quota(
         summary["agent_scope_filter"] = lanes.agent_scope_filter
         summary["all_open_count"] = value.get("open", value.get("open_count", len(all_open_items)))
         summary["other_agent_scoped_open_count"] = len(lanes.other_agent_scoped_items)
-        summary["other_agent_scoped_items"] = [
-            compact_todo_summary_item(item, text=str(item.get("text") or "").strip())
-            for item in lanes.other_agent_scoped_items[:TODO_VISIBILITY_LANE_LIMIT]
-        ]
+        summary["other_agent_scoped_items"] = compact_todo_summary_items(lanes.other_agent_scoped_items[:TODO_VISIBILITY_LANE_LIMIT], strip_text=True)
     if filter_user_gate_blocks_agent and lanes.user_action_open_items:
         summary["user_action_open_count"] = len(lanes.user_action_open_items)
-        summary["user_action_items"] = [
-            compact_todo_summary_item(item, text=str(item.get("text") or "").strip())
-            for item in lanes.user_action_open_items[:TODO_VISIBILITY_LANE_LIMIT]
-        ]
+        summary["user_action_items"] = compact_todo_summary_items(lanes.user_action_open_items[:TODO_VISIBILITY_LANE_LIMIT], strip_text=True)
     if lanes.user_action_agent_scope_filter:
         summary["user_action_agent_scope_filter"] = lanes.user_action_agent_scope_filter
         summary["other_agent_bound_user_action_open_count"] = len(
             lanes.other_agent_bound_user_action_items
         )
-        summary["other_agent_bound_user_action_items"] = [
-            compact_todo_summary_item(item, text=str(item.get("text") or "").strip())
-            for item in lanes.other_agent_bound_user_action_items[
-                :TODO_VISIBILITY_LANE_LIMIT
-            ]
-        ]
+        summary["other_agent_bound_user_action_items"] = compact_todo_summary_items(
+            lanes.other_agent_bound_user_action_items[:TODO_VISIBILITY_LANE_LIMIT], strip_text=True)
     return summary
 
 
@@ -928,23 +738,25 @@ def select_quota_todo_summary(
     filter_user_gate_blocks_agent: bool = False,
     available_capabilities: Any = None,
 ) -> dict[str, Any] | None:
-    canonical_summary = summarize_user_todos_for_quota(
-        canonical_value,
-        agent_identity=agent_identity,
-        filter_user_gate_blocks_agent=filter_user_gate_blocks_agent,
-        available_capabilities=available_capabilities,
-        resolve_capacity=True,
+    sources = (
+        (summarize_user_todos_for_quota, canonical_value),
+        (summarize_project_asset_todos_for_quota, project_asset_value),
     )
-    project_asset_summary = summarize_project_asset_todos_for_quota(
-        project_asset_value,
-        agent_identity=agent_identity,
-        filter_user_gate_blocks_agent=filter_user_gate_blocks_agent,
-        available_capabilities=available_capabilities,
-        resolve_capacity=True,
-    )
-    if is_canonical_attention_todo_summary(canonical_value):
-        return canonical_summary or project_asset_summary
-    return project_asset_summary or canonical_summary
+    if not is_canonical_attention_todo_summary(canonical_value):
+        sources = tuple(reversed(sources))
+    # Source precedence is decided before projecting Agent lanes/capacity.
+    # The fallback is needed only when the preferred source has no summary.
+    for summarize, value in sources:
+        summary = summarize(
+            value,
+            agent_identity=agent_identity,
+            filter_user_gate_blocks_agent=filter_user_gate_blocks_agent,
+            available_capabilities=available_capabilities,
+            resolve_capacity=True,
+        )
+        if summary:
+            return summary
+    return summary
 
 
 def select_quota_todo_source_items(

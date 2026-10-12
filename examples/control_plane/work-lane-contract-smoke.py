@@ -47,10 +47,9 @@ def build_quota_should_run(*args, **kwargs):
 
 
 def assert_dependency_monitor_requires_advancement() -> None:
-    guard = build_quota_should_run(
-        status_payload(status="side_bypass_dependency_observation"),
-        goal_id=GOAL_ID,
-    )
+    payload = status_payload(status="side_bypass_dependency_observation")
+    payload["attention_queue"]["items"][0]["project_asset"]["progress_scope"] = "dependency_observation"
+    guard = build_quota_should_run(payload, goal_id=GOAL_ID)
     assert guard["should_run"] is True, guard
     lane = guard["work_lane_contract"]
     assert lane["schema_version"] == "work_lane_contract_v1", lane

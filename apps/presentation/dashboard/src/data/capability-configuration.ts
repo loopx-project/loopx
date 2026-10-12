@@ -60,3 +60,11 @@ export function replanCadenceEditorValue(value: unknown): unknown {
   }
   return value;
 }
+
+/** A v0 storage selector did not enable creation; opening Settings must not. */
+export function goalStorageEditorValue(value: unknown): unknown {
+  const record = configurationObject(value);
+  return record.schema_version === "loopx_goal_storage_defaults_v0"
+    ? { ...record, canonical_creation: false }
+    : value;
+}

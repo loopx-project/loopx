@@ -67,6 +67,54 @@ def test_shared_intake_guidance_precedes_handoff_without_widening_runtime():
     assert CONVERSATION_INTENT_RESOLUTION_INSTRUCTION not in _turn_prompt("Execute.", execution_mode=True)
 
 
+def test_capable_owner_can_complete_work_without_claiming_a_worker_launch():
+    from loopx.chat_agent import TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION, _turn_prompt
+    from loopx.chat_manager import manager_agent_objective
+
+    prompt = _turn_prompt("Save the supplied source using this project's rules.", runtime_profile="trusted_owner")
+    objective = manager_agent_objective("trusted_owner")
+    for text in [prompt, objective]:
+        assert TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION in text
+        assert "ordinary work or a correction belonging to a qualified existing responsible Agent is a request to pass context" not in text
+        assert "A missing worker execution binding does not revoke your own current host grant" in text
+        assert "do not impersonate another Agent, bypass its Todo/lease authority" in text
+    assert "Use context_handoff for a uniquely relevant" not in prompt
+    assert "A protected_action is only an untrusted proposal" in prompt
+
+
+@pytest.mark.parametrize("existing_workspace", [False, True])
+def test_managed_owner_instructions_and_turn_agree_on_completion(tmp_path, existing_workspace):
+    from loopx.chat_agent import _turn_prompt
+    from loopx.chat_manager import manager_workspace
+
+    if existing_workspace:
+        # Resume a workspace carrying the older restricted completion rule.
+        manager_workspace(tmp_path)
+    workspace = manager_workspace(tmp_path, runtime_profile="trusted_owner")
+    instructions = (workspace / "AGENTS.md").read_text(encoding="utf-8")
+    turn = _turn_prompt("Save this note and read it back.", runtime_profile="trusted_owner")
+    for text in [instructions, turn]:
+        assert "Verify file edits by readback and durable state changes by their existing typed receipt before claiming completion." in text
+        assert "Never claim that a durable change happened until the control plane returns a verified receipt." not in text
+    assert "Durable LoopX state changes still use their typed owner" in instructions
+
+
+@pytest.mark.parametrize("mode", ["restricted", "project", "execution"])
+def test_direct_manager_work_does_not_widen_other_conversations(mode):
+    from loopx.chat_agent import TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION, _turn_prompt
+    from loopx.chat_manager import manager_agent_objective
+
+    kwargs = {"runtime_profile": "restricted"}
+    if mode != "restricted":
+        kwargs = {"project_work" if mode == "project" else "execution_mode": True}
+    prompt = _turn_prompt("Save this source.", **kwargs)
+    assert TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION not in prompt
+    if mode == "restricted":
+        assert "Do not edit files" in prompt
+        assert "Use context_handoff for a uniquely relevant" in prompt
+        assert TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION not in manager_agent_objective()
+
+
 @pytest.mark.parametrize("message", [None, "", " \n\t", 7, ["Answer"]])
 def test_an_ordinary_answer_needs_visible_text(message):
     row = evaluation.score({"id": "ordinary", "expected": "answer"}, {"message": message})
@@ -220,6 +268,39 @@ def test_review_evidence_retains_brief_without_provider_payload():
     row = evaluation.score(case, response)
     assert row["review_response"] == {"message": response["message"], "context_handoff": handoff}
     assert "raw_provider_payload" not in row["review_response"] and "usage" not in row["review_response"]
+
+
+def test_material_purpose_oracles_reject_wrong_role_and_dropped_destination():
+    suite = json.loads((ROOT / "examples/evaluations/chat-purpose.public.json").read_text())
+    cases = {case["id"]: case for case in suite["cases"]}
+    learning = cases["material-notebook-purpose"]
+    operations = cases["material-explicit-operations-purpose"]
+    # Same source and directory, but an explicit new purpose changes the recipient.
+    assert learning["context_ref"] == operations["context_ref"]
+    assert learning["target"] != operations["target"]
+    for case in cases.values():
+        if case["expected"] != "handoff":
+            continue
+        refs = case["required_handoff_refs"]
+        response = {"message": "Passing the requested work for assessment.", "context_handoff": {
+            **case["target"], "brief": {"context": " ".join(refs)}
+        }}
+        assert evaluation.score(case, response)["passed"]
+        wrong = operations["target"] if case["target"] == learning["target"] else learning["target"]
+        assert "wrong_recipient" in evaluation.score(case, {
+            **response, "context_handoff": {**response["context_handoff"], **wrong}
+        })["errors"]
+        # Naming the destination in the visible answer cannot repair a lost brief.
+        for brief in (None, " ".join(refs), {"context": refs[-1]}):
+            row = evaluation.score(case, {
+                "message": " ".join(refs),
+                "context_handoff": {**case["target"], "brief": brief}
+            })
+            assert "missing_handoff_ref" in row["errors"]
+    unknown = cases["material-unknown-purpose"]
+    answer = {"message": "Should this go into ResearchNotebook learning notes or OperationsLibrary?"}
+    assert evaluation.score(unknown, answer)["passed"]
+    assert not evaluation.score(unknown, {**answer, "context_handoff": operations["target"]})["passed"]
 
 
 @pytest.mark.parametrize("provider", ["codex", "operator-api"])

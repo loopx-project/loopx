@@ -176,6 +176,74 @@ def test_late_result_is_rejected_after_goal_recreation(
     assert commits == []
 
 
+def test_post_writeback_scope_rejects_a_recreated_goal(
+    tmp_path: Path,
+) -> None:
+    registry = tmp_path / ".loopx" / "registry.json"
+    _write_source_registry(registry, INSTANCE_A)
+    admission = FirstPartyHostGoalAdmission.for_plan(
+        registry_path=registry,
+        goal_id="release",
+        planned_goal_ref=capture_first_party_host_goal_ref(
+            registry_path=registry,
+            goal_id="release",
+        ),
+    )
+    _replace_goal_instance(registry, INSTANCE_B)
+    callbacks: list[str] = []
+
+    with pytest.raises(FirstPartyHostRuntimeRejected) as exc_info:
+        with admission.current_lifetime(operation="test_post_writeback"):
+            callbacks.append("dispatched")
+
+    assert exc_info.value.code == "stale_goal_instance"
+    assert callbacks == []
+
+
+def test_post_writeback_scope_blocks_goal_recreation_until_dispatch_finishes(
+    tmp_path: Path,
+) -> None:
+    registry = tmp_path / ".loopx" / "registry.json"
+    _write_source_registry(registry, INSTANCE_A)
+    admission = FirstPartyHostGoalAdmission.for_plan(
+        registry_path=registry,
+        goal_id="release",
+        planned_goal_ref=capture_first_party_host_goal_ref(
+            registry_path=registry,
+            goal_id="release",
+        ),
+    )
+    dispatch_started = threading.Event()
+    allow_dispatch = threading.Event()
+    recreation_finished = threading.Event()
+
+    def dispatch() -> None:
+        with admission.current_lifetime(operation="test_post_writeback"):
+            dispatch_started.set()
+            assert allow_dispatch.wait(timeout=5)
+
+    dispatch_thread = threading.Thread(target=dispatch)
+    recreate_thread = threading.Thread(
+        target=lambda: (
+            _replace_goal_instance(registry, INSTANCE_B),
+            recreation_finished.set(),
+        ),
+    )
+    dispatch_thread.start()
+    assert dispatch_started.wait(timeout=5)
+    recreate_thread.start()
+    time.sleep(0.05)
+    assert recreation_finished.is_set() is False
+
+    allow_dispatch.set()
+    dispatch_thread.join(timeout=5)
+    recreate_thread.join(timeout=5)
+
+    assert dispatch_thread.is_alive() is False
+    assert recreate_thread.is_alive() is False
+    assert recreation_finished.is_set() is True
+
+
 @pytest.mark.parametrize("registry_state", ["missing", "unreadable"])
 def test_source_result_fails_closed_when_registry_is_unavailable(
     tmp_path: Path,

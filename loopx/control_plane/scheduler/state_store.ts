@@ -498,7 +498,7 @@ function storeRequest(value: unknown, operation: "load" | "write"): {
   return { request, scope, path, legacyPath };
 }
 
-async function migrateLegacySchedulerState(
+async function migrateLegacySchedulerStateAtPathsUnderLock(
   scope: SchedulerScope,
   path: string,
   legacyPath: string,
@@ -516,35 +516,60 @@ async function migrateLegacySchedulerState(
     if (code === "ENOENT" || code === "ENAMETOOLONG") return null;
     throw error;
   }
-  return await withFileMutationLock(legacyPath, async () =>
-    await withFileMutationLock(path, async () => {
-      try {
-        const current = normalizeSchedulerState(
-          JSON.parse(await readFile(path, "utf8")),
-          scope,
-        );
-        if (current) return current;
-      } catch {
-        // The canonical path is still absent or unusable; inspect legacy state.
-      }
-      let legacyState: JsonObject | null = null;
-      try {
-        legacyState = normalizeSchedulerState(
-          JSON.parse(await readFile(legacyPath, "utf8")),
-          scope,
-        );
-      } catch {
-        return null;
-      }
-      if (!legacyState) return null;
-      await atomicWriteJson(path, stableValue(legacyState) as JsonObject);
-      try {
-        await unlink(legacyPath);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-      return legacyState;
-    })
+  return await withFileMutationLock(legacyPath, async () => {
+    try {
+      const current = normalizeSchedulerState(
+        JSON.parse(await readFile(path, "utf8")),
+        scope,
+      );
+      if (current) return current;
+    } catch {
+      // The canonical path is still absent or unusable; inspect legacy state.
+    }
+    let legacyState: JsonObject | null = null;
+    try {
+      legacyState = normalizeSchedulerState(
+        JSON.parse(await readFile(legacyPath, "utf8")),
+        scope,
+      );
+    } catch {
+      return null;
+    }
+    if (!legacyState) return null;
+    await atomicWriteJson(path, stableValue(legacyState) as JsonObject);
+    try {
+      await unlink(legacyPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    return legacyState;
+  });
+}
+
+async function migrateLegacySchedulerState(
+  scope: SchedulerScope,
+  path: string,
+  legacyPath: string,
+): Promise<JsonObject | null> {
+  return await withFileMutationLock(
+    path,
+    async () =>
+      await migrateLegacySchedulerStateAtPathsUnderLock(
+        scope,
+        path,
+        legacyPath,
+      ),
+  );
+}
+
+export async function migrateLegacySchedulerStateUnderLock(
+  runtimeRoot: string,
+  scope: SchedulerScope,
+): Promise<JsonObject | null> {
+  return await migrateLegacySchedulerStateAtPathsUnderLock(
+    scope,
+    schedulerStatePath(runtimeRoot, scope),
+    legacySchedulerStatePath(runtimeRoot, scope),
   );
 }
 

@@ -155,6 +155,16 @@ test("runtime exposes the source-session lifetime decisions", async () => {
   );
 });
 
+test("runtime exposes the canonical Goal acceptance lifecycle transition", async () => {
+  const result = await dispatchEffectRuntimeMethod(
+    handlers,
+    "goal.acceptance.lifecycle.transition",
+    {},
+  ) as Record<string, unknown>;
+  assert.equal(result.status, "failed");
+  assert.match(String(result.reason), /runtime_root/);
+});
+
 test("runtime boundary registers the quota monitor-poll transaction", async () => {
   await assert.rejects(
     dispatchEffectRuntimeMethod(handlers, "quota.monitor_poll.commit", {}),

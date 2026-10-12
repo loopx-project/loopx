@@ -1,7 +1,15 @@
+"""Identify the Python installer that owns this LoopX install, and render the
+commands that installer needs so the host that prints them can run them.
+
+Native Windows prints PowerShell guidance, where a quoted executable path is a
+string literal rather than a command; POSIX keeps shell quoting.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 import shlex
 
@@ -10,6 +18,31 @@ import shlex
 class PythonInstallOwner:
     manager: str
     environment: str | None = None
+
+
+def _powershell_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _is_windows_host() -> bool:
+    """Whether printed guidance targets PowerShell instead of a POSIX shell."""
+
+    return os.name == "nt"
+
+
+def interpreter_invocation(python_executable: str) -> str:
+    """The text that runs an interpreter path on the host that prints it.
+
+    POSIX shells run a quoted path directly. PowerShell reads a bare quoted
+    path as a string literal, so the ``&`` call operator with a single-quoted
+    literal is required; that form also carries spaces and apostrophes in the
+    interpreter path. This module owns the renderer because the pip-owned
+    upgrade command is the first caller; doctor and update reuse it.
+    """
+
+    if _is_windows_host():
+        return f"& {_powershell_literal(python_executable)}"
+    return shlex.quote(python_executable)
 
 
 def resolve_python_install_owner(
@@ -44,7 +77,9 @@ def python_distribution_upgrade_command(
     if owner.manager == "pipx":
         package_command = f"pipx upgrade {shlex.quote(owner.environment or 'loopx')}"
     elif owner.manager == "pip":
-        package_command = f"{shlex.quote(python_executable)} -m pip install --upgrade loopx"
+        package_command = (
+            f"{interpreter_invocation(python_executable)} -m pip install --upgrade loopx"
+        )
     else:
         return None
     return (

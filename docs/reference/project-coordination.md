@@ -91,6 +91,27 @@ same evidence and semantic handoff path as the steward, bounded to that Goal:
    deduplicate retry/restart. It does not open a replacement user conversation or
    require a second question.
 
+When Chat and coordination use separate runtime directories, the trusted Chat
+host records its source-store address on the private original return route.
+Peer forwarding reads that exact Session/Turn without creating or recovering a
+Chat store. The address is evidence provenance, not a new source grant: current
+sender/recipient grants, Goal instance checks and every parent hop still apply.
+At Chat host startup, the existing return service can fill a missing legacy
+address from that host's exact committed request and current authorization,
+including when its return was already delivered. It preserves request IDs,
+GoalRefs and prior delivery receipts; it never retargets a pinned address or
+copies a conversation. A missing/closed source, conflicting receipt or revoked
+grant remains blocked. Restore the original Chat host and authorization before
+retrying; there is no peer/model-supplied source-root override. A lost caller
+answer does not cancel an independently committed inbox request.
+
+Chat 与协调目录分离时，可信 Chat 宿主会在私有原始返回路由中记录来源存储位置。
+Peer 只读该来源的精确 Session/Turn，仍由现有规则核验来源授权、所有接收方和
+Goal 实例。旧记录缺少位置时，由原 Chat 宿主在启动时根据已提交请求和当前授权
+恢复关联；保留请求、GoalRef 与返回凭据，不复制会话或改写既有位置。
+来源缺失、会话关闭、凭据冲突或授权撤销时继续拒绝；须恢复原宿主及授权后重试。
+调用方回答丢失不等于取消已独立提交的收件请求。
+
 The Chat endpoint is a conversation runtime, **not** the registered coordinator.
 It does not attach to that Agent's original session, run a worker merely by
 delivering a message, or take over its Goal. Inbox delivery, receiver adoption,

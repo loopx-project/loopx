@@ -617,6 +617,7 @@ def project_post_handoff_history(
     for run, signal in zip(runs, projection["runs"], strict=True):
         compact = {field: run[field] for field in (
             "generated_at", "classification", "health_check", "json_exists", "markdown_exists",
+            "progress_scope",
         ) if field in run}
         compact.update({field: signal[field] for field in ("delivery_batch_scale", "delivery_turn_kind")})
         if signal.get("delivery_claim_conflicts"):

@@ -591,7 +591,8 @@ def test_issue_fix_goal_projects_capability_guard_without_todo_fields(
     assert "loopx issue-fix workflow-plan " in rendered
     assert "loopx issue-fix feasibility " in rendered
     assert "proceed: `loopx issue-fix feasibility " in rendered
-    assert len(rendered.replace(str(project), "<project>")) <= 3_600
+    # Full-body readback adds a routed command and authority/completeness guidance.
+    assert len(rendered.replace(str(project), "<project>")) <= 4_100
     todo_command = next(
         step["command_template"]
         for step in transaction["ordered_steps"]
@@ -872,7 +873,9 @@ def test_projection_materially_reduces_repetition_without_hiding_measurement(
     compact_json = json.dumps(compact, ensure_ascii=False, sort_keys=True)
     detailed_json = json.dumps(detailed, ensure_ascii=False, sort_keys=True)
 
-    assert len(compact_json) <= int(len(detailed_json) * 0.65)
+    # Exact-readback guidance is useful common content in both projections;
+    # retain the duplicate-content checks below rather than remove that guidance.
+    assert len(compact_json) <= int(len(detailed_json) * 0.66)
     compact_duplication = compact["packet_summary"]["duplication_measurement"]
     detailed_duplication = detailed["packet_summary"]["duplication_measurement"]
     assert compact_duplication["objective_content"]["duplicate_occurrences"] <= 11
@@ -2079,12 +2082,15 @@ def test_guided_takeover_with_runnable_frontier_projects_todo_delta(
     validate_shared_todo_options(add_args)
     validate_todo_add_options(add_args)
     # The takeover continues through the normal refresh/host-loop/quota tail.
-    assert step_ids.index("apply_todo_delta") < step_ids.index("refresh_state")
+    assert step_ids.index("apply_todo_delta") < step_ids.index("read_back_authored_todos") < step_ids.index("refresh_state")
     assert "quota_guard" in step_ids
     rendered = render_start_goal_guided_markdown(payload)
     assert "apply_todo_delta" in rendered
     assert "reuse" in rendered
     assert "todo_delta:" in rendered
+    readback = next(step for step in steps if step["id"] == "read_back_authored_todos")
+    assert readback["command_template"] in rendered
+    assert "todo_detail_projection.source_complete=true" in rendered
 
 
 def test_guided_takeover_without_runnable_frontier_keeps_unconditional_authoring(
@@ -2095,6 +2101,7 @@ def test_guided_takeover_without_runnable_frontier_keeps_unconditional_authoring
     step_ids = [step["id"] for step in payload["guided_transaction"]["ordered_steps"]]
     assert "write_ordered_todos" in step_ids
     assert "apply_todo_delta" not in step_ids
+    assert step_ids.index("write_ordered_todos") < step_ids.index("read_back_authored_todos") < step_ids.index("refresh_state")
 
 
 def _write_connected_project_with_blocked_agent_todo(root: Path) -> Path:

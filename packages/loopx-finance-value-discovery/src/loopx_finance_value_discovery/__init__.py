@@ -2,6 +2,24 @@
 
 from importlib import import_module
 
+from .funding_event import (
+    FINANCE_FUNDING_EVENT_INPUT_SCHEMA_VERSION,
+    FINANCE_FUNDING_EVENT_SCHEMA_VERSION,
+    assess_funding_event_pair,
+)
+
+from .stock_change import (
+    FINANCE_STOCK_CHANGE_INPUT_SCHEMA_VERSION,
+    FINANCE_STOCK_CHANGE_SCHEMA_VERSION,
+    assess_stock_change,
+)
+
+from .cumulative_flow import (
+    FINANCE_FLOW_DIFFERENCE_INPUT_SCHEMA_VERSION,
+    FINANCE_FLOW_DIFFERENCE_SCHEMA_VERSION,
+    assess_flow_difference,
+)
+
 from .cash_reconciliation import (
     FINANCE_CASH_RECONCILIATION_INPUT_SCHEMA_VERSION,
     FINANCE_CASH_RECONCILIATION_SCHEMA_VERSION,
@@ -68,6 +86,9 @@ from .replay import (
 )
 
 __all__ = [
+    "FINANCE_FUNDING_EVENT_INPUT_SCHEMA_VERSION",
+    "FINANCE_FUNDING_EVENT_SCHEMA_VERSION",
+    "assess_funding_event_pair",
     "EVIDENCE_AXES",
     "EXPLAINED_BETA_COMPONENTS",
     "FINANCE_BETA_ATTRIBUTION_INPUT_SCHEMA_VERSION",
@@ -81,6 +102,10 @@ __all__ = [
     "FINANCE_CASH_RECONCILIATION_SCHEMA_VERSION",
     "FINANCE_CONTRACT_LIQUIDITY_EVALUATION_SCHEMA_VERSION",
     "FINANCE_CONTRACT_LIQUIDITY_INPUT_SCHEMA_VERSION",
+    "FINANCE_STOCK_CHANGE_INPUT_SCHEMA_VERSION",
+    "FINANCE_STOCK_CHANGE_SCHEMA_VERSION",
+    "FINANCE_FLOW_DIFFERENCE_INPUT_SCHEMA_VERSION",
+    "FINANCE_FLOW_DIFFERENCE_SCHEMA_VERSION",
     "FINANCE_METRIC_PACK_EVALUATION_SCHEMA_VERSION",
     "FINANCE_METRIC_PACK_INPUT_SCHEMA_VERSION",
     "FINANCE_METRIC_PACK_REPLAY_SCHEMA_VERSION",
@@ -103,6 +128,8 @@ __all__ = [
     "build_finance_transaction_approval_packet",
     "build_finance_value_discovery_packet",
     "assess_numeric_accuracy",
+    "assess_stock_change",
+    "assess_flow_difference",
     "assess_cash_reconciliation",
     "assess_period_comparison",
     "assess_period_encoding",

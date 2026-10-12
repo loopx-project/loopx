@@ -77,7 +77,7 @@ ACTIVE_USER_PUBLIC_TEXT_FORBIDDEN_MARKERS = (
     "tok" + "en=",
     "pass" + "word=",
 )
-ACTIVE_USER_SECRET_KEY_SHAPED_RE = re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{8,}")
+ACTIVE_USER_SECRET_KEY_SHAPED_RE = re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{8,}", re.IGNORECASE)
 
 
 def build_worker_bridge_mounts(
@@ -170,7 +170,12 @@ def _coerce_public_safe_worker_text(
     text = str(value or "").strip()
     if not text:
         raise ValueError(f"{field} is required")
-    leaked = [marker for marker in ACTIVE_USER_PUBLIC_TEXT_FORBIDDEN_MARKERS if marker in text]
+    text_lower = text.lower()
+    leaked = [
+        marker
+        for marker in ACTIVE_USER_PUBLIC_TEXT_FORBIDDEN_MARKERS
+        if marker.lower() in text_lower
+    ]
     if ACTIVE_USER_SECRET_KEY_SHAPED_RE.search(text):
         leaked.append("sk-token-shaped")
     if leaked:

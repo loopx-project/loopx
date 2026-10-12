@@ -10,8 +10,8 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from loopx import status as status_module
-from loopx.control_plane.todos.todo_index import build_todo_index as build_todo_index_read_model
+from loopx import status as status_module  # noqa: E402
+from loopx.control_plane.todos.todo_index import build_todo_index as build_todo_index_read_model  # noqa: E402
 
 
 def write_event(path: Path, payload: dict[str, object]) -> None:
@@ -93,6 +93,8 @@ def main() -> None:
     event_only_items = event_only_index["items"]
     assert len(event_only_items) == 1, event_only_items
     assert event_only_items[0]["source"] == "rollout_event_log", event_only_items[0]
+    assert event_only_items[0]["status"] == "done", event_only_items[0]
+    assert event_only_items[0]["done"] is True, event_only_items[0]
 
     assert read_model_index == index, (read_model_index, index)
     assert index["current_projected_count"] == 1, index
@@ -106,8 +108,9 @@ def main() -> None:
     assert item["event_kinds"] == ["todo_add", "todo_complete"], item
     assert item["latest_event_kind"] == "todo_complete", item
     assert item["latest_event_status"] == "done", item
-    assert item["status"] == "done", item
-    assert item["done"] is True, item
+    # Historical completion remains diagnostic; the current queue owns status.
+    assert item["status"] == "open", item
+    assert item["done"] is False, item
     print("todo-index-rollout-status smoke ok")
 
 

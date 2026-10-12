@@ -110,6 +110,30 @@ def _basis(registry_path: Path) -> str:
     )
 
 
+def test_legacy_registry_stays_locked_through_plan_and_write(tmp_path, monkeypatch):
+    from loopx.file_lock import exclusive_cross_runtime_file_lock, LockAcquireTimeoutError
+    from loopx.control_plane.work_items import team_plan_adapter
+
+    _project, registry = _fixture(tmp_path)
+    original_effect = team_plan_adapter.effect_runtime_result
+    checked = []
+
+    def inspect(method, request):
+        if method == "work_items.team_plan.plan":
+            with pytest.raises(LockAcquireTimeoutError):
+                with exclusive_cross_runtime_file_lock(registry, timeout_seconds=0):
+                    pass
+            checked.append(True)
+        return original_effect(method, request)
+
+    monkeypatch.setattr(team_plan_adapter, "effect_runtime_result", inspect)
+    result = _settle(registry, _proposal())
+    assert result[0]["status"] == "committed", result
+    assert checked == [True]
+    with exclusive_cross_runtime_file_lock(registry, timeout_seconds=0):
+        pass
+
+
 def _settle(
     registry_path: Path,
     proposal: dict,

@@ -21,6 +21,12 @@ _RETRY_FLAGS = (
 )
 
 
+async def stage_portable_python(environment: BaseEnvironment, destination: str) -> None:
+    """Stage the configured runner interpreter without using the task PATH."""
+    source = Path(os.environ["LOOPX_PORTABLE_PYTHON"]).resolve()
+    await environment.upload_dir(source, destination)
+
+
 class CodexOffline(Codex):
     def __init__(self, *args, goals="false", web_search="disabled", **kwargs):
         if str(goals) not in {"true", "false"}:

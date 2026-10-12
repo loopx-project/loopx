@@ -300,24 +300,29 @@ def apply_receipt_bound_wait_recovery(
     available_capabilities: list[str] | None,
     scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None,
     monitor_phase: str | None = None,
+    settlement_progress: dict[str, Any] | None = None,
 ) -> bool:
     """Read full provider facts only when a replay lost its executable binding."""
     from ..todos.list_readback import list_goal_todos
+    from ..todos.resume_condition import compact_todo_resume_items
     from ..runtime.time import now_utc_iso
 
     source = list_goal_todos(
         registry_path=registry_path, runtime_root_arg=str(runtime_root), goal_id=goal_id,
     )
-    # Transport one coherent source read, narrowed by its typed dependency
-    # reference. TS revalidates the wait; unrelated Todo bodies never cross RPC.
+    # Keep transitive dependencies from this coherent read. A direct-target
+    # slice loses longer cycles; compact facts keep prose out of the RPC.
     bound: dict[str, Any] = next((row for row in source["todos"] if row.get("todo_id") == todo_id), {})
-    target_id = (bound.get("resume_condition") or {}).get("target_todo_id")
-    items = [row for row in source["todos"] if row.get("todo_id") in {todo_id, target_id}]
+    items = compact_todo_resume_items(source["todos"])
+    for row in items:
+        if row.get("todo_id") == todo_id:
+            row["resume_condition"] = bound.get("resume_condition")
     verdict = effect_runtime_result("quota.settlement.read", {
         "schema_version": "loopx_quota_receipt_bound_wait_request_v0",
         "todos": items, "todo_id": todo_id, "agent_id": agent_id,
         "turn_instance_id": turn_instance_id, "observed_at": now_utc_iso(),
         "monitor_phase": monitor_phase,
+        "settlement_progress": settlement_progress,
     })
     if verdict.get("status") == "none":
         return False
@@ -415,6 +420,7 @@ def _apply_recovery_projection(
     cli_channel = interaction_contract.get("cli_channel")
     if isinstance(cli_channel, dict):
         cli_channel["spend_policy"] = obligation["spend_policy"]
+        cli_channel["spend_allowed_now"] = obligation.get("spend_allowed_now") is True
         cli_channel["recovery_ref"] = "$.unsettled_host_turn_recovery"
     payload["interaction_contract"] = interaction_contract
     return True

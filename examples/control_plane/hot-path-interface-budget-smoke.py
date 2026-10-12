@@ -71,17 +71,23 @@ SURFACE_BUDGETS = {
         "cold_path": "status, history, or active state",
         # Codex keeps a lossless codex_app compatibility alias while the
         # provider-neutral app_automation packet becomes canonical.
-        # Pre-limit work counts add useful scope/completeness evidence; allow
-        # modest headroom after removing the redundant observed-row count.
-        "max_json_chars": 14_500,
-        "max_nested_keys": 360,
-        "max_top_level_keys": 52,
+        # Full Goal/selected-work read commands add necessary source continuity.
+        # One Agent-channel carrier avoids duplicating them in the CLI channel.
+        # M3 adds one validated cadence readback envelope to the quota packet:
+        # 357 -> 368 nested keys and 51 -> 52 top-level keys.
+        "max_json_chars": 15_500,
+        "max_nested_keys": 376,
+        "max_top_level_keys": 54,
     },
     "dashboard_status_json": {
         "owner": "operator dashboard",
         "consumer": "render first-screen operator state",
         "cold_path": "history, run artifacts, or project-local adapter output",
-        "max_json_chars": 22_500,
+        # Selected-work freshness added seven 95-character digest fields to
+        # this unchanged fixture (21,895 -> 22,560). Keep the internal source
+        # revisions: quota consumes this status projection before its own CLI
+        # compaction. The contract records why modest headroom is appropriate.
+        "max_json_chars": 23_000,
         "max_nested_keys": 350,
         "max_top_level_keys": 27,
     },

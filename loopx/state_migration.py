@@ -18,7 +18,7 @@ from .control_plane.projects.registry_codec import (
     project_registry_transaction,
     require_runtime_compatible_project_registry,
 )
-from .control_plane.todos.active_state_editing import atomic_write_state_text
+from .control_plane.runtime.document_io import atomic_write_state_text
 from .control_plane.coordination.legacy_writer_fence import legacy_coordination_todo_lock_path, require_legacy_state_replacement_allowed
 from .control_plane.work_items.task_lease import task_lease_lock_path
 from .registry import registry_goals

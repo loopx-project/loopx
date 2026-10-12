@@ -134,6 +134,26 @@ def test_inventory_scope_and_limits_are_not_an_attention_queue(tmp_path, reads):
     assert scoped["goals"][0]["host_id"] is None
 
 
+def test_portfolio_rows_project_exact_goal_instance_identity_only_when_requested(
+    tmp_path, reads
+):
+    path = registry(tmp_path, ("alpha",))
+    payload = json.loads(path.read_text())
+    payload["goals"][0]["goal_instance_id"] = "ginst_" + "a" * 32
+    path.write_text(json.dumps(payload))
+
+    default = portfolio.build_goal_portfolio(registry_path=path, now=NOW)
+    result = portfolio.build_goal_portfolio(
+        registry_path=path,
+        now=NOW,
+        include_goal_instance_id=True,
+    )
+
+    assert "goal_instance_id" not in default["goals"][0]
+    assert result["goals"][0]["goal_id"] == "alpha"
+    assert result["goals"][0]["goal_instance_id"] == "ginst_" + "a" * 32
+
+
 def test_quota_noise_does_not_evict_recorded_delivery(tmp_path, reads):
     result = portfolio.build_goal_portfolio(
         registry_path=registry(tmp_path, ("alpha",)), now=NOW

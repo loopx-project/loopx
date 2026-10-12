@@ -2,7 +2,7 @@ import { z } from "zod";
 
 const metricValueSchema = z.object({
   value: z.number().finite(),
-  total: z.number().finite().positive().optional(),
+  total: z.number().finite().nonnegative().optional(),
   unit: z.string().optional(),
   higher_is_better: z.boolean(),
 }).passthrough();
@@ -97,9 +97,13 @@ const armSchema = z.object({
 const metricDeltaSchema = z.object({
   baseline_value: z.number().finite(),
   candidate_value: z.number().finite(),
-  delta: z.number().finite(),
+  delta: z.number().finite().optional(),
+  delta_rate: z.number().finite().optional(),
+  comparison_unavailable_reason: z.string().optional(),
   direction: z.enum(["improved", "flat", "regressed"]).optional(),
-}).passthrough();
+}).passthrough().refine((metric) => metric.comparison_unavailable_reason
+  ? metric.delta === undefined && metric.delta_rate === undefined && metric.direction === undefined
+  : metric.delta !== undefined, "Metric comparison must contain a delta or an unavailable reason");
 
 const matchedComparisonSchema = z.object({
   comparison_id: z.string(),

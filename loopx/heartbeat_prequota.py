@@ -6,6 +6,7 @@ from typing import Any
 from .capabilities.issue_fix.pr_gate_reconcile import (
     reconcile_acknowledged_issue_fix_pr_reviews,
 )
+from .capabilities.issue_fix.pr_wait_reconcile import reconcile_pr_wait_dependencies
 
 
 HEARTBEAT_PRE_QUOTA_SCHEMA_VERSION = "heartbeat_pre_quota_v0"
@@ -44,6 +45,16 @@ def run_heartbeat_pre_quota(
             "write_count": 0,
         }
 
+    try:
+        dependencies = reconcile_pr_wait_dependencies(registry_path=registry_path,
+            runtime_root_arg=runtime_root_arg, goal_id=goal_id, agent_id=agent_id,
+            fetch_timeout_seconds=fetch_timeout_seconds)
+    except Exception as exc:
+        dependencies = {"ok": False, "degraded": True, "failure_count": 1,
+                        "error_category": type(exc).__name__, "external_read_count": 0}
+    degraded = degraded or bool(dependencies.get("degraded"))
+    failure_count += int(dependencies.get("failure_count") or 0)
+
     return {
         "ok": True,
         "schema_version": HEARTBEAT_PRE_QUOTA_SCHEMA_VERSION,
@@ -53,6 +64,7 @@ def run_heartbeat_pre_quota(
         "failure_count": failure_count,
         "checks": {
             "acknowledged_pr_reviews": review_reconciliation,
+            "pr_dependencies": dependencies,
         },
         "quota_spend_required": False,
         "continue_to_quota": True,
@@ -74,6 +86,7 @@ def render_heartbeat_pre_quota_markdown(payload: dict[str, Any]) -> str:
             f"- degraded: `{payload.get('degraded')}`",
             f"- reconciled_count: `{review.get('reconciled_count', 0)}`",
             f"- failure_count: `{payload.get('failure_count')}`",
+            f"- PR dependency reads: `{checks.get('pr_dependencies', {}).get('external_read_count', 0)}`",
             f"- continue_to_quota: `{payload.get('continue_to_quota')}`",
             "- quota_spend_required: `False`",
         ]

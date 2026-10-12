@@ -1,0 +1,6 @@
+.personal-content-reference { overflow-wrap: anywhere; }
+.personal-content-reference label { display: grid; gap: 6px; margin-block: 12px; }
+.personal-content-reference input:not([type="file"]),
+.personal-content-reference textarea { box-sizing: border-box; min-width: 0; width: 100%; padding: 10px; border: 1px solid var(--pw-line-strong, #ebebeb); border-radius: 6px; color: inherit; background: transparent; font: inherit; }
+.personal-content-reference textarea { resize: vertical; }
+.personal-content-reference .personal-capability-linked-setting { margin-block: 12px; }

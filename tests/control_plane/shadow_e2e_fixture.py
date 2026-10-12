@@ -8,6 +8,9 @@ import select
 import subprocess
 import sys
 from dataclasses import dataclass
+from tempfile import TemporaryDirectory
+
+import loopx
 
 from loopx.control_plane.testing.authority_e2e_rows_stage2c2 import CRASH_WORKER
 
@@ -20,6 +23,9 @@ class ShadowWorkspace:
     runtime: Path
     state: Path
     goal: str = "goal-e2e"
+    command: tuple[str, ...] = (sys.executable, "-m", "loopx.cli")
+    cwd: Path = REPO
+    package: Path = Path(loopx.__file__).resolve().parent
 
     def arguments(self, *args: str) -> list[str]:
         return [
@@ -36,8 +42,8 @@ class ShadowWorkspace:
 
     def cli(self, *args: str, success: bool = True) -> dict:
         result = subprocess.run(
-            [sys.executable, "-m", "loopx.cli", *self.arguments(*args)],
-            cwd=REPO,
+            [*self.command, *self.arguments(*args)],
+            cwd=self.cwd,
             capture_output=True,
             text=True,
             timeout=45,
@@ -59,45 +65,65 @@ class ShadowWorkspace:
         return self.cli("authority-shadow", "drain", *args, success=False)
 
     def crash(self, window: str, *args: str) -> dict:
-        child = subprocess.Popen(
-            [
-                sys.executable,
-                "-c",
-                CRASH_WORKER,
-                window,
-                str(self.state),
-                *self.arguments(*args),
-            ],
-            cwd=REPO,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        assert child.stdout is not None
-        try:
-            readable, _, _ = select.select([child.stdout], [], [], 30)
-            assert readable, "public CLI did not reach the requested persistence window"
-            line = child.stdout.readline()
-            if not line.startswith("BARRIER "):
-                child.kill()
-                stdout, stderr = child.communicate(timeout=10)
-                raise AssertionError(f"No process barrier: {line}{stdout}\n{stderr}")
-            payload = json.loads(line.removeprefix("BARRIER "))
-            if payload.get("native_pid"):
-                assert child.stdin is not None
-                child.stdin.write("terminate_native\n")
-                child.stdin.flush()
-                readable, _, _ = select.select([child.stdout], [], [], 10)
-                assert readable and child.stdout.readline().strip() == "REAPED", "native owner must be reaped"
-            child.kill()
-            child.communicate(timeout=10)
-            assert child.returncode == -9
-            return payload
-        finally:
-            if child.poll() is None:
+        # Test-only fault assets are not wheel data. Generate the scheduling
+        # driver here and bind it to the actual package's production owner.
+        with TemporaryDirectory(prefix="loopx-drain-fault-") as directory:
+            driver = Path(directory) / "drain_fault.mts"
+            module = self.package / "control_plane/coordination/shadow_drain.ts"
+            driver.write_text(
+                "import {drainShadowOutbox} from " + json.dumps(module.as_uri()) + ";"
+                "let input=''; for await (const bytes of process.stdin) input+=bytes;"
+                "const phase=process.argv[2]==='between_unlinks'?'after_unlink':process.argv[2];"
+                "const request=JSON.parse(input);"
+                "const result=await drainShadowOutbox(request,{afterEffect:async observed=>{"
+                "if(observed===phase){"
+                "process.stdout.write('BARRIER '+JSON.stringify({native_pid:process.pid,request})+'\\n');"
+                "await new Promise(()=>{setInterval(()=>{},1000);});"
+                "}}});process.stdout.write(JSON.stringify(result)+'\\n');",
+                encoding="utf-8",
+            )
+            relative_driver = "'loopx/control_plane/testing/shadow_drain_fault_process.ts'"
+            assert CRASH_WORKER.count(relative_driver) == 1
+            worker = CRASH_WORKER.replace(relative_driver, repr(str(driver)))
+            child = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    worker,
+                    window,
+                    str(self.state),
+                    *self.arguments(*args),
+                ],
+                cwd=self.cwd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            assert child.stdout is not None
+            try:
+                readable, _, _ = select.select([child.stdout], [], [], 30)
+                assert readable, "public CLI did not reach the requested persistence window"
+                line = child.stdout.readline()
+                if not line.startswith("BARRIER "):
+                    child.kill()
+                    stdout, stderr = child.communicate(timeout=10)
+                    raise AssertionError(f"No process barrier: {line}{stdout}\n{stderr}")
+                payload = json.loads(line.removeprefix("BARRIER "))
+                if payload.get("native_pid"):
+                    assert child.stdin is not None
+                    child.stdin.write("terminate_native\n")
+                    child.stdin.flush()
+                    readable, _, _ = select.select([child.stdout], [], [], 10)
+                    assert readable and child.stdout.readline().strip() == "REAPED", "native owner must be reaped"
                 child.kill()
                 child.communicate(timeout=10)
+                assert child.returncode == -9
+                return payload
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                    child.communicate(timeout=10)
 
 
 def workspace(path: Path, *, bootstrap: bool = True) -> ShadowWorkspace:

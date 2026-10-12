@@ -1,0 +1,29 @@
+{
+  "schema_version": "procedural_experience_contract_v0",
+  "applicability": [
+    "Reviewing a recovery RFC or phased architecture proposal against an accepted product roadmap",
+    "Technical design coverage passes while the first useful user outcome or packaged journey remains unclear"
+  ],
+  "observed_outcome": "The complete-state recovery RFC covered eight technical design criteria. A subsequent maintainer-directed product review requested a bounded first recovered Goal, earlier packaged interaction, and evidence of useful work after recovery. The revised implementation and its user benefit were still unverified when this experience was recorded.",
+  "attribution": "The earlier review emphasized technical coverage and treated user experience as inapplicable to a documentation change. The later review made product value and delivery order explicit. This is a difference in review frame, not a controlled same-head experiment or proof that one reviewer is always correct. Result checking verifies consistency, not the truth of either judgment.",
+  "future_behavior": {
+    "trigger": "An RFC defines delivery stages for recovery or another caller-facing capability, even when its diff contains only documentation.",
+    "action": "Read the current accepted roadmap and PR frame before the diff. Name the first useful user outcome, owning boundary, minimum packaged journey, and useful result after the operation. Check whether the proposed stages deliver these together. Keep refactors bounded to removing duplicate authority and making the next likely change easier.",
+    "validation": "Bind findings to the current exact head and roadmap acceptance. Walk one ordinary task through discovery, operation, failure or recovery, and result readback. For a design PR, review the specified acceptance journey and mark runtime evidence pending. Measure attention and maintenance cost per accepted result; do not infer value from test, receipt or PR counts.",
+    "stop_condition": "Ignore or refute this advice when the current change has a justified internal prerequisite boundary or different accepted scope. Do not require a completed runtime for a design PR, invent unrelated roadmap gates, inherit a historical verdict, or block solely because the human and machine judgments differ."
+  },
+  "limitations": [
+    "One maintainer-directed correction is advisory evidence, not a universal reward label, hard policy or additional action authority.",
+    "A structurally qualified experience and delivered context do not prove semantic adoption or improved review quality.",
+    "No memory recall or application lineage was recorded for the original review; do not fabricate a memory utility observation from the verdict difference.",
+    "Review API target commits and the heads named in earlier review bodies differ; preserve both in the companion case and do not claim a same-head counterfactual."
+  ],
+  "evidence_refs": [
+    "github:loopx-project/loopx:issue:5940",
+    "github:loopx-project/loopx:pr:5944",
+    "github:loopx-project/loopx:review:5452444228",
+    "github:loopx-project/loopx:review:5453719155",
+    "github:loopx-project/loopx:review:5454100835",
+    "git:f4c21235dfa6695a7592c8023c9a150268e28f48"
+  ]
+}

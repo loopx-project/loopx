@@ -1,4 +1,4 @@
-.personal-capability-scope-note.personal-performance-diagnosis { max-height: min(440px, 40dvh); font-size: 12px; }
+.personal-capability-scope-note.personal-performance-diagnosis { max-height: min(440px, 40dvh); font-size: var(--text-caption); line-height: var(--leading-caption); }
 .personal-performance-diagnosis > summary { position: sticky; top: 0; padding: 8px 0; background: var(--pw-bg); z-index: 1; }
 .personal-capability-scope-note.personal-performance-diagnosis p { padding-left: 0; }
 .personal-performance-diagnosis label { display: grid; gap: 6px; margin-block: 10px; }

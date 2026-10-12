@@ -25,7 +25,8 @@ def main() -> int:
     parser.add_argument("--task", action="append", default=[])
     parser.add_argument("--execution-mode", choices=MODES, default="heartbeat")
     parser.add_argument("--iteration-context", choices=CONTEXTS, default="fresh")
-    parser.add_argument("--task-entry", choices=TASK_ENTRIES, default="seeded-todo")
+    parser.add_argument("--task-entry", choices=TASK_ENTRIES,
+                        help="LoopX modes default to loopx-planned; explicit seeded-todo retains legacy entry")
     parser.add_argument("--planning-timeout", type=float, default=300)
     parser.add_argument("--validation-command-json", default="[]")
     parser.add_argument("--turn-timeout", type=float, default=None)

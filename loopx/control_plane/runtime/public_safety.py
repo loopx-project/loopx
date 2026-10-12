@@ -90,7 +90,9 @@ def validate_public_safe_value(
     Mapping field names must be strings. Field classification is exact after
     case, separator, and camelCase normalization. Values are then checked
     recursively so nested maps and lists cannot bypass the same credential
-    and local-path boundary.
+    and local-path boundary. This public-export policy rejects home-relative,
+    explicit path-prefixed and file-URL locators as well as absolute paths;
+    ordinary remote URLs and repository-relative references remain allowed.
     """
 
     if isinstance(value, Mapping):
@@ -100,7 +102,7 @@ def validate_public_safe_value(
                     f"{path} contains a non-string field name ({type(key).__name__})"
                 )
             key_text = key
-            if LOCAL_PATH_SURFACE_PATTERN.search(
+            if find_public_safe_local_path(
                 key_text
             ) or SECRET_LIKE_SURFACE_PATTERN.search(key_text):
                 raise ValueError(f"{path} contains an unsafe field name")
@@ -121,8 +123,14 @@ def validate_public_safe_value(
         return
     if not isinstance(value, str):
         return
-    if LOCAL_PATH_SURFACE_PATTERN.search(value):
-        raise ValueError(f"{path} contains an absolute local path")
+    if find_public_safe_local_path(value):
+        # Preserve the existing diagnostic for the historical absolute shapes.
+        kind = (
+            "an absolute local path"
+            if LOCAL_PATH_SURFACE_PATTERN.search(value)
+            else "a local path"
+        )
+        raise ValueError(f"{path} contains {kind}")
     if SECRET_LIKE_SURFACE_PATTERN.search(value):
         raise ValueError(f"{path} contains a credential-like value")
 

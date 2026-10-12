@@ -53,6 +53,7 @@ def restart_services_for_runtime_activation(
     *,
     changes_applied: bool,
     runtime_ready: bool,
+    installed_bin: Path | None = None,
 ) -> dict[str, Any]:
     """Report and perform the restart that moves services onto the new release.
 
@@ -61,12 +62,25 @@ def restart_services_for_runtime_activation(
     the health of unrelated enabled extension providers. Tying the restart to
     full extension health left status/chat silently serving the previous release
     while the update reported a rollback-only outcome.
+
+    Archive installs can select a separate bin directory. Those installs do not
+    own the user's default managed services. Compare directories, not launcher
+    targets: a symlink still belongs to the directory the installer updates.
+    Package-manager callers retain their existing activation path.
     """
 
     if not (changes_applied and runtime_ready):
         return {
             "restarted_services": [],
             "restart_status": "skipped_runtime_not_activated",
+        }
+    if (
+        installed_bin is not None
+        and installed_bin.parent.resolve() != (Path.home() / ".local/bin").resolve()
+    ):
+        return {
+            "restarted_services": [],
+            "restart_status": "skipped_custom_installation",
         }
     return {
         "restarted_services": restart_managed_loopx_services(),

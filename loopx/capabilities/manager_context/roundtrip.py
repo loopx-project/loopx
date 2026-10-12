@@ -128,7 +128,7 @@ def _verification_exception_error(exc):
     return decision["error"] if decision["status"] == "explicit_unverified" else None
 
 
-def _register_unlocked(root, row, session, turn):
+def _register_unlocked(root, row, session, turn, *, source_store=None):
     value = {
         key: row[key]
         for key in ("request_id", "goal_id", "agent_id", "source_id", "goal_ref")
@@ -140,10 +140,22 @@ def _register_unlocked(root, row, session, turn):
         channel_id=session["channel_id"],
     )
     path = _root(root) / "roundtrips" / (row["request_id"] + ".json")
+    source_root = None
+    if source_store is not None:
+        from ...control_plane.collaboration.source_chat_observation import trusted_source_chat_root
+
+        source_root = trusted_source_chat_root(source_store, value)
+        if source_root != str(root.resolve()):
+            value["source_chat_runtime_root"] = source_root
     if path.exists():
         old = _read(path)
-        if any(old.get(key) != value for key, value in value.items()):
+        if (any(old.get(key) != item for key, item in value.items()
+                if key != "source_chat_runtime_root")
+                or (source_root is not None and old.get("source_chat_runtime_root")
+                    not in (None, source_root))):
             raise ValueError("context return route conflict")
+        if "source_chat_runtime_root" in value and "source_chat_runtime_root" not in old:
+            _write(path, old | {"source_chat_runtime_root": source_root})
     else:
         _write(path, value | {"registered_at": _now()})
     saved = _read(path)
@@ -151,7 +163,7 @@ def _register_unlocked(root, row, session, turn):
         raise ValueError("context return route readback failed")
 
 
-def register(root, row, session, turn, *, scope=None):
+def register(root, row, session, turn, *, scope=None, source_store=None):
     """Called by trusted Chat delivery, never with model-authored routing."""
     path = _root(root) / "roundtrips" / (row["request_id"] + ".json")
     with _request_lock(
@@ -160,7 +172,7 @@ def register(root, row, session, turn, *, scope=None):
         scope,
         path.with_suffix(".lock"),
     ):
-        _register_unlocked(root, row, session, turn)
+        _register_unlocked(root, row, session, turn, source_store=source_store)
 
 
 def _route(root, row, *, scope=None):
@@ -218,6 +230,8 @@ def report(
     caller_goal_ref=None,
     scope=None,
     update_id=None,
+    attachment_refs=None,
+    workspace=None,
 ):
     """Chat audience adapter; the shared Inbox owns result validation/persistence."""
     if scope is None and registry is not None:
@@ -240,6 +254,8 @@ def report(
                 text,
                 scope=goal_scope,
                 update_id=update_id,
+                attachment_refs=attachment_refs,
+                workspace=workspace,
             )
     row = _entry(root, goal_id, agent_id, request_id, scope=scope)
     route = _route(root, row, scope=scope)
@@ -249,6 +265,16 @@ def report(
             and not scan_public_boundary_text(text)["ok"]):
         raise ValueError("reply contains private boundary material; write an audience-safe conclusion")
     from ...control_plane.collaboration.inbox import record_result
+    attachments = None
+    if attachment_refs:
+        # Only the independently verified bound-owner App is qualified here.
+        # Group and local-Web file disclosure need their own qualified surface.
+        if scope is None or not str(route.get("channel_id", "")).startswith("manager.external.native."):
+            raise ValueError("result attachments require a registered Goal and bound-owner App return")
+        from ...control_plane.collaboration.result_files import snapshot_result_files
+
+        decide_collaboration_lifecycle(scope, operation="result_publish", record=row, route=route)
+        attachments = snapshot_result_files(root, scope, attachment_refs, workspace=workspace)
     return {
         **record_result(
             root,
@@ -258,6 +284,7 @@ def report(
             scope=scope,
             route=route,
             update_id=update_id,
+            attachments=attachments,
         ),
         "status": (
             "queued_for_requester"
@@ -576,6 +603,10 @@ def _write_exact_return_state(
                 raise ValueError("exact return delivery admission changed")
             result = {**value, "goal_ref": row["goal_ref"],
                       **({"result_key": reply["result_key"]} if "result_key" in reply else {})}
+            # A refusal does not erase evidence that the provider already wrote.
+            # Terminal state remains terminal; preserving its locator is no retry.
+            if result.get("status") == "explicit_unverified" and current.get("attempt") is not None:
+                result["attempt"] = current["attempt"]
             if preserve_admission:
                 result["admission"] = admission
             else:
@@ -605,6 +636,16 @@ def _retry_state(state, now, *, error):
     return result
 
 
+def _transport_route(route, reply, external_sender):
+    attachments = reply.get("attachments") or []
+    if not attachments:
+        return route
+    if getattr(external_sender, "supports_result_files", False) is not True:
+        raise ValueError("return_transport_unavailable")
+    # Ephemeral transport payload, never part of the persisted audience/grant.
+    return {**route, "result_attachments": attachments}
+
+
 def _resolve_delivery_sender(external_sender):
     """Resolve a manager return transport to ``(sender, attempt_aware)``.
 
@@ -624,11 +665,28 @@ def _resolve_delivery_sender(external_sender):
     return None, False
 
 
+def _belongs_to_chat_host(root, store, path):
+    from ...control_plane.collaboration.source_chat_observation import is_source_chat_host
+
+    route_path = _root(root) / "roundtrips" / (path.parent.name + ".json")
+    try:
+        # Missing legacy routes can only be recovered from the coordination
+        # root's Chat receipts. Private hosts recover their frozen provenance
+        # at startup before draining; a foreign host must never claim them.
+        route = _read(route_path) if route_path.exists() else {}
+        return route.get("kind") != "peer" and is_source_chat_host(root, route, store)
+    except (OSError, ValueError, TypeError):
+        logging.getLogger(__name__).warning("Manager return source provenance unavailable")
+        return False
+
+
 def _drain_exact(root, registry, store, external_sender, *, now, cancelled):
     processed = 0
     for path in iter_result_paths(_root(root) / "replies"):
         if cancelled():
             break
+        if not _belongs_to_chat_host(root, store, path):
+            continue
         state_path = path.with_name(path.stem + ".delivery.json")
         effect_locks = ExitStack()
         try:
@@ -677,6 +735,7 @@ def _drain_exact(root, registry, store, external_sender, *, now, cancelled):
         try:
             if cancelled():
                 return processed
+            route = _transport_route(route, reply, external_sender)
             try:
                 store.append_message(
                     route["session_id"],
@@ -950,6 +1009,8 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
     for path in iter_result_paths(_root(root) / "replies"):
         if cancelled():
             break
+        if not _belongs_to_chat_host(root, store, path):
+            continue
         state_path = path.with_name(path.stem + ".delivery.json")
         with exclusive_file_lock(path.with_suffix(".lock")):
             try:
@@ -974,7 +1035,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                     or reply.get("source_id") != row["source_id"]
                 ):
                     raise ValueError("return_reply_identity_mismatch")
-                route = _route(root, row)
+                route = _transport_route(_route(root, row), reply, external_sender)
                 if route.get("kind") == "peer":
                     continue  # Delivered by the requester inbox, never a Chat audience.
                 session = store.load_session(route["session_id"])
@@ -1038,6 +1099,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                     _write(
                         state_path,
                         {
+                            **state,
                             "status": "explicit_unverified",
                             "error": "manager_return_payload_conflict",
                         },
@@ -1056,6 +1118,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                             _write(
                                 state_path,
                                 {
+                                    **state,
                                     "status": "explicit_unverified",
                                     "error": "provider_locator_unavailable",
                                 },
@@ -1067,6 +1130,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                             _write(
                                 state_path,
                                 {
+                                    **state,
                                     "status": "explicit_unverified",
                                     "error": "provider_locator_unavailable",
                                 },
@@ -1093,6 +1157,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                             _write(
                                 state_path,
                                 {
+                                    **state,
                                     "status": "explicit_unverified",
                                     "error": "provider_verifier_unavailable",
                                 },
@@ -1112,7 +1177,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                             if error:
                                 _write(
                                     state_path,
-                                    {"status": "explicit_unverified", "error": error},
+                                    {**state, "status": "explicit_unverified", "error": error},
                                 )
                                 continue
                             # An unclassified readback failure keeps the locator and
@@ -1152,6 +1217,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                             _write(
                                 state_path,
                                 {
+                                    **state,
                                     "status": "explicit_unverified",
                                     "error": decision["error"],
                                 },
@@ -1275,7 +1341,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                     if error:
                         _write(
                             state_path,
-                            {"status": "explicit_unverified", "error": error},
+                            {**current, "status": "explicit_unverified", "error": error},
                         )
                     elif _attempt_locator(current.get("attempt")) is None:
                         # The record says the provider took the write and named
@@ -1310,6 +1376,58 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
     return processed
 
 
+def recover_source_chat_provenance(root, registry, store, *, cancelled=lambda: False):
+    """Backfill legacy addresses from this host's committed, authorized sources.
+
+    Run once on host startup, including for already delivered returns. Never
+    scan other Chat roots or rewrite a pinned source, grant, result or receipt.
+    """
+    from ...control_plane.collaboration.source_chat_observation import observe_source_chat
+
+    if store.root.parent.resolve() == root.resolve():
+        return 0  # Co-located legacy routes already have the right address.
+    recovered = 0
+    for path in sorted((_root(root) / "roundtrips").glob("*.json")):
+        if cancelled():
+            break
+        try:
+            route = _read(path)
+            if route.get("kind") == "peer" or "source_chat_runtime_root" in route:
+                continue
+            if path.stem != route.get("request_id"):
+                continue
+            # Reject other hosts before taking a Goal lifetime lock or loading
+            # its registry. This is one startup pass, not a polling-time scan.
+            session, turn = observe_source_chat(store.root.parent, route)
+            with collaboration_goal_scope(
+                registry, goal_id=route["goal_id"], agents=(route["agent_id"],),
+                caller_goal_ref=route.get("goal_ref"), require_active=True,
+            ) as scope:
+                row = _entry(root, scope.goal_id, route["agent_id"], route["request_id"], scope=scope)
+                if any(route.get(key) != row.get(key) for key in
+                       ("request_id", "goal_id", "agent_id", "source_id", "goal_ref")):
+                    continue
+                grant = (target_authority(root, session=session, turn=turn,
+                                          target={"goal_id": row["goal_id"], "agent_id": row["agent_id"]})
+                         if scope.exact else authority(root, registry, session, turn))
+                if {"goal_id": row["goal_id"], "agent_id": row["agent_id"]} not in grant["targets"]:
+                    continue
+                decide_collaboration_lifecycle(
+                    scope, operation="original_return_admit", record=row, route=route,
+                    initial_delivery=_original_delivery_facts(row, route, turn,
+                                                               source_id=grant.get("source_id")),
+                )
+                if cancelled():
+                    break
+                register(root, row, session, turn, scope=scope, source_store=store)
+                recovered += 1
+        except (OSError, ValueError, KeyError, TypeError, EffectRuntimeRejected):
+            # Unrelated unavailable/revoked sources cannot starve valid ones.
+            # Preserve their records; peer admission still reports recovery.
+            continue
+    return recovered
+
+
 class ReturnService:
     """Cheap local receipt pump hosted by the existing Chat server."""
 
@@ -1320,10 +1438,14 @@ class ReturnService:
             target=self.run, daemon=True, name="loopx-manager-returns"
         )
 
-    def start(self):
+    def start(self) -> None:
         self.thread.start()
 
     def run(self):
+        try:
+            recover_source_chat_provenance(*self.args[:3], cancelled=self.stop.is_set)
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+            logging.getLogger(__name__).warning("Source Chat provenance recovery unavailable")
         while not self.stop.is_set():
             try:
                 drain(*self.args, cancelled=self.stop.is_set)
@@ -1333,6 +1455,7 @@ class ReturnService:
                 )
             self.stop.wait(3)
 
-    def close(self):
+    def close(self) -> None:
         self.stop.set()
-        self.thread.join(timeout=3)
+        if self.thread.ident is not None:
+            self.thread.join(timeout=3)

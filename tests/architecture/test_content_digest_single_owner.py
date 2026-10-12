@@ -181,7 +181,8 @@ CONSUMER_MODULES = (
     "loopx.control_plane.collaboration.inbox",
     "loopx.control_plane.collaboration.links",
     "loopx.control_plane.collaboration.peers",
-    "loopx.control_plane.coordination.local_authority_shadow_outbox",
+    "loopx.control_plane.collaboration.result_files",
+    "loopx.control_plane.coordination.local_authority_shadow_history",
     "loopx.control_plane.coordination.shadow_management",
     "loopx.control_plane.digest_envelope",
     "loopx.control_plane.effect_runtime",
@@ -204,6 +205,7 @@ CONSUMER_MODULES = (
     "loopx.extensions.openviking_semantic_preference.history_export",
     "loopx.extensions.presentation",
     "loopx.presentation.chat_bundle",
+    "loopx.presentation.static_site",
 )
 
 # A consumer that hands `re` a pattern this file cannot fold. Pinned empty: folding reads

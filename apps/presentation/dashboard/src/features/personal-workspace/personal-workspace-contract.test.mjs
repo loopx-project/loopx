@@ -385,6 +385,13 @@ for (const contextGoalId of [null, "existing-research-goal"]) {
   assert.equal(request.normalizedParameters.goal_id, "goal-new-research");
   assert.notEqual(request.normalizedParameters.goal_id, contextGoalId);
 }
+const explicitWorkspace = goalCreateRequest({
+  objective: "Inspect the second project", completion: "A checked report", boundary: "Read only",
+  agentId: "research-agent", permission: "read_only", contextGoalId: "first-project",
+  workspaceRef: "second-project", operationId: "explicit-workspace",
+}, (key) => key);
+assert.equal(explicitWorkspace.normalizedParameters.workspace_ref, "second-project");
+assert.equal(explicitWorkspace.context.goal_id, "first-project", "Conversation and workspace remain separate");
 assert.match(page, /t\("proposal\.workspace\.current"\)/, "Create Goal localizes its execution workspace explanation");
 assert.match(i18n, /Current local workspace \(no Repository bound\)/, "English workspace copy explains that no repository is bound");
 assert.match(i18n, /当前本地工作区（未绑定 Repository）/, "Chinese workspace copy explains that no repository is bound");
@@ -405,6 +412,11 @@ assert.match(workspaceSettings, /key: "language"/, "Settings expose a language t
 assert.match(workspaceSettings, /key: "capabilities"/, "Settings expose a unified capability destination");
 assert.match(workspaceSettings, /<MachineConfigurationSettings/, "Settings mount the machine configuration registry");
 assert.match(workspaceSettings, /<LarkSettingsPage[\s\S]*embedded/, "Settings embed the Lark management page");
+assert.match(i18n, /"cadence\.eligibility": "Minimum-interval condition"/, "English cadence copy names only the interval condition");
+assert.match(i18n, /"cadence\.eligibleNow": "Minimum interval satisfied"/, "English cadence copy does not claim execution readiness");
+assert.match(i18n, /"cadence\.eligibility": "最小间隔条件"/, "Chinese cadence copy names only the interval condition");
+assert.match(i18n, /"cadence\.eligibleNow": "最小间隔条件已满足"/, "Chinese cadence copy does not claim execution readiness");
+assert.doesNotMatch(i18n, /"cadence\.[^"]+": "(?:Execution eligibility|Eligible now|执行资格|当前可执行)"/, "Cadence copy never expands interval state into overall execution eligibility");
 assert.match(larkSettings, /state: "ready" \| "unverified" \| "not_ready"/, "Lark readiness keeps unverified routes separate from actual failures");
 assert.match(larkSettings, /lark\.routesUnverified[\s\S]*unverifiedRouteCount/, "Lark settings summarize only unverified routes with their exact count");
 assert.match(i18n, /\{count\} Lark routes pending verification/, "English Lark readiness copy names routes instead of extensions");

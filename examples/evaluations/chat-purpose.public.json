@@ -1,0 +1,117 @@
+{
+  "schema_version": "chat_intake_evaluation_v1",
+  "contexts": {
+    "notebook-material": {
+      "scope": "manager",
+      "coverage": {"complete": true},
+      "fixture_boundary": "Synthetic public source and conversation; no live source read, note write, dispatch or outcome is asserted.",
+      "goals": [
+        {
+          "goal_id": "research-notebook",
+          "description": "ResearchNotebook personal learning and long-term technical notes. notebook-owner follows this project's note integration rules.",
+          "activation_state": "active",
+          "current_todos": []
+        },
+        {
+          "goal_id": "product-operations",
+          "description": "OperationsLibrary public-source collection, documentation and outreach. operations-owner maintains its material library.",
+          "activation_state": "active",
+          "current_todos": [
+            {"todo_id": "operations-collection", "text": "Collect public articles and reusable writing examples into OperationsLibrary", "status": "open", "claimed_by": "operations-owner"}
+          ]
+        }
+      ],
+      "context_delegation": {
+        "mode": "context_only",
+        "targets": [
+          {"goal_id": "research-notebook", "agent_id": "notebook-owner"},
+          {"goal_id": "product-operations", "agent_id": "operations-owner"}
+        ]
+      },
+      "conversation": [
+        {"role": "user", "message": "这个助手帮我处理 ResearchNotebook 的学习素材，整理进 notes/model-training.md，按项目已有 rules 和 skills 执行。"},
+        {"role": "user", "message": "素材：article-v1.md"},
+        {"role": "assistant", "message": "文章讲专家反馈、训练回退和可复用失败案例。已读，尚未整理笔记。"}
+      ],
+      "source_material": {"ref": "article-v1.md", "read_status": "complete", "text": "Expert feedback can refine objectives; failed training variants should remain reproducible evidence."},
+      "notes": [],
+      "current_constraints": ["The steward has no notebook write grant; delegate to the authorized project owner. Do not publish or change audience grants."]
+    },
+    "unknown-material-purpose": {
+      "scope": "manager",
+      "coverage": {"complete": true},
+      "fixture_boundary": "Synthetic public source and conversation; no live source read, note write, dispatch or outcome is asserted.",
+      "goals": [
+        {"goal_id": "research-notebook", "description": "ResearchNotebook learning and long-term notes, maintained by notebook-owner.", "activation_state": "active", "current_todos": []},
+        {"goal_id": "product-operations", "description": "OperationsLibrary public-source collection and outreach, maintained by operations-owner.", "activation_state": "active", "current_todos": [{"todo_id": "operations-collection", "text": "Collect public articles and writing examples", "status": "open", "claimed_by": "operations-owner"}]}
+      ],
+      "context_delegation": {
+        "mode": "context_only",
+        "targets": [
+          {"goal_id": "research-notebook", "agent_id": "notebook-owner"},
+          {"goal_id": "product-operations", "agent_id": "operations-owner"}
+        ]
+      },
+      "conversation": [{"role": "user", "message": "管家，列出现在需要我处理的待办。"}],
+      "source_material": {"ref": "article-v1.md", "read_status": "complete", "text": "Expert feedback can refine objectives; failed training variants should remain reproducible evidence."},
+      "current_constraints": ["No additional project preference or original destination is available. The two destinations serve different purposes; neither is a default. No write, publishing or audience-change grant."]
+    },
+    "correct-misrouted-material": {
+      "scope": "manager",
+      "coverage": {"complete": true},
+      "fixture_boundary": "Synthetic public source and conversation; no live source read, note write, dispatch or outcome is asserted.",
+      "goals": [
+        {"goal_id": "research-notebook", "description": "ResearchNotebook personal learning and long-term notes, maintained by notebook-owner.", "activation_state": "active", "current_todos": []},
+        {"goal_id": "product-operations", "description": "OperationsLibrary public-source collection and outreach, maintained by operations-owner.", "activation_state": "active", "current_todos": [{"todo_id": "operations-collection", "text": "Collect public articles and writing examples", "status": "open", "claimed_by": "operations-owner"}]}
+      ],
+      "context_delegation": {
+        "mode": "context_only",
+        "targets": [
+          {"goal_id": "research-notebook", "agent_id": "notebook-owner"},
+          {"goal_id": "product-operations", "agent_id": "operations-owner"}
+        ]
+      },
+      "conversation": [
+        {"role": "user", "message": "素材：article-v1.md"},
+        {"role": "assistant", "message": "交给 operations-owner，准备加入 OperationsLibrary 供写宣传材料时使用。"},
+        {"role": "user", "message": "这个完全错了，这是发给 ResearchNotebook 个人助手整理进 notes/model-training.md 的学习素材。"}
+      ],
+      "source_material": {"ref": "article-v1.md", "read_status": "complete", "text": "Expert feedback can refine objectives; failed training variants should remain reproducible evidence."},
+      "prior_handoff": {"goal_id": "product-operations", "agent_id": "operations-owner", "status": "candidate_prepared", "note_write_verified": false},
+      "current_constraints": ["The steward has no notebook write grant; delegate to the authorized project owner. Preserve audit history. Do not publish or change audience grants."]
+    }
+  },
+  "cases": [
+    {
+      "id": "material-unknown-purpose",
+      "context_ref": "unknown-material-purpose",
+      "request": "素材：article-v1.md，帮我收好。",
+      "expected": "answer",
+      "required_evidence_refs": ["ResearchNotebook", "OperationsLibrary"]
+    },
+    {
+      "id": "material-notebook-purpose",
+      "context_ref": "notebook-material",
+      "request": "加入素材了没？没完成就继续做好。",
+      "expected": "handoff",
+      "target": {"goal_id": "research-notebook", "agent_id": "notebook-owner"},
+      "required_handoff_refs": ["ResearchNotebook", "notes/model-training.md", "article-v1.md"]
+    },
+    {
+      "id": "material-explicit-operations-purpose",
+      "context_ref": "notebook-material",
+      "request": "这次另有用途：把 article-v1.md 收进 OperationsLibrary 的 public-materials.md，给运营参考。交给 operations-owner，先只收录，别发布。",
+      "expected": "handoff",
+      "target": {"goal_id": "product-operations", "agent_id": "operations-owner"},
+      "required_handoff_refs": ["OperationsLibrary", "public-materials.md", "article-v1.md"]
+    },
+    {
+      "id": "material-owner-purpose-correction",
+      "context_ref": "correct-misrouted-material",
+      "request": "按我纠正的用途把这件事做完。",
+      "expected": "handoff",
+      "target": {"goal_id": "research-notebook", "agent_id": "notebook-owner"},
+      "required_handoff_refs": ["ResearchNotebook", "notes/model-training.md", "article-v1.md"]
+    }
+  ]
+}

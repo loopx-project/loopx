@@ -169,6 +169,36 @@ resulting Markdown shape is:
 Status lifts those checkboxes into `user_todos` and `agent_todos`, so dashboard
 attention stays human-readable and agent-facing status remains actionable.
 
+### Replanning an obsolete completion dependency
+
+An open advancement Todo with an unmet `todo_done` wait cannot acquire an
+execution lease. Directly clearing its wait with released lease history remains
+fenced. If the original owner has evidence that the wait is obsolete, use the
+existing administrative lifecycle rather than inventing an execution grant:
+
+1. Read the exact Todo, claim, inactive lease and current provider revision.
+2. With a fresh CAS and stable operation identity, run `todo update --status
+   blocked --clear-resume-when --reason '<reviewed obsolete dependency>'`.
+3. Read back the committed blocked state, then use its fresh CAS and a different
+   operation identity for `todo update --status open --clear-resume-when --reason
+   '<reviewed new route>'`.
+4. Acquire a fresh execution lease before editing copy, evidence or work results.
+
+Both updates require the original Goal/Todo/actor arguments plus
+`--update-operation-id` and `--update-expected-provider-revision`. Omit old
+execution-proof flags and do not bundle ownership, requirements, copy, evidence
+or completion changes. Keep the dependency when it is still valid. A stale CAS,
+active holder or unauthorized actor still rejects; planning does not complete
+the prerequisite, release another actor's work or settle a Turn. The diagnostic
+`recovery.lifecycle_replan` describes these steps only for the same claim owner
+with released history under hard-lease coordination; it does not execute them.
+
+有证据表明原依赖已经过时时，同 owner 可沿现有“blocked → open”生命周期重规划：
+每步冷读原任务并用 fresh CAS 和独立幂等标识，只传 status、clear-resume-when 和
+reason，不携带旧执行租约、不捆绑文案/证据/要求/归属。两步不授执行权限，之后仍须
+取得新的合法 lease；原依赖仍有效时继续等待。恢复诊断提供现有入口，不放宽门禁，
+不伪造前置任务完成或 Turn 结算；默认升级与 App/Lark 操作路径须分别验收。
+
 `read_only_project_map` means a connected read-only project now has a standard
 map run from `loopx read-only-map`. The next Codex action should use the
 map's recommended action or upgrade to a project-specific adapter when needed.
@@ -226,6 +256,39 @@ obsolete runtime-only goal. The command only moves files when rerun with
 
 If the contract check fails, status prepends a high-severity
 `loopx-contract` item before project goals.
+
+## Bound user-action reminder updates
+
+Under canonical `hard_lease`, an OPEN `role=user`, `task_class=user_action`
+reminder without a claim or any retained lease may have its text, note or
+evidence corrected by its exact registered `bound_agent`. Use `todo update`
+with the current `--update-expected-provider-revision` and a stable
+`--update-operation-id`; preview with `--dry-run`, then read back the result.
+An exact retry replays the receipt; a changed retry or stale revision refuses.
+Text keeps the existing title/priority derivation.
+
+This corrects the human-facing obligation without claiming execution authority.
+It does not change status, binding, ownership, decision scope, work requirements
+or the original action's execution state. Cross-agent and excluded actors still
+refuse. A reminder with retained lease history requires the bound actor's
+current active lease key/version as well as provider CAS. An existing lease
+does not require or create an agent claim. Expired/released or incorrect proofs
+refuse; recovery points to inspection of a live proof or acquisition of a fresh
+lease, never claiming the user Todo. The edit neither renews nor releases the
+lease. A historical replay proves prior acceptance, not current authority.
+User gates, unbound actions, agent Todos and bundled non-copy edits retain
+their ordinary admission. Completing an action uses its separate terminal lifecycle contract.
+CLI and other transports share the canonical typed update owner; this rule
+does not activate a notification provider or prove that the reminder was sent.
+
+canonical `hard_lease` 下，尚无 claim 或租约历史的 OPEN `user_action` 可由精确绑定的
+注册 Agent 更新文案、note 和 evidence。更新复用 provider CAS 与操作幂等；不得借此
+改变生命周期、归属、执行要求或决策权限。有租约历史时，同绑定角色必须提供当前有效
+租约的 key/version，并通过 provider CAS；无需、也不新增 agent claim。过期、released、
+错误凭据仍拒绝，恢复须检查当前凭据或取得新租约；更新不续租或释放，旧回执重放不授予
+当前权限。其他角色、被排除角色、user gate、未绑定待办、agent Todo 和非文案混合更新
+仍执行原门禁。更新提醒不代表本人已执行，
+也不证明通知送达。
 
 ## Boundary
 

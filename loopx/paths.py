@@ -105,7 +105,7 @@ def _runtime_root_has_machine_state(root: Path) -> bool:
     project_owned: set[str] = set()
     if root == DEFAULT_RUNTIME_ROOT and project_registry.is_file() and not _is_redirected_path(project_registry):
         from .control_plane.projects.registry_codec import load_registry
-        from .file_lock import _lock_path, lock_holder_path, lock_incident_path
+        from .file_lock import _lock_path, lock_holder_paths, lock_incident_path
 
         try:
             registry = load_registry(project_registry)
@@ -113,7 +113,8 @@ def _runtime_root_has_machine_state(root: Path) -> bool:
             return True  # Unclassified existing state requires an explicit route.
         project_owned = {
             project_registry.name, _lock_path(project_registry).name,
-            lock_holder_path(project_registry).name, lock_incident_path(project_registry).name,
+            lock_incident_path(project_registry).name,
+            *(holder.name for holder in lock_holder_paths(project_registry)),
         }
         goal_root = root / DEFAULT_PROJECT_GOALS.name
         declared_dirs = set()
@@ -324,6 +325,28 @@ def resolve_runtime_root(
     if runtime_root.is_absolute() or registry_path is None:
         return runtime_root
     return registry_project_root(registry_path) / runtime_root
+
+
+def effective_runtime_root(
+    registry_path: Path,
+    runtime_root_override: str | Path | None,
+) -> Path:
+    """Resolve the one runtime root every writer hook of a CLI call must share.
+
+    ``--runtime-root`` wins when given; otherwise the registry's
+    ``common_runtime_root`` applies, and a relative value resolves against the
+    registry's project root rather than the caller's working directory. Todo,
+    follow-up, handoff-mode, and task-lease hooks all consume this value so one
+    goal never splits into two candidate lineages.
+    """
+
+    # The codec imports path constants; load it at this call boundary to avoid
+    # a module cycle. No capture or drain owner participates in route selection.
+    from .control_plane.projects.registry_codec import load_registry
+
+    registry = load_registry(registry_path)
+    override = str(runtime_root_override) if runtime_root_override is not None else None
+    return resolve_runtime_root(registry, override, registry_path=registry_path)
 
 
 def rel_or_abs(path: Path, root: Path) -> str:

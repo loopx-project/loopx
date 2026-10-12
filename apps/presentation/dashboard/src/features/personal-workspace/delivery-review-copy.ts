@@ -54,7 +54,7 @@ const en = {
   updating: "Workspace facts changed. Updating this snapshot…",
   workMap: {
     title: "Work map", canvas: "Work map canvas", focus: "Map focus", current: "Current work", all: "Everything",
-    zoom: "Map zoom", zoomOut: "Zoom out", zoomIn: "Zoom in", fit: "Fit",
+    zoom: "Map zoom", zoomOut: "Zoom out", zoomIn: "Zoom in", fit: "Reset", close: "Close item details",
     boundary: "Arrows follow recorded task links. The map shows relationships; it does not decide what can run or whether the Goal is accepted.",
     tasksDone: "tasks done", blocked: "blocked", waiting: "waiting", decisions: "need your decision", watches: "watching",
     hidden: "finished or deferred, hidden", unlinked: "Not linked to other work", empty: "This Goal has no tasks yet.",
@@ -96,7 +96,7 @@ const zh: typeof en = {
   updating: "工作区状态已变化，正在更新此快照…",
   workMap: {
     title: "工作地图", canvas: "工作地图画布", focus: "地图范围", current: "当前工作", all: "全部",
-    zoom: "地图缩放", zoomOut: "缩小", zoomIn: "放大", fit: "适配",
+    zoom: "地图缩放", zoomOut: "缩小", zoomIn: "放大", fit: "重置", close: "关闭事项详情",
     boundary: "箭头来自已记录的任务关联。地图只展示关系，不决定哪些工作可以执行，也不代表 Goal 已通过验收。",
     tasksDone: "项任务已完成", blocked: "受阻", waiting: "等待", decisions: "需你决策", watches: "持续监控",
     hidden: "项已完成或延后的工作已隐藏", unlinked: "未与其他工作关联", empty: "此 Goal 还没有任务。",

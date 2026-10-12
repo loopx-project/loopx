@@ -131,6 +131,32 @@ def test_terminal_report_retains_unqualified_status_and_unknowns(trial):
         build(trial)
 
 
+@pytest.mark.parametrize("fault", [None, "profile", "mode", "unknown"])
+def test_official_feedback_payload_is_preserved_without_relabeling_history(trial, fault):
+    for name in ("runtime-receipt", "worker-profile"):
+        path = trial[3] / (name + ".json")
+        value = json.loads(path.read_text())
+        value["feedback"] = "best-only"
+        value["feedback_payload"] = "official-result"
+        if fault == "profile" and name == "worker-profile":
+            value.pop("feedback_payload")
+        elif fault == "mode":
+            value["feedback"] = "blind"
+        elif fault == "unknown":
+            value["feedback_payload"] = "future-unknown"
+        write(path, value)
+    if fault:
+        with pytest.raises(ValueError, match="feedback payload"):
+            build(trial)
+        assert not trial[2].exists()
+    else:
+        out = build(trial)
+        settings = json.loads((out / "settings/run.json").read_text())
+        assert settings["runner"]["feedback_payload"] == "official-result"
+        assert settings["worker_profile"]["feedback_payload"] == "official-result"
+        assert verify(out)["runs"] == 1
+
+
 @pytest.mark.parametrize(
     "file,key,value",
     [

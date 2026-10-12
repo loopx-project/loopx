@@ -1,0 +1,131 @@
+{
+  "schema_version": "finance_funding_event_research_input_v1",
+  "goal_id": "synthetic-funding-review",
+  "source_id": "synthetic-funding-pair",
+  "source_version": 1,
+  "supersedes": [],
+  "review_due_at": "2001-01-02T09:00:00Z",
+  "funding_event_input": {
+    "schema_version": "finance_funding_event_pair_input_v1",
+    "decision_at": "2001-01-02T08:00:04Z",
+    "legs": [
+      {
+        "source": {
+          "ref": "synthetic:first",
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "field_ref": "funding_event_rate",
+          "version_ref": "synthetic:v1",
+          "producer_as_of": "2001-01-02T08:00:01Z",
+          "capture_start": "2001-01-02T08:00:02Z",
+          "capture_end": "2001-01-02T08:00:03Z"
+        },
+        "instrument": {
+          "venue_ref": "synthetic:venue",
+          "instrument_ref": "synthetic:first-perp",
+          "version_ref": "synthetic:linear-v1",
+          "base_unit": "first",
+          "quote_currency": "SYN",
+          "mapping_kind": "linear_quote_notional",
+          "evidence_ref": "synthetic:contract"
+        },
+        "side": "short",
+        "rate": {
+          "value": "0.002",
+          "unit": "fraction",
+          "kind": "realized",
+          "period": {
+            "start": "2001-01-02T07:00:00Z",
+            "end": "2001-01-02T08:00:00Z",
+            "event_relation": "accrual_ends_no_later_than_payment",
+            "evidence_ref": "synthetic:period"
+          },
+          "event": {
+            "ref": "synthetic:08-event",
+            "settlement_at": "2001-01-02T08:00:00Z",
+            "evidence_ref": "synthetic:event"
+          },
+          "payment_convention": "positive_long_pays",
+          "evidence_ref": "synthetic:rate",
+          "original_literal": "0.002"
+        },
+        "calculation_basis": {
+          "quantity": "2",
+          "quantity_unit": "first",
+          "reference_price": "50",
+          "price_base_unit": "first",
+          "currency": "SYN",
+          "evidence_ref": "synthetic:basis"
+        },
+        "settlement": {
+          "payment_ref": "synthetic:payment-first",
+          "settled_at": "2001-01-02T08:00:01Z",
+          "amount": "0.2",
+          "currency": "SYN",
+          "evidence_ref": "synthetic:payment"
+        }
+      },
+      {
+        "source": {
+          "ref": "synthetic:second",
+          "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "field_ref": "funding_event_rate",
+          "version_ref": "synthetic:v1",
+          "producer_as_of": "2001-01-02T08:00:01Z",
+          "capture_start": "2001-01-02T08:00:02Z",
+          "capture_end": "2001-01-02T08:00:03Z"
+        },
+        "instrument": {
+          "venue_ref": "synthetic:venue",
+          "instrument_ref": "synthetic:second-perp",
+          "version_ref": "synthetic:linear-v1",
+          "base_unit": "second",
+          "quote_currency": "SYN",
+          "mapping_kind": "linear_quote_notional",
+          "evidence_ref": "synthetic:contract"
+        },
+        "side": "long",
+        "rate": {
+          "value": "0.005",
+          "unit": "fraction",
+          "kind": "realized",
+          "period": {
+            "start": "2001-01-02T00:00:00Z",
+            "end": "2001-01-02T08:00:00Z",
+            "event_relation": "accrual_ends_no_later_than_payment",
+            "evidence_ref": "synthetic:period"
+          },
+          "event": {
+            "ref": "synthetic:08-event",
+            "settlement_at": "2001-01-02T08:00:00Z",
+            "evidence_ref": "synthetic:event"
+          },
+          "payment_convention": "positive_long_pays",
+          "evidence_ref": "synthetic:rate",
+          "original_literal": "0.005"
+        },
+        "calculation_basis": {
+          "quantity": "2",
+          "quantity_unit": "second",
+          "reference_price": "50",
+          "price_base_unit": "second",
+          "currency": "SYN",
+          "evidence_ref": "synthetic:basis"
+        },
+        "settlement": {
+          "payment_ref": "synthetic:payment-second",
+          "settled_at": "2001-01-02T08:00:01Z",
+          "amount": "-0.5",
+          "currency": "SYN",
+          "evidence_ref": "synthetic:payment"
+        }
+      }
+    ],
+    "costs": {
+      "amount": "0.1",
+      "currency": "SYN",
+      "kind": "realized",
+      "observed_at": "2001-01-02T08:00:02Z",
+      "evidence_ref": "synthetic:cost"
+    }
+  }
+}

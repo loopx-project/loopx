@@ -41,6 +41,14 @@ Frozen failures/missing evidence remain visible. T4 deletes proven redundant
 owners alongside implementation, without waiting for R6 or all Python to vanish.
 This replaces stale current-count estimates, not historical execution evidence.
 
+The [reversible trial operation sheet](../../reference/sqlite-authority-store.md#reversible-developer-trial--可逆开发者试用)
+joins ordinary native Todo/guard/writeback/once-only spend with restart and a
+current-head exit to File. Its CLI regression preserves full Todo metadata and
+the original settled Turn through that exit. It is a bounded qualification path,
+not sustained use, full Goal recovery, a live Host trial or released-default
+approval. Package/source parity must also exclude retired modules after repeated
+builds; a clean build alone cannot close that packaging rule.
+
 **Fresh creation opt-in (2026-10-04, proposed).** The existing
 [device setting and CLI/App creation owner](../../reference/local-authority-provider-selection.md#new-goal-authority-machine-setting)
 can freeze a File/SQLite target and `soft_claim`/`hard_lease` policy, initialize
@@ -1416,10 +1424,17 @@ evidence at 1,000 commits/64 KiB now reports 16 checkpoints, a 63-commit replay
 budget, one checkpoint history read and 1,048,576 retained projection bytes plus
 126,714 delta bytes against 65,536,000 bytes for one copy per commit.
 
-This is still not completion of lane L. File and NoKV continue to retain and
-decode their complete journal on every load, so bounded recovery is a property
-of the embedded candidate rather than cross-provider parity; the SQLite profile
-also still retains receipts and events without pruning. The split
+This is still not completion of lane L. The current comparison uses File's
+checkpoint/delta journal and bounded verified read views, as described in the
+[matched provider comparison](../../reference/sqlite-authority-store.md#short-term-default-decision-and-matched-experiment).
+File rereads and hashes the complete envelope and checks store identity before
+reusing a decoded view; avoiding repeated decoding does not eliminate durable
+publication or large-history verification costs. SQLite historical reads prove
+the covering checkpoint span, and scans return complete states. The shipped
+archive audit already uses indexed receipt batches; qualify that complete
+consumer alongside individual receipt and scan queries. These mechanisms do
+not establish cross-provider recovery parity or NoKV qualification, and SQLite
+still retains receipts and events without pruning. The split
 storage-traffic measurements landed with the matched-capacity entrypoint
 (#4224 batch 1): the formal 64 KiB 10k/100k profile on the reference runtime
 (Node 22.22.3/SQLite 3.51.3, declared local host) measures logical writes at
@@ -3320,6 +3335,38 @@ new implementation work; changing languages or moving a helper is not an exit.
 | A–C / L7: Capture continuity | Reconcile the merged #4315 archive/lease-membership repair; qualify its ladder row/mutant and sustained mixed-writer/event-source matrix rather than reimplementing the closed defect. | Real CLI/File capture, history retained, partial drain unqualified, crash/replay and a new lease after archive/rebootstrap. Keep the legacy migration window provable; T4 cannot be used to skip this row. |
 | C / L8: Whole-Goal rehearsal and cohort migration | Integrate one exact revision/profile after L2–L7; drain capture, fence old writers, verify canonical readback and projection, then rehearse fenced export/rollback. | D3 evidence packet binds lineage, cursor, source digest, command coverage and profile. Existing Goal migration requires explicit cohort approval; no per-command split authority or stale Markdown revival. |
 | D / L9: New-Goal default and bounded retirement | A dedicated default-change PR makes new-Goal creation/onboarding choose the qualified local profile, including settings/readback, installer and packaged clients. Retire old business writers only as their final callers and migration window close. | L8's integrated product/rollback qualification; distinguish new Goal default from existing Goal migration. Publish compatibility/disable guidance, keep explicit provider choice, permanent rendering and validated import/export. T4 can continue after the default ships. |
+
+**L9 creation-default candidate.** Unconfigured new-Goal CLI/App creation now
+uses the same registered SQLite/hard-lease configuration and existing TS
+initialization owner. Explicit v0 selectors and v1 creation-off remain supported;
+the guided editor preserves v0 opt-out when upgrading its envelope. Existing
+Goals, frozen operations, provider receipts and migration fences retain their
+own route. Namespace removal restores the new default, so disable guidance
+uses an explicit creation-off setting. Candidate implementation and packaged
+interaction evidence remain distinct from L8/D3 integrated recovery, D2
+sustained/platform qualification and release-default activation; none of those
+gates is replaced by this checkpoint. No old writer or historical backup reader
+is retired by this change.
+
+**L9 App recovery checkpoint.** Post-commit creation must retain the original
+operation/workspace, initial Todo identities and accepted Session/Turn when
+first-Host startup or transport fails. The typed action review owner projects
+committed steps separately from completion and offers original-operation retry;
+the transport reuses native Todo and Turn idempotency, not a new decision owner.
+Qualify single/multiple-Goal and non-Git workspaces, response loss/restart,
+conflicting identities and provider refusal through installed CLI/HTTP and the
+packaged App. This bounded recovery closes no real-model first-Turn, L8/D3 or
+formal D2 acceptance and retires no historical recovery reader.
+
+**L9 original-proposal readback.** A global creation proposed inside an existing
+Goal retains its manager context. The opened drawer reads the exact original
+proposal independently of that Goal's discovery list; unrelated manager cards
+stay outside the Goal. Identity mismatch, missing records and transport failure
+remain explicit errors, and mutation responses cancel superseded reads before
+publishing receipts. Packaged interaction and installed File/SQLite recovery
+qualify this projection repair separately from real-model first-Turn, L8/D3,
+sustained D2 and release-default activation. No provider, policy or old-Goal
+migration default changes here.
 
 **Earlier 2026-09-24 implementation context.** Display refresh advances
 projection recovery/client closure without claiming every consumer qualified. SQLite #4910 added the larger measurement axes; #4224 records

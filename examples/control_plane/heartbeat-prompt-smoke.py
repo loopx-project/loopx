@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -585,7 +586,9 @@ def main() -> int:
         "Agent-facing CLI output budgets, deterministic control-plane qualification, "
         "model-behavior shadow evaluation, and release outcome baseline correctness",
         "current quota claim/lease and workspace contract plus repository rules",
-        "Within authority/budget, deliver verifiable results",
+        "Read agent_channel.work_context and required_reads (or envelope) before work",
+        "Size by task/evidence/risk within authority/budget, not ops/files/wakes",
+        "calls/writeback ≠ completion; obey stop/replan",
         "Task-scoped coordination grants no authority over other agents",
         "Keep scope in this prompt, not todo metadata",
         "Normal turns use CLI `interaction_contract`; use `loopx-project` for "
@@ -943,7 +946,9 @@ def main() -> int:
         "2 consecutive eligible heartbeats are no-progress loops",
         "self-cancel turn",
         "repair path is",
-        "Within authority/budget, deliver verifiable results",
+        "Read agent_channel.work_context and required_reads (or envelope) before work",
+        "Size by task/evidence/risk within authority/budget, not ops/files/wakes",
+        "calls/writeback ≠ completion; obey stop/replan",
         "a focused correction may suffice",
         "Stay inside `goal_boundary` when present",
         "Follow user authority and repository rules",
@@ -1118,11 +1123,14 @@ def main() -> int:
     assert "do not infer" in project_skill, project_skill
     assert "reason to paste one-off control logic into the scheduler" in project_skill, project_skill
 
+    cli_registry = (ACTIVE_STATE.parent / "registry.json").resolve()
     cli_json = subprocess.run(
         [
             sys.executable,
             "-m",
             "loopx.cli",
+            "--registry",
+            str(cli_registry),
             "--format",
             "json",
             "heartbeat-prompt",
@@ -1141,6 +1149,7 @@ def main() -> int:
         goal_id=GOAL_ID,
         active_state=ACTIVE_STATE,
         reward_memory_enabled=False,
+        registry_path=cli_registry,
     )
     assert cli_payload["task_body"] == cli_expected_payload["task_body"], cli_payload
     assert set(cli_payload) == {
@@ -1158,6 +1167,8 @@ def main() -> int:
             sys.executable,
             "-m",
             "loopx.cli",
+            "--registry",
+            str(cli_registry),
             "--format",
             "json",
             "heartbeat-prompt",
@@ -1178,6 +1189,7 @@ def main() -> int:
         active_state=ACTIVE_STATE,
         full=True,
         reward_memory_enabled=False,
+        registry_path=cli_registry,
     )
     assert cli_full_payload["task_body"] == cli_full_expected_payload["task_body"], cli_full_payload
     assert cli_full_payload["thin"] is False, cli_full_payload
@@ -1189,6 +1201,8 @@ def main() -> int:
             sys.executable,
             "-m",
             "loopx.cli",
+            "--registry",
+            str(cli_registry),
             "--format",
             "json",
             "heartbeat-prompt",
@@ -1209,6 +1223,7 @@ def main() -> int:
         active_state=ACTIVE_STATE,
         compact=True,
         reward_memory_enabled=False,
+        registry_path=cli_registry,
     )
     assert cli_compact_payload["task_body"] == cli_compact_expected_payload["task_body"], cli_compact_payload
     assert cli_compact_payload["compact"] is True, cli_compact_payload
@@ -1218,6 +1233,8 @@ def main() -> int:
             sys.executable,
             "-m",
             "loopx.cli",
+            "--registry",
+            str(cli_registry),
             "--format",
             "json",
             "heartbeat-prompt",
@@ -1238,6 +1255,7 @@ def main() -> int:
         active_state=ACTIVE_STATE,
         brief=True,
         reward_memory_enabled=False,
+        registry_path=cli_registry,
     )
     assert cli_brief_payload["task_body"] == cli_brief_expected_payload["task_body"], cli_brief_payload
     assert cli_brief_payload["brief"] is True, cli_brief_payload
@@ -1248,6 +1266,8 @@ def main() -> int:
             sys.executable,
             "-m",
             "loopx.cli",
+            "--registry",
+            str(cli_registry),
             "--format",
             "json",
             "heartbeat-prompt",
@@ -1268,6 +1288,7 @@ def main() -> int:
         active_state=ACTIVE_STATE,
         thin=True,
         reward_memory_enabled=False,
+        registry_path=cli_registry,
     )
     assert cli_thin_payload["task_body"] == cli_thin_expected_payload["task_body"], cli_thin_payload
     assert cli_thin_payload["schema_version"] == HEARTBEAT_AGENT_INPUT_SCHEMA_VERSION
@@ -1278,6 +1299,8 @@ def main() -> int:
             sys.executable,
             "-m",
             "loopx.cli",
+            "--registry",
+            str(cli_registry),
             "--format",
             "json",
             "heartbeat-prompt",
@@ -1297,8 +1320,9 @@ def main() -> int:
     cli_canary_payload = json.loads(cli_canary_json.stdout)
     assert cli_canary_payload["cli_bin"] == "loopx-canary", cli_canary_payload
     assert "loopx-canary doctor" in cli_canary_payload["cli_preflight"], cli_canary_payload
-    assert "loopx-canary --format json" in cli_canary_payload["quota_guard_command"], cli_canary_payload
-    assert "loopx-canary heartbeat-prompt --compact" in cli_canary_payload["task_body"], cli_canary_payload
+    canary_prefix = f"loopx-canary --registry {shlex.quote(str(cli_registry))}"
+    assert f"{canary_prefix} --format json" in cli_canary_payload["quota_guard_command"], cli_canary_payload
+    assert f"{canary_prefix} heartbeat-prompt --compact" in cli_canary_payload["task_body"], cli_canary_payload
 
     with tempfile.TemporaryDirectory() as raw_tmp:
         root = Path(raw_tmp)
@@ -1412,11 +1436,13 @@ def main() -> int:
         assert "sink_activation" not in cli_registry_default_payload
         assert "Explore Graph" not in cli_registry_default_payload["task_body"]
         assert "Generic Kanban" not in cli_registry_default_payload["task_body"]
-        assert cli_registry_default_payload["expanded_prompt_command"] == (
-            "loopx heartbeat-prompt --full --goal-id public-heartbeat-goal "
+        registry_prefix = f"loopx --registry {shlex.quote(str(registry_path.resolve()))}"
+        assert "expanded_prompt_command" not in cli_registry_default_payload, cli_registry_default_payload
+        assert cli_registry_default_payload["brief_prompt_command"] == (
+            f"{registry_prefix} heartbeat-prompt --brief --goal-id public-heartbeat-goal "
             "--agent-id codex-main-control --agent-scope 'primary review and coordination'"
         ), cli_registry_default_payload
-        assert "loopx heartbeat-prompt --compact --goal-id public-heartbeat-goal" in (
+        assert f"{registry_prefix} heartbeat-prompt --compact --goal-id public-heartbeat-goal" in (
             cli_registry_default_payload["task_body"]
         ), cli_registry_default_payload
         assert "--active-state" not in cli_registry_default_payload["task_body"], cli_registry_default_payload

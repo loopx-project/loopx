@@ -229,6 +229,7 @@ def read_canonical_snapshot(
             ),
             "provider_revision": snapshot["provider_revision"],
             "cursor": snapshot["cursor"],
+            "store_identity": snapshot["store_identity"],
             "source_authority": source,
             "decision_read_from_provider": True,
             "legacy_fallback_used": False,

@@ -111,6 +111,8 @@ def _validated_turn_receipt(journal: Mapping[str, Any]) -> ValidatedTurnReceipt:
         "result_kind": result_kind,
         "receipt": dict(receipt),
         "scheduler": _mapping(journal.get("scheduler")),
+        "validation": journal.get("task_validation"),
+        **({"validation_stage": journal["validation_stage"]} if journal.get("validation_stage") else {}),
         **project_host_failure(journal),
     }
     settlement_result = journal.get("settlement_result")

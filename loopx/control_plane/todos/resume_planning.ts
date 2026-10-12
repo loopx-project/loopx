@@ -143,6 +143,24 @@ function successorWaits(resumeBlocked: readonly Item[], deferredItems: readonly 
     } }))).sort((a, b) => Number(b.claim === agent) - Number(a.claim === agent));
 }
 
+function dependencyCycleReplan(items: readonly Item[], agent: string | null): JsonObject | null {
+  if (!agent) return null;
+  const candidates = ordered(unique(items)).filter(entry => {
+    const lane = claimLane(entry, agent);
+    return entry.payload.role === "agent" && entry.payload.task_class === "advancement_task" &&
+      ["open", "deferred"].includes(entry.status ?? "") &&
+      (entry.payload.archive_state == null || entry.payload.archive_state === "active") &&
+      (lane === "current_agent" || lane === "unclaimed") &&
+      entry.diagnosis?.state === "invalid" && entry.diagnosis.reason === "dependency_cycle";
+  });
+  if (!candidates.length) return null;
+  const first = candidates[0];
+  return {count: candidates.length, candidates: payloads(candidates, 3),
+    reason: `Todo ${first.id} depends on an unfinished completion cycle; waiting cannot resolve this plan.`,
+    recommended_action: "Inspect the reported dependency_cycle_todo_ids and their current owners. Replan an obsolete dependency only through the authorized Todo lifecycle with fresh owner/lease proof. If another owner must change an edge, report that concrete blocker. Do not clear a valid dependency, mark work done, or change another owner's Todo merely to unlock execution.",
+    spend_policy: "no spend for cycle diagnosis; replan credit requires validated authorized writeback"};
+}
+
 function resolveCapacity(items: readonly Item[], source: readonly Item[], capabilities: string[]): Item[] {
   const result = evaluateTodoResumeConditions({
     schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
@@ -291,5 +309,6 @@ export function projectTodoResumePlanning(value: unknown): JsonObject {
     capacity_fields: capacityFields,
     deferred_items: payloads(deferredItems), monitor_blocked_items: payloads(monitorItems),
     blocked_successor_items: payloads(successorWaits(resumeBlocked, deferredItems, display.agent)),
+    dependency_cycle_replan: dependencyCycleReplan([...resumeBlocked, ...deferredItems], display.agent),
   };
 }

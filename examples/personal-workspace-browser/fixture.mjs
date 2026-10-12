@@ -151,7 +151,7 @@ export function goalCapabilityCatalog(multiSubagentConfiguration) {
       capabilityId: "todo_replan_cadence",
       displayName: "Goal review cadence",
       editorScopes: ["machine", "goal"],
-      defaultConfiguration: { count_unit: "completed_todos", count: 5 },
+      defaultConfiguration: { count_unit: "effective_turns", count: 5 },
       fields: [
         { key: "count_unit", label: "Count between reviews", description: "", input_kind: "select", required: true, options: ["completed_todos", "effective_turns"] },
         { key: "count", label: "Review interval", description: "", input_kind: "number", required: true, minimum: 1, maximum: 5 },
@@ -430,6 +430,9 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     deletedGoalIds: new Set(),
     nextLifecycleApplyOutcome: null,
     loseNextTeamPlanResponse: false,
+    failNextActionList: false,
+    failActionListAfterLostTeamPlanResponse: false,
+    failNextTeamPlanAfterCommit: null,
     actionApplies: [],
     actionCancels: [],
     actionPreviews: [],
@@ -488,6 +491,8 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     // Applied User action outcomes, so the needs-you projection reads back like canonical status.
     userActionOutcomes: new Map(),
     hostThreadActivity: {},
+    /** Scenario hook applied to every status payload after the shared fixture rules. */
+    transformStatus: null,
     answerForMessage: null,
     loopxModeRequests: [],
     get larkConnections() { return runtime.larkConnections; },
@@ -759,6 +764,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       const goal = fixture.run_history.goals.find((item) => item.id === goalId);
       if (goal) goal.host_thread_activity = activity;
     }
+    state.transformStatus?.(fixture);
     fixture.run_history.goals = fixture.run_history.goals.filter(goal => !state.deletedGoalIds.has(goal.id));
     const goalActivationScope = new URL(route.request().url()).searchParams.get("goal_activation");
     const isActiveScope = goalActivationScope === "active";
@@ -1793,6 +1799,11 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer, protectedAction, scriptedAnswer?.goal_draft, scriptedAnswer?.proposals ?? []), status: 200 });
   });
   await page.route(/\/api\/actions(?:\?.*)?$/, async (route) => {
+    if (route.request().method() === "GET" && state.failNextActionList) {
+      state.failNextActionList = false;
+      await route.fulfill({ contentType: "application/json", json: { ok: false, error: "Action state is temporarily unavailable", error_code: "action_list_unavailable" }, status: 503 });
+      return;
+    }
     const url = new URL(route.request().url());
     const goalId = url.searchParams.get("goal_id");
     const contextKind = url.searchParams.get("context_kind");
@@ -1967,17 +1978,50 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       const decisionReceipt = decisionParameters ? { projection_verified: true, receipt_id: "fixture-receipt", outcome: "gate_resolved",
         decision_outcome: decisionParameters.decision,
         unblock_resume_state: { approve: "resumed", reject: "decision_rejected", cancel: "decision_cancelled" }[decisionParameters.decision] ?? null } : null;
+      const storedProposal = actionProposals.get(apply[1]);
       const proposal = {
         schema_version: "loopx_chat_action_proposal_v1", proposal_id: apply[1], action_kind: actionKind,
-        summary: "已应用", normalized_parameters: preview?.normalized_parameters ?? actionProposals.get(apply[1])?.normalized_parameters ?? {}, context: preview?.context ?? actionProposals.get(apply[1])?.context ?? {}, expected_state_fingerprint: "fixture-r1",
-        permission_classification: "durable_write", validation_evidence: [], available_transitions: ["apply", "cancel"],
-        status: "applied", receipt: teamPlanReceipt ?? decisionReceipt ?? { projection_verified: true, receipt_id: "fixture-receipt" }, stale: null, created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:01Z",
+        summary: actionKind === "team.plan" && storedProposal ? storedProposal.summary : "已应用",
+        normalized_parameters: actionKind === "team.plan" && storedProposal
+          ? storedProposal.normalized_parameters : preview?.normalized_parameters ?? storedProposal?.normalized_parameters ?? {},
+        context: actionKind === "team.plan" && storedProposal
+          ? storedProposal.context : preview?.context ?? storedProposal?.context ?? {},
+        expected_state_fingerprint: actionKind === "team.plan" && storedProposal
+          ? storedProposal.expected_state_fingerprint : "fixture-r1",
+        permission_classification: "durable_write",
+        validation_evidence: actionKind === "team.plan" && storedProposal ? storedProposal.validation_evidence : [],
+        available_transitions: ["apply", "cancel"],
+        status: "applied", receipt: teamPlanReceipt ?? decisionReceipt ?? { projection_verified: true, receipt_id: "fixture-receipt" }, stale: null,
+        created_at: actionKind === "team.plan" && storedProposal
+          ? storedProposal.created_at : "2026-08-13T01:00:00Z",
+        updated_at: "2026-08-13T01:00:01Z",
         ...(actionProposals.get(apply[1])?.canonical_update_basis
           ? { canonical_update_basis: actionProposals.get(apply[1]).canonical_update_basis } : {}),
       };
       actionProposals.set(apply[1], proposal);
+      if (actionKind === "team.plan" && state.failNextTeamPlanAfterCommit === apply[1]) {
+        state.failNextTeamPlanAfterCommit = null;
+        const failed = {
+          ...proposal,
+          status: "failed",
+          receipt: null,
+          failure: {
+            error_code: "team_plan_commit_failed",
+            message: "The team plan was committed, but its post-commit readback failed.",
+            failed_at: "2026-08-13T01:00:01Z",
+            retry_safe: true,
+          },
+        };
+        actionProposals.set(apply[1], failed);
+        await route.fulfill({ contentType: "application/json", json: { ok: true, proposal: failed }, status: 200 });
+        return;
+      }
       if (actionKind === "team.plan" && state.loseNextTeamPlanResponse) {
         state.loseNextTeamPlanResponse = false;
+        if (state.failActionListAfterLostTeamPlanResponse) {
+          state.failActionListAfterLostTeamPlanResponse = false;
+          state.failNextActionList = true;
+        }
         await route.fulfill({ contentType: "application/json", status: 503, json: { ok: false, error: "Assignment response unavailable", error_code: "team_plan_response_lost" } });
         return;
       }

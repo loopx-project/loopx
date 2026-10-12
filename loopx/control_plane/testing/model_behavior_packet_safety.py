@@ -73,6 +73,34 @@ def _decode_facts(chunks: list[str]) -> dict[str, Any]:
         raise ValueError("scheduler host facts must be bounded canonical compressed JSON") from None
 
 
+def _matching_route_command(args: list[Any], command: str) -> bool:
+    # The native scheduler binder prepends these route options. Recognize only
+    # that transport prefix, not a quota token hidden inside an arbitrary argv.
+    # This does not validate CLI admission; all option values remain in the
+    # confidentiality view and receive the ordinary recursive safety scan.
+    index = 0
+    seen: set[str] = set()
+    while index < len(args):
+        item = args[index]
+        if not isinstance(item, str):
+            return False
+        option, separator, value = item.partition("=")
+        if option not in ("--registry", "--runtime-root"):
+            break
+        if option in seen:
+            return False
+        seen.add(option)
+        if not separator:
+            index += 1
+            if index == len(args) or not isinstance(args[index], str):
+                return False
+            value = args[index]
+        if not value or value.startswith("-"):
+            return False
+        index += 1
+    return args[index:index + 2] == ["quota", command]
+
+
 def _expose_chunks(args: list[Any], *, command: str, schema_valid: bool) -> None:
     positions: list[int] = []
     chunks: list[str] = []
@@ -102,7 +130,7 @@ def _expose_chunks(args: list[Any], *, command: str, schema_valid: bool) -> None
         index += 1
     if not chunks:
         return  # Legacy, unencoded hints still receive ordinary recursive scanning.
-    if not schema_valid or args[:2] != ["quota", command]:
+    if not schema_valid or not _matching_route_command(args, command):
         raise ValueError("scheduler host facts require the matching typed hint and command")
     payload = _decode_facts(chunks)
     # Only the validation view changes. Scan the entire decoded envelope once,

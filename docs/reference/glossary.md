@@ -112,15 +112,6 @@ Authority handoff mode between agents.
 - typescript: [`HANDOFF_MODES`](../../loopx/control_plane/coordination/handoff_mode_vocabulary.ts).
 - Values / 值: `legacy`, `soft_claim`, `hard_lease`.
 
-## lease_action
-
-Authority-core lease mutation verb.
-
-- Tier / 层级: `kernel`; status / 状态: `legacy`.
-- python: [`LeaseAction`](../../loopx/control_plane/coordination/authority_core.py).
-- Values / 值: `acquire`, `renew`, `transfer`, `release`.
-- Compatibility only / 兼容保留: `acquire`, `release`, `renew`, `transfer`.
-
 ## loop_disposition
 
 Pure controller verdict for the outer loop after combining the last Turn receipt with the fresh route.
@@ -192,6 +183,14 @@ Effect-program settlement step executed for one Turn.
 - python: [`SettlementStepKind`](../../loopx/control_plane/effect_program.py).
 - typescript: [`SETTLEMENT_STEP_KINDS`](../../loopx/control_plane/effect_program.ts).
 - Values / 值: `validation`, `durable_writeback`, `quota_spend`, `terminal_closeout`.
+
+## task_lease_lifecycle_operation
+
+Operation accepted by the shipped native lease lifecycle request decoder; acquisition has its own transaction.
+
+- Tier / 层级: `cross_runtime`; status / 状态: `canonical`.
+- typescript: [`TASK_LEASE_LIFECYCLE_OPERATIONS`](../../loopx/control_plane/work_items/task_lease_lifecycle_request.ts).
+- Values / 值: `renew`, `transfer`, `release`, `terminal_verify`, `holder_verify`, `fence_close`.
 
 ## todo_completion_continuation
 

@@ -12,6 +12,9 @@
     "unblocks",
     "resumes",
     "handoff",
+    "done",
+    "route_flag",
+    "legacy_route_label",
     "context_fields"
   ],
   "evaluation_columns": [
@@ -21,6 +24,7 @@
     "unresolved_successor_ids",
     "tracked_completion",
     "successor_gap",
-    "handoff_state"
+    "handoff_state",
+    "route_continuation_replan_required"
   ]
 }

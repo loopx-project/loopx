@@ -1,5 +1,5 @@
 import {
-  settlementIdentity as buildSettlementIdentity,
+  settlementIdentityFromPlan,
   type JsonObject,
   type SettlementIdentity,
 } from "../effect_program.ts";
@@ -112,6 +112,19 @@ export function resolveLaneRecommendation(value: unknown): JsonObject {
   if (!actor || !agents.includes(actor)) {
     return reject("next_action_actor_unregistered", "Next Action requires a registered --agent-id");
   }
+  // The current selector may legitimately choose B after receipt-bound A
+  // starts waiting or completes. A's writeback cannot create B's step receipt,
+  // even with a fresh B basis. Ordinary writes have no settlement binding.
+  const settlement = settlementIdentity(request.settlement_identity);
+  if (settlement && (settlement.goal_id !== goalId || settlement.agent_id !== actor ||
+      (settlement.binding_kind === "todo" && settlement.todo_id !== selected?.todo_id))) {
+    return reject("next_action_task_unavailable",
+      "Next Action does not match the original Turn's Goal, agent and Todo; finish the original Turn writeback without --next-action, then select the next Todo through a fresh guard");
+  }
+  if (settlement?.binding_kind === "autonomous_replan") {
+    return reject("next_action_task_unavailable",
+      "This Turn is bound to autonomous replan, so --next-action cannot edit a Todo step; use --recommended-action for replan guidance while preserving the original Turn and replan obligation");
+  }
   if (expected && expected !== basis) {
     return reject("next_action_basis_conflict", "Next Action task or lane read basis changed; reread status and rejudge before retrying");
   }
@@ -119,7 +132,7 @@ export function resolveLaneRecommendation(value: unknown): JsonObject {
     return reject("next_action_task_unavailable", "No selected eligible advancement Todo for this agent; update or select work through the existing Todo route");
   }
   const resolution: JsonObject = {
-    ...recommendation(text, "agent_lane_step", "agent_lane", "not_applicable", selected),
+    ...recommendation(text, "agent_lane_step", "agent_lane", settlement ? "exact" : "not_applicable", selected),
     goal_id: goalId, agent_id: actor, todo_basis: taskBasis, source_revision: sourceRevision,
     read_basis: basis, step_revision: digest([basis, text]),
   };
@@ -188,34 +201,18 @@ function candidate(value: unknown, label: string): RecommendationCandidate | nul
 function settlementIdentity(value: unknown): SettlementIdentity | null {
   if (value === null || value === undefined) return null;
   const raw = requireJsonObject(value, "refresh_recommendation.settlement_identity");
-  const effectId = requireNonEmptyString(
-    raw.effect_id,
-    "refresh_recommendation.settlement_identity.effect_id",
-  );
-  const identity = buildSettlementIdentity({
-    goal_id: requireNonEmptyString(
-      raw.goal_id,
-      "refresh_recommendation.settlement_identity.goal_id",
-    ),
-    agent_id: requireNonEmptyString(
-      raw.agent_id,
-      "refresh_recommendation.settlement_identity.agent_id",
-    ),
-    todo_id: todoId(
-      raw.todo_id,
-      "refresh_recommendation.settlement_identity.todo_id",
-    ),
-    turn_instance_id: requireNonEmptyString(
-      raw.turn_instance_id,
-      "refresh_recommendation.settlement_identity.turn_instance_id",
-    ),
-  });
-  if (identity.effect_id !== effectId) {
+  // Reuse the settlement owner's v0/v1 binding and effect validation. A replan
+  // identity has no Todo; accepting its wire shape never grants a Todo step.
+  const identity = settlementIdentityFromPlan({settlement_plan: {identity: raw}});
+  if (identity.failure) {
     throw new EffectRuntimeRequestError(
-      "refresh_recommendation.settlement_identity.effect_id mismatch",
+      `refresh_recommendation.settlement_identity: ${identity.failure.reason}`,
     );
   }
-  return identity;
+  if (identity.value.binding_kind === "todo") {
+    todoId(identity.value.todo_id, "refresh_recommendation.settlement_identity.todo_id");
+  }
+  return identity.value;
 }
 
 function candidateIsRunnable(
@@ -304,7 +301,7 @@ export function resolveRefreshRecommendation(value: unknown): RefreshRecommendat
   let settlementAlignment: SettlementAlignment = "not_applicable";
   let settlementGapReason: SettlementGapReason | undefined;
   let exactSettlementCandidate = false;
-  if (settlement) {
+  if (settlement?.binding_kind === "todo") {
     settlementAlignment = "unavailable";
     if (!agentId || settlement.agent_id !== agentId) {
       settlementGapReason = "identity_mismatch";

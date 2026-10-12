@@ -134,7 +134,7 @@ test("settlement identity drift is rejected instead of trusted as read-model inp
           effect_id: "goal-shared:agent-a:todo_other:turn-1",
         },
       }),
-    /effect_id mismatch/,
+    /effect id does not match its identity/,
   );
 });
 
@@ -156,6 +156,66 @@ const laneContext = {
   selected_todo: baseRequest.agent_lane_candidate,
   task_facts: baseRequest.agent_lane_candidate, prior_resolution: null,
 };
+
+const replanIdentity = {
+  schema_version: "quota_settlement_identity_v1",
+  goal_id: "goal-shared", agent_id: "agent-a", turn_instance_id: "turn-replan",
+  binding_kind: "autonomous_replan", binding_id: "replan-fixture",
+  replan_obligation_id: "replan-fixture",
+  effect_id: "goal-shared:agent-a:autonomous_replan:replan-fixture:turn-replan",
+};
+
+test("replan step writes have an actionable refusal without borrowing a Todo", () => {
+  const result = resolveLaneRecommendation({...laneContext,
+    settlement_identity: replanIdentity, write: {text: "Continue the replan."}});
+  assert.equal(result.admitted, false);
+  assert.equal(result.error_code, "next_action_task_unavailable");
+  assert.match(String(result.error), /--recommended-action/);
+  assert.equal(result.resolution, undefined);
+});
+
+test("derived replan advice has no Todo settlement alignment or grant", () => {
+  const result = resolveRefreshRecommendation({...baseRequest,
+    settlement_identity: replanIdentity, settlement_candidate: null,
+    agent_lane_candidate: null, active_state_next_action: null});
+  assert.equal(result.recommended_action_source, "default_refresh_action");
+  assert.equal(result.settlement_alignment, "not_applicable");
+  assert.equal(result.todo_id, undefined);
+});
+
+test("replan identity contradictions cannot become a lane step", () => {
+  for (const patch of [
+    {effect_id: "another-effect"},
+    {todo_id: "todo_higher_priority"},
+    {binding_id: "another-replan"},
+  ]) {
+    assert.throws(() => resolveLaneRecommendation({...laneContext,
+      settlement_identity: {...replanIdentity, ...patch},
+      write: {text: "Continue the replan."}}));
+  }
+  for (const patch of [{agent_id: "agent-b"}, {goal_id: "another-goal"}]) {
+    const changed = {...replanIdentity, ...patch};
+    changed.effect_id = `${changed.goal_id}:${changed.agent_id}:autonomous_replan:replan-fixture:turn-replan`;
+    const result = resolveLaneRecommendation({...laneContext,
+      settlement_identity: changed, write: {text: "Continue the replan."}});
+    assert.equal(result.admitted, false);
+    assert.equal(result.resolution, undefined);
+  }
+});
+
+test("legacy and v1 Todo identities preserve the same lane step", () => {
+  const legacy = {effect_id: "goal-shared:agent-a:todo_higher_priority:turn-1",
+    goal_id: "goal-shared", agent_id: "agent-a", todo_id: "todo_higher_priority",
+    turn_instance_id: "turn-1"};
+  const first = resolveLaneRecommendation({...laneContext, settlement_identity: legacy,
+    write: {text: "Continue the selected Todo."}});
+  const second = resolveLaneRecommendation({...laneContext,
+    settlement_identity: {...legacy, schema_version: "quota_settlement_identity_v1",
+      binding_kind: "todo", binding_id: legacy.todo_id},
+    write: {text: "Continue the selected Todo."}});
+  assert.equal(first.admitted, true);
+  assert.deepEqual(second, first);
+});
 
 test("a lane step refines the selected task without rewriting its identity or text", () => {
   const read = resolveLaneRecommendation(laneContext);
@@ -202,4 +262,50 @@ test("unknown actors, absent tasks and peer-owned tasks fail closed", () => {
   ]) {
     assert.equal(resolveLaneRecommendation({...laneContext, ...change, write: {text: "Try."}}).admitted, false);
   }
+});
+
+test("a receipt-bound write cannot decorate a different current lane Todo", () => {
+  const before = resolveLaneRecommendation({...laneContext, write: {text: "Keep B's experiment."}});
+  const request = {...laneContext, prior_resolution: before.resolution,
+    settlement_identity: baseRequest.settlement_identity,
+    write: {text: "Wait for A's dependency."}};
+  const result = resolveLaneRecommendation(request);
+  assert.equal(result.admitted, false);
+  assert.equal(result.error_code, "next_action_task_unavailable");
+  assert.match(String(result.error), /original Turn.*without --next-action/);
+  const projected = result.selected_todo as Record<string, unknown>;
+  assert.equal(projected.todo_id, "todo_higher_priority");
+  assert.equal(projected.next_step, "Keep B's experiment.");
+  assert.equal(result.resolution, undefined);
+});
+
+test("matching settlement steps retain exact alignment; ordinary steps need no Turn", () => {
+  const context = {...laneContext, selected_todo: baseRequest.settlement_candidate,
+    task_facts: baseRequest.settlement_candidate};
+  const read = resolveLaneRecommendation(context);
+  const bound = resolveLaneRecommendation({...context,
+    settlement_identity: baseRequest.settlement_identity,
+    write: {text: "Continue A's accepted segment.", expected_basis: read.basis}});
+  assert.equal(bound.admitted, true);
+  const resolution = bound.resolution as Record<string, unknown>;
+  assert.equal(resolution.todo_id, "todo_selected");
+  assert.equal(resolution.settlement_alignment, "exact");
+  const ordinary = resolveLaneRecommendation({...context, write: {text: "Inspect A's artifact."}});
+  assert.equal(ordinary.admitted, true);
+  assert.equal((ordinary.resolution as Record<string, unknown>).settlement_alignment, "not_applicable");
+});
+
+test("lane write revalidates the original Goal, actor and effect identity", () => {
+  const context = {...laneContext, selected_todo: baseRequest.settlement_candidate,
+    task_facts: baseRequest.settlement_candidate, write: {text: "Try the next segment."}};
+  for (const change of [{goal_id: "another-goal"}, {agent_id: "agent-b"}]) {
+    const identity = {...baseRequest.settlement_identity, ...change};
+    identity.effect_id = `${identity.goal_id}:${identity.agent_id}:${identity.todo_id}:${identity.turn_instance_id}`;
+    const rejected = resolveLaneRecommendation({...context, settlement_identity: identity});
+    assert.equal(rejected.admitted, false);
+    assert.equal(rejected.error_code, "next_action_task_unavailable");
+  }
+  assert.throws(() => resolveLaneRecommendation({...context, settlement_identity: {
+    ...baseRequest.settlement_identity, effect_id: "forged-effect",
+  }}), /effect id does not match its identity/);
 });

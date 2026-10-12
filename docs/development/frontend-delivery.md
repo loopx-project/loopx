@@ -77,6 +77,12 @@ and the state readback plus tested revision and limits. Keep private messages,
 local paths and raw run logs out. The existing public first-screen preview gate
 still applies; do not add user approvals for routine implementation decisions.
 
+For Goal workspace composition, render before and after on the synthetic
+showcase workspace (`LOOPX_PERSONAL_WORKSPACE_SCENARIO=goal-showcase node
+examples/personal-workspace-browser-smoke.mjs`) and answer the
+[craft review](design.md#craft-review) from those screenshots. Placeholder
+fixtures prove behavior; they are not a basis for judging composition.
+
 **Evaluation cadence:** ordinary work runs offline regressions and affected
 browser/backend checks. Paid model interpretation and review-decision probes
 belong to release-candidate qualification, with failures/skips retained. A
@@ -86,7 +92,9 @@ probe is not a pass. See [release readiness](../product/release-readiness.md).
 中文要点：先定义用户想完成的事，再比较最短合法路径；复用已有授权与状态归属，
 减少重填、重复确认和页面跳转。以真实构建页面、代表性数据和状态回读验收，区分
 模拟边界、打包验证和安装生效。评审先挑战交互成本与证据，再解释代码；平时不跑
-付费模型评测，不用测试数量或 PR 合并代替用户任务完成。
+付费模型评测，不用测试数量或 PR 合并代替用户任务完成。Goal 工作区的构图改动用
+`goal-showcase` 合成展示数据截取前后对比图，并按 design.md 的 Craft review 逐项
+回答；占位 fixture 只证明行为，不作为判断构图的依据。
 
 ## Source development and updates
 

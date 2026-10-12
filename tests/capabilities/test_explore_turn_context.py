@@ -55,6 +55,54 @@ def registry(tmp_path, *, graph=False, planning=False):
     return path
 
 
+@pytest.mark.parametrize("command", ["turn-context", "summary", "worker-branch-plan", "graph"])
+@pytest.mark.parametrize("damage", ["truncated", "foreign-goal", "invalid-status"])
+def test_decision_reads_reject_incomplete_evidence_and_recover(tmp_path, command, damage):
+    path = registry(tmp_path, graph=True, planning=True)
+    root = tmp_path / "runtime"
+    log = explore_result_log_path(root, "research")
+    node = build_explore_node_event(
+        goal_id="research", agent_id="worker", node_id="route",
+        title="Candidate route", status="open",
+    )
+    finding = build_explore_finding_event(
+        goal_id="research", agent_id="worker", node_id="route",
+        finding_id="counterexample", title="Counterexample", status="refuted",
+        summary="Applies only to the tested inputs.",
+    )
+    append_explore_result_event(log, node)
+    append_explore_result_event(log, finding)
+    healthy = log.read_bytes()
+    if damage == "truncated":
+        damaged = json.dumps(node) + '\n{"event_kind":'
+    else:
+        altered = {**finding, **({"goal_id": "foreign"} if damage == "foreign-goal"
+                                else {"status": "invented"})}
+        damaged = json.dumps(node) + "\n" + json.dumps(altered) + "\n"
+    log.write_text(damaged)
+    args = [sys.executable, "-m", "loopx.cli", "--registry", str(path),
+            "--runtime-root", str(root), "--format", "json", "explore", command,
+            "--goal-id", "research"]
+    if command in {"turn-context", "worker-branch-plan"}:
+        args += ["--agent-id", "worker"]
+    output = tmp_path / "graph.json"
+    if command == "graph":
+        output.write_text("previous export")
+        args += ["--graph-format", "json", "--out", str(output)]
+    rejected = subprocess.run(args, capture_output=True, text=True)
+    assert rejected.returncode != 0, rejected.stdout
+    packet = json.loads(rejected.stdout)
+    assert packet["ok"] is False and "Explore result" in packet["error"]
+    assert log.read_text() == damaged
+    if command == "graph":
+        assert output.read_text() == "previous export"
+    log.write_bytes(healthy)
+    recovered = subprocess.run(args, capture_output=True, text=True)
+    assert recovered.returncode == 0, recovered.stdout
+    assert json.loads(recovered.stdout)["ok"] is True
+    assert log.read_bytes() == healthy
+
+
 @pytest.mark.parametrize(
     "mode,graph,planning",
     [("off", False, False), ("evidence", True, False), ("planning", True, True)],
@@ -126,7 +174,7 @@ def test_disabled_hook_keeps_packet_and_does_not_read_evidence(tmp_path, monkeyp
         pytest.fail("disabled Explore read evidence")
 
     monkeypatch.setattr(
-        "loopx.capabilities.explore.turn_context.load_explore_result_events", unexpected
+        "loopx.capabilities.explore.turn_context.load_explore_result_events_strict", unexpected
     )
     assert (
         extend_turn_start_dispatch(
@@ -304,7 +352,7 @@ def test_legacy_planning_does_not_grant_existing_sink_publication(tmp_path):
     assert observed == [False]
 
 
-def test_real_quota_packet_exposes_replayable_read_without_admitting_unhealthy_goal(
+def test_real_quota_delivers_replayable_context_without_admitting_unhealthy_goal(
     tmp_path,
 ):
     import subprocess
@@ -337,16 +385,26 @@ def test_real_quota_packet_exposes_replayable_read_without_admitting_unhealthy_g
     )
     packet = json.loads(packet_run.stdout)
     assert packet["ok"] is False  # This fixture deliberately has no healthy adapter.
-    required = next(
-        r for r in packet["required_reads"] if r["kind"] == "explore_turn_context"
+    channel = packet["interaction_contract"]["agent_channel"]
+    assert packet["should_run"] is False
+    assert channel["delivery_allowed"] is False
+    assert "required_reads" not in packet
+    source = next(
+        r for r in channel["work_context"]["sources"]
+        if r["kind"] == "explore_turn_context"
     )
+    assert not any(r.get("kind") == "explore_turn_context" for r in channel["required_reads"])
     read = subprocess.run(
-        [sys.executable, "-m", "loopx.cli", *shlex.split(required["command"])[1:]],
+        [sys.executable, "-m", "loopx.cli", *shlex.split(source["command"])[1:]],
         capture_output=True,
         text=True,
         check=True,
     )
     result = json.loads(read.stdout)
+    # The CLI adds its route receipt; the registered reader returns the same
+    # canonical context without transport diagnostics.
+    assert result.pop("source_runtime_route")["routed_to_source_registry"] is False
+    assert result == source["content"]
     assert result["graph_enabled"] is True
     assert result["harness"] is None
 
@@ -485,6 +543,34 @@ def test_turn_context_audit_count_compatibility(counts, omitted):
     assert len(result["findings"]) == 3
 
 
+def test_turn_context_preserves_wait_conditions_and_total_omissions():
+    from loopx.capabilities.explore.todo_branch_plan import build_explore_todo_branch_plan
+
+    plan = build_explore_todo_branch_plan(
+        goal_id="research", agent_id="worker", width=3,
+        orchestration={"explore_harness": {"enabled": True}},
+        todos=[{
+            "todo_id": f"todo_waiting_{index}", "text": "Use the prepared artifact",
+            "status": "open", "task_class": "advancement_task", "priority": "P0",
+            "resume_when": "todo_done:todo_prepare", "resume_ready": False,
+        } for index in range(12)],
+    )
+    packet = effect_runtime_result("explore.turn_context", {
+        "goal_id": "research", "agent_id": "worker", "route": ["loopx"],
+        "harness_gate": {"enabled": True}, "graph_enabled": False,
+        "projection": {}, "plan": plan,
+    })
+    context = packet["harness"]
+    assert context["selected_branches"] == []
+    assert len(context["rejected_candidates"]) == 3
+    assert context["omitted_rejected_candidates"] == 9
+    for row in context["rejected_candidates"]:
+        assert row["actionable_open"] is False
+        assert row["resume_ready"] is False
+        assert row["resume_when"] == "todo_done:todo_prepare"
+    assert "todo-branch-plan" in context["plan_command"]
+
+
 @pytest.mark.parametrize("kind", ["findings", "edges"])
 def test_turn_context_rejects_negative_evidence_count(kind):
     with pytest.raises(EffectRuntimeRejected, match=f"Explore {kind} count must be nonnegative") as rejected:
@@ -497,3 +583,25 @@ def test_turn_context_rejects_negative_evidence_count(kind):
         })
     assert rejected.value.error_kind == "request_rejected"
     assert rejected.value.diagnostic_code == "invalid_request"
+
+
+def test_many_durable_refs_keep_bounded_audit_and_full_cold_read(tmp_path):
+    path = registry(tmp_path, planning=True)
+    refs = [f"unknown-{i}" for i in range(40)]
+    add_goal_todo(registry_path=path, goal_id="research", role="agent",
+                  text="Inspect unresolved evidence", claimed_by="worker",
+                  explore_result_node_refs=refs)
+    packet = explore_turn_context(registry_path=path, runtime_root=tmp_path / "runtime",
+                                  goal_id="research", agent_id="worker")
+    audit = packet["harness"]["selected_branches"][0]["typed_evidence_audit"]
+    for field in ("requested_node_refs", "unknown_node_refs"):
+        assert audit[field] == refs[:8]
+        assert audit[f"omitted_{field}"] == 32
+    assert "unknown_result_node_ref" in audit["hazards"]
+    # Follow the actual full-audit command carried by the compact packet.
+    command = packet["harness"]["plan_command"]
+    result = subprocess.run([sys.executable, "-m", "loopx.cli", *command[1:]],
+                            capture_output=True, text=True, check=True)
+    full = json.loads(result.stdout)["selected_branches"][0]["typed_evidence_audit"]
+    assert full["requested_node_refs"] == full["unknown_node_refs"] == refs
+    assert full["score_delta"] == 0

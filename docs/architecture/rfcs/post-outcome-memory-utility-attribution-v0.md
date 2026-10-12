@@ -1,6 +1,6 @@
 # RFC: Post-Outcome Memory Utility Attribution v0
 
-- Status: Accepted; Stage 1 shipped, Stage 2 delivered by this PR, Stage 3+ remain proposed
+- Status: Accepted; Stage 1 and Stage 2 implemented, Stage 3+ remain proposed
 - Supersedes / closes: none
 - Date: 2026-08-15
 - Tracking issues: [#3214](https://github.com/huangruiteng/loopx/issues/3214), [#3824](https://github.com/huangruiteng/loopx/issues/3824)
@@ -367,6 +367,48 @@ bounded rank-prior effect plus readback receipt.
 
 Stage 4 runs a bounded pilot with held-out or counterfactual evaluation before
 any default-on ranking influence.
+
+### 9.1 Review-learning pilot: repository experience before utility
+
+[PR #5944](https://github.com/loopx-project/loopx/pull/5944) supplies the first
+[repository-owned comparison and experience](../../../loopx/capabilities/pr_review_queue/experiences/README.md).
+Earlier machine approvals covered technical recovery design; a later
+maintainer-directed model review requested a first useful recovered Goal,
+earlier packaged interaction and useful post-recovery results. Preserve each
+frame, actor provenance, API target commit, body-declared head, evidence and
+unresolved outcome. Different frames and source heads prevent treating this
+as a controlled experiment or automatic gold label.
+
+The first pilot phase stores public distilled evidence in Git using the existing
+`procedural_experience_contract_v0`. `pull-request-review` owns the source and
+read-only file adapter; `reward_memory` retains qualification, recall and the
+TypeScript context-delivery decision. Self-repair points to the same case and
+repairs its owning workflow. No second store, shared decision owner, utility
+score or provider write is introduced.
+
+A registered Agent needs qualified Reward Memory enablement, automatic recall
+and an explicit `pull_request_review.review` surface. Its actionable PR packet
+can deliver at most three repository-matched, exact-readback experiences.
+Historical verdict labels stay outside retrieval inputs. Disabled, other-surface,
+unqualified and unrelated-repository calls preserve their base behavior;
+malformed/changed sources fail open. Native public advice extends only this
+opt-in caller boundary; provider ranking, configuration, action authority and
+exact-head work selection are unchanged.
+
+This phase accepts a versioned case, qualified experience, real source readback
+and JSON/Markdown delivery at the production CLI, plus off-parity and failure
+controls. Context delivery does not establish semantic adoption or better
+reviews. Explain adoption, rejection or irrelevance in the existing
+`problem_context` judgment with current-head evidence.
+
+The next phase pins one common review frame, artifact revision, model and budget
+across baseline/experience arms on held-out cases, including justified internal
+prerequisites and false-blocker controls. Retain disagreement; measure actionable
+findings, incorrect blockers, review cost and human attention per accepted review.
+A maintainer correction is evidence, not an unconditional reward. Only verified
+application and work-outcome lineage can feed the existing utility observation
+and reducer. The original case has no such lineage, so its utility is unproven.
+This pilot closes no Stage 3/4 ranking or general review-quality qualification.
 
 ## 10. Validation criteria
 

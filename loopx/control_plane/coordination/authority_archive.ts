@@ -9,7 +9,7 @@ import {authorityStateDelta} from "./authority_state_log.ts";
 import {AUTHORITY_ARCHIVE_SCHEMA, archiveCursor as positive, verifyAuthorityArchive,
   withVerifiedAuthorityArchive, type ArchiveHeader, type AuthorityArchiveSummary} from "./authority_archive_read.ts";
 import {checkArchivePage, checkArchivePrefix} from "./authority_archive_audit.ts";
-import {syncAuthorityDirectory} from "./file_authority_store.ts";
+import {FileAuthorityStore, syncAuthorityDirectory} from "./file_authority_store.ts";
 export {verifyAuthorityArchive} from "./authority_archive_read.ts";
 export type {AuthorityArchiveSummary} from "./authority_archive_read.ts";
 
@@ -106,27 +106,43 @@ export async function restoreAuthorityArchive(path: string, target: AuthoritySto
     let previous = prefix.provider_revision;
     let after: string | null = retained === "0" ? null : retained;
     let pending: AuthorityStoreCommittedTransaction[] = [];
+    const checkPending = async (acknowledged?: Awaited<ReturnType<AuthorityStore["commitAuthority"]>>) => {
+      const checked = await checkArchivePage(target, pending, after);
+      if (checked.status !== "matched") invalid(`restore ${checked.reason_code}; resume the same archive`);
+      if (acknowledged?.status === "applied" && (acknowledged.cursor !== pending.at(-1)!.cursor ||
+          checked.provider_revision !== acknowledged.provider_revision)) {
+        invalid("restore commit acknowledgement differs from durable revision");
+      }
+      previous = checked.provider_revision; after = pending.at(-1)!.cursor; pending = [];
+    };
     for await (const row of archive.transactions()) {
       if (BigInt(row.cursor) <= BigInt(retained)) continue;
+      pending.push(row);
+      if (target instanceof FileAuthorityStore) {
+        // File retains one envelope. Publish the same bounded page used by
+        // independent journal/receipt proof, rather than rewrite all history
+        // after every logical transaction. Other providers keep their own IO.
+        if (pending.length === 16 || row.cursor === verified.commits) {
+          let acknowledged: Awaited<ReturnType<AuthorityStore["commitAuthority"]>> | undefined;
+          try { acknowledged = await target.appendArchivePage(previous, identity.store_identity, pending); }
+          catch { /* journal and original receipts are the recovery proof */ }
+          await checkPending(acknowledged);
+        }
+        continue;
+      }
       let acknowledged: Awaited<ReturnType<AuthorityStore["commitAuthority"]>> | undefined;
       try {
         acknowledged = await target.commitAuthority({expected_provider_revision: previous, operation_id: row.operation_id,
           events: row.events, next_projection: row.projection, receipts: row.receipts});
       } catch { /* exact journal readback is the recovery proof */ }
-      pending.push(row);
       if (acknowledged?.status === "applied") {
         if (acknowledged.cursor !== row.cursor) invalid("restore commit acknowledgement cursor mismatch");
         previous = acknowledged.provider_revision;
       }
-      // Normal writes share a bounded page proof. An uncertain/rejected write
-      // forces immediate readback before any later write; never issue it twice.
+      // Uncertain/rejected writes force readback before any subsequent write.
+      // No provider's ambiguous transaction or page is issued twice here.
       if (pending.length === 16 || row.cursor === verified.commits || acknowledged?.status !== "applied") {
-        const checked = await checkArchivePage(target, pending, after);
-        if (checked.status !== "matched") invalid(`restore ${checked.reason_code}; resume the same archive`);
-        if (acknowledged?.status === "applied" && checked.provider_revision !== previous) {
-          invalid("restore commit acknowledgement differs from durable revision");
-        }
-        previous = checked.provider_revision; after = row.cursor; pending = [];
+        await checkPending(acknowledged);
       }
     }
     const final = await target.loadAuthority();

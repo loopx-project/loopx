@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 from loopx.control_plane.testing.canary_harness import write_fixture_registry, run_json_cli_result
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
@@ -151,6 +151,50 @@ def test_ready_deferred_lanes_keep_full_counts_before_truncation() -> None:
     assert len(lanes["current_agent_deferred_resume_candidates"]) == 1
     assert lanes["executor_excluded_self_deferred_resume_count"] == 1
     assert lanes["unclaimed_deferred_resume_count"] == 0
+
+
+@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("independent", [False, True])
+def test_public_quota_replans_completion_cycles_without_reassigning_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, independent: bool,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
+    state.write_text(
+        "---\nstatus: active\n---\n# Goal\n## Objective\nDeliver checked work.\n\n## Agent Todo\n"
+        "- [ ] [P1] Complete the first task.\n"
+        "  <!-- loopx:todo todo_id=todo_alpha role=agent task_class=advancement_task status=open claimed_by=agent-a resume_when=todo_done:todo_bravo -->\n"
+        "- [ ] [P1] Complete the second task.\n"
+        "  <!-- loopx:todo todo_id=todo_bravo role=agent task_class=advancement_task status=open claimed_by=agent-b resume_when=todo_done:todo_alpha -->\n"
+        + ("- [ ] [P2] Deliver independent work.\n"
+           "  <!-- loopx:todo todo_id=todo_independent role=agent task_class=advancement_task status=open claimed_by=agent-a -->\n" if independent else ""),
+        encoding="utf-8",
+    )
+    write_fixture_registry(project=tmp_path, runtime_root=runtime, registry_path=registry,
+        goal_id="goal-a", domain="resume-planning", adapter_kind="generic_project_goal_v0",
+        state_file=str(state), registered_agents=["agent-a", "agent-b"], quota_allowed_slots=None)
+    if provider != "legacy":
+        goal = json.loads(registry.read_text())["goals"][0]
+        fields = parse_active_state_todos(state.read_text(), goal=goal, item_limit=None)
+        initialize_canonical_authority(runtime, "goal-a", build_todo_runtime_shadow_projection(
+            goal_id="goal-a", todos=fields["agent_todos"]["items"], handoff_mode="soft_claim"),
+            state_path=state, provider=provider)
+    before = state.read_bytes()
+    code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
+        "--include-detail", "agent-todos", "--scan-path", str(tmp_path), registry_path=registry, runtime_root=runtime)
+    assert code == 0, packet
+    summary = packet["agent_todo_summary"]
+    blocked = next(row for row in summary["resume_blocked_items"] if row["todo_id"] == "todo_alpha")
+    assert blocked["resume_condition"]["invalid_state"] == "dependency_cycle"
+    if independent:
+        assert packet["selected_todo"]["todo_id"] == "todo_independent"
+    else:
+        frontier = packet["agent_scope_frontier"]
+        assert frontier["action"] == "successor_replan_required"
+        assert frontier["quiet_noop_allowed"] is False
+        assert ids(frontier["dependency_cycle_candidates"]) == ["todo_alpha"]
+        assert "owner" in frontier["recommended_action"]
+    assert state.read_bytes() == before
 
 
 def test_ignored_rows_do_not_turn_an_explicit_lane_into_fallback_input() -> None:

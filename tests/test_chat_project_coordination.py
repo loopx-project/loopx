@@ -4,6 +4,7 @@ import json
 import queue
 import subprocess
 import sys
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -16,6 +17,114 @@ from loopx.chat_store import ChatSessionStore
 from loopx.capabilities.manager_context import pending
 from loopx.capabilities.manager_context.inspection import ManagerInspection, CONTEXT_TOOL_NAME
 from loopx.capabilities.manager_context.roundtrip import drain, reply_status
+
+
+def test_failed_stop_keeps_active_claim_and_retry_preserves_unrelated_work(tmp_path):
+    store = ChatSessionStore(tmp_path)
+    session = store.create_session(goal_id="sample", agent_id="codex", adapter_kind="codex_app_server",
+        upstream_thread_id="thread", upstream_mode="chat")
+    sid = session["session_id"]
+    controller = ChatRuntimeController(store=store, codex_bin="missing")
+    started, release = threading.Event(), threading.Event()
+
+    class Adapter:
+        upstream_thread_id = "thread"
+        reject = True
+        closed = False
+        def healthcheck(self): return True
+        def close_session(self):
+            self.closed = True
+            release.set()
+        def start_turn(self, message, sink):
+            sink("turn.started", {"upstream_turn_id": "current-native"})
+            started.set()
+            assert release.wait(5)
+            return {"message": "discard this late answer"}
+        def interrupt_turn(self, turn_id):
+            assert turn_id == "current-native"
+            if self.reject:
+                raise RuntimeError("upstream rejected")
+            release.set()
+
+    adapter = Adapter()
+    controller.adapters[sid] = adapter
+    try:
+        turn, _ = controller.submit_turn(session_id=sid, client_turn_id="stop-retry", message="run",
+            work_dir=tmp_path, objective="sample")
+        tid = turn["turn_id"]
+        assert started.wait(2)
+        with pytest.raises(CodexChatAgentError, match="停止尚未确认"):
+            controller.interrupt_turn(session_id=sid, turn_id=tid)
+        assert store.load_turn(sid, tid)["status"] == "interrupting"
+        assert store.load_session(sid)["active_turn_id"] == tid
+        assert not adapter.closed
+        assert not any(e["kind"] == "turn.interrupted" for e in store.events_after(sid, tid, None))
+        assert not any("已中断" in m["text"] for m in store.messages(sid))
+        adapter.reject = False
+        assert controller.interrupt_turn(session_id=sid, turn_id=tid)["status"] == "interrupted"
+        assert store.load_session(sid)["active_turn_id"] is None
+        assert not adapter.closed
+        assert not any("discard this late answer" in m["text"] for m in store.messages(sid))
+    finally:
+        release.set()
+        controller.close()
+
+
+def test_stop_during_native_start_binds_current_turn_without_borrowing_previous_turn(tmp_path, monkeypatch):
+    store = ChatSessionStore(tmp_path)
+    session = store.create_session(goal_id="sample", agent_id="codex", adapter_kind="codex_app_server",
+        upstream_thread_id="thread", upstream_mode="chat")
+    sid = session["session_id"]
+    controller = ChatRuntimeController(store=store, codex_bin="missing")
+    starting, bind, stopped = threading.Event(), threading.Event(), threading.Event()
+    native = CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None), messages=queue.Queue(),
+        thread_id="thread", work_dir=tmp_path, response_timeout_sec=2, current_turn_id="previous-native")
+    adapter = CodexAppServerAdapter(native)
+    calls = []
+
+    def send(message, *, on_event):
+        starting.set()
+        assert bind.wait(3)
+        on_event("turn.started", {"upstream_turn_id": "current-native"})
+        assert stopped.wait(3)
+        raise CodexChatAgentError("interrupted", gate=None, error_code="interrupted")
+
+    def interrupt(turn_id):
+        calls.append(turn_id)
+        stopped.set()
+
+    monkeypatch.setattr(native, "send", send)
+    monkeypatch.setattr(native, "interrupt", interrupt)
+    monkeypatch.setattr(native, "close", lambda: stopped.set())
+    controller.adapters[sid] = adapter
+    try:
+        turn, _ = controller.submit_turn(session_id=sid, client_turn_id="starting-stop", message="run",
+            work_dir=tmp_path, objective="sample")
+        tid = turn["turn_id"]
+        assert starting.wait(2)
+        result, errors = [], []
+        def stop():
+            try:
+                result.append(controller.interrupt_turn(session_id=sid, turn_id=tid))
+            except Exception as exc:
+                errors.append(exc)
+        worker = threading.Thread(target=stop)
+        worker.start()
+        # Wait for the durable fence before releasing the delayed native identity.
+        import time
+        deadline = time.monotonic() + 2
+        while store.load_turn(sid, tid)["status"] != "interrupting" and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert store.load_turn(sid, tid)["status"] == "interrupting" and not calls
+        bind.set()
+        worker.join(4)
+        assert not worker.is_alive() and not errors
+        assert calls == ["current-native"] and result[0]["status"] == "interrupted"
+        assert store.load_turn(sid, tid)["upstream_turn_id"] == "current-native"
+    finally:
+        bind.set()
+        stopped.set()
+        controller.close()
 
 
 @pytest.fixture
@@ -71,6 +180,7 @@ def test_project_chat_nested_cli_handoff_returns_once_after_restart(project, mon
     before = registry.read_bytes(), (repo / "ACTIVE_GOAL_STATE.md").read_bytes()
     store = ChatSessionStore(root)
     controller = ChatRuntimeController(store=store, codex_bin="codex", registry_path=registry)
+    answer = "**Source comparison**\n\nThe periods differ.\n\n- Keep the correction.\n- Do not infer growth."
 
     class ModelFixture:
         upstream_thread_id = "fixture-project-model"
@@ -79,7 +189,8 @@ def test_project_chat_nested_cli_handoff_returns_once_after_restart(project, mon
         def start_turn(self, message, sink):
             assert "OTHER_PROJECT_PRIVATE" not in message
             assert '"scope": "owner_goal"' in message and '"agent_id": "coordinator"' in message
-            return {"schema_version": "loopx_chat_agent_response_v0", "message": "Forwarding the correction", "proposals": [], "gate": None,
+            sink("answer.delta", {"text": answer})
+            return {"schema_version": "loopx_chat_agent_response_v0", "message": answer, "proposals": [], "gate": None,
                     "context_handoff": {"goal_id": "research", "agent_id": "coordinator"}}
 
     monkeypatch.setattr(controller, "capabilities", lambda: [
@@ -100,6 +211,12 @@ def test_project_chat_nested_cli_handoff_returns_once_after_restart(project, mon
             message="Ask coordinator to check the corrected source with reviewer.", work_dir=repo, objective="Research delivery")
         done = controller.wait_for_turn(session_id=session["session_id"], turn_id=turn["turn_id"], timeout_sec=20)
         assert done["status"] == "completed", done
+        assert done["response"]["message"].startswith(answer + "\n\n")
+        assert done["response"]["message"].count(answer) == 1
+        streamed = [event["payload"]["text"] for event in store.events_after(session["session_id"], turn["turn_id"], None)
+                    if event["kind"] == "answer.delta"]
+        assert "".join(streamed) == answer
+        assert ChatSessionStore(root).load_turn(session["session_id"], turn["turn_id"])["response"] == done["response"]
         receipt = done["response"]["context_handoff_receipt"]
         request_id = receipt["request_id"]
         assert request_id in json.dumps(cli("coordinator", "read"))

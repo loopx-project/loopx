@@ -10,12 +10,14 @@ from ...file_lock import (
     cross_runtime_lock_witness,
     exclusive_cross_runtime_file_lock,
 )
+from ..coordination.shadow_management import runtime_artifact_lock_target
 from ..effect_runtime import effect_runtime_result
 from ..projects.registry_codec import (
     SOURCE_SESSION_PROFILE_ID,
     load_project_registry,
 )
 from ..effect_program import TurnProviderStepKind
+from .activation import goal_activation_state
 from .source_session_registry_state import (
     exact_goal_ref,
     guard_path,
@@ -68,6 +70,27 @@ class FirstPartyHostTurnEffectAdmission:
             journal_path=self.journal_path,
         )
 
+    @contextmanager
+    def _runtime_artifact_lifetime(self, *, operation: str) -> Iterator[None]:
+        path = self.journal_path.expanduser().resolve()
+        turns_dir = path.parent
+        goal_dir = turns_dir.parent
+        goals_dir = goal_dir.parent
+        if (
+            turns_dir.name != "turns"
+            or goal_dir.name != self.goal_admission.goal_id
+            or goals_dir.name != "goals"
+        ):
+            raise FirstPartyHostRuntimeRejected("journal_path_mismatch")
+        with exclusive_cross_runtime_file_lock(
+            runtime_artifact_lock_target(
+                goals_dir.parent,
+                self.goal_admission.goal_id,
+            ),
+            operation=operation,
+        ):
+            yield
+
     def prepare(
         self,
         step_kind: TurnProviderStepKind,
@@ -75,13 +98,16 @@ class FirstPartyHostTurnEffectAdmission:
         persist_journal: JournalPersist,
     ) -> None:
         try:
-            prepare_source_turn_effect(
-                registry_path=self.goal_admission.registry_path,
-                goal_id=self.goal_admission.goal_id,
-                effect=self._effect(step_kind, effect_ref),
-                source_admission=self.goal_admission.source_journal_admission_locked,
-                persist_journal=persist_journal,
-            )
+            with self._runtime_artifact_lifetime(
+                operation="source_turn_effect_runtime_artifact_admit",
+            ):
+                prepare_source_turn_effect(
+                    registry_path=self.goal_admission.registry_path,
+                    goal_id=self.goal_admission.goal_id,
+                    effect=self._effect(step_kind, effect_ref),
+                    source_admission=self.goal_admission.source_journal_admission_locked,
+                    persist_journal=persist_journal,
+                )
         except SourceTurnEffectRejected as exc:
             raise FirstPartyHostRuntimeRejected(exc.code) from exc
 
@@ -100,13 +126,16 @@ class FirstPartyHostTurnEffectAdmission:
         persist_journal: JournalPersist,
     ) -> None:
         try:
-            release_source_turn_effect(
-                registry_path=self.goal_admission.registry_path,
-                goal_id=self.goal_admission.goal_id,
-                effect=self._effect(step_kind, effect_ref),
-                source_admission=self.goal_admission.source_journal_admission_locked,
-                persist_journal=persist_journal,
-            )
+            with self._runtime_artifact_lifetime(
+                operation="source_turn_effect_runtime_artifact_release",
+            ):
+                release_source_turn_effect(
+                    registry_path=self.goal_admission.registry_path,
+                    goal_id=self.goal_admission.goal_id,
+                    effect=self._effect(step_kind, effect_ref),
+                    source_admission=self.goal_admission.source_journal_admission_locked,
+                    persist_journal=persist_journal,
+                )
         except SourceTurnEffectRejected as exc:
             raise FirstPartyHostRuntimeRejected(exc.code) from exc
 
@@ -147,10 +176,18 @@ def source_goal_authority(registry_path: Path, goal_id: str) -> dict[str, Any]:
     if len(matches) != 1:
         return {"kind": "absent"}
     goal = matches[0]
+    try:
+        activation_state = goal_activation_state(goal).value
+    except ValueError:
+        return {"kind": "unavailable", "reason": "goal_activation_unreadable"}
     goal_ref = {"goal_id": goal.get("id")}
     if "goal_instance_id" in goal:
         goal_ref["goal_instance_id"] = goal.get("goal_instance_id")
-    return {"kind": "present", "goal_ref": goal_ref}
+    return {
+        "kind": "present",
+        "goal_ref": goal_ref,
+        "activation_state": activation_state,
+    }
 
 
 def capture_first_party_host_goal_ref(
@@ -294,8 +331,24 @@ class FirstPartyHostGoalAdmission:
             self._decision("require_current")
 
     @contextmanager
+    def current_lifetime(self, *, operation: str) -> Iterator[None]:
+        """Keep a source-session side effect inside its planned Goal lifetime."""
+
+        if not self.source_profile:
+            yield
+            return
+        with exclusive_cross_runtime_file_lock(
+            guard_path(self.registry_path, self.goal_id),
+            operation=operation,
+        ):
+            self._decision("require_current")
+            yield
+
+    @contextmanager
     def source_journal_admission(
         self,
+        *,
+        runtime_root: Path,
     ) -> Iterator[dict[str, Any] | None]:
         """Hand one journal mutation to the TS owner under the source guard."""
 
@@ -304,10 +357,17 @@ class FirstPartyHostGoalAdmission:
             return
         target = guard_path(self.registry_path, self.goal_id)
         with exclusive_cross_runtime_file_lock(
-            target,
-            operation="first_party_host_journal_commit",
+            runtime_artifact_lock_target(
+                runtime_root.expanduser().resolve(),
+                self.goal_id,
+            ),
+            operation="first_party_host_journal_runtime_artifact_guard",
         ):
-            yield self.source_journal_admission_locked()
+            with exclusive_cross_runtime_file_lock(
+                target,
+                operation="first_party_host_journal_commit",
+            ):
+                yield self.source_journal_admission_locked()
 
     def source_journal_admission_locked(self) -> dict[str, Any]:
         """Build a TS handoff while the caller holds this Goal's source guard."""

@@ -104,3 +104,16 @@ Native CLI tests cover both File and SQLite authority; real stdio tests cover
 assessment, fresh linked work, replay, foreign ownership, revocation and direct
 answers. These qualify the tools and context, not autonomous receiver adoption,
 live original-channel delivery, installed App behavior or complete golden queries.
+
+Explicit result files extend the existing `result_publication.ts` owner. Its
+bounded relative refs and content descriptors participate in immutable publication
+and replay identity; they grant no filesystem or audience authority.
+`result_files.py` performs host IO against the registered workspace under the
+current Goal-instance guard, with no-follow directory opens and private content
+snapshots. Result observations carry metadata rather than bytes through the typed
+bridge. The original return adapter supplies these descriptors only to a transport
+that advertises file support; it retains the existing result chain, delivery
+attempt and verification recovery. Lark owns App-bound resource upload and
+download, not a second result or scheduling ledger. The public producer currently
+admits only verified bound-owner App returns on supported POSIX hosts; other
+audiences and frontend file presentation require their own qualification.

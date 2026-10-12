@@ -16,6 +16,7 @@ import { readReceiptLogSnapshot } from "./runtime/receipt_log_snapshot.ts";
 
 export const ROLLOUT_EVENT_SCHEMA_VERSION = "loopx_rollout_event_v0";
 export const HEARTBEAT_RECEIPT_EVENT_KIND = "quota_should_run";
+export type HeartbeatReceiptStatus = "fresh" | "missing" | "stale";
 
 /**
  * One parse of a Goal's rollout-event log.
@@ -114,7 +115,16 @@ export function goalHeartbeatReceiptsFromSnapshot(
       "rollout_event_snapshot_scope_mismatch",
     );
   }
-  return snapshot.events.filter((event) =>
+  return heartbeatReceiptsFromEvents(snapshot.events, goalId, agentId);
+}
+
+/** The heartbeat receipt filter over events a caller already read. */
+export function heartbeatReceiptsFromEvents(
+  events: readonly JsonObject[],
+  goalId: string,
+  agentId?: string | null,
+): JsonObject[] {
+  return events.filter((event) =>
     event.event_kind === HEARTBEAT_RECEIPT_EVENT_KIND &&
     event.goal_id === goalId &&
     // A failed invocation without a real Turn identity is an audit, not a
@@ -142,4 +152,46 @@ export async function readGoalHeartbeatReceipts(
     goalId,
     agentId,
   );
+}
+
+export async function heartbeatReceiptStatus(params: {
+  runtimeRoot: string;
+  goalId: string;
+  agentId: string;
+  turnInstanceId: string;
+}): Promise<HeartbeatReceiptStatus> {
+  const snapshot = await readGoalRolloutEventSnapshot(
+    params.runtimeRoot,
+    params.goalId,
+  );
+  const receipts = goalHeartbeatReceiptsFromSnapshot(
+    snapshot,
+    params.goalId,
+    params.agentId,
+  );
+  if (snapshot === null || receipts === null) return "missing";
+  const firstReceipt = receipts.find(
+    (event) => event.run_id === params.turnInstanceId,
+  );
+  const firstMatch = firstReceipt === undefined
+    ? -1
+    : snapshot.events.indexOf(firstReceipt);
+  if (firstMatch < 0) return "missing";
+  return snapshot.events.slice(firstMatch + 1).some((event) => {
+    if (
+      event.event_kind !== HEARTBEAT_RECEIPT_EVENT_KIND ||
+      event.goal_id !== params.goalId ||
+      event.agent_id !== params.agentId
+    ) return false;
+    if (typeof event.run_id === "string" && event.run_id.trim().length > 0) {
+      return event.run_id !== params.turnInstanceId;
+    }
+    const details = event.details;
+    return event.status === "normal_run" &&
+      typeof details === "object" && details !== null && !Array.isArray(details) &&
+      (details as JsonObject).ok === true &&
+      (details as JsonObject).should_run === true;
+  })
+    ? "stale"
+    : "fresh";
 }

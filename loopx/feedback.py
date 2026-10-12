@@ -3,17 +3,16 @@ from __future__ import annotations
 from contextlib import nullcontext
 
 from .file_lock import exclusive_cross_runtime_file_lock
-from .control_plane.coordination.runtime_shadow_writer_adapter import require_prose_state_write_allowed
-from .control_plane.todos.active_state_editing import atomic_write_state_text
+from .control_plane.coordination.legacy_writer_fence import require_prose_state_write_allowed
+from .control_plane.runtime.document_io import atomic_write_state_text
 
-import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .control_plane.runtime.time import chronology_key
-from .history import load_index, load_registry
+from .history import append_run_index_record, load_index, load_registry
 from .paths import resolve_runtime_root
 from .public_safe_text import (
     PRIVATE_TEXT_PATTERNS as SHARED_PRIVATE_TEXT_PATTERNS,
@@ -492,8 +491,7 @@ def append_human_reward(
                 )
                 state_text_to_write = planned if changed else None
             index_path.parent.mkdir(parents=True, exist_ok=True)
-            with index_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(index_record, ensure_ascii=False) + "\n")
+            append_run_index_record(index_path, index_record)
             if state_file_to_write and state_text_to_write is not None:
                 try:
                     atomic_write_state_text(state_file_to_write, state_text_to_write)

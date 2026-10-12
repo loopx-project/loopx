@@ -46,6 +46,22 @@ CLI/provider acceptance checks both dependency kinds, replay, no debit,
 original validator preservation and independent next-Turn selection. It does
 not claim live research adoption or PostgreSQL qualification.
 
+### Registering a source-satisfied successor
+
+External-wait authoring recomputes a successor's `todo_done` or
+`monitor_changed` condition from the same locked Todo snapshot using the
+existing typed resume evaluator. A completed dependency (including archived
+history) or a strictly advanced monitor generation can therefore serve as the
+runnable successor without clearing its condition. A pending, missing,
+self-referential or invalid dependency still rejects the whole edit without
+writing. Caller-supplied `resume_ready` no longer admits work: it is a display
+projection, not proof. The default change affects CLI, native planning and the
+shared Chat/Lark Todo update owner; no activation switch or new authority is
+added. PR, capacity and clock conditions lack evidence at this authoring
+boundary and remain rejected as successor proof. Their ordinary scheduling
+semantics are unchanged. Dry-run and canonical operation replay keep their
+existing behavior; live host and packaged App/Lark adoption are separate checks.
+
 ### Suspending leased work
 
 For an open, leased Agent Todo, the current claim/lease owner can use the
@@ -58,13 +74,59 @@ Dry-run changes nothing; retry replays the receipt. Ownership, scope, work
 requirements and completion validation cannot be amended through this path.
 Monitor-driven automatic waiting retains `status=open`; its existing authoring
 contract rejects deferral so a generation change can make it runnable again.
-Reopen explicitly deferred work with `--status open --clear-resume-when` and acquire a fresh execution
-lease before work; the old proof remains invalid.
+Reopen explicitly deferred work with `--status open --clear-resume-when`.
+The next edit follows the current mode's admission; the old proof remains invalid.
+Submit this resume separately from note/evidence or work-requirement edits,
+using a fresh `--update-operation-id` and current
+`--update-expected-provider-revision`. Review the wait's resolution first;
+the diagnostic retry is not evidence that it resolved. The existing lifecycle
+retires inactive lease lineage atomically while preserving its version/epoch.
+A live lease must be released first. A bundled edit's recovery names this
+separate resume only when the current lifecycle fence permits it; explicit old
+proof and foreign/excluded/bound actors remain rejected. After resuming, acquire
+a fresh lease and use its returned proof for the pending edit when the mode
+requires execution fencing. Under `soft_claim`, a permitted owner copy edit uses
+no old proof or replacement lease; other edits retain their own admission.
 
 A `pr_merged` condition is still a valid Todo scheduling condition, but a PR
 number alone is not a qualified blocked-closeout proof. Register a real
 monitor or dependency Todo and use `monitor_changed` / `todo_done` for causal
 closeout. Unsupported PR waits now name this recovery route explicitly.
+
+### Unavailable Monitor observation
+
+An admitted open Agent `continuous_monitor` on canonical authority may discover
+that its observation cannot be obtained. Close the original Goal/Agent/Todo/Turn
+with `refresh-state --delivery-outcome outcome_gap --progress-result-class
+blocked`, a stable blocker ID, evidence IDs and a normal vision decision. Do not
+invent a `monitor-poll` hash, record control metadata as an account observation,
+or spend. The existing settlement plan exposes this path.
+
+The same typed quota owner freezes `quota_monitor_unavailable_v0` in the existing
+`blocked_retry` receipt slot, with `observation_available=false` and the Monitor
+scope. Exact admission, identity, evidence and durable writeback still gate
+`typed_blocked_writeback_no_spend`. This closes only the attempted Turn: the Todo
+stays open; `last_checked_at`, `next_due_at`, result hash, material generation,
+cadence and expiry remain unchanged. It creates neither a retry clock nor an
+advancement wait, material successor, completion or delivery claim. Existing
+advancement retry/causal-wait semantics and genuine committed polls retain their
+behavior. A committed poll cannot be rewritten as an unavailable attempt.
+
+Exact replay returns the frozen receipt, with no duplicate writeback or debit.
+After closing the original effect, reenter the current recovery host Turn to
+select independently eligible work; do not create a third identity or rebind the
+old one. Missing capability admission or evidence and wrong bindings still fail.
+File and SQLite CLI acceptance covers this recovery, preserved observation
+fields, capability restoration, committed-poll rejection and zero debit.
+PostgreSQL and live host adoption remain separate qualifications. Before rollback,
+reconcile these receipts using a runtime that recognizes the new proof.
+
+This is a bounded R1/S2/S10 recovery slice in the existing quota owner. The legacy
+`isBoundedBlockedRetry` entry point remains for active callers, but now qualifies
+Monitor unavailable proofs as well; only the advancement schema projects a
+bounded retry. No Python decision owner, new switch, frontend control or Lark
+authority is added. App/Chat consume the same CLI settlement guidance; their
+packaged surfaces are not qualified by the CLI tests.
 
 ## 中文
 
@@ -98,6 +160,18 @@ Dashboard 已消费 canonical 等待与回执，Chat／Lark 仍复用 Todo updat
 验收覆盖两种依赖、重放、零扣额、原验收器保留与下一 Turn 独立选择；不据此
 宣称投研真实采用或 PostgreSQL 资格已通过。
 
+### 登记源证据已满足的后继
+
+external-wait authoring 复用既有 typed resume evaluator，从同一份锁定的 Todo
+快照重算后继的 `todo_done` 或 `monitor_changed` 条件。已完成的依赖（包括归档
+历史）或严格超过基线的 monitor generation，可合法承接工作，无须删除后继的
+等待条件。尚未满足、缺失、自引用或非法依赖仍整体拒绝且不写入。
+`resume_ready` 是展示投影，调用方提供的值不再授权后继。这项默认行为调整覆盖
+CLI、native planning 及同源 Chat/Lark Todo update owner，不新增开关或权限。
+PR、capacity 和 clock 条件在此 authoring 边界缺少证据，仍不能靠展示字段承接；
+它们的普通调度语义不变。Dry-run 与 canonical 操作重放沿用原契约，本机 Host
+及打包 App/Lark 采用须分别验收。
+
 ### 有租约任务的延期
 
 当前 claim／lease 持有者可沿用 `todo update`，只提交 `--status deferred`、
@@ -107,8 +181,75 @@ TS 在一个 provider CAS 内同时延期 Todo、释放租约；保留租约历�
 模式也适用。Dry-run 不写入，重试重放原回执，不允许夹带任务内容、权限或验收修改。
 `monitor_changed` 的自动等待仍须保持 open，代际变化后才能自动进入可执行队列；
 其原有 authoring 规则继续拒绝延期。显式延期的普通依赖任务恢复时用
-`--status open --clear-resume-when`，执行前重新获取租约，旧证明仍失效。
+`--status open --clear-resume-when`；剩余编辑遵循当前模式的准入，旧证明仍失效。
+恢复应与 note/evidence、工作要求编辑分开，使用新的
+`--update-operation-id` 和当前 `--update-expected-provider-revision`。
+先核实等待条件已解决；诊断中的重试入口不证明条件已满足。既有生命周期以同一
+CAS 结清非活跃租约，并保留 version/epoch；活跃租约须先释放。只有当前生命周期
+允许时，捆绑编辑的拒绝结果才指出单独恢复路径；显式旧证明、外来 claimant、
+excluded/bound 限制仍拒绝。恢复后，模式要求执行 fencing 时获取新租约，以返回的新证明提交剩余编辑。
+`soft_claim` 中允许的 owner 文案编辑不使用旧证明，也不获取替代租约；其他编辑仍按原准入规则。
 
 `pr_merged` 仍是合法的调度等待条件，但 PR 编号本身不能证明阻塞结算所需的
 真实依赖。应登记实际 monitor／依赖 Todo，以 `monitor_changed`／`todo_done`
 完成因果结算；错误信息明确给出此恢复路径。
+
+### Monitor 观察不可取得
+
+canonical authority 上已准入、开放的 Agent `continuous_monitor`，可能在尝试中
+发现无法取得观察。用原 Goal/Agent/Todo/Turn 调用 `refresh-state`，提供
+`outcome_gap`、typed `blocked`、稳定 blocker、证据 ID 与正常 vision 决策，沿既有
+计划关闭本次尝试。不得编造 poll hash、把控制元数据记成账户观察或扣额。
+
+同一 TS quota owner 在既有 `blocked_retry` 回执槽冻结
+`quota_monitor_unavailable_v0`、`observation_available=false` 与 Monitor 范围；
+精确准入、身份、证据和持久写回仍是无扣额结算门槛。只关闭原 Turn，Todo 仍开放，
+检查/到期时钟、hash、material generation、cadence 与 expiry 不变。不生成重试时钟、
+advancement 等待、material successor、完成或投递声明。旧 advancement 重试/因果等待
+与真实 poll 保持原行为；已提交 poll 不能改写为不可观察尝试。
+
+精确重放返回冻结回执，不重复写回或扣额；原 effect 关闭后，重新进入当前 recovery
+host Turn 可选择独立合法任务，不新造第三身份或重绑旧 Turn。缺准入能力、缺证或错绑
+仍拒绝。File/SQLite 的真实 CLI 验收覆盖恢复、观察字段保留、能力恢复、已 poll 拒绝与
+零扣额；PostgreSQL、本机真实采用及 App/Lark 打包入口仍分阶段验收。降级前用支持新
+证明的运行时核对回执。
+
+这是既有 quota owner 的 R1/S2/S10 有界修复，兼容保留活动调用者使用的
+`isBoundedBlockedRetry` 名称；只有 advancement schema 产生有界重试投影。
+不新增 Python 判断源、开关、前端控件或 Lark 权威；CLI 计划提供同源说明。
+
+### Receipt-owned retry projection / 回执所属的重试投影
+
+A promoted blocked `outcome_gap` Run can own a five-minute retry while its
+canonical Todo remains OPEN with no `resume_when`. Quota selection overlays the
+wait only for the same Goal/Agent/Todo, until the original due instant; a newer
+work Run supersedes it. The read-only projection now retains `blocked_retry`
+with the original `turn_instance_id`, source and clocks. The existing typed
+Todo frontier owns the earliest deadline before display compaction; thin
+scheduler output carries `pending_retry` from that same result.
+
+When that retry temporarily removes the only executable work, an independently
+open `user_action` remains a notice rather than becoming the reason work must
+wait. Execution still waits: `must_attempt_work=false`, no delivery or spend.
+The scheduler caps quiet/human/agent-scope/monitor waiting to the original retry
+horizon, then applies the existing owner cadence floor. A real user gate still
+blocks work. The wakeup is a quota recheck, not execution permission or an
+exact-time promise; all current gates, claims and leases must be read again.
+At or after due, the temporary overlay disappears without a maintenance write.
+
+CLI and managed heartbeat packets share this projection. This is a backend
+prerequisite: packaged Dashboard and live Lark rendering/adoption are separate
+acceptance stages. No new timer, authority, setting, canonical Todo field,
+financial clock, or automatically executing display action is introduced.
+
+原生 blocked/outcome_gap Run 可以拥有五分钟 retry，而 canonical Todo 仍为
+OPEN、没有 resume_when。临时选择投影只作用于同一 Goal/Agent/Todo，到原到期
+时点即消失；更新的工作 Run 会替代旧等待。blocked_retry 保留原 Turn、来源和
+时钟，typed Todo frontier 在显示压缩前选定最早时点；精简 scheduler 包的
+pending_retry 来自同一结果。
+
+retry 暂时移除唯一可执行工作时，独立 user_action 仍是提醒，不是恢复工作的
+前置门禁。此时仍不执行或扣额。scheduler 先按原 retry 时点收紧等待，再应用
+既有角色间隔下限；真实用户门禁继续阻塞执行。唤醒只意味着重新读取 quota、
+claim/lease 与当前门禁，不授权执行，也不承诺精确时刻运行。到期不需修改原
+Todo 或回执。CLI/heartbeat 同源；打包 App、真实 Lark 展示与采用仍须分别验收。

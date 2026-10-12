@@ -141,10 +141,10 @@ export const goalActivityScenario = {
       );
       await page.screenshot({ path: resolve(outputDir, "goal-activity-sidebar.png"), animations: "disabled" });
       await running.locator(".personal-goal-link").click();
-      await page.locator(".personal-channel-activity", { hasText: "执行中" }).waitFor();
+      await page.getByTestId("goal-vitals").locator(".goal-vital-value", { hasText: "执行中" }).first().waitFor();
       await page.screenshot({ path: resolve(outputDir, "goal-activity-running-goal.png"), animations: "disabled" });
       await queued.locator(".personal-goal-link").click();
-      await page.locator(".personal-channel-activity", { hasText: "已安排" }).waitFor();
+      await page.getByTestId("goal-vitals").locator(".goal-vital-value", { hasText: "已安排" }).first().waitFor();
       await page.setViewportSize({ width: 390, height: 844 });
       await page.screenshot({ path: resolve(outputDir, "goal-activity-mobile.png"), animations: "disabled" });
       coverageEntries.push(...await live.close());

@@ -14,6 +14,7 @@ import {indexCoordinationProjection} from "./coordination_projection.ts";
 import {canonicalTaskLease} from "./task_lease_state.ts";
 import {loadLegacyCoordinationWriterFence} from "./legacy_writer_fence.ts";
 import {withCanonicalWriter} from "./local_authority_write.ts";
+import {readShadowManagementState} from "./shadow_management.ts";
 import {FileAuthorityStore, syncAuthorityDirectory} from "./file_authority_store.ts";
 import {SqliteAuthorityStore} from "./sqlite_authority_store.ts";
 import {localAuthorityProviderPaths, openLocalAuthorityStoreHandle, publishLocalAuthoritySelection,
@@ -93,6 +94,10 @@ function decodeRecovery(value: unknown, plan: Plan, digest: string): Recovery {
   return record as Recovery;
 }
 async function observe(root: string, goalId: string): Promise<{source: Source; store: AuthorityStore}> {
+  // A capture binding can still enqueue work from the previous source. Neither
+  // an empty queue now nor lease expiry proves its writer has stopped.
+  const capture = await readShadowManagementState(root, goalId);
+  if (capture && capture.status !== "inactive") throw new Error("Stop and roll back the active capture before provider migration");
   const fence = await loadLegacyCoordinationWriterFence(root, goalId);
   if (fence.status !== "loaded") throw new Error("Migration requires an engaged legacy writer fence");
   const handle = await openLocalAuthorityStoreHandle(root, goalId, {}, {existingOnly: true});
@@ -109,6 +114,48 @@ async function observe(root: string, goalId: string): Promise<{source: Source; s
   }
   return {store: handle.store, source: {provider: selected, store_identity: identity.store_identity,
     provider_revision: head.provider_revision, cursor: head.cursor, projection_sha256: sha256(head.head), fence_sha256: sha256(fence.fence)}};
+}
+
+async function currentSource(root: string, goalId: string): Promise<JsonObject> {
+  const fence = await loadLegacyCoordinationWriterFence(root, goalId);
+  if (fence.status !== "loaded") return {goal_id: goalId, canonical: false, provider: null};
+  const handle = await openLocalAuthorityStoreHandle(root, goalId, {}, {existingOnly: true});
+  const identity = await handle.store.storeIdentity();
+  const head = await handle.store.loadAuthority();
+  if (identity.status !== "available" || head.status !== "loaded") throw new Error("Current canonical source unavailable");
+  const index = indexCoordinationProjection(head.head, goalId);
+  return {goal_id: goalId, canonical: true, provider: provider(handle.provider),
+    store_identity: identity.store_identity, provider_revision: head.provider_revision, cursor: head.cursor,
+    todo_count: index.todos.size, unsettled_lease_count: [...index.leases].filter(([id, row]) =>
+      canonicalTaskLease(row, goalId, id).status === "active").length};
+}
+
+/** Original completion is historical evidence; it cannot select a provider or
+ * certify the currently selected store after another migration. */
+async function migrationReadback(root: string, goalId: string, request: JsonObject): Promise<JsonObject> {
+  if (request.plan === undefined) return {current: await currentSource(root, goalId)};
+  const plan = decodePlan(await optionalJson(absolute(request.plan)));
+  const digest = sha256(plan);
+  if (request.plan_sha256 !== digest || plan.runtime_root !== root || plan.goal_id !== goalId) {
+    throw new Error("Migration plan digest, runtime or Goal mismatch");
+  }
+  const directory = join(root, "authority-transition", "local-provider", digest);
+  const raw = await optionalJson(join(directory, "recovery.json"));
+  const recovery = raw === undefined ? undefined : decodeRecovery(raw, plan, digest);
+  if (recovery) {
+    const archive = await verifyAuthorityArchive(join(directory, "source.archive.jsonl"));
+    checkArchive(archive, plan);
+    if (archive.archive_sha256 !== recovery.archive_sha256) throw new Error("Migration backup changed");
+  }
+  // An unavailable live store cannot erase a verified historical completion.
+  // Null is unknown, never a fallback or permission to adopt that old target.
+  let current: JsonObject | null = null;
+  try { current = await currentSource(root, goalId); } catch { /* independent read unavailable */ }
+  return {current, plan_sha256: digest, target_provider: plan.target_provider,
+    reviewed_source: {provider: plan.source.provider, cursor: plan.source.cursor,
+      provider_revision: plan.source.provider_revision, store_identity: plan.source.store_identity},
+    recovery: recovery ? {phase: recovery.phase, target_store_identity: recovery.target_store_identity,
+      archive_sha256: recovery.archive_sha256} : null};
 }
 function checkArchive(archive: AuthorityArchiveSummary, plan: Plan): void {
   const source = plan.source;
@@ -128,7 +175,7 @@ function targetStore(root: string, plan: Plan, identity?: string): AuthorityStor
 /** No provider factory injection: this administrative operation explicitly owns
  * the built-in local stores, and never silently adopts a PostgreSQL binding. */
 export async function manageLocalAuthorityMigration(request: JsonObject): Promise<JsonObject> {
-  const base = {schema_version: "loopx_local_authority_migration_result_v0", legacy_fallback_used: false,
+  const base = {ok: true, schema_version: "loopx_local_authority_migration_result_v0", legacy_fallback_used: false,
     execution_authority_granted: false};
   // Publication may have succeeded even if fsync/readback throws. Report unknown,
   // not a false assertion that no authority changed; retry the same plan.
@@ -136,8 +183,10 @@ export async function manageLocalAuthorityMigration(request: JsonObject): Promis
   try {
     const root = await realpath(requireLocalAuthorityRuntimeRoot(request.runtime_root));
     const goalId = requireAuthorityStoreId(request.goal_id, "goal id");
-    const planPath = absolute(request.plan);
     return await withCanonicalWriter(root, goalId, false, async () => {
+      if (request.action === "migration-readback") return {...base, status: "observed", authority_changed: false,
+        ...await migrationReadback(root, goalId, request)};
+      const planPath = absolute(request.plan);
       if (request.action === "plan-migration") {
         const target = provider(request.provider);
         const {source} = await observe(root, goalId);
@@ -146,6 +195,8 @@ export async function manageLocalAuthorityMigration(request: JsonObject): Promis
           runtime_root: root, goal_id: goalId, target_provider: target, source};
         await writePlan(planPath, plan);
         return {...base, status: "planned", authority_changed: false, plan_sha256: sha256(plan), plan,
+          reviewed_source: {provider: source.provider, cursor: source.cursor,
+            provider_revision: source.provider_revision, store_identity: source.store_identity}, target_provider: target,
           requires_execute: true};
       }
       if (request.action !== "migrate" || typeof request.execute !== "boolean") throw new Error("Invalid migration action");
@@ -219,7 +270,7 @@ export async function manageLocalAuthorityMigration(request: JsonObject): Promis
         publication_readback: {cursor: readback.cursor, provider_revision: readback.provider_revision}};
     });
   } catch (error) {
-    return {...base, status: "failed", authority_changed: publicationAttempted ? null : false,
+    return {...base, ok: false, status: "failed", authority_changed: publicationAttempted ? null : false,
       reason_code: publicationAttempted ? "migration_publication_uncertain" : "migration_rejected",
       reason: error instanceof Error ? error.message : "Migration unavailable"};
   }

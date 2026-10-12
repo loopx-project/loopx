@@ -140,6 +140,12 @@ OWNERS = (
 )
 OWNER_IDS = [owner_id for owner_id, _ in OWNERS]
 
+EXTENDED_WINDOWS_PATHS = (
+    r"\\?\UNC\fileserver\share\a.md",
+    r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\notes\a.md",
+    r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\notes\a.md",
+)
+
 
 @pytest.mark.parametrize("owner", [check for _, check in OWNERS], ids=OWNER_IDS)
 @pytest.mark.parametrize("sample", PUBLIC_SAFE_SAMPLES, ids=_ids(PUBLIC_SAFE_SAMPLES))
@@ -160,6 +166,15 @@ def test_private_looking_corpus_is_rejected_by_every_owner(
 ) -> None:
     with pytest.raises(ValueError, match="private-looking value"):
         owner(sample[1])
+
+
+@pytest.mark.parametrize("owner", [check for _, check in OWNERS], ids=OWNER_IDS)
+@pytest.mark.parametrize("path", EXTENDED_WINDOWS_PATHS)
+def test_extended_windows_paths_remain_accepted_by_state_owners(
+    owner: Any,
+    path: str,
+) -> None:
+    owner(path)
 
 
 def test_corpus_covers_the_reviewed_credential_shapes() -> None:

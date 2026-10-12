@@ -182,7 +182,30 @@ def _provider_page(payload: object) -> tuple[list[Mapping[str, Any]], bool, str 
         raise ValueError("Lark group-history provider page_token is required")
     if not has_more:
         page_token = None
-    return list(messages), has_more, str(page_token) if page_token else None
+    expanded: list[Mapping[str, Any]] = []
+    for message in messages:
+        expanded.append(message)
+        replies = message.get("thread_replies", [])
+        if not isinstance(replies, list) or any(
+            not isinstance(reply, Mapping) for reply in replies
+        ):
+            raise ValueError("Lark group-history thread replies are invalid")
+        root_id = str(message.get("root_id") or message.get("message_id") or "")
+        for reply in replies:
+            # The CLI expansion repeats the root as its first row.
+            if reply.get("message_id") == message.get("message_id"):
+                continue
+            if any(
+                reply.get(field) and message.get(field)
+                and reply[field] != message[field]
+                for field in ("chat_id", "thread_id")
+            ) or (reply.get("root_id") and reply["root_id"] != root_id):
+                raise ValueError("Lark group-history thread reply source changed")
+            expanded.append({
+                **reply, "root_id": root_id,
+                "thread_id": reply.get("thread_id") or message.get("thread_id"),
+            })
+    return expanded, has_more, str(page_token) if page_token else None
 
 
 def _canonical_events(
@@ -196,6 +219,9 @@ def _canonical_events(
     invalid_count = 0
     self_message_skipped_count = 0
     for message in messages:
+        if message.get("chat_id") and message["chat_id"] != chat_id:
+            invalid_count += 1
+            continue
         if _is_profile_self_message(message, profile_app_id=profile_app_id):
             skipped_count += 1
             self_message_skipped_count += 1
@@ -224,7 +250,7 @@ def _canonical_events(
             event["sender_type"] = sender_type
         if sender_id:
             event["sender_id"] = sender_id
-        for field in ("parent_id", "root_id"):
+        for field in ("parent_id", "root_id", "thread_id"):
             if message.get(field) not in (None, ""):
                 event[field] = message[field]
         # Preserve structured positive *and negative* mention evidence.  The

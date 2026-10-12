@@ -94,6 +94,72 @@ still require a separately pinned experiment. Capture grants no additional
 read/write/lease authority. Keep captures private; disable the option in the
 next run and use ordinary file management to remove unneeded records.
 
+Whole-Goal requirements and selected work have different sources. After final
+delivery admission, the shared typed interaction owner adds these pre-work reads
+after any existing hook reads, without duplicating identical commands. The
+Agent channel is the single carrier; CLI actions do not repeat the list. See
+[required work context](../required-work-context.md) for the changed exact-read
+default and caller migration:
+
+1. `cat -- <registered-state-file>` restores the whole Goal intent, acceptance
+   and stop conditions. The pointer is resolved from the registered Goal, not a
+   selected Todo or run-history source label.
+2. When canonical acceptance is enabled, `goal-acceptance inspect --goal-id …`
+   restores its full objective, non-goals, criteria, scope and revision. It does
+   not execute validators or expose their commands. A scoped acceptance contract
+   does not replace original Goal intent or prove global completion.
+3. For selected work, `todo list --goal-id … --todo-id …` restores full current
+   task text and status/claim once at `todo.text` (exact reads remove list/role
+   aliases and reject `--thin`), including when canonical
+   Todos supersede a stale Markdown display. Adaptive work uses its primary ID.
+
+Ordinary product heartbeat consumes current task/acceptance/User sources from
+`interaction_contract.agent_channel.work_context`, then any remaining
+`agent_channel.required_reads`. The Agent channel is the single content/read
+carrier; the CLI channel carries transitions. TurnEnvelope consumes and signs
+both as `work_context` and `required_reads`; it never independently synthesizes
+another policy. Already delivered content requires no second CLI invocation.
+The selected-Todo display body is display-only and may be bounded; the typed
+owner validates the exact read against selected identity, lifecycle, claim and
+source revision. A supplied full-body snapshot must match before fulfilling the read. If the full body is already
+in the selected action, `work_context.selected_todo_ref` reuses that body while
+the source retains unique continuation, relation and authority metadata. If the
+selected view is bounded, the full canonical detail stays in
+`work_context.sources`. TurnEnvelope must preserve those unique fields and may
+omit only an actually duplicate body; if there are no other fields to retain,
+`work_context.selected_todo_authority` carries the source and revision. All exact
+commands remain in `required_reads`.
+The mixed Goal document remains an exact progressive full read; quota checks
+source availability rather than automatically copying unrelated tasks/history.
+No heading heuristic replaces Goal intent. `work_context.complete` does not
+settle pending read obligations. Full delivered sources and related User
+obligations survive budget overflow. Missing,
+ambiguous, failed or changed sources require recovery and a fresh guard before
+dependent work; content grants no claim, lease or amendment authority.
+
+This is a default decision/heartbeat behavior change, not an envelope opt-in.
+Admitted replans acquire Goal reads, without an old selected-Todo read.
+Non-delivery, selection-only, settlement-only and governed-capability lanes
+acquire no extra core work reads. Related User obligations remain scoped; full quota summaries stay compact. Shared adapters retain
+selected Todo context; text aliases require exact equality, never a case-folded
+or truncated-prefix match. Supplied selected text survives envelope serialization
+intact. Hosts must honor the reads; signing does not prove execution or model
+adherence. Full Goal requirement coverage and global closeout remain open.
+No new frontend/Lark operation or configuration is introduced. Regenerate saved
+expanded heartbeat prompts to consume the new contract; bootstrap prompts reload
+installed rules on their next wake. This source-checkout change does not upgrade
+an installed runtime or modify an existing automation.
+
+中文：共享 typed interaction owner 在准入后生成 Goal 原文、已启用的结构化验收、
+当前 Todo 全文三层读取。普通产品 heartbeat 消费 agent channel 清单，TurnEnvelope
+只传输并签名同一清单；不能仅由短包临时推导义务。Goal 原文恢复完整意图和停止条件，
+局部验收不能替代完整目标，任务状态/claim 继续由精确 Todo reader 提供。读取失败、
+缺失、歧义或变化须重新 guard；当前内容不是 selection 快照，签名也不证明模型已读。
+这是默认 guard/heartbeat 行为变化：准入的 replan 读取 Goal，等待、待选择、仅结算及
+受治理 capability 分支不追加读取。完整义务覆盖与全局收口仍未实现。旧的展开式
+heartbeat prompt 需重新生成；bootstrap 会在下次唤醒重载已安装规则。本源码改动不会
+升级已安装 runtime 或修改现有 automation，也不新增前端/Lark 操作。
+
 The envelope flag selects a projection of the full decision. The original v0
 contract left the default `quota should-run` output unchanged; the
 [PR-05 migration](protocol-action-packet-decision-v0.md) omits
@@ -120,6 +186,21 @@ liveness, vision/handoff state, and actionable warning references. A canonical
 envelope; matching hashes prove the covered action dimensions agree for that
 projection. They do not prove that every possible quota state has test
 coverage.
+
+Required reads use the authoritative `interaction_contract.agent_channel` list,
+including an explicit empty list. Historical interaction-root and payload lists
+remain fallbacks when that carrier is absent. Commands retain their exact bytes;
+existing `ordering`, `hook_id` and `capability_id` coordinates survive both the
+quota transport and the signed envelope projection. Provider diagnostics remain
+outside this whitelist. A matching signature cannot prove that omitted reads
+were complete or that a host executed them. Newly projected decisions retain
+these corrected facts in the existing required-read dimension; saved signatures
+are not rewritten, and no new execution permission is granted.
+
+中文：必读列表优先使用 agent_channel 的权威列表，包括明确的空列表；缺失时
+才兼容旧位置。命令原样保留，已有读取顺序、hook 和 capability 身份贯穿 quota
+传输与签名短包，私有诊断不进入该列表。修正新投影不重写历史签名；签名相等
+不能证明读取完整或宿主已经执行，也不提供新的权限。
 
 Action-signature coverage is versioned independently from the envelope schema.
 `turn_envelope_action_dimensions_v0` covers the original action projection;
@@ -161,6 +242,24 @@ identity, step conditions, authority and one-spend semantics are unchanged.
 中文：新生成的结算命令自带位置正确的全局 JSON 参数，完整包、短包及写回后的
 补结算命令保持一致。填充占位项后直接执行，检查退出码和 JSON `ok`；不再需要
 手工在子命令后追加格式参数。直接 CLI 的默认格式、历史回执与结算权限均不变。
+
+When an admitted Turn's verified durable writeback is followed by a Todo
+dependency wait, its replay now projects only the original `quota_spend` step.
+The later wait cannot replace the committed outcome with a blocked writeback.
+This default guard recovery grants no independent work and preserves the Todo
+wait and successor. The envelope retains the same complete executable command,
+including identity arguments after long registry/runtime paths. The spend owner
+still validates the original receipts, workspace and checkpoint; a missing spend
+receipt is repaired on that identity without another debit. Before verified
+writeback, registered causal waits retain the blocked no-spend closeout.
+This is shared CLI/heartbeat decision transport; it adds no frontend/Lark
+operation, changes no host cadence and does not update installed runtimes.
+
+中文：原 Turn 已有验证通过的持久写回，之后 Todo 才进入依赖等待时，同一 Turn
+重入只补原 `quota_spend` 步骤，不再要求用 blocked 覆盖已有结果。等待和后继任务
+保持原样，不准入独立工作；短包保留完整命令和原身份。额度 owner 仍校验原回执、
+工作区和 checkpoint，补回执不重复扣额。尚无验证写回的因果等待仍走不扣额收口。
+此项修复不改变宿主调度、已安装版本或前端/Lark 操作。
 
 The shared CLI plan also explains delivery classification before writeback.
 Validated evidence that excludes a route and informs the next decision can be
@@ -222,6 +321,23 @@ same-Turn reentry cannot replace it with the current recommendation. An
 ineligible/rejected choice still replays the receipt without mutation; a
 first-call rejection reports
 `heartbeat_receipt.status=not_committed` and writes no receipt event.
+
+A receipt-bound `refresh-state --next-action` must refine that original Turn's
+Goal, Agent and Todo. If waiting or completion makes the current selector choose
+another Todo, the existing typed recommendation owner rejects the step before
+appending a run; even the other Todo's fresh read basis cannot retarget the
+original writeback. Finish the original writeback without `--next-action`, then
+select subsequent work through a fresh guard. A matching bound step records
+`settlement_alignment=exact`; ordinary unbound steps retain `not_applicable`.
+This changes the previous acceptance of a mismatched task-step write, without
+clearing dependencies, altering Todo authority or granting another Turn.
+
+中文：绑定回执的 `refresh-state --next-action` 必须属于原 Turn 的 Goal、Agent
+和 Todo。原任务等待或完成后，即使当前选择器已选中另一个 Todo，且提供其最新
+read basis，同一 TS recommendation owner 仍在追加 run 前拒绝跨任务步骤。
+先去掉 `--next-action` 完成原写回，再通过 fresh guard 选择后续工作。匹配步骤保留
+`settlement_alignment=exact`，无 Turn 绑定的普通步骤仍为 `not_applicable`。
+本项修复此前错误接受的跨任务写入，不清依赖、不改变 Todo 权威或授予新 Turn。
 
 For an eligible explicit choice deferred solely by runnable autonomous replan,
 the typed qualifier adds `inline_reentry_allowed=true`. After durably retaining
@@ -332,6 +448,56 @@ final packet, including diagnostics. The historical `source_json_bytes` and
 `envelope_json_bytes` fields still count Unicode code points for v0 compatibility;
 do not use them as wire-byte measurements.
 
+### Capability refusal facts
+
+`boundary.capability_gate` carries the existing quota gate's `required` and
+`missing` arrays intact, including an empty `missing` array after admission.
+Earlier compact projection used only `required_capabilities` and
+`missing_capabilities`, which could report matching projection signatures while
+omitting the current refusal facts. Historical names are still carried when
+present in the supplied source; they are not synthesized or rewritten.
+
+These facts participate in the existing boundary signature. Newly built
+projections over current sources therefore have different hashes; saved
+signatures are not rewritten and this is not a cross-version hash-equivalence
+promise. Full quota output, admission, optional capability activation, claim,
+lease and mutation checks are unchanged. No capability is granted by reading
+these arrays. The default full heartbeat packet remains the source decision;
+compact/Turn hosts retain its reason for refusal without recomputing readiness.
+
+中文：短包原样保留现有能力门禁的 required/missing（包括合法空数组），历史字段
+只在源中存在时保留。新投影签名覆盖这些事实，不改写历史签名；完整包、准入、
+可选能力开关和 claim/lease 权限不变。读取缺失项不授予能力。
+
+### Optional memory participation
+
+The compact boundary retains the verified Goal/Agent Reward Memory automation
+facts in `boundary.capabilities.reward_memory`: `automatic_recall` and
+`automatic_ingest`. Unconfigured, disabled or unavailable bindings omit this
+projection. It carries neither private provider configuration nor memory content
+and grants no action authority. Existing action-signature coverage includes it.
+
+Codex CLI host requests use these facts together with the fresh runtime binding
+readback. Recall guidance is added only with enabled recall and actual context;
+the reflection instruction and output-schema field appear only with enabled
+ingest. A disabled or stale recall packet cannot activate either operation.
+Older/custom hosts may still return a reflection field: while ingest is off the
+adapter ignores it before validation and journaling, preserving ordinary work.
+When enabled, bounded reflection validation, exact independent attestation and
+post-settlement ingest retain their existing rules. Provider failure remains
+fail-open. The host adapter is Python IO transport over the existing capability
+resolver and TypeScript envelope owner, not a new enablement policy.
+
+This is a bounded shared-facts step. Heartbeat still has its existing full and
+compact rendering paths; it is not yet the same installed host journey. The
+remaining convergence work is tracked in the existing
+[effect-interpreter RFC](../../architecture/rfcs/agent-loop-effect-interpreter-v0.md#heartbeat-and-turn-envelope-convergence).
+
+中文：短包只携带已核验的 recall/ingest 参与事实；关闭、未配置或不可用时不加入。
+Codex CLI 据此及新鲜绑定读回装配指令和 schema，关闭 ingest 时忽略旧宿主返回的
+反思字段。权限、独立验证与结算规则不变。heartbeat 与 TurnEnvelope 的安装态统一
+仍待验证，不能把这一步当作完成。
+
 ### Budget warnings and allocation
 
 Oversize valid envelopes keep their normal Turn plan/controller route. They
@@ -383,8 +549,20 @@ repeat another authoritative field. In particular,
 todo text is already present as the recommended action. Scheduler reset plans
 keep the exact acknowledgement argv inline when it satisfies the executable
 argv limits; the failure argv stays behind `failure_cli_args_detail_ref` until
-the host update actually fails. Consumers must follow these references instead
-of treating the omitted duplicate as missing state.
+the host update actually fails. Both omitted-argv references now carry a
+`detail_ref` into `full_decision.scheduler_hint.<source carrier>` instead of an
+unbound `quota should-run --include-detail scheduler` request. Resolve that path
+through this envelope's captured `detail_ref.full_decision`, check its
+Goal/Agent/Turn and source hash, and retain the original argv verbatim. The
+carrier is `app_automation` when supplied, otherwise the historical `codex_app`;
+an alias must not redirect the reference to another source. Missing capture
+requires recovery, never another admission disguised as a detail read. Actual
+host readback and current scheduler mutation validation still apply.
+
+中文：被省略的 ACK 和失败上报参数通过同一 Turn 保存的完整决策读取，不再
+提示执行未绑定的新 quota 命令。先核对 Goal/Agent/Turn 和来源哈希，再按
+`detail_ref` 读取原始参数；历史 Codex 投影仍使用其原始来源。捕获丢失须恢复，
+不得将重新准入当作细节读取；此引用不代替实际 host 读回或调度写入时的验证。
 
 This contract is a projection only. It does not change quota selection, todo
 routing, scheduler state, history writes, or state transitions. Promoting it to

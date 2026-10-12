@@ -46,6 +46,11 @@
       "available",
       "exhausted",
       "not_applicable"
+    ],
+    "validation_recovery": [
+      "absent",
+      "repair_required",
+      "replan_required"
     ]
   },
   "checks": {
@@ -422,6 +427,20 @@
       "disposition": "repair",
       "reason": "retryable host failure {failure_kind} exhausted its bounded attempt budget",
       "lineage": "effective"
+    },
+    {
+      "id": "task_validation_replan",
+      "when": {
+        "receipt_kind": [
+          "validation_failed"
+        ],
+        "validation_recovery": [
+          "replan_required"
+        ]
+      },
+      "disposition": "replan",
+      "reason": "independent task validation requires replan before another Turn",
+      "lineage": "receipt"
     },
     {
       "id": "failed_receipt",

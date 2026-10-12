@@ -733,6 +733,21 @@ final-result identities separately. Reconnect and replay must neither start a
 second model Turn nor duplicate events or drop the final result. No adapter may
 claim tool activity it did not emit.
 
+The native Codex adapter now projects observed command-output and MCP-progress
+notifications into the same running step, retaining only its already-redacted
+identity/title and observed elapsed duration. It coalesces bursts over five
+seconds, drops unknown/terminal/wrong-Turn items and never stores output or tool
+progress text in the presentation. Chat's existing step duration updates in
+place; Lark's existing bounded post editor shows a new-output/progress cue with
+the observed duration. A silent tool produces no synthetic update, and output
+is not a completed check. This source slice does not qualify packaged Lark
+timing, stop/recovery or the complete R2/R3 journey.
+
+原生 Codex 的命令输出与 MCP 进度通知现在更新原运行步骤，只保留已脱敏名称与实际
+经过时长；五秒合并突发事件，不存输出正文，不把旧回合、未知或已结束步骤重新激活。
+Chat 沿用原步骤时长显示，飞书沿用原消息编辑器呈现新输出/进度提示。工具静默时不
+制造进展，收到输出不代表检查通过；安装版时序、停止恢复与 R2/R3 整体验收仍开放。
+
 Stop and correction bind the current session and Turn. An old control cannot
 affect a later Turn. Stop readback distinguishes actual interruption, already
 terminal and unsupported/refused. A busy correction is accepted as native
@@ -1029,7 +1044,11 @@ source/Goal mismatch never become empty success. Outputs retain their existing F
 Overview, Tasks, Chat and Files are direct Goal navigation; configuration opens
 the existing settings editor. Visited views retain filters, completed history
 and scroll within the same Goal/source. The delivery section is inline in
-Overview, not a third board/list layout or nested settings modal.
+Overview, not a third board/list layout or nested settings modal. The page
+composition around it (persistent masthead, vitals, direction, work by owner,
+results and the all-work rail) belongs to the
+[Goal workspace RFC](goal-workspace-surface-v0.md); this section's contract is
+unchanged.
 
 This is a bounded S5/G2 visibility slice, not G2 qualification or a general
 interaction compiler. It reuses existing graph, acceptance and preview/apply

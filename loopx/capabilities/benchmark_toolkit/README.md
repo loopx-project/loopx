@@ -924,6 +924,20 @@ metric, comparison protocol, score countability, and treatment fidelity. Exact
 protocol revisions remain visible as a warning even when a declared comparison
 protocol says an older credible score remains semantically comparable.
 
+Metric comparisons preserve the raw `delta` (candidate value minus baseline
+value). When both metrics have positive totals, `delta_rate` determines improvement
+and the dashboard's largest eligible contrast; Markdown and dashboard labels show
+this change in percentage points (`pp`). Scalar metrics use the raw delta.
+Units, improvement direction, and the presence of a denominator must agree.
+A mismatch, zero denominator, or non-finite difference retains the endpoint values
+with `comparison_unavailable_reason`, without a delta or direction. An unavailable
+primary metric excludes the matched pair; an unavailable auxiliary metric does
+not invalidate an otherwise eligible primary comparison. Optional unit and
+direction metadata may remain absent on both sides of historical board rows.
+Factorial interactions use the same scale across all four cells and retain the
+existing fixed-total requirement for their primary metric. The study dashboard
+does not rank a mixture of scalar and ratio contrasts against one another.
+
 Full post-run analysis stays in private `benchmark_case_insight_v0` storage. The
 board records only its compact status or handle, so reading the board cannot widen
 the solving agent's evidence boundary.

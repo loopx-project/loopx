@@ -34,6 +34,9 @@ def test_current_blocker_and_owner_request_reach_both_conversations(tmp_path, mo
     for channel in ("manager", "goal.goal-a"):
         context = manager_turn_context(registry, {"channel_id": channel, "goal_id": "goal-a"},
                                        runtime, include_details=False)
+        full_blocker = context["goals"][0]["attention"]["items"][1]["blocker"]
+        assert full_blocker["delivery"]["state"] == "pending"
+        assert "have not been assessed" in full_blocker["impact"]
         attention = manager_index(context)["goals"][0]["attention"]
         assert attention["status"] == "read", context
         assert attention["coverage"]["known"] == 2
@@ -42,8 +45,8 @@ def test_current_blocker_and_owner_request_reach_both_conversations(tmp_path, mo
         assert "release window" in decision["request"]["text"]
         assert blocker["owner_must_act"] is False
         assert blocker["blocker"]["cause"] == "Required input has not arrived"
-        assert blocker["blocker"]["delivery"]["state"] == "pending"
-        assert "have not been assessed" in blocker["blocker"]["impact"]
+        assert blocker["details_omitted"] is True
+        assert blocker["read_reference"] == {"view": "todos", "goal_id": "goal-a", "todo_id": work_id}
     after = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
     assert after == before
     assert not list(tmp_path.rglob("goal-channel*.json"))

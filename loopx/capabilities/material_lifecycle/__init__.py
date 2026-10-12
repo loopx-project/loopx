@@ -95,8 +95,26 @@ from .settlement import (
     MATERIAL_INTAKE_RANKING_SETTLEMENT_SCHEMA_VERSION,
     build_material_intake_ranking_settlement,
 )
+from .revision import (
+    MATERIAL_CANDIDATE_REVISION_APPLY_RECEIPT_SCHEMA_VERSION,
+    MATERIAL_CANDIDATE_REVISION_PROPOSAL_SCHEMA_VERSION,
+    MATERIAL_CANDIDATE_REVISION_ROLLBACK_RECEIPT_SCHEMA_VERSION,
+    MaterialCandidateRevisionProvider,
+    MaterialCandidateRevisionReconciliation,
+    apply_material_candidate_revision,
+    build_material_candidate_revision_proposal,
+    rollback_material_candidate_revision,
+)
 
 __all__ = [
+    "MATERIAL_CANDIDATE_REVISION_APPLY_RECEIPT_SCHEMA_VERSION",
+    "MATERIAL_CANDIDATE_REVISION_PROPOSAL_SCHEMA_VERSION",
+    "MATERIAL_CANDIDATE_REVISION_ROLLBACK_RECEIPT_SCHEMA_VERSION",
+    "MaterialCandidateRevisionProvider",
+    "MaterialCandidateRevisionReconciliation",
+    "apply_material_candidate_revision",
+    "build_material_candidate_revision_proposal",
+    "rollback_material_candidate_revision",
     "MaterialProjectScope",
     "MaterialProjectScopeVerifier",
     "MATERIAL_CANDIDATE_INTAKE_APPLY_RECEIPT_SCHEMA_VERSION",

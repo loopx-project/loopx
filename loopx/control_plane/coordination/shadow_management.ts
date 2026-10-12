@@ -509,6 +509,84 @@ async function inventory(path: string): Promise<JsonObject | null> {
   await visit(path, "");
   return { entries, digest: managementDigest(entries) };
 }
+
+/** Discover original capture files without reinterpreting them as delivery or
+ * import receipts. The caller holds maintenance and primary source locks. */
+export async function readRetainedShadowArtifacts(root: string, goal: string): Promise<JsonObject> {
+  async function retainedFile(path: string): Promise<JsonObject | null> {
+    try {
+      if (!(await lstat(dirname(path))).isDirectory() || !(await lstat(path)).isFile()) {
+        throw new ShadowManagementError("shadow_outbox_layout_invalid");
+      }
+      const bytes = await readFile(path);
+      return {path, size: bytes.length, sha256: `sha256:${createHash("sha256").update(bytes).digest("hex")}`};
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  }
+  async function directory(path: string): Promise<JsonObject | null> {
+    const value = await inventory(path);
+    return value === null ? null : {path, inventory: value};
+  }
+  const management = shadowManagementDirectory(root, goal);
+  const state = await readShadowManagementState(root, goal);
+  const operations = join(management, "operations");
+  const operationInventory = await directory(operations);
+  const store = new FileAuthorityStore(join(root, "authority-shadow", "file-v0"), goal, {existingOnly: true});
+  const legacy = new FileAuthorityStore(join(root, "authority-shadow", "file", goal), goal, {existingOnly: true});
+  const rollbackArchives: JsonObject[] = [];
+  // File rollback archives share a provider directory across Goals. Derive
+  // only this Goal's originals through its existing management manifests.
+  const entries = (operationInventory?.inventory as JsonObject | undefined)?.entries as JsonObject[] | undefined;
+  for (const entry of entries ?? []) {
+    const relative = String(entry.path);
+    if (entry.kind !== "file" || relative.split("/").length !== 2 || !relative.endsWith("/manifest.json")) continue;
+    const raw = await readJson(join(operations, relative));
+    if (!raw) throw new ShadowManagementError("shadow_management_manifest_invalid");
+    const request = requestOf(raw.request);
+    if (request.goal_id !== goal || !sameSourceRoot(request.runtime_root, root)
+        || join(operations, relative) !== manifestPath({...request, runtime_root: root})) {
+      throw new ShadowManagementError("shadow_management_manifest_invalid");
+    }
+    const terminal = await readJson(resultPath(request));
+    const current = state?.operation.operation_id === request.operation_id ? state : null;
+    const manifest = await loadManifest(request, {operation: current?.operation ?? terminal
+      ?? {manifest_digest: managementDigest(raw)}});
+    if (terminal !== null) {
+      if (terminal.request_digest !== requestDigest(request) || !isAuthorityJsonObject(terminal.result)) {
+        throw new ShadowManagementError("shadow_management_result_invalid");
+      }
+      await validateReplayResult(request, manifest, terminal.result, state);
+    } else if (current?.result) await validateReplayResult(request, manifest, current.result, state);
+    const completed = terminal !== null || (state?.operation.operation_id === request.operation_id && state.result !== null);
+    if (manifest.kind !== "rollback") continue;
+    if (completed && !same(await inventory(archiveOutboxPath(request)), manifest.outbox)) {
+      throw new ShadowManagementError("rollback_archive_readback_mismatch");
+    }
+    if (manifest.candidate === null) continue;
+    const archive = await retainedFile(store.authorityArchivePath(request.operation_id));
+    if (archive === null && completed) throw new ShadowManagementError("rollback_archive_readback_mismatch");
+    // A prepared rollback may not have renamed the source yet. Keep that
+    // absence visible; inspection never finishes the interrupted operation.
+    if (archive !== null) {
+      if (archive.sha256 !== (manifest.candidate as JsonObject).sha256) {
+        throw new ShadowManagementError("rollback_archive_readback_mismatch");
+      }
+      rollbackArchives.push(archive);
+    }
+  }
+  return {
+    management_state: await retainedFile(shadowManagementStatePath(root, goal)),
+    management_operations: operationInventory,
+    outbox: await directory(join(root, "authority-shadow", "outbox", goal)),
+    runtime_store: await retainedFile(store.path),
+    runtime_store_identity: await retainedFile(store.identityPath),
+    rollback_archives: rollbackArchives,
+    legacy_observation: await directory(legacy.directory),
+    legacy_store: await retainedFile(legacy.path),
+  };
+}
 async function fileDigest(path: string): Promise<string | null> {
   try { return `sha256:${createHash("sha256").update(await readFile(path)).digest("hex")}`; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }

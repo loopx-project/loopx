@@ -847,3 +847,71 @@ def test_update_preserves_selected_route_through_install_and_readback(tmp_path, 
     if driver == "archive_snapshot":
         assert installer_env["LOOPX_REGISTRY"] == str(registry.resolve())
         assert installer_env["LOOPX_RUNTIME_ROOT"] == str(runtime)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX archive installation ownership")
+@pytest.mark.parametrize("bin_target", [
+    None, "", "default_alias", "custom", "custom_launcher_link", "relative_custom",
+])
+@pytest.mark.parametrize("extension_returncode", [0, 1])
+def test_archive_readback_and_activation_follow_installer_bin_owner(
+    tmp_path, monkeypatch, bin_target, extension_returncode,
+):
+    default_bin = tmp_path / ".local/bin"
+    custom_bin = tmp_path / "custom/bin"
+    targets = {
+        None: None,
+        "": "",
+        "default_alias": str(default_bin / "../bin"),
+        "custom": str(custom_bin),
+        "custom_launcher_link": str(custom_bin),
+        "relative_custom": "custom/bin",
+    }
+    target = targets[bin_target]
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.delenv("LOOPX_BIN_DIR", raising=False)
+    if target is not None:
+        monkeypatch.setenv("LOOPX_BIN_DIR", target)
+    if bin_target == "custom_launcher_link":
+        custom_bin.mkdir(parents=True)
+        # A custom launcher linking to the default runtime still belongs to the
+        # custom installation directory. Resolving the launcher loses ownership.
+        (custom_bin / "loopx").symlink_to(default_bin / "loopx")
+    passed = subprocess.CompletedProcess([], 0, '{"ok":true}', '')
+    extension = subprocess.CompletedProcess([], extension_returncode, '{}', '')
+    with (
+        mock.patch("loopx.self_update.run_archive_installer", return_value=(passed, {})),
+        mock.patch("loopx.self_update.subprocess.run", side_effect=[passed, extension]) as run,
+        mock.patch("loopx.runtime_activation.restart_managed_loopx_services", return_value=["com.loopx.status"]) as restart,
+    ):
+        result = execute_update_plan({"source": {}, "plan": {}})
+    selected_launcher = Path(target or default_bin) / "loopx"
+    assert [call.args[0][0] for call in run.call_args_list] == [str(selected_launcher)] * 2
+    assert result["ok"] is (extension_returncode == 0)
+    assert result["changes_applied"] is True
+    if bin_target in (None, "", "default_alias"):
+        restart.assert_called_once_with()
+        assert result["execution"]["restart_status"] == "restarted"
+    else:
+        restart.assert_not_called()
+        assert result["execution"]["restart_status"] == "skipped_custom_installation"
+        assert result["execution"]["restarted_services"] == []
+    if extension_returncode:
+        assert result["next_action"]["kind"] == "repair_blocked_extensions"
+
+
+@pytest.mark.parametrize("driver", ["python_pip", "python_pipx"])
+def test_python_distribution_activation_ignores_archive_bin_override(tmp_path, monkeypatch, driver):
+    monkeypatch.setenv("LOOPX_BIN_DIR", str(tmp_path / "custom/bin"))
+    payload = build_update_plan(action="apply", doctor_payload=doctor_payload())
+    payload["install_lifecycle"].update(execution_driver=driver)
+    passed = subprocess.CompletedProcess([], 0, '{"ok":true}', '')
+    with (
+        mock.patch("loopx.self_update.subprocess.run", return_value=passed),
+        mock.patch("loopx.runtime_activation.restart_managed_loopx_services", return_value=[]) as restart,
+    ):
+        result = execute_update_plan(payload)
+    assert result["ok"]
+    restart.assert_called_once_with()
+    assert result["execution"]["restart_status"] == "restarted"

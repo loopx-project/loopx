@@ -2195,7 +2195,8 @@ def sync_loopx_todos_to_lark_kanban(
         build_issue_fix_outcome_collection_from_domain_state,
     )
     from ....control_plane.todos.todo_semantics import todo_priority_label
-    from ....todos import resolve_todo_state_path, section_bounds, todo_blocks
+    from ....control_plane.todos.path_resolution import resolve_todo_state_path
+    from ....control_plane.todos.active_state_editing import section_bounds, todo_blocks
 
     resolved_project, resolved_state_file = resolve_todo_state_path(
         registry_path=registry_path,

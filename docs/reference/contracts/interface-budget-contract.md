@@ -10,8 +10,8 @@ and size/count budgets.
 | --- | --- | --- | --- | --- | --- | --- |
 | `heartbeat_prompt_json` | heartbeat automation | wake and route one bounded turn | `quota should-run`, `status`, or `review-packet --handoff-only` | `json_chars <= 5400` plus `interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 30` |
 | `review_packet_handoff_only_json` | project-agent handoff | forward the smallest sufficient task packet | full `review-packet` or run-history artifact | `json_chars <= 3000` plus `handoff_interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 18` |
-| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 14500` | `nested_keys <= 360` | `top_level_keys <= 52` |
-| `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 22500` | `nested_keys <= 350` | `top_level_keys <= 27` |
+| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 15500` | `nested_keys <= 376` | `top_level_keys <= 54` |
+| `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 23000` | `nested_keys <= 350` | `top_level_keys <= 27` |
 
 These four budgets measure compact machine payloads. For
 `heartbeat_prompt_json`, the measured payload is the actual
@@ -22,6 +22,14 @@ activation packet. The other payloads are measured before stdout formatting. JSO
 indentation and Markdown wrappers can make emitted output materially larger;
 the emitted-output qualification matrix below measures that separate boundary
 through the real CLI entry point.
+
+The M3 automatic-cadence readback raises the quota fixture from 357 to 368
+nested keys. The 11-key increase is one always-present, validated readback:
+Goal, Agent and automation scope, configuration revision, effective minimum and
+the owner's four-field eligibility union. The 376-key ceiling leaves eight keys
+of headroom. The same envelope moves the fixture from 51 to 52 top-level keys;
+the 54-key ceiling leaves two keys of headroom. The JSON-size ceiling does not
+change.
 
 The successful thin heartbeat projection contains only `schema_version`,
 `ok`, `goal_id`, optional `agent_id`, `task_body`, and the compact
@@ -83,18 +91,42 @@ route, pending-selection qualification, and hard-lane preemption evidence. The
 budget retains modest headroom for those enforceable semantics; repeated action
 details and command prefixes still belong in compact references or cold paths.
 
-The work-count projection adds scope and completeness facts that a bounded Todo
-list cannot supply. Its observed-row count is derived from `open - hidden`,
-rather than repeated in the wire object. The quota ceiling moves from 14,000
-to 14,500 characters and from 350 to 360 nested keys to retain modest headroom
-for this useful semantic growth; the top-level ceiling stays 52. Existing
-repeated Todo bodies across named lanes have distinct consumers and cannot be
-removed without a separately validated caller migration.
+The work-count projection retains scope and completeness facts. The current
+quota ceiling rises from 14,500 to 15,500 characters to include full Goal and
+selected-work required-read commands, carried once in the Agent channel. On the
+same fixture, main measured 14,065 and the unified projection measured 14,916
+characters; a preceding longer-reason draft measured 15,084. The 584-character
+headroom accommodates useful source coordinates without truncating requirements.
+Nested and top-level ceilings remain 360 and 52 (observed 357 and 51). This is a
+presentation regression budget, not a token, permission or compute allowance.
+Exact Todo detail removes redundant bodies through an explicit caller migration;
+other quota lane projections remain separately owned.
 
-工作计数增加了展示列表无法提供的完整性与作用域信息；已观察行数由 `open - hidden`
-推导，不重复传输。quota 字符预算从 14,000 调至 14,500，嵌套键从 350 调至 360，
-保留适量余量；顶层键上限仍为 52。不同 lane 重复携带的 Todo 有既有消费者，后续
-去重应配合调用方迁移，不能仅为通过尺寸测试而删除。
+The dashboard/status character ceiling rises from 22,500 to 23,000. On the
+unchanged hot-path fixture, commit `8bb21ac5d40f6db679475495800157e20fc11c2f`
+added selected-work content revisions: its parent measured 21,895 characters,
+and that commit, current main and the handoff acknowledgment candidate all
+measure 22,560. Seven digest fields account for the full 665-character growth.
+The separate item lanes and Todo index carry those revisions into quota's
+selected-work freshness checks; removing them from internal status would change
+admission semantics. Existing CLI compaction still omits this metadata from the
+quota Agent input. Retain the source fields and unchanged fixture, leaving 440
+characters of headroom; nested/top-level ceilings remain 350/27 (observed 336/26).
+This adjusts a measured regression budget, not an external limit, execution
+quota, permission, transport SLO or unrestricted payload allowance.
+
+dashboard/status 字符预算从 22,500 调至 23,000。同一 fixture 在所选任务正文
+revision 引入前为 21,895 字符，引入后、当前 main 与交接回复候选均为 22,560；
+七处 digest 字段解释全部 665 字符增长。各任务 lane 和 Todo 索引向 quota 传递
+准入新鲜度依据，不能从内部 status 删除；现有 quota CLI 投影仍隐藏这些元数据。
+保留原 fixture 和字段，余量 440 字符；嵌套键/顶层键上限仍为 350/27，实测
+336/26。此调整仅为有测量依据的回归预算，不扩大权限、计算额度或传输 SLO。
+
+quota 字符预算从 14,500 调至 15,500，容纳完整 Goal 与所选工作项的必读命令，
+只在 Agent channel 携带一份。同一 fixture 的 main／统一后分别为 14,065／14,916
+字符；此前较长说明草稿为 15,084。当前余量 584 字符；嵌套键与顶层键上限仍为
+360／52，实测 357／51。该预算不授予权限或计算额度。精确 Todo 通过调用方迁移
+移除重复正文，完整要求不截断，其它 quota lane 保留各自用途。
 
 | Emitted Surface | Default Qualification | Scale / Limit Contract | Cold Path |
 | --- | --- | --- | --- |

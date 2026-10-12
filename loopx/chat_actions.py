@@ -9,7 +9,7 @@ import re
 from typing import Any, Mapping, Sequence
 
 from .agent_registry import agent_profile_for_goal, registered_agent_ids_for_goal
-from .bootstrap import GoalCreationConflictError, bootstrap_project
+from .control_plane.projects.identity import GoalCreationConflictError
 from .capabilities.machine_configuration.goal_storage import initialize_goal_storage_target
 from .chat import apply_todo_review_preview, build_todo_review_preview
 from .chat_action_normalization import ChatActionNormalizationMixin
@@ -25,15 +25,16 @@ from .control_plane.goals.configure_goal_service import (
 )
 from .control_plane.runtime.time import now_utc, parse_timestamp
 from .control_plane.scheduler.monitor_todo import monitor_next_due_at
-from .control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
+from .control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable, read_canonical_todos_if_promoted
 from .control_plane.todos.contract import TODO_DECISION_OUTCOME_VALUES
 from .history import load_registry
 from .host_loop_activation import build_host_loop_activation_packet
 from .kiro_cli_goal_mode import KIRO_CLI_CHAT_AGENT_ID
 from .paths import resolve_runtime_root
+from .public_safe_text import OPAQUE_ID_PATTERN as _OPAQUE_ID
 from .quota import build_quota_should_run
 from .registry import registry_goals
-from .todos import add_goal_todo, update_goal_todo
+from .control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
 
 
 CHAT_ACTION_RESPONSE_SCHEMA_VERSION = "loopx_chat_action_response_v1"
@@ -52,7 +53,6 @@ SUPPORTED_ACTION_KINDS = {
     "operation.execute",
     "team.plan",
 }
-_OPAQUE_ID = re.compile(r"^[A-Za-z0-9._:-]{1,200}$")
 # Runtime Endpoint ids and durable Goal agent ids are chosen independently, so
 # a family token collapses both onto the host that produced them: Endpoint
 # `codex` has to resolve to a registered `codex-main-control`. Every host that
@@ -433,7 +433,7 @@ class ChatActionService(
         )
 
     def _project_for_goal_create(
-        self, proposal: Mapping[str, Any]
+        self, proposal: Mapping[str, Any], *, progress: Mapping[str, Any] | None = None
     ) -> tuple[Path, dict[str, Any]]:
         parameters = proposal.get("normalized_parameters")
         context = proposal.get("context")
@@ -450,58 +450,35 @@ class ChatActionService(
             return candidates[0], {"id": "", "repo": str(candidates[0]), "domain": "project-goal-control-plane",
                                   "adapter": {"kind": "generic_project_goal_v0"}}
         goals = registry_goals(self._registry())
+        # Resume from server-owned identity, before mutable single-Goal routing.
+        # No caller path or a different creation operation can redirect it.
+        if progress:
+            existing = next((goal for goal in goals if goal.get("id") == parameters.get("goal_id")), None)
+            if existing is not None and existing.get("creation_operation_id") == proposal.get("proposal_id"):
+                project = Path(str(existing.get("repo") or "")).expanduser().resolve()
+                if not project.is_dir() or _digest(str(project)) != progress["workspaceDigest"]:
+                    raise ValueError("The original creation workspace is unavailable or changed; restore it before retrying")
+                source = next((goal for goal in goals if goal.get("id") == existing.get("parent_goal_id")), existing)
+                return project, source
+        # Explicit destinations outrank conversation context and legacy fallback.
+        # A missing/stale choice must ask again, never silently select another root.
         context_goal_id = str(context.get("goal_id") or "").strip()
+        source_id = context_goal_id if workspace_ref == "current" else workspace_ref
         source_goal = next(
-            (goal for goal in goals if str(goal.get("id") or "") == context_goal_id),
+            (goal for goal in goals if str(goal.get("id") or "") == source_id),
             None,
         )
-        if source_goal is None and workspace_ref != "current":
-            source_goal = next(
-                (goal for goal in goals if str(goal.get("id") or "") == workspace_ref),
-                None,
-            )
-        if source_goal is None and len(goals) == 1:
+        if source_goal is None and workspace_ref == "current" and len(goals) == 1:
             source_goal = goals[0]
-        if source_goal is None and workspace_ref == "current":
-            workspace_candidates = [
-                root
-                for root in self.workspace_roots
-                if root.is_dir() and (root / ".git").exists()
-            ]
-            if len(workspace_candidates) == 1:
-                return workspace_candidates[0], {
-                    "id": "",
-                    "domain": "project-goal-control-plane",
-                    "repo": str(workspace_candidates[0]),
-                    "adapter": {"kind": "generic_project_goal_v0"},
-                }
+        if source_goal is None:
+            workspace_candidates = [root for root in self.workspace_roots if root.is_dir()]
             token_map = {
                 f"workspace-{hashlib.sha256(str(root).encode('utf-8')).hexdigest()[:12]}": root
                 for root in workspace_candidates
             }
-            if workspace_ref in token_map:
-                selected = token_map[workspace_ref]
-                return selected, {
-                    "id": "",
-                    "domain": "project-goal-control-plane",
-                    "repo": str(selected),
-                    "adapter": {"kind": "generic_project_goal_v0"},
-                }
-        elif source_goal is None and workspace_ref.startswith("workspace-"):
-            workspace_candidates = [
-                root
-                for root in self.workspace_roots
-                if root.is_dir() and (root / ".git").exists()
-            ]
-            selected = next(
-                (
-                    root
-                    for root in workspace_candidates
-                    if workspace_ref
-                    == f"workspace-{hashlib.sha256(str(root).encode('utf-8')).hexdigest()[:12]}"
-                ),
-                None,
-            )
+            selected = (workspace_candidates[0]
+                        if workspace_ref == "current" and len(workspace_candidates) == 1
+                        else token_map.get(workspace_ref))
             if selected is not None:
                 return selected, {
                     "id": "",
@@ -519,7 +496,7 @@ class ChatActionService(
                     (
                         root
                         for root in self.workspace_roots
-                        if root.is_dir() and (root / ".git").exists()
+                        if root.is_dir()
                     ),
                     start=1,
                 )
@@ -529,7 +506,7 @@ class ChatActionService(
                 gate={
                     "kind": "workspace_selection_required",
                     "summary": "Select one server-configured workspace before creating this Goal.",
-                    "next_action": "Start LoopX Chat with exactly one --scan-path workspace or regenerate from an existing Goal channel.",
+                    "next_action": "Choose an available workspace or a registered Goal workspace, then review again. Unlisted directories require server workspace setup.",
                     "candidates": candidates,
                 },
             )
@@ -550,6 +527,15 @@ class ChatActionService(
     def _apply_goal_create(
         self, proposal_id: str, proposal: dict[str, Any], parameters: dict[str, Any]
     ) -> dict[str, Any]:
+        from .control_plane.effect_runtime import effect_runtime_result
+
+        def require_first_turn_readback(turn: dict[str, Any]) -> None:
+            plan = effect_runtime_result("presentation.action_review_plan.compile", {
+                "proposal": {**proposal, "first_turn_readback": turn},
+            })
+            if plan.get("reason") == "readback_unverified":
+                raise ValueError("The original first Turn ended before Host dispatch; inspect its original Session instead of starting another")
+
         current_fingerprint = self._registry_fingerprint()
         heartbeat = (
             parameters.get("heartbeat")
@@ -565,7 +551,10 @@ class ChatActionService(
             ),
             None,
         )
-        project, source_goal = self._project_for_goal_create(proposal)
+        progress = effect_runtime_result("presentation.action_review_plan.compile", {"proposal": proposal}).get("creationProgress") or {}
+        if (proposal.get("checkpoint") or {}).get("steps") and not progress:
+            raise ValueError("Goal creation checkpoints do not match the original request; inspect the recorded operation")
+        project, source_goal = self._project_for_goal_create(proposal, progress=progress)
         workspace_digest = _digest(str(project))
         conflict = ProtectedActionGate(
             "goal.create",
@@ -615,6 +604,8 @@ class ChatActionService(
             result = {"ok": True}
         else:
             try:
+                from .bootstrap import bootstrap_project
+
                 result = bootstrap_project(
                     project=project,
                     creation_operation_id=proposal_id,
@@ -660,7 +651,7 @@ class ChatActionService(
             receipt={"outcome": "goal_bootstrapped", "goal_id": goal_id},
         )
         agent_id = str(parameters.get("agent_id") or "").strip()
-        if agent_id:
+        if agent_id and not progress.get("agentId"):
             configure_goal(
                 registry_path=self.registry_path,
                 goal_id=goal_id,
@@ -676,8 +667,12 @@ class ChatActionService(
                     "agent_id": agent_id,
                 },
             )
-        todo_ids: list[str] = []
-        for todo_text in parameters.get("initial_todos") or []:
+        todo_ids: list[str] = list(progress.get("todoIds") or [])
+        # Canonical File/SQLite own replay after a committed write loses its
+        # response. Historical target-only creation retains its old adapter.
+        pending_todos = (parameters.get("initial_todos") or []) if "todoIds" not in progress else []
+        authority = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id) if pending_todos else None
+        for index, todo_text in enumerate(pending_todos):
             todo = add_goal_todo(
                 registry_path=self.registry_path,
                 goal_id=goal_id,
@@ -688,6 +683,7 @@ class ChatActionService(
                 claimed_by=agent_id or None,
                 agent_id=agent_id or None,
                 dry_run=False,
+                operation_id=f"goal-create:{proposal_id}:todo:{index}" if authority is not None else None,
             )
             if todo.get("todo_id"):
                 todo_ids.append(str(todo["todo_id"]))
@@ -703,6 +699,16 @@ class ChatActionService(
             )
         turn_result: dict[str, Any] | None = None
         session_id = ""
+        if progress.get("firstTurn"):
+            session_id = progress["firstTurn"]["sessionId"]
+            turn_id = progress["firstTurn"]["turnId"]
+            turn_store = self.chat_store or getattr(self.runtime_controller, "store", None)
+            session = turn_store.load_session(session_id) if turn_store is not None else None
+            turn = turn_store.load_turn(session_id, turn_id) if session is not None else None
+            if session is None or session.get("goal_id") != goal_id or session.get("agent_id") != agent_id or turn is None:
+                raise ValueError("The recorded first Turn is unavailable; restore its original Session instead of starting another")
+            require_first_turn_readback(turn)
+            turn_result = {"turn_id": turn_id, "status": str(turn["status"]), "created": False}
         first_turn_gate: dict[str, Any] | None = None
         try:
             from .status import collect_status
@@ -732,7 +738,7 @@ class ChatActionService(
             )
         except Exception:
             guard = {"should_run": True, "state": "status_unavailable"}
-        if guard.get("should_run") is not True:
+        if guard.get("should_run") is not True and turn_result is None:
             first_turn_gate = {
                 "kind": "goal_quota_gate",
                 "summary": str(
@@ -745,17 +751,29 @@ class ChatActionService(
                 )[:600],
                 "quota_state": str(guard.get("state") or "waiting"),
             }
-        if agent_id and self.runtime_controller is not None and first_turn_gate is None:
-            session, _resumed = self.runtime_controller.open_session(
-                goal_id=goal_id,
-                agent_id=agent_id,
-                work_dir=project,
-                objective=objective,
-                mode="resume_latest",
-                channel_id=f"goal.{goal_id}",
-                agent_goal_id=goal_id,
-            )
+        if agent_id and self.runtime_controller is not None and first_turn_gate is None and turn_result is None:
+            if progress.get("sessionId"):
+                session = self.runtime_controller.store.load_session(progress["sessionId"])
+                if session is None or session.get("goal_id") != goal_id or session.get("agent_id") != agent_id:
+                    raise ValueError("The original first Session is unavailable; restore it before retrying")
+            else:
+                session, _resumed = self.runtime_controller.open_session(
+                    goal_id=goal_id,
+                    goal_instance_id=(
+                        str(projected["goal_instance_id"])
+                        if projected.get("goal_instance_id")
+                        else None
+                    ),
+                    agent_id=agent_id,
+                    work_dir=project,
+                    objective=objective,
+                    mode="resume_latest",
+                    channel_id=f"goal.{goal_id}",
+                    agent_goal_id=goal_id,
+                )
             session_id = _opaque(session.get("session_id"), field="session_id")
+            self.store.save_checkpoint(proposal_id, step="first_session_opened",
+                receipt={"outcome": "first_session_opened", "session_id": session_id})
             first_turn, created = self.runtime_controller.submit_turn(
                 session_id=session_id,
                 client_turn_id=f"goal-start-{proposal_id}",
@@ -768,6 +786,7 @@ class ChatActionService(
                 work_dir=project,
                 objective=objective,
             )
+            require_first_turn_readback(first_turn)
             turn_result = {
                 "turn_id": _opaque(first_turn.get("turn_id"), field="turn_id"),
                 "status": str(first_turn.get("status") or "queued"),
@@ -814,6 +833,20 @@ class ChatActionService(
             "projection_verified": True,
             "resource_ids": {
                 "goal_id": goal_id,
+                **(
+                    {"goal_instance_id": str(projected["goal_instance_id"])}
+                    if projected.get("goal_instance_id")
+                    else {}
+                ),
+                **(
+                    {
+                        "creation_operation_id": str(
+                            projected["creation_operation_id"]
+                        )
+                    }
+                    if projected.get("creation_operation_id")
+                    else {}
+                ),
                 **({"agent_id": agent_id} if agent_id else {}),
                 **({"todo_ids": todo_ids} if todo_ids else {}),
                 **({"session_id": session_id} if session_id else {}),
@@ -1302,6 +1335,8 @@ class ChatActionService(
                     "next_action": "Prepare a new operation instead of regenerating this one.",
                 },
             )
+        if proposal.get("action_kind") == "goal.create" and (proposal.get("checkpoint") or {}).get("steps"):
+            raise ActionConflictError("Creation already recorded effects; recover the original operation instead of regenerating")
         if proposal.get("status") not in {"stale", "failed", "gated", "rejected"}:
             raise ActionConflictError(
                 f"proposal in {proposal.get('status')} state cannot be regenerated"

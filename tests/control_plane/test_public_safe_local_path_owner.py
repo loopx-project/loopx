@@ -9,15 +9,14 @@ pin the migration and its boundaries:
 * both sites answer through `loopx/public_safe_text.find_public_safe_local_path`
   and no longer declare a local-path regex of their own;
 * the union the owner decides is `LOCAL_PATH_SURFACE_PATTERN`, the two
-  direction-3 gap shapes and the historical `:`/`=` boundary form, in that
+  direction-3 gap shapes, the historical `:`/`=` boundary form and file URLs, in that
   order, so dropping any arm is caught;
 * nothing the sites rejected before is accepted now (no loosening), and the
   widening is exactly the direction-3 shapes -- both halves are measured against
   the shared corpus, so "no silent loosening" is enforced rather than claimed;
 * each site keeps its own rejection message and length limits;
-* `file://` is unchanged here (both sites still reject it through the
-  raw-remote-location rule), and the general runtime export gate is *not*
-  tightened by this PR, which `test_runtime_export_gate_is_unchanged` pins.
+* `file://` remains rejected, now with the local-path diagnostic; the typed
+  runtime export gate also consumes this policy for keys and values.
 """
 
 from __future__ import annotations
@@ -138,6 +137,7 @@ def test_owner_recognizes_the_absolute_roots_the_gaps_and_the_boundary_form() ->
         owner.HOME_RELATIVE_PATH_PATTERN,
         owner.PATH_PREFIX_LOCAL_PATTERN,
         owner.LOCAL_PATH_BOUNDARY_REFERENCE_PATTERN,
+        owner.FILE_URL_LOCAL_PATH_PATTERN,
     )
 
 
@@ -301,22 +301,20 @@ def test_both_sites_keep_their_length_limits_and_clean_verdicts() -> None:
     "value",
     ["file:///Users/alex/notes.md", "file://./notes.md"],
 )
-def test_file_url_verdicts_are_unchanged_and_still_named_as_raw_urls(
+def test_file_url_verdicts_are_unchanged_and_named_as_local_paths(
     value: str,
 ) -> None:
-    # The direction-3 `file://` decision is deferred, so these must keep failing
-    # through the raw-remote-location rule with the site's own wording.
-    with pytest.raises(ValueError, match="raw URL"):
+    # Both sites keep rejecting file URLs; the shared local-path policy now
+    # supplies their existing field-specific local-path diagnostic.
+    with pytest.raises(ValueError, match=LOCAL_PATH_MESSAGE):
         material_validation.compact_text(value, field="source_ref")
-    with pytest.raises(ValueError, match="raw URL"):
+    with pytest.raises(ValueError, match=LOCAL_PATH_MESSAGE):
         decision_packets._compact_text(value, field="source_ref")
 
 
-def test_runtime_export_gate_is_unchanged() -> None:
-    # Disclosed non-change, pinned so the later tightening has to be a deliberate
-    # edit here: `validate_public_safe_value` still accepts a home-relative
-    # reference. Direction 3 decides that per destination, and how many of the
-    # gate's call sites would newly reject was not measured in this PR.
+def test_runtime_export_gate_rejects_local_references_but_preserves_prose() -> None:
+    with pytest.raises(ValueError, match="target_layout contains a local path"):
+        public_safety.validate_public_safe_value({"target_layout": "~/.agents/skills"})
     public_safety.validate_public_safe_value(
-        {"target_layout": "~/.agents/skills", "note": "path: is fine without a path"}
+        {"target_layout": "skills/", "note": "path: is fine without a path"}
     )

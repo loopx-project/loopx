@@ -35,7 +35,7 @@ loopx configure-goal --goal-id <goal-id> --clear-progress-review-configuration -
 | `mode` | `off`、`shadow`、`assist` | `off` 不加载任何内容；`shadow` 记录并展示；`assist` 可以触发义务 |
 | `signal` | `noul`、`choice` | 哪一组判断算作漂移 |
 | `drift_threshold` | 2–20 | 触发义务前需要的连续已完成漂移回执数 |
-| `contract_revision` | sha256 或空 | 回执必须绑定的观察器 basis 修订，由 `loopx-jev drift init` 打印；`assist` 必需。pin 是手动的：绑定到其他修订的回执永不计数，basis 变化本身不会让早先回执退休，最新回执绑定到别处时 status 报告 `rebind_hint: newer_receipts_under_unpinned_revision` |
+| `contract_revision` | sha256 或空 | 回执必须绑定的观察器 basis 修订，由 `loopx-jev drift init` 打印；`assist` 必需。pin 是手动的：绑定到其他修订的回执永不计数，basis 变化本身不会让旧格式或 operator-study 回执退休，最新回执绑定到别处时 status 报告 `rebind_hint: newer_receipts_under_unpinned_revision` |
 
 策略保存在 Goal 注册表的 `control_plane.progress_review`，可在 `loopx configure-goal --goal-id <goal-id>` 输出的 `feature_summary` 和 Dashboard 能力编辑器中看到。格式错误的配置块会安全地退回 `off`。
 
@@ -48,7 +48,9 @@ loopx configure-goal --goal-id <goal-id> --clear-progress-review-configuration -
 - `judgments.choice`：`relation` 与 `increment` 标签或 null；
 - `judgments.noul`：`behavior_change`、`serves_acceptance`、`evidence_increment` 的概率或 null；
 - `drift_signal.noul`、`drift_signal.choice`：`true`、`false` 或 null；
-- `timing_ns`、`usage`、`label_probability_threshold`、`recorded_at`。
+- `timing_ns`、`usage`、`label_probability_threshold`、`recorded_at`；
+- 可选 `evidence_scope`：criterion 来源／版本／摘要、声明的相对文件及
+  `declared_file_net_change` 覆盖。新 canonical binding 的信号被消费前会与当前任务验收复核。
 
 `sequence` 是写回执的观察器的本地计数，`drift init` 创建新的观察器状态时会从 0 重新计数。核心从不跨观察器比较 sequence：加载、加载上限、最新修订判断和同一转换两条回执的合并，都按 run 的 `generated_at`、再 `recorded_at`、再 `sequence` 排序（`progress_review_receipt_order_key`）。
 
@@ -63,7 +65,21 @@ loopx configure-goal --goal-id <goal-id> --clear-progress-review-configuration -
 
 这收紧了原 stage-0 `assist` 的兼容行为：身份不完整的历史回执仍可在 shadow/status 查看，但不能形成或解除义务。off 行为、模型请求、手动 revision pin 与类型化 replan 出口保持原契约。
 
-每个被捕获的转换只有三种：**漂移**（completed、所选信号为 `true`、pin 修订）、**on-goal**（completed、信号为 `false`）或**未评估**，后者带一个类型化原因（`pending`、`failed`、`abstained`、`stale`、`undecided`、`missing`、`unattributed`、`identity_conflict`、`other_revision`、`not_evaluated`）。形成是保守的：义务需要 `drift_threshold` 个连续漂移转换，中间不能有未评估转换。存续则不然：一旦形成，更新的未评估转换既不延长也不解除义务，其数量作为 `unevaluated_transitions` 记在 trigger 上。只有已确认的重规划或更新的 completed on-goal 判定能结束它；Goal 负责人也可以把模式调回 `shadow` 或 `off`。绑定到非 pin 修订的回执是未评估的历史，永不计数。扫描范围是 Goal 保留的 run 历史（`latest_runs`），义务最多只能与该窗口同样老。
+每个被捕获的转换只有三种：**漂移**（completed、所选信号为 `true`、pin 修订）、**干预条件不成立**（completed、信号为 `false`）或**未评估**，后者带一个类型化原因（`pending`、`failed`、`abstained`、`stale`、`undecided`、`missing`、`unattributed`、`identity_conflict`、`other_revision`、`not_evaluated`）。形成是保守的：义务需要 `drift_threshold` 个连续漂移转换，中间不能有未评估转换。存续则不然：一旦形成，更新的未评估转换既不延长也不解除义务，其数量作为 `unevaluated_transitions` 记在 trigger 上。只有已确认的重规划或更新的 completed 未触发判定能结束它；Goal 负责人也可以把模式调回 `shadow` 或 `off`。绑定到非 pin 修订的回执是未评估的历史，永不计数。扫描范围是 Goal 保留的 run 历史（`latest_runs`），义务最多只能与该窗口同样老。
+
+## Criterion 与观察读回
+
+规范任务 criterion 通过观察器的显式
+[`acceptance_scope`](../../../packages/loopx-jev/DRIFT_SHADOW.zh-CN.md#绑定规范任务-criterion)
+绑定：读取既有验收 owner，不信任 manifest 自述的 acceptance。手写 basis 仍标为
+`operator_study`。规范 criterion binding 变化或不可用时，该回执投影为过期并撤回信号；
+保留存储历史与政策的手动 revision pin，旧格式回执沿用原行为。
+
+在 **Goal 设置 → 能力中心 → 进展评估哨兵** 中，已启用的 Goal 分别展示目标关系与
+证据增量、criterion 来源、选中文件覆盖及缺失／过期／不可用状态。点
+**重新读取审查证据** 刷新，读取期间撤回旧判断。`off_goal` 与 `new_evidence` 可以
+同时成立且组合信号未触发，不能据此称为符合目标。回执存储读取失败保持不可用，
+不沿用缓存成功。模型分数不构成任务验收，也不授予停止、回滚或完成权限；`off` 不读取。
 
 ## 解除
 

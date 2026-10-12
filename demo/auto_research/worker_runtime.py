@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from uuid import uuid4
 
 from .defaults import (
     AUTO_RESEARCH_DEFAULT_GOAL_ID,
@@ -30,6 +32,14 @@ from ..multi_agent.role_successor import (
 from loopx.control_plane.todos.contract import (
     normalize_supported_todo_resume_when,
     normalize_todo_id,
+)
+from loopx.control_plane.todos.handoff_mode import HANDOFF_MODE_HARD_LEASE
+from loopx.control_plane.work_items.task_lease import (
+    TaskLeaseError,
+    acquire_task_lease,
+    inspect_task_lease,
+    release_task_lease,
+    runtime_root_from_registry,
 )
 from loopx.history import load_registry
 from loopx.paths import resolve_runtime_root
@@ -419,18 +429,21 @@ def _executed_successor_todo_ids(successor_todos: dict[str, object]) -> list[str
 def _complete_selected_todo(
     *,
     registry_path: Path,
+    runtime_root_arg: str | None,
     goal_id: str,
     todo_id: str,
     agent_id: str,
     action: str,
     execute: bool,
     successor_todo_ids: list[str] | None = None,
+    lease_proof: dict[str, object] | None = None,
 ) -> dict[str, object]:
     if not execute:
         return {"requested": True, "executed": False}
     linked_successors = successor_todo_ids or []
     result = complete_goal_todo(
         registry_path=registry_path,
+        runtime_root_arg=runtime_root_arg,
         goal_id=goal_id,
         todo_id=todo_id,
         role="agent",
@@ -445,6 +458,7 @@ def _complete_selected_todo(
         successor_todo_ids=linked_successors or None,
         self_merged=True,
         dry_run=False,
+        **(lease_proof or {}),
     )
     return {
         "requested": True,
@@ -456,6 +470,50 @@ def _complete_selected_todo(
         "self_merged": bool(result.get("self_merged")),
         "successor_todo_ids": result.get("successor_todo_ids") or linked_successors,
     }
+
+
+@contextmanager
+def _worker_execution_lease(
+    *, registry_path: Path, runtime_root_arg: str | None,
+    goal_id: str, todo_id: str, agent_id: str,
+) -> Iterator[dict[str, object]]:
+    """Use the typed lease owner without borrowing another execution's fence."""
+    runtime_root = runtime_root_from_registry(registry_path, runtime_root_arg)
+    current = inspect_task_lease(
+        registry_path=registry_path, runtime_root=runtime_root,
+        goal_id=goal_id, todo_id=todo_id,
+    )
+    if current.get("ok") is not True:
+        raise TaskLeaseError("Worker lease inspection failed", code=str(current.get("error_code")))
+    if current.get("handoff_mode") != HANDOFF_MODE_HARD_LEASE:
+        yield {}
+        return
+    key = "auto-research-worker-" + uuid4().hex
+    acquired = acquire_task_lease(
+        registry_path=registry_path, runtime_root=runtime_root,
+        goal_id=goal_id, todo_id=todo_id, owner=agent_id,
+        idempotency_key=key,
+    )
+    version = acquired["lease"]["version"]
+    try:
+        yield {"task_lease_idempotency_key": key, "task_lease_expected_version": version}
+    finally:
+        # Completion may already have retired this execution. Cleanup must never
+        # release a newer lease acquired by another invocation.
+        current = inspect_task_lease(
+            registry_path=registry_path, runtime_root=runtime_root,
+            goal_id=goal_id, todo_id=todo_id,
+        )
+        if current.get("ok") is not True:
+            raise TaskLeaseError("Worker lease cleanup readback failed", code=str(current.get("error_code")))
+        lease = current.get("lease") or {}
+        if (current.get("active") is True and lease.get("owner") == agent_id
+            and lease.get("idempotency_key") == key and lease.get("version") == version):
+            release_task_lease(
+                registry_path=registry_path, runtime_root=runtime_root,
+                goal_id=goal_id, todo_id=todo_id, owner=agent_id,
+                idempotency_key=key, expected_version=version,
+            )
 
 
 def load_auto_research_worker_frontier(
@@ -677,95 +735,101 @@ def run_auto_research_worker_turn(
             isinstance(frontier_completion, dict)
             and frontier_completion.get("status") == "failure_successor_required"
         )
-        artifact = _write_evaluation_summary_artifact(
-            registry_path=registry_path,
-            runtime_root_arg=runtime_root_arg,
-            output_path=evaluation_summary_path,
-            goal_id=goal_id,
-            todo_id=todo_id,
-            lineage_todo_id=lineage_todo_id,
-            require_selected_failure_match=require_selected_failure_match,
-            agent_id=agent_id,
-        )
-        if artifact["decision_summary"]["failure_continuation_unresolved"]:
-            return _failure_lineage_unresolved_result(
+        with _worker_execution_lease(
+            registry_path=registry_path, runtime_root_arg=runtime_root_arg,
+            goal_id=goal_id, todo_id=todo_id, agent_id=agent_id,
+        ) as lease_proof:
+            artifact = _write_evaluation_summary_artifact(
+                registry_path=registry_path,
+                runtime_root_arg=runtime_root_arg,
+                output_path=evaluation_summary_path,
                 goal_id=goal_id,
-                agent_id=agent_id,
                 todo_id=todo_id,
-                action=action,
-                artifact=artifact,
-                frontier_packet=frontier_packet,
-                complete_selected_todo=complete_selected_todo,
+                lineage_todo_id=lineage_todo_id,
+                require_selected_failure_match=require_selected_failure_match,
+                agent_id=agent_id,
             )
-        role_id = auto_research_role_id_for_action(action)
-        successor_todos = _maybe_add_role_successor_todos(
-            registry_path=registry_path,
-            goal_id=goal_id,
-            source_todo_id=todo_id,
-            agent_id=agent_id,
-            role_id=role_id,
-            action=action,
-            decision_summary=artifact["decision_summary"],
-            execute=True,
-        )
-        successor_todo_ids = _executed_successor_todo_ids(successor_todos)
-        followup = first_successor_followup(successor_todos)
-        completion = (
-            _complete_selected_todo(
+            if artifact["decision_summary"]["failure_continuation_unresolved"]:
+                return _failure_lineage_unresolved_result(
+                    goal_id=goal_id,
+                    agent_id=agent_id,
+                    todo_id=todo_id,
+                    action=action,
+                    artifact=artifact,
+                    frontier_packet=frontier_packet,
+                    complete_selected_todo=complete_selected_todo,
+                )
+            role_id = auto_research_role_id_for_action(action)
+            successor_todos = _maybe_add_role_successor_todos(
                 registry_path=registry_path,
                 goal_id=goal_id,
-                todo_id=todo_id,
+                source_todo_id=todo_id,
                 agent_id=agent_id,
+                role_id=role_id,
                 action=action,
+                decision_summary=artifact["decision_summary"],
                 execute=True,
-                successor_todo_ids=successor_todo_ids,
             )
-            if complete_selected_todo
-            else {"requested": False}
-        )
-        return {
-            "ok": True,
-            "schema_version": AUTO_RESEARCH_WORKER_TURN_SCHEMA_VERSION,
-            "mode": "execute",
-            "goal_id": goal_id,
-            "agent_id": agent_id,
-            "selected_todo_id": todo_id,
-            "selected_action": action,
-            "executed": True,
-            "summary_mode": AUTO_RESEARCH_STATE_SUMMARY_MODE,
-            "artifact": _artifact_summary("evaluation_summary", filename="evaluation-summary.public.json"),
-            "artifact_status": artifact["summary"]["status"],
-            "claim_allowed": artifact["summary"]["claim_allowed"],
-            "promotion_decision_made": artifact["summary"]["promotion_decision_made"],
-            "role_id": role_id,
-            "evaluation_summary": {
+            successor_todo_ids = _executed_successor_todo_ids(successor_todos)
+            followup = first_successor_followup(successor_todos)
+            completion = (
+                _complete_selected_todo(
+                    registry_path=registry_path,
+                    runtime_root_arg=runtime_root_arg,
+                    goal_id=goal_id,
+                    todo_id=todo_id,
+                    agent_id=agent_id,
+                    action=action,
+                    execute=True,
+                    successor_todo_ids=successor_todo_ids,
+                    lease_proof=lease_proof,
+                )
+                if complete_selected_todo
+                else {"requested": False}
+            )
+            return {
+                "ok": True,
+                "schema_version": AUTO_RESEARCH_WORKER_TURN_SCHEMA_VERSION,
+                "mode": "execute",
+                "goal_id": goal_id,
+                "agent_id": agent_id,
+                "selected_todo_id": todo_id,
+                "selected_action": action,
+                "executed": True,
+                "summary_mode": AUTO_RESEARCH_STATE_SUMMARY_MODE,
+                "artifact": _artifact_summary("evaluation_summary", filename="evaluation-summary.public.json"),
+                "artifact_status": artifact["summary"]["status"],
                 "claim_allowed": artifact["summary"]["claim_allowed"],
-                "best_dev_metric": artifact["evidence_graph_summary"]["best_dev_metric"],
-                "best_holdout_metric": artifact["evidence_graph_summary"]["best_holdout_metric"],
-                "holdout_metric_sequence": artifact["evidence_graph_summary"][
-                    "holdout_metric_sequence"
-                ],
-                "holdout_improvement_count": artifact["decision_summary"][
-                    "holdout_improvement_count"
-                ],
-                "validated_promotion_candidate_count": artifact["decision_summary"][
-                    "validated_promotion_candidate_count"
-                ],
-                "failure_continuation": artifact["decision_summary"][
-                    "failure_continuation"
-                ],
-            },
-            "successor_todos": successor_todos,
-            "followup": followup,
-            "completion": completion,
-            "frontier": frontier_packet,
-            "public_boundary": {
-                "raw_logs_recorded": False,
-                "private_artifacts_recorded": False,
-                "absolute_paths_recorded": False,
-                "credentials_recorded": False,
-            },
-        }
+                "promotion_decision_made": artifact["summary"]["promotion_decision_made"],
+                "role_id": role_id,
+                "evaluation_summary": {
+                    "claim_allowed": artifact["summary"]["claim_allowed"],
+                    "best_dev_metric": artifact["evidence_graph_summary"]["best_dev_metric"],
+                    "best_holdout_metric": artifact["evidence_graph_summary"]["best_holdout_metric"],
+                    "holdout_metric_sequence": artifact["evidence_graph_summary"][
+                        "holdout_metric_sequence"
+                    ],
+                    "holdout_improvement_count": artifact["decision_summary"][
+                        "holdout_improvement_count"
+                    ],
+                    "validated_promotion_candidate_count": artifact["decision_summary"][
+                        "validated_promotion_candidate_count"
+                    ],
+                    "failure_continuation": artifact["decision_summary"][
+                        "failure_continuation"
+                    ],
+                },
+                "successor_todos": successor_todos,
+                "followup": followup,
+                "completion": completion,
+                "frontier": frontier_packet,
+                "public_boundary": {
+                    "raw_logs_recorded": False,
+                    "private_artifacts_recorded": False,
+                    "absolute_paths_recorded": False,
+                    "credentials_recorded": False,
+                },
+            }
 
     return _manual_research_required_result(
         goal_id=goal_id,

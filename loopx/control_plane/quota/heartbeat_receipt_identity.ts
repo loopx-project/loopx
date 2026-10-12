@@ -13,6 +13,8 @@ import type { JsonObject } from "../effect_program.ts";
 import {settlementIdentity, type SettlementIdentity} from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { jsonObject } from "../runtime_decode.ts";
+import {nativeChildReportAdmission} from "../capabilities/native_child_admission.ts";
+import type {ReceiptBoundReplayPhase} from "./settlement_phase.ts";
 
 const TODO_ID_PATTERN = /^todo_[a-z0-9_-]{3,64}$/;
 const REPLAN_OBLIGATION_ID_PATTERN = /^replan-[a-f0-9]{16}$/;
@@ -179,4 +181,45 @@ export function selectEffectiveHeartbeatReceipt<Value>(
   return identities.size === 1
     ? [...identities.values()][0]!
     : entries.at(-1)!.value;
+}
+
+/** Reentry can qualify work on the original binding, never replace its authority.
+ * The caller commits this append-only projection under the receipt-log lock. */
+export function heartbeatWorkRequalification(
+  original: JsonObject,
+  currentDetails: JsonObject,
+  identity: SettlementIdentity,
+  phase: ReceiptBoundReplayPhase,
+  closeoutStarted: boolean,
+): JsonObject {
+  const replay = {append: false, details: null};
+  const candidate = heartbeatReceiptBinding(identity.goal_id, identity.agent_id,
+    heartbeatReceiptFactFromEvent({...original, details: currentDetails}));
+  if (candidate === null || candidate.binding_kind !== identity.binding_kind ||
+      candidate.binding_id !== identity.binding_id ||
+      candidate.settlement_effect_id !== identity.effect_id) {
+    throw receiptIdentityConflict("work requalification must preserve the original settlement binding");
+  }
+  if (phase !== "open" || closeoutStarted) return replay;
+  // No legacy/status-label compatibility for new qualifications: all modern
+  // work facts must be explicit. This reuses the report-admission predicate.
+  if (nativeChildReportAdmission(currentDetails, null, identity.effect_id, phase, false)
+      .report_permission !== "new_operation") return replay;
+  const oldDetails = heartbeatReceiptDetails(original);
+  if (nativeChildReportAdmission(oldDetails, original.status, identity.effect_id, phase, false)
+      .report_permission === "new_operation") return replay;
+  const originalReplan = normalizeHeartbeatReplanObligationId(oldDetails.semantic_replan_obligation_id);
+  const currentReplan = normalizeHeartbeatReplanObligationId(currentDetails.semantic_replan_obligation_id);
+  if (currentReplan !== null && currentReplan !== originalReplan) {
+    throw receiptIdentityConflict("work requalification cannot replace the original semantic replan guard");
+  }
+  const qualified = {...oldDetails};
+  for (const field of ["ok", "should_run", "must_attempt_work", "delivery_allowed", "quiet_noop_allowed"]) {
+    qualified[field] = currentDetails[field]!;
+  }
+  // Preserve workspace causality, semantic guards, pending selection and all
+  // original identities. Work admission makes this same Todo owe closeout.
+  qualified.closeout_required = identity.todo_id !== null;
+  qualified.settlement_receipt_revision = "work_admission";
+  return {append: true, details: qualified};
 }

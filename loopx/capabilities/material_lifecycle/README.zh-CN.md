@@ -144,6 +144,13 @@ write scope 和 owner gate。
    验证 stable ID、source digest、backup digest、count 和 parse health。
 3. **Exact-read 决策证据。**
    只提升当前且权威的证据；拒绝过期、不可读或只有二手来源的 claim。
+   rerank move 或 Explore topic 只能引用符合条件的 packet 证据：changed fact
+   必须新鲜且匹配当前 source revision；recalled claim 必须已 exact-read 验证且匹配当前
+   source revision；直接引用 source/revision 也必须由同一类新鲜 changed fact 或
+   exact-read 验证过的 claim 支持。单独的 `source_revisions` 扫描记录不能作为动作依据。
+   policy 评估拿到的是副本，不能改写用于校验其动作的 packet snapshot。
+   明确过期或被拒绝的记录不能作为动作依据。无关的过期记录仍保留展示；packet
+   无法识别的 opaque ref 继续按原有调用方语义处理。
 4. **选择最小有效变化。**
    把 lifecycle transition、bounded rerank 和 structural rebuild 作为三种不同操作。
 5. **Preview 与验证。**

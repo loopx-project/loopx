@@ -1363,8 +1363,24 @@ def _split_semicolon(value: str) -> list[str]:
     return [item.strip() for item in value.split(";") if item.strip()]
 
 
+def resolve_canary_catalog_path(
+    catalog_path: Path | None = None, *, repo_root: Path | None = None,
+) -> Path:
+    """Resolve development inputs without treating an installed wheel as a checkout."""
+    path = (catalog_path or (
+        repo_root / "docs/concepts/interaction-pattern-catalog.md"
+        if repo_root is not None else DEFAULT_CATALOG_PATH
+    )).expanduser()
+    if not path.is_file():
+        raise ValueError(
+            f"canary catalog is missing: {path}; run from a complete LoopX source "
+            "checkout or supply --catalog PATH. The wheel does not bundle development inputs."
+        )
+    return path
+
+
 def _read_catalog(catalog_path: Path | None = None) -> tuple[Path, str]:
-    path = (catalog_path or DEFAULT_CATALOG_PATH).expanduser()
+    path = resolve_canary_catalog_path(catalog_path)
     return path, path.read_text(encoding="utf-8")
 
 
@@ -1831,7 +1847,8 @@ def render_catalog_canary_profiles_markdown(payload: dict[str, Any]) -> str:
 
 
 def render_catalog_canary_plan_markdown(payload: dict[str, Any]) -> str:
-    inputs = payload.get("selection_inputs") if isinstance(payload.get("selection_inputs"), dict) else {}
+    inputs_value = payload.get('selection_inputs')
+    inputs = inputs_value if isinstance(inputs_value, dict) else {}
     lines = [
         "# Catalog Canary Plan",
         "",

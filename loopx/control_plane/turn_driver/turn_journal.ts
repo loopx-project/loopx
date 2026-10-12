@@ -14,6 +14,7 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import { preparedAttemptViolation } from "./turn_journal_attempt_contract.ts";
 import { recordedTurnEffects, type RecordedTurnEffects } from "./turn_journal_effect_readback.ts";
+import { selectedWorkTodoId } from "../work_items/interaction_contract.ts";
 
 export const TURN_JOURNAL_INSPECTION_SCHEMA_VERSION =
   "loopx_turn_journal_inspection_v1";
@@ -239,23 +240,6 @@ function identityState(
   return [complete, complete && new Set(observed).size === 1];
 }
 
-function selectedTurnTodoId(envelope: JsonObject): string | null {
-  const orchestration = asObject(envelope.task_orchestration_contract);
-  const primaryTodoId = typeof orchestration.primary_todo_id === "string"
-    ? orchestration.primary_todo_id.trim()
-    : "";
-  if (
-    orchestration.schema_version === "task_orchestration_contract_v2" &&
-    orchestration.mode === "adaptive" &&
-    primaryTodoId
-  ) {
-    return primaryTodoId;
-  }
-  const action = asObject(envelope.action);
-  const selectedTodo = asObject(action.selected_todo);
-  return isValidIdentity(selectedTodo.todo_id) ? selectedTodo.todo_id : null;
-}
-
 function typedSettlementIdentityState(
   envelope: JsonObject,
   transaction: JsonObject,
@@ -278,7 +262,10 @@ function typedSettlementIdentityState(
   const expectedTurnInstance = isValidIdentity(transaction.turn_instance_id)
     ? transaction.turn_instance_id
     : transaction.turn_key;
-  const selectedTodoId = selectedTurnTodoId(envelope);
+  const selectedTodoId = selectedWorkTodoId({
+    selected_todo: asObject(envelope.action).selected_todo,
+    task_orchestration_contract: envelope.task_orchestration_contract,
+  });
   return [
     true,
     isValidIdentity(expectedTurnInstance) &&

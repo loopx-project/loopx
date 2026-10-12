@@ -15,6 +15,7 @@ from typing import Any
 
 from loopx.bootstrap import bootstrap_project
 from loopx.configure_goal import configure_goal
+from loopx.control_plane.todos.handoff_mode import set_goal_handoff_mode
 from loopx.state_refresh import refresh_state_run
 from loopx.todos import add_goal_todo, complete_goal_todo, update_goal_todo
 
@@ -173,6 +174,14 @@ def seed_story(root: Path, story: dict[str, Any], notice: str) -> dict[str, Any]
             goal_id=story["id"],
             registered_agents=story["agents"],
             execute=True,
+        )
+    )
+    checked(
+        set_goal_handoff_mode(
+            registry_path=registry,
+            goal_id=story["id"],
+            mode="soft_claim",
+            runtime_root_arg=str(runtime),
         )
     )
     write_story_artifacts(project, story, notice)

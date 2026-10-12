@@ -66,6 +66,7 @@ from .project_lifecycle_inputs import (
     inline_agent_vision_packet,
     inline_progress_observation,
     reject_non_standard_json_constant,
+    split_explore_result_input,
 )
 from .project_lifecycle_sinks import (
     apply_external_sink_postcondition,
@@ -250,6 +251,10 @@ def register_refresh_state_command(
         "--progress-coverage-complete",
         action="store_true",
         default=None,
+    )
+    refresh_state_parser.add_argument(
+        "--explore-result-json",
+        help="Path to an explicit explore_result_attachment_v0; ingest and link after committed work writeback.",
     )
     refresh_state_parser.add_argument(
         "--reward-memory-reflection-json",
@@ -483,6 +488,14 @@ def handle_refresh_state_command(
         elif inline_vision_packet:
             agent_vision_packet = inline_vision_packet
             merge_agent_vision_patch = True
+        agent_vision_packet, explore_result = split_explore_result_input(
+            agent_vision_packet, getattr(args, "explore_result_json", None),
+            scope_context=dict(
+                registry_path=registry_path, runtime_root_override=args.runtime_root,
+                goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id,
+                turn_instance_id=args.turn_instance_id,
+            ),
+        )
         progress_observation = inline_progress_observation(args)
         reward_memory_reflection_json = str(
             getattr(args, "reward_memory_reflection_json", None) or ""
@@ -574,6 +587,7 @@ def handle_refresh_state_command(
             checkpoint_read_context_id=getattr(args, "checkpoint_read_context", None),
             first_delivery=bool(getattr(args, "first_delivery", False)),
             progress_observation=progress_observation,
+            explore_result=explore_result,
             usage_measurement=usage_measurement,
             usage_codex_session=(
                 Path(args.usage_codex_session).expanduser()
@@ -782,6 +796,18 @@ def handle_refresh_state_command(
         if not material_refresh_ready:
             print_payload(payload, fmt, render_state_refresh_markdown)
             return 0 if payload.get("ok") else 1
+        if payload.get("explore_result") is not None:
+            from ..capabilities.explore.result_writeback import deliver_result_attachment
+            delivery = deliver_result_attachment(
+                payload=payload, registry_path=registry_path,
+                runtime_root=Path(payload["runtime_root"]),
+                goal_id=args.goal_id, agent_id=args.agent_id,
+                todo_id=args.todo_id, turn_instance_id=args.turn_instance_id,
+            )
+            payload["explore_result_delivery"] = delivery
+            if not delivery["ok"]:
+                payload["ok"] = False
+                payload["error"] = "Primary writeback committed; replay this exact refresh to retry Explore result delivery"
         graph_sync = sync_explore_graph_after_material_refresh(
             registry_path=registry_path,
             goal_id=args.goal_id,

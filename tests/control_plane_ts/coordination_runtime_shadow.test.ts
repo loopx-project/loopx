@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, writeFile, unlink, symlink } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile, unlink, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
@@ -28,6 +28,29 @@ async function qualify(f: ShadowFixture, head: JsonObject, extra: JsonObject = {
     minimum_operations: 3, required_event_kinds: ["todo_add"], ...extra });
 }
 
+test("retained observations refuse corrupt provider bytes without suggesting bootstrap", async (t) => {
+  const {f, head} = await qualifiedFixture(t);
+  const source = await sourceRequest(f, head);
+  const original = await readFile(f.store.path);
+  await writeFile(f.store.path, "{corrupt journal");
+  for (const [read, schema, extra] of [
+    [inspectCoordinationRuntimeShadow, schemas.COORDINATION_RUNTIME_SHADOW_INSPECT_REQUEST_SCHEMA, {}],
+    [qualifyCoordinationRuntimeShadow, schemas.COORDINATION_RUNTIME_SHADOW_QUALIFY_REQUEST_SCHEMA,
+      {minimum_operations: 3, required_event_kinds: ["todo_add"]}],
+    [readCoordinationRuntimeShadowTodoCandidate, schemas.COORDINATION_RUNTIME_SHADOW_TODO_READ_REQUEST_SCHEMA,
+      {todo_id: "todo_1"}],
+  ] as const) {
+    const result = await read({...source, schema_version: schema, ...extra});
+    assert.equal(result.status, "failed");
+    assert.equal(result.reason_code, "provider_protocol_violation");
+    assert.equal(result.qualified, false);
+    assert.equal(result.decision_read_from_shadow, false);
+    assert.equal(await readFile(f.store.path, "utf8"), "{corrupt journal");
+  }
+  await writeFile(f.store.path, original);
+  assert.equal((await qualify(f, head)).status, "qualified");
+});
+
 test("bootstrap is exactly replayable, has no mutation receipt and cannot overwrite a different baseline", async (t) => {
   const f = await fixture(t);
   const request = { ...await sourceRequest(f, f.baseline), schema_version: schemas.COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA,
@@ -39,6 +62,72 @@ test("bootstrap is exactly replayable, has no mutation receipt and cannot overwr
   assert.equal(rejected.status, "failed");
   const history = await f.store.scanCommitted(null, 10); assert.equal(history.status, "page");
   if (history.status === "page") { assert.equal(history.transactions.length, 1); assert.deepEqual(history.transactions[0]?.receipts, []); }
+});
+
+for (const kind of ["unsupported_name", "file_symlink", "directory_symlink", "parent_symlink", "non_file"] as const) {
+  test(`source admission rejects ${kind} without changing the candidate`, async (t) => {
+    const f = await fixture(t);
+    const before = await f.store.loadAuthority();
+    let source = await sourceRequest(f, f.baseline);
+    const directory = join(f.root, "goals", "goal-a", "task-leases");
+    await mkdir(directory, {recursive: true});
+    const outside = join(f.root, "retained-source");
+    await mkdir(outside);
+    const record = JSON.stringify({goal_id: "goal-a", todo_id: "todo_retained", status: "released", version: 4, lease_epoch: 2});
+    await writeFile(join(outside, "todo_retained.json"), record);
+    if (kind === "unsupported_name") await writeFile(join(directory, "unexpected lease.json"), record);
+    if (kind === "file_symlink") await symlink(join(outside, "todo_retained.json"), join(directory, "todo_retained.json"));
+    if (kind === "non_file") await mkdir(join(directory, "todo_retained.json"));
+    if (kind === "directory_symlink") {
+      await rm(directory, {recursive: true});
+      await symlink(outside, directory);
+    }
+    if (kind === "parent_symlink") {
+      const goalDirectory = join(f.root, "goals", "goal-a");
+      await rm(goalDirectory, {recursive: true});
+      await symlink(outside, goalDirectory);
+    }
+    if (kind !== "non_file") source = await sourceRequest(f, f.baseline);
+    const result = await inspectCoordinationRuntimeShadow({...source,
+      schema_version: schemas.COORDINATION_RUNTIME_SHADOW_INSPECT_REQUEST_SCHEMA});
+    assert.equal(result.status, "failed", JSON.stringify(result));
+    assert.equal(result.reason_code, "source_lease_inventory_invalid");
+    assert.deepEqual(await f.store.loadAuthority(), before);
+    assert.equal(await readFile(join(outside, "todo_retained.json"), "utf8"), record);
+    assert.deepEqual(await readdir(outside), ["todo_retained.json"]);
+  });
+}
+
+test("regular orphan lease history stays witnessed without becoming a live lease", async (t) => {
+  const f = await fixture(t);
+  const directory = join(f.root, "goals", "goal-a", "task-leases");
+  const record = JSON.stringify({goal_id: "goal-a", todo_id: "todo_retained", status: "released", version: 4, lease_epoch: 2,
+    future_extension: {flag: false, missing_value: null}});
+  await writeFile(join(directory, "todo_retained.json"), record);
+  await writeFile(join(directory, ".task-leases.lock"), "retained host lock");
+  const source = await sourceRequest(f, f.baseline);
+  assert.equal(((source.source_snapshot as JsonObject).lease_inventory as JsonObject[]).length, 1);
+  const result = await inspectCoordinationRuntimeShadow({...source,
+    schema_version: schemas.COORDINATION_RUNTIME_SHADOW_INSPECT_REQUEST_SCHEMA});
+  assert.equal(result.status, "matched", JSON.stringify(result));
+  assert.deepEqual(f.baseline.leases, []);
+  assert.equal(await readFile(join(directory, "todo_retained.json"), "utf8"), record);
+});
+
+test("source validation cannot repair invalid UTF-8 into a different retained record", async (t) => {
+  const f = await fixture(t);
+  const path = join(f.root, "goals", "goal-a", "task-leases", "todo_retained.json");
+  const bytes = Buffer.concat([Buffer.from('{"goal_id":"goal-a","todo_id":"todo_retained","note":"'),
+    Buffer.from([0xff]), Buffer.from('"}')]);
+  await writeFile(path, bytes);
+  const before = await f.store.loadAuthority();
+  const source = await sourceRequest(f, f.baseline);
+  const result = await inspectCoordinationRuntimeShadow({...source,
+    schema_version: schemas.COORDINATION_RUNTIME_SHADOW_INSPECT_REQUEST_SCHEMA});
+  assert.equal(result.status, "failed", JSON.stringify(result));
+  assert.equal(result.qualified, false);
+  assert.deepEqual(await f.store.loadAuthority(), before);
+  assert.deepEqual(await readFile(path), bytes);
 });
 
 test("outbox qualification verifies bounded history coverage and never claims sustained parity", async (t) => {

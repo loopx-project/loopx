@@ -72,6 +72,18 @@ def _composition_failure_dispatch(
     }
 
 
+def post_writeback_source_failure(
+    hooks: Sequence[PostWritebackHookRegistration],
+) -> dict[str, Any]:
+    """Report a stale or unavailable source without invoking any hook."""
+
+    return _composition_failure_dispatch(
+        hooks,
+        error_code="source_projection_failed",
+        receipt_ref=None,
+    )
+
+
 def _recorded_composition_failure(
     journal_path: Path,
     *,
@@ -259,4 +271,5 @@ def dispatch_committed_cli_post_writeback_hooks(
 __all__ = [
     "PostWritebackProjectionBuilder",
     "dispatch_committed_cli_post_writeback_hooks",
+    "post_writeback_source_failure",
 ]

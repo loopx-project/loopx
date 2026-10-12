@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from typing import Any
 
 
@@ -42,8 +43,17 @@ def heartbeat_prompt_mode(
     return "thin"
 
 
-def prompt_budget_text(text: str, *, goal_id: str, active_state: str) -> str:
-    return text.replace(goal_id, "<GOAL_ID>").replace(active_state, "<ACTIVE_STATE>")
+def prompt_budget_text(
+    text: str, *, goal_id: str, active_state: str,
+    registry_path: str | None = None,
+) -> str:
+    normalized = text
+    # Compare authored guidance independently of the host's selected path length.
+    # char_count below still reports the actual transport/body size.
+    if registry_path:
+        normalized = normalized.replace(shlex.quote(registry_path), "<REGISTRY_PATH>")
+        normalized = normalized.replace(registry_path, "<REGISTRY_PATH>")
+    return normalized.replace(goal_id, "<GOAL_ID>").replace(active_state, "<ACTIVE_STATE>")
 
 
 def build_interface_budget(
@@ -51,6 +61,7 @@ def build_interface_budget(
     task_body: str,
     goal_id: str,
     active_state: str,
+    registry_path: str | None = None,
     full: bool = False,
     compact: bool = False,
     brief: bool = False,
@@ -62,7 +73,9 @@ def build_interface_budget(
         if native_goal_host
         else heartbeat_prompt_mode(full=full, compact=compact, brief=brief, thin=thin)
     )
-    budget_text = prompt_budget_text(task_body, goal_id=goal_id, active_state=active_state)
+    budget_text = prompt_budget_text(
+        task_body, goal_id=goal_id, active_state=active_state, registry_path=registry_path,
+    )
     budget_chars = len(budget_text)
     reward_memory_headroom = (
         REWARD_MEMORY_OUTCOME_PROMPT_HEADROOM_CHARS

@@ -1,7 +1,7 @@
 import { writeSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
 import { flushCompileCache } from "node:module";
-import { chmod, readFile, rm, type FileHandle } from "node:fs/promises";
+import { readFile, rm, type FileHandle } from "node:fs/promises";
 
 import type { JsonObject } from "./effect_program.ts";
 import {
@@ -28,7 +28,9 @@ const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
 const MAX_INLINE_RESPONSE_BYTES = 2 * 1024 * 1024;
 // Explicit opt-in: ordinary effects retain the 2 MiB request/response wire.
 const LOCAL_SNAPSHOT_METHODS = new Set([
+  "coordination.local_authority.todo_source",
   "todo.context.page",
+  "work_item.context.project",
   "goal.checkpoint_read_context.resolve",
   "goal.checkpoint_read_context.commit",
   "goal.checkpoint_read_context.inspect_replay",
@@ -304,7 +306,6 @@ server.listen(0, "127.0.0.1", async () => {
         // serving a goal is not necessarily the one the caller resolves from PATH.
         runtime_identity: sqliteRuntimeIdentity(),
       });
-      await chmod(infoPath, 0o600);
     });
     publicationComplete = true;
     resolvePublication();

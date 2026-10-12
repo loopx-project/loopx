@@ -12,7 +12,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..extensions.process_runtime import terminate_process_tree
-from .planner import REPO_ROOT, build_catalog_canary_plan, flatten_catalog_canary_checks
+from .planner import (
+    REPO_ROOT,
+    build_catalog_canary_plan,
+    flatten_catalog_canary_checks,
+    resolve_canary_catalog_path,
+)
 from .smoke_profiles import list_smoke_suite_profiles, resolve_smoke_suite_profiles
 
 
@@ -84,8 +89,9 @@ def _is_relative_to(path: Path, parent: Path) -> bool:
         return False
 
 
-def normalize_canary_command(command: str) -> dict[str, Any]:
+def normalize_canary_command(command: str, repo_root: Path | None = None) -> dict[str, Any]:
     """Parse a planner command into a shell-free, repository-local argv."""
+    repo_root = (repo_root or REPO_ROOT).resolve()
 
     try:
         parts = shlex.split(command)
@@ -112,9 +118,9 @@ def normalize_canary_command(command: str) -> dict[str, Any]:
         }
 
     interpreter = parts[0]
-    script = (REPO_ROOT / parts[1]).resolve()
-    examples_root = (REPO_ROOT / "examples").resolve()
-    if not _is_relative_to(script, examples_root):
+    script = (repo_root / parts[1]).resolve()
+    examples_root = (repo_root / "examples").resolve()
+    if not _is_relative_to(script, examples_root) or not _is_relative_to(script, repo_root):
         return {
             "ok": False,
             "command": command,
@@ -144,25 +150,27 @@ def normalize_canary_command(command: str) -> dict[str, Any]:
         "ok": True,
         "command": command,
         "argv": argv,
-        "display_argv": _display_argv(argv),
+        "display_argv": _display_argv(argv, repo_root=repo_root),
         "injected_args": injected_args,
-        "script": str(script.relative_to(REPO_ROOT)),
+        "script": str(script.relative_to(repo_root)),
     }
 
 
-def _display_argv(argv: list[str]) -> list[str]:
+def _display_argv(argv: list[str], repo_root: Path | None = None) -> list[str]:
+    repo_root = (repo_root or REPO_ROOT).resolve()
     displayed = list(argv)
     if displayed and Path(displayed[0]).resolve() == Path(sys.executable).resolve():
         displayed[0] = "python3"
     for index, value in enumerate(displayed[1:], start=1):
         path = Path(value)
-        if path.is_absolute() and _is_relative_to(path.resolve(), REPO_ROOT.resolve()):
-            displayed[index] = str(path.resolve().relative_to(REPO_ROOT.resolve()))
+        if path.is_absolute() and _is_relative_to(path.resolve(), repo_root.resolve()):
+            displayed[index] = str(path.resolve().relative_to(repo_root.resolve()))
     return displayed
 
 
-def _tracked_change_paths() -> tuple[bool, list[str], str]:
-    git_ok, git_detail = _git_worktree_probe(REPO_ROOT)
+def _tracked_change_paths(repo_root: Path | None = None) -> tuple[bool, list[str], str]:
+    repo_root = (repo_root or REPO_ROOT).resolve()
+    git_ok, git_detail = _git_worktree_probe(repo_root)
     if not git_ok:
         return False, [], git_detail
 
@@ -171,7 +179,7 @@ def _tracked_change_paths() -> tuple[bool, list[str], str]:
     ok = True
     for args in (["diff", "--name-only"], ["diff", "--name-only", "--cached"]):
         completed = subprocess.run(
-            ["git", "-C", str(REPO_ROOT), *args],
+            ["git", "-C", str(repo_root), *args],
             check=False,
             text=True, encoding="utf-8", errors="replace",
             stdout=subprocess.PIPE,
@@ -203,12 +211,13 @@ def _git_worktree_probe(root: Path) -> tuple[bool, str]:
     return True, ""
 
 
-def _git_required_skip(normalized: dict[str, Any]) -> dict[str, Any] | None:
+def _git_required_skip(normalized: dict[str, Any], repo_root: Path | None = None) -> dict[str, Any] | None:
+    repo_root = (repo_root or REPO_ROOT).resolve()
     script_name = Path(str(normalized.get("script") or "")).name
     reason = GIT_REQUIRED_SCRIPTS.get(script_name)
     if not reason:
         return None
-    git_ok, git_detail = _git_worktree_probe(REPO_ROOT)
+    git_ok, git_detail = _git_worktree_probe(repo_root)
     if git_ok:
         return None
     return {
@@ -221,19 +230,21 @@ def _git_required_skip(normalized: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def _serial_smoke_reason(check: dict[str, Any]) -> str:
+def _serial_smoke_reason(check: dict[str, Any], repo_root: Path | None = None) -> str:
+    repo_root = (repo_root or REPO_ROOT).resolve()
     normalized = check.get("normalized")
     if not isinstance(normalized, dict):
-        normalized = normalize_canary_command(str(check.get("command") or ""))
+        normalized = normalize_canary_command(str(check.get("command") or ""), repo_root=repo_root)
     script_name = Path(str(normalized.get("script") or "")).name
     return SERIAL_SMOKE_SCRIPTS.get(script_name, "")
 
 
-def _restore_tracked_paths(paths: list[str]) -> dict[str, Any]:
+def _restore_tracked_paths(paths: list[str], repo_root: Path | None = None) -> dict[str, Any]:
+    repo_root = (repo_root or REPO_ROOT).resolve()
     if not paths:
         return {"ok": True, "restored_paths": []}
     completed = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "restore", "--staged", "--worktree", "--", *paths],
+        ["git", "-C", str(repo_root), "restore", "--staged", "--worktree", "--", *paths],
         check=False,
         text=True, encoding="utf-8", errors="replace",
         stdout=subprocess.PIPE,
@@ -253,15 +264,17 @@ def _run_check(
     timeout_seconds: float,
     check_index: int | None = None,
     check_count: int | None = None,
+    repo_root: Path | None = None,
 ) -> dict[str, Any]:
-    normalized = normalize_canary_command(str(check.get("command") or ""))
+    repo_root = (repo_root or REPO_ROOT).resolve()
+    normalized = normalize_canary_command(str(check.get("command") or ""), repo_root=repo_root)
     result = {**check, "normalized": normalized}
     if check_index is not None and check_count is not None:
         result.update({"check_index": check_index, "check_count": check_count})
     if not normalized.get("ok"):
         result.update({"status": "skipped", "ok": False, "reason": normalized.get("reason")})
         return result
-    git_required_skip = _git_required_skip(normalized)
+    git_required_skip = _git_required_skip(normalized, repo_root=repo_root)
     if git_required_skip:
         result.update(git_required_skip)
         return result
@@ -286,7 +299,7 @@ def _run_check(
                 env[name] = str(home / directory)
             try:
                 with subprocess.Popen(
-                    normalized["argv"], cwd=REPO_ROOT, env=env,
+                    normalized["argv"], cwd=repo_root, env=env,
                     text=True, encoding="utf-8", errors="replace",
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     start_new_session=os.name == "posix",
@@ -310,7 +323,7 @@ def _run_check(
                         [sys.executable, "-c", "from loopx.control_plane.effect_runtime "
                          "import restart_effect_runtime; r=restart_effect_runtime(); "
                          "raise SystemExit(r['status'] == 'shutdown_pending')"],
-                        cwd=REPO_ROOT, env=env, check=True, timeout=15,
+                        cwd=repo_root, env=env, check=True, timeout=15,
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     )
     except subprocess.TimeoutExpired as exc:
@@ -343,32 +356,37 @@ def run_canary_smoke_check(
     check: dict[str, Any],
     *,
     timeout_seconds: float = 120.0,
+    repo_root: Path | None = None,
 ) -> dict[str, Any]:
     """Execute one normalized canary smoke-suite check through the runner contract."""
+    repo_root = (repo_root or REPO_ROOT).resolve()
 
-    return _run_check(check, timeout_seconds=max(1.0, timeout_seconds))
-
-
-def _smoke_script_relative(script: Path) -> str:
-    return script.relative_to(REPO_ROOT).as_posix()
+    return _run_check(check, timeout_seconds=max(1.0, timeout_seconds), repo_root=repo_root)
 
 
-def _smoke_script_filter_keys(script: Path) -> set[str]:
-    examples_root = REPO_ROOT / "examples"
+def _smoke_script_relative(script: Path, repo_root: Path | None = None) -> str:
+    repo_root = (repo_root or REPO_ROOT).resolve()
+    return script.relative_to(repo_root).as_posix()
+
+
+def _smoke_script_filter_keys(script: Path, repo_root: Path | None = None) -> set[str]:
+    repo_root = (repo_root or REPO_ROOT).resolve()
+    examples_root = repo_root / "examples"
     return {
         script.name,
-        _smoke_script_relative(script),
+        _smoke_script_relative(script, repo_root=repo_root),
         script.relative_to(examples_root).as_posix(),
     }
 
 
-def _smoke_script_check(script: Path, *, source: str = "suite") -> dict[str, Any]:
+def _smoke_script_check(script: Path, *, source: str = "suite", repo_root: Path | None = None) -> dict[str, Any]:
+    repo_root = (repo_root or REPO_ROOT).resolve()
     return {
         "source": source,
         "profile_id": "smoke-suite",
         "profile_title": "Smoke suite",
         "tier": "default",
-        "command": f"python3 {_smoke_script_relative(script)}",
+        "command": f"python3 {_smoke_script_relative(script, repo_root=repo_root)}",
         "reason": "tracked public smoke script",
     }
 
@@ -387,10 +405,11 @@ def _normalize_script_filter(script: str) -> str:
     return path.name if path.suffix else value
 
 
-def _matches_modules(script: Path, modules: list[str]) -> bool:
+def _matches_modules(script: Path, modules: list[str], repo_root: Path | None = None) -> bool:
+    repo_root = (repo_root or REPO_ROOT).resolve()
     if not modules:
         return True
-    examples_relative = script.relative_to(REPO_ROOT / "examples").as_posix().lower()
+    examples_relative = script.relative_to(repo_root / "examples").as_posix().lower()
     haystack = f"{script.name.lower()} {examples_relative}"
     stem_tokens = {
         token for token in re.split(r"[-_./]+", examples_relative.removesuffix(script.suffix)) if token
@@ -421,14 +440,18 @@ def _discover_smoke_suite_checks(
     modules: list[str] | None = None,
     exclude_modules: list[str] | None = None,
     scripts: list[str] | None = None,
+    repo_root: Path | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    repo_root = (repo_root or REPO_ROOT).resolve()
     normalized_suite = suite if suite in SMOKE_SUITE_CHOICES else "default-public"
     modules = list(modules or [])
     exclude_modules = list(exclude_modules or [])
     requested_scripts = {
         script for script in (_normalize_script_filter(item) for item in (scripts or [])) if script
     }
-    all_scripts = sorted(path for path in (REPO_ROOT / "examples").rglob("*-smoke.py") if path.is_file())
+    if not (repo_root / "examples").is_dir():
+        raise ValueError("canary examples are missing; run from a complete source checkout")
+    all_scripts = sorted(path for path in (repo_root / "examples").rglob("*-smoke.py") if path.is_file())
     if normalized_suite == "default-public":
         all_scripts = [
             script for script in all_scripts
@@ -437,12 +460,12 @@ def _discover_smoke_suite_checks(
     selected: list[Path] = []
     missing_scripts = set(requested_scripts)
     for script in all_scripts:
-        script_filter_keys = _smoke_script_filter_keys(script)
+        script_filter_keys = _smoke_script_filter_keys(script, repo_root=repo_root)
         if requested_scripts and requested_scripts.isdisjoint(script_filter_keys):
             continue
-        if not _matches_modules(script, modules):
+        if not _matches_modules(script, modules, repo_root=repo_root):
             continue
-        if exclude_modules and _matches_modules(script, exclude_modules):
+        if exclude_modules and _matches_modules(script, exclude_modules, repo_root=repo_root):
             missing_scripts.difference_update(script_filter_keys)
             continue
         selected.append(script)
@@ -455,7 +478,7 @@ def _discover_smoke_suite_checks(
         }
         for script in sorted(missing_scripts)
     ]
-    return [_smoke_script_check(script) for script in selected], warnings
+    return [_smoke_script_check(script, repo_root=repo_root) for script in selected], warnings
 
 
 def _dedupe_checks(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -483,10 +506,12 @@ def _progress_check_started(
     index: int,
     total: int,
     check: dict[str, Any],
+    repo_root: Path | None = None,
 ) -> None:
+    repo_root = (repo_root or REPO_ROOT).resolve()
     if not progress_callback:
         return
-    normalized_check = normalize_canary_command(str(check.get("command") or ""))
+    normalized_check = normalize_canary_command(str(check.get("command") or ""), repo_root=repo_root)
     progress_callback(
         {
             "schema_version": "canary_smoke_suite_progress_v0",
@@ -545,6 +570,7 @@ def build_canary_smoke_suite_run(
     allow_tracked_side_effects: bool = False,
     parallel_jobs: int = 1,
     progress_callback: ProgressCallback | None = None,
+    repo_root: Path | None = None,
 ) -> dict[str, Any]:
     """Build and optionally execute a continue-on-failure smoke suite.
 
@@ -552,6 +578,7 @@ def build_canary_smoke_suite_run(
     commands plus catalog-plan checks. It gives maintainers a full regression
     sweep without hiding the smaller profile/module loops used while developing.
     """
+    repo_root = (repo_root or REPO_ROOT).resolve()
 
     modules = list(modules or [])
     exclude_modules = list(exclude_modules or [])
@@ -593,12 +620,13 @@ def build_canary_smoke_suite_run(
             modules=modules,
             exclude_modules=exclude_modules,
             scripts=scripts,
+            repo_root=repo_root,
         )
         selected.extend(suite_checks)
         warnings.extend(suite_warnings)
     if catalog_selector_requested or normalized_suite == "catalog-plan":
         plan = build_catalog_canary_plan(
-            catalog_path=catalog_path,
+            catalog_path=resolve_canary_catalog_path(catalog_path, repo_root=repo_root),
             changed_files=changed_files,
             surfaces=surfaces,
             families=families,
@@ -623,7 +651,7 @@ def build_canary_smoke_suite_run(
     if limit and limit > 0:
         selected = selected[:limit]
     normalized = [
-        {**check, "normalized": normalize_canary_command(str(check.get("command") or ""))}
+        {**check, "normalized": normalize_canary_command(str(check.get("command") or ""), repo_root=repo_root)}
         for check in selected
     ]
 
@@ -643,7 +671,7 @@ def build_canary_smoke_suite_run(
         "auto_restored": False,
     }
     if execute:
-        git_ok, tracked_before, git_stderr = _tracked_change_paths()
+        git_ok, tracked_before, git_stderr = _tracked_change_paths(repo_root=repo_root)
         clean_start = git_ok and not tracked_before
         if allow_tracked_side_effects:
             enforcement_reason = "tracked_side_effects_explicitly_allowed"
@@ -665,7 +693,7 @@ def build_canary_smoke_suite_run(
         serial_indexes = {
             index
             for index, check in enumerate(selected, start=1)
-            if _serial_smoke_reason(check)
+            if _serial_smoke_reason(check, repo_root=repo_root)
         }
         serial_check_count = len(serial_indexes)
         parallel_check_count = len(selected) - serial_check_count
@@ -678,15 +706,17 @@ def build_canary_smoke_suite_run(
                     index=index,
                     total=len(selected),
                     check=check,
+                    repo_root=repo_root,
                 )
                 result = _run_check(
                     check,
                     timeout_seconds=max(1.0, timeout_seconds),
                     check_index=index,
                     check_count=len(selected),
+                    repo_root=repo_root,
                 )
                 if side_effect_guard["enforced"]:
-                    after_ok, tracked_after, after_stderr = _tracked_change_paths()
+                    after_ok, tracked_after, after_stderr = _tracked_change_paths(repo_root=repo_root)
                     side_effects = sorted(set(tracked_after) - set(tracked_before))
                     if side_effects:
                         result.update(
@@ -697,7 +727,7 @@ def build_canary_smoke_suite_run(
                             }
                         )
                         if clean_start:
-                            restore = _restore_tracked_paths(side_effects)
+                            restore = _restore_tracked_paths(side_effects, repo_root=repo_root)
                             result["tracked_side_effect_restore"] = restore
                             side_effect_guard["auto_restored"] = (
                                 bool(side_effect_guard.get("auto_restored"))
@@ -726,10 +756,12 @@ def build_canary_smoke_suite_run(
                         index=index,
                         total=len(selected),
                         check=check,
+                        repo_root=repo_root,
                     )
                     future = executor.submit(
                         _run_check,
                         check,
+                        repo_root=repo_root,
                         timeout_seconds=max(1.0, timeout_seconds),
                         check_index=index,
                         check_count=len(selected),
@@ -765,15 +797,17 @@ def build_canary_smoke_suite_run(
                     index=index,
                     total=len(selected),
                     check=check,
+                    repo_root=repo_root,
                 )
                 result = _run_check(
                     check,
                     timeout_seconds=max(1.0, timeout_seconds),
                     check_index=index,
                     check_count=len(selected),
+                    repo_root=repo_root,
                 )
                 result["serial_execution_required"] = True
-                result["serial_execution_reason"] = _serial_smoke_reason(check)
+                result["serial_execution_reason"] = _serial_smoke_reason(check, repo_root=repo_root)
                 indexed_results[index] = result
                 _progress_check_finished(
                     progress_callback,
@@ -783,7 +817,7 @@ def build_canary_smoke_suite_run(
                 )
             results = [indexed_results[index] for index in sorted(indexed_results)]
         if side_effect_guard["enforced"]:
-            final_ok, tracked_after, final_stderr = _tracked_change_paths()
+            final_ok, tracked_after, final_stderr = _tracked_change_paths(repo_root=repo_root)
             side_effects = sorted(set(tracked_after) - set(tracked_before))
             side_effect_guard.update(
                 {
@@ -806,7 +840,7 @@ def build_canary_smoke_suite_run(
                     "tracked_side_effects": side_effects,
                 }
                 if clean_start:
-                    restore = _restore_tracked_paths(side_effects)
+                    restore = _restore_tracked_paths(side_effects, repo_root=repo_root)
                     guard_failure["tracked_side_effect_restore"] = restore
                     side_effect_guard["auto_restored"] = (
                         bool(side_effect_guard.get("auto_restored")) or bool(restore.get("ok"))
@@ -832,7 +866,7 @@ def build_canary_smoke_suite_run(
         "ok": ok,
         "schema_version": CANARY_SMOKE_SUITE_RUN_SCHEMA_VERSION,
         "suite": normalized_suite,
-        "repo_root": str(REPO_ROOT),
+        "repo_root": str(repo_root),
         "dry_run": not execute,
         "executes_checks": execute,
         "writes_evidence": bool(allow_tracked_side_effects),
@@ -909,9 +943,11 @@ def build_catalog_canary_run(
     check_limit: int = 3,
     execute: bool = True,
     timeout_seconds: float = 120.0,
+    repo_root: Path | None = None,
 ) -> dict[str, Any]:
+    repo_root = (repo_root or REPO_ROOT).resolve()
     plan = build_catalog_canary_plan(
-        catalog_path=catalog_path,
+        catalog_path=resolve_canary_catalog_path(catalog_path, repo_root=repo_root),
         changed_files=changed_files,
         surfaces=surfaces,
         families=families,
@@ -923,13 +959,13 @@ def build_catalog_canary_run(
     planned = flatten_catalog_canary_checks(plan)
     selected = planned[: max(0, check_limit)]
     normalized = [
-        {**check, "normalized": normalize_canary_command(str(check.get("command") or ""))}
+        {**check, "normalized": normalize_canary_command(str(check.get("command") or ""), repo_root=repo_root)}
         for check in selected
     ]
     results = []
     if execute:
         results = [
-            _run_check(check, timeout_seconds=max(1.0, timeout_seconds))
+            _run_check(check, timeout_seconds=max(1.0, timeout_seconds), repo_root=repo_root)
             for check in selected
         ]
 
@@ -994,7 +1030,8 @@ def render_catalog_canary_run_markdown(payload: dict[str, Any]) -> str:
     for check in payload.get("selected_checks", []):
         if not isinstance(check, dict):
             continue
-        normalized = check.get("normalized") if isinstance(check.get("normalized"), dict) else {}
+        normalized_value = check.get('normalized')
+        normalized = normalized_value if isinstance(normalized_value, dict) else {}
         command = " ".join(str(part) for part in normalized.get("display_argv") or [])
         status = check.get("status") or ("ready" if normalized.get("ok") else "skipped")
         lines.extend(
@@ -1025,7 +1062,8 @@ def render_catalog_canary_run_markdown(payload: dict[str, Any]) -> str:
 def render_canary_smoke_suite_run_markdown(payload: dict[str, Any]) -> str:
     mode = "execute" if payload.get("executes_checks") else "preview"
     guard = payload.get("side_effect_guard")
-    guard = guard if isinstance(guard, dict) else {}
+    guard_value = guard
+    guard = guard_value if isinstance(guard_value, dict) else {}
     lines = [
         "# Canary Smoke Suite",
         "",
@@ -1062,7 +1100,8 @@ def render_canary_smoke_suite_run_markdown(payload: dict[str, Any]) -> str:
     for check in payload.get("selected_checks", []):
         if not isinstance(check, dict):
             continue
-        normalized = check.get("normalized") if isinstance(check.get("normalized"), dict) else {}
+        normalized_value = check.get('normalized')
+        normalized = normalized_value if isinstance(normalized_value, dict) else {}
         command = " ".join(str(part) for part in normalized.get("display_argv") or [])
         status = check.get("status") or ("ready" if normalized.get("ok") else "skipped")
         title = check.get("profile_title") or check.get("profile_id") or "smoke"

@@ -72,6 +72,83 @@ def test_attached_host_help_does_not_advertise_unsupported_controls():
     assert "/stop " not in rendered and "/new " not in rendered
 
 
+@pytest.mark.parametrize(
+    ("cadence", "expected"),
+    [
+        (
+            {
+                "min_interval_minutes": 60,
+                "eligibility": {
+                    "state": "waiting",
+                    "next_eligible_at_ms": 1791637200000,
+                },
+            },
+            "自动执行最小间隔：60 分钟；最小间隔条件尚未满足，等待至 2026-10-10T13:00:00.000Z。",
+        ),
+        (
+            {
+                "min_interval_minutes": 15,
+                "eligibility": {
+                    "state": "eligible",
+                    "next_eligible_at_ms": None,
+                },
+            },
+            "自动执行最小间隔：15 分钟；最小间隔条件已满足。",
+        ),
+        (
+            {
+                "min_interval_minutes": None,
+                "eligibility": {
+                    "state": "unavailable",
+                    "next_eligible_at_ms": None,
+                },
+            },
+            "自动执行状态暂不可读，不能据此判断可启动。",
+        ),
+    ],
+)
+def test_attached_status_renders_owner_cadence_without_a_countdown(cadence, expected):
+    rendered = render_conversation_status(
+        snapshot(
+            recipient_agent_id="authorized-worker",
+            recipient_goal_id="authorized-goal",
+            automation_cadence=cadence,
+        )
+    )
+    assert expected in rendered
+    assert "剩余" not in rendered and "秒后" not in rendered
+
+
+@pytest.mark.parametrize(
+    "stronger_state",
+    [
+        {"session_status": "resume_failed"},
+        {
+            "active_turn_status": "running",
+            "active_turn_observation_available": False,
+        },
+    ],
+)
+def test_interval_condition_never_claims_session_start_readiness(stronger_state):
+    rendered = render_conversation_status(
+        snapshot(
+            recipient_agent_id="authorized-worker",
+            recipient_goal_id="authorized-goal",
+            automation_cadence={
+                "min_interval_minutes": 15,
+                "eligibility": {
+                    "state": "eligible",
+                    "next_eligible_at_ms": None,
+                },
+            },
+            **stronger_state,
+        )
+    )
+    assert rendered.startswith("⚠️")
+    assert "最小间隔条件已满足" in rendered
+    assert "当前可启动" not in rendered
+
+
 def test_timeout_is_actionable_and_does_not_recommend_blind_retry():
     rendered = render_conversation_status(snapshot(active_turn_status="timed_out"))
     assert "检查原会话后再决定是否重试" in rendered

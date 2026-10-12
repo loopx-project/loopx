@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -101,6 +102,67 @@ def test_package_is_semantically_idempotent_and_rollback_restores_previous_revis
     assert manifest["active_revision"] == "rev-a"
     assert manifest["previous_revision"] == "rev-b"
     assert len((state / RECEIPT_LOG_FILE).read_text(encoding="utf-8").splitlines()) == 3
+
+
+def test_rollback_rejects_revision_paths_outside_the_retained_revision(
+    tmp_path: Path,
+) -> None:
+    site = _site(tmp_path)
+    output = tmp_path / "publish"
+    state = tmp_path / "state"
+    _package(site, output, state)
+    (site / "index.html").write_text("second\n", encoding="utf-8")
+    _package(site, output, state, revision="rev-b")
+
+    escaped_content = b"copied from output\n"
+    escaped_source = output / "escaped.txt"
+    escaped_source.write_bytes(escaped_content)
+    victim = tmp_path / "escaped.txt"
+    victim.write_text("must remain unchanged\n", encoding="utf-8")
+    metadata_path = output / REVISION_DIR / "rev-a" / REVISION_FILE
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["files"] = [
+        {
+            "path": "../../escaped.txt",
+            "sha256": hashlib.sha256(escaped_content).hexdigest(),
+            "size": len(escaped_content),
+        }
+    ]
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(StaticSiteContractError, match="revision file path"):
+        rollback_static_site(
+            output_dir=output,
+            revision="rev-a",
+            state_dir=state,
+            execute=True,
+        )
+
+    assert victim.read_text(encoding="utf-8") == "must remain unchanged\n"
+
+
+def test_rollback_rejects_retained_revision_content_drift(tmp_path: Path) -> None:
+    site = _site(tmp_path)
+    output = tmp_path / "publish"
+    state = tmp_path / "state"
+    _package(site, output, state)
+    (site / "index.html").write_text("second\n", encoding="utf-8")
+    _package(site, output, state, revision="rev-b")
+    (output / REVISION_DIR / "rev-a" / "index.html").write_text(
+        "tampered\n", encoding="utf-8"
+    )
+
+    with pytest.raises(StaticSiteContractError, match="integrity"):
+        rollback_static_site(
+            output_dir=output,
+            revision="rev-a",
+            state_dir=state,
+            execute=True,
+        )
+
+    assert (output / MANIFEST_FILE).read_text(encoding="utf-8").find(
+        '"active_revision": "rev-b"'
+    ) >= 0
 
 
 def test_github_pages_adapter_projects_stable_latest_and_revision_urls(

@@ -1,4 +1,4 @@
-"""Complete source codecs and index transport for the typed Todo frontier owner."""
+"""Lossless source codecs consumed by the typed summary/frontier owners."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import json
 import zlib
 from typing import Any
 
-from ..effect_runtime import effect_runtime_result
 # Refs #4447: the todo contract owns this vocabulary; import it instead of
 # restating the literal in every module that classifies a Todo.
 from .contract import (
@@ -84,29 +83,3 @@ def frontier_source_facts(
         return rows
     return {"encoding": "deflate-base64-json-v0",
             "data": base64.b64encode(zlib.compress(raw)).decode("ascii")}
-
-
-def _request(operation: str, **facts: Any) -> dict[str, Any]:
-    result = effect_runtime_result("todo.frontier_revision.project", {
-        "schema_version": "todo_frontier_revision_request_v0",
-        "operation": operation, **facts,
-    })
-    if not isinstance(result, dict):
-        raise TypeError("typed frontier revision response must be an object")
-    return result
-
-
-def build_advancement_frontier_revision_index(
-    source_items: list[dict[str, Any]],
-) -> dict[str, Any]:
-    index = _request("index", rows=frontier_source_facts(source_items)).get("index")
-    if not isinstance(index, dict):
-        raise TypeError("typed frontier revision response index must be an object")
-    return index
-
-
-def attach_advancement_frontier_revision_index(
-    summary: dict[str, Any], source_items: list[dict[str, Any]], *, role: str | None,
-) -> None:
-    if role == "agent":
-        summary["advancement_frontier_revision_index"] = build_advancement_frontier_revision_index(source_items)

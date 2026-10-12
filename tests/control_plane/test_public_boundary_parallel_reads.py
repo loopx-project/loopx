@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event, Lock
@@ -205,3 +206,111 @@ def test_tracked_private_policy_and_warning_order_are_preserved(
     assert payload["private_state_git_warnings"] == [
         ".codex/untracked.md: private state should be gitignored",
     ]
+
+
+@pytest.mark.parametrize("target", ["file", "directory", "nested_directory", "alias"])
+@pytest.mark.parametrize("roots", ["alone", "first", "last"])
+def test_private_scan_targets_cannot_hide_their_ancestry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str, roots: str
+) -> None:
+    public = tmp_path / "public.md"
+    private = tmp_path / ".codex" / "notes" / "secret.md"
+    private.parent.mkdir(parents=True)
+    public.write_text("public", encoding="utf-8")
+    private.write_text("synthetic private content", encoding="utf-8")
+    selected = {
+        "file": private,
+        "directory": private.parent.parent,
+        "nested_directory": private.parent,
+        "alias": tmp_path / "alias.md",
+    }[target]
+    if target == "alias":
+        selected.symlink_to(private)
+    scan_roots = {
+        "alone": [selected], "first": [selected, tmp_path], "last": [tmp_path, selected],
+    }[roots]
+    original = Path.read_text
+    opened: list[Path] = []
+
+    def read(path: Path, *args, **kwargs) -> str:
+        assert path != private.resolve(), "private contents reached the I/O worker"
+        opened.append(path)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read)
+    payload = contract.scan_public_boundary(scan_roots)
+    assert payload["ok"] is True
+    assert payload["scanned_files"] == (0 if roots == "alone" else 1)
+    assert len(payload["skipped_private_state_files"]) == 1
+    assert opened == ([] if roots == "alone" else [public.resolve()])
+
+
+def test_explicit_public_worktree_file_inside_private_parent_remains_public(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / ".local" / "checkout"
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
+    public = repo / "untracked.md"
+    public.write_text("public", encoding="utf-8")
+
+    def fail_git_probe(_: Path):
+        pytest.fail("a public worktree input is not private state")
+
+    monkeypatch.setattr(contract, "_git_probe", fail_git_probe)
+    payload = contract.scan_public_boundary([public])
+    assert payload["ok"] is True
+    assert payload["scanned_files"] == 1
+    assert payload["skipped_private_state_files"] == []
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_overlapping_roots_preserve_real_tracked_private_policy(
+    tmp_path: Path, reverse: bool
+) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, capture_output=True)
+    private = tmp_path / ".codex" / "notes" / "tracked.md"
+    private.parent.mkdir(parents=True)
+    private.write_text("https://tenant.lark" + "office.com/wiki/example", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", ".codex/notes/tracked.md"], check=True)
+    untracked = private.with_name("untracked.md")
+    untracked.write_text("synthetic private content", encoding="utf-8")
+    roots = [tmp_path, private.parent]
+    if reverse:
+        roots.reverse()
+    blocked = contract.scan_public_boundary(roots)
+    assert blocked["hits"] == [".codex/notes/tracked.md:1: private_doc_url"]
+    assert blocked["skipped_private_state_files"] == [".codex/notes/untracked.md"]
+    allowed = contract.scan_public_boundary(roots, registry={
+        "public_boundary": {"tracked_private_doc_urls": "allow"},
+    })
+    assert allowed["ok"] is True
+    assert allowed["allowed_hits"] == blocked["hits"]
+    assert allowed["skipped_private_state_files"] == blocked["skipped_private_state_files"]
+
+
+def test_private_alias_retarget_is_classified_again_on_the_next_scan(tmp_path: Path) -> None:
+    private = tmp_path / ".codex" / "secret.md"
+    private.parent.mkdir()
+    private.write_text("synthetic private content", encoding="utf-8")
+    public = tmp_path / "public.md"
+    public.write_text("public", encoding="utf-8")
+    alias = tmp_path / "alias.md"
+    alias.symlink_to(private)
+    first = contract.scan_public_boundary([alias])
+    assert first["scanned_files"] == 0
+    alias.unlink()
+    alias.symlink_to(public)
+    second = contract.scan_public_boundary([alias])
+    assert second["scanned_files"] == 1
+    assert second["skipped_private_state_files"] == []
+
+
+def test_git_marker_alone_cannot_hide_private_scan_ancestry(tmp_path: Path) -> None:
+    private = tmp_path / ".codex" / "notes" / "secret.md"
+    private.parent.mkdir(parents=True)
+    (private.parent / ".git").mkdir()
+    private.write_text("synthetic private content", encoding="utf-8")
+    payload = contract.scan_public_boundary([private])
+    assert payload["scanned_files"] == 0
+    assert len(payload["skipped_private_state_files"]) == 1

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { isSupportedNodeVersion } from "../../loopx/control_plane/runtime/node_version.ts";
 
 type CleanupContext = {
   after(callback: () => void | Promise<void>): void;
@@ -20,6 +21,14 @@ const entrypoint = fileURLToPath(
 const goalId = "goal-followup-cli";
 const agentId = "agent-followup-cli";
 const turnId = "turn-followup-cli";
+
+test("heartbeat follow-up CLI applies minimum Node prerelease precedence", () => {
+  assert.equal(isSupportedNodeVersion("22.22.2"), false);
+  assert.equal(isSupportedNodeVersion("22.22.3-rc.1"), false);
+  assert.equal(isSupportedNodeVersion("22.22.3"), true);
+  assert.equal(isSupportedNodeVersion("22.22.4-rc.1"), true);
+  assert.equal(isSupportedNodeVersion("22.22.3+build.1"), true);
+});
 
 async function tempRuntime(t: CleanupContext): Promise<string> {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "loopx-followup-cli-"));
@@ -80,7 +89,7 @@ function chunks(value: unknown): string[] {
   return encoded.match(/.{1,384}/g) ?? [];
 }
 
-function argv(runtimeRoot: string, format = "json"): string[] {
+function argv(runtimeRoot: string, format = "json", hint = hintPayload()): string[] {
   const result = [
     "--format",
     format,
@@ -95,9 +104,11 @@ function argv(runtimeRoot: string, format = "json"): string[] {
     "-A",
     "--applied-rrule",
     "FREQ=MINUTELY;INTERVAL=15",
+    "--app-automation-current-rrule",
+    "FREQ=MINUTELY;INTERVAL=15",
     "--host-match-observed",
   ];
-  for (const chunk of chunks(hintPayload())) {
+  for (const chunk of chunks(hint)) {
     result.push("--scheduler-host-facts-chunk", chunk);
   }
   result.push("--turn-instance-id", turnId, "--execute");
@@ -187,6 +198,73 @@ test("native host-followup CLI decodes bounded argv facts and writes JSON", asyn
     (result.scheduler_commit as Record<string, unknown>).status,
     "written",
   );
+});
+
+test("native ACK cannot use its pre-update hint as fresh host readback", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await writeReceipt(runtimeRoot);
+  for (const observed of ["", "FREQ=MINUTELY;INTERVAL=3"]) {
+    const args = argv(runtimeRoot);
+    args[args.indexOf("--app-automation-current-rrule") + 1] = observed;
+    const child = runCli(args);
+    assert.equal(child.status, 1);
+    const result = JSON.parse(child.stdout) as Record<string, unknown>;
+    assert.equal(result.ok, false);
+    assert.equal(result.reason_code, "rrule_mismatch");
+    assert.equal((result.scheduler_commit as Record<string, unknown>).written, false);
+  }
+});
+
+test("dropping the bound host-match flag cannot bypass the launcher readback route", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await writeReceipt(runtimeRoot);
+  const args = argv(runtimeRoot);
+  args.splice(args.indexOf("--host-match-observed"), 1);
+  const child = runCli(args);
+  assert.equal(child.status, 1);
+  assert.equal(JSON.parse(child.stdout).error.code, "scheduler_host_facts_identity_mismatch");
+});
+
+test("neutral current readback updates a Trae ACK without reading Codex metadata", async (t) => {
+  for (const [before, observed] of [
+    ["FREQ=MINUTELY;INTERVAL=3", "FREQ=MINUTELY;INTERVAL=15"],
+    ["FREQ=MINUTELY;INTERVAL=15", "FREQ=MINUTELY;INTERVAL=3"],
+    ["FREQ=MINUTELY;INTERVAL=15", ""],
+  ]) {
+    await t.test(`${before} -> ${observed || "unavailable"}`, async (t) => {
+      const runtimeRoot = await tempRuntime(t);
+      await writeReceipt(runtimeRoot);
+      const hint = hintPayload();
+      const facts = hint.host_facts as Record<string, unknown>;
+      facts.surface = "trae_app";
+      facts.observed_host_rrule = before;
+      const args = argv(runtimeRoot, "json", hint);
+      args[args.indexOf("-A")] = "--trae_app";
+      args[args.indexOf("--app-automation-current-rrule") + 1] = observed;
+      const child = runCli(args);
+      const payload = JSON.parse(child.stdout) as Record<string, unknown>;
+      const matches = observed === "FREQ=MINUTELY;INTERVAL=15";
+      assert.equal(child.status, matches ? 0 : 1, child.stderr);
+      assert.equal(payload.ok, matches);
+      assert.equal((payload.scheduler_commit as Record<string, unknown>).written, matches);
+      if (!matches) assert.equal(payload.reason_code, "rrule_mismatch");
+    });
+  }
+});
+
+test("non-Codex ACK without a new observation preserves its bound facts", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await writeReceipt(runtimeRoot);
+  const hint = hintPayload();
+  const facts = hint.host_facts as Record<string, unknown>;
+  facts.surface = "trae_app";
+  facts.observed_host_rrule = "FREQ=MINUTELY;INTERVAL=15";
+  const args = argv(runtimeRoot, "json", hint);
+  args[args.indexOf("-A")] = "--trae_app";
+  args.splice(args.indexOf("--app-automation-current-rrule"), 2);
+  const child = runCli(args);
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(JSON.parse(child.stdout).scheduler_commit.status, "written");
 });
 
 test("native host-followup CLI preserves the scheduler Markdown surface", async (t) => {

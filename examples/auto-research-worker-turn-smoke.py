@@ -33,6 +33,13 @@ from demo.multi_agent.role_successor import (  # noqa: E402
     apply_role_successor_todos,
 )
 from loopx.todos import add_goal_todo, complete_goal_todo  # noqa: E402
+from loopx.control_plane.work_items.task_lease import (  # noqa: E402
+    TaskLeaseError,
+    acquire_task_lease,
+    inspect_task_lease,
+    release_task_lease,
+)
+from demo.auto_research.worker_runtime import run_auto_research_worker_turn  # noqa: E402
 
 from examples.auto_research_lightweight_fixture import (  # noqa: E402
     AGENT_ID as EVIDENCE_AGENT_ID,
@@ -406,6 +413,31 @@ def main() -> int:
             eval_status="failed_to_run",
             primary_metric_status="inconclusive",
         )
+        # This seeded Goal uses the ordinary canonical SQLite/hard_lease default.
+        # Admit the exact executor lease before terminal writeback; a claim alone
+        # is not execution authority under that contract.
+        for prerequisite, successor in zip(seeded_todos[:2], seeded_todos[1:3]):
+            lease_key = "seeded-prerequisite-" + str(prerequisite["action_kind"])
+            lease = acquire_task_lease(
+                registry_path=registry, runtime_root=Path(runtime_root), goal_id=GOAL_ID,
+                todo_id=prerequisite["todo_id"], owner=prerequisite["agent_id"],
+                idempotency_key=lease_key, ttl_seconds=600,
+            )
+            completed = complete_goal_todo(
+                registry_path=registry, goal_id=GOAL_ID, todo_id=prerequisite["todo_id"],
+                role="agent", claimed_by=prerequisite["agent_id"], agent_id=prerequisite["agent_id"],
+                task_lease_idempotency_key=lease_key, task_lease_expected_version=lease["lease"]["version"],
+                note="synthetic predecessor resolved for exhausted-retry lineage fixture",
+                evidence="public-safe predecessor fixture; no research metric or result claimed",
+                successor_todo_ids=[successor["todo_id"]], self_merged=True, dry_run=False,
+            )
+            assert completed["completed"] is True, completed
+        executor_lease = acquire_task_lease(
+            registry_path=registry, runtime_root=Path(runtime_root), goal_id=GOAL_ID,
+            todo_id=executor_seed["todo_id"], owner=EXECUTOR_AGENT_ID,
+            idempotency_key="seeded-executor-completion", ttl_seconds=600,
+        )
+        assert executor_lease["source_authority"] == "sqlite_v0", executor_lease
         executor_completion = complete_goal_todo(
             registry_path=registry,
             goal_id=GOAL_ID,
@@ -413,6 +445,8 @@ def main() -> int:
             role="agent",
             claimed_by=EXECUTOR_AGENT_ID,
             agent_id=EXECUTOR_AGENT_ID,
+            task_lease_idempotency_key="seeded-executor-completion",
+            task_lease_expected_version=executor_lease["lease"]["version"],
             note="lane-authored exhausted retry evidence was appended",
             evidence="public-safe evidence packet recorded retry exhaustion",
             no_followup=True,
@@ -422,6 +456,61 @@ def main() -> int:
         assert executor_completion["completed"] is True, executor_completion
         workspace = temp / "visible-workspace"
         workspace.mkdir()
+
+        evaluator_request = dict(
+            registry_path=registry, runtime_root_arg=runtime_root, goal_id=GOAL_ID,
+            agent_id=EVALUATOR_AGENT_ID, workspace=workspace, execute=True,
+            complete_selected_todo=True,
+        )
+        external = acquire_task_lease(
+            registry_path=registry, runtime_root=Path(runtime_root), goal_id=GOAL_ID,
+            todo_id=evaluator_seed["todo_id"], owner=EVALUATOR_AGENT_ID,
+            idempotency_key="external-summary-attempt", ttl_seconds=600,
+        )
+        try:
+            run_auto_research_worker_turn(**evaluator_request)
+        except TaskLeaseError as exc:
+            assert exc.code == "todo_lease_conflict", exc
+        else:
+            raise AssertionError("a worker must not borrow another execution's lease")
+        assert not (workspace / ".local").exists(), workspace
+        retained = inspect_task_lease(
+            registry_path=registry, runtime_root=Path(runtime_root), goal_id=GOAL_ID,
+            todo_id=evaluator_seed["todo_id"],
+        )
+        assert retained["active"] is True and retained["lease"] == external["lease"], retained
+        release_task_lease(
+            registry_path=registry, runtime_root=Path(runtime_root), goal_id=GOAL_ID,
+            todo_id=evaluator_seed["todo_id"], owner=EVALUATOR_AGENT_ID,
+            idempotency_key="external-summary-attempt", expected_version=external["lease"]["version"],
+        )
+        # A real output failure must retire only this worker's admitted lease.
+        (workspace / ".local").write_text("blocked output directory", encoding="utf-8")
+        try:
+            run_auto_research_worker_turn(**evaluator_request)
+        except (FileExistsError, NotADirectoryError):
+            pass
+        else:
+            raise AssertionError("the invalid output directory must fail before Todo completion")
+        (workspace / ".local").unlink()
+        failed_attempt = inspect_task_lease(
+            registry_path=registry, runtime_root=Path(runtime_root), goal_id=GOAL_ID,
+            todo_id=evaluator_seed["todo_id"],
+        )
+        assert failed_attempt["active"] is False, failed_attempt
+
+        unfinished_summary = run_auto_research_worker_turn(
+            **{**evaluator_request, "complete_selected_todo": False}
+        )
+        assert unfinished_summary["selected_todo_id"] == evaluator_seed["todo_id"], unfinished_summary
+        assert unfinished_summary["executed"] is True, unfinished_summary
+        assert unfinished_summary["completion"]["requested"] is False, unfinished_summary
+        unfinished_lease = inspect_task_lease(
+            registry_path=registry, runtime_root=Path(runtime_root), goal_id=GOAL_ID,
+            todo_id=evaluator_seed["todo_id"],
+        )
+        assert unfinished_lease["active"] is False, unfinished_lease
+        assert unfinished_lease["lease"]["idempotency_key"].startswith("auto-research-worker-"), unfinished_lease
 
         seeded_failure_turn = run_worker_turn(
             registry=registry,
@@ -448,7 +537,30 @@ def main() -> int:
         assert seeded_failure_turn["completion"]["successor_todo_ids"] == [
             successors[0]["todo_id"]
         ], seeded_failure_turn
+        completed_attempt = inspect_task_lease(
+            registry_path=registry, runtime_root=Path(runtime_root), goal_id=GOAL_ID,
+            todo_id=evaluator_seed["todo_id"],
+        )
+        assert completed_attempt["active"] is False, completed_attempt
         assert_public_safe(seeded_failure_turn)
+
+        manual_todo = add_goal_todo(
+            registry_path=registry, goal_id=GOAL_ID, role="agent",
+            text="Author a real failure successor before further research execution.",
+            task_class="advancement_task", action_kind="propose_failure_successor",
+            claimed_by="research-curator", priority="P0", dry_run=False,
+        )
+        manual_successor = run_worker_turn(
+            registry=registry, runtime_root=runtime_root, workspace=workspace,
+            agent_id="research-curator", execute=True, complete=True,
+        )
+        assert_manual_research_required(manual_successor, action="propose_failure_successor")
+        assert manual_successor["selected_todo_id"] == manual_todo["todo_id"], manual_successor
+        manual_lease = inspect_task_lease(
+            registry_path=registry, runtime_root=Path(runtime_root), goal_id=GOAL_ID,
+            todo_id=manual_successor["selected_todo_id"],
+        )
+        assert manual_lease["lease"] is None, manual_lease
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp = Path(temp_dir)
@@ -1273,7 +1385,7 @@ def main() -> int:
             claimed_by=EXECUTOR_AGENT_ID,
             dry_run=False,
         )
-        first_summary = add_goal_todo(
+        add_goal_todo(
             registry_path=registry,
             goal_id=GOAL_ID,
             role="agent",
@@ -1284,7 +1396,7 @@ def main() -> int:
             unblocks_todo_id=failure_evidence["todo_id"],
             dry_run=False,
         )
-        second_summary = add_goal_todo(
+        add_goal_todo(
             registry_path=registry,
             goal_id=GOAL_ID,
             role="agent",

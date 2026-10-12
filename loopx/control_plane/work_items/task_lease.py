@@ -577,7 +577,7 @@ def task_lease_todo_projection(
 ) -> dict[str, Any] | None:
     """Resolve the canonical Markdown/event todo projection for lease guards."""
 
-    from ...todos import list_goal_todos
+    from ...control_plane.todos.list_readback import list_goal_todos
 
     try:
         payload = list_goal_todos(

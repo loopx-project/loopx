@@ -11,7 +11,9 @@ from .goal_channel_targets import goal_channel_target_for_name
 from .goal_topic_runtime import _inbox_config
 from .manager_routing import authorized_manager_goal_ids
 from .event_inbox import load_lark_event_inbox_config, _load_processed
-from .inbox_reply import CommandRunner, reply_lark_event_inbox, verify_lark_inbox_reply
+from .inbox_reply import CommandRunner, _bot_identity_verified, _default_runner, _verified_reply_result, reply_lark_event_inbox, verify_lark_inbox_reply
+from .return_files import uploaded_result_files, verify_result_files
+from .outbound import present_lark_conversation_text
 from ...capabilities.manager_context import authority
 from ...capabilities.manager_context.roundtrip import ReturnResolutionBlocked
 
@@ -137,6 +139,7 @@ def send_return(
     delivery_attempt_recorder: Callable[[Mapping[str, str | None]], None] | None = None,
     private_transport: Any = None,
 ) -> dict[str, Any]:
+    text = present_lark_conversation_text(text)
     def resolve() -> tuple[Path, Path, Callable[[], bool] | None, object, str]:
         return _return_inbox(
             root=root,
@@ -156,7 +159,27 @@ def send_return(
         current = resolve()
         return {"continue_delivery": current[:2] == (project, config_path) and current[3:] == (destination, message_id)}
 
+    attachments = route.get("result_attachments") or []
+    keys = ()
+    if attachments:
+        if not isinstance(session.get("steward_context"), dict) or private_transport is None:
+            raise ValueError("result files require the bound-owner App transport")
+        reply = load_lark_event_inbox_config(project=project, config_path=config_path)["reply"]
+        if not _bot_identity_verified(runner=runner or _default_runner,
+                                     base=["lark-cli", "--profile", reply["sender_profile"]],
+                                     expected_name=reply["bot_display_name"]) or not source_verifier():
+            raise ValueError("result file sender or source identity unavailable")
+        keys = uploaded_result_files(root=root, profile=reply["sender_profile"],
+            provider_ref=session["steward_context"]["provider_ref"], attachments=attachments,
+            runner=runner, private_transport=private_transport,
+            before_upload=lambda: before_send("")["continue_delivery"] and source_verifier())
+
     runner_kwargs: dict[str, Any] = {"runner": runner} if runner else {}
+    observed_attempt = {}
+    def record_attempt(value):
+        observed_attempt.update(value)
+        if delivery_attempt_recorder is not None:
+            delivery_attempt_recorder(value)
     result: dict[str, Any] = reply_lark_event_inbox(
         project=project,
         config_path=config_path,
@@ -165,13 +188,26 @@ def send_return(
         content_format="markdown",
         execute=True,
         before_send=before_send,
-        delivery_attempt_recorder=delivery_attempt_recorder,
+        delivery_attempt_recorder=record_attempt if attachments else delivery_attempt_recorder,
         source_membership_verifier=source_verifier,
         # A returned manager answer keeps the provider bound, not the compact
         # notification length.
         short_message_limit=None,
+        attachment_keys=keys,
+        attachment_names=tuple(attachment["name"] for attachment in attachments),
+        finalize_reactions=not attachments,
         **runner_kwargs,
     )
+    if attachments and result.get("reply_verified") is True:
+        # The recorder persists the exact message locator before this read.
+        # Failure retains that attempt; recovery only reads it, never resends.
+        verified = verify_result_files(profile=reply["sender_profile"],
+            message_id=observed_attempt["message_ref"], text=text, attachments=attachments, keys=keys,
+            runner=runner, private_transport=private_transport)
+        result.update(verified)
+        if verified.get("reply_verified") is True:
+            result.update(_verified_reply_result(project=project, config_path=config_path,
+                message_id=message_id, runner=runner or _default_runner, finalize_reactions=True))
     return result
 
 
@@ -189,6 +225,7 @@ def verify_return(
     cancelled: Callable[[], bool] = lambda: False,
     private_transport: Any = None,
 ) -> dict[str, Any]:
+    text = present_lark_conversation_text(text)
     project, config_path, source_verifier, _destination, message_id = _return_inbox(
         root=root,
         registry=registry,
@@ -202,6 +239,18 @@ def verify_return(
     if runner is None and isinstance(session.get("steward_context"), dict):
         runner = private_transport._reply_runner
     runner_kwargs: dict[str, Any] = {"runner": runner} if runner else {}
+    attachments = route.get("result_attachments") or []
+    keys = ()
+    if attachments:
+        if not isinstance(session.get("steward_context"), dict) or private_transport is None:
+            return {"reply_verified": False, "verification_performed": True, "blocker": "provider_delivery_intent_conflict"}
+        reply = load_lark_event_inbox_config(project=project, config_path=config_path)["reply"]
+        try:
+            keys = uploaded_result_files(root=root, profile=reply["sender_profile"],
+                provider_ref=session["steward_context"]["provider_ref"], attachments=attachments,
+                runner=runner, private_transport=private_transport, verify_only=True)
+        except (ValueError, OSError):
+            return {"reply_verified": False, "verification_performed": True, "blocker": "provider_delivery_intent_conflict"}
     result: dict[str, Any] = verify_lark_inbox_reply(
         project=project,
         config_path=config_path,
@@ -209,13 +258,25 @@ def verify_return(
         text=text,
         attempt=attempt,
         source_membership_verifier=source_verifier,
+        attachment_keys=keys,
+        attachment_names=tuple(attachment["name"] for attachment in attachments),
+        finalize_reactions=not attachments,
         **runner_kwargs,
     )
+    if attachments and result.get("reply_verified") is True:
+        result.update(verify_result_files(profile=reply["sender_profile"],
+            message_id=attempt["message_ref"], text=text, attachments=attachments, keys=keys,
+            runner=runner, private_transport=private_transport))
+        if result.get("reply_verified") is True:
+            result.update(_verified_reply_result(project=project, config_path=config_path,
+                message_id=message_id, runner=runner or _default_runner, finalize_reactions=True))
     return result
 
 
 class LarkManagerReturnTransport:
     """Send or read back one saved result through the existing Lark adapter."""
+
+    supports_result_files = True
 
     def __init__(self, server: Any, root: Path) -> None:
         self.server = server
@@ -259,14 +320,19 @@ class LarkManagerReturnTransport:
         )
 
 
-def start_return_service(server: Any, runtime_root: Path) -> Any:
+def start_return_service(server: Any, runtime_root: Path, *, start_service: bool = True) -> Any:
     """Compose the return pump at the existing Chat/Lark service boundary."""
     from ...capabilities.manager_context.roundtrip import ReturnService
 
     transport = LarkManagerReturnTransport(server, runtime_root)
+    composition = getattr(server, "conversation_transports", None)
+    if composition is not None:
+        composition.default_return = transport
+        transport = composition
     service = ReturnService(
         runtime_root, server.registry_path, server.chat_store, transport
     )
     transport.cancelled = service.stop.is_set
-    service.start()
+    if start_service:
+        service.start()
     return service

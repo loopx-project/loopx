@@ -572,6 +572,23 @@ def stream_lark_goal_topic_profile(
                 if callback_stream is not None:
                     callback_stream.terminate()
                 return
+            if dispatch.failed:
+                # A worker can fail while stdout waits indefinitely for the
+                # next event. Unblock that reader so close drains active work
+                # and raises into the existing service retry owner. Do not set
+                # stop: failure must not become a requested, non-retrying exit.
+                try:
+                    with result_lock:
+                        if health_sink is not None:
+                            health_sink(
+                                {"status": "failed", "error_code": "lark_event_listener_failed"}
+                            )
+                finally:
+                    if process.poll() is None:
+                        process.terminate()
+                    if callback_stream is not None:
+                        callback_stream.terminate()
+                return
             if callback_stream is not None and callback_stream.disconnected():
                 callback_disconnected.set()
                 if process.poll() is None:
@@ -596,7 +613,6 @@ def stream_lark_goal_topic_profile(
         name=f"loopx-lark-stop-{profile}",
         daemon=True,
     )
-    watcher.start()
     event_count = 0
     replied_count = 0
     provider_ready = False
@@ -622,12 +638,13 @@ def stream_lark_goal_topic_profile(
             private_admitter=private_admitter,
         )
         with result_lock:
+            failed = dispatch.failed
             if int(result.get("event_count") or 0) and not provider_ready:
                 # A provider event is stronger readiness evidence than a
                 # diagnostic marker and protects compatibility with providers
                 # that omit the marker while still emitting the typed stream.
                 provider_ready = True
-                if health_sink is not None:
+                if health_sink is not None and not failed:
                     health_sink({"status": "listening", "error_code": None})
             event_count += int(result.get("event_count") or 0)
             replied_count += int(result.get("replied_count") or 0)
@@ -636,8 +653,10 @@ def stream_lark_goal_topic_profile(
                 reasons = list(result.get("event_reasons") or [])
                 health_sink(
                     {
-                        "status": "listening",
-                        "error_code": None,
+                        "status": "failed" if failed else "listening",
+                        "error_code": (
+                            "lark_event_listener_failed" if failed else None
+                        ),
                         "event_count": int(result.get("event_count") or 0),
                         "replied_count": int(result.get("replied_count") or 0),
                         "last_event_status": str(statuses[-1]) if statuses else None,
@@ -662,6 +681,7 @@ def stream_lark_goal_topic_profile(
                 )
 
     dispatch = ProfileEventDispatch(handle_event, stop)
+    watcher.start()
     stream_failed = True
     try:
         stdout = process.stdout
@@ -677,9 +697,10 @@ def stream_lark_goal_topic_profile(
                 break
             stripped = line.strip()
             if stripped.startswith(_EVENT_READY_PREFIX):
-                provider_ready = True
-                if health_sink is not None:
-                    health_sink({"status": "listening", "error_code": None})
+                with result_lock:
+                    provider_ready = True
+                    if health_sink is not None and not dispatch.failed:
+                        health_sink({"status": "listening", "error_code": None})
                 continue
             if stripped.startswith("[event] exited "):
                 match = _EVENT_EXIT_REASON.search(stripped)

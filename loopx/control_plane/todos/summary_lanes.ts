@@ -17,11 +17,14 @@ export const TODO_SUMMARY_LANES = [
 export type TodoSummaryLane = typeof TODO_SUMMARY_LANES[number];
 const TASK_CLASSES = ["advancement_task", "continuous_monitor", "user_gate", "user_action", "blocker"] as const;
 
-interface Row {
+export interface MonitorSchedule {
+  readonly watchOnly: boolean; readonly dueAt: number | null; readonly expiresAt: number | null;
+}
+
+interface Row extends MonitorSchedule {
   ordinal: number; status: "open" | "blocked" | "done" | "deferred";
   taskClass: typeof TASK_CLASSES[number]; done: boolean; actionable: boolean;
-  claim: boolean; resumeBlocked: boolean; preferred: boolean; watchOnly: boolean;
-  dueAt: number | null; expiresAt: number | null; sort: readonly [number, number, string, string];
+  claim: boolean; resumeBlocked: boolean; preferred: boolean; sort: readonly [number, number, string, string];
 }
 function finite(value: unknown, label: string): number {
   if (typeof value !== "number" || !Number.isFinite(value)) throw new EffectRuntimeRequestError(`${label} must be finite`);
@@ -29,6 +32,17 @@ function finite(value: unknown, label: string): number {
 }
 function optionalTime(value: unknown, label: string): number | null {
   return value === null ? null : finite(value, label);
+}
+export function decodeMonitorSchedule(row: JsonObject): MonitorSchedule {
+  return {watchOnly: requireBoolean(row.watch_only, "watch_only"),
+    dueAt: optionalTime(row.due_at, "due_at"), expiresAt: optionalTime(row.expires_at, "expires_at")};
+}
+const monitorIsActive = (row: MonitorSchedule, now: number) => row.expiresAt === null || row.expiresAt > now;
+export function monitorIsDue(row: MonitorSchedule, now: number): boolean {
+  return monitorIsActive(row, now) && row.dueAt !== null && row.dueAt <= now;
+}
+export function monitorHasScheduleGap(row: MonitorSchedule, now: number): boolean {
+  return monitorIsActive(row, now) && !row.watchOnly && row.dueAt === null;
 }
 function decodeRow(value: unknown, ordinal: number): Row {
   const row = requireJsonObject(value, `rows[${ordinal}]`);
@@ -47,8 +61,7 @@ function decodeRow(value: unknown, ordinal: number): Row {
   return {ordinal, status, done, taskClass: requireStringLiteral(row.task_class, TASK_CLASSES, "task_class"),
     actionable: status === "open" && (!hasResume || ready) && !requireBoolean(row.acceptance_blocked, "acceptance_blocked"),
     claim: requireBoolean(row.claimed, "claimed"), resumeBlocked: hasResume && row.resume_ready === false,
-    preferred: requireBoolean(row.preferred, "preferred"), watchOnly: requireBoolean(row.watch_only, "watch_only"),
-    dueAt: optionalTime(row.due_at, "due_at"), expiresAt: optionalTime(row.expires_at, "expires_at"),
+    preferred: requireBoolean(row.preferred, "preferred"), ...decodeMonitorSchedule(row),
     sort: [finite(sort[0], "priority"), finite(sort[1], "index"), sort[2], sort[3]]};
 }
 function compare(left: Row, right: Row): number {
@@ -108,12 +121,11 @@ export function projectTodoSummaryLanes(value: unknown): JsonObject {
   const claimed = ordered.filter(row => row.claim);
   const executable = ordered.filter(row => row.actionable && row.taskClass === "advancement_task");
   const monitors = ordered.filter(row => row.actionable && row.taskClass === "continuous_monitor");
-  const activeMonitor = (row: Row) => row.expiresAt === null || row.expiresAt > now;
-  const due = monitors.filter(row => activeMonitor(row) && row.dueAt !== null && row.dueAt <= now);
+  const due = monitors.filter(row => monitorIsDue(row, now));
   const watchOnlyMonitors = monitors.filter(row => row.watchOnly);
   const watchOnlyDue = due.filter(row => row.watchOnly);
   const nonWatchOnlyDue = due.filter(row => !row.watchOnly);
-  const missing = monitors.filter(row => activeMonitor(row) && !row.watchOnly && row.dueAt === null);
+  const missing = monitors.filter(row => monitorHasScheduleGap(row, now));
   const selected = {
     open_items: open, terminal_items: terminal, deferred_items: deferred, done_items: done,
     projected_open_items: ordered, projected_deferred_items: orderedDeferred,

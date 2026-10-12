@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from .bootstrap import default_goal_id
+from .control_plane.projects.identity import default_goal_id
 from .paths import shell_selected_global_registry
 from .codex_cli_probe_markdown import (
     render_codex_cli_bounded_visible_pilot_adapter_markdown as render_codex_cli_bounded_visible_pilot_adapter_markdown,

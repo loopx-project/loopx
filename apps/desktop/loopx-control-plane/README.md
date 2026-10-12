@@ -26,8 +26,12 @@ Startup automatically uses the newest qualified local runtime it can establish.
 It compares package versions; equal versions with source revisions use ancestry
 from the fixed official GitHub repository. Installation time and lexical SHA
 order never determine freshness. If the bounded check is offline, rate limited
-or revisions diverge, an independently installed CLI keeps working without a
-version selection screen or downgrade. An App-owned snapshot with the same
+or revisions diverge, a saved discovery path follows the current default CLI
+when both are snapshots of the same installation and share a release base.
+This follows the installer's completed promotion, without claiming unknown
+source ancestry is newer. A provably older default is not adopted; other
+installations remain independent. Neither case requires a version selection
+screen. An App-owned snapshot with the same
 release base can follow the current App's bundled snapshot when ancestry is
 unknown; this is maintenance of the App's own installation, not proof that one
 source revision is newer. A provably newer runtime remains selected. Both local HTTP services must expose the selected
@@ -73,6 +77,10 @@ it cannot depend on a macOS Documents-folder consent prompt. Ordinary
 `loopx doctor` retains its full operator/integration diagnostics. Terminal
 installation still revalidates enabled extensions by default; the App sets
 `LOOPX_INSTALL_REVALIDATE_EXTENSIONS=0` for its bounded bootstrap.
+Runtime preparation isolates Git discovery to its verified export, so a
+developer's Git environment or a checkout enclosing `TMPDIR` cannot supply
+unrelated branch or dirty-state metadata. The bundled revision and digest
+remain the source of the installed snapshot's identity.
 Failed runtime preparation remains supervised, with at most three automatic
 install attempts per App process and at least 30 seconds between attempts.
 Existing recovery controls remain available after that budget is exhausted,
@@ -103,6 +111,9 @@ startup. An incomplete App installation retains its recovery state; runtime
 freshness must prevent a journal from silently downgrading a newer CLI.
 Concurrent transactions and another install before restart remain rejected.
 macOS keeps a signature-verified previous App for **Restore previous version**;
+recovery can restore the original install path even when a failed update moved
+the App away entirely. If another installer recreates that path during recovery,
+rollback stops without replacing the concurrent installation.
 Goal data is not deleted or migrated backwards, so data-schema compatibility
 still governs rollback suitability. Older backups may consume disk space.
 

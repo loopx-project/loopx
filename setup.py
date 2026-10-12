@@ -6,6 +6,7 @@ import shutil
 import sys
 from setuptools import setup
 from setuptools.command.build_py import build_py
+from setuptools.command.bdist_wheel import bdist_wheel
 from setuptools.command.sdist import sdist
 
 
@@ -23,13 +24,34 @@ def verify_frontend():
     module.validate_bundle(root / "loopx/web/chat", source_root=root)
 
 
+def clear_built_package(directory):
+    stale = Path(directory) / "loopx"
+    source = (Path(__file__).parent / "loopx").resolve()
+    destination = stale.resolve()
+    if destination.is_relative_to(source) or source.is_relative_to(destination):
+        raise RuntimeError("build destination must be outside the LoopX source package")
+    if stale.exists():
+        shutil.rmtree(stale)
+
+
 class BuildWithFrontend(build_py):
     def run(self):
         if not self.editable_mode:
             verify_frontend()
-            stale = Path(self.build_lib) / "loopx/web/chat"
-            if stale.exists():
-                shutil.rmtree(stale)
+            # setuptools copies changed files but does not remove deleted modules or
+            # package data. Rebuild only our package, including qualified asset history.
+            clear_built_package(self.build_lib)
+        super().run()
+
+
+class WheelWithFrontend(bdist_wheel):
+    def run(self):
+        if not self.skip_build:
+            # Validate/build before clearing staging, and let setuptools reuse that
+            # completed command. --skip-build still uses the explicitly selected build.
+            self.run_command("build")
+        # Failed or --keep-temp builds can retain a second copy of deleted files.
+        clear_built_package(self.bdist_dir)
         super().run()
 
 
@@ -39,4 +61,10 @@ class SourceWithFrontend(sdist):
         super().run()
 
 
-setup(cmdclass={"build_py": BuildWithFrontend, "sdist": SourceWithFrontend})
+setup(
+    cmdclass={
+        "build_py": BuildWithFrontend,
+        "bdist_wheel": WheelWithFrontend,
+        "sdist": SourceWithFrontend,
+    }
+)

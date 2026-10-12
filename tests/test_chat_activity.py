@@ -8,6 +8,7 @@ import pytest
 from pathlib import Path
 
 from loopx.presentation.codex_activity import (
+    ACTIVITY_UPDATE_INTERVAL_SEC,
     COMMAND_VERBS,
     REASONING_UPDATE_INTERVAL_SEC,
     STEP_KINDS,
@@ -92,6 +93,101 @@ def test_user_and_answer_items_are_not_steps():
     for item in ({"type": "userMessage", "id": "u"}, {"type": "agentMessage", "id": "m", "text": "hi"},
                  {"type": "futureItem", "id": "z"}, None, "text"):
         assert steps.started(item) is None and steps.completed(item) is None
+
+
+def test_observed_output_is_throttled_and_never_retained_or_promoted_to_completion():
+    clock = _Clock()
+    steps = CodexActivitySteps(clock=clock)
+    command = _command("python -u worker.py")
+    steps.started(command)
+    assert steps.activity_delta("exec-1", "private output", kind="command") is None
+    clock.now += ACTIVITY_UPDATE_INTERVAL_SEC
+    for bad in ("", None, {"text": "private output"}):
+        assert steps.activity_delta("exec-1", bad, kind="command") is None
+    assert steps.activity_delta("unknown", "private output", kind="command") is None
+    assert steps.activity_delta("exec-1", "private output", kind="tool") is None
+    update = steps.activity_delta("exec-1", "private output", kind="command")
+    assert update == {"id": "exec-1", "kind": "command", "state": "running", "verb": "run",
+                      "title": "python -u worker.py", "duration_ms": 5000}
+    assert update["state"] == "running" and "exit_code" not in update
+    assert steps.activity_delta("exec-1", "more private output", kind="command") is None
+    clock.now += ACTIVITY_UPDATE_INTERVAL_SEC
+    assert steps.activity_delta("exec-1", "more output", kind="command")["duration_ms"] == 10000
+    assert "private output" not in repr(vars(steps))
+    assert steps.completed({**command, "exitCode": 1})["state"] == "failed"
+    assert steps.activity_delta("exec-1", "late output", kind="command") is None
+    assert not steps._active and not steps._activity_emitted
+    steps.started({"type": "mcpToolCall", "id": "tool", "server": "fixture", "tool": "inspect"})
+    clock.now += ACTIVITY_UPDATE_INTERVAL_SEC
+    assert steps.activity_delta("tool", "private progress", kind="tool")["title"] == "fixture · inspect"
+    assert steps.activity_delta("tool", "wrong method", kind="command") is None
+
+
+def test_native_output_progress_is_source_bound_and_clean_before_persisted_replay(monkeypatch, tmp_path):
+    from loopx import chat_agent
+    from loopx.chat_store import ChatSessionStore
+    from loopx.presentation import codex_activity
+
+    # Timing/coalescing is covered above; this exercises actual stdio routing,
+    # Turn filtering, terminal cleanup and durable replay without slow sleeps.
+    monkeypatch.setattr(codex_activity, "ACTIVITY_UPDATE_INTERVAL_SEC", 0)
+    peer = tmp_path / "peer.py"
+    peer.write_text(r'''
+import json, sys
+def emit(value):
+    print(json.dumps(value), flush=True)
+for raw in sys.stdin:
+    request = json.loads(raw)
+    if "id" not in request:
+        continue
+    if request["method"] != "turn/start":
+        emit({"id": request["id"], "result": {"thread": {"id": "thread"}}})
+        continue
+    turn = "current"
+    emit({"id": request["id"], "result": {"turn": {"id": turn}}})
+    for item, method, field in [
+        ({"id": "command", "type": "commandExecution", "command": "python -u worker.py"}, "item/commandExecution/outputDelta", "delta"),
+        ({"id": "tool", "type": "mcpToolCall", "server": "fixture", "tool": "inspect"}, "item/mcpToolCall/progress", "message"),
+    ]:
+        emit({"method": "item/started", "params": {"threadId": "thread", "turnId": turn, "item": item}})
+        for thread, tid, iid, text in [("other", turn, item["id"], "outside-thread"),
+                                       ("thread", "stale", item["id"], "outside-turn"),
+                                       ("thread", turn, "unknown", "unknown-item"),
+                                       ("thread", turn, item["id"], ""),
+                                       ("thread", turn, item["id"], "private-host-output")]:
+            emit({"method": method, "params": {"threadId": thread, "turnId": tid, "itemId": iid, field: text}})
+        emit({"method": "item/completed", "params": {"threadId": "thread", "turnId": turn, "item": {**item, "status": "completed"}}})
+        emit({"method": method, "params": {"threadId": "thread", "turnId": turn, "itemId": item["id"], field: "late-private-output"}})
+    emit({"method": "item/agentMessage/delta", "params": {"threadId": "thread", "turnId": turn, "delta": "Ready."}})
+    emit({"method": "turn/completed", "params": {"threadId": "thread", "turn": {"id": turn, "status": "completed"}}})
+''', encoding="utf-8")
+    popen = chat_agent.subprocess.Popen
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda _: sys.executable)
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda command, **kwargs:
+                        popen([sys.executable, str(peer), *command[1:]], **kwargs))
+    session = chat_agent.CodexChatAgentSession.start(
+        codex_bin="fixture-host", work_dir=tmp_path, goal_id="fixture",
+        objective="Inspect synthetic activity.", codex_home=tmp_path / "host-home",
+        idle_timeout_sec=5, hard_timeout_sec=10,
+    )
+    root = tmp_path / "store"
+    store = ChatSessionStore(root)
+    try:
+        session.send("Inspect activity.", on_event=lambda kind, payload:
+                     store.append_event("session", "turn", kind=kind, payload=payload))
+        events = ChatSessionStore(root).events_after("session", "turn", None)
+        updates = [event for event in events if event["payload"].get("method") in {
+            "item/commandExecution/outputDelta", "item/mcpToolCall/progress"}]
+        assert len(updates) == 2
+        assert {event["payload"]["step"]["kind"] for event in updates} == {"command", "tool"}
+        assert all(event["payload"]["step"]["state"] == "running" for event in updates)
+        saved = "\n".join(p.read_text() for p in store.root.rglob("*.events.jsonl"))
+        for secret in ("outside-thread", "outside-turn", "unknown-item", "private-host-output", "late-private-output"):
+            assert secret not in saved
+        assert [event["payload"]["step"]["state"] for event in events if "step" in event["payload"]] == [
+            "running", "running", "completed", "running", "running", "completed"]
+    finally:
+        session.close()
 
 
 def test_reasoning_streams_throttled_and_prefers_the_model_summary():

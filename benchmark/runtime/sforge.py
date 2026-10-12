@@ -15,8 +15,11 @@ from types import SimpleNamespace
 
 from sforge.harness.agent.codex import CodexAgent
 
-from .codex import Execution, TASK_ENTRIES, prepare_codex_home
-from .codex_offline import CodexOffline
+from benchmark.edgebench.feedback import FEEDBACK_MODES
+from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
+
+from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, prepare_codex_home
+from .codex_offline import CodexOffline, stage_portable_python
 from .harbor import (
     BenchmarkCodex, _GOAL_ID, _PYTHON, _SCHEDULER_STATE, _SRC,
 )
@@ -80,10 +83,14 @@ class SForgeWorker(CodexAgent):
 
     def __init__(self, config, *, profile: str, cwd: str,
                  timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
-                 blind_prompt: str | None = None,
-                 task_entry: str = "seeded-todo",
+                 feedback_prompt: str | None = None,
+                 feedback: str = "native",
+                 workspace_instructions: str | None = None,
+                 task_objective: str | None = None,
+                 task_entry: str | None = None,
                  turn_envelope: bool = False,
-                 replan_after_turns: int | None = None):
+                 replan_after_turns: int | None = None,
+                 replan_after_todos: int | None = None):
         super().__init__(config)
         if profile not in PROFILES:
             raise ValueError("Unknown benchmark worker profile")
@@ -98,20 +105,50 @@ class SForgeWorker(CodexAgent):
             raise ValueError("Explicit model and reasoning effort are required")
         if not os.environ.get("CODEX_AUTH_JSON_PATH"):
             raise ValueError("Set CODEX_AUTH_JSON_PATH to the trial credential source")
-        if task_entry not in TASK_ENTRIES:
-            raise ValueError("unsupported task entry")
-        if task_entry != "seeded-todo" and not profile.startswith("heartbeat-"):
+        if task_entry == "loopx-planned" and not profile.startswith("heartbeat-"):
             raise ValueError("loopx-planned requires a heartbeat profile")
-        self.task_entry = task_entry
+        self.task_entry = Execution(
+            mode="heartbeat" if profile.startswith("heartbeat-") else "plain",
+            task_entry=task_entry,
+        ).task_entry
+        if replan_after_turns is not None and replan_after_todos is not None:
+            raise ValueError("Choose replan_after_turns or replan_after_todos, not both")
+        if replan_after_todos is not None:
+            if type(replan_after_todos) is not int or not 1 <= replan_after_todos <= 5:
+                raise ValueError("replan_after_todos must be an integer between 1 and 5")
+            if not profile.startswith("heartbeat-"):
+                raise ValueError("replan_after_todos requires a heartbeat profile")
         if replan_after_turns is not None:
             if (type(replan_after_turns) is not int or
-                    not 1 <= replan_after_turns <= 5):
-                raise ValueError("replan_after_turns must be an integer between 1 and 5")
+                    not 1 <= replan_after_turns <= 6):
+                raise ValueError("replan_after_turns must be an integer between 1 and 6")
             if not profile.startswith("heartbeat-"):
                 raise ValueError("replan_after_turns requires a heartbeat profile")
+        if (replan_after_turns is None and replan_after_todos is None
+                and profile.startswith("heartbeat-")):
+            replan_after_turns = DEFAULT_REPLAN_AFTER_TURNS
         self.replan_after_turns = replan_after_turns
+        self.replan_after_todos = replan_after_todos
         self.profile, self.cwd = profile, cwd
-        self.blind_prompt = blind_prompt
+        if feedback not in FEEDBACK_MODES:
+            raise ValueError("Unknown feedback mode")
+        if feedback != "native" and feedback_prompt is None:
+            raise ValueError("Restricted feedback requires its task wrapper")
+        if workspace_instructions is not None and (
+            feedback != "native" or not workspace_instructions.strip()
+            or feedback_prompt is None or not feedback_prompt.startswith(workspace_instructions)
+        ):
+            raise ValueError("Workspace feedback instructions must match the native task wrapper")
+        if task_objective is not None and (
+            not isinstance(task_objective, str) or not task_objective.strip()
+            or workspace_instructions is None or task_objective not in workspace_instructions
+        ):
+            raise ValueError("Task objective must occur in the native workspace instructions")
+        self.feedback = feedback
+        self.feedback_prompt = feedback_prompt
+        self.workspace_instructions = workspace_instructions
+        self.task_objective = task_objective
+        self.instructions_installed = False
         self.prompt_installed = False
         self.timeout_seconds = timeout_seconds
         # Let one call use the trial budget. The shared worker recomputes the
@@ -119,9 +156,10 @@ class SForgeWorker(CodexAgent):
         self.turn_timeout = timeout_seconds - 160
         self.runtime = None
         self.prepared = False
-        # A single Codex call and a native Goal must not acquire an outer loop.
-        self.resume_cmd = (CodexAgent.resume_cmd if profile == "official" else
-                           "shared-scheduler" if profile.startswith("heartbeat-") else None)
+        # Only the official profile delegates continuation to SForge. Heartbeat
+        # workers already run a scheduler: restarting it after terminal/quiescent
+        # exit duplicates that owner and can exhaust the native resume limit.
+        self.resume_cmd = CodexAgent.resume_cmd if profile == "official" else None
 
     def install_stop_hook(self, backend, handle, log_dir, logger):
         self.environment = SForgeEnvironment(
@@ -135,6 +173,7 @@ class SForgeWorker(CodexAgent):
             self.environment.setup_env = {}
 
     def _install_worker(self, backend, handle, log_dir, logger):
+        self.backend, self.handle = backend, handle
         self.log_dir = log_dir
         effort = {"max": "xhigh"}.get(self._config.agent_effort, self._config.agent_effort)
         common = dict(logs_dir=log_dir / "worker", model_name=self._config.agent_model,
@@ -170,42 +209,78 @@ class SForgeWorker(CodexAgent):
                 iteration_context="resume" if mode == "heartbeat" else "fresh",
                 turn_timeout_sec=self.turn_timeout,
                 scheduler_timeout_sec=self.timeout_seconds,
+                planning_timeout_sec=None,
                 task_entry=self.task_entry,
                 turn_envelope=self.turn_envelope,
                 replan_after_turns=self.replan_after_turns,
+                replan_after_todos=self.replan_after_todos,
+                task_objective=self.task_objective,
             )
             asyncio.run(self.runtime.install(self.environment))
-        if self.blind_prompt is not None:
+        # Prompt replacement describes the policy; the feedback mode owns access.
+        if self.feedback != "native":
             result = backend.exec_run(handle, ["rm", "-f", "/usr/local/bin/sforge-submit"], user="root")
             if result.exit_code:
                 raise RuntimeError("Could not remove unavailable submission entrypoint")
+        if self.feedback == "best-only":
+            from benchmark.edgebench import feedback_hook
+            from benchmark.edgebench.feedback import prepare_feedback_root
+            # Plain workers stage only Codex; their task image need not ship Python.
+            # Heartbeat/native-goal workers already staged this same interpreter.
+            if self.runtime is None:
+                result = backend.exec_run(handle, ["mkdir", "-p", _PYTHON], user="root")
+                if result.exit_code:
+                    raise RuntimeError("Could not create best-only interpreter directory")
+                asyncio.run(stage_portable_python(self.environment, _PYTHON))
+                result = backend.exec_run(handle, ["chmod", "-R", "a+rX", _PYTHON], user="root")
+                if result.exit_code:
+                    raise RuntimeError("Best-only interpreter is unreadable by worker")
+            hook_python = f"{_PYTHON}/bin/python3"
+            hook = PurePosixPath("/opt/edgebench-feedback/hook.py")
+            prepare_feedback_root(backend, handle)
+            backend.copy_to_container(handle, Path(feedback_hook.__file__), hook)
+            result = backend.exec_run(handle, [hook_python, str(hook), "--install"], user="root")
+            if result.exit_code:
+                raise RuntimeError("Could not install best-only Codex delivery hooks")
+            result = backend.exec_run(handle, [hook_python, "-c",
+                "from pathlib import Path; "
+                f"Path({str(hook)!r}).read_bytes(); Path('/etc/codex/hooks.json').read_bytes()"], user="agent")
+            if result.exit_code:
+                raise RuntimeError("Best-only Codex delivery hooks are unreadable by worker")
         (log_dir / "worker-profile.json").write_text(json.dumps({
             "profile": self.profile, "model": self._config.agent_model,
             "task_entry": self.task_entry,
             "reasoning_effort": effort, "timeout_seconds": self.timeout_seconds,
+            "loopx_usage_ping_enabled": False,
+            **({"planning_timeout_seconds": None}
+               if self.task_entry == "loopx-planned" else {}),
             "stop_hook": self.profile == "official",
             **({"turn_envelope": True} if self.turn_envelope else {}),
             "outer_resume": self.resume_cmd is not None,
             "explore_graph": self.profile == "heartbeat-explore",
             "explore_harness": self.profile == "heartbeat-explore",
-            "feedback": "blind" if self.blind_prompt is not None else "native",
+            "feedback": self.feedback,
+            **({"feedback_delivery": "codex_hooks", "feedback_payload": FEEDBACK_PAYLOAD}
+               if self.feedback == "best-only" else {}),
             **(self.runtime._replan_receipt() if self.runtime and
-               self.replan_after_turns is not None else {}),
+               self.profile.startswith("heartbeat-") else {}),
         }, indent=2))
 
     def format_run_cmd(self, prompt_path, *, model=None, cwd="", internet=True, resume=False):
-        if self.blind_prompt is not None and not self.prompt_installed:
+        if self.workspace_instructions is not None and not self.instructions_installed:
+            self._install_workspace_instructions()
+        if self.feedback_prompt is not None and not self.prompt_installed:
             with tempfile.TemporaryDirectory(prefix="benchmark-prompt-") as directory:
                 prompt = Path(directory) / "task.md"
-                prompt.write_text(self.blind_prompt)
+                prompt.write_text(self.feedback_prompt)
                 asyncio.run(self.environment.upload_file(prompt, prompt_path))
             # Native run_agent saved the pre-override wrapper. Keep its visible
             # prompt artifact aligned with what all five workers actually read.
-            (self.log_dir / "agent_prompt.md").write_text(self.blind_prompt)
+            (self.log_dir / "agent_prompt.md").write_text(self.feedback_prompt)
             self.prompt_installed = True
         if self.profile in {"official", "single"}:
-            return super().format_run_cmd(prompt_path, model=model, cwd=cwd,
-                                          internet=internet, resume=resume)
+            return self._execution_command(super().format_run_cmd(prompt_path, model=model, cwd=cwd,
+                                          internet=internet, resume=resume))
         if self.runtime is None:
             raise RuntimeError("Run the native SForge installation hook before execution")
         if not self.prepared:
@@ -229,17 +304,52 @@ class SForgeWorker(CodexAgent):
         command = worker_command(env, python=f"{_PYTHON}/bin/python3", source=_SRC,
                                  state_file=_SCHEDULER_STATE, host_timeout=self.turn_timeout)
         if self.task_entry == "loopx-planned":
-            env["LOOPX_PLANNING_TIMEOUT_SEC"] = str(self.runtime.planning_timeout)
             env["LOOPX_PLANNING_RESULT"] = "/opt/loopx-benchmark/control/planning-phase-001.json"
             command = [f"{_PYTHON}/bin/python3", "-m", "benchmark.runtime.sforge_entry", *command]
-        # Persist the phase deadline in the task environment. An abnormal outer
-        # resume preserves the remaining budget instead of granting another 18h.
+        # Persist the phase deadline for repeated command preparation. Reusing
+        # an entry command must never grant another full trial budget.
         deadline = "/opt/loopx-benchmark/control/phase-deadline"
+        started = "/opt/loopx-benchmark/control/execution-started"
         exports = " ".join(f"{key}={shlex.quote(value)}" for key, value in env.items())
-        return (
+        return self._execution_command(
             f"set -eu; test -f {deadline} || echo $(( $(date +%s) + {self.timeout_seconds} )) > {deadline}; "
             f"export LOOPX_PHASE_DEADLINE_EPOCH=$(cat {deadline}); "
             f"remaining=$(( LOOPX_PHASE_DEADLINE_EPOCH - $(date +%s) )); "
-            'test "$remaining" -gt 0 || exit 0; '
-            f"exec timeout --signal=TERM --kill-after=30 ${{remaining}}s env {exports} {shlex.join(command)}"
+            f'if test "$remaining" -le 0; then test -f {started}; exit $?; fi; '
+            + (f"touch {started}; " if self.task_entry != "loopx-planned" else "")
+            + f"set +e; timeout --signal=TERM --kill-after=30 ${{remaining}}s env {exports} {shlex.join(command)}; "
+            f"phase_rc=$?; if test $phase_rc -eq 124 && test -f {started} "
+            '&& test "$(date +%s)" -ge "$LOOPX_PHASE_DEADLINE_EPOCH"; then exit 0; fi; exit $phase_rc',
+            execution_start_marker=started,
         )
+
+    def _install_workspace_instructions(self):
+        """Preserve task instructions and verify the policy before model entry."""
+        path = shlex.quote(str(PurePosixPath(self.cwd) / "AGENTS.md"))
+        marker = "<!-- EdgeBench native feedback policy -->"
+        block = f"\n\n{marker}\n\n{self.workspace_instructions}"
+        check = f"test ! -L {path} && {{ test ! -e {path} || test -f {path}; }}"
+        read = asyncio.run(self.environment.exec(f"{check} && {{ test ! -f {path} || cat {path}; }}"))
+        if read.return_code:
+            raise RuntimeError("Workspace AGENTS.md must be a readable regular file or absent")
+        if marker in read.stdout and not read.stdout.endswith(block):
+            raise RuntimeError("Workspace AGENTS.md has conflicting or partial feedback instructions")
+        expected = read.stdout if read.stdout.endswith(block) else read.stdout + block
+        if expected != read.stdout:
+            written = asyncio.run(self.environment.exec(
+                f"{check} && printf '%s' {shlex.quote(block)} >> {path}"))
+            if written.return_code:
+                raise RuntimeError("Could not append workspace feedback instructions")
+        observed = asyncio.run(self.environment.exec(f"cat {path}"))
+        if observed.return_code or observed.stdout != expected:
+            raise RuntimeError("Workspace feedback instruction readback failed")
+        (self.log_dir / "workspace-AGENTS.md").write_text(observed.stdout)
+        self.instructions_installed = True
+
+    def _execution_command(self, command, *, execution_start_marker=None):
+        if getattr(self, "backend", None) is not None:
+            self.backend.execution_command = command
+            self.backend.execution_start_marker = execution_start_marker
+        if self.feedback == "best-only":
+            self.backend.start_feedback(self.handle)
+        return command

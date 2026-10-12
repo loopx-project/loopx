@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import warnings
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -11,13 +11,18 @@ from ...control_plane.capability_hooks import (
     PostWritebackHookRegistration,
 )
 from ...control_plane.digest_envelope import enveloped_sha256, sha256_envelope
+from ...control_plane.coordination.local_authority import canonical_todo_summary_fields
 from ...control_plane.goals.goal_frontier import (
     build_goal_frontier_projection_from_summaries,
 )
-from .todo_source import read_report_todo_source
+from .todo_source import read_report_source_history, read_report_todo_source
+from ...control_plane.effect_runtime import (
+    CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS,
+    effect_runtime_result,
+)
 from ...control_plane.todos.quota_summary import summarize_user_todos_for_quota
 from ...control_plane.todos.todo_index import MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL
-from ...history import collect_history, load_registry
+from ...history import collect_history, load_index_snapshot, load_registry
 from ...paths import resolve_runtime_root
 from ...registry import registry_goals
 from ...rollout_event_log import load_rollout_events, rollout_event_log_path
@@ -185,6 +190,8 @@ def build_periodic_report_post_writeback_projection(
     runtime_root: Path,
     goal_id: str,
     agent_id: str | None,
+    source_todos: Mapping[str, Any] | None = None,
+    source_runs: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, object]:
     """Reduce private runtime state to one bounded public-safe stage receipt."""
 
@@ -194,7 +201,25 @@ def build_periodic_report_post_writeback_projection(
     available_capabilities = payload.get("available_capabilities")
     if available_capabilities is None and isinstance(payload.get("turn"), Mapping):
         available_capabilities = payload["turn"].get("available_capabilities")
-    events = load_rollout_events(
+    if source_todos is None and "todo_source" in payload:
+        source_todos = effect_runtime_result(
+            "coordination.local_authority.todo_source",
+            {
+                "schema_version": "loopx_local_coordination_todo_source_request_v0",
+                "runtime_root": str(runtime_root), "goal_id": goal_id,
+                "source": payload["todo_source"],
+            },
+            timeout=CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS,
+            large_local_snapshot=True,
+        )
+        if source_todos.get("status") != "loaded":
+            raise ValueError("original canonical Todo source is unavailable")
+        source_runs = read_report_source_history(
+            runtime_root=runtime_root, goal_id=goal_id, run=payload,
+        )
+    if (source_todos is None) != (source_runs is None):
+        raise ValueError("a committed source requires both Todo and run history")
+    events = [] if source_todos is not None else load_rollout_events(
         rollout_event_log_path(runtime_root, goal_id),
         limit=MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL,
     )
@@ -202,77 +227,110 @@ def build_periodic_report_post_writeback_projection(
     state_path = (
         state.get("path") if isinstance(state, Mapping) else None
     ) or payload.get("state_file")
-    fields, _ = read_report_todo_source(
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-        goal_id=goal_id,
-        state_path=Path(state_path)
-        if isinstance(state_path, str) and state_path
-        else None,
-        rollout_events=events,
-        available_capabilities=available_capabilities,
-    )
+    if source_todos is not None:
+        fields = canonical_todo_summary_fields(
+            source_todos["todos"],
+            rollout_events=events,
+            available_capabilities=available_capabilities,
+            goal_acceptance_contract=source_todos.get("goal_acceptance_contract"),
+            goal_acceptance_work_guards=source_todos.get("goal_acceptance_work_guards"),
+        )
+    else:
+        fields, _ = read_report_todo_source(
+            registry_path=registry_path,
+            runtime_root=runtime_root,
+            goal_id=goal_id,
+            state_path=Path(state_path)
+            if isinstance(state_path, str) and state_path
+            else None,
+            rollout_events=events,
+            available_capabilities=available_capabilities,
+        )
     projection, _user_summary, _agent_summary = _frontier_projection(
         todos=fields, goal_id=goal_id, agent_id=normalized_agent_id
     )
-    history = collect_history(
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-        goal_id=goal_id,
-        limit=64,
-        include_runtime_goals=False,
+    if source_runs is None:
+        history = collect_history(
+            registry_path=registry_path,
+            runtime_root=runtime_root,
+            goal_id=goal_id,
+            limit=64,
+            include_runtime_goals=False,
+        )
+        goals = history.get("goals")
+        goal_history = goals[0] if isinstance(goals, list) and goals else {}
+        latest_runs = (
+            list(goal_history.get("latest_runs") or [])
+            if isinstance(goal_history, Mapping)
+            else []
+        )
+    else:
+        latest_runs = list(source_runs)
+    # Terminal settlement follows the current history. A successor milestone is
+    # only claimed below, from the exact durable refresh that carries its
+    # accepted ACK and selected Vision.
+    receipt = derive_periodic_report_stage_completion_from_runs(
+        latest_runs=latest_runs,
+        agent_id=normalized_agent_id,
+        goal_frontier_projection=projection,
     )
-    goals = history.get("goals")
-    goal_history = goals[0] if isinstance(goals, list) and goals else {}
-    latest_runs = (
-        list(goal_history.get("latest_runs") or [])
-        if isinstance(goal_history, Mapping)
-        else []
-    )
-    settled_ack: Mapping[str, Any] | None = None
-    for run in latest_runs:
-        if not isinstance(run, Mapping):
-            continue
-        run_agent_id = str(run.get("agent_id") or "").strip()
-        vision = run.get("agent_vision")
+    if receipt is None:
+        source_run_path = payload.get("json_path")
+        if not isinstance(source_run_path, str) or not source_run_path:
+            return {}
+        records = load_index_snapshot(
+            runtime_root / "goals" / goal_id / "runs" / "index.jsonl",
+            include_artifact_status=False,
+        ).records
+        matches = [
+            position for position, run in enumerate(records)
+            if run.get("json_path") == source_run_path
+        ]
+        if len(matches) != 1:
+            return {}
+        # Index append position, including equal-clock writes, fixes the
+        # Vision history visible to this source refresh on exact retry.
+        source_refresh_runs = list(
+            reversed(records[max(0, matches[0] - 63):matches[0] + 1])
+        )
+        source_run = source_refresh_runs[0]
+        run_agent_id = str(source_run.get("agent_id") or "").strip()
+        vision = source_run.get("agent_vision")
         vision_agent_id = (
             str(vision.get("agent_id") or "").strip()
             if isinstance(vision, Mapping)
             else ""
         )
         if run_agent_id and vision_agent_id and run_agent_id != vision_agent_id:
-            continue
+            return {}
         attributed_agent_id = run_agent_id or vision_agent_id
         if attributed_agent_id != normalized_agent_id:
-            continue
-        raw_ack = run.get("autonomous_replan_ack")
+            return {}
+        raw_ack = source_run.get("autonomous_replan_ack")
         ack = dict(raw_ack) if isinstance(raw_ack, Mapping) else None
-        if ack is not None:
-            ack["agent_id"] = attributed_agent_id
         semantic_delta = ack.get("semantic_delta") if isinstance(ack, Mapping) else None
         if (
-            isinstance(ack, Mapping)
-            and ack.get("recorded") is True
-            and isinstance(semantic_delta, Mapping)
-            and "vision_successor_required"
-            in {str(value) for value in semantic_delta.get("trigger_kinds") or []}
+            not isinstance(ack, Mapping)
+            or ack.get("recorded") is not True
+            or not isinstance(semantic_delta, Mapping)
+            or "vision_successor_required"
+            not in {str(value) for value in semantic_delta.get("trigger_kinds") or []}
         ):
-            settled_ack = ack
-            break
-    settled_obligation = None
-    if settled_ack is not None:
-        settled_obligation = {
-            "frontier_identity": settled_ack.get("frontier_identity"),
-            "agent_id": normalized_agent_id,
-            "triggers": [{"kind": "vision_successor_required"}],
-        }
-    receipt = derive_periodic_report_stage_completion_from_runs(
-        latest_runs=latest_runs,
-        agent_id=normalized_agent_id,
-        goal_frontier_projection=projection,
-        settled_replan_obligation=settled_obligation,
-        settled_replan_ack=settled_ack,
-    )
+            return {}
+        ack["agent_id"] = attributed_agent_id
+        receipt = derive_periodic_report_stage_completion_from_runs(
+            latest_runs=source_refresh_runs,
+            agent_id=normalized_agent_id,
+            goal_frontier_projection=projection,
+            settled_replan_obligation={
+                "frontier_identity": ack.get("frontier_identity"),
+                "obligation_id": semantic_delta.get("obligation_id"),
+                "agent_id": normalized_agent_id,
+                "triggers": [{"kind": "vision_successor_required"}],
+            },
+            settled_replan_ack=ack,
+            source_run_path=source_run_path,
+        )
     if receipt is None:
         return {}
     result: dict[str, object] = {"stage_completion": receipt}

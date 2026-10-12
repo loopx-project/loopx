@@ -274,6 +274,26 @@ def render_loopx_turn_journal_inspection_markdown(
     )
 
 
+def render_loopx_turn_journal_progress_markdown(
+    payload: dict[str, object],
+) -> str:
+    """Render one allowlisted progress event from a Turn journal watch."""
+    phases = payload.get("completed_phases")
+    completed = (
+        ", ".join(str(phase) for phase in phases)
+        if isinstance(phases, list) and phases
+        else "none"
+    )
+    return "\n".join(
+        [
+            "# LoopX Turn Progress",
+            f"- journal_status: {payload.get('journal_status')}",
+            f"- completed_phases: {completed}",
+            "- effects: none",
+        ]
+    )
+
+
 def render_loopx_turn_managed_step_markdown(payload: dict[str, object]) -> str:
     if not payload.get("ok"):
         error = payload.get("error") or "Turn managed step failed"

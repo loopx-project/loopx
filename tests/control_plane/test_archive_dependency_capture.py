@@ -8,7 +8,7 @@ import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 from test_runtime_shadow_bounded_e2e import workspace, enable, cli
-from loopx.control_plane.coordination.runtime_shadow import (
+from loopx.control_plane.coordination.authority_source_capture import (
     build_runtime_shadow_source_snapshot, capture_todo_archive_dependencies,
 )
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected
@@ -58,7 +58,7 @@ def test_missing_authority_stays_rejected_without_mutating_input(metadata):
 
 
 def test_capture_transport_separates_classification_from_private_prose(monkeypatch):
-    from loopx.control_plane.coordination import runtime_shadow
+    from loopx.control_plane.coordination import authority_source_capture as runtime_shadow
     original = runtime_shadow.effect_runtime_result
     requests = []
     def record(method, params):

@@ -25,7 +25,7 @@ function lines(value: unknown, label: string): string[] {
   return value.map((item, index) => text(item, `${label}[${index}]`, 1000));
 }
 
-function workspaceRef(value: unknown): string {
+export function workspaceRef(value: unknown): string {
   const ref = text(value, "input.ref", 512);
   // References never fetch URLs or expose a sender's absolute filesystem path.
   if (ref.startsWith("/") || ref.includes("\\") || ref.includes(":")

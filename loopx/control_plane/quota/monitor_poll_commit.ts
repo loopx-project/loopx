@@ -145,6 +145,7 @@ interface MonitorRequest {
 }
 
 interface MonitorProviderPlan extends JsonObject {
+  legacy_batch_version?: 1;
   schema_version: typeof MONITOR_TODO_PROVIDER_PLAN_SCHEMA | typeof LEASED_MONITOR_TODO_PROVIDER_PLAN_SCHEMA;
   lease_proof?: TaskLeaseProof;
   gate_scope_guard?: boolean;
@@ -917,7 +918,7 @@ function requestDigest(request: MonitorRequest): string {
 
 function providerPlanFor(request: MonitorRequest, gateGuard = Boolean(
   request.observation.settlement_todo_id && request.observation.settlement_todo_id !== request.observation.todo_id
-)): MonitorProviderPlan {
+), legacyBatchVersion: 1 | null = 1): MonitorProviderPlan {
   const resultHash = request.observation.result_hash;
   if (!resultHash) {
     throw new EffectRuntimeRequestError("monitor todo writeback requires --result-hash");
@@ -926,6 +927,7 @@ function providerPlanFor(request: MonitorRequest, gateGuard = Boolean(
     schema_version: request.observation.lease_proof ? LEASED_MONITOR_TODO_PROVIDER_PLAN_SCHEMA : MONITOR_TODO_PROVIDER_PLAN_SCHEMA,
     ...(request.observation.lease_proof ? {lease_proof: request.observation.lease_proof} : {}),
     ...(gateGuard ? {gate_scope_guard: true} : {}),
+    ...(legacyBatchVersion === 1 ? {legacy_batch_version: 1 as const} : {}),
     monitor_effect_id: request.effect_id,
     goal_id: request.goal_id,
     generated_at: request.generated_at,
@@ -964,12 +966,16 @@ function providerPlanObject(value: unknown): MonitorProviderPlan {
       plan.schema_version !== LEASED_MONITOR_TODO_PROVIDER_PLAN_SCHEMA) {
     throw new EffectRuntimeRequestError("Monitor Todo provider plan schema mismatch");
   }
+  if (plan.legacy_batch_version !== undefined && plan.legacy_batch_version !== 1) {
+    throw new EffectRuntimeRequestError("unsupported legacy Monitor batch version");
+  }
   const proof = decodeTaskLeaseProof(plan.lease_proof);
   if ((plan.schema_version === LEASED_MONITOR_TODO_PROVIDER_PLAN_SCHEMA) !== (proof !== null)) {
     throw new EffectRuntimeRequestError("Monitor provider plan lease proof/schema mismatch");
   }
   return {
     schema_version: plan.schema_version,
+    ...(plan.legacy_batch_version === 1 ? {legacy_batch_version: 1} : {}),
     ...(proof ? {lease_proof: proof} : {}),
     ...(plan.gate_scope_guard == null ? {} : {gate_scope_guard: requireBoolean(plan.gate_scope_guard, "provider_plan.gate_scope_guard")}),
     monitor_effect_id: requiredString(
@@ -2287,7 +2293,7 @@ async function evaluateQuotaMonitorPollRequest(
       const expectedPlan = providerPlanFor({
         ...request,
         generated_at: plan.generated_at,
-      }, plan.gate_scope_guard === true);
+      }, plan.gate_scope_guard === true, plan.legacy_batch_version ?? null);
       if (pythonJson(plan) !== pythonJson(expectedPlan)) {
         throw new EffectRuntimeRequestError(
           "quota monitor-poll provider plan conflicts with its transaction receipt",
@@ -2338,7 +2344,7 @@ async function evaluateQuotaMonitorPollRequest(
       const expectedPlan = providerPlanFor({
         ...request,
         generated_at: plan.generated_at,
-      }, plan.gate_scope_guard === true);
+      }, plan.gate_scope_guard === true, plan.legacy_batch_version ?? null);
       if (pythonJson(plan) !== pythonJson(expectedPlan)) {
         throw new EffectRuntimeRequestError(
           "quota monitor-poll provider plan conflicts with its transaction receipt",

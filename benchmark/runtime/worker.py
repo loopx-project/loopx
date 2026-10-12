@@ -249,7 +249,7 @@ def run_once(env: dict[str, str]) -> dict:
         timeout_seconds=(float(env["LOOPX_CODEX_TURN_TIMEOUT_SEC"])
                          if env.get("LOOPX_CODEX_TURN_TIMEOUT_SEC") else None),
         validation_command=json.loads(env.get("LOOPX_VALIDATION_COMMAND_JSON", "[]")),
-        task_entry=env.get("LOOPX_TASK_ENTRY", "seeded-todo"),
+        task_entry=env.get("LOOPX_TASK_ENTRY"),
         turn_envelope=env.get("LOOPX_TURN_ENVELOPE", "0") == "1",
     )
     stage = env.get("LOOPX_TASK_STAGE", "execute")
@@ -344,9 +344,15 @@ def run_once(env: dict[str, str]) -> dict:
                         command, env=env, stdout=stdout, stderr=stderr
                     ) as process:
                         allowance = 150 if execution.mode == "turn" and stage == "execute" else 0
-                        timeout = (float(env["LOOPX_PLANNING_TIMEOUT_SEC"]) if stage == "plan"
-                                   else None if execution.timeout_seconds is None
-                                   else execution.timeout_seconds + allowance)
+                        if stage == "plan":
+                            limit = env.get("LOOPX_PLANNING_TIMEOUT_SEC")
+                            # SForge planning has no stage cap: the same absolute
+                            # trial deadline bounds this subprocess and its handoff.
+                            timeout = (float(limit) if limit is not None else
+                                       max(0, float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time()))
+                        else:
+                            timeout = (None if execution.timeout_seconds is None
+                                       else execution.timeout_seconds + allowance)
                         process.communicate(
                             input=body, timeout=timeout
                         )

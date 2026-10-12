@@ -2,7 +2,7 @@
 
 - **RFC status:** Accepted
 - **Supersedes / closes:** none
-- **Delivery maturity:** Partial, proposed implementation; not promoted
+- **Delivery maturity:** M1/M3 and managed Turn candidate delivered; host promotion remains unqualified
 - **Owners:** Quota, scheduler and host-runtime maintainers
 - **Created / last normative revision:** 2026-09-23
 - **Implementation baseline:** `79241d7ef`
@@ -125,6 +125,22 @@ protection against clock manipulation.
 
 For App, show desired versus observed schedule and apply failure. Unsupported
 intervals require holding the affected automation, not shortening the interval.
+Codex App ACK commands must re-read the matched heartbeat after the host update.
+The requested RRULE and the hint's earlier observation cannot certify that update.
+The typed scheduler commit rejects missing or mismatched current observations
+before migration, identity reset or persistence. This applies to the console's
+native follow-up and the Python compatibility adapter. Unix and PowerShell
+launchers route Codex host-match ACKs through that same entrypoint's fresh read;
+other generated follow-ups keep their Node fast path. Outer-controlled writes
+retain the entrypoint's existing permission guard before native dispatch.
+The native decoder binds the host-match flag to the captured ACK fact, so
+dropping that flag cannot bypass the launcher's current-readback route.
+Other App adapters supply their own neutral current-RRULE argument; an explicit
+unavailable observation clears earlier facts, while absence preserves their
+bound observation. They never read Codex metadata to fill a missing observation.
+Failure commands retain their original target/observed pair. Real App API updates and readback on
+disposable File/SQLite Goals qualify this schedule boundary separately from
+elapsed timer wakeups, installed-runtime adoption and pre-model admission.
 The activation path must be qualified separately before advertising one-click
 floor-safe activation. An in-model guard can stop further work after waking;
 it cannot recover already consumed model tokens. Merely changing a prompt is
@@ -184,7 +200,7 @@ scope; do not delete the state file as routine rollback.
 | No retry storm | Managed host failure/invalid-result retries denied; no spend on denial | Internal provider tool-call limits |
 | Compatible off | Existing executor suite; absent policy creates no cadence files | Configured lanes intentionally change |
 | App honesty | Desired schedule and guarantee readback; mismatched ACK rejected | No zero-token wakeup claim |
-| Full product delivery | Settings/CLI projection parity and packaged interaction | Pending companion milestone |
+| M3 readback parity | Quota, settings, CLI and selected-Agent Lark render the same owner eligibility and exact next time | Host activation and timer-to-hook qualification remain separate |
 
 ## 10. Operations
 
@@ -201,11 +217,12 @@ must preserve the latest start for every active scope.
 | --- | --- | --- |
 | M1 · S7/S2/S4 | Codex App first: owner CLI, durable inherited floor, reset/backoff-safe recommendations, activation guidance and compact readback | Real file/CLI and App projection negative tests; opt-in, pause before rollback |
 | M2 · S4/R2 | Managed Turn atomic admission plus scoped App hook qualification; actual timer apply/readback and legacy launcher coverage | Isolated host acceptance, manual/automatic identity, hook trust/failure coverage, unsupported schedule holds and bounded continuation |
-| M3 · S5/S7 | Existing settings editor exposes inherited floor and next eligibility; unified quota wait feedback in frontend/Lark/CLI | Packaged interaction/readback parity; no duplicate policy owner |
+| M3 · S5/S7 | Delivered: existing settings editor exposes inherited floor and next eligibility; quota/frontend/Lark/CLI share typed wait feedback | Packaged interaction/readback parity; no duplicate policy owner |
 | M4 · S7/R6 | Cross-host reservations only when a real shared-runtime caller requires them | Provider concurrency/fence/recovery evidence; explicit promotion |
 
-M1 is useful for App schedule management, not completion of the multi-host
-product journey. The broader product goal remains open until M2/M3 acceptance.
+M1 and M3 are useful for App schedule management and truthful readback, not
+completion of the multi-host product journey. The broader product goal remains
+open until M2 host qualification is accepted.
 
 ## 12. Open decisions
 
@@ -214,8 +231,6 @@ product journey. The broader product goal remains open until M2/M3 acceptance.
 2. Quota/runtime maintainers: bounded episode admission versus per-invocation
    admission. Keep the conservative per-invocation unit until real continuation
    evidence justifies explicit time/step limits for an episode.
-3. Settings owners: agent-versus-automation editor placement for M3; reuse the
-   existing quota/configuration projection, not another preferences store.
 
 ## Appendix: implementation ledger
 
@@ -233,11 +248,12 @@ the interval. The local CLI remains a same-UID trust boundary.
 A managed start is two-phase in the same store: admission reserves the interval
 slot, and the Turn executor confirms that reservation only after the host
 attempt is durable in its journal. A crash between the two leaves the
-reservation resumable by the same Turn identity once the floor is reached, so a
-reserved-but-unstarted start never strands a Turn; a confirmed start stays
-fail-closed for the same identity, and an explicit manual reason cannot bypass
-that. A store record written without the phase field is read as an attempted
-start, so an older or hand-edited file fails closed rather than resuming.
+reservation immediately resumable by the same Turn identity without moving the
+original interval anchor, so a reserved-but-unstarted start never strands a
+Turn. A confirmed start stays fail-closed for the same identity, and an explicit
+manual reason cannot bypass that. A store record written without the phase field
+is read as an attempted start, so an older or hand-edited file fails closed
+rather than resuming.
 
 The M3 settings companion presents the quota-owned Goal/agent/automation policy
 through one explicit Save backed by revision-locked preview, apply and readback,
@@ -248,12 +264,26 @@ Switching the target discards the draft. Save records target/value provenance
 without requiring a free-text reason or a second reduction checkbox. The editor
 shows effective inheritance before saving; stale intent and unverified readback
 require refresh instead of silently retrying or reporting verified success.
-Per-Agent overrides preserve peer and Goal defaults. It does
-not edit existing Codex App timers, and next-eligible time plus Lark/CLI wait
-parity remain open. The App timer-to-hook path, non-Turn launchers and live
-model-host promotion remain unqualified; M4 remains a design option. No existing
-automation is activated or rebound by this proposal. Tests and PR validation
-must distinguish deterministic evidence from host promotion.
+Per-Agent overrides preserve peer and Goal defaults.
+
+M3 now consumes the owner's nested eligibility union across quota, the settings
+API, human CLI, Dashboard and selected-Agent Lark `/status`. Only an otherwise
+runnable hosted App automation is demoted to a quiet wait; generic CLI
+inspection and stronger pause, health, gate, recovery, repair or settlement
+states retain their existing decision. Every surface shows the owner-produced
+state and exact next-eligible timestamp without computing its own countdown.
+`eligible` means only that the minimum-interval condition has elapsed. Session
+health, quota, permissions and work availability remain separate gates.
+Lark reads only for an exact selected attached Agent, at Agent-wide scope with
+no automation id, and persists the validated public-safe observation in the
+existing status snapshot. Missing roots, read failures and malformed or
+mismatched owner results become unavailable, never eligible; delivery replay
+uses the frozen snapshot without another owner read.
+
+M3 does not edit existing Codex App timers. The App timer-to-hook path, non-Turn
+launchers and live model-host promotion remain unqualified; M4 remains a design
+option. No existing automation is activated or rebound by this proposal. Tests
+and PR validation must distinguish deterministic evidence from host promotion.
 
 M1 policy files are read as v1 and upgraded in place to v2 on the first
 configuration write or admitted start. The path stays stable; older binaries

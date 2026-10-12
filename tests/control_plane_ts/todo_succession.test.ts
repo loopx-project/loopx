@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {evaluateTodoSuccession, projectTodoSuccession, projectTodoClosure, SUCCESSION_FACT_COLUMNS, SUCCESSION_EVALUATION_COLUMNS} from "../../loopx/control_plane/todos/succession.ts";
+import {evaluateTodoSuccession, projectTodoSuccession, projectTodoClosure, validateTodoClosureSource, SUCCESSION_FACT_COLUMNS, SUCCESSION_EVALUATION_COLUMNS} from "../../loopx/control_plane/todos/succession.ts";
 
 const row = (todo_id: string, overrides = {}) => ({todo_id, status: "done", active: true,
   advancement: true, no_followup: false, successors: [], superseded_by: null,
-  unblocks: null, resumes: null, handoff: false, context_fields: ["claimed_by"], ...overrides});
+  unblocks: null, resumes: null, handoff: false, done: false, route_flag: null,
+  legacy_route_label: "", context_fields: ["claimed_by"], ...overrides});
 
 type ProjectionInput = {schema_version: string; rows: Record<string, unknown>[];
   context_field_sets?: unknown; evaluations?: Record<string, unknown>[]};
@@ -22,6 +23,26 @@ function project(request: ProjectionInput) {
   return {...result, evaluations: (result.evaluations as unknown[][]).map(row =>
     Object.fromEntries(SUCCESSION_EVALUATION_COLUMNS.map((name, index) => [name, row[index]])))};
 }
+
+test("route advisory belongs to the source evaluation and never clears the handoff", () => {
+  const source = row("todo_gate", {status: "open", handoff: true, legacy_route_label: "STALE handoff closeout"});
+  for (const [extra, expected] of [
+    [{}, true], [{route_flag: false}, false], [{route_flag: true, done: true}, true],
+    [{status: "done"}, false], [{status: "deferred"}, false], [{done: true}, false],
+    [{active: false}, false], [{handoff: false}, false], [{legacy_route_label: "handoff closeout"}, false],
+  ] as const) {
+    const value = {...source, ...extra}, evaluation = evaluateTodoSuccession([value])[0];
+    assert.equal(evaluation.route_continuation_replan_required, expected);
+    assert.deepEqual(evaluation.successor_todo_ids, []);
+    assert.equal(evaluation.handoff_state, !value.active || !value.handoff ? null :
+      value.status === "done" ? "cleared_without_successor" : value.status === "deferred" ? "deferred" : "blocking");
+  }
+  const evaluation = evaluateTodoSuccession([source])[0];
+  for (const extra of [{route_flag: false}, {legacy_route_label: "handoff closeout"}, {done: true}]) {
+    assert.throws(() => project({schema_version: "todo_succession_request_v1",
+      rows: [{...source, ...extra}], evaluations: [evaluation]}), /matching full-source/);
+  }
+});
 
 test("one resolver recognizes explicit, supersession and inferred links in source order", () => {
   const rows = [row("todo_source", {successors: ["todo_explicit", "todo_source", "todo_missing"], superseded_by: "todo_replaced", handoff: true}),
@@ -77,6 +98,77 @@ test("terminal proofs require full selection and absence of every unresolved obl
   assert.equal((watch.terminal_closure_proof as Record<string, unknown>).all_todos_done, false);
 });
 
+function closureSource() {
+  return {schema_version: "todo_summary_v0", source_section: "Agent Todo",
+    total_count: 1, open_count: 0, done_count: 1, deferred_count: 0,
+    convergence_open_count: 0, completed_without_successor_count: 0, route_continuation_replan_count: 0,
+    items: [{status: "done", done: true, watch_only: false}], monitor_open_items: [],
+    deferred_item_count: 0, deferred_resume_count: 0,
+    source_proof: {schema_version: "todo_source_proof_v0", role: "agent", derived: true, item_count: 1},
+    terminal_closure_proof: {schema_version: "todo_terminal_closure_proof_v0", role: "agent", derived: true,
+      source_section: "Agent Todo", item_count: 1, all_todos_done: true, monitor_open_count: 0,
+      watch_only_monitor_count: 0, successor_gap_count: 0, route_replan_count: 0, no_followup_count: 1},
+    closure_intent: {schema_version: "todo_closure_intent_v0", kind: "no_followup", derived: true, count: 1}};
+}
+test("retained closure proofs reject malformed integer witnesses without false terminal intent", () => {
+  for (const bad of [true, false, null, "0", "bad", -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+    for (const patch of [{item_count: bad}, {monitor_open_count: bad, watch_only_monitor_count: bad},
+      {successor_gap_count: bad}, {route_replan_count: bad}, {no_followup_count: bad}]) {
+      const input = closureSource();
+      const result = validateTodoClosureSource({...input, terminal_closure_proof: {...input.terminal_closure_proof, ...patch}});
+      assert.equal((result.source_completeness as Record<string, unknown>).status, "invalid");
+      assert.equal(result.closure_intent, null);
+    }
+  }
+  const input = closureSource(), before = structuredClone(input);
+  assert.equal((validateTodoClosureSource(input).closure_intent as Record<string, unknown>).count, 1);
+  assert.deepEqual(input, before);
+});
+test("closure source validation retains empty, bounded full-source and watch-only observations", () => {
+  const input = closureSource();
+  const cases = [{...input, total_count: 0, done_count: 0, items: [],
+    source_proof: {...input.source_proof, item_count: 0},
+    terminal_closure_proof: {...input.terminal_closure_proof, item_count: 0, no_followup_count: 0}},
+  {...input, total_count: 13, done_count: 13,
+    source_proof: {...input.source_proof, item_count: 13},
+    terminal_closure_proof: {...input.terminal_closure_proof, item_count: 13}},
+  {...input, total_count: 2, open_count: 1,
+    items: [...input.items, {status: "open", done: false, watch_only: true}],
+    monitor_open_items: [{watch_only: true}], source_proof: {...input.source_proof, item_count: 2},
+    terminal_closure_proof: {...input.terminal_closure_proof, item_count: 2, all_todos_done: false,
+      all_convergent_todos_done: true, monitor_open_count: 1, watch_only_monitor_count: 1}}];
+  for (const source of cases) assert.equal((validateTodoClosureSource(source).source_completeness as Record<string, unknown>).status, "valid");
+  assert.equal(validateTodoClosureSource(cases[0]).closure_intent, null);
+});
+test("closure proofs cannot claim all todos are done while watch-only monitors remain", () => {
+  const input = closureSource();
+  const watchOnly = {...input, total_count: 2, open_count: 1, done_count: 1,
+    items: [...input.items as Record<string, unknown>[], {status: "open", done: false, watch_only: true}],
+    monitor_open_items: [{watch_only: true}],
+    source_proof: {...input.source_proof as Record<string, unknown>, item_count: 2},
+    terminal_closure_proof: {...input.terminal_closure_proof as Record<string, unknown>, item_count: 2,
+      all_todos_done: false, all_convergent_todos_done: true, monitor_open_count: 1, watch_only_monitor_count: 1}};
+  assert.equal((validateTodoClosureSource(watchOnly).source_completeness as Record<string, unknown>).status, "valid");
+  const inconsistent = {...watchOnly, terminal_closure_proof: {...watchOnly.terminal_closure_proof,
+    all_todos_done: true}};
+  const result = validateTodoClosureSource(inconsistent);
+  assert.equal((result.source_completeness as Record<string, unknown>).status, "invalid");
+  assert.equal(result.closure_intent, null);
+});
+test("open, partial, deferred and replan source evidence cannot reuse a terminal proof", () => {
+  const input = closureSource();
+  for (const patch of [{source_proof: null}, {total_count: true}, {done_count: "1"}, {open_count: 1},
+    {source_section: ""}, {items: []}, {items: [null]}, {items: [{status: "open", done: false}]},
+    {items: [{status: "done", done: false}]}, {items: [{status: "done", done: true, route_continuation_replan_required: true}]},
+    {monitor_open_items: [{watch_only: false}]}, {monitor_open_items: null}, {deferred_item_count: null},
+    {deferred_item_count: 1}, {deferred_resume_count: 1}, {convergence_open_count: true},
+    {completed_without_successor_count: 1}, {route_continuation_replan_count: 1}]) {
+    const result = validateTodoClosureSource({...input, ...patch});
+    assert.equal((result.source_completeness as Record<string, unknown>).status, "invalid");
+    assert.equal(result.closure_intent, null);
+  }
+});
+
 test("interned field sets are lossless and reject invalid references", () => {
   const rows = Array.from({length: 4000}, (_, index) => row(`todo_history_${index}`, {
     active: false, context_fields: index % 2 ? ["claimed_by", "completed_at"] : [],
@@ -91,6 +183,7 @@ test("interned field sets are lossless and reject invalid references", () => {
 test("a cached result cannot contradict its matched item facts", () => {
   const source = row("todo_source"), evaluation = evaluateTodoSuccession([source])[0];
   for (const mutation of [{successor_gap: false}, {tracked_completion: false}, {handoff_state: "superseded"},
+    {route_continuation_replan_required: true},
     {successor_todo_ids: [null]}, {successor_todo_ids: [source.todo_id]}]) {
     assert.throws(() => project({schema_version: "todo_succession_request_v1",
       rows: [source], evaluations: [{...evaluation, ...mutation}]}), /succession evaluation|successor identity/);

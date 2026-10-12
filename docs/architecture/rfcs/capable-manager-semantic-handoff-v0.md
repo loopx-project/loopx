@@ -314,6 +314,26 @@ File/SQLite CLI and real stdio tests qualify this context/tool slice. Receiver
 adoption, actual effects and original-route return remain separate acceptance;
 keep G0/G1 open until the installed ordinary journey proves them.
 
+**Explicit result-file checkpoint (2026-10-08).** The existing CLI `report` and
+scoped MCP `return_result` now accept bounded workspace-relative attachment refs
+for verified bound-owner App requests. The shared typed publication owner binds
+their immutable content identity; the POSIX host snapshots bytes, and Lark returns
+one Markdown post with files to the original conversation. Regressions cover
+workspace edits after publication, revoked return authority, exact Goal-instance
+replacement, lost resource records and download mismatch without a resend. An
+installed private-App journey returned one file post, verified downloaded bytes
+and retained that message across restart. Automatic return recovery remains open.
+The Lark candidate resolves message-scoped resource keys only from the exact post
+and ordered filenames, downloads to fixed local names with explicit suffixes, and
+finishes processing feedback only after byte verification. Read-only validation
+against the original App message passes. A route refusal also preserves the saved
+provider attempt and result identity, without reopening terminal work or resending.
+This does not certify installed automatic recovery or M3 completion. The existing
+manager delivery owner retains that next
+gate. Local-Web file presentation, inline video playback, groups and cross-host
+transfer remain with their surface owners. Explicit refs keep this boundary
+verifiable and reversible without another delivery ledger.
+
 Migrate current inbox/tracking/roundtrip records into the single collaboration owner; preserve their valid effect semantics and receipts, but retire duplicate manager-specific transition logic after cutover. Persist intent before dispatch; use request revision plus effect identity for idempotency. A changed payload cannot reuse an immutable identity; a correction appends a linked revision and the receiver rechecks relevant state before effectful execution. Multiple messages about one job may be explicitly related by the manager, preserving each original obligation and correction. Do not merge independent same-text requests by a content hash alone.
 
 At-least-once delivery with idempotent Core effects is the target. Do not promise exactly-once external effects: uncertain sends are reconciled using provider receipts before retry. Concurrent workers use existing claims/leases; delegation does not claim the worker's Todo. Cross-host operation uses configured transport and authority, not a bare local path copied to another machine.
@@ -656,8 +676,23 @@ cover the matching blocker revision; generation failures remain pending. Local
 autonomous wake, change/read/recovery receipts and sustained model quality remain
 Stage 2/R3 work. The external synthesis transcript is isolated from live owner Turns.
 
+The prompt directory uses the existing bounded attention projection to supply
+short blocker/request excerpts with explicit omission, coverage and exact Todo
+read references. All authorized Goals, Agents and source quality remain visible;
+the existing scoped reader restores complete records before decisions or action.
+The native host's observed context-compaction start/end phases appear through
+the same Chat and Lark progress path, without reasoning text or a completion
+claim. This bounded A20/A22 slice does not qualify end-to-end latency or network
+recovery, and does not change context storage, Session identity or authority.
+
 
 The shared [conversation work surface](intelligent-review-presentation-surfaces-v0.md#88-reusable-conversation-work-surface) owns adaptive reports, truthful event presentation, Turn-scoped stop/steer, reconnect and cross-channel density for all LoopX conversations. This RFC applies those same rules to the steward's owner conversation; it owns recipient selection, receiver assessment and the original-route return. A manager-specific answer format or transport must not become a second presentation authority.
+
+The shared handoff acknowledgement presents a bounded task preview and readable
+result/boundary bullets, with the current delivery or execution observation.
+Selection evidence and historical context remain available in the complete
+receiver brief/readback. This presentation slice does not shorten the receiver
+contract, establish adoption, or qualify the full A21–A24 journey.
 
 Routing uses §5.5 rather than a static Agent name list. For a product-design request addressed to the steward, first inspect authorized current Goal, registration, claimed work and fresh session reachability; then rank eligible receivers by responsibility and context, with model/profile fit and actual capacity as separate constraints. Explain the selected recipient or the exact gap. The receiver must acknowledge and assess the full corrected intent, then either work or defer with an owner and condition. The original conversation receives the assessment and final evidenced result through §5.6; the catalog, a stored inbox request and a spinner are three distinct incomplete states. This must pass with a real active worker plus stopped, registered-only, stale and model-mismatched decoys before advertising automatic delegation.
 
@@ -826,7 +861,15 @@ provider failure where available; unexpected local preparation errors use
 `runtime_unavailable`, with private diagnostics retained locally. Cancellation
 and an already terminal result win over a late preparation error. Restoring the
 runtime must not replay a failed request; the same ingress identity returns the
-same failure, while a fresh explicit request can run after repair.
+same failure, while a fresh explicit request can run after repair. Before
+terminal settlement, the built-in Codex provider may retry startup once for a
+typed `response_timeout` when restoring a known upstream thread. Its failed
+process must be closed first; the same thread, workspace and configured grant
+remain binding, with native configuration/authentication checks reapplied.
+This preparation retry does not dispatch a Turn. Fresh thread creation, host
+approval/authentication failures and already dispatched Turns are not retried;
+an exhausted startup still follows the existing terminal failure contract, and
+a persisted stop must prevent dispatch even if startup later succeeds.
 
 **Model capacity failures (S5/S10):** the Codex adapter preserves the typed
 `serverOverloaded` terminal error as `server_overloaded`; arbitrary upstream

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke-test force bootstrap warnings and todo-preserving reconnects."""
+"""Smoke-test canonical force refusal and explicit File-preserving reconnects."""
 
 from __future__ import annotations
 
@@ -33,11 +33,46 @@ def goal_from_registry(project: Path) -> dict:
 
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="loopx-bootstrap-preserve-") as tmp:
+        canonical_project = Path(tmp) / "canonical-project"
+        canonical_project.mkdir()
+        canonical_runtime = Path(tmp) / "canonical-runtime"
+        canonical = run_cli(
+            "--runtime-root", str(canonical_runtime), "bootstrap",
+            "--project", str(canonical_project), "--goal-id", GOAL_ID,
+            "--objective", "Preserve canonical authority during reconnect.", "--no-global-sync",
+        )
+        assert canonical["storage_target"]["provider"] == "sqlite", canonical
+        canonical_state = Path(canonical["state_file"])
+        state_before = canonical_state.read_bytes()
+        registry_before = (canonical_project / ".loopx/registry.json").read_bytes()
+        refused = run_cli(
+            "--runtime-root", str(canonical_runtime), "bootstrap",
+            "--project", str(canonical_project), "--goal-id", GOAL_ID,
+            "--objective", "Do not rebuild canonical state.",
+            "--force", "--preserve-todos", "--no-global-sync", check=False,
+        )
+        assert refused["ok"] is False, refused
+        assert "Canonical creation cannot rebuild existing state" in json.dumps(refused), refused
+        assert canonical_state.read_bytes() == state_before
+        assert (canonical_project / ".loopx/registry.json").read_bytes() == registry_before
+
+        # Existing force/Markdown migration assertions belong to the supported
+        # explicit File creation path, not the canonical default writer.
+        runtime = Path(tmp) / "file-runtime"
+        configuration = runtime / "machine/configuration.json"
+        configuration.parent.mkdir(parents=True)
+        configuration.write_text(json.dumps({
+            "schema_version": "loopx_machine_configuration_v0", "namespaces": {
+                "goal_storage": {"schema_version": "loopx_goal_storage_defaults_v1",
+                                 "new_goal_provider": "file", "canonical_creation": False,
+                                 "new_goal_handoff_mode": "soft_claim"},
+            },
+        }), encoding="utf-8")
         project = Path(tmp) / "project"
         project.mkdir()
 
         initial = run_cli(
-            "bootstrap",
+            "--runtime-root", str(runtime), "bootstrap",
             "--project",
             str(project),
             "--goal-id",
@@ -48,6 +83,9 @@ def main() -> int:
         )
         assert initial["ok"] is True, initial
         assert initial["state_action"] == "created", initial
+        assert initial["storage_target"] == {
+            "schema_version": "loopx_new_goal_storage_target_v0", "provider": "file",
+        }, initial
         state_file = Path(initial["state_file"])
         assert state_file == (project / ".loopx/goals/bootstrap-preserve-fixture/ACTIVE_GOAL_STATE.md").resolve()
 
@@ -55,7 +93,7 @@ def main() -> int:
         state_file.write_text(todo_state, encoding="utf-8")
 
         preserved = run_cli(
-            "bootstrap",
+            "--runtime-root", str(runtime), "bootstrap",
             "--project",
             str(project),
             "--goal-id",
@@ -85,7 +123,7 @@ def main() -> int:
         assert goal_from_registry(project)["coordination"]["write_scope"] == ["src/**"]
 
         replaced = run_cli(
-            "bootstrap",
+            "--runtime-root", str(runtime), "bootstrap",
             "--project",
             str(project),
             "--goal-id",

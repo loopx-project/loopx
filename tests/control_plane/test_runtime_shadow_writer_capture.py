@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from loopx.control_plane.coordination import local_authority_shadow_adapter as adapter
 from loopx.control_plane.work_items.task_lease import (
     acquire_task_lease,
@@ -161,7 +163,10 @@ def test_runtime_shadow_todo_writer_is_zero_effect_by_default(tmp_path: Path) ->
     assert not (runtime_root / "authority-shadow").exists()
 
 
-def test_runtime_shadow_native_lease_writers_capture_complete_records(tmp_path: Path) -> None:
+@pytest.mark.parametrize("configuration_cleared", [False, True])
+def test_runtime_shadow_native_lease_writers_capture_complete_records(
+    tmp_path: Path, configuration_cleared: bool,
+) -> None:
     registry, _state, runtime_root = _fixture(tmp_path, enabled=True)
     added = add_goal_todo(
         registry_path=registry,
@@ -171,6 +176,10 @@ def test_runtime_shadow_native_lease_writers_capture_complete_records(tmp_path: 
         task_class="advancement_task",
     )
     todo_id = str(added["todo_id"])
+    if configuration_cleared:
+        config = json.loads(registry.read_text(encoding="utf-8"))
+        config["goals"][0]["coordination"].pop("runtime_shadow")
+        registry.write_text(json.dumps(config), encoding="utf-8")
 
     acquired = acquire_task_lease(
         registry_path=registry,

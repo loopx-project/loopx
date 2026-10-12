@@ -13,7 +13,7 @@ export type ComparisonSelection = {
 /** Preserve reading context only while both exact version bindings remain current. */
 export function currentComparisonSelection(selection: ComparisonSelection | null,
   result: DelegationReadback, sessionId: string): ComparisonSelection | null {
-  if (!selection || selection.sessionId !== sessionId || result.status !== "accepted" ||
+  if (!selection || selection.sessionId !== sessionId || result.status !== "accepted" || result.current_use?.state === "unavailable" ||
       result.error || result.recovery_required ||
       selection.target.operation_id !== result.operation_id || selection.target.request_id !== result.request_id ||
       selection.target.agent_id !== result.agent_id || selection.target.todo_id !== result.todo_id) return null;
@@ -37,7 +37,7 @@ export function preferredComparisonIndex(ref: string, artifacts: Artifact[]): nu
 /** Compare only the exact source version bound to the request, never a newer file. */
 export function comparisonSource(link: DelegationDependency, source: DelegationReadback): Artifact | null {
   if (link.state !== "current" || source.operation_id !== link.operation_id ||
-      source.status !== "accepted" || source.recovery_required || source.error) return null;
+      source.status !== "accepted" || source.current_use?.state === "unavailable" || source.recovery_required || source.error) return null;
   const matches = (source.artifacts ?? []).filter(row => row.ref === link.ref && row.sha256 === link.sha256);
   return matches.length === 1 ? matches[0] : null;
 }

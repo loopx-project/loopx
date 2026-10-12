@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 import pytest
@@ -17,6 +18,10 @@ OBSERVED_AT = "2026-07-26T07:30:00+08:00"
 def evidence_packet(
     *,
     goal_id: str = "goal:material-example",
+    fact_freshness: str = "fresh",
+    fact_revision: str = "revision:7",
+    source_revision: str = "revision:7",
+    source_freshness: str = "fresh",
 ) -> dict[str, Any]:
     return build_decision_evidence_packet(
         goal_id=goal_id,
@@ -27,9 +32,9 @@ def evidence_packet(
                 "fact_id": "fact:priority-shift",
                 "summary": "The current objective now favors runtime evidence.",
                 "source_ref": "source:decision-ledger",
-                "source_revision": "revision:7",
+                "source_revision": fact_revision,
                 "observed_at": OBSERVED_AT,
-                "freshness": "fresh",
+                "freshness": fact_freshness,
                 "authority": "curated-ledger",
             }
         ],
@@ -44,9 +49,9 @@ def evidence_packet(
         source_revisions=[
             {
                 "source_ref": "source:decision-ledger",
-                "revision": "revision:7",
+                "revision": source_revision,
                 "observed_at": OBSERVED_AT,
-                "freshness": "fresh",
+                "freshness": source_freshness,
             }
         ],
         provider_health=[
@@ -150,6 +155,385 @@ def test_decision_evidence_drives_bounded_rerank_and_explore_intent() -> None:
     assert planning.explore_intent["execution_authorized"] is False
     assert planning.explore_intent["provider_calls_performed"] is False
     assert planning.explore_intent["source_cursor_apply_authorized"] is False
+
+
+@pytest.mark.parametrize("action_kind", ["move", "explore"])
+@pytest.mark.parametrize("fact_freshness", ["stale", "unknown"])
+def test_stale_referenced_fact_cannot_drive_rerank_or_explore(
+    action_kind: str,
+    fact_freshness: str,
+) -> None:
+    class StaleEvidencePolicy:
+        policy_id = "policy:stale-evidence"
+
+        def evaluate(self, **_: Any) -> MaterialDecisionPolicyResult:
+            move = {
+                "material_ref": "material:runtime",
+                "from_rank": 8,
+                "to_rank": 4,
+                "reason_code": "current_objective_fit",
+                "evidence_refs": ["fact:priority-shift"],
+            }
+            topic = {
+                "topic_ref": "topic:runtime-adoption",
+                "reason_code": "evidence_gap",
+                "evidence_refs": ["fact:priority-shift"],
+            }
+            return MaterialDecisionPolicyResult(
+                moves=(move,) if action_kind == "move" else (),
+                explore_topics=(topic,) if action_kind == "explore" else (),
+            )
+
+    planning = plan_with(
+        StaleEvidencePolicy(),
+        decision_evidence=evidence_packet(
+            fact_freshness=fact_freshness,
+        ),
+    )
+
+    assert planning.policy_status == "invalid"
+    assert planning.readiness_blockers == ("decision_policy_contract_invalid",)
+    assert planning.no_change is True
+    assert planning.rerank_proposal["moves"] == []
+    assert planning.rerank_proposal["apply_authorized"] is False
+    assert planning.explore_intent is None
+
+
+@pytest.mark.parametrize("source_freshness", ["stale", "unknown"])
+def test_stale_source_revision_cannot_support_a_fresh_labeled_fact(
+    source_freshness: str,
+) -> None:
+    planning = plan_with(
+        ReadyPolicy(),
+        decision_evidence=evidence_packet(source_freshness=source_freshness),
+    )
+
+    assert planning.policy_status == "invalid"
+    assert planning.readiness_blockers == ("decision_policy_contract_invalid",)
+    assert planning.no_change is True
+    assert planning.rerank_proposal["moves"] == []
+    assert planning.explore_intent is None
+
+
+def test_fact_without_matching_current_source_revision_is_not_support() -> None:
+    planning = plan_with(
+        ReadyPolicy(),
+        decision_evidence=evidence_packet(source_revision="revision:8"),
+    )
+
+    assert planning.policy_status == "invalid"
+    assert planning.readiness_blockers == ("decision_policy_contract_invalid",)
+    assert planning.no_change is True
+    assert planning.rerank_proposal["moves"] == []
+    assert planning.explore_intent is None
+
+
+def test_fresh_referenced_fact_survives_unrelated_stale_claim() -> None:
+    planning = plan_with(ReadyPolicy())
+
+    assert planning.policy_status == "ready"
+    assert planning.no_change is False
+    assert planning.rerank_proposal["moves"][0]["evidence_refs"] == [
+        "fact:priority-shift"
+    ]
+    assert planning.explore_intent is not None
+    assert planning.explore_intent["topics"][0]["evidence_refs"] == [
+        "fact:priority-shift"
+    ]
+
+
+def test_unrecognized_opaque_evidence_refs_remain_compatible() -> None:
+    class ExternalEvidencePolicy:
+        policy_id = "policy:external-evidence"
+
+        def evaluate(self, **_: Any) -> MaterialDecisionPolicyResult:
+            return MaterialDecisionPolicyResult(
+                moves=(
+                    {
+                        "material_ref": "material:runtime",
+                        "from_rank": 8,
+                        "to_rank": 4,
+                        "reason_code": "external_evidence",
+                        "evidence_refs": ["artifact:external-123"],
+                    },
+                ),
+                explore_topics=(
+                    {
+                        "topic_ref": "topic:external",
+                        "reason_code": "external_evidence_gap",
+                        "evidence_refs": ["review:external-456"],
+                    },
+                ),
+            )
+
+    planning = plan_with(ExternalEvidencePolicy())
+
+    assert planning.policy_status == "ready"
+    assert planning.rerank_proposal["moves"][0]["evidence_refs"] == [
+        "artifact:external-123"
+    ]
+    assert planning.explore_intent is not None
+    assert planning.explore_intent["topics"][0]["evidence_refs"] == [
+        "review:external-456"
+    ]
+
+
+def test_current_freshness_literals_remain_compatible() -> None:
+    planning = plan_with(
+        ReadyPolicy(),
+        decision_evidence=evidence_packet(
+            fact_freshness="current",
+            source_freshness="current",
+        ),
+    )
+
+    assert planning.policy_status == "ready"
+    assert planning.rerank_proposal["moves"][0]["evidence_refs"] == [
+        "fact:priority-shift"
+    ]
+
+
+def test_identified_stale_source_revision_cannot_be_cited_directly() -> None:
+    class RevisionReferencePolicy:
+        policy_id = "policy:revision-reference"
+
+        def evaluate(self, **_: Any) -> MaterialDecisionPolicyResult:
+            return MaterialDecisionPolicyResult(
+                moves=(
+                    {
+                        "material_ref": "material:runtime",
+                        "from_rank": 8,
+                        "to_rank": 4,
+                        "reason_code": "stale_source_revision",
+                        "evidence_refs": ["revision:7"],
+                    },
+                )
+            )
+
+    planning = plan_with(
+        RevisionReferencePolicy(),
+        decision_evidence=evidence_packet(source_freshness="stale"),
+    )
+
+    assert planning.policy_status == "invalid"
+    assert planning.no_change is True
+    assert planning.rerank_proposal["moves"] == []
+
+
+@pytest.mark.parametrize("evidence_ref", ["source:scan-only", "revision:scan-only-7"])
+def test_scan_only_source_revision_is_not_action_support(evidence_ref: str) -> None:
+    packet = build_decision_evidence_packet(
+        goal_id="goal:material-example",
+        decision_id="decision:material-rerank",
+        observed_at=OBSERVED_AT,
+        source_revisions=[
+            {
+                "source_ref": "source:scan-only",
+                "revision": "revision:scan-only-7",
+                "observed_at": OBSERVED_AT,
+                "freshness": "fresh",
+            }
+        ],
+    )
+
+    class ScanOnlyPolicy:
+        policy_id = "policy:scan-only"
+
+        def evaluate(self, **_: Any) -> MaterialDecisionPolicyResult:
+            return MaterialDecisionPolicyResult(
+                moves=(
+                    {
+                        "material_ref": "material:runtime",
+                        "from_rank": 8,
+                        "to_rank": 4,
+                        "reason_code": "scan_only_reference",
+                        "evidence_refs": [evidence_ref],
+                    },
+                )
+            )
+
+    planning = plan_with(ScanOnlyPolicy(), decision_evidence=packet)
+
+    assert planning.policy_status == "invalid"
+    assert planning.no_change is True
+    assert planning.rerank_proposal["moves"] == []
+    assert planning.rerank_proposal["apply_authorized"] is False
+
+
+@pytest.mark.parametrize("evidence_ref", ["source:decision-ledger", "revision:7"])
+def test_exact_read_claim_can_support_direct_source_or_revision_ref(
+    evidence_ref: str,
+) -> None:
+    packet = build_decision_evidence_packet(
+        goal_id="goal:material-example",
+        decision_id="decision:material-rerank",
+        observed_at=OBSERVED_AT,
+        recalled_claims=[
+            {
+                "claim_id": "claim:exact-read",
+                "summary": "An exact read confirmed the current objective.",
+                "provider_ref": "provider:local",
+                "source_ref": "source:decision-ledger",
+                "source_revision": "revision:7",
+                "observed_at": OBSERVED_AT,
+                "exact_read_verified": True,
+                "confidence": 0.9,
+            }
+        ],
+        source_revisions=[
+            {
+                "source_ref": "source:decision-ledger",
+                "revision": "revision:7",
+                "observed_at": OBSERVED_AT,
+                "freshness": "current",
+            }
+        ],
+    )
+
+    class ExactReadPolicy:
+        policy_id = "policy:exact-read"
+
+        def evaluate(self, **_: Any) -> MaterialDecisionPolicyResult:
+            return MaterialDecisionPolicyResult(
+                moves=(
+                    {
+                        "material_ref": "material:runtime",
+                        "from_rank": 8,
+                        "to_rank": 4,
+                        "reason_code": "exact_read_support",
+                        "evidence_refs": [evidence_ref],
+                    },
+                )
+            )
+
+    planning = plan_with(ExactReadPolicy(), decision_evidence=packet)
+
+    assert planning.policy_status == "ready"
+    assert planning.rerank_proposal["moves"][0]["evidence_refs"] == [evidence_ref]
+    assert planning.rerank_proposal["apply_authorized"] is False
+
+
+def test_ambiguous_revision_alias_with_scan_only_pair_fails_closed() -> None:
+    packet = build_decision_evidence_packet(
+        goal_id="goal:material-example",
+        decision_id="decision:material-rerank",
+        observed_at=OBSERVED_AT,
+        recalled_claims=[
+            {
+                "claim_id": "claim:exact-read",
+                "summary": "An exact read confirmed the current objective.",
+                "provider_ref": "provider:local",
+                "source_ref": "source:verified",
+                "source_revision": "revision:shared",
+                "observed_at": OBSERVED_AT,
+                "exact_read_verified": True,
+                "confidence": 0.9,
+            }
+        ],
+        source_revisions=[
+            {
+                "source_ref": "source:verified",
+                "revision": "revision:shared",
+                "observed_at": OBSERVED_AT,
+                "freshness": "current",
+            },
+            {
+                "source_ref": "source:scan-only",
+                "revision": "revision:shared",
+                "observed_at": OBSERVED_AT,
+                "freshness": "current",
+            },
+        ],
+    )
+
+    class AmbiguousRevisionPolicy:
+        policy_id = "policy:ambiguous-revision"
+
+        def evaluate(self, **_: Any) -> MaterialDecisionPolicyResult:
+            return MaterialDecisionPolicyResult(
+                moves=(
+                    {
+                        "material_ref": "material:runtime",
+                        "from_rank": 8,
+                        "to_rank": 4,
+                        "reason_code": "ambiguous_revision_alias",
+                        "evidence_refs": ["revision:shared"],
+                    },
+                )
+            )
+
+    planning = plan_with(AmbiguousRevisionPolicy(), decision_evidence=packet)
+
+    assert planning.policy_status == "invalid"
+    assert planning.no_change is True
+    assert planning.rerank_proposal["moves"] == []
+
+
+@pytest.mark.parametrize("action_kind", ["move", "explore"])
+def test_policy_mutation_cannot_refresh_stale_snapshot_or_mutate_caller(
+    action_kind: str,
+) -> None:
+    packet = evidence_packet(fact_freshness="stale", source_freshness="stale")
+    before = deepcopy(packet)
+
+    class MutatingPolicy:
+        policy_id = "policy:mutating"
+        received_evidence: dict[str, Any] | None = None
+
+        def evaluate(self, *, decision_evidence: dict[str, Any], **_: Any):
+            self.received_evidence = decision_evidence
+            decision_evidence["changed_facts"][0]["freshness"] = "fresh"
+            decision_evidence["source_revisions"][0]["freshness"] = "fresh"
+            move = {
+                "material_ref": "material:runtime",
+                "from_rank": 8,
+                "to_rank": 4,
+                "reason_code": "mutated_stale_support",
+                "evidence_refs": ["fact:priority-shift"],
+            }
+            topic = {
+                "topic_ref": "topic:runtime-adoption",
+                "reason_code": "mutated_stale_support",
+                "evidence_refs": ["fact:priority-shift"],
+            }
+            return MaterialDecisionPolicyResult(
+                moves=(move,) if action_kind == "move" else (),
+                explore_topics=(topic,) if action_kind == "explore" else (),
+            )
+
+    policy = MutatingPolicy()
+    planning = plan_with(policy, decision_evidence=packet)
+
+    assert policy.received_evidence is not packet
+    assert packet == before
+    assert planning.policy_status == "invalid"
+    assert planning.no_change is True
+    assert planning.rerank_proposal["moves"] == []
+    assert planning.rerank_proposal["decision_evidence_ref"] == before["packet_ref"]
+    assert planning.rerank_proposal["apply_authorized"] is False
+    assert planning.explore_intent is None
+
+
+def test_identified_rejected_claim_cannot_be_cited_as_support() -> None:
+    class RejectedClaimPolicy:
+        policy_id = "policy:rejected-claim"
+
+        def evaluate(self, **_: Any) -> MaterialDecisionPolicyResult:
+            return MaterialDecisionPolicyResult(
+                explore_topics=(
+                    {
+                        "topic_ref": "topic:old-priority",
+                        "reason_code": "old_priority",
+                        "evidence_refs": ["claim:old-priority"],
+                    },
+                )
+            )
+
+    planning = plan_with(RejectedClaimPolicy())
+
+    assert planning.policy_status == "invalid"
+    assert planning.no_change is True
+    assert planning.explore_intent is None
 
 
 def test_decision_policy_can_preserve_order_without_exploration() -> None:

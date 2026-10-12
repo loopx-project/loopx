@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import {readFile} from "node:fs/promises";
+import {readFile, symlink} from "node:fs/promises";
+import {join} from "node:path";
 import test from "node:test";
 import {projectCoordinationSource, SOURCE_PROJECTION_REQUEST_SCHEMA} from "../../loopx/control_plane/coordination/source_projection.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
@@ -91,4 +92,20 @@ test("source revalidation preserves the supported pre-validator manifest and rej
   assert.deepEqual(head, before);
   manifest.records_sha256 = "0".repeat(64);
   await assert.rejects(verifyShadowSourceSnapshot(await sourceRequest(source, head) as import("../../loopx/control_plane/coordination/runtime_shadow.ts").ShadowRequest), /digest mismatch/);
+});
+
+test("source runtime aliases preserve the snapshot in either transport direction", async t => {
+  const {fixture, sourceRequest} = await import("./shadow_file_fixture.ts");
+  const {verifyShadowSourceSnapshot} = await import("../../loopx/control_plane/coordination/runtime_shadow.ts");
+  const source = await fixture(t);
+  const alias = join(source.root, "runtime-alias");
+  await symlink(source.root, alias, "junction");
+  for (const registeredAlias of [true, false]) {
+    const request = await sourceRequest(source, source.baseline);
+    if (registeredAlias) (request.source_snapshot as Record<string, unknown>).registered_runtime_root = alias;
+    else request.runtime_root = alias;
+    const before = structuredClone(request);
+    await verifyShadowSourceSnapshot(request as import("../../loopx/control_plane/coordination/runtime_shadow.ts").ShadowRequest);
+    assert.deepEqual(request, before, "directory equivalence must not rewrite retained source facts");
+  }
 });

@@ -40,6 +40,13 @@ class ProfileEventDispatch:
             max_workers=workers, thread_name_prefix="loopx-lark-dispatch"
         )
 
+    @property
+    def failed(self) -> bool:
+        """Expose failure while the stream reader is idle; close still owns it."""
+
+        with self._condition:
+            return self._failure is not None
+
     def submit(self, lane: tuple[str, ...], line: str) -> bool:
         with self._condition:
             while self._pending >= self._capacity and not self._closing:

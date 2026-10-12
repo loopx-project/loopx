@@ -121,3 +121,56 @@ export function goalWorkMapSharedOwner(map: GoalWorkMap) {
   const owners = new Set(map.nodes.flatMap(node => node.owner_agent ? [node.owner_agent] : []));
   return owners.size === 1 && map.nodes.filter(node => node.owner_agent).length > 1 ? [...owners][0] : null;
 }
+
+/** Presentation geometry only: roomy cards and routes confined to empty gutters.
+ * Keep one set of dimensions for the canvas and CSS; never shrink text to fit.
+ */
+export const goalWorkMapCard = { width: 236, height: 136 };
+export function goalWorkMapGeometry(layout: ReturnType<typeof goalWorkMapLayout>, available: number) {
+  const { width: cardWidth, height: cardHeight } = goalWorkMapCard;
+  const columnStep = cardWidth + 64, rowStep = cardHeight + 36, padding = 24;
+  const positions = new Map<string, { x: number; y: number }>();
+  const routes = new Map<string, { x: number; y: number }[]>();
+  const frames: { x: number; y: number; w: number; h: number }[] = [];
+  let x = 0, y = 0, shelf = 0, right = 0;
+  for (const group of layout.groups) {
+    const columnIndex = new Map(group.columns.flatMap((column, index) => column.map(node => [node.node_id, index] as const)));
+    const pairs = new Map<string, GoalWorkMapEdge[]>();
+    for (const edge of layout.edges) {
+      if (!columnIndex.has(edge.from_node_id)) continue;
+      const key = `${edge.from_node_id}\0${edge.to_node_id}`;
+      pairs.set(key, [...pairs.get(key) ?? [], edge]);
+    }
+    const detours = [...pairs.values()].filter(([edge]) => columnIndex.get(edge.from_node_id)! !== columnIndex.get(edge.to_node_id)! + 1);
+    const headroom = detours.length ? 20 + detours.length * 8 : 0;
+    const w = group.columns.length * columnStep - 64;
+    const h = Math.max(...group.columns.map(column => column.length)) * rowStep - 36 + headroom;
+    if (x > 0 && x + w > available - padding * 2) { y += shelf + 48; x = 0; shelf = 0; }
+    const left = padding + x, top = padding + y;
+    group.columns.forEach((column, c) => column.forEach((node, r) => positions.set(node.node_id, { x: left + c * columnStep, y: top + headroom + r * rowStep })));
+    let detour = 0;
+    for (const edges of pairs.values()) {
+      const edge = edges[0], source = positions.get(edge.to_node_id)!, target = positions.get(edge.from_node_id)!;
+      const start = { x: source.x + cardWidth, y: source.y + cardHeight / 2 };
+      const end = { x: target.x, y: target.y + cardHeight / 2 };
+      let points;
+      if (columnIndex.get(edge.from_node_id)! === columnIndex.get(edge.to_node_id)! + 1) {
+        const middle = (start.x + end.x) / 2;
+        points = [start, { x: middle, y: start.y }, { x: middle, y: end.y }, end];
+      } else {
+        // Skip-column, reverse and same-column links travel above the group.
+        // Their vertical sections stay outside all card columns, including
+        // other rows in the source and destination columns.
+        const track = top + 8 + detour++ * 8;
+        points = [start, { x: start.x + 16, y: start.y }, { x: start.x + 16, y: track },
+          { x: end.x - 16, y: track }, { x: end.x - 16, y: end.y }, end];
+      }
+      edges.forEach(item => routes.set(item.edge_id, points));
+    }
+    frames.push({ x: left - 12, y: top - 12, w: w + 24, h: h + 24 });
+    right = Math.max(right, x + w);
+    x += w + 48;
+    shelf = Math.max(shelf, h);
+  }
+  return { positions, routes, frames, width: padding * 2 + right, height: padding * 2 + y + shelf };
+}

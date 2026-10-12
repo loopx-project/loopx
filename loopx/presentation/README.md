@@ -47,6 +47,11 @@ That keeps topology cards, tables, and graph views close to the dashboard
 without turning presentation code into the source of evidence for vision and
 replan.
 
+`explore_results_api.py` adapts the canonical Explore log and Todo readback for
+the Chat results endpoint. It owns pagination and read error presentation;
+the existing capability and Todo owners retain evidence and state authority.
+Python remains the HTTP transport adapter, without a separate decision owner.
+
 ## Static Site Delivery Contract
 
 `loopx presentation package` turns an already-built, public-safe site directory

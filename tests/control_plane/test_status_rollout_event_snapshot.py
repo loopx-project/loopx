@@ -10,6 +10,7 @@ import loopx.rollout_event_log as rollout_event_log_module
 import loopx.status as status_module
 from loopx.control_plane import effect_runtime
 from loopx.control_plane.todos.todo_index import build_todo_index
+from loopx.control_plane.todos.resume_condition import evaluate_todo_resume_conditions
 from loopx.rollout_event_log import (
     ROLLOUT_EVENT_SCHEMA_VERSION,
     RolloutEventSnapshot,
@@ -135,7 +136,7 @@ def _indexed_todo_ids(payload: dict[str, Any]) -> set[str]:
     }
 
 
-def test_collect_status_reuses_one_goal_snapshot_and_next_request_is_fresh(
+def test_collect_status_reuses_display_snapshot_but_pr_wait_reads_complete_facts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -181,7 +182,13 @@ def test_collect_status_reuses_one_goal_snapshot_and_next_request_is_fresh(
 
     assert loads == [(GOAL_ID, 500)]
     assert _deferred_todo(first, "todo_wait_pr_41")["resume_ready"] is True
-    assert _deferred_todo(first, "todo_wait_pr_42")["resume_ready"] is False
+    # The retained PR proof is read by the typed Todo owner, independently of
+    # the bounded display snapshot. Evidence receipts and Todo index still
+    # share the original snapshot within this status request.
+    resumed = _deferred_todo(first, "todo_wait_pr_42")
+    assert resumed["resume_ready"] is True
+    assert resumed["resume_condition"]["matched_event_id"] == appended_events[0]["event_id"]
+    assert resumed["resume_condition"]["matched_pr_ref"] == f"{REPOSITORY}#42"
     assert [
         receipt["event_id"]
         for receipt in _goal_queue_item(first)["evidence_log_read_receipts"]
@@ -209,7 +216,7 @@ def test_collect_status_reuses_one_goal_snapshot_and_next_request_is_fresh(
     assert "todo_event_appended" in _indexed_todo_ids(second)
 
 
-def test_explicit_empty_events_do_not_fall_back_to_disk(
+def test_empty_display_events_keep_complete_pr_proof_and_pure_evaluation_stays_empty(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -245,8 +252,20 @@ def test_explicit_empty_events_do_not_fall_back_to_disk(
         for item in fresh["agent_todos"]["deferred_items"]
         if item["todo_id"] == "todo_wait_pr_41"
     )
-    assert empty_todo["resume_ready"] is False
+    # Empty display history must not truncate the retained authority for a PR
+    # dependency. The Python display loader remains unused as asserted above.
+    assert empty_todo["resume_ready"] is True
     assert fresh_todo["resume_ready"] is True
+    assert empty_todo["resume_condition"]["matched_pr_ref"] == f"{REPOSITORY}#41"
+    assert empty_todo["resume_condition"]["matched_event_id"] == fresh_todo["resume_condition"]["matched_event_id"]
+    # The pure evaluator has no local source pointer and must still respect
+    # explicitly empty evidence; it cannot invent a merge or read the log.
+    waiting = {"todo_id": "todo_wait_pr_41", "role": "agent", "status": "deferred",
+               "task_class": "advancement_task", "resume_when": "pr_merged:#41",
+               "task_repository": f"git:github.com/{REPOSITORY}"}
+    pure = evaluate_todo_resume_conditions([waiting], source_items=[waiting], rollout_events=[])
+    assert pure[waiting["todo_id"]]["satisfied"] is False
+    assert "matched_event_id" not in pure[waiting["todo_id"]]
 
 
 def test_direct_todo_index_calls_keep_fresh_disk_reads(tmp_path: Path) -> None:

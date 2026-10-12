@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import {spawnSync} from "node:child_process";
-import { mkdtemp, open, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, open, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
 import {
   acquireFileMutationLock,
+  appendJsonLine,
+  appendJsonLineSync,
   claimFileMutationLock,
   mutationLockOwner,
   releaseFileMutationLock,
@@ -17,6 +19,32 @@ async function workspace(t: TestContext): Promise<string> {
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }
+
+test("JSONL append starts a new row after an unterminated tail", async t => {
+  const root = await workspace(t);
+  const path = join(root, "index.jsonl");
+  await writeFile(path, '{"interrupted":', "utf8");
+
+  await appendJsonLine(path, {goal_id: "goal-a"});
+
+  assert.equal(
+    await readFile(path, "utf8"),
+    '{"interrupted":\n{"goal_id":"goal-a"}\n',
+  );
+});
+
+test("synchronous JSONL append starts a new row after an unterminated tail", async t => {
+  const root = await workspace(t);
+  const path = join(root, "index.jsonl");
+  await writeFile(path, '{"interrupted":', "utf8");
+
+  appendJsonLineSync(path, {goal_id: "goal-a"});
+
+  assert.equal(
+    await readFile(path, "utf8"),
+    '{"interrupted":\n{"goal_id":"goal-a"}\n',
+  );
+});
 
 test("zero-wait acquisition retries a reclaimed dead owner but preserves a live owner", async t => {
   const root = await workspace(t), target = join(root, "state");

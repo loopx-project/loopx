@@ -1,13 +1,16 @@
 """Public synthetic provider/native Core journeys, never private credentials."""
 import json
 import time
+import http.client
+import threading
+from types import SimpleNamespace
 
 import pytest
 from test_chat_ordinary_project import ordinary  # noqa: F401
 
 from loopx.capabilities.native_chat.conversation_bindings import ChatConversationBindings
 from loopx.capabilities.native_chat.external_conversations import ChatExternalConversations
-from loopx.extensions.lark.conversation_identity import observe_lark_conversation_identity
+from loopx.extensions.lark.conversation_identity import identity_ref, lark_private_source, observe_lark_conversation_identity
 from loopx.extensions.lark.private_conversations import LarkPrivateConversations
 from loopx.extensions.lark.goal_topic_runtime import poll_lark_goal_topic_profile_once
 
@@ -17,11 +20,14 @@ class Provider:
         self.messages = {}
         self.calls = []
         self.writes = []
+        self.topic_writes = []
         self.verify_replies = True
         self.reactions = {}
         self.reaction_creates = []
         self.fail_reaction_create = False
         self.fail_reaction_delete = False
+        self.owner_ready = True
+        self.bot_ready = True
         self.profile_apps = {profile: f"cli_{profile.replace('-', '_')}"
                              for profile in ["notes-app", "steward-app"]}
 
@@ -34,6 +40,18 @@ class Provider:
             "sender": {"id": event["sender_id"], "sender_type": "user"}, "msg_type": kind, "content": text}
         return event
 
+    def topic(self, name, text, *, root=None, chat="oc_community", sender="ou_member", addressed=True):
+        event = self.event("notes-app", name, text)
+        event.update(chat_id=chat, chat_type="group", sender_id=sender)
+        if root:
+            event.update(root_id=root, parent_id=root, thread_id=f"omt_{root}")
+        self.messages[event["message_id"]].update(chat_id=chat,
+            sender={"id": sender, "sender_type": "user"},
+            **{key: event[key] for key in ["root_id", "parent_id", "thread_id"] if key in event})
+        if not root and addressed:
+            self.messages[event["message_id"]]["mentions"] = [{"name": "notes-app", "id": {"open_id": "ou_notes_app_bot"}}]
+        return event
+
     def __call__(self, args, cwd=None, timeout=None):
         self.calls.append(list(args))
         if args[1:] == ["profile", "list"]:
@@ -42,16 +60,36 @@ class Provider:
                 for profile, app_id in self.profile_apps.items()]), "stderr": ""}
         profile = args[args.index("--profile") + 1]
         if "auth" in args:
-            data = {"ok": True, "appId": f"cli_{profile.replace('-', '_')}", "identities": {
-                "bot": {"available": True, "verified": True, "appName": profile},
-                "user": {"available": True, "verified": True, "openId": f"ou_{profile.replace('-', '_')}"}}}
+            data = {"ok": True, "appId": self.profile_apps[profile], "identities": {
+                "bot": {"available": self.bot_ready, "verified": self.bot_ready, "appName": profile,
+                        "openId": f"ou_{profile.replace('-', '_')}_bot"},
+                "user": {"available": self.owner_ready, "verified": self.owner_ready, "openId": f"ou_{profile.replace('-', '_')}"}}}
+        elif "+chat-list" in args:
+            data = {"ok": True, "data": {"chats": [{"chat_id": chat, "name": title}
+                for chat, title in [("oc_community", "Community trial"), ("oc_second", "Second trial")]]}}
+        elif "api" in args and "GET" in args:
+            path = args[args.index("GET") + 1]
+            assert path.startswith("/open-apis/im/v1/messages/")
+            message = dict(self.messages[path.rsplit("/", 1)[-1]])
+            if message.get("msg_type") == "text" and "content" in message and "body" not in message:
+                message["body"] = {"content": json.dumps({"text": message.pop("content")})}
+            data = {"code": 0, "data": {"items": [message]}}
         elif "+messages-mget" in args:
             ref = args[args.index("--message-ids") + 1]
             message = self.messages[ref]
             if not self.verify_replies and ref.startswith("om_out_"):
                 message = {**message, "body": {"content": json.dumps({"text": "not yet visible"})}}
             data = {"ok": True, "data": {"items": [message]}}
-        elif "+messages-send" in args:
+        elif "+messages-edit" in args:
+            ref = args[args.index("--message-id") + 1]
+            content = args[args.index("--content") + 1]
+            assert self.messages[ref]["sender"]["id"] == self.profile_apps[profile]
+            if "--dry-run" in args:
+                data = {"ok": True, "api": [{"body": {"content": content, "msg_type": "post"}}]}
+            else:
+                self.messages[ref]["body"] = {"content": content}
+                data = {"ok": True}
+        elif "+messages-send" in args or "+messages-reply" in args:
             kind = "post" if "--content" in args else "text"
             content = args[args.index("--content") + 1] if kind == "post" else json.dumps({"text": args[args.index("--text") + 1]})
             text = json.loads(content)["zh_cn"]["content"][0][0]["text"] if kind == "post" else json.loads(content)["text"]
@@ -60,7 +98,15 @@ class Provider:
             else:
                 ref = f"om_out_{len(self.writes)}"
                 self.writes.append((profile, text))
-                self.messages[ref] = {"message_id": ref, "msg_type": kind, "body": {"content": content}}
+                target = self.messages[args[args.index("--message-id") + 1]] if "+messages-reply" in args else None
+                self.messages[ref] = {"message_id": ref, "msg_type": kind, "body": {"content": content},
+                    "chat_id": target["chat_id"] if target else args[args.index("--chat-id") + 1],
+                    "sender": {"id": self.profile_apps[profile], "sender_type": "app"}}
+                if target:
+                    assert "--reply-in-thread" in args
+                    root = target.get("root_id") or target["message_id"]
+                    self.messages[ref].update(root_id=root, parent_id=target["message_id"], thread_id=f"omt_{root}")
+                    self.topic_writes.append((target["chat_id"], root, text))
                 data = {"ok": True, "data": {"message_id": ref}}
         elif "reactions" in args:
             ref = args[args.index("--message-id") + 1]
@@ -91,12 +137,730 @@ def connect(fixture):
     store, runtime, contexts, _, _, _, _ = fixture
     provider = Provider()
     bindings = ChatConversationBindings(root=store.root, project_contexts=contexts,
-        observe=lambda profile: observe_lark_conversation_identity(profile=profile, runner=provider, cli_bin="lark-cli"))
+        observe=lambda profile: observe_lark_conversation_identity(profile=profile, runner=provider, cli_bin="lark-cli"),
+        observe_group=lambda profile: observe_lark_conversation_identity(profile=profile, runner=provider, cli_bin="lark-cli", audience="group"))
     contexts.conversation_bindings = bindings
     for profile in ["notes-app", "steward-app"]:
         bindings.configure(transport_ref=profile, project_ref=contexts.available()[0]["project_ref"], executor_endpoint_id="codex")
     return store, runtime, provider, LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
                                                              runner=provider, cli_bin="lark-cli")
+
+
+def connect_group(fixture):
+    store, runtime, provider, transport = connect(fixture)
+    runtime.codex_home = fixture[-1].parent / "isolated-native-account"
+    runtime.codex_home.mkdir()
+    fake = fixture[-2]
+    fake.write_text(fake.read_text().replace('"thread": {"id": "durable-thread"},',
+        '"thread": {"id": "durable-thread"}, '
+        '"activePermissionProfile": {"id": request["params"].get("permissions")}, '
+        '"runtimeWorkspaceRoots": [request["params"]["cwd"]],'))
+    binding = transport.bindings.read()["bindings"][0]
+    refs = [identity_ref(binding["provider_ref"], chat) for chat in ["oc_community", "oc_second"]]
+    transport.bindings.configure(transport_ref="notes-app", project_ref=binding["project_ref"],
+        executor_endpoint_id="codex", audience="group", group_refs=refs, available_group_refs=refs)
+    return store, runtime, provider, transport
+
+
+def finish_group_turn(runtime, transport, *, message):
+    row = next(row for row in transport.core.pending() if row["message"] == message)
+    assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)["status"] == "completed"
+    transport.reconcile()
+    return row
+
+
+def test_lark_transport_recovery_returns_on_original_admission_without_model_replay(ordinary, monkeypatch):  # noqa: F811
+    from test_chat_turn_steering import install_transport_failure
+
+    install_transport_failure(ordinary[-2])
+    store, runtime, provider, transport = connect(ordinary)
+    monkeypatch.setattr(runtime.closed, "wait", lambda _: False)
+    event = provider.event("notes-app", "recover-original", "transport recovery")
+    try:
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        record = next(row for row in transport.core.pending() if row["message"] == event["content"])
+        sid, tid = record["session_id"], record["turn_id"]
+        assert runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)["status"] == "completed"
+        provider.verify_replies = False
+        transport.reconcile()
+        sent = list(provider.writes)
+        assert ("notes-app", "Runtime response.") in sent
+        provider.verify_replies = True
+        assert transport.admit("notes-app", {**event, "event_id": "redelivery"})["status"] == "durably_accepted"
+        # Lost/unconfirmed provider readback must retry delivery, never model IO.
+        transport.reconcile()
+        assert provider.writes == sent
+        packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        starts = [row["params"] for row in packets if row["method"] == "turn/start"]
+        assert len(starts) == 2 and starts[0] == starts[1]
+        assert len(store.list_sessions()) == 1
+        assert [row["text"] for row in store.messages(sid) if row["role"] == "user"] == [event["content"]]
+        assert all(profile == "notes-app" for profile, _ in provider.writes)
+        reply = next(row for row in provider.messages.values()
+                     if "Runtime response." in row.get("body", {}).get("content", ""))
+        assert reply["chat_id"] == event["chat_id"]
+    finally:
+        runtime.close()
+
+
+def test_group_topics_share_members_but_isolate_topics_apps_and_native_host(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("community-root", "Explain this public project")
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        first = finish_group_turn(runtime, transport, message=root["content"])
+        continuation = provider.topic("community-follow", "Compare its configuration", root=root["message_id"], sender="ou_other_member")
+        assert transport.admit("notes-app", continuation)["status"] == "durably_accepted"
+        second = finish_group_turn(runtime, transport, message=continuation["content"])
+        assert second["session_id"] == first["session_id"]
+        assert transport.admit("notes-app", {**continuation, "event_id": "redelivered"})["status"] == "durably_accepted"
+        for name, chat in [("different-topic", "oc_community"), ("different-group", "oc_second")]:
+            event = provider.topic(name, name, chat=chat)
+            assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+            row = finish_group_turn(runtime, transport, message=name)
+            assert row["session_id"] != first["session_id"]
+        assert len(store.list_sessions()) == 3
+        context = store.load_session(first["session_id"])["project_context"]
+        assert context["audience"] == "bound_group" and context["filesystem_scope"] == "workspace_only"
+        assert all(row["goal_id"] is None for row in store.list_sessions())
+        assert provider.topic_writes and all(chat in {"oc_community", "oc_second"} for chat, _, _ in provider.topic_writes)
+        assert any(root_id == root["message_id"] and text == "Runtime response." for _, root_id, text in provider.topic_writes)
+        requests = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        starts = [r["params"] for r in requests if r["method"] == "thread/start"]
+        assert len(starts) == 3 and all(r["permissions"] == "loopx_workspace_only_read" for r in starts)
+        assert all(not r.get("dynamicTools") for r in starts)
+        assert "Fresh Core evidence" not in ordinary[4].read_text()
+        # Original private project still uses the default host and grant.
+        assert runtime.project_contexts.available()[0].get("filesystem_scope") is None
+        assert transport._binding("steward-app").get("audience") is None
+        runtime.close()
+        from loopx.chat_runtime import ChatRuntimeController
+        restarted = ChatRuntimeController(store=store, codex_bin=str(ordinary[-2]), project_contexts=runtime.project_contexts)
+        restarted.codex_home = runtime.codex_home
+        try:
+            reopened, resumed = restarted.open_session(goal_id=None, agent_id="codex", work_dir=ordinary[-1],
+                objective="continue", conversation_binding_id=context["binding_id"],
+                source_context=lark_private_source(provider_ref=context["provider_ref"], event=root),
+                mode="resume_latest")
+            assert resumed and reopened["session_id"] == first["session_id"]
+        finally:
+            restarted.close()
+    finally:
+        runtime.close()
+
+
+def test_group_model_handoff_cannot_read_or_dispatch_to_a_private_goal(ordinary, monkeypatch):  # noqa: F811
+    from loopx.chat_runtime import CodexAppServerAdapter
+    store, runtime, provider, transport = connect_group(ordinary)
+    original = CodexAppServerAdapter.start_turn
+
+    def untrusted_response(adapter, *args, **kwargs):
+        return {**original(adapter, *args, **kwargs), "context_handoff": {
+            "goal_id": "private-work", "agent_id": "private-agent", "brief": "read private state"}}
+
+    monkeypatch.setattr(CodexAppServerAdapter, "start_turn", untrusted_response)
+    monkeypatch.setattr("loopx.chat_runtime.apply_context_handoff",
+        lambda *_, **__: pytest.fail("workspace Chat must reject before any private Goal read or dispatch"))
+    try:
+        root = provider.topic("untrusted-handoff", "Explain this public project")
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        row = transport.core.pending()[0]
+        turn = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+        assert turn["status"] == "failed"
+        assert "cannot hand off" in json.dumps(turn)
+        assert not (store.root.parent / "manager-context").exists()
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("mentioned_stop", [False, True])
+def test_group_progress_queue_and_stop_remain_in_the_original_topic(ordinary, mentioned_stop):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        roots = [provider.topic(f"running-{i}", "wait for interrupt") for i in range(2)]
+        for root in roots:
+            assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        rows = [next(row for row in transport.core.pending() if row["source"] == lark_private_source(
+            provider_ref=transport._binding("notes-app")["provider_ref"], event=root)) for root in roots]
+        for row in rows:
+            deadline = time.monotonic() + 10
+            while store.load_turn(row["session_id"], row["turn_id"])["status"] != "running":
+                assert time.monotonic() < deadline
+                time.sleep(.01)
+        queued = provider.topic("queued-in-first-topic", "Continue this public check", root=roots[0]["message_id"])
+        assert transport.admit("notes-app", queued)["status"] == "durably_accepted"
+        assert len(store.queued_turns(rows[0]["session_id"])) == 1
+        store.append_event(rows[0]["session_id"], rows[0]["turn_id"], kind="answer.delta", payload={"text": "Public progress"})
+        store.append_event(rows[0]["session_id"], rows[0]["turn_id"], kind="agent.phase", payload={"method": "item/reasoning/textDelta", "label": "private reasoning"})
+        transport.reconcile()
+        assert any(root == roots[0]["message_id"] and "Public progress" in text for _, root, text in provider.topic_writes)
+        assert all("private reasoning" not in text for _, _, text in provider.topic_writes)
+        stop = provider.topic("stop-first-topic", "/stop", root=roots[0]["message_id"])
+        if mentioned_stop:
+            stop["content"] = "@Renamed assistant  /stop"
+            provider.messages[stop["message_id"]].update(content=stop["content"],
+                body={"content": json.dumps({"text": "@_user_1  /stop"})},
+                mentions=[{"key": "@_user_1", "name": "Renamed assistant", "id": "ou_notes_app_bot"}])
+        assert transport.admit("notes-app", stop)["status"] == "command_recorded"
+        assert runtime.wait_for_turn(session_id=rows[0]["session_id"], turn_id=rows[0]["turn_id"], timeout_sec=10)["status"] == "interrupted"
+        assert store.load_turn(rows[1]["session_id"], rows[1]["turn_id"])["status"] == "running"
+        finish_group_turn(runtime, transport, message=queued["content"])
+        assert any("+messages-edit" in call for call in provider.calls)
+        assert all(root in {row["message_id"] for row in roots} for _, root, _ in provider.topic_writes)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("command", ["/status", "/help", "/new"])
+def test_group_mentioned_controls_bypass_model_turns(ordinary, command):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("control-topic", "Explain this public project")
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        row = finish_group_turn(runtime, transport, message=root["content"])
+        turns = store.root / "sessions" / row["session_id"] / "turns"
+        before = sorted(turns.glob("*.json"))
+        event = provider.topic("mentioned-control", "@Renamed assistant " + command, root=root["message_id"])
+        provider.messages[event["message_id"]].update(
+            body={"content": json.dumps({"text": "@_user_1 " + command})},
+            mentions=[{"key": "@_user_1", "name": "Renamed assistant", "id": {"app_id": "cli_notes_app"}}])
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        assert sorted(turns.glob("*.json")) == before
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("raw_text,identity,key", [
+    ("@_user_1 /stop", "ou_steward_app_bot", "@_user_1"),
+    ("@notes-app /stop", "ou_notes_app_bot", "@_user_1"),
+    ("Explain @_user_1 /stop", "ou_notes_app_bot", "@_user_1"),
+    ("`@_user_1 /stop`", "ou_notes_app_bot", "@_user_1"),
+    ("@_user_1 /stop after this", "ou_notes_app_bot", "@_user_1"),
+    ("@_user_1/stop", "ou_notes_app_bot", "@_user_1"),
+    ("@_user_1 /stop", "ou_notes_app_bot", ""),
+])
+def test_group_mention_text_does_not_invent_a_control(ordinary, raw_text, identity, key):  # noqa: F811
+    _, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("ordinary-topic", "Explain this public project")
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        finish_group_turn(runtime, transport, message=root["content"])
+        rendered = raw_text.replace("@_user_1", "@notes-app")
+        event = provider.topic("ordinary-mention", rendered, root=root["message_id"])
+        provider.messages[event["message_id"]].update(
+            body={"content": json.dumps({"text": raw_text})},
+            mentions=[{"key": key, "name": "notes-app", "id": identity}])
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        row = finish_group_turn(runtime, transport, message=rendered)
+        assert row["message"] == rendered
+    finally:
+        runtime.close()
+
+
+def test_group_provenance_and_revocation_prevent_private_or_wrong_topic_delivery(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        for event in [provider.event("notes-app", "private", "private query"),
+                      provider.topic("foreign", "foreign", chat="oc_not_selected"),
+                      provider.topic("unaddressed", "ordinary community conversation", addressed=False)]:
+            assert transport.admit("notes-app", event)["status"] in {"audience_rejected", "source_verification_failed"}
+        root = provider.topic("root", "topic one")
+        forged = provider.topic("forged", "wrong root", root=root["message_id"])
+        provider.messages[forged["message_id"]]["root_id"] = "om_other_root"
+        assert transport.admit("notes-app", forged)["status"] == "source_verification_failed"
+        assert not store.list_sessions() and not list(transport.root.glob("*.json"))
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        row = next(row for row in transport.core.pending() if row["message"] == root["content"])
+        assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)["status"] == "completed"
+        binding = transport._binding("notes-app")
+        transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+        transport.reconcile()
+        assert provider.writes == []  # Even a completed result needs current source authority.
+        assert transport.admit("notes-app", root)["status"] == "audience_rejected"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("mentions", [
+    [{"name": "notes-app", "id": {"open_id": "ou_steward_app_bot"}}],
+    [{"name": "notes-app", "id": {"app_id": "cli_steward_app"}}],
+    [{"name": "notes-app"}],
+    None,
+])
+def test_group_root_requires_this_apps_provider_mention_before_capture(ordinary, mentions):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("wrong-recipient", "Explain this project")
+        message = provider.messages[root["message_id"]]
+        message["mentioned"] = True
+        if mentions is None:
+            message.pop("mentions")
+        else:
+            message["mentions"] = mentions
+        assert transport.admit("notes-app", root)["status"] == "source_verification_failed"
+        assert not store.list_sessions() and not list(transport.root.glob("*.json"))
+        assert provider.writes == []
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("identity", [{"open_id": "ou_notes_app_bot"}, {"app_id": "cli_notes_app"}])
+def test_group_provider_mention_survives_a_bot_rename_and_topic_followup(ordinary, identity):  # noqa: F811
+    _, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("renamed-bot", "Explain this project")
+        provider.messages[root["message_id"]]["mentions"] = [{"name": "Renamed project assistant", "id": identity}]
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        first = finish_group_turn(runtime, transport, message=root["content"])
+        followup = provider.topic("renamed-followup", "Compare its configuration", root=root["message_id"])
+        assert transport.admit("notes-app", followup)["status"] == "durably_accepted"
+        second = finish_group_turn(runtime, transport, message=followup["content"])
+        assert second["session_id"] == first["session_id"]
+        assert all(topic == root["message_id"] for _, topic, _ in provider.topic_writes)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("is_reply", [False, True])
+def test_group_readback_accepts_null_event_fields_and_provider_enriched_thread(ordinary, is_reply):  # noqa: F811
+    _, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("compact-topic", "Explain this project")
+        # The CLI event projection emits null for absent fields; mget can
+        # supply the topic's thread id even when the event did not carry it.
+        root.update(root_id=None, parent_id=None, thread_id=None)
+        provider.messages[root["message_id"]]["thread_id"] = "omt_compact_topic"
+        provider.messages[root["message_id"]]["mentions"] = [{"id": "cli_notes_app", "name": "notes-app"}]
+        event = root
+        if is_reply:
+            event = provider.topic("compact-reply", "Compare its configuration", root=root["message_id"])
+            event["thread_id"] = None
+            provider.messages[event["message_id"]]["thread_id"] = "omt_compact_topic"
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        finish_group_turn(runtime, transport, message=event["content"])
+        assert all(topic == root["message_id"] for _, topic, _ in provider.topic_writes)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("field,value", [("parent_id", "om_wrong_parent"), ("thread_id", "omt_wrong_thread")])
+def test_group_readback_rejects_supplied_conflicting_ancestry(ordinary, field, value):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("conflicting-topic", "Explain this project")
+        event = provider.topic("conflicting-reply", "Continue", root=root["message_id"])
+        event[field] = value
+        assert transport.admit("notes-app", event)["status"] == "source_verification_failed"
+        assert not store.list_sessions() and not list(transport.root.glob("*.json"))
+        assert provider.writes == []
+    finally:
+        runtime.close()
+
+
+def test_group_reply_uses_raw_ancestry_when_display_readback_omits_it(ordinary):  # noqa: F811
+    _, runtime, provider, transport = connect_group(ordinary)
+    root = provider.topic("display-root", "Explain this project")
+    reply = provider.topic("display-reply", "Compare its configuration", root=root["message_id"])
+
+    def rendered_provider(args, cwd=None, timeout=None):
+        result = provider(args, cwd, timeout)
+        if "+messages-mget" in args:
+            payload = json.loads(result["stdout"])
+            for message in payload["data"]["items"]:
+                message = dict(message)
+                message.pop("root_id", None)
+                message.pop("parent_id", None)
+                payload["data"]["items"] = [message]
+            return {**result, "stdout": json.dumps(payload)}
+        return result
+
+    transport.runner = rendered_provider
+    try:
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        first = finish_group_turn(runtime, transport, message=root["content"])
+        assert transport.admit("notes-app", reply)["status"] == "durably_accepted"
+        second = finish_group_turn(runtime, transport, message=reply["content"])
+        assert second["session_id"] == first["session_id"]
+        assert all(topic == root["message_id"] for _, topic, _ in provider.topic_writes)
+        assert len([text for _, _, text in provider.topic_writes if text == "Runtime response."]) == 2
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("failure", ["unavailable", "code_error", "wrong_sender", "wrong_chat", "wrong_type", "wrong_root"])
+def test_group_raw_readback_failure_cannot_fall_back_to_display_authority(ordinary, failure):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    root = provider.topic("raw-root", "Explain this project")
+    reply = provider.topic("raw-reply", "Compare its configuration", root=root["message_id"])
+
+    def conflicting_provider(args, cwd=None, timeout=None):
+        result = provider(args, cwd, timeout)
+        if "api" in args and "GET" in args:
+            if failure == "unavailable":
+                return {"returncode": 1, "stdout": '{"code":999}', "stderr": ""}
+            if failure == "code_error":
+                return {**result, "stdout": json.dumps({**json.loads(result["stdout"]), "code": 999})}
+            payload = json.loads(result["stdout"])
+            message = dict(payload["data"]["items"][0])
+            message.update({"wrong_sender": {"sender": {"id": "ou_other", "sender_type": "user"}},
+                            "wrong_chat": {"chat_id": "oc_other"}, "wrong_type": {"msg_type": "image"},
+                            "wrong_root": {"root_id": "om_other_root"}}[failure])
+            payload["data"]["items"] = [message]
+            return {**result, "stdout": json.dumps(payload)}
+        return result
+
+    transport.runner = conflicting_provider
+    try:
+        assert transport.admit("notes-app", reply)["status"] == "source_verification_failed"
+        assert not store.list_sessions() and not list(transport.root.glob("*.json"))
+        assert not provider.writes and not provider.reaction_creates
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("kind", ["image", "post"])
+def test_group_raw_provenance_preserves_rendered_media_and_original_topic(ordinary, kind):  # noqa: F811
+    from test_lark_private_images import image_runner
+    from test_chat_image_attachments import PNG_DATA_URL
+
+    _, runtime, provider, transport = connect_group(ordinary)
+    root = provider.topic("media-root", "Explain this project")
+    media = provider.topic("media-reply", "Inspect this diagram\n![Image](img_example)", root=root["message_id"])
+    media["message_type"] = kind
+    provider.messages[media["message_id"]]["msg_type"] = kind
+    download = image_runner(provider)
+
+    def raw_media_provider(args, cwd=None, timeout=None):
+        result = download(args, cwd, timeout)
+        if "api" in args and "GET" in args:
+            payload = json.loads(result["stdout"])
+            message = payload["data"]["items"][0]
+            if message.get("msg_type") == kind:
+                message.pop("content")
+                body = {"image_key": "img_example"} if kind == "image" else {
+                    "zh_cn": {"title": "", "content": [[{"tag": "text", "text": "Inspect this diagram"},
+                                                       {"tag": "img", "image_key": "img_example"}]]}}
+                message["body"] = {"content": json.dumps(body)}
+            return {**result, "stdout": json.dumps(payload)}
+        return result
+
+    transport.runner = raw_media_provider
+    try:
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        first = finish_group_turn(runtime, transport, message=root["content"])
+        assert transport.admit("notes-app", media)["status"] == "durably_accepted"
+        second = finish_group_turn(runtime, transport, message="Inspect this diagram\n[图片 1]")
+        assert second["session_id"] == first["session_id"]
+        assert second["attachments"][0]["data_url"] == PNG_DATA_URL
+        assert all(topic == root["message_id"] for _, topic, _ in provider.topic_writes)
+    finally:
+        runtime.close()
+
+
+def test_group_status_and_recipient_commands_cannot_expose_private_sessions(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("status-root", "/status")
+        assert transport.admit("notes-app", root)["status"] == "command_recorded"
+        help_event = provider.topic("help", "/help", root=root["message_id"])
+        assert transport.admit("notes-app", help_event)["status"] == "command_recorded"
+        for name, command in [("agents", "/agents"), ("agent", "/agent secret"), ("project", "/project")]:
+            assert transport.admit("notes-app", provider.topic(name, command, root=root["message_id"]))["status"] == "command_recorded"
+        transport.reconcile()
+        assert not store.list_sessions()
+        replies = "\n".join(text for _, text in provider.writes)
+        assert str(ordinary[-1]) not in replies and "此 Bot" in replies
+        assert "不能选择个人 Agent" in replies
+        assert all(root_id == root["message_id"] for _, root_id, _ in provider.topic_writes)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("owner_ready", [True, False])
+def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_widening(ordinary, monkeypatch, owner_ready):  # noqa: F811
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.extensions.lark.cli_resolution import LarkCliResolution
+    import loopx.chat_lark_api as api
+
+    store, runtime, provider, transport = connect(ordinary)
+    monkeypatch.setattr(api, "build_lark_goal_topic_runtime_snapshot", lambda **_: {"goals": []})
+    monkeypatch.setattr(ChatRequestHandler, "_lark_runner", lambda _: provider)
+    refreshes = []
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.runtime_controller = store, runtime
+    server.verbose = False
+    server.registry_path, server.runtime_root_override = runtime.registry_path, store.root.parent
+    server.lark_cli_resolution = LarkCliResolution(command="lark-cli", available=True, source="explicit", version="fixture", error_code=None)
+    server.lark_private_conversations = transport
+    server.lark_goal_topic_runtime = SimpleNamespace(refresh=lambda: refreshes.append(True), health_snapshot=lambda: {}, close=lambda: None)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def request(path, body=None):
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request("GET" if body is None else "POST", path,
+                None if body is None else json.dumps(body), headers={"Content-Type": "application/json"})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    path = "/api/chat/lark/private-conversations"
+    body = {"app_ref": "notes-app", "project_ref": runtime.project_contexts.available()[0]["project_ref"],
+        "executor_endpoint_id": "codex", "audience": "group", "group_ids": ["oc_community"]}
+    provider.owner_ready = owner_ready
+    try:
+        original = transport.bindings.read()
+        for bad in [{"group_ids": ["oc_not_selected"]}, {"group_ids": []},
+                    {"group_ids": ["oc_community", "oc_community"]}, {"context_kind": "steward"},
+                    {"executor_endpoint_id": "claude-code"}]:
+            assert request(path, {**body, **bad})[0] == 400
+            assert transport.bindings.read() == original and not refreshes
+        status, response = request(path, body)
+        assert status == 200, response
+        saved = next(row for row in response["connections"] if row["app_ref"] == "notes-app")
+        assert saved["audience"] == "group" and saved["group_count"] == 1
+        assert saved["agent_candidates"] == saved["agent_targets"] == []
+        assert str(ordinary[-1]) not in json.dumps(response)
+        selected = request("/api/chat/lark/chats?app_ref=notes-app")[1]["chats"]
+        assert [(row["chat_id"], row["selected"]) for row in selected] == [("oc_community", True), ("oc_second", False)]
+        assert request(path, body)[1]["revision"] == response["revision"]
+        assert refreshes == [True, True]
+        assert not store.list_sessions() and not provider.writes
+        if not owner_ready:
+            frozen = transport.bindings.read()
+            assert request(path, {key: value for key, value in body.items() if key not in {"audience", "group_ids"}})[0] == 400
+            assert transport.bindings.read() == frozen
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        runtime.close()
+
+
+def test_http_listener_health_belongs_to_each_bound_transport(ordinary):  # noqa: F811
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.capabilities.native_chat.transports import ChatConversationTransports
+    from test_chat_transport_composition import Transport
+
+    store, runtime, provider, lark = connect(ordinary)
+    external = Transport("external-owner")
+    composed = ChatConversationTransports(observe_default=lark.bindings.observe, transports=[external])
+    bindings = ChatConversationBindings(root=store.root, project_contexts=runtime.project_contexts,
+                                       observe=composed.observe)
+    runtime.project_contexts.conversation_bindings = bindings
+    bindings.configure(transport_ref=external.transport_ref,
+        project_ref=runtime.project_contexts.available()[0]["project_ref"], executor_endpoint_id="codex")
+    original = bindings.read()
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.runtime_controller, server.verbose = store, runtime, False
+    server.lark_private_conversations, server.conversation_transports = lark, composed
+    # A stale Lark row must not mask the current locally installed provider.
+    server.lark_goal_topic_runtime = SimpleNamespace(health_snapshot=lambda: {
+        "notes-app": {"status": "listening"}, "steward-app": {"status": "starting"},
+        "external-owner": {"status": "stopped"}}, close=lambda: None)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def snapshot():
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request("GET", "/api/chat/lark/private-conversations")
+            response = connection.getresponse()
+            assert response.status == 200
+            return {row["app_ref"]: row for row in json.loads(response.read())["connections"]}
+        finally:
+            connection.close()
+
+    def unavailable():
+        raise OSError("provider credential must not be exposed")
+
+    try:
+        for state in ["starting", "listening", "retrying", "stopped", "standby", "inactive"]:
+            external.health_snapshot = lambda: {"status": state, "credential": "private-provider-data"}
+            rows = snapshot()
+            assert rows["external-owner"]["listener_status"] == state
+            assert rows["notes-app"]["listener_status"] == "listening"
+            assert rows["steward-app"]["listener_status"] == "starting"
+            assert "private-provider-data" not in json.dumps(rows)
+        for malformed in [None, [], {"status": "private-provider-data"}, {"status": []}]:
+            external.health_snapshot = lambda: malformed
+            assert snapshot()["external-owner"]["listener_status"] == "unknown"
+        external.health_snapshot = unavailable
+        assert snapshot()["external-owner"]["listener_status"] == "unknown"
+        del external.health_snapshot
+        assert snapshot()["external-owner"]["listener_status"] == "unknown"
+        del server.conversation_transports
+        server.lark_goal_topic_runtime = SimpleNamespace(health_snapshot=lambda: {}, close=lambda: None)
+        assert all(row["listener_status"] == "unknown" for row in snapshot().values())
+        assert bindings.read() == original and not store.list_sessions() and not provider.writes
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        runtime.close()
+
+
+def test_bot_only_group_continues_after_user_logout_but_rejects_private_and_app_drift(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        provider.owner_ready = False
+        root = provider.topic("bot-only-root", "Explain the project")
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        first = finish_group_turn(runtime, transport, message=root["content"])
+        home = store.load_session(first["session_id"])["codex_home"]
+        # Signing in a user later must not change this App-owned principal/home.
+        provider.owner_ready = True
+        follow = provider.topic("bot-only-follow", "Compare the config", root=root["message_id"])
+        assert transport.admit("notes-app", follow)["status"] == "durably_accepted"
+        second = finish_group_turn(runtime, transport, message=follow["content"])
+        assert second["session_id"] == first["session_id"]
+        assert store.load_session(second["session_id"])["codex_home"] == home
+        private = provider.event("notes-app", "private-for-group", "List personal tasks")
+        assert transport.admit("notes-app", private)["status"] == "audience_rejected"
+        provider.profile_apps["notes-app"] = "cli_rotated_app"
+        changed = provider.topic("rotated-app", "Explain config", root=root["message_id"])
+        assert transport.admit("notes-app", changed)["status"] == "audience_rejected"
+    finally:
+        runtime.close()
+
+
+def test_group_identity_requires_verified_bot_and_private_identity_requires_verified_user():
+    provider = Provider()
+    provider.owner_ready = False
+    group = observe_lark_conversation_identity(profile="notes-app", runner=provider, cli_bin="lark-cli", audience="group")
+    assert group["operator_ref"] != identity_ref(group["provider_ref"], "ou_notes_app")
+    with pytest.raises(ValueError, match="owner independently"):
+        observe_lark_conversation_identity(profile="notes-app", runner=provider, cli_bin="lark-cli")
+    provider.bot_ready = False
+    with pytest.raises(ValueError, match="App identity"):
+        observe_lark_conversation_identity(profile="notes-app", runner=provider, cli_bin="lark-cli", audience="group")
+
+
+def test_group_outbound_source_verification_reads_fresh_envelopes_without_display_projection(ordinary):  # noqa: F811
+    _, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("outbound-root", "/status")
+        event = provider.topic("outbound-follow", "/status", root=root["message_id"])
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        record = json.loads(next(transport.root.glob("*.json")).read_text())
+        provider.calls.clear()
+        assert transport._source_verified(record)
+        assert not any("+messages-mget" in args for args in provider.calls)
+        assert {args[args.index("GET") + 1] for args in provider.calls if "GET" in args} == {
+            f"/open-apis/im/v1/messages/{root['message_id']}",
+            f"/open-apis/im/v1/messages/{event['message_id']}",
+        }
+        # Every outbound attempt must re-read the root: no cross-attempt cache.
+        provider.messages[root["message_id"]]["mentions"] = []
+        assert not transport._source_verified(record)
+        assert not provider.writes
+    finally:
+        runtime.close()
+
+
+def test_group_admission_source_reads_overlap_but_keep_rendered_model_input(ordinary):  # noqa: F811
+    _, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("overlap-root", "Explain the project")
+        event = provider.topic("overlap-follow", "@notes-app Explain config", root=root["message_id"])
+        provider.messages[event["message_id"]]["body"] = {
+            "content": json.dumps({"text": "@_user_1 Explain config"})}
+        started = threading.Barrier(2)
+
+        def overlap(args, cwd=None, timeout=None):
+            if ("+messages-mget" in args or
+                    ("GET" in args and args[args.index("GET") + 1].endswith(event["message_id"]))):
+                started.wait(timeout=2)
+            return provider(args, cwd, timeout)
+
+        transport.runner = overlap
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        row = transport.core.pending()[0]
+        assert row["message"] == event["content"]
+        assert row["source"]["topic_ref"] == lark_private_source(
+            provider_ref=identity_ref("cli_notes_app"), event=event)["topic_ref"]
+        assert not provider.writes
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("drift", [
+    "sender", "chat", "type", "root", "parent", "thread", "mention",
+    "root_sender", "root_parent", "root_chat", "app", "bot", "revoke",
+])
+def test_group_outbound_envelopes_fail_closed_on_source_or_grant_drift(ordinary, drift):  # noqa: F811
+    _, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("fence-root", "/status")
+        event = provider.topic("fence-follow", "/status", root=root["message_id"])
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        record = json.loads(next(transport.root.glob("*.json")).read_text())
+        provider.calls.clear()
+        message, original = provider.messages[event["message_id"]], provider.messages[root["message_id"]]
+        if drift == "sender":
+            message["sender"] = {"id": "ou_other", "sender_type": "user"}
+        elif drift == "chat":
+            message["chat_id"] = "oc_other"
+        elif drift == "type":
+            message["msg_type"] = "image"
+        elif drift == "root":
+            message["root_id"] = "om_other"
+        elif drift == "parent":
+            message["parent_id"] = "om_other"
+        elif drift == "thread":
+            message["thread_id"] = "omt_other"
+        elif drift == "mention":
+            original["mentions"] = []
+        elif drift == "root_sender":
+            original["sender"]["sender_type"] = "app"
+        elif drift == "root_parent":
+            original["parent_id"] = "om_other"
+        elif drift == "root_chat":
+            original["chat_id"] = "oc_other"
+        elif drift == "app":
+            provider.profile_apps["notes-app"] = "cli_other"
+        elif drift == "bot":
+            provider.bot_ready = False
+        else:
+            transport.bindings.disconnect(record["binding_id"], expected_revision=transport.bindings.read()["revision"])
+        transport.reconcile()
+        assert not provider.writes
+        assert not transport.core.read_request(record["request_ref"]).get("delivery_verified")
+        if drift in {"sender", "chat", "type", "root", "parent", "thread"}:
+            assert not any("GET" in args and args[args.index("GET") + 1].endswith(root["message_id"])
+                           for args in provider.calls)
+    finally:
+        runtime.close()
+
+
+def test_legacy_group_principal_and_native_home_are_not_migrated_during_observation(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        group_observer = transport.bindings._observe_group
+        transport.bindings._observe_group = None
+        binding = next(row for row in transport.bindings.read()["bindings"] if row["transport_ref"] == "notes-app")
+        transport.bindings.configure(transport_ref="notes-app", project_ref=binding["project_ref"],
+            executor_endpoint_id="codex", audience="group", group_refs=binding["group_refs"],
+            available_group_refs=binding["group_refs"])
+        transport.bindings._observe_group = group_observer
+        frozen = transport.bindings.read()
+        root = provider.topic("legacy-group-root", "Explain the project")
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        first = finish_group_turn(runtime, transport, message=root["content"])
+        home = store.load_session(first["session_id"])["codex_home"]
+        follow = provider.topic("legacy-group-follow", "Compare config", root=root["message_id"])
+        assert transport.admit("notes-app", follow)["status"] == "durably_accepted"
+        second = finish_group_turn(runtime, transport, message=follow["content"])
+        assert first["session_id"] == second["session_id"]
+        assert store.load_session(second["session_id"])["codex_home"] == home
+        assert transport.bindings.read() == frozen
+        provider.owner_ready = False
+        assert transport.admit("notes-app", provider.topic("legacy-logout", "Compare", root=root["message_id"]))["status"] == "audience_rejected"
+        assert transport.bindings.read() == frozen
+    finally:
+        runtime.close()
 
 
 def test_native_private_admission_queue_other_app_stop_and_verified_delivery(ordinary):  # noqa: F811
@@ -193,6 +957,80 @@ def test_model_capacity_failure_keeps_session_and_original_delivery(ordinary, pr
         runtime.close()
 
 
+@pytest.mark.parametrize("profile", ["notes-app", "steward-app"])
+@pytest.mark.parametrize("info,code", [
+    ("other", "host_gate"),
+    ({"responseStreamDisconnected": {"httpStatusCode": None}}, "upstream_transport_failure"),
+    ("cyberPolicy", "cyber_policy"),
+])
+def test_disconnect_failure_returns_original_retry_evidence_without_manual_status_or_replay(
+    ordinary, profile, info, code,  # noqa: F811
+):
+    store, runtime, provider, transport = connect(ordinary)
+    capture, fake = ordinary[-3:-1]
+    source = fake.read_text().replace('"codexErrorInfo": "cyberPolicy"',
+                                     f'"codexErrorInfo": {info!r}')
+    marker = '            turn_status[active_turn] = "failed"'
+    source = source.replace(marker, marker + '\n'
+        '            for _ in range(5):\n'
+        '                print(json.dumps({"method": "error", "params": {"threadId": "durable-thread", '
+        '"turnId": active_turn, "willRetry": True, "error": {"codexErrorInfo": '
+        '{"responseStreamDisconnected": {"httpStatusCode": None}}, "message": "private retry detail"}}}), flush=True)')
+    fake.write_text(source)
+    try:
+        event = provider.event(profile, "disconnect", "typed terminal failure")
+        assert transport.admit(profile, event)["status"] == "durably_accepted"
+        row = transport.core.pending()[0]
+        sid, tid = row["session_id"], row["turn_id"]
+        turn = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert turn["status"] == "failed" and turn["response"] is None
+        assert turn["error_code"] == code
+        events = store.events_after(sid, tid, None)
+        assert sum(bool(r.get("payload", {}).get("retry")) for r in events) == 5
+        thread = store.load_session(sid)["upstream_thread_id"]
+        provider.verify_replies = False
+        assert transport.reconcile() == 0
+        terminal = provider.writes[-1][1]
+        label = {"host_gate": "响应流曾中断", "upstream_transport_failure": "响应连接失败",
+                 "cyber_policy": "安全策略拦截"}[code]
+        assert label in terminal and "原会话已保留" in terminal
+        assert "/status" not in terminal and "已过期" not in terminal
+        assert "private" not in terminal and "Partial answer" not in terminal
+        if code != "host_gate":
+            assert "响应流曾中断" not in terminal
+        # The failed delivery resumes its frozen intent after a transport
+        # restart. It cannot turn a retry observation into a new model call.
+        before = list(provider.writes)
+        provider.verify_replies = True
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+                                             runner=provider, cli_bin="lark-cli")
+        assert restarted.reconcile() == 1 and restarted.reconcile() == 0
+        assert provider.writes == before
+        assert store.load_turn(sid, tid)["error_code"] == code
+        requests = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert sum(r["method"] == "turn/start" for r in requests) == 1
+        assert store.load_session(sid)["upstream_thread_id"] == thread
+        # Retry history belongs to a Turn, not the entire Session. A later
+        # unclassified failure cannot inherit this disconnect explanation.
+        fake.write_text(source.replace('            for _ in range(5):', '            for _ in range(0):')
+                        .replace(f'"codexErrorInfo": {info!r}', '"codexErrorInfo": "other"'))
+        runtime.close()
+        from loopx.chat_runtime import ChatRuntimeController
+        resumed = ChatRuntimeController(store=store, codex_bin=str(fake), project_contexts=ordinary[2])
+        runtime = resumed
+        following = LarkPrivateConversations(controller=resumed, runtime_root=store.root.parent,
+                                             runner=provider, cli_bin="lark-cli")
+        following.admit(profile, provider.event(profile, "new-failure", "typed terminal failure"))
+        next_row = next(r for r in following.core.pending() if r.get("turn_id") != tid)
+        assert next_row["session_id"] == sid
+        assert resumed.wait_for_turn(session_id=sid, turn_id=next_row["turn_id"], timeout_sec=10)["error_code"] == "host_gate"
+        following.reconcile()
+        assert "响应流曾中断" not in provider.writes[-1][1]
+        assert store.load_session(sid)["upstream_thread_id"] == thread
+    finally:
+        runtime.close()
+
+
 def test_source_rejection_unsupported_file_notice_and_ambiguous_reply_readback(ordinary):  # noqa: F811
     _, runtime, provider, transport = connect(ordinary)
     try:
@@ -278,7 +1116,7 @@ def test_private_answer_keeps_preexisting_attempt_text_on_recovery(ordinary, mon
         # Reproduce the pre-change facade: it journals Core text unchanged;
         # the existing Inbox owner independently normalizes the provider wire.
         with monkeypatch.context() as legacy:
-            legacy.setattr(private_conversations, "normalize_lark_outbound_text", lambda text, **_: text)
+            legacy.setattr(private_conversations, "_presentation_text", lambda text: text)
             assert transport.reconcile() == 0
         saved = json.loads(next(transport.root.glob("*.json")).read_text())
         assert saved["deliveries"]["terminal"]["text"] == answer
@@ -413,6 +1251,110 @@ def test_revocation_during_source_read_prevents_native_admission(ordinary):  # n
         assert transport.core.pending() == []
         assert store.list_sessions() == []
         assert provider.writes == []
+    finally:
+        runtime.close()
+
+
+def test_core_admission_verifies_once_inside_both_fences_including_replay(ordinary, monkeypatch):  # noqa: F811
+    from contextlib import contextmanager
+    from loopx.capabilities.native_chat import external_conversations
+
+    store, runtime, _, transport = connect(ordinary)
+    binding = transport.bindings.read()["bindings"][0]
+    source = {"source_ref": "a" * 24, "sender_ref": binding["operator_ref"], "private_human_message": True}
+    original_lock = external_conversations.exclusive_file_lock
+    active = set()
+
+    @contextmanager
+    def track_lock(path, *, operation):
+        with original_lock(path, operation=operation):
+            active.add(operation)
+            try:
+                yield
+            finally:
+                active.remove(operation)
+
+    original_observe = transport.bindings.observe
+    observed = []
+
+    def observe(profile):
+        assert active == {"route_external_chat_request", "admit_external_chat_request"}
+        observed.append(profile)
+        return original_observe(profile)
+
+    monkeypatch.setattr(external_conversations, "exclusive_file_lock", track_lock)
+    transport.bindings.observe = observe
+    try:
+        args = {"binding_id": binding["binding_id"], "source": source,
+                "request_ref": "b" * 24, "message": "/help", "command": "help"}
+        first = transport.core.admit(**args)
+        assert first["status"] == "command_completed"
+        assert observed == ["notes-app"]
+        assert transport.core.admit(**args) == first
+        assert observed == ["notes-app", "notes-app"]
+        transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+        with pytest.raises(ValueError):
+            transport.core.admit(**args)
+        assert store.list_sessions() == []
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("field", ["binding_id", "source_ref"])
+@pytest.mark.parametrize("value", ["../../outside", "", "not-an-opaque-reference", None])
+def test_invalid_source_lock_path_is_rejected_before_file_access(ordinary, monkeypatch, field, value):  # noqa: F811
+    from loopx.capabilities.native_chat import external_conversations
+
+    _, runtime, _, transport = connect(ordinary)
+    binding = transport.bindings.read()["bindings"][0]
+    source = {"source_ref": "a" * 24, "sender_ref": binding["operator_ref"], "private_human_message": True}
+    binding_id = binding["binding_id"]
+    if field == "binding_id":
+        binding_id = value
+    else:
+        source[field] = value
+
+    def unexpected_lock(*args, **kwargs):
+        pytest.fail("invalid references must not reach filesystem locks")
+
+    monkeypatch.setattr(external_conversations, "exclusive_file_lock", unexpected_lock)
+    try:
+        with pytest.raises(ValueError, match="invalid external conversation source reference"):
+            transport.core.admit(binding_id=binding_id, source=source,
+                                 request_ref="b" * 24, message="must not execute")
+        assert not transport.core.root.exists()
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("change", ["disconnect", "owner_change"])
+def test_authority_changed_while_waiting_for_source_fence_blocks_admission(ordinary, monkeypatch, change):  # noqa: F811
+    from contextlib import contextmanager
+    from loopx.capabilities.native_chat import external_conversations
+
+    store, runtime, _, transport = connect(ordinary)
+    binding = transport.bindings.read()["bindings"][0]
+    source = {"source_ref": "a" * 24, "sender_ref": binding["operator_ref"], "private_human_message": True}
+    original_lock = external_conversations.exclusive_file_lock
+    original_observe = transport.bindings.observe
+
+    @contextmanager
+    def change_before_acquiring_source_fence(path, *, operation):
+        if operation == "route_external_chat_request":
+            if change == "disconnect":
+                transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+            else:
+                transport.bindings.observe = lambda profile: {**original_observe(profile), "operator_ref": "f" * 24}
+        with original_lock(path, operation=operation):
+            yield
+
+    monkeypatch.setattr(external_conversations, "exclusive_file_lock", change_before_acquiring_source_fence)
+    try:
+        with pytest.raises(ValueError):
+            transport.core.admit(binding_id=binding["binding_id"], source=source,
+                                 request_ref="b" * 24, message="must not execute")
+        assert transport.core.pending() == []
+        assert store.list_sessions() == []
     finally:
         runtime.close()
 

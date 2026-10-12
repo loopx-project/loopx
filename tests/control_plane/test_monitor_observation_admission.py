@@ -378,7 +378,15 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
     assert resume["identity"]["turn_instance_id"] == turn
     assert resume["grants_new_delivery"] is False
     assert resume["progress_ref"] == "$.settlement_progress"
-    assert len(json.dumps(resume, ensure_ascii=False, indent=2)) < 2_000
+    # Same stable fixture: v1.3.1 writeback was 1,831 chars; the bounded vision
+    # authoring contract and unavailable-monitor closeout now require 5,328.
+    # Keep useful decision guidance, with 672 chars of measured headroom. Spend
+    # and settled packets retain the original 2,000-character regression budget.
+    resume_budget = (
+        6_000 if (resume["next_step"] or {}).get("kind") == "durable_writeback"
+        else 2_000
+    )
+    assert len(json.dumps(resume, ensure_ascii=False, indent=2)) < resume_budget
     after_cli = poll["after"]["interaction_contract"]["cli_channel"]
     assert after_cli["settlement_resume_ref"] == "$.settlement_resume"
     assert after_cli["spend_after_validation"] is False

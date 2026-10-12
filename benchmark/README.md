@@ -14,7 +14,7 @@ The workspace follows three rules:
    the archive placement rules below, without becoming active practice.
 
 Reusable product policy stays in
-[`benchmark-toolkit`](../docs/capabilities/benchmark-toolkit/README.md). The
+[`benchmark-toolkit`](../loopx/capabilities/benchmark_toolkit/README.md). The
 toolkit owns provider-neutral permission, artifact, and integrity boundaries.
 This directory may contain thin examples and practice notes, but it is not
 installed as a second LoopX Python package and does not grant execution or

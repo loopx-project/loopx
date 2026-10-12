@@ -160,6 +160,58 @@ pub(crate) fn is_private_runtime(executable: &str, private_executable: &Path) ->
         .is_some_and(|(executable, releases)| executable.starts_with(releases))
 }
 
+// Discovery follows the installer's promoted default, not the time or name of
+// a release. Only canonical sibling snapshots of the same installation qualify
+// for this fallback; a checkout, another installer or an escaping symlink does
+// not acquire the installation owner's authority by resembling its path.
+pub(crate) fn same_release_installation(
+    installed_executable: &str,
+    installed: &Value,
+    default_executable: &str,
+    default: &Value,
+) -> bool {
+    fn installation(executable: &str, identity: &Value) -> Option<PathBuf> {
+        let executable = fs::canonicalize(executable).ok()?;
+        if executable.file_name()? != "loopx" {
+            return None;
+        }
+        let scripts = executable.parent()?;
+        if scripts.file_name()? != "scripts" {
+            return None;
+        }
+        let release = scripts.parent()?;
+        if release.file_name()?.to_str()? != identity["release_id"].as_str()? {
+            return None;
+        }
+        let releases = release.parent()?;
+        (releases.file_name()? == "releases").then(|| releases.to_path_buf())
+    }
+    installation(installed_executable, installed)
+        .zip(installation(default_executable, default))
+        .is_some_and(|(installed, default)| installed == default)
+}
+
+pub(crate) fn prefer_discovered_runtime(
+    package: &tauri::utils::PackageInfo,
+    installed: &Value,
+    candidate: &Value,
+    installer_default: bool,
+    compare_commits: impl FnOnce(&str, &str) -> Option<std::cmp::Ordering>,
+) -> bool {
+    use std::cmp::Ordering;
+    match compare_runtimes(package, installed, candidate, compare_commits) {
+        Some(Ordering::Less) => true,
+        Some(Ordering::Greater) => false,
+        // Equal/unknown source ancestry cannot turn a cached immutable path
+        // into a pin against its own installation's currently promoted CLI.
+        // This follows the owner; it does not claim that source is newer.
+        _ => {
+            installer_default
+                && compare_package_versions(package, installed, candidate) == Some(Ordering::Equal)
+        }
+    }
+}
+
 // A saved App-owned release path is a discovery cache, not a developer pin.
 // For the same release base, the current App can maintain its own snapshot
 // even when rebased sources or offline ancestry cannot be ordered. Preserve
@@ -303,6 +355,108 @@ mod tests {
         );
         let value: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
         assert_eq!(value.as_object().unwrap().len(), 2);
+    }
+    #[test]
+    fn installer_default_replaces_a_cache_without_inventing_source_freshness() {
+        use std::cmp::Ordering;
+        let package = tauri::utils::PackageInfo {
+            name: "LoopX".into(),
+            version: "1.2.4".parse().unwrap(),
+            authors: "contributors",
+            description: "desktop",
+            crate_name: "desktop",
+        };
+        let current = json!({"package_version":"1.2.4", "source_revision":"cached"});
+        let candidate = json!({"package_version":"1.2.4", "source_revision":"default"});
+        for (installer_default, relation, expected) in [
+            (true, None, true),
+            (false, None, false),
+            (true, Some(Ordering::Greater), false),
+            (false, Some(Ordering::Greater), false),
+            (true, Some(Ordering::Less), true),
+            (false, Some(Ordering::Less), true),
+            (true, Some(Ordering::Equal), true),
+            (false, Some(Ordering::Equal), false),
+        ] {
+            assert_eq!(
+                prefer_discovered_runtime(
+                    &package,
+                    &current,
+                    &candidate,
+                    installer_default,
+                    |_, _| relation
+                ),
+                expected,
+                "installer_default={installer_default} relation={relation:?}"
+            );
+        }
+        for (version, expected) in [("1.2.3", false), ("1.2.5", true), ("invalid", false)] {
+            assert_eq!(
+                prefer_discovered_runtime(
+                    &package,
+                    &current,
+                    &json!({"package_version":version, "source_revision":"default"}),
+                    true,
+                    |_, _| panic!("versions precede owner fallback")
+                ),
+                expected
+            );
+        }
+        assert!(prefer_discovered_runtime(
+            &package,
+            &current,
+            &json!({"package_version":"1.2.4", "source_revision":null}),
+            true,
+            |_, _| panic!("following the installer needs no source attestation")
+        ));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn cached_release_follows_only_the_same_canonical_installation_default() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let old = root.path().join("owner/releases/old/scripts/loopx");
+        let new = root.path().join("owner/releases/new/scripts/loopx");
+        let independent = root.path().join("another/releases/new/scripts/loopx");
+        let checkout = root.path().join("checkout/scripts/loopx");
+        for path in [&old, &new, &independent, &checkout] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "qualified by Core elsewhere").unwrap();
+        }
+        let launcher = root.path().join("default-loopx");
+        symlink(&new, &launcher).unwrap();
+        let old_identity = json!({"release_id":"old"});
+        let new_identity = json!({"release_id":"new"});
+        assert!(same_release_installation(
+            old.to_str().unwrap(),
+            &old_identity,
+            launcher.to_str().unwrap(),
+            &new_identity
+        ));
+        for path in [&independent, &checkout, &root.path().join("missing")] {
+            assert!(!same_release_installation(
+                old.to_str().unwrap(),
+                &old_identity,
+                path.to_str().unwrap(),
+                &new_identity
+            ));
+        }
+        assert!(!same_release_installation(
+            old.to_str().unwrap(),
+            &old_identity,
+            new.to_str().unwrap(),
+            &json!({"release_id":"unrelated"})
+        ));
+        // Text beneath the first owner's releases cannot authorize another
+        // installation after a symlink escapes the canonical ownership root.
+        let escape = root.path().join("owner/releases/escape");
+        symlink(independent.parent().unwrap().parent().unwrap(), &escape).unwrap();
+        assert!(!same_release_installation(
+            old.to_str().unwrap(),
+            &old_identity,
+            escape.join("scripts/loopx").to_str().unwrap(),
+            &new_identity
+        ));
     }
     #[test]
     fn current_app_maintains_only_its_own_unordered_same_base_snapshot() {

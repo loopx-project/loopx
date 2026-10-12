@@ -12,18 +12,35 @@ from typing import Any
 import uuid
 import hashlib
 
-from ...chat_store import _atomic_write_json, _read_json
+from ...chat_store import TERMINAL_TURN_STATES, _atomic_write_json, _read_json
 from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ...file_lock import exclusive_file_lock
 
 
 class ChatConversationBindings:
     def __init__(self, *, root: Path, project_contexts: Any,
-                 observe: Callable[[str], dict[str, Any]]) -> None:
+                 observe: Callable[[str], dict[str, Any]],
+                 observe_group: Callable[[str], dict[str, Any]] | None = None) -> None:
         self.path = root / "conversation-bindings.json"
         self.projects = project_contexts
-        self.observe = observe
+        self._observe_owner = observe
+        self._observe_group = observe_group
         self.controller: Any | None = None
+
+    def observe(self, transport_ref: str, *, audience: str | None = None) -> dict[str, Any]:
+        row = next((item for item in self.read()["bindings"] if item["transport_ref"] == transport_ref), {})
+        if audience is None:
+            audience = row.get("audience", "owner")
+        if audience == "group" and self._observe_group is not None:
+            observed = self._observe_group(transport_ref)
+            # Earlier group grants used the verified user's principal. Keep
+            # that exact identity/home until an explicit disconnect/reconnect;
+            # changing it during a poll would invalidate resumed Sessions.
+            if (row.get("audience") == "group" and row.get("provider_ref") == observed["provider_ref"]
+                    and row.get("operator_ref") != observed["operator_ref"]):
+                return self._observe_owner(transport_ref)
+            return observed
+        return self._observe_owner(transport_ref)
 
     def read(self) -> dict[str, Any]:
         if not self.path.exists():
@@ -43,14 +60,16 @@ class ChatConversationBindings:
 
     def configure(self, *, transport_ref: str, project_ref: str,
                   executor_endpoint_id: str, context_kind: str = "project",
-                  project_grant: str | None = None, goal_scope: str | None = None) -> dict[str, Any]:
+                  project_grant: str | None = None, goal_scope: str | None = None,
+                  audience: str | None = None, group_refs: list[str] | None = None,
+                  available_group_refs: list[str] | None = None) -> dict[str, Any]:
         if goal_scope is not None and (context_kind != "steward" or goal_scope not in {"selected", "all_registered"}):
             raise ValueError("select a supported steward Goal scope")
         if project_grant is None:
             project_grant = self.projects.workspace_grant if context_kind == "project" and executor_endpoint_id == "codex" else "workspace_read"
         if project_grant not in {"workspace_read", "workspace_write"} or (context_kind != "project" and project_grant != "workspace_read"):
             raise ValueError("workspace write authorization is only available for project Chat")
-        observation = self.observe(transport_ref)
+        observation = self.observe(transport_ref, audience=audience or "owner")
         candidate = {
             "schema_version": "loopx_chat_conversation_binding_v0",
             "binding_id": uuid.uuid4().hex[:24], "transport_ref": transport_ref,
@@ -59,11 +78,13 @@ class ChatConversationBindings:
             "executor_endpoint_id": executor_endpoint_id,
             "grant": project_grant if context_kind == "project" else "portfolio_read", "enabled": True,
             **({"goal_ids": [], "goal_scope": goal_scope or "all_registered"} if context_kind == "steward" else {}),
+            **({"audience": audience} if audience is not None else {}),
+            **({"group_refs": group_refs} if group_refs is not None else {}),
         }
         with exclusive_file_lock(self.path, operation="configure_chat_conversation_binding"):
             current = self.read()
             previous = next((row for row in current["bindings"] if row["transport_ref"] == transport_ref), None)
-            if previous and all(previous.get(key) == candidate.get(key) for key in ["context_kind", "project_ref", "executor_endpoint_id", "provider_ref", "operator_ref", "grant"]):
+            if previous and all(previous.get(key) == candidate.get(key) for key in ["context_kind", "project_ref", "executor_endpoint_id", "provider_ref", "operator_ref", "grant", "audience", "group_refs"]):
                 if previous.get("agent_targets"):
                     candidate["agent_targets"] = previous["agent_targets"]
             if (context_kind == "steward" and previous and all(previous.get(key) == candidate.get(key)
@@ -79,6 +100,7 @@ class ChatConversationBindings:
             result = self._core("collaboration.conversation.binding", {
                 "current": current, "expected_revision": current.get("revision"), "operation": "configure",
                 "binding": candidate, "observation": observation, "available_projects": self.projects.available(),
+                **({"available_group_refs": available_group_refs} if audience == "group" else {}),
             })
             proposed = next(row for row in result["state"]["bindings"] if row["transport_ref"] == transport_ref)
             channels = self.delivery_channels(proposed) if goal_scope is not None else []
@@ -96,7 +118,9 @@ class ChatConversationBindings:
             if readback != result["state"]:
                 raise OSError("conversation binding publication did not verify")
             binding = next(row for row in readback["bindings"] if row["transport_ref"] == transport_ref)
-            return binding
+        if previous and previous["binding_id"] != binding["binding_id"]:
+            self._stop_revoked_binding(previous["binding_id"])
+        return binding
 
     def disconnect(self, binding_id: str, *, expected_revision: int) -> dict[str, Any]:
         with exclusive_file_lock(self.path, operation="disconnect_chat_conversation_binding"):
@@ -108,10 +132,53 @@ class ChatConversationBindings:
                 _atomic_write_json(self.path, result["state"])
             if self.read() != result["state"]:
                 raise OSError("conversation binding revocation did not verify")
-            return dict(result["state"])
+        self._stop_revoked_binding(binding_id)
+        return dict(result["state"])
+
+    def _stop_revoked_binding(self, binding_id: str) -> None:
+        """Apply the committed grant decision through existing exact Turn control.
+
+        Never wait for a worker while holding the grant publication fence. Drop
+        its queued work before stopping the active Turn; other audiences and
+        local Turns in a shared attached Session retain their own authority.
+        Retrying disconnect with the current revision retries an unconfirmed stop.
+        """
+        if self.controller is None:
+            return
+        store = self.controller.store
+        failures = []
+        for row in store.list_sessions():
+            session = store.load_session(row["session_id"])
+            if session is None:
+                continue
+            bound = any(isinstance(session.get(key), dict)
+                and session[key].get("binding_id") == binding_id
+                for key in ("project_context", "steward_context"))
+            turns = store.queued_turns(session["session_id"])
+            active = store.load_turn(session["session_id"], session["active_turn_id"]) if session.get("active_turn_id") else None
+            if active:
+                turns.append(active)
+            for turn in turns:
+                target = turn.get("external_agent_target") or {}
+                if (not bound and (target.get("context") or {}).get("binding_id") != binding_id
+                        or turn.get("status") in TERMINAL_TURN_STATES):
+                    continue
+                try:
+                    stopped = self.controller.interrupt_turn(session_id=session["session_id"], turn_id=turn["turn_id"])
+                    if stopped.get("status") not in TERMINAL_TURN_STATES:
+                        raise RuntimeError("Turn stop did not settle")
+                except Exception as exc:
+                    # Revocation remains published even when a host lacks stop
+                    # control. Continue stopping other exact targets, then report
+                    # failure without exposing private transport diagnostics.
+                    failures.append(exc)
+        if failures:
+            raise OSError("Conversation grant revoked; execution stop is not confirmed. Retry stop for this binding.") from failures[0]
 
     def resolve(self, *, binding_id: str, source_ref: str, sender_ref: str,
-                private_human_message: bool, session_context: dict[str, Any] | None = None) -> dict[str, Any]:
+                private_human_message: bool, session_context: dict[str, Any] | None = None,
+                group_ref: str | None = None, topic_ref: str | None = None,
+                group_human_message: bool = False) -> dict[str, Any]:
         current = self.read()
         row = next((item for item in current.get("bindings", []) if item.get("binding_id") == binding_id), None)
         if row is None:
@@ -125,6 +192,8 @@ class ChatConversationBindings:
             "available_projects": self.projects.available(),
             **registry_scope,
             **({"session_context": session_context} if session_context is not None else {}),
+            **({"group_ref": group_ref, "topic_ref": topic_ref,
+                "group_human_message": group_human_message} if group_ref is not None or topic_ref is not None or group_human_message else {}),
         })
 
     def goal_scope_ids(self, binding: dict[str, Any]) -> list[str]:
@@ -160,8 +229,20 @@ class ChatConversationBindings:
             sender_id=binding["operator_ref"], execute=execute, if_absent=if_absent)
 
     def session_context(self, saved: dict[str, Any]) -> dict[str, Any]:
+        if saved.get("audience") == "bound_group":
+            return self.resolve(binding_id=saved["binding_id"], source_ref=saved["source_ref"],
+                sender_ref=saved["operator_ref"], private_human_message=False,
+                group_ref=saved["group_ref"], topic_ref=saved["topic_ref"], group_human_message=True,
+                session_context=saved)
         return self.resolve(binding_id=saved["binding_id"], source_ref=saved["source_ref"],
                             sender_ref=saved["operator_ref"], private_human_message=True, session_context=saved)
+
+    def manager_runtime_owner(self, saved: dict[str, Any], channel_id: str) -> bool:
+        """Fresh Core audience proof; saved Session text is never authority."""
+        selected = self.session_context(saved)
+        if selected["channel_id"] != channel_id:
+            raise ValueError("bound manager audience changed")
+        return selected["owner_manager_audience"] is True
 
     def steward_scope(self, session: dict[str, Any]) -> list[str] | None:
         saved = session.get("steward_context")
@@ -214,7 +295,7 @@ class ChatConversationBindings:
 
     def agent_candidates(self, binding_id: str) -> list[dict[str, Any]]:
         row = next(item for item in self.read()["bindings"] if item["binding_id"] == binding_id)
-        if row["context_kind"] != "project" or self.controller is None:
+        if row["context_kind"] != "project" or row.get("audience") == "group" or self.controller is None:
             return []
         project = next((item for item in self.projects.available() if item["project_ref"] == row["project_ref"]), None)
         if project is None:
@@ -264,6 +345,40 @@ class ChatConversationBindings:
             "target_observation": self.agent_observation(target["session_id"])})
 
 
+    def stop_recoveries(self, current: dict[str, Any]) -> list[dict[str, Any]]:
+        """Project revoked execution from canonical Turns, never recreate a grant.
+
+        Session and external-target context retain the exact binding identity
+        across restart. No second stop ledger or provider diagnostics are needed.
+        A recovery disappears only when the existing Turn owner settles it.
+        """
+        if self.controller is None:
+            return []
+        authorized = {row["binding_id"] for row in current["bindings"]}
+        store = self.controller.store
+        pending: dict[str, dict[str, Any]] = {}
+        for row in store.list_sessions():
+            session = store.load_session(row["session_id"])
+            if session is None:
+                continue
+            turns = store.queued_turns(session["session_id"])
+            active = store.load_turn(session["session_id"], session["active_turn_id"]) if session.get("active_turn_id") else None
+            if active:
+                turns.append(active)
+            for turn in turns:
+                if turn.get("status") in TERMINAL_TURN_STATES:
+                    continue
+                target = turn.get("external_agent_target") or {}
+                context = target.get("context") or session.get("project_context") or session.get("steward_context") or {}
+                binding_id = context.get("binding_id")
+                if not binding_id or binding_id in authorized:
+                    continue
+                recovery = pending.setdefault(binding_id, {"binding_id": binding_id,
+                    "project_ref": context.get("project_ref", ""), "pending_count": 0})
+                recovery["pending_count"] += 1
+        return [pending[key] for key in sorted(pending)]
+
+
 def validate_external_agent_turn(*, store: Any, session: dict[str, Any],
                                  goal: dict[str, Any] | None, turn: dict[str, Any]) -> None:
     """Called under the grant and canonical queue fences before host claim.
@@ -275,7 +390,7 @@ def validate_external_agent_turn(*, store: Any, session: dict[str, Any],
     if saved is None:
         return
     from ...attached_session import _require_bound_host
-    if not isinstance(saved, dict) or turn.get("origin") != "lark" or goal is None:
+    if not isinstance(saved, dict) or turn.get("origin") not in {"lark", "external"} or goal is None:
         raise ValueError("the attached external audience is unavailable")
     context, target = saved["context"], saved["target"]
     if not Path(goal["repo"]).is_dir():

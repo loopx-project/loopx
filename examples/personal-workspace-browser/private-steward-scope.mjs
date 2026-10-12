@@ -39,7 +39,7 @@ export const privateStewardScopeScenario = {
         await page.locator(".personal-settings-tabs").getByRole("button", {name: "Lark", exact: true}).click();
       }
       await settings();
-      const panel = page.getByRole("region", {name: "本人飞书私聊"});
+      const panel = page.getByRole("region", {name: "飞书项目助手与管家"});
       await panel.getByText("LoopX 管家 · 已选范围 · 1 个 Goal", {exact: true}).waitFor();
       const upgrade = panel.getByRole("button", {name: "授权全部已注册工作", exact: true});
       await upgrade.scrollIntoViewIfNeeded();

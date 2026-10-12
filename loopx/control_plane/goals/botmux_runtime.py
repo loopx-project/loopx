@@ -18,6 +18,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from ...file_lock import LockAcquireTimeoutError, exclusive_file_lock
 from ...file_lock import lock_timeout_error_fields
 from ...paths import registry_project_root
+from ...public_safe_text import OPAQUE_ID_PATTERN as _SAFE_TOKEN
 from ...registry import registry_goals
 
 
@@ -28,7 +29,6 @@ BOTMUX_DEFAULT_ENDPOINT = "http://127.0.0.1:7891"
 BOTMUX_DEFAULT_TOKEN_ENV = "BOTMUX_DASHBOARD_TOKEN"
 BOTMUX_HTTP_TIMEOUT_SECONDS = 4.0
 
-_SAFE_TOKEN = re.compile(r"^[A-Za-z0-9._:-]{1,200}$")
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _PRIVATE_PACKET_KEYS = {
     "bot_id",

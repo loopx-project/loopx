@@ -256,6 +256,22 @@ def test_assembler_rejects_recalled_claim_that_does_not_match_authority() -> Non
         )
 
 
+@pytest.mark.parametrize("timeout_seconds", [float("inf"), float("nan")])
+def test_assembler_rejects_non_finite_timeout(timeout_seconds: float) -> None:
+    with pytest.raises(ValueError, match="timeout_seconds must be a positive number"):
+        assemble_decision_evidence(
+            goal_id="goal:decision-advisor",
+            decision_id="decision:priority",
+            observed_at=OBSERVED_AT,
+            before=BEFORE,
+            sources=[],
+            source_providers={},
+            cursors={},
+            rebase=accepted_rebase,
+            timeout_seconds=timeout_seconds,
+        )
+
+
 def test_assembler_rejects_changed_fact_without_exact_authority_revision() -> None:
     def fabricated_rebase(_: Any) -> DecisionEvidenceRecords:
         return DecisionEvidenceRecords(

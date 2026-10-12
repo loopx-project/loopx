@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -14,13 +15,24 @@ import time
 
 import pytest
 
+from loopx.self_update_download import run_archive_installer
 
-def _start_partial_archive_server(payload, *, complete_resume):
+
+def _start_partial_archive_server(
+    payload, *, complete_resume, resume_status=206, installer_script=None,
+    transient_resume=False,
+):
     requests = []
     partial_size = max(1, len(payload) // 3)
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
+            if self.path == "/install.sh" and installer_script is not None:
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(installer_script)))
+                self.end_headers()
+                self.wfile.write(installer_script)
+                return
             range_header = self.headers.get("Range")
             requests.append(range_header)
             if len(requests) == 1:
@@ -31,16 +43,32 @@ def _start_partial_archive_server(payload, *, complete_resume):
                 self.wfile.flush()
                 time.sleep(3)
                 return
-            if not complete_resume:
+            if not complete_resume or (transient_resume and len(requests) == 2):
                 self.send_response(503)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
             expected_range = f"bytes={partial_size}-"
             if range_header != expected_range:
+                if range_header is None and resume_status != 206:
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                    return
                 self.send_response(400)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
+                return
+            if resume_status != 206:
+                self.send_response(resume_status)
+                body = payload if resume_status == 200 else b""
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                try:
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # curl rejects the resume response before reading it.
                 return
             self.send_response(206)
             self.send_header("Content-Length", str(len(payload) - partial_size))
@@ -191,7 +219,11 @@ def test_commit_response_uses_file_transport_and_cleans_up(tmp_path, valid, ref_
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX archive installer")
-def test_archive_download_resumes_after_attempt_timeout(tmp_path):
+@pytest.mark.parametrize("resume_status", [206, 200, 416])
+@pytest.mark.parametrize("entrypoint", ["shell", "update_download"])
+def test_archive_download_recovers_after_attempt_timeout(
+    tmp_path, resume_status, entrypoint,
+):
     source = Path(__file__).resolve().parents[1]
     package = tmp_path / "package"
     scripts = package / "scripts"
@@ -207,7 +239,8 @@ def test_archive_download_resumes_after_attempt_timeout(tmp_path):
         handle.add(package, arcname="package")
     payload = archive.read_bytes()
     server, thread, requests, partial_size = _start_partial_archive_server(
-        payload, complete_resume=True
+        payload, complete_resume=True, resume_status=resume_status,
+        installer_script=(source / "scripts/install-from-github.sh").read_bytes(),
     )
     scratch = tmp_path / "scratch"
     scratch.mkdir()
@@ -221,30 +254,41 @@ def test_archive_download_resumes_after_attempt_timeout(tmp_path):
         TEST_RECEIPT=str(receipt),
     )
     try:
-        result = subprocess.run(
-            ["bash", str(source / "scripts/install-from-github.sh")],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
+        if entrypoint == "update_download":
+            result, diagnostic = run_archive_installer(
+                f"http://127.0.0.1:{server.server_port}/install.sh",
+                env=env, timeout_seconds=5,
+            )
+            assert diagnostic["stage"] == "installer_execution"
+            assert len(diagnostic["attempts"]) == 1
+        else:
+            result = subprocess.run(
+                ["bash", str(source / "scripts/install-from-github.sh")],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
 
     assert result.returncode == 0, result.stderr
-    assert requests[:2] == [None, f"bytes={partial_size}-"]
+    assert requests == ([None, f"bytes={partial_size}-"] if resume_status == 206
+                        else [None, f"bytes={partial_size}-", None])
     assert receipt.read_text().strip() == hashlib.sha256(payload).hexdigest()
     assert list(scratch.iterdir()) == []
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX archive installer")
-def test_archive_timeout_failure_never_extracts_partial_file(tmp_path):
+@pytest.mark.parametrize("resume_status", [503, 416])
+def test_archive_timeout_failure_never_extracts_partial_file(tmp_path, resume_status):
     source = Path(__file__).resolve().parents[1]
     payload = bytes(range(256)) * 4096
     server, thread, requests, partial_size = _start_partial_archive_server(
-        payload, complete_resume=False
+        payload, complete_resume=resume_status != 503, resume_status=resume_status,
+        transient_resume=resume_status == 416,
     )
     binary = tmp_path / "bin"
     binary.mkdir()
@@ -266,6 +310,7 @@ def test_archive_timeout_failure_never_extracts_partial_file(tmp_path):
         TEST_TAR_MARKER=str(tar_marker),
     )
     try:
+        started = time.monotonic()
         result = subprocess.run(
             ["bash", str(source / "scripts/install-from-github.sh")],
             env=env,
@@ -273,6 +318,7 @@ def test_archive_timeout_failure_never_extracts_partial_file(tmp_path):
             text=True,
             timeout=15,
         )
+        elapsed = time.monotonic() - started
     finally:
         server.shutdown()
         server.server_close()
@@ -280,5 +326,40 @@ def test_archive_timeout_failure_never_extracts_partial_file(tmp_path):
 
     assert result.returncode != 0
     assert requests[:2] == [None, f"bytes={partial_size}-"]
+    assert len(requests) <= 3
+    assert elapsed < 6
     assert not tar_marker.exists()
+    assert list(scratch.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX archive installer")
+def test_complete_corrupt_archive_is_rejected_before_extraction(tmp_path):
+    source = Path(__file__).resolve().parents[1]
+    archive = tmp_path / "corrupt.tar.gz"
+    archive.write_bytes(b"not a gzip archive")
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    real_tar = shutil.which("tar")
+    assert real_tar is not None
+    tar = binary / "tar"
+    tar.write_text(
+        '#!/bin/sh\ncase "$1" in *x*) printf called > "$TEST_TAR_MARKER";; esac\n'
+        f'exec {shlex.quote(real_tar)} "$@"\n'
+    )
+    tar.chmod(0o755)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    marker = tmp_path / "extracted"
+    env = {k: v for k, v in os.environ.items() if not k.startswith("LOOPX_")}
+    env.update(
+        PATH=f"{binary}{os.pathsep}{env['PATH']}", TMPDIR=str(scratch),
+        LOOPX_PYTHON=sys.executable, LOOPX_ARCHIVE_URL=archive.as_uri(),
+        TEST_TAR_MARKER=str(marker),
+    )
+    result = subprocess.run(
+        ["bash", str(source / "scripts/install-from-github.sh")],
+        env=env, capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode != 0
+    assert not marker.exists()
     assert list(scratch.iterdir()) == []

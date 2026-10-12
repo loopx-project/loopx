@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .agent_registry import registered_agent_ids_for_goal
-from .bootstrap import default_goal_id
+from .control_plane.projects.identity import default_goal_id
 from .paths import registered_goal_state_file
 from .capabilities.issue_fix.candidate_preflight import (
     candidate_preflight_input_contract,

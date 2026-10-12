@@ -126,6 +126,19 @@ for (const provider of providers) {
     assert.equal(result.status, "ambiguous");
     assert.deepEqual(await store.loadAuthority(), before);
   });
+  test(`${provider}: source admission fences new writes and never replaces historical replay`, options, async t => {
+    const store = await fixture(t, provider); await seed(store);
+    const before = await store.loadAuthority();
+    const rejected = await commitTeamPlan(store, request(), async () => false);
+    assert.equal(rejected.reason_code, "team_plan_preview_stale");
+    assert.deepEqual(await store.loadAuthority(), before);
+    assert.equal((await commitTeamPlan(store, request(), async () => true)).status, "applied");
+    const committed = await store.loadAuthority();
+    assert.equal((await commitTeamPlan(store, request(), async () => {
+      throw new Error("historical replay must not read current source facts");
+    })).status, "replayed");
+    assert.deepEqual(await store.loadAuthority(), committed);
+  });
 }
 
 test("preview stays inert and rejects unenforced policy claims", () => {

@@ -1,11 +1,15 @@
 """Receipt-backed cadence over an open Todo, through the real CLI and runtime."""
 
 import json
+import shlex
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from loopx.capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
+from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
+from loopx.capabilities.machine_configuration.store import configure_machine_configuration
 from tests.control_plane.test_quota_settlement_cli import (
     _write_fixture,
     _run_cli,
@@ -24,22 +28,51 @@ from loopx.control_plane.work_items.semantic_replan_writeback import (
 )
 
 
-def test_open_todo_counts_only_settled_turns(tmp_path: Path) -> None:
+@pytest.mark.parametrize("threshold_override,device_count,threshold", [
+    (None, None, 6), (2, 3, 2), (None, 3, 3), (5, 6, 5), (None, 5, 5), (6, None, 6), (None, 6, 6),
+])
+def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
+    tmp_path: Path, threshold_override: int | None, device_count: int | None,
+    threshold: int,
+) -> None:
     project, runtime, registry = _write_fixture(tmp_path)
+    fixture = json.loads(registry.read_text())
+    fixture["goals"][0]["quota"]["allowed_slots"] = threshold + 2
+    registry.write_text(json.dumps(fixture))
+    if device_count is not None:
+        machine_registry = build_builtin_machine_configuration_registry()
+        configuration = {
+            "schema_version": "loopx_machine_configuration_v0",
+            "namespaces": {"todo_replan_cadence": {
+                "schema_version": "todo_replan_cadence_machine_defaults_v1",
+                "count_unit": "effective_turns", "count": device_count,
+            }},
+        }
+        preview = configure_machine_configuration(
+            runtime_root=runtime, registry=machine_registry, configuration=configuration,
+        )
+        configure_machine_configuration(
+            runtime_root=runtime, registry=machine_registry, configuration=configuration,
+            execute=True, expected_plan_revision=preview["plan_revision"],
+        )
     rc, configured = _run_cli(
         registry,
         runtime,
         "configure-goal",
         "--goal-id",
         GOAL_ID,
-        "--execution-replan-after-turns",
-        "2",
-        "--execute",
+        *(["--execution-replan-after-turns", str(threshold_override), "--execute"]
+          if threshold_override else []),
     )
     assert rc == 0, configured
     goal = json.loads(registry.read_text())["goals"][0]
-    assert goal["execution_profile"]["replan_after_effective_turns"] == 2
-    context = effective_turn_cadence_context(goal, runtime)
+    if threshold_override:
+        assert goal["execution_profile"]["replan_after_effective_turns"] == threshold_override
+    else:
+        assert "replan_after_effective_turns" not in goal.get("execution_profile", {})
+    context = effective_turn_cadence_context(
+        resolve_todo_replan_cadence_goal(goal, runtime), runtime,
+    )
 
     def periodic():
         path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
@@ -56,7 +89,7 @@ def test_open_todo_counts_only_settled_turns(tmp_path: Path) -> None:
             effective_turn_cadence=context,
         )
 
-    for i in range(2):
+    for i in range(threshold):
         turn = f"effective-turn-{i}"
         rc, guard = _run_cli(
             registry,
@@ -120,12 +153,12 @@ def test_open_todo_counts_only_settled_turns(tmp_path: Path) -> None:
             turn,
         )
         assert rc == 0, spent
-        if i == 0:
+        if i < threshold - 1:
             assert periodic() is None
     trigger = periodic()
     assert trigger is not None
     assert trigger["kind"] == "periodic_review_due"
-    assert trigger["run_count"] == 2
+    assert trigger["run_count"] == threshold
     rc, listed = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
     assert rc == 0, listed
     assert (
@@ -178,7 +211,7 @@ def test_open_todo_counts_only_settled_turns(tmp_path: Path) -> None:
             json.dumps(row) + "\n"
             for row in events
             if not (
-                row.get("run_id") == "effective-turn-1"
+                row.get("run_id") == f"effective-turn-{threshold - 1}"
                 and row.get("event_kind") == "quota_spend"
             )
         )
@@ -187,6 +220,66 @@ def test_open_todo_counts_only_settled_turns(tmp_path: Path) -> None:
         assert periodic() is None
     finally:
         log.write_bytes(original)
+
+    # A cadence checkpoint is a review, not an obligation to invent a new route.
+    # Execute the projected vision path against the real isolated File runtime.
+    selected_rc, selected = _run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--turn-instance-id", "effective-turn-next", "--scan-path", str(project),
+    )
+    assert selected_rc == 0, selected
+    contract = selected["replan_action_packet"]["writeback_contract"]
+    assert contract["preferred_input"] == "evidence_linked_vision_path"
+    plan = selected["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert contract["vision_authoring_ref"] == (
+        "$.interaction_contract.cli_channel.settlement_plan.ordered_steps[1].vision_authoring"
+    )
+    authoring = plan["ordered_steps"][1]["vision_authoring"]
+    assert authoring["schema_version"] == "goal_vision_replan_contract_v0"
+    if threshold_override is None and device_count is None:
+        rc, envelope = _run_cli(
+            registry, runtime, "quota", "should-run", "--codex-app", "--turn-envelope",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+            "--turn-instance-id", "effective-turn-next", "--scan-path", str(project),
+        )
+        assert rc == 0, envelope
+        assert envelope["replan_action_packet"]["writeback_contract"]["vision_authoring"] == authoring
+        assert envelope["writeback"]["settlement_plan"] == plan
+    vision_path = tmp_path / "periodic-vision.json"
+    vision = json.loads(json.dumps(authoring["minimal_example"]))
+    vision["vision_patch"] = {"acceptance_summary": "Original acceptance remains open."}
+    vision["path_delta"] = {"schema_version": "goal_path_delta_v0", "outcome": "replan",
+                       "prior_assumption": "The existing method remains viable.",
+                       "observed_reality": "Current validation supports continuing it.",
+                       "retained": ["Existing method and open Todo"], "evidence_refs": []}
+    command = shlex.split(selected["interaction_contract"]["cli_channel"]["next_cli_actions"][0])
+    command = command[command.index("refresh-state"):]
+    command[command.index("--agent-vision-json") + 1] = str(vision_path)
+    command += ["--delivery-workspace-path", str(project), "--no-global-sync", "--suppress-external-sinks"]
+    vision_path.write_text(json.dumps(vision))
+    rc, rejected = _run_cli(registry, runtime, *command)
+    assert rc == 1 and rejected["appended"] is False, rejected
+    assert "typed semantic delta" in rejected["error"], rejected
+    vision["path_delta"]["evidence_refs"] = ["evidence:method-validation"]
+    vision_path.write_text(json.dumps(vision))
+    rc, accepted = _run_cli(registry, runtime, *command)
+    assert rc == 0, accepted
+    assert accepted["autonomous_replan_ack"]["semantic_delta"]["satisfying_outcomes"] == ["fresh_vision_path_outcome"]
+    rc, spent = _run_cli(
+        registry, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--turn-instance-id", "effective-turn-next", "--slots", "1",
+        "--source", "heartbeat", "--execute",
+    )
+    assert rc == 0 and spent["settlement_progress"]["state"] == "settled", json.dumps(spent)
+    rc, following = _run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--turn-instance-id", "after-periodic-review", "--scan-path", str(project),
+    )
+    assert rc == 0 and following["decision"] == "run", following
+    assert following["selected_todo"]["status"] == "open"
 
     rc, cleared = _run_cli(
         registry,
@@ -200,17 +293,19 @@ def test_open_todo_counts_only_settled_turns(tmp_path: Path) -> None:
     assert rc == 0, cleared
     assert (
         effective_turn_cadence_context(
-            json.loads(registry.read_text())["goals"][0], runtime
-        )
-        is None
+            resolve_todo_replan_cadence_goal(
+                json.loads(registry.read_text())["goals"][0], runtime,
+            ), runtime,
+        )["threshold"]
+        == (device_count or 6)
     )
 
 
-@pytest.mark.parametrize("invalid", [0, 6, True, 2.5, "2"])
+@pytest.mark.parametrize("invalid", [0, 7, True, 2.5, "2"])
 def test_effective_cadence_rejects_invalid_units(invalid):
     from loopx.execution_profile import compact_execution_profile
 
-    with pytest.raises(ValueError, match="integer from 1 to 5"):
+    with pytest.raises(ValueError, match="integer from 1 to 6"):
         compact_execution_profile({"replan_after_effective_turns": invalid})
 
 

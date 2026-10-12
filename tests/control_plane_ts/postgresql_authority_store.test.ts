@@ -201,6 +201,14 @@ test("PostgreSQL identity rotation commits the next incarnation", async () => {
     store_identity: NEXT_STORE_IDENTITY,
   });
   assert.equal(harness.calls[0]?.text, "BEGIN");
+  const identityLock = harness.calls.findIndex(call =>
+    call.text.includes("pg_advisory_xact_lock")
+  );
+  const metadataRead = harness.calls.findIndex(call =>
+    call.text.includes("FROM loopx_control_plane.authority_store_metadata")
+  );
+  assert.ok(identityLock > 0);
+  assert.ok(metadataRead > identityLock);
   const update = harness.calls.find(call =>
     call.text.includes("UPDATE loopx_control_plane.authority_store_metadata")
   );

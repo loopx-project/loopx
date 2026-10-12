@@ -162,6 +162,14 @@ class LarkOutboundTextError(ValueError):
 DEFAULT_LARK_TEXT_LIMIT = 1200
 
 
+def present_lark_conversation_text(text: str) -> str:
+    """Render a persisted answer without granting unresolved mention authority."""
+    try:
+        return normalize_lark_outbound_text(text, limit=None, preserve_format=True)
+    except LarkOutboundTextError:
+        return safe_lark_plain_text_fallback(text)
+
+
 def normalize_lark_outbound_text(
     value: Any, *, limit: int | None = DEFAULT_LARK_TEXT_LIMIT, preserve_format: bool = False,
 ) -> str:

@@ -34,13 +34,17 @@ def opaque_digest(*values: Any) -> str:
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:32]
 
 
-def manager_failure_reply(error: Exception | Mapping[str, Any]) -> tuple[str, str]:
+def manager_failure_reply(
+    error: Exception | Mapping[str, Any], *, retry_info: Any = None,
+) -> tuple[str, str]:
     labels = {
         "cyber_policy": "上游安全策略拦截",
         "misalignment_policy_violation": "上游策略拦截",
         "usage_limit_exceeded": "上游用量限制",
         "rate_limit_exceeded": "上游请求频率限制",
         "server_overloaded": "当前模型繁忙",
+        "upstream_transport_failure": "上游响应连接失败",
+        "session_queue_expired": "排队请求已过期",
         "context_window_exceeded": "上下文超限",
         "unauthorized": "上游身份验证失败",
         "idle_timeout": "等待上游响应超时",
@@ -67,6 +71,13 @@ def manager_failure_reply(error: Exception | Mapping[str, Any]) -> tuple[str, st
         else getattr(error, "error_code", "")
     )
     code = code if code in labels else "processing_failed"
+    # Old hosts can terminate with `other` after typed disconnect retries.
+    # Describe that observed history without changing the terminal category,
+    # inferring an authorization failure, or granting permission to replay.
+    if (code == "host_gate" and isinstance(retry_info, Mapping)
+            and set(retry_info) == {"responseStreamDisconnected"}
+            and isinstance(retry_info["responseStreamDisconnected"], Mapping)):
+        return code, "上游响应流曾中断，自动重试后本轮仍未完成。没有生成完整答复，本次请求不会自动重放。"
     if code == "server_overloaded":
         return code, "当前模型繁忙，本轮未完成。请先查看 /status 与已有结果，再决定是否稍后重试；本次请求不会自动重放。"
     return code, f"已收到你的消息，但本次未能完成：{labels.get(code, '管家处理失败')}。没有生成完整答复，本次请求不会自动重放。"

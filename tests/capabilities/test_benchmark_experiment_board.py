@@ -128,6 +128,217 @@ def _running_baseline(**overrides: object) -> dict[str, object]:
     return payload
 
 
+@pytest.mark.parametrize(
+    "before,after,higher,expected",
+    [
+        (50, 60, True, "regressed"),
+        (50, 100, True, "flat"),
+        (50, 120, True, "improved"),
+        (50, 60, False, "improved"),
+        (50, 100, False, "flat"),
+        (50, 120, False, "regressed"),
+    ],
+)
+def test_metric_direction_uses_ratio_scale(before, after, higher, expected):
+    baseline = _baseline()
+    candidate = _baseline(
+        run_id="candidate",
+        arm_id="treatment",
+        arm_role="treatment",
+        treatment_fidelity="qualified",
+        comparison_anchor_run_id=baseline["run_id"],
+    )
+    baseline["metrics"]["feature_pass"] = {
+        "value": before,
+        "total": 100,
+        "higher_is_better": higher,
+    }
+    candidate["metrics"]["feature_pass"] = {
+        "value": after,
+        "total": 200,
+        "higher_is_better": higher,
+    }
+    comparison = build_benchmark_experiment_board([baseline, candidate])["comparisons"][
+        0
+    ]
+    metric = comparison["metric_deltas"]["feature_pass"]
+    assert comparison["matched_pair_countable"] is True
+    assert metric["delta"] == after - before
+    assert metric["delta_rate"] == pytest.approx(after / 200 - before / 100)
+    assert metric["direction"] == expected
+    rendered = render_benchmark_experiment_board_markdown(
+        build_benchmark_experiment_board([baseline, candidate])
+    )
+    assert f"{(after / 200 - before / 100) * 100:g} pp" in rendered
+
+
+@pytest.mark.parametrize(
+    "before,after,reason",
+    [
+        ({"value": 1000, "unit": "ms"}, {"value": 2, "unit": "s"}, "unit_mismatch"),
+        ({"value": 1, "unit": "ms"}, {"value": 2}, "unit_mismatch"),
+        (
+            {"value": 1, "higher_is_better": True},
+            {"value": 2, "higher_is_better": False},
+            "direction_mismatch",
+        ),
+        ({"value": 1, "higher_is_better": True}, {"value": 2}, "direction_mismatch"),
+        ({"value": 1, "total": 10}, {"value": 2}, "denominator_presence_mismatch"),
+        (
+            {"value": 1, "total": 10},
+            {"value": 0, "total": 0},
+            "non_positive_denominator",
+        ),
+    ],
+)
+def test_primary_metric_incompatibility_excludes_pair(before, after, reason):
+    baseline = _baseline()
+    candidate = _baseline(
+        run_id="candidate",
+        arm_id="treatment",
+        arm_role="treatment",
+        treatment_fidelity="qualified",
+        comparison_anchor_run_id=baseline["run_id"],
+    )
+    baseline["metrics"]["feature_pass"] = before
+    candidate["metrics"]["feature_pass"] = after
+    comparison = build_benchmark_experiment_board([baseline, candidate])["comparisons"][
+        0
+    ]
+    assert comparison["matched_pair_countable"] is False
+    assert "primary_metric_definition_mismatch" in comparison["reason_codes"]
+    metric = comparison["metric_deltas"]["feature_pass"]
+    assert metric["comparison_unavailable_reason"] == reason
+    assert "delta" not in metric and "direction" not in metric
+
+
+def test_incompatible_auxiliary_metric_preserves_primary_pair():
+    baseline = _baseline()
+    candidate = _baseline(
+        run_id="candidate",
+        arm_id="treatment",
+        arm_role="treatment",
+        treatment_fidelity="qualified",
+        comparison_anchor_run_id=baseline["run_id"],
+    )
+    candidate["metrics"]["preservation_pass"]["unit"] = "seconds"
+    comparison = build_benchmark_experiment_board([baseline, candidate])["comparisons"][
+        0
+    ]
+    assert comparison["matched_pair_countable"] is True
+    assert comparison["metric_deltas"]["feature_pass"]["direction"] == "flat"
+    assert (
+        comparison["metric_deltas"]["preservation_pass"][
+            "comparison_unavailable_reason"
+        ]
+        == "unit_mismatch"
+    )
+    # Historical scalar rows need not acquire optional metadata to remain readable.
+    baseline["metrics"]["feature_pass"] = {"value": 1}
+    candidate["metrics"]["feature_pass"] = {"value": 2}
+    comparison = build_benchmark_experiment_board([baseline, candidate])["comparisons"][
+        0
+    ]
+    assert comparison["matched_pair_countable"] is True
+    assert comparison["metric_deltas"]["feature_pass"] == {
+        "baseline_value": 1,
+        "candidate_value": 2,
+        "delta": 1.0,
+    }
+
+
+def test_factorial_ratio_interaction_uses_one_scale():
+    rows = _four_arm_rows()
+    for row, value, total in zip(rows, [50, 60, 50, 55], [100, 200, 100, 100]):
+        row["metrics"]["preservation_pass"] = {
+            "value": value,
+            "total": total,
+            "higher_is_better": True,
+        }
+    contrast = build_benchmark_experiment_board(
+        rows,
+        four_arm_contract=_four_arm_contract(),
+    )["factorial_contrasts"][0]
+    assert contrast["factorial_contrast_countable"] is True
+    interaction = contrast["interaction_contrast"]["metric_contrasts"][
+        "preservation_pass"
+    ]
+    assert interaction["difference_in_differences"] == -5
+    assert interaction["difference_in_differences_rate"] == pytest.approx(0.25)
+    assert interaction["direction"] == "improved"
+    # Two individually compatible effects still cannot be subtracted across units.
+    for row in rows[2:]:
+        row["metrics"]["preservation_pass"]["unit"] = "different-unit"
+    contrast = build_benchmark_experiment_board(
+        rows,
+        four_arm_contract=_four_arm_contract(),
+    )["factorial_contrasts"][0]
+    assert contrast["factorial_contrast_countable"] is True
+    assert contrast["interaction_contrast"]["metric_contrasts"][
+        "preservation_pass"
+    ] == {
+        "comparison_unavailable_reason": "unit_mismatch",
+    }
+
+
+def test_factorial_zero_primary_denominator_is_not_countable():
+    rows = _four_arm_rows()
+    for row in rows:
+        row["metrics"]["feature_pass"].update(value=0, total=0)
+    contrast = build_benchmark_experiment_board(
+        rows,
+        four_arm_contract=_four_arm_contract(),
+    )["factorial_contrasts"][0]
+    assert contrast["factorial_contrast_countable"] is False
+    assert "primary_metric_definition_mismatch" in contrast["reason_codes"]
+
+
+@pytest.mark.parametrize("total", [None, 1e-308])
+def test_non_finite_comparison_does_not_publish_a_direction(total):
+    baseline = _baseline()
+    candidate = _baseline(
+        run_id="candidate",
+        arm_id="treatment",
+        arm_role="treatment",
+        treatment_fidelity="qualified",
+        comparison_anchor_run_id=baseline["run_id"],
+    )
+    for row, value in [(baseline, -1e308), (candidate, 1e308)]:
+        row["metrics"]["feature_pass"] = {"value": value, "higher_is_better": True}
+        if total is not None:
+            row["metrics"]["feature_pass"].update(
+                value=1 if row is baseline else 2, total=total
+            )
+    comparison = build_benchmark_experiment_board([baseline, candidate])["comparisons"][
+        0
+    ]
+    assert comparison["matched_pair_countable"] is False
+    assert comparison["metric_deltas"]["feature_pass"] == {
+        "baseline_value": baseline["metrics"]["feature_pass"]["value"],
+        "candidate_value": candidate["metrics"]["feature_pass"]["value"],
+        "comparison_unavailable_reason": "non_finite_difference",
+    }
+
+
+@pytest.mark.parametrize("metric_name", ["feature_pass", "preservation_pass"])
+def test_factorial_non_finite_raw_interaction_is_unavailable(metric_name):
+    rows = _four_arm_rows()
+    for row, value in zip(rows, [1e308, 0, 0, 1e308]):
+        row["metrics"][metric_name] = {
+            "value": value,
+            "total": 1e308,
+            "higher_is_better": True,
+        }
+    contrast = build_benchmark_experiment_board(
+        rows,
+        four_arm_contract=_four_arm_contract(),
+    )["factorial_contrasts"][0]
+    assert contrast["factorial_contrast_countable"] is (metric_name != "feature_pass")
+    assert contrast["interaction_contrast"]["metric_contrasts"][metric_name] == {
+        "comparison_unavailable_reason": "non_finite_difference",
+    }
+
+
 def _four_arm_contract() -> dict[str, object]:
     return compact_benchmark_four_arm_contract(
         build_benchmark_four_arm_contract(

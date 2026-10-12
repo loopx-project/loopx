@@ -5,14 +5,17 @@ from copy import deepcopy
 import pytest
 
 from loopx.control_plane.todos.resume_planning import project_todo_resume_planning
-from loopx.control_plane.todos.route_continuation import todo_summary_route_continuation_candidates
+from loopx.control_plane.todos.quota_selection import project_quota_planning
 from loopx.control_plane.todos.succession_warning import build_todo_succession_warning_lanes
 
 
 def projected(item: dict) -> list[dict]:
     return [
         project_todo_resume_planning({"deferred_items": [item]})["deferred_items"][0],
-        todo_summary_route_continuation_candidates({"route_continuation_candidates": [item]})[0],
+        project_quota_planning({"route_continuation_candidates": [item]},
+            all_open_items=[], source_open_count=0, agent_identity=None,
+            filter_user_gate_blocks_agent=False, available_capabilities=[])
+        ["route_lanes"]["route_continuation_replan_candidates"][0],
         build_todo_succession_warning_lanes(
             {"completed_without_successor_items": [item]}, item_limit=5,
         )["completed_without_successor_items"][0],

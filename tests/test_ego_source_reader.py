@@ -10,6 +10,11 @@ from loopx.extensions import ego_source_reader as reader
 URL = "https://example.com/article?q=1"
 
 
+@pytest.fixture(autouse=True)
+def isolated_reader_space(monkeypatch):
+    monkeypatch.setattr(reader, "_OWNED_SPACE", reader._OwnedSpace())
+
+
 @pytest.fixture
 def configured(monkeypatch, tmp_path):
     executable = tmp_path / "ego-browser"
@@ -49,7 +54,7 @@ def test_read_returns_evidence_without_visual_or_write_claim(configured, monkeyp
     assert result["images_read"] is False and result["image_count"] == 2
     args, kwargs = calls[0]
     assert args[:3] == [str(configured), "nodejs", "-e"]
-    assert kwargs["stdin"] == subprocess.DEVNULL and kwargs["timeout"] == 30
+    assert kwargs["stdin"] == subprocess.DEVNULL and 0 < kwargs["timeout"] <= 30
     assert "shell" not in kwargs
     assert "does not prove article" in result["limitations"]
 
@@ -88,11 +93,114 @@ def test_real_child_preserves_utf8_evidence_on_a_gbk_host(
     ("https://other.test/article", "source_origin_not_authorized"),
     ("https://example.com\n.evil.test/article", "source_url_invalid"),
     ("https://example.com\\@evil.test/article", "source_url_invalid"),
+    ("https://[fe80::1%25en0]/article", "source_url_invalid"),
     ("javascript:alert(1)", "source_url_invalid"),
 ])
 def test_rejects_url_before_browser_access(configured, monkeypatch, url, error):
     monkeypatch.setattr(reader.subprocess, "run", lambda *a, **k: pytest.fail("browser accessed"))
     assert reader.read_public_url(url) == {"ok": False, "error": error}
+
+
+@pytest.mark.parametrize("setting", [None, "*", " * "])
+@pytest.mark.parametrize("image", [False, True])
+def test_all_origins_default_and_wildcard_read_new_sources(configured, monkeypatch, tmp_path, setting, image):
+    if setting is None:
+        monkeypatch.delenv("LOOPX_EGO_READ_ORIGINS")
+    else:
+        monkeypatch.setenv("LOOPX_EGO_READ_ORIGINS", setting)
+    url = "https://new-source.example/article#section"
+    config = reader.ReaderConfig.from_environment()
+    assert config.origins == frozenset({"*"})
+    result, observation = run_generated_script(config, url, image, tmp_path / "image.png")
+    assert result["ok"] and result["url"] == url
+    assert observation["domReads"] > 0
+    monkeypatch.setattr(reader, "_run", lambda *_a, **_k: response(extraction(
+        url=url, requested_url=url, canonical_url=url)))
+    assert reader.read_public_url(url)["ok"]
+
+
+@pytest.mark.parametrize("url", ["http://example.com/", "file:///tmp/source", "javascript:alert(1)",
+                                "https://user:secret@example.com/", "https://example.com:8443/"])
+def test_all_origins_still_rejects_invalid_urls_before_browser_access(configured, monkeypatch, url):
+    monkeypatch.setenv("LOOPX_EGO_READ_ORIGINS", "*")
+    monkeypatch.setattr(reader, "_run", lambda *_a, **_k: pytest.fail("browser accessed"))
+    assert reader.read_public_url(url) == {"ok": False, "error": "source_url_invalid"}
+    assert json.loads(reader.read_public_image(url, 0)[0].text)["error"] == "source_url_invalid"
+
+
+@pytest.mark.parametrize("url", ["http://example.com/", "file:///tmp/source", "javascript:alert(1)",
+                                "https://user:secret@example.com/", "https://example.com:8443/"])
+def test_all_origins_browser_preflight_preserves_url_constraints(configured, monkeypatch, url):
+    import shutil
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node required for browser preflight")
+    monkeypatch.setenv("LOOPX_EGO_READ_ORIGINS", "*")
+    script = reader._script(reader.ReaderConfig.from_environment(), url)
+    harness = ("async function taskSpace(){console.log('BROWSER_ACCESSED');throw Error('accessed');}"
+               "(async()=>{" + script + "})().catch(e=>{console.error(e);process.exitCode=1;});")
+    result = subprocess.run([node, "-e", harness], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 1 and "source_url_invalid" in result.stderr
+    assert "BROWSER_ACCESSED" not in result.stdout
+
+
+@pytest.mark.parametrize("setting", ["", "*,https://example.com", "https://*.example.com", "all"])
+def test_invalid_origin_modes_do_not_expand_scope(configured, monkeypatch, setting):
+    monkeypatch.setenv("LOOPX_EGO_READ_ORIGINS", setting)
+    monkeypatch.setattr(reader, "_run", lambda *_a, **_k: pytest.fail("browser accessed"))
+    assert reader.read_public_url(URL)["error"] == "source_reader_not_configured"
+
+
+@pytest.mark.parametrize("image", [False, True])
+def test_all_origins_still_fences_cross_origin_redirects(configured, monkeypatch, tmp_path, image):
+    monkeypatch.setenv("LOOPX_EGO_READ_ORIGINS", "*")
+    result, observation = run_generated_script(reader.ReaderConfig.from_environment(), URL, image,
+        tmp_path / "image.png", redirect="https://another.example/private")
+    assert result == {"ok": False, "error": "source_url_changed"}
+    assert observation == {"domReads": 0, "captures": 0}
+
+
+def test_ipv6_source_and_origin_use_browser_canonical_host(configured, monkeypatch, tmp_path):
+    url = "https://[2606:4700:4700:0000:0000:0000:0000:1111]/article"
+    origin = "https://[2606:4700:4700::1111]"
+    monkeypatch.setenv("LOOPX_EGO_READ_ORIGINS", "https://[2606:4700:4700:0000:0000:0000:0000:1111]")
+
+    config = reader.ReaderConfig.from_environment()
+    canonical, actual_origin = reader._url(url)
+
+    assert canonical == origin + "/article"
+    assert actual_origin == origin
+    assert config.origins == frozenset({origin})
+
+    result, observation = run_generated_script(
+        config, canonical, False, tmp_path / "unused.png",
+    )
+    assert result["ok"] is True
+    assert result["url"] == canonical
+    assert observation["domReads"] > 0
+
+
+@pytest.mark.parametrize("origin_host", ["::ffff:8.8.8.8", "::ffff:808:808"])
+@pytest.mark.parametrize("request_host", ["::ffff:8.8.8.8", "::ffff:808:808"])
+def test_ipv4_mapped_ipv6_round_trips_through_browser_url(
+    configured, monkeypatch, tmp_path, origin_host, request_host,
+):
+    monkeypatch.setenv("LOOPX_EGO_READ_ORIGINS", f"https://[{origin_host}]")
+    config = reader.ReaderConfig.from_environment()
+    url = f"https://[{request_host}]/article"
+
+    canonical, origin = reader._url(url)
+    result, observation = run_generated_script(
+        config, url, False, tmp_path / "unused.png",
+    )
+
+    expected = "https://[::ffff:808:808]/article"
+    assert result["ok"] is True
+    assert result["url"] == expected
+    assert observation["domReads"] > 0
+    assert canonical == expected
+    assert origin == "https://[::ffff:808:808]"
+    assert config.origins == frozenset({"https://[::ffff:808:808]"})
 
 
 @pytest.mark.parametrize("key,value", [
@@ -106,6 +214,285 @@ def test_bad_operator_configuration_fails_closed(configured, monkeypatch, key, v
     monkeypatch.setenv(key, value)
     monkeypatch.setattr(reader.subprocess, "run", lambda *a, **k: pytest.fail("browser accessed"))
     assert reader.read_public_url(URL)["error"] == "source_reader_not_configured"
+
+
+def auto_config(monkeypatch):
+    monkeypatch.setenv("LOOPX_EGO_READ_TASK_SPACE", "auto")
+    monkeypatch.setenv("LOOPX_EGO_READ_PAGE", "p1")
+
+
+def space_response(space, *, stderr=False):
+    output = reader.SPACE_MARKER + json.dumps({"id": space})
+    return subprocess.CompletedProcess([], 0, "" if stderr else output, output if stderr else "")
+
+
+@pytest.mark.parametrize("stderr", [False, True])
+def test_auto_space_is_lazy_and_reused_for_text_and_image(configured, monkeypatch, tmp_path, stderr):
+    auto_config(monkeypatch)
+    calls = []
+    def run(_executable, script, **_kwargs):
+        calls.append(script)
+        if 'taskSpace("LoopX public-source reader ' in script:
+            return space_response(19, stderr=stderr)
+        if "screenshot(" in script:
+            path = tmp_path / "image.png"
+            path.write_bytes(png())
+            return response({"url": URL, "index": 0, "alt": "figure"})
+        return response(extraction())
+    monkeypatch.setattr(reader, "_run", run)
+    assert reader.read_public_url("https://other.test/private")["error"] == "source_origin_not_authorized"
+    assert not calls
+    assert reader.read_public_url(URL)["ok"]
+    assert reader.read_public_url(URL)["ok"]
+    assert reader._read(URL, 0, str(tmp_path / "image.png"))["ok"]
+    assert len(calls) == 4
+    assert all("taskSpace(19)" in s for s in calls[1:])
+
+
+def test_separate_reader_process_state_owns_separate_spaces(configured, monkeypatch):
+    auto_config(monkeypatch)
+    config = reader.ReaderConfig.from_environment()
+    # Model the real factory's name-based reuse, not predetermined distinct ids.
+    spaces = {}
+    def run(_executable, script, **_kwargs):
+        name = json.loads(script.split("taskSpace(", 1)[1].split(");", 1)[0])
+        return space_response(spaces.setdefault(name, 19 + len(spaces)))
+    monkeypatch.setattr(reader, "_run", run)
+    first, second = reader._OwnedSpace(), reader._OwnedSpace()
+    assert first.resolve(config).task_space == 19
+    assert second.resolve(config).task_space == 20
+    assert first.resolve(config).task_space == 19
+    assert first.name != second.name and len(spaces) == 2
+    first.forget_closed()
+    first.resolve(config)
+    assert len(spaces) == 2  # The owner identity remains stable during recovery.
+
+
+@pytest.mark.parametrize("failure", ["user_control", "timeout"])
+def test_errors_do_not_create_replacement_spaces(configured, monkeypatch, failure):
+    auto_config(monkeypatch)
+    calls = []
+    def run(executable, script, **_kwargs):
+        calls.append(script)
+        if 'taskSpace("LoopX public-source reader ' in script:
+            if failure == "ambiguous_creation":
+                raise subprocess.TimeoutExpired(executable, 30)
+            return space_response(19)
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(executable, 30)
+        return subprocess.CompletedProcess([], 1, "", "user took control")
+    monkeypatch.setattr(reader, "_run", run)
+    assert not reader.read_public_url(URL)["ok"]
+    assert not reader.read_public_url(URL)["ok"]
+    assert sum('taskSpace("LoopX public-source reader ' in s for s in calls) == 1
+
+
+def test_lost_creation_receipt_recovers_exact_owned_space_without_recreation(configured, monkeypatch):
+    auto_config(monkeypatch)
+    calls = []
+    def run(executable, script, **_kwargs):
+        calls.append(script)
+        if len(calls) == 1:
+            raise subprocess.TimeoutExpired(executable, 30)
+        if "matches.map" in script:
+            assert json.dumps(reader._OWNED_SPACE.name) in script
+            return subprocess.CompletedProcess([], 0, reader.SPACE_MARKER + json.dumps({
+                "matches": [{"id": 19, "createdBy": "agent", "ownership": "agent"}]}), "")
+        assert "taskSpace(19)" in script
+        return response(extraction())
+    monkeypatch.setattr(reader, "_run", run)
+    assert reader.read_public_url(URL)["error"] == "browser_read_timeout"
+    assert reader.read_public_url(URL)["ok"]
+    assert reader._OWNED_SPACE.space == 19
+    assert len(calls) == 3
+    assert sum('taskSpace("LoopX public-source reader ' in s for s in calls) == 1
+    assert all("takeOver" not in s and "claimTaskSpace" not in s for s in calls)
+
+
+@pytest.mark.parametrize("matches", [
+    [], [{"id": 19, "createdBy": "agent", "ownership": "agent"}] * 2,
+    [{"id": 19, "createdBy": "user", "ownership": "agent"}],
+    [{"id": 19, "createdBy": "agent", "ownership": "agentDelegatedToUser"}],
+    [{"id": 19, "createdBy": "agent", "ownership": "inactive"}],
+    [{"id": True, "createdBy": "agent", "ownership": "agent"}],
+    [None], "not a list",
+])
+def test_uncertain_creation_lookup_never_claims_or_creates(configured, monkeypatch, matches):
+    auto_config(monkeypatch)
+    calls = []
+    def run(executable, script, **_kwargs):
+        calls.append(script)
+        if len(calls) == 1:
+            raise subprocess.TimeoutExpired(executable, 30)
+        assert "matches.map" in script and "taskSpace(" not in script
+        return subprocess.CompletedProcess([], 0, reader.SPACE_MARKER + json.dumps({"matches": matches}), "")
+    monkeypatch.setattr(reader, "_run", run)
+    assert reader.read_public_url(URL)["error"] == "browser_read_timeout"
+    assert reader.read_public_url(URL)["error"] == "source_reader_space_unavailable"
+    assert reader._OWNED_SPACE.space is None and len(calls) == 2
+
+
+@pytest.mark.parametrize("stderr", [False, True])
+def test_only_confirmed_missing_owned_space_is_replaced_once(configured, monkeypatch, stderr):
+    auto_config(monkeypatch)
+    calls = []
+    def run(_executable, script, **_kwargs):
+        calls.append(script)
+        if 'taskSpace("LoopX public-source reader ' in script:
+            return space_response(19 if len(calls) == 1 else 20)
+        if "taskSpace(19)" in script:
+            output = reader.SPACE_MARKER + '{"closed":true}'
+            return subprocess.CompletedProcess([], 1, "" if stderr else output, output if stderr else "")
+        return response(extraction())
+    monkeypatch.setattr(reader, "_run", run)
+    assert reader.read_public_url(URL)["ok"]
+    assert reader._OWNED_SPACE.space == 20 and len(calls) == 4
+
+
+@pytest.mark.parametrize("auto", [True, False])
+def test_shutdown_only_finishes_its_created_space_once(configured, monkeypatch, auto):
+    if auto:
+        auto_config(monkeypatch)
+    calls = []
+    def run(_executable, script, **_kwargs):
+        calls.append(script)
+        return space_response(19)
+    monkeypatch.setattr(reader, "_run", run)
+    reader._OWNED_SPACE.resolve(reader.ReaderConfig.from_environment())
+    reader._OWNED_SPACE.close()
+    reader._OWNED_SPACE.close()
+    if auto:
+        assert len(calls) == 2
+        assert "taskSpace(19)" in calls[-1] and "ownership==='agent'" in calls[-1]
+        assert "finish({keep:[]})" in calls[-1]
+    else:
+        assert not calls
+
+
+@pytest.mark.parametrize("ownership", [
+    "agent", "user", "agentDelegatedToUser", "inactive", "unassigned",
+    "unknown", "missing", "unreadable",
+])
+def test_shutdown_uses_live_control_not_creation_snapshot(configured, monkeypatch, ownership):
+    owned = reader._OwnedSpace()
+    owned.space = 19
+    owned.executable = str(configured)
+    observations = []
+
+    def run(_executable, script, **_kwargs):
+        # The handle retains the creation-time agent snapshot even when live
+        # control has changed. Resolve/finish calls are the guarded effects.
+        harness = (
+            "const calls=[];"
+            "async function listTaskSpaces(){"
+            f"const state={json.dumps(ownership)};"
+            "if(state==='unreadable')throw Error('connection lost');"
+            "return state==='missing'?[]:[{id:19,ownership:state}];}"
+            "async function taskSpace(){calls.push('resolve');return {"
+            "ownership:'agent',async finish(){calls.push('finish');}};}"
+            "try{" + script + "}catch(e){}"
+            "console.log(JSON.stringify(calls));"
+        )
+        result = subprocess.run(["node", "-e", harness], capture_output=True,
+                                text=True, check=True, timeout=10)
+        observations.append(json.loads(result.stdout))
+        return result
+
+    monkeypatch.setattr(reader, "_run", run)
+    owned.close()
+    owned.close()
+    assert observations == [["resolve", "finish"] if ownership == "agent" else []]
+
+
+@pytest.mark.parametrize("code,expected", [
+    ("EGO_TASK_SPACE_USER_IN_CONTROL", "source_reader_not_agent_owned"),
+    ("EGO_TASK_SPACE_INACTIVE", "source_reader_not_agent_owned"),
+    ("EGO_OPERATION_FAILED", "browser_read_failed"),
+])
+@pytest.mark.parametrize("stage", ["resolve", "navigate", "extract"])
+@pytest.mark.parametrize("image", [False, True])
+def test_native_control_race_survives_discarded_cli_output(
+    configured, monkeypatch, code, expected, stage, image,
+):
+    # Inventory still says Agent, but a later SDK boundary denies control.
+    # Run the production script in a real child. Model Ego's hard-stop sink,
+    # which discards all result markers and does not print error_code.
+    real_run = subprocess.run
+    trace = []
+    def run(args, **kwargs):
+        harness = (
+            "const code=" + json.dumps(code) + ";const stage=" + json.dumps(stage) + ";"
+            "function denied(){const e=Error('native wording changed');e.error_code=code;throw e;}"
+            "async function listTaskSpaces(){return [{id:7,ownership:'agent'}];}"
+            "async function taskSpace(){if(stage==='resolve')denied();return {page(){return {"
+            "async goto(){if(stage==='navigate')denied();},async waitForFunction(){},"
+            "async evaluate(){denied();},async screenshot(){throw Error('capture forbidden');}};}};}"
+            "(async()=>{" + args[3] + "})().catch(()=>{process.exitCode=1;});"
+        )
+        child = real_run(["node", "-e", harness], **kwargs)
+        trace.append(child.returncode)
+        # Neither code nor an extraction sentinel survives the real SDK sink.
+        return subprocess.CompletedProcess(args, child.returncode, "", "SDK hard stop guidance")
+    monkeypatch.setattr(reader.subprocess, "run", run)
+    if image:
+        result = json.loads(reader.read_public_image(URL, 0)[0].text)
+    else:
+        result = reader.read_public_url(URL)
+    assert result["ok"] is False and result["error"] == expected
+    assert trace == [1]  # No retry, new space, claim, takeover, or capture.
+
+
+def test_creation_and_read_share_one_timeout_budget(configured, monkeypatch):
+    auto_config(monkeypatch)
+    clock = iter([0, 5, 29])
+    monkeypatch.setattr(reader.time, "monotonic", lambda: next(clock))
+    timeouts = []
+    def run(_args, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        return space_response(19) if len(timeouts) == 1 else response(extraction())
+    monkeypatch.setattr(reader.subprocess, "run", run)
+    assert reader.read_public_url(URL)["ok"]
+    assert timeouts == [25, 1]
+
+
+def test_stdio_hosts_create_isolated_spaces_and_clean_up_on_eof(configured, monkeypatch, tmp_path):
+    import asyncio
+    import os
+    import sys
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+    auto_config(monkeypatch)
+    log = tmp_path / "calls.jsonl"
+    configured.write_text("#!" + sys.executable + "\n" +
+        "import json,os,sys\nfrom pathlib import Path\n" +
+        "script=sys.argv[-1]\n" +
+        f"with Path({str(log)!r}).open('a') as f: f.write(json.dumps([os.getppid(),script])+'\\n')\n" +
+        "if 'taskSpace(\"LoopX public-source reader ' in script:\n" +
+        " print('LOOPX_READER_SPACE:'+json.dumps({'id':os.getppid()}),file=sys.stderr)\n" +
+        "elif 'finish({keep:[]})' not in script:\n" +
+        " print('LOOPX_PUBLIC_SOURCE:'+" + repr(response(extraction()).stdout.split(":", 1)[1]) + ",file=sys.stderr)\n")
+    configured.chmod(0o700)
+    async def host():
+        params = StdioServerParameters(command=sys.executable,
+            args=["-m", "loopx.extensions.ego_source_reader"], env=dict(os.environ))
+        async with stdio_client(params) as (incoming, outgoing):
+            async with ClientSession(incoming, outgoing) as session:
+                await session.initialize()
+                for _ in range(2):
+                    result = await session.call_tool("read_public_url", {"url": URL})
+                    assert json.loads(result.content[0].text)["ok"]
+    async def journey():
+        await asyncio.gather(host(), host())
+    asyncio.run(journey())
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    hosts = {pid for pid, _ in calls}
+    assert len(hosts) == 2
+    for pid in hosts:
+        scripts = [script for owner, script in calls if owner == pid]
+        assert len(scripts) == 4
+        assert sum('taskSpace("LoopX public-source reader ' in s for s in scripts) == 1
+        assert all(f"taskSpace({pid})" in s for s in scripts[1:])
+        assert "listTaskSpaces()" in scripts[-1] and "finish({keep:[]})" in scripts[-1]
 
 
 @pytest.mark.parametrize("value", [
@@ -164,14 +551,13 @@ def test_duplicate_or_non_json_result_is_rejected():
     assert not reader._result(output, output, URL)["ok"]
 
 
-def test_url_is_json_data_and_fence_precedes_dom_read(configured):
+def test_url_is_json_data_and_normalized_before_navigation(configured):
     config = reader.ReaderConfig.from_environment()
     url = 'https://example.com/?q=";process.exit();//'
     script = reader._script(config, url)
     assert "requestedUrl=" + json.dumps(url) in script
     assert "await p.goto(target.href)" in script
     assert script.index("new URL(requestedUrl)") < script.index("await p.goto(")
-    assert script.index("current.href!==request.url") < script.index("document.body")
 
 
 def png(width=2, height=2):
@@ -291,7 +677,8 @@ def test_text_read_exposes_image_indices_without_claiming_visual_read(configured
     assert result["images_read"] is False
 
 
-def run_generated_script(config, url, image, path, *, redirect=None):
+def run_generated_script(config, url, image, path, *, redirect=None, readiness=None, ownership="agent",
+                         text="Source evidence"):
     """Execute the production script in Node, without the user's browser/Page."""
     import shutil
     node = shutil.which("node")
@@ -301,27 +688,82 @@ def run_generated_script(config, url, image, path, *, redirect=None):
               else reader._script(config, url))
     harness = """
 const vm=require('node:vm'),fs=require('node:fs');
-let href='',domReads=0,captures=0;
-const image={alt:'figure',currentSrc:'https://example.com/image.png',complete:true,
+let href='',domReads=0,captures=0,loaded=!readiness||readiness.startsWith('sidebar_busy')||readiness==='empty_sibling_article';
+const image={alt:'figure',currentSrc:'https://example.com/image.png',
+ get complete(){return !readiness?.startsWith('image_')||loaded;},
  naturalWidth:2,naturalHeight:2,scrollIntoView(){},
+ closest(){return null;},
+ getClientRects(){return [1];},
  getBoundingClientRect(){return {left:0,top:0,width:2,height:2};}};
-const doc=new Proxy({title:'Article',body:{innerText:'Source evidence'},images:[image]},
+const spinner={getClientRects(){return [1];}};
+const root={get innerText(){return readiness?.startsWith('image_')?'':loaded?text:'Navigation Loading';},
+ getClientRects(){return [1];},
+ getAttribute(){return (readiness==='busy'&&!loaded)||readiness==='main_busy_with_readable_article'?'true':null;},
+ closest(selector){return selector==='[aria-busy="true"]'&&this.getAttribute('aria-busy')==='true'?this:null;},
+ querySelectorAll(selector){if(selector==='article')return articles;
+ if(selector==='img')return readiness?.startsWith('navigation_')&&!loaded?[]:[image];
+ return readiness?.startsWith('navigation_')?[]:readiness==='sidebar_busy_inside_main'?[sidebar]:loaded?[]:[spinner];}};
+spinner.closest=()=>null;
+const article={innerText:text,getAttribute(){return null;},closest(){return null;},getClientRects(){return [1];},
+ querySelectorAll(selector){return selector==='img'?[image]:[];}};
+const emptyArticle={innerText:'',getAttribute(){return null;},closest(){return null;},querySelectorAll(){return [];}};
+const sidebar={innerText:'Loading sidebar',getAttribute(){return 'true';},
+ closest(selector){return selector==='[aria-busy="true"]'?this:{};},
+ querySelectorAll(){return [spinner];},getClientRects(){return [1];}};
+const sidebarFixture=readiness?.startsWith('sidebar_busy');
+let articles=readiness==='article_with_sidebar'?[article]:[];
+if(sidebarFixture)articles=readiness==='sidebar_busy_inside_main'?[sidebar]:[];
+if(readiness==='sidebar_busy_with_primary_article')articles=[sidebar,article];
+if(readiness==='main_busy_with_readable_article'){
+ articles=[article];article.closest=selector=>selector==='[aria-busy="true"]'?root:null;
+}
+if(readiness==='article_busy_with_main_chrome'){
+ articles=[sidebar];sidebar.closest=selector=>selector==='[aria-busy="true"]'?sidebar:null;
+}
+const doc=new Proxy({title:'Article',body:root,
+ createRange(){return {selectNodeContents(){},getClientRects(){return [1];}};},
+ createTreeWalker(node){
+  const chromeOnly=readiness?.startsWith('navigation_')&&!loaded;
+  const parent=chromeOnly?{closest(){return {};},getClientRects(){return [1];}}:node;
+  let visited=false;return {nextNode(){if(visited)return null;visited=true;
+   return {textContent:node.innerText,parentElement:parent};}};},
+ querySelectorAll(selector){return selector==='main,[role="main"]'?[root]:[...articles,...(sidebarFixture?[sidebar]:[])];},
+ querySelector(selector){if(readiness==='article_with_sidebar')return selector==='article'?article:root;
+ if(readiness==='empty_sibling_article')return selector==='article'?emptyArticle:root;
+ if(sidebarFixture||readiness==='article_busy_with_main_chrome')return selector==='article'?sidebar:root;
+ if(readiness==='main_busy_with_readable_article')return selector==='article'?article:root;
+ return readiness&&selector!=='article'?root:null;},images:[image]},
  {get(target,key){domReads++;return target[key];}});
 const page={async goto(url){href=new URL(redirect||url).href;},
  async evaluate(fn,arg){return vm.runInNewContext('('+fn.toString()+')(arg)',
- {URL,location:{href},document:doc,arg,scrollX:0,scrollY:0});},
- async waitForFunction(fn,arg){if(!await this.evaluate(fn,arg))throw Error('not loaded');},
+ {URL,location:{href},document:doc,arg,scrollX:0,scrollY:0,NodeFilter:{SHOW_TEXT:4},
+ getComputedStyle(){return {visibility:'visible'};}});},
+ async waitForFunction(fn,arg){
+  if(typeof arg==='string'&&readiness){
+   const initial=await this.evaluate(fn,arg);
+   if(readiness==='article_with_sidebar'||sidebarFixture||readiness==='empty_sibling_article'){if(!initial)throw Error('readable content delayed by sidebar');loaded=true;}
+   else{
+    if(initial)throw Error('loading content accepted');
+    if(readiness==='timeout'||readiness==='image_timeout'||readiness==='navigation_timeout'||readiness==='main_busy_with_readable_article'||readiness==='article_busy_with_main_chrome')throw Error('page.waitForFunction timed out after 10000ms; private diagnostic');
+    if(readiness==='user_control')throw Error('User took control');
+    loaded=true;
+   }
+  }
+  if(!await this.evaluate(fn,arg))throw Error('not loaded');},
  async screenshot(options){captures++;fs.writeFileSync(options.path,Buffer.from(pixels,'base64'));}};
-async function taskSpace(){return {page(){return page;}};}
-(async()=>{await eval('(async()=>{'+source+'})()');
- console.log('SCRIPT_OBSERVATION:'+JSON.stringify({domReads,captures}));})()
- .catch(error=>{console.error(error);process.exitCode=1;});
+async function listTaskSpaces(){return [{id:spaceId,ownership}];}
+async function taskSpace(){if(ownership!=='agent')throw Error('Page must not resolve while user-owned');return {page(){return page;}};}
+(async()=>{await eval('(async()=>{'+source+'})()');})()
+ .catch(error=>{console.error(error);process.exitCode=1;})
+ .finally(()=>console.log('SCRIPT_OBSERVATION:'+JSON.stringify({domReads,captures})));
 """
     import base64
     inputs = ("const source=" + json.dumps(script) + ";const redirect=" + json.dumps(redirect)
+              + ";const readiness=" + json.dumps(readiness) + ";const text=" + json.dumps(text)
+              + ";const ownership=" + json.dumps(ownership) + ";const spaceId=" + json.dumps(config.task_space)
               + ";const pixels=" + json.dumps(base64.b64encode(png()).decode()) + ";")
     result = subprocess.run([node, "-e", inputs + harness], capture_output=True,
-                            text=True, timeout=10, check=True)
+                            text=True, timeout=10, check=ownership == "agent")
     observed = next(line.split(":", 1)[1] for line in result.stdout.splitlines()
                     if line.startswith("SCRIPT_OBSERVATION:"))
     decoded = (reader._image_result(result.stdout, result.stderr, url, 0, str(path)) if image
@@ -330,10 +772,125 @@ async function taskSpace(){return {page(){return page;}};}
 
 
 @pytest.mark.parametrize("image", [False, True])
+@pytest.mark.parametrize("ownership", ["agentDelegatedToUser", "user", "inactive", "unassigned", "unknown"])
+def test_live_user_control_stops_before_page_access_and_can_resume_without_chat(
+    configured, tmp_path, monkeypatch, image, ownership,
+):
+    config = reader.ReaderConfig.from_environment()
+    result, observation = run_generated_script(config, URL, image, tmp_path / "image.png", ownership=ownership)
+    assert result == {"ok": False, "error": "source_reader_not_agent_owned"}
+    assert observation == {"domReads": 0, "captures": 0}
+    # The next tool call sees control returned through Ego itself, with no
+    # textual confirmation, takeover or replacement of the original space.
+    resumed, observed = run_generated_script(config, URL, image, tmp_path / "image.png")
+    assert resumed["ok"] and observed["domReads"] > 0
+    script = reader._image_script(config, URL, 0, str(tmp_path / "image.png")) if image else reader._script(config, URL)
+    assert "takeOverTaskSpace" not in script and "claimTaskSpace" not in script
+    monkeypatch.setattr(reader, "_run", lambda *_a, **_k: subprocess.CompletedProcess(
+        [], 1, reader.MARKER + json.dumps({"error": "source_reader_not_agent_owned"}), "private diagnostic"))
+    assert reader._read(URL, 0 if image else None, str(tmp_path / "image.png")) == result
+
+
+@pytest.mark.parametrize("image", [False, True])
+@pytest.mark.parametrize("readiness", ["loading", "busy", "article_with_sidebar"])
+def test_rendered_content_waits_without_accepting_navigation_shell(
+    configured, tmp_path, image, readiness,
+):
+    result, observation = run_generated_script(
+        reader.ReaderConfig.from_environment(), URL, image, tmp_path / "image.png",
+        readiness=readiness,
+    )
+    assert result["ok"]
+    if not image:
+        assert result["text"] == "Source evidence"
+    assert observation["captures"] == int(image)
+
+
+@pytest.mark.parametrize("image", [False, True])
+def test_readiness_timeout_returns_no_shell_or_image(configured, tmp_path, image):
+    result, observation = run_generated_script(
+        reader.ReaderConfig.from_environment(), URL, image, tmp_path / "image.png",
+        readiness="timeout",
+    )
+    assert result == {"ok": False, "error": "source_content_not_ready"}
+    assert observation["captures"] == 0
+
+
+@pytest.mark.parametrize("image", [False, True])
+def test_readiness_does_not_swallow_user_control(configured, tmp_path, image):
+    with pytest.raises(subprocess.CalledProcessError):
+        run_generated_script(
+            reader.ReaderConfig.from_environment(), URL, image, tmp_path / "image.png",
+            readiness="user_control",
+        )
+
+
+def test_short_readable_content_has_no_length_threshold(configured, tmp_path):
+    result, _ = run_generated_script(
+        reader.ReaderConfig.from_environment(), URL, False, tmp_path / "image.png", text="Hi",
+    )
+    assert result["ok"] and result["text"] == "Hi"
+
+
+@pytest.mark.parametrize("readiness,ok", [(None, True), ("image_loading", True), ("image_timeout", False)])
+def test_image_only_content_is_readable_after_pixels_load(configured, tmp_path, readiness, ok):
+    result, observation = run_generated_script(
+        reader.ReaderConfig.from_environment(), URL, True, tmp_path / "image.png",
+        readiness=readiness, text="",
+    )
+    assert result["ok"] is ok
+    assert observation["captures"] == int(ok)
+    if not ok:
+        assert result["error"] == "source_content_not_ready"
+
+
+@pytest.mark.parametrize("image", [False, True])
+@pytest.mark.parametrize("readiness", [
+    "sidebar_busy_before_main", "sidebar_busy_inside_main", "sidebar_busy_with_primary_article",
+    "empty_sibling_article",
+])
+def test_busy_sidebar_article_does_not_block_primary_content(configured, tmp_path, image, readiness):
+    result, observation = run_generated_script(
+        reader.ReaderConfig.from_environment(), URL, image, tmp_path / "image.png",
+        readiness=readiness, text="" if image else "Primary content",
+    )
+    assert result["ok"]
+    assert observation["captures"] == int(image)
+
+
+@pytest.mark.parametrize("image", [False, True])
+@pytest.mark.parametrize("readiness,ok", [("navigation_loading", True), ("navigation_timeout", False)])
+def test_navigation_text_does_not_make_empty_content_ready(configured, tmp_path, image, readiness, ok):
+    result, observation = run_generated_script(
+        reader.ReaderConfig.from_environment(), URL, image, tmp_path / "image.png",
+        readiness=readiness,
+    )
+    assert result["ok"] is ok
+    assert observation["captures"] == int(image and ok)
+    if ok and not image:
+        assert result["text"] == "Source evidence"
+    if not ok:
+        assert result["error"] == "source_content_not_ready"
+
+
+@pytest.mark.parametrize("image", [False, True])
+@pytest.mark.parametrize("readiness", ["main_busy_with_readable_article", "article_busy_with_main_chrome"])
+def test_primary_busy_state_cannot_be_bypassed_by_readable_chrome(configured, tmp_path, image, readiness):
+    result, observation = run_generated_script(
+        reader.ReaderConfig.from_environment(), URL, image, tmp_path / "image.png",
+        readiness=readiness,
+    )
+    assert result == {"ok": False, "error": "source_content_not_ready"}
+    assert observation["captures"] == 0
+
+
+@pytest.mark.parametrize("image", [False, True])
 @pytest.mark.parametrize("url,canonical", [
     ("https://example.com/a/../", "https://example.com/"),
     ('https://example.com/?q="x"', "https://example.com/?q=%22x%22"),
     ("https://example.com/a/%2e%2e/article", "https://example.com/article"),
+    ("https://example.com/#/blog/article", "https://example.com/#/blog/article"),
+    ("https://example.com/article#section-2", "https://example.com/article#section-2"),
 ])
 def test_browser_equivalent_urls_keep_exact_resource_fence(configured, tmp_path, image, url, canonical):
     result, observation = run_generated_script(reader.ReaderConfig.from_environment(), url,
@@ -351,6 +908,33 @@ def test_generated_scripts_reject_real_redirect_before_dom(configured, tmp_path,
                                                image, tmp_path / "image.png", redirect=redirect)
     assert result == {"ok": False, "error": "source_url_changed"}
     assert observation == {"domReads": 0, "captures": 0}
+
+
+@pytest.mark.parametrize("image", [False, True])
+@pytest.mark.parametrize("redirect", [
+    "https://example.com/", "https://example.com/#/blog/different",
+])
+def test_fragment_routes_are_fenced_before_text_or_pixels(configured, tmp_path, image, redirect):
+    url = "https://example.com/#/blog/article"
+    result, observation = run_generated_script(reader.ReaderConfig.from_environment(), url,
+                                               image, tmp_path / "image.png", redirect=redirect)
+    assert result == {"ok": False, "error": "source_url_changed"}
+    assert observation == {"domReads": 0, "captures": 0}
+
+
+def test_public_read_preserves_fragment_without_changing_origin_authority(configured, monkeypatch):
+    url = "https://example.com/#/blog/article"
+    calls = []
+    def run(_args, **_kwargs):
+        calls.append(_args[-1])
+        return response(extraction(url=url, requested_url=url, canonical_url=url))
+    monkeypatch.setattr(reader.subprocess, "run", run)
+    result = reader.read_public_url(url)
+    assert result["ok"] and result["url"] == result["requested_url"] == url
+    assert "requestedUrl=" + json.dumps(url) in calls[0]
+    assert reader._url(url)[1] == "https://example.com"
+    assert reader.read_public_url("https://other.test/#https://example.com")["error"] == "source_origin_not_authorized"
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("field,value", [("requested_url", "https://example.com/different"),

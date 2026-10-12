@@ -4,17 +4,12 @@ import argparse
 from collections.abc import Callable
 from pathlib import Path
 
-from ..control_plane.coordination.local_authority_shadow_adapter import (
-    CLI_DRAIN_LOCK_TIMEOUT_SECONDS,
-    drain_local_authority_shadow_outbox,
-    effective_runtime_root,
-    local_authority_shadow_status,
-)
-from ..control_plane.coordination.local_authority_shadow_outbox import OutboxError
+from ..paths import effective_runtime_root
 from ..file_lock import LockAcquireTimeoutError
 
 
 AUTHORITY_SHADOW_CLI_SCHEMA = "loopx_authority_shadow_cli_v0"
+CLI_DRAIN_LOCK_TIMEOUT_SECONDS = 5.0
 CLI_DRAIN_MAX_ENTRIES = 256
 CLI_DRAIN_BUDGET_SECONDS = 30.0
 
@@ -152,43 +147,53 @@ def handle_authority_shadow_command(
     action = str(getattr(args, "authority_shadow_command", None))
     payload: dict[str, object]
     try:
-        # The same resolver every writer hook uses, so drain and status address
-        # the lineage those hooks wrote.
-        runtime_root = effective_runtime_root(registry_path, runtime_root_arg)
-        if action == "drain":
-            if args.max_entries < 1:
-                raise ValueError("--max-entries must be at least 1")
-            result = drain_local_authority_shadow_outbox(
-                registry_path=registry_path,
-                runtime_root=runtime_root,
-                goal_id=args.goal_id,
-                max_entries=args.max_entries,
-                budget_seconds=args.budget_seconds,
-                lock_timeout_seconds=args.lock_timeout_seconds,
-            )
-            payload = {
-                "schema_version": AUTHORITY_SHADOW_CLI_SCHEMA,
-                "action": "drain",
-                **result.to_payload(),
-            }
-        else:
-            payload = {
-                "schema_version": AUTHORITY_SHADOW_CLI_SCHEMA,
-                **local_authority_shadow_status(
+        from ..control_plane.coordination.local_authority_shadow_readback import (
+            local_authority_shadow_status,
+        )
+        from ..control_plane.coordination.local_authority_shadow_history import OutboxError
+
+        try:
+            # The same resolver every writer hook uses, so drain and status address
+            # the lineage those hooks wrote.
+            runtime_root = effective_runtime_root(registry_path, runtime_root_arg)
+            if action == "drain":
+                from ..control_plane.coordination.local_authority_shadow_adapter import (
+                    drain_local_authority_shadow_outbox,
+                )
+
+                if args.max_entries < 1:
+                    raise ValueError("--max-entries must be at least 1")
+                result = drain_local_authority_shadow_outbox(
                     registry_path=registry_path,
                     runtime_root=runtime_root,
                     goal_id=args.goal_id,
-                ),
+                    max_entries=args.max_entries,
+                    budget_seconds=args.budget_seconds,
+                    lock_timeout_seconds=args.lock_timeout_seconds,
+                )
+                payload = {
+                    "schema_version": AUTHORITY_SHADOW_CLI_SCHEMA,
+                    "action": "drain",
+                    **result.to_payload(),
+                }
+            else:
+                payload = {
+                    "schema_version": AUTHORITY_SHADOW_CLI_SCHEMA,
+                    **local_authority_shadow_status(
+                        registry_path=registry_path,
+                        runtime_root=runtime_root,
+                        goal_id=args.goal_id,
+                    ),
+                }
+        except OutboxError as exc:
+            payload = {
+                "ok": False,
+                "schema_version": AUTHORITY_SHADOW_CLI_SCHEMA,
+                "action": action,
+                "goal_id": args.goal_id,
+                "error": str(exc),
+                "error_code": exc.reason_code,
             }
-    except OutboxError as exc:
-        payload = {
-            "ok": False,
-            "schema_version": AUTHORITY_SHADOW_CLI_SCHEMA,
-            "action": action,
-            "goal_id": args.goal_id,
-            "error": str(exc),
-            "error_code": exc.reason_code,
-        }
     except LockAcquireTimeoutError as exc:
         payload = {
             "ok": False,

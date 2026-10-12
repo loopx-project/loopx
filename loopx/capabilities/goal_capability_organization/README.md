@@ -58,6 +58,44 @@ References and caller observations are **not authenticated execution grants**;
 re-read the original owners before acting. Advice never authorizes a provider
 call, installation, configuration mutation, order, signing or transfer.
 
+### Trial feedback through the same planning entry
+
+Trial proposals now return `trial_basis_digest`. After its original owner records
+the outcome, the caller can attach optional `trial_feedback` to the same candidate
+in `--capability-candidate-json`, for example:
+
+```json
+{"outcome_ref":"owner/outcome-v1","trial_basis_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","status":"failed"}
+```
+
+Replace the illustrative digest with the previous proposal's digest. The planning provider
+hashes UTF-8 `JSON.stringify` of an object in this order: `goal_id`, `agent_id`,
+`todo_id`, `gap_ref`, `capability_id`, `candidate_revision`, `configuration_ref`,
+`effect_ref`, `rollback_ref`. Absent scope fields or revision are `null`.
+`candidate_revision` is optional; it and `outcome_ref` follow the existing bounded
+reference format. The digest has 64 lowercase hexadecimal characters after
+`sha256:`. Existing applicability and enabled-state requirements still apply.
+
+| Caller-declared feedback | Advice for that candidate |
+| --- | --- |
+| Exact basis, `failed` or `no_evidence` | Continue work; do not propose the unchanged trial again |
+| Exact basis, `succeeded` | Inspect the original owner's outcome; no utility or adoption inference |
+| Different scope, revision or reference | Inspect stale feedback with the original owner |
+| No feedback | Preserve the existing trial proposal behavior |
+| Malformed feedback | Isolate optional advice failure; a fresh owner observation can recover it |
+
+A later independent candidate without feedback remains eligible. An enabled
+direct candidate wins before feedback validation; off skips feedback entirely.
+This deterministic advice consumer neither verifies receipts nor persists a
+retry gate. The digest identifies declarations, not their authenticity. Renaming
+a revision does not prove improvement; original admission and effect review
+remain required. Records, retirement and rollback stay with their existing owners.
+
+Scope refinement references
+[Rethinking the Evaluation of Harness Evolution for Agents](https://arxiv.org/html/2607.12227v3):
+bounded tool feedback, task improvement, transfer and total development/evaluation
+cost need separate evidence. Deterministic tests establish no empirical utility.
+
 Retain the use/result/effect and retirement decision through existing Todo,
 outcome and capability owners. A useful result must improve a declared outcome
 or cost against its baseline; invocation, a PR or a successful test is not utility.

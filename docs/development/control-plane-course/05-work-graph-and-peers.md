@@ -195,30 +195,33 @@ coordination:
       requires_reason: true
 ```
 
-`loopx/control_plane/todos/mutation_authority.py::authorize_todo_lifecycle_mutation`
-只在 actor 与 claim owner 不同时读取这项授权：
+生命周期决策由
+`loopx/control_plane/coordination/todo_lifecycle_decision.ts` 拥有。多 peer 路径先
+检查注册、exclusion 和 binding；只有 claim owner 不一致的拒绝可由动作级 grant 处理：
 
-```python
-if claim_owner and claim_owner != normalized_actor:
-    grant = todo_lifecycle_authority_for_goal(
-        load_goal_from_registry(registry_path, goal_id),
-        agent_id=normalized_actor,
-        registered_agents=registered_agents,
-    )
-    if grant is None:
-        raise ValueError("actor cannot mutate another peer's claimed todo")
-    if effective_action not in grant["actions"]:
-        raise ValueError("lifecycle action is not delegated")
-    normalized_reason = str(authority_reason or "").strip()
-    if grant["requires_reason"] and not normalized_reason:
-        raise ValueError("delegated override requires --authority-reason")
-    return {
-        "mode": "delegated_orchestration_override",
-        "authority_source": "coordination.todo_lifecycle_authority",
-        "authority_action": effective_action,
-        "authority_reason": normalized_reason,
-    }
+```typescript
+const rejection = registeredTodoMutationRejection(todo, actor, registered);
+if (rejection !== null && rejection !== "claim_owner_mismatch") {
+  return result("rejected", rejection);
+}
+if (rejection === "claim_owner_mismatch") {
+  const grant = request.lifecycle_grants.find((candidate) => candidate.agent_id === actor);
+  if (grant === undefined) return result("rejected", "claim_owner_mismatch");
+  if (!grant.actions.includes(request.authority_action)) {
+    return result("rejected", "delegation_action_not_granted");
+  }
+  if (grant.requires_reason && !String(request.authority_reason ?? "").trim()) {
+    return result("rejected", "delegation_reason_required");
+  }
+  return { mode: "delegated_orchestration_override", ownershipGate: "not_required" };
+}
 ```
+
+这是同一 `authority` 决策中的片段，不是新的调用接口。未晋升源适配器
+`mutation_authority.py::authorize_todo_lifecycle_mutation` 仍在 owner mismatch 后
+读取并规范化 registry grant，再通过 `authority_core.decide` 调用同一 TS owner；
+canonical 事务也复用该 owner。Python facts、grant 校验和 receipt 投影保留，
+不再经由无人调用的单项 grant 查询。
 
 这份 grant 有四个边界：
 
@@ -730,18 +733,26 @@ class TodoContinuationPolicy(str, Enum):
 
 因此 `open` 不等于“可执行”：一个 open `continuous_monitor` 可能尚未 due，一个 open `user_gate` 等待的是用户，一个 open `advancement_task` 还可能被 capability 或 workspace 卡住。
 
-再看 continuation 的默认值：
+再看 `loopx/control_plane/todos/completion_policy.ts` 中 continuation 的默认值。
+私有 `continuationPolicy` 在 `resolveTodoCompletionPolicy` 整项完成策略内使用：
 
-```python
-def resolve_todo_continuation_policy(value, *, action_kind=None):
-    del action_kind
-    explicit = normalize_todo_continuation_policy(value)
-    if explicit:
-        return TodoContinuationPolicy(explicit)
-    return TodoContinuationPolicy.INDEPENDENT_HANDOFF
+```typescript
+function continuationPolicy(
+  value: string | null,
+): typeof CONTINUATION_POLICIES[number] {
+  const candidate = stripPythonWhitespace(String(value ?? "")).toLowerCase();
+  return CONTINUATION_POLICIES.includes(
+      candidate as typeof CONTINUATION_POLICIES[number],
+    )
+    ? candidate as typeof CONTINUATION_POLICIES[number]
+    : "independent_handoff";
+}
 ```
 
-默认 `independent_handoff` 是刻意的：完成者不会因为“刚做完上一项”就自动拥有下一项。只有 `same_agent_non_delivery` 这种明确的同 agent 连续工作才保留 owner。
+默认 `independent_handoff` 是刻意的：完成者不会因为“刚做完上一项”就自动拥有下一项。
+仅在提供新 Agent Todo、未显式指定其 owner 且选择 `same_agent_non_delivery` 时，
+完成策略才继承当前 `claimed_by`。显式 successor owner 仍受注册和 exclusion 校验。
+Python continuation 枚举和 metadata 规范化保留用于编解码；无生产调用的旧策略查询已退役。
 
 ### 2. Live runtime model 只有 peer；旧 hierarchy 只是 migration input
 
@@ -855,7 +866,7 @@ if current_workspace:
 
 ### 断点练习
 
-1. 在 `resolve_todo_continuation_policy` 观察空值为何落到 independent handoff。
+1. 在 `completion_policy.ts::resolveTodoCompletionPolicy` 观察空值为何落到 independent handoff，以及 same-agent 继承需要哪些条件。
 2. 在 `build_capability_gate:301` 改变 `available_capabilities`，只比较 runnable/blocked id。
 3. 在 canonical checkout 与 linked worktree 各跑一次 quota，比较 `agent_workspace_guard`。
 4. 给同一 todo 同时设置 `claimed_by` 与相同 agent 的 `excluded_agents`，确认 contract fail closed。
@@ -878,6 +889,8 @@ if current_workspace:
 4. `loopx/control_plane/work_items/lifecycle.py`
 5. `loopx/control_plane/agents/runtime_model.py`
 6. `loopx/control_plane/todos/mutation_authority.py`
+   与 `loopx/control_plane/coordination/todo_lifecycle_decision.ts`：对照源适配器 facts 与共享生命周期决策。
+   `loopx/control_plane/todos/completion_policy.ts`：对照完整 successor ownership 策略。
 7. `loopx/control_plane/agents/material_frontier.py`
 8. `loopx/control_plane/agents/material_handoff.py`
 9. `loopx/control_plane/work_items/`

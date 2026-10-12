@@ -19,7 +19,8 @@ from loopx.control_plane.todos.completion_validation_projection import (
 )
 from loopx.cli import build_parser
 from loopx.cli_commands import todo as todo_command
-from loopx.control_plane.todos import provider_projection, active_state_editing
+from loopx.control_plane.todos import provider_projection
+from loopx.control_plane.runtime import document_io
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from canonical_authority_fixture import initialize_canonical_authority
@@ -669,7 +670,7 @@ def test_project_markdown_cli_publishes_with_atomic_replace(
     original_mode = stat.S_IMODE(state_path.stat().st_mode)
     parent_syncs: list[object] = []
     monkeypatch.setattr(
-        active_state_editing,
+        document_io,
         "fsync_state_directory",
         lambda path: parent_syncs.append(path),
     )
@@ -693,14 +694,14 @@ def test_project_markdown_cli_publishes_with_atomic_replace(
         lambda **_kwargs: (object(), tmp_path, state_path),
     )
     replacements: list[tuple[object, object]] = []
-    real_replace = active_state_editing.os.replace
+    real_replace = document_io.os.replace
 
     def record_replace(source, target) -> None:
         if Path(target) == state_path:
             replacements.append((source, target))
         real_replace(source, target)
 
-    monkeypatch.setattr(active_state_editing.os, "replace", record_replace)
+    monkeypatch.setattr(document_io.os, "replace", record_replace)
 
     result = todo_command.handle_todo_command(
         build_parser().parse_args(
@@ -735,7 +736,7 @@ def test_atomic_projection_failure_preserves_original(monkeypatch, tmp_path, ope
     state_path = tmp_path / "ACTIVE_GOAL_STATE.md"
     state_path.write_bytes(b"original\r\n")
     opened = []
-    real_fdopen = active_state_editing.os.fdopen
+    real_fdopen = document_io.os.fdopen
 
     def capture_handle(*args, **kwargs):
         handle = real_fdopen(*args, **kwargs)
@@ -745,10 +746,10 @@ def test_atomic_projection_failure_preserves_original(monkeypatch, tmp_path, ope
     def fail(*_args, **_kwargs):
         raise OSError("injected pre-publication failure")
 
-    monkeypatch.setattr(active_state_editing.os, "fdopen", capture_handle)
-    monkeypatch.setattr(active_state_editing.os, operation, fail)
+    monkeypatch.setattr(document_io.os, "fdopen", capture_handle)
+    monkeypatch.setattr(document_io.os, operation, fail)
     with pytest.raises(OSError, match="injected pre-publication failure"):
-        active_state_editing.atomic_write_state_text(state_path, "replacement\n")
+        document_io.atomic_write_state_text(state_path, "replacement\n")
     assert state_path.read_bytes() == b"original\r\n"
     assert opened and all(handle.closed for handle in opened)
     assert list(tmp_path.iterdir()) == [state_path]

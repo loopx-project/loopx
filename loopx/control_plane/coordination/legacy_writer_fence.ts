@@ -35,6 +35,9 @@ export {
   LEGACY_COORDINATION_WRITE_CHECK_RESULT_SCHEMA,
 };
 
+/** A cold import pins its own source and operation; it has no shadow revision. */
+export const COLD_SOURCE_IMPORT_WRITER_FENCE_SCHEMA = "loopx_cold_source_import_writer_fence_v0";
+
 // Caller adapter: remediation is rendered here, never inside
 // checkLegacyCoordinationWriteAllowed, which owns only the stable typed reason
 // and the fence binding facts.  Tokens are substituted in one pass, so a data
@@ -107,6 +110,15 @@ export function legacyCoordinationWriterFencePath(root: string, goalId: string):
 
 export function decodeLegacyCoordinationWriterFence(value: unknown): JsonObject {
   const fence = canonicalAuthorityObject(value, "legacy coordination writer fence");
+  if (fence.schema_version === COLD_SOURCE_IMPORT_WRITER_FENCE_SCHEMA) {
+    if (fence.state !== "engaged" || !hasExactAuthorityKeys(fence,
+        ["schema_version", "state", "goal_id", "fence_id", "import_operation_id", "import_plan_sha256"]) ||
+        !BARE_SHA256_PATTERN.test(String(fence.import_plan_sha256))) {
+      throw new Error("Invalid cold source import writer fence");
+    }
+    for (const key of ["goal_id", "fence_id", "import_operation_id"]) requireAuthorityStoreId(fence[key], key);
+    return fence;
+  }
   if (fence.schema_version === NEW_GOAL_WRITER_FENCE_SCHEMA) {
     if (fence.state !== "engaged" || !hasExactAuthorityKeys(fence,
         ["schema_version", "state", "goal_id", "fence_id", "creation_operation_id", "creation_identity_sha256", "creation_completed"]) ||

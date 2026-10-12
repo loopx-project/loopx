@@ -12,6 +12,7 @@ import json
 from typing import Any
 
 from ..quota.turn_envelope import turn_envelope_action_signature_document
+from .driver import selected_turn_todo
 
 LOOPX_TURN_HOST_REQUEST_SCHEMA = "loopx_turn_host_request_v0"
 LOOPX_TURN_RESULT_SCHEMA = "loopx_turn_result_v0"
@@ -88,6 +89,16 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
         "write_scope": list(write_scope) if isinstance(write_scope, list) else [],
         "workspace_guard": _mapping(boundary.get("workspace_guard")),
     }
+    if isinstance(envelope.get("work_context"), Mapping):
+        authority["work_context"] = dict(envelope["work_context"])
+    selected = selected_turn_todo(envelope)
+    if selected:
+        # Both the declaration and a possible exact-text alias are signed.
+        # Do not replace a complete task with the shorter primary-action label.
+        if selected.get("text_ref") == "action.recommended_action":
+            selected = {**selected, "text": action.get("recommended_action")}
+            selected.pop("text_ref")
+        authority["selected_todo"] = selected
     unavailable = _mapping(_mapping(envelope.get("contract_capsule")).get("unavailable_context"))
     if unavailable:
         authority["unavailable_context"] = unavailable
@@ -123,7 +134,8 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
     return (
         "You are executing one bounded LoopX-governed work segment.\n"
         "The JSON below is the complete host authority for this Turn. Execute "
-        "primary_action only after required_reads, write only inside write_scope, "
+        "primary_action only after reading work_context and any remaining required_reads. "
+        "Do not repeat reads already fulfilled in work_context. Write only inside write_scope, "
         "and obey workspace_guard. Do not infer authority from other prose.\n\n"
         f"{context_instruction}"
         f"Turn authority JSON:\n{authority_json}\n\n"
@@ -135,7 +147,19 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         "- summary: what changed or why stopped (<=400 chars)\n"
         "- recommended_action: the bounded follow-up recommendation (<=1200 chars)\n"
         "- next_action: the concrete next step (<=1200 chars)\n"
-        "- vision_unchanged_reason: why the goal path is unchanged (<=240 chars)\n"
+        "- vision_unchanged_reason: why a material result's goal path is unchanged "
+        "(<=240 chars)\n"
+        "For material result kinds (validated_progress, repair_required, and "
+        "replan_required), describe the path outcome. For a material goal-path "
+        "change, set path_delta_mode to material_replan, "
+        "result_kind to replan_required, and agent_vision_json to a JSON-encoded "
+        "bounded goal_vision_replan_contract_v0 packet whose path_delta is "
+        "goal_path_delta_v0 with outcome replan; leave vision_unchanged_reason "
+        "empty. For unchanged paths, set path_delta_mode to unchanged, omit "
+        "agent_vision_json, and provide vision_unchanged_reason. These fields "
+        "describe the result only; they grant no authority. For stop results "
+        "(wait, user_action_required, iteration_failed), omit both "
+        "path_delta_mode and agent_vision_json.\n"
         "Use repair_required when the task is sound but a recoverable defect "
         "blocks it, replan_required when this route is exhausted, and "
         "wait/user_action_required when no material write is safe, and "
@@ -268,15 +292,24 @@ def build_result(
 
     if kind in MATERIAL_KINDS:
         _complete_material_fields(result, kind)
-    # This adapter has no goal-vision packet, so the executor treats the path
-    # delta as unchanged and requires a bounded reason for material results.
-    result["vision_unchanged_reason"] = _bounded(
-        candidate.get("vision_unchanged_reason")
-        or (
+    for field in ("path_delta_mode", "agent_vision_json"):
+        if field in candidate:
+            # Preserve the structured executor input verbatim. The executor
+            # owns type, size, JSON and semantic validation.
+            result[field] = candidate[field]
+
+    has_path_delta = "path_delta_mode" in candidate or "agent_vision_json" in candidate
+    unchanged_reason = candidate.get("vision_unchanged_reason")
+    if unchanged_reason:
+        result["vision_unchanged_reason"] = _bounded(
+            unchanged_reason, limit=TEXT_LIMITS["vision_unchanged_reason"]
+        )
+    elif not has_path_delta:
+        # Keep the legacy material-without-packet behavior for older hosts.
+        result["vision_unchanged_reason"] = _bounded(
             "host reported material work without a goal vision replan packet"
             if kind in MATERIAL_KINDS
-            else "host reported no material change"
-        ),
-        limit=TEXT_LIMITS["vision_unchanged_reason"],
-    )
+            else "host reported no material change",
+            limit=TEXT_LIMITS["vision_unchanged_reason"],
+        )
     return result

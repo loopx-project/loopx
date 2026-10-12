@@ -1,7 +1,7 @@
 """Source I/O for the existing TS recommendation owner; no task write authority."""
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
@@ -76,6 +76,7 @@ def latest_bound_recommendation(runs: list[dict[str, Any]], agent_id: str) -> di
 def lane_recommendation_context(source: dict[str, Any], *, agent_id: str | None,
     selected_todo: dict[str, Any] | None, task: dict[str, Any] | None,
     prior_resolution: dict[str, Any] | None = None, write: dict[str, Any] | None = None,
+    settlement_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     # Reuse the existing frontier's semantic fact vocabulary. Display indexes,
     # selection reasons and bounded text decorations are not task revisions.
@@ -85,6 +86,7 @@ def lane_recommendation_context(source: dict[str, Any], *, agent_id: str | None,
         result = effect_runtime_result("work_item.refresh_recommendation.lane", {
             **source, "agent_id": agent_id, "selected_todo": selected_todo,
             "task_facts": facts, "prior_resolution": prior_resolution, "write": write,
+            "settlement_identity": dict(settlement_identity) if settlement_identity is not None else None,
         })
     except EffectRuntimeRejected as error:
         raise ValueError(str(error)) from error

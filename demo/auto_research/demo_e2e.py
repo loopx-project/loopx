@@ -242,6 +242,10 @@ def _seed_visible_demo_control_plane(
         todo_id = result.get("todo_id")
         if isinstance(todo_id, str) and todo_id:
             seeded_todo_ids_by_action.setdefault(action_kind, todo_id)
+        # Canonical create receipts carry the normalized record in `todo`;
+        # legacy File creation keeps its metadata on the outer response.
+        created_todo = result.get("todo")
+        created_fields = created_todo if isinstance(created_todo, dict) else result
         seeded_todos.append(
             {
                 "todo_id": todo_id,
@@ -249,7 +253,7 @@ def _seed_visible_demo_control_plane(
                 "lane_id": lane_id,
                 "role_id": role_id,
                 "action_kind": action_kind,
-                "resume_when": result.get("resume_when"),
+                "resume_when": created_fields.get("resume_when"),
             }
         )
 

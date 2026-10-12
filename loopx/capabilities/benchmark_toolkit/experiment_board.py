@@ -14,6 +14,7 @@ from .experiment_identity import (
     experiment_token_text as _token,
 )
 from .factorial_contrast import (
+    benchmark_metric_comparison_value,
     build_benchmark_factorial_contrasts,
     build_benchmark_metric_delta,
 )
@@ -636,6 +637,10 @@ def _build_comparison(
             metric_deltas[name] = build_benchmark_metric_delta(
                 anchor_metrics[name], candidate_metrics[name]
             )
+        if metric_deltas.get(candidate.get("primary_metric"), {}).get(
+            "comparison_unavailable_reason"
+        ):
+            reasons.append("primary_metric_definition_mismatch")
 
     return {
         "comparison_id": (
@@ -944,9 +949,11 @@ def render_benchmark_experiment_board_markdown(payload: Mapping[str, Any]) -> st
             else {}
         )
         primary_delta = deltas.get(item.get("primary_metric"))
-        delta_value = (
-            primary_delta.get("delta") if isinstance(primary_delta, Mapping) else "n/a"
-        )
+        delta_value: str | float = "n/a"
+        if isinstance(primary_delta, Mapping):
+            value = benchmark_metric_comparison_value(primary_delta)
+            if value is not None:
+                delta_value = f"{value * 100:g} pp" if "delta_rate" in primary_delta else value
         reasons = (
             ", ".join(str(value) for value in item.get("reason_codes", []) or [])
             or "none"
@@ -997,10 +1004,12 @@ def render_benchmark_experiment_board_markdown(payload: Mapping[str, Any]) -> st
         )
         primary = metrics.get(item.get("primary_metric"))
         interaction_value = (
-            primary.get("difference_in_differences")
+            primary.get("difference_in_differences", "n/a")
             if isinstance(primary, Mapping)
             else "n/a"
         )
+        if isinstance(primary, Mapping) and "difference_in_differences_rate" in primary:
+            interaction_value = f"{primary['difference_in_differences_rate'] * 100:g} pp"
         reasons = (
             ", ".join(str(value) for value in item.get("reason_codes", []) or [])
             or "none"

@@ -18,6 +18,8 @@ import {
   type PostgreSqlAuthorityDatabase,
 } from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
 import { openLocalAuthorityStoreHandle } from "../../loopx/control_plane/coordination/local_authority_provider.ts";
+import {readLocalCoordinationTodoSource} from "../../loopx/control_plane/coordination/local_authority_read.ts";
+import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {
   authorityStoreCommitFixture as commit,
   registerAuthorityStoreConformance,
@@ -119,6 +121,40 @@ async function cleanScope(tenantId: string, goalId: string): Promise<void> {
 }
 
 if (database && installed) {
+  test("PostgreSQL historical Todo source retains the original frontier", async t => {
+    await installed;
+    const options = {tenant_id: `tenant-${randomUUID()}`, goal_id: `goal-${randomUUID()}`};
+    t.after(() => cleanScope(options.tenant_id, options.goal_id));
+    const store = new PostgreSqlAuthorityStore(database, options);
+    const todos = [{schema_version: "todo_domain_record_v0", todo_id: "todo-source", role: "agent",
+      status: "open", done: false, archive_state: "active", text: "Synthetic retained work",
+      title: "Synthetic retained work", priority: "P2", task_class: "advancement_task"}];
+    const projection = (rows: typeof todos) => ({goal_id: options.goal_id, todos: rows, leases: [],
+      todo_read_model: coordinationTodoReadModel(rows, TODO_DOMAIN_READ_RECORD_SCHEMA)});
+    const first = await store.commitAuthority({expected_provider_revision: null,
+      operation_id: "source-seed", events: [], receipts: [], next_projection: projection(todos)});
+    assert.equal(first.status, "applied");
+    if (first.status !== "applied") return;
+    const identity = await store.storeIdentity();
+    assert.equal(identity.status, "available");
+    if (identity.status !== "available") return;
+    const source = {source_authority: "postgresql_v0", store_identity: identity.store_identity,
+      provider_revision: first.provider_revision, cursor: first.cursor};
+    const later = await store.commitAuthority({expected_provider_revision: first.provider_revision,
+      operation_id: "source-later", events: [], receipts: [],
+      next_projection: projection(todos.map(row => ({...row, status: "done", done: true})))});
+    assert.equal(later.status, "applied");
+    const request = {schema_version: "loopx_local_coordination_todo_source_request_v0",
+      runtime_root: tmpdir(), goal_id: options.goal_id, source};
+    const historical = await readLocalCoordinationTodoSource(request, {createStore: () => store});
+    assert.equal(historical.status, "loaded", JSON.stringify(historical));
+    assert.equal((historical.todos as Record<string, unknown>[])[0]?.status, "open");
+    assert.equal(historical.provider_revision, first.provider_revision);
+    assert.equal((await readLocalCoordinationTodoSource({...request,
+      source: {...source, store_identity: "foreign"}}, {createStore: () => store})).reason_code,
+    "todo_source_lineage_mismatch");
+  });
+
   registerAuthorityStoreConformance("PostgreSQL provider", async (t) => {
     await installed;
     const tenantId = `tenant-${randomUUID()}`;

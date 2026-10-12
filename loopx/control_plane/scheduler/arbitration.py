@@ -76,6 +76,7 @@ def _classify_disposition(
     must_attempt: bool,
     quiet_noop_allowed: bool,
     agent_scope_frontier_actions: Collection[str],
+    non_gating_notice_retry: bool = False,
 ) -> tuple[SchedulerDisposition, str]:
     agent_scope_modes = {str(value) for value in agent_scope_frontier_actions}
     if mode == "terminal_no_followup":
@@ -84,6 +85,8 @@ def _classify_disposition(
         return SchedulerDisposition.PEER_COORDINATION_WAIT, mode
     if mode == "agent_monitor_only":
         return SchedulerDisposition.AGENT_MONITOR_ONLY_WAIT, mode
+    if user_required and not must_attempt and non_gating_notice_retry:
+        return SchedulerDisposition.QUIET_WAIT, "blocked_wait"
     if user_required and not must_attempt:
         return SchedulerDisposition.HUMAN_GATE, "interaction_blocking_user_gate"
     if mode == "monitor_quiet_skip":
@@ -157,26 +160,30 @@ def build_scheduler_arbitration(
         errors=errors,
     )
 
-    if delivery_allowed and not must_attempt:
-        errors.append("interaction_contract.delivery_without_attempt")
-    if quiet_noop_allowed and (must_attempt or delivery_allowed or user_required):
-        errors.append("interaction_contract.quiet_noop_conflicts_with_required_action")
-    if mode in {
-        "terminal_no_followup",
-        "peer_coordination_blocked",
-        "agent_monitor_only",
-    } and (
-        user_required or must_attempt or delivery_allowed or not quiet_noop_allowed
+    from ..effect_runtime import effect_runtime_result
+
+    cli_channel = _mapping(contract.get("cli_channel"))
+    spend_flags = {field: _required_bool(
+        cli_channel, field, error_prefix="interaction_contract.cli_channel", errors=errors,
+    ) if field in cli_channel else False for field in ("spend_allowed_now", "spend_after_validation")}
+    validation = effect_runtime_result("work_item.interaction_consistency.validate", {
+        "mode": mode, "user_required": user_required, "must_attempt": must_attempt,
+        "delivery_allowed": delivery_allowed, "quiet_noop_allowed": quiet_noop_allowed,
+        **spend_flags,
+    })
+    if not isinstance(validation, dict) or not isinstance(validation.get("errors"), list) or any(
+        not isinstance(error, str) for error in validation["errors"]
     ):
-        errors.append("interaction_contract.terminal_conflicts_with_open_action")
-    if mode == "heartbeat_settled_skip" and (user_required or must_attempt or delivery_allowed):
-        errors.append("interaction_contract.settled_conflicts_with_open_action")
+        raise TypeError("interaction consistency validation returned invalid diagnostics")
+    errors.extend(validation["errors"])
     disposition, reason_code = _classify_disposition(
         mode=mode,
         user_required=user_required,
         must_attempt=must_attempt,
         quiet_noop_allowed=quiet_noop_allowed,
         agent_scope_frontier_actions=agent_scope_frontier_actions,
+        non_gating_notice_retry=(user_channel.get("non_gating_notice") is True and
+            _mapping(agent_channel.get("wait")).get("source") == "turn_settlement"),
     )
 
     if errors:

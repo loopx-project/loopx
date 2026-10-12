@@ -52,7 +52,7 @@ def current_notice_revision(
     *, registry_path: Path, runtime_root: Path, goal_id: str,
     facts: Mapping[str, Any], scope_valid: Callable[[], bool],
 ) -> str:
-    from ...todos import list_goal_todos
+    from ...control_plane.todos.list_readback import list_goal_todos
     from ...control_plane.quota.blocked_transition_notice import build_blocked_transition_notice
     from ...control_plane.effect_runtime import effect_runtime_result
     from .goal_attention import notice_request_fields

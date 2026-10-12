@@ -287,161 +287,82 @@ def todo_item_claimed_by_agent_or_unclaimed(
     return not claimed_by or claimed_by == normalized_agent_id
 
 
+def _advancement_frontier_projection(
+    summary: dict[str, Any], *, agent_id: str | None,
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, int]]:
+    """Legacy fact codec; TS owns precedence, claim lanes and count floors."""
+    from ..effect_runtime import effect_runtime_result
+
+    keys = ("executable_backlog_items", "unclaimed_priority_open_items",
+            "claimed_advancement_open_items")
+    sources = {
+        key: [item for item in summary.get(key, []) if isinstance(item, dict)]
+        if isinstance(summary.get(key), list) else None for key in keys
+    }
+    claim_scope = summary.get("claim_scope")
+    diagnostic = claim_scope.get("other_agent_claimed_items") if isinstance(claim_scope, dict) else None
+
+    def encode(items: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+        return [{"claim": normalize_todo_claimed_by(item.get("claimed_by")),
+                 "excluded": normalize_todo_excluded_agents(item.get("excluded_agents")),
+                 "advancement": todo_item_task_class(item) == TODO_TASK_CLASS_ADVANCEMENT,
+                 "actionable": todo_item_is_actionable_open(item)} for item in items] if items is not None else None
+
+    result = effect_runtime_result("todo.frontier_revision.project", {
+        "schema_version": "todo_frontier_revision_request_v0", "operation": "classify",
+        "agent_id": normalize_todo_claimed_by(agent_id),
+        "sources": {key: encode(items) for key, items in sources.items()},
+        "diagnostic_peers": encode([item for item in diagnostic if isinstance(item, dict)])
+            if isinstance(diagnostic, list) else None,
+        "claimed_count_floor": str(_positive_int(summary.get("current_agent_claimed_advancement_count"))),
+    })
+    if not isinstance(result, dict) or not isinstance(result.get("groups"), dict) or not isinstance(result.get("counts"), dict):
+        raise TypeError("invalid typed advancement frontier projection")
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for key in ("current_agent_claimed_items", "unclaimed_items", "other_agent_claimed_items"):
+        group = result["groups"].get(key)
+        if not isinstance(group, dict) or group.get("source") not in sources or not isinstance(group.get("indices"), list):
+            raise TypeError("invalid typed advancement frontier source")
+        source = sources[group["source"]] or []
+        indices = group["indices"]
+        if any(type(index) is not int or index < 0 or index >= len(source) for index in indices):
+            raise TypeError("invalid typed advancement frontier index")
+        groups[key] = [source[index] for index in indices]
+    counts = result["counts"]
+    current_key = "current_agent_claimed_advancement_count"
+    encoded_count = counts.get(current_key)
+    if isinstance(encoded_count, str) and re.fullmatch(r"0|[1-9][0-9]*", encoded_count):
+        counts[current_key] = int(encoded_count)
+    if set(counts) != {"current_agent_claimed_advancement_count", "unclaimed_advancement_count", "other_agent_claimed_advancement_count"} or any(type(count) is not int or count < 0 for count in counts.values()):
+        raise TypeError("invalid typed advancement frontier counts")
+    return groups, counts
+
+
 def todo_advancement_frontier_items(
-    summary: dict[str, Any] | None,
-    *,
-    agent_id: str | None,
+    summary: dict[str, Any] | None, *, agent_id: str | None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Return the authoritative advancement frontier items grouped by claim ownership.
-
-    Preserves the slot precedence of executable backlog first, falling back to
-    unclaimed priority and claimed advancement open items when the executable backlog
-    is omitted. Peer-claimed items are tracked separately and excluded from the current
-    agent's selectable advancement frontier.
-    """
-
-    empty: dict[str, list[dict[str, Any]]] = {
-        "current_agent_claimed_items": [],
-        "unclaimed_items": [],
-        "other_agent_claimed_items": [],
-    }
+    """Read the typed frontier, retaining the caller's original display rows."""
     if not isinstance(summary, dict):
-        return empty
-
-    normalized_agent_id = normalize_todo_claimed_by(agent_id)
-    executable_items = summary.get("executable_backlog_items")
-    if isinstance(executable_items, list):
-        current_items: list[dict[str, Any]] = []
-        unclaimed_items: list[dict[str, Any]] = []
-        other_items: list[dict[str, Any]] = []
-        for value in executable_items:
-            if not isinstance(value, dict):
-                continue
-            if not todo_item_is_actionable_open(value):
-                continue
-            if todo_item_task_class(value) != TODO_TASK_CLASS_ADVANCEMENT:
-                continue
-            claimed_by = normalize_todo_claimed_by(value.get("claimed_by"))
-            if claimed_by:
-                if normalized_agent_id and claimed_by == normalized_agent_id:
-                    if not todo_item_excludes_agent(
-                        value, agent_id=normalized_agent_id
-                    ):
-                        current_items.append(value)
-                elif normalized_agent_id:
-                    other_items.append(value)
-                else:
-                    current_items.append(value)
-                continue
-            if not todo_item_excludes_agent(value, agent_id=normalized_agent_id):
-                unclaimed_items.append(value)
-        return {
-            "current_agent_claimed_items": current_items,
-            "unclaimed_items": unclaimed_items,
-            "other_agent_claimed_items": other_items,
-        }
-
-    unclaimed_items = [
-        value
-        for value in summary.get("unclaimed_priority_open_items") or []
-        if isinstance(value, dict)
-        and todo_item_is_actionable_open(value)
-        and todo_item_task_class(value) == TODO_TASK_CLASS_ADVANCEMENT
-        and not todo_item_excludes_agent(value, agent_id=normalized_agent_id)
-    ]
-    current_items = [
-        value
-        for value in summary.get("claimed_advancement_open_items") or []
-        if isinstance(value, dict)
-        and todo_item_is_actionable_open(value)
-        and todo_item_task_class(value) == TODO_TASK_CLASS_ADVANCEMENT
-        and (
-            not normalized_agent_id
-            or normalize_todo_claimed_by(value.get("claimed_by")) == normalized_agent_id
-        )
-        and not todo_item_excludes_agent(value, agent_id=normalized_agent_id)
-    ]
-    other_items = [
-        value
-        for value in summary.get("claimed_advancement_open_items") or []
-        if isinstance(value, dict)
-        and todo_item_is_actionable_open(value)
-        and todo_item_task_class(value) == TODO_TASK_CLASS_ADVANCEMENT
-        and normalized_agent_id
-        and normalize_todo_claimed_by(value.get("claimed_by"))
-        and normalize_todo_claimed_by(value.get("claimed_by")) != normalized_agent_id
-    ]
-    return {
-        "current_agent_claimed_items": current_items,
-        "unclaimed_items": unclaimed_items,
-        "other_agent_claimed_items": other_items,
-    }
+        return {"current_agent_claimed_items": [], "unclaimed_items": [], "other_agent_claimed_items": []}
+    return _advancement_frontier_projection(summary, agent_id=agent_id)[0]
 
 
 def agent_scoped_selectable_advancement_todo_ids(
-    agent_todo_summary: dict[str, Any] | None,
-    *,
-    agent_id: str | None,
+    agent_todo_summary: dict[str, Any] | None, *, agent_id: str | None,
 ) -> set[str]:
-    """Return the ids the agent-scoped selectable advancement frontier holds.
-
-    Derived directly from the authoritative ``todo_advancement_frontier_items``
-    helper so that slot precedence and claim ownership predicates never diverge
-    from the frontier counter.
-    """
-
-    frontier_items = todo_advancement_frontier_items(
-        agent_todo_summary,
-        agent_id=agent_id,
-    )
-    selectable: set[str] = set()
-    for item in (
-        frontier_items["current_agent_claimed_items"]
-        + frontier_items["unclaimed_items"]
-    ):
-        if todo_id := normalize_todo_id(item.get("todo_id")):
-            selectable.add(todo_id)
-    return selectable
+    frontier = todo_advancement_frontier_items(agent_todo_summary, agent_id=agent_id)
+    return {todo_id for item in frontier["current_agent_claimed_items"] + frontier["unclaimed_items"]
+            if (todo_id := normalize_todo_id(item.get("todo_id")))}
 
 
 def todo_advancement_frontier_counts(
-    summary: dict[str, Any] | None,
-    *,
-    agent_id: str | None,
+    summary: dict[str, Any] | None, *, agent_id: str | None,
 ) -> dict[str, int]:
-    """Classify the durable advancement frontier by exact claim ownership."""
-
+    """Read commitment counts; diagnostic floors do not grant execution."""
     if not isinstance(summary, dict):
-        return {
-            "current_agent_claimed_advancement_count": 0,
-            "unclaimed_advancement_count": 0,
-            "other_agent_claimed_advancement_count": 0,
-        }
-    frontier_items = todo_advancement_frontier_items(summary, agent_id=agent_id)
-    claim_scope = summary.get("claim_scope")
-    other_items = (
-        claim_scope.get("other_agent_claimed_items")
-        if isinstance(claim_scope, dict)
-        else []
-    )
-    diagnostic_other_count = sum(
-        1
-        for value in other_items or []
-        if isinstance(value, dict)
-        and todo_item_is_actionable_open(value)
-        and todo_item_task_class(value) == TODO_TASK_CLASS_ADVANCEMENT
-    )
-    return {
-        "current_agent_claimed_advancement_count": max(
-            len(frontier_items["current_agent_claimed_items"]),
-            _positive_int(summary.get("current_agent_claimed_advancement_count")),
-        ),
-        "unclaimed_advancement_count": len(frontier_items["unclaimed_items"]),
-        "other_agent_claimed_advancement_count": max(
-            len(frontier_items["other_agent_claimed_items"]),
-            diagnostic_other_count,
-        ),
-    }
+        return {"current_agent_claimed_advancement_count": 0,
+                "unclaimed_advancement_count": 0, "other_agent_claimed_advancement_count": 0}
+    return _advancement_frontier_projection(summary, agent_id=agent_id)[1]
 
 
 def todo_item_has_removed_continuation_policy(item: dict[str, Any]) -> bool:

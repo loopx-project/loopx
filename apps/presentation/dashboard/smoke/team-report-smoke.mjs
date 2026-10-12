@@ -35,6 +35,16 @@ assert.equal((links.match(/<a /g) ?? []).length, 4, 'Only explicit web destinati
 assert.equal((links.match(/target="_blank"/g) ?? []).length, 4, 'Opening a destination preserves the current conversation');
 assert.match(links, /<\/a>。English:/);
 assert.doesNotMatch(links, /<script|<img|href="(?:javascript:|ftp:|mailto:)/);
+const adjacentNamedAndPlainLinks = renderToStaticMarkup(createElement(MarkdownText, {text:
+  '[Topic](https://en.wikipedia.org/wiki/Reference_(mathematics)) https://example.org/after'}));
+assert.match(adjacentNamedAndPlainLinks,
+  /href="https:\/\/en.wikipedia.org\/wiki\/Reference_\(mathematics\)"[^>]*>Topic<\/a> <a/);
+assert.match(adjacentNamedAndPlainLinks, /href="https:\/\/example.org\/after"/);
+assert.equal((adjacentNamedAndPlainLinks.match(/<a /g) ?? []).length, 2,
+  'A balanced-parenthesis Markdown destination does not consume an adjacent plain URL');
+const nestedParenthesesLink = renderToStaticMarkup(createElement(MarkdownText, {text:
+  '[Nested](https://example.org/a_(b_(c)))'}));
+assert.match(nestedParenthesesLink, /href="https:\/\/example.org\/a_\(b_\(c\)\)"[^>]*>Nested<\/a>/);
 // linkify-it 5.0.2 stops scanning userinfo at its bound, so an automatic match
 // can end inside a longer address and point at the prefix host. The renderer
 // must link only the addresses it matched completely.

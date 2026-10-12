@@ -139,7 +139,10 @@ def overlay_active_turn_retries(
         seen.add(todo_id)
         retry = active_turn_retry_for_run(run, observed_at=observed_at)
         if retry is not None:
-            waits[todo_id] = retry
+            waits[todo_id] = {
+                **retry, "goal_id": goal_id, "agent_id": agent_id,
+                "turn_instance_id": run["turn_instance_id"],
+            }
     if not waits:
         return status_payload
     queue = status_payload.get("attention_queue")
@@ -170,6 +173,7 @@ def overlay_active_turn_retries(
                     and todo.get("status") == "open"
                     and todo.get("task_class") == "advancement_task"
                     and not todo.get("resume_when")
+                    and todo.get("claimed_by") in (None, agent_id)
                 ):
                     resume = retry["resume_when"]
                     projected_rows.append(
@@ -177,6 +181,10 @@ def overlay_active_turn_retries(
                             **todo,
                             "resume_when": resume,
                             "resume_ready": False,
+                            # Read-only Run provenance; never persist these fields
+                            # into the canonical Todo or treat them as admission.
+                            "blocked_retry": retry,
+                            "next_due_at": retry["due_at"],
                             "resume_condition": {
                                 "kind": "resume_at",
                                 "resume_when": resume,

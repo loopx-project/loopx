@@ -1,5 +1,6 @@
 /** Pure field intent planning. Admission, leases, validation and commit stay
  * with the calling lifecycle transaction; this result grants no write right. */
+import { normalizeTodoWorkRequirements } from "./work_requirements.ts";
 import {planTodoPriority} from "./priority.ts";
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
@@ -37,10 +38,15 @@ const PRESENT_FIELDS = ["required_write_scopes", "required_capabilities", "targe
 const FLAGS = ["clear_claim", "claim_only", "clear_user_binding", "clear_blocks_agent",
   "clear_global_gate", "clear_resume_when"] as const;
 const INTENT_FIELDS = new Set<string>([...STRING_FIELDS, ...PRESENT_FIELDS, ...FLAGS,
-  "status", "claimed_by", "bound_agent", "goal_bound", "blocks_agent", "excluded_agents",
+  "append_explore_result_node_refs", "status", "claimed_by", "bound_agent", "goal_bound", "blocks_agent", "excluded_agents",
   "global_gate", "unblocks_todo_id", "successor_todo_ids", "completion_continuation",
   "completion_recovery", "completion_metadata_updates_override", "resume_when",
   "resume_monitor_generation", "no_followup", "monitor_metadata", "text", "priority", "clear_priority"]);
+
+/** A narrow metadata operation; never a lifecycle transition or claim. */
+export function isExploreReferenceAppend(intent: JsonObject): boolean {
+  return Object.keys(intent).length === 1 && Array.isArray(intent.append_explore_result_node_refs);
+}
 
 function optionalString(value: unknown, label: string): string | null {
   if (value === null || value === undefined) return null;
@@ -202,6 +208,22 @@ export function planTodoFieldUpdate(value: unknown): TodoFieldUpdatePlan {
   }
   for (const field of PRESENT_FIELDS) {
     if (Object.hasOwn(intent, field)) updates[field] = intent[field];
+  }
+  // Merge against the owner-locked snapshot, never a caller read/replace.
+  // This extends the existing Explore reference vocabulary; no new state is persisted.
+  if (present(intent.append_explore_result_node_refs)) {
+    if (present(intent.explore_result_node_refs)) {
+      throw new EffectRuntimeRequestError("cannot replace and append Explore references together");
+    }
+    const additions = normalizeTodoWorkRequirements({
+      explore_result_node_refs: intent.append_explore_result_node_refs,
+    }).explore_result_node_refs as string[];
+    const existing = normalizeTodoWorkRequirements({
+      explore_result_node_refs: block.explore_result_node_refs ?? [],
+    }).explore_result_node_refs as string[];
+    Object.assign(updates, normalizeTodoWorkRequirements({
+      explore_result_node_refs: [...existing, ...additions],
+    }));
   }
   // Public update carries the effective scope and raw observation once. The
   // field plan composes validation and generation without another RPC.

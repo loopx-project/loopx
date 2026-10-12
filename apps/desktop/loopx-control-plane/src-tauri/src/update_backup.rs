@@ -141,13 +141,16 @@ fn copy(source: &Path, destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn recoverable_backup(root: &Path) -> Option<PathBuf> {
+fn recoverable_backups(root: &Path) -> Vec<PathBuf> {
     let previous = root.join("previous");
+    let mut backups = Vec::new();
     if previous.join("LoopX.app/Contents/Info.plist").is_file() {
-        return Some(previous);
+        backups.push(previous);
     }
-    fs::read_dir(root)
-        .ok()?
+    let mut older = fs::read_dir(root)
+        .ok()
+        .into_iter()
+        .flatten()
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let sequence = entry
@@ -161,8 +164,21 @@ fn recoverable_backup(root: &Path) -> Option<PathBuf> {
                 .is_file()
                 .then_some((sequence, path))
         })
-        .max_by_key(|(sequence, _)| *sequence)
-        .map(|(_, path)| path)
+        .collect::<Vec<_>>();
+    older.sort_by_key(|(sequence, _)| std::cmp::Reverse(*sequence));
+    backups.extend(older.into_iter().map(|(_, path)| path));
+    backups
+}
+
+fn recoverable_backup(root: &Path) -> Option<PathBuf> {
+    recoverable_backups(root).into_iter().next()
+}
+
+fn verified_recoverable_backup(root: &Path) -> Option<PathBuf> {
+    recoverable_backups(root).into_iter().find(|backup| {
+        fs::read_to_string(backup.join("version")).is_ok()
+            && signature_verifies(&backup.join("LoopX.app"))
+    })
 }
 
 pub fn available(app: &AppHandle) -> bool {
@@ -210,7 +226,7 @@ pub fn restore(app: &AppHandle) -> Result<(), String> {
     // must not require it to be intact; the verified backup source is what
     // must pass verification (`copy` re-checks its codesign signature).
     let executable = std::env::current_exe().map_err(|_| "app_bundle_required")?;
-    let backup = recoverable_backup(&root(app)?).ok_or("backup_unavailable")?;
+    let backup = verified_recoverable_backup(&root(app)?).ok_or("backup_unavailable")?;
     let version = fs::read_to_string(backup.join("version")).map_err(|_| "backup_unavailable")?;
     let handle = app.clone();
     restore_verified_backup(&executable, &backup, move || {
@@ -233,16 +249,38 @@ pub(crate) fn restore_verified_backup(
         return Err("backup_unavailable".into());
     }
     let target = installed_bundle_at(executable)?;
+    // The pinned updater can move the old App away and fail before installing
+    // its replacement. Observe absence before staging/journaling, then commit
+    // with NOREPLACE: a concurrent installer must never be overwritten.
+    let target_missing = match fs::symlink_metadata(&target) {
+        Ok(_) => false,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(_) => return Err("rollback_failed".into()),
+    };
     let staging = tempfile::tempdir_in(target.parent().ok_or("app_bundle_required")?)
         .map_err(|_| "rollback_failed")?;
     let candidate = staging.path().join("LoopX.app");
     copy(&previous.join("LoopX.app"), &candidate)?;
     let failed = staging.path().join("failed.app");
-    // Preserve staging before the swap. After a successful exchange it owns
-    // the displaced App; after an exchange failure it owns the verified copy.
+    // Preserve staging before committing. An exchange retains the displaced
+    // App; a failed commit retains the verified copy.
     let _preserved = staging.keep();
     before_swap()?;
-    replace_bundle(&target, &candidate, &failed)?;
+    if target_missing {
+        #[cfg(target_os = "macos")]
+        rustix::fs::renameat_with(
+            rustix::fs::CWD,
+            &candidate,
+            rustix::fs::CWD,
+            &target,
+            rustix::fs::RenameFlags::NOREPLACE,
+        )
+        .map_err(|_| "rollback_failed")?;
+        #[cfg(not(target_os = "macos"))]
+        return Err("rollback_failed".into());
+    } else {
+        replace_bundle(&target, &candidate, &failed)?;
+    }
     // Keep the displaced App recoverable too. Never delete an installed App.
     Ok(())
 }
@@ -373,6 +411,35 @@ mod tests {
         fs::create_dir_all(previous.join("LoopX.app/Contents")).unwrap();
         fs::write(previous.join("LoopX.app/Contents/Info.plist"), "plist").unwrap();
         assert_eq!(recoverable_backup(root.path()), Some(previous));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn corrupted_previous_backup_falls_back_to_latest_valid_older_backup() {
+        let root = tempfile::tempdir().unwrap();
+        let older = root.path().join("older-1000");
+        fs::create_dir_all(&older).unwrap();
+        let older_app = ad_hoc_signed_synthetic_app(root.path(), "Older.app");
+        fs::rename(older_app, older.join("LoopX.app")).unwrap();
+        fs::write(older.join("version"), "1.2.0").unwrap();
+
+        let previous = root.path().join("previous");
+        fs::create_dir_all(&previous).unwrap();
+        let previous_app = ad_hoc_signed_synthetic_app(root.path(), "Previous.app");
+        fs::write(
+            previous_app.join("Contents/Resources/sealed-resource.txt"),
+            "corrupted after backup rotation",
+        )
+        .unwrap();
+        fs::rename(previous_app, previous.join("LoopX.app")).unwrap();
+        fs::write(previous.join("version"), "1.3.0").unwrap();
+
+        assert!(!signature_verifies(&previous.join("LoopX.app")));
+        assert!(signature_verifies(&older.join("LoopX.app")));
+        // The inexpensive status probe still sees the newest directory, while
+        // restoration skips it after signature verification fails.
+        assert_eq!(recoverable_backup(root.path()), Some(previous));
+        assert_eq!(verified_recoverable_backup(root.path()), Some(older));
     }
 
     #[test]
@@ -649,11 +716,11 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "macos")]
-    fn restore_verified_backup_repairs_damaged_targets_but_not_a_moved_target() {
+    fn restore_verified_backup_repairs_damaged_and_missing_targets() {
         // The actual recovery seam: a verified (ad-hoc signed) backup must be
         // able to replace a damaged installation — the exact state the
-        // recovery panel offers rollback for — while a target that was moved
-        // away entirely fails closed without deleting the backup.
+        // recovery panel offers rollback for — including a target moved away
+        // entirely by the updater. The verified backup remains available.
         let dir = tempfile::tempdir().unwrap();
         let previous = dir.path().join("previous");
         fs::create_dir_all(&previous).unwrap();
@@ -690,15 +757,12 @@ mod tests {
 
         // Moved-away target: the boundary is derived from the executable's
         // path (the updater moved the bundle away; the running process keeps
-        // its old path), so location succeeds but the swap's first rename
-        // finds nothing there. The seam fails closed without deleting the
-        // verified backup, which stays in place for manual recovery.
+        // its old path). Recovery restores that exact missing path without
+        // requiring the damaged installation to exist.
         let target_c = ad_hoc_signed_synthetic_app(dir.path(), "MovedAway.app");
         fs::remove_dir_all(&target_c).unwrap();
-        assert_eq!(
-            restore_verified_backup(&synthetic_executable(&target_c), &previous, || Ok(())),
-            Err("rollback_failed".into())
-        );
+        restore_verified_backup(&synthetic_executable(&target_c), &previous, || Ok(())).unwrap();
+        assert!(installed_bundle_verifies(&synthetic_executable(&target_c)));
         assert!(previous.join("LoopX.app/Contents/Info.plist").is_file());
 
         // Corrupted backup source: copy's signature gate rejects it before
@@ -714,6 +778,46 @@ mod tests {
             Err("backup_failed".into())
         );
         assert!(installed_bundle_verifies(&synthetic_executable(&target_d)));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn missing_target_restore_preserves_a_concurrent_install() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let previous = dir.path().join("previous");
+        fs::create_dir_all(&previous).unwrap();
+        let backup = ad_hoc_signed_synthetic_app(dir.path(), "Backup.app");
+        fs::rename(backup, previous.join("LoopX.app")).unwrap();
+        let target = dir.path().join("Missing.app");
+        let concurrent = ad_hoc_signed_synthetic_app(dir.path(), "Concurrent.app");
+        let concurrent_inode = fs::metadata(&concurrent).unwrap().ino();
+        let result = restore_verified_backup(&synthetic_executable(&target), &previous, || {
+            fs::rename(&concurrent, &target).unwrap();
+            Ok(())
+        });
+        assert_eq!(result, Err("rollback_failed".into()));
+        assert_eq!(fs::metadata(&target).unwrap().ino(), concurrent_inode);
+        assert!(installed_bundle_verifies(&synthetic_executable(&target)));
+        assert!(signature_verifies(&previous.join("LoopX.app")));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn missing_target_restore_requires_the_continuation_journal() {
+        let dir = tempfile::tempdir().unwrap();
+        let previous = dir.path().join("previous");
+        fs::create_dir_all(&previous).unwrap();
+        let backup = ad_hoc_signed_synthetic_app(dir.path(), "Backup.app");
+        fs::rename(backup, previous.join("LoopX.app")).unwrap();
+        let target = dir.path().join("Missing.app");
+        let result = restore_verified_backup(&synthetic_executable(&target), &previous, || {
+            Err("journal_unavailable".into())
+        });
+        assert_eq!(result, Err("journal_unavailable".into()));
+        assert!(!target.exists());
+        assert!(signature_verifies(&previous.join("LoopX.app")));
     }
 
     #[test]

@@ -10,6 +10,7 @@ import type {
 import { localizedAttentionAge, useWorkspaceI18n } from "./i18n";
 import { CompletedTaskLane } from "./completed-task-lane";
 import { MarkdownText } from "./markdown";
+import { isGoalWorkTodo } from "../../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
 
 function TaskLane({
   children,
@@ -164,11 +165,11 @@ export function GoalTasksView({
     : "all";
   const laneMatches = (agentId?: string | null) => selectedLaneId === "all" || agentId === selectedLaneId;
   const openAgentTodos = goal.agentTodos
-    .filter((todo) => todo.taskClass !== "continuous_monitor" && !todo.done)
+    .filter((todo) => isGoalWorkTodo(todo) && !todo.done)
     .filter((todo) => laneMatches(todo.claimedBy))
     .sort((left, right) => priorityRank(left) - priorityRank(right));
   const doneAgentTodos = goal.agentTodos
-    .filter((todo) => todo.taskClass !== "continuous_monitor" && todo.done)
+    .filter((todo) => isGoalWorkTodo(todo) && todo.done)
     .filter((todo) => laneMatches(todo.claimedBy));
   const scheduleItems = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "schedule" }> =>
     item.kind === "schedule" && laneMatches(item.schedule.agentId));

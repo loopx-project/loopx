@@ -6,7 +6,7 @@ import {GoalTeamLineage} from "./goal-team-lineage";
 
 type Selection = {operationId: string; ref?: string; sha256?: string};
 const readableRows = (page: DelegationInventory) => page.items.filter(row =>
-  row.operation_id && row.status === "accepted" && !row.recovery_required && row.artifacts?.length);
+  row.operation_id && row.status === "accepted" && row.current_use?.state !== "unavailable" && !row.recovery_required && row.artifacts?.length);
 const AUTO_DISCOVERY_PAGES = 3;
 const MAX_INSPECTED_PAGES = 10;
 
@@ -34,7 +34,7 @@ export function GoalTeamResults({sessionId, zh, refreshKey}: {sessionId: string;
     const matches = expected?.ref ? artifacts.filter(row => row.ref === expected.ref) : [];
     const artifact = expected?.ref ? (matches.length === 1 && matches[0].sha256 === expected.sha256 ? matches[0] : undefined)
       : artifacts.find(row => isMarkdownArtifact(row.ref)) ?? artifacts[0];
-    if (value.operation_id !== operationId || value.status !== "accepted" || value.error || value.recovery_required || !artifact) {
+    if (value.operation_id !== operationId || value.status !== "accepted" || value.current_use?.state === "unavailable" || value.error || value.recovery_required || !artifact) {
       setError(changed);
     } else {
       chosen.current = {operationId, ref: artifact.ref, sha256: artifact.sha256};

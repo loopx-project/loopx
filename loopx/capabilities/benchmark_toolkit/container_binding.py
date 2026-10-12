@@ -9,6 +9,7 @@ from dataclasses import dataclass
 BENCHMARK_EXACT_CONTAINER_BINDING_SCHEMA_VERSION = (
     "benchmark_exact_container_binding_v0"
 )
+DOCKER_CONTAINER_DISCOVERY_TIMEOUT_SECONDS = 30
 
 CommandRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 
@@ -32,6 +33,7 @@ def _run_command(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
         text=True, encoding="utf-8", errors="replace",
         capture_output=True,
         check=False,
+        timeout=DOCKER_CONTAINER_DISCOVERY_TIMEOUT_SECONDS,
     )
 
 
@@ -85,6 +87,10 @@ def select_exact_docker_container(
 
     try:
         completed = (command_runner or _run_command)(command)
+    except subprocess.TimeoutExpired as error:
+        raise DockerContainerBindingError(
+            "docker_container_discovery_timed_out"
+        ) from error
     except OSError as error:
         raise DockerContainerBindingError(
             "docker_container_discovery_failed"

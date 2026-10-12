@@ -6,11 +6,11 @@ employees appear, what artifacts to inspect, and how to stop or take over.
 
 Use the deeper showcase and protocol docs only after this path is clear:
 
-- [Multi-agent product recipe](../../../docs/guides/multi-agent-product-recipe.md)
-- [Stop, takeover, and state-aware wake walkthrough](../../../docs/guides/auto-research-stop-takeover-wake-walkthrough.md)
-- [Decentralized auto-research showcase](../../../docs/product/use-cases/auto-research/decentralized-auto-research-showcase.md)
-- [auto_research_role_state_machine_v0](../../../docs/reference/protocols/auto-research-role-state-machine-v0.md)
-- [auto_research_role_profile_v0](../../../docs/reference/protocols/auto-research-role-profile-v0.md)
+- [Multi-agent product recipe](../../docs/guides/multi-agent-product-recipe.md)
+- [Stop, takeover, and state-aware wake walkthrough](../../docs/guides/auto-research-stop-takeover-wake-walkthrough.md)
+- [Decentralized auto-research showcase](../../docs/product/use-cases/auto-research/decentralized-auto-research-showcase.md)
+- [auto_research_role_state_machine_v0](../../docs/reference/protocols/auto-research-role-state-machine-v0.md)
+- [auto_research_role_profile_v0](../../docs/reference/protocols/auto-research-role-profile-v0.md)
 
 Implementation boundary: auto-research is a thin preset over the generic
 multi-agent kernel. `demo/auto_research/preset.py` owns only the
@@ -20,7 +20,7 @@ tick, workspace/trust-safe launch, todo/evidence/status protocol, and compact
 human status. The developer-facing recipe proof also follows that boundary:
 `preset.py` calls the generic `multi_agent.recipe` helper instead of defining
 decentralized A2A proof mechanics itself.
-Use the [multi-agent product recipe](../../../docs/guides/multi-agent-product-recipe.md) when a new
+Use the [multi-agent product recipe](../../docs/guides/multi-agent-product-recipe.md) when a new
 product wants to copy the pattern without copying auto-research code.
 
 ## Promotion Decision
@@ -380,7 +380,11 @@ The default visible digital employees are:
 | `evaluator-promoter:evaluator-promoter` | Evaluator/promoter | Checks holdout/verification evidence, classifies claims, and keeps promotion boundaries explicit. |
 
 Each Codex TUI role must route through its own quota/frontier/worker-turn path
-inside the pane. The supervisor only makes those roles visible and interactive.
+inside the pane and honor the selected Todo's execution authority. For a `hard_lease` Goal,
+an executing summary worker acquires its own exact task lease before writing,
+passes that lease into completion, and releases it on failure or unfinished
+completion. An existing execution's lease is a conflict, never borrowed.
+The supervisor only makes those roles visible and interactive.
 The panes share the same LoopX goal surface: registry, runtime root, frontier,
 todo projection, and evidence graph. Do not move every pane into an unrelated
 empty workspace; isolate only mutating research-executor attempts with a claimed
@@ -433,7 +437,7 @@ Operator control stays on this command path:
 
 `--attach` and `--wake-visible-after-launch` cannot be combined. For the full
 stop → takeover → resume cycle and the synthetic smokes that pin it, see the
-[stop/takeover/wake walkthrough](../../../docs/guides/auto-research-stop-takeover-wake-walkthrough.md).
+[stop/takeover/wake walkthrough](../../docs/guides/auto-research-stop-takeover-wake-walkthrough.md).
 
 ## 4. Launch A Visible Rehearsal
 

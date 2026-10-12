@@ -4,6 +4,7 @@ from copy import deepcopy
 from dataclasses import replace
 
 import pytest
+from todo_frontier_fixture import summary_frontier_index
 
 from loopx.control_plane.goals.goal_frontier import (
     derive_goal_frontier_replan_obligation_from_summaries,
@@ -24,7 +25,6 @@ from loopx.control_plane.goals.goal_frontier.long_todo_chain import (
 )
 from loopx.control_plane.todos.frontier_revision import (
     TODO_FRONTIER_REVISION_INDEX_SCHEMA_VERSION,
-    build_advancement_frontier_revision_index,
 )
 from loopx.control_plane.todos.summary_item import compact_todo_summary_item
 from loopx.control_plane.work_items.interaction_contract import (
@@ -338,7 +338,7 @@ def test_frontier_revision_index_preserves_complete_agent_lane_semantics() -> No
             "updated_at": "2026-08-22T09:00:00+08:00",
         },
     ]
-    original = build_advancement_frontier_revision_index(source_items)
+    original = summary_frontier_index(source_items)
     current_revision = original["by_agent"][0]
     assert current_revision["agent_id"] == "current-agent"
     unclaimed_revision = original["unclaimed"]
@@ -349,14 +349,14 @@ def test_frontier_revision_index_preserves_complete_agent_lane_semantics() -> No
 
     other_agent_change = deepcopy(source_items)
     other_agent_change[1]["priority"] = "P0"
-    changed_other = build_advancement_frontier_revision_index(other_agent_change)
+    changed_other = summary_frontier_index(other_agent_change)
     assert changed_other["by_agent"][0] == current_revision
     assert changed_other["unclaimed"] == unclaimed_revision
     assert changed_other["all"] != all_revision
 
     unclaimed_change = deepcopy(source_items)
     unclaimed_change[2]["priority"] = "P0"
-    changed_unclaimed = build_advancement_frontier_revision_index(unclaimed_change)
+    changed_unclaimed = summary_frontier_index(unclaimed_change)
     assert changed_unclaimed["by_agent"][0] != current_revision
     assert changed_unclaimed["unclaimed"] != unclaimed_revision
 
@@ -1050,3 +1050,20 @@ def test_vision_ack_and_gap_from_same_durable_run_do_not_rearm() -> None:
 
     timestamp = "2026-08-13T09:00:00+08:00"
     assert _vision_gap_acknowledged(_vision_gap_with_generated_at(timestamp), _ack(timestamp))
+
+
+def test_lifecycle_review_identity_binds_todo_and_original_completion_not_display_text() -> None:
+    def identity(todo_id: str, completion: str, text: str = "Verified source") -> str:
+        result = derive_goal_frontier_replan_obligation_from_summaries(
+            user_todo_summary={"open_count": 0},
+            agent_todo_summary={"open_count": 0, "completed_without_successor_items": [
+                {"todo_id": todo_id, "completion_turn_key": completion, "text": text,
+                 "task_class": "advancement_task", "claimed_by": "current-agent"}]},
+            work_lane_contract=None, agent_id="current-agent", existing_replan_obligation=None,
+        )
+        assert result is not None
+        return result["obligation_id"]
+    original = identity("todo_original", "original-completion")
+    assert original == identity("todo_original", "original-completion", "Changed display wording")
+    assert original != identity("todo_other", "original-completion")
+    assert original != identity("todo_original", "later-completion")

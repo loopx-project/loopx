@@ -103,7 +103,7 @@ def test_filter_composes_with_existing_lane_call_and_rejects_downgraded_response
     monkeypatch.setattr(effect_runtime, "effect_runtime_result", track)
     assert filtered_todo_summary(source, role="user", agent_id="agent-a")["total_count"] == 1
     assert len(requests) == 1
-    assert requests[0]["schema_version"] == "todo_summary_projection_request_v2"
+    assert requests[0]["schema_version"] == "todo_summary_projection_request_v3"
     # One whole-source batch stays columnar, so adding fields cannot silently
     # push a long-history request past the runtime request budget.
     assert requests[0]["columns"][:3] == ["status", "done", "task_class"]

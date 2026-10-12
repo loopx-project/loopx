@@ -20,6 +20,8 @@ import {
 import { projectRepositoryDeliveryGate } from "./work_items/repository_delivery.ts";
 import { projectPendingCapabilityIntent } from "./work_items/pending_capability_intent.ts";
 
+import {exploreResultWritebackAffordance} from "./capabilities/explore_result_writeback.ts";
+
 export const CAPABILITY_HOOK_REGISTRATION_SCHEMA_VERSION =
   CAPABILITY_HOOK_REGISTRATION_SCHEMA;
 export const INTERACTION_PROJECTION_HOOK_RESULT_SCHEMA_VERSION =
@@ -333,6 +335,17 @@ export function validateInteractionProjectionHookInvocation(input: {
   switch (slot) {
     case "pending_capability_intent":
       projection = projectPendingCapabilityIntent(result.payload);
+      break;
+    case "explore_result_attachment":
+      if (registration.capability_id !== "explore") {
+        throw new Error("Explore attachment projection requires its owning capability");
+      }
+      // The capability supplies presence only; shared typed guidance cannot be
+      // replaced by provider text or converted into a mandatory work gate.
+      if (Object.keys(requiredObject(result.payload, "Explore attachment presence")).length) {
+        throw new Error("Explore attachment presence must be empty");
+      }
+      projection = exploreResultWritebackAffordance();
       break;
     case "repository_delivery":
       projection = projectRepositoryDeliveryGate(result.payload);

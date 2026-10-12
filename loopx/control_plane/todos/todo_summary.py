@@ -6,8 +6,6 @@ from typing import Any, Callable, Optional, TypeGuard
 
 from ..goals.goal_vision_wait_projection import attach_active_vision_waits
 from .contract import (
-    TODO_STATUS_DONE,
-    TODO_STATUS_OPEN,
     TODO_TASK_CLASS_ADVANCEMENT,
     TODO_TASK_CLASS_USER_ACTION,
     build_todo_id,
@@ -39,10 +37,11 @@ from .contract import (
     normalize_todo_task_class,
     todo_done_for_status,
 )
+from .summary_item import todo_text_content_revision
 from .completion_validation_projection import project_completion_validation_authority
-from .frontier_revision import attach_advancement_frontier_revision_index
+from .frontier_revision import frontier_source_facts, TODO_FRONTIER_REVISION_INDEX_SCHEMA_VERSION
 from .handoff_gate import build_todo_handoff_gate_states
-from .handoff_note import attach_todo_handoff_note
+from .handoff_note import attach_todo_handoff_notes, handoff_context_source, validate_handoff_context
 from .todo_semantics import (
     todo_item_is_actionable_open as projection_todo_item_is_actionable_open,
     todo_item_is_deferred as projection_todo_item_is_deferred,
@@ -56,10 +55,6 @@ from .todo_semantics import (
     todo_priority_rank as projection_todo_priority_rank,
     todo_presentation_sort_key as projection_todo_presentation_sort_key,
     todo_projection_sort_key as projection_todo_projection_sort_key,
-)
-from .succession_warning import (
-    TODO_SUCCESSION_WARNING_REASON_CODE,
-    TODO_SUCCESSION_WARNING_SCHEMA_VERSION,
 )
 from .resume_condition import evaluate_todo_resume_conditions
 from ..runtime.time import now_utc, now_utc_iso
@@ -90,7 +85,7 @@ TODO_ARCHIVE_STATE_ACTIVE = "active"
 # facts: repeating every key name per Todo pushed a long-history request past the
 # effect-runtime request budget. The typed owner decodes the declared columns
 # back into row objects before validating them, so no cell changes meaning.
-SUMMARY_PROJECTION_REQUEST_SCHEMA_VERSION = "todo_summary_projection_request_v2"
+SUMMARY_PROJECTION_REQUEST_SCHEMA_VERSION = "todo_summary_projection_request_v3"
 SUMMARY_PROJECTION_COLUMNS = (
     "status", "done", "task_class", "has_resume", "resume_ready", "resume_evaluated",
     "acceptance_blocked", "claimed", "preferred", "watch_only", "due_at", "expires_at",
@@ -142,13 +137,18 @@ def normalize_todo_text(text: str, *, limit: int | None = 500) -> str:
     return compact[: limit - 1].rstrip() + "…"
 
 
-def todo_item_status(item: dict[str, Any]) -> str:
-    """Return one Todo's explicit status with marker compatibility."""
-
-    status = normalize_todo_status(item.get("status"))
-    if status:
-        return status
-    return TODO_STATUS_DONE if item.get("done") else TODO_STATUS_OPEN
+def _structured_todo_text_fields(
+    item: dict[str, Any],
+    *,
+    text_limit: int | None,
+    include_content_revision: bool,
+) -> tuple[str, str | None]:
+    source_text = str(item.get("text") or "")
+    content_revision = (
+        todo_text_content_revision(source_text)
+        if include_content_revision else None
+    )
+    return normalize_todo_text(source_text, limit=text_limit), content_revision
 
 
 def todo_archive_state(item: dict[str, Any]) -> str:
@@ -303,8 +303,13 @@ def structured_todo_item(
     source_section: str | None,
     archive_state: str = "active",
     text_limit: int | None = 500,
+    include_content_revision: bool = False,
 ) -> dict[str, Any]:
-    text = normalize_todo_text(str(item.get("text") or ""), limit=text_limit)
+    text, content_revision = _structured_todo_text_fields(
+        item,
+        text_limit=text_limit,
+        include_content_revision=include_content_revision,
+    )
     priority, title = todo_priority_parts(text)
     index = item.get("index")
     explicit_status = normalize_todo_status(item.get("status"))
@@ -334,6 +339,8 @@ def structured_todo_item(
             ),
         }
     )
+    if content_revision:
+        normalized["content_revision"] = content_revision
     action_kind = normalize_todo_action_kind(item.get("action_kind"))
     if action_kind:
         normalized["action_kind"] = action_kind
@@ -431,7 +438,7 @@ def structured_todo_item(
     return normalized
 
 
-def compact_todo_item(item: dict[str, Any]) -> dict[str, Any]:
+def _compact_todo_item_record(item: dict[str, Any]) -> dict[str, Any]:
     compact: dict[str, Any] = {
         "index": item.get("index"),
         "done": bool(item.get("done")),
@@ -442,10 +449,20 @@ def compact_todo_item(item: dict[str, Any]) -> dict[str, Any]:
             continue
         if item.get(key) is not None:
             compact[key] = item.get(key)
+    if item.get("content_revision"):
+        compact["content_revision"] = item["content_revision"]
     if isinstance(item.get("goal_acceptance_guard"), dict):
         compact["goal_acceptance_guard"] = item["goal_acceptance_guard"]
-    attach_todo_handoff_note(compact)
     return compact
+
+
+def compact_todo_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return attach_todo_handoff_notes([_compact_todo_item_record(item) for item in items])
+
+
+def compact_todo_item(item: dict[str, Any]) -> dict[str, Any]:
+    """Singleton adapter; whole-source consumers use the batch owner."""
+    return compact_todo_items([item])[0]
 
 
 def canonical_todo_read_record(
@@ -485,7 +502,7 @@ def _task_orchestration_authority(lanes: dict[str, list[dict[str, Any]]], *, rol
     """Materialize the typed selection using the existing public field allowlist."""
     return {"schema_version": TASK_ORCHESTRATION_AUTHORITY_SCHEMA_VERSION, "role": role,
         **{name: [{key: compact[key] for key in fields if key in compact}
-                  for item in lanes[name] for compact in [compact_todo_item(item)]]
+                  for compact in lanes[name]]
            for name, fields in (("candidate_items", TASK_ORCHESTRATION_CANDIDATE_FIELDS),
                                 ("user_blocker_items", TASK_ORCHESTRATION_USER_BLOCKER_FIELDS))}}
 
@@ -575,13 +592,13 @@ def open_todo_items(
             if key in seen:
                 continue
             seen.add(key)
-            compact = compact_todo_item(item)
+            compact = _compact_todo_item_record(item)
             compact["done"] = False
             compact["text"] = text
             result.append(compact)
             if len(result) >= limit:
-                return sorted(result, key=projection_todo_presentation_sort_key)
-    return sorted(result, key=projection_todo_presentation_sort_key)
+                return sorted(attach_todo_handoff_notes(result), key=projection_todo_presentation_sort_key)
+    return sorted(attach_todo_handoff_notes(result), key=projection_todo_presentation_sort_key)
 
 
 def todo_lane_items(
@@ -778,18 +795,13 @@ def todo_successor_todo_ids(item: dict[str, Any], *, items: list[dict[str, Any]]
     return list(evaluation["successor_todo_ids"])
 
 
-def todo_item_is_succession_tracked_completion(item: dict[str, Any]) -> bool:
-    from .succession_warning import project_succession
-
-    return project_succession([item])[0]["tracked_completion"] is True
-
-
 def _structured_todo_group_items(
     items: list[dict[str, Any]],
     *,
     source_section: str | None,
     role: str | None,
     text_limit: int | None,
+    include_content_revision: bool,
 ) -> list[dict[str, Any]]:
     return [
         structured_todo_item(
@@ -798,6 +810,7 @@ def _structured_todo_group_items(
             source_section=source_section,
             archive_state=todo_archive_state(item),
             text_limit=text_limit,
+            include_content_revision=include_content_revision,
         )
         if isinstance(item, dict)
         else item
@@ -824,6 +837,7 @@ def _structured_resume_source_items(
                 if item.get("archive_state") is not None
                 else TODO_ARCHIVE_STATE_ACTIVE
             ),
+            include_content_revision=True,
         )
         for item in (items or [])
         if isinstance(item, dict)
@@ -840,12 +854,63 @@ def _resume_condition_evaluated(item: dict[str, Any], resume: str | None) -> boo
         and item.get("resume_ready") is condition.get("satisfied"))
 
 
+def _materialize_summary_lanes(items: list[dict[str, Any]], compacts: list[dict[str, Any]],
+    result: dict[str, Any], summary: dict[str, Any], lanes: dict[str, Any],
+    orchestration: dict[str, list[int]], *, fused_context: bool,
+) -> None:
+    """Materialize validated ordinals with the existing display field allowlist."""
+    if fused_context:
+        contexts = validate_handoff_context(result.get("handoff_context"), len(items))
+        for compact, context in zip(compacts, contexts, strict=True):
+            if context["note"]:
+                compact["handoff_note"] = context["note"]
+    else:
+        # Counts/closure still use every source row in their existing batch.
+        # The independent display lens only needs the ordinals that are used.
+        visible = sorted({index for lane in lanes.values() if lane["format"] != "raw" for index in lane["indices"]}
+                         | {index for indices in orchestration.values() for index in indices})
+        attach_todo_handoff_notes([compacts[index] for index in visible])
+    warning = summary.get("todo_succession_warning")
+    warning_action = warning.get("recommended_action") if isinstance(warning, dict) else None
+    if summary.get("completed_without_successor_count") and not isinstance(warning_action, str):
+        raise ValueError("invalid typed Todo succession warning")
+    for name, lane in lanes.items():
+        mode = lane.get("format")
+        if mode not in {"raw", "active", "compact", "recent", "gap"}:
+            raise ValueError("invalid Todo summary display format")
+        formatted = []
+        for index in lane["indices"]:
+            item = items[index]
+            if mode == "raw":
+                compact = item
+            elif mode == "active":
+                compact = dict(compacts[index])
+                for key in ("note", "evidence", "reason", "completed_at", "updated_at", "superseded_by"):
+                    compact.pop(key, None)
+            elif mode in {"compact", "recent", "gap"}:
+                compact = dict(compacts[index])
+                if mode in {"recent", "gap"}:
+                    for key in ("note", "evidence", "reason"):
+                        compact.pop(key, None)
+                if mode == "gap":
+                    compact.update(succession_tracked=True,
+                        recommended_action=warning_action)
+            else:
+                raise ValueError("invalid Todo summary display format")
+            formatted.append(compact)
+        summary[name] = formatted
+    if isinstance(warning, dict):
+        warning["items"] = summary["completed_without_successor_items"]
+
+
 def _project_summary(items: list[dict[str, Any]], preferred_todo_ids: set[str] | None,
     *, selection: dict[str, Any] | None, role: str | None, source_section: str | None,
     item_limit: int | None, full_selection: bool,
 ) -> dict[str, Any]:
     """Adapt evaluated facts and materialize one typed summary decision."""
-    from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+    import json
+
+    from ..effect_runtime import MAX_REQUEST_BYTES, EffectRuntimeRejected, effect_runtime_result
 
     from .succession_warning import succession_evaluations, succession_request
 
@@ -861,9 +926,6 @@ def _project_summary(items: list[dict[str, Any]], preferred_todo_ids: set[str] |
     # the same full-source hashes/semantics before using any summary fact,
     # avoiding a separate RPC for every role/filter (including empty roles).
     succession = succession_evaluations(items)
-    handoff_gates = build_todo_handoff_gate_states(items, evaluations=succession)
-    replan_gates = {gate.get("todo_id") for gate in handoff_gates
-        if gate.get("route_continuation_replan_required") is True}
     rows = []
     for item, evaluation in zip(items, succession, strict=True):
         resume = normalize_todo_resume_when(item.get("resume_when"))
@@ -885,23 +947,37 @@ def _project_summary(items: list[dict[str, Any]], preferred_todo_ids: set[str] |
             "linked_user_action": bool(normalize_todo_id(item.get("unblocks_todo_id"))),
             "no_followup": normalize_todo_no_followup(item.get("no_followup")) is True,
             "successor_gap": evaluation["successor_gap"], "handoff_state": evaluation["handoff_state"],
-            "replan": item.get("route_continuation_replan_required") is True or item.get("todo_id") in replan_gates,
+            "replan": evaluation["route_continuation_replan_required"],
             **{"todo_id": normalize_todo_id(item.get("todo_id")),
                 "claim": normalize_todo_claimed_by(item.get("claimed_by")),
                 "bound": normalize_todo_bound_agent(item.get("bound_agent")),
                 "blocks": normalize_todo_blocks_agent(item.get("blocks_agent")),
                 "global": bool(item.get("global_gate")),
                 "excluded": normalize_todo_excluded_agents(item.get("excluded_agents"))}})
+    compacts = [_compact_todo_item_record(item) for item in items]
+    contexts = [handoff_context_source(item) for item in compacts]
+    for context in contexts:
+        for key in ("todo_id", "claimed_by", "excluded_agents"):
+            context.get("metadata", {}).pop(key, None)
+        context.get("texts", {}).pop("task_class", None)
+        if not context.get("metadata"):
+            context.pop("metadata", None)
     try:
-        result = effect_runtime_result("todo.summary.project", {
+        request = {
             "schema_version": SUMMARY_PROJECTION_REQUEST_SCHEMA_VERSION,
+            "handoff_sources": contexts,
             "columns": list(SUMMARY_PROJECTION_COLUMNS),
             "rows": [[row[name] for name in SUMMARY_PROJECTION_COLUMNS] for row in rows],
             "succession": succession_request(items, reuse=True),
+            "frontier_rows": frontier_source_facts(items) if role == "agent" else None,
             "observed_at": now_utc().timestamp(),
             "selection": selection, "role": role, "source_section": source_section,
             "item_limit": item_limit, "full_selection": full_selection,
-        })
+        }
+        fused_context = len(json.dumps(request, separators=(",", ":")).encode()) <= MAX_REQUEST_BYTES - 4096
+        if not fused_context:
+            request.pop("handoff_sources")
+        result = effect_runtime_result("todo.summary.project", request)
     except EffectRuntimeRejected as error:
         raise ValueError(str(error)) from error
     if not isinstance(result, dict) or result.get("schema_version") != "todo_summary_projection_v0":
@@ -930,32 +1006,15 @@ def _project_summary(items: list[dict[str, Any]], preferred_todo_ids: set[str] |
     summary = result.get("fields")
     if not isinstance(summary, dict) or summary.get("schema_version") != "todo_summary_v0":
         raise ValueError("invalid typed Todo summary fields")
-    for name, lane in lanes.items():
-        mode = lane.get("format")
-        if mode not in {"raw", "active", "compact", "recent", "gap"}:
-            raise ValueError("invalid Todo summary display format")
-        formatted = []
-        for index in lane["indices"]:
-            item = items[index]
-            if mode == "raw":
-                compact = item
-            elif mode == "active":
-                compact = compact_active_next_action_todo_item(item)
-            elif mode in {"compact", "recent", "gap"}:
-                compact = compact_todo_item(item)
-                if mode in {"recent", "gap"}:
-                    for key in ("note", "evidence", "reason"):
-                        compact.pop(key, None)
-                if mode == "gap":
-                    compact.update(succession_tracked=True,
-                        recommended_action="record no_followup=true or add/link a successor todo")
-            else:
-                raise ValueError("invalid Todo summary display format")
-            formatted.append(compact)
-        summary[name] = formatted
+    if role == "agent":
+        index = summary.get("advancement_frontier_revision_index")
+        if not isinstance(index, dict) or index.get("schema_version") != TODO_FRONTIER_REVISION_INDEX_SCHEMA_VERSION:
+            raise ValueError("invalid typed Todo summary frontier index")
+    _materialize_summary_lanes(items, compacts, result, summary, lanes, orchestration,
+        fused_context=fused_context)
     return {"summary": summary, "items": [items[index] for index in selected],
         "succession": [succession[index] for index in selected],
-        "orchestration": {name: [items[index] for index in indices] for name, indices in orchestration.items()}}
+        "orchestration": {name: [compacts[index] for index in indices] for name, indices in orchestration.items()}}
 
 
 def compact_todo_group(
@@ -970,6 +1029,7 @@ def compact_todo_group(
     available_capabilities: Any = None,
     item_limit: int | None = MAX_STATUS_TODOS_PER_ROLE,
     text_limit: int | None = 500,
+    include_content_revision: bool = True,
     include_task_orchestration_authority: bool = False,
     vision_runs: list[dict[str, Any]] | None = None,
     evaluated_at: str | None = None,
@@ -981,6 +1041,7 @@ def compact_todo_group(
         source_section=source_section,
         role=role,
         text_limit=text_limit,
+        include_content_revision=include_content_revision,
     )
     _apply_resume_conditions(
         items,
@@ -1030,7 +1091,6 @@ def compact_evaluated_todo_group(
         return None
     summary: dict[str, Any] = projected["summary"]
     handoff_gates = build_todo_handoff_gate_states(items, evaluations=projected["succession"])
-    attach_advancement_frontier_revision_index(summary, items, role=role)
     attach_active_vision_waits(
         summary, vision_runs, role=role, items=items,
         lineage_items=lineage_items,
@@ -1040,16 +1100,4 @@ def compact_evaluated_todo_group(
             projected["orchestration"], role=role)
     if handoff_gates:
         summary["handoff_gates"] = handoff_gates
-    if summary.get("completed_without_successor_count"):
-        summary["todo_succession_warning"] = {
-            "schema_version": TODO_SUCCESSION_WARNING_SCHEMA_VERSION,
-            "reason_code": TODO_SUCCESSION_WARNING_REASON_CODE,
-            "count": summary["completed_without_successor_count"],
-            "items": summary["completed_without_successor_items"],
-            "recommended_action": (
-                "run loopx todo complete --no-follow-up for the completed Todo, "
-                "or add/link a successor Todo before closing the slice; do not "
-                "invent a user gate"
-            ),
-        }
     return summary

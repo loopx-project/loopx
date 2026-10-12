@@ -129,7 +129,10 @@ def check_todo_lifecycle() -> None:
             "--todo-id",
             todo_id,
         )
-        item = listed["todos"][0]
+        assert listed["matched"] is True, listed
+        assert listed["todo_detail_projection"]["source_complete"] is True, listed
+        item = listed["todo"]
+        assert item["todo_id"] == todo_id, item
         assert item["explore_result_node_refs"] == ["node_live", "node_dead"], item
 
         completed = run_loopx(
@@ -193,7 +196,7 @@ def check_todo_lifecycle() -> None:
             GOAL_ID,
             "--todo-id",
             str(second["todo_id"]),
-        )["todos"][0]
+        )["todo"]
         assert "explore_result_node_refs" not in cleared, cleared
 
 

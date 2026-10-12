@@ -14,11 +14,11 @@ if str(REPO_ROOT) not in sys.path:
 
 from loopx.control_plane.todos.quota_summary import (  # noqa: E402
     compact_quota_todo_summary_for_payload,
-    is_user_gate_todo_item,
     select_quota_todo_summary,
     summarize_project_asset_todos_for_quota,
     summarize_user_todos_for_quota,
 )
+from loopx.control_plane.todos.user_gate import is_user_gate_todo_item  # noqa: E402
 
 
 AGENT_IDENTITY = {"agent_id": "codex-product-capability"}

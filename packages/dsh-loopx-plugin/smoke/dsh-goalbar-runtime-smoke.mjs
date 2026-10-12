@@ -1042,6 +1042,26 @@ async function exerciseRealDshWeb(
     await new Promise(resolveWait => setTimeout(resolveWait, 150))
     const idleCalls = (await readFile(cliLog, 'utf8')).trim().split('\n')
     assert.deepEqual(idleCalls, startupCalls, 'idle real DSH runtime invoked LoopX after bootstrap')
+
+    // Use the same Entry.update live-disable operation as Plugin Hub. Losing
+    // LoopX's bootstrap provider must remove only its own dependent services.
+    const disabled = await fetch(new URL('/qualification/disable-loopx', baseUrl), {
+      method: 'POST', headers: authHeaders, signal: AbortSignal.timeout(5_000),
+    })
+    assert.equal(disabled.status, 200, 'LoopX disposal stopped the shared Web server')
+    assert.deepEqual(await disabled.json(), { bootstrapRemoved: true, webAlive: true })
+    const afterDisable = await fetch(baseUrl, {
+      headers: authHeaders, signal: AbortSignal.timeout(5_000),
+    })
+    assert.equal(afterDisable.status, 200, 'DSH became unavailable after LoopX live-disable')
+    assert(!(await afterDisable.text()).includes(`"id":"${packageId}"`),
+      'live-disable retained the LoopX Client boot entry')
+    const retired = await rpc(baseUrl, 'goalbar/read', {
+      v: requestVersion, op: 'read', sessionId: 'runtime-no-agent',
+    }, authHeaders, undefined, sharedApi)
+    assert.equal(retired.response.status, 404, 'live-disable retained the LoopX route')
+    assert.deepEqual((await readFile(cliLog, 'utf8')).trim().split('\n'), startupCalls,
+      'LoopX disposal invoked a business command')
   } catch (error) {
     throw new Error(`real DSH web qualification failed: ${error.message}\n${redactWebOutput(output.text)}`, { cause: error })
   } finally {
@@ -1089,6 +1109,9 @@ case " $* " in
   *" workflow-skills "*)
     case " $* " in
       *" --install "*)
+        # Make initialization observably asynchronous: the printed URL must
+        # still wait for native Loader readiness without a Web-row dependency.
+        sleep 1
         for skill in loopx loopx-benchmark loopx-doc-registry loopx-pr-program loopx-pr-review loopx-project loopx-self-repair; do
           mkdir -p "$skills_dir/$skill"
           printf '%s\n' '---' "name: \"$skill\"" "description: \"LoopX runtime smoke skill.\"" '---' '' '# LoopX smoke' > "$skills_dir/$skill/SKILL.md"
@@ -1118,6 +1141,30 @@ esac
       'plugin', '--profile', 'web', 'add', tarball,
       '--prefer-offline', '--ignore-scripts',
     ], env)
+    const probe = join(temp, 'lifecycle-probe.mjs')
+    await writeFile(probe, `
+export const inject = ['loader', 'webServer']
+export function apply(ctx) {
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact', path: '/qualification/disable-loopx',
+    async handler(request, response) {
+      if (request.method !== 'POST') { response.writeHead(405).end(); return }
+      for (const id of ['loopx-init-command', 'loopx-goalbar', 'loopx-driver', 'loopx-shadow-observer']) {
+        const entry = [...ctx.loader.entries()].find(candidate => candidate.options.id === id)
+        if (!entry) throw new Error('missing qualification row: ' + id)
+        await entry.update({ disabled: true }, false, true)
+      }
+      response.setHeader('content-type', 'application/json')
+      response.end(JSON.stringify({
+        bootstrapRemoved: ctx.get('loopxBootstrap') === undefined,
+        webAlive: ctx.get('webServer') !== undefined && ctx.get('webRuntime') !== undefined,
+      }))
+    },
+  }))
+}
+`)
+    const profilePatch = join(home, 'profiles', 'web', 'cordis.patch.yml')
+    await writeFile(profilePatch, `- insert:\n    - id: loopx-lifecycle-qualification\n      name: ${JSON.stringify(probe)}\n`)
     installed = await realpath(join(home, 'profiles', 'web', 'node_modules', packageId))
     const dshInstallRequire = createRequire(
       join(dirname(dirname(dshBin)), '..', 'package.json'),
@@ -1146,9 +1193,28 @@ esac
       )
       previousRow = row
     }
-    assert.match(installedDump, /id: webserver[\s\S]*inject:\n\s+- webStartup\n\s+- loopxBootstrap/u)
-    assert.match(installedDump, /id: web-runtime[\s\S]*inject:\n\s+- webStartup\n\s+- loopxBootstrap/u)
+    assert(!installedDump.includes('loopxBootstrap'),
+      'optional LoopX bootstrap leaked into shared profile dependencies')
+
+    await writeFile(profilePatch, [
+      'loopx-init-command', 'loopx-goalbar', 'loopx-driver', 'loopx-shadow-observer',
+    ].map(id => `- id: ${id}\n  disabled: true\n`).join(''))
+    const disabledOutput = { text: '' }
+    const disabledChild = spawn(dshBin, ['--profile', 'web', '--port', '0', '--no-open'], {
+      cwd: packageRoot, env, stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    try {
+      const disabledWeb = await openAuthenticatedWeb(await waitForWebUrl(disabledChild, disabledOutput))
+      assert.equal(disabledWeb.index.status, 200, 'disabled LoopX package prevented DSH boot')
+      const retired = await rpc(disabledWeb.baseUrl, 'goalbar/read', {
+        v: requestVersion, op: 'read', sessionId: 'runtime-no-agent',
+      }, disabledWeb.headers, undefined, sharedApi)
+      assert.equal(retired.response.status, 404, 'disabled LoopX package activated the Host')
+    } finally {
+      await stopChild(disabledChild)
+    }
     run(dshBin, ['plugin', '--profile', 'web', 'remove', packageId], env)
+    await rm(profilePatch)
     const dump = run(dshBin, ['--profile', 'web', '--dump-config'], env)
     assert(!dump.includes(packageId), 'profile removal retained a LoopX Loader row')
   } finally {
@@ -1156,7 +1222,7 @@ esac
   }
   process.stdout.write([
     'dsh-loopx GoalBar runtime smoke passed',
-    `  real-profile: DSH ${dshVersion}, packed install, awaited automatic initialization, immediate /loopx skill readback, boot graph, served/materialized Client, loopback fence, process teardown, idle no-extra-CLI`,
+    `  real-profile: DSH ${dshVersion}, packed install, delayed automatic initialization before readiness, immediate /loopx skill readback, boot graph, served/materialized Client, loopback fence, live-disable preserves DSH and retires LoopX, disabled-package boot, process teardown, idle no-extra-CLI`,
     '  packed-connection: live mid-turn binding, lease revision reconciliation, runtime-only update, pending-watch abort, successful Start/Pause, handler disposal',
     '  client-lifecycle: slot coexistence/session injection plus ordinary-unload and cached-reapply CSS cleanup',
     '  manual-evidence: mounted Client-to-carrier Start/Pause stays in the owner-reviewed packed-browser gate',

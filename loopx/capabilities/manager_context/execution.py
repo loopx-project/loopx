@@ -6,7 +6,10 @@ Context receipt, launch observation, receiver adoption and return stay separate.
 
 from pathlib import Path
 from collections.abc import Callable
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ...chat_store import ChatSessionStore
 
 from ...agent_registry import load_goal_from_registry
 from ...collaboration_mcp import Delegations
@@ -112,33 +115,88 @@ def dispatch(root: Path, registry: Path, *, session: dict[str, Any], turn: dict[
         return {"submitted": False, "reason": "execution_binding_or_admission_unavailable"}
 
 
-def handoff_message(receipt: dict[str, Any], execution: dict[str, Any]) -> str:
-    prefix = "已将原消息交给 " + str(receipt["agent_id"]) + "。"
+def handoff_message(
+    receipt: dict[str, Any],
+    execution: dict[str, Any],
+    *,
+    brief: dict[str, Any] | None = None,
+) -> str:
+    """Summarize delivered context; execution facts come only from dispatch.
+
+    Display limits do not change the full normalized brief in the inbox.
+    The sender's free-form message cannot establish delivery or completion.
+    """
+    blocks = [f"**已转交给 `{receipt['agent_id']}`。**"]
+
+    def preview(value: str, limit: int) -> str:
+        # One display item stays one line. This is not a semantic parser and
+        # never changes the complete brief delivered to the receiver.
+        text = " ".join(value.split())
+        return text if len(text) <= limit else text[:limit] + "…"
+
+    if brief:
+        blocks.append(preview(brief["purpose"], 160))
+        for key, label, count, limit in (
+            ("acceptance", "期待的结果", 3, 100),
+            ("constraints", "执行边界", 2, 90),
+        ):
+            items = brief[key]
+            if items:
+                lines = [f"**{label}**", ""]
+                lines.extend("- " + preview(item, limit) for item in items[:count])
+                if len(items) > count:
+                    lines.append(f"- 另有 {len(items) - count} 项，已随完整简报交接。")
+                blocks.append("\n".join(lines))
+        blocks.append("**回传要求**：" + preview(brief["return_requirement"], 120))
+        # Selection evidence, internal operation ids and historical context
+        # belong to the full brief/readback, not the default chat preview.
+        blocks.append("完整简报已投递；上面是摘要。")
     if execution.get("submitted"):
-        return prefix + "已提交受控执行；受理不代表完成，接收方的处理结论将回到本次对话。"
-    if execution.get("reason"):
-        return prefix + "交接已保存，但执行绑定或任务准入未通过，尚未启动执行。"
-    return prefix + "材料已进入收件箱，尚未启动执行；收到接收方的处理结论后会回到这里。"
+        state = "已提交执行，尚未确认完成。"
+    elif execution.get("reason"):
+        state = "交接已保存，本次未提交受控执行；是否已开始处理尚未核实。"
+    else:
+        state = "已送达；是否已开始处理尚未核实。"
+    blocks.append(state + "处理结论会回到本次对话。")
+    return "\n\n".join(blocks)
 
 
-def handoff_response(root: Path, registry: Path, *, session: dict[str, Any],
-                     turn: dict[str, Any], response: dict[str, Any],
-                     source_authorized: Callable[[], bool],
-                     execution_allowed: Callable[[], bool]) -> dict[str, Any]:
-    """Present context delivery and separately admitted execution on one path."""
+def handoff_response(
+    root: Path,
+    registry: Path,
+    *,
+    session: dict[str, Any],
+    turn: dict[str, Any],
+    response: dict[str, Any],
+    source_authorized: Callable[[], bool],
+    execution_allowed: Callable[[], bool],
+    source_store: "ChatSessionStore | None" = None,
+) -> dict[str, Any]:
+    """Append receipt-backed status to the existing audience-processed answer.
+
+    This presentation adapter does not reinterpret model prose as execution
+    evidence or replace the answer already shown by the Chat stream.
+    """
     from . import deliver
+
+    answer = response.get("message")
+    answer = answer if isinstance(answer, str) and answer.strip() else ""
+
+    def present(notice: str) -> str:
+        return answer + "\n\n" + notice if answer else notice
 
     try:
         if not source_authorized():
             raise ValueError("manager connection authority is no longer available")
         receipt = deliver(root, registry, session=session, turn=turn,
-                          request=response["context_handoff"])
+                          request=response["context_handoff"], source_store=source_store)
         execution = dispatch(root, registry, session=session, turn=turn,
                              request=response["context_handoff"], receipt=receipt,
                              execution_allowed=execution_allowed)
         return {**response, "proposals": [], "gate": None,
                 "context_handoff_receipt": receipt, "context_execution": execution,
-                "message": handoff_message(receipt, execution)}
+                "message": present(handoff_message(receipt, execution,
+                    brief=None if answer else response["context_handoff"].get("brief")))}
     except (OSError, ValueError):
         return {**response, "proposals": [], "gate": None,
-                "message": "材料尚未转交：目标绑定、来源授权或持久收件回读未通过。需要修复交接链路；没有改动任务或优先级。"}
+                "message": present("材料尚未转交：目标绑定、来源授权或持久收件回读未通过。需要修复交接链路；没有改动任务或优先级。")}

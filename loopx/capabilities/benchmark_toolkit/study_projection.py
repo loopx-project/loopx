@@ -23,6 +23,7 @@ from .experiment_board import (
     normalize_benchmark_experiment_board_row,
     preview_benchmark_experiment_board_upsert,
 )
+from .factorial_contrast import benchmark_metric_comparison_value
 from .experiment_identity import (
     ARM_ROLES,
     experiment_run_key,
@@ -1240,16 +1241,22 @@ def build_benchmark_study_dashboard(
         ranked = [
             comparison
             for comparison in eligible
-            if isinstance(
-                comparison.get("metric_deltas", {})
-                .get(primary_metric, {})
-                .get("delta"),
-                (int, float),
+            if (
+                benchmark_metric_comparison_value(
+                    comparison.get("metric_deltas", {}).get(primary_metric, {})
+                )
+                is not None
             )
         ]
+        # A raw count and a rate have no meaningful shared magnitude ordering.
+        scales = {"delta_rate" in item["metric_deltas"][primary_metric] for item in ranked}
+        if len(scales) > 1:
+            ranked = []
         largest = max(
             ranked,
-            key=lambda item: abs(item["metric_deltas"][primary_metric]["delta"]),
+            key=lambda item: abs(
+                benchmark_metric_comparison_value(item["metric_deltas"][primary_metric]) or 0
+            ),
             default=None,
         )
         case["eligible_comparisons"] = eligible
@@ -1276,7 +1283,9 @@ def build_benchmark_study_dashboard(
                 directions[direction] += 1
             for metric_name, transitions in binary_transitions.items():
                 binary_delta = item.get("metric_deltas", {}).get(metric_name)
-                if not isinstance(binary_delta, Mapping):
+                if not isinstance(binary_delta, Mapping) or binary_delta.get(
+                    "comparison_unavailable_reason"
+                ):
                     continue
                 before, after = (
                     binary_delta.get("baseline_value"),

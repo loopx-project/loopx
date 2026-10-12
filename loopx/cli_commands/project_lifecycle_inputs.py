@@ -8,6 +8,8 @@ registration and dispatch module keeps one cohesive responsibility.
 from __future__ import annotations
 
 import argparse
+import json
+from pathlib import Path
 
 from ..control_plane.work_items.progress_observation import ProgressResultClass
 
@@ -20,6 +22,28 @@ INLINE_VISION_FIELDS = {
     "vision_dreaming_policy": "dreaming_policy",
     "vision_last_patch": "last_patch_summary",
 }
+
+
+def split_explore_result_input(vision_packet, result_path, *, scope_context=None):
+    """Transport explicit attachments; the capability owns validation/conflicts.
+
+    Keep the generic vision packet separate. No attachment means no capability
+    call, and neither ordinary vision fields nor local files imply a finding.
+    """
+    attachments = []
+    if isinstance(vision_packet, dict) and "explore_result" in vision_packet:
+        vision_packet = dict(vision_packet)
+        attachments.append(vision_packet.pop("explore_result"))
+    if result_path:
+        attachments.append(json.loads(Path(result_path).expanduser().read_text(encoding="utf-8")))
+    if not attachments:
+        return vision_packet, None
+    from ..capabilities.explore.result_writeback import normalize_result_attachment
+
+    other = {"other_attachment": attachments[1]} if len(attachments) == 2 else {}
+    return vision_packet, normalize_result_attachment(
+        attachments[0], vision_packet=vision_packet, scope_context=scope_context, **other
+    )
 
 
 def inline_agent_vision_packet(args: argparse.Namespace) -> dict[str, object] | None:

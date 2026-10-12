@@ -88,91 +88,91 @@ depending on the executor:
 - a shared controller loop can use the same number as a weighted selection
   ratio between eligible goals.
 
-## Completed-Todo Review Cadence
+## Goal Review Cadence
 
-`execution_profile.replan_after_completed_todos` is an integer hyperparameter,
-default **5** in both standard and fine-grained Turn modes. It may be set as a
-live machine default, while an explicit Goal value remains pinned until it is
-cleared. Set it to 2 or 3 for earlier review. Supported values are 1–5: the
-current agent projection retains five recent completions, so larger values are
-rejected.
+The product and benchmark runners default to review after **6 settled effective
+work Turns** in both standard and fine-grained modes. This changes the previous
+product threshold of five Turns and benchmark threshold of three Turns. Review
+can occur while a long Todo remains open; it does not count completed Todos.
+TurnEnvelope is not required. These are deterministic thresholds, not random
+averages or counts of model messages, tool calls, or heartbeat wakeups.
 
-```bash
-# Preview, apply, and read back the Goal setting.
-loopx configure-goal --goal-id example --execution-replan-after-todos 3
-loopx configure-goal --goal-id example --execution-replan-after-todos 3 --execute
-loopx configure-goal --goal-id example
-
-# Restore live machine-default inheritance.
-loopx configure-goal --goal-id example --clear-execution-replan-after-todos --execute
-```
-
-The Dashboard exposes **Goal review cadence** in both Machine Configuration and
-Goal capability settings. Machine changes are revision-locked and affect every
-Goal without an explicit override at its next quota/frontier evaluation. A Goal
-override is a complete value, not a field merge; clearing it restores live
-inheritance. Removing the machine namespace restores the capability default of
-5. This is a setting of the built-in control plane, with no provider or plugin
-installation. It does not create host turns, spend quota, or grant authority.
-
-The count includes completed advancement Todos claimed by the same Agent, with
-valid completion timestamps, after the latest qualifying outcome checkpoint.
-Open Todos, other Agents' work, and protocol steps do not count. A checkpoint
-must satisfy the existing material-outcome and acceptance-evidence rules;
-a generic refresh or an unqualified replan ACK does not reset the window.
-A closed Agent vision is excluded by the existing terminal-state rule.
-
-At the threshold, the next `quota should-run --goal-id example --agent-id agent-a`
-evaluation contributes a `vision_outcome_checkpoint_required` acceptance gap
-with `completed_todo_count` and `completed_todo_threshold`, through the existing
-replan obligation path. This is a machine-evaluated review obligation, subject
-to existing lane arbitration. The review can retain the current path with
-`continue` or `no_change`, or choose `replan`; reaching the threshold does not
-require changing a correct plan. No permission or quota boundary changes, and
-no external data is published by this setting.
-
-This counter does not interrupt the host or schedule a continuation turn.
-For review during a long turn, the executor must write completion state as
-work finishes and re-enter quota before starting the next Todo. Completing all
-Todos in one batch at closeout or never re-entering quota can defer review until
-after implementation. Lowering the threshold alone cannot repair that gap.
-
-Other cadences are independent: the standard profile's two-small-delivery
-streak suggests widening work; fine mode's five-small-delivery streak suggests
-direction review. Neither is this completed-Todo counter. The periodic review
-window of 20 material run records and long-open-Todo-chain triggers also retain
-their existing thresholds. Quiet or unchanged Monitor polls do not consume the
-periodic material-run window; their dedicated Monitor replan thresholds still apply.
-
-### Effective-work-Turn review cadence
-
-An explicit `execution_profile.replan_after_effective_turns` selects receipt-backed
-periodic review while a Todo may remain open. The setting replaces that Goal's
-completed-Todo cadence; the legacy default remains unchanged. Both units currently
-accept 1–5, keeping this opt-in within the existing cadence configuration range.
+The shared TypeScript history owner counts distinct, settled work Turns for the
+same Agent after its latest accepted replan acknowledgement. An accepted negative
+work result can count; observation-only polls, duplicate retries, unspent
+writebacks and missing settlement receipts cannot. At the threshold, the next
+quota evaluation creates `periodic_review_due` through the existing replan path.
+An evidence-linked review may retain the current approach; it does not require
+inventing a new plan, completing the open Todo, or declaring the Goal achieved.
+Review evidence from settled work for current source and acceptance applicability
+before running another probe. Reuse applicable evidence; missing, stale or
+insufficient evidence needs targeted verification. Do not repeat unchanged checks
+only to produce another review artifact. Explicit validation gates still apply.
+The cadence does not interrupt a host, schedule a Turn, spend quota or grant
+authority. The executor must settle work and re-enter quota before starting the
+next work Turn for the review obligation to take effect.
 
 ```bash
-loopx configure-goal --goal-id example --execution-replan-after-turns 3
-loopx configure-goal --goal-id example --execution-replan-after-turns 3 --execute
+# Preview, apply, and read back an explicit Goal threshold (supported: 1–6).
+loopx configure-goal --goal-id example --execution-replan-after-turns 5
+loopx configure-goal --goal-id example --execution-replan-after-turns 5 --execute
 loopx configure-goal --goal-id example
+
+# Restore live device/default inheritance.
 loopx configure-goal --goal-id example --clear-execution-replan-after-turns --execute
 ```
 
-The shared TypeScript history owner counts distinct, settled work Turns for the
-selected Agent after its latest accepted replan acknowledgement. An accepted
-negative work result can count; a poll, duplicate retry, unspent writeback or
-missing settlement receipt cannot. Reaching the threshold creates a periodic
-review obligation through the existing quota/writeback path. This does not
-schedule a host Turn or grant execution, quota or write authority.
+The Dashboard exposes **Goal review cadence** in the Capability Center for
+both the device and selected Goal. The existing machine namespace
+`todo_replan_cadence_machine_defaults_v1` stores `count_unit` (`effective_turns`
+or `completed_todos`) and `count`. It is built into the control plane and needs
+no provider installation. The CLI, settings readback, quota decision and
+writeback validation use the same effective configuration.
 
-In the Capability Center, **Goal review cadence** offers the counting unit and
-quantity for either the device default or selected Goal. The versioned machine
-configuration `todo_replan_cadence_machine_defaults_v1` stores `count_unit`
-(`completed_todos` or `effective_turns`) and `count`. Existing v0 configuration
-retains its completed-Todo meaning and storage on read; applying the guided
-editor explicitly migrates its shape. Legacy Goal API input `completed_todos`
-remains accepted. Clearing a Goal override restores the current device default;
-removing that namespace restores the legacy capability default.
+Precedence is **explicit Goal override → live device setting → product default**.
+A Goal override is a complete unit/count value, not a field merge. Device writes
+are revision-locked; removing the namespace restores six effective Turns.
+Existing explicit Goal and device values retain their unit and count, including
+five effective Turns and legacy completed-Todo settings. To retain the previous
+product cadence, set `--execution-replan-after-turns 5` explicitly. Reading or
+upgrading does not rewrite overrides. Clearing the Goal override restores inheritance. Goals without
+any override adopt the new default on their next evaluation after upgrade;
+this is a disclosed default behavior change, not a migration of historical data.
+Already running benchmark attempts retain their frozen code and settings.
+
+### Explicit completed-Todo cadence
+
+For the former product behavior or a unit ablation, select completed Todos:
+
+```bash
+loopx configure-goal --goal-id example --execution-replan-after-todos 5 --execute
+loopx configure-goal --goal-id example --clear-execution-replan-after-todos --execute
+```
+
+`execution_profile.replan_after_completed_todos` accepts 1–5; the retained Agent
+projection has five recent completions. It counts same-Agent advancement Todos
+with valid completion timestamps after the latest qualified outcome checkpoint.
+Open Todos, other Agents' work and protocol steps do not count. At the threshold
+it contributes `vision_outcome_checkpoint_required` with the completion count
+and threshold. A checkpoint must satisfy the existing material-outcome and
+acceptance-evidence rules; generic refreshes or unqualified ACKs do not reset
+this window.
+The closed-vision rule and existing lane arbitration remain in effect.
+
+Only one counting unit applies to a Goal. The explicit legacy unit preserves
+its completion/checkpoint semantics; it does not simultaneously trigger the
+effective-Turn cadence. Other review causes remain independent: small-delivery
+streaks (two small deliveries in standard mode and five in fine mode),
+long-open-Todo chains and Monitor-specific thresholds. The former
+20-material-run periodic fallback remains on the explicit completed-Todo path;
+the effective-Turn path uses verified settlements instead.
+
+产品与 benchmark 默认统一为 6 个已结算有效工作 Turn，此前分别为 5 个与 3 个。
+长 Todo 未结束也能触发方向复核，不依赖 TurnEnvelope，不按工具调用或空轮询计数。
+Goal 显式设置优先，其次是设备设置；清除两层覆盖才恢复产品默认。显式 Turn 与
+旧 Todo 配置保留原单位和次数，升级不改写；显式设置 5 个 Turn 可保留旧产品周期。
+没有覆盖的 Goal 则采用新默认。复核仍可有证据地
+保留当前路线，不要求机械换方向，也不增加执行、配额或目标验收权限。
 
 ### Governed Turn Execution
 
@@ -216,6 +216,15 @@ eligible frontier changes. Reentering the same Turn returns
 `heartbeat_settled_skip` with the original binding; only a fresh Turn discovers
 new work or replan obligations. Missing, rejected or mismatched checkpoints and
 receipts remain incomplete; this replay rule grants no Todo or Goal completion.
+
+An interrupted Todo-bound Turn retains the same identity before closeout too.
+Its replayed receipt, selected Todo and settlement commands must agree even if
+a higher-priority dated successor becomes ready after admission. Frontier
+discovery cannot rebind the old Turn; recover its verified effects first, then
+select the due successor under a fresh Turn. A stopped local trial does not
+become progress through recovery. Promoted authority's existing typed blocked
+closeout can use a Turn-owned retry for an open Todo without a resume condition,
+without inventing an external dependency or restarting the trial's budget.
 
 A Todo-bound path replan can be qualified during execution even when the
 initial guard selected no replan obligation. Its exact durable writeback must
@@ -420,6 +429,30 @@ Turn without spending quota. The retry suppresses only the blocked Todo for
 the same Agent until due or superseded by newer work, so independent eligible
 Todos can still be selected. Historical blocked writebacks without a bounded
 retry retain their prior spend readback; no debit is retroactively erased.
+Automatic no-spend stall writeback uses the same receipt-owned retry projection
+as live selection, including its post-writeback readback. A future unchanged
+monitor therefore stays quiet during that wait without failing the heartbeat
+receipt or changing the monitor's due time, hash, or material generation.
+The typed deadline owner reconciles a newer, earlier receipt-owned retry with
+an existing full-source deadline cache; hidden earlier monitor deadlines and
+unchanged caches remain intact. The same typed batch derives `blocked_retry_wait`
+from qualified full-source receipts independently of `frontier_deadline`, which
+still names the earliest wakeup. A non-blocking `user_action` notice therefore
+does not turn the retry into a human gate even when an earlier or equal monitor
+owns that wakeup. The retry identity and original due time remain visible; the
+monitor clock, genuine gate and independent runnable work keep their own rules.
+This corrects the automatic notice explanation without adding configuration or
+persisted state. The pending retry is a recheck deadline, not execution authority:
+current gates and the configured cadence floor still apply at and after due time.
+
+类型化 deadline owner 会把新叠加的、更早到期的 Turn 重试纳入已有的完整来源
+缓存，同时保留显示列表之外的更早监控时钟和未变化的缓存。同一个 typed batch
+从完整且合格的 receipt 来源独立投影 `blocked_retry_wait`；`frontier_deadline`
+仍表示最早唤醒时间。即使更早或同刻的独立 monitor 拥有下一唤醒，普通
+`user_action` 提醒也不会把重试解释为人工门禁；原 retry 身份/到期时间、monitor
+时钟、真实 gate 和独立可执行工作各自保持。这是自动通知解释的修正，不新增
+配置或持久化状态。重试到期仅要求重新检查，不授予执行权限；当前 gate 和
+已配置的调度周期下限仍然有效。
 
 `quota should-run` also separates long-running observation from work that should
 advance the selected goal. When the selected goal's current projection is a
@@ -713,6 +746,12 @@ must reopen, supersede, or record a public-safe no-follow-up rationale before
 ordinary delivery work. Only when no ready current-agent/unclaimed deferred
 resume exists should agent-scoped quota fall through to `agent_scope_wait`,
 `reassignment_required`, or `scope_exhausted`.
+
+The generated reopen command uses `--status open --clear-resume-when --reason`
+to consume the existing narrow lifecycle transition. Under canonical hard
+leases this resumes unchanged work without granting execution authority; the
+worker must then acquire a fresh lease. Bundling `--note`, evidence or other
+execution edits into that command remains subject to the normal lease fence.
 
 Priority remains authoritative across the resume boundary. When a ready
 current-agent or unclaimed deferred successor has strictly higher priority than
@@ -1220,6 +1259,15 @@ as distinct durable follow-up guidance; they do not implicitly invoke this
 task-step editor or replace shared prose, including after completion or repair.
 Refreshes without `--next-action` keep their existing recommendation
 and report behavior. Historical prose-update receipts remain readable.
+
+A Todo-less autonomous replan carries a v1 replan settlement identity, not a
+Todo step target. `--next-action` therefore returns
+`next_action_task_unavailable` with recovery guidance instead of trying to
+decode a missing `todo_id`. Omit that flag to derive the recommendation, or use
+`--recommended-action` for explicit replan guidance, retaining the original
+Turn and `--replan-obligation-id`. Neither route selects another Todo or grants
+its execution authority. Recommendation consumers reuse the settlement owner's
+v0/v1 identity validation, including effect and exclusive-binding checks.
 
 CLI status omits the reducer's internal source context and duplicate basis;
 the selected route and explicit peer detail retain the editable read fence.

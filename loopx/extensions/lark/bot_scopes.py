@@ -9,9 +9,8 @@ message ingestion; ``sink`` adds interactive cards and docs comments.
 
 from __future__ import annotations
 
-import re
+from .identity_shapes import LARK_APP_ID_PATTERN as APP_ID_PATTERN
 
-APP_ID_PATTERN = re.compile(r"cli_[A-Za-z0-9_-]+")
 _OFFICIAL_SCOPE_APPLY_HOSTS = ("open.feishu.cn", "open.larkoffice.com")
 
 # 核心：发消息、建群/查群/群成员管理 —— goal-channel、reviewer、kanban 必需

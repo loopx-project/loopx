@@ -15,6 +15,7 @@ from ...agent_registry import agent_profile_for_goal, registered_agent_ids_for_g
 from ...control_plane.goals.activation import goal_activation_state
 from ...control_plane.runtime.public_safety import public_safe_compact_text
 from ...history import decode_registry_snapshot
+from ...thread_agent_binding import summarize_agent_binding_routes
 
 
 class ContextDelivery(str, Enum):
@@ -94,6 +95,14 @@ def agent_page(
                 continue
             rows.append(row)
     page = rows[offset:offset + limit]
+    by_goal = {goal["id"]: goal for goal in visible}
+    for row in page:
+        bindings = summarize_agent_binding_routes(
+            [by_goal[row["goal_id"]]], agent_id=row["agent_id"])
+        row["registered_host_binding"] = {
+            key: bindings[key] for key in
+            ("outcome", "candidate_count", "address_shared", "scope")
+        }
     end = offset + len(page)
     return {
         "ok": True, "view": "agents", "rows": page, "offset": offset,
@@ -105,7 +114,9 @@ def agent_page(
         "stopped_goals_excluded": stopped,
         "note": "Search covers this source's permitted registrations, independently of delivery grants. "
                 "Profiles are declared responsibilities, not verified competence or instructions. "
-                "No presence, model availability, binding or execution was checked. "
+                "Registered host-binding summaries cover only that row's Goal; no host addresses are exposed. "
+                "No presence, model availability or execution was checked. Binding metadata is context, not recipient selection or permission. "
+                "Use view=agent_route for an exact selected identity's current host observation. "
                 "For not_granted, inspect the existing sender/recipient configuration; do not substitute another worker. "
                 "Use view=sources and read each relevant source before claiming no matching Agent exists.",
     }

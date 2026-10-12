@@ -171,7 +171,7 @@ CASES.extend([
 # corresponding row red.
 LADDER_ROW = "tests/control_plane/test_shared_goal_authority_e2e.py::test_ladder_row_passes_or_is_declared_unverified"
 CASES.extend([
-    Case("status_hides_prepared_only", ((COORDINATION + "local_authority_shadow_outbox.py", replacement(
+    Case("status_hides_prepared_only", ((COORDINATION + "local_authority_shadow_history.py", replacement(
         '            "committed_pending": sum(1 for entry in entries if entry.is_committed),\n'
         '            "prepared_only": sum(1 for entry in entries if not entry.is_committed),',
         '            "committed_pending": len(entries),\n'
@@ -287,8 +287,8 @@ CASES.extend([
         "if False:")),),
          "tests/control_plane/test_shadow_drain_adversarial.py::test_state_file_override_cannot_attribute_an_unbound_source_to_active_lineage"),
     Case("bootstrap_unregistered_root", ((COORDINATION + "runtime_shadow.ts", replacement(
-        "if (registeredRoot !== request.runtime_root)",
-        "if (false && registeredRoot !== request.runtime_root)")),),
+        "if (!await sameSourceRuntimeRoot(registeredRoot, request.runtime_root))",
+        "if (false)")),),
          "tests/control_plane/test_runtime_shadow_bounded_e2e.py::test_controller_cannot_bind_the_registered_source_to_an_override_runtime_root"),
     Case("bootstrap_unregistered_state", ((COORDINATION + "runtime_shadow.ts", replacement(
         "if (resolve(String(snapshot.state_path)) !== resolve(String(snapshot.registered_state_path)))",

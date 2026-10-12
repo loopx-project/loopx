@@ -5,11 +5,12 @@
 import { createHash } from "node:crypto";
 import {inflateSync} from "node:zlib";
 import type { JsonObject } from "../effect_program.ts";
-import { requireJsonObject } from "../runtime_decode.ts";
+import { requireJsonObject, requireBoolean, requireNonEmptyString, requireStringArray, optionalNonEmptyString } from "../runtime_decode.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import { normalizeTodoAgent, stripPythonWhitespace } from "../coordination/todo_agents.ts";
 import { AuthorityStoreProtocolError } from "../coordination/authority_store_codec.ts";
+import {claimAllowsAgent} from "./agent_scope.ts";
 
 const REVISION = "todo_frontier_revision_v0";
 const INDEX = "todo_frontier_revision_index_v0";
@@ -133,7 +134,7 @@ function checkpoint(rows: Row[] | null, agent: string | null, unclaimedOnly = fa
   if (rows === null) return {complete: false};
   const selected = rows.filter(row => row.advancement &&
     (!unclaimedOnly || row.claim === null) &&
-    (!agent || ((row.claim === null || row.claim === agent) && !row.excluded.includes(agent))));
+    claimAllowsAgent(row, agent));
   if (selected.length === 0) return {complete: false};
   const ids = new Set<string>();
   let latest: bigint | null = null;
@@ -218,10 +219,62 @@ function successorCheckpoints(request: JsonObject, agent: string | null): JsonOb
   ], bindings};
 }
 
+/** Classify legacy summary views without transporting private Todo content.
+ * An explicit empty executable slot wins. Count floors preserve observation
+ * coverage; they never synthesize selectable rows or an execution grant.
+ */
+function classifyFrontier(request: JsonObject, agent: string | null): JsonObject {
+  const sources = requireJsonObject(request.sources, "frontier sources");
+  const decode = (value: unknown) => {
+    if (value == null) return null;
+    if (!Array.isArray(value)) throw new EffectRuntimeRequestError("frontier source must be an array");
+    return value.map((raw, index) => {
+      const row = requireJsonObject(raw, "frontier classification row");
+      const actionable = requireBoolean(row.actionable, "actionable");
+      const advancement = requireBoolean(row.advancement, "advancement");
+      return {index, claim: optionalNonEmptyString(row.claim, "claim"),
+        excluded: requireStringArray(row.excluded, "excluded"),
+        eligible: actionable && advancement};
+    });
+  };
+  const executable = decode(sources.executable_backlog_items);
+  const free = decode(sources.unclaimed_priority_open_items) ?? [];
+  const claimed = decode(sources.claimed_advancement_open_items) ?? [];
+  const eligible = (row: typeof free[number]) => row.eligible;
+  const excluded = (row: typeof free[number]) => agent !== null && row.excluded.includes(agent);
+  const current = executable !== null
+    ? executable.filter(row => eligible(row) && row.claim !== null && (!agent || claimAllowsAgent(row, agent)))
+    : claimed.filter(row => eligible(row) && (!agent || row.claim === agent) && !excluded(row));
+  const unclaimed = executable !== null
+    ? executable.filter(row => eligible(row) && row.claim === null && !excluded(row))
+    : free.filter(row => eligible(row) && !excluded(row));
+  const others = (executable ?? claimed).filter(row => eligible(row) && agent !== null && row.claim !== null && row.claim !== agent);
+  // Python integer observations may exceed the JSON number precision boundary.
+  // Keep the floor exact in transit; selection still depends only on real rows.
+  const encodedFloor = requireNonEmptyString(request.claimed_count_floor, "claimed_count_floor");
+  if (!/^(0|[1-9][0-9]*)$/.test(encodedFloor)) {
+    throw new EffectRuntimeRequestError("claimed count floor must be canonical nonnegative decimal");
+  }
+  const floor = BigInt(encodedFloor);
+  const currentCount = floor > BigInt(current.length) ? floor : BigInt(current.length);
+  const group = (source: string, rows: typeof free) => ({source, indices: rows.map(row => row.index)});
+  return {groups: {
+    current_agent_claimed_items: group(executable !== null ? "executable_backlog_items" : "claimed_advancement_open_items", current),
+    unclaimed_items: group(executable !== null ? "executable_backlog_items" : "unclaimed_priority_open_items", unclaimed),
+    other_agent_claimed_items: group(executable !== null ? "executable_backlog_items" : "claimed_advancement_open_items", others),
+  }, counts: {
+    current_agent_claimed_advancement_count: currentCount <= BigInt(Number.MAX_SAFE_INTEGER)
+      ? Number(currentCount) : currentCount.toString(),
+    unclaimed_advancement_count: unclaimed.length,
+    other_agent_claimed_advancement_count: Math.max(others.length, (decode(request.diagnostic_peers) ?? []).filter(eligible).length),
+  }};
+}
+
 export function projectAdvancementFrontier(value: unknown): JsonObject {
   const request = requireJsonObject(value, "frontier revision request");
   if (request.schema_version !== "todo_frontier_revision_request_v0") throw new EffectRuntimeRequestError("frontier revision schema mismatch");
   const agent = agentId(request.agent_id);
+  if (request.operation === "classify") return classifyFrontier(request, agent);
   if (request.operation === "trigger_checkpoints") {
     return {trigger_checkpoints: triggerCheckpoints(request.triggers)};
   }
@@ -232,15 +285,42 @@ export function projectAdvancementFrontier(value: unknown): JsonObject {
   const rows = decodeRows(request.rows);
   if (request.operation === "select") return {checkpoint: checkpoint(rows, agent)};
   if (request.operation !== "index") throw new EffectRuntimeRequestError("unsupported frontier revision operation");
+  return {index: frontierIndex(rows)};
+}
+
+function frontierIndex(rows: Row[] | null): JsonObject {
   // An excluded agent can have no claimed rows. It still needs its own lane;
   // falling back to the global unclaimed checkpoint would include excluded work.
   const agents = [...new Set((rows ?? []).filter(row => row.advancement)
     .flatMap(row => [...(row.claim ? [row.claim] : []), ...row.excluded]))].sort();
   const counts = claimedAdvancementCounts(rows);
-  return {index: {schema_version: INDEX, ...(counts === null ? {} : {claimed_advancement_counts: counts}),
+  return {schema_version: INDEX, ...(counts === null ? {} : {claimed_advancement_counts: counts}),
     all: checkpoint(rows, null),
     unclaimed: checkpoint(rows, null, true),
-    by_agent: agents.map(agent_id => ({agent_id, ...checkpoint(rows, agent_id)}))}};
+    by_agent: agents.map(agent_id => ({agent_id, ...checkpoint(rows, agent_id)}))};
+}
+
+/** Compose the existing index owner inside an already-required summary read.
+ * Bind the lossless legacy codec to the validated source before selecting;
+ * display limits must never decide replan identity or commitment counts. */
+export function projectSummaryFrontierIndex(value: unknown, source: readonly JsonObject[],
+  indices: readonly number[]): JsonObject {
+  const rows = decodeRows(value);
+  if (rows === null || rows.length !== source.length) {
+    throw new EffectRuntimeRequestError("summary frontier source cardinality mismatch");
+  }
+  for (const [index, row] of rows.entries()) {
+    const fact = source[index];
+    const actionable = fact.status === "open" && !fact.done &&
+      (!fact.has_resume || fact.resume_ready === true) && !fact.acceptance_blocked;
+    if (row.id !== text(fact.todo_id) || row.claim !== (text(fact.claim) || null) ||
+        JSON.stringify(row.excluded) !== JSON.stringify(fact.excluded) ||
+        row.advancement !== (fact.task_class === "advancement_task") ||
+        row.actionable !== actionable || row.updated !== text(fact.updated_at || fact.completed_at)) {
+      throw new EffectRuntimeRequestError("summary frontier facts disagree with the validated source");
+    }
+  }
+  return frontierIndex(indices.map(index => rows[index]));
 }
 
 function classifyAck(observation: LongChainObservation, value: unknown): AckDecision {

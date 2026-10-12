@@ -33,20 +33,20 @@ export function GoalTeamEpisode({sessionId, result, zh, onInspect, onObservation
       ]);
       const matches = (link: DelegationDependency, source: DelegationReadback) =>
         link.state === "current" && source.operation_id === link.operation_id
-        && source.status === "accepted" && !source.recovery_required && !source.error
+        && source.status === "accepted" && source.current_use?.state !== "unavailable" && !source.recovery_required && !source.error
         && source.artifacts?.some(artifact => artifact.ref === link.ref && artifact.sha256 === link.sha256);
       const responseBindsOriginal = challenge.dependencies?.some(link =>
         link.relation === "responds_to" && link.operation_id === original!.operation_id && matches(link, first));
       const revisionMatchesObservation = revised.operation_id === result.operation_id
         && revised.request_id === result.request_id && revised.todo_id === result.todo_id
-        && revised.status === "accepted" && revised.agent_id === result.agent_id
+        && revised.status === "accepted" && revised.current_use?.state !== "unavailable" && revised.agent_id === result.agent_id
         && !revised.recovery_required && !revised.error
         && revised.artifacts?.length === result.artifacts?.length
         && result.artifacts?.every(expected => revised.artifacts?.some(
           artifact => artifact.ref === expected.ref && artifact.sha256 === expected.sha256))
         && revised.dependencies?.some(link => link.relation === "revises" && link.operation_id === original!.operation_id && matches(link, first))
         && revised.dependencies?.some(link => link.relation === "responds_to" && link.operation_id === response!.operation_id && matches(link, challenge));
-      if (result.status !== "accepted" || result.error || result.recovery_required
+      if (result.status !== "accepted" || result.current_use?.state === "unavailable" || result.error || result.recovery_required
           || !matches(original!, first) || !matches(response!, challenge)
           || !responseBindsOriginal || !revisionMatchesObservation) {
         throw new Error("linked evidence unavailable");
@@ -59,7 +59,7 @@ export function GoalTeamEpisode({sessionId, result, zh, onInspect, onObservation
         ? await readLoopXTeamWork(sessionId, refreshedAdoption.consumer_operation_id).catch(() => null) : null;
       const downstreamBindsRevision = downstream?.dependencies?.some(link =>
         link.relation === "uses" && link.operation_id === revised.operation_id && matches(link, revised));
-      const downstreamMatchesReceipt = downstream?.status === "accepted" && !downstream.recovery_required && !downstream.error
+      const downstreamMatchesReceipt = downstream?.status === "accepted" && downstream.current_use?.state !== "unavailable" && !downstream.recovery_required && !downstream.error
         && downstream.operation_id === refreshedAdoption?.consumer_operation_id
         && downstream.request_id === refreshedAdoption?.consumer_request_id
         && downstream.agent_id === refreshedAdoption?.consumer_agent_id

@@ -13,6 +13,7 @@ from loopx.cli_commands import (
     project_lifecycle,
     project_lifecycle_refresh_state,
 )
+from loopx.cli_runtime import add_subcommand_format, build_cli_parser
 from loopx.control_plane.capability_hooks import (
     POST_WRITEBACK_HOOK_RESULT_SCHEMA_VERSION,
     PostWritebackHookRegistration,
@@ -28,41 +29,24 @@ settlement_session = settlement_fixtures.session
 
 
 def _args(*, suppress_external_sinks: bool = False) -> argparse.Namespace:
-    return argparse.Namespace(
-        command="refresh-state",
-        goal_id="goal-public-fixture",
-        project=None,
-        state_file=None,
-        classification="validated",
-        recommended_action=None,
-        next_action=None,
-        delivery_batch_scale=None,
-        delivery_outcome=None,
-        delivery_workspace_path=None,
-        agent_id="agent-public-fixture",
-        agent_lane=None,
-        progress_scope=None,
-        autonomous_replan_recorded=False,
-        repair_delta_kinds=None,
-        agent_vision_json=None,
-        vision_state=None,
-        vision_summary=None,
-        vision_role_scope=None,
-        vision_acceptance=None,
-        vision_advancement_policy=None,
-        vision_replan_trigger=None,
-        vision_dreaming_policy=None,
-        vision_last_patch=None,
-        vision_todo_delta=None,
-        vision_unchanged_reason=None,
-        available_capabilities=None,
-        dry_run=False,
-        no_global_sync=False,
-        suppress_external_sinks=suppress_external_sinks,
-        runtime_root=None,
-        subcommand_format="json",
-        format=None,
+    parser, subparsers = build_cli_parser()
+    project_lifecycle_refresh_state.register_refresh_state_command(
+        subparsers, add_subcommand_format
     )
+    argv = [
+        "refresh-state",
+        "--goal-id",
+        "goal-public-fixture",
+        "--agent-id",
+        "agent-public-fixture",
+        "--classification",
+        "validated",
+        "--format",
+        "json",
+    ]
+    if suppress_external_sinks:
+        argv.append("--suppress-external-sinks")
+    return parser.parse_args(argv)
 
 
 @pytest.mark.parametrize(

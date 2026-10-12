@@ -302,7 +302,11 @@ def main() -> int:
             "lark_kanban_heartbeat_sync",
             "pull_request_review",
             "periodic_report",
+            "content_ops",
         }
+        references = features["content_ops"]
+        assert references["availability"] == "local_artifact_preview", references
+        assert "default" not in references and "current" not in references, references
         improvement = features["goal_capability_organization"]
         assert improvement["default"] == {
             "mode": "off", "discovery_budget_minutes": 5, "max_trials": 1,
@@ -315,10 +319,10 @@ def main() -> int:
             "wait_for_ci": True,
             "review_order": "forward",
         }
-        assert features["todo_replan_cadence"]["availability"] == "supported_opt_in"
+        assert features["todo_replan_cadence"]["availability"] == "supported_explicit_override"
         assert features["todo_replan_cadence"]["default"] == {
-            "count_unit": "completed_todos",
-            "count": 5,
+            "count_unit": "effective_turns",
+            "count": 6,
         }
         # Goal-scoped cadence is omitted when no explicit override is present;
         # the machine default remains discoverable through the default field.
@@ -326,7 +330,7 @@ def main() -> int:
             "todo_replan_cadence"
         ]
         replan_commands = features["todo_replan_cadence"]["commands"]
-        assert "--execution-replan-after-turns 3" in replan_commands["preview_enable"]
+        assert "--execution-replan-after-turns 6" in replan_commands["preview_enable"]
         assert "--execute" not in replan_commands["preview_enable"]
         assert "--execute" in replan_commands["apply_enable"]
         assert "--clear-execution-replan-after-todos" in replan_commands["preview_disable"]

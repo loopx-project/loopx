@@ -379,6 +379,11 @@ export function delegationInventoryItem(params: JsonObject): JsonObject {
   if (observation.status === "accepted") {
     requireThat(Array.isArray(observation.artifacts) && observation.artifacts.length > 0,
       "accepted inventory requires current artifacts");
+    if (observation.current_use !== undefined) {
+      const use = requireJsonObject(observation.current_use, "delegation current use");
+      requireThat(use.state === "current" || use.state === "unavailable", "invalid delegation current use");
+      result.current_use = use;
+    }
     result.artifacts = observation.artifacts.map(value => {
       const artifact = requireJsonObject(value, "accepted artifact");
       requireThat(text(artifact.ref) && typeof artifact.sha256 === "string"
@@ -486,6 +491,16 @@ export function decideDelegationStop(params: JsonObject): DelegationStopStep {
   }
   return stopRecord("requested", operationFree ? executionPending
     : params.timed_out === true ? "holder_still_running_after_grace" : "awaiting_acknowledgement");
+}
+
+/** Same-operation recovery after an explicitly requested independent recheck.
+ * Admission supplies a qualified committed receipt and proves no Host reinvocation. */
+export function recoverRevalidatedDelegation(params: JsonObject): JsonObject {
+  requireThat(params.from === "rejected" && params.original_task_failure === true,
+    "revalidation recovery requires the original task failure");
+  requireThat(params.committed_progress === true && params.host_reinvoked === false,
+    "revalidation recovery requires committed progress without repeating Host work");
+  return {status: "turn_returned"};
 }
 
 /** Whether an accepted result may produce a wake intent at all.

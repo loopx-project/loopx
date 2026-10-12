@@ -97,15 +97,25 @@ def test_complete_with_next_todo_uses_registered_agent():
                      "--goal-id", gid, "--role", "agent", "--text", "first segment"], home=home)
         assert add.returncode == 0, f"todo add failed:\n{add.stdout}\n{add.stderr}"
         todo_id = json.loads(add.stdout)["todo_id"]
+        denied = loopx(["--registry", registry, "todo", "claim", "--goal-id", gid,
+                        "--todo-id", todo_id, "--claimed-by", "cc"], home=home)
+        assert denied.returncode != 0 and "hard_lease" in denied.stdout, denied.stdout
+        acquired = loopx(["--registry", registry, "--format", "json", "task-lease", "acquire",
+                          "--goal-id", gid, "--todo-id", todo_id, "--owner", "cc",
+                          "--idempotency-key", "cc-lifecycle-first"], home=home)
+        assert acquired.returncode == 0, acquired.stdout + acquired.stderr
+        lease = json.loads(acquired.stdout)["lease"]
+        proof = ["--task-lease-idempotency-key", "cc-lifecycle-first",
+                 "--task-lease-expected-version", str(lease["version"])]
         r = loopx(["--registry", registry, "todo", "claim", "--goal-id", gid,
-                   "--todo-id", todo_id, "--claimed-by", "cc"], home=home)
+                   "--todo-id", todo_id, "--claimed-by", "cc", *proof], home=home)
         assert r.returncode == 0, f"claim failed:\n{r.stdout}\n{r.stderr}"
 
         # The exact shape loopx_mcp.complete_task now runs: --next-agent-todo and
         # NO --next-claimed-by. This is the maintainer's repro that used to fail.
         comp = loopx(["--registry", registry, "todo", "complete", "--goal-id", gid,
                       "--todo-id", todo_id, "--claimed-by", "cc", "--evidence", "ran build; pass",
-                      "--next-agent-todo", "second segment"], home=home)
+                      "--agent-id", "cc", *proof, "--next-agent-todo", "second segment"], home=home)
         assert comp.returncode == 0, f"complete+next failed:\n{comp.stdout}\n{comp.stderr}"
         blob = (comp.stdout + comp.stderr).lower()
         assert "not registered" not in blob, f"unexpected registration error:\n{comp.stdout}\n{comp.stderr}"

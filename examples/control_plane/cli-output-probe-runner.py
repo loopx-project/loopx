@@ -130,6 +130,7 @@ def _receipt_row(
             else []
         ),
         "next_action_basis_count": semantics.next_action_basis_count(payload),
+        "authoring_inputs": semantics.authoring_input_observations(text),
     }
 
 

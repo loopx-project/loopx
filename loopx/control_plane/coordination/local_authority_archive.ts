@@ -96,7 +96,7 @@ export async function manageLocalAuthorityArchive(value: unknown,
       }
       return {...base, ...await upgradeAuthorityFormats(request.runtime_roots as string[], request.execute === true)};
     }
-    if (request.action === "plan-migration" || request.action === "migrate") return await manageLocalAuthorityMigration(request);
+    if (request.action === "plan-migration" || request.action === "migrate" || request.action === "migration-readback") return await manageLocalAuthorityMigration(request);
     const archive = path(request.archive, "archive path");
     if (request.action === "verify") return {...base, status: "verified", archive: await verifyAuthorityArchive(archive)};
     const goalId = requireAuthorityStoreId(request.goal_id, "goal id");

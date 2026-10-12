@@ -1,6 +1,6 @@
 .personal-goal-draft { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--pw-line-strong); }
 .personal-goal-draft dl { display: grid; gap: 12px; margin: 16px 0; }
-.personal-goal-draft dt, .personal-goal-draft small, .personal-goal-draft footer span { color: var(--pw-muted); font-size: 12px; }
+.personal-goal-draft dt, .personal-goal-draft small, .personal-goal-draft footer span { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
 .personal-goal-draft dd { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .personal-goal-draft-options { display: flex; flex-wrap: wrap; gap: 8px; }
 .personal-goal-draft-options small { flex-basis: 100%; }
@@ -9,4 +9,4 @@
 .personal-goal-draft footer { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-top: 16px; }
 .personal-manager-conversation-tray:has(.personal-goal-draft) { max-height: min(620px, 65dvh); }
 .personal-manager-conversation-tray:has(.personal-goal-draft) .personal-manager-conversation-messages { min-height: 0; max-height: none; }
-.personal-manager-conversation-bubble .personal-goal-draft > strong { color: var(--pw-text); font-size: 14px; font-weight: 600; }
+.personal-manager-conversation-bubble .personal-goal-draft > strong { color: var(--pw-text); font-size: var(--text-body); line-height: var(--leading-body); font-weight: 600; }

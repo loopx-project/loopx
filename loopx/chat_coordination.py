@@ -32,6 +32,40 @@ PROJECT_COORDINATION_GUIDANCE = (
 PROJECT_CONTEXT_VERSION = 2
 
 
+def apply_context_handoff(
+    controller, scope, session, turn, response, context, *, execution_allowed
+):
+    """Apply a requested handoff while the source scope remains current."""
+    if response.get("context_handoff") is None:
+        return response
+    if scope["kind"] == "unavailable":
+        raise ValueError("context handoff requires a scoped conversation")
+    from .capabilities.manager_context.execution import handoff_response
+    from .chat_manager_context import manager_authorization_scope_is_current
+
+    expected_scope_id = context.get("authorization_scope_id")
+    if scope["kind"] == "external_audience" and expected_scope_id is None:
+        current_session = controller.store.load_session(session["session_id"]) or {}
+        expected_scope_id = current_session.get("manager_authorization_scope_id")
+    return handoff_response(
+        controller.coordination_runtime_root,
+        controller.registry_path,
+        session=session,
+        turn=turn,
+        source_store=controller.store,
+        response=response,
+        source_authorized=lambda: scope["kind"] != "external_audience"
+        or manager_authorization_scope_is_current(
+            controller.registry_path,
+            controller.manager_scope_resolver,
+            session,
+            expected_scope_id,
+            runtime_root=controller.coordination_runtime_root,
+        ),
+        execution_allowed=execution_allowed,
+    )
+
+
 def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, scope):
     """Prepare the same evidence/handoff path for each supported conversation."""
     from .chat_runtime import CodexAppServerAdapter, CodexChatAgentError
@@ -67,17 +101,14 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
                     "next_action": "Reconnect the manager to the intended Goal and retry the same message.",
                 },
             )
-        if scope.get("bound_steward") is True:
-            # A new, explicitly confirmed commission extends this same owner's
-            # scope. Refresh tools/evidence without manufacturing a new thread.
-            controller.store.update_session(session_id, manager_authorization_scope_id=scope_id)
-        elif session.get("manager_authorization_scope_id") != scope_id:
+        if session.get("manager_authorization_scope_id") != scope_id:
             adapter.close_session()
             with controller.lock:
                 if controller.adapters.get(session_id) is adapter:
                     controller.adapters.pop(session_id, None)
             manager_runtime = controller.manager_runtime_profile(
-                str(session.get("channel_id") or "manager")
+                str(session.get("channel_id") or "manager"),
+                steward_context=session.get("steward_context"),
             )
             adapter = controller._start_adapter(
                 agent_id=str(session["agent_id"]),
@@ -117,7 +148,7 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
         context["context_execution"] = execution_catalog
     if isinstance(adapter, CodexAppServerAdapter):
         from .capabilities.manager_context.inspection import ManagerInspection, manager_index
-        from .chat_manager_context import manager_authorization_scope_id
+        from .chat_manager_context import manager_authorization_scope_is_current
         expected_scope_id = context.get("authorization_scope_id")
         def scope_valid() -> bool:
             if scope["kind"] == "owner_portfolio":
@@ -127,8 +158,13 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
                 return bool(current and current.get("status") != "closed"
                             and current.get("goal_id") == session.get("goal_id")
                             and current.get("channel_id") == session.get("channel_id"))
-            current = controller.manager_scope_resolver(session) if controller.manager_scope_resolver else None
-            return isinstance(current, list) and manager_authorization_scope_id(current, runtime_root=runtime_root, channel_id=session.get("channel_id")) == expected_scope_id
+            return manager_authorization_scope_is_current(
+                controller.registry_path,
+                controller.manager_scope_resolver,
+                session,
+                expected_scope_id,
+                runtime_root=runtime_root,
+            )
         inspection = ManagerInspection(
             context=context, registry_path=controller.registry_path,
             runtime_root=runtime_root,

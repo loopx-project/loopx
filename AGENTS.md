@@ -122,16 +122,18 @@ adapters, smoke tests, public docs, or commit/push workflows, use the
    - focused validation or cleanup.
 6. Push a branch and open a PR for reviewable batches.
 
-Control-plane, runtime and product surfaces are never self-merged. A change
-that alters the behavior of `loopx/**`, `apps/**` or `packages/**`, a
-permission or authority boundary, a persisted state or receipt contract, a
-quota/scheduler/todo rule, or a CLI/API contract is proposed, reviewed on its
-exact head, and then left for the maintainer to merge -- including when the
-author has already validated it, its review is published, and its CI is green.
-Admin bypass does not convert one of those changes into a self-mergeable one,
-and neither does a small diff: a validated fix is still a control-plane change
-when it changes control-plane behavior. When the author cannot tell whether a
-change is in that set, it is not self-merged.
+Control-plane, runtime and product surfaces require explicit maintainer
+merge authorization. A change that alters the behavior of `loopx/**`, `apps/**`
+or `packages/**`, a permission or authority boundary, a persisted state or
+receipt contract, a quota/scheduler/todo rule, or a CLI/API contract must be
+proposed and reviewed on its exact head. After the required validation passes
+and exact-head merge readiness returns ready, an agent may use admin bypass
+when the maintainer has explicitly authorized that merge or delivery batch.
+A small diff, successful validation, published review or green CI does not grant
+merge authority by itself. Admin bypass never substitutes for exact-head review,
+required validation or merge readiness. Without explicit authorization, leave
+these changes for the maintainer to merge; when the affected boundary is unclear,
+use the same authorization requirement.
 
 For small, low-risk PRs, maintainers may self-merge after validation when all
 of the following are true:
@@ -380,6 +382,16 @@ compatibility; neither a historical ceiling nor a green revised test is the
 objective. Record the tradeoff in existing PR validation/review evidence, not a
 new approval workflow. Hard limits and frozen experiment/promotion criteria
 retain their owning authority and cannot be reclassified to erase a failure.
+
+LoopX is a semantic control plane: agent-consumed prose is part of its behavior
+contract. Before shortening packet guidance, compare obligations clause by
+clause, including ordering, evidence provenance, modality, scope qualifiers,
+continuation and stop conditions. Stable fields, commands and decision codes
+do not prove that shorter instructions preserve those obligations. A regression
+ceiling is not frozen authority: prefer an evidence-backed limit increase when
+compression would discard useful meaning. Use the existing review capability's
+`observable_semantics.decision_text_assessment`; do not optimize for a green
+size test at the expense of the caller's decision.
 
 ### Refactor Real-Path Validation
 

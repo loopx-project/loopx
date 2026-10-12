@@ -115,6 +115,7 @@ class TurnStartHookRegistration:
     producer: TurnStartProducer
     max_result_bytes: int = 16 * 1024
     required_read: Mapping[str, Any] | None = None
+    context_reader: Callable[[], Mapping[str, Any]] | None = None
 
     def contract(self) -> dict[str, Any]:
         return {
@@ -243,6 +244,7 @@ def dispatch_turn_start_hooks(
     results: list[dict[str, Any]] = []
     required_reads: list[dict[str, Any]] = []
     failures: list[dict[str, str]] = []
+    contexts: list[dict[str, Any]] = []
     seen_hook_ids: set[str] = set()
     seen_required_read_commands: set[str] = set()
     ordered = sorted(registrations or (), key=lambda item: item.hook_id)
@@ -299,6 +301,14 @@ def dispatch_turn_start_hooks(
                         }
                     )
                     seen_required_read_commands.add(command)
+                    if registration.context_reader is not None:
+                        # Invoke the registered read adapter, never its displayed
+                        # shell command. Discovery receipts remain content-free.
+                        try:
+                            content = dict(registration.context_reader())
+                            contexts.append({"command": command, "content": content})
+                        except Exception:  # noqa: BLE001 - preserve an actionable read on failure.
+                            contexts.append({"command": command, "error_code": "context_source_unavailable"})
     return {
         "schema_version": TURN_START_HOOK_DISPATCH_SCHEMA_VERSION,
         "phase": "turn_start",
@@ -307,6 +317,7 @@ def dispatch_turn_start_hooks(
         "results": results,
         "required_reads": required_reads,
         "failures": failures,
+        **({"contexts": contexts} if contexts else {}),
     }
 
 

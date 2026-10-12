@@ -2,6 +2,7 @@ import { readReceiptLogSnapshot } from "../runtime/receipt_log_snapshot.ts";
 import { isAbsolute, join } from "node:path";
 
 import {
+  heartbeatReceiptsFromEvents,
   readGoalRolloutEventSnapshot,
   strictGoalRolloutEvents,
   type GoalRolloutEventSnapshot,
@@ -51,11 +52,18 @@ import {
   normalizeHeartbeatTodoId as normalizeTodoId,
   optionalHeartbeatString as optionalString,
   selectEffectiveHeartbeatReceipt,
+  heartbeatWorkRequalification,
   type HeartbeatReceiptFact,
 } from "./heartbeat_receipt_identity.ts";
 
+import {
+  candidateReadbackBinding,
+  missingCloseoutReceipts,
+  selectCloseoutCandidates,
+  type PriorHostTurnCloseoutCandidate,
+} from "./prior_turn_closeout.ts";
 import { refreshExternalDelivery } from "./refresh_external_delivery.ts";
-import { BLOCKED_WAIT_REQUEST_SCHEMA, prepareBlockedWait, RECEIPT_BOUND_WAIT_REQUEST_SCHEMA, projectReceiptBoundWait } from "./blocked_wait.ts";
+import { BLOCKED_WAIT_REQUEST_SCHEMA, prepareBlockedWait, RECEIPT_BOUND_WAIT_REQUEST_SCHEMA, projectReceiptBoundWait, isMonitorUnavailableWait } from "./blocked_wait.ts";
 import {nativeChildReportAdmission} from "../capabilities/native_child_admission.ts";
 import {
   parseQuotaAccountingOwner,
@@ -70,6 +78,17 @@ export const QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA =
 export const QUOTA_SETTLEMENT_READBACK_RESULT_SCHEMA =
   "loopx_quota_settlement_readback_result_v0";
 export const SEMANTIC_REPLAN_GUARD_SCHEMA = "semantic_replan_guard_v0";
+
+// Where the guard compiles the repair for an owed prior Turn. The repair lane
+// depends on the bound Todo's facts, which this read model does not read, so
+// the refusal names that compiled contract instead of guessing a command.
+const PRIOR_TURN_RECOVERY_ACTIONS_REF = "interaction_contract.cli_channel.next_cli_actions";
+
+interface OwedPriorTurn extends PriorHostTurnCloseoutCandidate {
+  missing_receipts: string[];
+}
+
+type OwedPriorTurnLookup = (agentId: string, turnInstanceId: string) => OwedPriorTurn | null;
 
 const TURN_INSTANCE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const AGENT_ID_PATTERN = /^[a-z][a-z0-9_.:@-]{0,79}$/;
@@ -86,6 +105,7 @@ interface ReadbackRequest {
   resolve_original_binding: boolean;
   borrow_source_admission: boolean;
   refresh_retry: RefreshRetryRequest | null;
+  heartbeat_reentry_guard: JsonObject | null;
   owner: QuotaAccountingOwner;
 }
 
@@ -121,6 +141,14 @@ function settlementScope(
     throw new EffectRuntimeRequestError("goal_id must be a single path segment");
   }
   return {runtimeRoot, goalId};
+}
+
+/** Validate the canonical scope before callers perform optional receipt IO. */
+export function validateQuotaSettlementScope(
+  runtimeRootValue: unknown,
+  goalIdValue: unknown,
+): { runtimeRoot: string; goalId: string } {
+  return settlementScope(runtimeRootValue, goalIdValue);
 }
 
 /** Receipt verification owns progress; a durable debit alone is not settlement. */
@@ -246,6 +274,8 @@ function decodeRequest(
     resolve_original_binding: request.resolve_original_binding === true,
     borrow_source_admission: request.borrow_source_admission === true,
     refresh_retry: decodeRefreshRetry(request.refresh_retry),
+    heartbeat_reentry_guard: request.heartbeat_reentry_guard == null ? null
+      : requireJsonObject(request.heartbeat_reentry_guard, "heartbeat_reentry_guard"),
     owner,
   };
 }
@@ -778,6 +808,7 @@ function resolveIdentity(
   request: ReadbackRequest,
   events: readonly JsonObject[],
   runs: readonly JsonObject[],
+  owedPriorTurn: OwedPriorTurnLookup | null,
 ): SettlementResult<JsonObject> | null {
   let agentId = normalizeAgentId(request.agent_id);
   let todoId = normalizeTodoId(request.todo_id);
@@ -885,10 +916,24 @@ function resolveIdentity(
     // binds the preemption it is actually holding. Naming the wrong command
     // costs the caller a turn, so the repair is chosen from the retained
     // selection the guard recorded.
+    //
+    // Neither rebind can succeed while an earlier Turn of this Agent owes its
+    // closeout: the guard preempts selection with that Turn's recovery and
+    // replays it for every later Turn. Both repairs above then only replay, so
+    // the owed Turn is named from the same candidate rule the guard applies.
     const deferredSelectionTodoId = normalizeTodoId(
       receiptDetails.pending_action_selection_todo_id,
     );
-    const repair = deferredSelectionTodoId === null
+    const owed = owedPriorTurn?.(identity.agent_id, turnInstanceId) ?? null;
+    const repair = owed !== null
+      ? `an earlier Turn owes its closeout (turn_instance_id ${owed.prior_turn_instance_id}, ` +
+        `${owed.binding_kind} ${owed.binding_id}, missing ${owed.missing_receipts.join(", ")}), ` +
+        "so the guard replays that recovery instead of binding this turn and a " +
+        "rebind of this turn cannot succeed; settle the earlier Turn first by " +
+        `following the guard's ${PRIOR_TURN_RECOVERY_ACTIONS_REF} ` +
+        `(quota should-run --turn-instance-id ${turnInstanceId} returns them), ` +
+        "then rerun the guard for this turn and settle with the identity it returns"
+      : deferredSelectionTodoId === null
       ? "rebind it through the guard's same-turn reconciliation, then settle: " +
         "quota should-run --turn-instance-id " +
         `${turnInstanceId} --todo-id ${identity.todo_id ?? "<todo_id>"}`
@@ -907,6 +952,10 @@ function resolveIdentity(
         ...(deferredSelectionTodoId === null
           ? {}
           : { deferred_selection_todo_id: deferredSelectionTodoId }),
+        ...(owed === null ? {} : {
+          owed_prior_turn: owed,
+          recovery_actions_ref: PRIOR_TURN_RECOVERY_ACTIONS_REF,
+        }),
       },
     );
   }
@@ -989,9 +1038,52 @@ function failedReadback(
   };
 }
 
+/**
+ * The newest prior Turn of this Agent whose closeout is still owed, by the
+ * candidate and missing-receipt rule the guard's preflight applies to the same
+ * snapshot. Each candidate is read back under its own binding, which is never
+ * unbound, so the nested read never asks this question again.
+ */
+function owedPriorTurnFromSnapshot(
+  request: ReadbackRequest,
+  snapshot: QuotaSettlementReadbackSnapshot,
+  agentId: string,
+  turnInstanceId: string,
+): OwedPriorTurn | null {
+  const receipts = heartbeatReceiptsFromEvents(snapshot.events, request.goal_id, agentId)
+    .filter((event) => quotaOwnerOwnsProjection(request.owner, event.goal_ref));
+  const { candidates } = selectCloseoutCandidates(
+    receipts,
+    request.goal_id,
+    agentId,
+    turnInstanceId,
+  );
+  for (const selected of candidates) {
+    const missingReceipts = missingCloseoutReceipts(readQuotaSettlementFromRequest(
+      {
+        ...request,
+        agent_id: agentId,
+        ...candidateReadbackBinding(selected),
+        infer_turn_instance_id: false,
+        allow_unbound_binding: false,
+        resolve_original_binding: false,
+        refresh_retry: null,
+        heartbeat_reentry_guard: null,
+      },
+      snapshot,
+      false,
+    ));
+    if (missingReceipts !== null) {
+      return { ...selected, missing_receipts: missingReceipts };
+    }
+  }
+  return null;
+}
+
 function readQuotaSettlementFromRequest(
   request: ReadbackRequest,
   snapshot: QuotaSettlementReadbackSnapshot,
+  nameOwedPriorTurn = true,
 ): JsonObject {
   if (
     snapshot.runtimeRoot !== request.runtime_root ||
@@ -1024,6 +1116,10 @@ function readQuotaSettlementFromRequest(
     request,
     explicitEvents,
     ownerRuns,
+    nameOwedPriorTurn
+      ? (agentId, turnInstanceId) =>
+        owedPriorTurnFromSnapshot(request, snapshot, agentId, turnInstanceId)
+      : null,
   );
   if (identityResult === null) {
     return {
@@ -1074,6 +1170,8 @@ function readQuotaSettlementFromRequest(
   const spendEvent = findStepEvent(events, identity, "quota_spend");
   const completionEvent = findStepEvent(events, identity, "todo_complete");
   const supersedeEvent = findStepEvent(events, identity, "todo_supersede");
+  const closeoutStarted = [writebackRun, writebackEvent, spendRun, spendEvent, completionEvent, supersedeEvent]
+    .some((receipt) => receipt !== null);
 
   const writeback = writebackResult(identity, writebackRun, writebackEvent);
   const spend = spendResult(identity, spendRun, spendEvent);
@@ -1128,6 +1226,8 @@ function readQuotaSettlementFromRequest(
     material_change: isMaterialMonitorPoll(monitorPoll),
     durable_writeback_present: writeback.failure === null,
     quota_spend_present: spend.failure === null,
+    unavailable_attempt_present: blockedNoSpend &&
+      isMonitorUnavailableWait(writebackRun?.blocked_retry, identity.todo_id),
   });
   // A committed observation closes its exact Turn independently of whether
   // the monitor still appears in the current Todo frontier. Reuse the monitor
@@ -1143,7 +1243,7 @@ function readQuotaSettlementFromRequest(
     no_spend_closeout_present: blockedNoSpend,
   });
 
-  const recovery = request.refresh_retry === null ? null : refreshRecovery(
+  const refreshDecision = request.refresh_retry === null ? null : refreshRecovery(
     request.refresh_retry, writebackRun, writeback.failure === null,
     workspaceCausality?.requirement,
     writebackRun !== null && snapshot.runs.slice(
@@ -1155,6 +1255,14 @@ function readQuotaSettlementFromRequest(
       (jsonObject(run.agent_vision) !== null || jsonObject(run.vision_checkpoint)?.required === true)
     ),
   );
+  // A non-material poll need not appear as findWriteback's advancement run.
+  // Its exact committed observation still fences an incompatible unavailable
+  // claim; retain the normal workspace/vision supplement paths for real polls.
+  const recovery = monitorPoll !== null && request.refresh_retry?.delivery_outcome === "outcome_gap" &&
+      isTurnScopedSettlementOutcome(request.refresh_retry.delivery_outcome,
+        request.refresh_retry.progress_observation, identity.todo_id)
+    ? {...refreshDecision, decision: "reject", reason: "committed_writeback_payload_conflict"}
+    : refreshDecision;
 
   return {
     schema_version: QUOTA_SETTLEMENT_READBACK_RESULT_SCHEMA,
@@ -1185,9 +1293,12 @@ function readQuotaSettlementFromRequest(
     replay_phase: replayPhase,
     native_child_admission: nativeChildReportAdmission(
       receiptDetails, heartbeatReceipt.status, identity.effect_id, replayPhase,
-      [writebackRun, writebackEvent, spendRun, spendEvent, completionEvent, supersedeEvent]
-        .some((receipt) => receipt !== null),
+      closeoutStarted,
     ),
+    ...(request.heartbeat_reentry_guard === null ? {} : {
+      heartbeat_reentry_qualification: heartbeatWorkRequalification(heartbeatReceipt,
+        request.heartbeat_reentry_guard, identity, replayPhase, closeoutStarted),
+    }),
   };
 }
 

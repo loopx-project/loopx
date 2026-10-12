@@ -36,6 +36,7 @@ DEFAULT_AGENT = "cc"
 # registry-driven context, shared with the hooks/MCP
 sys.path.insert(0, str(HERE.parent / "hooks"))
 from goal_state import goal_context, find_registry, loop_md_path  # noqa: E402
+from stdio_utf8 import pin_utf8_stdio  # noqa: E402
 from loopx.control_plane.heartbeat.rules import (  # noqa: E402
     HOST_LOOP_SAFETY_RULE,
     RUNTIME_REPAIR_ROUTING_RULE,
@@ -276,4 +277,5 @@ def main():
 
 
 if __name__ == "__main__":
+    pin_utf8_stdio()
     main()

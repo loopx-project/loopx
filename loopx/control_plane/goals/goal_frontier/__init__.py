@@ -1003,6 +1003,7 @@ def derive_goal_frontier_replan_obligation_from_summaries(
     acceptance_gaps: list[dict[str, Any]] | None = None,
     monitor_lane_semantically_valid: bool = True,
     vision_settlement_query: bool = False,
+    _frontier_counts: dict[str, int] | None = None,
 ) -> dict[str, Any] | None:
     """Return a compact replan obligation when the goal frontier has no advancement.
 
@@ -1012,9 +1013,13 @@ def derive_goal_frontier_replan_obligation_from_summaries(
     """
 
     agent_counts = _summary_task_counts(agent_todo_summary)
-    frontier_counts = _frontier_advancement_counts(
-        agent_todo_summary=agent_todo_summary,
-        agent_id=agent_id,
+    # Only the enclosing context reduction supplies this fresh, same-agent
+    # snapshot. Standalone callers still classify their current source.
+    frontier_counts = (
+        _frontier_counts if _frontier_counts is not None
+        else _frontier_advancement_counts(
+            agent_todo_summary=agent_todo_summary, agent_id=agent_id,
+        )
     )
     total_frontier_advancement = sum(frontier_counts.values())
     selectable_frontier_advancement = (
@@ -1419,12 +1424,17 @@ def build_goal_frontier_projection_from_summaries(
     acceptance_gaps: list[dict[str, Any]] | None = None,
     vision_wait_state: dict[str, Any] | None = None,
     fallback_gaps: list[dict[str, Any]] | None = None,
+    _frontier_counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     user_counts = _summary_task_counts(user_todo_summary)
     agent_counts = _summary_task_counts(agent_todo_summary)
-    frontier_counts = _frontier_advancement_counts(
-        agent_todo_summary=agent_todo_summary,
-        agent_id=agent_id,
+    # Only the enclosing context reduction supplies this fresh, same-agent
+    # snapshot. Standalone callers still classify their current source.
+    frontier_counts = (
+        _frontier_counts if _frontier_counts is not None
+        else _frontier_advancement_counts(
+            agent_todo_summary=agent_todo_summary, agent_id=agent_id,
+        )
     )
     selectable_frontier_advancement = (
         frontier_counts["current_agent_claimed_advancement_count"]
@@ -1489,6 +1499,7 @@ def build_goal_frontier_projection_context_from_status(
     goal_status: str | None = None,
     agent_profile: dict[str, Any] | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
+    receipt_bound_guard_recorded_at: str | None = None,
 ) -> dict[str, Any]:
     """Build the quota-facing goal-frontier read model.
 
@@ -1679,6 +1690,7 @@ def build_goal_frontier_projection_context_from_status(
         agent_todo_source_items=agent_todo_source_items,
         latest_replan_ack=effective_replan_ack,
         current_transition_replan_ack=replan_transition_ack,
+        _frontier_counts=frontier_counts,
         acceptance_gaps=acceptance_gaps,
         monitor_lane_semantically_valid=not goal_vision_state_is_closed(
             (latest_agent_vision or {}).get("state")
@@ -1698,7 +1710,7 @@ def build_goal_frontier_projection_context_from_status(
             work_lane_contract=work_lane_contract, agent_id=agent_id,
             existing_replan_obligation=None, agent_todo_source_items=agent_todo_source_items,
             latest_replan_ack=effective_replan_ack, acceptance_gaps=acceptance_gaps,
-            vision_settlement_query=True,
+            vision_settlement_query=True, _frontier_counts=frontier_counts,
         )
         if (source or {}).get("obligation_id") == receipt_bound_replan_obligation_id:
             source_ack = replan_successor_transition_ack(
@@ -1706,6 +1718,21 @@ def build_goal_frontier_projection_context_from_status(
                 agent_todo_items=agent_todo_source_items,
             )
             frontier_transition_candidate = {"obligation": source, "ack": source_ack}
+
+    lifecycle_candidate = None
+    if receipt_bound_replan_obligation_id and receipt_bound_guard_recorded_at:
+        from ...work_items.lifecycle_recovery import receipt_bound_lifecycle_candidate
+        lifecycle_candidate = receipt_bound_lifecycle_candidate(
+            selected_obligation_id=receipt_bound_replan_obligation_id,
+            guard_recorded_at=receipt_bound_guard_recorded_at, agent_id=agent_id,
+            items=agent_todo_source_items or [],
+            derive=lambda summary: derive_goal_frontier_replan_obligation_from_summaries(
+                user_todo_summary=user_todo_summary, agent_todo_summary=summary,
+                work_lane_contract=work_lane_contract, agent_id=agent_id,
+                existing_replan_obligation=None, agent_todo_source_items=agent_todo_source_items,
+                _frontier_counts=frontier_counts,
+            ),
+        )
 
     if (
         frontier_replan_obligation
@@ -1767,6 +1794,7 @@ def build_goal_frontier_projection_context_from_status(
         acceptance_gaps=acceptance_gaps,
         vision_wait_state=vision_wait_state,
         fallback_gaps=declared_fallback_gaps,
+        _frontier_counts=frontier_counts,
     )
     if latest_replan_ack_feedback:
         goal_frontier_projection["replan_ack_feedback"] = (
@@ -1783,7 +1811,7 @@ def build_goal_frontier_projection_context_from_status(
         "projected_replan_ack": projected_replan_ack,
         "replan_transition_ack": replan_transition_ack,
         "run_replan_transition_ack": run_replan_transition_ack,
-        "replan_transition_candidates": [run_transition_candidate, frontier_transition_candidate],
+        "replan_transition_candidates": [run_transition_candidate, frontier_transition_candidate, *([lifecycle_candidate] if lifecycle_candidate else [])],
     }
 
 

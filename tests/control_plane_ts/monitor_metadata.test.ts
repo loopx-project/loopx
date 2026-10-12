@@ -100,9 +100,12 @@ test("poll rejects invalid observation shapes without mutating its input", () =>
 });
 
 test("timestamp codec rejects rollover dates and ordering retains microseconds", () => {
-  for (const invalid of ["2030-02-30T00:00:00Z", "2030-01-01T24:00:00Z", "2030"]) {
+  for (const invalid of ["2030-02-30T00:00:00Z", "2030"]) {
     assert.throws(() => planMonitorMetadata(request({metadata: {expires_at: invalid}})), /timestamp/);
   }
+  assert.throws(() => planMonitorMetadata(request({
+    metadata: {expires_at: "2030-01-01T24:00:00Z"},
+  })), /timestamp/);
   assert.throws(() => planMonitorMetadata(request({
     existing: {...existing, last_checked_at: "2030-01-01T01:00:00.000002Z"},
     observation: observation({generated_at: "2030-01-01T01:00:00.000001Z", monitor_effect_id: null}),
@@ -155,7 +158,20 @@ test("Todo timestamp codec retains Python ISO compatibility, timezone seconds an
     "1970-01-01T01:00:00+00:59:59.999999"]) {
     assert.equal(parseTodoTimestampMicros(value), 1n, value);
   }
-  for (const value of ["1970-02-30", "2021-W53", "1970-01-01T24:00:00", "1970-01-01T01:00+24:00",
+  for (const value of ["1970-01-01T00.1", "1970-01-01T00:00.1"]) {
+    assert.equal(parseTodoTimestampMicros(value), 100000n, value);
+  }
+  assert.equal(parseTodoTimestampMicros("1970-01-01T00:00:00+01.1"), -3600100000n);
+  for (const value of ["1970-01-01T00:00:00+00.1", "1970-01-01T00:00:00-00.1",
+    "1970-01-01T00:00:00+00:00:00.1"]) {
+    assert.equal(parseTodoTimestampMicros(value), 0n, value);
+  }
+  for (const value of ["1970-01-01T00.1+00.5", "1970-01-01T00:00:00.1+00:00:00.5"]) {
+    assert.equal(parseTodoTimestampMicros(value), 100000n, value);
+  }
+  for (const value of ["1970-02-30", "2021-W53", "1970-01-01T01:00+24:00",
+    "1970-01-01T24:00:00", "1970-01-01T24:00:01",
+    "9999-12-31T24:00:00", "9999-12-31T24:00:00Z", "9999-12-31T24:00:00.000000",
     "1970-01-01T00:0000", "1970-01-01T0000:00", "tomorrow", "2030"]) {
     assert.equal(parseTodoTimestampMicros(value), null, value);
   }

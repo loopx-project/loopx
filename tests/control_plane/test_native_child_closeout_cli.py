@@ -39,11 +39,31 @@ def test_closed_replan_only_accepts_existing_native_operations(
         "--replan-obligation-id", guard["autonomous_replan_obligation"]["obligation_id"])
     assert added["replan_transition"]["recorded"] is True
     binding = ("--goal-id", GOAL, "--agent-id", AGENT, "--todo-id", TODO, "--turn-instance-id", TURN)
+    vision = tmp_path / "replan-vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {
+            "acceptance_summary": "Validate each source slice before dependent work proceeds.",
+            "advancement_policy": "as_needed",
+        },
+        "path_delta": {
+            "schema_version": "goal_path_delta_v0", "outcome": "replan",
+            "prior_assumption": "The long source chain needed a bounded review.",
+            "observed_reality": "The reviewed chain has an independent source validation slice.",
+            "retained": ["Validate the original source"],
+            "changed": ["Proceed with the independent validation slice"],
+            "evidence_refs": ["evidence:source-audit"],
+        },
+    }))
+    # Long-chain replans require an evidence-linked path; unchanged prose cannot ACK them.
     refreshed = call("refresh-state", *binding, "--classification", "bounded_replan_progress",
         "--delivery-batch-scale", "single_surface", "--delivery-outcome", "outcome_progress",
-        "--vision-unchanged-reason", "The source validation remains open; its independent successor changes the path.",
+        "--agent-vision-json", str(vision),
         "--no-global-sync", "--suppress-external-sinks")
     assert refreshed["settlement_progress"]["state"] == "spend_required"
+    ack = json.loads(Path(refreshed["json_path"]).read_text())["autonomous_replan_ack"]
+    assert ack["recorded"] is True
+    assert "fresh_vision_path_outcome" in ack["semantic_delta"]["outcomes"]
     reject(*base, "record", "--operation-id", "op-new", "--stage", "decision",
         "--operation", "spawn", "--outcome", "started", "--entrypoint-id", "generic_host",
         "--execute", reason="open, work-admitted")
@@ -90,6 +110,7 @@ def test_closed_replan_only_accepts_existing_native_operations(
     assert index.read_bytes() == closed_index
     rows = [json.loads(line) for line in index.read_text().splitlines()]
     assert sum(row.get("classification") == "quota_slot_spent" for row in rows) == 1
+    assert sum(row.get("autonomous_replan_ack", {}).get("recorded") is True for row in rows) == 1
     assert call("todo", "list", "--goal-id", GOAL, "--todo-id", TODO)["todo"]["status"] == "open"
     assert call("todo", "list", "--goal-id", GOAL, "--todo-id", added["todo_id"])["todo"]["status"] == "open"
     assert original.get("todo_id") == TODO

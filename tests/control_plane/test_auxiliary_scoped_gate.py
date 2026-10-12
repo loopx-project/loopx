@@ -95,8 +95,8 @@ def test_emitted_auxiliary_command_honors_an_unrelated_gate(tmp_path, monkeypatc
             else "monitor_poll_admission_rejected")
         assert rc == 1 and denied["error_code"] == expected, denied
         assert _spend_run_count(runtime) == 0
-        rows = list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=DUE_MONITOR_TODO_ID)["todos"]
-        assert rows[0].get("result_hash") is None
+        row = list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=DUE_MONITOR_TODO_ID)["todo"]
+        assert row.get("result_hash") is None
         return
     rc, observed = emitted()
     assert rc == 0, observed
@@ -146,8 +146,8 @@ def test_gate_changed_after_preflight_cannot_commit_observation(tmp_path, monkey
             invoke()
         assert rejected.value.payload["no_effect"]["operation_id"]
 
-    rows = list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=DUE_MONITOR_TODO_ID)["todos"]
-    assert rows[0].get("result_hash") is None
+    row = list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=DUE_MONITOR_TODO_ID)["todo"]
+    assert row.get("result_hash") is None
     assert _spend_run_count(runtime) == 0
 
     # A rejected effect can retry after the scoped gate is restored. After that
@@ -211,8 +211,8 @@ def test_old_pending_plan_preserves_identity_but_not_new_write_authority(tmp_pat
         else:
             with pytest.raises(LocalCoordinationAuthorityUnavailable, match="current User gate dependencies"):
                 invoke()
-        rows = list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=DUE_MONITOR_TODO_ID)["todos"]
-        assert rows[0].get("result_hash") is None
+        row = list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=DUE_MONITOR_TODO_ID)["todo"]
+        assert row.get("result_hash") is None
     assert _spend_run_count(runtime) == 0
 
 

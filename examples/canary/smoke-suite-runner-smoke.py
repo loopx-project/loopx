@@ -425,7 +425,8 @@ def assert_parallel_jobs_execute_and_preserve_report_order() -> None:
     original_tracked_change_paths = canary_runner._tracked_change_paths
     events: list[dict[str, object]] = []
 
-    def fake_tracked_change_paths() -> tuple[bool, list[str], str]:
+    def fake_tracked_change_paths(repo_root: Path | None = None) -> tuple[bool, list[str], str]:
+        assert repo_root == REPO_ROOT.resolve(), repo_root
         return True, [], ""
 
     try:
@@ -473,7 +474,8 @@ def assert_parallel_jobs_keep_marked_smokes_serial() -> None:
     original_tracked_change_paths = canary_runner._tracked_change_paths
     observed: list[tuple[str, int | None]] = []
 
-    def fake_tracked_change_paths() -> tuple[bool, list[str], str]:
+    def fake_tracked_change_paths(repo_root: Path | None = None) -> tuple[bool, list[str], str]:
+        assert repo_root == REPO_ROOT.resolve(), repo_root
         return True, [], ""
 
     def fake_run_check(
@@ -482,8 +484,9 @@ def assert_parallel_jobs_keep_marked_smokes_serial() -> None:
         timeout_seconds: float,
         check_index: int | None = None,
         check_count: int | None = None,
+        repo_root: Path | None = None,
     ) -> dict[str, object]:
-        normalized = canary_runner.normalize_canary_command(str(check.get("command") or ""))
+        normalized = canary_runner.normalize_canary_command(str(check.get("command") or ""), repo_root=repo_root)
         observed.append((str(normalized.get("script") or ""), check_index))
         return _fake_passed_check(
             check,
@@ -531,7 +534,8 @@ def assert_fail_fast_keeps_parallel_jobs_serial() -> None:
     original_run_check = canary_runner._run_check
     original_tracked_change_paths = canary_runner._tracked_change_paths
 
-    def fake_tracked_change_paths() -> tuple[bool, list[str], str]:
+    def fake_tracked_change_paths(repo_root: Path | None = None) -> tuple[bool, list[str], str]:
+        assert repo_root == REPO_ROOT.resolve(), repo_root
         return True, [], ""
 
     try:
@@ -572,8 +576,9 @@ def _fake_passed_check(
     timeout_seconds: float,
     check_index: int | None = None,
     check_count: int | None = None,
+    repo_root: Path | None = None,
 ) -> dict[str, object]:
-    normalized = canary_runner.normalize_canary_command(str(check.get("command") or ""))
+    normalized = canary_runner.normalize_canary_command(str(check.get("command") or ""), repo_root=repo_root)
     result: dict[str, object] = {
         **check,
         "normalized": normalized,
@@ -596,13 +601,14 @@ def assert_readonly_run_rejects_and_restores_tracked_side_effects() -> None:
     restored: list[list[str]] = []
     calls = {"tracked": 0}
 
-    def fake_tracked_change_paths() -> tuple[bool, list[str], str]:
+    def fake_tracked_change_paths(repo_root: Path | None = None) -> tuple[bool, list[str], str]:
+        assert repo_root == REPO_ROOT.resolve(), repo_root
         calls["tracked"] += 1
         if calls["tracked"] == 1 or restored:
             return True, [], ""
         return True, ["examples/generated-tracked-side-effect.txt"], ""
 
-    def fake_restore_tracked_paths(paths: list[str]) -> dict[str, object]:
+    def fake_restore_tracked_paths(paths: list[str], repo_root: Path | None = None) -> dict[str, object]:
         restored.append(paths)
         return {"ok": True, "restored_paths": paths}
 
@@ -644,7 +650,8 @@ def assert_unavailable_git_worktree_is_reported_explicitly() -> None:
     original_run_check = canary_runner._run_check
     original_tracked_change_paths = canary_runner._tracked_change_paths
 
-    def fake_tracked_change_paths() -> tuple[bool, list[str], str]:
+    def fake_tracked_change_paths(repo_root: Path | None = None) -> tuple[bool, list[str], str]:
+        assert repo_root == REPO_ROOT.resolve(), repo_root
         return False, [], "not_a_git_worktree: fixture"
 
     try:
@@ -680,7 +687,8 @@ def assert_tracked_side_effects_require_explicit_allow() -> None:
     original_tracked_change_paths = canary_runner._tracked_change_paths
     original_restore_tracked_paths = canary_runner._restore_tracked_paths
 
-    def fake_tracked_change_paths() -> tuple[bool, list[str], str]:
+    def fake_tracked_change_paths(repo_root: Path | None = None) -> tuple[bool, list[str], str]:
+        assert repo_root == REPO_ROOT.resolve(), repo_root
         return True, [], ""
 
     def fail_restore_tracked_paths(paths: list[str]) -> dict[str, object]:

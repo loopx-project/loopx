@@ -412,6 +412,46 @@ def _is_fixture_metadata_target(
     return target.resolve() in allowed
 
 
+def _cat_operands(tokens: list[str]) -> list[str] | None:
+    """Parse bounded file operands without interpreting arbitrary cat options."""
+    if not tokens or Path(tokens[0]).name != "cat":
+        return None
+    explicit_end = len(tokens) > 1 and tokens[1] == "--"
+    operands = tokens[2:] if explicit_end else tokens[1:]
+    if not 1 <= len(operands) <= 8:
+        return None
+    if any(operand in {"|", ">", "<", ">>", "<<", "<<<", "&"} for operand in operands):
+        return None
+    if not explicit_end and any(operand.startswith("-") for operand in operands):
+        return None
+    return operands
+
+
+def _single_cat_operand(tokens: list[str]) -> str | None:
+    """Pipelines retain their existing single-file contract."""
+    operands = _cat_operands(tokens)
+    return operands[0] if operands is not None and len(operands) == 1 else None
+
+
+def _batch_cat_read_plan(
+    tokens: list[str], *, fixture: _SelectedTodoToolFixture,
+) -> list[BoundedWorkspaceReadStep] | None:
+    """Compile a standalone batch; fail closed at each prerequisite read."""
+    operands = _cat_operands(tokens)
+    if operands is None or len(operands) < 2:
+        return None
+    targets = [_resolve_project_path(value, fixture=fixture) for value in operands]
+    if any(target is None for target in targets):
+        return None
+    return [
+        BoundedWorkspaceReadStep(
+            "content", ("cat", "--", str(target)), target,
+            ";" if index == 0 else "&&",
+        )
+        for index, target in enumerate(targets)
+    ]
+
+
 def _metadata_pipeline_step(
     segment: list[str],
     *,
@@ -459,9 +499,10 @@ def _metadata_pipeline_step(
             operator=operator,
             line_limit=limit,
         )
-    if len(left) != 2 or Path(left[0]).name != "cat":
+    operand = _single_cat_operand(left)
+    if operand is None:
         return None
-    target = _resolve_metadata_path(left[1], fixture=fixture)
+    target = _resolve_metadata_path(operand, fixture=fixture)
     allowed_registries = {
         fixture.global_registry_path.resolve(),
         (fixture.project_root / ".loopx" / "registry.json").resolve(),
@@ -472,7 +513,7 @@ def _metadata_pipeline_step(
             ("head", "-n", str(limit), str(target)),
             operator=operator,
         )
-    content_target = _resolve_project_path(left[1], fixture=fixture)
+    content_target = _resolve_project_path(operand, fixture=fixture)
     if content_target is None:
         return None
     return BoundedWorkspaceReadStep(
@@ -518,6 +559,11 @@ def bounded_workspace_read_plan(
             segments[-1].append(token)
     if not segments[-1] or len(segments) > 8:
         return None
+
+    if len(segments) == 1:
+        batch = _batch_cat_read_plan(segments[0], fixture=fixture)
+        if batch is not None:
+            return batch
 
     plan: list[BoundedWorkspaceReadStep] = []
     for operator, raw_segment in zip(operators, segments, strict=True):
@@ -593,7 +639,7 @@ def bounded_workspace_read_plan(
             )
             continue
         content_shape = bool(
-            (executable == "cat" and len(segment) == 2)
+            _single_cat_operand(segment) is not None
             or (
                 executable == "head"
                 and (

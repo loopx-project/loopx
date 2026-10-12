@@ -12,6 +12,7 @@ import pytest
 from test_local_delegation import brief, demo, service as service
 from loopx import collaboration_mcp as delegation
 from loopx.control_plane.collaboration import delegation_stop_lease as stop_lease
+from loopx.control_plane.collaboration import delegation_validation
 from loopx.control_plane.collaboration.inbox import _read
 from loopx.control_plane.collaboration.peers import returns
 from loopx.file_lock import exclusive_file_lock, lock_holder_host_label
@@ -98,7 +99,7 @@ runpy.run_module('loopx.cli', run_name='__main__')
     runner._observe(path, row, "rejected")
     assert runner.resume("analysis-recovery")["status"] == "turn_returned"
     row = _read(path)
-    journal = runner._validated_turn_journal(row, runner.binding("analysis"))
+    journal = delegation_validation.validated_turn_journal(runner, row, runner.binding("analysis"))
     assert journal["task_validation"]["ok"] is True
     assert journal["host_result"]["result_kind"] == "validated_progress"
     assert not demo.canonical_tasks(root)["todo_analyst-initial"]["done"]
@@ -110,16 +111,16 @@ runpy.run_module('loopx.cli', run_name='__main__')
 
 def test_stop_wins_before_recovered_completion(service, monkeypatch):
     root, runner = recoverable_boundary(service, monkeypatch)
-    validated = runner._validated_turn_journal
+    validated = delegation_validation.validated_turn_journal
     receipts = []
 
-    def stop_after_validation(row, binding):
-        journal = validated(row, binding)
+    def stop_after_validation(service, row, binding):
+        journal = validated(service, row, binding)
         assert journal is not None
         receipts.append(runner.stop("analysis-recovery", execute=True))
         return journal
 
-    monkeypatch.setattr(runner, "_validated_turn_journal", stop_after_validation)
+    monkeypatch.setattr(delegation_validation, "validated_turn_journal", stop_after_validation)
     runner.execute("analysis-recovery")
     assert len(receipts) == 1 and receipts[0]["phase"] == "requested"
     receipt = runner.stop("analysis-recovery", execute=True)

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .control_plane.runtime.time import parse_timestamp
-from .todos import complete_goal_todo, update_goal_todo
+from .control_plane.todos.mutation_api import complete_goal_todo, update_goal_todo
 
 
 class ChatMonitorActionMixin:

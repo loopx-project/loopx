@@ -11,6 +11,7 @@ import {
 
 export const BLOCKED_WAIT_REQUEST_SCHEMA = "loopx_quota_blocked_wait_request_v0";
 const CAUSAL_WAIT_SCHEMA = "quota_blocked_causal_wait_v0";
+export const MONITOR_UNAVAILABLE_SCHEMA = "quota_monitor_unavailable_v0";
 
 function reject(message: string): never {
   throw new EffectRuntimeRequestError(`typed blocked no-spend closeout ${message}`);
@@ -31,7 +32,10 @@ function causalCondition(waiting: JsonObject, target: JsonObject): JsonObject | 
        target.material_change_generation < 0)) return null;
   const evaluated = evaluateTodoResumeConditions({
     schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
-    items: [waiting], source_items: [target],
+    // The v0 receipt freezes only a pair and historically validates its direct
+    // condition. Do not retroactively apply graph diagnosis to historical
+    // receipts. New waits additionally validate the current graph below.
+    items: [waiting], source_items: [{...target, resume_when: undefined}],
   });
   const rows = evaluated.conditions as JsonObject[];
   const condition = jsonObject(rows[0]?.condition);
@@ -79,6 +83,30 @@ function retainedTodo(todo: JsonObject): JsonObject {
     .map((field) => [field, todo[field]]));
 }
 
+function currentCompletionCondition(todo: JsonObject, todos: JsonObject[]): JsonObject | null {
+  if (typeof todo.resume_when !== "string" || !todo.resume_when.trim().toLowerCase().startsWith("todo_done:")) return null;
+  const evaluated = evaluateTodoResumeConditions({schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
+    items: [todo], source_items: todos, kinds: ["todo_done"]});
+  return jsonObject((evaluated.conditions as JsonObject[])[0]?.condition);
+}
+
+const CYCLE_REPAIR = "The Todo bound to this Turn depends on a completion dependency cycle. Inspect the cycle and current owners; repair only an owner-reviewed obsolete dependency through the authorized Todo lifecycle with fresh owner/lease proof, then re-enter this same Turn. If the needed edit belongs to another owner, retain the binding and report that blocker. Do not qualify the cycle as an ordinary wait, clear valid dependencies, fabricate completion, or rebind the Turn to independent work.";
+
+/** An unavailable attempt is not an observation or a retry clock. The
+ * surrounding settlement owner verifies the exact guard, typed blocker and
+ * evidence before committing this frozen, canonical Monitor scope. */
+export function isMonitorUnavailableWait(value: unknown, todoId: string | null): boolean {
+  const wait = jsonObject(value);
+  const monitor = jsonObject(wait?.monitor_todo);
+  return !!wait && wait.schema_version === MONITOR_UNAVAILABLE_SCHEMA &&
+    wait.source === "turn_settlement" && wait.observation_available === false &&
+    !!todoId && wait.todo_id === todoId && monitor?.todo_id === todoId &&
+    monitor.role === "agent" && monitor.task_class === "continuous_monitor" &&
+    monitor.status === "open" &&
+    (monitor.archive_state == null || monitor.archive_state === "active") &&
+    timestamp(wait.observed_at) !== null;
+}
+
 /** Preflight belongs to the same TS settlement owner as durable readback.
  * Python only transports the complete current Todo facts and observation clock. */
 export function prepareBlockedWait(value: unknown): JsonObject {
@@ -89,13 +117,30 @@ export function prepareBlockedWait(value: unknown): JsonObject {
   const todos = request.todos.map((value) => requireJsonObject(value, "blocked wait Todo"));
   const matches = todos.filter((todo) => todo.todo_id === request.todo_id);
   const todo = matches[0];
-  if (matches.length !== 1 || !todo || !["open", "deferred"].includes(String(todo.status)) ||
-      todo.task_class !== "advancement_task") reject("requires the same unfinished advancement Todo");
+  if (matches.length !== 1 || !todo || !["open", "deferred"].includes(String(todo.status))) {
+    reject("requires the same unfinished Todo");
+  }
   const observed = timestamp(request.observed_at);
   if (observed === null) reject("has an invalid timestamp");
+  if (todo.task_class === "continuous_monitor") {
+    if (todo.role !== "agent" || todo.status !== "open" ||
+        (todo.archive_state != null && todo.archive_state !== "active") ||
+        request.allow_turn_settlement_retry !== true) {
+      reject("requires an admitted open Monitor attempt on canonical authority");
+    }
+    const fields = ["claimed_by", "last_checked_at", "next_due_at", "result_hash",
+      "material_change", "material_change_generation", "cadence", "expires_at", "watch_only"];
+    return {schema_version: MONITOR_UNAVAILABLE_SCHEMA, source: "turn_settlement",
+      todo_id: request.todo_id, observed_at: request.observed_at, observation_available: false,
+      monitor_todo: {...retainedTodo(todo), ...Object.fromEntries(
+        fields.filter(field => todo[field] !== undefined).map(field => [field, todo[field]]))}};
+  }
+  if (todo.task_class !== "advancement_task") reject("requires the same unfinished advancement Todo");
   const resume = todo.resume_when;
   const condition = jsonObject(todo.resume_condition);
   if (typeof resume === "string" && /^(?:monitor_changed|todo_done):/.test(resume)) {
+    const fresh = currentCompletionCondition(todo, todos);
+    if (fresh?.invalid_state === "dependency_cycle") reject("cannot qualify a completion dependency cycle; inspect dependency_cycle_todo_ids and repair the plan through the authorized Todo lifecycle");
     const targets = todos.filter((target) => target.todo_id === resume.slice(resume.indexOf(":") + 1));
     const target = targets[0];
     const current = targets.length === 1 && target ? causalCondition(todo, target) : null;
@@ -137,9 +182,10 @@ export function prepareBlockedWait(value: unknown): JsonObject {
 
 export const RECEIPT_BOUND_WAIT_REQUEST_SCHEMA = "loopx_quota_receipt_bound_wait_request_v0";
 
-/** A pending dependency or blocked Monitor changes executable work, never the Turn's binding.
- * This read-only projection cannot settle a Turn. Causal waits need verified
- * refresh-state closeout; an unpolled blocked Monitor needs lifecycle repair. */
+/** A pending dependency changes executable work, never the Turn's receipts.
+ * settlement_progress is the existing settlement owner's exact-Turn readback,
+ * transported by the live guard, not an author-declared progress observation.
+ * This projection grants no work and cannot settle or debit a Turn. */
 export function projectReceiptBoundWait(value: unknown): JsonObject {
   const request = requireJsonObject(value, "receipt-bound wait request");
   if (request.schema_version !== RECEIPT_BOUND_WAIT_REQUEST_SCHEMA ||
@@ -154,6 +200,13 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
       todo.archive_state !== "active" || (todo.claimed_by && todo.claimed_by !== request.agent_id)) {
     return {status: "none"};
   }
+  const progress = jsonObject(request.settlement_progress);
+  if (progress?.schema_version === "quota_settlement_progress_v0" &&
+      progress.next_step === "quota_spend" &&
+      (progress.state === "spend_required" || progress.state === "spend_receipt_required")) {
+    const reason = "The original Turn's durable writeback is verified. Its later dependency wait cannot replace that outcome. Execute only the original settlement spend command; the spend owner revalidates all receipts and acceptance, and a receipt repair cannot debit twice. Leave the Todo wait and successor unchanged.";
+    return boundRecovery(request, "quota_spend", reason);
+  }
   if (todo.task_class === "continuous_monitor" && todo.status === "blocked" &&
       request.monitor_phase === "poll_due") {
     const reason = "The Monitor bound to this Turn is blocked. Inspect its blocker and existing effects; only after verifying the blocker is resolved, restore the Monitor and re-enter this same Turn. A blocked status is not a poll receipt and does not authorize replan or independent work.";
@@ -166,6 +219,9 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
   // be rejected by the separate 1–30 minute blocked-retry writeback budget.
   const kind = jsonObject(todo.resume_condition)?.kind;
   if (kind !== "monitor_changed" && kind !== "todo_done") return {status: "none"};
+  if (currentCompletionCondition(todo, todos)?.invalid_state === "dependency_cycle") {
+    return boundRecovery(request, "dependency", CYCLE_REPAIR);
+  }
   // Share the real writeback validation of target existence and generation.
   const wait = prepareBlockedWait({...request, schema_version: BLOCKED_WAIT_REQUEST_SCHEMA,
     allow_turn_settlement_retry: false});
@@ -173,22 +229,28 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
   return boundRecovery(request, "blocked_writeback", reason, wait);
 }
 
-/** Both routes preserve the existing binding and grant only control-plane recovery. */
+/** Recovery routes preserve the existing binding and grant no independent work. */
 function boundRecovery(
-  request: JsonObject, repair: "lifecycle" | "blocked_writeback", reason: string, wait?: JsonObject,
+  request: JsonObject, repair: "lifecycle" | "blocked_writeback" | "quota_spend" | "dependency", reason: string, wait?: JsonObject,
 ): JsonObject {
   const obligation = repair === "blocked_writeback"
-    ? "close_bound_wait_without_spend" : "repair_bound_monitor_lifecycle";
+    ? "close_bound_wait_without_spend" : repair === "quota_spend"
+    ? "settle_bound_turn" : repair === "dependency"
+    ? "repair_bound_dependency" : "repair_bound_monitor_lifecycle";
   return {
     status: "recovery_required",
     recovery: {schema_version: "unsettled_host_turn_recovery_v0", scope: "current_turn",
       turn_instance_id: request.turn_instance_id, binding_kind: "todo",
       binding_id: request.todo_id, repair, ...(wait ? {wait} : {})},
     obligation: {lane: "control_plane_recovery",
-      next_lane: repair === "blocked_writeback" ? "advancement_task" : "continuous_monitor",
+      next_lane: repair === "lifecycle" ? "continuous_monitor" : "advancement_task",
       obligation, contract: "repair_bound_turn_closeout",
       contract_obligation: obligation, must_attempt_work: true,
-      delivery_allowed: false, notify: "DONT_NOTIFY", spend_policy: "no spend for blocked closeout",
+      delivery_allowed: false, notify: "DONT_NOTIFY",
+      ...(repair === "quota_spend" ? {spend_allowed_now: true} : {}),
+      spend_policy: repair === "quota_spend"
+        ? "settle the original verified writeback once; no independent work or new writeback"
+        : "no spend for blocked closeout",
       reason_code: repair === "blocked_writeback" ? "receipt_bound_pending_wait" : "unsettled_host_turn",
       reason, recommendation_reason: reason,
       unsettled_reason: reason, recommended_action: reason},

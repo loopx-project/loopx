@@ -52,6 +52,8 @@ def test_cli_successor_refresh_resets_periodic_window(tmp_path: Path, capsys) ->
     registry = tmp_path / "registry.json"
     registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
         "id": GOAL, "status": "active", "repo": str(project), "state_file": state.name,
+        # Exercise the periodic-history window instead of the live machine default.
+        "execution_profile": {"replan_after_completed_todos": 1},
         "coordination": {"agent_model": "peer_v1", "registered_agents": [AGENT]},
     }]}))
     obligation = autonomous_replan_obligation_from_runs(runs, agent_todos={}, agent_id=AGENT)

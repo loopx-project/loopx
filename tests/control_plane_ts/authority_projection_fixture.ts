@@ -36,6 +36,8 @@ export function todoFixtureRecord(
   delete domainInput.schema_version;
   delete domainInput.source_section;
   delete domainInput.index;
+  // Content revision is read-model selection metadata, not a persisted Todo field.
+  delete domainInput.content_revision;
   const domain = canonicalTodoDomainRecord({
     ...domainInput,
     schema_version: TODO_DOMAIN_ITEM_SCHEMA,

@@ -17,6 +17,7 @@ from .activation_qualification import (
 )
 from .doctor import collect_doctor
 from .install_contract import NO_CLONE_INSTALL_URL
+from .python_install_owner import interpreter_invocation
 from .runtime_activation import restart_services_for_runtime_activation
 from .self_update_download import run_archive_installer
 
@@ -479,7 +480,7 @@ def _python_distribution_rollback_plan(
             "rollback_command": None,
         }
     command = (
-        f"{shlex.quote(sys.executable)} -m pip install "
+        f"{interpreter_invocation(sys.executable)} -m pip install "
         f"{shlex.quote(f'loopx=={current_version}')}\n"
         "loopx workflow-skills --install\n"
         "loopx slash-commands --install\n"
@@ -1117,7 +1118,9 @@ def execute_update_plan(
         env=env,
         timeout_seconds=timeout_seconds,
     )
-    loopx_bin = Path.home() / ".local" / "bin" / "loopx"
+    # Match install-local.sh's LOOPX_BIN_DIR override, including its empty-value
+    # default. Read back the installation that this update actually replaced.
+    loopx_bin = Path(env.get("LOOPX_BIN_DIR") or _user_loopx_bin().parent) / "loopx"
     doctor_result = subprocess.run(
         [str(loopx_bin), *route_arguments, "--format", "json", "doctor"],
         text=True, encoding="utf-8", errors="replace",
@@ -1174,11 +1177,12 @@ def execute_update_plan(
         restart_services_for_runtime_activation(
             changes_applied=updated["changes_applied"],
             runtime_ready=runtime_ready,
+            installed_bin=loopx_bin,
         )
     )
     if not updated["ok"] and runtime_ready:
         updated["recommended_action"] = (
-            "the updated runtime is installed and serving; repair the blocked "
+            "the updated runtime is installed; repair the blocked "
             "enabled extension providers, then rerun "
             "`loopx extension doctor --all-enabled --execute`"
         )

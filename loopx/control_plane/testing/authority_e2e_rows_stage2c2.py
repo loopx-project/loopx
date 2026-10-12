@@ -109,7 +109,7 @@ import json, pathlib, sys, time
 from loopx.cli import main
 from loopx.control_plane.coordination import local_authority_shadow_adapter as adapter
 from loopx.control_plane.coordination import local_authority_shadow_outbox as outbox
-from loopx.control_plane.todos import active_state_editing
+from loopx.control_plane.runtime import document_io
 window, state = sys.argv[1], pathlib.Path(sys.argv[2])
 def pause(payload=None):
     print('BARRIER ' + json.dumps(payload or {}), flush=True)
@@ -139,14 +139,14 @@ def write_json(path, value):
     if window == 'before_marker' and path.name.endswith('.committed.json'): pause()
     return actual_json(path, value)
 outbox.durable_write_json = write_json
-actual_replace = active_state_editing.os.replace
+actual_replace = document_io.os.replace
 def replace(source, target):
     is_primary = pathlib.Path(target) == state
     if is_primary and window == 'before_replace': pause()
     result = actual_replace(source, target)
     if is_primary and window == 'after_replace': pause()
     return result
-active_state_editing.os.replace = replace
+document_io.os.replace = replace
 actual_unlink = pathlib.Path.unlink
 def unlink(path, *args, **kwargs):
     result = actual_unlink(path, *args, **kwargs)

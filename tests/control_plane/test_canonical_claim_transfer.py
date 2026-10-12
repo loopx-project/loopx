@@ -59,7 +59,7 @@ def test_public_claim_transfer_recipient_and_projection_recovery(tmp_path, monke
         assert result["source_authority"] == provider + "_v0"
         assert result["projection_delivery"] == "pending"
         assert result["projection_outbox"]["retry_business_mutation"] is False
-        assert cli(["todo", "list"])["todos"][0]["claimed_by"] == "agent-b"
+        assert cli(["todo", "list"])["todo"]["claimed_by"] == "agent-b"
         state.rmdir()
         state.write_text(original_text)
         replay = cli(["task-lease", "transfer"], *transfer, "--transfer-claim")
@@ -82,13 +82,13 @@ def test_public_claim_transfer_recipient_and_projection_recovery(tmp_path, monke
                        "--task-lease-expected-version", "2", "--evidence", "validation://claim-transfer", "--no-follow-up")
         assert complete["ok"]
         current = cli(["todo", "list"])
-        assert current["todos"][0]["status"] == "done"
+        assert current["todo"]["status"] == "done"
         current_lease = cli(["task-lease", "inspect"])
         assert current_lease["lease"]["status"] == "released" and not current_lease["active"]
         historical = cli(["task-lease", "transfer"], *transfer, "--transfer-claim")
         assert historical["original_receipt"] == result["original_receipt"]
         assert historical["lease"]["status"] == "active"
-        assert cli(["todo", "list"])["todos"][0]["status"] == "done"
+        assert cli(["todo", "list"])["todo"]["status"] == "done"
         assert cli(["task-lease", "inspect"])["lease"] == current_lease["lease"]
         assert not (runtime / "goals" / goal / "task-leases" / f"{target}.json").exists()
     finally:

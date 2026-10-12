@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
-from .file_lock import exclusive_file_lock
+from .file_lock import exclusive_cross_runtime_file_lock
 
 
 ROLLOUT_EVENT_SCHEMA_VERSION = "loopx_rollout_event_v0"
@@ -444,7 +444,9 @@ def append_rollout_event(log_path: Path, event: Mapping[str, Any]) -> dict[str, 
     if not event_id:
         raise ValueError("rollout event_id is required")
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with exclusive_file_lock(log_path):
+    with exclusive_cross_runtime_file_lock(
+        log_path, operation="append_rollout_event"
+    ):
         for _, line in _iter_rollout_event_lines(log_path):
             if event_id not in line:
                 continue
@@ -489,7 +491,9 @@ def append_rollout_event_once(
     if not event_id:
         raise ValueError("rollout event_id is required")
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with exclusive_file_lock(log_path):
+    with exclusive_cross_runtime_file_lock(
+        log_path, operation="append_rollout_event_once"
+    ):
         for _, line in _iter_rollout_event_lines(log_path):
             try:
                 existing = json.loads(line)

@@ -14,7 +14,7 @@ from typing import Any
 
 from ..effect_runtime import effect_runtime_result
 from ..runtime.time import now_utc_iso
-from ..todos.active_state_editing import atomic_write_state_text, verify_state_text_durable
+from ..runtime.document_io import atomic_write_state_text, verify_state_text_durable
 
 SUPERVISOR_EVENT_SCHEMA = "supervisor_log_event_v0"
 LOCAL_PRIVATE_PRIVACY = "local_private"

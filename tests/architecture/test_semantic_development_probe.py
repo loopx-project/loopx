@@ -344,7 +344,7 @@ def probe_cli(repository: Path) -> Path:
     return repository
 
 
-def _run_probe_cli(repository: Path) -> subprocess.CompletedProcess[str]:
+def _run_probe_cli(repository: Path, *args: str) -> subprocess.CompletedProcess[str]:
     # The copied CLI runs in a disposable repository. Do not merge its coverage
     # into the source checkout: pytest removes that repository before CI reports.
     env = {
@@ -357,6 +357,7 @@ def _run_probe_cli(repository: Path) -> subprocess.CompletedProcess[str]:
             "scripts/generate_semantic_inventory.py",
             "--changed-from",
             "HEAD",
+            *args,
         ],
         cwd=repository,
         env=env,
@@ -364,6 +365,19 @@ def _run_probe_cli(repository: Path) -> subprocess.CompletedProcess[str]:
         text=True,
         check=False,
     )
+
+
+def test_cli_accepts_a_native_untracked_source_path(probe_cli: Path) -> None:
+    _write(probe_cli, "loopx/new_contract.py", 'STATES = ("ready", "done")\n')
+
+    completed = _run_probe_cli(
+        probe_cli, "--include-untracked", str(Path("loopx") / "new_contract.py"),
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "loopx/new_contract.py::STATES" in completed.stdout
+    assert "explicit_untracked" in completed.stdout
+    assert "added values: ready, done" in completed.stdout
 
 
 def test_cli_keeps_the_index_value_after_the_worktree_is_restored(

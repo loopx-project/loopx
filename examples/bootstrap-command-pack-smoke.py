@@ -404,6 +404,7 @@ def test_start_goal_guided_previews_transaction_without_mutation() -> None:
             "connect_if_needed",
             "plan_ranked_todos",
             "write_ordered_todos",
+            "read_back_authored_todos",
             "refresh_state",
             "activate_host_loop",
             "quota_guard",

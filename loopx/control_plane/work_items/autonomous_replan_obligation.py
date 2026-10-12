@@ -228,6 +228,7 @@ def ensure_replan_novelty_policy(
                 "monitor_target_id",
                 "progress_fingerprint",
                 "agent_id",
+                *(("todo_id", "completion_turn_key") if trigger.get("kind") == "completed_advancement_without_successor" else ()),
                 *(
                     ("latest_generated_at", "oldest_counted_generated_at")
                     if trigger.get("kind")

@@ -475,16 +475,9 @@ def test_live_inventory_ignores_missing_or_stale_reports(tmp_path, monkeypatch, 
         smoke["check_inventory"](registry, sources + duplicate)
 
 
-@pytest.mark.parametrize('name', ['effective_action', 'lease_action'])
+@pytest.mark.parametrize('name', ['effective_action'])
 def test_remaining_kernel_values_each_carry_a_note(name):
-    """The two kernel vocabularies that are not Turn control flow still need notes.
-
-    ``effective_action`` is the overloaded should-run slot M1 is due to split, so
-    a value here is only legible once the registry says which condition produces
-    it; ``lease_action`` is legacy and every value is compatibility-only, which
-    is exactly the kind of disposition a reader cannot infer from the name. The
-    note is required in the diff that adds a value, not afterwards.
-    """
+    """The should-run slot still needs its producing condition after M4."""
     smoke = runpy.run_path(str(SMOKE))
     vocabulary = smoke['load_registry']()['vocabularies'][name]
     notes = vocabulary.get('value_notes', {})
@@ -581,7 +574,9 @@ def test_generated_domain_accepts_true_kernel_comparison() -> None:
     domain = smoke["ProducerDomain"].from_registry(registry)
     assert domain.kernel < domain.walked
     assert domain.walked - domain.kernel == {"settlement_binding_kind"}
-    assert domain.outside_by_tier == (("cross_runtime", 19),)
+    # M4 preserves the native lifecycle owner and relation, without claiming
+    # its production liveness from the retired Python compatibility-only set.
+    assert domain.outside_by_tier == (("cross_runtime", 20),)
 
 
 def test_canonical_domain_rejects_old_kernel_only_universe() -> None:
@@ -601,12 +596,12 @@ def test_domain_membership_change_requires_regenerated_prose() -> None:
     # even if the independent numeric domain entries were already updated.
     registry["vocabularies"]["settlement_binding_kind"].pop("producers")
     for invariant_id in ("F1_producer_closedness", "F2_canonical_value_liveness"):
-        _invariant(registry, invariant_id)["domain"]["verified"] = 6
+        _invariant(registry, invariant_id)["domain"]["verified"] = 5
     with pytest.raises(smoke["Drift"], match="canonical producer-domain projection"):
         smoke["check_formal_model"](registry["formal_model"], registry)
     projected = smoke["producer_domain_prose"](registry)
-    assert "20 cross_runtime" in projected["F1_producer_closedness.statement"]
-    assert "6 kernel and 0 outside" in projected["universes.vocabularies"]
+    assert "21 cross_runtime" in projected["F1_producer_closedness.statement"]
+    assert "5 kernel and 0 outside" in projected["universes.vocabularies"]
 
 
 @pytest.mark.parametrize("invariant_id", sorted({
@@ -942,3 +937,48 @@ def test_every_executed_projection_must_be_registered() -> None:
     del registry["projections"]["turn_route_to_loop_disposition"]
     with pytest.raises(smoke["Drift"], match="is not registered"):
         smoke["check_projections"](registry)
+
+
+@pytest.mark.parametrize('symbol', ['LeaseAction', 'LeaseModeGateCommand', 'CoordinationCommand'])
+@pytest.mark.parametrize('form', ['definition', 'absolute_import', 'relative_import'])
+def test_retired_lease_input_cannot_regrow_a_definition_or_producer(symbol, form):
+    smoke = runpy.run_path(str(SMOKE))
+    owner = 'loopx/control_plane/coordination/authority_core.py'
+    if form == 'definition':
+        text = f'{symbol} = object\n' if symbol == 'CoordinationCommand' else f'class {symbol}:\n pass\n'
+        source = smoke['SourceFile'](owner, '.py', text)
+    else:
+        module = 'loopx.control_plane.coordination.authority_core' if form == 'absolute_import' else '.authority_core'
+        text = f'from {module} import {symbol} as Restored\ndef emit():\n return Restored\n'
+        source = smoke['SourceFile']('loopx/control_plane/coordination/new_writer.py', '.py', text)
+    with pytest.raises(smoke['Drift'], match='retired lease input'):
+        smoke['check_retired_lease_input'](smoke['load_registry'](), [source])
+
+
+def test_retired_lease_registry_entry_cannot_return_as_fake_compatibility():
+    smoke = runpy.run_path(str(SMOKE))
+    registry = copy.deepcopy(smoke['load_registry']())
+    registry['vocabularies']['lease_action'] = {'producers': [], 'compatibility_only': {}}
+    with pytest.raises(smoke['Drift'], match='retired lease input'):
+        smoke['check_retired_lease_input'](registry, [])
+
+
+def test_native_lifecycle_relation_keeps_the_live_owner_and_verification_boundary():
+    smoke = runpy.run_path(str(SMOKE))
+    registry = smoke['load_registry']()
+    assert registry['coverage_floor']['vocabularies'] == 26
+    assert registry['coverage_floor']['owner_symbols'] == 51
+    assert registry['coverage_floor']['relations'] == 9
+    relation = next(row for row in registry['relations']['subsets']
+                    if row['name'] == 'task_lease_lifecycle_decision_operation')
+    assert relation['superset'] == 'task_lease_lifecycle_operation'
+    assert set(relation['excluded']) == {'terminal_verify', 'holder_verify', 'fence_close'}
+    smoke['check_relations'](registry)
+    mutated = copy.deepcopy(registry)
+    mutated['relations']['subsets'][-1]['excluded'] = ['holder_verify', 'fence_close']
+    with pytest.raises(smoke['Drift'], match='drifted from the registry'):
+        smoke['check_relations'](mutated)
+    mutated = copy.deepcopy(registry)
+    mutated['vocabularies']['task_lease_lifecycle_operation']['owners']['typescript'] = None
+    with pytest.raises(smoke['Drift'], match='actual owner'):
+        smoke['check_retired_lease_input'](mutated, [])

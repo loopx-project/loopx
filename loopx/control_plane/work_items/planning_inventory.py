@@ -14,7 +14,7 @@ from ..todos.todo_semantics import (
     todo_item_is_actionable_open,
     todo_item_task_class,
 )
-from ..todos.summary_item import compact_todo_summary_item
+from ..todos.summary_item import compact_todo_summary_items
 from .primary_action import protocol_action_text
 
 TODO_PLANNING_INVENTORY_REQUEST_SCHEMA_VERSION = (
@@ -22,22 +22,25 @@ TODO_PLANNING_INVENTORY_REQUEST_SCHEMA_VERSION = (
 )
 
 
-def compact_planning_candidate(
-    value: Mapping[str, Any],
-) -> dict[str, Any] | None:
-    todo_id = normalize_todo_id(value.get("todo_id"))
-    text = protocol_action_text(value.get("text"), limit=500)
-    if not todo_id or not text:
-        return None
-    compact = dict(compact_todo_summary_item(dict(value), text=text))
-    for field in (
-        "source",
-        "selected_by",
-        "availability_reason",
-    ):
-        if value.get(field) is not None:
-            compact[field] = value[field]
-    return compact
+def compact_planning_candidates(values: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    sources, texts = [], []
+    for value in values:
+        todo_id = normalize_todo_id(value.get("todo_id"))
+        text = protocol_action_text(value.get("text"), limit=500)
+        if todo_id and text:
+            sources.append(dict(value))
+            texts.append(text)
+    compacts = compact_todo_summary_items(sources, texts=texts)
+    for value, compact in zip(sources, compacts, strict=True):
+        for field in ("source", "selected_by", "availability_reason"):
+            if value.get(field) is not None:
+                compact[field] = value[field]
+    return compacts
+
+
+def compact_planning_candidate(value: Mapping[str, Any]) -> dict[str, Any] | None:
+    compacts = compact_planning_candidates([value])
+    return compacts[0] if compacts else None
 
 
 def quota_runnable_action_candidates(
@@ -91,15 +94,12 @@ def quota_runnable_action_candidates(
                 # The ready higher-priority successor owns this turn's lifecycle
                 # decision; it cannot be advertised as a runnable alternative.
                 continue
-            compact = compact_planning_candidate(candidate)
-            if compact is None:
-                continue
-            todo_id = str(compact["todo_id"])
-            if todo_id in seen:
+            todo_id = normalize_todo_id(candidate.get("todo_id"))
+            if not todo_id or not protocol_action_text(candidate.get("text"), limit=500) or todo_id in seen:
                 continue
             seen.add(todo_id)
-            candidates.append(compact)
-    return candidates
+            candidates.append(candidate)
+    return compact_planning_candidates(candidates)
 
 
 def _unavailable_reason(candidate: Mapping[str, Any]) -> str:
@@ -133,10 +133,8 @@ def unavailable_higher_priority_candidates(
             continue
         candidate = dict(item)
         candidate["availability_reason"] = _unavailable_reason(candidate)
-        compact = compact_planning_candidate(candidate)
-        if compact is not None:
-            unavailable.append(compact)
-    return unavailable
+        unavailable.append(candidate)
+    return compact_planning_candidates(unavailable)
 
 
 def _source_context_count(summary: Mapping[str, Any] | None) -> int:
@@ -164,11 +162,7 @@ def build_quota_planning_inventory_request(
     )
     if not goal_id or not safe_agent_id or compact_selected is None:
         return None
-    source_items = [
-        compact
-        for item in agent_todo_source_items
-        if (compact := compact_planning_candidate(item)) is not None
-    ]
+    source_items = compact_planning_candidates(agent_todo_source_items)
     return {
         "schema_version": TODO_PLANNING_INVENTORY_REQUEST_SCHEMA_VERSION,
         "goal_id": goal_id,

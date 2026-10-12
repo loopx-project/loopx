@@ -275,7 +275,7 @@ def main() -> None:
     tail_path_visible = tail_path_early + tail_path_filter.feed(tail_path_chunks[1]) + tail_path_filter.finish()
     assert protected_path not in tail_path_visible, tail_path_visible
     assert "hidden" not in tail_path_visible, tail_path_visible
-    assert tail_path_visible == redact_local_paths(tail_path_text, protected_paths=[protected_path]), tail_path_visible
+    assert tail_path_visible == redact_local_paths(tail_path_text, protected_paths=[protected_path], project_relative=True), tail_path_visible
 
     english_path_filter = VisibleResponseStreamFilter(protected_paths=[protected_path])
     english_path_text = f"The report is in {protected_path}/notes.txt. Review it next. "
@@ -285,7 +285,7 @@ def main() -> None:
     ) + english_path_filter.finish()
     assert protected_path not in english_path_visible, english_path_visible
     # Splitting at sentences must not change what redaction produces.
-    assert english_path_visible == redact_local_paths(english_path_text, protected_paths=[protected_path]), english_path_visible
+    assert english_path_visible == redact_local_paths(english_path_text, protected_paths=[protected_path], project_relative=True), english_path_visible
 
     path_filter = VisibleResponseStreamFilter(protected_paths=[protected_path])
     path_text = ("前" * 150) + protected_path + "/secret.txt 后续内容"
@@ -296,7 +296,7 @@ def main() -> None:
     path_visible = path_early + path_filter.finish()
     assert path_early, "a protected path crossing the segment boundary must not stall the stream"
     assert protected_path not in path_visible, path_visible
-    assert "[project]" in path_visible, path_visible
+    assert "./secret.txt" in path_visible, path_visible
 
     with tempfile.TemporaryDirectory(prefix="loopx-chat-agent-") as raw_tmp:
         root = Path(raw_tmp)

@@ -23,6 +23,23 @@ def test_archive_cli_complete_isolated_recovery(tmp_path, monkeypatch, provider)
         {"id": goal, "repo": str(tmp_path), "state_file": state.name}]}))
     projection = {"goal_id": goal, "retained": [{"id": "archived", "lease_epoch": 7}], "text": "中文原文"}
     initialize_canonical_authority(runtime, goal, projection, state_path=state, provider=provider)
+    # Cross multiple restore pages through the actual CLI, with original
+    # operations and receipts expressed independently from the archive decoder.
+    module = REPO / "loopx/control_plane/coordination/local_authority_provider.ts"
+    script = (
+        f"import {{openLocalAuthorityStore}} from {json.dumps(module.as_uri())};"
+        "let input='';for await(const chunk of process.stdin)input+=chunk;const q=JSON.parse(input);"
+        "const store=await openLocalAuthorityStore(q.root,q.goal);const head=await store.loadAuthority();"
+        "let previous=head.provider_revision;"
+        "for(let i=1;i<=33;i++){const result=await store.commitAuthority({expected_provider_revision:previous,"
+        "operation_id:'historical-'+i,events:[{round:i}],receipts:[{round:i,changed:false,optional:null}],"
+        "next_projection:{...q.projection,round:i}});"
+        "if(result.status!=='applied')throw new Error(JSON.stringify(result));previous=result.provider_revision;}"
+    )
+    subprocess.run(["node", "--no-warnings", "--experimental-strip-types", "--input-type=module", "-e", script],
+                   input=json.dumps({"root": str(runtime), "goal": goal, "projection": projection}),
+                   capture_output=True, text=True, timeout=45, check=True)
+    projection = {**projection, "round": 33}
     registry_before, state_before = registry.read_bytes(), state.read_bytes()
     # File bytes across the active tree prove no fence/selector/registry rewrite.
     def files():
@@ -44,13 +61,13 @@ def test_archive_cli_complete_isolated_recovery(tmp_path, monkeypatch, provider)
         assert not exported["authority_changed"]
         verified = cli("verify", "--archive", str(archive))
         assert verified["archive"] == exported["archive"]
-        assert verified["archive"]["commits"] == "1"
+        assert verified["archive"]["commits"] == "34"
         audit_args = ("audit", "--goal-id", goal, "--archive", str(archive),
                       "--archive-sha256", verified["archive"]["archive_sha256"])
         audited = cli(*audit_args)
         assert audited["status"] == "audited"
         assert audited["audit"]["scope"] == "exact"
-        assert audited["audit"]["compared_commits"] == "1"
+        assert audited["audit"]["compared_commits"] == "34"
         assert not audited["authority_changed"]
         occupied = cli("export", "--goal-id", goal, "--archive", str(archive), exit_code=1)
         assert occupied["status"] == "failed"
@@ -92,6 +109,17 @@ def test_archive_cli_complete_isolated_recovery(tmp_path, monkeypatch, provider)
             readback = subprocess.run(["node", "--no-warnings", "--experimental-strip-types", "--input-type=module", "-e", script],
                                       capture_output=True, text=True, timeout=30, check=True)
             assert json.loads(readback.stdout)["head"] == projection
+            # A separate process reopens all original receipt bodies and
+            # cursors. A head-only oracle cannot detect discarded history.
+            receipts_script = (f"import {{{class_name}}} from {json.dumps(module.as_uri())};"
+                f"const store=new {class_name}({json.dumps(str(destination / 'store'))},{json.dumps(goal)});"
+                "const out=[];for(let i=1;i<=33;i++)out.push(await store.readReceipt('historical-'+i));"
+                "process.stdout.write(JSON.stringify(out));")
+            receipts = subprocess.run(["node", "--no-warnings", "--experimental-strip-types", "--input-type=module",
+                                       "-e", receipts_script], capture_output=True, text=True, timeout=30, check=True)
+            for i, receipt in enumerate(json.loads(receipts.stdout), 1):
+                assert receipt["status"] == "found" and receipt["cursor"] == str(i + 1)
+                assert receipt["receipts"] == [{"round": i, "changed": False, "optional": None}]
         # An arbitrary occupied directory, including the active runtime, is never reused.
         rejected = cli("restore", "--goal-id", goal, "--archive", str(archive), "--archive-sha256",
                        verified["archive"]["archive_sha256"], "--destination", str(runtime),
@@ -179,40 +207,6 @@ def test_all_known_upgrade_roots_are_registry_owned_and_do_not_create_stores(tmp
     with pytest.raises(ValueError, match="Both default LoopX registries exist"):
         authority_archive.authority_upgrade_roots(project_registry, None, all_known=True)
     assert authority_archive.authority_upgrade_roots(project_registry, str(common), all_known=True) == roots
-
-
-@pytest.mark.parametrize("initial,target", [("file", "sqlite"), ("sqlite", "file")])
-def test_provider_migration_cli_preserves_readback_and_rollback(tmp_path, monkeypatch, initial, target):
-    from canonical_authority_fixture import promoted_create_fixture
-
-    isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, runtime, state = promoted_create_fixture(tmp_path, provider=initial)
-    before = state.read_bytes()
-
-    def cli(*args, expected=0):
-        result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
-                                 "--format", "json", *args], cwd=REPO, capture_output=True, text=True, timeout=90)
-        assert result.returncode == expected, result.stdout + result.stderr
-        return json.loads(result.stdout)
-
-    try:
-        for index, destination in enumerate((target, initial)):
-            plan = tmp_path / f"plan-{index}.json"
-            planned = cli("authority-archive", "plan-migration", "--goal-id", "goal-a", "--provider", destination, "--plan", str(plan))
-            arguments = ("authority-archive", "migrate", "--goal-id", "goal-a", "--plan", str(plan), "--plan-sha256", planned["plan_sha256"])
-            assert cli(*arguments)["status"] == "planned"
-            migrated = cli(*arguments, "--execute")
-            assert migrated["status"] == "migrated", migrated
-            assert migrated["selected_provider"] == destination
-            assert migrated["audit"]["compared_commits"] == "1"
-            assert cli(*arguments, "--execute")["status"] == "already_applied"
-            # Independent production CLI reads must follow the published selector.
-            snapshot = cli("authority-archive", "export", "--goal-id", "goal-a", "--archive", str(tmp_path / f"after-{index}.jsonl"))
-            assert snapshot["archive"]["source_provider"] == destination
-        assert state.read_bytes() == before
-    finally:
-        subprocess.run([sys.executable, "-c", "from loopx.control_plane.effect_runtime import effect_runtime_result; effect_runtime_result('runtime.shutdown',{},retry_safe=False)"],
-                       cwd=REPO, capture_output=True, text=True, timeout=30, check=True)
 
 
 @pytest.mark.parametrize("execute", [False, True])

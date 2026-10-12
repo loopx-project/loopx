@@ -92,7 +92,7 @@ def read_completion_result(*, registry_path: Path, runtime_root: Path,
                            goal_id: str, todo_id: str) -> dict[str, Any]:
     """Exact owner-local read; absence, stale acceptance and byte drift fail closed."""
     from ..goals.acceptance import inspect_goal_acceptance
-    from ...todos import list_goal_todos
+    from ...control_plane.todos.list_readback import list_goal_todos
 
     todos = list_goal_todos(registry_path=registry_path, goal_id=goal_id,
                             todo_id=todo_id, runtime_root_arg=str(runtime_root))

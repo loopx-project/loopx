@@ -363,3 +363,5 @@ accepted design documents are distinct from depending on the LoopX runtime.
   This distinguishes proposal packaging, historical tooling and pilots, plugin
   registration and current acceptance limits. No live integration was
   independently reproduced and other entries were not revalidated.
+
+For current upstream contribution candidates and invitation status, see [fork contribution research](fork-research.md).

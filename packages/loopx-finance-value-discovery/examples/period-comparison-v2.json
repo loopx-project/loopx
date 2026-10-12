@@ -1,0 +1,101 @@
+{
+  "schema_version": "finance_period_comparison_input_v2",
+  "period_intent": "same_period",
+  "left": {
+    "source_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "context": {
+      "startDate": "2001-01-01Z",
+      "endDate": "2001-12-31Z"
+    },
+    "economic_period": {
+      "context_source_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "evidence_ref": "urn:synthetic:parent:period",
+      "role": "annual_return",
+      "start": "2001-01-01T00:00:00Z",
+      "end": "2002-01-01T00:00:00Z",
+      "start_basis": "calendar"
+    },
+    "statement_basis": {
+      "subject_ref": "urn:synthetic:issuer",
+      "metric_ref": "urn:synthetic:investing-flow",
+      "filing_ref": "urn:synthetic:filing:original",
+      "version_ref": "urn:synthetic:version:original",
+      "scope_ref": "aggregate",
+      "evidence_ref": "urn:synthetic:parent:left",
+      "unit": {
+        "currency": "USD",
+        "scale": 3
+      },
+      "value": "-340"
+    }
+  },
+  "right": {
+    "source_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "context": {
+      "startDate": "2001-01-01Z",
+      "endDate": "2001-12-31Z"
+    },
+    "economic_period": {
+      "context_source_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "evidence_ref": "urn:synthetic:parent:period",
+      "role": "annual_return",
+      "start": "2001-01-01T00:00:00Z",
+      "end": "2002-01-01T00:00:00Z",
+      "start_basis": "calendar"
+    },
+    "statement_basis": {
+      "subject_ref": "urn:synthetic:issuer",
+      "metric_ref": "urn:synthetic:investing-flow",
+      "filing_ref": "urn:synthetic:filing:restated",
+      "version_ref": "urn:synthetic:version:restated",
+      "scope_ref": "other-only",
+      "evidence_ref": "urn:synthetic:parent:right",
+      "unit": {
+        "currency": "USD",
+        "scale": 3
+      },
+      "value": "-170"
+    }
+  },
+  "basis_bridge": {
+    "evidence_ref": "urn:synthetic:parent:decomposition",
+    "target_scope_ref": "other-only",
+    "target_component_refs": [
+      "other"
+    ],
+    "left": {
+      "source_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "filing_ref": "urn:synthetic:filing:original",
+      "version_ref": "urn:synthetic:version:original",
+      "scope_ref": "aggregate",
+      "coverage_evidence_ref": "urn:synthetic:parent:coverage:left",
+      "components": [
+        {
+          "component_ref": "purchase",
+          "value": "-200"
+        },
+        {
+          "component_ref": "disposal",
+          "value": "30"
+        },
+        {
+          "component_ref": "other",
+          "value": "-170"
+        }
+      ]
+    },
+    "right": {
+      "source_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "filing_ref": "urn:synthetic:filing:restated",
+      "version_ref": "urn:synthetic:version:restated",
+      "scope_ref": "other-only",
+      "coverage_evidence_ref": "urn:synthetic:parent:coverage:right",
+      "components": [
+        {
+          "component_ref": "other",
+          "value": "-170"
+        }
+      ]
+    }
+  }
+}

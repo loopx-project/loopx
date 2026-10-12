@@ -316,6 +316,22 @@ def _compact_interaction_contract(contract: dict[str, Any]) -> dict[str, Any]:
     return compact
 
 
+def _goal_list_view(packet: dict[str, Any], *, selected: bool) -> dict[str, Any]:
+    """Avoid repeating the selected work's source-read plan in the overview."""
+    if not selected:
+        return packet
+    contract = _as_dict(packet.get("interaction_contract"))
+    agent_channel = _as_dict(contract.get("agent_channel"))
+    if not agent_channel.get("required_reads") and not agent_channel.get("work_context"):
+        return packet
+    overview_contract = dict(contract)
+    overview_agent_channel = dict(agent_channel)
+    overview_agent_channel.pop("required_reads", None)
+    overview_agent_channel.pop("work_context", None)
+    overview_contract["agent_channel"] = overview_agent_channel
+    return {**packet, "interaction_contract": overview_contract}
+
+
 def _compact_scheduler_hint(scheduler_hint: dict[str, Any]) -> dict[str, Any]:
     if not scheduler_hint:
         return {}
@@ -614,6 +630,10 @@ def collect_diagnosis(
         item.get("machine_signal") == ORPHANED_GOAL_STATE_CONNECTION
         for item in goal_packets
     )
+    goal_overviews = [
+        _goal_list_view(packet, selected=packet is selected)
+        for packet in goal_packets
+    ]
     payload = {
         "ok": bool(status_payload.get("ok")) and not diagnosis_blocked,
         "schema_version": DIAGNOSIS_SCHEMA_VERSION,
@@ -631,7 +651,7 @@ def collect_diagnosis(
         "run_count": status_payload.get("run_count"),
         "attention_item_count": _as_dict(status_payload.get("attention_queue")).get("item_count"),
         "selected": selected,
-        "goals": goal_packets,
+        "goals": goal_overviews,
         "status_summary": {
             "contract": contract.get("summary"),
             "contract_errors": contract_errors["items"],

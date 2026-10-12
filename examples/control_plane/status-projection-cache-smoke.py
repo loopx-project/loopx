@@ -16,7 +16,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.control_plane.runtime.status_projection_cache import write_status_projection_cache
+from loopx.control_plane.runtime.status_projection_cache import write_status_projection_cache  # noqa: E402
 
 GOAL_ID = "status-projection-cache-fixture"
 AGENT_ID = "codex-main-control"
@@ -336,8 +336,12 @@ def main() -> int:
             "--use-projection-cache",
         )
         assert stale_quota.get("ok") is True, stale_quota
-        assert_cache_hit(stale_quota)
-        assert_next_action(stale_quota, initial_todo_id)
+        # Read-only status may display an opted-in stale snapshot; scheduling
+        # must invalidate changed authoritative Todos before selecting work.
+        quota_cache = cache_metadata(stale_quota)
+        assert quota_cache["hit"] is False, quota_cache
+        assert quota_cache["miss_reason"] == "goal_todo_projection_changed", quota_cache
+        assert_next_action(stale_quota, successor_id)
 
         expire_cache_record(stale_status)
         expire_cache_record(stale_quota)

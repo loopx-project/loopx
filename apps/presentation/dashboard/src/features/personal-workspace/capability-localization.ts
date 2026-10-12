@@ -12,7 +12,8 @@ type FieldCopy = Record<string, Readonly<{ description?: string; label: string; 
 
 const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
   en: {
-    goal_storage: { displayName: "New Goal authority", description: "Opt in to canonical creation and choose the storage and execution policy for future Goals. Existing Goals require a separate backed-up migration." },
+    content_ops: {displayName: "Reference styles", description: "Retrieve source styles from an existing private catalog and prepare attributed outlines. No source or material-store writes."},
+    goal_storage: { displayName: "New Goal authority", description: "New Goals default to canonical SQLite with hard leases. Choose storage and execution policy for future Goals. Existing Goals require a separate backed-up migration." },
     manager_runtime: {
       displayName: "Runtime",
       description: "Selects the persistent host-tool profile used by owner manager conversations.",
@@ -78,7 +79,8 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
     },
   },
   "zh-CN": {
-    goal_storage: { displayName: "新 Goal 的权威存储", description: "可启用 canonical 创建，选择之后新 Goal 的存储与执行策略。已有 Goal 仍需单独备份、迁移。" },
+    content_ops: {displayName: "素材与风格", description: "从原有私有目录检索表达结构，准备带来源署名的提纲；不执行来源或素材库写入。"},
+    goal_storage: { displayName: "新 Goal 的权威存储", description: "新 Goal 默认使用 canonical SQLite 与 hard lease；可选择之后新 Goal 的存储与执行策略。已有 Goal 仍需单独备份、迁移。" },
     manager_runtime: {
       displayName: "运行环境",
       description: "选择管家会话持续生效的宿主工具模式。",
@@ -157,7 +159,7 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     executor_model: { label: "Model", description: "Optional model for the selected executor. Leave blank to keep the executor's own default." },
     executor_reasoning_effort: { label: "Reasoning effort", description: "Optional reasoning effort for the selected executor. Leave blank to keep the executor's own default." },
     count_unit: { label: "Review after", description: "Work Turns require accepted settlement; polls and retries do not count.", options: { completed_todos: "Completed Todos", effective_turns: "Settled work Turns" } },
-    count: { label: "Number between reviews", description: "From 1 to 5, using the selected unit. Goal overrides take precedence over device defaults." },
+    count: { label: "Number between reviews", description: "Settled work Turns: 1–6; completed Todos: 1–5. Goal overrides take precedence over device defaults." },
     allowed_domains: { label: "Allowed responsibility domains", description: "Enter one bounded, public-safe domain per line." },
     coordinator_agent_id: { label: "Coordinator Agent", description: "Use an already registered Agent id; leave blank to disable coordination." },
     enabled: { label: "Enabled" },
@@ -189,7 +191,7 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     executor_model: { label: "模型", description: "所选执行器使用的模型，可留空；留空表示沿用执行器自身的默认模型。" },
     executor_reasoning_effort: { label: "推理档位", description: "所选执行器使用的推理档位，可留空；留空表示沿用执行器自身的默认档位。" },
     count_unit: { label: "复核计数依据", description: "有效工作 Turn 须完成结算；轮询和重复重试不计数。", options: { completed_todos: "已完成 Todo", effective_turns: "已结算工作 Turn" } },
-    count: { label: "两次复核间的数量", description: "按所选单位计数，范围 1–5；Goal 显式设置优先于设备默认值。" },
+    count: { label: "两次复核间的数量", description: "已结算工作 Turn 为 1–6，已完成 Todo 为 1–5；Goal 显式设置优先于设备默认值。" },
     allowed_domains: { label: "允许的职责域", description: "每行填写一个有边界、可公开的职责域。" },
     coordinator_agent_id: { label: "协调 Agent", description: "填写一个已经注册的 Agent ID；留空表示关闭协调。" },
     enabled: { label: "启用" },

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ...file_lock import exclusive_run_index_lock
-from ...history import load_index, reserve_unique_run_paths
+from ...history import append_run_index_record, load_index, reserve_unique_run_paths
 from .time import now_local_iso
 
 
@@ -92,8 +92,7 @@ def write_compact_runtime_projection(
             markdown_renderer(record) + "\n",
             encoding="utf-8",
         )
-        with index_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(index_record, ensure_ascii=False) + "\n")
+        append_run_index_record(index_path, index_record)
 
         rows, _ = load_index(index_path)
         readback_verified = any(

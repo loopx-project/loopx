@@ -30,6 +30,7 @@ COMMAND_VERBS = ("read", "search", "list", "run")
 TITLE_LIMIT = 160
 DETAIL_LIMIT = 4000
 REASONING_UPDATE_INTERVAL_SEC = 1.5
+ACTIVITY_UPDATE_INTERVAL_SEC = 5.0
 
 _ITEM_KINDS = {
     "reasoning": "reasoning",
@@ -110,6 +111,8 @@ class CodexActivitySteps:
         self._started: dict[str, float] = {}
         self._reasoning: dict[str, dict[str, list[str]]] = {}
         self._reasoning_emitted: dict[str, float] = {}
+        self._active: dict[str, dict[str, Any]] = {}
+        self._activity_emitted: dict[str, float] = {}
 
     def _clean(self, value: Any) -> str:
         def clean_path(match: re.Match[str]) -> str:
@@ -148,7 +151,12 @@ class CodexActivitySteps:
         if item.get("type") == "reasoning":
             # The first update waits one interval so it carries a phrase, not a token.
             self._reasoning_emitted.setdefault(step_id, now)
-        return self._step(item, step_id, "running")
+        step = self._step(item, step_id, "running")
+        if step["kind"] in {"command", "tool"}:
+            # Keep only the redacted presentation, never the host payload.
+            self._active[step_id] = step
+            self._activity_emitted.setdefault(step_id, now)
+        return step
 
     def completed(self, item: Any) -> dict[str, Any] | None:
         if not isinstance(item, dict) or item.get("type") not in _ITEM_KINDS:
@@ -168,7 +176,23 @@ class CodexActivitySteps:
             step["duration_ms"] = max(0, int((self._clock() - started) * 1000))
         self._reasoning.pop(step_id, None)
         self._reasoning_emitted.pop(step_id, None)
+        self._active.pop(step_id, None)
+        self._activity_emitted.pop(step_id, None)
         return step
+
+    def activity_delta(self, item_id: Any, delta: Any, *, kind: str) -> dict[str, Any] | None:
+        """Observe real output/progress without retaining or displaying its text."""
+        if not isinstance(delta, str) or not delta:
+            return None
+        step_id = _step_id(item_id)
+        step = self._active.get(step_id)
+        if step is None or step["kind"] != kind:
+            return None  # Unknown, wrong-kind and already-terminal items stay absent.
+        now = self._clock()
+        if now - self._activity_emitted[step_id] < ACTIVITY_UPDATE_INTERVAL_SEC:
+            return None
+        self._activity_emitted[step_id] = now
+        return {**step, "duration_ms": max(0, int((now - self._started[step_id]) * 1000))}
 
     def reasoning_delta(
         self, item_id: Any, delta: Any, *, summary: bool, index: Any = 0

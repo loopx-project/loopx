@@ -204,6 +204,37 @@ def _case_export_rejects_non_public_goal_id_before_history_read(
     assert not (tmp_path / "out").exists()
 
 
+def _case_export_rejects_symlinked_goal_root(tmp_path: Path, monkeypatch) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    goal_root = out / "goal-through-link"
+    try:
+        goal_root.symlink_to(outside, target_is_directory=True)
+    except (NotImplementedError, OSError):
+        # Some Windows runners do not grant symlink creation to the test user.
+        return
+
+    monkeypatch.setattr(history_export, "collect_history", lambda **_: {"runs": []})
+    try:
+        export_goal_conclusions(
+            goal_id="goal-through-link",
+            registry_path=tmp_path / "registry.json",
+            runtime_root=tmp_path,
+            out_dir=out,
+        )
+    except RuntimeError as exc:
+        assert "goal output directory must not be a symlink" in str(exc)
+    else:
+        raise AssertionError("export must reject a symlinked goal output directory")
+
+    assert goal_root.is_symlink(), "export must not replace the caller's symlink"
+    assert not (outside / "history-conclusions").exists(), (
+        "export must not create files through the symlink"
+    )
+
+
 def _case_export_preserves_foreign_files_when_retiring_owned_generation(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -241,8 +272,10 @@ def _case_export_preserves_foreign_files_when_retiring_owned_generation(
         if isinstance(v, str) and v != proj["target_scope_hint"]
     )
     # local path is only in the local receipt
-    assert result["local_receipt"]["out_dir"].endswith(
-        f"out/{goal}/history-conclusions"
+    assert Path(result["local_receipt"]["out_dir"]).parts[-3:] == (
+        "out",
+        goal,
+        "history-conclusions",
     )
 
 
@@ -384,18 +417,18 @@ def _case_export_write_failure_preserves_prior_owned_corpus(
     monkeypatch.setattr(
         history_export, "collect_history", lambda **_: {"runs": new_runs}
     )
-    original_write_text = Path.write_text
+    original_open = Path.open
     staged_document_writes = 0
 
-    def _fail_second_staged_document(path: Path, data: str, **kwargs) -> int:
+    def _fail_second_staged_document(path: Path, mode="r", *args, **kwargs):
         nonlocal staged_document_writes
-        if path.suffix == ".md" and path.parent != goal_out:
+        if "w" in mode and path.suffix == ".md" and path.parent != goal_out:
             staged_document_writes += 1
             if staged_document_writes == 2:
                 raise OSError("simulated staged write failure")
-        return original_write_text(path, data, **kwargs)
+        return original_open(path, mode, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "write_text", _fail_second_staged_document)
+    monkeypatch.setattr(Path, "open", _fail_second_staged_document)
     try:
         export_goal_conclusions(
             goal_id=goal,
@@ -798,6 +831,47 @@ def _case_export_fails_closed_when_neither_live_nor_backup_is_valid(
         raise AssertionError("should have raised")
     except RuntimeError as exc:
         assert "unverified backup" in str(exc)
+
+
+def _case_staged_documents_stay_byte_exact_on_a_windows_host(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A Windows host translates LF to CRLF for text-mode writes.
+
+    The staged corpus is validated by a byte-exact readback and the manifest
+    pins each document's sha256, so publication must not depend on the host
+    text layer leaving newlines untouched.
+    """
+
+    goal = "host-newline-translation"
+    real_open = Path.open
+
+    def _windows_text_write_open(self, mode="r", *args, **kwargs):
+        if "b" not in mode and any(flag in mode for flag in "wax"):
+            if kwargs.get("newline") is None:
+                # Mirror the os.linesep translation CPython applies on Windows.
+                kwargs["newline"] = "\r\n"
+        return real_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", _windows_text_write_open)
+    run = {
+        "classification": "host-newline",
+        "generated_at": "2026-08-04T01:02:03Z",
+        "recommended_action": "publish byte-exact documents",
+    }
+    result = _export_runs(tmp_path, monkeypatch, goal_id=goal, runs=[run])
+
+    assert result["public_projection"]["written"] == 1
+    (name,) = result["local_receipt"]["owned_files"]
+    expected = render_conclusion_markdown(goal, run)
+    assert expected is not None
+    published = (Path(result["local_receipt"]["out_dir"]) / name).read_bytes()
+    assert published == expected.encode("utf-8")
+    assert b"\r\n" not in published
+
+    replacement = dict(run, recommended_action="replace the published generation")
+    result2 = _export_runs(tmp_path, monkeypatch, goal_id=goal, runs=[replacement])
+    assert result2["public_projection"]["retired_prior_generation"] == 1
 
 
 def _case_active_provider_rejects_exit_zero_unsuccessful_openviking_envelope(

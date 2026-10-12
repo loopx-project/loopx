@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {createHash} from "node:crypto";
 import {projectReplanContext, validateReplanContext} from "../../loopx/control_plane/work_items/replan_context.ts";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 
@@ -90,5 +91,83 @@ test("references resolve only the exact immutable row within the same Goal and A
   for (const invalid of [{agent_id: "agent-b"}, {goal_id: "goal-b"}, {rows: []},
     {rows: [{...row(1), health_check: "Replaced observation"}]}, {evidence_ref: "missing"}]) {
     assert.throws(() => projectReplanContext({...resolve, ...invalid}), /unavailable/);
+  }
+});
+
+function pair(time = 1): [JsonObject, JsonObject] {
+  const identity = {schema_version: "quota_settlement_identity_v0", goal_id: "goal-a", agent_id: "agent-a",
+    todo_id: "todo-a", turn_instance_id: "turn-" + time, effect_id: "settlement-" + time};
+  const hash = (text: string) => createHash("sha256").update(text).digest("hex");
+  const work = {...row(time), todo_id: "todo-a", classification: "bounded_probe", recommended_action: "Try the next route.",
+    _source_facts: {...identity, settlement_identity: identity, quota_spend_commit: null,
+      recommended_action_digest: hash("Try the next route."), health_check_digest: hash(String(row(time).health_check))}};
+  const accounting = {...work, ...row(time + 0.1), progress_observation: null, classification: "quota_slot_spent",
+    _source_facts: {...work._source_facts, quota_spend_commit: {
+      schema_version: "quota_spend_commit_receipt_v0", effect_id: identity.effect_id + "#quota_spend"}}};
+  return [work, accounting];
+}
+
+test("reduction preserves raw counts, negative coverage, obligation and immutable resolution", () => {
+  const [work, accounting] = pair();
+  const legacy = [work, accounting].map(({_source_facts: _source, ...row}) => row);
+  const before = projectReplanContext({...request, rows: legacy});
+  const after = projectReplanContext({...request, rows: [work, accounting]});
+  assert.equal((after.evidence as JsonObject[]).length, 1);
+  for (const key of ["evidence_count", "coverage_ledger", "coverage_count", "uncovered_frontier", "obligation_id", "core_goal"])
+    assert.deepEqual(after[key], before[key]);
+  for (const row of before.evidence as JsonObject[]) {
+    const resolved = projectReplanContext({...request, rows: [work, accounting], operation: "resolve", evidence_ref: row.evidence_ref});
+    assert.equal((resolved.evidence as JsonObject).recommended_action, work.recommended_action);
+    assert.ok(!("_source_facts" in (resolved.evidence as JsonObject)));
+  }
+});
+
+test("an unpaired grouped occurrence keeps the group's full continuation", () => {
+  const [work, accounting] = pair();
+  const {_source_facts: _source, ...unpaired} = {...accounting, ...row(3), progress_observation: null};
+  const context = projectReplanContext({...request, rows: [work, accounting, unpaired]});
+  const evidence = context.evidence as JsonObject[];
+  assert.equal(evidence.length, 2);
+  assert.equal(evidence[0].occurrences, 2);
+  assert.ok(String(evidence[0].summary).includes(String(work.recommended_action)));
+});
+
+test("a display cap cannot remove a continuation whose work is not displayed", () => {
+  const [work, accounting] = pair();
+  const others = Array.from({length: 30}, (_, i) => ({...row(i + 10),
+    health_check: "Independent validation " + i}));
+  const latestAccounting = {...accounting, ...row(100), progress_observation: null};
+  const context = projectReplanContext({...request, rows: [work, latestAccounting, ...others]});
+  // Result/route diversity selects another work row; recency admits this
+  // accounting row while its exact work row is outside the cap.
+  assert.equal((context.evidence as JsonObject[]).length, 24);
+  assert.equal(context.evidence_count, 32);
+  assert.equal(context.coverage_count, 1);
+  assert.ok((context.evidence as JsonObject[]).some(item => String(item.summary).includes(String(work.recommended_action))));
+});
+
+test("independent accounting, mismatched identities and actual progress are never hidden", () => {
+  const [work, accounting] = pair();
+  const source = accounting._source_facts as JsonObject;
+  for (const altered of [accounting, {...accounting, progress_observation: progress},
+    {...accounting, _source_facts: {...source, turn_instance_id: "another-turn"}},
+    {...accounting, _source_facts: {...source, health_check_digest: null}, health_check: "Validation failed"}]) {
+    const context = projectReplanContext({...request, rows: altered === accounting ? [altered] : [work, altered]});
+    assert.equal((context.evidence as JsonObject[]).length, altered === accounting ? 1 : 2);
+  }
+});
+
+test("invalid source digest shapes cannot authorize accounting reduction", () => {
+  const hex = "b".repeat(64);
+  for (const bad of [hex.slice(1), hex + "b", hex.toUpperCase(), "g".repeat(64), `sha256:${hex}`]) {
+    for (const field of ["recommended_action_digest", "delivery_outcome_digest"]) {
+      const rows = pair().map(item => ({...item,
+        ...(field === "delivery_outcome_digest" ? {delivery_outcome: "verified result"} : {}),
+        _source_facts: {...item._source_facts as JsonObject, [field]: bad}}));
+      const context = projectReplanContext({...request, rows});
+      assert.equal((context.evidence as JsonObject[]).length, 2, `${field}: ${bad}`);
+      assert.ok((context.evidence as JsonObject[]).every(item =>
+        String(item.summary).includes(String(rows[0].recommended_action))));
+    }
   }
 });

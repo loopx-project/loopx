@@ -5,7 +5,9 @@ import { useWorkspaceI18n } from "./i18n";
 
 /** The saved browser carrier is recovery context, never write authority: the
  * server loads its immutable plan and the canonical owner checks the digest. */
-export function GoalOwnershipSettings({goalId, onChanged}: {goalId: string; onChanged: () => void}) {
+export function GoalOwnershipSettings({goalId, onChanged, refreshKey = 0}: {
+  goalId: string; onChanged: () => void; refreshKey?: number;
+}) {
   const {t} = useWorkspaceI18n();
   const key = `loopx-ownership-preview:${goalId}`;
   const [current, setCurrent] = useState<GoalOwnership | null>(null);
@@ -36,7 +38,7 @@ export function GoalOwnershipSettings({goalId, onChanged}: {goalId: string; onCh
     }).catch(() => { if (generation.current === token) setError(t("ownership.loadFailed")); })
       .finally(() => { if (generation.current === token) setBusy(false); });
     return () => { generation.current++; };
-  }, [goalId, key, reload, t]);
+  }, [goalId, key, reload, refreshKey, t]);
 
   async function submit(apply: boolean) {
     if (inFlight.current || busy) return;

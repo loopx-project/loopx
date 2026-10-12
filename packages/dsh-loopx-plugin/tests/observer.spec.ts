@@ -1,9 +1,12 @@
 import { readFileSync } from 'node:fs'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import type { Context } from '@deepseek-ai/cordis'
-import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import { Context } from '@deepseek-ai/cordis'
+import { SessionId, SessionStore } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import {
   ledgerPath,
   ENV_GOAL_ID,
@@ -459,5 +462,58 @@ describe('registerShadowObserver', () => {
     expect(observer.stats().observed_event_count).toBe(1)
     expect(warnings).toEqual([])
     expect(typeof disposeEffect).toBe('function')
+  })
+})
+
+describe('Cordis and DSH session publication integration', () => {
+  it('observes a live session through create, append, and disposal, then flushes on context disposal', async () => {
+    const ledgerDir = await mkdtemp(join(tmpdir(), 'loopx-observer-cordis-'))
+    const sessionId = SessionId('session-cordis-integration')
+    const integrationConfig: ShadowObserverConfig = {
+      ...config,
+      sessionId,
+      ledgerDir,
+      bufferBound: 8,
+    }
+    const ctx = new Context()
+
+    try {
+      const observer = registerShadowObserver(ctx, integrationConfig)
+      const sessionStoreFiber = await ctx.plugin(SessionStore)
+      const session = sessionStoreFiber.ctx.sessions.create(sessionId, {
+        meta: { cwd: ledgerDir },
+      })
+
+      session.append('user/message', {
+        id: 'message-cordis-integration' as UserMessage['id'],
+        role: 'user',
+        content: [{ type: 'text', text: 'synthetic observer integration event' }],
+        source: { kind: 'user' },
+      }, { surfaceOp: 'append' })
+
+      await sessionStoreFiber.dispose()
+      await ctx.fiber.dispose()
+
+      const records = (await readFile(ledgerPath(integrationConfig), 'utf8'))
+        .trim()
+        .split('\n')
+        .map(line => JSON.parse(line) as Record<string, unknown>)
+      const envelopes = records.filter(record => record.schema_version === OBSERVER_ENVELOPE_SCHEMA_VERSION)
+      const stats = records.find(record => record.schema_version === OBSERVER_STATS_SCHEMA_VERSION)
+
+      expect(envelopes.map(record => record.event_kind)).toEqual([
+        'session_started', 'user_message', 'session_disposed',
+      ])
+      expect(stats).toMatchObject({
+        observed_event_count: 3,
+        accepted_event_count: 3,
+        rejected_event_count: 0,
+        observer_failure_count: 0,
+      })
+      expect(observer.stats().accepted_event_count).toBe(3)
+    } finally {
+      await ctx.fiber.dispose()
+      await rm(ledgerDir, { recursive: true, force: true })
+    }
   })
 })

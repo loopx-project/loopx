@@ -141,12 +141,22 @@ while [[ "$archive_attempt" -le "$archive_max_attempts" ]]; do
     fi
   fi
   archive_attempts_completed="$archive_attempt"
+  resuming_archive=0
+  if [[ -s "$archive_path" ]]; then
+    resuming_archive=1
+  fi
   if http_status="$(curl --silent --show-error --fail --location \
     --connect-timeout 10 --max-time "$attempt_timeout" \
     --continue-at - --write-out '%{http_code}' \
     "$archive_url" -o "$archive_path")"; then
-    archive_downloaded=1
-    break
+    # curl can treat 416 as an already-complete resumed transfer. The local
+    # partial file is not proof of that; recover by downloading it afresh.
+    if [[ "$resuming_archive" -eq 1 && "$http_status" == 416 ]]; then
+      last_curl_code=0
+    else
+      archive_downloaded=1
+      break
+    fi
   else
     last_curl_code=$?
   fi
@@ -156,6 +166,19 @@ while [[ "$archive_attempt" -le "$archive_max_attempts" ]]; do
     last_http_status=0
   fi
   retryable=0
+  # Some servers/proxies ignore Range (200) or reject its offset (416).
+  # curl reports these as 33, or 56 with HTTP 200, depending on its version.
+  # Restart only a rejected resume; ordinary transfer failures keep partial
+  # bytes. The restart uses the next attempt and the original deadline.
+  if [[ "$resuming_archive" -eq 1 ]]; then
+    case "$last_curl_code:$last_http_status" in
+      33:*|56:200|22:416|0:416)
+        rm -f "$archive_path"
+        retryable=1
+        echo "loopx installer: archive resume rejected; retrying a complete download within the remaining budget" >&2
+        ;;
+    esac
+  fi
   case "$last_curl_code" in
     5|6|7|18|28|35|52|55|56)
       retryable=1
@@ -175,6 +198,9 @@ while [[ "$archive_attempt" -le "$archive_max_attempts" ]]; do
 done
 if [[ "$archive_downloaded" -ne 1 ]]; then
   echo "loopx installer error: archive download failed after $archive_attempts_completed attempt(s) (curl $last_curl_code, HTTP $last_http_status)" >&2
+  if [[ "$last_curl_code" -eq 0 ]]; then
+    exit 1
+  fi
   exit "$last_curl_code"
 fi
 archive_sha256="$("$python_bin" - "$archive_path" <<'PY'
@@ -190,6 +216,8 @@ print(digest.hexdigest())
 PY
 )"
 export LOOPX_ARCHIVE_SHA256="$archive_sha256"
+# Validate the complete compressed archive before extracting any members.
+tar -tzf "$archive_path" >/dev/null
 tar -xzf "$archive_path" -C "$extract_dir"
 
 repo_root="$(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d -print -quit)"

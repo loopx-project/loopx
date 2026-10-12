@@ -30,6 +30,7 @@ MAX_SESSION_BINDING_CANDIDATES = 3
 MAX_WORKSPACE_SCOPES = 4
 STALE_CLAIM_THRESHOLD_HOURS = 36
 MATERIAL_LIFECYCLE_CAPABILITY = "material_lifecycle"
+LEASE_STATUS_UNAVAILABLE = "unavailable"
 
 _TODO_GROUP_LIST_KEYS = tuple(
     dict.fromkeys(
@@ -559,9 +560,9 @@ def _agent_state(
     1. blocked      — current todo is blocked or a blocker
     2. monitoring / waiting — monitor-only or non-open current work
     3. executing    — the Turn lane is live or a delegation worker holds its lock
-    4. unknown      — the lane holder cannot be checked here (foreign host or
-                      unreadable record), or an active lease has expired while
-                      nothing is live; consumers fail closed on it
+    4. unknown      — the lane or lease cannot be checked here, or an active
+                      lease has expired while nothing is live; consumers fail
+                      closed on it
     5. bound        — has session binding and active todo
     6. launchable   — has active todo, no session binding
     7. addressable  — has session binding but no active todo
@@ -592,7 +593,8 @@ def _agent_state(
         return WORKER_LIFECYCLE_STATE_EXECUTING
     lease = _as_dict(facts.get("lease"))
     if lane in EXECUTION_LANE_UNKNOWN_STATES or (
-        lease.get("status") == "active" and lease.get("expired") is True
+        lease.get("status") == LEASE_STATUS_UNAVAILABLE
+        or (lease.get("status") == "active" and lease.get("expired") is True)
     ):
         return WORKER_LIFECYCLE_STATE_UNKNOWN
 

@@ -49,7 +49,7 @@ from .control_plane.agents.runtime_model import (
 )
 from .control_plane.agents.supervisor import normalize_peer_supervisor
 from .control_plane.agents.work_mode import normalize_agent_work_modes
-from .control_plane.coordination import runtime_shadow as shadow
+from .control_plane.coordination import configuration as shadow
 from .control_plane.coordination.configuration import normalize_goal_write_scope
 from .control_plane.operator_inbox_binding import local_private_config_digest
 from .control_plane.projects.registry_codec import (

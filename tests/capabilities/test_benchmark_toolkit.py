@@ -18,6 +18,7 @@ from loopx.capabilities.benchmark_toolkit import (
     DockerContainerBindingError,
     build_benchmark_integrity_qualification,
     compact_docker_container_binding_receipt,
+    container_binding,
     select_exact_docker_container,
 )
 from loopx.capabilities.catalog import build_capability_detail_packet
@@ -110,6 +111,41 @@ def test_exact_container_binding_rejects_invalid_or_failed_discovery() -> None:
         )
 
     assert private_stderr not in str(error.value)
+
+
+def test_exact_container_binding_reports_command_timeout_without_diagnostics() -> None:
+    def timed_out_runner(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(argv, timeout=30, stderr="private daemon detail")
+
+    with pytest.raises(
+        DockerContainerBindingError,
+        match="^docker_container_discovery_timed_out$",
+    ) as error:
+        select_exact_docker_container(
+            ancestor_image="benchmark-runner:fixture",
+            required_labels={"job.identity": "fixture"},
+            command_runner=timed_out_runner,
+        )
+
+    assert "private daemon detail" not in str(error.value)
+
+
+def test_default_container_discovery_runner_uses_a_bounded_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    def fake_subprocess_run(argv: Sequence[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        observed.update(kwargs)
+        return subprocess.CompletedProcess(argv, 0, "container-a\n", "")
+
+    monkeypatch.setattr(container_binding.subprocess, "run", fake_subprocess_run)
+    select_exact_docker_container(
+        ancestor_image="benchmark-runner:fixture",
+        required_labels={"job.identity": "fixture"},
+    )
+
+    assert observed["timeout"] == container_binding.DOCKER_CONTAINER_DISCOVERY_TIMEOUT_SECONDS
 
 
 def test_catalog_exposes_post_run_case_insight_monitor_contract() -> None:

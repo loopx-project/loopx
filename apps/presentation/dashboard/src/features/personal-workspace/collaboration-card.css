@@ -1,10 +1,10 @@
 .personal-collaboration { margin-top: 12px; border: 1px solid var(--color-border, #ebebeb); border-radius: 6px; padding: 12px 16px; overflow-wrap: anywhere; }
 .personal-collaboration header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
-.personal-collaboration header span, .personal-collaboration-status { font-size: 12px; opacity: .75; }
+.personal-collaboration header span, .personal-collaboration-status { font-size: var(--text-caption); line-height: var(--leading-caption); opacity: .75; }
 .personal-collaboration-status { display: flex; flex-wrap: wrap; gap: 8px 16px; }
 .personal-collaboration summary { cursor: pointer; min-height: 44px; display: list-item; align-content: center; }
-.personal-collaboration h4 { margin: 12px 0 4px; font-size: 13px; }
+.personal-collaboration h4 { margin: 12px 0 4px; font-size: var(--text-body); line-height: var(--leading-body); }
 .personal-collaboration p { white-space: pre-wrap; }
 .personal-collaboration ul { padding-left: 20px; }
-.personal-collaboration small { display: block; font-family: var(--font-mono); font-size: 11px; }
+.personal-collaboration small { display: block; font-family: var(--font-mono); font-size: var(--text-caption); line-height: var(--leading-caption); }
 .personal-collaboration summary:focus-visible { outline: 2px solid var(--color-link, #0070f3); outline-offset: 2px; }

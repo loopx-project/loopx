@@ -94,7 +94,7 @@ def test_blocked_retry_requires_the_exact_pending_todo_and_bounded_due_time() ->
         observed_at=observed,
     )
     assert valid["due_at"] == "2026-09-24T14:05:00Z"
-    with pytest.raises(ValueError, match="same unfinished advancement Todo"):
+    with pytest.raises(ValueError, match="same unfinished Todo"):
         require_blocked_retry_wait(
             fields("2026-09-24T14:05:00Z"),
             todo_id="todo_other",

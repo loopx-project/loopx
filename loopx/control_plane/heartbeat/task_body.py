@@ -674,7 +674,7 @@ def render_thin_heartbeat_task_body(
 {scope_sentence}
 Use TurnEnvelope: `action.must_attempt` requires work; `user.notify` controls
 output only. ok=false -> recovery, no delivery. Language=user. Honor `boundary`, `execution_policy`, `contract_capsule`,
-`required_reads`, `agent_context`, and `replan_action_packet` when present.
+`work_context`, remaining `required_reads`, `agent_context`, and `replan_action_packet` when present.
 Read `detail_ref.full_decision` for selection, replan, capability context or
 missing/truncated commands: same-invocation observation, not fresh admission.
 Selection uses the saved `interaction_contract.cli_channel.selection_command`.
@@ -741,13 +741,26 @@ def render_heartbeat_generator_inputs_markdown(payload: dict[str, Any]) -> str:
         f"- agent_model: `{payload.get('agent_model')}`",
         f"- agent_role: `{payload.get('agent_role')}`",
     ]
+    lines.append(f"- agent_scopes: `{payload.get('agent_scopes')}`")
+    if payload.get("thin") is True:
+        lines.append(
+            f"- thin_prompt_command: `{payload.get('thin_prompt_command')}`"
+        )
+    elif payload.get("brief") is True:
+        lines.append(
+            f"- brief_prompt_command: `{payload.get('brief_prompt_command')}`"
+        )
+    else:
+        lines.extend(
+            [
+                f"- expanded_prompt_command: `{payload.get('expanded_prompt_command')}`",
+                f"- compact_prompt_command: `{payload.get('compact_prompt_command')}`",
+                f"- brief_prompt_command: `{payload.get('brief_prompt_command')}`",
+                f"- thin_prompt_command: `{payload.get('thin_prompt_command')}`",
+            ]
+        )
     lines.extend(
         [
-            f"- agent_scopes: `{payload.get('agent_scopes')}`",
-            f"- expanded_prompt_command: `{payload.get('expanded_prompt_command')}`",
-            f"- compact_prompt_command: `{payload.get('compact_prompt_command')}`",
-            f"- brief_prompt_command: `{payload.get('brief_prompt_command')}`",
-            f"- thin_prompt_command: `{payload.get('thin_prompt_command')}`",
             "- pr_review_pre_quota_command: "
             f"`{payload.get('pr_review_pre_quota_command')}`",
             f"- quota_guard_command: `{payload.get('quota_guard_command')}`",

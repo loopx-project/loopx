@@ -57,6 +57,44 @@ def test_run_index_ordinary_records_are_unaffected(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    ("tail", "expected_goal_ids"),
+    [
+        (b'{"goal_id":"interrupted"', [GOAL_ID]),
+        (
+            json.dumps(
+                {"goal_id": "previous-goal", "generated_at": "2026-09-15T00:00:00Z"}
+            ).encode("utf-8"),
+            ["previous-goal", GOAL_ID],
+        ),
+    ],
+    ids=["torn-tail", "valid-unterminated-tail"],
+)
+def test_history_append_starts_a_new_record_after_an_unterminated_tail(
+    tmp_path: Path,
+    tail: bytes,
+    expected_goal_ids: list[str],
+) -> None:
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    index_path = runs_dir / "index.jsonl"
+    index_path.write_bytes(tail)
+    record = {"goal_id": GOAL_ID, "generated_at": GENERATED_AT}
+
+    history.write_reserved_run_artifacts(
+        runs_dir=runs_dir,
+        generated_at=GENERATED_AT,
+        record=record.copy(),
+        index_record=record.copy(),
+        payload=record.copy(),
+        render_markdown=lambda _payload: "# run",
+    )
+
+    snapshot = history.load_index_snapshot(index_path)
+    assert tail + b"\n" in index_path.read_bytes()
+    assert [row["goal_id"] for row in snapshot.records] == expected_goal_ids
+
+
+@pytest.mark.parametrize(
     "text",
     [
         "",

@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { ArrowRight, Download, ExternalLink, RefreshCw, Search } from "lucide-react";
+import { ArrowRight, CircleAlert, Download, ExternalLink, RefreshCw, Search } from "lucide-react";
 import { deliveryReviewMarkdown, fetchDeliveryReview, filterReviewNodes, reviewCoverageIncomplete, reviewNodeColumn, type DeliveryReviewSnapshot, type ReviewFocus, type ReviewGraph, type ReviewNode } from "../../data/delivery-review";
 import type { WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceModel, WorkspaceTimelineItem } from "./personal-workspace-model";
 import { GoalAcceptanceObservationCard } from "./goal-acceptance-observation-card";
@@ -149,11 +149,12 @@ export function DeliveryReview({ goal, items, userTodos, onSelect, active }: Del
       <div><button type="button" disabled={state.kind === "loading"} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={15} />{copy.refresh}</button><button type="button" disabled={!usable} onClick={download}><Download size={15} />{copy.export}</button></div>
     </header>
     {feedback ? <p role="status">{feedback}</p> : null}
-    {!snapshot ? <p role={state.kind === "error" ? "alert" : "status"} className="delivery-notice">{state.kind === "error" ? copy.error : copy.loading}</p> : <>
-      {state.kind === "error" ? <p role="alert" className="delivery-notice">{copy.refreshError}</p> : null}
+    {!snapshot ? state.kind === "error" ? <p role="alert" className="delivery-notice is-error"><CircleAlert aria-hidden size={15} />{copy.error}</p>
+      : <div role="status" className="delivery-loading" aria-label={copy.loading}><i /><i /><i /></div> : <>
+      {state.kind === "error" ? <p role="alert" className="delivery-notice is-error"><CircleAlert aria-hidden size={15} />{copy.refreshError}</p> : null}
       <p className="delivery-snapshot-time">{copy.observed} · <time dateTime={snapshot.observed_at}>{new Date(snapshot.observed_at).toLocaleString(locale)}</time>
         {state.kind === "loading" || (stale && state.kind !== "error") ? <span role="status"> · {copy.updating}</span> : null}</p>
-      {stale && state.kind === "error" ? <p role="alert" className="delivery-notice">{copy.changed}</p> : null}
+      {stale && state.kind === "error" ? <p role="alert" className="delivery-notice is-error"><CircleAlert aria-hidden size={15} />{copy.changed}</p> : null}
       {snapshot.goal_map ? <GoalWorkMapView map={snapshot.goal_map} copy={copy.workMap} selectedId={mapSelectedId} onSelect={setMapSelectedId}
         canOpen={node => usable && mapSource(node) !== null} onOpen={node => { const source = mapSource(node); if (source) onSelect(source); }} />
         : snapshot.goal_map === null ? <p className="delivery-notice">{copy.workMap.unavailable}</p> : null}

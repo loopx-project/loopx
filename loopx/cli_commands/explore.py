@@ -19,7 +19,7 @@ from ..capabilities.explore.result_log import (
     build_explore_node_event,
     build_explore_result_projection,
     explore_result_log_path,
-    load_explore_result_events,
+    load_explore_result_events_strict,
 )
 from ..capabilities.explore.research_evidence import append_research_observation
 from ..capabilities.explore.harness_gate import GATE_STATE_DISABLED
@@ -54,7 +54,7 @@ from ..extensions.runtime import (
 )
 from ..history import load_registry
 from ..paths import resolve_runtime_root
-from ..todos import list_goal_todos
+from ..control_plane.todos.list_readback import list_goal_todos
 from .explore_feishu_commands import (
     FEISHU_SINK_EXPLORE_COMMANDS,
     handle_explore_feishu_command,
@@ -84,6 +84,10 @@ def register_explore_commands(
     add_subcommand_format(context)
     context.add_argument("--goal-id", required=True)
     context.add_argument("--agent-id", required=True)
+    context.add_argument("--result-limit", type=int, default=3, help="Evidence details per page (1..20); default 3.")
+    context.add_argument("--result-offset", type=int, default=0, help="Continue using the previous page's result_revision.")
+    context.add_argument("--result-node", help="Read evidence for one question node.")
+    context.add_argument("--result-revision", help="Evidence revision returned by the previous page; rejects changed evidence.")
 
     schema = sub.add_parser("schema", help="Print the result-board schema and LoopX mapping.")
     add_subcommand_format(schema)
@@ -251,7 +255,7 @@ def _projection_for(
     finding_limit_override: int | None = None,
 ) -> dict[str, object]:
     log_path = explore_result_log_path(runtime_root, args.goal_id)
-    events = load_explore_result_events(log_path, goal_id=args.goal_id)
+    events = load_explore_result_events_strict(log_path, goal_id=args.goal_id)
     finding_limit = (
         int(args.finding_limit)
         if finding_limit_override is None
@@ -504,7 +508,9 @@ def handle_explore_command(
         elif args.explore_command == "turn-context":
             from ..capabilities.explore.turn_context import explore_turn_context
             payload = explore_turn_context(registry_path=Path(str(source_runtime_route["source_registry"])), runtime_root=runtime_root,
-                goal_id=args.goal_id, agent_id=args.agent_id)
+                                           goal_id=args.goal_id, agent_id=args.agent_id,
+                                           result_limit=args.result_limit, result_offset=args.result_offset,
+                                           result_node=args.result_node, result_revision=args.result_revision)
         elif args.explore_command == "node":
             event = build_explore_node_event(
                 goal_id=args.goal_id,

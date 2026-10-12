@@ -40,11 +40,11 @@ def test_exact_task_cli_http_preserve_full_current_and_retained_request(tmp_path
         {"id": "reading-goal", "repo": str(tmp_path), "state_file": "state.md"}]}))
     before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="reading-goal")
 
-    def cli(*args):
+    def cli(*args, expected_exit=0):
         process = subprocess.run([sys.executable, "-c", "from loopx.cli import main; raise SystemExit(main())",
             "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
             "todo", "list", "--goal-id", "reading-goal", *args], capture_output=True, text=True, timeout=60)
-        assert process.returncode == 0, process.stdout + process.stderr
+        assert process.returncode == expected_exit, process.stdout + process.stderr
         return json.loads(process.stdout)
 
     hot = cli()
@@ -54,7 +54,8 @@ def test_exact_task_cli_http_preserve_full_current_and_retained_request(tmp_path
         exact = cli("--todo-id", todo_id)
         assert exact["matched"] and exact["todo"]["text"] == text
         assert tail in exact["todo"]["text"]
-        assert len(cli("--todo-id", todo_id, "--thin")["todo"]["text"]) <= 500
+        thin_exact = cli("--todo-id", todo_id, "--thin", expected_exit=1)
+        assert "remove --thin" in thin_exact["error"]
 
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.registry_path, server.runtime_root_override, server.verbose = registry, str(runtime), False

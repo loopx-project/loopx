@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import codecs
 import json
 import os
 import sys
@@ -40,6 +41,49 @@ from .request_action import (
 )
 from ...paths import resolve_runtime_root
 
+MAX_INPUT_BYTES = 16 * 1024 * 1024
+
+
+def _input_byte_limit(text: str) -> int:
+    # An explicit, positive byte count; there is no unbounded setting.
+    if not text.isdecimal() or int(text) < 1:
+        raise argparse.ArgumentTypeError(f"must be a positive whole number of bytes, got {text!r}")
+    return int(text)
+
+
+def _add_input_limit(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--max-input-bytes",
+        type=_input_byte_limit,
+        default=MAX_INPUT_BYTES,
+        help=(
+            "Refuse a JSON input file or stdin larger than this many bytes before "
+            f"parsing (default {MAX_INPUT_BYTES}). Bounds input size, not process memory."
+        ),
+    )
+
+
+def _read_stdin_text(limit: int, label: str) -> str:
+    # Read through the text stream so stdin keeps its decoding, but charge each
+    # chunk by its encoded size: one character can take up to four bytes. One
+    # incremental encoder spans all chunks, so a BOM is charged only once.
+    encoding = getattr(sys.stdin, "encoding", None) or "utf-8"
+    errors = getattr(sys.stdin, "errors", None) or "surrogatepass"
+    encoder = codecs.getincrementalencoder(encoding)(errors)
+    chunks: list[str] = []
+    consumed = 0
+    while consumed <= limit:
+        chunk = sys.stdin.read(max(1, (limit + 1 - consumed) // 4))
+        if not chunk:
+            consumed += len(encoder.encode("", final=True))
+            break
+        chunks.append(chunk)
+        consumed += len(encoder.encode(chunk))
+    if consumed > limit:
+        raise ValueError(f"{label} exceeds the {limit}-byte limit")
+    return "".join(chunks)
+
+
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
     None,
@@ -59,11 +103,17 @@ class ProviderCommandRegistrar(Protocol):
 ProviderCommandHandler = Callable[..., int | None]
 
 
-def _load_json_object(path_text: str) -> dict[str, Any]:
+def _load_json_object(path_text: str, limit: int) -> dict[str, Any]:
+    label = "periodic-report JSON input"
     if path_text == "-":
-        payload = json.loads(sys.stdin.read())
+        text = _read_stdin_text(limit, label)
     else:
-        payload = json.loads(Path(path_text).expanduser().read_text(encoding="utf-8"))
+        with Path(path_text).expanduser().open("rb") as source:
+            raw = source.read(limit + 1)
+        if len(raw) > limit:
+            raise ValueError(f"{label} exceeds the {limit}-byte limit")
+        text = raw.decode("utf-8")
+    payload = json.loads(text)
     if not isinstance(payload, dict):
         raise ValueError(f"{path_text} must contain a JSON object")
     return payload
@@ -85,6 +135,7 @@ def register_periodic_report_commands(
         help="Normalize one periodic_report_v0 attempt without provider effects.",
     )
     add_subcommand_format(compose)
+    _add_input_limit(compose)
     compose.add_argument(
         "--request-json",
         required=True,
@@ -95,6 +146,7 @@ def register_periodic_report_commands(
         help="Evaluate cadence and material progress triggers without effects.",
     )
     add_subcommand_format(evaluate)
+    _add_input_limit(evaluate)
     evaluate.add_argument(
         "--request-json",
         required=True,
@@ -105,6 +157,7 @@ def register_periodic_report_commands(
         help="Promote durable rollout events into a periodic-report trigger.",
     )
     add_subcommand_format(evaluate_runtime)
+    _add_input_limit(evaluate_runtime)
     evaluate_runtime.add_argument(
         "--request-json",
         required=True,
@@ -153,6 +206,7 @@ def register_periodic_report_commands(
         help="Preview or apply the runtime-root machine periodic-report policy.",
     )
     add_subcommand_format(configure_machine_defaults)
+    _add_input_limit(configure_machine_defaults)
     configure_machine_defaults.add_argument(
         "--config-json",
         required=True,
@@ -187,6 +241,7 @@ def register_periodic_report_commands(
         ),
     )
     add_subcommand_format(plan_goal_delivery)
+    _add_input_limit(plan_goal_delivery)
     plan_goal_delivery.add_argument(
         "--request-json",
         required=True,
@@ -202,6 +257,7 @@ def register_periodic_report_commands(
         help="Inspect a built-in preset or project profile without provider effects.",
     )
     add_subcommand_format(inspect_profile)
+    _add_input_limit(inspect_profile)
     profile_source = inspect_profile.add_mutually_exclusive_group(required=True)
     profile_source.add_argument(
         "--profile-json",
@@ -220,6 +276,7 @@ def register_periodic_report_commands(
         ),
     )
     add_subcommand_format(archive)
+    _add_input_limit(archive)
     archive.add_argument(
         "--request-json",
         required=True,
@@ -465,7 +522,7 @@ def handle_periodic_report_command(
     try:
         if args.periodic_report_command == "archive-openviking":
             payload = _archive_openviking(
-                _load_json_object(args.request_json),
+                _load_json_object(args.request_json, args.max_input_bytes),
                 args,
             )
         elif args.periodic_report_command == "inspect-profile":
@@ -473,14 +530,14 @@ def handle_periodic_report_command(
                 build_periodic_report_preset_activation(args.preset)
                 if args.preset
                 else build_periodic_report_activation(
-                    _load_json_object(args.profile_json)
+                    _load_json_object(args.profile_json, args.max_input_bytes)
                 )
             )
         elif args.periodic_report_command == "evaluate-trigger":
-            request = _load_json_object(args.request_json)
+            request = _load_json_object(args.request_json, args.max_input_bytes)
             payload = build_periodic_report_trigger_decision(request)
         elif args.periodic_report_command == "evaluate-runtime-trigger":
-            request = _load_json_object(args.request_json)
+            request = _load_json_object(args.request_json, args.max_input_bytes)
             payload = build_periodic_report_runtime_trigger_decision(
                 request,
                 rollout_events=iter_rollout_events(
@@ -550,7 +607,7 @@ def handle_periodic_report_command(
             if args.periodic_report_command == "configure-machine-defaults":
                 payload = configure_periodic_report_machine_defaults(
                     runtime_root=runtime_root,
-                    machine_defaults=_load_json_object(args.config_json),
+                    machine_defaults=_load_json_object(args.config_json, args.max_input_bytes),
                     execute=bool(args.execute),
                     expected_plan_revision=args.expected_plan_revision,
                 )
@@ -569,11 +626,11 @@ def handle_periodic_report_command(
                 registry, runtime_root_arg, registry_path=registry_path
             )
             payload = build_goal_periodic_report_delivery_plan(
-                _load_json_object(args.request_json),
+                _load_json_object(args.request_json, args.max_input_bytes),
                 machine_defaults=read_periodic_report_machine_defaults(runtime_root),
             )
         else:
-            request = _load_json_object(args.request_json)
+            request = _load_json_object(args.request_json, args.max_input_bytes)
             payload = build_periodic_report_run(request)
     except PeriodicReportSubscriptionConfigurationError as exc:
         payload = {

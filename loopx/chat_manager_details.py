@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .presentation.public_safety import redact_public_text, scan_public_boundary_text
-from .todos import list_goal_todos
+from .control_plane.todos.list_readback import list_goal_todos
 from .control_plane.effect_runtime import effect_runtime_result
 
 
@@ -43,7 +43,7 @@ def read_manager_goal_details(
         )
         if result.get("ok") is not True:
             raise ValueError("Todo authority unavailable or conflicting")
-        records = result.get("todos", [])
+        records = ([result["todo"]] if result.get("todo") else []) if todo_id else result.get("todos", [])
         page = effect_runtime_result("todo.context.page", {
             "records": records, "owner_scope": owner_scope, "offset": offset,
             "limit": limit, "todo_id": todo_id,

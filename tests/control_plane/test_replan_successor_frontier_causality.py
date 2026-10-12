@@ -2,10 +2,10 @@
 from copy import deepcopy
 
 import pytest
+from todo_frontier_fixture import summary_frontier_index
 
 from loopx.control_plane.goals.goal_frontier.ack_policy import replan_successor_transition_ack
 from loopx.control_plane.goals.goal_frontier.long_todo_chain import evaluate_long_todo_chain
-from loopx.control_plane.todos.frontier_revision import build_advancement_frontier_revision_index
 from loopx.control_plane.work_items.autonomous_replan_obligation import ensure_replan_novelty_policy
 
 
@@ -39,7 +39,7 @@ def test_successor_proves_exact_predecessor_before_closing(indexed, mutation):
     elif mutation == "ambiguous":
         rows.append({**successor, "todo_id": "todo_other_successor"})
     current = obligation(rows)
-    summary = {"advancement_frontier_revision_index": build_advancement_frontier_revision_index(rows)} if indexed else {}
+    summary = {"advancement_frontier_revision_index": summary_frontier_index(rows)} if indexed else {}
     source = deepcopy(rows)
     if mutation == "truncated":
         source.pop(0)

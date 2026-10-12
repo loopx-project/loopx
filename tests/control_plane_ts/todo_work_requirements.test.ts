@@ -17,7 +17,6 @@ for (const intent of [
   {required_write_scopes: ["src/**", "/absolute"]}, {required_write_scopes: ["src/**", "../escape"]},
   {required_write_scopes: ["src/**", "has space"]},
   {explore_result_node_refs: ["Node:ok", "bad/ref"]},
-  {explore_result_node_refs: Array.from({length: 9}, (_, i) => `Node:${i}`)},
   {action_kind: "invalid action"}, {task_domain: "invalid/domain"},
   {task_repository: "https://user:password@example.com/project"},
   {task_repository: "user:password@example.com:project"},
@@ -41,4 +40,10 @@ test("metadata correction neither validates unrelated historic declarations nor 
   assert.equal(Object.hasOwn(updates, "resume_when"), false);
   assert.equal(Object.hasOwn(updates, "resume_monitor_generation"), false);
   assert.deepEqual(todo.required_capabilities, ["legacy/invalid"]);
+});
+
+test("durable Explore links preserve identities beyond a context page", () => {
+  const refs = Array.from({length: 40}, (_, i) => `Node:${i}`);
+  assert.deepEqual(normalizeTodoWorkRequirements({explore_result_node_refs: [...refs, refs[0]]}),
+    {explore_result_node_refs: refs});
 });

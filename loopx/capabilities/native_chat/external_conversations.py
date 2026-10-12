@@ -6,14 +6,33 @@ runner. Write it before admission so a crash can replay the same client identity
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
+import re
 from datetime import datetime, timedelta, timezone
 import hashlib
 from typing import Any
 
 from ...chat_store import _atomic_write_json, _read_json
 from ...chat_attachments import normalize_chat_image_attachments
+from ...control_plane.quota.automation_cadence_readback import (
+    automation_cadence_readback,
+    unavailable_automation_cadence_readback,
+)
 from ...file_lock import exclusive_file_lock
+
+# Request journals are named by their 24-hex request_ref; lock metadata and
+# other siblings in this directory are not requests.
+_REQUEST_JOURNAL_STEM = re.compile(r"[a-f0-9]{24}")
+
+
+def _commission_goal_identity(goal: dict[str, Any]) -> dict[str, str]:
+    identity: dict[str, str] = {}
+    for field in ("goal_instance_id", "creation_operation_id"):
+        value = str(goal.get(field) or "").strip()
+        if value:
+            identity[field] = value
+    return identity
 
 
 class ChatExternalConversations:
@@ -24,23 +43,81 @@ class ChatExternalConversations:
         self.root = controller.store.root / "external-requests"
         self.actions: Any | None = None
 
+    def _automation_cadence_observation(
+        self, target: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Read the owner once for the exact selected Agent status scope."""
+
+        goal_id = str(target["goal_id"])
+        agent_id = str(target["agent_id"])
+        runtime_root = getattr(self.controller, "coordination_runtime_root", None)
+        if not runtime_root:
+            return unavailable_automation_cadence_readback(
+                goal_id=goal_id,
+                agent_id=agent_id,
+                automation_id=None,
+                reason="runtime_root_unavailable",
+            )
+        try:
+            from ...control_plane.effect_runtime import effect_runtime_result
+
+            owner_result = effect_runtime_result(
+                "quota.automation_cadence.manage",
+                {
+                    "runtime_root": str(runtime_root),
+                    "operation": "read",
+                    "goal_id": goal_id,
+                    "agent_id": agent_id,
+                    "automation_id": None,
+                },
+                retry_safe=True,
+            )
+            if not isinstance(owner_result, Mapping):
+                raise ValueError("automation cadence owner result must be an object")
+            return automation_cadence_readback(
+                owner_result,
+                expected_goal_id=goal_id,
+                expected_agent_id=agent_id,
+                expected_automation_id=None,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return unavailable_automation_cadence_readback(
+                goal_id=goal_id,
+                agent_id=agent_id,
+                automation_id=None,
+                reason="owner_read_failed",
+            )
+
     def admit(self, *, binding_id: str, source: dict[str, Any], request_ref: str,
               message: str, command: str | None = None,
-              attachments: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+              attachments: list[dict[str, Any]] | None = None,
+              origin: str = "lark") -> dict[str, Any]:
         import re
+        if origin not in {"lark", "external"}:
+            raise ValueError("unsupported external conversation origin")
         if not re.fullmatch(r"[a-f0-9]{24}", request_ref):
             raise ValueError("invalid external request reference")
         if command not in {None, "agents", "select_agent", "select_project", "status", "help", "new", "stop", "unsupported", "commission", "confirm_commission", "cancel_commission", "stop_commission", "resume_commission"}:
             raise ValueError("unsupported external conversation command")
-        selected = self.bindings.resolve(binding_id=binding_id, **source)
+        # These references enter the lock path before authority is resolved.
+        # Check path-safe shape here; the typed owner checks current grants
+        # and provider identity after both fences are acquired.
+        for ref in (binding_id, source.get("source_ref")):
+            if not isinstance(ref, str) or not re.fullmatch(r"[a-f0-9]{24}", ref):
+                raise ValueError("invalid external conversation source reference")
         path = self.root / f"{request_ref}.json"
         with exclusive_file_lock(self.root / "source-fences" / f"{binding_id}.{source['source_ref']}.json", operation="route_external_chat_request"), exclusive_file_lock(path, operation="admit_external_chat_request"):
+            # Resolve after waiting for both fences, including exact replay.
+            # A lock-external provider probe cannot authorize the write and
+            # would duplicate this fresh authority check on every request.
             selected = self.bindings.resolve(binding_id=binding_id, **source)
             expected = {"binding_id": binding_id, "source": source, "message": message, "command": command,
-                        "attachments": normalize_chat_image_attachments(attachments) or None}
+                        "attachments": normalize_chat_image_attachments(attachments) or None, "origin": origin}
             if path.exists():
                 row = _read_json(path)
-                if any(row.get(key) != value for key, value in expected.items()):
+                # Existing Lark journals predate persisted transport origin.
+                if any((row.get(key, "lark") if key == "origin" else row.get(key)) != value
+                       for key, value in expected.items()):
                     raise ValueError("external request identity was reused with different content")
                 if row.get("status") != "prepared":
                     return row
@@ -100,7 +177,7 @@ class ChatExternalConversations:
                 # Session check. Never move an accepted request to a new Session.
                 self._record_steward_ingress(row, selected, current, client_id)
                 turn, _ = controller.store.create_queued_turn(current["session_id"],
-                    client_turn_id=client_id, message=row["message"], origin="lark",
+                    client_turn_id=client_id, message=row["message"], origin=row.get("origin", "lark"),
                     attachments=row.get("attachments"),
                     external_agent_target={"target": target, "context": selected["context"]} if target else None)
                 row.update(status="accepted", turn_id=turn["turn_id"])
@@ -115,6 +192,8 @@ class ChatExternalConversations:
                 "queued_count": len(controller.store.queued_turns(current["session_id"])) if current else 0,
                 "active_turn": ({key: value for key, value in controller.store.load_turn(current["session_id"], active_id).items()
                     if key != "attachments"} if active_id else None)}
+            if row["command"] == "status" and target:
+                observations["automation_cadence"] = self._automation_cadence_observation(target)
         # Routing needs presence, not private image bytes. Persisted attachments
         # remain in the native request/Turn and never enter the effect bridge.
         plan = effect_runtime_result("collaboration.conversation.request", {
@@ -192,7 +271,7 @@ class ChatExternalConversations:
                 turn, _ = controller.enqueue_turn(session_id=current["session_id"],
                     client_turn_id=plan["client_turn_id"], message=row["message"],
                     attachments=row.get("attachments"),
-                    work_dir=Path("."), objective="", origin="lark",
+                    work_dir=Path("."), objective="", origin=row.get("origin", "lark"),
                     external_agent_target={"target": target, "context": selected["context"]} if target else None)
                 row.update(status="accepted", turn_id=turn["turn_id"])
             except RuntimeError as exc:
@@ -229,7 +308,8 @@ class ChatExternalConversations:
             message=row["message"], source_id=row["request_ref"])
 
     def pending(self) -> list[dict[str, Any]]:
-        return [_read_json(path) for path in sorted(self.root.glob("*.json"))]
+        return [_read_json(path) for path in sorted(self.root.glob("*.json"))
+                if _REQUEST_JOURNAL_STEM.fullmatch(path.stem)]
 
     def read_request(self, request_ref: str) -> dict[str, Any]:
         return _read_json(self.root / f"{request_ref}.json")
@@ -253,9 +333,28 @@ class ChatExternalConversations:
             resources = row["commission_resources"]
             current = self.controller.store.load_session(resources["session_id"])
             turn = self.controller.store.load_turn(resources["session_id"], resources["turn_id"])
-            if not current or not turn or current.get("goal_id") != goal_id:
+            if self.actions is None:
                 continue
-            facts.append({"goal_id": goal_id, "turn_status": turn["status"],
+            try:
+                goal_identity = _commission_goal_identity(
+                    self.actions._goal(goal_id)
+                )
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            if (
+                not goal_identity
+                or any(resources.get(key) != value for key, value in goal_identity.items())
+                or not current
+                or not turn
+                or current.get("goal_id") != goal_id
+                or (
+                    "goal_instance_id" in goal_identity
+                    and current.get("goal_instance_id")
+                    != goal_identity["goal_instance_id"]
+                )
+            ):
+                continue
+            facts.append({"goal_id": goal_id, **goal_identity, "turn_status": turn["status"],
                 "native_execution": current.get("native_goal"),
                 "result_delivery_verified": row.get("delivery_verified") is True,
                 "result_excerpt": str((turn.get("response") or {}).get("message") or "")[:500],
@@ -330,8 +429,12 @@ class ChatExternalConversations:
                             client_turn_id=f"commission-resume-{row['request_ref']}",
                             message=f"/goal resume --tokens {row['command_argument']['native_token_budget']}",
                             work_dir=Path(goal["repo"]), objective=str(goal.get("objective") or ""))
-                        row.update(commission_resources={"goal_id": row["target_goal_id"], "session_id": row["target_session_id"],
-                            "turn_id": turn["turn_id"]}, response=f"已受理原委托的恢复，保留原生线程、目标及累计用量。总 token 上限 {row['command_argument']['native_token_budget']}；结果会返回此私聊。\n停止：/stop-commission {argument}")
+                        row.update(commission_resources={
+                            "goal_id": row["target_goal_id"],
+                            **_commission_goal_identity(goal),
+                            "session_id": row["target_session_id"],
+                            "turn_id": turn["turn_id"],
+                        }, response=f"已受理原委托的恢复，保留原生线程、目标及累计用量。总 token 上限 {row['command_argument']['native_token_budget']}；结果会返回此私聊。\n停止：/stop-commission {argument}")
                     elif row["command"] == "cancel_commission":
                         self.actions.cancel(argument)
                         row["response"] = "已取消这份新委托预览；没有创建或启动 Goal。"
@@ -394,7 +497,8 @@ class ChatExternalConversations:
                 self.bindings.resolve(binding_id=row["binding_id"], **row["source"])
                 if row["status"] == "prepared":
                     self.admit(binding_id=row["binding_id"], source=row["source"], request_ref=row["request_ref"],
-                               message=row["message"], command=row["command"])
+                               message=row["message"], command=row["command"],
+                               attachments=row.get("attachments"), origin=row.get("origin", "lark"))
                 elif row["status"] == "command_queued":
                     self._run_steward_action(row)
                 elif row["status"] == "accepted":

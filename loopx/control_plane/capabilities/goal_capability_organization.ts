@@ -1,7 +1,9 @@
 /** Goal-owned improvement intent; never capability enablement or admission. */
+import { createHash } from "node:crypto";
 import type { AgentContextProvider } from "../agent_context.ts";
 import type { JsonObject } from "../effect_program.ts";
 import { jsonObject, requireJsonObject } from "../runtime_decode.ts";
+import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 const DEFAULTS: JsonObject = { mode: "off", discovery_budget_minutes: 5, max_trials: 1 };
 const FIELDS = Object.keys(DEFAULTS);
@@ -42,7 +44,7 @@ export function planImprovementConfiguration(value: unknown): JsonObject {
 }
 
 /** Bounded caller observations are advice, not proof of execution authority. */
-export function planCapabilityImprovement(policyValue: unknown, observationValue: unknown): JsonObject {
+export function planCapabilityImprovement(policyValue: unknown, observationValue: unknown, scopeValue?: unknown): JsonObject {
   const policy = normalizeImprovementPolicy(policyValue);
   const observation = jsonObject(observationValue) ?? {};
   const base: JsonObject = {
@@ -68,14 +70,45 @@ export function planCapabilityImprovement(policyValue: unknown, observationValue
     capability_id: direct.capability_id, configuration_ref: direct.configuration_ref,
   };
   if (policy.max_trials === 0) return none("trial_budget_zero");
-  const trial = candidates.find(item => identifier(item.capability_id)
-    && item.applicable === true && item.enabled === false
-    && identifier(item.configuration_ref) && identifier(item.effect_ref) && identifier(item.rollback_ref));
-  if (trial) return {
-    ...base, recommendation: "propose_reversible_trial", reason_code: "trial_has_effect_and_rollback_basis",
-    capability_id: trial.capability_id, configuration_ref: trial.configuration_ref,
-    effect_ref: trial.effect_ref, rollback_ref: trial.rollback_ref,
-  };
+  const scope = jsonObject(scopeValue) ?? {};
+  let reviewed: JsonObject | undefined;
+  for (const trial of candidates) {
+    if (!(identifier(trial.capability_id) && trial.applicable === true && trial.enabled === false
+      && identifier(trial.configuration_ref) && identifier(trial.effect_ref) && identifier(trial.rollback_ref))) continue;
+    // This digest identifies declared trial inputs, not authenticated owner truth.
+    // Pin the caller and gap as well as the revision and original-owner references.
+    if (trial.candidate_revision != null && !identifier(trial.candidate_revision)) {
+      throw new Error("capability candidate revision must be a bounded reference");
+    }
+    const trialBasis = {
+      goal_id: scope.goal_id ?? null, agent_id: scope.agent_id ?? null, todo_id: scope.todo_id ?? null,
+      gap_ref: observation.gap_ref,
+      capability_id: trial.capability_id, candidate_revision: trial.candidate_revision ?? null,
+      configuration_ref: trial.configuration_ref, effect_ref: trial.effect_ref, rollback_ref: trial.rollback_ref,
+    };
+    const trial_basis_digest = `sha256:${createHash("sha256").update(JSON.stringify(trialBasis)).digest("hex")}`;
+    const refs = { capability_id: trial.capability_id, configuration_ref: trial.configuration_ref,
+      effect_ref: trial.effect_ref, rollback_ref: trial.rollback_ref, trial_basis_digest };
+    if (trial.trial_feedback != null) {
+      const feedback = requireJsonObject(trial.trial_feedback, "capability trial feedback");
+      if (!identifier(feedback.outcome_ref) || typeof feedback.trial_basis_digest !== "string"
+        || !ENVELOPED_SHA256_PATTERN.test(feedback.trial_basis_digest)
+        || typeof feedback.status !== "string" || !["succeeded", "failed", "no_evidence"].includes(feedback.status)) {
+        throw new Error("capability trial feedback requires an outcome reference, basis digest and receipt status");
+      }
+      const stale = feedback.trial_basis_digest !== trial_basis_digest;
+      // A result is not utility. Ask the original owner to review successes and
+      // stale feedback; do not propose the unchanged failed trial again.
+      reviewed ??= { ...base, ...refs, outcome_ref: feedback.outcome_ref,
+        recommendation: stale || feedback.status === "succeeded" ? "inspect_trial_outcome" : "continue_current_work",
+        reason_code: stale ? "trial_feedback_stale" : feedback.status === "succeeded"
+          ? "trial_result_requires_owner_review" : feedback.status === "failed" ? "prior_trial_failed" : "prior_trial_no_evidence" };
+      continue;
+    }
+    return { ...base, ...refs, recommendation: "propose_reversible_trial",
+      reason_code: "trial_has_effect_and_rollback_basis" };
+  }
+  if (reviewed) return reviewed;
   return none("missing_applicability_or_trial_basis");
 }
 
@@ -85,9 +118,9 @@ export const improvementContextProvider: AgentContextProvider = {
   produce(input, config) {
     const policy = normalizeImprovementPolicy(config.policy);
     const observation = jsonObject(input.observations.capability_improvement) ?? {};
-    const plan = planCapabilityImprovement(policy, observation);
+    const plan = planCapabilityImprovement(policy, observation, input.scope);
     return {
-      guidance: ["Use enabled capabilities directly. Inspect relevant gaps only; trials need original-owner admission, effect and rollback refs. Advice grants no authority; empty/failed advice must not stop useful work."],
+      guidance: ["Use enabled capabilities directly. Trials need original-owner admission and current effect/rollback refs. Feedback is caller-declared: re-read its owner; success is not utility. Refine failed trials only with changed inputs and fresh feedback. Advice grants no authority; empty/failed advice must not stop useful work."],
       facts: {
         planning_trigger: observation.trigger === "replan" ? "replan" : "before_plan",
         ...Object.fromEntries(Object.entries(plan).filter(([key]) => ![

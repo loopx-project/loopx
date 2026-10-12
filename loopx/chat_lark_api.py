@@ -521,11 +521,15 @@ class LarkChatRequestMixin:
                 error_code=exc.error_code,
             )
             return
+        from .extensions.lark.conversation_identity import identity_ref
+        bindings = self.server.runtime_controller.project_contexts.conversation_bindings
+        binding = next((row for row in bindings.read()["bindings"] if row["transport_ref"] == app_ref), None) if bindings else None
         self._send_json(
             {
                 "ok": True,
                 "schema_version": "loopx_lark_group_chats_v0",
-                "chats": chats,
+                "chats": [{**chat, "selected": identity_ref(binding["provider_ref"], chat["chat_id"]) in binding.get("group_refs", [])}
+                          for chat in chats] if binding else chats,
             }
         )
 

@@ -75,3 +75,34 @@ test("a deferred Todo closes its original Turn rather than selecting a replaceme
   assert.equal(recovery.binding_id, "todo_waiting");
   assert.equal(recovery.turn_instance_id, "host-turn-1");
 });
+
+for (const state of ["spend_required", "spend_receipt_required"]) {
+  test(`${state} preserves durable writeback before projecting a later dependency wait`, () => {
+    const input = {...request(), settlement_progress: {schema_version: "quota_settlement_progress_v0",
+      state, next_step: "quota_spend"}};
+    const before = structuredClone(input);
+    const result = projectReceiptBoundWait(input);
+    assert.equal((result.recovery as Record<string, unknown>).repair, "quota_spend");
+    assert.equal((result.recovery as Record<string, unknown>).binding_id, input.todo_id);
+    assert.equal((result.recovery as Record<string, unknown>).turn_instance_id, input.turn_instance_id);
+    assert.equal((result.obligation as Record<string, unknown>).delivery_allowed, false);
+    assert.equal((result.obligation as Record<string, unknown>).spend_allowed_now, true);
+    assert.deepEqual(input, before);
+  });
+}
+
+for (const progress of [null, {},
+  {schema_version: "quota_settlement_progress_v0", state: "identity_required", next_step: "validation"},
+  {schema_version: "quota_settlement_progress_v0", state: "writeback_required", next_step: "durable_writeback"},
+  {schema_version: "quota_settlement_progress_v0", state: "writeback_receipt_required", next_step: "durable_writeback"},
+  {schema_version: "quota_settlement_progress_v0", state: "settled", next_step: null},
+  {schema_version: "quota_settlement_progress_v0", state: "spend_required", next_step: "durable_writeback"},
+  {schema_version: "other", state: "spend_required", next_step: "quota_spend"},
+]) {
+  test(`incomplete or inapplicable receipt progress ${JSON.stringify(progress)} retains blocked no-spend`, () => {
+    const result = projectReceiptBoundWait({...request(), settlement_progress: progress});
+    assert.equal((result.recovery as Record<string, unknown>).repair, "blocked_writeback");
+    assert.equal((result.obligation as Record<string, unknown>).spend_allowed_now, undefined);
+    assert.equal((result.obligation as Record<string, unknown>).spend_policy, "no spend for blocked closeout");
+  });
+}

@@ -1,4 +1,5 @@
 """Local notice intake is independent of optional transport and model prose."""
+import hashlib
 import json
 
 from loopx.chat_manager_context import manager_turn_context
@@ -39,22 +40,37 @@ def test_steward_turn_receives_blocker_and_decision_without_channel(tmp_path, mo
     assert "independent documentation" in work["blocker"]["impact"]
     assert decision["request"]["text"] == gate["text"]
     assert decision["owner_must_act"] is True
-    assert manager_index(context)["goals"][0]["attention"] == attention
+    preview = manager_index(context)["goals"][0]["attention"]
+    assert preview["details_omitted"] is True
+    assert preview["items"][0]["request"]["text"] == gate["text"]
+    assert preview["items"][1]["blocker"]["cause"] == blocker["reason"]
+    assert preview["coverage"] == attention["coverage"]
+    assert "impact" not in preview["items"][1]["blocker"]
+    assert "impact" in attention["items"][1]["blocker"]
     assert not list(tmp_path.rglob("goal-channel*.json"))
 
 
 def test_missing_source_is_unknown_and_external_scope_is_not_expanded(tmp_path, monkeypatch):
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"goals": [{"id": "allowed"}]}))
+    revision = "sha256:" + hashlib.sha256(registry.read_bytes()).hexdigest()
     selected = []
     def read(**kwargs):
         selected.append(kwargs["goal_ids"])
-        return {"goals": [{"goal_id": "allowed", "agents": []}], "coverage": {}}
+        return {"goals": [{"goal_id": "allowed", "agents": []}], "coverage": {},
+                "inventory_revision": revision}
     monkeypatch.setattr(portfolio, "build_goal_portfolio", read)
     monkeypatch.setattr("loopx.chat_manager_context.build_goal_portfolio", read)
-    context = manager_turn_context(tmp_path / "missing", {
+    context = manager_turn_context(registry, {
         "channel_id": "manager.external.fixture"}, tmp_path,
         authorized_goal_ids=["allowed"], include_details=False)
     assert selected == [["allowed"]]
     assert context["goals"][0]["attention"]["status"] == "unavailable"
+    registry.unlink()
+    changed = manager_turn_context(registry, {"channel_id": "manager.external.fixture"},
+                                   tmp_path, authorized_goal_ids=["allowed"], include_details=False)
+    assert changed["goals"] == []
+    assert "external_authorization_changed" in changed["warnings"]
 
 
 def test_multi_goal_turn_keeps_coverage_without_repeating_every_request(tmp_path, monkeypatch):

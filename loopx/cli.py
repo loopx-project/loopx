@@ -73,7 +73,7 @@ from .capabilities.periodic_report.post_writeback_hook import (
     build_periodic_report_post_writeback_projection,
     periodic_report_post_writeback_hooks_for_goal,
 )
-from .control_plane.coordination.local_authority_shadow_adapter import (
+from .paths import (
     effective_runtime_root,
 )
 from .capabilities.semantic_preference.cli import (

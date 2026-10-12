@@ -6,7 +6,7 @@ reuse inbox request and exact Goal-instance admission, never Todo authority.
 
 from __future__ import annotations
 
-from ...todos import list_goal_todos
+from ...control_plane.todos.list_readback import list_goal_todos
 from ..runtime.public_safety import public_safe_compact_text
 from ..todos.contract import TODO_ID_PATTERN
 from ..effect_runtime import effect_runtime_result

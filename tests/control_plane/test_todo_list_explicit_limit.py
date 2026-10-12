@@ -243,7 +243,7 @@ def test_todo_id_lookup_ignores_the_section_cap(tmp_path: Path) -> None:
     assert payload["matched"] is True
     assert payload["todo"]["todo_id"] == "todo_agent_open_007"
     assert payload["todo_count"] == 1
-    assert [item["todo_id"] for item in payload["todos"]] == ["todo_agent_open_007"]
+    assert "todos" not in payload
 
 
 def test_explicit_limit_rejects_non_positive_values(tmp_path: Path) -> None:

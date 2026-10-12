@@ -75,9 +75,9 @@ def test_scheduler_modes_do_not_add_an_outer_loop_to_native_goal():
 
 @pytest.mark.parametrize("profile,resumes", [
     ("official", True), ("single", False), ("native-goal", False),
-    ("heartbeat-resume", True), ("heartbeat-explore", True),
+    ("heartbeat-resume", False), ("heartbeat-explore", False),
 ])
-def test_worker_completion_authority(profile, resumes, monkeypatch):
+def test_only_official_delegates_continuation_to_sforge(profile, resumes, monkeypatch):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from sforge.harness.config import SForgeConfig
@@ -87,6 +87,7 @@ def test_worker_completion_authority(profile, resumes, monkeypatch):
                           profile=profile, cwd="/task")
     assert (worker.resume_cmd is not None) is resumes
     assert worker.timeout_seconds == 64800
+    assert worker.task_entry == ("loopx-planned" if profile.startswith("heartbeat-") else "seeded-todo")
     if profile in {"official", "single"}:
         command = worker.format_run_cmd("/task.md", internet=False)
         assert 'model_reasoning_effort="xhigh"' in command
@@ -106,6 +107,50 @@ def test_invalid_worker_inputs_fail_before_install(monkeypatch):
     monkeypatch.delenv("CODEX_AUTH_JSON_PATH", raising=False)
     with pytest.raises(ValueError, match="credential"):
         SForgeWorker(config, profile="single", cwd="/task")
+
+
+@pytest.mark.parametrize("profile", ["official", "single", "native-goal", "heartbeat-resume", "heartbeat-explore"])
+@pytest.mark.parametrize("unreadable", [False, True])
+def test_best_only_install_requires_ordinary_worker_hook_readback(tmp_path, monkeypatch, profile, unreadable):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from types import SimpleNamespace
+    from sforge.harness.agent.codex import CodexAgent
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex, CodexOffline
+    credential = tmp_path / "synthetic-auth.json"
+    credential.write_text("{}")
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", str(credential))
+    async def installed(self, environment):
+        pass  # Exercise the native installation seam without installing a model.
+    monkeypatch.setattr(CodexOffline, "install", installed)
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    monkeypatch.setattr(CodexAgent, "install_stop_hook", lambda *args: None)
+    staged = []
+    async def stage_python(environment, destination):
+        staged.append(destination)
+    monkeypatch.setattr("benchmark.runtime.sforge.stage_portable_python", stage_python)
+    ordinary_reads = []
+    def command(handle, cmd, **kwargs):
+        if kwargs.get("user") == "agent" and isinstance(cmd, list) and "read_bytes" in cmd[-1]:
+            ordinary_reads.append(cmd)
+            return SimpleNamespace(exit_code=int(unreadable), output="")
+        return SimpleNamespace(exit_code=0, output="")
+    backend = SimpleNamespace(exec_run=command, copy_to_container=lambda *args: None)
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile=profile, cwd="/task", feedback="best-only", feedback_prompt="Synthetic local task")
+    if unreadable:
+        with pytest.raises(RuntimeError, match="unreadable by worker"):
+            worker.install_stop_hook(backend, None, tmp_path, None)
+        assert not (tmp_path / "worker-profile.json").exists()
+    else:
+        worker.install_stop_hook(backend, None, tmp_path, None)
+        assert json.loads((tmp_path / "worker-profile.json").read_text())["feedback_delivery"] == "codex_hooks"
+        assert json.loads((tmp_path / "worker-profile.json").read_text())["feedback_payload"] == "official-result"
+        assert json.loads((tmp_path / "worker-profile.json").read_text())["loopx_usage_ping_enabled"] is False
+    assert len(ordinary_reads) == 1
+    assert ordinary_reads[0][0] == "/opt/loopx-benchmark/python/bin/python3"
+    assert len(staged) == int(profile in {"official", "single"})
 
 
 @pytest.mark.parametrize("profile,total,expected", [
@@ -135,11 +180,12 @@ def test_native_goal_and_heartbeat_use_trial_budget_without_independent_wake_lim
     env = worker.runtime._worker_env(cwd="/task")
     assert float(env["LOOPX_CODEX_TURN_TIMEOUT_SEC"]) == expected
     assert worker.runtime.scheduler_timeout == total
-    expected_cadence = ({"replan_after_effective_turns": turns} if turns else
+    expected_cadence = ({"replan_after_effective_turns": turns or 6}
+                        if profile.startswith("heartbeat-") else
                         {"replan_after_completed_todos": 3})
     assert worker.runtime._replan_receipt() == expected_cadence
     receipt = json.loads((tmp_path / "worker-profile.json").read_text())
-    if turns is not None:
+    if profile.startswith("heartbeat-"):
         assert all(receipt.get(k) == v for k, v in expected_cadence.items())
     else:
         assert "replan_after_effective_turns" not in receipt
@@ -157,6 +203,7 @@ def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path,
     from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
     backend = object.__new__(RecordingDockerBackend)
     backend.log_dir = tmp_path / "artifacts"
+    backend.feedback = None
     copied, cleaned = [], []
     def archive(handle, remote):
         copied.append(str(remote))
@@ -229,18 +276,34 @@ def test_blind_policy_removes_judge_route_and_credentials_native_is_unchanged(mo
         backend.create_network_isolation(None, [alias, api], None)
 
 
-@pytest.mark.parametrize("interrupted,started,runtime,status", [
-    (True, True, 0, "cancelled"),
-    (True, False, 0, "cancelled"),
-    (False, False, 0, "launch_failed"),
-    (False, True, 0, "runner_failed"),
-    (False, True, 1, "terminal"),
+@pytest.mark.parametrize("interrupted,started,runtime,exit_code,timed_out,status", [
+    (True, True, 0, None, False, "cancelled"),
+    (True, False, 0, None, False, "cancelled"),
+    (False, False, 0, None, False, "launch_failed"),
+    (False, True, 0, 0, False, "runner_failed"),
+    (False, True, 1, 0, False, "terminal"),
+    (False, True, 310, 1, False, "runner_failed"),
+    (False, True, 310, None, False, "runner_failed"),
+    (False, True, 43200, -1, True, "terminal"),
+    (True, True, 43200, -1, True, "cancelled"),
 ])
-def test_native_result_disposition_uses_signal_and_start_evidence(interrupted, started, runtime, status):
+def test_native_result_disposition_requires_successful_exit_or_budget_timeout(
+    interrupted, started, runtime, exit_code, timed_out, status,
+):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from benchmark.edgebench.run import _result_status
-    assert _result_status(interrupted=interrupted, started=started, runtime_seconds=runtime) == status
+    assert _result_status(interrupted=interrupted, started=started, runtime_seconds=runtime,
+                          exit_code=exit_code, timed_out=timed_out) == status
+
+
+@pytest.mark.parametrize("timed_out,exit_code", [(True, -1), (True, None), (False, 0)])
+def test_planning_without_execution_entry_never_emits_completed_result(timed_out, exit_code):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.edgebench.run import _result_status
+    assert _result_status(interrupted=False, started=True, runtime_seconds=300,
+        exit_code=exit_code, timed_out=timed_out, execution_started=False) == "runner_failed"
 
 
 def test_native_swallowed_interrupt_is_observed_and_handler_restored():
@@ -335,11 +398,11 @@ def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, 
     assert first == resumed
     assert ("benchmark.runtime.sforge_entry" in first) is (entry == "loopx-planned")
     assert "test -f /opt/loopx-benchmark/control/phase-deadline ||" in first
-    assert first.index("export LOOPX_PHASE_DEADLINE_EPOCH") < first.index("exec timeout")
+    assert first.index("export LOOPX_PHASE_DEADLINE_EPOCH") < first.index("timeout --signal")
     assert json.loads((tmp_path / "worker-profile.json").read_text())["task_entry"] == entry
 @pytest.mark.parametrize('profile', ['heartbeat-resume', 'heartbeat-explore'])
 @pytest.mark.parametrize('enabled', [False, True])
-@pytest.mark.parametrize('cadence', [None, 2])
+@pytest.mark.parametrize('cadence', [None, 2, 6])
 def test_envelope_treatment_reaches_shared_worker_and_receipts(tmp_path, monkeypatch, profile, enabled, cadence):
     pytest.importorskip('sforge')
     pytest.importorskip('harbor')
@@ -356,8 +419,9 @@ def test_envelope_treatment_reaches_shared_worker_and_receipts(tmp_path, monkeyp
     env = worker.runtime._worker_env(cwd='/task')
     assert env.get('LOOPX_TURN_ENVELOPE') == ('1' if enabled else None)
     assert worker.runtime.execution.turn_envelope is enabled
-    assert worker.runtime.replan_after_turns == cadence
+    assert worker.runtime.replan_after_turns == (cadence or 6)
     receipt = json.loads((tmp_path / 'worker-profile.json').read_text())
+    assert receipt['outer_resume'] is False
     assert receipt.get('turn_envelope') is (True if enabled else None)
     if not enabled:
         assert 'turn_envelope' not in receipt
@@ -383,26 +447,40 @@ def test_envelope_rejects_incompatible_sforge_worker(profile):
                      profile=profile, cwd='/task', turn_envelope=True)
 
 
-def test_edgebench_rejects_envelope_before_creating_trial(tmp_path):
+@pytest.mark.parametrize("profile,options", [
+    ("native-goal", ["--turn-envelope"]),
+    ("official", ["--replan-after-turns", "3"]),
+    ("single", ["--replan-after-todos", "3"]),
+    ("native-goal", ["--replan-after-todos", "3"]),
+    ("heartbeat-resume", ["--replan-after-turns", "3", "--replan-after-todos", "3"]),
+    ("heartbeat-explore", ["--replan-after-todos", "0"]),
+])
+def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_path, profile, options):
     pytest.importorskip('sforge')
     pytest.importorskip('harbor')
     from benchmark.edgebench.run import main
     with pytest.raises(SystemExit) as error:
         main(['--task', 'fixture', '--tasks-dir', str(tmp_path), '--log-dir', str(tmp_path),
-              '--run-id', 'invalid', '--worker', 'native-goal', '--model', 'fixture',
-              '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999', '--turn-envelope'])
+              '--run-id', 'invalid', '--worker', profile, '--model', 'fixture',
+              '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999', *options])
     assert error.value.code == 2
     assert not (tmp_path / 'runs').exists()
 
 
+@pytest.mark.parametrize("cadence_args,field,count", [
+    ([], "replan_after_effective_turns", 6),
+    (["--replan-after-turns", "2"], "replan_after_effective_turns", 2),
+    (["--replan-after-todos", "3"], "replan_after_completed_todos", 3),
+])
 @pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("entry", [None, "seeded-todo"])
 @pytest.mark.parametrize("task,timeout_args,expected,interval", [
-    ("fixture", [], 64800, 300),
-    ("portfolio_risk_calibration", [], 43200, 300),
-    ("lean_analysis_proofs", [], 64800, 1800),
+    ("fixture", [], 64800, 0),
+    ("portfolio_risk_calibration", [], 43200, 0),
+    ("lean_analysis_proofs", [], 43200, 0),
     ("portfolio_risk_calibration", ["--timeout", "1800", "--eval-interval", "60"], 1800, 60),
-    ("lean_analysis_proofs", ["--eval-interval", "0"], 64800, 0)])
-def test_edgebench_receipt_records_only_enabled_treatment(tmp_path, monkeypatch, enabled, task, timeout_args, expected, interval):
+    ("lean_analysis_proofs", ["--eval-interval", "0"], 43200, 0)])
+def test_edgebench_receipt_records_resolved_entry_and_enabled_treatment(tmp_path, monkeypatch, enabled, task, timeout_args, expected, interval, entry, cadence_args, field, count):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from types import SimpleNamespace
@@ -414,29 +492,47 @@ def test_edgebench_receipt_records_only_enabled_treatment(tmp_path, monkeypatch,
     monkeypatch.setattr(run, "source_pins", lambda *a: ("fixture", "fixture"))
     monkeypatch.setattr(run, "load_benchmark", lambda *a: None)
     monkeypatch.setattr(run, "make_task_spec", lambda *a: SimpleNamespace(
-        cwd="/task", work_image_key="work", judge_image_key="judge", internet=False))
-    monkeypatch.setattr(run, "SForgeWorker", lambda *a, **k: SimpleNamespace(resume_cmd="resume"))
+        cwd="/task", work_image_key="work", judge_image_key="judge", internet=False,
+        game_mode=False, submit_paths=["solver.py"],
+        work=SimpleNamespace(agent_query="fixture task"),
+        judge=SimpleNamespace(selection="score_first", score_direction="maximize")))
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
     monkeypatch.setattr(run, "RecordingDockerBackend", lambda **k: SimpleNamespace(image_exists=lambda image: True))
     def stop_before_solver(**kwargs):
+        # Exercise the real adapter at the CLI handoff, including both context
+        # modes. SForge must not resume an exited LoopX scheduler.
+        assert kwargs["disable_auto_resume"] is True
+        assert kwargs["agent"].resume_cmd is None
         assert kwargs["timeout"] == kwargs["config"].agent_timeout == expected
         assert kwargs["eval_interval"] == interval
+        agent = kwargs["agent"]
+        assert "total trial budget" not in agent.workspace_instructions
+        assert agent.task_objective in agent.workspace_instructions
+        assert agent.feedback_prompt.startswith(agent.workspace_instructions)
         raise RuntimeError("synthetic launch failure")
     monkeypatch.setattr(run, "run_agent", stop_before_solver)
     args = ["--task", task, "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
             "--run-id", "receipt", "--worker", "heartbeat-resume", "--model", "fixture",
-            "--effort", "xhigh", "--judge-url", "http://127.0.0.1:9999"]
+            "--effort", "xhigh", "--judge-url", "http://127.0.0.1:9999", "--feedback", "native"]
+    if entry:
+        args += ["--task-entry", entry]
     with pytest.raises(RuntimeError, match="synthetic launch failure"):
-        run.main(args + timeout_args + (["--turn-envelope"] if enabled else []))
+        run.main(args + timeout_args + cadence_args + (["--turn-envelope"] if enabled else []))
     receipt = json.loads((tmp_path / f"runs/receipt/{task}/runtime-receipt.json").read_text())
+    assert receipt["task_entry"] == (entry or "loopx-planned")
     assert receipt["timeout_seconds"] == expected
     assert receipt["eval_interval"] == interval
+    assert receipt[field] == count
+    other = ("replan_after_completed_todos" if field == "replan_after_effective_turns"
+             else "replan_after_effective_turns")
+    assert other not in receipt
     assert ("turn_envelope" in receipt) is enabled
     if enabled:
         assert receipt["turn_envelope"] is True
     assert receipt["status"] == "runner_failed"
 
 
-@pytest.mark.parametrize("value", [0, 6, True, 2.5, "3"])
+@pytest.mark.parametrize("value", [0, 7, True, 2.5, "3"])
 def test_effective_turn_cadence_rejects_invalid_values_before_install(tmp_path, monkeypatch, value):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
@@ -460,7 +556,8 @@ def test_effective_turn_cadence_rejects_ambiguous_units(tmp_path):
 
 @pytest.mark.parametrize("task,explicit,expected", [
     ("portfolio_risk_calibration", None, 43200),
-    ("lean_analysis_proofs", None, 64800),
+    ("lean_analysis_proofs", None, 43200),
+    ("lean_analysis_proofs", 86400, 86400),
     ("unknown-future-task", None, 64800),
     ("portfolio_risk_calibration", 1800, 1800),
     ("portfolio_risk_calibration", 64800, 64800),
@@ -475,13 +572,13 @@ def test_edgebench_task_timeout_precedence(task, explicit, expected):
 
 @pytest.mark.parametrize("task,explicit,expected", [
     ("portfolio_risk_calibration", None, 300),
-    ("lean_analysis_proofs", None, 1800),
+    ("lean_analysis_proofs", None, 300),
     ("unknown-future-task", None, 300),
     ("lean_analysis_proofs", 60, 60),
     ("portfolio_risk_calibration", 1800, 1800),
     ("lean_analysis_proofs", 0, 0),
 ])
-def test_edgebench_task_eval_interval_precedence(task, explicit, expected):
+def test_edgebench_five_minute_sampling_default_and_explicit_override(task, explicit, expected):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from benchmark.edgebench.run import _task_default
@@ -496,3 +593,108 @@ def test_edgebench_task_default_rejects_invalid_file_values(monkeypatch, value):
     monkeypatch.setattr(run.json, "loads", lambda _: {"fixture": {"eval_interval_seconds": value}})
     with pytest.raises(ValueError, match="Invalid EdgeBench eval_interval_seconds"):
         run._task_default("fixture", "eval_interval_seconds", None, 300)
+
+
+@pytest.mark.parametrize("profile", ["heartbeat-resume", "heartbeat-explore"])
+def test_sforge_explicit_todo_cadence_reaches_worker_and_receipt(tmp_path, monkeypatch, profile):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+
+    async def installed(self, environment):
+        pass
+
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+                          profile=profile, cwd="/task", replan_after_todos=3)
+    worker.install_stop_hook(None, None, tmp_path, None)
+    assert worker.replan_after_turns is None
+    assert worker.runtime._replan_receipt() == {"replan_after_completed_todos": 3}
+    receipt = json.loads((tmp_path / "worker-profile.json").read_text())
+    assert receipt["replan_after_completed_todos"] == 3
+    assert "replan_after_effective_turns" not in receipt
+
+
+@pytest.mark.parametrize("profile", ["heartbeat-resume", "heartbeat-explore"])
+def test_sforge_planning_has_no_independent_cap_or_extra_trial_budget(tmp_path, monkeypatch, profile):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+    async def installed(self, environment):
+        pass
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile=profile, cwd="/task", timeout_seconds=1800)
+    worker.install_stop_hook(None, None, tmp_path, None)
+    assert worker.runtime.planning_timeout is None
+    assert worker.runtime.scheduler_timeout == 1800
+    assert worker.turn_timeout == 1640
+    receipt = json.loads((tmp_path / "worker-profile.json").read_text())
+    assert receipt["planning_timeout_seconds"] is None
+    assert receipt["timeout_seconds"] == 1800
+    worker.prepared = True
+    command = worker.format_run_cmd("/task.md")
+    assert "LOOPX_PLANNING_TIMEOUT_SEC" not in command
+    assert " + 1800 " in command
+
+
+def test_recorded_solver_exit_does_not_take_status_from_output(tmp_path, monkeypatch):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from types import SimpleNamespace
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
+    backend = object.__new__(RecordingDockerBackend)
+    backend.log_dir = tmp_path / "collected"
+    backend.blind_api_endpoint = None
+    backend.feedback = None
+    backend.execution_command = "synthetic solver"
+    monkeypatch.setattr(DockerBackend, "exec_run_with_timeout", lambda *a, **k:
+        SimpleNamespace(exit_code=1, timed_out=False, elapsed_seconds=310,
+                        output="done: successful looking text"))
+    backend.exec_run_with_timeout(None, ["/bin/bash", "-c", backend.execution_command])
+    assert backend.execution_receipt == {"exit_code": 1, "execution_started": True,
+                                         "timed_out": False, "elapsed_seconds": 310}
+    assert json.loads((tmp_path / "execution-receipt.json").read_text()) == backend.execution_receipt
+
+
+@pytest.mark.parametrize("profile", [
+    "official", "single", "native-goal", "heartbeat-resume", "heartbeat-explore",
+])
+@pytest.mark.parametrize("feedback,prompt", [
+    ("native", None), ("native", "Synthetic native wrapper"), ("blind", "Synthetic local task"),
+])
+def test_install_preserves_mode_owned_submission_access(tmp_path, monkeypatch, profile, feedback, prompt):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from types import SimpleNamespace
+    from sforge.harness.agent.codex import CodexAgent
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, CodexOffline, BenchmarkCodex
+    credential = tmp_path / "synthetic-auth.json"
+    credential.write_text("{}")
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", str(credential))
+    monkeypatch.delenv("LOOPX_PORTABLE_PYTHON", raising=False)
+    async def installed(self, environment):
+        pass
+    async def forbidden(*args):
+        raise AssertionError("Plain native/blind worker staged extra runtime")
+    monkeypatch.setattr(CodexOffline, "install", installed)
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    monkeypatch.setattr("benchmark.runtime.sforge.stage_portable_python", forbidden)
+    monkeypatch.setattr(CodexAgent, "install_stop_hook", lambda *args: None)
+    commands = []
+    def exec_run(handle, command, **kwargs):
+        commands.append(command)
+        return SimpleNamespace(exit_code=0)
+    backend = SimpleNamespace(exec_run=exec_run,
+                              copy_to_container=lambda *args: None)
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile=profile, cwd="/task", feedback=feedback,
+        feedback_prompt=prompt)
+    worker.install_stop_hook(backend, None, tmp_path, None)
+    assert (["rm", "-f", "/usr/local/bin/sforge-submit"] in commands) is (feedback != "native")
+    assert json.loads((tmp_path / "worker-profile.json").read_text())["feedback"] == feedback

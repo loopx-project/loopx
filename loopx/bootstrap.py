@@ -1,14 +1,20 @@
 from __future__ import annotations
 
-import re
+from contextlib import nullcontext
 from uuid import uuid4
 from pathlib import Path
 
 from .capabilities.machine_configuration.goal_storage import new_goal_storage_target, initialize_goal_storage_target
-from .registry import find_registry_goal
+from .control_plane.projects.identity import (
+    GoalCreationConflictError as GoalCreationConflictError,
+    slugify_goal_id as slugify_goal_id,
+    default_goal_id as default_goal_id,
+    derive_goal_display_name as derive_goal_display_name,
+)
+from .registry import find_registry_goal, resolve_state_file
+from .control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from .control_plane.coordination.legacy_writer_fence import legacy_todo_write_transaction, require_legacy_state_replacement_allowed
 from .control_plane.coordination.legacy_writer_fence import require_registry_source_write_allowed
-from .control_plane.coordination.runtime_shadow_writer_adapter import require_runtime_shadow_capture_prepared, begin_todo_runtime_shadow_capture, settle_todo_runtime_shadow_capture
 from .control_plane.projects.registry_codec import (
     load_project_registry,
     project_registry_transaction,
@@ -17,10 +23,9 @@ from .control_plane.projects.registry_codec import (
 from typing import Any
 
 from .control_plane.runtime.time import now_local_iso
-from .control_plane.runtime.public_safety import public_safe_compact_text
+from .control_plane.runtime.document_io import atomic_write_state_text
 from .control_plane.todos.active_state_editing import (
     TODO_SECTION_HEADINGS,
-    atomic_write_state_text,
     insertion_anchor,
     section_bounds,
 )
@@ -35,8 +40,8 @@ from .execution_profile import (
 )
 from .global_registry import sync_project_registry_to_global
 from .install_contract import (
-    ARCHIVE_FALLBACK_INSTALL_COMMAND,
-    DEFAULT_INSTALL_REPAIR_COMMAND,
+    archive_fallback_install_command,
+    install_repair_command,
 )
 from .orchestration import (
     DEFAULT_ORCHESTRATION_MODE,
@@ -55,25 +60,6 @@ from .registry_writability import probe_registry_write_path
 DEFAULT_OBJECTIVE = "Improve this project through bounded, verified goal segments."
 DEFAULT_DOMAIN = "project-goal-control-plane"
 DEFAULT_NEXT_ACTION = "Initial routing is owned by the connected domain adapter."
-
-
-class GoalCreationConflictError(ValueError):
-    """A create-only bootstrap cannot adopt another registry operation."""
-
-
-def slugify_goal_id(value: str) -> str:
-    slug = re.sub(r"[^a-zA-Z0-9]+", "-", value.lower()).strip("-")
-    return slug or "project-goal"
-
-
-def default_goal_id(project: Path) -> str:
-    return f"{slugify_goal_id(project.name)}-goal"
-
-
-def derive_goal_display_name(goal_text: str | None) -> str | None:
-    """Derive a public-safe display title from user-supplied goal text."""
-
-    return public_safe_compact_text(goal_text, limit=132)
 
 
 def now_iso() -> str:
@@ -351,7 +337,7 @@ def bootstrap_project(
     if not state_file.is_absolute():
         state_file = project / state_file
     goal_doc = resolve_project_path(project, goal_doc)
-    runtime_root = resolve_runtime_root(read_json_if_exists(registry_path), str(runtime_root) if runtime_root else None, registry_path=registry_path)
+    runtime_root = resolve_runtime_root(read_json_if_exists(registry_path), str(runtime_root) if runtime_root else None, registry_path=registry_path).resolve()
     updated_at = now_iso()
     execution_profile = build_execution_profile(
         minimum_scale=execution_minimum_scale,
@@ -400,14 +386,27 @@ def bootstrap_project(
     if storage_target is not None:
         goal_entry.setdefault("coordination", {})["storage_target"] = storage_target
     canonical_creation = (storage_target or {}).get("schema_version") == "loopx_new_goal_storage_target_v1"
+    # Imported/promoted Goals have no canonical *creation* receipt. Resolve
+    # their current authority through the existing typed reader, never by
+    # manufacturing a creation target or reviving their old Markdown source.
+    existing_authority = (read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id)
+        if previous_goal is not None and not canonical_creation else None)
+    canonical_existing = existing_authority is not None
     if canonical_creation and previous_goal is not None and force:
         raise ValueError("Canonical creation cannot rebuild existing state; restore or migrate through its owning operation")
+    if canonical_existing and force:
+        raise ValueError("Canonical authority cannot rebuild existing state; restore or migrate through its owning operation")
+    if canonical_existing:
+        registered_state = resolve_state_file(Path(previous_goal["repo"]), previous_goal["state_file"])
+        if (registered_state is None or registered_state.resolve(strict=False) != state_file.resolve(strict=False)
+            or Path(previous_goal["repo"]).expanduser().resolve() != project):
+            raise ValueError("Canonical reconnect must use its registered project and state route")
     if canonical_creation:
         goal_entry["creation_operation_id"] = creation_operation_id or (previous_goal or {}).get("creation_operation_id") or f"goal-create:{uuid4().hex}"
     registry, registry_goal_action = merge_goal(registry, goal_entry, force=force)
 
     state_exists = state_file.exists()
-    state_action = "kept-existing" if canonical_creation and previous_goal is not None else "created"
+    state_action = "kept-existing" if canonical_existing or (canonical_creation and previous_goal is not None) else "created"
     if state_exists and force and preserve_todos:
         state_action = "kept-existing-preserve-todos"
     elif state_exists and not force:
@@ -417,7 +416,7 @@ def bootstrap_project(
 
     repaired_state_text: str | None = None
     repaired_todo_source_roles: list[str] = []
-    if not canonical_creation and state_exists and state_action in {
+    if not canonical_creation and not canonical_existing and state_exists and state_action in {
         "kept-existing",
         "kept-existing-preserve-todos",
     }:
@@ -520,8 +519,8 @@ def bootstrap_project(
                     "Fix global registry write access, then rerun this command.",
                     "Use --no-global-sync only for an explicit local-only setup.",
                 ],
-                "install_repair_command": DEFAULT_INSTALL_REPAIR_COMMAND,
-                "archive_fallback_install_command": ARCHIVE_FALLBACK_INSTALL_COMMAND,
+                "install_repair_command": install_repair_command(),
+                "archive_fallback_install_command": archive_fallback_install_command(),
                 "install_repair_note": (
                     "If this local LoopX install is missing or stale, repair the PyPI distribution "
                     "and packaged workflow skills, then confirm with loopx doctor before continuing."
@@ -539,18 +538,20 @@ def bootstrap_project(
         if canonical_creation and previous_goal is not None:
             storage_selection = initialize_goal_storage_target(runtime_root,
                 {**previous_goal, "state_file": str(state_file)}, registry_path=registry_path)
-        canonical_reconnect = storage_selection is not None and storage_selection.get("authority_initialized") is True
+        canonical_reconnect = canonical_existing or (storage_selection is not None and storage_selection.get("authority_initialized") is True)
         canonical_bootstrap_transport = canonical_creation
         with project_registry_transaction(
             registry_path,
             operation="bootstrap_registry",
             create=dict,
-        ) as registry_transaction, legacy_todo_write_transaction(
+        ) as registry_transaction, (nullcontext() if canonical_existing else legacy_todo_write_transaction(
             registry_path, goal_id, state_file, None, "bootstrap_state", canonical_creation,
             runtime_root=runtime_root,
-        ):
+        )):
             current_registry = registry_transaction.payload_copy()
             current_goal = find_registry_goal(current_registry, goal_id)
+            if canonical_existing and current_goal != previous_goal:
+                raise ValueError("Canonical Goal registration changed; retry bootstrap")
             if creation_operation_id is not None and current_goal is not None:
                 # The App is creating a new Goal, not reconnecting one. Recheck
                 # under the publication lock before state/provider side effects.
@@ -569,7 +570,7 @@ def bootstrap_project(
             # A first explicit bootstrap has no previous Goal authority to fence.
             # Existing Goals still resolve and authorize their original route.
             if current_registry.get("goals"):
-                previous_root = resolve_runtime_root(current_registry, None, registry_path=registry_path)
+                previous_root = resolve_runtime_root(current_registry, None, registry_path=registry_path).resolve()
                 if previous_root != runtime_root:
                     for previous_goal in current_registry["goals"]:
                         if isinstance(previous_goal, dict) and previous_goal.get("id"):
@@ -599,13 +600,18 @@ def bootstrap_project(
                     execution_profile=execution_profile,
                     handoff_mode=declared_handoff_mode,
                 )
-            elif not canonical_creation:
+            elif not canonical_creation and not canonical_reconnect:
                 planned, repaired_todo_source_roles = repair_missing_todo_source_sections(original)
             if planned != original:
                 if canonical_bootstrap_transport:
                     require_registry_source_write_allowed(registry_path=registry_path, runtime_root=runtime_root,
                         goal_id=goal_id, state_file=state_file)
                 if not canonical_creation:
+                    from .control_plane.coordination.runtime_shadow_writer_adapter import (
+                        begin_todo_runtime_shadow_capture,
+                        require_runtime_shadow_capture_prepared,
+                    )
+
                     shadow_capture = begin_todo_runtime_shadow_capture(registry_path=registry_path,
                         runtime_root=runtime_root, goal_id=goal_id, state_path=state_file,
                         write_class="bootstrap_state", original_text=original)
@@ -624,8 +630,11 @@ def bootstrap_project(
         # Registry intent survives an interrupted initialization. Reconnect retries
         # it outside the legacy/registry locks; changing machine defaults cannot
         # retarget that Goal. The TS owner refuses replacing an existing provider.
-        storage_selection = initialize_goal_storage_target(runtime_root, find_registry_goal(registry, goal_id) or {}, registry_path=registry_path)
+        if not canonical_existing:
+            storage_selection = initialize_goal_storage_target(runtime_root, find_registry_goal(registry, goal_id) or {}, registry_path=registry_path)
         if shadow_capture is not None:
+            from .control_plane.coordination.runtime_shadow_writer_adapter import settle_todo_runtime_shadow_capture
+
             shadow_evidence = settle_todo_runtime_shadow_capture({}, registry_path=registry_path,
                 runtime_root=runtime_root, goal_id=goal_id, capture=shadow_capture, emit_disabled=False)
         if sync_global:
@@ -639,6 +648,9 @@ def bootstrap_project(
 
     return {
         **shadow_evidence,
+        **({"authority_read": {key: existing_authority[key] for key in (
+            "provider_revision", "cursor", "source_authority", "decision_read_from_provider", "legacy_fallback_used",
+        )}} if existing_authority is not None else {}),
         "storage_selection": storage_selection,
         "storage_target": (find_registry_goal(registry, goal_id) or {}).get("coordination", {}).get("storage_target"),
         "ok": True,
@@ -674,8 +686,8 @@ def bootstrap_project(
             f"loopx --registry {runtime_root / 'registry.global.json'} status",
             f"loopx --registry {relative_state_file(project, registry_path)} history --goal-id {goal_id}",
         ],
-        "install_repair_command": DEFAULT_INSTALL_REPAIR_COMMAND,
-        "archive_fallback_install_command": ARCHIVE_FALLBACK_INSTALL_COMMAND,
+        "install_repair_command": install_repair_command(),
+        "archive_fallback_install_command": archive_fallback_install_command(),
         "install_repair_note": (
             "If this local LoopX install is missing or stale, repair the PyPI distribution "
             "and packaged workflow skills, then confirm with loopx doctor before continuing."

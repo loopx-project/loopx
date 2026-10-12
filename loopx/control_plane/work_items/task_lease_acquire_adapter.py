@@ -19,7 +19,7 @@ from ..coordination.coordination_state_contract_generated import (
     TASK_LEASE_CANONICAL_CLAIM_TRANSFER_REQUEST_SCHEMA,
     TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA,
 )
-from ..coordination.runtime_shadow import resolve_coordination_runtime_shadow_config
+from ..coordination.configuration import resolve_coordination_runtime_shadow_config
 from ..goals.legacy_event_source import (
     state_event_log_candidates as _state_event_log_candidates,
 )
@@ -165,7 +165,7 @@ def _task_lease_authority_projection(
     state_file: Path | None,
     project_todos: bool = True,
 ) -> tuple[Any, list[Any], list[dict[str, Any]], dict[str, Any] | None]:
-    from ...todos import list_goal_todos
+    from ..todos.list_readback import list_goal_todos
     from ..goals.active_state_metadata import parse_state_frontmatter
 
     if goal is None:
@@ -333,14 +333,17 @@ def _finalize_native_acquire_result(
     registry_path: Path,
     runtime_root: Path,
     goal_id: str,
-    todo_id: str,
     legacy_provider_projection: bool,
 ) -> dict[str, Any]:
     result = dict(payload)
     if legacy_provider_projection and result.get("ok") is True:
         result["handoff_mode"] = authority.get("handoff_mode") or HANDOFF_MODE_LEGACY
         result.pop("settlement", None)
-    if result.get("ok") is True and result.get("acquired") is True:
+    if (
+        result.get("ok") is True
+        and result.get("acquired") is True
+        and "coordination_runtime_shadow_capture" in result
+    ):
         from ..coordination.runtime_shadow_writer_adapter import (
             settle_lease_runtime_shadow_capture,
         )
@@ -432,7 +435,6 @@ def execute_native_task_lease_acquire(
             registry_path=registry_path,
             runtime_root=runtime_root,
             goal_id=str(goal_id),
-            todo_id=str(todo_id),
             legacy_provider_projection=_legacy_provider_projection,
         )
     raise RuntimeError("native task-lease acquire exhausted source-CAS retries")

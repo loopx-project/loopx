@@ -4,7 +4,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from .bootstrap import default_goal_id
+from .control_plane.projects.identity import default_goal_id
 from .control_plane.projects.registry_codec import load_registry
 from .paths import (
     registered_goal_state_file,
@@ -48,10 +48,13 @@ def render_cli_command_prefix(
     *,
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
 ) -> str:
     prefix = shell_arg(cli_bin)
     if runtime_root is not None:
         prefix += f" --runtime-root {shell_arg(str(runtime_root))}"
+    if registry_path is not None:
+        prefix += f" --registry {shell_arg(str(registry_path))}"
     return prefix
 
 
@@ -169,6 +172,7 @@ def render_quota_guard_command(
     *,
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
     agent_id: str | None = None,
     available_capabilities: Any = None,
     runtime_profile: str | None = None,
@@ -205,10 +209,10 @@ def render_quota_guard_command(
     else:
         turn_arg = ""
     registry_arg = (
-        _render_global_registry_arg(runtime_root) if include_shared_registry else ""
+        _render_global_registry_arg(runtime_root) if include_shared_registry and registry_path is None else ""
     )
     return (
-        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} --format json "
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root, registry_path=registry_path)} --format json "
         f"{registry_arg}"
         f"quota should-run --goal-id {shell_arg(goal_id)}{agent_arg}"
         f"{capability_args}{scheduler_args}{turn_arg}"
@@ -221,14 +225,15 @@ def render_quota_spend_command(
     source: str = "adapter",
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
     agent_id: str | None = None,
     available_capabilities: Any = None,
 ) -> str:
     agent_arg = f" --agent-id {shell_arg(agent_id)}" if agent_id else ""
     capability_args = render_available_capability_args(available_capabilities)
     return (
-        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} --format json "
-        f"{_render_global_registry_arg(runtime_root)}"
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root, registry_path=registry_path)} --format json "
+        f"{_render_global_registry_arg(runtime_root) if registry_path is None else ''}"
         "quota spend-slot "
         f"--goal-id {shell_arg(goal_id)} "
         f"--slots 1 --source {shell_arg(source)} --execute{agent_arg}{capability_args}"
@@ -240,6 +245,7 @@ def render_refresh_state_command(
     *,
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
     project: str | None = None,
     agent_id: str | None = None,
     progress_scope: str | None = None,
@@ -266,7 +272,7 @@ def render_refresh_state_command(
         else ""
     )
     return (
-        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root, registry_path=registry_path)} "
         f"refresh-state --goal-id {shell_arg(goal_id)}"
         f"{project_arg}{classification_arg}{scale_arg}{outcome_arg}{agent_arg}{scope_arg}"
     )
@@ -277,6 +283,7 @@ def render_accountable_progress_refresh_command(
     *,
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
     agent_id: str | None = None,
     progress_scope: str | None = None,
     classification: str = "<PUBLIC_SAFE_PROGRESS_CLASSIFICATION>",
@@ -287,6 +294,7 @@ def render_accountable_progress_refresh_command(
         goal_id,
         cli_bin=cli_bin,
         runtime_root=runtime_root,
+        registry_path=registry_path,
         agent_id=agent_id,
         progress_scope=progress_scope,
         classification=classification,

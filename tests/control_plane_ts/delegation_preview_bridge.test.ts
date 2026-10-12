@@ -6,13 +6,14 @@ import {join} from "node:path";
 import {createInterface} from "node:readline";
 import {setTimeout as delay} from "node:timers/promises";
 import test from "node:test";
+import {fileURLToPath} from "node:url";
 
 const bridge = new URL("../../loopx/control_plane/collaboration/delegation_preview_bridge.ts", import.meta.url);
 
 function transport(script: string, cwd = process.cwd(), lifetimeClock?: number) {
   const clock = lifetimeClock === undefined ? [] : ["--import", "data:text/javascript," + encodeURIComponent(
     `const original=globalThis.setTimeout;globalThis.setTimeout=(f,ms,...a)=>original(f,ms===300000?${lifetimeClock}:ms,...a)`)];
-  const child = spawn(process.execPath, [...clock, "--no-warnings", "--experimental-strip-types", bridge.pathname],
+  const child = spawn(process.execPath, [...clock, "--no-warnings", "--experimental-strip-types", fileURLToPath(bridge)],
     {stdio: ["pipe", "pipe", "pipe"]});
   const lines = createInterface({input: child.stdout})[Symbol.asyncIterator]();
   let id = 0;

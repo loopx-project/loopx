@@ -14,6 +14,7 @@ from loopx.capabilities.manager_context.inspection import (
     READ_TOOL,
     READ_VIEWS,
     TOOL_NAME,
+    agent_work_summary,
     manager_index,
 )
 from loopx.chat_agent import CodexChatAgentSession, CodexChatAgentError
@@ -156,6 +157,15 @@ def test_a_refused_read_names_every_bad_argument_and_the_called_tool(tmp_path):
     assert not records
 
 
+
+def _todo_read_fixture(records):
+    def read(**arguments):
+        if arguments.get("todo_id"):
+            matches = [r for r in records if r["todo_id"] == arguments["todo_id"]]
+            return {"ok": True, "todo": matches[0] if len(matches) == 1 else None}
+        return {"ok": True, "todos": records}
+    return read
+
 def test_a_valid_read_keeps_its_existing_shape(tmp_path):
     """The refusal payload is additive: legal reads are unchanged."""
 
@@ -169,7 +179,7 @@ def test_a_valid_read_keeps_its_existing_shape(tmp_path):
 def test_revocation_during_read_suppresses_result(monkeypatch, tmp_path):
     grants = iter([True, False])
     monkeypatch.setattr(
-        details, "list_goal_todos", lambda **_: {"ok": True, "todos": []}
+        details, "list_goal_todos", _todo_read_fixture([])
     )
     tool, records = inspector(tmp_path, lambda: next(grants))
     assert tool.read(TOOL_NAME, {"view": "todos", "goal_id": "alpha"}) == {
@@ -181,10 +191,10 @@ def test_revocation_during_read_suppresses_result(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize('name', [TOOL_NAME, CONTEXT_TOOL_NAME])
 def test_exact_todo_recovers_compacted_context_without_widening_scope(monkeypatch, tmp_path, name):
-    monkeypatch.setattr(details, 'list_goal_todos', lambda **_: {'ok': True, 'todos': [
+    monkeypatch.setattr(details, 'list_goal_todos', lambda **_: {'ok': True, 'todo':
         {'todo_id': 'todo_report', 'status': 'done', 'text': 'Research report',
          'note': 'Context. ' * 60 + 'Do not publish.', 'resume_ready': False},
-    ]})
+    })
     tool, records = inspector(tmp_path)
     tool.owner_scope = True
     result = tool.read(name, {'view': 'todos', 'goal_id': 'alpha', 'todo_id': 'todo_report'})
@@ -211,15 +221,74 @@ def test_invalid_exact_todo_read_does_not_touch_core(monkeypatch, tmp_path, argu
 
 
 def test_exact_todo_retains_existing_encoded_row_budget(monkeypatch, tmp_path):
-    monkeypatch.setattr(details, 'list_goal_todos', lambda **_: {'ok': True, 'todos': [
+    monkeypatch.setattr(details, 'list_goal_todos', lambda **_: {'ok': True, 'todo':
         {'todo_id': 'todo_report', 'status': 'open', 'text': 'Research', 'note': 'x' * 25000},
-    ]})
+    })
     tool, _ = inspector(tmp_path)
     tool.owner_scope = True
     result = tool.read(TOOL_NAME, {'view': 'todos', 'goal_id': 'alpha', 'todo_id': 'todo_report'})
     assert result['oversized_rows'] == [0]
     assert result['rows'][0]['status'] == 'oversized_record'
     assert 'x' * 25000 not in json.dumps(result)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_attention_reference_recovers_canonical_long_todo(tmp_path, monkeypatch, provider):
+    from tests.control_plane.canonical_authority_fixture import (
+        isolate_sqlite_runtime, promoted_create_fixture,
+    )
+    from loopx.chat_manager_context import manager_turn_context
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.todos import add_goal_todo
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, _ = promoted_create_fixture(tmp_path, provider=provider)
+    full_text = "[P0] Compare the evidence. " + "背景😀。" * 180 + "Only publish after owner acceptance."
+    full_note = "Original constraints. " * 50 + "Keep the original audience."
+    created = add_goal_todo(
+        registry_path=registry, runtime_root_arg=str(runtime), goal_id="goal-a",
+        role="user", text=full_text, note=full_note, task_class="user_gate",
+        operation_id="long-owner-request-fixture",
+    )
+    assert created["ok"], created
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
+    todo_id = before["todos"][0]["todo_id"]
+    native = details.list_goal_todos(
+        registry_path=registry, runtime_root_arg=str(runtime), goal_id="goal-a", todo_id=todo_id,
+    )
+    assert native["authority_read"]["decision_read_from_provider"] is True
+    assert native["authority_read"]["legacy_fallback_used"] is False
+    assert native["todo"]["text"] == full_text
+    # The native read also supplies a derived summary; exact inspection must not prefer it.
+    assert native["todo"]["title"] != full_text
+    grants = {"current": True}
+    for channel in ("manager", "goal.goal-a"):
+        context = manager_turn_context(
+            registry, {"channel_id": channel, "goal_id": "goal-a"}, runtime, include_details=False,
+        )
+        item = manager_index(context)["goals"][0]["attention"]["items"][0]
+        assert item["details_omitted"] is True
+        reference = item["read_reference"]
+        assert reference == {"view": "todos", "goal_id": "goal-a", "todo_id": todo_id}
+        records = []
+        tool = ManagerInspection(
+            context=context, registry_path=registry, runtime_root=runtime, owner_scope=True,
+            scope_valid=lambda: grants["current"], record=records.append,
+        )
+        result = tool.read(TOOL_NAME, reference)
+        assert result["ok"] is True and result["matched"] == 1
+        assert result["rows"][0]["title"] == full_text
+        assert result["rows"][0]["continuation"] == full_note
+        assert result["rows"][0]["content_truncated"] is False
+        tool.owner_scope = False
+        external = tool.read(CONTEXT_TOOL_NAME, reference)
+        assert external["rows"][0]["title"] == full_text
+        assert "continuation" not in external["rows"][0]
+        grants["current"] = False
+        assert tool.read(TOOL_NAME, reference)["error"] == "authorization_changed"
+        assert len(records) == 2
+        grants["current"] = True
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == before
 
 
 def test_unavailable_is_unknown_and_large_portfolio_is_disclosed(tmp_path):
@@ -229,10 +298,65 @@ def test_unavailable_is_unknown_and_large_portfolio_is_disclosed(tmp_path):
     assert result["source"]["status"] == "unavailable"
     tool.context["goals"][0]["current_todos"] = {"body": "x" * 40000}
     index = manager_index(tool.context)
-    assert len(json.dumps(index)) < 1000
+    assert len(json.dumps(index)) < 2000
     result = tool.read(TOOL_NAME, {"view": "portfolio"})
     assert result["oversized_rows"] == [0]
     assert len(json.dumps(result)) < 2000
+
+
+def test_agent_work_summary_bounds_content_without_inventing_execution():
+    summary = agent_work_summary({"agent_id": "worker", "source_verified": True,
+                                  "todos": [{"todo_id": "todo_1", "title": "x" * 25000,
+                                             "status": "blocked", "readiness": "blocked",
+                                             "raw_private_body": "excluded"}]})
+    assert len(summary["todos"][0]["title"]) == 240
+    assert summary["todos"][0]["content_truncated"] is True
+    assert summary["todos"][0]["status"] == "blocked"
+    assert agent_work_summary(summary) == summary
+    assert summary["todos_omitted"] == 0 and "raw_private_body" not in json.dumps(summary)
+    tool_index = manager_index({"goals": [{"goal_id": "stopped", "activation_state": "stopped",
+                                           "agents": [summary]}]})
+    assert tool_index["goals"] == [] and tool_index["stopped_goals_excluded"] == 1
+
+
+def test_current_work_portfolio_keeps_authorization_fence(tmp_path):
+    tool, records = inspector(tmp_path, scope=lambda: False)
+    tool.context["goals"][0]["agents"] = [{"agent_id": "worker", "todos": [{"title": "private"}]}]
+    result = tool.read(TOOL_NAME, {"view": "portfolio"})
+    assert result == {"ok": False, "error": "authorization_changed"}
+    assert not records and "private" not in json.dumps(result)
+
+
+def test_directory_attention_preview_keeps_all_workers_and_exact_scoped_read(monkeypatch, tmp_path):
+    text = "Review the complete plan. " * 50 + "Only proceed after owner acceptance."
+    task = {"todo_id": "todo_gate", "role": "user", "task_class": "user_gate",
+            "status": "blocked", "text": text, "note": "Do not bypass acceptance"}
+    monkeypatch.setattr(details, "list_goal_todos", _todo_read_fixture([task]))
+    tool, _ = inspector(tmp_path)
+    tool.owner_scope = True
+    row = tool.context["goals"][0]
+    row.update(quality="stale", source={"revision": "revision-original"},
+               agents=[{"agent_id": f"worker_{i}", "source_verified": False} for i in range(40)],
+               attention={"status": "read", "coverage": {"known": 1, "included": 1, "omitted": 0},
+                          "items": [{"todo_id": task["todo_id"], "owner_must_act": True,
+                                     "blocker": {"blocker_identity": "todo:todo_gate", "task": task,
+                                                 "cause": text, "delivery": {"receipt": "x" * 20000}},
+                                     "request": {"request_id": task["todo_id"], "text": text}}]})
+    before = json.dumps(tool.context, sort_keys=True)
+    index = manager_index(tool.context)
+    preview = index["goals"][0]
+    assert [a["agent_id"] for a in preview["agents"]] == [f"worker_{i}" for i in range(40)]
+    assert preview["quality"] == "stale" and preview["source"]["revision"] == "revision-original"
+    item = preview["attention"]["items"][0]
+    assert item["request"]["content_truncated"] is True and item["details_omitted"] is True
+    assert "receipt" not in json.dumps(item) and len(json.dumps(item)) < 1400
+    assert json.dumps(tool.context, sort_keys=True) == before
+    result = tool.read(TOOL_NAME, item["read_reference"])
+    assert result["ok"] and result["rows"][0]["title"] == text
+    assert result["rows"][0]["continuation"] == task["note"]
+    assert result["rows"][0]["content_truncated"] is False
+    tool.scope_valid = lambda: False
+    assert tool.read(TOOL_NAME, item["read_reference"])["error"] == "authorization_changed"
 
 
 def test_delivery_pages_cross_day_without_duplication(tmp_path):
@@ -405,17 +529,14 @@ for line in sys.stdin:
     monkeypatch.setattr(
         details,
         "list_goal_todos",
-        lambda **_: {
-            "ok": True,
-            "todos": [
+        _todo_read_fixture([
                 {
                     "todo_id": "todo_sample",
                     "text": "Check the sample result",
                     "status": "open",
                     "note": "Public background. " * 30 + "Keep this a draft; do not publish.",
                 },
-            ],
-        },
+            ]),
     )
     store = ChatSessionStore(tmp_path / "runtime" / "chat")
     runtime = ChatRuntimeController(

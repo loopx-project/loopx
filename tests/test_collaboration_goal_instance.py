@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -39,6 +40,46 @@ from loopx.file_lock import exclusive_cross_runtime_file_lock
 
 INSTANCE_A = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 INSTANCE_B = "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+
+@pytest.mark.skipif(os.open not in os.supports_dir_fd or not hasattr(os, "O_NOFOLLOW"),
+                   reason="result file snapshots require POSIX no-follow directory opens")
+def test_exact_result_files_retain_original_route_and_refuse_a_recreated_workspace(tmp_path):
+    from loopx.control_plane.collaboration.goal_instance_scope import collaboration_goal_scope
+    from loopx.control_plane.collaboration.result_files import snapshot_result_files
+    from loopx.control_plane.collaboration.inbox import _entry, record_result
+    from loopx.capabilities.manager_context.roundtrip import _route
+
+    registry = _create_source_registry(tmp_path)
+    store, _, receipt = _external_manager_request(tmp_path, registry)
+    calls = []
+
+    class Sender:
+        supports_result_files = True
+
+        def __call__(self, route, session, turn, text):
+            calls.append(route)
+            return {"reply_verified": True, "verification_performed": True}
+
+    sender = Sender()
+    drain(tmp_path, registry, store, sender)
+    (tmp_path / "result.bin").write_bytes(b"exact-instance result")
+    with collaboration_goal_scope(registry, goal_id="delivery", agents=("builder",), caller_goal_ref=receipt["goal_ref"]) as scope:
+        row = _entry(tmp_path, "delivery", "builder", receipt["request_id"], scope=scope)
+        route = _route(tmp_path, row, scope=scope)
+        attachments = snapshot_result_files(tmp_path, scope, ["result.bin"])
+        record_result(tmp_path, row, "conclusion", "The file is ready.", scope=scope, route=route,
+                      update_id="file-ready", attachments=attachments)
+    drain(tmp_path, registry, store, sender)
+    assert len(calls) == 2 and calls[-1]["result_attachments"] == attachments
+    assert calls[-1]["goal_ref"] == receipt["goal_ref"]
+    assert calls[-1]["source_id"] == route["source_id"]
+    assert "result_attachments" not in route
+    assert drain(tmp_path, registry, store, sender) == 0
+    _recreate(registry)
+    with collaboration_goal_scope(registry, goal_id="delivery", agents=("builder",), caller_goal_ref=receipt["goal_ref"]) as scope:
+        with pytest.raises(ValueError, match="instance changed"):
+            snapshot_result_files(tmp_path, scope, ["result.bin"])
 
 
 def _source_payload(root: Path, instance_id: str) -> dict:

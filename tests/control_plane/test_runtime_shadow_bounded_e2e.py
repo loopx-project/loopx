@@ -423,7 +423,7 @@ def test_snapshot_changed_between_python_builder_and_native_inspection_is_reject
     assert result["reason_code"] == "source_changed_retry"
 
 
-def test_public_handoff_todo_and_monitor_successor_capture_each_primary_mutation(tmp_path: Path) -> None:
+def test_public_handoff_todo_and_atomic_monitor_batch_capture_each_primary_mutation(tmp_path: Path) -> None:
     registry, runtime, _state = workspace(tmp_path)
     enable(registry)
     cli(registry, runtime, "coordination-shadow", "bootstrap", "--goal-id", "goal-a", "--execute")
@@ -447,14 +447,17 @@ def test_public_handoff_todo_and_monitor_successor_capture_each_primary_mutation
         "--next-continuation-policy", "same_agent_non_delivery", "--next-claimed-by", "agent-a", "--execute")
     assert len(result["successor_todo_ids"]) == 1
     transactions = history(tmp_path, runtime)
-    assert len(transactions) == 6  # Baseline, handoff, todo add, monitor add, observation update, successor add.
+    assert len(transactions) == 5  # Baseline, handoff, todo add, monitor add, atomic Monitor batch.
+    batch_todos = {todo["todo_id"]: todo for todo in transactions[-1]["projection"]["todos"]}
+    assert batch_todos[monitor["todo_id"]]["result_hash"] == "release-v1"
+    assert batch_todos[result["successor_todo_ids"][0]]["text"] == "Validate the released head"
     receipts = [transaction["receipts"][0] for transaction in transactions[1:]]
-    assert len({receipt["entry_id"] for receipt in receipts}) == 5
-    assert [receipt["seq"] for receipt in receipts] == [1, 2, 3, 4, 5]
+    assert len({receipt["entry_id"] for receipt in receipts}) == 4
+    assert [receipt["seq"] for receipt in receipts] == [1, 2, 3, 4]
     assert {receipt["write_class"] for receipt in receipts} >= {"handoff_mode_set", "todo_add", "todo_update"}
-    qualified = cli(registry, runtime, "coordination-shadow", "qualify", "--goal-id", "goal-a", "--minimum-operations", "5")
+    qualified = cli(registry, runtime, "coordination-shadow", "qualify", "--goal-id", "goal-a", "--minimum-operations", "4")
     assert qualified["qualification"]["qualified"] is True
-    assert qualified["qualification"]["evidence"]["operation_count"] == 5
+    assert qualified["qualification"]["evidence"]["operation_count"] == 4
 
 
 def test_disabling_configuration_cannot_cancel_an_active_capture_obligation(tmp_path: Path) -> None:

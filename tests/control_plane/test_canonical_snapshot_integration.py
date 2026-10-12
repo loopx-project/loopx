@@ -86,6 +86,32 @@ def native_read(runtime):
     )
 
 
+def test_historical_source_uses_private_snapshot_above_inline_budget(wide_goal):
+    runtime, _state, _registry, projection = wide_goal
+    original = native_read(runtime)
+    request = {
+        "schema_version": "loopx_local_coordination_todo_source_request_v0",
+        "runtime_root": str(runtime),
+        "goal_id": "goal-a",
+        "source": {
+            key: original[key]
+            for key in (
+                "source_authority", "store_identity", "provider_revision", "cursor"
+            )
+        },
+    }
+    with pytest.raises(EffectRuntimeResponseAmbiguous):
+        effect_runtime_result("coordination.local_authority.todo_source", request)
+    historical = effect_runtime_result(
+        "coordination.local_authority.todo_source", request,
+        timeout=15, large_local_snapshot=True,
+    )
+    assert historical["status"] == "loaded"
+    assert historical["todos"] == projection["todos"]
+    assert historical["source"] == request["source"]
+    assert len(json.dumps(historical, ensure_ascii=False).encode()) > MAX_RESPONSE_BYTES
+
+
 def cli(registry, *args):
     process = subprocess.run(
         [

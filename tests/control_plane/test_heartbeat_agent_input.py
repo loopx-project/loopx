@@ -24,6 +24,8 @@ def test_peer_prompt_defers_workspace_and_lease_requirements_to_current_contract
         runtime_profile="codex_app_heartbeat", **{mode: True},
     )
     body = payload["task_body"]
+    assert "agent_channel.work_context" in body
+    assert "required_reads (or envelope) before work" in body
     assert "quota claim/lease and workspace contract plus repository rules" in body
     assert "use an independent worktree for repository writes" not in body
     assert "independent repo worktree" not in body

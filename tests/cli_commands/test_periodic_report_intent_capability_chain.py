@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 from loopx.capabilities.periodic_report.pending_intent import (
-    consume_pending_periodic_report_intent,
     pending_periodic_report_intents,
 )
 from settlement_capability_dispatch_fixture import (
@@ -18,13 +17,7 @@ from settlement_capability_dispatch_fixture import (
 
 
 def _write_unclaimed_frontier_state(project: Path) -> None:
-    """State whose progress snapshot has no agent-claimed items yet.
-
-    The unclaimed advancement Todo keeps the successor frontier owned, so the
-    dispatch still freezes one stage receipt, while the durable progress
-    snapshot stays empty and the pending intent carries capability evidence
-    without a frozen project_progress projection.
-    """
+    """Leave an active successor after the earlier stage has been superseded."""
 
     project.joinpath("goal.md").write_text(
         f"""# Goal
@@ -70,20 +63,7 @@ def _intent_sidecar(runtime: Path) -> dict[str, object]:
     return json.loads(sidecars[0].read_text(encoding="utf-8"))
 
 
-def _editorial_fact_sources(registry: Path, runtime: Path) -> set[str]:
-    result = consume_pending_periodic_report_intent(
-        registry_path=registry,
-        runtime_root=runtime,
-        goal_id=GOAL_ID,
-        agent_id=AGENT_ID,
-        execute=True,
-    )
-    assert result["status"] == "editorial_required", result
-    request = json.loads(Path(result["editorial_request_path"]).read_text("utf-8"))
-    return {str(fact.get("source_ref")) for fact in request["facts"]}
-
-
-def test_pending_intent_fallback_uses_producer_capability_evidence(
+def test_later_todo_completion_does_not_replay_superseded_successor_milestone(
     tmp_path: Path,
 ) -> None:
     captured, registry, runtime = complete_todo_via_cli(
@@ -92,23 +72,19 @@ def test_pending_intent_fallback_uses_producer_capability_evidence(
         write_state=_write_unclaimed_frontier_state,
     )
 
-    assert "available_capabilities" in captured
+    assert captured["available_capabilities"] == ["network"]
     intents = pending_periodic_report_intents(
         registry_path=registry,
         runtime_root=runtime,
         goal_id=GOAL_ID,
         agent_id=AGENT_ID,
     )
-    assert len(intents) == 1
-    payload = intents[0]["payload"]
-    assert "project_progress" not in payload
-    assert payload["available_capabilities"] == ["network"]
-
-    _claim_gated_successors(registry.parent)
-    assert f"todo:{GATED_TODO}" in _editorial_fact_sources(registry, runtime)
+    assert intents == []
+    sidecar = _intent_sidecar(runtime)
+    assert sidecar["intent"] is None
 
 
-def test_pending_intent_fallback_fails_closed_without_producer_evidence(
+def test_later_todo_completion_without_capabilities_does_not_replay_milestone(
     tmp_path: Path,
 ) -> None:
     _captured, registry, runtime = complete_todo_via_cli(
@@ -117,13 +93,13 @@ def test_pending_intent_fallback_fails_closed_without_producer_evidence(
         write_state=_write_unclaimed_frontier_state,
     )
 
-    sidecar = _intent_sidecar(runtime)
-    assert "project_progress" not in sidecar["intent"]["payload"]
-    assert "available_capabilities" not in sidecar["intent"]["payload"]
-
-    _claim_gated_successors(registry.parent)
-    assert f"todo:{GATED_TODO}" not in _editorial_fact_sources(registry, runtime)
-    assert f"todo:{PLAIN_TODO}" in _editorial_fact_sources(registry, runtime)
+    assert _intent_sidecar(runtime)["intent"] is None
+    assert pending_periodic_report_intents(
+        registry_path=registry,
+        runtime_root=runtime,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+    ) == []
 
 
 def test_post_writeback_frontier_and_progress_share_one_canonical_snapshot(
@@ -175,8 +151,8 @@ def test_post_writeback_frontier_and_progress_share_one_canonical_snapshot(
         agent_id=AGENT_ID,
     )
     assert len(reads) == 1
-    assert result["stage_completion"]["acceptance"] == "validated"
-    assert f"todo:{GATED_TODO}" in {
-        r["source_ref"] for r in result["project_progress"]["items"]
-    }
+    # The history contains a later active successor, while this ordinary
+    # post-writeback payload has no exact refresh identity. Canonical Todo
+    # loading still occurs once, but it cannot recover the older milestone.
+    assert result == {}
     assert not state.exists()

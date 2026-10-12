@@ -37,6 +37,7 @@ from .control_plane.quota.monitor_poll import (
     record_quota_monitor_poll_for_decision,
     resolve_due_monitor_candidate,
 )
+from .control_plane.quota.blocked_retry import overlay_active_turn_retries
 from .control_plane.quota.recent_runs import (
     goal_latest_run as _goal_latest_run,
 )
@@ -77,7 +78,7 @@ from .control_plane.quota.policy_constants import (
     FOCUS_WAIT_REASON,
     SELF_REPAIR_SPEND_ACTIONS,
 )
-from .control_plane.runtime.time import parse_timestamp as _parse_timestamp
+from .control_plane.runtime.time import now_utc_iso, parse_timestamp as _parse_timestamp
 from .control_plane.scheduler.execution_context import (
     SchedulerExecutionContextResolution,
 )
@@ -190,11 +191,14 @@ def _int_number(value: Any, *, default: int) -> int:
     if isinstance(value, int):
         return value
     if isinstance(value, float):
-        return int(value)
+        try:
+            return int(value)
+        except (ValueError, OverflowError):
+            return default
     if isinstance(value, str):
         try:
             return int(float(value.strip()))
-        except ValueError:
+        except (ValueError, OverflowError):
             return default
     return default
 
@@ -921,6 +925,7 @@ def build_quota_should_run(
     receipt_bound_terminal_phase: ReceiptBoundTerminalPhase | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
     receipt_bound_replan_guard_scoped: bool = False,
+    receipt_bound_guard_recorded_at: str | None = None,
     turn_instance_id: str | None = None,
     runtime_root: str | Path | None = None,
     workspace_path: Path | None = None,
@@ -948,6 +953,7 @@ def build_quota_should_run(
         receipt_bound_terminal_phase=receipt_bound_terminal_phase,
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
         receipt_bound_replan_guard_scoped=receipt_bound_replan_guard_scoped,
+        receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
         turn_instance_id=turn_instance_id,
         runtime_root=runtime_root,
         workspace_path=workspace_path,
@@ -1208,6 +1214,13 @@ def record_quota_monitor_poll(
                         **current_status,
                         "bounded_research_frontier": dict(frontier),
                     }
+        # Automatic stall writeback must see the same receipt-owned wait as
+        # live selection. Keep the canonical Todo and monitor clocks untouched;
+        # re-evaluate after writeback so an expired/superseded wait is not kept.
+        decision_status = overlay_active_turn_retries(
+            decision_status, goal_id=safe_goal_id, agent_id=agent_id,
+            observed_at=now_utc_iso(),
+        )
         return build_quota_should_run(
             decision_status,
             goal_id=safe_goal_id,
@@ -1229,7 +1242,7 @@ def record_quota_monitor_poll(
         # Discovery/selection is an open-work projection, not the committed
         # Turn's lifecycle authority. Read the exact bound record, including
         # completed history; TS monitor admission owns its interpretation.
-        from .todos import list_goal_todos
+        from .control_plane.todos.list_readback import list_goal_todos
 
         if registry_path is not None:
             bound_records = list_goal_todos(
@@ -1239,8 +1252,7 @@ def record_quota_monitor_poll(
                 todo_id=normalized_receipt_todo_id,
                 role="agent",
             )
-            items = bound_records.get("todos") or []
-            auxiliary_settlement_todo = items[0] if len(items) == 1 else None
+            auxiliary_settlement_todo = bound_records.get("todo")
     effective_todo_id = normalized_observation_todo_id or (
         normalized_receipt_todo_id if not target_key else None
     )

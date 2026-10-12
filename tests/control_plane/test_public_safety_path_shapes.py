@@ -31,7 +31,35 @@ ACCEPTED_TEXT = [
     "id x:y/z",
     "docs/evidence.md",
     "access key rotation guide",
+    "path: is fine without a path",
+    "profile://example.org/report",
 ]
+
+EXPORT_LOCAL_REFERENCES = [
+    "~/evidence.txt",
+    "~" + chr(92) + "evidence.txt",
+    "path:/srv/evidence.txt",
+    "PATH:" + chr(92) + "evidence.txt",
+    "file:///tmp/evidence.txt",
+    "FILE://localhost/share/evidence.txt",
+    "file://server/share/evidence.txt",
+    "file://./evidence.txt",
+    "lookup :/Users/fixture/evidence.txt",
+]
+
+
+@pytest.mark.parametrize("value", EXPORT_LOCAL_REFERENCES)
+@pytest.mark.parametrize("position", ["scalar", "nested_value", "nested_key"])
+def test_public_export_rejects_local_references_at_every_depth(value, position):
+    payload = {
+        "scalar": value,
+        "nested_value": {"items": ({"summary": value},)},
+        "nested_key": {"items": [{value: "safe text"}]},
+    }[position]
+    with pytest.raises(ValueError, match="local path|unsafe field name") as matched:
+        validate_public_safe_value(payload)
+    # Diagnostics name the field, without echoing the private locator.
+    assert value not in str(matched.value)
 
 def _secret(key: str, separator: str, quote: str = "", key_quote: str = "") -> str:
     """Build a credential-shaped probe without a literal secret assignment."""

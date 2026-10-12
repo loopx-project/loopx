@@ -132,6 +132,11 @@ def test_correction_and_late_draft_return_to_original_conversation(
                 timeout_sec=10,
             )
             assert completed["status"] == "completed", completed
+            reply = completed["response"]["message"]
+            assert "**已转交给 `writer`。**" in reply
+            assert reply.startswith("Passing the brief to the existing owner.\n\n")
+            assert reply.count("Passing the brief to the existing owner.") == 1
+            assert "是否已开始处理尚未核实" in reply
             receipt = completed["response"]["context_handoff_receipt"]
             assert receipt["agent_id"] == "writer"
             assert not completed["response"]["proposals"]
@@ -152,6 +157,7 @@ def test_correction_and_late_draft_return_to_original_conversation(
                 if row["request_id"] == receipt["request_id"]
             )
             assert received["message"] == message
+            assert received["brief"]["purpose"] == drafts[index][1]
             assert received["brief"]["constraints"] == drafts[index][2]
             # This is a receiver decision, separate from supplied/delivered.
             acknowledge(

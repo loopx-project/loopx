@@ -6,10 +6,11 @@ DEFAULT_PERMISSION_RULE = "Do not ask for permissions when the current host sess
 OPERATOR_LANGUAGE_RULE = "Language=user; fallback=English; mix only if asked/scoped-bilingual."
 OPERATOR_LANGUAGE_RULE_THIN = "Lang=user; default=en; mix=asked/scoped."
 SCOPE_BOUNDED_WORK_RULE = (
-    "Within authority/budget, deliver verifiable results sized by "
-    "task/evidence/risk, not ops/files/wakes. Calls/writeback aren't "
-    "completion; obey stop/replan."
+    "Read agent_channel.work_context and required_reads (or envelope) before work. "
+    "Size by task/evidence/risk within authority/budget, not ops/files/wakes; "
+    "calls/writeback ≠ completion; obey stop/replan."
 )
+
 USER_TODO_FINAL_MESSAGE_RULE = (
     f"{OPERATOR_LANGUAGE_RULE} "
     "`interaction_contract.user_channel.notify` controls output: "

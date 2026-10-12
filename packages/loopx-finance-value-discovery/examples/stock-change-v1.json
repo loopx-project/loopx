@@ -1,0 +1,62 @@
+{
+  "schema_version": "finance_stock_change_input_v1",
+  "compatibility": null,
+  "later": {
+    "source_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "context": {
+      "instant": "2002-12-31Z"
+    },
+    "point": {
+      "context_source_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "evidence_ref": "synthetic:point:later",
+      "role": "balance_sheet",
+      "instant": "2003-01-01T00:00:00Z"
+    },
+    "statement_basis": {
+      "subject_ref": "synthetic:issuer",
+      "metric_ref": "cash_and_equivalents",
+      "filing_ref": "synthetic:filing",
+      "version_ref": "synthetic:v1",
+      "scope_ref": "synthetic:column:later",
+      "evidence_ref": "synthetic:row:later",
+      "unit": {
+        "currency": "USD",
+        "scale": 6
+      },
+      "value": "123.50"
+    },
+    "aggregation_kind": "stock",
+    "accuracy": {
+      "decimals": "INF"
+    }
+  },
+  "earlier": {
+    "source_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "context": {
+      "instant": "2001-12-31Z"
+    },
+    "point": {
+      "context_source_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "evidence_ref": "synthetic:point:earlier",
+      "role": "balance_sheet",
+      "instant": "2002-01-01T00:00:00Z"
+    },
+    "statement_basis": {
+      "subject_ref": "synthetic:issuer",
+      "metric_ref": "cash_and_equivalents",
+      "filing_ref": "synthetic:filing",
+      "version_ref": "synthetic:v1",
+      "scope_ref": "synthetic:column:earlier",
+      "evidence_ref": "synthetic:row:earlier",
+      "unit": {
+        "currency": "USD",
+        "scale": 6
+      },
+      "value": "100.25"
+    },
+    "aggregation_kind": "stock",
+    "accuracy": {
+      "decimals": "INF"
+    }
+  }
+}

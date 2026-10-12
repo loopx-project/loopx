@@ -13,8 +13,15 @@ import {
 } from "../effect_program.ts";
 import { EffectRuntimeConflictError, EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { stripPythonWhitespace } from "../coordination/todo_agents.ts";
+import {
+  parseExactGoalRef,
+  type ExactGoalRef,
+} from "../goals/goal_instance_identity.ts";
 import { jsonObject, requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
-import { interpretTurnJournal } from "./turn_journal.ts";
+import {
+  interpretTurnJournal,
+  parseTurnJournalGoalBinding,
+} from "./turn_journal.ts";
 
 interface JournalEvidence {
   turn_key: string;
@@ -28,6 +35,16 @@ function decodeIdentity(value: unknown): BoundSettlementIdentity {
   }
   const parsed = settlementIdentityFromPlan({ settlement_plan: { identity } });
   if (parsed.failure !== null) throw new EffectRuntimeRequestError(parsed.failure.reason);
+  return parsed.value;
+}
+
+function decodeGoalRef(value: unknown): ExactGoalRef {
+  const parsed = parseExactGoalRef(value);
+  if (parsed.kind === "invalid") {
+    throw new EffectRuntimeRequestError(
+      `Turn journal query requires an exact GoalRef: ${parsed.issue}`,
+    );
+  }
   return parsed.value;
 }
 
@@ -57,7 +74,10 @@ function observedCapabilities(envelope: JsonObject): string[] {
 }
 
 function evidenceForJournal(
-  value: unknown, turnKey: string, expected: BoundSettlementIdentity,
+  value: unknown,
+  turnKey: string,
+  expected: BoundSettlementIdentity,
+  expectedGoalRef: ExactGoalRef | null,
 ): JournalEvidence | null {
   const journal = jsonObject(value);
   const plan = jsonObject(journal?.plan);
@@ -83,6 +103,18 @@ function evidenceForJournal(
   if (actual.goal_id !== expected.goal_id || actual.agent_id !== expected.agent_id ||
       actual.binding_kind !== expected.binding_kind || actual.binding_id !== expected.binding_id ||
       actual.turn_instance_id !== expected.turn_instance_id || actual.effect_id !== expected.effect_id) return null;
+  const goalBinding = parseTurnJournalGoalBinding(journal);
+  if (goalBinding.kind === "invalid") {
+    journalConflict(`Turn journal GoalRef binding is invalid: ${goalBinding.violation}`);
+  }
+  if (expectedGoalRef !== null) {
+    if (goalBinding.kind === "legacy") return null;
+    if (
+      goalBinding.goal_ref.goal_id !== expectedGoalRef.goalId.value
+      || goalBinding.goal_ref.goal_instance_id !==
+        expectedGoalRef.goalInstanceId.value
+    ) return null;
+  }
   const inspection = interpretTurnJournal({
     schema_version: "loopx_turn_journal_interpretation_request_v0",
     journal, goal_id: expected.goal_id, agent_id: expected.agent_id, turn_key: turnKey,
@@ -98,7 +130,9 @@ function evidenceForJournal(
 }
 
 async function querySettlementJournal(
-  runtimeRootValue: unknown, identity: BoundSettlementIdentity,
+  runtimeRootValue: unknown,
+  identity: BoundSettlementIdentity,
+  goalRef: ExactGoalRef | null,
 ): Promise<JournalEvidence | null> {
   const runtimeRoot = requireNonEmptyString(runtimeRootValue, "runtime_root");
   if (!isAbsolute(runtimeRoot) || runtimeRoot.includes("\0")) {
@@ -135,7 +169,12 @@ async function querySettlementJournal(
     } finally {
       await handle.close();
     }
-    const evidence = evidenceForJournal(value, `sha256:${entry.name.slice(0, -5)}`, identity);
+    const evidence = evidenceForJournal(
+      value,
+      `sha256:${entry.name.slice(0, -5)}`,
+      identity,
+      goalRef,
+    );
     if (evidence === null) continue;
     if (matched !== null) journalConflict("LoopX Turn settlement identity matched multiple journals");
     matched = evidence;
@@ -150,11 +189,24 @@ export async function findTurnJournalBySettlement(params: JsonObject): Promise<{
     todo_id: requireNonEmptyString(params.todo_id, "todo_id"),
     turn_instance_id: requireNonEmptyString(params.turn_instance_id, "turn_instance_id"),
   }));
-  const evidence = await querySettlementJournal(params.runtime_root, identity);
+  const evidence = await querySettlementJournal(params.runtime_root, identity, null);
   return { turn_key: evidence?.turn_key ?? null };
 }
 
 export async function readTurnJournalCapabilities(params: JsonObject): Promise<{ observed_capabilities: string[] | null }> {
-  const evidence = await querySettlementJournal(params.runtime_root, decodeIdentity(params.settlement_identity));
+  const identity = decodeIdentity(params.settlement_identity);
+  const goalRef = Object.hasOwn(params, "goal_ref")
+    ? decodeGoalRef(params.goal_ref)
+    : null;
+  if (goalRef !== null && goalRef.goalId.value !== identity.goal_id) {
+    throw new EffectRuntimeRequestError(
+      "Turn journal query GoalRef conflicts with its settlement identity",
+    );
+  }
+  const evidence = await querySettlementJournal(
+    params.runtime_root,
+    identity,
+    goalRef,
+  );
   return { observed_capabilities: evidence?.observed_capabilities ?? null };
 }

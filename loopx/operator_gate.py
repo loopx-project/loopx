@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .feedback import validate_local_control_text, validate_public_safe_text
-from .history import collect_history, load_registry
+from .history import append_run_index_record, collect_history, load_registry
 from .paths import resolve_runtime_root
 from .registry import registry_goals
 from .runtime import validate_goal_id_path_segment
@@ -401,8 +401,7 @@ def record_operator_gate(
             runs_dir.mkdir(parents=True, exist_ok=True)
             json_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             markdown_path.write_text(render_operator_gate_markdown(payload) + "\n", encoding="utf-8")
-            with index_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(index_record, ensure_ascii=False) + "\n")
+            append_run_index_record(index_path, index_record)
     projection_result = finalize_material_projection(
         registry_path=registry_path,
         source_runtime_root=runtime_root,

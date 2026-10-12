@@ -151,15 +151,17 @@ test("SQLite scan snapshots stay independent across checkpoint boundaries", asyn
   assert.equal(({} as Record<string, unknown>).marker, undefined);
 });
 
-test("SQLite head continuity is independent of retained history", {timeout: 30000}, async t => {
+test("SQLite head materializes bounded proof rows without replaying history", {timeout: 30000}, async t => {
   const {store} = await fixture(t);
   assert.equal((await store.storeIdentity()).status, "available");
   const {DatabaseSync} = createRequire(import.meta.url)("node:sqlite");
   const prepare = DatabaseSync.prototype.prepare;
-  let retainedRowsRead = 0;
-  // Count every retained transaction row the hot path materializes, so the
+  let materializedCommitRows = 0;
+  // Count commit-query result rows the hot path materializes, so the
   // bound is measured on the production entrypoint instead of asserted from
   // an EXPLAIN plan that a later rewrite could satisfy by another route.
+  // COUNT(*) returns one aggregate row regardless of the engine work needed
+  // to produce it. This bounds JS materialization, not SQLite cost or latency.
   DatabaseSync.prototype.prepare = function(this: import("node:sqlite").DatabaseSync, sql: string) {
     const statement = prepare.call(this, sql);
     if (!/FROM commits\b/i.test(sql)) return statement;
@@ -170,7 +172,7 @@ test("SQLite head continuity is independent of retained history", {timeout: 3000
         if (property !== "all" && property !== "get") return value.bind(target);
         return (...args: unknown[]) => {
           const result = value.apply(target, args);
-          retainedRowsRead += Array.isArray(result) ? result.length : result === undefined ? 0 : 1;
+          materializedCommitRows += Array.isArray(result) ? result.length : result === undefined ? 0 : 1;
           return result;
         };
       },
@@ -183,13 +185,13 @@ test("SQLite head continuity is independent of retained history", {timeout: 3000
       assert.equal(result.status, "applied"); if (result.status !== "applied") return;
       revision = result.provider_revision;
     }
-    retainedRowsRead = 0;
+    materializedCommitRows = 0;
     const loaded = await store.loadAuthority();
     assert.equal(loaded.status, "loaded");
     if (loaded.status === "loaded") assert.equal(loaded.cursor, String(AUTHORITY_STATE_CHECKPOINT_INTERVAL * 2));
     // The live head is proven from its own row, its retained transaction and
     // the cursor bounds, so a window replay is not part of a head read.
-    assert.ok(retainedRowsRead <= 3, `head continuity read ${retainedRowsRead} retained rows`);
+    assert.ok(materializedCommitRows <= 3, `head materialized ${materializedCommitRows} commit-query rows`);
   } finally { DatabaseSync.prototype.prepare = prepare; }
   const db = new DatabaseSync(store.path);
   try {
@@ -233,6 +235,17 @@ test("SQLite head continuity is independent of retained history", {timeout: 3000
       assert.equal(audited.commits, AUTHORITY_STATE_CHECKPOINT_INTERVAL * 2);
       assert.equal(audited.checkpoints, 2);
     }
+    // A non-tail hole outside the live proof window still invalidates the
+    // retained lineage. MIN/MAX and an intact head/parent alone cannot prove it.
+    const historical = db.prepare("SELECT * FROM commits WHERE cursor=3").get();
+    db.exec("DELETE FROM commits WHERE cursor=3");
+    const historicalGap = await store.loadAuthority();
+    assert.equal(historicalGap.status, "failed");
+    if (historicalGap.status === "failed") assert.equal(historicalGap.reason_code, "provider_protocol_violation");
+    db.prepare("INSERT INTO commits VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(
+      historical.cursor, historical.operation_id, historical.commit_digest, historical.state_digest,
+      historical.parent_state_digest, historical.delta, historical.events, historical.receipts);
+    assert.equal((await store.loadAuthority()).status, "loaded");
     // A gap inside the live window fails closed on the next read, and the
     // linear audit cannot skip the missing parent either.
     db.exec("DELETE FROM commits WHERE cursor=66");

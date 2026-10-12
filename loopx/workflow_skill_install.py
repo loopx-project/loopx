@@ -178,6 +178,11 @@ def _install_one_skill(source: Path, target: Path) -> str:
                          bundle / "scripts/lexical_retrieval.py")
             return _install_one_skill(bundle, target)
     ignored = (SKILL_VERSION_MARKER_FILENAME,)
+    stale_backups = sorted(target.parent.glob(f".{target.name}.previous.*"))
+    if stale_backups:
+        raise RuntimeError(
+            f"workflow skill backup requires inspection: {stale_backups[0]}"
+        )
     if target.is_dir() and hash_skill_tree(
         source, ignored_relative_paths=ignored
     ) == hash_skill_tree(target, ignored_relative_paths=ignored):
@@ -192,7 +197,9 @@ def _install_one_skill(source: Path, target: Path) -> str:
         if target.exists():
             backup = target.with_name(f".{target.name}.previous.{os.getpid()}")
             if backup.exists():
-                shutil.rmtree(backup)
+                raise RuntimeError(
+                    f"workflow skill backup requires inspection: {backup}"
+                )
             target.replace(backup)
         temporary.replace(target)
     except BaseException:
@@ -202,8 +209,8 @@ def _install_one_skill(source: Path, target: Path) -> str:
     finally:
         if temporary.exists():
             shutil.rmtree(temporary)
-        if backup and backup.exists():
-            shutil.rmtree(backup)
+    if backup and backup.exists():
+        shutil.rmtree(backup)
     return "updated" if backup else "created"
 
 

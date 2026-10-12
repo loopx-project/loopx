@@ -11,6 +11,7 @@ import pytest
 from loopx.cli_commands.quota_failure_report import quota_failure_payload
 from loopx.cli import build_parser, main
 from loopx.control_plane import effect_runtime
+from loopx.control_plane.runtime.node_probe import NodeProbe, NodeProbeOutcome
 
 
 def _locator(tmp_path: Path, monkeypatch) -> tuple[Path, dict[str, object]]:
@@ -212,7 +213,7 @@ def test_real_locator_denial_never_launches_or_dispatches_and_recovers(
     with pytest.raises(effect_runtime.EffectRuntimeHostPermissionError) as raised:
         effect_runtime.effect_runtime_request("runtime.ping", {}, retry_safe=retry_safe)
     assert raised.value.__cause__ is denial
-    assert len(reads) == 1
+    assert len(reads) == effect_runtime.RUNTIME_LOCATOR_PERMISSION_RETRIES + 1
     reads.clear()
     assert main(["--format", "json", "--registry", str(registry), "--runtime-root",
                  str(tmp_path), "quota", "status", "--goal-id", identity["goal_id"],
@@ -221,7 +222,8 @@ def test_real_locator_denial_never_launches_or_dispatches_and_recovers(
     assert payload["error_code"] == "quota_runtime_permission_denied"
     assert "host-approved" in payload["health_items"][0]["recommended_action"]
     assert "private locator details" not in json.dumps(payload)
-    assert len(reads) == 1 and not launches and not dispatches
+    assert len(reads) == effect_runtime.RUNTIME_LOCATOR_PERMISSION_RETRIES + 1
+    assert not launches and not dispatches
     assert registry.read_text() == "{}" and not locator.exists()
     denied = False
     try:
@@ -239,7 +241,7 @@ def test_readiness_preserves_locator_permission_diagnostic_and_recovery(
     tmp_path: Path, monkeypatch, deep: bool,
 ) -> None:
     monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path)
-    monkeypatch.setattr(effect_runtime, "_probe_node", lambda: ("ready", "node", "24.0.0"))
+    monkeypatch.setattr(effect_runtime, "_probe_node", lambda **_: NodeProbe(NodeProbeOutcome.READY, "node", "24.0.0"))
     locator = effect_runtime._runtime_info_path(effect_runtime._runtime_fingerprint())
     original = Path.read_text
 
@@ -338,7 +340,7 @@ def test_deep_readiness_connection_denial_keeps_host_recovery(
     tmp_path: Path, monkeypatch,
 ) -> None:
     _locator(tmp_path, monkeypatch)
-    monkeypatch.setattr(effect_runtime, "_probe_node", lambda: ("ready", "node", "24.0.0"))
+    monkeypatch.setattr(effect_runtime, "_probe_node", lambda **_: NodeProbe(NodeProbeOutcome.READY, "node", "24.0.0"))
 
     def denied(*_args, **_kwargs):
         raise PermissionError(errno.EPERM, "private connection details")

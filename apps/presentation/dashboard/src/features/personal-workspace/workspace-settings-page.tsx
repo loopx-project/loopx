@@ -6,6 +6,7 @@ import { useWorkspaceI18n } from "./i18n";
 import { LarkSettingsPage } from "./lark-settings-page";
 import { GoalCapabilitySettings } from "./goal-capability-settings";
 import { GoalOwnershipSettings } from "./goal-ownership-settings";
+import { GoalStorageSettings } from "./goal-storage-settings";
 import { AutomationCadenceSettings } from "./automation-cadence-settings";
 import { MachineConfigurationSettings } from "./machine-configuration-settings";
 import { ConfigurationBackupSettings } from "./configuration-backup-settings";
@@ -56,6 +57,7 @@ export function WorkspaceSettingsPage({
   const [tab, setTab] = useState<SettingsPage>(initialTab === "machine" ? "capabilities" : initialTab);
   const [capabilityScope, setCapabilityScope] = useState<"machine" | "goal">(initialTab === "capabilities" ? "goal" : "machine");
   const [capabilityGoalId, setCapabilityGoalId] = useState(initialGoalId ?? "");
+  const [ownershipRefresh, setOwnershipRefresh] = useState(0);
   const tabsRef = useRef<HTMLElement>(null);
   useEffect(() => {
     const navigation = tabsRef.current;
@@ -221,7 +223,13 @@ export function WorkspaceSettingsPage({
             onChanged={onChanged}
           />
         ) : null}
-        {tab === "ownership" && selectedGoal ? <GoalOwnershipSettings key={selectedGoal.goalId} goalId={selectedGoal.goalId} onChanged={onChanged} /> : null}
+        {tab === "ownership" && selectedGoal ? <div key={selectedGoal.goalId}>
+              <GoalOwnershipSettings goalId={selectedGoal.goalId} onChanged={onChanged} refreshKey={ownershipRefresh} />
+              <GoalStorageSettings goalId={selectedGoal.goalId} onChanged={() => {
+                setOwnershipRefresh(value => value + 1);
+                onChanged();
+              }} />
+        </div> : null}
         {tab === "capabilities" && (capabilityScope === "machine" || capabilityGoalId) ? <ConfigurationBackupSettings key={`${capabilityScope}:${capabilityGoalId}`} goalId={capabilityScope === "goal" ? capabilityGoalId : null} /> : null}
         {tab === "cadence" && selectedGoal ? <AutomationCadenceSettings key={selectedGoal.goalId} goal={selectedGoal} /> : null}
 

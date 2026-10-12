@@ -217,6 +217,9 @@ test("prepare merges a patch and requires an explicit durable replan", () => {
 });
 
 test("prepare rejects identity drift, private text, and typed budget overflow", () => {
+  assert.throws(() => buildVisionCheckpoint(prepareRequest({
+    agent_vision_packet: {vision_summary: "Read /ext" + "_data" + "/artifact.txt"},
+  })), /contains a private-looking value/);
   assert.throws(
     () => buildVisionCheckpoint(prepareRequest({
       agent_vision_packet: {

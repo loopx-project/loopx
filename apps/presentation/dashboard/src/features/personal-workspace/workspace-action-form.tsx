@@ -1,7 +1,7 @@
 import { goalCreateContent, goalCreateRequest } from "./goal-create-request";
 import { useEffect, useId, useRef, useState } from "react";
 import { useWorkspaceI18n } from "./i18n";
-import type { WorkspaceActionPreviewRequest } from "./personal-workspace-model";
+import type { WorkspaceActionPreviewRequest, WorkspaceGoal } from "./personal-workspace-model";
 
 // Action identity comes from an explicit control, never from the text being edited.
 export type WorkspaceActionDraft = {
@@ -22,8 +22,9 @@ function boundedLength(value: string) {
   return Array.from(value.split(/\s+/u).filter(Boolean).join(" ")).length;
 }
 
-export function WorkspaceActionForm({ draft, onClose, onPreview }: {
+export function WorkspaceActionForm({ draft, workspaceGoals = [], onClose, onPreview }: {
   draft: WorkspaceActionDraft;
+  workspaceGoals?: WorkspaceGoal[];
   onClose: () => void;
   onPreview: (request: WorkspaceActionPreviewRequest) => Promise<unknown>;
 }) {
@@ -37,6 +38,7 @@ export function WorkspaceActionForm({ draft, onClose, onPreview }: {
   const [objective, setObjective] = useState(draft.text ?? "");
   const [completion, setCompletion] = useState(draft.completionCriteria ?? "");
   const [boundary, setBoundary] = useState(draft.executionBoundary ?? "");
+  const [workspaceRef, setWorkspaceRef] = useState("current");
   const [permission, setPermission] = useState<string>(draft.permission ?? "workspace_write_on_confirmation");
   const [interval, setInterval] = useState(draft.kind === "heartbeat" ? "1" : "2");
   const [unit, setUnit] = useState(draft.kind === "heartbeat" ? "d" : "h");
@@ -65,7 +67,7 @@ export function WorkspaceActionForm({ draft, onClose, onPreview }: {
     setError("");
     try {
       if (draft.kind === "goal") {
-        await onPreview(goalCreateRequest({ objective, completion, boundary, permission,
+        await onPreview(goalCreateRequest({ objective, completion, boundary, permission, workspaceRef,
           agentId: draft.agentId, contextGoalId: draft.goalId }, t));
         onClose();
         return;
@@ -103,6 +105,11 @@ export function WorkspaceActionForm({ draft, onClose, onPreview }: {
           {draft.kind === "goal" ? <>
             <label>{zh ? "完成标准" : "Completion criteria"}<textarea aria-label={zh ? "完成标准" : "Completion criteria"} required value={completion} onChange={(event) => setCompletion(event.target.value)} /></label>
             <label>{zh ? "执行边界（可选）" : "Execution boundary (optional)"}<textarea aria-label={zh ? "执行边界（可选）" : "Execution boundary (optional)"} value={boundary} onChange={(event) => setBoundary(event.target.value)} /></label>
+            <label>{zh ? "工作目录" : "Working directory"}<select aria-label={zh ? "工作目录" : "Working directory"} value={workspaceRef} onChange={(event) => setWorkspaceRef(event.target.value)}>
+              <option value="current">{zh ? "默认工作区（确认前检查）" : "Default workspace (check before confirming)"}</option>
+              {workspaceGoals.map((goal) => <option key={goal.goalId} value={goal.goalId}>{goal.title} · {goal.repository?.label ?? goal.goalId}</option>)}
+            </select></label>
+            <p>{zh ? "可沿用已有 Goal 的工作目录。未连接的目录需要先完成项目连接；选择目录不会增加执行权限。" : "Reuse an existing Goal’s working directory. Unconnected directories need project setup first; selecting a directory does not expand execution permissions."}</p>
             <label>{zh ? "执行权限" : "Execution permission"}<select aria-label={zh ? "执行权限" : "Execution permission"} value={permission} onChange={(event) => setPermission(event.target.value)}><option value="read_only">{zh ? "只读" : "Read only"}</option><option value="workspace_write_on_confirmation">{zh ? "确认后允许修改工作区" : "Allow workspace changes after confirmation"}</option></select></label>
           </> : null}
         </>}

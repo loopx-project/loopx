@@ -313,7 +313,11 @@ test("PostgreSQL identity rotation reports a lost COMMIT response as ambiguous",
     connect: async () => {
       const connection: PostgreSqlAuthorityConnection = {
         query: async text => {
-          if (text === "BEGIN" || text.includes("UPDATE loopx_control_plane.authority_store_metadata")) {
+          if (
+            text === "BEGIN" ||
+            text.includes("pg_advisory_xact_lock") ||
+            text.includes("UPDATE loopx_control_plane.authority_store_metadata")
+          ) {
             return {rows: [], rowCount: 1};
           }
           if (text.includes("authority_store_metadata")) {

@@ -23,11 +23,6 @@ from .work_lane import (
 )
 
 
-DEPENDENCY_OBSERVATION_CLASSIFICATION_HINTS = (
-    "dependency_observed",
-    "dependency_observation",
-    "dependency_monitor",
-)
 DEFAULT_MONITOR_DUE_ITEM_LIMIT = 1
 
 
@@ -35,9 +30,6 @@ def latest_run_progress_scope(run: dict[str, Any]) -> str:
     explicit = str(run.get("progress_scope") or "").strip()
     if explicit:
         return explicit
-    classification = str(run.get("classification") or "").strip().lower()
-    if any(hint in classification for hint in DEPENDENCY_OBSERVATION_CLASSIFICATION_HINTS):
-        return "dependency_observation"
     return "primary_goal"
 
 
@@ -54,7 +46,6 @@ def item_progress_scope(item: dict[str, Any]) -> str:
         return latest_run_progress_scope(latest_handoff_run)
     return latest_run_progress_scope(
         {
-            "classification": item.get("status") or item.get("latest_run_classification"),
             "progress_scope": item.get("latest_run_progress_scope"),
         }
     )

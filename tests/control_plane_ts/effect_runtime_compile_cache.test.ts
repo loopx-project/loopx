@@ -116,14 +116,25 @@ test("non-private parents and absent absolute info paths do not create a cache",
   assert.ok(!readdirSync(root).includes("compile-cache"));
 });
 
-test("a cache symlink is not followed or permission-repaired", {
-  skip: process.platform === "win32" ? "Windows symlink creation needs host privileges" : false,
-}, t => {
-  const { root, cache, run } = fixture(t);
-  const target = join(root, "untouched");
-  mkdirSync(target, { mode: 0o755 });
-  symlinkSync(target, cache, "dir");
-  assert.deepEqual(run(), { value: 1, enabled: false });
-  assert.deepEqual(readdirSync(target), []);
-  assert.equal(lstatSync(target).mode & 0o777, 0o755);
-});
+for (const targetMode of [0o755, 0o700, undefined]) {
+  test(`a cache symlink to ${targetMode === undefined ? "an absent target" : targetMode.toString(8)} is not followed or permission-repaired`, {
+    skip: process.platform === "win32" ? "Windows symlink creation needs host privileges" : false,
+  }, t => {
+    const { root, cache, run } = fixture(t);
+    const target = join(root, "untouched");
+    if (targetMode !== undefined) {
+      mkdirSync(target, { mode: targetMode });
+      chmodSync(target, targetMode);
+      assert.equal(lstatSync(target).mode & 0o777, targetMode);
+    }
+    symlinkSync(target, cache, "dir");
+    assert.deepEqual(run(), { value: 1, enabled: false });
+    assert.ok(lstatSync(cache).isSymbolicLink());
+    if (targetMode === undefined) {
+      assert.throws(() => lstatSync(target), { code: "ENOENT" });
+    } else {
+      assert.deepEqual(readdirSync(target), []);
+      assert.equal(lstatSync(target).mode & 0o777, targetMode);
+    }
+  });
+}

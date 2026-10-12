@@ -146,6 +146,67 @@ def test_semantic_instruction_is_arm_scoped() -> None:
     assert "copy packet.scheduler exactly" not in full_instruction
 
 
+@pytest.mark.parametrize("fulfilled", [False, True])
+def test_generated_hook_reads_reach_both_actor_arms_without_legacy_fallback(tmp_path, fulfilled):
+    from loopx.control_plane.capability_hooks import TurnStartHookRegistration, dispatch_turn_start_hooks
+    from loopx.control_plane.quota.live_decision import build_live_quota_should_run_decision
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+    from loopx.control_plane.testing.canary_harness import write_fixture_registry
+    from loopx.control_plane.testing.model_behavior_qualification import model_behavior_semantic_contract_from_packet
+    from loopx.control_plane.testing.quota_fixtures import quota_status_payload
+    from tests.control_plane.test_turn_start_capability_hooks import _result
+
+    registry, runtime, state = tmp_path / "registry.json", tmp_path / "runtime", tmp_path / "state.md"
+    state.write_text("# Goal\n## Objective\nPreserve the complete work contract.\n## Agent Todo\n")
+    write_fixture_registry(project=tmp_path, runtime_root=runtime, registry_path=registry,
+        goal_id="fixture-goal", domain="software", adapter_kind="generic_project_goal_v0",
+        state_file=str(state), registered_agents=["agent-a"], quota_allowed_slots=None)
+    hooks = []
+    expected = []
+    for index in range(8):
+        hook_id = f"fixture.context{index}"
+        read = {"kind": "fixture_context", "command": f"loopx context read --item {index}",
+            "reason": "Read the full evidence. " * 8 + f"Tail {index}", "ordering": "before_work"}
+        hooks.append(TurnStartHookRegistration(hook_id=hook_id, capability_id="operator-inbox",
+            requested_read_scope=("provider_history",), requested_write_scope=(),
+            producer=lambda h=hook_id: _result(hook_id=h, external_reads_performed=False,
+                local_private_state_mutated=False), required_read=read,
+            context_reader=(lambda: {"ok": True, "text": "Full source."}) if fulfilled else None))
+        expected.append({**read, "source": "turn_start_capability_hook", "hook_id": hook_id,
+            "capability_id": "operator-inbox"})
+    dispatch = dispatch_turn_start_hooks(hooks)
+    assert not dispatch["failures"]
+    status = quota_status_payload(goal_id="fixture-goal", status="active",
+        recommended_action="Continue authorized work", coordination={"registered_agents": ["agent-a"]},
+        # Keep selected-Todo admission reads out of this hook-only contract test.
+        agent_todo_items=[])
+    full = build_live_quota_should_run_decision(status, goal_id="fixture-goal", agent_id="agent-a",
+        available_capabilities=["shell"], include_scheduler_detail=False, codex_app_current_rrule=None,
+        registry_path=registry, runtime_root=runtime, turn_start_hook_dispatch=dispatch)
+    # Public synthetic fixture routes only; neither arm invokes a live model.
+    full = json.loads(json.dumps(full).replace(str(tmp_path), "fixture"))
+    # Stale carriers must not override the authoritative list, including [].
+    full["interaction_contract"]["required_reads"] = [{"command": "obsolete root read"}]
+    full["required_reads"] = [{"command": "obsolete payload read"}]
+    expected = [] if fulfilled else expected
+    assert full["interaction_contract"]["agent_channel"]["required_reads"] == expected
+    for arm, packet in [("full_packet", full), ("candidate_packet", build_turn_envelope(full))]:
+        request = build_model_behavior_actor_request(packet, qualification_id=f"reads-{arm}", arm=arm,
+            semantic_contract_required=True, semantic_contract_fields=("required_reads",))
+        provider = _provider_input(request)
+        delivered = provider["packet"]
+        reads = (delivered["interaction_contract"]["agent_channel"]["required_reads"]
+            if arm == "full_packet" else delivered["required_reads"])
+        assert reads == expected
+        assert model_behavior_semantic_contract_from_packet(packet, arm=arm)["required_reads"] == expected
+        instruction = " ".join(_decision_instruction(arm=arm, semantic_contract_required=True,
+            semantic_contract_fields=("required_reads",)).split())
+        if arm == "full_packet":
+            assert "interaction_contract.agent_channel.required_reads, including an empty list" in instruction
+            assert "ordering, hook_id, capability_id and explicit prompt_budget_bytes exactly" in instruction
+            assert "never cap the list at five" in instruction
+
+
 def test_planning_horizon_instruction_excludes_unrelated_semantic_fields() -> None:
     instruction = " ".join(
         _decision_instruction(

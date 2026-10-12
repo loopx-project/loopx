@@ -67,9 +67,31 @@ def test_existing_symlink_is_not_followed(tmp_path):
     assert not (tmp_path / 'absent').exists()
 
 
-def test_real_guard_saved_before_envelope_and_read_without_reexecution(tmp_path):
-    project, runtime, registry = _write_fixture(tmp_path)
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+def test_real_guard_saved_before_envelope_and_read_without_reexecution(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from tests.control_plane.canonical_authority_fixture import (
+        initialize_canonical_authority, isolate_sqlite_runtime,
+    )
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    # A valid long route exceeds the executable inline argv limit. Its original
+    # signed scheduler command must remain resolvable without another guard.
+    root = tmp_path.joinpath(*(['long-route-' + 'x' * 170] * 3))
+    project, runtime, registry = _write_fixture(root)
+    # Keep SQLite's database filename within its provider limit; only the
+    # registry transport route needs to exercise the inline argv boundary.
+    runtime = tmp_path / 'runtime'
+    configured = json.loads(registry.read_text())
+    configured['common_runtime_root'] = str(runtime)
+    registry.write_text(json.dumps(configured))
     _configure_read_only_todo(project)
+    state = project / f'.codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md'
+    code, listed = _run_cli(registry, runtime, 'todo', 'list', '--goal-id', GOAL_ID)
+    assert code == 0, listed
+    projection = build_todo_runtime_shadow_projection(
+        goal_id=GOAL_ID, handoff_mode='soft_claim', todos=listed['todos'],
+    )
+    initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
     capture = tmp_path / "guard ' $(touch INJECTED) `touch INJECTED`"
     args = ['quota', 'should-run', '--goal-id', GOAL_ID, '--agent-id', AGENT_ID,
             '--todo-id', TODO_ID, '--turn-instance-id', TURN_ID, '--codex-app',
@@ -80,6 +102,11 @@ def test_real_guard_saved_before_envelope_and_read_without_reexecution(tmp_path)
     assert envelope['schema_version'] == 'loopx_turn_envelope_v0'
     saved = capture / 'decision.json'
     full = json.loads(saved.read_text())
+    app = envelope['scheduler']['app_automation']
+    assert 'ack_cli_args' not in app
+    ref = app['ack_cli_args_detail_ref']
+    assert ref['detail_ref'] == 'full_decision.scheduler_hint.app_automation.ack_hint.cli_args'
+    assert 'request' not in ref
     assert shlex.split(envelope['detail_ref']['full_decision']) == ['cat', '--', str(saved)]
     assert full['ok'] is True
     identity = full['interaction_contract']['cli_channel']['settlement_plan']['identity']
@@ -102,6 +129,12 @@ def test_real_guard_saved_before_envelope_and_read_without_reexecution(tmp_path)
         readback = subprocess.run(envelope['detail_ref']['full_decision'], shell=True,
                                   cwd=tmp_path, capture_output=True, text=True, check=True)
         assert json.loads(readback.stdout) == full
+        value = json.loads(readback.stdout)
+        for key in ref['detail_ref'].split('.')[1:]:
+            value = value[key]
+        assert value == full['scheduler_hint']['app_automation']['ack_hint']['cli_args']
+        assert value[value.index('--registry') + 1] == str(registry)
+        assert value[value.index('--turn-instance-id') + 1] == TURN_ID
     else:
         assert json.loads(saved.read_text()) == full
     assert not (tmp_path / 'INJECTED').exists()

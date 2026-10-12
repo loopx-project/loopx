@@ -91,6 +91,37 @@ def test_read_info_distinguishes_directory_from_unreadable_runtime_metadata(
             effect_runtime._read_info(info_path, fingerprint="fixture")
 
 
+def test_read_info_retries_transient_runtime_locator_permission_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    info_path = tmp_path / "runtime-info"
+    payload = {
+        "schema_version": effect_runtime.EFFECT_RUNTIME_INFO_SCHEMA_VERSION,
+        "fingerprint": "fixture",
+        "host": "127.0.0.1",
+        "port": 1234,
+        "token": "runtime-token",
+        "pid": os.getpid(),
+    }
+    info_path.write_text(json.dumps(payload), encoding="utf-8")
+    original_read_text = Path.read_text
+    attempts = 0
+
+    def deny_once(path: Path, *args, **kwargs):
+        nonlocal attempts
+        if path == info_path:
+            attempts += 1
+            if attempts == 1:
+                raise PermissionError("synthetic transient locator read denial")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", deny_once)
+
+    assert effect_runtime._read_info(info_path, fingerprint="fixture") == payload
+    assert attempts == 2
+
+
 def _raw_runtime_response(
     info: dict[str, object],
     payload: bytes,
@@ -1037,6 +1068,49 @@ def test_locator_publication_failure_surfaces_safe_typed_startup_diagnostic(
     else:
         assert not info_path.exists(), "a failed publisher must not claim readiness"
         assert json.loads(lock_path.read_text()) == lock_owner
+
+
+def test_runtime_ping_survives_denied_post_publication_chmod(
+    tmp_path: Path,
+    monkeypatch,
+    request: pytest.FixtureRequest,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
+    monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "60000")
+    denied = tmp_path / "post-publication-chmod-denied"
+    preload = tmp_path / "deny-locator-chmod.mjs"
+    preload.write_text("""import fs from 'node:fs';
+import {sep} from 'node:path';
+import {syncBuiltinESMExports} from 'node:module';
+const original = fs.promises.chmod;
+fs.promises.chmod = async function(path, mode) {
+  if (String(path).startsWith(process.env.LOOPX_TEST_RUNTIME_DIR + sep) &&
+      String(path).endsWith('.json')) {
+    fs.writeFileSync(process.env.LOOPX_TEST_CHMOD_DENIED, 'denied');
+    const error = new Error('synthetic denied post-publication chmod');
+    error.code = 'EACCES';
+    throw error;
+  }
+  return original.call(this, path, mode);
+};
+syncBuiltinESMExports();
+""", encoding="utf-8")
+    monkeypatch.setenv("NODE_OPTIONS", f"--import={preload.as_uri()}")
+    monkeypatch.setenv("LOOPX_TEST_RUNTIME_DIR", str(runtime_dir))
+    monkeypatch.setenv("LOOPX_TEST_CHMOD_DENIED", str(denied))
+    request.addfinalizer(effect_runtime.restart_effect_runtime)
+
+    result = effect_runtime.effect_runtime_result(
+        "runtime.ping", {}, retry_safe=False,
+    )
+
+    info_path = effect_runtime._runtime_info_path(effect_runtime._runtime_fingerprint())
+    assert result["pid"] > 0
+    assert json.loads(info_path.read_text(encoding="utf-8"))["pid"] == result["pid"]
+    assert not denied.exists(), "the publisher should not chmod an already private locator"
+    if os.name == "posix":
+        assert info_path.stat().st_mode & 0o777 == 0o600
 
 
 def test_early_runtime_exit_surfaces_stable_startup_diagnostic(

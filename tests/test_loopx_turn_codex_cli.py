@@ -13,6 +13,7 @@ import pytest
 
 from loopx.control_plane.goals.first_party_host_admission import (
     FirstPartyHostGoalAdmission,
+    FirstPartyHostRuntimeRejected,
 )
 from loopx.control_plane.projects.registry_codec import (
     source_session_registry_transaction,
@@ -730,6 +731,51 @@ def test_agent_binding_still_requires_exact_goal_lifetime(tmp_path, monkeypatch)
         run_codex_cli_host(request, runtime_root=tmp_path / "runtime", project=tmp_path,
                            codex_bin=str(executable), goal_admission=admission)
     assert len(log.read_text().splitlines()) == 1
+
+
+def test_stopped_source_goal_rejects_resume_before_provider_launch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executable, log = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    admission = _source_admission(tmp_path)
+    request = _request()
+    request["goal_ref"] = SOURCE_GOAL_REF
+    request["session"]["context_policy"] = {
+        "mode": "resume",
+        "binding_scope": "agent",
+    }
+    options = {
+        "runtime_root": tmp_path / "runtime",
+        "project": tmp_path,
+        "codex_bin": str(executable),
+        "goal_admission": admission,
+    }
+    run_codex_cli_host(request, **options)
+    binding = next((tmp_path / "runtime").glob("goals/*/turn-sessions/*.json"))
+    original_binding = binding.read_bytes()
+
+    with source_session_registry_transaction(
+        admission.registry_path,
+        operation="fixture_stop_goal",
+    ) as transaction:
+        registry = transaction.payload_copy()
+        registry["goals"][0]["activation"] = {
+            "schema_version": "loopx_goal_activation_v1",
+            "state": "stopped",
+            "updated_at": "2026-10-10T12:00:00Z",
+            "reason": "Owner paused the Goal",
+        }
+        transaction.commit(registry)
+
+    request["session"]["action"] = "resume"
+    with pytest.raises(FirstPartyHostRuntimeRejected) as error:
+        run_codex_cli_host(request, **options)
+
+    assert error.value.code == "goal_stopped"
+    assert len(log.read_text().splitlines()) == 1
+    assert binding.read_bytes() == original_binding
 
 
 def test_codex_source_session_descriptor_persists_exact_goal_ref(

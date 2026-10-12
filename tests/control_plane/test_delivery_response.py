@@ -93,7 +93,6 @@ def test_status_compaction_preserves_binding_and_all_consumers_defer_to_current_
 @pytest.mark.parametrize("resume, patch", [
     ("monitor_changed:todo_dependency", {"baseline_generation": 1}),
     ("capacity_available:network", {"capability": "other"}),
-    ("pr_merged:#1", {"pr_number": 2}),
     # The scheduled instant is one day ahead of the injected evaluation clock,
     # so the condition stays unsatisfied no matter when CI runs.
     (f"resume_at:{RESUME_AT}", {"clock_provider": "other"}),
@@ -114,6 +113,30 @@ def test_real_resume_projection_identity_survives_python_transport(resume, patch
                 row["resume_condition"] = condition
     assert project_delivery_response(blocked_run(), summary)["reason"] == "canonical_todo_wait"
     condition.update(patch)
+    assert project_delivery_response(blocked_run(), summary)["reason"] == "history_supervision"
+
+
+@pytest.mark.parametrize("resume", ["pr_merged:#1", "pr_merged:example/project#1"])
+def test_unobserved_pr_binding_cannot_prove_a_pending_delivery_wait(resume):
+    todo = {**waiting_todo(), "resume_when": resume,
+            "task_repository": "git:github.com/example/project"}
+    condition = evaluate_todo_resume_conditions(
+        [todo], source_items=[], available_capabilities=[],
+        evaluated_at=EVALUATED_AT,
+    )[todo["todo_id"]]
+    assert condition["pr_repo"] == "example/project"
+    assert condition["pr_number"] == 1
+    assert condition["satisfied"] is False
+    summary = quota_todo_summary([todo], claim_scope_agent_id="agent-a",
+                                evaluated_at=EVALUATED_AT)
+    for key in TODO_PLANNING_SOURCE_KEYS:
+        for row in summary.get(key, []):
+            if row["todo_id"] == todo["todo_id"]:
+                row["resume_condition"] = condition
+    # Repo/number identify what to observe. Missing merge evidence does not
+    # establish that the PR is pending or relax stalled-delivery supervision.
+    assert project_delivery_response(blocked_run(), summary)["reason"] == "history_supervision"
+    condition.update({"pr_repo": "example/other", "pr_number": 2})
     assert project_delivery_response(blocked_run(), summary)["reason"] == "history_supervision"
 
 

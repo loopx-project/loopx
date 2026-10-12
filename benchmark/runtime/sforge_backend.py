@@ -15,10 +15,14 @@ from .harbor import _CODEX_HOME, _CONTROL, _LOOPX_RUNTIME
 
 class RecordingDockerBackend(DockerBackend):
     def __init__(self, *, log_dir: Path, logger, oauth_proxy: bool = False,
-                 blind_api_endpoint: tuple[str, int] | None = None, client=None):
+                 blind_api_endpoint: tuple[str, int] | None = None, feedback=None, client=None):
         super().__init__(client)
         self.log_dir, self.logger = log_dir, logger
         self.blind_api_endpoint = blind_api_endpoint
+        self.feedback = feedback
+        self.execution_command = None
+        self.execution_start_marker = None
+        self.execution_receipt = None
         self.auth_ips = [] if oauth_proxy else resolve_hostname("auth.openai.com", logger)
         if not oauth_proxy and not self.auth_ips:
             raise RuntimeError("Cannot resolve Codex OAuth endpoint")
@@ -28,6 +32,8 @@ class RecordingDockerBackend(DockerBackend):
         if self.auth_ips:
             hosts["auth.openai.com"] = self.auth_ips[0]
         kwargs["extra_hosts"] = hosts
+        if self.feedback is not None:
+            self.feedback.bind(kwargs.get("environment"))
         kwargs["environment"] = self._agent_environment(kwargs.get("environment"))
         return super().create_container(image, name, **kwargs)
 
@@ -39,7 +45,27 @@ class RecordingDockerBackend(DockerBackend):
 
     def exec_run_with_timeout(self, handle, cmd, timeout=60, **kwargs):
         kwargs["environment"] = self._agent_environment(kwargs.get("environment"))
-        return super().exec_run_with_timeout(handle, cmd, timeout, **kwargs)
+        is_solver = cmd == ["/bin/bash", "-c", getattr(self, "execution_command", None)]
+        try:
+            result = super().exec_run_with_timeout(handle, cmd, timeout, **kwargs)
+            if is_solver:
+                # SForge's RunResult discards the process exit code. Preserve
+                # structured transport evidence without inspecting output text.
+                marker = getattr(self, "execution_start_marker", None)
+                execution_started = marker is None or super().exec_run(
+                    handle, ["test", "-f", marker], user="root").exit_code == 0
+                self.execution_receipt = dict(exit_code=result.exit_code,
+                    execution_started=execution_started,
+                    timed_out=result.timed_out, elapsed_seconds=result.elapsed_seconds)
+                target = self.log_dir.parent / "execution-receipt.json"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                pending = target.with_suffix(".tmp")
+                pending.write_text(json.dumps(self.execution_receipt))
+                pending.replace(target)
+            return result
+        finally:
+            if is_solver and self.feedback is not None:
+                self.feedback.pause()
 
     def create_network_isolation(self, handle, allowed_endpoints, logger):
         # ChatGPT login may refresh during an 18h run. Preserve the native
@@ -60,7 +86,14 @@ class RecordingDockerBackend(DockerBackend):
         ]]
         return super().create_network_isolation(handle, endpoints, logger)
 
+    def start_feedback(self, handle):
+        if self.feedback is None:
+            raise RuntimeError("Best-only publisher is unavailable")
+        self.feedback.start(self, handle)
+
     def cleanup_container(self, handle, logger=None):
+        if self.feedback is not None:
+            self.feedback.close()
         if handle is not None:
             self.log_dir.mkdir(parents=True, exist_ok=True)
             observations = []
@@ -83,3 +116,11 @@ class RecordingDockerBackend(DockerBackend):
                                          "error_kind": type(error).__name__})
             (self.log_dir / "artifact-collection.json").write_text(json.dumps(observations))
         super().cleanup_container(handle, logger)
+        if self.feedback is not None:
+            # Native cleanup logs some failures instead of raising. Verify the
+            # solver is absent before returning its capacity to another trial.
+            name = handle.name if handle is not None else (
+                f"sforge.run.{self.feedback.task_id}.{self.feedback.run_id}")
+            if self.container_exists(name):
+                raise RuntimeError("Worker remains present; online capacity was not released")
+            self.feedback.release_registration()

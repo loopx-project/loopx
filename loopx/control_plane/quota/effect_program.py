@@ -212,6 +212,7 @@ def build_turn_scoped_cli_settlement_plan(
             precondition=row["precondition"], idempotency_key_ref=row["idempotency_key_ref"],
             expected_receipt=row["expected_receipt"], command_template=row.get("command_template"),
             conditional=row.get("conditional", False), command_condition=row.get("command_condition"),
+            vision_authoring=row.get("vision_authoring"),
         ) for row in payload["ordered_steps"]
     ), _runtime_payload=payload)
 

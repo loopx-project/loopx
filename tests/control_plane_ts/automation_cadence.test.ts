@@ -1,10 +1,76 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 import test from "node:test";
 import {mkdtemp, mkdir, rm, readFile, writeFile, readdir} from "node:fs/promises";
+import {syncBuiltinESMExports} from "node:module";
 import {tmpdir} from "node:os";
 import {dirname, join} from "node:path";
 import {execFileSync} from "node:child_process";
-import {admitAutomationStart as admit, cadenceStorePath, confirmAutomationStart as confirm, manageAutomationCadence as manage, projectCadenceProgression as progression} from "../../loopx/control_plane/quota/automation_cadence.ts";
+import {admitAutomationStart as admit, cadenceStorePath, confirmAutomationStart as confirm, manageAutomationCadence as manage, projectCadenceProgression as progression, requireAutomationCadenceEligibility} from "../../loopx/control_plane/quota/automation_cadence.ts";
+
+test("owner projects lane-safe eligibility without changing legacy aliases", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cadence-readback-"));
+  const originalNow = Date.now;
+  const scope = {runtime_root: root, goal_id: "fixture", agent_id: "a", automation_id: null};
+  try {
+    Date.now = () => 1000;
+    const unconfigured = await manage({...scope, operation: "read"});
+    assert.deepEqual(unconfigured.eligibility, {
+      state: "unconfigured", reason: "unconfigured",
+      eligible_now: null, next_eligible_at_ms: null,
+    });
+    assert.equal(unconfigured.eligible_now, true);
+
+    await manage({...scope, agent_id: null, operation: "configure", expected_revision: 0,
+      min_interval_minutes: 60, owner_reference: "owner-request", execute: true});
+    const goal = await manage({...scope, agent_id: null, operation: "read"});
+    assert.deepEqual(goal.eligibility, {
+      state: "unavailable", reason: "agent_scope_required",
+      eligible_now: null, next_eligible_at_ms: null,
+    });
+    assert.equal(goal.eligible_now, true);
+
+    const ready = await manage({...scope, operation: "read"});
+    assert.deepEqual(ready.eligibility, {
+      state: "eligible", reason: "owner_minimum_interval",
+      eligible_now: true, next_eligible_at_ms: null,
+    });
+
+    await admit({...scope, request_id: "first", now_ms: 1000, trigger_at_ms: 1000});
+    Date.now = () => 1000 + 3_600_000 - 1;
+    const waiting = await manage({...scope, operation: "read"});
+    assert.deepEqual(waiting.eligibility, {
+      state: "waiting", reason: "minimum_interval_wait",
+      eligible_now: false, next_eligible_at_ms: 1000 + 3_600_000,
+    });
+    Date.now = () => 1000 + 3_600_000;
+    assert.deepEqual((await manage({...scope, operation: "read"})).eligibility, {
+      state: "eligible", reason: "owner_minimum_interval",
+      eligible_now: true, next_eligible_at_ms: 1000 + 3_600_000,
+    });
+  } finally {
+    Date.now = originalNow;
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("eligibility decoder rejects impossible public states", () => {
+  assert.deepEqual(requireAutomationCadenceEligibility({
+    state: "waiting", reason: "minimum_interval_wait",
+    eligible_now: false, next_eligible_at_ms: 42,
+  }), {
+    state: "waiting", reason: "minimum_interval_wait",
+    eligible_now: false, next_eligible_at_ms: 42,
+  });
+  assert.throws(() => requireAutomationCadenceEligibility({
+    state: "waiting", reason: "minimum_interval_wait",
+    eligible_now: false, next_eligible_at_ms: null,
+  }), /next eligible/);
+  assert.throws(() => requireAutomationCadenceEligibility({
+    state: "eligible", reason: "owner_minimum_interval",
+    eligible_now: false, next_eligible_at_ms: null,
+  }), /eligible now/);
+});
 
 test("owner floor inherits without changing another agent; reductions and concurrent writes require authority", async () => {
   const root = await mkdtemp(join(tmpdir(), "cadence-"));
@@ -130,8 +196,8 @@ test("an unconfirmed reservation resumes while a confirmed start fails closed", 
     await manage({...base, operation: "configure", expected_revision: 0, min_interval_minutes: 60,
       owner_reference: "owner-request", execute: true});
     assert.equal((await start("turn:1", 1000)).reserved, true);
-    assert.equal((await start("turn:1", 1000 + 3_600_000 - 1)).reason, "minimum_interval_wait");
-    const resumed = await start("turn:1", 1000 + 3_600_000);
+    assert.equal((await start("turn:2", 1001)).reason, "minimum_interval_wait");
+    const resumed = await start("turn:1", 1001, {trigger_at_ms: 1000});
     assert.equal(resumed.admitted, true);
     assert.equal(resumed.resumed, true);
     assert.equal(resumed.reason, "resumed_unstarted_reservation");
@@ -151,6 +217,39 @@ test("an unconfirmed reservation resumes while a confirmed start fails closed", 
     await writeFile(path, JSON.stringify(store));
     assert.equal((await start("turn:1", 1000 + 3 * 3_600_000)).reason, "duplicate_or_stale_trigger");
   } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test("confirmation rejects a reservation replaced before its locked read", async t => {
+  const root = await mkdtemp(join(tmpdir(), "cadence-confirm-race-"));
+  const base = {runtime_root: root, goal_id: "fixture", agent_id: "a", automation_id: null};
+  const path = cadenceStorePath(root, "fixture");
+  t.after(() => rm(root, {recursive: true, force: true}));
+  await manage({...base, operation: "configure", expected_revision: 0, min_interval_minutes: 60,
+    owner_reference: "owner-request", execute: true});
+  assert.equal((await admit({...base, request_id: "turn:a", now_ms: 1000,
+    trigger_at_ms: 1000})).reserved, true);
+  const staleSnapshot = await readFile(path, "utf8");
+  assert.equal((await admit({...base, request_id: "turn:b", now_ms: 1001,
+    trigger_at_ms: 1001, manual_reason: "owner-request"})).reserved, true);
+
+  const realReadFile = fs.readFile;
+  let cadenceReads = 0;
+  const read = t.mock.method(fs, "readFile", async (...args) => {
+    if (String(args[0]) === path && cadenceReads++ === 0) return staleSnapshot;
+    return realReadFile(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    read.mock.restore();
+    syncBuiltinESMExports();
+  });
+
+  const result = await confirm({...base, request_id: "turn:a"});
+  assert.equal(result.confirmed, false);
+  assert.equal(result.reason, "reservation_missing");
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")).starts.map(
+    (row: {request_id: string; state: string}) => [row.request_id, row.state]),
+  [["turn:b", "reserved"]]);
 });
 
 test("an M1 policy file upgrades in place without losing its configured floor", async () => {

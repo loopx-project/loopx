@@ -11,17 +11,20 @@ import { findTurnJournalBySettlement, readTurnJournalCapabilities } from "../../
 const phases = ["host_execute", "typed_result", "validation", "durable_writeback", "quota_spend", "scheduler_apply", "scheduler_ack"];
 const selector = { goal_id: "goal", agent_id: "actor", todo_id: "todo_task", turn_instance_id: "turn-7" };
 const identity = { schema_version: "quota_settlement_identity_v0", ...selector, effect_id: "goal:actor:todo_task:turn-7" };
+const goalRefA = { goal_id: "goal", goal_instance_id: `ginst_${"a".repeat(32)}` };
+const goalRefB = { goal_id: "goal", goal_instance_id: `ginst_${"b".repeat(32)}` };
 const key = `sha256:${"a".repeat(64)}`;
-function journal() {
+function journal(goalRef?: { goal_id: string; goal_instance_id: string }) {
   return {
     schema_version: "loopx_turn_journal_v0", goal_id: "goal", turn_key: key,
     status: "committed", completed_phases: [...phases],
     plan: {
+      ...(goalRef ? { goal_ref: goalRef } : {}),
       turn_envelope: {
         goal_id: "goal", agent_id: "actor", action: { selected_todo: { todo_id: "todo_task" } },
         boundary: { available_capabilities: ["network"] },
       },
-      transaction: { turn_key: key, turn_instance_id: "turn-7", settlement_plan: {
+      transaction: { turn_key: key, turn_instance_id: "turn-7", ...(goalRef ? { goal_ref: goalRef } : {}), settlement_plan: {
         schema_version: "quota_settlement_plan_v1", identity: { ...identity },
       } },
     },
@@ -37,8 +40,16 @@ async function fixture(t: TestContext) {
 }
 
 const lookup = (runtime_root: string) => findTurnJournalBySettlement({ runtime_root, ...selector });
-const capabilities = (runtime_root: string, settlement_identity: unknown = identity) =>
-  readTurnJournalCapabilities({ runtime_root, settlement_identity });
+const capabilities = (
+  runtime_root: string,
+  settlement_identity: unknown = identity,
+  goal_ref?: unknown,
+) =>
+  readTurnJournalCapabilities({
+    runtime_root,
+    settlement_identity,
+    ...(goal_ref === undefined ? {} : { goal_ref }),
+  });
 
 test("missing history is a read-only observation", async t => {
   const { root, directory } = await fixture(t);
@@ -63,6 +74,43 @@ test("real writer prefixes remain discoverable; only terminal history lends capa
     assert.deepEqual(await capabilities(root), { observed_capabilities: count === 7 ? ["network"] : null });
     assert.deepEqual(await readFile(path), before);
     assert.deepEqual(await readdir(directory), files);
+  }
+});
+
+test("capability evidence is bound to the current exact GoalRef", async t => {
+  const { root, path } = await fixture(t);
+  await writeFile(path, JSON.stringify(journal(goalRefA)));
+
+  assert.deepEqual(await capabilities(root, identity, goalRefA), {
+    observed_capabilities: ["network"],
+  });
+  assert.deepEqual(await capabilities(root, identity, goalRefB), {
+    observed_capabilities: null,
+  });
+  assert.deepEqual(await capabilities(root), {
+    observed_capabilities: ["network"],
+  });
+
+  await writeFile(path, JSON.stringify(journal()));
+  assert.deepEqual(await capabilities(root, identity, goalRefA), {
+    observed_capabilities: null,
+  });
+  assert.deepEqual(await capabilities(root), {
+    observed_capabilities: ["network"],
+  });
+});
+
+test("capability query rejects malformed or contradictory GoalRefs", async t => {
+  const { root } = await fixture(t);
+  for (const goalRef of [
+    { goal_id: "goal" },
+    { goal_id: "goal", goal_instance_id: "ginst_invalid" },
+    { goal_id: "other-goal", goal_instance_id: `ginst_${"c".repeat(32)}` },
+  ]) {
+    await assert.rejects(
+      capabilities(root, identity, goalRef),
+      EffectRuntimeRequestError,
+    );
   }
 });
 
