@@ -19,7 +19,8 @@ from ...control_plane.work_items.task_lease import (
     acquire_task_lease, inspect_task_lease, release_task_lease,
     runtime_root_from_registry, TaskLeaseError,
 )
-from ...todos import add_goal_todo, complete_goal_todo, list_goal_todos, update_goal_todo
+from ...control_plane.todos.mutation_api import add_goal_todo, complete_goal_todo, update_goal_todo
+from ...control_plane.todos.list_readback import list_goal_todos
 
 ISSUE_FIX_GROUPED_MONITOR_WRITEBACK_SCHEMA_VERSION = "issue_fix_grouped_monitor_writeback_v0"
 DEFAULT_ISSUE_FIX_MONITOR_CADENCE = "30m"

@@ -18,7 +18,8 @@ from typing import Any
 from ...history import load_registry
 from ...paths import resolve_runtime_root
 from ...rollout_event_log import load_rollout_events, rollout_event_log_path
-from ...todos import resolve_todo_state_path, section_bounds, todo_blocks
+from ...control_plane.todos.path_resolution import resolve_todo_state_path
+from ...control_plane.todos.active_state_editing import section_bounds, todo_blocks
 from ..explore.result_log import (
     EVENT_KIND_NODE,
     FINDING_STATUS_CONFIRMED,

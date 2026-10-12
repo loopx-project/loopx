@@ -54,7 +54,7 @@ from ..extensions.runtime import (
 )
 from ..history import load_registry
 from ..paths import resolve_runtime_root
-from ..todos import list_goal_todos
+from ..control_plane.todos.list_readback import list_goal_todos
 from .explore_feishu_commands import (
     FEISHU_SINK_EXPLORE_COMMANDS,
     handle_explore_feishu_command,

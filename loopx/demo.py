@@ -11,7 +11,7 @@ from .paths import select_default_runtime_root
 from .quota import build_quota_should_run
 from .state_refresh import refresh_state_run
 from .status import collect_status
-from .todos import add_goal_todo
+from .control_plane.todos.mutation_api import add_goal_todo
 
 
 DEFAULT_DEMO_PROJECT = Path("/tmp/loopx-demo")

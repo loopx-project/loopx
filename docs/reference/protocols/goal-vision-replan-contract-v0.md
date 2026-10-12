@@ -288,11 +288,12 @@ instructions through full/compact quota and the host Turn envelope:
   rules; reconsider the latter when they obstruct the goal. This cannot relax
   frozen acceptance, authority, budgets or stops, or rewrite criteria after a
   failure.
-- Before expanding repeated validation, verify that the changed intervention
-  reaches the executed path and current artifact. Prefer a discriminating probe,
-  keep negative evidence scoped to tested conditions and proxies scoped to their
-  coverage, and reuse still-applicable evidence when no new uncertainty warrants
-  repetition.
+- Compare expected progress toward the goal or information gain with the full
+  marginal cost of the next step. Before expanding repeated validation, verify
+  that the changed intervention reaches the executed path and current artifact.
+  Prefer a discriminating probe, keep negative evidence scoped to tested
+  conditions and proxies scoped to their coverage, and reuse still-applicable
+  evidence when no new uncertainty warrants repetition.
 
 This guidance is included by default whenever a replan action packet is
 projected. It is Agent judgment guidance, not a new machine-enforced acceptance
@@ -314,9 +315,10 @@ Turn envelope 中保留：
 - 保留用户要求的优先级和优化方向，区分硬约束与 Agent 暂定的候选筛选规则；
   后者阻碍目标时应重新审视。不能放宽冻结验收、权限、预算或停止条件，
   也不能因失败而事后改写标准。
-- 扩大重复验证前，确认改动进入实际执行路径和当前产物。优先选择能区分剩余
-  解释的探针；负证据只覆盖已测条件，局部代理指标只覆盖其代表的范围。
-  没有新不确定性时复用仍然适用的证据。
+- 将预期的目标推进或信息收益与下一步的完整边际成本一起比较。扩大重复验证前，
+  确认改动进入实际执行路径和当前产物。优先选择能区分剩余解释的探针；负证据
+  只覆盖已测条件，局部代理指标只覆盖其代表的范围。没有新不确定性时复用
+  仍然适用的证据。
 
 这是 Agent 判断指引，不新增机器验收门禁、配置或权限，不改变已有语义写回
 规则及非重规划 Turn。文本复用既有 TypeScript owner；投影测试证明送达和

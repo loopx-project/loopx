@@ -5,9 +5,10 @@ import { existsSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { resolve } from "node:path";
 import net from "node:net";
+import { fileURLToPath } from "node:url";
 import { resolveTestPython } from "../scripts/test-python.mjs";
 
-const repoRoot = resolve(new URL("..", import.meta.url).pathname);
+const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const pwcli = process.env.PWCLI ?? resolve(homedir(), ".codex/skills/playwright/scripts/playwright_cli.sh");
 const goalId = "reward-browser-smoke-goal";
 const sessionName = `ghrw${process.pid}`;

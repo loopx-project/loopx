@@ -150,10 +150,12 @@ Budget additional local disk space approximately equal to the archive size.
 Resume checks the target's entire existing prefix before appending its missing
 suffix. Prefix scans use at most 16 reconstructed transactions per page; each
 original operation is also looked up through the provider's receipt index. The
-same TS comparator serves restore and independent audit. Acknowledged new writes
-also share a page proof; an uncertain write forces immediate readback before any
-later write, without retrying the uncertain operation. Logical commits remain
-individual CAS operations. SQLite resolves all requested operation IDs in one
+same TS comparator serves restore and independent audit. File restore publishes
+one updated retained envelope per bounded page; every original logical row,
+revision and receipt remains separate. One target CAS protects that isolated
+recovery page. Ordinary File writes and other providers keep per-transaction
+CAS/publication. Acknowledged new writes share a page proof; an uncertain write
+forces immediate readback before any later write, without retrying it. SQLite resolves all requested operation IDs in one
 read transaction and verifies each touched checkpoint window once per batch;
 other providers use the same contract with scalar receipt lookup as a fallback.
 This removes redundant replay without skipping old receipts, caching proof

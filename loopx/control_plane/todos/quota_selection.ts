@@ -325,13 +325,17 @@ function utcIso(micros: bigint): string {
   const date = new Date(Number(seconds * 1000n)).toISOString().slice(0, -5);
   return `${date}${fraction ? `.${String(fraction).padStart(6, "0")}` : ""}+00:00`;
 }
-function projectTodoFrontierDeadline(summary: JsonObject, now: bigint, agent: string | null): JsonObject | null {
+function projectTodoFrontier(summary: JsonObject, now: bigint, agent: string | null): JsonObject {
   const projected = object(summary.frontier_deadline);
   const projectedTime = timestamp(projected?.next_due_at);
-  if (projected && projectedTime !== null && projectedTime > now) return {...projected};
+  const currentProjection = projected && projectedTime !== null && projectedTime > now ? projected : null;
   const seen = new Set<string>();
-  let selected: JsonObject | null = null, earliest: bigint | null = null;
-  for (const lane of frontierLanes) {
+  let selected: JsonObject | null = currentProjection;
+  let earliest: bigint | null = currentProjection ? projectedTime : null;
+  let addedRetryCount = 0;
+  let retryWait: JsonObject | null = null;
+  let retryDue: bigint | null = null;
+  for (const lane of currentProjection ? ["resume_blocked_items"] : frontierLanes) {
     const items = summary[lane];
     if (!Array.isArray(items)) continue;
     for (const raw of items) {
@@ -342,22 +346,38 @@ function projectTodoFrontierDeadline(summary: JsonObject, now: bigint, agent: st
       const id = identity(row), key = JSON.stringify([id, String(due)]);
       if (seen.has(key)) continue;
       seen.add(key);
+      const retry = object(row.blocked_retry);
+      const receiptRetry = row.status === "open" && row.task_class === "advancement_task" &&
+        row.resume_ready === false && retry?.source === "turn_settlement" &&
+        typeof retry.turn_instance_id === "string" && !!retry.turn_instance_id &&
+        retry.agent_id === agent && agent !== null && typeof retry.goal_id === "string" &&
+        (!row.claimed_by || row.claimed_by === retry.agent_id) &&
+        row.resume_when === retry.resume_when && timestamp(retry.due_at) === due &&
+        isBoundedBlockedRetry(retry, typeof row.todo_id === "string" ? row.todo_id : null);
+      // A receipt wait owns one unfinished Todo; the earliest wakeup may
+      // belong to a different monitor. Keep both facts from this full source.
+      if (receiptRetry && (retryDue === null || due < retryDue)) {
+        retryDue = due;
+        retryWait = retry;
+      }
+      if (currentProjection) {
+        // The full-source cache retains deadlines omitted from visible lanes.
+        // Only newly overlaid receipt retries can predate that current cache.
+        if (!receiptRetry || due >= projectedTime!) continue;
+        if (id !== currentProjection.identity) addedRetryCount += 1;
+      }
       if (earliest === null || due < earliest) {
         earliest = due;
-        const retry = object(row.blocked_retry);
-        const receiptRetry = row.status === "open" && row.task_class === "advancement_task" &&
-          row.resume_ready === false && retry?.source === "turn_settlement" &&
-          typeof retry.turn_instance_id === "string" && !!retry.turn_instance_id &&
-          retry.agent_id === agent && agent !== null && typeof retry.goal_id === "string" &&
-          (!row.claimed_by || row.claimed_by === retry.agent_id) &&
-          row.resume_when === retry.resume_when && timestamp(retry.due_at) === due &&
-          isBoundedBlockedRetry(retry, typeof row.todo_id === "string" ? row.todo_id : null);
         selected = {identity: id, source: receiptRetry ? "turn_settlement" : source(row, lane),
           next_due_at: utcIso(due), ...(receiptRetry ? {blocked_retry: retry} : {})};
       }
     }
   }
-  return selected ? {schema_version: "todo_frontier_deadline_v0", ...selected, candidate_count: seen.size} : null;
+  const candidateCount = currentProjection
+    ? Math.max(1, Number(currentProjection.candidate_count) || 0) + addedRetryCount : seen.size;
+  const deadline = currentProjection && selected === currentProjection ? {...currentProjection} :
+    selected ? {schema_version: "todo_frontier_deadline_v0", ...selected, candidate_count: candidateCount} : null;
+  return {frontier_deadline: deadline, ...(retryWait ? {blocked_retry_wait: retryWait} : {})};
 }
 
 /** One quota read boundary composes scope/claim selection, resume, hint
@@ -397,10 +417,17 @@ export function projectTodoQuotaPlanning(value: unknown): JsonObject {
   const handoff = hasSourceContract ? handoffGateLanes(request.handoff_items, agent, limit) : {};
   const route = hasSourceContract ? routeContinuationLanes(request.route_items, agent, limit) : {};
   const lanes = requireJsonObject(selected.lanes, "selection lanes");
-  const frontier = now === null ? null : projectTodoFrontierDeadline({
+  const resumeBlocked = requireJsonObject(resume.resume_blocked_lanes, "resume blocked lanes");
+  const frontier = now === null ? null : projectTodoFrontier({
     ...requireJsonObject(selected.claim_visibility, "claim visibility"),
     ...requireJsonObject(resume.deferred_lanes, "deferred lanes"),
-    ...requireJsonObject(resume.resume_blocked_lanes, "resume blocked lanes"), ...handoff,
+    ...resumeBlocked, ...handoff,
+    // Retain the display lane and union the existing full-source successor
+    // waits before choosing a deadline; visibility limits are not clock limits.
+    resume_blocked_items: [
+      ...(Array.isArray(resumeBlocked.resume_blocked_items) ? resumeBlocked.resume_blocked_items : []),
+      ...(resume.blocked_successor_items as JsonObject[]),
+    ],
     frontier_deadline: request.frontier_deadline ?? null,
     monitor_open_items: lanes.monitor_items,
     gate_open_items: lanes.gate_items,
@@ -410,5 +437,5 @@ export function projectTodoQuotaPlanning(value: unknown): JsonObject {
   if (now !== null) lanes.gate_items = (lanes.gate_items as JsonObject[]).slice(0, 3);
   return {schema_version: "todo_quota_planning_v0", resume_planning: resume, ...selected, ...closure,
     ...(hasSourceContract ? {handoff_lanes: handoff, route_lanes: route} : {}),
-    ...(now === null ? {} : {frontier_deadline: frontier})};
+    ...(now === null ? {} : frontier)};
 }

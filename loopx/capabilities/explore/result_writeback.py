@@ -12,7 +12,8 @@ from ...control_plane.coordination.local_authority import (
     read_canonical_todos_if_promoted,
 )
 from ...cli_commands.post_writeback import dispatch_committed_cli_post_writeback_hooks
-from ...todos import list_goal_todos, update_goal_todo
+from ...control_plane.todos.list_readback import list_goal_todos
+from ...control_plane.todos.mutation_api import update_goal_todo
 from .turn_context import _policy
 from .result_log import (
     append_explore_result_events,

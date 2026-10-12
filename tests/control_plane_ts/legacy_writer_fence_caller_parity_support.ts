@@ -10,7 +10,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { atomicWriteJson } from "../../loopx/control_plane/effect_runtime_io.ts";
@@ -116,7 +116,8 @@ async function snapshot(root: string): Promise<Record<string, string>> {
       if (entry.isDirectory()) {
         await walk(path);
       } else {
-        out[relative(root, path)] = createHash("sha256").update(await readFile(path)).digest("hex");
+        // Effect keys use the fixture's POSIX spelling on every host.
+        out[relative(root, path).split(sep).join("/")] = createHash("sha256").update(await readFile(path)).digest("hex");
       }
     }
   }
@@ -315,11 +316,17 @@ async function execute(ws: Workspace, caller: ParityCaller): Promise<JsonObject>
     : await executeTaskLeaseLifecycle(request, CLOCK);
 }
 
-/** Replace the temporary runtime root inside an envelope with a stable placeholder. */
+/**
+ * Replace the temporary runtime root inside an envelope with a stable
+ * placeholder, and spell the path under it with the fixture's POSIX separators.
+ */
 export function normalize(value: unknown, runtimeRoot: string): JsonObject {
   const text = JSON.stringify(value)
     .split(JSON.stringify(runtimeRoot).slice(1, -1)).join(RUNTIME_ROOT_PLACEHOLDER);
-  return JSON.parse(text);
+  return JSON.parse(text, (_key, field: unknown) =>
+    typeof field === "string" && field.startsWith(RUNTIME_ROOT_PLACEHOLDER)
+      ? field.split(sep).join("/")
+      : field);
 }
 
 export async function observeRow(row: ParityRow): Promise<Observation> {

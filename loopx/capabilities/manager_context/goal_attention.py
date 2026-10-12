@@ -55,7 +55,7 @@ def read_goal_attention(
     registry_path: Path, runtime_root: Path, goal_id: str, quota_packet: Mapping[str, Any],
 ) -> dict[str, Any]:
     """A current canonical Todo read is independent of stale/absent run history."""
-    from ...todos import list_goal_todos
+    from ...control_plane.todos.list_readback import list_goal_todos
 
     try:
         listed = list_goal_todos(registry_path=registry_path,
