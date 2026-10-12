@@ -9,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import sysconfig
 
 import pytest
 
@@ -46,7 +47,7 @@ def isolated_todo_distribution(tmp_path, monkeypatch, request):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     package_root = tmp_path / "package"
     package = package_root / "loopx"
-    command = [sys.executable, "-m", "loopx.cli"]
+    command = [sys.executable, "-S", "-m", "loopx.cli"]
     if request.param == "source":
         shutil.copytree(Path(__file__).resolve().parents[2] / "loopx", package,
                         ignore=shutil.ignore_patterns("__pycache__"))
@@ -59,10 +60,13 @@ def isolated_todo_distribution(tmp_path, monkeypatch, request):
         assert installed.returncode == 0, installed.stdout + installed.stderr
         entry = package_root / "bin/loopx"
         assert entry.is_file()
-        command = [sys.executable, str(entry)]
-    monkeypatch.setenv("PYTHONPATH", str(package_root))
+        command = [sys.executable, "-S", str(entry)]
+    # Keep dependencies available without processing editable-install .pth files.
+    # Their import finder can silently borrow a deleted module from the checkout.
+    dependencies = dict.fromkeys(sysconfig.get_paths()[key] for key in ("purelib", "platlib"))
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join([str(package_root), *dependencies]))
     provenance = json.loads(subprocess.check_output(
-        [sys.executable, "-c", "import json,loopx; from importlib import metadata; "
+        [sys.executable, "-S", "-c", "import json,loopx; from importlib import metadata; "
          "print(json.dumps({'module':loopx.__file__, "
          "'distribution':str(metadata.distribution('loopx').locate_file(''))}))"],
         cwd=tmp_path, text=True,
@@ -452,6 +456,7 @@ def test_explicit_source_writer_import_preserves_the_existing_seam(tmp_path):
     result = subprocess.run(
         [sys.executable, "-c", """
 import sys
+import sysconfig
 import loopx.todos as todos
 assert 'loopx.control_plane.todos.line_update' not in sys.modules
 assert 'loopx.control_plane.todos.legacy_mutation' not in sys.modules
