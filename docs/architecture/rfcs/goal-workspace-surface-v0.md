@@ -472,6 +472,10 @@ local packaged rendering, not cross-host latency or W2 live scale. V6 desktop/mo
 have been inspected; the PR's final validation record owns the full regression result. Activity covers
 material observations available in the existing timeline, not a complete audit or independent acceptance.
 Results keep their existing readback validators; run summaries cannot prove adoption.
+The approved narrow-screen presentation folds Direction on phones and opens All work from the
+masthead in a native dialog. Escape restores launcher focus; selecting a task returns to the existing
+inspector. History keeps its loaded state when reads are inactive, and missing remote Todo links
+show an unavailable notice without querying local owners.
 
 M3, W2/W3, installed behavior and real L1/G1 delivery/original-route return retain their existing owners.
 This candidate does not close those qualification gates.

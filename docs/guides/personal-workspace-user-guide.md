@@ -206,6 +206,11 @@ reference in the creation preview.
 
 ### 4.2 Goal 概览与交付依据 / Goal overview
 
+手机默认折叠目标与验收条件，可随时展开；顶部「全部工作」打开侧栏，Escape 关闭并返回入口。
+窄屏侧栏选择任务后关闭，沿用同一详情与 URL 选择；未知远端链接明确提示当前快照没有该任务。
+
+On phones, direction and criteria start folded. The top-bar **All work** control opens the rail; Escape closes it and returns focus. Selecting work opens the existing task details. Unknown remote links report unavailable snapshot details without querying local task owners.
+
 Goal 顶部直接提供 **概览、任务、对话、成果**，分别用于判断进展、推进工作、
 与 Agent 沟通和查看产出。选择一个 Goal 后仍默认进入四列任务看板；
 看板与列表保持原有任务范围。切换页面后，任务筛选、已加载历史和各页滚动位置保留。
