@@ -388,7 +388,11 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   const missingStridePath = periodicStrideReview && !evidenceLinkedPath;
   const staleStride = !!strideDecision && structuredReview &&
     strideDecision.reference_obligation_id !== obligation.obligation_id;
-  const reviewMismatch = strideDecision && structuredReview ? strideReviewMismatch(strideDecision, context) : null;
+  const reviewMismatch = strideDecision && structuredReview
+    ? periodicStrideReview && strideDecision.reference_context_id !== context.context_id
+      ? "Stride decision must reference the delivered due-review context."
+      : strideReviewMismatch(strideDecision, context)
+    : null;
   let outcomes = strings(observation.delta_kinds);
   if (outcomes.some(value => (CAPABILITY_OUTCOMES as readonly string[]).includes(value))) {
     throw new EffectRuntimeRequestError("capability evidence must be qualified by its owning capability, not generic progress");

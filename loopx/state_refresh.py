@@ -1031,6 +1031,10 @@ def refresh_state_run(
                 existing_agent_vision=existing_agent_vision,
                 merge_patch=merge_agent_vision_patch,
                 require_path_delta_for_durable_change=autonomous_replan_recorded,
+                allow_terminal_stride_path=(
+                    ((registry_goal or {}).get("execution_profile") or {}).get("stride_strategy")
+                    == "evidence_conditioned_v1"
+                ),
             )
         generated_at = now_local()
         # Next Action is now an actor/Todo-bound recommendation in the existing

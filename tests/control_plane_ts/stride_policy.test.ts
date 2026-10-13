@@ -100,6 +100,12 @@ test("every enabled due review records stride even when progress, a successor or
       reference_obligation_id: "replan-" + "b".repeat(16)}}});
   assert.equal(stale.accepted, false);
   assert.equal(stale.reason_code, "stride_reference_obligation_mismatch");
+  const foreignContext = projectReplanSemantics({operation: "qualify", obligation,
+    observation_delta: {delta_kinds: ["new_concrete_blocker"]},
+    agent_vision: {...authored, stride_decision: {...proposal,
+      reference_context_id: "replan-context-" + "b".repeat(24)}}});
+  assert.equal(foreignContext.accepted, false);
+  assert.equal(foreignContext.reason_code, "stride_review_basis_mismatch");
   const bareDecision = projectReplanSemantics({operation: "qualify", obligation,
     observation_delta: {delta_kinds: ["new_concrete_blocker"]},
     agent_vision: {stride_decision: proposal}});
@@ -108,8 +114,13 @@ test("every enabled due review records stride even when progress, a successor or
 });
 
 test("terminal due review can record stride without manufacturing a continuing path", () => {
-  const terminal = buildVisionCheckpoint({...request, agent_vision_packet: {...packet,
-    state: "no_followup", path_delta: {...packet.path_delta, outcome: "stop"}}}).agent_vision;
+  const terminalPacket = {...packet,
+    state: "no_followup", path_delta: {...packet.path_delta, outcome: "stop"}};
+  assert.throws(() => buildVisionCheckpoint({...request, agent_vision_packet: terminalPacket}), /stride_decision requires/);
+  assert.throws(() => buildVisionCheckpoint({...request, allow_terminal_stride_path: "true",
+    agent_vision_packet: terminalPacket}), /allow_terminal_stride_path/);
+  const terminal = buildVisionCheckpoint({...request, allow_terminal_stride_path: true,
+    agent_vision_packet: terminalPacket}).agent_vision;
   const obligation = {obligation_id: proposal.reference_obligation_id,
     triggers: [{kind: "periodic_review_due"}],
     replan_context: {stride_strategy: "evidence_conditioned_v1", context_id: contextId}};

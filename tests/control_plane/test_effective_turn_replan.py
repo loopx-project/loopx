@@ -391,7 +391,7 @@ def test_due_stride_review_survives_successor_transition_until_decision(
                        "cost_bound": "One source and its contrary case before replanning.",
                        "minimum_evidence": "A checked result and a contrary-case result."},
     }
-    decision_path.write_text(json.dumps({
+    vision_packet = {
         "schema_version": "goal_vision_replan_contract_v0",
         "state": "vision_patch_proposed",
         "vision_patch": {"acceptance_summary": "The original delivery remains open while the new source is validated."},
@@ -402,7 +402,18 @@ def test_due_stride_review_survives_successor_transition_until_decision(
             "changed": ["Validate the independent source before claiming completion"],
             "evidence_refs": ["evidence:independent-source-review"]},
         "stride_decision": decision,
-    }))
+    }
+    decision_path.write_text(json.dumps({**vision_packet,
+        "stride_decision": {**decision, "reference_context_id": "replan-context-" + "b" * 24}}))
+    foreign = call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--replan-obligation-id", obligation["obligation_id"],
+        "--turn-instance-id", "stride-due-review", "--agent-vision-json", str(decision_path),
+        "--classification", "bounded_replan_progress", "--delivery-batch-scale", "implementation",
+        "--delivery-outcome", "outcome_progress", "--no-global-sync", "--suppress-external-sinks",
+        expected_code=1)
+    assert foreign.get("appended") is not True
+    assert "context" in foreign["error"].lower()
+    decision_path.write_text(json.dumps(vision_packet))
     accepted = call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--replan-obligation-id", obligation["obligation_id"],
         "--turn-instance-id", "stride-due-review", "--agent-vision-json", str(decision_path),
