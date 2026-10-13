@@ -14,6 +14,135 @@ from loopx.extensions import public_source_reader as reader
 from loopx.capabilities.native_chat import codex_context
 
 
+@pytest.fixture
+def github_diff_transport(monkeypatch):
+    state = {"clock": 100.0, "attempts": [], "closed": [], "dns": [], "cost": 1.0,
+             "failure": TimeoutError("TCP stalled"), "private_host": None, "fail_canonical": False}
+    monkeypatch.setattr(reader.time, "monotonic", lambda: state["clock"])
+    def resolve(host, *args, **kwargs):
+        state["dns"].append(host)
+        addresses = ["8.8.8.8", "1.1.1.1"] if host == "github.com" else ["9.9.9.9"]
+        if host == state["private_host"]:
+            addresses.append("127.0.0.1")
+        return [(0, 0, 0, "", (address, 443)) for address in addresses]
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
+    class Sock:
+        def settimeout(self, value): pass
+        def makefile(self, *args):
+            return io.BytesIO(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n"
+                             b"Content-Length: 8\r\nConnection: close\r\n\r\ncomplete")
+    class Connection:
+        def __init__(self, host, address, timeout):
+            self.host, self.address, self.timeout = host, address, timeout
+            self.sock = Sock()
+        def request(self, method, path, *, headers):
+            state["attempts"].append((self.host, self.address, path, self.timeout, headers))
+            if self.host != "patch-diff.githubusercontent.com" or state["fail_canonical"]:
+                state["clock"] += min(self.timeout, state["cost"])
+                raise state["failure"]
+        def getresponse(self):
+            response = reader.http.client.HTTPResponse(self.sock)
+            response.begin()
+            self.sock = None
+            return response
+        def close(self): state["closed"].append(self.address)
+    monkeypatch.setattr(reader, "_PinnedHTTPS", Connection)
+    return state
+
+
+def test_github_diff_transport_failure_recovers_canonical_source_in_same_budget(github_diff_transport):
+    state = github_diff_transport
+    original = "https://github.com/example/project/pull/42.diff"
+    result = reader.article(original, deadline=110.0)
+    assert result["requested_url"] == original
+    assert result["observed_url"] == "https://patch-diff.githubusercontent.com/raw/example/project/pull/42.diff"
+    assert result["text"] == "complete" and result["truncated"] is False
+    assert state["dns"] == ["github.com", "patch-diff.githubusercontent.com"]
+    assert [(host, address, path) for host, address, path, _, _ in state["attempts"]] == [
+        ("github.com", "8.8.8.8", "/example/project/pull/42.diff"),
+        ("github.com", "1.1.1.1", "/example/project/pull/42.diff"),
+        ("patch-diff.githubusercontent.com", "9.9.9.9", "/raw/example/project/pull/42.diff")]
+    assert [budget for _, _, _, budget, _ in state["attempts"]] == [5.0, 9.0, 8.0]
+    assert state["closed"] == ["8.8.8.8", "1.1.1.1", "9.9.9.9"]
+    assert all(set(headers) == {"Accept-Encoding", "User-Agent"}
+               for _, _, _, _, headers in state["attempts"])
+
+
+@pytest.mark.parametrize("host", ["github.com", "patch-diff.githubusercontent.com"])
+def test_github_diff_recovery_rejects_mixed_dns_before_connection(github_diff_transport, host):
+    state = github_diff_transport
+    state["private_host"] = host
+    with pytest.raises(ValueError, match="non-public source address"):
+        reader.fetch("https://github.com/example/project/pull/42.diff", deadline=110.0)
+    assert all(attempt[0] != host for attempt in state["attempts"])
+
+
+@pytest.mark.parametrize("failure", [ssl.SSLCertVerificationError("untrusted certificate"),
+                                    ValueError("public source unavailable")])
+def test_github_diff_recovery_does_not_bypass_policy_rejection(github_diff_transport, failure):
+    state = github_diff_transport
+    state["failure"] = failure
+    with pytest.raises(type(failure)):
+        reader.fetch("https://github.com/example/project/pull/42.diff", deadline=110.0)
+    assert state["dns"] == ["github.com"] and len(state["attempts"]) == 1
+
+
+@pytest.mark.parametrize("url", [
+    "https://github.com/example/project/pull/42.diff?private=1",
+    "https://github.com/example/project/pull/42.patch",
+    "https://github.com/example/project/blob/main/file.diff",
+    "https://github.com/example/project/pull/42.diff/extra",
+    "https://github.com/example/project/pull/42%2ediff",
+    "https://github.com.evil.example/example/project/pull/42.diff",
+    "https://github.com/example/../pull/42.diff"])
+def test_github_diff_recovery_is_limited_to_exact_public_diff_paths(github_diff_transport, url):
+    state = github_diff_transport
+    with pytest.raises(TimeoutError):
+        reader.fetch(url, deadline=110.0)
+    assert "patch-diff.githubusercontent.com" not in state["dns"]
+
+
+def test_github_diff_recovery_cannot_extend_exhausted_deadline(github_diff_transport):
+    state = github_diff_transport
+    state["cost"] = 10.0
+    with pytest.raises(TimeoutError):
+        reader.fetch("https://github.com/example/project/pull/42.diff", deadline=110.0)
+    assert state["clock"] == 110.0 and state["dns"] == ["github.com"]
+
+
+def test_github_diff_canonical_failure_does_not_loop(github_diff_transport):
+    state = github_diff_transport
+    state["fail_canonical"] = True
+    with pytest.raises(TimeoutError):
+        reader.fetch("https://github.com/example/project/pull/42.diff", deadline=110.0)
+    assert state["dns"] == ["github.com", "patch-diff.githubusercontent.com"]
+    assert len(state["attempts"]) == len(state["closed"]) == 3
+
+
+def test_github_diff_recovery_consumes_existing_redirect_hop_limit(monkeypatch):
+    attempts = []
+    monkeypatch.setattr(reader, "public_addresses", lambda host: ["8.8.8.8"])
+    class Response:
+        status = 302
+        def getheader(self, name):
+            return ("/example/project/pull/42.diff" if len(attempts) == 5
+                    else f"/hop{len(attempts)}")
+        def close(self): pass
+    class Connection:
+        sock = None
+        def __init__(self, host, address, timeout): self.host = host
+        def request(self, method, path, **kwargs):
+            attempts.append((self.host, path))
+            if path.endswith(".diff"):
+                raise TimeoutError("TCP stalled")
+        def getresponse(self): return Response()
+        def close(self): pass
+    monkeypatch.setattr(reader, "_PinnedHTTPS", Connection)
+    with pytest.raises(ValueError, match="too many source redirects"):
+        reader.fetch("https://github.com/start", deadline=time.monotonic() + 10)
+    assert len(attempts) == 6 and attempts[-1] == ("github.com", "/example/project/pull/42.diff")
+
+
 @pytest.mark.parametrize("framing", ["headers", "chunk"])
 def test_trickled_framing_cannot_consume_the_next_address_budget(monkeypatch, framing):
     attempts, peers, servers = [], [], []
