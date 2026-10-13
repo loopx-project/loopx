@@ -341,10 +341,10 @@ def qualify_replan_writeback(
         transition_delta = guarded_replan_transition_delta(
             guard_scoped=guard_scoped,
             selected_obligation_id=guard_semantic_replan_obligation_id,
-            transition_acks=[context.get("run_replan_transition_ack"),
-                             context.get("replan_transition_ack"),
-                             *(candidate.get("ack") for candidate in
-                               context.get("replan_transition_candidates", []))],
+            transition_candidates=context.get("replan_transition_candidates", []),
+            stride_strategy=((registry_goal or {}).get("execution_profile") or {}).get(
+                "stride_strategy", "off"
+            ),
         )
         if transition_delta is not None:
             # This closes only the selected Turn obligation. The freshly

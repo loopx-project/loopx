@@ -641,9 +641,9 @@ function prepareVisionRefresh(request: VisionRefreshPrepareRequest): JsonObject 
   const [pathDelta, pathDeltaUsage] = normalizeGoalPathDelta(updatePacket.path_delta);
   Object.assign(fieldUsage, pathDeltaUsage);
   const [strideDecision, strideUsage] = normalizeStrideDecision(updatePacket.stride_decision, boundedPublicText);
-  if (strideDecision && (!pathDelta || !["continue", "no_change", "replan"].includes(String(pathDelta.outcome)) ||
+  if (strideDecision && (!pathDelta || !["continue", "no_change", "replan", "stop"].includes(String(pathDelta.outcome)) ||
       !Array.isArray(pathDelta.evidence_refs) || !pathDelta.evidence_refs.length)) {
-    throw new EffectRuntimeRequestError("stride_decision requires a fresh evidence-linked path decision");
+    throw new EffectRuntimeRequestError("stride_decision requires an evidence-linked path decision");
   }
   Object.assign(fieldUsage, strideUsage);
   const [fallbackDeclarations, fallbackUsage] = normalizeFallbackDeclarations(
