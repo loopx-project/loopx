@@ -308,7 +308,7 @@ def test_checkpoint_only_recovery_bypasses_open_todo_completion_validation(
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state_text = state_path.read_text(encoding="utf-8")
     selected_marker = (
-        f"todo_id={TODO_ID} status=open "
+        f"todo_id={TODO_ID} status=open claimed_by={AGENT_ID} "
         "task_class=advancement_task action_kind=validate "
         "-->"
     )

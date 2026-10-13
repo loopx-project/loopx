@@ -605,3 +605,44 @@ def test_many_durable_refs_keep_bounded_audit_and_full_cold_read(tmp_path):
     full = json.loads(result.stdout)["selected_branches"][0]["typed_evidence_audit"]
     assert full["requested_node_refs"] == full["unknown_node_refs"] == refs
     assert full["score_delta"] == 0
+
+def test_optional_finding_digests_bind_full_scoped_evidence_without_changing_default_view(tmp_path):
+    path = registry(tmp_path, graph=True, planning=True)
+    root = tmp_path / "runtime"
+    log = explore_result_log_path(root, "research")
+    append_explore_result_event(log, build_explore_node_event(
+        goal_id="research", agent_id="worker", node_id="route",
+        title="Candidate route", status="open"))
+    append_explore_result_event(log, build_explore_finding_event(
+        goal_id="research", agent_id="worker", node_id="route",
+        finding_id="counterexample", title="Scoped result", status="refuted", summary="Inputs A only."))
+    args = dict(registry_path=path, runtime_root=root, goal_id="research", agent_id="worker")
+    ordinary = explore_turn_context(**args)
+    with pytest.raises(ValueError, match="explicit boolean"):
+        explore_turn_context(**args, include_finding_digests="false")
+    assert explore_turn_context(**args, include_finding_digests=False) == ordinary
+    qualified = explore_turn_context(**args, include_finding_digests=True)
+    first = qualified["graph"]["recent_findings"][0]["source_sha256"]
+    assert len(first) == 64 and "source_sha256" not in ordinary["graph"]["recent_findings"][0]
+    append_explore_result_event(log, build_explore_finding_event(
+        goal_id="research", agent_id="worker", node_id="route", finding_id="counterexample",
+        title="Scoped result", status="refuted", summary="Different input scope; same title/status."))
+    assert explore_turn_context(**args, include_finding_digests=True)["graph"]["recent_findings"][0]["source_sha256"] != first
+
+
+def test_replan_explore_read_reports_unavailable_source_without_empty_evidence(monkeypatch, tmp_path):
+    from loopx.capabilities.explore import turn_context
+
+    calls = []
+    def unavailable(**kwargs):
+        calls.append(kwargs)
+        raise OSError("synthetic unavailable participant")
+
+    monkeypatch.setattr(turn_context, "explore_turn_context", unavailable)
+    assert turn_context.read_replan_explore_context(source_status={}, goal_id="goal-a", agent_id="agent-a") is None
+    assert calls == []
+    result = turn_context.read_replan_explore_context(
+        source_status={"registry": str(tmp_path / "registry.json"), "runtime_root": str(tmp_path / "runtime")},
+        goal_id="goal-a", agent_id="agent-a")
+    assert result == {"ok": False, "goal_id": "goal-a", "agent_id": "agent-a"}
+    assert len(calls) == 1 and calls[0]["include_finding_digests"] is True

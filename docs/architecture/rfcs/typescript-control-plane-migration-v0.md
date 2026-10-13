@@ -73,6 +73,15 @@ Disposable source/normal-wheel probes remove the facade, the whole legacy Todo
 writer and four shadow producers together; real File/SQLite CLI lifecycle,
 once-only settlement, Monitor replay and App cold-import/action/restart journeys
 must still work, with missing-provider/lease and changed-source/backup refusals.
+The App HTTP receiver now also removes `bootstrap.py` from that same copied
+distribution and checks the complete removed set before each server start,
+restart and auxiliary CLI. Separate fixture results cannot prove this combined
+absence. The ordinary canonical CLI creation entrypoint remains with its owner;
+removing it from the cold-import receiver is a disposable qualification probe,
+not a supported package format or permission to break the additive 1.x line.
+中文：App 冷导入、后续写入和重启使用同一份缺少旧入口、writer 与 source producer 的
+隔离副本；不能拼接两组各自缺少一部分模块的结果。正常 canonical 创建仍保留其
+现有入口，这个临时卸除验收不等于已完成整族退役、自然试用或正式安装采用。
 Lark dry-run and Explore replay qualify local consumers only, not live external
 adoption. The fresh research execution path added by [#5280](https://github.com/loopx-project/loopx/pull/5280)
 reintroduced a function-local historic import after the earlier caller inventory.
@@ -105,6 +114,11 @@ The existing delivery Todos should carry these concrete exits:
   execution grants refuse before effects; canonical work and original-operation
   recovery pass with the old writer physically absent. Keep the additive 1.x
   import/deprecation line compatible.
+  Admission must preserve original lease release and receipt/outbox recovery
+  before import; denying the existing shared legacy fence indiscriminately
+  would also block these prerequisites. Remove the Python missing-fence bypass
+  with the typed cutoff and validate the combined recovery-to-import journey
+  specified in the linked release contract.
 - After the last source caller exits, reconcile pending outboxes and delete
   unused capture producers/private decisions together. Keep supported historical
   readers and current-head rollback; do not wait for every external user to
@@ -112,6 +126,16 @@ The existing delivery Todos should carry these concrete exits:
 
 This updates the existing R5/T4 frontier and release proposal; it creates no
 parallel migration owner, runtime gate or release activation.
+
+Team-plan recovery prerequisite: an unpromoted plan that published its original
+receipt can now recover through the Chat confirmation owner while shadow
+bootstrap is interrupted. Registry/Todo/source locks still protect the read,
+and the existing typed identity validator rejects changed intent, actor or
+reviewed basis. Recovery verifies source durability without loading the capture
+producer or admitting new writes; fresh plans still obey all source, management
+and promotion guards. This repairs the existing 1.x recovery path and does not
+activate the 2.0 cutoff or settle the remaining lease/outbox/Host obligations.
+
 
 The retained import-compatible field writer now composes resume normalization
 and contradictory-clear rejection in its existing typed field plan. Keep blank
@@ -1756,6 +1780,16 @@ rely on the compiler instead of repeating ad hoc field checks throughout the
 domain. Transport checks such as framing, authentication, and size limits stay
 separate from schema validation and semantic invariants. An unchecked
 `JSON.parse(...) as T` must not establish control-plane authority.
+
+For shipped Todo contracts, the coordination record codec reuses its first
+strict-JSON normalization after checking allowed and required fields. That tree
+already owns its containers and orders keys by Unicode code point; rebuilding
+the same fields and cloning them again adds no authority or isolation. Generic
+contracts retain legacy inherited-field selection when reconstruction is needed.
+Keep malformed-JSON rejection, schema-error order, canonical bytes and
+input/output independence unchanged.
+This is a bounded shared-codec cost repair, not a provider-format migration or
+qualification of sustained operation, CI capacity or release admission.
 
 `as unknown as T` is permitted only as a named migration seam: its exact call
 site, upstream validator, negative boundary coverage, and removal owner must be

@@ -24,13 +24,18 @@ def _load_object(path_text: str, *, label: str) -> dict[str, Any]:
     path = Path(path_text).expanduser()
     try:
         raw = path.read_bytes()
-        if len(raw) > MAX_INPUT_BYTES:
-            raise ValueError(f"{label} exceeds the {MAX_INPUT_BYTES}-byte limit")
+    except OSError as exc:
+        raise ValueError(
+            f"{label} requires a readable JSON file path, not inline JSON"
+        ) from exc
+    if len(raw) > MAX_INPUT_BYTES:
+        raise ValueError(f"{label} exceeds the {MAX_INPUT_BYTES}-byte limit")
+    try:
         value = json.loads(raw)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"{label} must be a readable JSON object") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} file must contain valid JSON") from exc
     if not isinstance(value, dict):
-        raise ValueError(f"{label} must be a JSON object")
+        raise ValueError(f"{label} file must contain a JSON object")
     return value
 
 
@@ -103,6 +108,7 @@ def _render(payload: dict[str, object]) -> str:
         "retire_ready",
         "blocker",
         "reason",
+        "error",
     ):
         if field in payload:
             lines.append(f"- {field}: `{payload.get(field)}`")
@@ -137,7 +143,10 @@ def register_external_evidence_commands(
         "discover",
         help="Project method and connector inventory without claiming execution readiness.",
     )
-    discover.add_argument("--provider-inventory-json")
+    discover.add_argument(
+        "--provider-inventory-json", metavar="FILE",
+        help="Path to a JSON object with a providers array; not inline JSON.",
+    )
     discover.add_argument("--connector-registry", nargs="?", const="")
     add_subcommand_format(discover)
 
@@ -149,7 +158,10 @@ def register_external_evidence_commands(
     plan.add_argument("--decision", required=True)
     plan.add_argument("--evidence-kind", action="append", required=True)
     plan.add_argument("--constraint", action="append", default=[])
-    plan.add_argument("--provider-inventory-json")
+    plan.add_argument(
+        "--provider-inventory-json", metavar="FILE",
+        help="Path to a JSON object with a providers array; not inline JSON.",
+    )
     plan.add_argument("--public-github", action="store_true", help="Opt in to a fresh anonymous public GitHub readiness probe.")
     plan.add_argument("--source", action="append", default=[])
     plan.add_argument("--search-term", action="append", default=[])
@@ -158,14 +170,14 @@ def register_external_evidence_commands(
     add_subcommand_format(plan)
 
     execute = actions.add_parser("execute", help="Execute the exact public GitHub plan without admitting evidence.")
-    execute.add_argument("--plan-json", required=True)
+    execute.add_argument("--plan-json", required=True, metavar="FILE", help="Path to a saved plan JSON object.")
     execute.add_argument("--execute", action="store_true", help="Authorize bounded anonymous public-source reads.")
     add_subcommand_format(execute)
 
     project = actions.add_parser("readback", help="Show receipt, parent decision and actual research-ledger coverage.")
-    project.add_argument("--plan-json", required=True)
-    project.add_argument("--receipt-json", required=True)
-    project.add_argument("--admission-json")
+    project.add_argument("--plan-json", required=True, metavar="FILE", help="Path to a saved plan JSON object.")
+    project.add_argument("--receipt-json", required=True, metavar="FILE", help="Path to a receipt JSON object.")
+    project.add_argument("--admission-json", metavar="FILE", help="Path to a saved admission JSON object.")
     project.add_argument("--project", help="Existing deepresearch project; no implicit run is created.")
     project.add_argument("--execute", action="store_true", help="Write explicitly admitted sources to the existing ledger.")
     add_subcommand_format(project)
@@ -174,15 +186,15 @@ def register_external_evidence_commands(
         "receipt",
         help="Validate and bind a caller-presented provider receipt to its exact plan.",
     )
-    receipt.add_argument("--plan-json", required=True)
-    receipt.add_argument("--receipt-json", required=True)
+    receipt.add_argument("--plan-json", required=True, metavar="FILE", help="Path to a saved plan JSON object.")
+    receipt.add_argument("--receipt-json", required=True, metavar="FILE", help="Path to a receipt JSON object.")
     add_subcommand_format(receipt)
 
     admit = actions.add_parser(
         "admit", help="Validate a provider receipt and parent decision."
     )
-    admit.add_argument("--plan-json", required=True)
-    admit.add_argument("--receipt-json", required=True)
+    admit.add_argument("--plan-json", required=True, metavar="FILE", help="Path to a saved plan JSON object.")
+    admit.add_argument("--receipt-json", required=True, metavar="FILE", help="Path to a receipt JSON object.")
     admit.add_argument("--decision", choices=["admit", "reject"], required=True)
     admit.add_argument("--reason", required=True)
     admit.add_argument("--admit-source", action="append", default=[])
@@ -191,7 +203,7 @@ def register_external_evidence_commands(
     retire = actions.add_parser(
         "retire", help="Check downstream projection coverage before retirement."
     )
-    retire.add_argument("--admission-json", required=True)
+    retire.add_argument("--admission-json", required=True, metavar="FILE", help="Path to a saved admission JSON object.")
     retire.add_argument("--downstream-source", action="append", default=[])
     add_subcommand_format(retire)
 

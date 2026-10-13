@@ -14,6 +14,221 @@ from loopx.capabilities.periodic_report import cli as periodic_report_cli
 from loopx.cli import main
 
 
+_PRIVATE_ROOTS = [
+    pytest.param(("Users",), id="users"),
+    pytest.param(("Volumes",), id="volumes"),
+    pytest.param(("home",), id="home"),
+    pytest.param(("var", "folders"), id="var-folders"),
+    pytest.param(("tmp",), id="tmp"),
+    pytest.param(("private", "tmp"), id="private-tmp"),
+]
+_PATH_SPELLINGS = [
+    "posix",
+    "drive",
+    "unc",
+    "rooted",
+    "mixed",
+    "escaped-drive",
+    "escaped-unc",
+    "mixed-runs",
+]
+
+
+def _private_reference(root: tuple[str, ...], spelling: str) -> str:
+    # Assemble synthetic references without embedding machine paths in fixtures.
+    backslash = chr(92)
+    prefix, separator = {
+        "posix": ("/", "/"),
+        "drive": ("C:" + backslash, backslash),
+        "unc": (backslash * 2 + "fixture-host" + backslash, backslash),
+        "rooted": (backslash, backslash),
+        "mixed": ("C:/", backslash),
+        "escaped-drive": ("C:" + backslash * 2, backslash * 2),
+        "escaped-unc": (
+            backslash * 4 + "fixture-host" + backslash * 2,
+            backslash * 2,
+        ),
+        "mixed-runs": ("C:/" + backslash, "/" + backslash),
+    }[spelling]
+    return prefix + separator.join((*root, "fixture-user", "notes.md"))
+
+
+@pytest.mark.parametrize("root", _PRIVATE_ROOTS)
+@pytest.mark.parametrize("spelling", _PATH_SPELLINGS)
+def test_private_references_are_rejected_in_every_separator_spelling(
+    root: tuple[str, ...], spelling: str
+) -> None:
+    request = _request()
+    reference = _private_reference(root, spelling)
+    request["source_snapshots"][0]["snapshot_ref"] = reference
+
+    with pytest.raises(ValueError) as error:
+        build_periodic_report_run(request)
+
+    assert str(error.value) == (
+        "request.source_snapshots[0].snapshot_ref "
+        "contains a private path or credential-like value"
+    )
+    assert reference not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("section", "field"),
+    [
+        ("profile", "profile_ref"),
+        ("artifact_receipt", "artifact_ref"),
+        ("sink_receipts", "receipt_ref"),
+    ],
+)
+def test_windows_private_references_use_the_recursive_request_gate(
+    section: str, field: str
+) -> None:
+    request = _request()
+    target = request[section]
+    if isinstance(target, list):
+        target = target[0]
+    reference = _private_reference(("Users",), "drive")
+    target[field] = reference
+
+    with pytest.raises(
+        ValueError, match="private path or credential-like value"
+    ) as error:
+        build_periodic_report_run(request)
+    assert reference not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        pytest.param(
+            "C:" + chr(92).join(("", "Projects", "public-demo", "build")),
+            id="public-drive",
+        ),
+        pytest.param(
+            chr(92) * 2 + chr(92).join(("fixture-host", "share", "notes.md")),
+            id="public-unc",
+        ),
+        pytest.param(chr(92).join(("", "Projects", "notes.md")), id="public-rooted"),
+        pytest.param(
+            "C:" + (chr(92) * 2).join(("", "Projects", "notes.md")),
+            id="public-escaped-drive",
+        ),
+        pytest.param(
+            "C:" + chr(92).join(("", "users", "fixture-user", "notes.md")),
+            id="case-policy",
+        ),
+        pytest.param(
+            "C:" + chr(92).join(("", "workspace", "notes.md")), id="root-policy"
+        ),
+        pytest.param("https://example.com/report", id="https"),
+        pytest.param("snapshot:work-items/2026-w29", id="compact-token"),
+        pytest.param("<reference>", id="placeholder"),
+        pytest.param(
+            "<" + _private_reference(("Users",), "posix") + ">", id="posix-placeholder"
+        ),
+        pytest.param(
+            "<" + _private_reference(("Users",), "rooted") + ">",
+            id="native-placeholder",
+        ),
+    ],
+)
+def test_public_references_preserve_success_and_run_identity(reference: str) -> None:
+    request = _successful_request()
+    expected = build_periodic_report_run(request)
+    request["source_snapshots"][0]["snapshot_ref"] = reference
+    # snapshot_ref is output evidence, not an input to run/sink identity.
+    next(
+        source
+        for source in expected["source_snapshots"]
+        if source["source_id"] == "work_items"
+    )["snapshot_ref"] = reference
+
+    result = build_periodic_report_run(request)
+
+    assert result == expected
+    assert result["run_state"]["status"] == "succeeded"
+    assert result["run_state"]["terminal"] is True
+
+
+@pytest.mark.parametrize("input_kind", ["file", "stdin"])
+@pytest.mark.parametrize("spelling", _PATH_SPELLINGS[1:])
+def test_compose_cli_rejects_private_reference_and_recovers_with_public_reference(
+    input_kind: str,
+    spelling: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    request = _successful_request()
+    reference = _private_reference(("private", "tmp"), spelling)
+    request["source_snapshots"][0]["snapshot_ref"] = reference
+    arguments = ["--format", "json", "periodic-report", "compose-run", "--request-json"]
+
+    def compose() -> int:
+        encoded = json.dumps(request)
+        # JSON transport preserves actual one- versus two-backslash strings.
+        assert (
+            json.loads(encoded)["source_snapshots"][0]["snapshot_ref"]
+            == request["source_snapshots"][0]["snapshot_ref"]
+        )
+        if input_kind == "stdin":
+            monkeypatch.setattr(sys, "stdin", io.StringIO(encoded))
+            return main([*arguments, "-"])
+        path = tmp_path / "request.json"
+        path.write_text(encoded, encoding="utf-8")
+        return main([*arguments, str(path)])
+
+    assert compose() == 1
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {
+        "ok": False,
+        "schema_version": "periodic_report_error_v0",
+        "command": "compose-run",
+        "error": (
+            "request.source_snapshots[0].snapshot_ref "
+            "contains a private path or credential-like value"
+        ),
+    }
+    assert reference not in captured.out + captured.err
+    assert json.dumps(reference)[1:-1] not in captured.out + captured.err
+
+    request["source_snapshots"][0]["snapshot_ref"] = "snapshot:work-items/2026-w29"
+    assert compose() == 0
+    assert json.loads(capsys.readouterr().out) == build_periodic_report_run(request)
+
+
+@pytest.mark.parametrize(
+    "separator", [pytest.param("/", id="posix"), pytest.param(chr(92), id="native")]
+)
+def test_long_non_root_separator_run_reaches_reference_length_validation(
+    separator: str,
+) -> None:
+    # Bound an adversarial negative search so a regression cannot hang pytest.
+    script = """
+import sys
+sys.path.insert(0, "tests/capabilities")
+from test_periodic_report import _request
+from loopx.capabilities.periodic_report import build_periodic_report_run
+
+request = _request()
+request["source_snapshots"][0]["snapshot_ref"] = sys.argv[1] * 65536
+try:
+    build_periodic_report_run(request)
+except ValueError as error:
+    assert str(error) == "source_snapshots[0].snapshot_ref exceeds 500 characters"
+else:
+    raise AssertionError("oversized reference was accepted")
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script, separator],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def _request() -> dict[str, object]:
     return {
         "schema_version": "periodic_report_run_request_v0",

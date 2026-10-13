@@ -231,39 +231,52 @@ def apply_team_plan(
         result["projection_delivery"] = projected.get("projection_delivery")
         return result
 
-    # Only unpromoted Goals need the source writer and capture producer. Keep
-    # canonical replay and projection independent of this compatibility path.
-    from ..coordination.legacy_writer_fence import legacy_todo_write_transaction
-    from ..coordination.runtime_shadow_writer_adapter import (
-        begin_todo_runtime_shadow_capture, settle_todo_runtime_shadow_capture,
-    )
+    # Lock the original source before consulting its receipt. A management hold
+    # stops fresh writes, not readback of an already-published operation. Keep
+    # receipt identity validation in the shared typed planner.
+    from ..coordination.legacy_writer_fence import require_legacy_todo_write_allowed
     from ..runtime.document_io import verify_state_text_durable
-    from ..todos.active_state_editing import (
-        insert_into_existing_section, insert_new_section, section_bounds,
-        replace_updated_at,
-    )
-    from ..todos.contract import format_todo_metadata_line, parse_todo_metadata_line
 
     with exclusive_cross_runtime_file_lock(registry_path, operation="team_plan_commit"), \
-            legacy_todo_write_transaction(registry_path, goal_id, state, agent_id,
-            "todo_add", False, runtime_root=runtime):
+            exclusive_cross_runtime_file_lock(
+                legacy_coordination_todo_lock_path(runtime_root=runtime, goal_id=goal_id),
+                agent_id=agent_id, operation="legacy_coordination_todo_write"), \
+            exclusive_cross_runtime_file_lock(state, agent_id=agent_id, operation="todo_add"):
         read_source_request()
         original = state.read_text(encoding="utf-8")
         previous = previous_receipt(original)
+        if previous is not None:
+            # Promotion may have completed while these locks were acquired.
+            # An unavailable selected provider must still fail closed; this is
+            # original receipt recovery, never a Markdown authority fallback.
+            read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal_id)
+            replay = effect_runtime_result("work_items.team_plan.plan", {
+                **request, "previous_receipt": previous})
+            verify_state_text_durable(state, original)
+            return dict(replay["result"])
+        require_legacy_todo_write_allowed(
+            registry_path=registry_path, runtime_root=runtime, goal_id=goal_id, state_file=state)
+        # Recovery above needs neither the source producer nor Markdown editing.
+        from ..coordination.runtime_shadow_writer_adapter import (
+            begin_todo_runtime_shadow_capture, settle_todo_runtime_shadow_capture,
+        )
+        from ..todos.active_state_editing import (
+            insert_into_existing_section, insert_new_section, section_bounds,
+            replace_updated_at,
+        )
+        from ..todos.contract import format_todo_metadata_line, parse_todo_metadata_line
+
         existing = [metadata for line in original.splitlines()
                     if (metadata := parse_todo_metadata_line(line)) is not None]
         current_fingerprint = read_fingerprint() if read_fingerprint else None
         try:
             planned = effect_runtime_result("work_items.team_plan.plan", {
-                **request, "previous_receipt": previous, "todos": existing,
+                **request, "todos": existing,
                 "current_state_fingerprint": current_fingerprint,
             })
         except EffectRuntimeRejected as error:
             raise TeamPlanCommitError(error.diagnostic_code, str(error), current_fingerprint) from None
         result = dict(planned["result"])
-        if planned["replayed"]:
-            verify_state_text_durable(state, original)
-            return result
         capture = begin_todo_runtime_shadow_capture(registry_path=registry_path,
             runtime_root=runtime, goal_id=goal_id, state_path=state,
             write_class="todo_add", original_text=original)

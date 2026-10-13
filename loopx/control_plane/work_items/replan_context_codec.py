@@ -144,6 +144,7 @@ def project_replan_context(
     source_status: Mapping[str, Any] | None = None,
     goal_acceptance_contract: Mapping[str, Any] | None = None,
     stride_strategy: str = "off",
+    explore_context: Mapping[str, Any] | None = None,
     history_newest_first: bool | None = None,
 ) -> dict[str, Any]:
     from .replan_history_codec import project_replan_request
@@ -167,6 +168,7 @@ def project_replan_context(
                 include_decisions=strategy != "off" or bool(evidence_ref and evidence_ref.startswith("replan-decision-")),
                 history_newest_first=history_newest_first),
             "stride_strategy": strategy,
+            **({"explore_context": explore_context} if explore_context is not None else {}),
             "evidence_ref": evidence_ref,
             "read_prefix": shlex.join(prefix),
             "goal_facts": _goal_facts(source_status, goal_id, goal_acceptance_contract) if evidence_ref is None else {},

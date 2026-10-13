@@ -59,6 +59,8 @@
     "loopx/control_plane/goals/vision_checkpoint.ts",
     "loopx/control_plane/goals/shared_goal_alignment.ts",
     "loopx/control_plane/goals/goal_amendment_proposal.ts",
+    "loopx/control_plane/goals/goal_amendment_authority.ts",
+    "tests/control_plane_ts/goal_amendment_authority.test.ts",
     "loopx/control_plane/goals/goal_instance_identity.ts",
     "loopx/control_plane/goals/chat_session_lifecycle.ts",
     "loopx/control_plane/quota/settlement_workspace_causality.ts",
@@ -179,6 +181,8 @@
     "tests/control_plane_ts/chat_session_lifecycle.test.ts",
     "tests/control_plane_ts/test_python_runtime.test.ts",
     "loopx/control_plane/goals/direction_baseline.ts",
-    "tests/control_plane_ts/direction_baseline.test.ts"
+    "tests/control_plane_ts/direction_baseline.test.ts",
+    "loopx/zcode_goal_mode/*.ts",
+    "tests/control_plane_ts/zcode*.test.ts"
   ]
 }

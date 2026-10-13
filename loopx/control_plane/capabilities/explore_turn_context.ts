@@ -26,7 +26,7 @@ function evidenceCount(audit: JsonObject, kind: string, detailCount: number): nu
   }
   return Math.max(detailCount, total);
 }
-function branchContext(row: JsonObject): JsonObject {
+function branchContext(row: JsonObject, findingDigests?: Map<string, string>): JsonObject {
   const result = compact(row, ["todo_id", "text", "branch_role", "score", "confidence",
     "selection_status", "status", "actionable_open", "resume_when", "resume_ready"]);
   if (row.typed_evidence_audit == null) return result;
@@ -43,7 +43,8 @@ function branchContext(row: JsonObject): JsonObject {
     omitted_requested_node_refs: Math.max(0, requested.length - 8),
     omitted_unknown_node_refs: Math.max(0, unknown.length - 8),
     nodes: nodes.slice(0, 3).map(node => compact(node, ["node_id", "title", "status"])),
-    findings: findings.slice(0, 3).map(finding => compact(finding, ["finding_id", "node_id", "finding", "status"])),
+    findings: findings.slice(0, 3).map(finding => ({...compact(finding, ["finding_id", "node_id", "finding", "status"]),
+      ...(findingDigests?.has(String(finding.finding_id)) ? {source_sha256: findingDigests.get(String(finding.finding_id))} : {})})),
     relevant_edges: edges.slice(0, 3).map(edge => compact(edge, ["from_node", "to_node", "edge_type"])),
     omitted_audit_nodes: Math.max(0, nodes.length - 3),
     omitted_audit_findings: Math.max(0, evidenceCount(audit, "findings", findings.length) - 3),
@@ -64,6 +65,11 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   const nodes = rows(projection.nodes).sort((a, b) =>
     String(b.last_updated_at ?? "").localeCompare(String(a.last_updated_at ?? "")));
   const findings = rows(projection.findings);
+  if (params.include_finding_digests != null && typeof params.include_finding_digests !== "boolean") {
+    throw new EffectRuntimeRequestError("include_finding_digests must be a boolean");
+  }
+  const findingDigests = params.include_finding_digests === true ? new Map(findings.map(row =>
+    [String(row.finding_id), createHash("sha256").update(JSON.stringify(row)).digest("hex")])) : undefined;
   const branches = rows(plan.selected_branches);
   const rejected = rows(plan.rejected_candidates);
   const frontier = rows(projection.frontier);
@@ -120,13 +126,15 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       counts: projection.counts ?? {},
       recent_nodes: nodes.slice(0, 3).map(row => compact(row, ["node_id", "title", "status", "blocked_reason"])),
       // The canonical evidence projection calls the finding's title `finding`.
-      recent_findings: findings.slice(0, 3).map(row => compact({...row, title: row.finding}, ["finding_id", "node_id", "title", "status"])),
+      recent_findings: findings.slice(0, 3).map(row => ({...compact({...row, title: row.finding}, ["finding_id", "node_id", "title", "status"]),
+        ...(findingDigests?.has(String(row.finding_id)) ? {source_sha256: findingDigests.get(String(row.finding_id))} : {})})),
       // Full scoped summaries; progressive reads can raise the page size.
       // These retain the observation AND applicability; clipping away conditions
       // could turn a bounded refutation into a blanket route ban.
       writeback_results: visibleResults
         .map(row => ({...compact(row, ["finding_id", "node_id", "finding", "status", "evidence_refs"]),
-          summary: String(row.summary ?? "").slice(0, EXPLORE_WRITEBACK_SUMMARY_LIMIT)})),
+          summary: String(row.summary ?? "").slice(0, EXPLORE_WRITEBACK_SUMMARY_LIMIT),
+          ...(findingDigests?.has(String(row.finding_id)) ? {source_sha256: findingDigests.get(String(row.finding_id))} : {})})),
       result_page: {
         total: resultRows.length, offset: resultOffset, limit: resultLimit,
         remaining: remainingResults, revision: resultRevision,
@@ -155,9 +163,9 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
     harness: harness ? {
       orchestration_gate: gate,
       candidate_count: plan.candidate_count ?? 0,
-      selected_branches: branches.slice(0, 3).map(branchContext),
+      selected_branches: branches.slice(0, 3).map(branch => branchContext(branch, findingDigests)),
       omitted_selected_branches: Math.max(0, branches.length - 3),
-      rejected_candidates: rejected.slice(0, 3).map(branchContext),
+      rejected_candidates: rejected.slice(0, 3).map(branch => branchContext(branch)),
       omitted_rejected_candidates: Math.max(0,
         requireInteger(plan.rejected_candidate_count ?? rejected.length, "rejected_candidate_count") - 3),
       frontier: frontier.slice(0, 3).map(node => compact(node, ["node_id", "title", "status", "summary"])),

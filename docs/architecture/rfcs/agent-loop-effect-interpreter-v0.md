@@ -467,7 +467,7 @@ Current source-path audit for the first convergence slice:
 | Full requirements | Authoritative Agent-channel work context plus remaining reads; effective Todo, acceptance and scoped User obligations, with the full Goal on its progressive read | Registered source readers fulfill current task reads inline in both transports; the mixed Goal remains mandatory on its full read path; source failure holds dependent delivery. Live model adoption and packaged host journeys remain unqualified |
 | Capability refusal | Existing quota `capability_gate_v0`; compact boundary now retains exact `required`/`missing` arrays and historical source names | This repairs omitted facts, not readiness policy or capability activation |
 | Selection / claim / lease | Selected Todo, action portfolio and current owning transactions | Compact selected ownership is not a fresh lease; retain the captured source and revalidate at the owning mutation |
-| Replan / Goal closure | Replan action packet, contract capsule and vision audit | Full evidence remains on authorized detail paths; Todo completion is not Goal completion |
+| Replan / Goal closure | Replan action packet and the existing TS capsule preserve full audit steps/guidance, current judge and evidence/non-proof conditions | Same captured File/SQLite decisions qualify clause retention and signature mutation; full evidence stays on authorized detail paths. Host/model adoption remains open; Todo completion is not Goal completion |
 | Settlement / scheduler | Intact typed settlement plan and explicit host-owned scheduler projection; omitted scheduler argv references resolve the same captured full decision | Unbound detail commands are retired in this projection. Actual host readback, stale mutation refusal and exactly-once recovery still need host adoption qualification |
 | Optional memory | Verified boundary participation plus fresh host binding | Off/recall/ingest/stale/provider-failure isolation remains mandatory; transport parity is not model value |
 
@@ -480,6 +480,19 @@ provider-failure and settlement cases remain covered separately, and do not
 qualify installed App convergence or model costs. Keep all three Todos below
 open until their own acceptance is met; this inventory is not blanket permission
 to delete the remaining Python IO adapters.
+
+The continuation-audit projection also retains every ordered closeout step and
+the complete current judge. Earlier capsules dropped those fields while signing
+their already reduced projection, and clipped the continuation guidance to 48
+characters. Captured File/SQLite work and replan paths now retain those clauses
+and reject signature equivalence after a step/order/judge mutation. The existing
+8 KiB diagnostic remains unchanged; required text can exceed it with a warning.
+This closes that transport omission, not the three convergence acceptances or
+permission to retire their active Python/host adapters.
+
+中文：本批修复验收步骤、继续说明和当前判断在 capsule 中丢失的问题；签名一致曾只
+比较已经裁剪过的投影。File/SQLite 同次捕获验证完整条款和篡改后的签名差异；
+8 KiB 警告线保留。安装态 host、模型效果及整体统一仍按原三个 Todo 验收。
 
 The unified required-work context proposal now returns full current task sources in
 ordinary Heartbeat/quota packets as well as signed envelopes, without enabling
@@ -526,6 +539,18 @@ Remaining implementation Todos, in dependency order:
 | Reconcile execution/context requirements across heartbeat and TurnEnvelope | Same captured authoritative decision preserves actor/Goal/Todo, required full reads, claim/lease, action selection, replan/closure, conditional settlement and scheduler ownership. Inventory omitted/duplicated facts before deleting render branches. Include optional capabilities off, recall-only, ingest-only, stale binding and provider failure; private detail is accessed only through authorized references. |
 | Adopt one typed projection in real host renderers | Heartbeat full/thin and Turn host consume the same execution facts and per-Turn capture/detail route. Keep host-specific notification and scheduler transport explicit. Real File/SQLite CLI plus packaged Codex App tests cover reentry, source loss, refusal before required reads, late results, backoff and exactly-once settlement; no second admission from a detail read. Retire the replaced projection only after its last caller moves. |
 | Qualify the context shape and migration default | Compare the same normal, replan, wait/recovery and optional-capability workloads against both current full and compact paths. Measure payload/model tokens, detail IO, latency, resource growth, omissions and decision/outcome quality. Keep data loss, duplicate effects, identity and settlement errors as hard constraints. Preserve supported saved prompts/receipts and reversible rollout; change budgets or defaults only with that evidence. |
+
+Native Turn detail adoption now persists the real `run-once` producer's full
+observation and binds the Host request to it through the existing TS envelope
+owner. Real File/SQLite CLI tests inspect actual subprocess input, change the
+canonical Todo source, and verify original detail, retry and no-effect replay.
+The model provider is a protocol fixture. Read-only planning and optional quota
+capture defaults remain unchanged; native executing Turns now retain private
+capture evidence. Missing or mismatched evidence refuses Host reinvocation;
+legacy cached-result recovery and terminal readback preserve original receipts.
+This closes the producer-to-detail transport gap only. Live models, packaged
+App/Lark, later authority checks and the remaining convergence matrix retain
+their independent acceptance; no Python projection is retired by this slice.
 
 The earlier cost slice reproduced a regression-budget gap, rather than a
 missing fixture alias or permission to remove required context. Comparing

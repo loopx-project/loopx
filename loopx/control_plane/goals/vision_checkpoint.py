@@ -75,6 +75,7 @@ def prepare_vision_refresh(
     existing_agent_vision: dict[str, Any] | None,
     merge_patch: bool,
     require_path_delta_for_durable_change: bool,
+    allow_terminal_stride_path: bool = False,
 ) -> dict[str, Any]:
     """Run the TS-owned Vision preflight before semantic-replan qualification."""
 
@@ -92,6 +93,7 @@ def prepare_vision_refresh(
                 "require_path_delta_for_durable_change": bool(
                     require_path_delta_for_durable_change
                 ),
+                "allow_terminal_stride_path": allow_terminal_stride_path,
             },
         )
     except EffectRuntimeRejected as exc:

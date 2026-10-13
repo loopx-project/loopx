@@ -203,10 +203,33 @@ export const conversationActivityScenario = {
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "任务", exact: true }).click();
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
       assert.equal(await page.getByLabel("追加给本轮的指令").inputValue(), "先检查最新证据。", "blocked storage preserves drafts within this page");
+      const dispatchedBeforeStorageFailure = adjustments.length;
+      await page.getByRole("button", { name: "发送调整", exact: true }).click();
+      await page.getByText("调整尚未发送：浏览器存储无法保存重试信息。草稿仍保留在本页，请恢复存储后重试。", {exact: true}).waitFor();
+      assert.equal(adjustments.length, dispatchedBeforeStorageFailure, "Storage failure cannot dispatch inline steering");
+      const goalComposer = page.getByRole("textbox", { name: /发送消息|Send message/ });
+      await goalComposer.fill("输入框中的独立调整。");
+      await goalComposer.press("Enter");
+      await page.locator(".personal-action-feedback").filter({hasText: "调整尚未发送"}).waitFor();
+      assert.equal(adjustments.length, dispatchedBeforeStorageFailure, "The composer uses the same pre-dispatch persistence guard");
+      assert.equal(await goalComposer.inputValue(), "输入框中的独立调整。", "The refused composer draft stays editable");
+      await page.screenshot({path: resolve(outputDir, "conversation-steering-storage-unavailable.png"), animations: "disabled"});
+      await goalComposer.fill("");
+      await page.evaluate(() => { delete window.sessionStorage.setItem; });
+      await page.getByLabel("追加给本轮的指令").fill("先检查最新证据，再继续。");
+      const durableInline = await page.evaluate(() => JSON.parse(sessionStorage.getItem("loopx-pw-composer-steering"))
+        .find(([, request]) => request.text === "先检查最新证据，再继续。")[1]);
+      await page.evaluate(() => { window.sessionStorage.setItem = () => { throw new Error("QuotaExceededError"); }; });
+      await goalComposer.fill("另一个尚未保存的调整。");
+      await goalComposer.press("Enter");
+      assert.equal(adjustments.length, dispatchedBeforeStorageFailure, "A new composer identity still requires persistence");
       await page.getByRole("button", { name: "发送调整", exact: true }).click();
       await page.locator(".personal-message")
         .filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) })
         .getByRole("status").filter({ hasText: "执行器已接收本轮追加指令。" }).waitFor();
+      assert.equal(adjustments.at(-1).client_ingress_id, durableInline.id, "Unsaved composer draft cannot block the durable inline identity");
+      assert.equal(await goalComposer.inputValue(), "另一个尚未保存的调整。");
+      await page.evaluate(() => { delete window.sessionStorage.setItem; });
       await page.getByRole("button", { name: "中断本轮", exact: true }).click();
       await page.getByText("已中断。你可以在当前会话继续发送消息。", { exact: true }).waitFor();
       assert.deepEqual(api.interrupts.at(-1), { sessionId: goalTurn.sessionId, turnId: goalTurn.turnId });

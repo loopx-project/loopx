@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { goalStorageEditorValue, parseEditableCapabilityJson, projectEditableCapabilityConfiguration } from "../src/data/capability-configuration.js";
+import { goalStorageEditorValue, parseEditableCapabilityJson, projectEditableCapabilityConfiguration, replanCadenceEditorDefaults } from "../src/data/capability-configuration.js";
 
 const periodicReportEditor = {
   fields: [
@@ -13,6 +13,22 @@ const periodicReportEditor = {
 };
 
 const storageEditor = { fields: [{ key: "new_goal_provider" }, { key: "canonical_creation" }, { key: "new_goal_handoff_mode" }] };
+const cadenceEditor = { fields: [{ key: "count_unit" }, { key: "count" }, { key: "stride_strategy" }] };
+const cadenceDefault = { count_unit: "effective_turns", count: 6, stride_strategy: "off" };
+assert.deepEqual(projectEditableCapabilityConfiguration(cadenceEditor,
+  { stride_strategy: "evidence_conditioned_v1" },
+  replanCadenceEditorDefaults({ count_unit: "effective_turns", count: 3, stride_strategy: "off" }, cadenceDefault)),
+  { count_unit: "effective_turns", count: 3, stride_strategy: "evidence_conditioned_v1" },
+  "a sparse JSON draft returning to the form preserves the effective review interval");
+assert.deepEqual(projectEditableCapabilityConfiguration(cadenceEditor,
+  { count_unit: "completed_todos", count: 2 },
+  replanCadenceEditorDefaults({ count_unit: "effective_turns", count: 3, stride_strategy: "evidence_conditioned_v1" }, cadenceDefault)),
+  { count_unit: "completed_todos", count: 2, stride_strategy: "off" },
+  "an explicit cadence wins and omitted strategy retains default-off semantics");
+assert.deepEqual(replanCadenceEditorDefaults(
+  { schema_version: "todo_replan_cadence_machine_defaults_v0", completed_todos: 4 }, cadenceDefault),
+  { count_unit: "completed_todos", count: 4, stride_strategy: "off" },
+  "legacy effective intervals retain their own unit and count");
 const storageDefault = { schema_version: "loopx_goal_storage_defaults_v1", new_goal_provider: "sqlite",
   canonical_creation: true, new_goal_handoff_mode: "hard_lease" };
 assert.deepEqual(projectEditableCapabilityConfiguration(storageEditor,

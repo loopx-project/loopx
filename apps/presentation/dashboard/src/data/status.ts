@@ -537,6 +537,7 @@ export const runRecordSchema = z.object({
 });
 
 export const runGoalSchema = z.object({
+  zcode_goal_eligible_agent_ids: z.array(z.string()).optional().default([]).catch([]),
   acceptance_observation: goalAcceptanceObservationSchema.optional().nullable().catch(null),
   id: z.string(),
   activation_state: z.enum(["active", "stopped"]).optional().default("active"),

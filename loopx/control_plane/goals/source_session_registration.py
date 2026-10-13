@@ -214,6 +214,11 @@ def _creation_receipt(
         "request_digest": journal["request_digest"],
         "goal_ref": copy.deepcopy(journal["goal_ref"]),
         "created_at": journal["created_at"],
+        # Preserve the original owner declaration for later canonical intent
+        # initialization. Old receipts stay historical and are never backfilled.
+        "root_commitments": {"objective": request.objective,
+            "non_goals": list(request.non_goals), "acceptance": list(request.acceptance),
+            "stop_condition": request.stop_condition},
     }
 
 
@@ -280,7 +285,53 @@ def _matching_creation_receipt(
     return receipt
 
 
+def configure_source_creation_goal(goal: dict[str, Any], agents: list[str], provider: str | None, operation_id: str | None) -> None:
+    """Bind optional creation inputs; all state decisions remain with their owners."""
+    from ...agent_registry import normalize_registered_agents
+    from ..todos.contract import normalize_todo_claimed_by
+    from ..coordination.new_goal_storage_transport import resolve_canonical_creation_target
+    if agents:
+        if len(agents) > 128 or any(normalize_todo_claimed_by(agent) is None for agent in agents):
+            raise ValueError("registered_agents must be a bounded list of valid peer identifiers")
+        goal["coordination"] = {**goal.get("coordination", {}),
+            "agent_model": "peer_v1", "registered_agents": normalize_registered_agents(agents)}
+    if provider is not None:
+        goal["creation_operation_id"] = operation_id
+        goal["coordination"] = {**goal.get("coordination", {}), "storage_target": resolve_canonical_creation_target(provider)}
+
+
 def register_fresh_source_session_project(
+    request: FreshSourceSessionRegistration,
+) -> dict[str, Any]:
+    result = _register_fresh_source_session_project(request)
+    if (request.goal_record.get("coordination") or {}).get("storage_target") is None:
+        return result
+    # A fresh authority is optional and bound to the original creation request.
+    # Reuse its existing empty-source/fence/receipt owner after publication;
+    # interrupted initialization retries the same operation, never migration.
+    from ..coordination.new_goal_storage_transport import initialize_goal_storage_target
+    from ..effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
+    from ..projects.registry_codec import load_project_registry
+    from .source_session_registry_state import current_goal_ref
+    with exclusive_cross_runtime_file_lock(guard_path(request.registry_path, request.goal_id),
+                                          operation="source_session_goal_lifetime"):
+        registry = load_project_registry(request.registry_path)
+        current_ref, goal = current_goal_ref(registry, goal_id=request.goal_id)
+        if current_ref != result["goal_ref"] or goal != result["goal"]:
+            raise ValueError("Source Goal changed before authority initialization; inspect its current lifetime")
+        try:
+            result["storage_initialization"] = initialize_goal_storage_target(
+                request.runtime_root, goal, registry_path=request.registry_path)
+        except (OSError, ValueError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
+            # Registration is already durable. Do not call it an unchanged
+            # failure or infer that the provider write did not occur.
+            result.update(ok=False, storage_initialization=None,
+                error="Goal registration is retained; authority initialization is unconfirmed. Retry the original registration operation.",
+                recovery={"operation_id": request.operation_id, "retry_with_same_operation_id": True})
+    return result
+
+
+def _register_fresh_source_session_project(
     request: FreshSourceSessionRegistration,
 ) -> dict[str, Any]:
     """Create or replay the one fresh-project source-session publication."""

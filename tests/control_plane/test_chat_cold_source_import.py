@@ -26,7 +26,9 @@ def cold_api(tmp_path, monkeypatch, request, capture_present):
         for name in ("todos.py", "bootstrap.py",
             "control_plane/coordination/runtime_shadow_writer_adapter.py",
             "control_plane/coordination/local_authority_shadow_outbox.py"):
-            (receiver / "loopx" / name).unlink()
+            # The consumer-retirement fixture can already have removed part
+            # of this same set before the cold receiver is copied.
+            (receiver / "loopx" / name).unlink(missing_ok=True)
     registry = tmp_path / "project/.loopx/registry.json"
     if request.param:
         # The configured registry may live outside conventional Goal folders.

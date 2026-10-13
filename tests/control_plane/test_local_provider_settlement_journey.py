@@ -14,8 +14,8 @@ from pathlib import Path
 
 from canonical_authority_fixture import isolate_sqlite_runtime
 import test_quota_settlement_cli as settlement
-from test_quota_authority_settlement_journey import _source
 from test_todo_list_record_references import expand_references
+from test_quota_authority_settlement_journey import _source
 
 
 REPO = Path(__file__).resolve().parents[2]

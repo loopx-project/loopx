@@ -241,10 +241,13 @@ function projectQuotaActionPortfolioV1(
     if (unavailableHigherPriority.length >= MAX_ALTERNATIVE_ACTIONS) break;
   }
 
-  if (!requirePlanningChoice && alternativeActions.length === 0 && unavailableHigherPriority.length === 0) {
+  // A recommendation is not acceptance of unclaimed work, even when it is
+  // the only runnable candidate. Reuse the existing explicit-choice boundary.
+  const requiresExplicitTurnBinding = requirePlanningChoice ||
+    primary.claim_required_before_work === true || alternativeActions.length > 0;
+  if (!requiresExplicitTurnBinding && unavailableHigherPriority.length === 0) {
     return null;
   }
-  const requiresExplicitTurnBinding = requirePlanningChoice || alternativeActions.length > 0;
   return {
     schema_version: ACTION_PORTFOLIO_SCHEMA_VERSION,
     primary: primaryProjection(primary),

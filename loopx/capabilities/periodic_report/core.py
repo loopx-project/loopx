@@ -36,7 +36,10 @@ _REPORTABLE_TRIGGER_KINDS = {
     "vision_closed",
 }
 _LOCAL_PATH_SURFACE_PATTERN = re.compile(
-    r"(?<!<)/(?:Users|Volumes|home|var/folders|tmp|private/tmp)/[^\s`'\"<>]+"
+    # search() can start at the last separator in a run; repeating the prefix
+    # would rescan long non-root runs before the request's length validation.
+    r"(?<!<)[\\/](?:Users|Volumes|home|var[\\/]+folders|tmp|private[\\/]+tmp)"
+    r"[\\/]+[^\s`'\"<>]+"
 )
 _FORBIDDEN_RAW_KEYS = {
     "credential",

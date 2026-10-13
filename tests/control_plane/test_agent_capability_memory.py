@@ -29,7 +29,7 @@ def test_next_turn_reuses_declared_runtime_capability(tmp_path):
 
 
 def test_goal_inheritance_local_failure_recovery_and_forget(tmp_path):
-    _, runtime, registry = _write_fixture(tmp_path, required_capability="network")
+    _, runtime, registry = _write_fixture(tmp_path, required_capability="network", claimed=False)
     data = json.loads(registry.read_text())
     data["goals"][0]["coordination"]["available_capabilities"] = ["network"]
     data["goals"][0]["coordination"]["registered_agents"].append("agent-b")
@@ -69,7 +69,7 @@ def test_owner_authority_and_optional_enablement_are_not_remembered(tmp_path):
 
 
 def test_observation_does_not_cross_registry_or_agent(tmp_path):
-    _, runtime, registry = _write_fixture(tmp_path, required_capability="network")
+    _, runtime, registry = _write_fixture(tmp_path, required_capability="network", claimed=False)
     data = json.loads(registry.read_text())
     data["goals"][0]["coordination"]["registered_agents"].append("agent-b")
     registry.write_text(json.dumps(data))

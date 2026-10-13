@@ -117,6 +117,17 @@ These directly determine whether a long-running team is usable. A directory or R
 
 The bounded S6/S8 source-reading slice provides a [read-only MCP adapter for an existing Ego Page](../../integrations/ego-source-reader.md): rendered text, image indices and one indexed rendered image region within configured origins and an exact URL fence. It creates no Session, material authority or browser service. Text/image navigation now has a bounded semantic-content readiness check scoped to primary semantic content rather than an ancillary sidebar article; navigation text alone cannot satisfy it, busy content ancestors still delay extraction, and image reads accept loaded visible pixels without requiring a caption. One native Bot text round read the observed article through its final paragraph and returned streamed progress and the answer in the original conversation; its first-answer latency remains unqualified. Native Bot single-image consumption has also been observed, but neither proves all images or the referenced primary post. Source capture, verification walls, truncation, unloaded images and optional provider setup keep their separate acceptance boundaries; this slice does not close the materials journey.
 
+The bounded S4/S5/S7/S8/S12 [ZCode native CLI provider](../../../loopx/zcode_goal_mode/README.md)
+adds explicit binding, model selection, start/pause/resume/stop and live readback
+through the existing CLI and Goal detail drawer. It reuses Core Goal/Agent
+identity and quota admission/revocation, isolates the managed session and keeps
+the skill facade as default. Packaged recovery now exercises one real API,
+bridge and persistent journal owner with a vendor-protocol substitute; matched
+shared-off observations preserve schemas, user text and durable effects. This
+qualifies that bounded recovery path; per-call hard budgets, live billing, Desktop attachment,
+Automations and multi-Agent acceptance remain separate. This closes no G1 or
+fleet qualification gate.
+
 ## 3. Portfolio Milestones, Resource Ordering and Completion
 
 S streams describe ongoing ownership, G milestones qualify a product combination, and R cards specify the current core implementation slices. These are cross-references, not a runtime state machine. Progress is evidence-gated rather than date-promised. Changes in capacity or business priority update canonical Todos rather than assuming every stream starts simultaneously.
@@ -329,7 +340,7 @@ subsystem was not performed. Section 8 records the focused audit.
 | [TypeScript Control-Plane Migration Direction v0](typescript-control-plane-migration-v0.md) | S2 | Accepted; whole-transaction migration active | P0/P1: R1–R4 hot transactions first; T0–T4 caller/deletion/cost evidence; no full rewrite prerequisite |
 | [Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)](semantic-vocabulary-convergence-v0.md) | S2 | Accepted; registry/inventory/drift and subsequent typed slices exist | P1: converge by semantic role and active producer/consumer; no name-based enum merging; review schema changes separately |
 | [LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.md) | S2/S3/S7 | Accepted; stores, local transactions and service-admission foundations exist | P1→P2: R5 local D1–D3, R6 authenticated hosts; real backend/soak/recovery before promotion |
-| [Shared Goal Alignment and Governed Amendment Protocol (v0)](shared-goal-alignment-and-governed-amendment-v0.md) | S3 | Accepted; Stage 1/2 and owner acceptance readback; full intent/commit incomplete | P1: #3836 governed acceptance amendments and peer adoption; R4 CAS/lease impact, conflicts and lost-response receipts |
+| [Shared Goal Alignment and Governed Amendment Protocol (v0)](shared-goal-alignment-and-governed-amendment-v0.md) | S3 | Accepted; Stage 1/2 and bounded local root/template commit; generic adoption incomplete | P1: #3836 governed acceptance amendments and peer adoption; R4 CAS/lease impact, conflicts and lost-response receipts |
 | [Goal Direction Baseline (v0)](goal-direction-baseline-v0.md) | S3/S6 | Accepted; material read-model proposal | P1: #2831 direction-material revision to acceptance basis linkage; same-Agent/current-revision fixtures |
 | [Goal Artifact Lifecycle Projection (milestone / guard / next-transition) v0](goal-artifact-lifecycle-projection-v0.md) | S3/S5 | Accepted; read-model proposal | P1: derive milestone/guard/next transition from typed facts; no process engine |
 | [Capable Agent Manager and Semantic Work Handoff (v0)](capable-manager-semantic-handoff-v0.md) | S1/S3 | Accepted; shared request assessment/Core-link context and scoped worker linking qualified; M1–M4 not fully qualified | P0→P1: owner → steward → managed Agent authority inheritance, receiver-owned planning, actual work and original-route return in R1/R2 real teams and R3; continuation matrix and A1–A20. An authorized steward group retains its owner's managed read/effect scope; do not reduce it merely because the entrypoint is external |

@@ -267,6 +267,16 @@ prerequisite: packaged Dashboard and live Lark rendering/adoption are separate
 acceptance stages. No new timer, authority, setting, canonical Todo field,
 financial clock, or automatically executing display action is introduced.
 
+Status CLI and HTTP now consume the same per-agent retry projection before
+building their Todo index. The task inspector displays the recorded time,
+original retry-check deadline and original Turn. Its `resume_condition`
+contains the read-only `blocked_retry` provenance so existing structured readers
+can retain it. At the deadline, or after a superseding work Run, the projection
+disappears on the next status read; no Todo or receipt is rewritten. Canonical
+waits, foreign claims and unrelated work retain their existing behavior.
+This adds no execution button, permission, timer or debit. Lark transports can
+read the same status data; live Lark delivery remains separately qualified.
+
 原生 blocked/outcome_gap Run 可以拥有五分钟 retry，而 canonical Todo 仍为
 OPEN、没有 resume_when。临时选择投影只作用于同一 Goal/Agent/Todo，到原到期
 时点即消失；更新的工作 Run 会替代旧等待。blocked_retry 保留原 Turn、来源和
@@ -278,3 +288,10 @@ retry 暂时移除唯一可执行工作时，独立 user_action 仍是提醒，�
 既有角色间隔下限；真实用户门禁继续阻塞执行。唤醒只意味着重新读取 quota、
 claim/lease 与当前门禁，不授权执行，也不承诺精确时刻运行。到期不需修改原
 Todo 或回执。CLI/heartbeat 同源；打包 App、真实 Lark 展示与采用仍须分别验收。
+
+status CLI／HTTP 现在于构建 Todo 索引前消费同一角色 retry 投影。既有任务详情
+显示原记录时间、重试资格核验时点与原 Turn；`resume_condition.blocked_retry`
+保留只读来源，结构化读者可继续传递。到期或被新工作 Run 替代后，下次 status
+读取即移除投影，不改原 Todo／回执。canonical 等待、其他 claimant 及独立工作
+保持原行为；不增加执行按钮、权限、计时器或扣额。Lark 可复用同源 status 数据，
+真实送达仍需单独验收。

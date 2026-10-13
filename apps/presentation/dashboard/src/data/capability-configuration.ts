@@ -61,6 +61,16 @@ export function replanCadenceEditorValue(value: unknown): unknown {
   return { ...record, stride_strategy: record.stride_strategy ?? "off" };
 }
 
+/** Fill omitted review interval fields from the currently effective value. */
+export function replanCadenceEditorDefaults(effective: unknown, fallback: unknown): Record<string, unknown> {
+  const defaults = { ...configurationObject(fallback) };
+  const live = configurationObject(replanCadenceEditorValue(effective));
+  if (Object.hasOwn(live, "count_unit")) defaults.count_unit = live.count_unit;
+  if (Object.hasOwn(live, "count")) defaults.count = live.count;
+  // Strategy omission keeps the existing default-off meaning.
+  return defaults;
+}
+
 /** A v0 storage selector did not enable creation; opening Settings must not. */
 export function goalStorageEditorValue(value: unknown): unknown {
   const record = configurationObject(value);

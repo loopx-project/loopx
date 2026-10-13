@@ -89,7 +89,9 @@ def _write_fixture(
     root: Path,
     *,
     required_capability: str | None = None,
+    claimed: bool = True,
 ) -> tuple[Path, Path, Path]:
+    """Build owned delivery work; claim-authoring scenarios must opt out."""
     project = root / "project"
     runtime = root / "runtime"
     state_file = f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
@@ -99,6 +101,7 @@ def _write_fixture(
     capability_metadata = (
         f" required_capabilities={required_capability}" if required_capability else ""
     )
+    claim_metadata = f"claimed_by={AGENT_ID} " if claimed else ""
     state_path.write_text(
         "---\n"
         "status: active-read-only\n"
@@ -114,6 +117,7 @@ def _write_fixture(
         "## Agent Todo\n\n"
         "- [ ] [P1] Validate and settle the selected delivery.\n"
         f"  <!-- loopx:todo todo_id={TODO_ID} status=open "
+        f"{claim_metadata}"
         "task_class=advancement_task action_kind=validate"
         f"{capability_metadata} -->\n",
         encoding="utf-8",
@@ -1903,6 +1907,8 @@ def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(
         "outcome_progress",
         "--delivery-boundary",
         "in_flight_continuation",
+        "--delivery-workspace-path",
+        str(project),
         "--agent-id",
         AGENT_ID,
         "--todo-id",
@@ -1980,6 +1986,8 @@ def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(
         "outcome_progress",
         "--delivery-boundary",
         "in_flight_continuation",
+        "--delivery-workspace-path",
+        str(project),
         "--agent-id",
         AGENT_ID,
         "--todo-id",
@@ -2041,6 +2049,8 @@ def test_in_flight_progress_settles_while_completion_validation_todo_is_open(
         "outcome_progress",
         "--delivery-boundary",
         "in_flight_continuation",
+        "--delivery-workspace-path",
+        str(project),
         "--agent-id",
         AGENT_ID,
         "--todo-id",
@@ -2935,6 +2945,27 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     )
     assert fresh_turn_rc == 0, fresh_turn
     assert fresh_turn["selected_todo"]["todo_id"] == successor_id
+
+    ack_rc, ack = _run_cli(
+        registry_path,
+        runtime,
+        *original_ack_hint["cli_args"],
+    )
+    # The newer receipt-bound fresh_turn superseded this Turn for host writeback,
+    # even though its original delivery settlement still replays correctly.
+    assert ack_rc == 1, ack
+    assert ack["error_code"] == "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE"
+    assert ack["scheduler_state_mutated"] is False
+    assert ack["write_performed"] is False
+    assert ack["appended"] is False
+    assert load_scheduler_state(
+        runtime,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        state_key=APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+    ) is None
+    assert _spend_run_count(runtime) == 1
+
     fresh_ack_args = fresh_turn["scheduler_hint"]["app_automation"]["ack_hint"]["cli_args"]
     fresh_ack_rc, fresh_ack = _run_cli(registry_path, runtime, *fresh_ack_args)
     assert fresh_ack_rc == 0, fresh_ack
@@ -3527,7 +3558,7 @@ def test_visible_goal_capability_reentry_preserves_turn_through_selection(
 
 
 @pytest.mark.parametrize("host_surface", ["codex-app", "codex-app-ssh"])
-def test_single_todo_guided_start_keeps_direct_delivery_semantics(
+def test_single_claimed_todo_guided_start_keeps_direct_delivery_semantics(
     tmp_path: Path,
     host_surface: str,
 ) -> None:
@@ -3569,6 +3600,65 @@ def test_single_todo_guided_start_keeps_direct_delivery_semantics(
         for step in settlement_plan["ordered_steps"]
         if step["kind"] == "quota_spend"
     )
+
+
+@pytest.mark.parametrize("profile", ["codex_app_heartbeat", "codex_app_ssh_goal"])
+def test_unclaimed_candidate_does_not_create_an_unsettled_work_obligation(
+    tmp_path: Path, profile: str,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path, claimed=False)
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8")
+        + "\n- [ ] [P0] Resume the original delivery after its dependency.\n"
+        + "  <!-- loopx:todo todo_id=todo_owned_wait status=deferred "
+        + f"claimed_by={AGENT_ID} task_class=advancement_task "
+        + "resume_when=todo_done:todo_owner_receipt -->\n"
+        + "\n## User Todo\n\n- [ ] Provide the authorized receipt.\n"
+        + "  <!-- loopx:todo todo_id=todo_owner_receipt status=open "
+        + f"task_class=user_action bound_agent={AGENT_ID} -->\n",
+        encoding="utf-8",
+    )
+    original_state = state_path.read_bytes()
+    guard_args = (
+        "quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--runtime-profile", profile, "--scan-path", str(project),
+    )
+    for turn in ("turn-unclaimed-first", "turn-unclaimed-next"):
+        rc, packet = _run_cli(
+            registry_path, runtime, *guard_args, "--turn-instance-id", turn,
+        )
+        assert rc == 0, packet
+        assert packet["decision"] != "unsettled_host_turn_recovery"
+        cli = packet["interaction_contract"]["cli_channel"]
+        assert cli.get("selection_required") is True
+        assert packet["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+        assert "settlement_plan" not in cli
+        receipt = packet["heartbeat_receipt"]
+        assert "settlement_identity" not in receipt
+        assert receipt.get("closeout_required") is not True
+        assert state_path.read_bytes() == original_state
+        assert _spend_run_count(runtime) == 0
+
+    selection = cli["selection_command"]
+    command = selection["route_prefix"] + " " + selection[
+        "command_args_template"
+    ].replace("{todo_id}", TODO_ID)
+    rc, selected = _run_generated_cli(command, registry_path=registry_path)
+    assert rc == 0, selected
+    identity = selected["heartbeat_receipt"]["settlement_identity"]
+    assert identity["todo_id"] == TODO_ID
+    assert identity["turn_instance_id"] == "turn-unclaimed-next"
+    assert selected["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    assert state_path.read_bytes() == original_state  # Selection is not a claim.
+    assert _spend_run_count(runtime) == 0
+    rc, replay = _run_cli(
+        registry_path, runtime, *guard_args,
+        "--turn-instance-id", "turn-unclaimed-next",
+    )
+    assert rc == 0, replay
+    assert replay["heartbeat_receipt"]["settlement_identity"] == identity
+    assert "action_portfolio" not in replay
 
 
 def test_visible_goal_refresh_and_spend_preserve_selected_todo_causality(
@@ -4110,6 +4200,7 @@ def test_host_owned_turn_executes_projected_selection_and_replays_identity(
         "--turn-instance-id", TURN_ID, "--classification", "validated_progress",
         "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
         "--delivery-boundary", "in_flight_continuation",
+        "--delivery-workspace-path", str(project),
         "--no-global-sync", "--suppress-external-sinks",
     )
     assert refresh_rc == 0, refresh
@@ -4857,7 +4948,9 @@ def test_selection_added_after_pending_guard_reports_final_boundary(
     )
     from loopx.todos import list_goal_todos
 
-    project, runtime, registry_path = _write_fixture(tmp_path)
+    # Preserve the unclaimed-frontier precondition: a claimed original Todo
+    # would remain the default instead of the newly introduced claimed task.
+    project, runtime, registry_path = _write_fixture(tmp_path, claimed=False)
     _configure_selectable_alternative(project)
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     items = list_goal_todos(
@@ -7166,6 +7259,8 @@ def test_settled_turn_defers_prior_unsettled_history_to_fresh_turn(
         "single_surface",
         "--delivery-outcome",
         "outcome_progress",
+        "--delivery-workspace-path",
+        str(project),
         *binding,
         "--no-global-sync",
         "--suppress-external-sinks",

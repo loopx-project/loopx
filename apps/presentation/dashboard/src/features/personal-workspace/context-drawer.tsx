@@ -1,3 +1,4 @@
+import { ZCodeGoalControl } from "./zcode-goal-control";
 import { GoalAcceptanceObservationCard } from "./goal-acceptance-observation-card";
 import { AttentionActions } from "./attention-actions";
 import { AttentionDetailCard } from "./attention-detail-card";
@@ -642,7 +643,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
             <section className="personal-task-inspector-summary">
               <div className="personal-task-inspector-status">
                 <span className={selection.item.done ? "is-done" : selection.item.status === "blocked" ? "is-blocked" : "is-open"}>
-                  <i />{selection.item.done ? t("drawer.taskStatusCompleted") : selection.item.status === "deferred" ? t("drawer.taskStatusDeferred") : selection.item.status === "blocked" ? t("drawer.taskStatusBlocked") : t("drawer.taskStatusOpen")}
+                  <i />{selection.item.done ? t("drawer.taskStatusCompleted") : selection.item.retryReadback ? t("drawer.resumePending") : selection.item.status === "deferred" ? t("drawer.taskStatusDeferred") : selection.item.status === "blocked" ? t("drawer.taskStatusBlocked") : t("drawer.taskStatusOpen")}
                 </span>
                 {selection.item.priority ? <span>{selection.item.priority}</span> : null}
                 <span>{selection.item.taskClass === "advancement_task" ? t("drawer.taskAdvancement") : selection.item.taskClass ?? t("drawer.taskOrdinary")}</span>
@@ -658,19 +659,24 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               <dl>
                 <div><dt>Goal</dt><dd>{selection.item.goalTitle}</dd></div>
                 <div><dt>{t("common.owner")}</dt><dd>{selection.item.claimedBy ? selection.item.ownerLabel ?? selection.item.claimedBy : t("drawer.notAssigned")}</dd></div>
-                <div><dt>{t("common.status")}</dt><dd>{selection.item.done ? t("drawer.taskStatusCompleted") : selection.item.status === "deferred" ? t("drawer.taskStatusDeferred") : selection.item.status === "blocked" ? t("drawer.taskStatusBlocked") : t("drawer.taskStatusOpen")}</dd></div>
+                <div><dt>{t("common.status")}</dt><dd>{selection.item.done ? t("drawer.taskStatusCompleted") : selection.item.retryReadback ? t("drawer.resumePending") : selection.item.status === "deferred" ? t("drawer.taskStatusDeferred") : selection.item.status === "blocked" ? t("drawer.taskStatusBlocked") : t("drawer.taskStatusOpen")}</dd></div>
                 <div><dt>{t("drawer.priority")}</dt><dd>{selection.item.priority ?? t("drawer.notSet")}</dd></div>
                 {selection.item.completedAt ? <div><dt>{t("drawer.completedAt")}</dt><dd><time dateTime={selection.item.completedAt}>{selection.item.completedAt}</time></dd></div> : null}
                 {selection.item.dependencies ? <div><dt>{t("drawer.dependencies")}</dt><dd>{selection.item.dependencies.join(" · ") || t("common.none")}</dd></div> : null}
                 {selection.item.status === "deferred" || selection.item.resumeWhen ? <div><dt>{t("drawer.resumeWhen")}</dt><dd>{selection.item.resumeWhen || t("drawer.notSet")}</dd></div> : null}
                 {selection.item.resumeWhen ? <div><dt>{t("drawer.resumeState")}</dt><dd>{selection.item.resumeInvalidReason === "dependency_cycle" ? t("drawer.resumeCycle") : selection.item.resumeReady == null ? t("drawer.notSet") : selection.item.resumeReady ? t("drawer.resumeReady") : t("drawer.resumePending")}</dd></div> : null}
                 {selection.item.resumeReceiptId ? <div><dt>{t("drawer.resumeReceipt")}</dt><dd>{selection.item.resumeReceiptId}</dd></div> : null}
+                {selection.item.retryReadback ? <>
+                  <div><dt>{t("drawer.retryObserved")}</dt><dd><time dateTime={selection.item.retryReadback.observedAt}>{formatMonitorDate(selection.item.retryReadback.observedAt, locale)}</time></dd></div>
+                  <div><dt>{t("drawer.retryDue")}</dt><dd><time dateTime={selection.item.retryReadback.dueAt}>{formatMonitorDate(selection.item.retryReadback.dueAt, locale)}</time><p>{t("drawer.retryBoundary")}</p></dd></div>
+                  <div><dt>{t("drawer.retryTurn")}</dt><dd><code>{selection.item.retryReadback.turnId}</code></dd></div>
+                </> : null}
                 {selection.item.validationDigest ? <>
                   <div><dt>{t("drawer.validationRevision")}</dt><dd>{selection.item.validationRevision ?? t("drawer.notSet")}</dd></div>
                   <div><dt>{t("drawer.validationDigest")}</dt><dd><code>{selection.item.validationDigest}</code></dd></div>
                   {selection.item.validationRevisionActor ? <div><dt>{t("drawer.validationRevisionActor")}</dt><dd>{selection.item.validationRevisionActor}</dd></div> : null}
                 </> : null}
-                <div><dt>{t("drawer.nextTransition")}</dt><dd>{selection.item.nextTransition ?? (selection.item.done ? t("drawer.taskNextCompleted") : selection.item.resumeInvalidReason === "dependency_cycle" ? t("drawer.taskNextCycle") : selection.item.resumeReady ? t("drawer.taskNextResumeReady") : selection.item.status === "deferred" ? t("drawer.taskNextDeferred") : selection.item.status === "blocked" ? t("drawer.taskNextBlocked") : t("drawer.taskNextOpen"))}</dd></div>
+                <div><dt>{t("drawer.nextTransition")}</dt><dd>{selection.item.nextTransition ?? (selection.item.done ? t("drawer.taskNextCompleted") : selection.item.resumeInvalidReason === "dependency_cycle" ? t("drawer.taskNextCycle") : selection.item.retryReadback ? t("drawer.taskNextDeferred") : selection.item.resumeReady ? t("drawer.taskNextResumeReady") : selection.item.status === "deferred" ? t("drawer.taskNextDeferred") : selection.item.status === "blocked" ? t("drawer.taskNextBlocked") : t("drawer.taskNextOpen"))}</dd></div>
               </dl>
             </section>
             {!readOnly && !selection.item.done ? <div className="personal-task-inspector-actions" aria-label={t("drawer.taskActions")}>
@@ -823,6 +829,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                 </>
               )}
             </section>
+            {selection.item.zcodeGoalEligibleAgentIds?.length ? <ZCodeGoalControl key={selection.item.goalId} goal={selection.item} readOnly={readOnly} /> : null}
             {!readOnly ? <div className="personal-drawer-action-grid">
               <button className="personal-secondary-action" onClick={() => callbacks.onRequestScheduleConfig?.("heartbeat", selection.item.goalId)} type="button"><Radio size={16} />{t("drawer.setupHeartbeat")}</button>
               <button className="personal-secondary-action" onClick={() => callbacks.onRequestScheduleConfig?.("monitor", selection.item.goalId)} type="button"><CalendarClock size={16} />{t("drawer.scheduleAdd")}</button>

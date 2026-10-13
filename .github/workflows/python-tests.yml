@@ -242,6 +242,14 @@ jobs:
           npm run smoke:personal-workspace-packaged
           npm run smoke:chat-turn-acceptance-retry
           npm run smoke:chat-upgrade
+      - name: Qualify packaged ZCode recovery against its persistent owner
+        env:
+          LOOPX_USAGE_PING: "0"
+          DO_NOT_TRACK: "1"
+        run: |
+          python -m pip install --disable-pip-version-check -e ".[test]"
+          npm ci --ignore-scripts
+          node examples/zcode-persistent-browser-smoke.mjs
 
   kernel-static-checks:
     needs: [changes, chat-bundle]
@@ -398,11 +406,15 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  dashboard-acceptance:
+  dashboard-browser:
     needs: [changes, chat-bundle]
     if: needs.changes.outputs.core_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -443,16 +455,47 @@ jobs:
 
       - name: Measure Dashboard unit and browser interactions
         env:
+          LOOPX_PERSONAL_WORKSPACE_SHARD: "${{ matrix.shard }}/3"
           LOOPX_DASHBOARD_COVERAGE: "1"
           LOOPX_PLAYWRIGHT_PACKAGE: ${{ github.workspace }}/apps/presentation/dashboard/node_modules/playwright
         run: |
+          node --test examples/personal-workspace-browser/shard.test.mjs
           npm run test:dashboard:coverage
           cd apps/presentation/dashboard
           npx playwright install --with-deps chromium --only-shell
           node ../../../examples/personal-workspace-browser-smoke.mjs
+          cp ../../../output/playwright/personal-workspace/acceptance-results.json ../../../coverage/dashboard/acceptance-results.json
 
       - name: Upload Dashboard coverage
         uses: actions/upload-artifact@v7
+        with:
+          name: dashboard-coverage-${{ matrix.shard }}
+          path: |
+            coverage/dashboard/lcov.info
+            coverage/dashboard/browser-coverage.json
+            coverage/dashboard/acceptance-results.json
+          if-no-files-found: error
+          retention-days: 3
+
+  dashboard-acceptance:
+    needs: [changes, dashboard-browser]
+    if: needs.changes.outputs.core_tests == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22.22.3"
+      - run: npm ci --ignore-scripts
+      - run: node --test scripts/ci/merge-dashboard-coverage.test.mjs
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: dashboard-coverage-*
+          path: coverage/dashboard-shards
+      - name: Require every acceptance shard and merge source coverage
+        run: node scripts/ci/merge-dashboard-coverage.mjs coverage/dashboard-shards coverage/dashboard
+      - uses: actions/upload-artifact@v7
         with:
           name: dashboard-coverage
           path: coverage/dashboard/*.info
@@ -541,7 +584,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -588,7 +631,7 @@ jobs:
         run: >-
           python -m pytest -v -n 2 -m "not stage2c_e2e"
           -p scripts.ci.pytest_timing
-          --splits 4 --group ${{ matrix.shard }}
+          --splits 6 --group ${{ matrix.shard }}
           --splitting-algorithm least_duration
           --durations=25 --durations-min=1
           --junitxml=junit.xml
@@ -638,7 +681,7 @@ jobs:
       - name: Combine complete coverage and enforce the existing floor
         run: |
           shards=()
-          for shard in 1 2 3 4; do
+          for shard in 1 2 3 4 5 6; do
             path="coverage-shards/python-coverage-${shard}/.coverage"
             test -s "$path"
             shards+=("$path")

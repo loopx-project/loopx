@@ -73,6 +73,66 @@ const protocolActionFields = {
   agent_action: "advance one bounded segment",
 };
 
+test("vision closeout obligations survive projection and signature mutation", () => {
+  const source = payload();
+  const audit = {
+    schema_version: "vision_continuation_audit_v0", required: true,
+    decision: "acceptance_gap_open", selected_todo_is_goal_completion: false,
+    closeout_allowed_without_evidence: false,
+    required_before_closeout: [
+      "inspect registered material before public research",
+      "preserve the original source and acceptance evidence " + "完整要求🧭 ".repeat(40),
+      "derive requirements", "record evidence", "check current authority",
+      "retain unsuccessful results", "continue when acceptance is unproven",
+    ],
+    recommended_action: "Inspect the original evidence first.\nIf acceptance remains unproven, " +
+      "keep the vision active and write a successor or replan trigger.",
+    authoritative_evidence_kinds: ["evaluation_outputs", "successor_state"],
+    not_satisfied_by: ["todo_completion_alone", "vision_checkpoint_alone"],
+    vision_gap_judge: {
+      schema_version: "vision_gap_judge_v0", done: false, decision: "continue",
+      reason: "Evidence remains incomplete.", done_only_when: [],
+      continue_when: ["evidence_is_missing_weak_or_stale"], otherwise: "continue",
+    },
+    acceptance_gaps: [{private_detail: "read from the original capture"}],
+  };
+  source.vision_continuation_audit = audit;
+  const before = structuredClone(source);
+  const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields,
+    scheduler_execution_args: "", captured_decision_path: "private capture/decision.json"});
+  const projected = (envelope.contract_capsule as JsonObject).vision_continuation_audit as JsonObject;
+  for (const field of ["required_before_closeout", "recommended_action", "vision_gap_judge",
+    "authoritative_evidence_kinds", "not_satisfied_by"] as const) {
+    assert.deepEqual(projected[field], audit[field]);
+  }
+  assert.equal(projected.acceptance_gaps, undefined);
+  assert.equal((envelope.detail_ref as JsonObject).full_decision, "cat -- 'private capture/decision.json'");
+  assert.deepEqual(source, before);
+  assert.deepEqual(quotaActionSignatureDocument(source, protocolActionFields),
+    turnEnvelopeActionSignatureDocument(envelope));
+  for (const mutate of [
+    (value: JsonObject) => { (value.required_before_closeout as string[]).pop(); },
+    (value: JsonObject) => { (value.required_before_closeout as string[]).reverse(); },
+    (value: JsonObject) => { value.recommended_action = "close the vision"; },
+    (value: JsonObject) => { (value.vision_gap_judge as JsonObject).done = true; },
+    (value: JsonObject) => { value.not_satisfied_by = []; },
+  ]) {
+    const changed = structuredClone(envelope);
+    mutate((changed.contract_capsule as JsonObject).vision_continuation_audit as JsonObject);
+    assert.notDeepEqual(turnEnvelopeActionSignatureDocument(changed),
+      turnEnvelopeActionSignatureDocument(envelope));
+  }
+  (projected.required_before_closeout as string[]).push("consumer edit");
+  assert.deepEqual(source, before);
+});
+
+test("absent vision audit retains the existing envelope shape", () => {
+  const source = payload();
+  const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields,
+    scheduler_execution_args: ""});
+  assert.equal((envelope.contract_capsule as JsonObject).vision_continuation_audit, undefined);
+});
+
 test("capability facts retain exact current and historical source fields", () => {
   for (const fields of [
     {required: ["network", "filesystem_write"], missing: ["network"]},
@@ -860,5 +920,33 @@ test("envelope never independently invents requirement reads from work or admiss
     const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields,
       scheduler_execution_args: ""});
     assert.deepEqual(envelope.required_reads, []);
+  }
+});
+
+
+test("native Turn capture binds the original observation without inventing admission", () => {
+  const decision = payload();
+  const envelope = buildTurnEnvelope({payload: decision, protocol_action_fields: protocolActionFields,
+    scheduler_execution_args: ""});
+  const request = {operation: "bind_capture", payload: decision, envelope,
+    turn_instance_id: "native-turn", turn_key: "sha256:" + "a".repeat(64),
+    captured_decision_path: "/tmp/native-turn/decision.json"};
+  const bound = evaluateTurnEnvelope(request);
+  assert.deepEqual(bound.action_signature, envelope.action_signature);
+  const capture = (bound.detail_ref as JsonObject).captured_decision as JsonObject;
+  assert.equal(capture.turn_instance_id, "native-turn");
+  assert.equal(capture.turn_key, request.turn_key);
+  assert.equal(decision.heartbeat_receipt, undefined);
+  assert.equal((bound.detail_ref as JsonObject).full_decision, "cat -- /tmp/native-turn/decision.json");
+  assert.deepEqual(evaluateTurnEnvelope({...request, envelope: bound}), bound);
+  for (const change of [{reason: "new source"}, {goal_id: "other"},
+    {agent_identity: {agent_id: "other"}}, {ok: false}]) {
+    assert.throws(() => evaluateTurnEnvelope({...request, payload: {...decision, ...change}}),
+      EffectRuntimeRequestError);
+  }
+  for (const change of [{turn_instance_id: "other-turn"}, {turn_key: "sha256:" + "b".repeat(64)},
+    {captured_decision_path: "/tmp/other.json"}]) {
+    assert.throws(() => evaluateTurnEnvelope({...request, envelope: bound, ...change}),
+      EffectRuntimeRequestError);
   }
 });

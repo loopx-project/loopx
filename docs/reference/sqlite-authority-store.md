@@ -393,6 +393,17 @@ exit in an isolated synthetic Goal. Keep passed, failed and untested cases
 separate. This operation sheet is preparation, not a trial invitation or a
 certificate for a released default.
 
+Bind these checks and later operations to the reviewed installation, not the
+`loopx` currently found on PATH. Two installations can report the same version
+while carrying different source. Set `TRIAL_LOOPX_BIN` to the candidate's
+installed console command or release launcher; resolve it once before the first
+read so a later release-symlink switch cannot retarget the trial. Record the
+installation doctor's runtime identity (release/source, or package fingerprint
+for a normal wheel) and Python executable alongside the candidate digest/source,
+and check that they identify the selected installation.
+The PATH-discovered command in that report is only discovery context. An
+inherited `PYTHONPATH` must not substitute a checkout for the selected package.
+
 Record the selected Host separately from storage readiness. In Chat, a built-in
 CLI endpoint's `available` flag checks executable discovery; it does not prove
 authentication, model access, a completed Turn or restart recovery. For Codex,
@@ -416,17 +427,22 @@ readback separate from these non-model checks.
 
 For an already canonical trial Goal, set `TRIAL_REGISTRY`, `TRIAL_RUNTIME` and
 `TRIAL_GOAL` to its reviewed routes; choose `TRIAL_EXIT_PLAN` outside the live
-store. Keep the plan and returned `plan_sha256` privately. Read before applying:
+store. Keep the plan and returned `plan_sha256` privately. This POSIX-shell
+example retains one resolved candidate command for all reads and operations:
 
 ```sh
+: "${TRIAL_LOOPX_BIN:?Set the installed command for the reviewed candidate}"
+TRIAL_LOOPX_BIN=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$TRIAL_LOOPX_BIN")
 trial_loopx() {
   : "${TRIAL_REGISTRY:?Set the reviewed registry}" "${TRIAL_RUNTIME:?Set the reviewed runtime}"
   : "${TRIAL_GOAL:?Set the reviewed Goal}"
-  loopx --registry "$TRIAL_REGISTRY" --runtime-root "$TRIAL_RUNTIME" --format json "$@"
+  env -u PYTHONPATH "$TRIAL_LOOPX_BIN" --registry "$TRIAL_REGISTRY" \
+    --runtime-root "$TRIAL_RUNTIME" --format json "$@"
 }
 trial_loopx doctor --installation-only
 trial_loopx todo list --goal-id "$TRIAL_GOAL"
 : "${TRIAL_AGENT:?Choose the registered trial Agent}" "${TRIAL_TODO:?Choose its eligible Todo}"
+# Use the selected Todo's authorized workspace; repository writes require an independent worktree.
 trial_loopx turn plan --goal-id "$TRIAL_GOAL" --agent-id "$TRIAL_AGENT" \
   --todo-id "$TRIAL_TODO" --host codex-cli --iteration-context fresh \
   --execution-mode isolated-headless --scheduler-owner outer_controller \
@@ -468,6 +484,15 @@ expected/observed result and whether later writes survive through the project's
 normal issue/review route; redact private text, paths and raw evidence.
 Storage activation grants no Host execution, lease ownership or external access.
 
+Run the plan from the selected Todo's authorized workspace. A repository-writing
+peer Todo inspected outside its independent worktree can correctly return
+`agent_workspace_repair`, even though the installation and storage are healthy.
+Move to the existing authorized worktree and repeat the same read-only plan;
+do not change the Goal route or weaken its workspace guard. A successful process
+exit or `ok=true` alone does not mean a ready route: inspect `route.kind`,
+`route.effective_action`, the envelope obligations and `effects`. Plan-only
+`host_invocation_allowed=false` remains expected even for `ready_for_host`.
+
 新 canonical Goal、已有 canonical File Goal 和冷 Markdown Goal 按各自入组路径
 验收。复用既有不超过 20 人的可逆 opt-in 阶段，冷源先完成审核导入；不能通过创建
 空 SQLite 库替代导入，也不让无关 profile 或全部 D2 轴成为每个人的前置。
@@ -476,6 +501,14 @@ Storage activation grants no Host execution, lease ownership or external access.
 夹带已退役模块。陈旧 build 产物不是兼容性，也不能作为物理退役证据。在隔离
 合成 Goal 验证安装 CLI、打包 App、完整 Todo/来源、重启原操作恢复及保留新写入的
 退出。上面的命令是操作准备，不代表已经邀请试用或发布默认资格通过。
+
+把后续检查和操作绑定到已审核的安装，不直接使用 PATH 上碰巧命中的 `loopx`。
+两个安装可以版本相同而源码不同。`TRIAL_LOOPX_BIN` 指向候选安装的 console
+命令或 release launcher，在首次读取前解析一次实际路径，避免后续 release 符号
+链接切换悄悄改变试用来源。doctor 的 runtime identity（release/source，正常 wheel
+为 package fingerprint）和 Python executable 应与候选包/源码一起记录并核对；
+报告中的 PATH 命令只是发现信息。上述 wrapper
+移除继承的 `PYTHONPATH`，防止另一个 checkout 替代候选包；不会更新全局安装。
 
 Host 与存储分别验收。Chat 内置 CLI endpoint 的 `available` 仅检查可执行文件
 能否找到；不是登录、模型访问、Turn 完成或重启恢复证明。Codex 可先用
@@ -489,6 +522,13 @@ Session 的进程退出后可能尚无可恢复的 rollout。原 Session 恢复�
 ready 路由仍是计划，后续授权执行须遵守返回的 required reads、lease 和权限边界。
 按试用所选 Host 和负载验收，不让无关 Host 不可用阻塞独立合格的 profile。
 首个真实 Turn 完成及原操作重启读回仍须分别证明，不能从上述非模型检查推断。
+
+从选定 Todo 的授权工作目录读取 plan。带仓库写入的 peer Todo 在独立 worktree
+之外可以合法返回 `agent_workspace_repair`，并不表示安装或存储故障。切换到既有
+授权 worktree 重读同一只读计划，不修改 Goal 路由或弱化 workspace guard。
+进程成功或 `ok=true` 本身不表示路由 ready；读回 `route.kind`、`route.effective_action`、
+envelope 义务和 `effects`。即使 `ready_for_host`，plan-only 的
+`host_invocation_allowed=false` 也仍是预期结果。
 
 退出先暂停自动 Turn，再分别停止 Host/writer、结算 active lease/capture；从当前
 SQLite head 预览 File 迁移，审核冻结来源与备份，再明确应用同一 plan/digest。

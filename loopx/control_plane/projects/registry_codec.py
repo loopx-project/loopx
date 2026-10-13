@@ -335,6 +335,17 @@ class ProjectRegistryTransaction:
     def payload_copy(self) -> dict[str, Any]:
         return copy.deepcopy(self._document.payload)
 
+    def source_read_witness(self) -> dict[str, str]:
+        """Identify the exact existing bytes read under this transaction's lock.
+
+        Consumers must recheck this witness before their independent commit;
+        the digest is an observation, not a registry mutation permission.
+        """
+        if not self._existed or self._finished:
+            raise RuntimeError("source read witness requires an open existing registry transaction")
+        return {"path": str(self._path.resolve()),
+                "sha256": hashlib.sha256(self._document.raw_bytes).hexdigest()}
+
     def commit(self, payload: dict[str, Any]) -> bool:
         if self._finished:
             raise RuntimeError("project registry transaction is already finished")

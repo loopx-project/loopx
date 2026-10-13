@@ -306,6 +306,24 @@ function admissionEqual(
     && left.effect_ref === right.effect_ref;
 }
 
+/** Readiness for a synchronous source-owned mutation while its adapter holds
+ * the existing lifecycle guard. This does not reserve an asynchronous effect. */
+export function sourceGoalMutationReadiness(value: unknown):
+  {kind: "admit"} | {kind: "reject"; code: SourceTurnEffectRejection | "goal_not_active"} {
+  const facts = requiredObject(value, "source Goal mutation facts");
+  if (facts.profile_id !== SOURCE_SESSION_PROFILE_ID) return {kind: "reject", code: "unsupported_profile"};
+  if (facts.goal_status !== "active") return {kind: "reject", code: "goal_not_active"};
+  const requested = exactGoalRef(facts.requested_goal_ref, "requested_goal_ref");
+  const current = exactGoalRef(facts.current_goal_ref, "current_goal_ref");
+  if (!goalRefsEqual(requested, current)) return {kind: "reject", code: "stale_goal_instance"};
+  const gate = sourceTurnEffectGate(facts.gate);
+  if (gate?.state === "closing") return {kind: "reject", code: "goal_retirement_in_progress"};
+  if (gate !== null && !goalRefsEqual(exactGoalRef(gate.goal_ref, "gate.goal_ref"), current)) {
+    return {kind: "reject", code: "stale_goal_instance"};
+  }
+  return {kind: "admit"};
+}
+
 function openSourceTurnEffectGate(goalRef: ExactGoalRef): SourceTurnEffectOpenGate {
   return {
     schema_version: SOURCE_TURN_EFFECT_GATE_SCHEMA_VERSION,

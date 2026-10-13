@@ -22,6 +22,7 @@ from ..runtime.runtime_projection_route import (
     collect_runtime_projection_route_diagnostics,
 )
 from ..projection_envelope_facts import seal_projection_envelope, source_fact
+from ..quota.blocked_retry import overlay_status_turn_retries
 from ..runtime.time import now_utc_iso, parse_timestamp, utc_isoformat
 from ..todos.todo_index import MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL
 from ...registry import registry_goals
@@ -81,6 +82,7 @@ def collect_status(
     include_public_boundary_scan: bool = True,
     recent_run_limit: int | None = None,
     include_goal_subagent_configuration: bool = False,
+    include_zcode_goal_eligibility: bool = False,
     activation_state_filter: GoalActivationState | str | None = None,
     agent_lane_id: str | None = None,
 ) -> dict[str, Any]:
@@ -159,6 +161,7 @@ def collect_status(
     # No later projection consumes canonical rows; release retained archive
     # data before assembling the rest of the display.
     del todo_snapshot
+    queue = overlay_status_turn_retries(history, queue, observed_at=now_utc_iso())
     runtime_summaries = context.build_runtime_summaries(
         history=history,
         queue=queue,
@@ -177,13 +180,31 @@ def collect_status(
         runtime_root_override=str(runtime_root),
         registry=registry,
     )
+    zcode_eligibility: dict[str, list[str]] = {}
+    source_goal_observer: Callable[[str, dict[str, Any] | None], None] | None = None
+    if include_zcode_goal_eligibility:
+        from ...zcode_goal_mode.bridge import zcode_goal_eligible_agent_ids
+
+        def observe_source_goal(current_goal_id: str, source_goal: dict[str, Any] | None) -> None:
+            zcode_eligibility[current_goal_id] = (
+                zcode_goal_eligible_agent_ids(source_goal) if source_goal is not None else []
+            )
+
+        source_goal_observer = observe_source_goal
     runtime_projection_routes = collect_runtime_projection_route_diagnostics(
         registry_path=registry_path,
         runtime_root=runtime_root,
         goal_id=goal_filter,
         activation_state_filter=activation_filter,
         registry=registry,
+        source_goal_observer=source_goal_observer,
     )
+    if include_zcode_goal_eligibility:
+        for row in runtime_summaries["run_history"]["goals"]:
+            row["zcode_goal_eligible_agent_ids"] = (
+                zcode_eligibility.get(str(row.get("id") or ""), [])
+                if row.get("registry_member") is True else []
+            )
     routes_read_at = now_utc_iso()
     runtime_projection_route_health = {
         "healthy": (

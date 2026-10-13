@@ -2,9 +2,9 @@
 
 LoopX uses the Apache License 2.0 as the primary license for its unified open
 source core beginning with `v0.4.8`. The complete current license is in
-[`LICENSE`](https://github.com/huangruiteng/loopx/blob/main/LICENSE), and the
+[`LICENSE`](https://github.com/loopx-project/loopx/blob/main/LICENSE), and the
 attribution notices distributed with the project are in
-[`NOTICE`](https://github.com/huangruiteng/loopx/blob/main/NOTICE).
+[`NOTICE`](https://github.com/loopx-project/loopx/blob/main/NOTICE).
 
 ## Version Boundary
 
@@ -14,7 +14,7 @@ attribution notices distributed with the project are in
   under Apache-2.0.
 - The previous MIT license text and its copyright notice are preserved
   verbatim in
-  [`LICENSE-MIT`](https://github.com/huangruiteng/loopx/blob/main/LICENSE-MIT).
+  [`LICENSE-MIT`](https://github.com/loopx-project/loopx/blob/main/LICENSE-MIT).
   They continue to document and govern the rights already granted for
   historical MIT releases and portions first distributed under those terms.
 
@@ -43,13 +43,59 @@ Unless a contributor explicitly states otherwise before submission, future
 contributions accepted into LoopX are submitted under Apache-2.0, as described
 by section 5 of that license. Each commit in a pull request must also carry a
 Developer Certificate of Origin 1.1 sign-off. See
-[`CONTRIBUTING.md`](https://github.com/huangruiteng/loopx/blob/main/CONTRIBUTING.md)
-and [`DCO`](https://github.com/huangruiteng/loopx/blob/main/DCO) for the exact
+[`CONTRIBUTING.md`](https://github.com/loopx-project/loopx/blob/main/CONTRIBUTING.md)
+and [`DCO`](https://github.com/loopx-project/loopx/blob/main/DCO) for the exact
 workflow and certification.
 
 No contributor license agreement or copyright assignment is introduced by
 this transition. Copyright remains with contributors for their respective
 contributions.
+
+## Reuse, Ports, And Attribution
+
+LoopX was created by [`@huangruiteng`](https://github.com/huangruiteng).
+The [authors and contributors record](authors.md) links to the public history;
+[`NOTICE`](../../NOTICE) preserves project attribution in distributions.
+Creator credit identifies project provenance. It does not assign other
+contributors' rights to the creator or determine ownership of a particular
+contribution.
+
+Apache-2.0 permits forks, modifications, and derivative distributions,
+including commercial ones, subject to its terms. For redistribution under
+Apache-2.0, [section 4](https://www.apache.org/licenses/LICENSE-2.0#redistribution)
+requires you to:
+
+- provide recipients with a copy of the license;
+- place prominent notices in modified files stating that you changed them;
+- retain applicable copyright, patent, trademark, and attribution notices in
+  the source form of distributed derivative works; and
+- include a readable copy of the applicable attribution notices from `NOTICE`
+  in one of the locations allowed by section 4(d).
+
+You must not use AI generation, code rewriting, cross-language translation,
+or project renaming as grounds to remove or evade copyright, attribution, or
+NOTICE retention requirements under the applicable license. If the distributed
+material is a derivative work of LoopX, those obligations still apply. This
+clarification does not restrict modifications or redistribution permitted by
+the applicable license.
+
+Whether a particular implementation is a derivative work depends on its facts;
+this guidance does not classify every independent implementation of similar
+ideas as a derivative.
+Historical MIT material and separately licensed third-party components remain
+subject to their applicable terms.
+
+An upstream repository link and a description of the changes help readers
+understand a fork's provenance. These are recommended practices, not additional
+license conditions. Follow the [name and marks guidance](trademarks.md) when
+presenting a fork or integration; software reuse does not establish project
+endorsement or an official LoopX release.
+
+This guidance does not add a blanket ban on rewriting, porting, or
+re-open-sourcing, or require separate maintainer permission for uses already
+permitted by the applicable license. `LICENSE`, historical license grants, and
+third-party notices continue to govern; neither README wording nor `NOTICE`
+amends those grants.
 
 ## Open Core And Commercial Boundaries
 
@@ -60,7 +106,7 @@ they are not part of this repository's Apache-2.0 core distribution.
 
 Apache-2.0 itself permits commercial use, modification, and distribution
 subject to its terms. The separate project-name and logo guidance in
-[`TRADEMARKS.md`](https://github.com/huangruiteng/loopx/blob/main/docs/project/trademarks.md)
+[`TRADEMARKS.md`](https://github.com/loopx-project/loopx/blob/main/docs/project/trademarks.md)
 still applies; the software license does not create endorsement or trademark
 rights.
 

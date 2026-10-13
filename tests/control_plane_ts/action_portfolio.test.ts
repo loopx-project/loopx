@@ -135,6 +135,27 @@ test("planning packet gates optional lenses without leaking its inventory", () =
   assert.equal("agent_todo_planning_inventory" in (result ?? {}), true);
 });
 
+test("a sole unclaimed candidate requires selection without an alternative", () => {
+  const primary = {
+    ...candidate("todo_unclaimed001", "Consider an available slice.", "P1"),
+    claimed_by: undefined,
+  };
+  for (const unavailable of [[], [{
+    ...candidate("todo_waiting001", "Wait for the original dependency.", "P0"),
+    status: "deferred",
+    availability_reason: "resume_condition_pending",
+  }]]) {
+    const result = projectQuotaActionPortfolio(request(primary, [], unavailable));
+    const policy = result?.selection_policy as Record<string, unknown>;
+    assert.equal(policy?.requires_explicit_turn_binding, true);
+    assert.equal(policy.recommendation_role, "default_not_binding");
+    assert.equal(policy.direct_delivery_before_selection, false);
+    const suggestions = result?.suggested_actions as Record<string, unknown>[];
+    assert.equal(suggestions.length, 1);
+    assert.equal(suggestions[0].claim_required_before_work, true);
+  }
+});
+
 test("planning packet rejects malformed projection gates", () => {
   const primary = candidate("todo_primary001", "Run the only slice.", "P0");
   assert.throws(
@@ -312,7 +333,7 @@ test("future or blocked higher priority work keeps the portfolio visible", () =>
   );
 });
 
-test("a single primary needs no redundant portfolio", () => {
+test("a single claimed primary needs no redundant portfolio", () => {
   const primary = candidate("todo_primary001", "Run the only slice.", "P0");
   assert.equal(projectQuotaActionPortfolio(request(primary, [])), null);
 });

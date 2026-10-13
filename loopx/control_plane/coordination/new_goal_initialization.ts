@@ -2,6 +2,7 @@
  * The original creation receipt remains valid after later Todo writes.
  */
 import {readFile} from "node:fs/promises";
+import {createHash} from "node:crypto";
 import {resolve} from "node:path";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeConflictError, EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
@@ -14,6 +15,7 @@ import {projectCoordinationSource, SOURCE_PROJECTION_REQUEST_SCHEMA} from "./sou
 import {TODO_DOMAIN_READ_RECORD_SCHEMA} from "./coordination_state_contract.ts";
 import {commitPromotionAndReadBack, readPromotionReceipt} from "./promotion_receipt.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
+import {parseExactGoalRef} from "../goals/goal_instance_identity.ts";
 
 export async function initializeNewGoalAuthority(raw: JsonObject): Promise<JsonObject> {
   const root = requireLocalAuthorityRuntimeRoot(raw.runtime_root);
@@ -36,8 +38,25 @@ export async function initializeNewGoalAuthority(raw: JsonObject): Promise<JsonO
     fence_id: `new-goal:${operationId}`, creation_operation_id: operationId, creation_identity_sha256: identitySha,
     creation_completed: false};
   const validateRegistration = async () => {
-    const registry = JSON.parse(await readFile(String((snapshot.registry_source as JsonObject).path), "utf8"));
+    // The trusted source adapter validated the existing registry codec. Bind
+    // that decoded observation to its complete bytes before inspecting fields;
+    // this does not make the lifecycle-only profile a generic runtime profile.
+    const bytes = await readFile(String((snapshot.registry_source as JsonObject).path));
+    if (createHash("sha256").update(bytes).digest("hex") !== (snapshot.registry_source as JsonObject).sha256) {
+      throw new EffectRuntimeRequestError("Canonical creation source registration changed");
+    }
+    const document = JSON.parse(bytes.toString("utf8"));
+    const sourceRef = raw.source_goal_ref === undefined ? null : parseExactGoalRef(raw.source_goal_ref);
+    const registry = sourceRef?.kind === "parsed" && Array.isArray(document) && document.length === 2 &&
+      document[0]?.schema_version === "loopx_project_registry_envelope_v2" &&
+      document[0]?.minimum_writer_protocol === "goal_instance_v2" && document[1]?.profile_id === "source_session_v1"
+      ? document[1] : document;
     const registered = registry.goals?.find((goal: JsonObject) => goal.id === goalId);
+    if (raw.source_goal_ref !== undefined && (sourceRef?.kind !== "parsed" ||
+        sourceRef.value.goalId.value !== goalId || registered?.goal_instance_id !== sourceRef.value.goalInstanceId.value ||
+        registered?.status !== "active")) {
+      throw new EffectRuntimeRequestError("Canonical creation source Goal lifetime changed");
+    }
     if (!registered || registered.creation_operation_id !== operationId ||
         !canonicalAuthorityBytes(registered.coordination?.storage_target).equals(canonicalAuthorityBytes(target)) ||
         typeof registered.repo !== "string" || typeof registered.state_file !== "string" ||

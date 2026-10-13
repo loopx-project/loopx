@@ -133,6 +133,53 @@ try {
   await verificationGap.scrollIntoViewIfNeeded();
   await page.screenshot({path: resolve(outputDir, "team-verifier-gap-mobile.png"), animations: "disabled"});
   await page.setViewportSize({width: 1512, height: 980});
+  // A completed source can retain its output bytes while its dependency
+  // chain becomes unavailable. Reading an adoption candidate must withdraw
+  // the earlier correction trace and must never offer a confirmation.
+  const adoption = evidence.locator(".goal-team-adoption");
+  await evidence.getByText("版本与采用关系详情", {exact: true}).click();
+  await adoption.getByText("确认采用于后续结果", {exact: true}).click();
+  const consumerInventory = route => route.request().postDataJSON()?.operation === "operations"
+    ? route.fulfill({json: {items: [{record_id: "b".repeat(64), operation_id: "accepted-synthesis",
+      agent_id: "synthesizer", status: "accepted", recovery_required: false}],
+      has_more: false, next_cursor: null, page_readback_complete: true}}) : route.fallback();
+  await page.route("**/api/chat/sessions/*/loopx", consumerInventory);
+  await adoption.getByRole("button", {name: "查找使用此版本的后续结果", exact: true}).click();
+  await adoption.getByLabel("后续结果", {exact: true}).waitFor();
+  const invalidSource = route => route.request().postDataJSON()?.operation === "read"
+    && route.request().postDataJSON()?.operation_id === "accepted-analysis"
+    ? route.fulfill({json: {...legacyReadback, current_use: {state: "unavailable", reason: "input_unavailable"}}})
+    : route.fallback();
+  await page.route("**/api/chat/sessions/*/loopx", invalidSource);
+  const adoptionWritesBefore = api.loopxModeRequests.filter(row => row.operation === "adopt").length;
+  await adoption.getByRole("button", {name: "阅读后续结果", exact: true}).click();
+  await page.waitForFunction(() => !document.querySelector(".goal-team-adoption")
+    || document.querySelector(".goal-team-adoption").getAttribute("aria-busy") === "false");
+  await page.screenshot({path: resolve(outputDir, "team-source-chain-observation.png"), animations: "disabled"});
+  await evidence.getByRole("alert").filter({hasText: "关联执行或版本已变化"}).waitFor({timeout: 3000});
+  assert.equal(await evidence.getByRole("button", {name: "阅读原始产物", exact: true}).count(), 0,
+    "An unavailable source chain withdraws the earlier correction witness");
+  assert.equal(await adoption.getByRole("button", {name: "确认采用于此结果", exact: true}).count(), 0);
+  assert.equal(await original().count(), 0);
+  assert.equal(api.loopxModeRequests.filter(row => row.operation === "adopt").length, adoptionWritesBefore);
+  await page.screenshot({path: resolve(outputDir, "team-source-chain-unavailable-desktop.png"), animations: "disabled"});
+  await page.setViewportSize({width: 390, height: 844});
+  await page.emulateMedia({reducedMotion: "reduce"});
+  assert.ok(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth));
+  await page.screenshot({path: resolve(outputDir, "team-source-chain-unavailable-mobile.png"), animations: "disabled"});
+  await page.setViewportSize({width: 1512, height: 980});
+  await page.unroute("**/api/chat/sessions/*/loopx", invalidSource);
+  await page.unroute("**/api/chat/sessions/*/loopx", consumerInventory);
+  await recheck.focus();
+  await page.keyboard.press("Enter");
+  await original().waitFor();
+  await evidence.getByRole("button", {name: "核验关联执行", exact: true}).click();
+  await verificationGap.waitFor();
+  // Restore the same comparison explicitly after withdrawal.
+  await evidence.getByRole("button", {name: /^修订依据/}).click();
+  await evidence.getByLabel("对照产物", {exact: false}).selectOption({label: "report.md"});
+  await evidence.getByRole("button", {name: "查看原文差异", exact: true}).click();
+  await selectedOutput().waitFor();
   // Losing an optional adoption cannot erase freshly verified correction evidence.
   const unavailableDownstream = route => route.request().postDataJSON()?.operation === "read"
     && route.request().postDataJSON()?.operation_id === "accepted-synthesis"

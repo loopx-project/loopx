@@ -76,6 +76,32 @@ UTF-8) an unpinned gate would decode the event into mojibake, miss the project
 goal and answer `{}` — no gate at all — and `/loopx status` would raise on its own
 state glyphs. `tests/test_claude_goal_mode_stdio_utf8.py` guards all three.
 
+Claude Code also runs those baked command strings through a shell - `/bin/sh`
+on macOS/Linux, Git Bash on Windows when it is installed, PowerShell on a
+Windows host without Git Bash (hooks reference, "Exec form and shell form";
+Claude Code switched Windows hooks from `cmd.exe` to Git Bash in 2.1.47 and
+added the PowerShell fallback in 2.1.120). The installer detects that same
+choice and encodes every path it bakes - the interpreter and the script it
+starts - as one literal token for it: `shlex.quote`'s single-quoted form under
+`/bin/sh` and Git Bash, a single-quoted `& '...'` token under PowerShell. A
+Windows path is always quoted, because Git Bash eats the backslashes of a bare
+`C:\Users\me\Python\python.exe`. Unencoded, the shell splits the path at the
+first space, expands `$NAME`, drops backslashes, or closes the token at an
+inner `"`: the `--harden` gate fails OPEN, the statusline renders nothing and
+`/loopx` never runs. Two boundaries stay explicit: the `/loopx` `!` line runs
+through the Bash tool, so it is always POSIX-encoded and a Windows host without
+Git Bash cannot run it at all; and the shell choice is made when the installer
+runs - installing or removing Git Bash later, or pointing Claude Code at one
+with `CLAUDE_CODE_GIT_BASH_PATH` in an environment the installer cannot see,
+changes which shell Claude Code picks, so re-run `install.py --harden` after
+that change. Claude Code honors that override only for a file named `bash.exe`,
+`sh.exe`, `bash` or `sh`; anything else, existing or not, is ignored and
+detection proceeds as if it were unset, and the installer follows the same
+rule.
+`tests/test_claude_goal_install_python_launcher.py` executes the installed
+hook, statusline and `/loopx` commands through the selected shell for a plain
+path, an ordinary spaced path and literal `$`/quote paths.
+
 ```bash
 python3 loopx/claude_goal_mode/scripts/install.py --scope project --project /path/to/project --harden
 ```

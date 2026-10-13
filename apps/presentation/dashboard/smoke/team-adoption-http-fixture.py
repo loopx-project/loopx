@@ -46,6 +46,19 @@ def main() -> None:
                 "ref": "accepted-input.json", "description": "Accepted input", "sha256": artifact["sha256"],
                 "delegation": {"operation_id": "analysis-1", "ref": artifact["ref"], "relation": "uses"}}]})
             assert wait(runner, "synthesis-1")["status"] == "accepted"
+            source_chain = "--source-chain" in sys.argv
+            if source_chain:
+                downstream = runner.read("synthesis-1")["artifacts"][0]
+                config["bindings"].append({**config["bindings"][0], "id": "further", "agent_id": "analyst",
+                    "todo_id": "todo_analyst-corrected", "workspace": str(root / "analyst/corrected"),
+                    "output_refs": ["output.json", "report.md"]})
+                runner.config.write_text(json.dumps(config))
+                (root / "analyst/corrected/report.md").write_text("# Further result\n\nUses the exact accepted synthesis.\n")
+                (root / "analyst/corrected/accepted-input.json").write_text(downstream["text"])
+                runner.start("further", "further-1", {**brief(), "inputs": [{
+                    "ref": "accepted-input.json", "description": "Accepted synthesis", "sha256": downstream["sha256"],
+                    "delegation": {"operation_id": "synthesis-1", "ref": downstream["ref"], "relation": "uses"}}]})
+                assert wait(runner, "further-1")["status"] == "accepted"
             repo = root / "project"
             executor = repo / ".loopx/config/delegations.json"
             executor.parent.mkdir(parents=True)
@@ -79,12 +92,13 @@ def main() -> None:
                     input_file.write_text(artifact["text"])
                     print(json.dumps({"restored": True}), flush=True)
                 elif operation == "inspect":
-                    observed = runner.read("analysis-1")
+                    observed = runner.read("synthesis-1" if source_chain else "analysis-1")
                     session = store.load_session("adoption")
                     print(json.dumps({"result": observed, "session_unchanged": session == initial_session,
                         "coordinator_paused": session["loopx_mode"]["paused"] is True,
                         "host_invocations": [(root / workspace / "host-invocations").read_text()
-                            for workspace in ("analyst/initial", "reviewer/corrected")]}), flush=True)
+                            for workspace in (("analyst/initial", "reviewer/corrected", "analyst/corrected")
+                                if source_chain else ("analyst/initial", "reviewer/corrected"))]}), flush=True)
                 else:
                     raise ValueError("Unknown fixture command")
         finally:

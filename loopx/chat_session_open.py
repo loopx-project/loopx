@@ -38,6 +38,7 @@ def open_chat_session(
     objective: str,
     mode: str,
     requested_endpoint: str = "",
+    agent_model_id: str = "",
     project_ref: str | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Return ``(session, resumed)`` for one entry-point request."""
@@ -49,6 +50,7 @@ def open_chat_session(
             work_dir=work_dir,
             executor_endpoint_id=requested_endpoint or None,
             mode=mode,
+            agent_model_id=agent_model_id or None,
         )
     if context_kind == "project":
         if goal_id is not None or not project_ref:
@@ -56,6 +58,7 @@ def open_chat_session(
         return controller.open_session(
             goal_id=None, agent_id=requested_endpoint or DEFAULT_GOAL_AGENT_ID,
             work_dir=work_dir, objective=objective, mode=mode, project_ref=project_ref,
+            agent_model_id=agent_model_id or None,
         )
     if context_kind != "goal":
         raise ValueError("unknown conversation context")
@@ -67,4 +70,5 @@ def open_chat_session(
         mode=mode,
         channel_id=f"goal.{goal_id}",
         agent_goal_id=goal_id,
+        agent_model_id=agent_model_id or None,
     )

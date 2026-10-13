@@ -13,7 +13,7 @@ export function MessageActivity({ message, onInterruptTurn, onSteerTurn, onCance
   onInterruptTurn?: (turnId: string) => Promise<void>;
   onSteerTurn?: (turnId: string, text: string, ingressId: string) => Promise<void>;
 }) {
-  const { locale } = useWorkspaceI18n();
+  const { locale, t } = useWorkspaceI18n();
   const zh = locale === "zh-CN";
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +69,10 @@ export function MessageActivity({ message, onInterruptTurn, onSteerTurn, onCance
     // Retain the operation identity after a lost response; retry cannot deliver twice.
     if (request.current?.text.trim() !== text) updateDraft(draft);
     const sent = request.current!;
-    if (cacheKey) retainSteeringRequest(cacheKey, sent);
+    if (!cacheKey || !retainSteeringRequest(cacheKey, sent)) {
+      setSteerError(t("feedback.steeringStorageUnavailable"));
+      return;
+    }
     setSteering(true);
     setSteerError(null);
     try {

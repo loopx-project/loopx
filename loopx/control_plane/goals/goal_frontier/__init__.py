@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from ...agents.agent_scope import (
@@ -62,6 +63,7 @@ from .acceptance import (
 )
 from ...effect_runtime import effect_runtime_result
 from .ack_policy import (
+    attach_rejected_replan_feedback,
     autonomous_replan_ack_satisfies_obligation,
     replan_successor_transition_ack,
 )
@@ -1499,6 +1501,7 @@ def build_goal_frontier_projection_context_from_status(
     agent_profile: dict[str, Any] | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
     receipt_bound_guard_recorded_at: str | None = None,
+    replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     """Build the quota-facing goal-frontier read model.
 
@@ -1655,11 +1658,15 @@ def build_goal_frontier_projection_context_from_status(
         agent_id=agent_id,
     )
     effective_replan_ack = latest_agent_replan_ack or projected_replan_ack
+    stride_strategy = ((project_asset or {}).get("execution_profile") or {}).get(
+        "stride_strategy", "off"
+    )
     replan_transition_ack = replan_successor_transition_ack(
         agent_todo_summary,
         agent_id=agent_id,
         replan_obligation=replan_obligation,
         agent_todo_items=agent_todo_source_items,
+        stride_strategy=stride_strategy,
     )
     # Keep the validated history-obligation transition distinct from any
     # successor frontier obligation derived below. Exact Turn settlement may
@@ -1674,6 +1681,7 @@ def build_goal_frontier_projection_context_from_status(
             replan_obligation=replan_obligation,
             acceptance_gaps=source_acceptance_gaps,
             todo_succession_gap_open=todo_succession_gap_open,
+            stride_strategy=stride_strategy,
         )
         and autonomous_replan_ack_matches_frontier(
             obligation_ack,
@@ -1711,6 +1719,7 @@ def build_goal_frontier_projection_context_from_status(
         agent_id=agent_id,
         replan_obligation=frontier_replan_obligation,
         agent_todo_items=agent_todo_source_items,
+        stride_strategy=stride_strategy,
     )
     frontier_obligation_ack = frontier_transition_ack or effective_replan_ack
     frontier_transition_candidate = {"obligation": frontier_replan_obligation, "ack": frontier_transition_ack}
@@ -1726,6 +1735,7 @@ def build_goal_frontier_projection_context_from_status(
             source_ack = replan_successor_transition_ack(
                 agent_todo_summary, agent_id=agent_id, replan_obligation=source,
                 agent_todo_items=agent_todo_source_items,
+                stride_strategy=stride_strategy,
             )
             frontier_transition_candidate = {"obligation": source, "ack": source_ack}
 
@@ -1751,6 +1761,7 @@ def build_goal_frontier_projection_context_from_status(
             replan_obligation=frontier_replan_obligation,
             acceptance_gaps=source_acceptance_gaps,
             todo_succession_gap_open=todo_succession_gap_open,
+            stride_strategy=stride_strategy,
         )
         and autonomous_replan_ack_matches_frontier(
             frontier_obligation_ack,
@@ -1769,29 +1780,18 @@ def build_goal_frontier_projection_context_from_status(
             registered_agent_ids=registered_agent_ids,
         )
 
-    if replan_obligation and latest_replan_ack_feedback:
-        replan_obligation = dict(replan_obligation)
-        replan_obligation["replan_ack_feedback"] = latest_replan_ack_feedback
-        claims = latest_replan_ack_feedback.get("rejected_claims") or []
-        first_claim = next(
-            (item for item in claims if isinstance(item, dict)),
-            None,
-        )
-        if first_claim:
-            replan_obligation["recommended_action"] = (
-                "previous replan ACK was rejected: "
-                f"{first_claim.get('kind')}: {first_claim.get('reason')}; "
-                + str(replan_obligation.get("recommended_action") or "replan again")
-            )
+    replan_obligation = attach_rejected_replan_feedback(replan_obligation, latest_replan_ack_feedback)
 
     if replan_obligation:
         replan_obligation = dict(replan_obligation)
+        strategy = ((project_asset or {}).get("execution_profile") or {}).get("stride_strategy", "off")
+        explore_context = replan_explore_reader(goal_id, agent_id) if strategy != "off" and replan_explore_reader else None
         replan_obligation["replan_context"] = build_replan_context(
-            replan_obligation,
+            replan_obligation, explore_context=explore_context,
             goal_id=goal_id,
             agent_id=agent_id,
             newest_first_runs=(), source_status=status_payload,
-            stride_strategy=((project_asset or {}).get("execution_profile") or {}).get("stride_strategy", "off"),
+            stride_strategy=strategy,
             goal_acceptance_contract=(agent_todo_summary or {}).get("goal_acceptance_contract"),
         )
 
@@ -1814,6 +1814,7 @@ def build_goal_frontier_projection_context_from_status(
     return {
         "schema_version": "goal_frontier_projection_context_v0",
         "replan_obligation": replan_obligation,
+        "stride_strategy": stride_strategy,
         "replan_scope": replan_scope,
         "goal_frontier_projection": goal_frontier_projection,
         "acceptance_gaps": acceptance_gaps,

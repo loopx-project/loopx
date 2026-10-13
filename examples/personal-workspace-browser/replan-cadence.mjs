@@ -88,6 +88,20 @@ export const replanCadenceScenario = {
         return packet.capability_catalog.capabilities.find((row) => row.capability_id === "todo_replan_cadence");
       }
       if (await strategy.inputValue() !== "evidence_conditioned_v1") throw new Error("Goal did not inherit strategy version");
+      await page.getByRole("button", { name: "编辑 JSON", exact: true }).click();
+      await page.locator("#goal-configuration-json").fill(JSON.stringify({ stride_strategy: "evidence_conditioned_v1" }));
+      await page.getByRole("button", { name: "返回表单", exact: true }).click();
+      if (await unit.inputValue() !== "effective_turns" || await count.inputValue() !== "3") {
+        throw new Error("JSON-to-form conversion lost the effective review interval");
+      }
+      await page.getByRole("button", { name: "预览变更", exact: true }).click();
+      await applyGoalPreview();
+      const converted = await readGoalCadence();
+      if (converted.effective_configuration.configuration.count !== 3
+        || converted.effective_configuration.configuration.count_unit !== "effective_turns") {
+        throw new Error("JSON-to-form save substituted the product-default interval");
+      }
+      await page.screenshot({ path: resolve(outputDir, "replan-cadence-json-form.png"), animations: "disabled" });
       await count.fill("2");
       await strategy.selectOption("off");
       await page.getByRole("button", { name: "预览变更", exact: true }).click();

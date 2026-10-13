@@ -89,3 +89,15 @@ def build_turn_envelope(
         **({"captured_decision_path": captured_decision_path}
            if captured_decision_path is not None else {}),
     )
+
+
+def bind_turn_decision_capture(
+    payload: Mapping[str, Any], envelope: Mapping[str, Any], *,
+    captured_decision_path: str, turn_instance_id: str, turn_key: str,
+) -> dict[str, Any]:
+    """Validate and bind original native Turn evidence through the existing TS owner."""
+    return _turn_envelope_result(
+        "bind_capture", payload=dict(payload), envelope=dict(envelope),
+        captured_decision_path=captured_decision_path,
+        turn_instance_id=turn_instance_id, turn_key=turn_key,
+    )

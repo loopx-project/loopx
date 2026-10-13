@@ -67,7 +67,7 @@ def _obligation() -> dict[str, object]:
     )
 
 
-def _quota_payload(*, include_legacy_receipt: bool = False) -> dict[str, object]:
+def _quota_payload(*, include_legacy_receipt: bool = False, stride_strategy: str = "off") -> dict[str, object]:
     obligation = _obligation()
     item_extra: dict[str, object] = {
         "autonomous_replan_obligation": obligation,
@@ -103,7 +103,8 @@ def _quota_payload(*, include_legacy_receipt: bool = False) -> dict[str, object]
             }
         ],
         item_extra=item_extra,
-        project_asset_extra={"autonomous_replan_obligation": obligation},
+        project_asset_extra={"autonomous_replan_obligation": obligation,
+            **({"execution_profile": {"stride_strategy": stride_strategy, "replan_after_effective_turns": 6}} if stride_strategy != "off" else {})},
     )
     return build_quota_should_run(
         status_payload,
@@ -260,3 +261,23 @@ def test_replan_guidance_survives_cli_and_host_compaction_without_new_authority(
             - old_envelope["compaction"]["envelope_json_bytes"]) <= 1500
     envelope["replan_action_packet"].pop("planning_guidance")
     assert envelope["replan_action_packet"] == old_envelope["replan_action_packet"]
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_outer_explore_reader_runs_only_for_enabled_replan_context(monkeypatch, enabled):
+    from loopx.capabilities.explore import turn_context
+
+    calls = []
+    def read_source(**kwargs):
+        calls.append(kwargs)
+        return {"ok": False, "goal_id": GOAL_ID, "agent_id": AGENT_ID}
+
+    monkeypatch.setattr(turn_context, "read_replan_explore_context", read_source)
+    result = _quota_payload(stride_strategy="evidence_conditioned_v1" if enabled else "off")
+    assert result["replan_action_packet"]
+    assert len(calls) == int(enabled)
+    if enabled:
+        assert calls[0]["goal_id"] == GOAL_ID and calls[0]["agent_id"] == AGENT_ID
+        assert result["replan_action_packet"]["stride_control"]["explore_basis"]["availability"] == "unavailable"
+    else:
+        assert "stride_control" not in result["replan_action_packet"]

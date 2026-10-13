@@ -740,8 +740,20 @@ including `generic_cli`, `outer_controller`, and native CLI profiles. An explici
 asking for the selection it just accepted. This does not enable `--begin-turn`
 for those hosts or change legacy calls without a Turn identity.
 
-A single-candidate response
-keeps the direct execution path and does not add an extra selection round trip.
+A single already-claimed candidate keeps the direct execution path without an
+extra selection round trip. A sole unclaimed candidate instead projects the
+existing explicit selection contract: recommendation alone must not create a
+settlement identity or a required closeout. The agent may inspect the candidate
+without accepting it; a later Turn must not require recovery of that unchosen
+work. Explicit selection revalidates eligibility and binds the same Turn, but
+does not claim the Todo or grant new authority. Claim-before-work still applies.
+Previously committed receipts retain their identity and existing recovery rules;
+this change does not rewrite historical bindings.
+
+单个已认领候选继续直达；单个未认领候选则必须先显式选择。仅仅推荐不能生成
+结算身份或强制结算义务，也不能让下一轮被未选择的工作卡入恢复。显式选择仍
+通过原有准入校验并绑定同一 Turn，但不等于认领或新增授权；执行前仍需认领。
+已提交回执的身份及恢复规则保持不变，不追溯重写历史绑定。
 
 When the selected Todo has meaningful strategic context, the same default
 response may include `planning_horizon.schema_version=

@@ -1749,13 +1749,27 @@ export const typedActionsScenario = {
       await page.getByRole("button", {name: "设置 Heartbeat", exact: true}).click();
       await page.getByRole("dialog", {name: "Goal Heartbeat", exact: true}).getByRole("button", {name: "检查配置"}).click();
       await page.getByText("确认执行").waitFor({ state: "visible" });
+      const heartbeatPreview = api.actionPreviews.at(-1);
+      if (heartbeatPreview?.action_kind !== "heartbeat.bind") throw new Error("Continuation intent did not map to heartbeat.bind");
+      const heartbeatApplyResponse = page.waitForResponse(response => response.request().method() === "POST"
+        && new URL(response.url()).pathname === `/api/actions/${heartbeatPreview.proposalId}/apply`);
       await page.getByRole("button", { name: "确认并应用", exact: true }).click();
+      const response = await heartbeatApplyResponse;
+      const gateResponse = await response.json();
+      if (response.status() !== 409 || gateResponse.proposal?.status !== "gated"
+        || gateResponse.proposal?.gate?.kind !== "host_activation_required") {
+        throw new Error(`Heartbeat refusal did not persist the canonical host gate: ${JSON.stringify(gateResponse)}`);
+      }
       await page.getByText("需要宿主确认").waitFor({ state: "visible" });
       if (api.durableWriteCount !== writesBeforeHeartbeat) throw new Error("Protected heartbeat gate wrote durable state");
+      await page.reload({ waitUntil: "networkidle" });
+      await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+      await page.locator(".personal-gated-summary summary").click();
+      await page.locator('.personal-proposal-row[data-action-kind="heartbeat.bind"].is-gated').click();
+      await page.getByText("需要宿主确认").waitFor({ state: "visible" });
+      if (api.durableWriteCount !== writesBeforeHeartbeat) throw new Error("Reading the persisted heartbeat gate wrote durable state");
       pass(8, "Agent semantic protected intent creates only a typed preview, while discussion and targetless requests remain conversational and all protected-gate paths perform zero durable writes before confirmation.");
-      pass(11, "Heartbeat apply surfaced an explicit host-activation gate.");
-      const heartbeatPreview = api.actionPreviews.find((preview) => preview.action_kind === "heartbeat.bind");
-      if (!heartbeatPreview) throw new Error("Continuation intent did not map to heartbeat.bind");
+      pass(11, "Heartbeat apply persisted its host-activation gate and kept it visible after canonical reload, without an automation write.");
       await page.getByRole("button", { name: "关闭", exact: true }).click();
 
       await page.getByRole("button", { name: "概览", exact: true }).click();

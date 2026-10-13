@@ -58,6 +58,17 @@ provider 生命周期读回证明 installed/enabled/ready 之前仍投影为 `re
 
 ## CLI / 命令行
 
+The `external-evidence` `--*-json` options take **file paths**, not inline JSON.
+The provider inventory file contains an object with a `providers` array
+(`{"providers": [...]}`), not a bare array. File-read errors, invalid JSON,
+and non-object roots are reported separately in JSON and default Markdown output
+so callers can correct the input.
+
+`external-evidence` 的 `--*-json` 参数接收**文件路径**，不接收 inline JSON。
+provider inventory 文件的根对象须包含 `providers` 数组，不是裸数组。
+JSON 与默认 Markdown 输出分别报告文件读取、JSON 解析和根对象类型错误，
+便于调用者修正输入。
+
 ```bash
 loopx external-evidence discover \
   --connector-registry \

@@ -1335,6 +1335,8 @@ def run_loopx_turn_once(
     timeout_seconds: float | None,
     execute: bool,
     retry_failed: bool = False,
+    decision_capture_payload: Mapping[str, Any] | None = None,
+    require_decision_capture: bool = False,
     task_validator: TaskValidator | None = None,
     writeback: Writeback | None = None,
     completion_writeback: CompletionWriteback | None = None,
@@ -1495,6 +1497,17 @@ def run_loopx_turn_once(
         )
         if needs_host and goal_admission is not None:
             goal_admission.require_current()
+        if require_decision_capture and needs_host:
+            from .decision_capture import prepare_turn_decision_capture
+
+            original_plan = journal["plan"] if journal is not None else plan
+            plan = prepare_turn_decision_capture(
+                original_plan, journal_path=journal_path,
+                decision=decision_capture_payload, existing_journal=journal is not None,
+            )
+            # Preserve any session recovery adjustment; only the original
+            # observation replaces the fresh request's context.
+            request = {**request, "turn_envelope": plan["turn_envelope"]}
         admission = None
         if needs_host and admit_start is not None:
             admission = admit_start(

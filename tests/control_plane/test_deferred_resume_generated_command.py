@@ -42,7 +42,8 @@ def test_generated_deferred_resume_preserves_execution_lease_boundary(
 ) -> None:
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry = _write_fixture(tmp_path)
+    # This fixture authors the deferred claim below; start from an unclaimed row.
+    project, runtime, registry = _write_fixture(tmp_path, claimed=False)
     peer = "registered-peer"
     registry_data = json.loads(registry.read_text())
     registry_data["goals"][0]["coordination"]["registered_agents"].append(peer)

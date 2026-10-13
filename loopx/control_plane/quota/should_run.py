@@ -324,6 +324,7 @@ def build_quota_should_run(
     workspace_path: Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
     authoritative_fallback_todo_items: FallbackTodoSource = None,
+    replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = str(goal_id or "").strip()
     resolved_scheduler_context = resolve_scheduler_execution_context(
@@ -395,6 +396,7 @@ def build_quota_should_run(
             receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
             receipt_bound_replan_guard_scoped=receipt_bound_replan_guard_scoped,
             authoritative_fallback_todo_items=authoritative_fallback_todo_items,
+            replan_explore_reader=replan_explore_reader,
             receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
         )
         route = _resolve_quota_should_run_route(prepared)

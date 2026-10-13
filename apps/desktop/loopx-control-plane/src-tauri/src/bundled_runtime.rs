@@ -12,11 +12,15 @@ use std::{
 use tauri::{AppHandle, Manager};
 
 pub fn identity(app: &AppHandle) -> Result<Value, String> {
-    let path = app
-        .path()
-        .resource_dir()
-        .map_err(|_| "runtime_bundle_missing")?
-        .join("runtime/identity.json");
+    identity_at(
+        &app.path()
+            .resource_dir()
+            .map_err(|_| "runtime_bundle_missing")?,
+    )
+}
+
+fn identity_at(resources: &Path) -> Result<Value, String> {
+    let path = resources.join("runtime/identity.json");
     let value: Value =
         serde_json::from_slice(&fs::read(path).map_err(|_| "runtime_bundle_missing")?)
             .map_err(|_| "runtime_bundle_invalid")?;
@@ -28,6 +32,19 @@ pub fn identity(app: &AppHandle) -> Result<Value, String> {
         return Err("runtime_bundle_invalid".into());
     }
     Ok(value)
+}
+
+// Availability describes inputs present now, not an integrity attestation.
+// install_snapshot still verifies archive contents before running the installer.
+// A failed App replacement can remove these resources while its process lives.
+pub(crate) fn repair_resources_available(app: &AppHandle) -> bool {
+    app.path()
+        .resource_dir()
+        .is_ok_and(|resources| repair_resources_available_at(&resources))
+}
+
+fn repair_resources_available_at(resources: &Path) -> bool {
+    identity_at(resources).is_ok() && resources.join("runtime/runtime-source.tar.gz").is_file()
 }
 
 pub fn journal(app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -304,6 +321,49 @@ fn extract(bytes: &[u8], destination: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn repair_resources_follow_the_installed_bundle_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let resources = dir.path().join("Contents/Resources");
+        let runtime = resources.join("runtime");
+        fs::create_dir_all(&runtime).unwrap();
+        let manifest =
+            json!({"schema_version":"desktop_runtime_bundle_v1", "source_revision":"a".repeat(40)});
+        fs::write(runtime.join("identity.json"), manifest.to_string()).unwrap();
+        assert!(
+            !repair_resources_available_at(&resources),
+            "manifest alone cannot reinstall"
+        );
+        fs::write(
+            runtime.join("runtime-source.tar.gz"),
+            b"qualification input",
+        )
+        .unwrap();
+        assert!(repair_resources_available_at(&resources));
+        fs::remove_file(runtime.join("runtime-source.tar.gz")).unwrap();
+        fs::create_dir(runtime.join("runtime-source.tar.gz")).unwrap();
+        assert!(
+            !repair_resources_available_at(&resources),
+            "an archive path must be a file"
+        );
+        fs::remove_dir(runtime.join("runtime-source.tar.gz")).unwrap();
+        fs::write(
+            runtime.join("runtime-source.tar.gz"),
+            b"qualification input",
+        )
+        .unwrap();
+        fs::write(runtime.join("identity.json"), "{}").unwrap();
+        assert!(
+            !repair_resources_available_at(&resources),
+            "invalid identity stays unavailable"
+        );
+        fs::write(runtime.join("identity.json"), manifest.to_string()).unwrap();
+        fs::rename(&resources, dir.path().join("moved-resources")).unwrap();
+        assert!(
+            !repair_resources_available_at(&resources),
+            "a moved-away App has no repair inputs"
+        );
+    }
     #[test]
     #[ignore = "requires an isolated private installer root and built App bundle"]
     fn real_private_installer_keeps_the_default_cli_owner() {

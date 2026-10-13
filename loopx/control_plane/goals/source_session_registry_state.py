@@ -57,6 +57,7 @@ def current_goal_ref(
     registry: dict[str, Any],
     *,
     goal_id: str,
+    require_active: bool = True,
 ) -> tuple[dict[str, str], dict[str, Any]]:
     if registry.get("profile_id") != SOURCE_SESSION_PROFILE_ID:
         raise ValueError("source-session registry profile is unsupported")
@@ -65,7 +66,7 @@ def current_goal_ref(
     if len(matches) != 1:
         raise ValueError(f"goal_id is not registered exactly once: {goal_id}")
     goal = matches[0]
-    if goal.get("status") != "active":
+    if require_active and goal.get("status") != "active":
         raise ValueError(f"foreground goal is not active: {goal_id}")
     instance_id = goal.get("goal_instance_id")
     if not isinstance(instance_id, str):

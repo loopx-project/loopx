@@ -1,6 +1,18 @@
 import type { TodoItem } from "../../data/status";
 import type { WorkspaceAgentTodo, WorkspaceSchedule } from "./personal-workspace-model";
 
+/** Display the producer's receipt provenance; never evaluate eligibility here. */
+export function receiptRetryReadback(todo: Pick<TodoItem, "todo_id" | "claimed_by" | "resume_condition">): WorkspaceAgentTodo["retryReadback"] {
+  const retry = todo.resume_condition?.blocked_retry;
+  if (!retry || typeof retry !== "object" || Array.isArray(retry)) return null;
+  const row = retry as Record<string, unknown>;
+  if (row.source !== "turn_settlement" || row.todo_id !== todo.todo_id
+    || (todo.claimed_by && row.agent_id !== todo.claimed_by)
+    || typeof row.observed_at !== "string" || typeof row.due_at !== "string"
+    || typeof row.turn_instance_id !== "string" || !row.turn_instance_id.trim()) return null;
+  return { observedAt: row.observed_at, dueAt: row.due_at, turnId: row.turn_instance_id };
+}
+
 // Readback only: dates and ownership come from the Todo owner. Never calculate
 // a next check, expiry, or domain-specific deadline in the presentation layer.
 export function monitorTodoReadback(todo: TodoItem): Pick<WorkspaceAgentTodo,

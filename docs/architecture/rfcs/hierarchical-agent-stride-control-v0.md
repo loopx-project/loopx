@@ -497,7 +497,7 @@ slice. Scientific usefulness follows the independent qualification in
 
 ### 7.6 Research scope and evidence-conditioned control
 
-Research stride has three independently chosen coordinates. The first two are
+Work and research stride have three independently chosen coordinates. The first two are
 the main controls; the third bounds the evidence and cost needed to act:
 
 - **Work-slice size:** the coherent outcome, scope and cost admitted before the
@@ -565,17 +565,19 @@ No new scheduler, selection rule, quota debit or per-result settlement is added.
 
 #### An iterative strategy and engineering boundary
 
-The first strategy is **model-guided, evidence-conditioned vector adjustment**.
-It proposes increasing, retaining or reducing each coordinate, with a reason
-and a falsifiable next probe. It does not optimize a universal novelty score:
+The first strategy is **model-guided, evidence-conditioned work planning**.
+It explicitly chooses `grow` (expand a supported route), `switch` (test a
+different mechanism) or `verify` (resolve a specific grow-or-switch question),
+then describes a concrete plan and reason for each coordinate and a falsifiable
+next work slice. It does not optimize a universal novelty score:
 mechanism distance is relative to a declared reference method and goal, while
 slice size is relative to the next useful postcondition and decision risk.
 
 | Basis | Work slice | Mechanism distance | Evidence breadth |
 |---|---|---|---|
 | A supported method yields repeatable useful progress | Increase coherent work when decision risk permits | Retain unless a remaining gap justifies alternatives | Keep required checks; avoid redundant sweeps |
-| Current method leaves a substantive gap under applicable evidence | Start with a small discriminating pilot | Compare a larger departure with continuation | Narrow to the observation that distinguishes the routes |
-| Results conflict or expected gains are below uncertainty | Reduce work until the decision is clearer | Retain or compare alternatives without declaring refutation | Increase only a justified replication/uncertainty probe |
+| Current method leaves a substantive gap under applicable evidence | Choose a complete experiment that can distinguish routes | Compare a larger departure with continuation | Cover the evidence needed to distinguish and adopt routes |
+| Results conflict or expected gains are below uncertainty | Retain or enlarge coherent work needed to resolve uncertainty | Retain or compare alternatives without declaring refutation | Increase only a justified replication/uncertainty probe |
 | A larger departure produces attributable useful results | Expand the adopted method's next slice | Retain the useful departure, not novelty for its own sake | Expand validation needed for adoption |
 | Decision-relevant failure or an authority boundary appears | End/split the current slice through its owner | Reassess within the existing goal | Validate the specific failure; never widen authority |
 
@@ -599,31 +601,56 @@ numeric policy. The engineering design has four replaceable boundaries:
    cost to the next review. Proposal, adoption and utility remain separately
    replayable; missing feedback never becomes success.
 
-The present source slice implements the fourth boundary's recorded-decision
-input and the optional TypeScript strategy component `evidence_conditioned_v1`.
-The first version accepts a model-assessed evidence basis and deterministically
-derives three relative `grow | hold | shrink` coordinates. A versioned
-`agent_vision.stride_decision` carries that vector, the admitted obligation and
-observed context ids, and the next probe/adoption/cost commitments. Vision
-authoring validates the declared shape and vector before mutation. Enabled fresh
-Vision path reviews require the structured proposal; other source-specific exits
-remain unchanged. Existing
-Todo/Next Action admits work, and the next review returns the decision with
-actual observations. This is structured proposal control, not an automatic
-executor or a machine classifier of research merit. Its shared configuration
-vocabulary is `off | evidence_conditioned_v1`; unknown
-versions fail before mutation. The existing Goal review capability editor and
-CLI expose the version for a whole Goal override or inherited device default.
-`off` preserves ordinary evidence identity/selection and the five existing review
-instructions. Enablement adds the source-bound followthrough input and separate
-work-slice/mechanism-distance/validation-breadth advice. It has no automatic
-vector actuator. Use the existing bounded `path_delta` and task Next Action to
-record the first proposals; do not create another policy/state database. The explicit versioned attachment prevents parsing prose as a control vector.
-Future strategy versions preserve default-off parity, bounded fields and
-separate proposal/adoption authority; do not silently reinterpret old decisions. Promote each strategy after same-state ablations establish
-adoption and full-cost benefit; change one coordinate before studying their
-interaction. Six effective work Turns remains the existing review default,
-not the size of a Todo, experiment or mechanism change.
+The initial TypeScript component remains one selectable strategy,
+`evidence_conditioned_v1`, plus `off`. Its current implementation replaces fixed
+basis-to-vector mappings with an explicit `grow | switch | verify` action and
+three independently declared concrete plans and reasons. There is no `shrink`
+or idle `hold` decision option. A route switch names the reference method and changed mechanism;
+more tuning cannot establish that change. Basis records the Agent's interpretation,
+not a command to resize work. Verification must resolve a named next decision;
+repeating unchanged checks is not a default policy. The next probe declares
+minimum evidence for a coherent accepted deliverable or interpretable experiment, its prediction, adoption criterion and full cost.
+
+Ordinary engineering, organizing and maintenance use the same strategy and
+existing Todo/Next Action. `grow` may complete related implementation,
+integration, validation and readback as one useful delivery slice, reducing
+repeated planning, source reads and control overhead. Size means accepted scope,
+not Todo prose, file count or tool calls. Do not bundle independent commitments,
+ignore a dependency, widen authority or defer a required settlement merely to
+make work larger. Missing evidence can justify a complete verification; it does
+not mechanically require finer tasks. Stop or split at real risk, dependency
+and authority boundaries through their existing owners.
+
+Qualify ordinary-work adoption with an admitted delivery and subsequent review
+of actual artifact, quality and complete marginal cost. Synthetic CLI journeys
+prove transport and settlement, not model choice or efficiency improvement.
+Measure comparable completed work and repeated control/read overhead before
+claiming a gain; keep unavailable measurements unknown.
+
+The existing replan context returns the prior accepted decision and later work.
+A fresh proposal explicitly reviews actual adoption, new information and goal
+gain against that decision and delivered evidence, retaining unknowns. Co-enabled
+Explore contributes references into its existing scoped findings/planner and
+omitted-result reads; the proposal binds the revision and considered findings
+with an applicability/disposition reason. Typed validation rejects missing
+reviews, wrong decision/finding references and stale or unavailable bases.
+These are provenance and proposal-shape obligations, not automatic proof that
+research was executed or useful. Ordinary Todo/Next Action carries admitted work.
+
+The activation vocabulary and existing Goal/device editor stay unchanged; no
+second selectable strategy or policy database is added. Off retains ordinary
+projection/review semantics. Both historical v1 decision shapes retain read
+compatibility, but cannot discharge a fresh enabled review. Frozen workers retain
+their exact source. Pin implementation revisions for comparisons; do not
+reinterpret old decisions. The policy seam can evolve when evidence warrants it, without maintaining speculative variants.
+For an enabled periodic review, every settlement path now requires a current,
+source-bound stride decision. Typed progress, successor and terminal results
+remain valid evidence/outcomes, while a bare Todo successor transition cannot
+stand in for the review. This closes the decision-recording gap; it does not
+establish that the proposed action was adopted or improved the Goal.
+Six effective work Turns remains the review cadence, not the size of a Todo,
+experiment or route change. Matched continuation must qualify actual adoption,
+target benefit and full cost before promotion or synergy claims.
 
 Exploratory iteration may run only strategy-enabled test arms and reuse historical
 baselines as descriptive references. A fresh concurrent baseline is not required

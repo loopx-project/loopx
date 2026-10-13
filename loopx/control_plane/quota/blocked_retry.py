@@ -189,6 +189,7 @@ def overlay_active_turn_retries(
                                 "kind": "resume_at",
                                 "resume_when": resume,
                                 "satisfied": False,
+                                "blocked_retry": retry,
                             },
                         }
                     )
@@ -231,3 +232,36 @@ def overlay_active_turn_retries(
         if changed
         else status_payload
     )
+
+
+def overlay_status_turn_retries(
+    history: dict[str, Any], queue: dict[str, Any], *, observed_at: str
+) -> dict[str, Any]:
+    """Transport the existing per-agent retry projection into status readers.
+
+    History is the uncompressed control-plane snapshot, not the display tail.
+    Qualification, supersession and clocks stay with the existing retry owner.
+    No canonical Todo, receipt, scheduler or quota mutation is performed here.
+    """
+    payload = {"run_history": history, "attention_queue": queue}
+    for goal in history.get("goals") or []:
+        if not isinstance(goal, dict) or not goal.get("id"):
+            continue
+        semantic = goal.get("semantic_history")
+        runs = (
+            semantic.get("active_blocked_retry_runs")
+            if isinstance(semantic, dict)
+            and isinstance(semantic.get("active_blocked_retry_runs"), list)
+            else goal.get("latest_runs") or []
+        )
+        agents = dict.fromkeys(
+            run["agent_id"] for run in runs
+            if isinstance(run, dict) and isinstance(run.get("agent_id"), str)
+            and run["agent_id"]
+        )
+        for agent_id in agents:
+            payload = overlay_active_turn_retries(
+                payload, goal_id=goal["id"], agent_id=agent_id,
+                observed_at=observed_at,
+            )
+    return payload["attention_queue"]

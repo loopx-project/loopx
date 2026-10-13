@@ -318,7 +318,15 @@ def test_sink_preview_has_no_effect_and_execute_requires_exact_readback() -> Non
         assert result["business_evidence_judged"] is False
 
 
-def test_lark_sink_rejects_private_card_context_before_send() -> None:
+@pytest.mark.parametrize(
+    "separator",
+    [
+        pytest.param("/", id="posix"),
+        pytest.param(chr(92), id="native"),
+        pytest.param(chr(92) * 2, id="escaped"),
+    ],
+)
+def test_lark_sink_rejects_private_card_context_before_send(separator: str) -> None:
     source = build_periodic_report_source_result(
         source_id="release_notes",
         source_kind="release_activity",
@@ -365,7 +373,7 @@ def test_lark_sink_rejects_private_card_context_before_send() -> None:
                 "execute": True,
                 "goal_id": "project-maintenance",
                 "idempotency_key": "delivery-private-context",
-                "title": "/private/tmp/project-title",
+                "title": separator.join(("", "private", "tmp", "project-title")),
             },
         )
     with pytest.raises(ValueError, match="title must be a string"):

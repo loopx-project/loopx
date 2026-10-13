@@ -368,7 +368,7 @@ def test_chat_status_rejects_invalid_goal_activation_scope(monkeypatch) -> None:
 
 def test_workspace_directory_skips_expensive_projection_and_respects_scope(monkeypatch) -> None:
     registry = {"goals": [{"id": "alpha", "display_name": "Alpha"}, {"id": "beta"}]}
-    monkeypatch.setattr("loopx.chat_status_api.load_registry", lambda _: registry)
+    monkeypatch.setattr("loopx.chat_status_api.load_project_registry", lambda _: registry)
     monkeypatch.setattr("loopx.chat_status_api.collect_status", lambda **_: (_ for _ in ()).throw(AssertionError("directory must not collect status")))
     server, thread = _start_server()
     server.selected_goal_id = "alpha"

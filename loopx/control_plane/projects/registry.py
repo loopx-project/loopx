@@ -152,6 +152,8 @@ def register_project_goal(
     external_locator_bindings: list[str],
     goal_instance_profile: str | None = None,
     operation_id: str | None = None,
+    registered_agents: list[str] | None = None,
+    canonical_storage: str | None = None,
 ) -> dict[str, Any]:
     project_id = _identifier(project_id, field="project_id")
     goal_id = _identifier(goal_id, field="goal_id")
@@ -206,6 +208,11 @@ def register_project_goal(
         write_scope=[],
         execution_profile=None,
     )
+    if registered_agents or canonical_storage is not None:
+        if goal_instance_profile != "source_session_v1":
+            raise ValueError("peer and canonical storage configuration requires fresh source_session_v1 registration")
+        from ..goals.source_session_registration import configure_source_creation_goal
+        configure_source_creation_goal(goal_record, registered_agents or [], canonical_storage, operation_id)
     goal_record["project_id"] = project_id
     goal_record["objective"] = objective
     goal_record["brief"] = {

@@ -1,6 +1,18 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatMonitorDate, monitorScheduleReadback, monitorTodoReadback } from "./monitor-readback.ts";
+import { formatMonitorDate, monitorScheduleReadback, monitorTodoReadback, receiptRetryReadback } from "./monitor-readback.ts";
+
+test("receipt wait displays its original clocks and Turn without creating a monitor", () => {
+  const retry = { source: "turn_settlement", todo_id: "todo_retry", agent_id: "agent-a",
+    observed_at: "2030-10-01T10:58:16Z", due_at: "2030-10-01T11:03:16Z", turn_instance_id: "original-turn" };
+  const todo = { todo_id: "todo_retry", claimed_by: "agent-a", resume_condition: { blocked_retry: retry } };
+  assert.deepEqual(receiptRetryReadback(todo), { observedAt: retry.observed_at, dueAt: retry.due_at, turnId: retry.turn_instance_id });
+  for (const bad of [null, [], {}, { ...retry, todo_id: "todo_foreign" },
+    { ...retry, agent_id: "agent-b" }, { ...retry, source: "todo" }, { ...retry, turn_instance_id: "" }]) {
+    assert.equal(receiptRetryReadback({ ...todo, resume_condition: { blocked_retry: bad } }), null);
+  }
+  assert.equal(receiptRetryReadback({ ...todo, resume_condition: {} }), null);
+});
 
 test("canonical monitor facts survive Todo and schedule projections", () => {
   const source = { todo_id: "monitor-test", done: false, text: "Synthetic monitor",

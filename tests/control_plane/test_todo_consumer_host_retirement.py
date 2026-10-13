@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -33,12 +34,27 @@ def cold_api(tmp_path, monkeypatch, consumer_distribution):  # noqa: F811
         env["PYTHONPATH"] = os.pathsep.join([env["PYTHONPATH"], os.environ["PYTHONPATH"]])
         return tuple(result)
 
+    def require_retired_receiver(env):
+        receiver = Path(env["PYTHONPATH"].split(os.pathsep)[0]) / "loopx"
+        # One copied distribution, before every server start/restart and
+        # auxiliary CLI: neither earlier fixture alone proves this boundary.
+        for name in ("todos.py", "bootstrap.py",
+            "control_plane/todos/legacy_mutation.py", "control_plane/todos/line_update.py",
+            "control_plane/scheduler/legacy_monitor_poll.py",
+            "control_plane/coordination/runtime_shadow.py",
+            "control_plane/coordination/runtime_shadow_writer_adapter.py",
+            "control_plane/coordination/local_authority_shadow_adapter.py",
+            "control_plane/coordination/local_authority_shadow_outbox.py"):
+            assert not (receiver / name).exists(), name
+
     def selected_process(command, **kwargs):
         assert command[0] == sys.executable
+        require_retired_receiver(kwargs["env"])
         return subprocess.Popen([command[0], "-S", *command[1:]], **kwargs)
 
     def selected_run(command, **kwargs):
         assert command[0] == sys.executable
+        require_retired_receiver(kwargs["env"])
         return subprocess.run([command[0], "-S", *command[1:]], **kwargs)
 
     # Reuse the existing independent cold-import HTTP oracle and process
@@ -47,7 +63,7 @@ def cold_api(tmp_path, monkeypatch, consumer_distribution):  # noqa: F811
     monkeypatch.setattr(cold, "subprocess", SimpleNamespace(
         Popen=selected_process, run=selected_run, DEVNULL=subprocess.DEVNULL))
     yield from cold.cold_api.__wrapped__(
-        tmp_path, monkeypatch, SimpleNamespace(param=False), True)
+        tmp_path, monkeypatch, SimpleNamespace(param=False), False)
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

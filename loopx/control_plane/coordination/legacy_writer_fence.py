@@ -339,6 +339,22 @@ def require_legacy_coordination_write_allowed(
     )
 
 
+def require_legacy_todo_write_allowed(
+    *, registry_path: Path, runtime_root: Path, goal_id: str, state_file: Path,
+) -> None:
+    """Admit a fresh source mutation while its Todo/state locks are held.
+
+    Historical receipt reads use the same locks but do not admit a new write.
+    Keep source binding, management and promotion checks together for writers.
+    """
+    require_registry_source_write_allowed(
+        registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id,
+        state_file=state_file,
+    )
+    require_shadow_primary_write_allowed(runtime_root, goal_id)
+    require_legacy_coordination_write_allowed(runtime_root=runtime_root, goal_id=goal_id)
+
+
 @contextmanager
 def legacy_todo_write_transaction(
     registry_path: Path,
@@ -376,13 +392,8 @@ def legacy_todo_write_transaction(
         operation=operation,
     ):
         if not dry_run:
-            require_registry_source_write_allowed(
-                registry_path=registry_path, runtime_root=resolved_runtime_root, goal_id=goal_id,
-                state_file=state_file,
-            )
-            require_shadow_primary_write_allowed(resolved_runtime_root, goal_id)
-            require_legacy_coordination_write_allowed(
-                runtime_root=resolved_runtime_root,
-                goal_id=goal_id,
+            require_legacy_todo_write_allowed(
+                registry_path=registry_path, runtime_root=resolved_runtime_root,
+                goal_id=goal_id, state_file=state_file,
             )
         yield

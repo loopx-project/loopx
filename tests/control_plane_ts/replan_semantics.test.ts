@@ -27,8 +27,10 @@ test("a revalidated successor receipt settles only its exact original Turn guard
     outcomes: ["new_runnable_successor"], satisfying_outcomes: ["new_runnable_successor"]};
   const ack = {schema_version: "autonomous_replan_ack_v0", recorded: true,
     source: "todo_replan_successor_transition", semantic_delta: delta};
+  const source = {obligation_id: id};
   const request = {operation: "turn_transition", guard_scoped: true,
-    selected_obligation_id: id, transition_acks: [null, ack]};
+    selected_obligation_id: id, transition_candidates: [{obligation: source, ack: null},
+      {obligation: source, ack}]};
   assert.deepEqual(projectReplanSemantics(request).semantic_delta, delta);
   for (const guard of [{guard_scoped: false}, {selected_obligation_id: null},
     {selected_obligation_id: "replan-2222222222222222"}]) {
@@ -38,10 +40,13 @@ test("a revalidated successor receipt settles only its exact original Turn guard
     {schema_version: "unknown"}, {semantic_delta: {...delta, accepted: false}},
     {semantic_delta: {...delta, satisfying_outcomes: []}},
     {semantic_delta: {...delta, successor_todo_id: null}}]) {
-    assert.equal(projectReplanSemantics({...request, transition_acks: [{...ack, ...invalid}]}).semantic_delta, null);
+    assert.equal(projectReplanSemantics({...request, transition_candidates: [
+      {obligation: source, ack: {...ack, ...invalid}}]}).semantic_delta, null);
   }
   const next = {...ack, semantic_delta: {...delta, obligation_id: "replan-2222222222222222"}};
-  assert.deepEqual(projectReplanSemantics({...request, transition_acks: [next, ack]}).semantic_delta, delta);
+  assert.deepEqual(projectReplanSemantics({...request, transition_candidates: [
+    {obligation: source, ack: next}, {obligation: source, ack}]}).semantic_delta, delta);
+  assert.throws(() => projectReplanSemantics({...request, transition_candidates: undefined}), /source-bound/);
   assert.throws(() => projectReplanSemantics({...request, selected_obligation_id: "malformed"}), /malformed/);
 });
 
@@ -333,8 +338,8 @@ test("versioned stride advice is opt-in and never a semantic discharge", () => {
   assert.deepEqual((withStrategy.planning_guidance as string[]).slice(0, 5), base.planning_guidance);
   assert.equal((withStrategy.planning_guidance as string[]).length, 6);
   assert.deepEqual(withStrategy.required_any_of, base.required_any_of);
-  assert.match((withStrategy.planning_guidance as string[])[5], /work-slice size, mechanism distance and validation breadth independently/);
-  assert.match((withStrategy.planning_guidance as string[])[5], /do not force a pivot from elapsed time or one noisy result/);
+  assert.match((withStrategy.planning_guidance as string[])[5], /work size, route distance and validation breadth independently/);
+  assert.match((withStrategy.planning_guidance as string[])[5], /Do not restart unfinished coherent work/);
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: enabled,
     planning_guidance: withStrategy.planning_guidance}).accepted, false);
   for (const version of ["future_v2", null, 1]) {

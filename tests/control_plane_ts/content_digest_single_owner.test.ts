@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import test from "node:test";
 import { fileURLToPath } from "node:url";
+import test from "node:test";
 import ts from "typescript";
 
 import {
@@ -147,6 +147,8 @@ const CANONICAL_CONSUMERS = [
   "control_plane/work_items/task_lease_lifecycle.ts",
   "control_plane/work_items/task_lease_lifecycle_request.ts",
   "control_plane/work_items/task_lease_workspace.ts",
+  "zcode_goal_mode/cli.ts",
+  "zcode_goal_mode/runtime.ts",
 ];
 
 function packageFiles(dir: string, base = ""): string[] {

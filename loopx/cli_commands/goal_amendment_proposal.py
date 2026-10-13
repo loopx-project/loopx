@@ -37,6 +37,7 @@ from ..control_plane.goals.shared_goal_alignment import (
 )
 from ..history import load_registry
 from ..runtime import validate_goal_id_path_segment
+from ..presentation.markdown import markdown_scalar
 from ..control_plane.todos.path_resolution import resolve_todo_state_path
 
 PrintPayload = Callable[
@@ -65,6 +66,25 @@ def render_goal_amendment_proposal_markdown(
         lines.append(f"- goal_id: `{payload.get('goal_id')}`")
     if payload.get("error"):
         lines.append(f"- error: {payload.get('error')}")
+        return "\n".join(lines)
+    if payload.get("schema_version") == "goal_amendment_result_v0":
+        lines.extend([f"- status: `{payload.get('status')}`",
+            f"- execution authority granted: `{payload.get('execution_authority_granted')}`"])
+        for field in ("reason", "canonical_effect", "goal_revision", "todo_id", "replan_settlement", "peer_adoption"):
+            if field in payload:
+                lines.append(f"- {field}: `{payload[field]}`")
+        intent = payload.get("intent")
+        if isinstance(intent, dict):
+            root = intent.get("root_intent") or {}
+            lines.extend([f"- Goal revision: `{intent.get('goal_revision')}`",
+                f"- Objective: {markdown_scalar(root.get('objective'))}"])
+            for field in ("non_goals", "acceptance", "stop_conditions", "terminal_conditions"):
+                lines.append(f"- {field}: {markdown_scalar(root.get(field))}")
+            policy = intent.get("policy") or {}
+            lines.append("- Templates: " + ", ".join(markdown_scalar(row.get("id")) for row in policy.get("templates", [])))
+        readiness = payload.get("mutation_readiness")
+        if isinstance(readiness, dict):
+            lines.append(f"- Mutation readiness: {markdown_scalar(readiness.get('code') or readiness.get('kind'))}")
         return "\n".join(lines)
     if "rows" in payload:
         rows = payload.get("rows")
@@ -136,6 +156,13 @@ def register_goal_amendment_proposal_command(
             "must match proposal.goal_id when given."
         ),
     )
+    parser.add_argument("--governed", metavar="OPERATION",
+        help="Operate the exact-lifetime canonical amendment owner; legacy submission remains unchanged.")
+    parser.add_argument("--goal-instance-id", help="Exact source-owned Goal lifetime for --governed.")
+    parser.add_argument("--agent-id", help="Registered peer actor; root configuration is a trusted-owner operation.")
+    parser.add_argument("--request-json", help="Bounded operation parameters; cannot replace source-owned facts.")
+    parser.add_argument("--operation-id", help="Stable mutation id; reuse it after a lost response.")
+    parser.add_argument("--execute", action="store_true", help="Commit an explicit governed mutation; default is a read-only preview.")
     parser.add_argument(
         "--project",
         help=(
@@ -161,6 +188,36 @@ def handle_goal_amendment_proposal_command(
     goal_id: str | None = getattr(args, "goal_id", None)
     try:
         runtime_root = Path(runtime_root_arg).expanduser() if runtime_root_arg else None
+        if getattr(args, "governed", None):
+            from ..control_plane.goals.goal_amendment_runtime import execute_goal_amendment
+            if args.list or args.proposal_json or args.project:
+                raise ValueError("--governed cannot replace legacy submit/list/project routing")
+            if not goal_id or not args.goal_instance_id:
+                raise ValueError("--governed requires --goal-id and --goal-instance-id")
+            parameters = {}
+            if args.request_json:
+                with Path(args.request_json).expanduser().open("rb") as stream:
+                    raw = stream.read(256 * 1024 + 1)
+                if len(raw) > 256 * 1024:
+                    raise ValueError("amendment request exceeds the complete 256 KiB limit")
+                parameters = json.loads(raw)
+                if not isinstance(parameters, dict):
+                    raise ValueError("amendment request must be an object")
+            if args.operation_id:
+                if "operation_id" in parameters:
+                    raise ValueError("supply operation_id once")
+                parameters["operation_id"] = args.operation_id
+            from ..capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
+            payload = execute_goal_amendment(registry_path=registry_path, goal_id=goal_id,
+                goal_instance_id=args.goal_instance_id, operation=args.governed,
+                actor_agent_id=args.agent_id, parameters=parameters,
+                runtime_root=runtime_root, execute=args.execute,
+                replan_configuration_reader=resolve_todo_replan_cadence_goal)
+            accepted = payload.get("ok") is True
+            print_payload(payload, output_format(args), render_goal_amendment_proposal_markdown)
+            return 0 if accepted else 1
+        if any(getattr(args, name, None) for name in ("goal_instance_id", "agent_id", "request_json", "operation_id", "execute")):
+            raise ValueError("governed-operation flags require --governed")
         if args.list:
             payload = _handle_list(
                 goal_id=goal_id,

@@ -300,6 +300,7 @@ def handle_turn_command(
             payload = execute_turn_run_once(
                 args,
                 payload=payload,
+                decision=None if args.resume_turn_key else decision,
                 registry_path=registry_path,
                 runtime_root=runtime_root,
                 runtime_root_arg=runtime_root_arg,

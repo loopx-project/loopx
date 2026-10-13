@@ -1,7 +1,14 @@
 {
-  "schema_version": "stride_decision_v1",
+  "schema_version": "stride_decision_v2",
   "basis_options": ["supported_progress", "unexplained_gap", "uncertain_evidence", "useful_new_route", "decision_failure"],
   "axis_names": ["work_slice", "route_distance", "validation_scope"],
-  "adjustments": ["grow", "hold", "shrink"],
-  "probe_field_limits": {"scope": 120, "prediction": 120, "adoption_criterion": 120, "cost_bound": 100}
+  "actions": ["grow", "switch", "verify"],
+  "axis_plan_limit": 120,
+  "probe_field_limits": {"scope": 120, "prediction": 120, "adoption_criterion": 120, "cost_bound": 100, "minimum_evidence": 120},
+  "axis_reason_limit": 96,
+  "review_text_limit": 120,
+  "adoption_options": ["executed", "partially_executed", "not_executed", "unknown"],
+  "information_options": ["new_evidence", "repeated_evidence", "unknown"],
+  "gain_options": ["improved", "flat", "regressed", "unknown"],
+  "explore_dispositions": ["used", "deferred", "no_applicable_evidence", "unavailable"]
 }
