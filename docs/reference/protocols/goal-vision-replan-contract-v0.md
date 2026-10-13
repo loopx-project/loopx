@@ -484,8 +484,14 @@ changed evidence basis requires reassessment under the original Turn identity,
 not another quota debit. Disabled Explore adds no Explore assessment duty.
 
 The typed owner validates shape, references and declared provenance before the
-fresh Vision path exit; other source-specific progress, successor and terminal
-exits remain unchanged. All attachment text counts toward the existing
+fresh Vision path exit. When an enabled Goal reaches a periodic review, every
+accepted exit must also record a current `agent_vision.stride_decision`: a new
+progress observation, runnable successor, blocker or coverage-backed terminal
+result cannot silently replace that decision. The typed outcome remains legal
+and retains its own evidence gate. A terminal review may attach the decision to
+an evidence-linked `stop` path. A Todo successor transition alone cannot settle
+the due review. Other replan sources retain their existing exit policies.
+All attachment text counts toward the existing
 1,800-character Vision budget. The live packet exposes field limits. Legacy
 recorded declarations and old explicit off-mode attachments retain transport
 compatibility; a newly enabled fresh-path proposal requires v2 action,
@@ -512,6 +518,10 @@ revision 与具体 finding，说明采用、暂缓、无适用证据或读取不
 按原 Turn 身份重新审视；不开额外执行权或配额。机器校验提案结构与引用，不能证明
 模型判断正确或已提升收益。两种历史 v1 决策保留原义读取兼容，但不能完成新的
 启用策略复盘；数据格式更新不增加可选策略版本。
+策略启用且周期复盘到期时，所有可接受出口都须记录绑定本次义务的
+`agent_vision.stride_decision`。新进展、可执行后续任务、阻塞或有覆盖证据的终止
+仍可作为结果，但不能代替复盘决定；单独创建后续 Todo 也不能结算到期义务。
+终止时可把决定附在有证据的 `stop` 路径上。其他 replan 来源沿用原有出口规则。
 
 The same opt-in strategy covers ordinary engineering, organizing and maintenance.
 `grow` expands a coherent accepted deliverable, including related integration,
