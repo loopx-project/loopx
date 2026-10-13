@@ -135,6 +135,13 @@ array，并接受 writer protocol `goal_instance_v1`；它**不**生成、比较
 Goal instance。因此，懂 codec 但不懂 identity 的版本也是旧 writer，原先
 “旧 loader 只接受 object 根”的论证不充分。
 
+I/O census 现由既有 semantic premerge smoke 从当前 tracked source 即时计算。
+仅人工审阅的直接 I/O 分类保存在
+`loopx/semantics/project_registry_io_classifications_v1.json`；调用坐标与 codec 位点
+从源码派生。M0 codec 边界检查继续保留，普通代码移位不再产生快照冲突。
+未分类直接 I/O 与失效分类仍会失败，详见
+[源码验证说明](../../development/testing-and-quality.md#local-validation-environment--本地验证环境)。
+
 Project registry 拥有配置和源 identity；global registry 是 host-local route
 projection。Canonical coordination 已有 typed TS transaction owner、独立的
 provider incarnation 和 receipt。`coordination/authority_source.ts` 与

@@ -151,6 +151,13 @@ transactions and a production I/O census. It reads legacy objects and strict
 Therefore a codec-capable but identity-unaware binary is part of the old-writer
 population; the original object-root-only argument is insufficient.
 
+The census is now computed from current tracked sources by the existing semantic
+premerge smoke. Only reviewed direct-I/O classifications are versioned in
+`loopx/semantics/project_registry_io_classifications_v1.json`; call coordinates
+and codec sites are derived. This preserves the M0 codec-boundary check while
+removing snapshot churn. Unclassified direct I/O and stale classifications still
+fail; see [source validation](../../development/testing-and-quality.md#local-validation-environment--本地验证环境).
+
 The project registry owns configuration and source identity; the global registry
 is a host-local route projection. Canonical coordination already has typed TS
 transaction owners, independent provider incarnations and receipts.
