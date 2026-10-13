@@ -536,6 +536,13 @@ def _turn_prompt(
             "Answer directly with the needed version and source references. Explicit requests to change or execute project work still follow their existing authorized workflow. "
             if not execution_mode else ""
         )
+        + (
+            "For bounded workspace edits, read applicable instructions completely, then start with the named files, their owning code and relevant tests. "
+            "Use repository-wide inventories or checksums only when the request, project rules or a necessary validator requires that scope. "
+            "Reuse unchanged reads. After editing, inspect the actual changed files or diff and run the required checks; repeat a read or check only after a relevant change, failure or unresolved concern. "
+            "Do not shorten required source coverage, omit permission or privacy negative cases, or widen the write scope to save diagnostic artifacts. "
+            if execution_mode or project_work or direct_work else ""
+        )
         + (CONVERSATION_INTENT_RESOLUTION_INSTRUCTION if not execution_mode and not project_work else "")
         + (TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION if direct_work else "")
         + (
