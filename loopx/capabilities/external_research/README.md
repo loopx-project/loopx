@@ -202,6 +202,13 @@ cannot authorize or prove a successful read.
 规划和执行均检查仓库当前公开性；不使用 token、cookie、私有仓库、分支 head、重定向、
 代理凭据、原文持久化或自动采纳。保留的 ready 行本身不证明执行成功。
 
+Each successful source's `accessed_at` records its UTC observation after the
+bounded read; receipt `completed_at` is recorded after all attempted reads,
+including failures. Neither timestamp establishes publication or first availability.
+
+每条成功来源的 `accessed_at` 在有界读取后记录 UTC 观察时间；回执的
+`completed_at` 在全部读取尝试（包括失败）结束后记录。两者均不证明发布或首次可得时间。
+
 Failure limitations identify the reached step: public repository visibility,
 source file read, or source text validation. HTTP status codes remain visible;
 exception messages, response bodies and transport reasons remain redacted.

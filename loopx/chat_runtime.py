@@ -315,7 +315,7 @@ class ChatRuntimeController:
         codex_bin: str,
         claude_bin: str = "claude",
         kiro_cli_bin: str = KIRO_CLI_BIN,
-        startup_timeout_sec: float = 30.0,
+        startup_timeout_sec: float | None = None,
         idle_timeout_sec: float = 180.0,
         hard_timeout_sec: float = 900.0,
         endpoint_registry: AgentEndpointRegistry | None = None,
@@ -336,9 +336,9 @@ class ChatRuntimeController:
             or os.environ.get("CODEX_HOME")
             or "~/.codex"
         ).expanduser().resolve()
-        self.claude_bin = claude_bin
-        self.kiro_cli_bin = kiro_cli_bin
-        self.startup_timeout_sec = startup_timeout_sec
+        self.claude_bin, self.kiro_cli_bin = claude_bin, kiro_cli_bin
+        self.acp_startup_timeout_sec = startup_timeout_sec
+        self.startup_timeout_sec = 30.0 if startup_timeout_sec is None else startup_timeout_sec
         self.idle_timeout_sec = idle_timeout_sec
         self.hard_timeout_sec = hard_timeout_sec
         self.endpoint_registry = endpoint_registry or AgentEndpointRegistry(store.root)
@@ -561,7 +561,7 @@ class ChatRuntimeController:
                 command=kiro_cli_chat_command(self.kiro_cli_bin),
                 work_dir=work_dir,
                 resume_thread_id=resume_thread_id,
-                startup_timeout_sec=self.startup_timeout_sec,
+                startup_timeout_sec=self.acp_startup_timeout_sec,
                 idle_timeout_sec=self.idle_timeout_sec,
                 hard_timeout_sec=self.hard_timeout_sec,
                 execution_mode=execution_mode,
@@ -573,7 +573,7 @@ class ChatRuntimeController:
                 work_dir=work_dir,
                 agent_work_dir=endpoint.mapped_work_dir(work_dir),
                 resume_thread_id=resume_thread_id,
-                startup_timeout_sec=self.startup_timeout_sec,
+                startup_timeout_sec=self.acp_startup_timeout_sec,
                 idle_timeout_sec=self.idle_timeout_sec,
                 hard_timeout_sec=self.hard_timeout_sec,
                 execution_mode=execution_mode,

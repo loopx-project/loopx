@@ -481,7 +481,7 @@ def test_todo_succession_gap_cli_actions_do_not_require_semantic_refresh() -> No
     )
 
     assert "--todo-id todo_111111111111" in actions[0]
-    assert "--turn-instance-id turn-implement" in actions[0]
+    assert "--completion-identity-key turn-implement" in actions[0]
     assert "--todo-id todo_222222222222" in actions[1]
     assert "--turn-instance-id" not in actions[1]
     assert all("refresh-state" not in action for action in actions)
@@ -564,7 +564,7 @@ def test_todo_succession_gap_interaction_contract_is_model_actionable() -> None:
     assert "settlement_plan" not in contract["cli_channel"]
     actions = contract["cli_channel"]["next_cli_actions"]
     assert "--todo-id todo_111111111111" in actions[0]
-    assert "--turn-instance-id turn-implement" in actions[0]
+    assert "--completion-identity-key turn-implement" in actions[0]
     assert all("refresh-state" not in action for action in actions)
     assert all("spend-slot" not in action for action in actions)
 

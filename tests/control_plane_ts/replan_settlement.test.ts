@@ -116,7 +116,7 @@ test("Todo lifecycle reentry preserves exact completion identities", () => {
         },
       ],
       next_cli_actions: [
-        "when no real successor remains for completed Todo todo_111111111111: loopx --runtime-root '/tmp/loopx runtime' todo complete --goal-id goal-example --todo-id todo_111111111111 --turn-instance-id turn-implement --agent-id current-agent --no-follow-up --note '<public-safe no-follow-up rationale>'",
+        "when no real successor remains for completed Todo todo_111111111111: loopx --runtime-root '/tmp/loopx runtime' todo complete --goal-id goal-example --todo-id todo_111111111111 --completion-identity-key turn-implement --agent-id current-agent --no-follow-up --note '<public-safe no-follow-up rationale>'",
         "when no real successor remains for completed Todo todo_222222222222: loopx --runtime-root '/tmp/loopx runtime' todo complete --goal-id goal-example --todo-id todo_222222222222 --completion-identity-key local_completion_2fdda7fd139a77f97e72ca43d6e6a72a --agent-id current-agent --no-follow-up --note '<public-safe no-follow-up rationale>'",
         "otherwise link or create one real runnable successor for the exact completed Todo; do not create lifecycle-only filler",
         "loopx --runtime-root '/tmp/loopx runtime' --format json quota should-run --goal-id goal-example --agent-id current-agent --available-capability shell",
@@ -156,7 +156,7 @@ test("Todo lifecycle reentry rejects a non-string runtime root", () => {
   );
 });
 
-test("local-shaped turn identities remain turn-scoped unless exactly derived", () => {
+test("completion reentry always uses the stored completion identity key", () => {
   const projection = projectTodoLifecycleSettlementReentry({
     schema_version: TODO_LIFECYCLE_REENTRY_REQUEST_SCHEMA,
     goal_id: "goal-example",
@@ -176,7 +176,7 @@ test("local-shaped turn identities remain turn-scoped unless exactly derived", (
   );
   assert.match(
     (projection.next_cli_actions as string[])[0] ?? "",
-    /--turn-instance-id local_completion_0{32}/,
+    /--completion-identity-key local_completion_0{32}/,
   );
 });
 
@@ -197,7 +197,7 @@ test("Todo lifecycle reentry shell-quotes projected identities", () => {
 
   assert.equal(
     (projection.next_cli_actions as string[])[0],
-    "when no real successor remains for completed Todo todo_1: loopx todo complete --goal-id 'goal with space' --todo-id todo_1 --turn-instance-id 'turn'\"'\"'quoted' --agent-id 'agent with space' --no-follow-up --note '<public-safe no-follow-up rationale>'",
+    "when no real successor remains for completed Todo todo_1: loopx todo complete --goal-id 'goal with space' --todo-id todo_1 --completion-identity-key 'turn'\"'\"'quoted' --agent-id 'agent with space' --no-follow-up --note '<public-safe no-follow-up rationale>'",
   );
   assert.equal(
     (projection.next_cli_actions as string[]).at(-1),

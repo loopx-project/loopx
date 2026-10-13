@@ -29,6 +29,7 @@ import time
 session_id = "acp:fixture/session"
 active_prompt_id = None
 session_cwd = ""
+client_initialized = False
 for line in sys.stdin:
     request = json.loads(line)
     assert request.get("jsonrpc") == "2.0", request
@@ -44,7 +45,12 @@ for line in sys.stdin:
                 "sessionCapabilities": {"close": {}},
             },
         }
+    elif method == "initialized":
+        assert request_id is None
+        client_initialized = True
+        continue
     elif method == "session/new":
+        assert client_initialized, "client must send initialized before session/new"
         assert request["params"]["mcpServers"] == []
         session_cwd = request["params"]["cwd"]
         result = {"sessionId": session_id}

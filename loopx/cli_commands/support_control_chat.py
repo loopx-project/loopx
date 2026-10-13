@@ -36,8 +36,10 @@ def register_chat_and_dashboard_commands(
     chat_parser.add_argument(
         "--startup-timeout-seconds",
         type=float,
-        default=30.0,
-        help="Maximum seconds allowed for Codex app-server startup and handshake.",
+        help=(
+            "Maximum seconds allowed for Agent startup and session creation. "
+            "Defaults to 30 seconds for Codex startup and 45 seconds for ACP session creation."
+        ),
     )
     chat_parser.add_argument(
         "--idle-timeout-seconds",

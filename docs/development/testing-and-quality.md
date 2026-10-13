@@ -175,22 +175,28 @@ number keeps the same concurrency lane when the merged close event changes
 `github.ref` to the base branch. Closed events skip classification and the final
 gate; open PRs retain the same required jobs and cancellation failures.
 
-A trusted `pull_request_target: closed` job additionally cancels remaining runs
+A trusted `pull_request_target` cleanup handles closed and synchronize events.
+Closed events cancel remaining runs
 of this workflow, using job-local `actions: write` without checking out PR code.
 It verifies the current closed PR, source repository/branch and close time;
 it preserves reopened PRs, another open PR on that branch, newer runs and
 foreign repositories. A missing run-to-PR association requires the exact closed
 head. After ordinary cancellation, it uses GitHub's force-cancel endpoint for
-nonterminal `always()` aggregates. The cleanup needs one short runner job;
+nonterminal `always()` aggregates. Before either cancellation stage it rereads
+both the target PR and open PRs sharing its source branch; a new sibling or
+unavailable lookup prevents the effect. A fresh retry can resume after the
+branch is no longer shared. The cleanup needs one short runner job;
 it releases obsolete capacity rather than reserving release capacity or
 providing a GitHub shared-pool priority guarantee.
 
 PR 关闭或合并后，以 PR 编号维持原并发 lane，关闭事件跳过分类与最终门；开放
-PR 的必需检查及取消失败规则不变。来自目标分支的可信 `pull_request_target:
-closed` 清理任务仅自身持有 `actions: write`，不检出 PR 代码。它核验当前关闭
+PR 的必需检查及取消失败规则不变。来自目标分支的可信 `pull_request_target`
+清理任务处理 closed 与 synchronize 事件（更新规则见下方共享分片说明），仅自身持有 `actions: write`，不检出 PR 代码。它核验当前关闭
 状态、源仓库/分支与关闭时间，保留重开的 PR、同源分支上的其他开放 PR、更新
 运行及其他仓库；缺少 PR 关联时只处理确切关闭 head。普通取消后仍未结束的
-`always()` 汇总使用强制取消 API。清理需要一个短 runner 任务；这会释放过期
+`always()` 汇总使用强制取消 API。普通及强制取消前都重读目标 PR 和同源分支的
+开放 PR；新出现的共享分支 PR 或读取失败会阻止副作用，分支不再共享后可重新
+触发清理。清理需要一个短 runner 任务；这会释放过期
 容量，不等于为发布预留容量或设置 GitHub 共享池优先级。
 
 The [job exemption policy](ci-impact-selection.md) additionally permits pure
@@ -627,6 +633,46 @@ JUnit、coverage 或必过门禁。归属与测量边界见
 Sonar 只复用同一次 run 的 XML，不重复测试、不跨 run 取产物。缺少 token 仍成功跳过
 Sonar，测试 job 不接收 Sonar secret。触发范围取原有两套 workflow 的并集；纯前端
 PR 使用前述豁免，Sonar 配置变更仍全量运行，包括没有 token 的 fork。
+
+Full Python shards share four repository-wide job concurrency groups, one per
+`matrix.shard`, across PR, main, merge-queue and manual runs carrying this
+workflow version. Each group admits one running job and uses `queue: max`
+to retain up to 100 pending jobs instead of replacing another current
+candidate. Workflow-level cancellation requests retirement of the same PR's
+obsolete head. Trusted base-branch cleanup on `synchronize` also retires its
+remaining obsolete runs, including `always()` aggregates that survive ordinary
+cancellation. It requires the event's current head, exact PR association, source
+repository and branch, and rechecks the current head before ordinary and force
+cancellation. It preserves another open PR sharing that branch. Current-head
+runs, unassociated open-PR runs and ordinary required gate predicates remain
+unchanged: cancelled, skipped or incomplete dependencies cannot become a green
+aggregate. This adds one short trusted cleanup job per update without checkout,
+PR-code execution or new permissions on qualification jobs. Older workflow
+versions on the base branch retain only closed-event cleanup. Queue overflow, cancellation and missing coverage remain failures of
+the required gate; collection, four partitions, two workers, reports and the
+coverage floor stay unchanged. Contributors can wait longer for a shard during
+overlapping full runs. This limits long-shard occupancy to four runners; it
+does not reserve release capacity or prioritize releases over other jobs or
+repositories in the organization's shared hosted pool. Older workflow versions
+do not participate. Roll back by removing this job-level concurrency block,
+retaining workflow-level cancellation and the required gate. See GitHub's
+[concurrency queue contract](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+
+全量 Python 分片按 `matrix.shard` 共用四个仓库级 job concurrency 组，适用于
+携带本版 workflow 的 PR、main、merge queue 和手动运行。每组允许一个运行中 job，
+用 `queue: max` 保留至多 100 个等待 job，不替换其他有效候选。workflow 级取消
+请求清退同 PR 的旧 head；可信 base 分支的 `synchronize` 清理还会取消遗留
+旧 run，包括普通取消后仍继续的 `always()` 汇总。清理要求事件中的当前 head、
+精确 PR 关联、源仓库和分支，在普通及强制取消前重新读取 head；同分支另一 open
+PR、当前 head 和无关联 run 均被保护。必过汇总条件不变，取消、跳过或缺失依赖
+不能变绿。每次更新增加一个短清理 job，不 checkout 或执行 PR 代码，不增加普通
+验证 job 的权限；base 分支旧版 workflow 仍只清理 closed 事件。队列溢出、取消
+和缺失 coverage 仍不能通过必需检查。
+完整 collection、四分片、双 worker、报告和覆盖率门槛保持不变；重叠的全量运行
+会增加贡献者等待分片的时间。此限制只把长分片占用约束到四台 runner，不预留发布
+容量，也不保证发布优先于组织共享 hosted 池中的其他 job 或仓库。旧版 workflow
+不参与该限制。回退时移除此 job 的 concurrency 块，保留 workflow 级取消和必需
+检查；队列行为遵循上述 GitHub 官方契约。
 
 Reproduce one shard locally with `uv run --extra test python -m pytest -v -n 2 --splits 4 --group 1
 --splitting-algorithm least_duration --cov=loopx`. Omit the split arguments to

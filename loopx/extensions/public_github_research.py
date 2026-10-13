@@ -89,7 +89,6 @@ def execute_public_github(plan: dict) -> dict:
         raise ValueError("public GitHub execution requires one to eight pinned sources")
     terms = request.get("search_terms", [])
     records, failures = [], []
-    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     for index, (ref, (owner, repo, revision, path)) in enumerate(zip(refs, sources), 1):
         read_step = "public repository visibility check"
         try:
@@ -103,6 +102,7 @@ def execute_public_github(plan: dict) -> dict:
             if not text.strip():
                 failures.append(f"Source {index}: empty source")
                 continue
+            accessed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             matches = []
             for term in terms:
                 lines = [str(index) for index, line in enumerate(text.splitlines(), 1) if term in line]
@@ -115,7 +115,7 @@ def execute_public_github(plan: dict) -> dict:
             records.append({"source_ref": ref, "source_family": "github_repository_file",
                 "basis": "observed", "finding": finding,
                 "limitation": "Retrieval/literal matches only; no semantic conclusion, execution test or completeness claim.",
-                "publication_date": None, "accessed_at": now,
+                "publication_date": None, "accessed_at": accessed_at,
                 "content_digest": "sha256:" + hashlib.sha256(raw).hexdigest()})
         except HTTPError as error:
             failures.append(f"Source {index}: HTTP {error.code} during {read_step}")
@@ -127,7 +127,7 @@ def execute_public_github(plan: dict) -> dict:
         "provider_id": PROVIDER_ID, "provider_kind": "method", "status": status,
         "sources": records, "summary": f"Read {len(records)} of {len(refs)} requested public sources.",
         "limitations": ["Original-source fallback remains available; parent admission is required.", *failures],
-        "completed_at": now}
+        "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
     return {"receipt": receipt, "execution": {"provider_id": PROVIDER_ID,
         "source_reads_observed": len(records), "requested_source_count": len(refs),
         "raw_content_persisted": False, "credentials_used": False,
