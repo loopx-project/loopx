@@ -6,6 +6,7 @@ import decisionSchema from "../stride_decision_schema.json" with {type: "json"};
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject, requireNonEmptyString, requireStringLiteral} from "../runtime_decode.ts";
+import {normalizeExploreResultPages} from "../capabilities/explore_result_page.ts";
 
 export function normalizeStrideStrategy(value: unknown): string {
   if (value === undefined) return schema.default;
@@ -134,7 +135,7 @@ export function normalizeStrideDecision(value: unknown, bounded: BoundedText = t
   }
   if (input.explore_review != null) {
     const review = requireJsonObject(input.explore_review, "stride_decision.explore_review");
-    exactFields(review, ["revision", "disposition", "considered_refs", "reason"], "explore_review");
+    exactFields(review, ["revision", "disposition", "considered_refs", "reason", ...(!historical ? ["result_pages"] : [])], "explore_review");
     if (review.revision !== null && !BARE_SHA256_PATTERN.test(requireNonEmptyString(review.revision, "explore_review.revision"))) throw new EffectRuntimeRequestError("explore_review requires a delivered revision or null when unavailable");
     requireStringLiteral(review.disposition, decisionSchema.explore_dispositions, "explore_review.disposition");
     const considered = refs(review.considered_refs, "explore_review.considered_refs");
@@ -142,6 +143,14 @@ export function normalizeStrideDecision(value: unknown, bounded: BoundedText = t
     output.explore_review = {...review, considered_refs: considered, reason: checked("explore_review.reason", review.reason, decisionSchema.review_text_limit)};
     for (const key of ["revision", "disposition"]) usage[`stride_decision.explore_review.${key}`] = String(review[key] ?? "").length;
     usage["stride_decision.explore_review.considered_refs"] = considered.join("").length;
+    if (Object.hasOwn(review, "result_pages")) {
+      if (review.disposition === "unavailable" || review.revision === null || !considered.length) {
+        throw new EffectRuntimeRequestError("Explore result pages require available evidence and considered references");
+      }
+      const pages = normalizeExploreResultPages(review.result_pages);
+      (output.explore_review as JsonObject).result_pages = pages;
+      usage["stride_decision.explore_review.result_pages"] = JSON.stringify(pages).length;
+    }
   }
   return [output, usage];
 }
@@ -215,6 +224,7 @@ export function projectStrideExploreBasis(value: unknown, goal: string, agent: s
     omitted_finding_refs: Math.max(0, byId.size - 6),
     result_page: graph?.result_page ?? null,
     rule: "Use the existing Explore view for scope/applicability, counterevidence and omitted-result reads. " +
+      "For considered findings outside this list, copy revision/offset/limit from up to three global result pages you read into explore_review.result_pages; writeback replays them against the source. Keep explore_review.revision unchanged. " +
       "A planner selection or recorded finding does not certify execution, utility, refutation of other inputs, or spawn authority."};
 }
 
@@ -242,6 +252,15 @@ export function strideReviewMismatch(decision: JsonObject, context: JsonObject):
   }
   if (explore.disposition === "unavailable") return "Available Explore evidence cannot be declared unreadable.";
   const allowed = new Set((basis.finding_refs as JsonObject[]).map(row => row.finding_id));
+  const deliveredPages = Array.isArray(context.explore_result_pages) ? context.explore_result_pages as JsonObject[] : [];
+  for (const page of (explore.result_pages ?? []) as JsonObject[]) {
+    const resolved = deliveredPages.find(row => row.revision === page.revision &&
+      row.offset === page.offset && row.limit === page.limit);
+    if (page.revision !== (basis.result_page as JsonObject | null)?.revision || !resolved) {
+      return "Explore result pages require current source replay; reread global pages under the original Turn.";
+    }
+    for (const ref of resolved.finding_refs as string[]) allowed.add(ref);
+  }
   if (considered.some(ref => !allowed.has(ref))) return "Explore review cites an undelivered or foreign finding.";
   return null;
 }

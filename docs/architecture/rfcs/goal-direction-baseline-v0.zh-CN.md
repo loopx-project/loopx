@@ -2,10 +2,10 @@
 
 - **RFC 状态：** 已接受
 - **替代 / 关闭：** 无
-- **交付成熟度：** Proposal
+- **交付成熟度：** Partial（M1 候选；准入验收待完成；M2 未验收）
 - **作者 / 负责人：** LoopX 维护者与贡献者
 - **创建日期：** 2026-09-10
-- **最后规范修订：** 2026-09-10
+- **最后规范修订：** 2026-10-12
 - **实现基线：** `41a95d9`
 - **跟踪 Issue：** [#2831](https://github.com/huangruiteng/loopx/issues/2831)
 - **相关契约：**
@@ -22,8 +22,9 @@
 记录运行时交付前必须决定的问题，其中的建议不等于批准。附录记录非规范性的
 执行、决策、证据与 fixture 计划。
 
-RFC 成熟度与交付成熟度互相独立。本提案不声称 `goal_direction_baseline_v0`、
-它的声明字段或运行时消费者已经存在于 `main`。
+RFC 成熟度与交付成熟度互相独立。M1 候选 TypeScript builder 已基于传入的完整 canonical
+输入实现 `goal_direction_baseline_v0`。生产 receipt writer、声明编写命令与运行时
+consumer 尚未交付；schema 合法的合成回执不证明真实阅读。
 
 独立的[验收合同 v0](../../reference/goal-acceptance-observations.md#owner-authorized-contract-v0)
 不实现本 RFC 的材料声明或使用回执。#2831 的下一切片是**方向材料版本与验收基线关联**，
@@ -48,8 +49,8 @@ Repository owner 文档只是可选的材料 provider 之一。它不会成为�
 repository 路径也不是协议。私有 wiki、外部文档系统或其他已注册 provider
 可以在不暴露原始内容的情况下满足同一个契约。
 
-本 RFC 只批准文档与 synthetic fixture 计划，不批准新的 writer、scheduler、
-状态 authority、自动 Vision 更新或运行时 gate。
+M1 只提供纯 read model，不引入 writer、scheduler、状态 authority、自动 Vision
+更新或运行时 gate。M2 保留独立的 consumer 与恢复验收。
 
 ## 2. 问题与动机
 
@@ -127,9 +128,9 @@ provider-neutral 材料元数据与当前 Agent 自己的 usage receipt，只暴
 - 当前 `shared_goal_alignment_v0` 绑定的是 event-log 或 canonical Todo
   projection 事实，并非 typed canonical Goal-intent revision。
 
-当前没有类型声明哪些 authority material 定义 Goal 方向，也没有 reducer 把
-这组材料与单个 Agent 的当前 usage receipt 绑定。本 RFC 不会把 shared-alignment
-source digest 或 Markdown state 改名为这个缺失的语义 identity。
+M1 builder 已将声明的方向材料与单个 Agent 的传入回执绑定。生产声明编写与回执
+provenance 仍属于 M2 依赖，不能用 shared-alignment source digest 或 Markdown
+state 代替真实阅读来源。
 
 ## 5. 提议架构
 
@@ -373,15 +374,15 @@ required material。
 | M1 | 基于完整 Goal authority 和 receipt 的 optional pure builder；无 consumer 或 writer。 | 批准第 12 节决策与 schema 限制。 | 确定性 fixture、mutation check；若双 runtime 消费则做 Python/TypeScript parity；public-boundary scan。 | 移除 default-off builder 与 projection。 |
 | M2 | 一个只读 Agent-scoped Vision-gap consumer。 | M1 conformance，并由维护者显式批准 consumer 与 recovery UX。 | 端到端证明 drift 可见、同 revision replay 安静且不修改 Vision/Todo/route。 | 禁用 consumer；保留 canonical registry 与 receipt。 |
 
-合并 M0 不授权后续 milestone。附录 D 的 F2 fixture 已在 M1 前以 conformance
-harness 形式签入
-（[examples/goal-direction-baseline-f2-smoke.py](../../../examples/goal-direction-baseline-f2-smoke.py)）；
-这不授权 M1，也不新增任何 runtime builder、writer 或 consumer。
+M1 候选实现在 [`direction_baseline.ts`](../../../loopx/control_plane/goals/direction_baseline.ts)。
+现有 [F2 smoke](../../../examples/goal-direction-baseline-f2-smoke.py) 已改为执行真实
+TypeScript 测试与两项源码 mutation，删除原 fixture-local reducer。没有 CLI、
+persistence、consumer、scheduler 或 quota 路径调用这个 builder。M2 保持独立。
 
 ## 12. 开放决策
 
 以下建议**等待 owner 决策，不构成运行时授权**。它们根据附录 F 的源码审计与合成
-测量细化现有三项决策；交付成熟度仍为 Proposal。
+测量细化现有三项决策；下文的实现证据不等于批准这些建议。
 
 ### 12.1 Schema 容量 — Goal authority owner
 
@@ -461,6 +462,25 @@ CLI 与前端必须共享该结果；Lark 在实际交互测试前仍单独保�
 维护者可以批准或调整容量和 receipt 决策，允许仅 TypeScript M1 pure builder，
 同时明确暂缓 M2。这项较窄决策不批准 consumer、writer 或 recovery UX；第 11 节
 仍要求 M2 显式批准及真实 producer/consumer 验证。
+
+### 12.4 M1 候选实现 profile
+
+纯构建器实现 §12.1 的建议包络和 §12.2 的回执规则。源码/测试不满足 §11 准入
+门槛：容量、回执资格和有界元数据 profile 仍须由具名 owner 批准。超限返回
+`blocked` / `direction_capacity_exceeded`、空 items 和 null digest，计数不代表
+部分 authority。文本限制为 id/revision 180 个 Unicode 字符、topic 120、purpose
+220、available boundary 80。调用者 identity/time 无效属于类型化输入错误。
+回执时间按纳秒精度排序；内容一致的并列观察取最小 receipt id。
+
+候选不从 prose 推导 authority：仅 `owner_status=reviewed`、
+`conflict_rule=owner_wins`、`freshness=current` 和
+`gate_status=ready|registered|readable` 可以通过。缺失/未知元数据或 boundary
+保持阻塞；public/public_safe 或显式 available boundary 允许本次读取，本身不
+授予访问权。Material role 仅提供信息。要求完整 `project_materials` 和
+`topic_authority`；map/list identity 和重复声明必须一致。可选项保持可见，但
+只有 required 项影响聚合状态/原因。完整输入的非法行即使属于可选项或 peer，
+仍拒绝投影。§12.3 的 consumer/回执来源要求保持独立；纯构建器不新增回执
+存储或 v0 字段。
 
 ---
 
@@ -568,3 +588,17 @@ id `receipt-{i}-{j}` 及 timestamp `2026-10-12T00:{j:02d}:00Z`；
 这些观测说明 material 数与 receipt 历史都影响成本，不验证拟议 declaration
 schema、最大字段宽度、conflict、组合最坏情况、端到端时延或实际负载占比。
 原始测量保留在公开仓库外；fixture 配方与有界汇总观测作为评审证据。
+
+## M1 候选源码检查点
+
+源码验证不代替 §11 的 M1 入口批准；§12 的 owner 决策仍待完成。
+
+可选 TypeScript 纯构建器取代原合成 decision owner。验证覆盖完整 registry 解析、
+准确 Agent/Todo/revision、冲突、时间顺序、输入不可变、输入/输出限额与 public-safe
+投影。用 Node >=22.22.3 执行
+`node --experimental-strip-types --test tests/control_plane_ts/direction_baseline.test.ts`
+与 `uv run --extra test python examples/goal-direction-baseline-f2-smoke.py`；既有
+`vision_checkpoint.test.ts` 验证路线 authority。没有新增平行 Python reducer 或
+Python/TypeScript 双消费路径。生产回执真实性、instance-bound storage、live provider、
+生产容量冻结和 M2 CLI/frontend/Lark 流程仍未验收。回退只移除尚未接入消费者的 builder，
+无需迁移 canonical state。

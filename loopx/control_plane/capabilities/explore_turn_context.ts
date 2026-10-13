@@ -5,6 +5,7 @@ import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireInteger, requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
 
 import {EXPLORE_WRITEBACK_SUMMARY_LIMIT, exploreResultWritebackAffordance} from "./explore_result_writeback.ts";
+import {normalizeExploreResultPages} from "./explore_result_page.ts";
 
 function rows(value: unknown): JsonObject[] {
   return Array.isArray(value) ? value.map(item => requireJsonObject(item, "Explore row")) : [];
@@ -117,11 +118,23 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
     throw new EffectRuntimeRequestError("Continuation requires result_revision from the previous page");
   }
   const visibleResults = resultRows.slice(resultOffset, resultOffset + resultLimit);
+  // Write-time replay uses this same source snapshot and ordering. The caller
+  // supplies only page coordinates, never the findings admitted by that page.
+  const reviewPages = params.review_pages === undefined ? null : normalizeExploreResultPages(params.review_pages).flatMap(page => {
+    if (!graph || resultNode !== null || page.revision !== resultRevision) {
+      // A stale query is not an unavailable source. Retain the current bounded
+      // context/read route; the replan owner refuses any unresolved citation.
+      return [];
+    }
+    return [{...page, finding_refs: resultRows.slice(Number(page.offset), Number(page.offset) + Number(page.limit))
+      .map(row => row.finding_id)}];
+  });
   const remainingResults = Math.max(0, resultRows.length - resultOffset - visibleResults.length);
   const resultRead = (...args: string[]) => command("turn-context", "--agent-id", agent, ...args);
   const writeback = exploreResultWritebackAffordance();
   return {
     ok: true, goal_id: goal, agent_id: agent, graph_enabled: graph, harness_enabled: harness,
+    ...(reviewPages ? {review_pages: reviewPages} : {}),
     graph: graph ? {
       counts: projection.counts ?? {},
       recent_nodes: nodes.slice(0, 3).map(row => compact(row, ["node_id", "title", "status", "blocked_reason"])),

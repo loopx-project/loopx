@@ -169,6 +169,7 @@
     "tests/control_plane_ts/turn_journal_effects.test.ts",
     "tests/control_plane_ts/chat_turn_acceptance.test.ts",
     "tests/control_plane_ts/vision_checkpoint.test.ts",
+    "tests/control_plane_ts/stride_explore_pagination.test.ts",
     "tests/control_plane_ts/checkpoint_read_context.test.ts",
     "tests/control_plane_ts/checkpoint_provider_head.test.ts",
     "tests/control_plane_ts/checkpoint_commit_probe.ts",
@@ -180,6 +181,8 @@
     "tests/control_plane_ts/goal_instance_identity.test.ts",
     "tests/control_plane_ts/chat_session_lifecycle.test.ts",
     "tests/control_plane_ts/test_python_runtime.test.ts",
+    "loopx/control_plane/goals/direction_baseline.ts",
+    "tests/control_plane_ts/direction_baseline.test.ts",
     "loopx/zcode_goal_mode/*.ts",
     "tests/control_plane_ts/zcode*.test.ts"
   ]

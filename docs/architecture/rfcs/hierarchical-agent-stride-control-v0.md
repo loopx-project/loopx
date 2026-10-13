@@ -634,6 +634,13 @@ Explore contributes references into its existing scoped findings/planner and
 omitted-result reads; the proposal binds the revision and considered findings
 with an applicability/disposition reason. Typed validation rejects missing
 reviews, wrong decision/finding references and stale or unavailable bases.
+Revision-bound global result pages can extend considered findings through the
+optional v2 `explore_review.result_pages` coordinates. The existing Explore
+owner replays at most three pages from its current source before writeback;
+these facts do not change the admitted context/basis identity. Changed source
+requires rereading within the original Turn. Page coordinates persist with the
+decision into subsequent review; node-filtered/planner detail routes remain
+outside this bounded citation path. No separate receipt store is introduced.
 These are provenance and proposal-shape obligations, not automatic proof that
 research was executed or useful. Ordinary Todo/Next Action carries admitted work.
 

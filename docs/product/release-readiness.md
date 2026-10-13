@@ -765,6 +765,29 @@ path, and canary route rather than as a user-facing release baseline.
   personal illustrated guide were independently read back. Focused checks
   passed; full Python/public smoke and paid model matrices were not rerun.
 
+- `v1.4.0` on 2026-10-11 22:47 +08:00: evidence reuse, native workspace
+  continuity and semantic control-plane quality at frozen commit
+  `1b452b00a114bd9f0d9c24868c9f45df42661748`. New unconfigured Goals use
+  canonical SQLite/hard leases; existing Goals retain their recorded storage
+  and use reviewed migration or cold-source import. The
+  [published release](https://github.com/loopx-project/loopx/releases/tag/v1.4.0)
+  includes fifteen bilingual capability operating entries and annotated
+  community credits. Public GitHub/PyPI packages, four desktop installers,
+  the signed macOS update feed, `desktop-stable` and source `stable` were
+  independently read back. Package hashes and hosted source attestations
+  match the frozen tag; actual PyPI 1.3.1-to-1.4.0 upgrade, installed Chat,
+  installation/deep doctor and stable runtime activation passed. The
+  [personal illustrated guide](https://my.feishu.cn/docx/E9sTdmBuSoX9wqxkKGPcuAPRnTc)
+  has verified user ownership, actual released UI screenshots and native
+  rendering. At the frozen source, 515 public smokes and 360 affected Python
+  checks passed; the authorized DS Flash/high alternative passed all 22
+  scenarios twice and six contrasts, with zero failures or skips. Earlier
+  Doubao qualification failures remain unqualified; this does not claim a
+  fresh full-tree Python sweep. Windows execution, Apple notarization,
+  authenticated Host interaction, external backend execution and sustained
+  SQLite qualification remain unqualified. No paired-version benchmark uplift
+  or isolated Astra causal effect is claimed.
+
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.
 

@@ -483,6 +483,24 @@ stale revisions and declaring unavailable evidence as empty are rejected. A
 changed evidence basis requires reassessment under the original Turn identity,
 not another quota debit. Disabled Explore adds no Explore assessment duty.
 
+For a considered finding omitted from the bounded basis, follow the global
+`result_page.next_command` (or increase its page size), then add
+`explore_review.result_pages: [{"revision": "<page revision>", "offset": 3, "limit": 3}]`.
+Copy these three coordinates from each page actually read; keep
+`explore_review.revision` bound to the original Explore basis. At most three
+distinct pages and three considered findings fit the existing Vision budget.
+Writeback replays the requested slices of the current, strictly validated
+Explore source and admits only findings present in those pages. The page
+revision binds the ordered full result contents and Goal/reader scope; it is
+not the bounded basis revision. Same-Goal peer findings remain reusable.
+Changed or unavailable source, forged membership and node-filtered pages are
+refused. Reread and reassess under the original Turn and obligation. This
+optional v2 field is retained in decision/history readback; ordinary reads stay
+read-only and no receipt store, claim, spawn or extra quota debit is created.
+Source replay verifies the declared citation, not that the model understood or
+adopted it. Existing v2 decisions without pages and historical v1 reads retain
+their behavior. Other detail routes are not supplemental citation sources.
+
 The typed owner validates shape, references and declared provenance before the
 fresh Vision path exit. When an enabled Goal reaches a periodic review, every
 accepted exit must also record a current `agent_vision.stride_decision`: a new
@@ -535,6 +553,13 @@ not improved model decisions or net efficiency.
 同一可选策略也覆盖普通工程、整理和维护：grow 扩大连贯的可验收交付，包含相关
 集成、验证和回读，不扩大权限、延迟结算或捆绑独立承诺。下次复盘核查质量与完整
 边际成本；合成准入链路只能证明协议采用，不能证明模型决策或净效率改善。
+
+补读全局结果分页后，可在 `explore_review.result_pages` 中附上实际读取页面的
+`revision`、`offset`、`limit`，最多三页；`explore_review.revision` 仍引用原有界
+证据版本。提交时从当前可信来源重放页面并核对 `considered_refs`，支持同一 Goal
+其他 Agent 产出的证据。来源变化、不可用、伪造成员或按节点筛选的页面会被拒绝，
+应在原 Turn 和原复盘义务下补读并重新评估。读取不写入回执或扣额度，分页引用随
+决策保留到历史和下次复盘；来源核验不证明模型理解、采用或研究收益。
 
 ### Path Delta
 

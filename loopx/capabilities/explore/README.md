@@ -590,6 +590,17 @@ ordering. These reads do not alter planner scores, graph state, claims or quota.
 The dashboard's saved-evidence reader also pages through history; the CLI
 options above control the agent context, not dashboard page size.
 
+When the stride strategy is enabled, findings read from a global result page
+can be cited in `explore_review.considered_refs` by also copying that page's
+`revision`, `offset` and `limit` into `explore_review.result_pages` (up to three
+pages). Keep the separately delivered `explore_review.revision`; the two
+revision fields have different scopes. Writeback resolves membership from the
+same current source, including results authored by peers in this Goal, and
+rejects changed/unavailable pages. This adds no read-side writes or execution
+permission. Node-filtered and planner-detail reads are not supported by this
+citation path. See the [stride contract](../../../docs/reference/protocols/goal-vision-replan-contract-v0.md#structured-stride-control)
+for the existing decision, budget and original-Turn recovery rules.
+
 Planning context also keeps a bounded `typed_evidence_audit` on suggested
 branches with explicit Todo/node links, and up to three existing exploring
 frontier nodes. Linked findings are resolved before the recent-history limit,

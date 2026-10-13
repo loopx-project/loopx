@@ -386,6 +386,12 @@ export function projectReplanContext(value: unknown): JsonObject {
   if (strideStrategy !== "off") context.stride_strategy = strideStrategy;
   if (followthrough) context.decision_followthrough = followthrough;
   if (exploreBasis) context.explore_basis = exploreBasis;
+  // Source-replayed supplemental pages qualify a proposal, not a new admission
+  // context. They must not change the original context or bounded basis IDs.
+  if (exploreBasis?.availability === "available" && request.explore_context != null) {
+    const source = requireJsonObject(request.explore_context, "Explore stride source");
+    if (source.review_pages !== undefined) context.explore_result_pages = source.review_pages;
+  }
   if (omitted.length) context.omitted_evidence = {
     distinct_observation_count: omitted.length,
     newest_at: omitted[0].row.generated_at, oldest_at: omitted.at(-1)!.first,

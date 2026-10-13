@@ -39,7 +39,8 @@ def _policy(registry_path, goal_id):
     return goal, graph, gate
 
 
-def read_replan_explore_context(*, source_status: Mapping, goal_id: str, agent_id: str | None):
+def read_replan_explore_context(*, source_status: Mapping, goal_id: str, agent_id: str | None,
+                               review_pages=None):
     """Outer read adapter; the replan owner invokes it only for enabled reviews.
 
     Unavailable IO is distinct from an empty or disabled evidence source. No
@@ -50,7 +51,8 @@ def read_replan_explore_context(*, source_status: Mapping, goal_id: str, agent_i
     try:
         return explore_turn_context(
             registry_path=Path(source_status["registry"]), runtime_root=Path(source_status["runtime_root"]),
-            goal_id=goal_id, agent_id=agent_id, include_finding_digests=True)
+            goal_id=goal_id, agent_id=agent_id, include_finding_digests=True,
+            **({"review_pages": review_pages} if review_pages is not None else {}))
     except (OSError, ValueError, RuntimeError):
         return {"ok": False, "goal_id": goal_id, "agent_id": agent_id}
 
@@ -60,6 +62,7 @@ def explore_turn_context(
     result_limit: int = 3, result_offset: int = 0,
     result_node: str | None = None, result_revision: str | None = None,
     include_finding_digests: bool = False,
+    review_pages=None,
 ):
     if type(include_finding_digests) is not bool:
         raise ValueError("include_finding_digests must be an explicit boolean")
@@ -119,6 +122,7 @@ def explore_turn_context(
             "result_node": result_node,
             "result_revision": result_revision,
             **({"include_finding_digests": True} if include_finding_digests else {}),
+            **({"review_pages": review_pages} if review_pages is not None else {}),
         },
     )
 
