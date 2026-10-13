@@ -385,6 +385,7 @@ export type WorkspaceReturnDelivery = {
   error?: string | null;
   status: string;
   verification?: "reconciled_after_restart";
+  request_revision?: number | null;
 };
 
 export type WorkspaceImageAttachment = {

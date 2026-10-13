@@ -61,6 +61,7 @@
     "loopx/control_plane/goals/goal_amendment_proposal.ts",
     "loopx/control_plane/goals/goal_amendment_authority.ts",
     "tests/control_plane_ts/goal_amendment_authority.test.ts",
+    "tests/control_plane_ts/request_control.test.ts",
     "loopx/control_plane/goals/goal_instance_identity.ts",
     "loopx/control_plane/goals/chat_session_lifecycle.ts",
     "loopx/control_plane/quota/settlement_workspace_causality.ts",

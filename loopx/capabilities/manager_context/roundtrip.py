@@ -39,6 +39,7 @@ from ...control_plane.collaboration.inbox import (
     prior_result_delivered,
 )
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
+from ...control_plane.collaboration.source_chat_observation import original_delivery_facts
 from ...chat import ChatMessagePayloadConflictError
 
 DELIVERY_STATUSES = {
@@ -232,6 +233,7 @@ def report(
     update_id=None,
     attachment_refs=None,
     workspace=None,
+    request_revision=None,
 ):
     """Chat audience adapter; the shared Inbox owns result validation/persistence."""
     if scope is None and registry is not None:
@@ -256,6 +258,7 @@ def report(
                 update_id=update_id,
                 attachment_refs=attachment_refs,
                 workspace=workspace,
+                request_revision=request_revision,
             )
     row = _entry(root, goal_id, agent_id, request_id, scope=scope)
     route = _route(root, row, scope=scope)
@@ -285,6 +288,7 @@ def report(
             route=route,
             update_id=update_id,
             attachments=attachments,
+            request_revision=request_revision,
         ),
         "status": (
             "queued_for_requester"
@@ -390,21 +394,6 @@ def project_chat_session_snapshot(root, store, session_id, *, registry):
     return snapshot
 
 
-def _original_delivery_facts(row, route, turn, *, source_id):
-    # Adapt trusted store/authority facts only. The common typed owner decides
-    # whether a committed handoff survived a lost caller response.
-    identity = {key: row[key] for key in ("request_id", "goal_id", "agent_id", "source_id", "goal_ref") if key in row}
-    return {
-        "request": identity,
-        "route": route,
-        "authorized_source_id": source_id,
-        "turn": {
-            "client_turn_id": turn.get("client_turn_id"),
-            "status": turn.get("status"),
-            "context_handoff_receipt": (turn.get("response") or {}).get("context_handoff_receipt"),
-        },
-    }
-
 
 def _exact_return_scope(registry, reply):
     return collaboration_goal_scope(
@@ -465,7 +454,7 @@ def _exact_return_context(root, registry, store, path, state_path, now):
             operation="original_return_admit",
             record=row,
             route=route,
-            initial_delivery=_original_delivery_facts(row, route, turn, source_id=grant.get("source_id")),
+            initial_delivery=original_delivery_facts(row, route, turn, source_id=grant.get("source_id")),
         )
         with _request_lock(
             root,
@@ -584,7 +573,7 @@ def _write_exact_return_state(
             record=row,
             route=route,
             initial_delivery=(
-                _original_delivery_facts(row, route, turn, source_id=context["source_id"])
+                original_delivery_facts(row, route, turn, source_id=context["source_id"])
                 if isinstance(turn, dict) else None
             ),
         )
@@ -1059,7 +1048,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                 with collaboration_goal_scope(registry, goal_id=row["goal_id"], agents=()) as scope:
                     decide_collaboration_lifecycle(
                         scope, operation="original_return_admit", record=row, route=route,
-                        initial_delivery=_original_delivery_facts(row, route, turn, source_id=grant.get("source_id")),
+                        initial_delivery=original_delivery_facts(row, route, turn, source_id=grant.get("source_id")),
                     )
                 if (
                     path.stem == "decision"
@@ -1414,7 +1403,7 @@ def recover_source_chat_provenance(root, registry, store, *, cancelled=lambda: F
                     continue
                 decide_collaboration_lifecycle(
                     scope, operation="original_return_admit", record=row, route=route,
-                    initial_delivery=_original_delivery_facts(row, route, turn,
+                    initial_delivery=original_delivery_facts(row, route, turn,
                                                                source_id=grant.get("source_id")),
                 )
                 if cancelled():

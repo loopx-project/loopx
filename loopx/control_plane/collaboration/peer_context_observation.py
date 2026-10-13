@@ -20,7 +20,8 @@ def require_parent_context_access(root, registry, parent, target_agent_id, *, sc
             break
         ancestor_id = original.get("parent_request_id")
         if not ancestor_id:
-            return  # An independent local peer request has no source context.
+            # An independent local peer request has no inherited source grant.
+            return {"local_source": True, "source_id": original["source_id"]}
         original = _entry(root, scope.goal_id, original["source_agent_id"],
                           ancestor_id, scope=scope)
 
@@ -29,7 +30,8 @@ def require_parent_context_access(root, registry, parent, target_agent_id, *, sc
         "origin": "web" if str(original.get("source_id", "")).startswith("web:") else "unknown",
     }
     grant = None
-    if not conversation_scope(conversation, origin=conversation["origin"])["private_conversation"]:
+    local_source = conversation_scope(conversation, origin=conversation["origin"])["private_conversation"]
+    if not local_source:
         # Use the original provider/store provenance and the existing source
         # authority owner. Reading must not recover or rewrite a return route.
         from .source_chat_observation import observe_source_chat
@@ -54,3 +56,4 @@ def require_parent_context_access(root, registry, parent, target_agent_id, *, sc
         })
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from exc
+    return {"local_source": local_source, "source_id": original["source_id"]}

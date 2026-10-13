@@ -2,7 +2,7 @@ import { useWorkspaceI18n } from "./i18n";
 import type { WorkspaceReturnDelivery } from "./personal-workspace-model";
 
 export function ReturnDeliveryStatus({ delivery }: { delivery?: WorkspaceReturnDelivery }) {
-  const { t } = useWorkspaceI18n();
+  const { t, locale } = useWorkspaceI18n();
   if (!delivery) return null;
   const label = delivery.status === "delivered"
     ? delivery.verification === "reconciled_after_restart"
@@ -23,6 +23,7 @@ export function ReturnDeliveryStatus({ delivery }: { delivery?: WorkspaceReturnD
   return (
     <small className={`personal-return-delivery is-${tone}`} role="status">
       {label}
+      {delivery.request_revision !== undefined ? ` · ${locale === "zh-CN" ? "请求版本" : "Request revision"} ${delivery.request_revision ?? (locale === "zh-CN" ? "未知" : "unknown")}` : ""}
     </small>
   );
 }

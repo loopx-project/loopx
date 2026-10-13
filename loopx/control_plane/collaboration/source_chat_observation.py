@@ -51,3 +51,19 @@ def trusted_source_chat_root(store, route):
     root = store.root.parent.resolve()
     observe_source_chat(root, {**route, "source_chat_runtime_root": str(root)})
     return str(root)
+
+
+def original_delivery_facts(row, route, turn, *, source_id):
+    # Adapt trusted store/authority facts only. The common typed owner decides
+    # whether a committed handoff survived a lost caller response.
+    identity = {key: row[key] for key in ("request_id", "goal_id", "agent_id", "source_id", "goal_ref") if key in row}
+    return {
+        "request": identity,
+        "route": route,
+        "authorized_source_id": source_id,
+        "turn": {
+            "client_turn_id": turn.get("client_turn_id"),
+            "status": turn.get("status"),
+            "context_handoff_receipt": (turn.get("response") or {}).get("context_handoff_receipt"),
+        },
+    }
