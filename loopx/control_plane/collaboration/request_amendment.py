@@ -44,7 +44,8 @@ def _reservation(snapshot: Mapping[str, Any], operation_id: Any) -> dict[str, An
 
 
 def _goal(registry: Path, root: Path, ref: Mapping[str, str], receiver: str,
-          operation: str, parameters: Mapping[str, Any], *, context=None, execute=False):
+          operation: str, parameters: Mapping[str, Any], *, context: Mapping[str, Any] | None = None,
+          execute: bool = False) -> dict[str, Any]:
     return _execute_goal_amendment(registry_path=registry, runtime_root=root, goal_id=ref["goal_id"],
         goal_instance_id=ref["goal_instance_id"], actor_agent_id=None if operation == "receipt" else receiver,
         operation=operation, parameters=parameters, request_context=context, execute=execute)
@@ -81,6 +82,8 @@ def _finish(*, registry: Path, root: Path, ref: Mapping[str, str], receiver: str
         "legacy_assessment": snapshot["_legacy_assessment"],
         "legacy_assessment_unavailable": snapshot["_legacy_assessment_unavailable"],
         "legacy_read": snapshot["_legacy_read"], "legacy_read_unavailable": snapshot["_legacy_read_unavailable"], "source_current": current})
+    if not isinstance(result, dict):
+        raise TypeError("request effect owner returned an invalid readback")
     if errors:
         result["readback_errors"] = errors
     if attempt_observation:
@@ -166,7 +169,7 @@ def control_request(*, registry_path: Path, runtime_root: Path, goal_ref: Mappin
                     receiver_agent_id: str, request_id: str, actor_agent_id: str | None,
                     operation: str, parameters: Mapping[str, Any] | None = None, execute: bool = False) -> dict[str, Any]:
     """Shared source UI/CLI path; cancellation settles only through its owner."""
-    common = dict(registry_path=registry_path, runtime_root=runtime_root, goal_ref=goal_ref,
+    common: dict[str, Any] = dict(registry_path=registry_path, runtime_root=runtime_root, goal_ref=goal_ref,
         receiver_agent_id=receiver_agent_id, request_id=request_id, actor_agent_id=actor_agent_id)
     if operation == "recover":
         if parameters:

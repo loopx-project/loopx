@@ -447,11 +447,12 @@ def acknowledge(
     return {"ok": True, **value}
 
 
-def _now():
+def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _entry(root, goal_id, agent_id, request_id, *, scope=None):
+def _entry(root: Path, goal_id: str, agent_id: str, request_id: str, *,
+           scope: CollaborationGoalScope | None = None) -> dict[str, Any]:
     if not isinstance(request_id, str) or not BARE_SHA256_PATTERN.fullmatch(request_id):
         raise ValueError("invalid context request id")
     target = _target(goal_id, agent_id, scope)
@@ -524,7 +525,7 @@ def record_read(
                 )
 
 
-def _receipt(root, lane, row):
+def _receipt(root: Path, lane: str, row: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
     path = _root(root) / lane / (row["request_id"] + ".json")
     if not path.exists():
         return {}, None
