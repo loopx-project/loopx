@@ -56,6 +56,8 @@ def _origin_remote(project: Path, git_bin: str) -> str:
     try:
         completed = subprocess.run(
             [git_bin, "-C", str(project), "config", "--get", "remote.origin.url"],
+            # This read must not borrow a Chat/RPC caller's open input pipe.
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             check=False,
             text=True, encoding="utf-8", errors="replace",

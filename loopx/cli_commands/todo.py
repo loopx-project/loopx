@@ -599,6 +599,7 @@ def handle_todo_command(
             settlement_readback = None
             completion_error = None
             completion_turn_key = None
+            completion_replay = None
             completion_identity_source = None
             completion_delivery_workspace = None
             # An explicit lifecycle identity must reach its own typed owner;
@@ -675,7 +676,21 @@ def handle_todo_command(
                         ),
                         "error": completion_error,
                     }
-                completion_turn_key = identity.effect_id
+                from ..control_plane.goals.checkpoint_context_io import completion_identity_for_original_turn
+
+                original_completion = completion_identity_for_original_turn(
+                    todo=todo, identity=identity, goal_id=args.goal_id,
+                    agent_id=args.agent_id, todo_id=args.todo_id,
+                    candidate={name: getattr(args, name, None) for name in (
+                        "evidence", "note", "reason", "result_file", "no_followup", "clear_claim",
+                        "next_agent_todo", "next_user_todo", "successor_todo_ids", "next_claimed_by",
+                        "next_task_class", "next_action_kind", "next_task_repository",
+                        "next_required_capabilities", "next_continuation_policy", "self_merged", "dry_run",
+                        "next_excluded_agents", "next_user_task_class", "decision_outcome", "role",
+                    )} | {"no_followup": bool(args.no_follow_up)},
+                )
+                completion_turn_key = original_completion["completion_turn_key"]
+                completion_replay = original_completion["replay"]
                 completion_identity_source = "turn_settlement"
                 writeback_run = settlement_readback.writeback_run
                 if isinstance(writeback_run, dict) and isinstance(
@@ -699,7 +714,7 @@ def handle_todo_command(
                 completion_turn_key = str(args.completion_identity_key)
                 completion_identity_source = "lifecycle_reentry"
             if completion_error is None:
-                payload = complete_goal_todo(
+                payload = completion_replay or complete_goal_todo(
                     registry_path=registry_path,
                     runtime_root_arg=runtime_root_arg,
                     goal_id=args.goal_id,

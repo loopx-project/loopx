@@ -214,6 +214,25 @@ def terminal_validation_effect_io(*, runtime_root: Path, request: Mapping[str, A
         return result
 
 
+def completion_identity_for_original_turn(*, todo: Mapping[str, Any], identity: SettlementIdentity,
+                                         goal_id: str, agent_id: str, todo_id: str,
+                                         candidate: Mapping[str, Any]) -> dict[str, Any]:
+    """Forward the admitted identity and actual Todo to the existing typed owner."""
+    result = _checkpoint_effect("goal.checkpoint_read_context.work_binding", {
+        "phase": "completion_identity", "todo": dict(todo), "identity": identity.as_dict(),
+        "goal_id": goal_id, "agent_id": agent_id, "todo_id": todo_id,
+        "candidate": dict(candidate),
+    })
+    key = result.get("completion_turn_key")
+    if not isinstance(key, str) or not key:
+        raise RuntimeError("Typed original completion identity is unavailable")
+    replay = result.get("replay")
+    if replay is not None and (not isinstance(replay, dict) or replay.get("ok") is not True
+                               or replay.get("completed") is not True or replay.get("changed") is not False):
+        raise RuntimeError("Typed original completion replay is invalid")
+    return dict(result)
+
+
 class TurnResultWork:
     """Managed Turn IO for the existing typed work-basis owner."""
 

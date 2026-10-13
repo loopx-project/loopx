@@ -22,6 +22,7 @@ def _run_git(project: Path, *args: str) -> subprocess.CompletedProcess[str] | No
         return subprocess.run(
             ["git", "-C", str(project), *args],
             text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,

@@ -43,6 +43,9 @@ TOOL = {
     "Action=adopt(operation_id,consumer_operation_id) records your decision after both results "
     "are accepted and the consumer has that exact uses input. Reading alone is not adoption. "
     "Read/wait/resume use the original operation_id. Running is not failure; do not duplicate it. "
+    "For a committed coordinator Todo awaiting direction, read(operation_id=todo_id, brief={purpose:first_delivery}) returns "
+    "its native checkpoint; resume with brief={purpose:first_delivery, read_context_id, agent_vision OR vision_unchanged_reason} "
+    "settles only that original result after your fresh judgment. Never substitute a new token onto an old judgment. "
     "After context loss, action=operations recovers this requester's durable work. Follow "
     "next_cursor for more; unavailable means reconcile, not redispatch. Action=inspect with binding_id checks the actual Turn/profile before new dispatch; unknown availability is not readiness. "
     "Action=prepare_check takes a stable operation_id and an acceptance document prepared from the owner's requested outcome and current task/file facts. "
@@ -87,6 +90,9 @@ GUIDANCE = (
     "member completion. Synthesize their actual artifacts and report remaining gaps here. "
     "For task_failure, repair the original artifact or validation environment before action=revalidate; it reruns checks without Host work. "
     "When current_use.state=unavailable, repair the declared source or receiver input and read again; do not propagate those artifacts as current facts. Read action=messages between work steps for owner inbox additions. "
+    "If scoped evidence reports coordinator_checkpoint, use loopx_collaboration read with its original Todo id and brief={purpose:first_delivery}, "
+    "judge the returned basis, then resume that same Todo with your brief containing its read_context_id "
+    "purpose:first_delivery and exactly one agent_vision or vision_unchanged_reason. Member operations retain their existing semantics. "
     "Do not claim the whole canonical Goal is complete. Keep independent analysis substantive. "
     "For a substantive deliverable or correction in a direct user message, reuse current inline outcome context (or action=outcomes if absent) and refine its stable outcome before work. "
     "At a material delivery milestone, review all retained requirements against actual artifacts; record evidence and unmet/uncertain conclusions in optional review. "
@@ -265,6 +271,11 @@ class ChatLoopXMode:
             else None
         )
         deliveries = session.get("loopx_deliveries") or []
+        checkpoint = None
+        if settings.get("agent_id"):
+            from .control_plane.goals.checkpoint_context_io import pending_first_delivery_progress
+            checkpoint = pending_first_delivery_progress(self.store.root.parent, session["goal_id"],
+                settings["agent_id"], registry_path=self.controller.registry_path)
         # Refresh unfinished observations even while the coordinator is paused:
         # delegated members have their own lifecycles. Accepted labels remain
         # explicitly last-read observations, never canonical Goal settlement.
@@ -298,6 +309,7 @@ class ChatLoopXMode:
                 active and session_id not in self.controller.adapters
             ),
             "deliveries": deliveries,
+            "coordinator_checkpoint": checkpoint,
             "ingress": [
                 {key: row.get(key) for key in ("client_ingress_id", "mode", "status")}
                 for row in self.store.loopx_ingress(session_id)[-20:]
@@ -896,6 +908,18 @@ class ChatLoopXMode:
             if action != "adopt" and "consumer_operation_id" in arguments:
                 raise ValueError("consumer_operation_id is only valid for adopt")
             operation_id = arguments.get("operation_id", "")
+            # Todo ids and delegation operation ids have separate owners. Never
+            # reinterpret an existing member operation as coordinator work.
+            brief = arguments.get("brief")
+            if action in {"read", "resume"} and isinstance(brief, dict) and brief.get("purpose") == "first_delivery":
+                if set(arguments) != {"action", "operation_id", "brief"} or (action == "read" and brief != {"purpose": "first_delivery"}):
+                    raise ValueError("invalid coordinator checkpoint arguments")
+                if service.path(operation_id).exists():
+                    raise ValueError("a member operation cannot be reinterpreted as a coordinator checkpoint")
+                from .chat_coordinator_checkpoint import CoordinatorCheckpoints
+                checkpoint = CoordinatorCheckpoints(self.controller.registry_path, self.store.root.parent,
+                    session["goal_id"], settings["agent_id"])
+                return checkpoint.read(operation_id) if action == "read" else checkpoint.resume(operation_id, {k: v for k, v in brief.items() if k != "purpose"})
             if action == "start" and not service.path(operation_id).exists():
                 from .control_plane.goals.acceptance import inspect_goal_acceptance
                 objective_basis = inspect_goal_acceptance(registry_path=self.controller.registry_path,

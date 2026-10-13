@@ -11,6 +11,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -88,7 +89,20 @@ def _write(path: Path, value: dict) -> None:
             json.dump(value, f, ensure_ascii=False)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        # Windows observers may briefly deny DELETE sharing. Retain the old
+        # complete record until replacement succeeds, as for lock sidecars.
+        # This retries only the same IO effect; persistent denial still fails.
+        deadline = time.monotonic() + 0.5
+        while True:
+            try:
+                os.replace(tmp, path)
+                break
+            except OSError as error:
+                remaining = deadline - time.monotonic()
+                if (os.name != "nt" or getattr(error, "winerror", None) != 5
+                        or remaining <= 0):
+                    raise
+                time.sleep(min(0.05, remaining))
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)

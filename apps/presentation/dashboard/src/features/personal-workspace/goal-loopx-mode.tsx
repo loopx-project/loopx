@@ -56,6 +56,8 @@ export function GoalLoopXMode({sessionId, onPrepare, onExecute, onChange}: {
   };
   const status = !snapshot?.enabled ? (zh ? "普通对话" : "Conversation")
     : snapshot.recovery_required ? (zh ? "LoopX · 需要恢复连接" : "LoopX · Reconnect required")
+    : snapshot.coordinator_checkpoint?.stage === "operation_unknown" ? (zh ? "LoopX · 原执行状态无法核验" : "LoopX · Original execution unverified")
+    : snapshot.coordinator_checkpoint?.result_committed ? (active ? (zh ? "LoopX · 正在核验已保留结果" : "LoopX · Reviewing retained result") : (zh ? "LoopX · 结果已保留，待协调员核验" : "LoopX · Result retained, coordinator review pending"))
     : native === "blocked" ? (zh ? "LoopX · 需要处理阻塞" : "LoopX · Blocked")
     : active ? (zh ? "LoopX · 正在推进" : "LoopX · Working")
     : native === "complete" ? (zh ? "LoopX · 本轮已结束" : "LoopX · Run finished")
@@ -95,9 +97,10 @@ export function GoalLoopXMode({sessionId, onPrepare, onExecute, onChange}: {
           if (active) void mutate("pause");
           else if (!configured || Number(snapshot.settings.token_budget ?? 0) <= Number(snapshot.native.tokensUsed ?? 0)) openSettings();
           else onExecute(resume ? "resume" : "start");
-        }}>{active ? <Pause size={14}/> : <Play size={14}/>}{active ? (zh ? "暂停协调员" : "Pause coordinator") : !snapshot?.enabled ? (zh ? "开启 LoopX 模式" : "Enable LoopX") : native === "complete" ? (zh ? "开启新一轮" : "Start new run") : (zh ? "恢复推进" : "Continue")}</button>
+        }}>{active ? <Pause size={14}/> : <Play size={14}/>}{active ? (zh ? "暂停协调员" : "Pause coordinator") : !snapshot?.enabled ? (zh ? "开启 LoopX 模式" : "Enable LoopX") : snapshot.coordinator_checkpoint ? (zh ? "继续核验" : "Continue review") : native === "complete" ? (zh ? "开启新一轮" : "Start new run") : (zh ? "恢复推进" : "Continue")}</button>
       </div>
     </div>
+    {snapshot?.coordinator_checkpoint ? <p role="status">{snapshot.coordinator_checkpoint.stage === "operation_unknown" ? (zh ? "原执行状态暂不可核验；恢复连接后重读，不能据此重新派发任务。" : "Original execution cannot be verified. Reconnect and reread before dispatching any work.") : (zh ? "原执行尚未完成结算；继续核验后，协调员会读取当前事实并核验下一步。" : "Original execution is awaiting settlement. Continue review lets the coordinator read current facts and review the next step.")}</p> : null}
     {pendingMessages.length ? <p role="status">{zh ? "待处理消息：" : "Pending messages: "}{pendingMessages.map(row => `${row.mode === "loopx_queue" ? "queue" : "inbox"} · ${row.status}`).join(" / ")}</p> : null}
     {needsReadback ? <button className="goal-loopx-review-notice" type="button" onClick={() => setPanel("team")}>{zh ? "最近成员回读有未通过或无法核验的结果 · 查看团队" : "Last member observations include rejected or unverified results · View team"}</button> : null}
     {(error || readError) && !panel ? <p className="personal-composer-error" role="alert">{error || readError}</p> : null}

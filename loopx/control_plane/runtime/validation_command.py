@@ -39,12 +39,14 @@ def run_caller_validation(
     validation_argv: list[str] | None = None,
     validation_label: str,
     timeout_seconds: int,
+    stdin: int | None = None,
 ) -> dict[str, Any]:
     """Run a caller-approved validation command and return a privacy-safe receipt.
 
     Exactly one of ``validation_command`` (shell-free ``shlex.split``) or
     ``validation_argv`` (pre-split JSON argv array, no shell parsing) selects
-    the command form. The command runs with ``cwd=workspace``.
+    the command form. The command runs with ``cwd=workspace``. Host adapters
+    can isolate protocol input; ordinary callers retain inherited stdin.
     Only ``exit_code`` and the boolean ``passed`` are recorded; command stdout,
     stderr, and local paths are deliberately not captured. A timeout raises
     ``subprocess.TimeoutExpired``; callers decide whether to convert that into
@@ -67,7 +69,7 @@ def run_caller_validation(
         argv,
         cwd=workspace,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-        stdin=_VALIDATION_STDIN.get(),
+        stdin=stdin if stdin is not None else _VALIDATION_STDIN.get(),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=os.name == "posix",

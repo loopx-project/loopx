@@ -257,6 +257,7 @@ def _run_declared_completion_validation(
     task_repository: str | None = None,
     delivery_workspace: Mapping[str, Any] | None = None,
     validation_workspace_path: Path | None = None,
+    stdin: int | None = None,
 ) -> dict[str, Any] | None:
     """Run a todo's declared caller-approved validation command.
 
@@ -299,6 +300,7 @@ def _run_declared_completion_validation(
                     validation_argv=validation_argv,
                     validation_label=label,
                     timeout_seconds=timeout_seconds,
+                    stdin=stdin,
                 ),
             )
         return cast(
@@ -308,6 +310,7 @@ def _run_declared_completion_validation(
                 validation_command=str(validation_command),
                 validation_label=label,
                 timeout_seconds=timeout_seconds,
+                stdin=stdin,
             ),
         )
     except subprocess.TimeoutExpired:
@@ -363,6 +366,7 @@ def run_declared_completion_validation_effect(
     goal_id: str,
     delivery_workspace: Mapping[str, Any] | None = None,
     validation_workspace_path: Path | None = None,
+    stdin: int | None = None,
 ) -> dict[str, Any]:
     """Execute exactly one TypeScript-authorized validation effect.
 
@@ -414,6 +418,7 @@ def run_declared_completion_validation_effect(
         ),
         delivery_workspace=delivery_workspace,
         validation_workspace_path=validation_workspace_path,
+        stdin=stdin,
     )
     if receipt is None:
         raise RuntimeError("authorized validation effect produced no receipt")

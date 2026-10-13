@@ -255,6 +255,7 @@ def validate(service, binding: dict) -> dict:
             effect=effect, registry_path=service.registry, goal_id=service.goal_id,
             delivery_workspace=before["delivery_workspace"],
             validation_workspace_path=Path(binding["workspace"]),
+            stdin=subprocess.DEVNULL,
         ) for effect in before["plan"]["effects"]]
     after = capture(service, binding)
     # The TS plan binds this task's work, claim/lifecycle and current rules.
@@ -404,6 +405,31 @@ def matching_turn_key(service, row: dict, binding: dict) -> str | None:
         turn_instance_id=service._turn_instance_id(row),
         request_subject=ordinary_request_subject(service, row, binding, require_active=False),
     )
+
+
+def original_work_context(service, row: dict, binding: dict) -> dict | None:
+    key = matching_turn_key(service, row, binding)
+    if key is None:
+        return None
+    journal = load_turn_journal(turn_journal_path(service.root, goal_id=service.goal_id, turn_key=key))
+    context = (journal or {}).get("result_work_context")
+    return context if isinstance(context, dict) else None
+
+
+def original_task_completed(service, row: dict, binding: dict) -> bool:
+    """Reconcile this Turn's native completion before replaying its effects."""
+    from ..goals.checkpoint_context_io import TurnResultWork
+    from ..quota.settlement import SettlementIdentity
+
+    context = original_work_context(service, row, binding)
+    if context is None:
+        return False
+    identity = SettlementIdentity.from_runtime_payload(context["settlement_identity"])
+    if (identity.goal_id, identity.agent_id, identity.todo_id, identity.turn_instance_id) != (
+        service.goal_id, binding["agent_id"], binding["todo_id"], service._turn_instance_id(row)):
+        raise ValueError("delegation result work identity changed; reconcile the original Turn")
+    return TurnResultWork(service.registry, service.root, identity,
+                          service._caller_goal_ref()).result_committed()
 
 
 def validated_turn_journal(service, row: dict, binding: dict) -> dict | None:

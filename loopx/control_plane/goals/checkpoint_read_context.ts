@@ -1,7 +1,6 @@
 /** Read basis for a missing decision/qualification checkpoint, not an execution/permission lease.
  * The commit effect holds source/index claims and the real provider fence. */
-import type {JsonObject} from "../effect_program.ts";
-import {settlementIdentity} from "../effect_program.ts";
+import {settlementIdentity, type JsonObject} from "../effect_program.ts";
 import {jsonObject, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
@@ -12,6 +11,8 @@ import {visionAuthoringContract} from "./vision_checkpoint.ts";
 import {hostRetryPolicyCheck} from "../turn_driver/turn_journal.ts";
 import {originalTurnRequestsNoFollowup} from "../todos/completion_state.ts";
 import {terminalValidationRecovery} from "../todos/completion_validation_plan.ts";
+import {decodeTodoCompletionFenceRequest, evaluateTodoCompletionFence,
+  TODO_COMPLETION_FENCE_REQUEST_SCHEMA} from "../todos/completion_fence.ts";
 
 const RECEIPT_SCHEMA = "checkpoint_read_context_v1";
 const FIRST_RECEIPT_SCHEMA = "checkpoint_read_context_v2";
@@ -278,6 +279,49 @@ export function evaluateCheckpointReadContext(value: unknown): JsonObject {
 /** Work input and validation share the existing read-receipt identity owner. */
 export function evaluateResultWorkBinding(value: unknown): JsonObject {
   const request = requireJsonObject(value, "result work binding");
+  if (request.phase === "completion_identity") {
+    const supplied = requireJsonObject(request.identity, "completion identity");
+    const identity = settlementIdentity({
+      goal_id: requireNonEmptyString(request.goal_id, "goal_id"),
+      agent_id: requireNonEmptyString(request.agent_id, "agent_id"),
+      todo_id: requireNonEmptyString(request.todo_id, "todo_id"),
+      turn_instance_id: requireNonEmptyString(supplied.turn_instance_id, "turn_instance_id"),
+    });
+    if (["goal_id", "agent_id", "todo_id", "turn_instance_id", "effect_id"].some(
+      field => supplied[field] !== identity[field as keyof typeof identity],
+    )) throw new EffectRuntimeRequestError("completion identity does not match the original scoped Turn");
+    const todo = requireJsonObject(request.todo, "completion Todo");
+    // Managed journals store the raw Turn id; interactive callers store its
+    // scoped effect id. Preserve history only for this already committed result.
+    const managedReplay = todo.status === "done" && todo.todo_id === identity.todo_id &&
+      todo.claimed_by === identity.agent_id && todo.completion_turn_key === identity.turn_instance_id;
+    const key = managedReplay ? identity.turn_instance_id : identity.effect_id;
+    const candidate = jsonObject(request.candidate);
+    const unchanged = candidate !== null &&
+      ["evidence", "note", "reason"].every(field => candidate[field] == null || candidate[field] === todo[field]) &&
+      ["result_file", "next_agent_todo", "next_user_todo", "next_claimed_by", "next_task_class",
+        "next_action_kind", "next_task_repository", "next_required_capabilities", "next_continuation_policy",
+        "next_excluded_agents", "next_user_task_class", "decision_outcome"]
+        .every(field => candidate[field] == null || candidate[field] === "") &&
+      (candidate.successor_todo_ids == null || (Array.isArray(candidate.successor_todo_ids) && candidate.successor_todo_ids.length === 0)) &&
+      candidate.clear_claim !== true && candidate.self_merged !== true &&
+      (candidate.role == null || candidate.role === todo.role);
+    if (managedReplay && unchanged) {
+      const fence = evaluateTodoCompletionFence(decodeTodoCompletionFenceRequest({
+        schema_version: TODO_COMPLETION_FENCE_REQUEST_SCHEMA, projection_source: "materialized",
+        todo, goal_id: identity.goal_id, todo_id: identity.todo_id,
+        requested_no_followup: candidate.no_followup === true,
+        requested_completion_turn_key: key, requested_completion_identity_source: "turn_settlement",
+      }));
+      if (fence.outcome === "replay") return {completion_turn_key: key, replay: {
+        ok: true, completed: true, changed: false, idempotent_replay: true,
+        dry_run: candidate.dry_run === true, goal_id: identity.goal_id, todo_id: identity.todo_id,
+        status: "done", completion_continuation: fence.completion_continuation,
+        completion_receipt_id: todo.completion_receipt_id ?? null, updated_at: todo.updated_at ?? null,
+      }};
+    }
+    return {completion_turn_key: key, replay: null};
+  }
   if (request.phase === "direction_terminal_intent") {
     const todo = requireJsonObject(request.todo, "completion Todo");
     const identity = requireJsonObject(request.identity, "completion identity");

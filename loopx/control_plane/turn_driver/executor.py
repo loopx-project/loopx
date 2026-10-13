@@ -1627,8 +1627,32 @@ def run_loopx_turn_once(
             "receipt": None,
             "scheduler": {"disposition": "not_evaluated"},
         }
+        # A retained Turn may only need settlement. Project the same typed
+        # recovery owner that execution consumes, without changing its journal
+        # or calling any execution callback. A new Turn keeps the original plan.
+        journal = _load_journal(turn_journal_path(
+            runtime_root, goal_id=goal_id, turn_key=str(transaction_plan["turn_key"])
+        ))
+        preview_plan = plan
+        if journal is not None:
+            envelope = plan.get("turn_envelope")
+            assessment = assess_existing_turn_recovery(
+                journal, request, goal_id=goal_id,
+                agent_id=str(envelope.get("agent_id") or "")
+                if isinstance(envelope, Mapping) else "",
+                turn_key=str(transaction_plan["turn_key"]),
+                retry_failed=retry_failed,
+                session_binding_resolver=session_binding_resolver,
+            )
+            preview_plan = {**plan, "route": {
+                **plan["route"],
+                "would_invoke_host": assessment.decision["reinvoke_host"],
+            }}
+            preview["recovery_audit"] = build_turn_recovery_audit(
+                assessment.decision, journal, status="finished", host_invoked=False
+            )
         return execution_payload(
-            plan,
+            preview_plan,
             preview,
             execute=False,
             replayed=False,

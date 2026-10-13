@@ -195,3 +195,41 @@ def turn_journal_observed_capabilities(
     if not isinstance(observed, list) or not all(isinstance(item, str) for item in observed):
         return None
     return observed
+
+
+def reconcile_settled_turn_journal(
+    runtime_root: Path, *, registry_path: Path, settlement_identity: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Transport native receipts into the original journal; never re-enter a Host."""
+    from ..effect_program import SettlementIdentity
+    from ..quota.accounting_admission import quota_accounting_admission
+
+    # Reuse the typed identity codec; a rendered id cannot override its fields.
+    identity = SettlementIdentity(
+        goal_id=settlement_identity["goal_id"], agent_id=settlement_identity["agent_id"],
+        todo_id=settlement_identity["todo_id"], turn_instance_id=settlement_identity["turn_instance_id"],
+    )
+    if identity.effect_id != settlement_identity.get("effect_id"):
+        raise ValueError("Settlement identity fields differ from their effect id")
+    key = find_loopx_turn_key_by_settlement_identity(runtime_root,
+        goal_id=identity.goal_id, agent_id=identity.agent_id, todo_id=identity.todo_id,
+        turn_instance_id=identity.turn_instance_id)
+    if key is None:
+        return None
+    path = turn_journal_path(runtime_root, goal_id=identity.goal_id, turn_key=key)
+    journal = load_turn_journal(path)
+    goal_ref = journal["plan"].get("goal_ref")
+    with quota_accounting_admission(runtime_root=runtime_root, registry_path=registry_path,
+            goal_id=identity.goal_id, goal_ref=goal_ref, operation="turn-journal-receipt-reconciliation") as admission:
+        with exclusive_cross_runtime_file_lock(runtime_artifact_lock_target(runtime_root, identity.goal_id),
+                operation="turn_journal_runtime_artifact_guard"):
+            with exclusive_cross_runtime_file_lock(shadow_maintenance_lock_target(runtime_root, identity.goal_id),
+                    operation="turn_journal_runtime_artifact_commit"):
+                request = {"path": str(path.resolve()), "runtime_root": str(runtime_root.resolve()),
+                           "settlement_identity": identity.as_dict()}
+                if goal_ref is not None:
+                    request.update(goal_ref=goal_ref, source_admission=admission)
+                result = effect_runtime_result("turn_journal.reconcile_settlement", request)
+    if not isinstance(result, dict) or result.get("ok") is not True or result.get("status") != "committed":
+        raise RuntimeError("Native Turn journal reconciliation did not commit")
+    return result

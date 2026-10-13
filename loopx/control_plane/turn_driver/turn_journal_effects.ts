@@ -21,6 +21,8 @@ import { decideFirstPartyHostRuntime } from "../goals/first_party_host_runtime.t
 import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import { requireNonEmptyString as requiredString, sourceNumberTokens } from "../runtime_decode.ts";
 import { preparedAttemptViolation } from "./turn_journal_attempt_contract.ts";
+import { readQuotaSettlementForAdmittedOwnerFromSnapshot, readQuotaSettlementSnapshot } from "../quota/settlement_readback.ts";
+import { parseQuotaAccountingOwner, requireQuotaOwnerProjection, withQuotaAccountingOwner } from "../quota/source_admission.ts";
 import {
   interpretTurnJournalEffect,
   journalPhaseViolation,
@@ -601,4 +603,107 @@ export async function commitTurnJournal(
       await releaseFileMutationLockClaim(claim);
     }
   }
+}
+
+/** Reflect provider-verified settlement; never authorize another Host or debit. */
+export function planSettledTurnJournal(existing: JsonObject, readback: JsonObject): JsonObject[] {
+  const state = requireJournalState(existing);
+  const plan = asObject(existing.plan);
+  const parsed = settlementIdentityFromPlan(asObject(plan.transaction));
+  if (parsed.failure !== null) conflict("Original journal settlement identity is unavailable");
+  const expected = parsed.value;
+  const identity = asObject(asObject(readback.identity).result).value;
+  const decoded = settlementIdentityFromPlan({ settlement_plan: { identity } });
+  if (readback.found !== true || decoded.failure !== null ||
+      (["goal_id", "agent_id", "binding_kind", "binding_id", "turn_instance_id", "effect_id"] as const)
+        .some(key => decoded.value[key] !== expected[key])) {
+    conflict("Provider settlement does not match the original journal identity");
+  }
+  const terminal = asObject(existing.completion_intent).continuation === "no_followup";
+  const settled = asObject(asObject(readback[terminal ? "terminal_settlement" : "settlement"]).payload);
+  const required = ["validation", "durable_writeback", "quota_spend", ...(terminal ? ["terminal_closeout"] : [])];
+  const receipts = settled.receipts;
+  if (settled.ok !== true || !Array.isArray(receipts) || receipts.length !== required.length ||
+      receipts.some((value, index) => {
+        const receipt = asObject(value);
+        return receipt.schema_version !== "quota_settlement_receipt_v1" || receipt.step_kind !== required[index] ||
+          receipt.status !== "committed" || receipt.effect_id !== expected.effect_id ||
+          typeof receipt.source_ref !== "string" || !receipt.source_ref.trim();
+      }) || !readback.writeback_run || !readback.spend_run) {
+    conflict("Original journal requires complete verified provider settlement receipts");
+  }
+  if (state.status === "committed") return [];
+  const committedReceipts = receipts as JsonObject[];
+  if (!["failed", "in_progress", "scheduler_action_required"].includes(state.status) ||
+      state.completedPhases.length < 3 || state.completedPhases.length > 5 ||
+      asObject(existing.task_validation).ok !== true ||
+      !["validated_completion", "validated_progress"].includes(String(asObject(existing.host_result).result_kind)) ||
+      existing.effect_attempts !== undefined || existing.source_effect_hold !== undefined ||
+      asObject(plan.host).scheduler_owner !== "outer_controller") {
+    conflict("Original journal is not eligible for receipt-only settlement reconciliation");
+  }
+  const steps: JsonObject[] = [];
+  let current = structuredClone(existing);
+  const audit = existing.settlement_reconciliation ?? {
+    previous_receipt: existing.receipt, previous_failure: existing.settlement_result,
+    previous_reason: existing.reason, receipts: committedReceipts,
+  };
+  function advance(count: number, status: string): void {
+    const phases = transactionPhases.slice(0, count);
+    const resultKind = asObject(existing.host_result).result_kind;
+    const next: JsonObject = { ...current, status, completed_phases: phases, result_kind: resultKind,
+      settlement_reconciliation: audit,
+      receipt: { ...asObject(current.receipt), ok: true, status: count === 7 ? "committed" : "validated",
+        result_kind: resultKind, completed_phases: phases, failed_phase: null,
+        next_phase: transactionPhases[count] ?? null, settlement_effect_id: expected.effect_id,
+        commit_eligibility: { writeback: true, quota_spend: count >= 4, scheduler_ack: count === 7 }, errors: [] } };
+    if (count >= 4) next.writeback = readback.writeback_run;
+    if (count >= 5) next.quota_spend = readback.spend_run;
+    if (terminal && count >= 5) next.terminal_closeout = asObject(readback.terminal_closeout).payload ?? committedReceipts.at(-1);
+    if (count === 7) {
+      next.scheduler = { completed: true, acknowledged: false, disposition: "outer_controller" };
+      next.settlement_result = settled;
+      delete next.reason;
+    }
+    requireJournalTransition(current, next, requireJournalState(current), requireJournalState(next));
+    current = next; steps.push(next);
+  }
+  if (state.status === "failed") advance(state.completedPhases.length, "in_progress");
+  if (state.completedPhases.length < 4) advance(4, "in_progress");
+  if (state.completedPhases.length < 5) advance(5, "in_progress");
+  advance(7, "committed");
+  return steps;
+}
+
+export async function reconcileTurnJournalSettlement(params: JsonObject): Promise<JsonObject> {
+  const path = requiredString(params.path, "path");
+  const runtimeRoot = requiredString(params.runtime_root, "runtime_root");
+  if (!isAbsolute(path) || !isAbsolute(runtimeRoot)) throw new EffectRuntimeRequestError("Journal reconciliation paths must be absolute");
+  const parsed = settlementIdentityFromPlan({ settlement_plan: { identity: params.settlement_identity } });
+  if (parsed.failure !== null || parsed.value.binding_kind !== "todo") throw new EffectRuntimeRequestError("Journal reconciliation requires a typed Todo identity");
+  const identity = parsed.value;
+  const owner = parseQuotaAccountingOwner({ runtimeRoot, goalId: identity.goal_id,
+    goalRefValue: params.goal_ref, sourceAdmissionValue: params.source_admission });
+  return withQuotaAccountingOwner(owner, async () => withFileMutationLock(path, async () => {
+    const journal = asObject(JSON.parse(await readFile(path, "utf8")));
+    const original = settlementIdentityFromPlan(asObject(asObject(journal.plan).transaction));
+    if (original.failure !== null || (["goal_id", "agent_id", "binding_kind", "binding_id", "turn_instance_id", "effect_id"] as const)
+      .some(key => original.value[key] !== identity[key]) ||
+      path !== join(runtimeRoot, "goals", identity.goal_id, "turns", `${String(journal.turn_key).slice(7)}.json`)) {
+      conflict("Journal reconciliation address differs from its original identity");
+    }
+    const binding = parseTurnJournalGoalBinding(journal);
+    if (binding.kind === "invalid") conflict("Journal reconciliation has invalid GoalRef binding");
+    requireQuotaOwnerProjection(owner, binding.kind === "exact" ? binding.goal_ref : undefined, "Turn journal");
+    const readback = readQuotaSettlementForAdmittedOwnerFromSnapshot({
+      schema_version: "loopx_quota_settlement_readback_request_v0", runtime_root: runtimeRoot,
+      goal_id: identity.goal_id, agent_id: identity.agent_id, todo_id: identity.todo_id,
+      turn_instance_id: identity.turn_instance_id, replan_obligation_id: null,
+      infer_turn_instance_id: false, allow_unbound_binding: false,
+    }, owner, await readQuotaSettlementSnapshot(runtimeRoot, identity.goal_id));
+    const steps = planSettledTurnJournal(journal, readback);
+    for (const snapshot of steps) await atomicWriteJson(path, snapshot);
+    return { ok: true, appended: steps.length > 0, replayed: steps.length === 0,
+      effect_id: identity.effect_id, turn_key: journal.turn_key, status: "committed" };
+  }));
 }

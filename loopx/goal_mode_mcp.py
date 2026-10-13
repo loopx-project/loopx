@@ -355,7 +355,20 @@ class GoalModeMCPControlPlane:
         )
         with host_vision_request(request, agent_vision, vision_unchanged_reason,
                                  allow_terminal_stride_path=self._allow_terminal_stride_path(goal_id, agent_vision)) as authored:
-            return settle_host_todo_completion(authored, run_cli=self.run_cli)
+            output = settle_host_todo_completion(authored, run_cli=self.run_cli)
+        completed = json.loads(output)
+        if completed.get("ok") is True and completed.get("settlement_complete") is True and turn_id:
+            from pathlib import Path
+            from .history import load_registry
+            from .paths import resolve_runtime_root
+            from .control_plane.turn_driver.journal_store import reconcile_settled_turn_journal
+
+            _, registry = self.context()
+            path = Path(registry)
+            root = resolve_runtime_root(load_registry(path), None, registry_path=path)
+            reconcile_settled_turn_journal(root, registry_path=path,
+                settlement_identity=completed["settlement_identity"])
+        return output
 
     def review_task_vision(
         self, todo_id: str, agent_id: str, agent_vision: dict[str, Any] | None = None,

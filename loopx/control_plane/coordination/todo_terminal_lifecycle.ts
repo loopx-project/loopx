@@ -1206,6 +1206,44 @@ function semanticDuplicate(
   return undefined;
 }
 
+async function exactStoredDeferredParent(
+  store: AuthorityStore, input: ResolvedCoordinationTodoTerminalLifecycleInput,
+  todo: JsonObject,
+): Promise<CoordinationTodoTerminalLifecycleResult | null> {
+  const operationId = completionTurnOperationId(input, false);
+  const saved = await store.readReceipt(operationId);
+  if (saved.status !== "found" || saved.receipts.length !== 1) return null;
+  const receipt = saved.receipts[0];
+  if (receipt.schema_version !== COORDINATION_TODO_TERMINAL_LIFECYCLE_RECEIPT_SCHEMA ||
+      receipt.operation_id !== operationId || receipt.goal_id !== input.goal_id ||
+      receipt.todo_id !== input.todo_id || receipt.command !== "complete" ||
+      typeof receipt.delivery_read_context_id !== "string") return null;
+  const result = canonicalAuthorityObject(receipt.result, "original completion result");
+  if (result.completion_policy == null) return null;
+  const recordedPolicy = canonicalAuthorityObject(result.completion_policy, "original completion policy");
+  if (!Object.hasOwn(recordedPolicy, "effective_claimed_by")) return null;
+  const policy = input.completion_policy_request;
+  if (policy?.claimed_by != null && policy.claimed_by !== todo.claimed_by) return null;
+  // Optional transport defaults preserve the committed result. Even this
+  // reconstruction must match its entire original fingerprint; no supplied
+  // actor, lease, evidence, read identity or validation is replaced.
+  const recovered = {...input,
+    expected_role: input.expected_role ?? requireLiteral(todo.role, TODO_ROLES, "original Todo role"),
+    note: input.note ?? optionalString(todo.note, "original note"),
+    evidence: input.evidence ?? optionalString(todo.evidence, "original evidence"),
+    reason: input.reason ?? optionalString(todo.reason, "original reason"),
+    delivery_read_context_id: input.delivery_read_context_id ?? receipt.delivery_read_context_id,
+    completion_policy_request: policy === null ? null : {...policy,
+      claimed_by: recordedPolicy.effective_claimed_by},
+    operation_id: operationId, defer_no_followup: true};
+  for (const requestedNoFollowup of [false, true]) {
+    const parent = {...recovered, requested_no_followup: requestedNoFollowup};
+    const exact = await terminalReceipt(parent, terminalRequestSha(parent)).read(store);
+    if (exact?.status === "replayed") return exact;
+  }
+  return null;
+}
+
 /**
  * Execute complete/supersede as one provider-neutral CAS transaction.
  *
@@ -1276,6 +1314,28 @@ export async function executeCoordinationTodoTerminalLifecycle(
         defer_no_followup: true};
       const original = await terminalReceipt(parent, terminalRequestSha(parent)).read(store);
       if (original?.status === "replayed") return original;
+    }
+    if (replay?.reason_code === "coordination_operation_identity_mismatch" &&
+        normalized.operation_identity.kind === "completion_turn" &&
+        normalized.requested_no_followup && normalized.defer_no_followup === true) {
+      // Pending checkpoint reentry recovers the accepted RESULT as history.
+      // It cannot finalize the continuation or perform a new mutation. The
+      // full historical hash still binds every supplied execution identity.
+      const current = await store.loadAuthority();
+      if (current.status === "loaded") {
+        let todo: JsonObject | undefined;
+        try {
+          todo = indexCoordinationProjection(current.head, input.goal_id).todos.get(input.todo_id);
+        } catch {
+          return replay;
+        }
+        if (todo?.status === "done" &&
+            todo.completion_turn_key === input.requested_completion_turn_key &&
+            todo.completion_requested_continuation === "no_followup") {
+          const original = await exactStoredDeferredParent(store, input, todo);
+          if (original?.status === "replayed") return original;
+        }
+      }
     }
     if (replay !== null) return replay;
     if (normalized.operation_identity.kind === "completion_turn" && normalized.requested_no_followup && normalized.defer_no_followup !== true) {
@@ -1641,6 +1701,10 @@ export async function executeCoordinationTodoTerminalLifecycle(
               break;
             }
           }
+        }
+        if (todo.completion_requested_continuation === "no_followup" &&
+            (original === null || original.reason_code === "coordination_operation_identity_mismatch")) {
+          original = await exactStoredDeferredParent(store, originalInput, todo) ?? original;
         }
         if (original === null) return terminalFailure("terminal_completion_receipt_required",
           "Same-Turn closeout requires the original accepted ordinary completion receipt.", {}, "decision_rejection");
