@@ -1,11 +1,10 @@
 from __future__ import annotations
-from ..quota.effective_action import EffectiveAction
 
 from typing import Any
 
+from ..quota.effective_action import EffectiveAction
 from .contract import TODO_TASK_CLASS_USER_ACTION, TODO_TASK_CLASS_USER_GATE
 from .todo_semantics import todo_item_task_class
-
 
 USER_GATE_ACTION_KIND_HINTS = (
     "approval",
@@ -76,12 +75,11 @@ def has_only_open_user_actions(summary: dict[str, Any] | None) -> bool:
 
     if not isinstance(summary, dict) or has_open_user_gate_todo(summary):
         return False
-    open_count = open_todo_count(summary)
-    try:
-        all_open_count = int(summary.get("all_open_count"))
-    except (TypeError, ValueError):
-        all_open_count = open_count
-    expected_count = max(0, all_open_count)
+    # ``open_count`` is already the complete Todo frontier for the current
+    # Agent after quota scope filtering.  ``all_open_count`` remains a
+    # Goal-wide diagnostic and must not be compared with Agent-scoped action
+    # rows.
+    expected_count = open_todo_count(summary)
     if expected_count <= 0:
         return False
     try:
