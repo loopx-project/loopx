@@ -280,6 +280,8 @@ def test_correction_before_reservation_refuses_obsolete_source_without_goal_muta
 def test_receiver_cli_reads_assesses_and_returns_the_correct_revision(source_goal, tmp_path, capsys):
     f = source_goal
     rid = _request(f)["request_id"]
+    code, original = _inbox(f, capsys, "read")
+    assert code == 0 and "When request_revision is supplied" not in original["followthrough"]
     assert _inbox(f, capsys, "acknowledge", "--request-id", rid, "--decision", "adopt", "--reason", "Original assessment")[0] == 0
     assert _inbox(f, capsys, "report", "--request-id", rid, "--reply-text", "Original result")[0] == 0
     original_decision = (_root(f["runtime"]) / "decisions" / (rid + ".json")).read_bytes()
@@ -291,6 +293,7 @@ def test_receiver_cli_reads_assesses_and_returns_the_correct_revision(source_goa
     assert code == 0, supplied
     item = next(item for item in supplied["items"] if item["request_id"] == rid)
     assert item["request_revision"] == 2 and item["brief"]["context"] == "Use the corrected source"
+    assert "When request_revision is supplied" in supplied["followthrough"]
     assert item["recorded_decision"] is None
     assert item["request_read_receipt"]["supplied_revision"] == 2
     assert "request_control" not in item

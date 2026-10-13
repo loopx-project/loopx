@@ -235,10 +235,13 @@ def handle_manager_inbox(args, registry_path, runtime_root):
             result["followthrough"] += (
                 " CLI: record assessment with manager-inbox acknowledge; optionally associate existing work "
                 "with manager-inbox link. Return audience-ready results with manager-inbox report "
-                "--phase conclusion --reply-text; use --phase decision for meaningful interim news. "
-                "When request_revision is supplied, acknowledge with --request-revision and --request-digest, "
-                "and report with --request-revision. Omitted revision stays bound to original revision 1."
+                "--phase conclusion --reply-text; use --phase decision for meaningful interim news."
             )
+            if any(item.get("request_revision") is not None for item in result.get("items", [])):
+                result["followthrough"] += (
+                    " When request_revision is supplied, acknowledge with --request-revision and --request-digest, "
+                    "and report with --request-revision. Omitted revision stays bound to original revision 1."
+                )
         elif args.manager_inbox_action == "report":
             from ..capabilities.manager_context.roundtrip import report
 
