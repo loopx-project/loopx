@@ -70,6 +70,8 @@ def test_http_ordinary_project_continues_native_session_without_goal_or_portfoli
     assert status == 200 and len(projects["projects"]) == 1
     project = projects["projects"][0]
     assert project["title"] == "notes" and "workspace_path" not in project
+    # The same root is offered to the Goal form by its creation reference.
+    assert project["goal_workspace_ref"].startswith("workspace-")
     body = {"context_kind": "project", "project_ref": project["project_ref"]}
     status, opened = request("/api/chat/sessions", body)
     assert status == 201, opened

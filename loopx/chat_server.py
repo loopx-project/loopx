@@ -27,7 +27,7 @@ from .chat_attachments import (
     normalize_chat_image_attachments,
     validate_chat_turn_envelope,
 )
-from .chat_actions import ChatActionService, ProtectedActionGate
+from .chat_actions import ChatActionService, ProtectedActionGate, goal_workspace_labels, goal_workspace_ref
 from .chat_action_store import ACTION_KINDS, ActionConflictError, ChatActionStore
 from .chat_goal_subagent_api import (
     GoalSubagentConfigurationRequestMixin,
@@ -1390,10 +1390,25 @@ class ChatRequestHandler(
         if path == DEFAULT_EXTENSION_PROJECTION_PATH:
             return self._handle_extension_projection(parse_qs(urlparse(self.path).query))
         if path == "/api/chat/projects":
+            contexts = self.server.runtime_controller.project_contexts.available()
+            roots = [Path(context["workspace_path"]) for context in contexts]
+            service = getattr(self.server, "action_service", None)
+            labels = goal_workspace_labels(roots)
+            if service is not None:
+                try:
+                    labels = service.workspace_labels()
+                except (OSError, ValueError):
+                    # Granted project workspaces never depend on the Goal
+                    # registry. An unreadable registry only loses naming that
+                    # tells these roots apart from registered Goal directories;
+                    # Goal preview and apply still refuse it on their own.
+                    pass
+            # The same roots admit Goal creation; their creation reference lets
+            # the Goal form offer them by the name a review will show.
             self._send_json({"ok": True, "projects": [
-                {"project_ref": context["project_ref"], "title": Path(context["workspace_path"]).name,
-                 "grant": context["grant"]}
-                for context in self.server.runtime_controller.project_contexts.available()
+                {"project_ref": context["project_ref"], "title": labels.get(root, root.name),
+                 "grant": context["grant"], "goal_workspace_ref": goal_workspace_ref(root)}
+                for context, root in zip(contexts, roots)
             ]})
             return
         if path == "/healthz":
@@ -1566,7 +1581,7 @@ def serve_chat(
     claude_bin: str = "claude",
     kiro_cli_bin: str = KIRO_CLI_BIN,
     lark_cli_bin: str | None = None,
-    startup_timeout_sec: float = 30.0,
+    startup_timeout_sec: float | None = None,
     idle_timeout_sec: float = 180.0,
     hard_timeout_sec: float = 900.0,
     assets_dir: Path | None = None,

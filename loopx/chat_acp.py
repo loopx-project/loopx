@@ -29,6 +29,8 @@ from .chat_agent import (
 
 EventSink = Callable[[str, dict[str, Any]], None]
 ACP_PROTOCOL_VERSION = 1
+ACP_INITIALIZE_TIMEOUT_DEFAULT_SEC = 30.0
+ACP_SESSION_STARTUP_TIMEOUT_DEFAULT_SEC = 45.0
 
 
 def _reader(stream: Any, messages: "queue.Queue[dict[str, Any] | Exception]") -> None:
@@ -84,7 +86,7 @@ class ACPStdioAdapter:
         work_dir: Path,
         agent_work_dir: Path | None = None,
         resume_thread_id: str | None = None,
-        startup_timeout_sec: float = 30.0,
+        startup_timeout_sec: float | None = None,
         idle_timeout_sec: float = 180.0,
         hard_timeout_sec: float = 900.0,
         execution_mode: bool = False,
@@ -117,6 +119,11 @@ class ACPStdioAdapter:
         messages: "queue.Queue[dict[str, Any] | Exception]" = queue.Queue()
         assert process.stdout is not None
         threading.Thread(target=_reader, args=(process.stdout, messages), daemon=True).start()
+        initialize_timeout_sec = (
+            ACP_INITIALIZE_TIMEOUT_DEFAULT_SEC
+            if startup_timeout_sec is None
+            else startup_timeout_sec
+        )
         adapter = cls(
             process=process,
             messages=messages,
@@ -125,7 +132,7 @@ class ACPStdioAdapter:
             agent_work_dir=agent_work_dir or work_dir.expanduser().resolve(),
             agent_capabilities={},
             execution_mode=execution_mode,
-            startup_timeout_sec=startup_timeout_sec,
+            startup_timeout_sec=initialize_timeout_sec,
             idle_timeout_sec=idle_timeout_sec,
             hard_timeout_sec=hard_timeout_sec,
         )
@@ -145,12 +152,20 @@ class ACPStdioAdapter:
                     },
                 },
                 request_id=1,
-                timeout_sec=startup_timeout_sec,
+                timeout_sec=initialize_timeout_sec,
             )
             if int(initialized.get("protocolVersion") or 0) != ACP_PROTOCOL_VERSION:
                 raise adapter._runtime_error("ACP Agent selected an unsupported protocol version.")
             capabilities = initialized.get("agentCapabilities")
             adapter.agent_capabilities = capabilities if isinstance(capabilities, dict) else {}
+            # ACP agents may defer session creation until the client confirms
+            # initialization before accepting ``session/new``.
+            adapter._notify("initialized", {})
+            session_startup_timeout_sec = (
+                ACP_SESSION_STARTUP_TIMEOUT_DEFAULT_SEC
+                if startup_timeout_sec is None
+                else startup_timeout_sec
+            )
             session_params = {"cwd": str(adapter.agent_work_dir), "mcpServers": []}
             if resume_thread_id:
                 session_capabilities = adapter.agent_capabilities.get("sessionCapabilities")
@@ -160,14 +175,14 @@ class ACPStdioAdapter:
                         "session/resume",
                         {**session_params, "sessionId": resume_thread_id},
                         request_id=2,
-                        timeout_sec=startup_timeout_sec,
+                        timeout_sec=session_startup_timeout_sec,
                     )
                 elif bool(adapter.agent_capabilities.get("loadSession")):
                     result = adapter._request(
                         "session/load",
                         {**session_params, "sessionId": resume_thread_id},
                         request_id=2,
-                        timeout_sec=startup_timeout_sec,
+                        timeout_sec=session_startup_timeout_sec,
                     )
                 else:
                     raise adapter._runtime_error("ACP Agent does not support session recovery.")
@@ -180,7 +195,7 @@ class ACPStdioAdapter:
                     "session/new",
                     session_params,
                     request_id=2,
-                    timeout_sec=startup_timeout_sec,
+                    timeout_sec=session_startup_timeout_sec,
                 )
                 adapter.session_id = str(result.get("sessionId") or "")
                 if not adapter.session_id:

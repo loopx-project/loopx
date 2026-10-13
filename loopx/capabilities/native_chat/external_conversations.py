@@ -10,9 +10,9 @@ from collections.abc import Mapping
 from pathlib import Path
 import re
 from datetime import datetime, timedelta, timezone
-import hashlib
 from typing import Any
 
+from ...chat_actions import goal_workspace_ref
 from ...chat_store import _atomic_write_json, _read_json
 from ...chat_attachments import normalize_chat_image_attachments
 from ...control_plane.quota.automation_cadence_readback import (
@@ -399,7 +399,7 @@ class ChatExternalConversations:
                             "objective": argument, "completion_criteria": "按明确委托返回可核验结果；原生执行结束不代表 LoopX 验收。",
                             "execution_boundary": "只读所选工作区；不继承旧目标，不自动调度，不扩大宿主策略。",
                             "agent_id": selected["binding"]["executor_endpoint_id"],
-                            "workspace_ref": "workspace-" + hashlib.sha256(workspace.encode()).hexdigest()[:12],
+                            "workspace_ref": goal_workspace_ref(Path(workspace)),
                             "heartbeat": {"enabled": False},
                             "native_token_budget": row["command_argument"]["native_token_budget"]}})
                     row.update(proposal_id=proposal["proposal_id"], response=(
