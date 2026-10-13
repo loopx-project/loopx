@@ -488,7 +488,8 @@ fresh Vision path exit. When an enabled Goal reaches a periodic review, every
 accepted exit must also record a current `agent_vision.stride_decision`: a new
 progress observation, runnable successor, blocker or coverage-backed terminal
 result cannot silently replace that decision. The typed outcome remains legal
-and retains its own evidence gate. A terminal review may attach the decision to
+and retains its own evidence gate. The decision references both the due
+obligation and its delivered review context. A terminal review may attach it to
 an evidence-linked `stop` path. A Todo successor transition alone cannot settle
 the due review. Other replan sources retain their existing exit policies.
 All attachment text counts toward the existing
@@ -520,7 +521,8 @@ revision 与具体 finding，说明采用、暂缓、无适用证据或读取不
 启用策略复盘；数据格式更新不增加可选策略版本。
 策略启用且周期复盘到期时，所有可接受出口都须记录绑定本次义务的
 `agent_vision.stride_decision`。新进展、可执行后续任务、阻塞或有覆盖证据的终止
-仍可作为结果，但不能代替复盘决定；单独创建后续 Todo 也不能结算到期义务。
+仍可作为结果，但不能代替复盘决定；决定须引用本次义务及交付的复盘上下文，
+单独创建后续 Todo 也不能结算到期义务。
 终止时可把决定附在有证据的 `stop` 路径上。其他 replan 来源沿用原有出口规则。
 
 The same opt-in strategy covers ordinary engineering, organizing and maintenance.
