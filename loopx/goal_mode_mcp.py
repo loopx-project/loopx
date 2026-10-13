@@ -7,6 +7,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated, Any
 
 try:  # pydantic ships with the FastMCP extra; base installs have no pydantic.
@@ -74,6 +75,33 @@ class GoalModeMCPControlPlane:
             "goal_id": goal_id,
             "goal_instance_id": goal_instance_id,
         }
+
+    def _allow_terminal_stride_path(self, goal_id: str, vision: dict[str, Any] | None) -> bool:
+        """Use the same effective Goal cadence as formal writeback before Todo effects."""
+        if not isinstance(vision, dict) or not isinstance(vision.get("path_delta"), dict):
+            return False
+        if vision["path_delta"].get("outcome") != "stop" or "stride_decision" not in vision:
+            return False
+        from .capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
+        from .control_plane.projects.registry_codec import load_registry
+        from .paths import (default_registry_path, global_registry_path,
+                            resolve_runtime_root, select_default_runtime_root)
+        from .registry import find_registry_goal
+
+        selected = self.context()[1]
+        if selected == "@host-global":
+            registry_path = global_registry_path(select_default_runtime_root())
+        else:
+            registry_path = Path(selected).expanduser() if selected else default_registry_path()
+            if not selected and not registry_path.exists():
+                registry_path = global_registry_path(select_default_runtime_root())
+        registry = load_registry(registry_path)
+        goal = find_registry_goal(registry, goal_id)
+        if goal is None:
+            raise ValueError(f"{goal_id}: registry does not contain the Goal for Vision preflight")
+        runtime_root = resolve_runtime_root(registry, registry_path=registry_path)
+        effective = resolve_todo_replan_cadence_goal(goal, runtime_root)
+        return (effective.get("execution_profile") or {}).get("stride_strategy") == "evidence_conditioned_v1"
 
     def command_prefix(self) -> list[str]:
         executable = shutil.which("loopx")
@@ -267,7 +295,8 @@ class GoalModeMCPControlPlane:
             no_follow_up=no_follow_up,
             goal_ref=self.goal_ref(),
         )
-        with host_vision_request(request, agent_vision, vision_unchanged_reason) as authored:
+        with host_vision_request(request, agent_vision, vision_unchanged_reason,
+                                 allow_terminal_stride_path=self._allow_terminal_stride_path(goal_id, agent_vision)) as authored:
             return settle_host_todo_completion(authored, run_cli=self.run_cli)
 
     def review_task_vision(
@@ -290,7 +319,8 @@ class GoalModeMCPControlPlane:
             checkpoint_read_context_id=read_context_id or None,
             goal_ref=self.goal_ref(),
         )
-        with host_vision_request(request, agent_vision, vision_unchanged_reason) as authored:
+        with host_vision_request(request, agent_vision, vision_unchanged_reason,
+                                 allow_terminal_stride_path=self._allow_terminal_stride_path(goal_id, agent_vision)) as authored:
             return refresh_host_todo_vision(authored, run_cli=self.run_cli)
 
 
