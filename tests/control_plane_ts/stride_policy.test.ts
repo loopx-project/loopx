@@ -21,6 +21,19 @@ const request = {schema_version: VISION_REFRESH_REQUEST_SCHEMA, phase: "prepare"
   agent_id: "agent-a", merge_patch: false, existing_agent_vision: null,
   require_path_delta_for_durable_change: false, agent_vision_packet: packet};
 
+test("Explore review keeps bare lowercase digest revisions and unavailable null distinct", () => {
+  const explore = {disposition: "deferred", considered_refs: [], reason: "Scoped later."};
+  for (const revision of ["0123456789abcdef".repeat(4), null]) {
+    const decision = normalizeStrideDecision({...proposal, explore_review: {...explore, revision}})[0]!;
+    assert.equal((decision.explore_review as Record<string, unknown>).revision, revision);
+  }
+  for (const revision of ["A".repeat(64), "a".repeat(63), "a".repeat(65), "g".repeat(64),
+      "sha256:" + "a".repeat(64)]) {
+    assert.throws(() => normalizeStrideDecision({...proposal, explore_review: {...explore, revision}}),
+      /explore_review requires a delivered revision/);
+  }
+});
+
 test("concrete independent plans retain action choice and fit the shared vision budget", () => {
   for (const basis of ["unexplained_gap", "uncertain_evidence", "supported_progress"]) {
     const decision = normalizeStrideDecision({...proposal, basis})[0]!;

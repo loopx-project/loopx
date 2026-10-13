@@ -1,5 +1,6 @@
 /** One opt-in work and research stride strategy; all execution authority retains its owners. */
 import {createHash} from "node:crypto";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import schema from "../stride_strategy_schema.json" with {type: "json"};
 import decisionSchema from "../stride_decision_schema.json" with {type: "json"};
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
@@ -134,7 +135,7 @@ export function normalizeStrideDecision(value: unknown, bounded: BoundedText = t
   if (input.explore_review != null) {
     const review = requireJsonObject(input.explore_review, "stride_decision.explore_review");
     exactFields(review, ["revision", "disposition", "considered_refs", "reason"], "explore_review");
-    if (review.revision !== null && !/^[a-f0-9]{64}$/.test(requireNonEmptyString(review.revision, "explore_review.revision"))) throw new EffectRuntimeRequestError("explore_review requires a delivered revision or null when unavailable");
+    if (review.revision !== null && !BARE_SHA256_PATTERN.test(requireNonEmptyString(review.revision, "explore_review.revision"))) throw new EffectRuntimeRequestError("explore_review requires a delivered revision or null when unavailable");
     requireStringLiteral(review.disposition, decisionSchema.explore_dispositions, "explore_review.disposition");
     const considered = refs(review.considered_refs, "explore_review.considered_refs");
     if (review.disposition === "used" && !considered.length) throw new EffectRuntimeRequestError("used Explore evidence requires a delivered reference");
