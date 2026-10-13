@@ -168,9 +168,20 @@ def test_receipt_bound_trae_hint_executes_native_without_python(
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is required")
 @pytest.mark.parametrize("launcher", ["unix", "powershell"])
+@pytest.mark.parametrize("node_layout", ["single", "multiple"])
 def test_receipt_bound_failure_hint_executes_native_without_python(
-    tmp_path: Path, launcher: str,
+    tmp_path: Path, monkeypatch, launcher: str, node_layout: str,
 ) -> None:
+    if node_layout == "multiple":
+        real_node = Path(shutil.which("node"))
+        later_bin = tmp_path / "later Node candidate"
+        later_bin.mkdir()
+        later_node = later_bin / real_node.name
+        later_node.write_text("This later PATH candidate must not execute.\n", encoding="utf-8")
+        later_node.chmod(0o755)
+        monkeypatch.setenv("PATH", os.pathsep.join([
+            str(real_node.parent), str(later_bin), os.environ.get("PATH", ""),
+        ]))
     registry_path, runtime_root, project = write_cli_fixture(
         tmp_path / "fixture-failure",
         scoped_agents=True,

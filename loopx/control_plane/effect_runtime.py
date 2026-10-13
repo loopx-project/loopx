@@ -6,6 +6,7 @@ import os
 import secrets
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -309,6 +310,10 @@ def _runtime_fingerprint_for_snapshot(
     snapshot: _RuntimeSourceSnapshot,
 ) -> str:
     digest = hashlib.sha256()
+    # The daemon's fixed Python adapter context must follow the interpreter
+    # selected by this caller, even when two environments share source files.
+    digest.update(sys.executable.encode("utf-8"))
+    digest.update(str(sys.version_info[:3]).encode("ascii"))
     source_root = Path(root)
     # Lazy imports and Python bridges resolve from this physical release. Equal
     # bytes in another checkout must not reuse a loader whose release may retire.
@@ -917,6 +922,8 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
         token = secrets.token_urlsafe(32)
         environment = os.environ.copy()
         environment["LOOPX_EFFECT_RUNTIME_TOKEN"] = token
+        # Fixed daemon context, never a model-supplied executable argument.
+        environment["LOOPX_EFFECT_RUNTIME_PYTHON"] = sys.executable
         # Capture stderr so a rejected startup can publish a typed
         # configuration diagnostic instead of a bare exit status. The capture
         # is an unlinked temporary file, so it cannot deadlock the child on a

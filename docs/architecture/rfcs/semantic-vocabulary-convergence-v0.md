@@ -1267,6 +1267,9 @@ owners and approval requirements.
 
 ## Appendix A: Execution ledger (non-normative)
 
+- Reserved-value and custom-scope disposition proposal: [cancelled / other](ledger/semantic-vocabulary-convergence-v0/2026-10-12-reserved-value-disposition.md).
+
+
 New entries are files, not sections here. Each one lives in
 [`ledger/<rfc-slug>/`](ledger/README.md) as `YYYY-MM-DD-slug.md` with a Chinese mirror
 beside it, and nothing enumerates them — the directory listing is the index.

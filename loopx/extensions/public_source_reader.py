@@ -170,6 +170,14 @@ def fetch(value: str, *, deadline: float) -> tuple[str, str, bytes]:
                 raise  # Certificate and TLS policy failures are not address recovery.
             except (OSError, http.client.IncompleteRead):
                 if index == len(addresses) - 1:
+                    # GitHub PR diffs have a canonical public content endpoint.
+                    # Recover transport failure only, using the same checked
+                    # request path, deadline and hop limit as an HTTP redirect.
+                    if (u.hostname == "github.com" and not u.query
+                            and re.fullmatch(r"/[A-Za-z0-9][A-Za-z0-9-]*/"
+                                r"[A-Za-z0-9_][A-Za-z0-9_.-]*/pull/[1-9][0-9]*\.diff", u.path)):
+                        url = public_url("https://patch-diff.githubusercontent.com/raw" + u.path)
+                        break
                     raise
             finally:
                 expiry.cancel()

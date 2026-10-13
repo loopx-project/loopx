@@ -161,6 +161,27 @@ def test_goal_frontier_replan_decision_table(
     )
 
 
+def test_capability_evidence_gap_precedence_and_disabled_parity() -> None:
+    # A caller-owned gap enters before monitor fallback. Existing authority,
+    # runnable work and acceptance checkpoints retain their established order.
+    selected = select_goal_frontier_replan_rule(GoalFrontierReplanFacts(capability_gap_pending=True))
+    assert selected.rule is GoalFrontierReplanRule.CAPABILITY_EVIDENCE_GAP
+    assert selected.derives_obligation
+    for fields, expected in [
+        ({"existing_replan_required": True}, GoalFrontierReplanRule.EXISTING_OBLIGATION),
+        ({"blocking_handoff_gate_count": 1}, GoalFrontierReplanRule.BLOCKING_HANDOFF_GATE),
+        ({"ready_deferred_successor_count": 1}, GoalFrontierReplanRule.READY_DEFERRED_SUCCESSOR),
+        ({"blocking_user_open_count": 1}, GoalFrontierReplanRule.OPEN_USER_TODO),
+        ({"acceptance_gap_count": 1}, GoalFrontierReplanRule.VISION_ACCEPTANCE_GAP),
+        ({"long_todo_chain_triggered": True}, GoalFrontierReplanRule.LONG_TODO_CHAIN),
+        ({"current_agent_blocker_count": 1}, GoalFrontierReplanRule.CURRENT_AGENT_BLOCKER),
+        ({"selectable_frontier_advancement": 1}, GoalFrontierReplanRule.NOT_MONITOR_ONLY),
+    ]:
+        decision = select_goal_frontier_replan_rule(GoalFrontierReplanFacts(capability_gap_pending=True, **fields))
+        assert decision.rule is expected
+    assert select_goal_frontier_replan_rule(GoalFrontierReplanFacts()).rule is GoalFrontierReplanRule.NOT_MONITOR_ONLY
+
+
 def _repeat_vision_gap() -> list[dict[str, object]]:
     return [
         {
@@ -460,7 +481,7 @@ def test_todo_succession_gap_cli_actions_do_not_require_semantic_refresh() -> No
     )
 
     assert "--todo-id todo_111111111111" in actions[0]
-    assert "--turn-instance-id turn-implement" in actions[0]
+    assert "--completion-identity-key turn-implement" in actions[0]
     assert "--todo-id todo_222222222222" in actions[1]
     assert "--turn-instance-id" not in actions[1]
     assert all("refresh-state" not in action for action in actions)
@@ -543,7 +564,7 @@ def test_todo_succession_gap_interaction_contract_is_model_actionable() -> None:
     assert "settlement_plan" not in contract["cli_channel"]
     actions = contract["cli_channel"]["next_cli_actions"]
     assert "--todo-id todo_111111111111" in actions[0]
-    assert "--turn-instance-id turn-implement" in actions[0]
+    assert "--completion-identity-key turn-implement" in actions[0]
     assert all("refresh-state" not in action for action in actions)
     assert all("spend-slot" not in action for action in actions)
 

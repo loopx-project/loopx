@@ -217,6 +217,15 @@ capability 与 goal 配置承担。
 source manifest，以及显式配置、只读的 `local-file` source adapter。该切片刻意
 停在 source 编排和私有 cursor checkpoint 之前。
 
+local-file transport 在已打开的普通文件 handle 上执行 `max_bytes`，最多读取上限
+加一个字节以检测超限。读取前后对比文件 identity、大小、修改/变更时间，并核对
+当前解析后的 source。检测到增长、替换或原地改写时按 provider failure 处理，不能
+推进 capture cursor 或创建 exact-read receipt。显式配置的稳定 symlink 仍可用。
+修复 source 后沿既有 capture cadence 重试；reviewed cursor 仍由 settlement owner
+控制。这是有界观察，不是原子文件系统快照，也不是网络文件系统读取的硬 deadline；
+host 仍需保留进程 timeout 边界。
+
+
 第二个切片增加薄 host API `assemble_profile_decision_evidence(...)`，以及只读的
 CLI 预览 `decision-context prepare-evidence`。profile 会解析已启用的 source
 provider，执行 bounded scan 与 exact read，并输出公开安全的 scan、revision、

@@ -174,6 +174,7 @@ Typed failure class of a settlement step.
 - python: [`SettlementFailureKind`](../../loopx/control_plane/effect_program.py).
 - typescript: [`SETTLEMENT_FAILURE_KINDS`](../../loopx/control_plane/effect_program.ts).
 - Values / 值: `invalid_identity`, `receipt_missing`, `receipt_unbound`, `identity_mismatch`, `writeback_missing`, `writeback_rejected`, `quota_spend_rejected`, `terminal_closeout_rejected`, `cancelled`, `permission_denied`, `budget_rejected`, `effect_outcome_unknown`.
+- Compatibility only / 兼容保留: `cancelled`.
 
 ## settlement_step_kind
 

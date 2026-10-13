@@ -380,3 +380,205 @@ def test_catalog_routes_to_default_off_profile_inspection() -> None:
         "decision_review_receipt_v0",
         "decision_review_settlement_v0",
     } <= schema_versions
+
+
+def test_local_file_read_enforces_limit_after_stale_preflight(tmp_path, monkeypatch):
+    authority = tmp_path / "authority.txt"
+    authority.write_bytes(b"small")
+    original_stat = Path.stat
+    preflight = authority.stat()
+    grew = False
+
+    def stale_preflight(path, *args, **kwargs):
+        nonlocal grew
+        if path == authority:
+            if not grew:
+                # Real late growth, not a fabricated provider return value.
+                authority.write_bytes(b"x" * 32)
+                grew = True
+            return preflight
+        return original_stat(path, *args, **kwargs)
+
+    payload = profile_payload(authority)
+    payload["source_provider_bindings"][0]["config"]["max_bytes"] = 16
+    profile = normalize_decision_context_profile(payload)
+    provider = build_decision_source_provider(profile.provider_binding_map()["local-authority"])
+    monkeypatch.setattr(Path, "stat", stale_preflight)
+    with pytest.raises(ValueError, match="exceeds max_bytes"):
+        provider.scan(source=profile.sources[0], after_cursor=None,
+            before="2100-01-01T00:00:00+00:00", limit=8,
+            timeout_seconds=2, observed_at=OBSERVED_AT)
+    assert grew
+
+
+def test_local_file_growth_during_read_is_bounded(tmp_path, monkeypatch):
+    import os
+
+    authority = tmp_path / "authority.txt"
+    authority.write_bytes(b"small")
+    inode = authority.stat().st_ino
+    payload = profile_payload(authority)
+    payload["source_provider_bindings"][0]["config"]["max_bytes"] = 16
+    profile = normalize_decision_context_profile(payload)
+    provider = build_decision_source_provider(profile.provider_binding_map()["local-authority"])
+    original_fstat, original_fdopen = os.fstat, os.fdopen
+    read_sizes = []
+    grew = False
+
+    def grow_after_descriptor_check(fd):
+        nonlocal grew
+        observed = original_fstat(fd)
+        if observed.st_ino == inode and not grew:
+            authority.write_bytes(b"x" * 64)
+            grew = True
+        return observed
+
+    class ObservedReader:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.stream.close()
+
+        def fileno(self):
+            return self.stream.fileno()
+
+        def read(self, size=-1):
+            read_sizes.append(size)
+            return self.stream.read(size)
+
+    monkeypatch.setattr(os, "fstat", grow_after_descriptor_check)
+    monkeypatch.setattr(os, "fdopen", lambda *a, **kw: ObservedReader(original_fdopen(*a, **kw)))
+    with pytest.raises(ValueError, match="exceeds max_bytes"):
+        provider.scan(source=profile.sources[0], after_cursor=None,
+            before="2100-01-01T00:00:00+00:00", limit=8,
+            timeout_seconds=2, observed_at=OBSERVED_AT)
+    assert grew
+    assert read_sizes == [17]
+
+
+def test_local_file_replacement_after_open_has_no_verified_read(tmp_path, monkeypatch):
+    import os
+
+    authority = tmp_path / "authority.txt"
+    authority.write_bytes(b"original")
+    replacement = tmp_path / "replacement.txt"
+    replacement.write_bytes(b"replaced")
+    inode = authority.stat().st_ino
+    profile = normalize_decision_context_profile(profile_payload(authority))
+    provider = build_decision_source_provider(profile.provider_binding_map()["local-authority"])
+    original_fstat = os.fstat
+    replaced = False
+
+    def replace_after_open(fd):
+        nonlocal replaced
+        observed = original_fstat(fd)
+        if observed.st_ino == inode and not replaced:
+            replacement.replace(authority)
+            replaced = True
+        return observed
+
+    monkeypatch.setattr(os, "fstat", replace_after_open)
+    with pytest.raises(ValueError, match="changed during bounded read"):
+        provider.scan(source=profile.sources[0], after_cursor=None,
+            before="2100-01-01T00:00:00+00:00", limit=8,
+            timeout_seconds=2, observed_at=OBSERVED_AT)
+    assert replaced
+
+
+@pytest.mark.parametrize("size,allowed", [(16, True), (17, False)])
+def test_local_file_exact_byte_limit_is_preserved(tmp_path, size, allowed):
+    authority = tmp_path / "authority.txt"
+    authority.write_bytes(b"x" * size)
+    payload = profile_payload(authority)
+    payload["source_provider_bindings"][0]["config"]["max_bytes"] = 16
+    profile = normalize_decision_context_profile(payload)
+    provider = build_decision_source_provider(profile.provider_binding_map()["local-authority"])
+    args = dict(source=profile.sources[0], after_cursor=None,
+        before="2100-01-01T00:00:00+00:00", limit=8,
+        timeout_seconds=2, observed_at=OBSERVED_AT)
+    if not allowed:
+        with pytest.raises(ValueError, match="exceeds max_bytes"):
+            provider.scan(**args)
+        return
+    scan = provider.scan(**args)
+    exact = provider.exact_read(source=profile.sources[0], item=scan.items[0],
+        timeout_seconds=2, observed_at=OBSERVED_AT)
+    assert exact.content == "x" * 16
+
+
+def test_local_file_in_place_edit_during_read_is_not_current(tmp_path, monkeypatch):
+    import os
+
+    authority = tmp_path / "authority.txt"
+    authority.write_bytes(b"before")
+    inode = authority.stat().st_ino
+    profile = normalize_decision_context_profile(profile_payload(authority))
+    provider = build_decision_source_provider(profile.provider_binding_map()["local-authority"])
+    original_fstat = os.fstat
+    changed = False
+
+    def edit_after_open(fd):
+        nonlocal changed
+        observed = original_fstat(fd)
+        if observed.st_ino == inode and not changed:
+            authority.write_bytes(b"after!")
+            os.utime(authority, ns=(observed.st_atime_ns, observed.st_mtime_ns + 1_000_000_000))
+            changed = True
+        return observed
+
+    monkeypatch.setattr(os, "fstat", edit_after_open)
+    with pytest.raises(ValueError, match="changed during bounded read"):
+        provider.scan(source=profile.sources[0], after_cursor=None,
+            before="2100-01-01T00:00:00+00:00", limit=8,
+            timeout_seconds=2, observed_at=OBSERVED_AT)
+    assert changed
+
+
+def test_local_file_symlink_to_explicit_source_still_reads(tmp_path):
+    authority = tmp_path / "authority.txt"
+    authority.write_text("stable source")
+    alias = tmp_path / "alias.txt"
+    alias.symlink_to(authority)
+    profile = normalize_decision_context_profile(profile_payload(alias))
+    provider = build_decision_source_provider(profile.provider_binding_map()["local-authority"])
+    scan = provider.scan(source=profile.sources[0], after_cursor=None,
+        before="2100-01-01T00:00:00+00:00", limit=8,
+        timeout_seconds=2, observed_at=OBSERVED_AT)
+    exact = provider.exact_read(source=profile.sources[0], item=scan.items[0],
+        timeout_seconds=2, observed_at=OBSERVED_AT)
+    assert exact.content == "stable source"
+    assert exact.resource_ref == str(authority.resolve())
+
+
+@pytest.mark.skipif(__import__("os").name != "posix", reason="POSIX FIFO replacement")
+def test_local_file_replaced_by_fifo_after_preflight_does_not_block(tmp_path, monkeypatch):
+    import os
+
+    authority = tmp_path / "authority.txt"
+    authority.write_text("stable source")
+    profile = normalize_decision_context_profile(profile_payload(authority))
+    provider = build_decision_source_provider(profile.provider_binding_map()["local-authority"])
+    original_open = os.open
+    descriptor = None
+
+    def replace_at_open(path, flags, *a, **kw):
+        nonlocal descriptor
+        if Path(path) == authority:
+            assert flags & os.O_NONBLOCK
+            authority.unlink()
+            os.mkfifo(authority)
+        descriptor = original_open(path, flags, *a, **kw)
+        return descriptor
+
+    monkeypatch.setattr(os, "open", replace_at_open)
+    with pytest.raises(ValueError, match="not a regular file"):
+        provider.scan(source=profile.sources[0], after_cursor=None,
+            before="2100-01-01T00:00:00+00:00", limit=8,
+            timeout_seconds=2, observed_at=OBSERVED_AT)
+    assert descriptor is not None
+    with pytest.raises(OSError):
+        os.fstat(descriptor)

@@ -20,7 +20,9 @@ def _sha(handle: BinaryIO) -> str:
     return digest.hexdigest()
 
 
-def read_cold_source_backup(manifest_path: Path) -> dict[str, Any]:
+def read_cold_source_backup(
+    manifest_path: Path, *, source_paths: list[Path] | None = None,
+) -> dict[str, Any]:
     """Witness the existing backup format, including pre-member-list archives.
 
     A checksum of a manifest alone is insufficient. Read the same open archive,
@@ -38,6 +40,21 @@ def read_cold_source_backup(manifest_path: Path) -> dict[str, Any]:
     execution = manifest.get("execution")
     if not isinstance(execution, dict):
         raise ValueError("cold_import_backup_not_executed")
+    # Transport only the requested Host source coverage. Still validate/hash
+    # every actual member and both complete artifacts; TS owns whether this
+    # subset proves all required source bytes. No backup bytes are removed.
+    selected: list[str] | None = None
+    if source_paths is not None:
+        selected = []
+        for source in source_paths:
+            source = source.expanduser().absolute()
+            for item in manifest["included"]:
+                try:
+                    suffix = source.relative_to(Path(item["source_path"]))
+                except ValueError:
+                    continue
+                prefix = PurePosixPath(item["archive_path"])
+                selected.append(str(prefix / suffix.as_posix()) if suffix.parts else str(prefix))
     archive_path = Path(execution["archive_path"]).expanduser().absolute()
     if not stat.S_ISREG(archive_path.lstat().st_mode):
         raise ValueError("cold_import_backup_archive_unsafe")
@@ -71,7 +88,9 @@ def read_cold_source_backup(manifest_path: Path) -> dict[str, Any]:
                         raise ValueError("cold_import_backup_member_unreadable")
                     with stream:
                         digest = _sha(stream)
-                    members.append({"archive_path": name, "sha256": digest})
+                    if selected is None or any(name == prefix or name.startswith(prefix + "/")
+                                               for prefix in selected):
+                        members.append({"archive_path": name, "sha256": digest})
             if not isinstance(embedded, dict) or any(embedded.get(key) != manifest.get(key)
                 for key in ("schema_version", "runtime_root", "project", "included", "configuration_source_registry")):
                 raise ValueError("cold_import_backup_source_map_changed")

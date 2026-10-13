@@ -1,4 +1,4 @@
-/** A user-directed pause is a Todo lifecycle change, not a completed delivery.
+/** A bounded pause is a Todo lifecycle change, not a completed delivery.
  * Retire only an inactive execution generation in the same provider CAS; a
  * live holder must release its lease before another actor can pause the work. */
 import type {JsonObject} from "../effect_program.ts";
@@ -7,17 +7,23 @@ import type {CoordinationTodoUpdateInput} from "./todo_update_intent.ts";
 import {canonicalTaskLease} from "./task_lease_state.ts";
 import {leaseEpoch, leaseIsActive, leaseVersion} from "../work_items/task_lease_acquire.ts";
 import {releasedTaskLeaseRecord} from "../work_items/task_lease_lifecycle_decision.ts";
+import {normalizeTodoResumeWhen, TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION} from "../todos/resume_condition.ts";
 
-const LIFECYCLE_FIELDS = new Set(["status", "reason", "clear_resume_when"]);
+const LIFECYCLE_FIELDS = new Set(["status", "reason", "clear_resume_when", "resume_when"]);
 
 export function isBlockedLifecycleTransition(
   input: CoordinationTodoUpdateInput, todo: JsonObject,
 ): boolean {
   const intent = input.planning_intent ?? {};
+  const pause = todo.status === "open" && intent.status === "blocked";
+  const clearWait = intent.clear_resume_when === true && intent.resume_when == null;
+  const typedWait = pause && intent.clear_resume_when !== true && typeof intent.resume_when === "string"
+    && normalizeTodoResumeWhen({schema_version: TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION,
+      resume_when: intent.resume_when}) === intent.resume_when;
   return todo.role === "agent" &&
-    ((todo.status === "open" && intent.status === "blocked") ||
+    (pause ||
       (todo.status === "blocked" && intent.status === "open")) &&
-    intent.clear_resume_when === true &&
+    (clearWait || typedWait) &&
     typeof intent.reason === "string" && Boolean(intent.reason.trim()) &&
     Object.keys(input.patch).length === 0 && input.clear_fields.length === 0 &&
     Object.keys(intent).every(field => LIFECYCLE_FIELDS.has(field));

@@ -116,7 +116,7 @@ def test_declared_return_is_scanned_in_real_python_syntax():
 def test_real_return_producer_rejects_an_unregistered_result(vocabulary_name, module, original):
     import json
     from loopx.semantics.inventory import load_sources
-    v = json.loads((ROOT / 'loopx/semantics/vocabulary_v0.json').read_text())['vocabularies'][vocabulary_name]
+    v = json.loads((ROOT / 'loopx/semantics/vocabulary_v0.json').read_text(encoding='utf-8'))['vocabularies'][vocabulary_name]
     sources = load_sources(ROOT)
     replacement = 'return "unknown_action"'
     found = False
@@ -205,7 +205,7 @@ def test_real_effect_adapters_are_observed_as_unresolved_passthrough():
     import json
     from loopx.semantics.inventory import load_sources
 
-    v = json.loads((ROOT / 'loopx/semantics/vocabulary_v0.json').read_text())['vocabularies']['effective_action']
+    v = json.loads((ROOT / 'loopx/semantics/vocabulary_v0.json').read_text(encoding='utf-8'))['vocabularies']['effective_action']
     paths = {'loopx/control_plane/effect_program.py', 'loopx/control_plane/effect_program.ts'}
     owner = v['owners']['python'].split('::')[0]
     sources = [source for source in load_sources(ROOT) if source.path in paths | {owner}]
@@ -249,7 +249,7 @@ def test_real_reexported_turn_owner_is_attributed_through_one_hop():
     from loopx.semantics.inventory import load_sources
     # loop_controller imports LoopXTurnRoute from driver, which re-exports the
     # generated owner; the registered return producer must still resolve.
-    v = json.loads((ROOT / 'loopx/semantics/vocabulary_v0.json').read_text())['vocabularies']['turn_route']
+    v = json.loads((ROOT / 'loopx/semantics/vocabulary_v0.json').read_text(encoding='utf-8'))['vocabularies']['turn_route']
     rows = collect_production(ROOT, v, load_sources(ROOT))
     site = 'loopx/control_plane/turn_driver/loop_controller.py::_envelope_route'
     resolved = {value for r in rows if r.site == site and not r.unresolved for value in r.values}

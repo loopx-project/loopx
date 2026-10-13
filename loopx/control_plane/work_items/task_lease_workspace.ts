@@ -5,12 +5,12 @@ import {realpath, stat, readFile, lstat, opendir} from "node:fs/promises";
 import {platform} from "node:os";
 import {createHash} from "node:crypto";
 import {isAbsolute, resolve} from "node:path";
-import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {normalizeTodoRepository} from "../todos/work_requirements.ts";
 import {leaseWriteRepository} from "./task_lease_repository.ts";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 
 export interface LeaseWorkspace extends JsonObject {
   host: string;

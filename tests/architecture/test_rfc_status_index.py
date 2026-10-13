@@ -45,7 +45,9 @@ def document(
             .replace("Supersedes / closes:", "替代 / 关闭：")
             .replace("Superseded by:", "被替代为：")
         )
-    (rfcs / f"{name}{'.zh-CN' if zh else ''}.md").write_text(header + "\n" + body)
+    (rfcs / f"{name}{'.zh-CN' if zh else ''}.md").write_text(
+        header + "\n" + body, encoding="utf-8"
+    )
 
 
 def run(repo: Path, mode: str) -> subprocess.CompletedProcess[str]:

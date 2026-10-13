@@ -216,11 +216,25 @@ def test_revision_lost_response_still_projects_exact_new_declaration(promoted, m
         real(method, request, **kwargs)
         raise EffectRuntimeResponseAmbiguous(method, timeout=1)
     monkeypatch.setattr(provider_update, "effect_runtime_result", lose_response)
-    with pytest.raises(EffectRuntimeResponseAmbiguous):
+    with pytest.raises(LocalCoordinationAuthorityUnavailable) as error:
         update_goal_todo(registry_path=registry, goal_id="goal-a", todo_id=created["todo_id"],
                          role="agent", agent_id="agent-a", update_operation_id="revise-after-loss",
                          update_expected_provider_revision=read(runtime)["provider_revision"],
                          validation_command_json=json.dumps([sys.executable, "-c", "raise SystemExit(3)"]))
+    assert error.value.code == "runtime_response_ambiguous"
+    assert error.value.payload["todo_id"] == created["todo_id"]
+    assert error.value.payload["operation_id"] == "revise-after-loss"
+    # The public boundary supplies a read of the original operation, never a
+    # new write or a claim that its missing response proves writer shutdown.
+    command = error.value.payload["recovery_command"]
+    assert command[0] == "loopx"
+    committed = read(runtime)
+    recovered = subprocess.run([sys.executable, "-m", "loopx.cli", *command[1:]],
+                               capture_output=True, text=True, timeout=60)
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    receipt = json.loads(recovered.stdout)
+    assert receipt["status"] == "found" and receipt["operation_id"] == "revise-after-loss"
+    assert read(runtime) == committed
     project(registry, runtime)
     canonical = read(runtime)["todos"][0]
     stored = read_completion_validation_declaration(runtime_root=runtime, goal_id="goal-a",

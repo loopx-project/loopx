@@ -662,6 +662,19 @@ bundled provider 的[就绪指南](../../../loopx/extensions/lark/docs/realtime-
 记录有界跨会话处理和仍待完成的替代验收；私聊开通、普通非 Goal 对话、流式回显与媒体输入，
 须等固定版本的已安装旅程通过后才能宣称就绪。
 
+**模型容量失败（S5/S10）：** Codex adapter 把 typed `serverOverloaded` 终结错误保留为
+`server_overloaded`，上游任意 prose 不能建立该分类。启用后的 Codex app-server Chat Turn
+现在默认对这个精确 typed 过载做有界同请求续接：同一 worker 内，Session、Turn、请求、
+grant、配置与 active claim 均未变，且完整最新 Turn 与 item 读回证明本轮没有执行工具或
+效果后，LoopX 可以用线性退避重新投递原请求，最多三次重试，每次续接前再读回一次。每次
+重试都在退避前先写入 Turn 事件账本，因此剩余额度可跨重启/压缩保留，新 worker 不会重开
+starting/terminal Turn 来重置它。未知 provider code、任何工具或效果证据、额外输入或
+steering、停止、权限/配置/claim 变化，以及不可读或不确定的历史都失败关闭：保留既有
+typed 失败与繁忙/连接说明，耗尽时同样保留终结结果，不重放不确定的尝试。原 Session、
+Turn 与投递回执仍是权威；这不新增模型 fallback、provider 替换或线程替换，也不证明
+provider 可用性或此前无副作用。Lark 私聊与管家回复仍显示安全的模型繁忙说明，并要求
+用户先核对已有结果再决定稍后重试；可重试通知仍等待真实终结结果。
+
 **产品边界：** Bot 是实时会话入口，不是另一个管家。普通项目对话和与选定既有 Agent
 直接交流，无需团队拆解或新增 Goal/Todo；需要长期承诺、协调和验收时，管家是显式接收者。
 共享认证入口、Session/Turn、执行/进度/附件、operation 决策与恢复；接收者职责、受众、
@@ -683,6 +696,15 @@ skills，不再附带管家的 Goal 发现、草稿或 context delegation 指令
 | 接着 | 首次私聊与显式角色选择接续正确会话，忙碌工作及时报告持久准入或拒绝 | Chat Session/Turn 与 typed ingress 拥有连续性、受众及 queue/steering；普通对话无需用户先造 Goal Topic，角色名本身不授予权限 |
 | 再做 | 每个宣称支持的 host 都能显示进度、接收图/文件和处理权限答复 | 既有 event/attachment/operation owner；有界临时卡片、明确不支持的媒体、认证后的精确 operation 回调，以及只重试投递的恢复 |
 | 切换门槛 | 安装态 provider/host 旅程经得住重连、重复事件、取消和投递不可用 | 固定版本，跑实际入口和回读；验收后才退役旧 bridge，每个 App 保持唯一 consumer，不复制凭据或 session |
+
+**请求发布与返回准备（S1/S3、A8/A9/A24）：** Inbox 条目可见前，先持久化并回读
+可信原对话返回路由；路由写入或回读失败不能暴露工作。只有路由而没有条目时，
+原请求可安全重试。Manager 和 peer 入口共用既有 TypeScript 请求 owner 判断原始
+内容和重放。升级产生的新接收说明不改变请求身份，必须保留已存说明；peer 发布
+中断后，用原操作中的说明补齐缺失条目。来源、语义 brief、接收方、Goal 实例或
+已选路由改变仍冲突。适配器保留原授权、锁、返回准备及逐字节存储回读，不新增
+请求库、修订互斥或执行授权。验证实际入口、即时接收、发布中断和重启后的原对话
+返回；这些证据不建立 worker 选择、实际执行或完整 A24 资格。
 
 ## 11. 规范性里程碑
 

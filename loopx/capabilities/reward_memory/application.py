@@ -596,6 +596,11 @@ def _active_item_decision(
         or surface_id not in set(scope.get("surface_ids") or [])
     ):
         return _ActiveItemDecision(None, "scope_filtered")
+    # Mirror activation's explicit version binding, not historical evidence refs.
+    if corpus["freshness"]["mode"] == "revision_bound" and (
+        scope.get("revision_ref") != corpus["freshness"]["source_revision"]
+    ):
+        return _ActiveItemDecision(None, "scope_filtered")
     if not isinstance(lifecycle, Mapping) or lifecycle.get("state") != "active":
         return _ActiveItemDecision(None, "lifecycle_filtered")
     expires_at = lifecycle.get("expires_at")

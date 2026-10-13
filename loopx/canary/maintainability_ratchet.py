@@ -49,6 +49,13 @@ def _exception(
 
 
 REVIEWED_MAINTAINABILITY_EXCEPTIONS: dict[str, dict[str, Any]] = {
+    "dependency_debt:loopx.control_plane.todos.legacy_mutation->loopx.capabilities.explore.research_frontier": _exception(
+        "The unpromoted legacy Todo writer was moved out of loopx.todos without changing its "
+        "explicit Explore completion evidence guard. The existing capability owner still "
+        "qualifies that evidence; omitting the guard would let legacy completion bypass M3.",
+        "Retire this bridge with the legacy writer, or replace it with a provider-neutral "
+        "injected terminal guard before removing this exact exception.",
+    ),
     "compatibility_facade:loopx.quota": _exception(
         "The public loopx.quota import surface remains a supported compatibility contract, "
         "including presentation-owned quota event renderers.",

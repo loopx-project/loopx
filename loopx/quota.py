@@ -4,7 +4,10 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import shlex
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .control_plane.goals.goal_frontier.fallback_source import FallbackTodoSource
 
 from .control_plane import compact_control_plane_policy
 from .control_plane.goals.activation import goal_is_stopped
@@ -35,7 +38,7 @@ from .control_plane.quota.monitor_poll import (
     QUOTA_MONITOR_POLL_CLASSIFICATION as QUOTA_MONITOR_POLL_CLASSIFICATION,
     build_quota_monitor_poll_event as build_quota_monitor_poll_event,
     record_quota_monitor_poll_for_decision,
-    resolve_due_monitor_candidate,
+    resolve_monitor_poll_target,
 )
 from .control_plane.quota.blocked_retry import overlay_active_turn_retries
 from .control_plane.quota.recent_runs import (
@@ -930,6 +933,7 @@ def build_quota_should_run(
     runtime_root: str | Path | None = None,
     workspace_path: Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
+    authoritative_fallback_todo_items: FallbackTodoSource = None,
 ) -> dict[str, Any]:
     from .control_plane.quota.should_run import (
         build_quota_should_run as _build_quota_should_run,
@@ -958,6 +962,7 @@ def build_quota_should_run(
         runtime_root=runtime_root,
         workspace_path=workspace_path,
         goal_ref=goal_ref,
+        authoritative_fallback_todo_items=authoritative_fallback_todo_items,
     )
 
 
@@ -1172,19 +1177,6 @@ def record_quota_monitor_poll(
     runtime_root = (
         Path(str(raw_runtime_root)).expanduser() if raw_runtime_root else None
     )
-    resolved_monitor = resolve_due_monitor_candidate(
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-        goal_id=safe_goal_id,
-        todo_id=normalized_requested_todo_id,
-        target_key=target_key,
-    )
-    normalized_observation_todo_id = normalized_requested_todo_id or (
-        normalize_todo_id(resolved_monitor.get("todo_id"))
-        if resolved_monitor
-        else None
-    )
-
     def should_run(current_status: dict[str, Any]) -> dict[str, Any]:
         decision_status = current_status
         if bounded_research_frontier_projector is not None:
@@ -1220,6 +1212,14 @@ def record_quota_monitor_poll(
         )
 
     before = should_run(status_payload)
+    recovery_effect_id = None
+    normalized_observation_todo_id = normalized_requested_todo_id
+    if normalized_observation_todo_id is None:
+        normalized_observation_todo_id, recovery_effect_id = resolve_monitor_poll_target(
+            registry_path=registry_path, runtime_root=runtime_root, goal_id=safe_goal_id,
+            target_key=target_key, before=before, turn_instance_id=turn_instance_id,
+            execute=execute, goal_ref=goal_ref,
+        )
     auxiliary_settlement_todo = None
     if (
         normalized_receipt_todo_id
@@ -1277,6 +1277,7 @@ def record_quota_monitor_poll(
         turn_instance_id=turn_instance_id,
         status_reloader=status_reloader,
         goal_ref=goal_ref,
+        recovery_effect_id=recovery_effect_id,
     )
     continuation = result.get("turn_continuation") or {}
     if (
@@ -1623,7 +1624,16 @@ def spend_quota_slot(
                 "turn_instance_id": identity.turn_instance_id,
                 "settlement_identity": identity.as_dict(),
                 "settlement_result": settlement_result_payload(spent_result),
-                "reason": "quota spend receipt replayed for the same settlement identity",
+                **(
+                    {"settlement_progress": settlement_readback.progress}
+                    if settlement_readback.progress.get("closeout_kind") == "capability_duty_retired_no_spend"
+                    else {}
+                ),
+                "reason": (
+                    "exact Turn closeout replayed without a quota debit"
+                    if settlement_readback.progress.get("closeout_kind") == "capability_duty_retired_no_spend"
+                    else "quota spend receipt replayed for the same settlement identity"
+                ),
                 **(
                     {"goal_ref": dict(goal_ref)}
                     if goal_ref is not None

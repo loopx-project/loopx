@@ -392,6 +392,7 @@ def build_state_backup_plan(
     include_skills: bool = True,
     include_registry_projects: bool = True,
     registry_path: Path | None = None,
+    configuration_goal_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     resolved_project = _resolved(Path(project))
     resolved_runtime_root = _resolved(Path(runtime_root).expanduser() if runtime_root else select_default_runtime_root())
@@ -425,6 +426,7 @@ def build_state_backup_plan(
         "project": str(resolved_project),
         "runtime_root": str(resolved_runtime_root),
         "configuration_source_registry": str(configuration_source_registry),
+        "configuration_goal_ids": configuration_goal_ids,
         "registry_discovery": registry_discovery,
         "codex_home": str(_codex_home()),
         "output_dir": str(resolved_output_dir),
@@ -616,6 +618,7 @@ def execute_state_backup_plan(payload: dict[str, Any]) -> dict[str, Any]:
             configuration = capture_configuration_backup(
                 registry_path=Path(payload["configuration_source_registry"]),
                 runtime_root=Path(payload["runtime_root"]),
+                goal_ids=payload.get("configuration_goal_ids"),
             )
             configuration_bytes = json.dumps(configuration, ensure_ascii=False, indent=2).encode("utf-8")
             info = tarfile.TarInfo("configuration-backup.json")

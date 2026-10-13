@@ -173,7 +173,7 @@ def build_turn_scoped_cli_settlement_plan(
         else ""
     )
     boundary_arg = (
-        " --delivery-boundary in_flight_continuation"
+        " --delivery-boundary <boundary>"
         if delivery_boundary == "in_flight_continuation"
         else ""
     )

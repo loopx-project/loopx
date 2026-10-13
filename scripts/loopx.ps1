@@ -68,7 +68,7 @@ $isNativeSchedulerFollowup = (
     $env:LOOPX_KUNLUNCODE_OUTER_CONTROLLER -ne "1"
 )
 if ($isNativeSchedulerFollowup) {
-    $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
+    $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($null -eq $node) {
         throw "Native scheduler follow-up requires Node.js 22.22.3 or newer"
     }

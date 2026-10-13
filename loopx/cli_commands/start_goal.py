@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -31,6 +32,8 @@ _CAPABILITY_ROUTE_PREFIX = re.compile(
     r"(?P<remainder>[\s\S]*)\Z"
 )
 _FINE_GRAINED_PREFIX = re.compile(r"\A--fine-grained(?P<remainder>(?:\s[\s\S]*)?)\Z")
+_CODEX_APP_SSH_HOST_SURFACE = "codex-app-ssh"
+_SSH_TRANSPORT_ENV_VARS = ("SSH_CONNECTION", "SSH_CLIENT")
 
 _EFFECT_RUNTIME_STARTUP_REMEDIATION_BY_CODE = {
     "startup_lock_timeout": (
@@ -104,13 +107,59 @@ def _render_start_goal_markdown(payload: dict[str, object]) -> str:
     if payload.get("ok") is not False:
         return render_start_goal_guided_markdown(payload)
     lines = ["# Guided Start Goal", "", f"- error: `{payload.get('error')}`"]
-    for field in ("diagnostic_code", "recommended_action", "suggested_command"):
+    for field in (
+        "error_code",
+        "diagnostic_code",
+        "recommended_action",
+        "suggested_command",
+    ):
         value = payload.get(field)
         if not value:
             continue
         rendered = value if field == "recommended_action" else f"`{value}`"
         lines.append(f"- {field}: {rendered}")
     return "\n".join(lines) + "\n"
+
+
+def _host_surface_environment_mismatch_payload(
+    *,
+    host_surface: str | None,
+    cli_bin: str,
+) -> dict[str, object] | None:
+    if host_surface != "codex-app" or not os.environ.get("CODEX_THREAD_ID"):
+        return None
+    ssh_evidence = [
+        variable for variable in _SSH_TRANSPORT_ENV_VARS if os.environ.get(variable)
+    ]
+    if not ssh_evidence:
+        return None
+    return {
+        "ok": False,
+        "schema_version": "loopx_start_goal_guided_v0",
+        "error_code": "host_surface_environment_mismatch",
+        "error": "Selected Codex App host surface conflicts with the detected SSH runtime",
+        "blocked_by": "host_surface_environment_mismatch",
+        "host_surface_environment_gate": {
+            "schema_version": "loopx_host_surface_environment_gate_v0",
+            "state": "blocked",
+            "requested_host_surface": host_surface,
+            "detected_runtime": "codex-app-over-ssh",
+            "required_host_surface": _CODEX_APP_SSH_HOST_SURFACE,
+            "evidence_env_vars": ["CODEX_THREAD_ID", *ssh_evidence],
+        },
+        "recommended_action": (
+            "Rerun the same command with `--host-surface codex-app-ssh`. "
+            "That profile emits the visible Goal task body through "
+            "`codex_app_ssh_goal` instead of requesting desktop heartbeat automation."
+        ),
+        "suggested_command": (
+            f"{cli_bin} start-goal --guided --host-surface codex-app-ssh ..."
+        ),
+        "safety_contract": {
+            "writes_registry": False,
+            "activates_host_loop": False,
+        },
+    }
 
 
 def add_capability_route_argument(parser: argparse.ArgumentParser) -> None:
@@ -311,6 +360,13 @@ def handle_start_goal_command(
             ),
         }
         print_payload(payload, args.format, _render_start_goal_markdown)
+        return 2
+    host_surface_mismatch = _host_surface_environment_mismatch_payload(
+        host_surface=args.host_surface,
+        cli_bin=args.cli_bin,
+    )
+    if host_surface_mismatch is not None:
+        print_payload(host_surface_mismatch, args.format, _render_start_goal_markdown)
         return 2
     display_name = args.display_name
     if not args.host_surface:

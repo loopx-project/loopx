@@ -96,3 +96,17 @@ test("gate scope projection qualifies every addressed live dependency without gr
   ]) assert.equal(project([{...independent, ...patch}]).state, "clear");
   assert.equal(project([{...independent, status: "blocked"}]).state, "independent");
 });
+
+test("an explicitly authored other scope is custom, never an unknown or cross-kind wildcard", () => {
+  const custom = {kind: "other", granularity: "action", scope_key: "study_conflict_review"};
+  assert.equal(decisionScopeCovers(custom, custom), true);
+  assert.equal(decisionScopeCovers(custom, {...custom, scope_key: "study_method_review"}), false);
+  const broad = {...custom, granularity: "global", scope_key: "*"};
+  assert.equal(decisionScopeCovers(broad, custom), true);
+  for (const kind of ["private_read", "write_scope", "resource", "production", "public_claim", "direction"]) {
+    assert.equal(decisionScopeCovers(broad, {...custom, kind}), false);
+    assert.equal(decisionScopeCovers({...broad, kind}, custom), false);
+  }
+  assert.equal(decisionScopeCovers({...broad, kind: "othre"}, custom), false);
+  assert.equal(decisionScopeCovers(broad, {...custom, kind: "othre"}), false);
+});

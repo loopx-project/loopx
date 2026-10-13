@@ -191,13 +191,15 @@ def _resolve_preview_settlement(
     if (
         isinstance(readback.progress, dict)
         and readback.progress.get("closeout_kind")
-        == "typed_blocked_writeback_no_spend"
+        in {"typed_blocked_writeback_no_spend", "capability_duty_retired_no_spend"}
     ):
         return {
             "identity": readback.identity.value,
             "result": readback.settlement,
             "delivery_run": readback.writeback_run,
             "reason": (
+                "this exact capability duty was retired and must not consume a quota slot; reassess the current frontier in a new Turn"
+                if readback.progress.get("closeout_kind") == "capability_duty_retired_no_spend" else
                 "this Turn already closed with an exact typed blocked writeback "
                 "and must not consume a quota slot; retry the Todo only after "
                 "its external blocker changes or a bounded backoff"
@@ -859,6 +861,10 @@ def build_quota_slot_preview_for_decision(
             "appended": False,
             "registry_mutated": False,
             "reason": before.get("reason") or "goal is not eligible for quota accounting preview",
+            # Transport the actual rejecting action, not an incidental quota
+            # snapshot on an earlier validation/workspace refusal. TS owns the
+            # mapping to settlement failure kinds; prose carries no such rule.
+            "quota_rejection_action": before.get("effective_action") if before.get("ok") is True else None,
             "before": before,
             "after": None,
         }

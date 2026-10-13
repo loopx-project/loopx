@@ -1,6 +1,7 @@
 import { goalCreateContent, goalCreateRequest } from "./goal-create-request";
 import { useEffect, useId, useRef, useState } from "react";
 import { useWorkspaceI18n } from "./i18n";
+import type { ChatProject } from "../../data/chat-model";
 import type { WorkspaceActionPreviewRequest, WorkspaceGoal } from "./personal-workspace-model";
 
 // Action identity comes from an explicit control, never from the text being edited.
@@ -28,9 +29,11 @@ export function todoCreateRequest(text: string, goalId: string, summary: string)
     normalizedParameters: {goal_id: goalId, text: text.trim()}, summary};
 }
 
-export function WorkspaceActionForm({ draft, workspaceGoals = [], onClose, onPreview }: {
+export function WorkspaceActionForm({ draft, workspaceGoals = [], workspaceProjects = [], onClose, onPreview }: {
   draft: WorkspaceActionDraft;
   workspaceGoals?: WorkspaceGoal[];
+  /** Dashboard-configured workspaces; each admits Goal creation by its own reference. */
+  workspaceProjects?: ChatProject[];
   onClose: () => void;
   onPreview: (request: WorkspaceActionPreviewRequest) => Promise<unknown>;
 }) {
@@ -45,6 +48,8 @@ export function WorkspaceActionForm({ draft, workspaceGoals = [], onClose, onPre
   const [completion, setCompletion] = useState(draft.completionCriteria ?? "");
   const [boundary, setBoundary] = useState(draft.executionBoundary ?? "");
   const [workspaceRef, setWorkspaceRef] = useState("current");
+  const configuredWorkspaces = workspaceProjects.filter(
+    (project): project is ChatProject & { goal_workspace_ref: string } => Boolean(project.goal_workspace_ref));
   const [permission, setPermission] = useState<string>(draft.permission ?? "workspace_write_on_confirmation");
   const [interval, setInterval] = useState(draft.kind === "heartbeat" ? "1" : "2");
   const [unit, setUnit] = useState(draft.kind === "heartbeat" ? "d" : "h");
@@ -113,10 +118,17 @@ export function WorkspaceActionForm({ draft, workspaceGoals = [], onClose, onPre
             <label>{zh ? "完成标准" : "Completion criteria"}<textarea aria-label={zh ? "完成标准" : "Completion criteria"} required value={completion} onChange={(event) => setCompletion(event.target.value)} /></label>
             <label>{zh ? "执行边界（可选）" : "Execution boundary (optional)"}<textarea aria-label={zh ? "执行边界（可选）" : "Execution boundary (optional)"} value={boundary} onChange={(event) => setBoundary(event.target.value)} /></label>
             <label>{zh ? "工作目录" : "Working directory"}<select aria-label={zh ? "工作目录" : "Working directory"} value={workspaceRef} onChange={(event) => setWorkspaceRef(event.target.value)}>
-              <option value="current">{zh ? "默认工作区（确认前检查）" : "Default workspace (check before confirming)"}</option>
-              {workspaceGoals.map((goal) => <option key={goal.goalId} value={goal.goalId}>{goal.title} · {goal.repository?.label ?? goal.goalId}</option>)}
+              <option value="current">{zh ? "默认工作区（检查配置时显示具体目录）" : "Default workspace (review shows which directory)"}</option>
+              {configuredWorkspaces.length ? <optgroup label={zh ? "Dashboard 工作区" : "Dashboard workspaces"}>
+                {configuredWorkspaces.map((project) => <option key={project.goal_workspace_ref} value={project.goal_workspace_ref}>{project.title}</option>)}
+              </optgroup> : null}
+              {workspaceGoals.length ? <optgroup label={zh ? "已有 Goal 的工作目录" : "Existing Goal directories"}>
+                {workspaceGoals.map((goal) => <option key={goal.goalId} value={goal.goalId}>{goal.title} · {goal.repository?.label ?? goal.goalId}</option>)}
+              </optgroup> : null}
             </select></label>
-            <p>{zh ? "可沿用已有 Goal 的工作目录。未连接的目录需要先完成项目连接；选择目录不会增加执行权限。" : "Reuse an existing Goal’s working directory. Unconnected directories need project setup first; selecting a directory does not expand execution permissions."}</p>
+            <p>{zh
+              ? <>检查配置时会显示具体目录。要添加其他目录，请用 <code>loopx dashboard --scan-path &lt;目录&gt;</code> 重新启动 Dashboard（每个项目一个）。选择目录不会增加执行权限。</>
+              : <>The review names the directory before anything is created. To add another directory, restart the Dashboard with <code>loopx dashboard --scan-path &lt;directory&gt;</code>, once per project. Choosing a directory does not expand execution permissions.</>}</p>
             <label>{zh ? "执行权限" : "Execution permission"}<select aria-label={zh ? "执行权限" : "Execution permission"} value={permission} onChange={(event) => setPermission(event.target.value)}><option value="read_only">{zh ? "只读" : "Read only"}</option><option value="workspace_write_on_confirmation">{zh ? "确认后允许修改工作区" : "Allow workspace changes after confirmation"}</option></select></label>
           </> : null}
         </>}

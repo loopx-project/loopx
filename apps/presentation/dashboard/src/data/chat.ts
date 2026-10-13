@@ -468,6 +468,15 @@ export const typedActionProposalSchema = z.object({
   checkpoint: z.record(z.string(), z.unknown()).nullable().optional(),
   failure: z.record(z.string(), z.unknown()).nullable().optional(),
   canonical_update_basis: actionSourceBasisSchema.optional(),
+  // The workspace a Goal creation resolved to, named for the owner's review.
+  workspace_binding: z.object({
+    schema_version: z.literal("loopx_goal_workspace_binding_v0"),
+    workspace_ref: z.string().min(1),
+    label: z.string().min(1),
+    source: z.enum(["goal_workspace", "configured_workspace"]),
+    selection: z.enum(["default", "explicit"]),
+    goal_id: z.string().min(1).optional(),
+  }).optional(),
   regenerated_from: z.string().nullable().optional(),
   operation: typedOperationEnvelopeSchema.nullable().optional(),
   created_at: z.string(),
@@ -1159,6 +1168,12 @@ export type DelegationReadback = {
 export function readLoopXTeamWork(sessionId: string, operationId: string) {
   return requestJson<DelegationReadback>(`/api/chat/sessions/${sessionId}/loopx`, {
     method: "POST", body: JSON.stringify({operation: "read", operation_id: operationId}),
+  });
+}
+export function adoptLoopXTeamWork(sessionId: string, operationId: string, consumerOperationId: string) {
+  return requestJson<DelegationReadback>(`/api/chat/sessions/${sessionId}/loopx`, {
+    method: "POST", body: JSON.stringify({operation: "adopt", operation_id: operationId,
+      consumer_operation_id: consumerOperationId}),
   });
 }
 export function revalidateLoopXTeamWork(sessionId: string, operationId: string) {

@@ -10,6 +10,7 @@ import {attentionUserActionScenario} from "./personal-workspace-browser/attentio
 import {prReviewAgentOrderScenario} from "./personal-workspace-browser/pr-review-agent-order.mjs";
 import {conversationImageRequestScenario} from "./personal-workspace-browser/conversation-image-request.mjs";
 import {externalEvidenceReadbackScenario} from "./personal-workspace-browser/external-evidence-readback.mjs";
+import {exploreCompositionOwnerScenario} from "./personal-workspace-browser/explore-composition-owner.mjs";
 // Isolated browser acceptance scenarios for the personal Agent workspace.
 
 import { mkdir, writeFile } from "node:fs/promises";
@@ -95,6 +96,7 @@ scenarioCatalog.push(nativeChildActivityScenario);
 scenarioCatalog.push(privateStewardScopeScenario);
 scenarioCatalog.push(externalEvidenceReadbackScenario);
 scenarioCatalog.push(configurationBackupScenario);
+scenarioCatalog.push(exploreCompositionOwnerScenario);
 scenarioCatalog.push(attentionUserActionScenario);
 scenarioCatalog.push(researchResultsScenario);
 scenarioCatalog.push(prReviewAgentOrderScenario);

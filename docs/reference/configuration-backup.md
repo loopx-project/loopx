@@ -35,6 +35,21 @@ select several. Full `backup-state` captures its global discovery registry by
 default, or the selected project registry with `--current-project-only`. The private
 archive manifest reports configuration verification and presence separately.
 
+For a reviewed cohort on a host with unreachable historical source registries,
+repeat `backup-state --configuration-goal-id example` to select the embedded
+configuration checkpoint. This uses the same strict source-owner capture as
+`configuration-backup export --goal-id`; a missing selected source still aborts.
+Omitting the flag retains all-Goal capture and its failure behavior. Physical
+state discovery remains unchanged: the archive retains reachable state and raw
+registry/history bytes, while `configuration_goal_ids`, `missing` and the
+verified configuration component expose the coverage limit. A selected cohort
+does not prove configuration recovery for omitted Goals.
+
+中文：历史源 registry 失联时，可显式重复 `--configuration-goal-id` 选择已审查的
+配置备份范围；所选源仍须严格校验，默认全量配置捕获不变。完整状态发现不收缩，
+原始 registry、历史和可达状态照常保存，清单明确记录配置范围及缺失项；不能把
+成功归档解释为已恢复未选 Goal 的配置。
+
 With `--current-project-only`, physical discovery also includes the selected
 project's registered `state_file` and `source_registry` routes, including custom
 paths outside conventional Goal directories. Relative routes resolve against
@@ -54,6 +69,18 @@ checkpoint reference under the runtime's `backups/configuration/`. A duplicate
 restore rejects the occupied destination; it does not silently replace it.
 CLI destinations require an existing physical parent and a new directory.
 Symlink ancestors and occupied/dangling destinations are rejected.
+
+Known invalid envelopes, changed or mismatched digests, and unsafe destination
+parents retain their specific refusal messages through the typed runtime and
+CLI. An already occupied destination is a state conflict. These use the existing
+`request_rejected`/`conflict` error categories; CLI refusals still exit with code
+1 and never activate settings or overwrite a checkpoint. Filesystem errors and
+unexpected readback failures retain the runtime's protected diagnostics. The
+browser keeps its existing bounded recovery error and permissions.
+
+中文：配置、摘要或目标父目录不合法时，CLI 保留具体拒绝原因；目标已占用按既有
+状态冲突分类。拒绝仍返回退出码 1，不覆盖检查点或激活设置。文件系统与未知读回
+故障继续使用受保护诊断，浏览器的恢复错误及权限边界不变。
 
 ## Configuration is not activation
 

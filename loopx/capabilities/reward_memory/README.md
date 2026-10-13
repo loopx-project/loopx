@@ -692,6 +692,15 @@ packets expose opaque provider references and compact lineage; application
 receipts contain hashed memory references, the model-owned reasoning summary,
 and current-artifact verification, never raw provider content.
 
+For `revision_bound` corpora, each returned envelope must also carry a
+`scope.revision_ref` equal to the corpus's `freshness.source_revision`, matching
+the existing activation and request guards. Missing or mismatched record
+versions count as `scope_filtered`; recall neither rewrites nor retires them.
+This check does not apply to other freshness modes or historical experience
+evidence refs. `source_truth_bound` experience remains eligible across artifact
+versions, subject to its existing source, quality and application checks. A
+separately verified new-version activation may preserve the original evidence.
+
 Recall packets also separate a provider that returned no items from provider
 items rejected by the exact-record gates. `provider_item_count`,
 `filtered_item_count`, and `filtered_reason_counts` expose only bounded counts

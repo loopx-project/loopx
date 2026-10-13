@@ -143,6 +143,7 @@ milestone status.
 | Host-delivered context | Quota can project a compact coverage ledger and uncovered frontier without requiring a manual evidence-read ritual. |
 | Explore evidence | Explore owns append-only nodes, edges, findings, and bounded public-safe projections. |
 | Research evidence and cold shadow | [Research observation v0](../../reference/protocols/research-observation-v0.md) composes generic progress with typed closure and explicit binary candidates. CLI summary and Lark node summaries share the read-only projection; exact experiment input fingerprints guard stale results. |
+| Explicit M3 composition gate | [PR #5280](https://github.com/loopx-project/loopx/pull/5280) merged as `1e6cae19f` on 2026-10-12. Opt-in Goal-frontier, Todo, experiment and input lineage share a typed write-time qualification across File and SQLite; stale or unrelated evidence cannot discharge the current obligation. The existing Goal capability editor and CLI own activation. This is an integrated rule, not evidence of accepted scientific results or natural-host use. |
 | Explore planning | Optional branch planners are read-only and return execution to quota, Todo, claim, and lease. |
 | Evidence in turn context | Planning-mode turn-start reads retain bounded explicit Todo/node evidence diagnostics and existing exploring frontier nodes. Linked evidence is classified before detail truncation: all findings and relevant edges in the supplied projection contribute to diagnostic counts and hazards, while row details remain bounded. Turn context reports omitted detail counts from those totals. This delivers decision input, not the §11.5 adoption gate or proof of model behavior. |
 | Model behavior qualification | Real function-tool conversations can test whether a model reads an actual packet and selects a real semantic writeback. |
@@ -151,11 +152,9 @@ milestone status.
 
 | Gap | Consequence |
 |---|---|
-| No shared research write-time gate | The cold evidence codec cannot discharge or enforce a live composition obligation. |
-| No exact obligation/Todo/result lineage | A research receipt is not proof of an authorized Todo transition or accepted Goal closure. |
-| Cold shadow not adopted by hot status/frontier | The existing #3173 projection remains behavior-compatible; canonical research obligations still need M3 integration. |
-| No dismissal or deferral contract | Evidence invalidation is visible, but typed candidate retirement and resumption remain unimplemented. |
-| No experiment-result adoption gate | Negative evidence can be recorded without proving that the next bound decision used its scope, validity or uncertainty. Proposed single-experiment integration is defined in §11.5; current cold receipts do not enforce it. |
+| M3 integrated behavior lacks complete remote qualification | PR #5280 has an exact-head approved review and local File/SQLite, default-off and packaged-configuration evidence. Its final-head CI did not finish green: jobs were cancelled on merge and the Stage2c aggregate failed because its matrix result was `cancelled`. This is not a demonstrated Stage2c test failure or remote browser acceptance. The separate browser CI source-install and composer-focus PRs #6287/#6282 closed without merging; their unresolved checks remain independent of M3's local evidence. |
+| No experiment-result adoption gate | Negative evidence can be recorded without proving that the next bound decision used its scope, validity or uncertainty. Proposed single-experiment integration is defined in §11.5; merged PR #5280 does not enforce it. |
+| Execution attribution is not effect authority | An exact Todo/experiment/input receipt does not grant a task lease, effect permission or accepted Goal closure. |
 | Live qualification incomplete | Deterministic and real CLI/file-log tests establish state semantics, not model selection quality or scientific truth; no live Lark sync is qualified by projection tests. |
 | No promotion evidence for inferred combinations | Shared constraints are not known to be precise enough to trigger obligations. |
 
@@ -234,8 +233,9 @@ execution, and result into one ambiguous relation. This RFC rejects that shape.
 
 The research envelope and closure basis have an active CLI caller and the
 [versioned evidence protocol](../../reference/protocols/research-observation-v0.md).
-The action signature, shared write gate and model selection below remain design
-targets. The cold shadow does not promote them into current behavior.
+The opt-in M3 development path implements exact execution lineage and shared
+write gates and bounded retirement transitions. Model selection below
+remain design targets; the cold shadow does not activate enforcement.
 
 ### 7.1 Compose; do not mutate v0 silently
 
@@ -953,8 +953,8 @@ control-plane failures.
 |---|---|---|---|
 | M0 | RFC, current-state inventory, and explicit ownership decision | Maintainer review; no runtime behavior | Accepted design |
 | M1 | Characterization fixtures plus typed research observation and closure contract in Explore | Deterministic normalization, privacy, compatibility, and negative tests | Implemented evidence/CLI slice; live research qualification remains separate |
-| M2 | Explicit-only composition candidate, canonical gap projection, and read-only status shadow | No pairwise inference; bounded packet; projection parity | Partial: #3173 legacy quota/successor; canonical binary cold shadow in CLI/Lark projection; hot status adoption and live Lark qualification remain |
-| M3 | Goal-frontier obligation, exact Todo/experiment lineage, shared write-time gate; proposed §11.5 single-experiment result/adoption prerequisite | State/replay matrix, real provider/state readback, default-off parity and packaged journey before enforcement | Not started; §11.5 is a design proposal, not delivered runtime |
+| M2 | Explicit-only composition candidate, canonical gap projection, and read-only status shadow | No pairwise inference; bounded packet; projection parity | #3173 legacy quota/successor and canonical binary cold shadow in CLI/Lark projection; hot status/frontier adoption shipped with M3, while live Lark qualification remains |
+| M3 | Goal-frontier obligation, exact Todo/experiment lineage, shared write-time gate; proposed §11.5 single-experiment result/adoption prerequisite | State/replay matrix, real provider/state readback, default-off parity and packaged journey before enforcement | Explicit-only gate merged in #5280 at `1e6cae19f` with exact-head approved review. Integrated-source local checks passed: 67 focused Python, 37 focused TypeScript, control-plane typecheck, packaged Explore configuration journey and 19/19 risk canaries. The final-head CI was cancelled/failed as described in §5.2, so remote and installed-host acceptance remain unproven. §11.5 result adoption is still a proposal, not delivered runtime. |
 | M4 | Bounded multi-candidate cards, `composition_selection_v0`, real model-tool behavior qualification, and repeated live shadow | Model autonomously selects a legal semantic action from the delivered candidate set; selection quality is no worse than the declared fallback; compact receipts only | Not started |
 | M5 | Shared-constraint candidate ranking in shadow mode | Precision and cost evidence; no automatic trigger | Not started |
 | M6 | Optional inferred trigger | Explicit maintainer decision and measured promotion thresholds | Deferred |
@@ -970,8 +970,8 @@ The M1/M2 evidence slice delivers:
 - characterize the current Explore projection before changing it;
 - prove public safety, canonical identity, and bounded projection;
 - show candidates and gaps in Explore summary and existing Lark node projections;
-  preserve #3173 quota behavior. Hot status adoption remains part of M3's common
-  frontier integration, with independent qualification before any promotion.
+  preserve #3173 quota behavior. The merged M3 gate now shares the live frontier
+  with status; remote and natural-host readback remain separate qualification.
 
 Validation uses `tests/control_plane_ts/explore_research.test.ts`,
 `tests/capabilities/test_explore_research_evidence.py` and the existing
@@ -980,14 +980,40 @@ terminal coverage, attribution, replay, invalidated inputs, stale experiment
 lineage and real CLI/file-log readback. Projection tests do not establish live
 remote effects or model-selected research behavior. Delivery is tracked in
 [#5214](https://github.com/loopx-project/loopx/issues/5214), now closed. Its closure
-does not supply missing live/M3 qualification. Remaining research direction is
+does not supply missing live M3 qualification. Remaining research direction is
 tracked by [#4391](https://github.com/loopx-project/loopx/issues/4391) and
 [#3243](https://github.com/loopx-project/loopx/issues/3243); preserve the explicit
 milestone gaps here rather than create a parallel task tree.
 
-M3 is the first behavior-changing slice. It should be a separate PR so the
-obligation and write gate can be reviewed and reverted independently from the
-evidence schema.
+M3 was the first behavior-changing slice. PR #5280 kept the obligation and
+write gate separately reviewable and reversible from the evidence schema.
+
+The M3 development boundary joins current same-agent Todo, experiment and input
+facts in the typed Explore owner. Goal policy is explicitly scoped and disabled
+by default; the existing capability editor and CLI share its configuration
+owner. Quota and refresh reuse one live frontier, with the original duty pinned
+through scalar rollout fields and both receipt adapters. Real CLI tests reject
+unrelated/deferred successors and invalidated writeback, then settle the original
+Turn through its exact successor. File/SQLite tests distinguish canonical Todos
+from stale display rows; packaged UI checks exercise policy preview, activation,
+disable, readback and narrow screens. Native actor/lease and CAS admission remain in force; a fixed IO host
+locks the graph while the typed owner qualifies and persists completion evidence.
+Real File/SQLite and legacy tests cover missing evidence, direct IPC self-approval,
+terminal-verb bypass, retained archive lineage and immutable completion replay.
+Agent-scoped status, Explore and existing Lark Summary fields use the same live
+facts. Typed candidate dismissal permits scoped terminal retirement; a fresh
+canonical blocker and common Todo resume condition defer the gap without closing
+it. Real CLI validates exact observed/dismissed/blocked progress source through
+the original Turn, with independent File/SQLite lease-safe wait/resume evidence.
+Invalidated input/scope/activation produces source-qualified retirement for the
+original duty. Common readback retains its guard and historical debit, closes
+that Turn without spend, and keeps the current frontier and runnable/paused work
+visible. IO assembly stays in existing CLI/refresh composition roots; the shared
+gate consumes supplied capability facts and the typed owner remains singular.
+The local state/replay matrix and 19 standard risk-selected premerge checks pass.
+Two existing scheduler ACK tests fail identically on the unchanged base under the
+same local runtime; this is retained as a baseline limitation, not called green.
+Maintainer-reviewed integration and independent live qualification remain.
 
 ## 17. Rejected Alternatives
 

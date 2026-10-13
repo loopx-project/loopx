@@ -195,6 +195,18 @@ goal-and-agent activation status, public-safe source manifests, and an explicitl
 configured read-only `local-file` source adapter. That slice intentionally
 stopped before source orchestration and private cursor checkpoints.
 
+The local-file transport enforces `max_bytes` on the opened regular-file
+handle, reading at most the limit plus one byte to detect overflow. It compares
+file identity, size and modification/change timestamps before and after the
+read, including the current resolved source. Detected growth, replacement or
+in-place change is a provider failure; it cannot advance a capture cursor or
+create an exact-read receipt. A stable explicitly configured symlink remains
+supported. Retry after repairing the source uses the existing capture cadence;
+reviewed cursors still require their settlement owner. This is bounded
+observation, not an atomic filesystem snapshot or a hard network-filesystem
+read deadline; hosts retain their process timeout boundary.
+
+
 The second slice adds `assemble_profile_decision_evidence(...)` as the thin
 host API and `decision-context prepare-evidence` as its read-only CLI preview.
 The profile now resolves enabled source providers, performs bounded scans and

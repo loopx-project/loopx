@@ -118,6 +118,36 @@ def _digest(payload: Any) -> str:
     return hashlib.sha256(stable.encode("utf-8")).hexdigest()
 
 
+def goal_workspace_ref(root: Path) -> str:
+    """The Goal-creation token for one server-configured workspace root."""
+
+    return f"workspace-{hashlib.sha256(str(root).encode('utf-8')).hexdigest()[:12]}"
+
+
+def goal_workspace_labels(directories: Sequence[Path]) -> dict[Path, str]:
+    """Owner-facing names for workspace directories, without checkout paths.
+
+    A directory is named by its own name; parent names are added, one at a
+    time, only while two different directories would otherwise read the same.
+    The filesystem anchor is never shown.
+    """
+
+    unique = list(dict.fromkeys(directories))
+    parts = {path: path.parts[1:] if path.anchor else path.parts for path in unique}
+    depth = dict.fromkeys(unique, 1)
+    while True:
+        labels = {path: "/".join(parts[path][-depth[path]:]) or str(path) for path in unique}
+        readers: dict[str, list[Path]] = {}
+        for path, label in labels.items():
+            readers.setdefault(label, []).append(path)
+        ambiguous = [path for group in readers.values() if len(group) > 1
+                     for path in group if depth[path] < len(parts[path])]
+        if not ambiguous:
+            return labels
+        for path in ambiguous:
+            depth[path] += 1
+
+
 def _normalize_cadence(value: Any) -> str:
     candidate = str(value or "").strip().lower().replace("-", "_")
     aliases = {
@@ -444,7 +474,7 @@ class ChatActionService(
             # The native steward freezes its configured workspace. Existing
             # Goals and the single-Goal fallback cannot redirect a commission.
             candidates = [root for root in self.workspace_roots if root.is_dir() and (root / ".git").exists()
-                          and workspace_ref == f"workspace-{hashlib.sha256(str(root).encode('utf-8')).hexdigest()[:12]}"]
+                          and workspace_ref == goal_workspace_ref(root)]
             if len(candidates) != 1:
                 raise ValueError("the bound steward workspace is unavailable")
             return candidates[0], {"id": "", "repo": str(candidates[0]), "domain": "project-goal-control-plane",
@@ -472,10 +502,7 @@ class ChatActionService(
             source_goal = goals[0]
         if source_goal is None:
             workspace_candidates = [root for root in self.workspace_roots if root.is_dir()]
-            token_map = {
-                f"workspace-{hashlib.sha256(str(root).encode('utf-8')).hexdigest()[:12]}": root
-                for root in workspace_candidates
-            }
+            token_map = {goal_workspace_ref(root): root for root in workspace_candidates}
             selected = (workspace_candidates[0]
                         if workspace_ref == "current" and len(workspace_candidates) == 1
                         else token_map.get(workspace_ref))
@@ -487,26 +514,22 @@ class ChatActionService(
                     "adapter": {"kind": "generic_project_goal_v0"},
                 }
         if source_goal is None:
+            available = [root for root in self.workspace_roots if root.is_dir()]
+            labels = self.workspace_labels()
             candidates = [
-                {
-                    "workspace_ref": f"workspace-{hashlib.sha256(str(root).encode('utf-8')).hexdigest()[:12]}",
-                    "label": f"Workspace {index}",
-                }
-                for index, root in enumerate(
-                    (
-                        root
-                        for root in self.workspace_roots
-                        if root.is_dir()
-                    ),
-                    start=1,
-                )
+                {"workspace_ref": goal_workspace_ref(root), "label": labels[root]}
+                for root in available
             ]
             raise ProtectedActionGate(
                 "goal.create",
                 gate={
                     "kind": "workspace_selection_required",
                     "summary": "Select one server-configured workspace before creating this Goal.",
-                    "next_action": "Choose an available workspace or a registered Goal workspace, then review again. Unlisted directories require server workspace setup.",
+                    "next_action": (
+                        "Choose an available workspace or a registered Goal workspace, then review again. "
+                        "To use another directory, restart the Dashboard with "
+                        "`loopx dashboard --scan-path <directory>`, once per project."
+                    ),
                     "candidates": candidates,
                 },
             )
@@ -523,6 +546,40 @@ class ChatActionService(
                 },
             )
         return project, source_goal
+
+    def workspace_labels(self) -> dict[Path, str]:
+        """Names for every directory a Goal creation can target.
+
+        Configured roots and registered Goal workspaces are named together, so
+        two choices never read the same in the form, a gate or a review.
+        """
+
+        directories = [root for root in self.workspace_roots if root.is_dir()]
+        for goal in registry_goals(self._registry()):
+            repo = str(goal.get("repo") or "").strip()
+            if repo:
+                directories.append(Path(repo).expanduser().resolve())
+        return goal_workspace_labels(directories)
+
+    def _goal_workspace_binding(
+        self, project: Path, source_goal: Mapping[str, Any], *, requested_ref: str
+    ) -> dict[str, Any]:
+        """The workspace a confirmed creation will use, as the owner reviews it.
+
+        ``workspace_ref`` is the explicit reference apply resolves, so a
+        default request is confirmed against the workspace it resolved to.
+        """
+
+        goal_id = str(source_goal.get("id") or "")
+        label = self.workspace_labels().get(project) or project.name
+        return {
+            "schema_version": "loopx_goal_workspace_binding_v0",
+            "workspace_ref": goal_id or goal_workspace_ref(project),
+            "label": label,
+            "source": "goal_workspace" if goal_id else "configured_workspace",
+            "selection": "default" if requested_ref == "current" else "explicit",
+            **({"goal_id": goal_id} if goal_id else {}),
+        }
 
     def _apply_goal_create(
         self, proposal_id: str, proposal: dict[str, Any], parameters: dict[str, Any]
@@ -1121,8 +1178,9 @@ class ChatActionService(
             raise ValueError("normalized_parameters and context must be objects")
         normalized = self._normalize(action_kind, parameters)
         canonical_update_basis = None
+        workspace_binding = None
         if action_kind == "goal.create":
-            project, _source_goal = self._project_for_goal_create(
+            project, source_goal = self._project_for_goal_create(
                 {
                     "normalized_parameters": normalized,
                     "context": dict(context),
@@ -1130,6 +1188,10 @@ class ChatActionService(
             )
             agent_id = str(normalized.get("agent_id") or "codex")
             eligibility = self._agent_eligibility(agent_id, project=project)
+            workspace_binding = self._goal_workspace_binding(
+                project, source_goal, requested_ref=str(normalized.get("workspace_ref") or "current")
+            )
+            normalized["workspace_ref"] = workspace_binding["workspace_ref"]
         else:
             eligibility = None
         if action_kind == "operation.execute":
@@ -1283,6 +1345,7 @@ class ChatActionService(
                 request.get("idempotency_key"), field="idempotency_key"
             ),
             canonical_update_basis=canonical_update_basis,
+            workspace_binding=workspace_binding,
         )
         return (
             self.store.arm_operation(str(proposal["proposal_id"]))

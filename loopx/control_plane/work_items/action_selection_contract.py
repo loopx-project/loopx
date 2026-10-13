@@ -157,102 +157,68 @@ def delivery_spend_allowed(
     )
 
 
+def action_selection_context(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Transport bounded current facts; TypeScript owns every admission decision."""
+    fields = ("ok", "should_run", "effective_action", "normal_delivery_allowed", "recovery_delivery_allowed",
+              "self_repair_allowed", "capability_repair_allowed", "workspace_repair_allowed", "safe_bypass_allowed",
+              "actionable_by_codex", "spend_allowed_now", "spend_after_validation")
+    result = {key: payload[key] for key in fields if key in payload}
+    for field, keys in (
+        ("selected_todo", ("todo_id", "selection_binding")),
+        ("autonomous_replan_obligation", ("selection_binding",)),
+        ("action_selection_qualification", ("state", "requested_todo_id", "recovery_action")),
+    ):
+        raw = payload.get(field)
+        if isinstance(raw, Mapping):
+            result[field] = {key: raw[key] for key in keys if key in raw}
+            if field == "selected_todo":
+                result[field]["todo_id"] = normalize_todo_id(raw.get("todo_id"))
+            if field == "action_selection_qualification" and isinstance(raw.get("selected_todo"), Mapping):
+                result[field]["selected_todo"] = {"todo_id": normalize_todo_id(raw["selected_todo"].get("todo_id"))}
+    return result
+
+
+def _selection_projection(method: str, payload: Mapping[str, Any], *,
+                          agent_must_attempt: bool, agent_delivery_allowed: bool | None,
+                          requested_todo_id: str | None = None) -> dict[str, Any]:
+    from ..effect_runtime import effect_runtime_result
+
+    request = {"packet": action_selection_context(payload), "agent_must_attempt": agent_must_attempt,
+               "agent_delivery_allowed": agent_delivery_allowed}
+    if requested_todo_id is not None:
+        request["requested_todo_id"] = requested_todo_id
+    result = effect_runtime_result(method, request)
+    if not isinstance(result, dict):
+        raise TypeError("typed action selection returned an invalid projection")
+    return result
+
+
 def current_action_selection_admission(
     payload: Mapping[str, Any], *, requested_todo_id: str,
-    agent_must_attempt: bool, agent_delivery_refused: bool,
+    agent_must_attempt: bool, agent_delivery_allowed: bool | None,
 ) -> tuple[str | None, bool]:
-    """Read current obligation admission, including repair and monitor positives."""
-    selected_todo = payload.get("selected_todo")
-    selected_todo_id = (
-        normalize_todo_id(selected_todo.get("todo_id"))
-        if isinstance(selected_todo, Mapping)
-        else None
-    )
-    qualification_value = payload.get("action_selection_qualification")
-    qualification: Mapping[str, object] = (
-        qualification_value if isinstance(qualification_value, Mapping) else {}
-    )
-    if selected_todo_id is None and str(qualification.get("state") or "") == (
-        "qualified"
-    ):
-        # An unsettled-host-turn recovery decision carries no top-level
-        # `selected_todo`: its qualification names the Todo that prior Turn
-        # has to settle, and binding the guard to that Todo is the documented
-        # closeout path rather than a conflict with the projection.
-        qualification_selected = qualification.get("selected_todo")
-        selected_todo_id = (
-            normalize_todo_id(qualification_selected.get("todo_id"))
-            if isinstance(qualification_selected, Mapping)
-            else None
-        )
-    selection_binding = (
-        selected_todo.get("selection_binding")
-        if isinstance(selected_todo, Mapping)
-        else None
-    )
-    execution_obligation_value = payload.get("execution_obligation")
-    execution_obligation: Mapping[str, object] = (
-        execution_obligation_value
-        if isinstance(execution_obligation_value, Mapping)
-        else {}
-    )
-    pending_selection_delivery_qualified = (
-        selection_binding == "pending_action_selection"
-        and payload.get("normal_delivery_allowed") is True
-    )
-    pending_selection_workspace_repair_qualified = (
-        selection_binding == "pending_action_selection"
-        and payload.get("workspace_repair_allowed") is True
-        and payload.get("effective_action") == EffectiveAction.AGENT_WORKSPACE_REPAIR.value
-        and execution_obligation.get("kind") == "agent_workspace_repair"
-        and execution_obligation.get("must_attempt_work") is True
-        and agent_must_attempt
-        and agent_delivery_refused
-    )
-    exact_current_obligation_qualified = (
-        selection_binding != "pending_action_selection"
-        and execution_obligation.get("must_attempt_work") is True
-        and agent_must_attempt
-    )
-    if (
-        selected_todo_id == requested_todo_id
-        and payload.get("ok") is True
-        and payload.get("should_run") is True
-        and (
-            pending_selection_delivery_qualified
-            or pending_selection_workspace_repair_qualified
-            or exact_current_obligation_qualified
-        )
-    ):
-        return selected_todo_id, True
-
-    return selected_todo_id, False
+    result = _selection_projection("work_item.action_selection.admission.project", payload,
+        requested_todo_id=requested_todo_id, agent_must_attempt=agent_must_attempt,
+        agent_delivery_allowed=agent_delivery_allowed)
+    selected, admitted = result.get("selected_todo_id"), result.get("admitted")
+    if (selected is not None and not isinstance(selected, str)) or type(admitted) is not bool:
+        raise TypeError("typed action selection returned invalid admission facts")
+    return selected, admitted
 
 
 def action_selection_needs_recovery(
     payload: Mapping[str, Any], *, agent_must_attempt: bool = False,
-    agent_delivery_refused: bool = False,
+    agent_delivery_allowed: bool | None = None,
 ) -> bool:
-    """Read the typed qualifier's result without reimplementing admission."""
-    qualification = payload.get("action_selection_qualification")
-    if not isinstance(qualification, Mapping) or qualification.get("state") not in {"deferred", "rejected"}:
+    # No selected-request input means there is no recovery projection to read.
+    if not isinstance(payload.get("action_selection_qualification"), Mapping):
         return False
-    # A committed binding is reconciled by the receipt owner, not by pending
-    # selection recovery. Preserve the same exemption as CLI preflight.
-    selected = payload.get("selected_todo")
-    replan = payload.get("autonomous_replan_obligation")
-    if any(isinstance(value, Mapping) and value.get("selection_binding") == "heartbeat_receipt"
-           for value in (selected, replan)):
-        return False
-    _, admitted = current_action_selection_admission(
-        payload, requested_todo_id=str(qualification.get("requested_todo_id") or ""),
-        agent_must_attempt=agent_must_attempt, agent_delivery_refused=agent_delivery_refused,
-    )
-    if admitted:
-        return False
-    if qualification.get("recovery_action") != "reenter_guard_without_selection":
-        raise RuntimeError("rejected action selection omitted its typed recovery action")
-    return True
+    result = _selection_projection("work_item.action_selection.recovery.project", payload,
+        agent_must_attempt=agent_must_attempt, agent_delivery_allowed=agent_delivery_allowed)
+    required = result.get("required")
+    if type(required) is not bool:
+        raise TypeError("typed action selection returned an invalid recovery decision")
+    return required
 
 
 def action_selection_recovery_fields(

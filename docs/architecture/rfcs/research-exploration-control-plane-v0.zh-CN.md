@@ -124,19 +124,18 @@ hypothesis”或“新 probe family”。它无法持久表达：A 和 B 都已�
 | Host-delivered context | Quota 可以投影 compact coverage ledger 与 uncovered frontier，不要求手动 evidence-read 仪式。 |
 | Explore evidence | Explore 拥有 append-only node、edge、finding 与有界 public-safe projection。 |
 | Research evidence 与 cold shadow | [Research observation v0](../../reference/protocols/research-observation-v0.zh-CN.md) 组合 generic progress、typed closure 和 explicit binary candidate。CLI summary 与 Lark node summary 共用只读投影，精确 experiment input fingerprint 防止过期结果继续有效。 |
+| 显式 M3 组合门禁 | [PR #5280](https://github.com/loopx-project/loopx/pull/5280) 已于 2026-10-12 作为 `1e6cae19f` 合入。可选启用的 Goal-frontier、Todo、experiment 和 input lineage 在 File/SQLite 中共用 typed write-time qualification；陈旧或无关证据不能解除当前义务。仍由既有 Goal 能力编辑器和 CLI 负责启用。规则已集成，不等于科学结果获接受或自然宿主已验收。 |
 | Explore planning | 可选 branch planner 保持只读，并把执行交还 quota、Todo、claim 和 lease。 |
-| Turn context 中的证据 | Planning 模式的 turn-start 读取保留有界的显式 Todo/节点证据诊断与既有 exploring 前沿节点；先解析 finding 再裁剪近期历史。这交付决策输入，不代表 §11.5 adoption gate 或模型行为已经验证。 |
+| Turn context 中的证据 | Planning 模式的 turn-start 读取保留有界的显式 Todo/节点证据诊断与既有 exploring 前沿节点。关联证据先分类再裁剪详情：输入投影中的全部 finding 和相关边参与诊断计数与风险判断，逐行详情仍保持有界。Turn context 同时报告被省略的详情数。这交付决策输入，不代表 §11.5 adoption gate 或模型行为已经验证。 |
 | Model behavior qualification | 真实 function-tool 对话可以验证模型是否读取真实 packet 并选择真实 semantic writeback。 |
 
 ### 5.2 还缺什么
 
 | 缺口 | 后果 |
 |---|---|
-| 没有 shared research write-time gate | Cold evidence codec 不能解除或强制 live composition obligation。 |
-| 没有精确 obligation/Todo/result lineage | Research receipt 不证明已授权 Todo transition 或已接受 Goal closure。 |
-| Cold shadow 未接入 hot status/frontier | 既有 #3173 投影保持行为兼容；canonical research obligation 仍需 M3 集成。 |
-| 没有 dismissal/deferral contract | Evidence invalidation 可见，但类型化 candidate retirement/resumption 尚未实现。 |
-| 没有 experiment-result adoption gate | 负证据可被记录，但不能证明下一绑定决策使用了其 scope、validity 与 uncertainty。§11.5 提议 single-experiment 集成；当前 cold receipt 不强制执行该提案。 |
+| 已集成的 M3 行为尚缺完整远端资格验证 | PR #5280 有精确 head 的批准评审，以及本地 File/SQLite、默认关闭和打包配置旅程证据。最终 head 的 CI 未全绿：合入时多项任务被取消，Stage2c 汇总因矩阵结果为 `cancelled` 而失败。这不证明 Stage2c 测试本身失败，也不构成远端浏览器验收。独立的浏览器 CI 源码安装和输入框焦点 PR #6287/#6282 均关闭且未合入；其未完成的检查与 M3 本地证据分开。 |
+| 尚无 experiment-result adoption gate | 负证据可被记录，但不能证明下一绑定决策使用了其 scope、validity 与 uncertainty。§11.5 提议 single-experiment 集成；已合入的 PR #5280 仍未强制执行结果采用。 |
+| 执行 attribution 不是 effect 权限 | 精确 Todo/experiment/input receipt 不授予 task lease、effect 权限或已接受的 Goal closure。 |
 | Live qualification 不完整 | Deterministic 与真实 CLI/file-log 测试证明状态语义，不证明 model selection 质量或科学结论；projection 测试不构成 live Lark sync 资格。 |
 | inferred combination 没有 promotion evidence | 共享 constraint 的精度还不足以直接触发 obligation。 |
 
@@ -211,8 +210,8 @@ A、B 之间的 `joint_probe` 直连边会把 candidate、execution 和 result �
 
 Research envelope 与 closure basis 已有真实 CLI caller 和
 [版本化证据协议](../../reference/protocols/research-observation-v0.zh-CN.md)。
-下文 action signature、shared write gate 和 model selection 仍为设计目标；
-cold shadow 不会将其 promotion 为当前行为。
+Opt-in M3 开发路径已实现精确 execution lineage 和共享 write gate。下文 model
+selection 仍为设计目标；有界 retirement 已实现，cold shadow 不会激活门禁。
 
 ### 7.1 组合，而不是静默修改 v0
 
@@ -865,8 +864,8 @@ rule，以及 model variance 与 control-plane failure 的分离。
 |---|---|---|---|
 | M0 | RFC、current-state inventory 与显式 ownership decision | Maintainer review；无 runtime behavior | 已接受的设计 |
 | M1 | Characterization fixture，以及 Explore 中的 typed research observation 与 closure contract | Deterministic normalization、privacy、compatibility 与 negative test | Evidence/CLI 切片已实现；真实研究 qualification 独立保留 |
-| M2 | Explicit-only composition candidate、canonical gap projection 与 read-only status shadow | 不做 pairwise inference；packet 有界；projection parity | 部分实现：#3173 legacy quota/successor；CLI/Lark projection 的 canonical binary cold shadow；hot status adoption 与 live Lark qualification 仍未完成 |
-| M3 | Goal-frontier obligation、精确 Todo/experiment lineage、共享 write-time gate；§11.5 提议 single-experiment result/adoption prerequisite | State/replay matrix、真实 provider/state readback、default-off parity；enforcement 前验证 packaged journey | 未开始；§11.5 是设计提案，不是已交付 runtime |
+| M2 | Explicit-only composition candidate、canonical gap projection 与 read-only status shadow | 不做 pairwise inference；packet 有界；projection parity | #3173 legacy quota/successor 与 CLI/Lark projection 的 canonical binary cold shadow 已交付；hot status/frontier adoption 随 M3 合入，live Lark qualification 仍未完成 |
+| M3 | Goal-frontier obligation、精确 Todo/experiment lineage、共享 write-time gate；§11.5 提议 single-experiment result/adoption prerequisite | State/replay matrix、真实 provider/state readback、default-off parity；enforcement 前验证 packaged journey | 显式门禁已在 #5280 作为 `1e6cae19f` 合入，并有精确 head 的批准评审。集成源码的本地验证通过：67 项聚焦 Python、37 项聚焦 TypeScript、control-plane typecheck、打包 Explore 配置旅程及 19/19 风险 canary。最终 head 的 CI 如 §5.2 所述被取消/汇总失败，远端和已安装宿主验收仍未证明。§11.5 结果采用仍是设计提案，不是已交付 runtime。 |
 | M4 | 有界 multi-candidate card、`composition_selection_v0`、真实 model-tool behavior qualification 与重复 live shadow | 模型从交付 candidate set 中自主选择合法 semantic action；选择质量不劣于 declared fallback；只保留 compact receipt | 未开始 |
 | M5 | Shared-constraint candidate 在 shadow mode 中排序 | 有 precision/cost evidence；不自动触发 | 未开始 |
 | M6 | 可选 inferred trigger | 显式 maintainer decision 与量化 promotion threshold | 延后 |
@@ -882,8 +881,8 @@ M1/M2 evidence 切片交付：
 - 修改 Explore projection 前先 characterization；
 - 证明 public safety、canonical identity 与 bounded projection；
 - 在 Explore summary 与既有 Lark node projection 展示 candidate/gap，保持 #3173
-  quota 行为。Hot status adoption 留在 M3 common frontier 集成，任何 promotion
-  之前仍需独立 qualification。
+  quota 行为。已合入的 M3 门禁与 status 共用 live frontier；远端和自然宿主
+  读回仍需独立 qualification。
 
 验证入口为 `tests/control_plane_ts/explore_research.test.ts`、
 `tests/capabilities/test_explore_research_evidence.py` 与既有 composition-frontier/
@@ -891,13 +890,34 @@ result-layer 检查。覆盖反向配对 canonical identity、terminal coverage�
 replay、input invalidation、stale experiment lineage 和真实 CLI/file-log 读回。
 Projection 测试不证明 live remote effect 或模型自主研究行为。交付继续由
 [#5214](https://github.com/loopx-project/loopx/issues/5214) 记录，该 issue 已关闭。
-关闭不补齐缺失的 live/M3 qualification。后续研究方向由
+关闭不补齐缺失的 live M3 qualification。后续研究方向由
 [#4391](https://github.com/loopx-project/loopx/issues/4391) 与
 [#3243](https://github.com/loopx-project/loopx/issues/3243) 跟踪；本 RFC 保留明确
 milestone gap，不另建平行 task tree。
 
-M3 是第一个 behavior-changing slice。它应单独成 PR，使 obligation 与 write gate
+M3 是第一个 behavior-changing slice。PR #5280 使 obligation 与 write gate
 能够独立于 evidence schema 评审和回滚。
+
+M3 开发边界在 typed Explore owner 中连接当前同一 Agent 的 Todo、experiment
+和 input 事实。Goal policy 显式限定范围且默认关闭；既有能力编辑器与 CLI 共享
+配置 owner。Quota 与 refresh 复用同一 live frontier，原 duty 通过 rollout 标量
+字段和两端 receipt adapter 固定。真实 CLI 测试拒绝无关/延期 successor 与失效
+writeback，再通过精确 successor 结算原 Turn。File/SQLite 测试区分 canonical
+Todo 与陈旧显示行；打包 UI 验证策略预览、启用、关闭、读回和窄屏。Native actor/lease 与 CAS admission
+仍强制执行；固定 IO host 锁定图，typed owner 校验并持久化 completion evidence。
+真实 File/SQLite 与 legacy 测试覆盖缺少证据、direct IPC 自报 approval、terminal
+verb 绕过、保留 archive lineage 和不可变 completion 回放。Agent 范围的 status、
+Explore 与既有 Lark Summary 字段使用同一 live fact。Typed candidate dismissal
+允许 scoped terminal retirement；新 canonical blocker 与通用 Todo resume condition
+使 gap 暂缓，但不关闭。真实 CLI 通过原 Turn 校验 observed/dismissed/blocked 的
+精确 progress source；File/SQLite 独立验证 lease-safe wait/resume。
+输入/scope/activation 失效时，为原 duty 生成 source-qualified retirement。
+通用 readback 保留原 guard 与历史 debit，无支出关闭该 Turn，同时保持当前
+frontier 与 runnable/paused work 可见。IO 装配保留在既有 CLI/refresh composition
+root；共享门禁消费传入的 capability fact，typed owner 始终只有一个。
+本地 state/replay matrix 与 19 项 standard 风险验证通过。两个既有 scheduler ACK
+测试在相同本地 runtime、未修改 base 上也以相同方式失败；保留为 baseline 限制，
+不称为 green。Maintainer review 集成与独立 live qualification 仍未完成。
 
 ## 17. 被拒绝的替代方案
 

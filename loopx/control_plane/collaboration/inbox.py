@@ -133,6 +133,18 @@ def normalize_source_context(value: str) -> str:
         raise ValueError(str(exc)) from exc
 
 
+def plan_request_publication(request, *, entry, operation=None):
+    """Adapt one locked source snapshot to the shared typed publication owner."""
+    from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+
+    try:
+        return effect_runtime_result("collaboration.request.plan_publication", {
+            "request": request, "entry": entry, "operation": operation,
+        })
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from exc
+
+
 def pending(
     runtime_root: Path,
     goal_id: str,

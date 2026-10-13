@@ -629,6 +629,15 @@ def append_project_asset_warning_markdown(
             f"trigger_count={replan_obligation.get('trigger_count')} "
             f"triggers={markdown_scalar(','.join(trigger_kinds))}"
         )
+    research = as_dict(project_asset.get("bounded_research_frontier"))
+    if research:
+        lines.append("    - research_execution: "
+                     f"state={markdown_scalar(research.get('state'))} "
+                     f"pending={research.get('pending_count')} scheduled={research.get('scheduled_count')} "
+                     f"observed={research.get('observed_count')} ineligible={research.get('ineligible_count')} "
+                     f"dismissed={research.get('dismissed_count')} deferred={research.get('deferred_count')}")
+        for gap in research.get("gaps") or []:
+            lines.append(f"      - {markdown_scalar(gap.get('gap_id'))}: {markdown_scalar(gap.get('status'))}")
     interface_budget_cadence = (
         project_asset.get("interface_budget_cadence")
         if isinstance(project_asset.get("interface_budget_cadence"), dict)

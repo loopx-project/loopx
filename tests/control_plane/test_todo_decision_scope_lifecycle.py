@@ -365,3 +365,45 @@ def test_user_gate_completion_requires_explicit_decision_outcome(
 
     assert state.read_text(encoding="utf-8") == before
     assert _todo(state, target["todo_id"])["status"] == "blocked"
+
+
+def test_custom_gate_consumes_only_its_explicit_custom_requirement(tmp_path: Path) -> None:
+    from loopx.cli import main
+    from contextlib import redirect_stdout
+    from io import StringIO
+
+    _, state, registry = _write_fixture(tmp_path)
+    custom = "other:action:study_conflict_review"
+    unrelated = "other:action:study_method_review"
+    named = "public_claim:action:publish_study"
+    target = add_goal_todo(registry_path=registry, goal_id=GOAL_ID, role="agent",
+        text="Prepare a study with separate owner reviews and publication permission.",
+        task_class="advancement_task", claimed_by=AGENT_ID,
+        required_decision_scopes=[custom, unrelated, named])
+    common = ["--registry", str(registry), "--runtime-root", str(tmp_path / "runtime"),
+        "--format", "json", "todo"]
+    output = StringIO()
+    with redirect_stdout(output):
+        code = main([*common, "add", "--goal-id", GOAL_ID, "--role", "user",
+            "--text", "Review the study conflict-of-interest declaration.",
+            "--task-class", "user_gate", "--blocks-agent", AGENT_ID,
+            "--decision-scope", custom, "--unblocks-todo-id", target["todo_id"]])
+    assert code == 0
+    gate = json.loads(output.getvalue())
+    assert _todo(state, gate["todo_id"])["decision_scope"]["kind"] == "other"
+    result = complete_goal_todo(registry_path=registry, goal_id=GOAL_ID,
+        todo_id=gate["todo_id"], role="user", decision_outcome="approve",
+        evidence="Owner approved the conflict-of-interest declaration only.")
+    resolution = result["decision_scope_resolution"]
+    assert [(scope["kind"], scope["scope_key"]) for scope in resolution["resolved_required_decision_scopes"]] == [
+        ("other", "study_conflict_review")]
+    expected = [("other", "study_method_review"), ("public_claim", "publish_study")]
+    assert [(scope["kind"], scope["scope_key"]) for scope in resolution["remaining_required_decision_scopes"]] == expected
+    saved = _todo(state, target["todo_id"])
+    assert [(scope["kind"], scope["scope_key"]) for scope in saved["required_decision_scopes"]] == expected
+    before = state.read_bytes()
+    with pytest.raises(ValueError, match="decision_scope"):
+        add_goal_todo(registry_path=registry, goal_id=GOAL_ID, role="user",
+            text="Unknown kind must not become custom authority.", task_class="user_gate",
+            blocks_agent=AGENT_ID, decision_scope="othre:action:study_conflict_review")
+    assert state.read_bytes() == before

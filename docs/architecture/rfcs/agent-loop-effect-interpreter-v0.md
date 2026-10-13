@@ -386,6 +386,16 @@ Stop or narrow M7 when any kill criterion holds:
   adapter binds validation to the existing atomic lease write while pure
   eligibility, conflict, file-lock, and CAS rules remain task-lease-owned
   (#3091, #3095).
+- Quota-spend callback failures use the optional `quota_rejection_action` fact,
+  copied from the existing effective-action owner only when quota admission
+  itself refuses the spend. `throttled_skip` maps to `budget_rejected` in the
+  TypeScript settlement owner. A nested quota snapshot is not that fact;
+  writeback and terminal refusals retain their own failure kinds. Missing,
+  malformed or unknown actions retain `quota_spend_rejected`, even when the
+  message contains "budget". This changes the former text-based diagnostic
+  classification, not admission, charging or retry authority. Previously stored
+  failure receipts are read unchanged; new callbacks must not rely on message
+  wording to request a budget classification.
 - Scheduler apply, ACK, failure writeback, and cadence remain data-encoded host
   handoffs outside agent-owned settlement.
 - `interpret_quota_should_run_packet` and `interpret_turn_result_packet` remain

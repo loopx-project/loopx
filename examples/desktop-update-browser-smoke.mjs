@@ -37,9 +37,11 @@ try {
   let nativeState = null;
   let nativeActionSettled = Promise.resolve();
   let nativeActionDelayMs = 150;
-  let nativeRuntimeSelection;
+  let nativeRuntimeSelection = { explicit: false, remembered: true, bundled_repair_available: true };
   let startupTiming = null;
   let failUpdate = false;
+  let fastInstallFailure = false;
+  let rollbackAvailable = true;
   let checkFailure = null;
   let checkUpToDate = false;
   let statusFailure = false;
@@ -62,7 +64,7 @@ try {
         runtime_selection: structuredClone(nativeRuntimeSelection),
         startup: structuredClone(startupTiming),
         app_version: "0.5.4",
-        rollback_available: true,
+        rollback_available: rollbackAvailable,
         environment: structuredClone(environmentTelemetry),
       };
       if (delayedStatus && delayedStatus.phase === result.state?.phase) {
@@ -75,6 +77,11 @@ try {
       return result;
     }
     calls.push({ command, args });
+    if (fastInstallFailure && args.action === "apply") {
+      rollbackAvailable = true;
+      nativeState = { phase: "error", details: { code: "app_install_failed" } };
+      throw new Error("app_install_failed");
+    }
     if (checkFailure && args.action === "check") return { phase: "error", details: { code: checkFailure } };
     if (checkUpToDate && args.action === "check") {
       nativeState = { phase: "up_to_date", details: { channel: args.channel } };
@@ -86,6 +93,9 @@ try {
       details: { version: "0.5.5", channel: args.channel },
     };
     nativeActionSettled = new Promise((done) => setTimeout(done, nativeActionDelayMs)).then(() => {
+      if (args.action === "forget_runtime_selection") {
+        nativeRuntimeSelection = { explicit: false, remembered: false, bundled_repair_available: true };
+      }
       nativeState = {
         phase: args.action === "check" ? "available" : ["align_runtime", "use_installed_runtime", "forget_runtime_selection"].includes(args.action) ? "connecting" : "restart_required",
         details: { version: "0.5.5", channel: args.channel },
@@ -124,6 +134,10 @@ try {
   assert.equal(await page.getByRole("button", { name: "更新并准备重启", exact: true }).count(), 0, "a delayed workspace status must not replace restart_required");
   assert.equal(await page.locator(".personal-update-panel").getByRole("button", { name: "重启完成更新", exact: true }).count(), 1);
   assert.deepEqual(calls.map((call) => call.args?.action), ["check", "apply"]);
+  await page.getByText("高级选项", { exact: true }).click();
+  assert.equal(await page.getByRole("button", { name: "清除记住的运行时选择", exact: true }).isEnabled(), false, "only restart may change native state after replacement");
+  await page.getByText("恢复上个版本", { exact: true }).click();
+  assert.equal(await page.getByRole("button", { name: "确认恢复上版", exact: true }).isEnabled(), false);
   nativeActionDelayMs = 150;
   await page.reload();
   await page.getByRole("button", { name: /重启完成更新/ }).waitFor();
@@ -160,6 +174,41 @@ try {
   await page.getByRole("button", { name: "更新并准备重启", exact: true }).waitFor();
 
   await nativeActionSettled;
+  // A fast failed install can create a verified rollback backup before the
+  // first progress poll. Recovery must be discoverable in this same window.
+  nativeState = { phase: "available", details: { channel: "stable", version: "0.5.5" } };
+  rollbackAvailable = false;
+  fastInstallFailure = true;
+  await page.reload();
+  await page.getByRole("button", { name: "有可用更新" }).click();
+  await page.getByText("高级选项", { exact: true }).click();
+  assert.equal(await page.getByText("恢复上个版本", { exact: true }).count(), 0);
+  const beforeFailedInstall = calls.length;
+  await page.getByRole("button", { name: "更新并准备重启", exact: true }).click();
+  await page.getByText("更新未完成。请重试；启动失败可尝试修复当前版本。").waitFor();
+  await page.getByText("恢复上个版本", { exact: true }).waitFor({ timeout: 2000 });
+  await page.getByText("恢复上个版本", { exact: true }).click();
+  assert.equal(await page.getByRole("button", { name: "确认恢复上版", exact: true }).isEnabled(), true);
+  assert.deepEqual(calls.slice(beforeFailedInstall).map((call) => call.args.action), ["apply"], "readback must not repeat installation or automatically roll back");
+  await page.screenshot({ path: resolve(output, "update-fast-failure-recovery.png") });
+  // A later action owns recovery metadata even if an earlier terminal read
+  // returns last. The stale backup observation must not revive its control.
+  const delayedRecoveryStatus = delayNextStatus("error");
+  await page.getByRole("button", { name: "检查更新", exact: true }).click();
+  await page.getByRole("button", { name: "更新并准备重启", exact: true }).click();
+  await delayedRecoveryStatus.started.promise;
+  rollbackAvailable = false;
+  checkUpToDate = true;
+  await page.getByRole("button", { name: "检查更新", exact: true }).click();
+  await page.getByText("当前通道暂无更新。", { exact: true }).waitFor();
+  await page.getByText("恢复上个版本", { exact: true }).waitFor({ state: "hidden" });
+  delayedRecoveryStatus.release.resolve();
+  await delayedRecoveryStatus.returned.promise;
+  await page.waitForTimeout(50);
+  assert.equal(await page.getByText("恢复上个版本", { exact: true }).count(), 0, "an older terminal read cannot replace current recovery metadata");
+  checkUpToDate = false;
+  fastInstallFailure = false;
+
   // The native owner decides whether Repair can maintain this installation.
   // The workspace consumes that projection rather than inferring from a path.
   nativeState = { phase: "ready", details: {} };
@@ -174,6 +223,10 @@ try {
   await page.getByText("正在连接更新后的服务…", { exact: true }).waitFor();
   assert.deepEqual(calls.slice(beforeForget).map((call) => call.args.action), ["forget_runtime_selection"]);
   await nativeActionSettled;
+  await page.getByRole("button", { name: "清除记住的运行时选择", exact: true }).waitFor({ state: "hidden" });
+  nativeState = { phase: "ready", details: {} };
+  await page.waitForFunction(() => [...document.querySelectorAll("button")].some((button) => button.textContent.trim() === "修复当前版本" && !button.disabled));
+  assert.equal(await page.getByRole("button", { name: "清除记住的运行时选择", exact: true }).count(), 0, "cleared choice must be read back without reloading");
   nativeState = { phase: "ready", details: {} };
   nativeRuntimeSelection = { explicit: true, remembered: true, bundled_repair_available: false };
   await page.reload();
@@ -182,6 +235,19 @@ try {
   assert.equal(await page.getByRole("button", { name: "修复当前版本", exact: true }).isEnabled(), false);
   assert.equal(await page.getByRole("button", { name: "清除记住的运行时选择", exact: true }).count(), 0, "forgetting a preference cannot clear an environment pin");
   nativeRuntimeSelection = undefined;
+  nativeState = { phase: "ready", details: {} };
+  rollbackAvailable = true;
+  nativeActionDelayMs = 1500;
+  await page.reload();
+  await page.getByRole("button", { name: "更新 LoopX", exact: true }).click();
+  await page.getByText("高级选项", { exact: true }).click();
+  await page.getByText("恢复上个版本", { exact: true }).click();
+  await page.getByRole("button", { name: "确认恢复上版", exact: true }).click();
+  assert.equal(await page.getByText("正在安装 App，请保持窗口打开。", { exact: true }).isVisible(), true, "rollback changes installed files; it is not a download");
+  await nativeActionSettled;
+  await page.locator(".personal-update-panel").getByRole("button", { name: "重启完成更新", exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "确认恢复上版", exact: true }).isEnabled(), false);
+  nativeActionDelayMs = 150;
   nativeState = { phase: "idle", details: {} };
   await page.reload();
   await page.getByRole("button", { name: "更新 LoopX", exact: true }).click();

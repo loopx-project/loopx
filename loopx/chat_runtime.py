@@ -83,6 +83,12 @@ STEERING_NOT_DELIVERED_CODES = frozenset({
 # module-level `Any`.
 AttachmentPayload = dict[str, Any]
 
+# Bounded overload continuation: one original dispatch plus at most this many
+# effect-free retries, each reserved in the Turn event ledger before its backoff
+# so the remaining budget survives restart/compaction.
+TRANSPORT_RETRY_MAX_RETRIES = 3
+TRANSPORT_RETRY_BACKOFF_SECONDS = 2.0
+
 
 class ChatTurnAcceptanceUnavailableError(Exception):
     """The durable acceptance attempt can be retried with the same request."""
@@ -309,7 +315,7 @@ class ChatRuntimeController:
         codex_bin: str,
         claude_bin: str = "claude",
         kiro_cli_bin: str = KIRO_CLI_BIN,
-        startup_timeout_sec: float = 30.0,
+        startup_timeout_sec: float | None = None,
         idle_timeout_sec: float = 180.0,
         hard_timeout_sec: float = 900.0,
         endpoint_registry: AgentEndpointRegistry | None = None,
@@ -330,9 +336,9 @@ class ChatRuntimeController:
             or os.environ.get("CODEX_HOME")
             or "~/.codex"
         ).expanduser().resolve()
-        self.claude_bin = claude_bin
-        self.kiro_cli_bin = kiro_cli_bin
-        self.startup_timeout_sec = startup_timeout_sec
+        self.claude_bin, self.kiro_cli_bin = claude_bin, kiro_cli_bin
+        self.acp_startup_timeout_sec = startup_timeout_sec
+        self.startup_timeout_sec = 30.0 if startup_timeout_sec is None else startup_timeout_sec
         self.idle_timeout_sec = idle_timeout_sec
         self.hard_timeout_sec = hard_timeout_sec
         self.endpoint_registry = endpoint_registry or AgentEndpointRegistry(store.root)
@@ -555,7 +561,7 @@ class ChatRuntimeController:
                 command=kiro_cli_chat_command(self.kiro_cli_bin),
                 work_dir=work_dir,
                 resume_thread_id=resume_thread_id,
-                startup_timeout_sec=self.startup_timeout_sec,
+                startup_timeout_sec=self.acp_startup_timeout_sec,
                 idle_timeout_sec=self.idle_timeout_sec,
                 hard_timeout_sec=self.hard_timeout_sec,
                 execution_mode=execution_mode,
@@ -567,7 +573,7 @@ class ChatRuntimeController:
                 work_dir=work_dir,
                 agent_work_dir=endpoint.mapped_work_dir(work_dir),
                 resume_thread_id=resume_thread_id,
-                startup_timeout_sec=self.startup_timeout_sec,
+                startup_timeout_sec=self.acp_startup_timeout_sec,
                 idle_timeout_sec=self.idle_timeout_sec,
                 hard_timeout_sec=self.hard_timeout_sec,
                 execution_mode=execution_mode,
@@ -1799,12 +1805,12 @@ class ChatRuntimeController:
         self, session_id: str, turn_id: str, adapter: CodexAppServerAdapter,
         retry_binding: dict[str, str], native_error_info: dict[str, Any] | str | None,
     ) -> bool:
-        """One same-worker retry, reserved durably before backoff/dispatch.
+        """A bounded same-worker retry chain, reserved durably before each backoff.
 
         The existing queued CAS and Core active claim own execution. The event
-        ledger retains the attempt across restart/compaction; a new worker never
-        reopens starting/terminal Turns or resets this allowance. Lark delivery
-        and other adapters do not decide whether to replay a model request.
+        ledger retains every attempt and fixes the remaining budget; a new worker
+        never reopens starting/terminal Turns or resets this allowance, and other
+        adapters never decide whether to replay a model request.
         """
         from .control_plane.chat_turn_acceptance import managed_turn_execution_allowed
 
@@ -1819,24 +1825,25 @@ class ChatRuntimeController:
                                 for row in self.store.events_after(session_id, turn_id, None)))
 
         try:
+            events = self.store.events_after(session_id, turn_id, None)
+            attempt = len([row for row in events if row.get("kind") == "transport.retry_planned"]) + 1
             if ((not isinstance(native_error_info, dict) and native_error_info != "serverOverloaded")
-                    or retry_binding.get("attempt") or not current() or any(row.get("kind") == "transport.retry_planned"
-                                    for row in self.store.events_after(session_id, turn_id, None))):
+                    or attempt > TRANSPORT_RETRY_MAX_RETRIES or not current()):
                 return False
             original = str((self.store.load_turn(session_id, turn_id) or {}).get("upstream_turn_id") or "")
             proof = adapter.session.transport_retry_readback(original) if original else None
             if proof is None or proof["codex_error_info"] != native_error_info or not current():
                 return False
-            delay = 2.0
-            retry_binding["attempt"] = "1"
+            delay = TRANSPORT_RETRY_BACKOFF_SECONDS * attempt
             self.store.append_event(session_id, turn_id, kind="transport.retry_planned", payload={
-                "attempt": 1, "upstream_turn_id": original,
+                "attempt": attempt, "upstream_turn_id": original,
                 "binding_sha256": retry_binding["sha256"], "readback": proof,
                 "not_before": (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat(),
             })
             label = "模型暂时繁忙" if native_error_info == "serverOverloaded" else "连接暂时中断"
             self.store.append_event(session_id, turn_id, kind="agent.phase", payload={
-                "phase": "retrying", "label": f"{label}，已核验本轮未执行工具；正在原会话继续。",
+                "phase": "retrying",
+                "label": f"{label}，已核验本轮未执行工具；正在原会话继续（第 {attempt}/{TRANSPORT_RETRY_MAX_RETRIES} 次重试）。",
             })
             if self.closed.wait(delay) or not current():
                 return False

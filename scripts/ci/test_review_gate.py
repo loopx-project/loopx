@@ -2,9 +2,11 @@
 from __future__ import annotations
 import copy
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 from types import SimpleNamespace
 import unittest
 import yaml
@@ -41,6 +43,7 @@ class GateTests(unittest.TestCase):
             Loader=yaml.BaseLoader,
         )
         self.assertIn("closed", workflow["on"]["pull_request"]["types"])
+        self.assertEqual(workflow["on"]["pull_request_target"]["types"], ["closed", "synchronize"])
         concurrency = workflow["concurrency"]
         jobs = workflow["jobs"]
 
@@ -70,11 +73,12 @@ class GateTests(unittest.TestCase):
             for name in ("changes", "merge-gate"):
                 self.assertTrue(expression(jobs[name]["if"], "", event=event))
         self.assertEqual([name for name, job in jobs.items() if not job.get("needs")],
-                         ["cancel-closed-pr", "changes"])
+                         ["cancel-obsolete-pr", "changes"])
         for name in ("changes", "merge-gate"):
             self.assertFalse(expression(jobs[name]["if"], "closed", event="pull_request_target"))
-        cleanup = jobs["cancel-closed-pr"]
+        cleanup = jobs["cancel-obsolete-pr"]
         self.assertTrue(expression(cleanup["if"], "closed", event="pull_request_target"))
+        self.assertTrue(expression(cleanup["if"], "synchronize", event="pull_request_target"))
         self.assertFalse(expression(cleanup["if"], "closed"))
         self.assertFalse(expression(cleanup["if"], "reopened", event="pull_request_target"))
         self.assertNotEqual(lane("closed", event="pull_request_target"),
@@ -89,12 +93,12 @@ class GateTests(unittest.TestCase):
                 self.assertIn("needs.changes.outputs.", job["if"])
                 self.assertIn("== 'true'", job["if"])
 
-    def test_trusted_cleanup_executes_only_obsolete_closed_pr_runs(self):
+    def test_trusted_cleanup_retires_obsolete_heads_without_skipping_required_gates(self):
         workflow = yaml.load(
             (Path(__file__).resolve().parents[2] / ".github/workflows/python-tests.yml").read_text(),
             Loader=yaml.BaseLoader,
         )
-        script = workflow["jobs"]["cancel-closed-pr"]["steps"][0]["with"]["script"]
+        script = workflow["jobs"]["cancel-obsolete-pr"]["steps"][0]["with"]["script"]
         # Execute the shipped transport script, independently supplying legal and
         # illegal lifecycle fixtures. No token or untrusted PR code is involved.
         harness = r"""
@@ -107,18 +111,28 @@ const pr = {state:'closed', closed_at:'2026-01-02T00:00:00Z',
 const old = {id:1, status:'queued', head_repository:{id:7}, head_branch:'fix',
   head_sha:'head', created_at:'2026-01-01T00:00:00Z', pull_requests:[]};
 async function run({first=pr, current=first, open=[], runs=[old], ordinaryDone=false,
-                    conflict=false, stuck=false, failure=false}={}) {
+                    conflict=false, stuck=false, failure=false, action='closed',
+                    eventHead=first.head.sha, beforeForce=current,
+                    beforeCancelOpen=open, beforeForceOpen=beforeCancelOpen,
+                    refreshFailure=false}={}) {
   const cancelled=[], forced=[], queries=[]; let reads=0;
-  const github = {rest:{pulls:{get:async()=>({data:reads++ ? current : first}), list:'pulls'},
+  let branchScope=open, openReads=0;
+  const github = {rest:{pulls:{get:async()=>({data:reads++ ? (reads > 2 ? beforeForce : current) : first}), list:'pulls'},
     actions:{listWorkflowRuns:'runs',
       cancelWorkflowRun:async p=>{cancelled.push(p.run_id); if(conflict || failure)
-        throw Object.assign(new Error('provider failure'), {status:conflict ? 409 : 403});},
+        throw Object.assign(new Error('provider failure'), {status:conflict ? 409 : 403});
+        branchScope=beforeForceOpen;},
       getWorkflowRun:async p=>({data:{status:(conflict || ordinaryDone ||
         (forced.includes(p.run_id) && !stuck)) ? 'completed' : 'queued'}})}},
-    paginate:async (method,params)=>{queries.push([method,params]); return method==='pulls' ? open : runs;},
+    paginate:async (method,params)=>{queries.push([method,params]);
+      if(method==='pulls') {
+        if(openReads++ && refreshFailure) throw new Error('branch read unavailable');
+        return branchScope;
+      }
+      branchScope=beforeCancelOpen; return runs;},
     request:async (route,p)=>{assert.equal(route,
       'POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel'); forced.push(p.run_id);}};
-  await execute(github, {repo:{owner:'owner',repo:'repo'},payload:{number:17}},
+  await execute(github, {repo:{owner:'owner',repo:'repo'},payload:{number:17,action,pull_request:{head:{sha:eventHead}}}},
     {info:()=>{}}, fn=>fn());
   return {cancelled,forced,queries};
 }
@@ -137,6 +151,43 @@ for (const fixture of [{first:{...pr,state:'open'}}, {current:{...pr,state:'open
   {current:{...pr,head:{...pr.head,sha:'new'}}}, {open:[{number:18}]}]) {
   assert.deepEqual((await run(fixture)).cancelled,[]);
 }
+const active = {...pr,state:'open',closed_at:null};
+const associatedOld = {...old,head_sha:'previous',pull_requests:[{number:17}]};
+const updated = await run({action:'synchronize',first:active,open:[{number:17}],
+  runs:[associatedOld, {...associatedOld,id:2,head_sha:'head'},
+    {...associatedOld,id:3,pull_requests:[]}, {...associatedOld,id:4,pull_requests:[{number:18}]},
+    {...associatedOld,id:5,head_repository:{id:8}}, {...associatedOld,id:6,head_branch:'another'},
+    {...associatedOld,id:7,head_sha:''}, {...associatedOld,id:8,status:'completed'}]});
+assert.deepEqual(updated.cancelled,[1]); assert.deepEqual(updated.forced,[1]);
+for (const fixture of [{eventHead:'stale'}, {current:pr},
+  {current:{...active,head:{...active.head,sha:'new'}}}, {open:[{number:18}]},
+  {current:{...active,head:{...active.head,repo:{id:8}}}},
+  {current:{...active,head:{...active.head,ref:'another'}}}]) {
+  assert.deepEqual((await run({action:'synchronize',first:active,runs:[associatedOld],...fixture})).cancelled,[]);
+}
+const changedDuringCancel = await run({action:'synchronize',first:active,runs:[associatedOld],
+  beforeForce:{...active,head:{...active.head,sha:'previous'}}});
+assert.deepEqual(changedDuringCancel.cancelled,[1]); assert.deepEqual(changedDuringCancel.forced,[]);
+for (const fixture of [{beforeCancelOpen:[{number:18}]},
+  {action:'synchronize',first:active,open:[{number:17}],runs:[associatedOld],
+   beforeCancelOpen:[{number:17},{number:18}]}]) {
+  assert.deepEqual((await run(fixture)).cancelled,[]);
+}
+for (const fixture of [{beforeForceOpen:[{number:18}]},
+  {action:'synchronize',first:active,open:[{number:17}],runs:[associatedOld],
+   beforeForceOpen:[{number:17},{number:18}]}]) {
+  const changedBranch = await run(fixture);
+  assert.deepEqual(changedBranch.cancelled,[1]);
+  assert.deepEqual(changedBranch.forced,[]);
+}
+await assert.rejects(run({refreshFailure:true}),/branch read unavailable/);
+// A fresh retry after the sibling closes can retire the original run.
+assert.deepEqual((await run()).forced,[1]);
+const movedOwner = await run({current:{...pr,head:{...pr.head,label:'moved:fix'}}});
+assert.deepEqual(movedOwner.forced,[1]);
+assert.ok(movedOwner.queries.filter(([method])=>method==='pulls').slice(1)
+  .every(([,params])=>params.head==='moved:fix'));
+assert.deepEqual((await run({action:'reopened',first:active})).cancelled,[]);
 assert.deepEqual((await run({ordinaryDone:true})).forced,[]);
 assert.deepEqual((await run({conflict:true})).forced,[]);
 await assert.rejects(run({stuck:true}),/has not completed/);
@@ -203,6 +254,75 @@ await assert.rejects(run({first:{...pr,head:{...pr.head,repo:null}}}),/no verifi
                 outputs["backend_tests"] = "false" if outputs["backend_tests"] == "true" else "true"
                 with self.assertRaisesRegex(ValueError, "contradictory"):
                     verifier(value)
+
+
+class PythonShardAdmissionTests(unittest.TestCase):
+    """Check the shipped workflow's admission scope and executable gate."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.workflow = yaml.load(
+            (Path(__file__).resolve().parents[2] / ".github/workflows/python-tests.yml").read_text(),
+            Loader=yaml.BaseLoader,
+        )
+
+    def script(self, job, step):
+        return next(row["run"] for row in self.workflow["jobs"][job]["steps"]
+                    if row.get("name") == step)
+
+    def test_required_python_gate_rejects_cancelled_overflow_and_missing_shards(self):
+        script = self.script("pytest", "Require every upstream check")
+        for checks in ("success", "failure", "cancelled", "skipped", ""):
+            for shards in ("success", "failure", "cancelled", "skipped", ""):
+                result = subprocess.run(
+                    ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+                    env={**os.environ, "CHECKS_RESULT": checks, "SHARDS_RESULT": shards},
+                    capture_output=True,
+                )
+                with self.subTest(checks=checks, shards=shards):
+                    self.assertEqual(result.returncode == 0,
+                                     checks == shards == "success")
+        gate = self.workflow["jobs"]["pytest"]
+        self.assertEqual(gate["if"], "always() && needs.changes.outputs.python_tests == 'true'")
+        self.assertEqual(gate["needs"], ["changes", "checks", "test-shard"])
+
+    def test_required_python_gate_reads_every_nonempty_coverage_partition(self):
+        script = self.script("pytest", "Combine complete coverage and enforce the existing floor")
+        # Execute the workflow's file guard, before the coverage tool itself.
+        guard = script.split("python -m coverage combine", 1)[0]
+        for absent in (None, 1, 2, 3, 4):
+            for empty in (False, True):
+                with tempfile.TemporaryDirectory() as directory:
+                    for shard in range(1, 5):
+                        path = Path(directory) / f"coverage-shards/python-coverage-{shard}/.coverage"
+                        path.parent.mkdir(parents=True)
+                        if shard != absent or empty:
+                            path.write_bytes(b"" if shard == absent else b"partition")
+                    result = subprocess.run(
+                        ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", guard],
+                        cwd=directory, capture_output=True,
+                    )
+                    with self.subTest(absent=absent, empty=empty):
+                        self.assertEqual(result.returncode == 0, absent is None)
+
+    def test_long_shards_share_groups_across_current_heads_without_replacement(self):
+        job = self.workflow["jobs"]["test-shard"]
+        fields = job.get("concurrency", {})
+        self.assertEqual(fields.get("queue"), "max")
+        self.assertEqual(fields.get("cancel-in-progress"), "false")
+        template = fields["group"]
+        # A ref/run/PR component would silently restore per-run admission.
+        self.assertEqual(re.findall(r"\$\{\{\s*(.*?)\s*\}\}", template), ["matrix.shard"])
+        groups = {re.sub(r"\$\{\{.*?\}\}", str(shard), template).casefold()
+                  for shard in range(1, 5)}
+        self.assertEqual(len(groups), 4)
+        self.assertEqual(job["strategy"]["matrix"]["shard"], ["1", "2", "3", "4"])
+        self.assertEqual(job["strategy"]["fail-fast"], "false")
+        # GateTests executes the current workflow's PR lifecycle expressions,
+        # including closed events whose ref changes to main. Keep that semantic
+        # qualification instead of requiring the superseded ref-only spelling.
+        self.assertEqual(self.workflow["permissions"], {"contents": "read"})
+        self.assertNotIn("secrets.", json.dumps(job))
 
 
 if __name__ == "__main__":

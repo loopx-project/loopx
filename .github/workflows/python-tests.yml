@@ -5,7 +5,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, closed]
   # Trusted base-branch code only; never checks out or executes PR content.
   pull_request_target:
-    types: [closed]
+    types: [closed, synchronize]
   # Inert until the main ruleset enables a merge queue; queue runs are full.
   merge_group:
   workflow_dispatch:
@@ -43,8 +43,8 @@ env:
   LOOPX_USAGE_PING: "0"
 
 jobs:
-  cancel-closed-pr:
-    if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
+  cancel-obsolete-pr:
+    if: github.event_name == 'pull_request_target' && (github.event.action == 'closed' || github.event.action == 'synchronize')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -59,36 +59,51 @@ jobs:
             const pull_number = context.payload.number;
             const readPR = async () => (await github.rest.pulls.get({...repo, pull_number})).data;
             const pr = await readPR();
-            if (pr.state !== 'closed') return core.info('PR is open; retain its qualification.');
-            const cutoff = Date.parse(pr.closed_at);
-            if (!pr.head.repo?.id || !pr.head.ref || !Number.isFinite(cutoff)) {
-              throw new Error('Closed PR has no verifiable source repository, branch or close time.');
+            const closed = context.payload.action === 'closed';
+            if (!closed && context.payload.action !== 'synchronize') return core.info('No obsolete-run cleanup event.');
+            if (pr.state !== (closed ? 'closed' : 'open')) return core.info('PR state changed; retain qualification.');
+            if (!closed && context.payload.pull_request?.head.sha !== pr.head.sha) {
+              return core.info('Synchronize head changed; stop cleanup.');
             }
+            const cutoff = Date.parse(pr.closed_at);
+            if (!pr.head.repo?.id || !pr.head.ref || !pr.head.sha || (closed && !Number.isFinite(cutoff))) {
+              throw new Error('PR has no verifiable source repository, branch, head or close time.');
+            }
+            const unchanged = current => current.state === pr.state && current.head.sha === pr.head.sha &&
+              current.head.ref === pr.head.ref && current.head.repo?.id === pr.head.repo.id &&
+              (!closed || current.closed_at === pr.closed_at);
             // Another open PR may use the same source branch against a different base.
-            const open = await github.paginate(github.rest.pulls.list,
-              {...repo, state: 'open', head: pr.head.label, per_page: 100});
-            if (open.length) return core.info('Source branch has an open PR; retain its qualification.');
+            const hasOtherOpenPR = async (head = pr.head.label) => (await github.paginate(github.rest.pulls.list,
+              {...repo, state: 'open', head, per_page: 100}))
+              .some(p => closed || p.number !== pull_number);
+            const cancellationScopeUnchanged = async () => {
+              const current = await readPR();
+              return unchanged(current) && !(await hasOtherOpenPR(current.head.label));
+            };
+            if (await hasOtherOpenPR()) {
+              return core.info('Source branch has another open PR; retain its qualification.');
+            }
             const runs = await github.paginate(github.rest.actions.listWorkflowRuns,
               {...repo, workflow_id: 'python-tests.yml', event: 'pull_request',
                 branch: pr.head.ref, per_page: 100});
             for (const run of runs) {
               const created = Date.parse(run.created_at);
               if (run.status === 'completed' || run.head_repository?.id !== pr.head.repo.id ||
-                  run.head_branch !== pr.head.ref || !Number.isFinite(created) || created > cutoff) continue;
+                  run.head_branch !== pr.head.ref || !run.head_sha || !Number.isFinite(created) ||
+                  (closed ? created > cutoff : run.head_sha === pr.head.sha)) continue;
               // GitHub can omit PR associations after merge. Only the exact closed head
               // is safe in that case; superseded heads remain in their concurrency lane.
               if (run.pull_requests?.length
                   ? !run.pull_requests.some(p => p.number === pull_number)
-                  : run.head_sha !== pr.head.sha) continue;
-              const current = await readPR();
-              if (current.state !== 'closed' || current.head.sha !== pr.head.sha ||
-                  current.closed_at !== pr.closed_at) return core.info('PR changed; stop cleanup.');
+                  : !closed || run.head_sha !== pr.head.sha) continue;
+              if (!(await cancellationScopeUnchanged())) return core.info('PR or source branch changed; stop cleanup.');
               const params = {...repo, run_id: run.id};
               try {
                 await github.rest.actions.cancelWorkflowRun(params);
                 await new Promise(resolve => setTimeout(resolve, 1500));
                 const {data: remaining} = await github.rest.actions.getWorkflowRun(params);
                 if (remaining.status !== 'completed') {
+                  if (!(await cancellationScopeUnchanged())) return core.info('PR or source branch changed; stop force cancellation.');
                   await github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel', params);
                   let terminal = false;
                   for (let attempt = 0; attempt < 10; attempt++) {
@@ -210,6 +225,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      - name: Install checkout for Python-backed browser scenarios
+        run: |
+          python -m pip install --disable-pip-version-check -e .
+          echo "LOOPX_TEST_PYTHON=$(python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
@@ -393,6 +412,15 @@ jobs:
           name: chat-bundle-${{ github.sha }}
           path: loopx/web/chat/
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install checkout for Python-backed browser scenarios
+        run: |
+          python -m pip install --disable-pip-version-check -e .
+          echo "LOOPX_TEST_PYTHON=$(python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
+
       - name: Set up the qualified Node.js runtime
         uses: actions/setup-node@v6
         with:
@@ -499,6 +527,13 @@ jobs:
     needs: [changes, chat-bundle]
     if: needs.changes.outputs.python_tests == 'true'
     runs-on: ubuntu-latest
+    # Share four long-test lanes across current PRs and other workflow runs.
+    # Do not replace another candidate's pending shard or cancel its active head.
+    # Workflow-level concurrency still retires obsolete heads of the same PR.
+    concurrency:
+      group: loopx-python-test-shard-${{ matrix.shard }}
+      queue: max
+      cancel-in-progress: false
     # All four shards were still progressing at 83-94% when the 45m job
     # deadline cancelled run 37916979857. Reserve setup/reporting headroom
     # without changing test-level deadlines, collection or worker count.
@@ -552,6 +587,7 @@ jobs:
         # Each runner retains the measured two-worker pool.
         run: >-
           python -m pytest -v -n 2 -m "not stage2c_e2e"
+          -p scripts.ci.pytest_timing
           --splits 4 --group ${{ matrix.shard }}
           --splitting-algorithm least_duration
           --durations=25 --durations-min=1

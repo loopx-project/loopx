@@ -264,7 +264,11 @@ def handle_coordination_shadow_command(
                     include_all_archived_todos=True)
                 request.update(action="prepare", projection=projection, source_snapshot=snapshot,
                     target_handoff_mode=args.target_handoff_mode, target_provider=args.provider,
-                    source_backup=read_cold_source_backup(args.backup_manifest))
+                    source_backup=read_cold_source_backup(args.backup_manifest, source_paths=[
+                        Path(snapshot["state_path"]), Path(snapshot["registry_source"]["path"]),
+                        *(Path(item["path"]) for item in snapshot["evidence_files"]),
+                        runtime_root / "goals" / args.goal_id / "task-leases",
+                    ]))
             else:
                 request.update(action="apply" if args.coordination_shadow_command == "apply-import" else "recover",
                     expected_plan_sha256=args.plan_sha256)

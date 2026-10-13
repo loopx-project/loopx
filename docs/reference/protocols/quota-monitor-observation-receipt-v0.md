@@ -48,6 +48,17 @@ advancement work remains active.
   replay that observation; changed content conflicts only with the same monitor
   identity; another due monitor receives an independent no-spend receipt.
   Shipped turn-only receipts remain replayable for their original monitor.
+- A target-only, turn-scoped executed retry retains the resolved Todo identity of an existing
+  poll transaction when that same active Monitor is no longer due. Current
+  target selection and the existing receipt path locate the operation; only the
+  typed transaction owner may verify its scope, fingerprint and frozen admission.
+  The transport rechecks that Todo-scoped operation's presence under the same
+  quota admission as the native receipt read. A prior no-effect abort cannot turn
+  this recovery route into a new poll. Committed replay and provider-committed
+  pending recovery grant no admission to a new not-due observation. Caller target, hash, intent and lease proof
+  remain unchanged. Explicit Todo retries and historical target-only wire shapes
+  retain their existing paths; current replacement selection is not evidence of
+  an archived Monitor's original identity.
 - A receipt-bound monitor remains strict: another monitor cannot be substituted
   for the Turn's settlement Todo. Multiple auxiliary receipts never change the
   already-bound settlement identity.
@@ -319,6 +330,14 @@ using a complete read-only snapshot with disposable File/SQLite/PostgreSQL arms.
   `target_key` 摘要建立身份。精确重试只重放该观察；同一 monitor 下内容变化
   只与该 monitor 冲突；另一个到期 monitor 获得独立的不计费回执。已发布的
   Turn-only 旧回执仍可对原 monitor 重放。
+- 仅用 target 的 turn-scoped 执行重试，在同一个 active Monitor 已不再到期时保留已有 poll
+  事务解析出的 Todo 身份。当前 target 选择和既有回执路径只定位原操作；作用域、
+  指纹与冻结准入仍由 typed 事务 owner 校验。transport 在 native 回执读取的同一
+  quota admission 内重查 Todo-scoped 操作仍存在；之前的 no-effect abort 不能把
+  恢复路由转成新 poll。重放已提交操作或恢复 provider 已提交的 pending 操作，
+  不提供新的未到期观察准入。调用者的 target、hash、intent
+  和租约证明保持原样。显式 Todo 重试及历史 target-only wire 保留原路径；当前
+  replacement 选择不能证明已归档 Monitor 的原身份。
 - 若 heartbeat 本身绑定的是 monitor，仍保持严格身份，不能把另一个 monitor
   替换为本 Turn 的结算 Todo；多个辅助回执也绝不改变既有结算身份。
 - 辅助观察无变化后，原 advancement Todo 继续保持选中；若观察发生重大变化，

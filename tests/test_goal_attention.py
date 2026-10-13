@@ -17,7 +17,7 @@ def test_steward_turn_receives_blocker_and_decision_without_channel(tmp_path, mo
     blocker = {"todo_id": "todo_work", "role": "agent", "task_class": "advancement_task",
                "status": "blocked", "text": "Verify the primary result",
                "reason": "Required input has not arrived"}
-    monkeypatch.setattr("loopx.todos.list_goal_todos", lambda **_: {
+    monkeypatch.setattr("loopx.control_plane.todos.list_readback.list_goal_todos", lambda **_: {
         "ok": True, "todos": [gate, blocker], "source": "canonical_fixture",
     })
     monkeypatch.setattr(portfolio, "collect_status", lambda **_: {

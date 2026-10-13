@@ -10,8 +10,12 @@ from loopx.cli_commands.quota_action_selection import (
     _requested_quota_action_selection_preflight,
 )
 from loopx.control_plane.work_items import interaction_contract
+from loopx.control_plane.effect_program import interpret_quota_should_run_packet
+from loopx.control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from loopx.control_plane.quota.turn_envelope import build_turn_envelope
 from loopx.control_plane.work_items.action_selection_contract import (
     action_selection_needs_recovery,
+    action_selection_context,
     bind_action_selection_recovery_command,
 )
 
@@ -28,6 +32,37 @@ def _source(state: str) -> dict:
             "recovery_action": "reenter_guard_without_selection",
         },
     }
+
+
+@pytest.mark.parametrize("state", ["deferred", "rejected"])
+@pytest.mark.parametrize("grant", ["work", "spend", "bypass", "settlement_plan", "should_run", "actionable"])
+def test_unadmitted_packet_cannot_reintroduce_authority_at_typed_readers(state, grant):
+    source = _source(state)
+    source["interaction_contract"] = interaction_contract.build_interaction_contract(source)
+    source["ok"] = source["should_run"] = False
+    source["execution_obligation"] = {"must_attempt_work": False}
+    contract = source["interaction_contract"]
+    if grant == "work":
+        contract["agent_channel"].update(must_attempt=True, delivery_allowed=True, quiet_noop_allowed=False)
+    elif grant == "spend":
+        contract["cli_channel"]["spend_after_validation"] = True
+    elif grant == "bypass":
+        source["safe_bypass_allowed"] = True
+    elif grant == "should_run":
+        source["should_run"] = True
+    elif grant == "actionable":
+        source["actionable_by_codex"] = True
+    else:
+        contract["cli_channel"]["settlement_plan"] = {}
+    with pytest.raises(EffectRuntimeRejected, match="unadmitted action selection"):
+        interpret_quota_should_run_packet(source)
+    with pytest.raises(EffectRuntimeRejected, match="unadmitted action selection"):
+        build_turn_envelope(source)
+    with pytest.raises(EffectRuntimeRejected, match="unadmitted action selection"):
+        effect_runtime_result("quota.scoped_override.project", {
+            "override": {}, "interaction_contract": contract,
+            "selection_context": action_selection_context(source),
+        })
 
 
 @pytest.mark.parametrize("state", ["deferred", "rejected"])
@@ -94,6 +129,95 @@ def test_committed_binding_is_owned_by_receipt_reconciliation(bound_field):
 
 def test_qualified_selection_is_not_recovery():
     assert action_selection_needs_recovery(_source("qualified")) is False
+
+
+@pytest.mark.parametrize("must_attempt,delivery", [(False, True), (True, False), (True, None)])
+def test_pending_delivery_requires_explicit_canonical_permission(must_attempt, delivery):
+    from loopx.control_plane.quota.error_codes import QuotaActionSelectionConflictError
+
+    source = _source("qualified")
+    source.update(normal_delivery_allowed=True, selected_todo={
+        "todo_id": "todo_pending", "selection_binding": "pending_action_selection",
+    })
+    agent = {"must_attempt": must_attempt}
+    if delivery is not None:
+        agent["delivery_allowed"] = delivery
+    source["interaction_contract"] = {"agent_channel": agent}
+    with pytest.raises(QuotaActionSelectionConflictError):
+        _requested_quota_action_selection_preflight(
+            source, requested_todo_id="todo_pending", receipt_bound_todo_id=None,
+            receipt_bound_replan_obligation_id=None,
+        )
+
+
+@pytest.mark.parametrize("legacy", [None, {}, {"must_attempt_work": False}, {"must_attempt_work": True}])
+def test_compatibility_obligation_does_not_override_canonical_admission(legacy):
+    source = _source("qualified")
+    source["selected_todo"] = {"todo_id": "todo_pending"}
+    if legacy is None:
+        source.pop("execution_obligation")
+    else:
+        source["execution_obligation"] = legacy
+    source["interaction_contract"] = {"agent_channel": {"must_attempt": True, "delivery_allowed": True}}
+    assert _requested_quota_action_selection_preflight(
+        source, requested_todo_id="todo_pending", receipt_bound_todo_id=None,
+        receipt_bound_replan_obligation_id=None,
+    ) is None
+
+
+@pytest.mark.parametrize("legacy", [None, {}, {"must_attempt_work": False}, {"must_attempt_work": True}])
+def test_closed_canonical_packet_ignores_compatibility_authority_at_readers(legacy):
+    source = _source("rejected")
+    source["interaction_contract"] = interaction_contract.build_interaction_contract(source)
+    source["ok"] = source["should_run"] = False
+    if legacy is None:
+        source.pop("execution_obligation")
+    else:
+        source["execution_obligation"] = legacy
+    interpret_quota_should_run_packet(source)
+    envelope = build_turn_envelope(source)
+    assert envelope["writeback"]["spend_allowed_now"] is False
+    assert envelope["writeback"]["spend_after_validation"] is False
+    effect_runtime_result("quota.scoped_override.project", {
+        "override": {}, "interaction_contract": source["interaction_contract"],
+        "selection_context": action_selection_context(source),
+    })
+
+
+@pytest.mark.parametrize("field", ["must_attempt_work", "delivery_allowed"])
+def test_null_legacy_permission_does_not_grant_work_or_delivery(field):
+    source = _source("qualified")
+    source["execution_obligation"][field] = None
+    contract = interaction_contract.build_interaction_contract(source)
+    canonical = "must_attempt" if field == "must_attempt_work" else "delivery_allowed"
+    assert contract["agent_channel"][canonical] is False
+
+
+@pytest.mark.parametrize("field", ["must_attempt_work", "delivery_allowed"])
+@pytest.mark.parametrize("value", ["false", "true", 1, [], {}])
+def test_malformed_legacy_boolean_cannot_become_canonical_permission(field, value):
+    source = _source("qualified")
+    source["execution_obligation"][field] = value
+    with pytest.raises(ValueError, match="must be a boolean"):
+        interaction_contract.build_interaction_contract(source)
+
+
+def test_one_recovery_decision_drives_both_interaction_channels(monkeypatch):
+    from loopx.control_plane.work_items import action_selection_contract as selection
+
+    calls = []
+    original = selection.action_selection_needs_recovery
+
+    def observed(payload, **facts):
+        calls.append(facts)
+        return original(payload, **facts)
+
+    monkeypatch.setattr(selection, "action_selection_needs_recovery", observed)
+    contract = interaction_contract.build_interaction_contract(_source("rejected"))
+    assert len(calls) == 1
+    assert contract["agent_channel"]["must_attempt"] is False
+    assert contract["cli_channel"]["spend_after_validation"] is False
+    assert "settlement_plan" not in contract["cli_channel"]
 
 
 @pytest.mark.parametrize("delivery_allowed", [False, True, None])

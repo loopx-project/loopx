@@ -201,6 +201,43 @@ def test_drain_defers_when_another_drainer_holds_the_lock(tmp_path: Path) -> Non
     assert not (runtime_root / "authority-shadow" / "file").exists()
 
 
+def test_lost_drain_response_never_replays_the_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry, state, runtime_root = _fixture(tmp_path)
+    _record_todo_write(registry, state, runtime_root, "Commit whose response is lost")
+    source = state.read_bytes()
+    original = adapter.effect_runtime_result
+    attempts: list[dict] = []
+
+    def lose_response(method: str, params: dict, **kwargs: object) -> object:
+        if method != "coordination.runtime_shadow.drain":
+            return original(method, params, **kwargs)
+        attempts.append(kwargs)
+        committed = original(method, params, **kwargs)
+        assert committed["delivered"] == 1
+        raise TimeoutError("injected lost response after the real drain committed")
+
+    limits = {"max_entries": 16, "budget_seconds": 2, "lock_timeout_seconds": .25}
+    with monkeypatch.context() as patch:
+        patch.setattr(adapter, "effect_runtime_result", lose_response)
+        unknown = _drain(registry, runtime_root, **limits)
+    assert unknown.outcome == "stopped"
+    assert unknown.reason_code == "shadow_drain_outcome_unknown"
+    assert len(attempts) == 1
+    assert attempts[0]["retry_safe"] is False
+    assert attempts[0]["timeout"] == 17
+    committed = adapter.read_local_authority_shadow(
+        runtime_root=runtime_root, goal_id=GOAL_ID, scan_limit=20)
+    assert len(committed["proof"]["transactions"]) == 2
+    assert state.read_bytes() == source
+    assert _drain(registry, runtime_root, **limits).outcome == "nothing_pending"
+    assert adapter.read_local_authority_shadow(
+        runtime_root=runtime_root, goal_id=GOAL_ID, scan_limit=20,
+    )["proof"]["transactions"] == committed["proof"]["transactions"]
+    assert state.read_bytes() == source
+
+
 def test_drain_batch_is_bounded_and_reports_what_it_left(tmp_path: Path) -> None:
     registry, state, runtime_root = _fixture(tmp_path)
     for index in range(3):

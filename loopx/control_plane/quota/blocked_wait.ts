@@ -124,10 +124,13 @@ export function prepareBlockedWait(value: unknown): JsonObject {
   if (observed === null) reject("has an invalid timestamp");
   if (todo.task_class === "continuous_monitor") {
     if (todo.role !== "agent" || todo.status !== "open" ||
-        (todo.archive_state != null && todo.archive_state !== "active") ||
-        request.allow_turn_settlement_retry !== true) {
-      reject("requires an admitted open Monitor attempt on canonical authority");
+        (todo.archive_state != null && todo.archive_state !== "active")) {
+      reject("requires an admitted open Monitor attempt");
     }
+    // Monitor failure closeout has no retry timer or Todo mutation. The
+    // settlement owner verifies its original admission and evidence for both
+    // supported Markdown and canonical sources. Keep canonical-only implicit
+    // advancement retry scheduling in the separate branch below.
     const fields = ["claimed_by", "last_checked_at", "next_due_at", "result_hash",
       "material_change", "material_change_generation", "cadence", "expires_at", "watch_only"];
     return {schema_version: MONITOR_UNAVAILABLE_SCHEMA, source: "turn_settlement",

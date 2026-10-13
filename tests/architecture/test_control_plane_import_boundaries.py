@@ -7,6 +7,12 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
+from loopx.canary.maintainability_ratchet import (
+    REVIEWED_MAINTAINABILITY_EXCEPTIONS,
+    evaluate_maintainability_findings,
+)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPOSITORY_ROOT / "loopx"
@@ -201,7 +207,19 @@ def _public_contract_evidence() -> dict[tuple[str, str], set[str]]:
     return evidence
 
 
-def test_control_plane_does_not_gain_outward_dependencies() -> None:
+def _review_outward_dependencies(edges, *, reviewed=REVIEWED_MAINTAINABILITY_EXCEPTIONS):
+    # Use the existing exact debt owner: the quarantined legacy writer retains
+    # its Explore completion guard until retirement. This is not a prefix waiver.
+    findings = [
+        {"id": f"dependency_debt:{source}->{target}", "category": "dependency_debt"}
+        for source, target in sorted(edges)
+    ]
+    return evaluate_maintainability_findings(findings, reviewed_exceptions={
+        key: value for key, value in reviewed.items() if key.startswith("dependency_debt:")
+    })
+
+
+def test_control_plane_has_no_unreviewed_outward_dependencies() -> None:
     outward_dependencies = {
         (_module_name(path), dependency)
         for path in CONTROL_PLANE_ROOT.rglob("*.py")
@@ -212,10 +230,43 @@ def test_control_plane_does_not_gain_outward_dependencies() -> None:
         )
     }
 
-    assert not outward_dependencies, (
-        "control-plane code must not depend on presentation, CLI, capability, or "
-        f"benchmark-adapter layers; unexpected edges: {sorted(outward_dependencies)}"
+    report = _review_outward_dependencies(outward_dependencies)
+    assert report["ok"], (
+        "control-plane outward dependencies require an exact reviewed exception "
+        f"with its retirement plan: {report}"
     )
+
+
+@pytest.mark.parametrize("edge", [
+    ("loopx.control_plane.todos.provider_update", "loopx.capabilities.explore.research_frontier"),
+    ("loopx.control_plane.todos.legacy_mutation_copy", "loopx.capabilities.explore.research_frontier"),
+    ("loopx.control_plane.todos.legacy_mutation", "loopx.capabilities.explore.research_frontier_extra"),
+    ("loopx.control_plane.todos.legacy_mutation", "loopx.capabilities.explore.research_frontier.child"),
+    ("loopx.control_plane.todos.legacy_mutation", "loopx.capabilities.issue_fix"),
+])
+def test_reviewed_legacy_bridge_never_allows_another_outward_edge(edge):
+    legacy = ("loopx.control_plane.todos.legacy_mutation", "loopx.capabilities.explore.research_frontier")
+    key = f"dependency_debt:{legacy[0]}->{legacy[1]}"
+    reviewed = {key: REVIEWED_MAINTAINABILITY_EXCEPTIONS[key]}
+    assert _review_outward_dependencies({legacy}, reviewed=reviewed)["ok"]
+    report = _review_outward_dependencies({legacy, edge}, reviewed=reviewed)
+    assert not report["ok"] and report["unreviewed_count"] == 1
+    assert report["unreviewed_findings"][0]["id"] == f"dependency_debt:{edge[0]}->{edge[1]}"
+
+
+@pytest.mark.parametrize("field", ["reason", "retirement_plan"])
+def test_outward_dependency_exception_requires_its_existing_review_evidence(field):
+    legacy = ("loopx.control_plane.todos.legacy_mutation", "loopx.capabilities.explore.research_frontier")
+    key = f"dependency_debt:{legacy[0]}->{legacy[1]}"
+    reviewed = {key: {**REVIEWED_MAINTAINABILITY_EXCEPTIONS[key], field: ""}}
+    report = _review_outward_dependencies({legacy}, reviewed=reviewed)
+    assert not report["ok"] and report["invalid_exception_count"] == 1
+
+
+def test_retired_outward_dependency_cannot_keep_a_stale_exception():
+    key = "dependency_debt:loopx.control_plane.todos.legacy_mutation->loopx.capabilities.explore.research_frontier"
+    report = _review_outward_dependencies(set(), reviewed={key: REVIEWED_MAINTAINABILITY_EXCEPTIONS[key]})
+    assert not report["ok"] and report["stale_exception_count"] == 1
 
 
 def test_periodic_report_hook_does_not_break_cold_imports() -> None:

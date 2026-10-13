@@ -1,7 +1,51 @@
+from typing import Any
+
+from loopx.control_plane.scheduler.execution_context import (
+    scheduler_execution_context_for_runtime_profile,
+)
+from loopx.control_plane.testing.quota_fixtures import (
+    quota_status_payload,
+    quota_todo_item,
+)
 from loopx.control_plane.todos.user_gate import (
     apply_scoped_user_gate_fallback_projection,
     build_user_todo_notification,
 )
+from loopx.quota import build_quota_should_run
+
+
+def _quota_guard_for_user_todos(
+    user_todo_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    agent_id = "codex-fixture"
+    status = quota_status_payload(
+        goal_id="nonblocking-user-action-fixture",
+        status="active",
+        recommended_action="Advance the current delivery.",
+        waiting_on="controller",
+        agent_todo_items=[
+            quota_todo_item(
+                todo_id="todo_delivery",
+                title="Advance the current delivery.",
+                claimed_by=agent_id,
+                required_capabilities=["shell"],
+            )
+        ],
+        user_todo_items=user_todo_items,
+        coordination={
+            "agent_model": "peer_v1",
+            "registered_agents": [agent_id, "codex-peer"],
+        },
+    )
+    return build_quota_should_run(
+        status,
+        goal_id="nonblocking-user-action-fixture",
+        agent_id=agent_id,
+        available_capabilities=["shell"],
+        scheduler_execution_context=scheduler_execution_context_for_runtime_profile(
+            "codex_app_heartbeat"
+        ),
+    )
 
 
 def test_user_gate_notification_repeats_until_resolved() -> None:
@@ -38,6 +82,166 @@ def test_waiting_user_todo_notification_does_not_force_repeat_policy() -> None:
         "notify_user_on_open_todo": True,
         "open_todo_notify_reason": "open user todo can resolve the user/controller blocker",
     }
+
+
+def test_waiting_user_action_remains_a_nonblocking_notice() -> None:
+    user_action = {
+        "todo_id": "todo_read_reference",
+        "status": "open",
+        "task_class": "user_action",
+        "text": "Read the optional reference.",
+    }
+
+    assert build_user_todo_notification(
+        {
+            "open_count": 1,
+            "user_action_open_count": 1,
+            "first_open_items": [user_action],
+            "user_action_items": [user_action],
+        },
+        state="waiting",
+        waiting_on="controller",
+    ) == {}
+
+
+def test_user_action_summary_fails_closed_when_a_gate_is_also_visible() -> None:
+    user_action = {
+        "todo_id": "todo_read_reference",
+        "status": "open",
+        "task_class": "user_action",
+        "text": "Read the optional reference.",
+    }
+    user_gate = {
+        "todo_id": "todo_approve_release",
+        "status": "open",
+        "task_class": "user_gate",
+        "text": "Approve the release.",
+    }
+
+    notification = build_user_todo_notification(
+        {
+            "open_count": 1,
+            "all_open_count": 2,
+            "user_action_open_count": 1,
+            "first_open_items": [user_action],
+            "gate_open_items": [user_gate],
+        },
+        state="waiting",
+        waiting_on="controller",
+    )
+
+    assert notification["notify_user_on_gate"] is True
+
+
+def test_user_action_notice_does_not_preempt_live_agent_delivery() -> None:
+    guard = _quota_guard_for_user_todos(
+        [
+            quota_todo_item(
+                todo_id="todo_read_reference",
+                role="user",
+                title="Read the optional reference.",
+                task_class="user_action",
+                bound_agent="codex-fixture",
+            )
+        ]
+    )
+
+    assert guard["requires_user_action"] is False
+    assert guard["selected_todo"]["todo_id"] == "todo_delivery"
+    contract = guard["interaction_contract"]
+    assert contract["mode"] == "bounded_delivery"
+    assert contract["user_channel"]["non_blocking"] is True
+    assert contract["user_channel"]["notify"] == "NOTIFY"
+    assert contract["agent_channel"]["must_attempt"] is True
+    assert contract["agent_channel"]["delivery_allowed"] is True
+    assert "response_plan" not in contract
+
+
+def test_other_agent_todos_do_not_turn_current_notice_into_a_gate() -> None:
+    current_action = quota_todo_item(
+        todo_id="todo_read_reference",
+        index=1,
+        role="user",
+        title="Read the optional reference.",
+        task_class="user_action",
+        bound_agent="codex-fixture",
+    )
+    foreign_todos = [
+        quota_todo_item(
+            todo_id="todo_peer_read_reference",
+            index=2,
+            role="user",
+            title="Read the peer reference.",
+            task_class="user_action",
+            bound_agent="codex-peer",
+        ),
+        quota_todo_item(
+            todo_id="todo_peer_approve_release",
+            index=2,
+            role="user",
+            title="Approve the peer release.",
+            task_class="user_gate",
+            action_kind="approve_release",
+            blocks_agent="codex-peer",
+        ),
+    ]
+
+    for foreign_todo in foreign_todos:
+        guard = _quota_guard_for_user_todos([current_action, foreign_todo])
+
+        assert guard["requires_user_action"] is False
+        assert guard["selected_todo"]["todo_id"] == "todo_delivery"
+        contract = guard["interaction_contract"]
+        assert contract["mode"] == "bounded_delivery"
+        assert contract["agent_channel"]["delivery_allowed"] is True
+
+
+def test_current_agent_gate_still_requires_user_action() -> None:
+    guard = _quota_guard_for_user_todos(
+        [
+            quota_todo_item(
+                todo_id="todo_read_reference",
+                index=1,
+                role="user",
+                title="Read the optional reference.",
+                task_class="user_action",
+                bound_agent="codex-fixture",
+            ),
+            quota_todo_item(
+                todo_id="todo_approve_release",
+                index=2,
+                role="user",
+                title="Approve the release.",
+                task_class="user_gate",
+                action_kind="approve_release",
+                blocks_agent="codex-fixture",
+            ),
+        ]
+    )
+
+    assert guard["requires_user_action"] is True
+    assert guard["interaction_contract"]["user_channel"]["action_required"] is True
+
+
+def test_incomplete_action_summary_fails_closed() -> None:
+    notification = build_user_todo_notification(
+        {
+            "open_count": 2,
+            "user_action_open_count": 1,
+            "first_open_items": [
+                {
+                    "todo_id": "todo_read_reference",
+                    "status": "open",
+                    "task_class": "user_action",
+                    "text": "Read the optional reference.",
+                }
+            ],
+        },
+        state="waiting",
+        waiting_on="controller",
+    )
+
+    assert notification["notify_user_on_open_todo"] is True
 
 
 def test_heartbeat_repeat_reason_owns_repeat_notification_policy() -> None:
