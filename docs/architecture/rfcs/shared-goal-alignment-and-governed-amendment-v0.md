@@ -1040,6 +1040,10 @@ digest and `source_request` reference. Acknowledge with `--request-revision N
 An omitted revision continues to name original revision 1; late original results
 remain appendable without satisfying a newer request. A new revision's first
 conclusion uses the existing immutable result-update chain automatically.
+For a conversation return, `--phase decision` retains one immutable interim
+update per revision. An older conclusion cannot suppress a newer revision's
+interim update; an available conclusion for that same revision supersedes its
+unsent interim update. Original decision/result records remain unchanged.
 Returned peer and conversation results identify their source revision.
 
 Use the existing governed proposal fields plus `source_request` when proposing

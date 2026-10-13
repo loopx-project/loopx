@@ -64,7 +64,10 @@ try{
  await panel.getByRole('button',{name:'修正内容',exact:true}).click();
  assert.equal(await panel.getByLabel('背景与补充',{exact:true}).inputValue(),'Correction from another authorized view');
  await panel.getByRole('button',{name:'收起编辑',exact:true}).click();
- await fixture('receiver');await fixture('reserve');
+ await fixture('receiver');await fixture('interim');
+ await page.reload();card=await enter();panel=card.locator('.personal-request-control');
+ await page.getByText('Checking the corrected request',{exact:true}).waitFor();
+ await fixture('reserve');
  await panel.getByRole('button',{name:'重新读取',exact:true}).click();
  await panel.getByText('目标变更仍待核对',{exact:true}).waitFor();
  await panel.screenshot({path:resolve(output,'pending-effect.png')});

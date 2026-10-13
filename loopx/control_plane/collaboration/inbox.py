@@ -638,7 +638,7 @@ def result_paths(folder: Path):
     """Enumerate the result-store layout, excluding delivery and lock sidecars."""
     paths = [path for path in folder.glob("*.json")
              if path.stem in {"decision", "conclusion"}
-             or re.fullmatch(r"conclusion-[0-9]{8}", path.stem)]
+             or re.fullmatch(r"(?:conclusion|decision)-[0-9]{8}", path.stem)]
     return sorted(paths, key=lambda path: (path.stem not in {"decision", "conclusion"},
                                           path.stem != "decision", path.stem))
 
@@ -648,7 +648,7 @@ def inspect_result_identity(reply, row, path):
 
     try:
         observations = [_result_observation(path.stem, reply)]
-        if reply.get("update_id") is not None:
+        if reply.get("update_id") is not None or reply.get("phase") == "decision":
             observations = [_result_observation(candidate.stem, _read(candidate))
                             for candidate in result_paths(path.parent)]
         legacy = _observe_receipt(path.parent.parent.parent / "decisions" / (row["request_id"] + ".json")) if (

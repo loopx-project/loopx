@@ -9,6 +9,12 @@ import {requestRevisionReceiptContext} from "./request_control.ts";
 // Local storage keys, not task status or authority. Updates keep the existing
 // conclusion phase and append immutable observations in publication order.
 const UPDATE_KEY = /^conclusion-[0-9]{8}$/;
+// One immutable interim observation per source revision, in the same result
+// store. The original decision key and conclusion update chain stay readable.
+const REVISION_DECISION_KEY = /^decision-[0-9]{8}$/;
+function decisionKey(revision: number): string {
+  return revision === 1 ? "decision" : `decision-${String(revision).padStart(8, "0")}`;
+}
 const UPDATE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$/;
 
 export function resultAttachmentRefs(params: JsonObject): JsonObject {
@@ -87,6 +93,15 @@ export function collaborationResultObservations(request: JsonObject, observation
     previous = receipt.key;
   }
   for (const receipt of results.filter((r) => !UPDATE_KEY.test(r.key))) {
+    if (REVISION_DECISION_KEY.test(receipt.key)) {
+      if (receipt.value.phase !== "decision" || receipt.value.result_key !== receipt.key
+          || typeof receipt.value.request_revision !== "number" || receipt.value.request_revision <= 1
+          || receipt.key !== decisionKey(receipt.value.request_revision)
+          || receipt.value.update_id !== undefined || receipt.value.previous_result_key !== undefined) {
+        throw new EffectRuntimeRequestError("revision decision receipt identity conflict");
+      }
+      continue;
+    }
     if (!["decision", "conclusion"].includes(receipt.key) || receipt.value.phase !== receipt.key) {
       throw new EffectRuntimeRequestError("result receipt identity conflict");
     }
@@ -123,23 +138,27 @@ export function planCollaborationResult(params: JsonObject): JsonObject {
   if (isUpdate && (phase !== "conclusion" || !conclusion)) {
     throw new EffectRuntimeRequestError("a result update requires an initial conclusion");
   }
-  const old = isUpdate ? updates.find((r) => r.value.update_id === updateId) : results.find((r) => r.key === phase);
+  const initialKey = phase === "decision" ? decisionKey(Number(revision)) : phase;
+  const old = isUpdate ? updates.find((r) => r.value.update_id === updateId) : results.find((r) => r.key === initialKey);
   const value: JsonObject = Object.fromEntries(["request_id", "goal_id", "agent_id", "source_id", "goal_ref"]
     .filter((key) => request[key] !== undefined).map((key) => [key, request[key]]));
   Object.assign(value, { phase, decision, text: params.text.trim() });
   if (context !== null) Object.assign(value, {request_revision: context.revision, request_revision_digest: context.revision_digest});
   if (attachments.length) value.attachments = attachments;
-  const key = old?.key ?? (isUpdate ? `conclusion-${String(updates.length + 1).padStart(8, "0")}` : phase);
+  const key = old?.key ?? (isUpdate ? `conclusion-${String(updates.length + 1).padStart(8, "0")}` : initialKey);
+  if (phase === "decision" && key !== phase) value.result_key = key;
   if (isUpdate) Object.assign(value, { result_key: key, update_id: updateId, previous_result_key: old?.value.previous_result_key ?? previous });
   if (old && (old.textSha256 !== createHash("sha256").update(String(value.text)).digest("hex") || old.value.phase !== phase
       || (old.value.request_revision ?? 1) !== revision
       || JSON.stringify(old.attachments) !== JSON.stringify(attachments))) {
     throw new EffectRuntimeRequestError("reply already committed; conflicting replacement rejected; use a stable update_id for a later conclusion");
   }
-  if (!old && phase === "decision" && conclusion && (conclusion.value.request_revision ?? 1) === revision) {
+  const interimSuperseded = phase === "decision" && results.some(r =>
+    r.value.phase === "conclusion" && (r.value.request_revision ?? 1) === revision);
+  if (!old && interimSuperseded) {
     throw new EffectRuntimeRequestError("cannot publish an intermediate decision after conclusion");
   }
-  return { result_key: key, value, replay: old !== undefined,
+  return { result_key: key, value, replay: old !== undefined, interim_superseded: interimSuperseded,
     ...(context === null ? {} : {request_revision: context.revision, current_request_revision: context.current_revision, request_brief: context.brief}) };
 }
 

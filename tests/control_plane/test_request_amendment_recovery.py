@@ -316,6 +316,43 @@ def test_receiver_cli_reads_assesses_and_returns_the_correct_revision(source_goa
     assert pending["inbox_state"] == "pending"
 
 
+def test_unknown_request_effect_does_not_block_a_new_independent_request(source_goal, tmp_path, capsys, monkeypatch):
+    from loopx.control_plane.collaboration import request_amendment as io
+
+    f = source_goal
+    rid, commit = _proposal(f, tmp_path, capsys)
+    original = io._goal
+
+    def lost(*args, **kwargs):
+        if args[4] == "commit" and kwargs.get("execute"):
+            raise OSError("Effect outcome is unknown")
+        return original(*args, **kwargs)
+
+    with monkeypatch.context() as changed:
+        changed.setattr(io, "_goal", lost)
+        code, pending = goal_call(f, tmp_path, capsys, "commit", commit,
+            operation_id="pending-request-effect", execute=True)
+        assert code == 1 and pending["effect"] is None, pending
+    second = peer_request(f["runtime"], f["registry"], f["ref"]["goal_id"], "agent-b", "agent-a",
+        "independent-request", BRIEF, caller_goal_ref=f["ref"])["request_id"]
+    assert second != rid
+    acknowledge(f["runtime"], f["ref"]["goal_id"], "agent-a", second, "adopt", "Independent request",
+        registry=f["registry"], caller_goal_ref=f["ref"])
+    basis = _control(f, second, "inspect")["view"]
+    source = {"request_id": second, "request_revision": basis["revision"], "request_digest": basis["revision_digest"]}
+    current = goal_call(f, tmp_path, capsys, "inspect", agent=None)[1]
+    code, proposed = goal_call(f, tmp_path, capsys, "propose", {**goal_basis(current), "proposal_id": "independent-proposal",
+        "template_id": "check", "evidence_refs": ["evidence:independent-request"], "replan_obligation_id": f["obligation"],
+        "source_request": source}, operation_id="propose-independent", execute=True)
+    assert code == 0, proposed
+    code, result = goal_call(f, tmp_path, capsys, "commit", {"source_request": source,
+        "proposal_id": proposed["proposal"]["proposal_id"], "proposal_digest": proposed["proposal"]["digest"]},
+        operation_id="commit-independent", execute=True)
+    assert code == 0 and result["effect"]["outcome"] == "committed", result
+    assert _control(f, rid, "inspect")["view"]["active_reservation"] is not None
+    assert _control(f, second, "inspect")["view"]["active_reservation"] is None
+
+
 def test_bound_mcp_consumers_keep_revision_and_return_relations(source_goal):
     f = source_goal
     rid = _request(f)["request_id"]

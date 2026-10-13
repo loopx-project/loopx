@@ -840,7 +840,9 @@ Goal、接收者或来源标识。保存以一次用户操作完成校验和写�
 `source_request`。判断使用 `--request-revision N --request-digest DIGEST`，结果
 回传使用 `--request-revision N`；MCP `assess_request`、`return_result` 支持同一
 修订字段。省略修订仍指原始版本 1，迟到证据不会被重绑到新版本；新修订的首次
-结论自动使用既有不可变结果更新链。同伴和原对话回读都标识来源修订。
+结论自动使用既有不可变结果更新链。原对话回传的 `--phase decision` 按修订
+保留一条不可变中途进展；旧结论不能压掉新修订的进展，同一修订已有结论时才
+收起尚未发送的进展。原始判断与结果记录保持不变。同伴和原对话回读都标识来源修订。
 
 为此请求提出固定模板变更时，在既有 governed proposal 字段中保留
 `source_request`。提交使用原 `proposal_id`、`proposal_digest`、`source_request`

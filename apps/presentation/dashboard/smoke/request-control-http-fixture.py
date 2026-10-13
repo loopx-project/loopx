@@ -9,7 +9,9 @@ from loopx.chat_server import serve_chat
 from loopx.chat_store import ChatSessionStore
 from loopx.capabilities.manager_context import deliver
 from loopx.control_plane.goals.goal_amendment_runtime import execute_goal_amendment
-from loopx.control_plane.collaboration.request_control_source import execute_request_control
+from loopx.control_plane.collaboration.request_control_source import (
+    execute_request_control,
+)
 from loopx.control_plane.effect_runtime import restart_effect_runtime
 
 root = Path(sys.argv[1])
@@ -254,6 +256,27 @@ def commands():
                     item["request_revision_digest"],
                 )
                 result = {"receiver_revision": item["request_revision"]}
+            elif operation == "interim":
+                current = inspect()
+                result = cli(
+                    "manager-inbox",
+                    "report",
+                    "--goal-id",
+                    ref["goal_id"],
+                    "--agent-id",
+                    "agent-a",
+                    "--request-id",
+                    rid,
+                    "--phase",
+                    "decision",
+                    "--reply-text",
+                    "Checking the corrected request",
+                    "--request-revision",
+                    str(current["revision"]),
+                )
+                from loopx.capabilities.manager_context.roundtrip import drain
+
+                drain(runtime, registry, store, lambda *_: None)
             elif operation == "reserve":
                 v = goal("inspect")
                 goal("adopt", {**basis(v), "operation_id": "adopt-root"}, execute=True)
