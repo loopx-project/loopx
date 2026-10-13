@@ -34,7 +34,7 @@ same Task inspector. Editing the proof requires a fresh preview. The proof draft
 is cleared when changing Tasks and is not saved as a browser preference.
 
 The App neither inspects a lease to fabricate proof nor acquires a competing
-execution. Providing JSON does not grant ownership or waive validation. The
+execution. Providing JSON does not grant ownership or waive validation.
 Where execution proof is required, the terminal owner checks current actor, claim, execution key, version, expiry,
 registry witness and provider revision. A changed or expired execution must be
 reconciled through its owning lifecycle. Retry the original reviewed proposal
