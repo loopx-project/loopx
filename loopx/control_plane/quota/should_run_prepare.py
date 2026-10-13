@@ -860,9 +860,7 @@ def _prepare_quota_should_run_item(
             agent_id=agent_frontier_id,
             replay_phase=receipt_bound_replay_phase,
             transition_candidates=goal_frontier_context.get("replan_transition_candidates"),
-            stride_strategy=((project_asset or {}).get("execution_profile") or {}).get(
-                "stride_strategy", "off"
-            ),
+            stride_strategy=goal_frontier_context["stride_strategy"],
         )
     )
     replan_scope = goal_frontier_context.get("replan_scope") or {}

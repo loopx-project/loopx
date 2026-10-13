@@ -1814,6 +1814,7 @@ def build_goal_frontier_projection_context_from_status(
     return {
         "schema_version": "goal_frontier_projection_context_v0",
         "replan_obligation": replan_obligation,
+        "stride_strategy": stride_strategy,
         "replan_scope": replan_scope,
         "goal_frontier_projection": goal_frontier_projection,
         "acceptance_gaps": acceptance_gaps,
