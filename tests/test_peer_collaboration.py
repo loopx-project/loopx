@@ -381,9 +381,14 @@ def test_peer_request_recovers_original_guidance_after_upgrade(scenario, monkeyp
 
     root, registry, brief, *_ = scenario
     if exact:
+        from loopx.control_plane.projects.registry_codec import source_session_registry_transaction
+
         data = json.loads(registry.read_text())
         data["goals"][0]["goal_instance_id"] = "ginst_" + "a" * 32
-        registry.write_text(json.dumps(data))
+        data.update(profile_id="source_session_v1", session_bindings=[], session_receipts=[], lifetime_receipts=[])
+        registry = root / "exact-source" / "registry.json"
+        with source_session_registry_transaction(registry, operation="test_create_exact_source", create=lambda: data) as transaction:
+            transaction.commit(transaction.payload_copy())
 
     def send(value=brief):
         return request(root, registry, "delivery", "builder", "reviewer", "review-upgrade", value)
@@ -409,7 +414,14 @@ def test_peer_request_recovers_original_guidance_after_upgrade(scenario, monkeyp
     assert recovered["replayed"] is (not interrupted)
     rid = recovered["request_id"]
     entry = next(_root(root).glob("entries/*/" + rid + ".json"))
-    assert json.loads(entry.read_text())["instruction"] == "Earlier receiver guidance."
+    stored_entry = json.loads(entry.read_text())
+    if exact:
+        assert stored_entry["schema_version"] == "loopx_manager_context_entry_v2"
+        assert stored_entry["goal_ref"] == {"goal_id": "delivery", "goal_instance_id": "ginst_" + "a" * 32}
+    else:
+        assert stored_entry["schema_version"] == "loopx_manager_context_entry_v1"
+        assert "goal_ref" not in stored_entry
+    assert stored_entry["instruction"] == "Earlier receiver guidance."
     assert all((_root(root) / p).read_bytes() == value for p, value in before.items())
     if not interrupted:
         assert recovered == {**first, "replayed": True}
