@@ -91,9 +91,12 @@ def execute_public_github(plan: dict) -> dict:
     records, failures = [], []
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     for index, (ref, (owner, repo, revision, path)) in enumerate(zip(refs, sources), 1):
+        read_step = "public repository visibility check"
         try:
             _public_repository(owner, repo)
+            read_step = "source file read"
             raw = _read(f"https://raw.githubusercontent.com/{owner}/{repo}/{revision}/{quote(path, safe='/')}")
+            read_step = "source text validation"
             text = raw.decode("utf-8")
             if "\x00" in text:
                 raise ValueError("source is not UTF-8 text")
@@ -115,9 +118,9 @@ def execute_public_github(plan: dict) -> dict:
                 "publication_date": None, "accessed_at": now,
                 "content_digest": "sha256:" + hashlib.sha256(raw).hexdigest()})
         except HTTPError as error:
-            failures.append(f"Source {index}: HTTP {error.code}")
+            failures.append(f"Source {index}: HTTP {error.code} during {read_step}")
         except (OSError, ValueError, UnicodeError, URLError):
-            failures.append(f"Source {index}: source read unavailable")
+            failures.append(f"Source {index}: source read unavailable during {read_step}")
     status = "succeeded" if records else "no_evidence" if all("empty source" in item for item in failures) else "failed"
     receipt = {"schema_version": "loopx_external_evidence_receipt_v0",
         "plan_id": plan["plan_id"], "request_id": request["request_id"],
