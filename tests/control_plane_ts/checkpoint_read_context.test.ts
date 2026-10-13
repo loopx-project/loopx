@@ -4,11 +4,46 @@ import {resolve} from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {evaluateCheckpointReadContext as evaluate, evaluateResultWorkBinding as work, executeResultWorkBinding} from "../../loopx/control_plane/goals/checkpoint_read_context.ts";
-import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
-import {settlementIdentity} from "../../loopx/control_plane/effect_program.ts";
+import {settlementIdentity, type JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {selectEffectiveHeartbeatReceipt, heartbeatReceiptFactFromEvent} from "../../loopx/control_plane/quota/heartbeat_receipt_identity.ts";
 
 const identity = {goal_id: "goal", agent_id: "agent", todo_id: "task", turn_instance_id: "turn", effect_id: "effect"};
+test("completion replay preserves the exact managed key without aliasing another scope", () => {
+  const scoped = settlementIdentity({goal_id: "goal", agent_id: "agent",
+    todo_id: "todo_original", turn_instance_id: "original-turn"});
+  const todo = {todo_id: "todo_original", claimed_by: "agent", status: "done",
+    completion_turn_key: "original-turn"};
+  const key = (snapshot: JsonObject = todo, bound: JsonObject = scoped) => work({
+    phase: "completion_identity", goal_id: "goal", agent_id: "agent", todo_id: "todo_original",
+    todo: snapshot, identity: bound,
+  }).completion_turn_key;
+  assert.equal(key(), "original-turn");
+  assert.equal(key({...todo, completion_turn_key: scoped.effect_id}), scoped.effect_id);
+  for (const changed of [{...todo, status: "open"}, {...todo, todo_id: "todo_other"},
+    {...todo, claimed_by: "another-agent"}, {...todo, completion_turn_key: "another-turn"}]) {
+    assert.equal(key(changed), scoped.effect_id);
+  }
+  assert.throws(() => key(todo, {...scoped, effect_id: "forged"}), /original scoped Turn/);
+  assert.throws(() => key(todo, settlementIdentity({goal_id: "other", agent_id: "agent",
+    todo_id: "todo_original", turn_instance_id: "original-turn"})), /original scoped Turn/);
+});
+test("managed result replay cannot submit a different candidate, successor or closeout", () => {
+  const scoped = settlementIdentity({goal_id: "goal", agent_id: "agent",
+    todo_id: "todo_original", turn_instance_id: "original-turn"});
+  const todo = {todo_id: "todo_original", claimed_by: "agent", role: "agent", status: "done",
+    completion_turn_key: "original-turn", completion_continuation: "active_goal", no_followup: false,
+    successor_todo_ids: [], evidence: "retained", completion_receipt_id: "original-receipt"};
+  const replay = (candidate: JsonObject) => work({phase: "completion_identity",
+    goal_id: "goal", agent_id: "agent", todo_id: "todo_original", todo, identity: scoped, candidate}).replay;
+  const candidate = {evidence: "retained", role: "agent"};
+  assert.deepEqual(replay(candidate), {ok: true, completed: true, changed: false, idempotent_replay: true,
+    dry_run: false, goal_id: "goal", todo_id: "todo_original", status: "done",
+    completion_continuation: "active_goal", completion_receipt_id: "original-receipt", updated_at: null});
+  for (const changed of [{evidence: "replacement"}, {next_agent_todo: "new"},
+    {next_excluded_agents: ["other"]}, {no_followup: true}, {role: "user"}, {clear_claim: true}]) {
+    assert.equal(replay({...candidate, ...changed}), null);
+  }
+});
 const facts = {
   todos: [
     {todo_id: "task", status: "open", text: "Build a page", depends_on_todo_ids: ["upstream"]},

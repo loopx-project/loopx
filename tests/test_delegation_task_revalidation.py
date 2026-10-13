@@ -6,6 +6,7 @@ import sys
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
+from pathlib import Path
 
 import pytest
 from mcp import ClientSession, StdioServerParameters
@@ -189,7 +190,26 @@ def test_committed_revalidation_response_loss_recovers_same_turn(service, monkey
         getattr(restarted, entrypoint)("analysis-1")
     assert restarted.path("analysis-1").read_bytes() == frozen
     stop_path.unlink()  # Remove only this synthetic injected fence.
-    getattr(restarted, entrypoint)("analysis-1")
+    if entrypoint == "resume":
+        async def resume_over_mcp():
+            params = StdioServerParameters(command=sys.executable,
+                cwd=str(Path(__file__).resolve().parents[1]), env={
+                    key: os.environ[key] for key in ("NODE_OPTIONS", "TMPDIR", "TEMP", "TMP")
+                    if key in os.environ}, args=["-m", "loopx.collaboration_mcp",
+                    "--registry", str(restarted.registry), "--runtime-root", str(restarted.root),
+                    "--goal-id", restarted.goal_id, "--agent-id", restarted.agent_id,
+                    "--workspace", str(root / "lead"), "--execution-config", str(restarted.config)])
+            async with stdio_client(params) as (reader, writer):
+                async with ClientSession(reader, writer) as session:
+                    await session.initialize()
+                    reply = await session.call_tool("resume_delegation", {"operation_id": "analysis-1"})
+                    assert not reply.isError, reply
+                    # A previously committed result needs publication, not a
+                    # new asynchronous Host. Closing this caller is safe now.
+                    assert json.loads(reply.content[0].text)["status"] == "accepted"
+        asyncio.run(resume_over_mcp())
+    else:
+        getattr(restarted, entrypoint)("analysis-1")
     accepted = wait(restarted)
     assert accepted["status"] == "accepted", accepted
     assert json.loads(restarted.path("analysis-1").read_text())["turn_key"] == turn_key
