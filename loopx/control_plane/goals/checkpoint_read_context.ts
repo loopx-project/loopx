@@ -408,8 +408,10 @@ export function evaluateResultWorkBinding(value: unknown): JsonObject {
     if (!protectedEvents.length) return {required: false};
     const match = protectedEvents.filter(event => event.agent_id === request.agent_id &&
       [event.run_id, jsonObject(event.details)?.settlement_effect_id].includes(request.completion_turn_key));
-    if (match.length !== 1 || request.identity == null ||
-        jsonObject(request.identity)?.turn_instance_id !== match[0].run_id ||
+    // Re-reading an admitted Turn records another observation, not a new
+    // admission identity. Every matching observation must retain that Turn.
+    if (match.length === 0 || request.identity == null ||
+        match.some(event => jsonObject(request.identity)?.turn_instance_id !== event.run_id) ||
         jsonObject(request.identity)?.agent_id !== match[0].agent_id ||
         jsonObject(request.identity)?.todo_id !== request.todo_id) return rejected("delivery_work_context_required");
     return {required: true};
