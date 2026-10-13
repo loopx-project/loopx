@@ -721,15 +721,22 @@ def _owner_text_reads(tree: ast.AST) -> list[int]:
 def _analyse(source: str, name: str = "<module>") -> dict[str, Any]:
     tree = ast.parse(source, filename=name)
     root = _collect_scopes(tree)
-    return {
-        "tree": tree,
-        "root": root,
-        "statements": _shape_statements(tree, root),
-        "constructions": _regex_constructions(tree, root),
-        "owner_imports": _owner_import_map(tree),
-        "owner_text_reads": _owner_text_reads(tree),
-        "loaded": _loaded_names(tree),
-    }
+    try:
+        return {
+            "statements": _shape_statements(tree, root),
+            "constructions": _regex_constructions(tree, root),
+            "owner_imports": _owner_import_map(tree),
+            "owner_text_reads": _owner_text_reads(tree),
+            "loaded": _loaded_names(tree),
+        }
+    finally:
+        # Readers are finished. Break AST -> scope -> binding -> AST cycles;
+        # retaining them makes later collections traverse whole source trees.
+        for node in ast.walk(tree):
+            scope = getattr(node, _SCOPE_ATTRIBUTE, None)
+            if scope is not None:
+                scope.names.clear()
+                delattr(node, _SCOPE_ATTRIBUTE)
 
 
 _REPO_SCAN: list[dict[str, Any]] | None = None
@@ -738,8 +745,8 @@ _REPO_SCAN: list[dict[str, Any]] | None = None
 def _repo_scan() -> list[dict[str, Any]]:
     """One pass over every module under `loopx/`, shared by all four layers.
 
-    1,167 modules parse and analyse in about four seconds, so this runs once per test
-    session rather than once per layer, and no layer is given a different view of the tree.
+    Cache the consumed read model once per session, not the temporary syntax trees,
+    scopes or raw source. Every layer still sees the same complete analysed snapshot.
     """
 
     global _REPO_SCAN
@@ -753,7 +760,6 @@ def _repo_scan() -> list[dict[str, Any]]:
             source = path.read_text(encoding="utf-8")
             entry = _analyse(source, str(path))
             entry["path"] = path
-            entry["source"] = source
             entry["relative"] = f"loopx/{path.relative_to(PACKAGE_ROOT).as_posix()}"
             parts = list(path.relative_to(PACKAGE_ROOT.parent).parts)
             parts[-1] = parts[-1][: -len(".py")]

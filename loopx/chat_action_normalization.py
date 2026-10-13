@@ -388,6 +388,8 @@ class ChatActionNormalizationMixin:
                     "resume_when",
                     "successor_todo_ids",
                     "no_followup",
+                    "task_lease_idempotency_key",
+                    "task_lease_expected_version",
                 },
             )
             goal_id = _opaque(values.get("goal_id"), field="goal_id")
@@ -443,6 +445,20 @@ class ChatActionNormalizationMixin:
                 if not isinstance(values["no_followup"], bool):
                     raise ValueError("no_followup must be true or false")
                 result["no_followup"] = values["no_followup"]
+            proof_fields = {"task_lease_idempotency_key", "task_lease_expected_version"}
+            if proof_fields.intersection(values):
+                if operation != "complete":
+                    raise ValueError("execution proof requires todo.update operation=complete")
+                if not proof_fields.issubset(values) or not result.get("agent_id"):
+                    raise ValueError("completion execution proof requires agent_id, key and version")
+                key = values["task_lease_idempotency_key"]
+                version = values["task_lease_expected_version"]
+                if not isinstance(key, str):
+                    raise ValueError("task_lease_idempotency_key must be a compact opaque id")
+                if isinstance(version, bool) or not isinstance(version, int) or version < 0:
+                    raise ValueError("task_lease_expected_version must be a non-negative integer")
+                result["task_lease_idempotency_key"] = _opaque(key, field="task_lease_idempotency_key")
+                result["task_lease_expected_version"] = version
             if "clear_priority" in values:
                 if not isinstance(values["clear_priority"], bool):
                     raise ValueError("clear_priority must be true or false")

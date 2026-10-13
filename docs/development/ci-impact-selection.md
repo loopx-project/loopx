@@ -60,6 +60,56 @@ the whole collection, excluding only the separately executed Stage2c marker.
 No tests are removed. Without timing history the splitter uses equal weights;
 four-way parallelism is not a claim of perfect duration balancing.
 
+The shard command explicitly loads `scripts.ci.pytest_timing`. Its controller
+streams pytest's setup/call/teardown durations to Actions logs as each report
+arrives, before final JUnit or duration summaries exist. To inspect a downloaded
+job log, run `node scripts/ci/pytest_timing.ts JOB_LOG`. The reader reports the
+selected and finished cases, observed elapsed time, measured worker-seconds,
+phase totals and longest observed cases.
+Only collected-item reports supply phase durations. Nested pytest/unittest
+subtests remain in pytest's result output; their cost is already included in
+the parent call, so they do not duplicate timing phases. Logs produced by the
+earlier observer that mixed subtest reports into ordinary phases remain rejected
+as contradictory evidence; the reader does not guess which duplicate to discard.
+The phase record identifies the full pytest node id by SHA-256 and displays the
+parent name without parameter payloads, bounded to 256 characters. Distinct
+parameter cases keep distinct hashes; huge values and hosted secret masking of
+parameter strings cannot expand or corrupt these JSON records. The existing
+verbose pytest result output remains available.
+Observation rows occupy their own lines with either quiet (`-q`) or verbose
+(`-v`) progress, including serial and xdist runs. The reader still requires
+line-framed records rather than guessing how to recover old progress-prefixed logs.
+Missing observations, malformed records or contradictory collections fail
+readback; an interrupted or incomplete run stays
+incomplete. A completed traversal with pytest exit code 1 still has test failures.
+Measured worker-seconds sum concurrent test phases and are not runner-minutes,
+queue delay, CPU time or the job's complete elapsed time. A partial log supplies
+only a lower bound; use job/step timestamps for setup and runner occupancy.
+These observations do not become a timing cache, change selection or establish
+qualification. Missing durations still use the existing equal-weight fallback.
+
+分片在 controller 中随 pytest 的 setup/call/teardown 报告写入 Actions 日志，
+无需等待最终 JUnit 或耗时汇总。下载单个 job 日志后运行
+`node scripts/ci/pytest_timing.ts JOB_LOG`，可回读选中／完成数量、已观察耗时、
+worker 秒数、各阶段总和与最慢用例。缺失、损坏或矛盾记录拒绝回读；中断与不完整
+运行保持不完整。遍历完成且 exit code 为 1 仍代表测试失败。
+仅收集项的报告提供 phase 耗时；pytest/unittest 子测试仍由 pytest 输出结果，
+其成本已包含在父项 call 中，不重复记入 phase。旧 observer 把子测试混入普通 phase
+的日志仍作为矛盾证据拒绝，reader 不猜测应丢弃哪条重复记录。
+并发 phase 总和不是
+runner-minutes、排队时长或 CPU 时间；不完整记录仅给出下界，环境准备与占用须结合
+job/step 时间戳。记录不进入 timing cache、不改变测试选择、不替代门禁；没有耗时
+历史时仍按原等权规则分片。
+完整 pytest node id 用 SHA-256 标识；显示名去除参数内容并限制为 256 字符。
+不同参数仍有不同 hash；超长参数及宿主对参数字符串的脱敏不会扩大或破坏这些
+JSON 记录。原有 pytest 详细结果输出仍保留。
+无论使用 quiet（`-q`）还是 verbose（`-v`）进度，串行和 xdist 运行中的观察记录
+都独占一行。reader 仍要求完整行记录，不猜测如何修复旧的进度字符前缀日志。
+The reader accepts a line-leading BOM from concatenated GitHub log chunks before
+timestamp/ANSI framing; phase identity, ordering and completion checks remain strict.
+reader 接受 GitHub 日志分块拼接产生的行首 BOM，再读取时间戳和 ANSI 包装；
+phase 身份、顺序与完整性检查保持严格。
+
 The aggregate requires every shard to succeed and all four coverage files to
 exist before combining them. The existing full-suite coverage floor remains.
 No Python or backend TypeScript coverage artifact or Sonar run is manufactured

@@ -1161,6 +1161,12 @@ export function readLoopXTeamWork(sessionId: string, operationId: string) {
     method: "POST", body: JSON.stringify({operation: "read", operation_id: operationId}),
   });
 }
+export function adoptLoopXTeamWork(sessionId: string, operationId: string, consumerOperationId: string) {
+  return requestJson<DelegationReadback>(`/api/chat/sessions/${sessionId}/loopx`, {
+    method: "POST", body: JSON.stringify({operation: "adopt", operation_id: operationId,
+      consumer_operation_id: consumerOperationId}),
+  });
+}
 export function revalidateLoopXTeamWork(sessionId: string, operationId: string) {
   return requestJson<DelegationReadback>(`/api/chat/sessions/${sessionId}/loopx`, {
     method: "POST", body: JSON.stringify({operation: "revalidate", operation_id: operationId}),

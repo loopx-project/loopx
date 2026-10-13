@@ -47,6 +47,7 @@ import { TaskRequest } from "./task-request";
 import { parseTodoResumeCondition } from "./todo-resume-condition";
 import { MarkdownText } from "./markdown";
 import { formatMonitorDate } from "./monitor-readback";
+import { parseTodoCompletionProof } from "./todo-completion-feedback";
 
 function subagentModelRequest(include: boolean, model: string, effort: string) {
   if (!include) return {};
@@ -158,6 +159,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
   const [todoAgentId, setTodoAgentId] = useState(agents.find((agent) => agent.available)?.agentId ?? "codex");
   const [todoPriority, setTodoPriority] = useState("");
   const [todoResumeWhen, setTodoResumeWhen] = useState("");
+  const [todoCompletionProof, setTodoCompletionProof] = useState("");
   const [previewFailure, setPreviewFailure] = useState<{identity: string; message: string} | null>(null);
   const previewAttemptRef = useRef(0);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -171,6 +173,10 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
           : selection.kind === "output" ? `output:${selection.item.outputId}`
             : selection.kind === "schedule" ? `schedule:${selection.item.scheduleId}`
                 : `goal:${selection.item.goalId}`;
+  const completionProofFields = selection.kind === "proposal" && selection.item.actionKind === "todo.update"
+    ? selection.item.fields.filter(field => field.key === "task_lease_idempotency_key" || field.key === "task_lease_expected_version") : [];
+  const visibleProposalFields = selection.kind === "proposal"
+    ? selection.item.fields.filter(field => !completionProofFields.includes(field)) : [];
 
   useEffect(() => {
     previewAttemptRef.current += 1;
@@ -179,6 +185,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     setDiagnosticsOpen(false);
     setRunDrawerTab("record");
     setTodoResumeWhen("");
+    setTodoCompletionProof("");
     const configuration = selection.kind === "goal" ? selection.item.subagentExecution : undefined;
     setSubagentAllowedDomains(configuration?.allowedDomains ?? []);
     setSubagentModel(configuration?.modelConfig?.model ?? "");
@@ -401,6 +408,12 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
       });
       return;
     }
+    const proof = operation === "complete" && todoCompletionProof.trim()
+      ? parseTodoCompletionProof(todoCompletionProof) : null;
+    if (operation === "complete" && todoCompletionProof.trim() && !proof) {
+      setPreviewFailure({identity: selectionIdentity, message: t("drawer.taskCompletionProofInvalid")});
+      return;
+    }
     await previewAction({
       actionKind: "todo.update",
       context: { goal_id: todo.goalId, kind: "todo", todo_id: todo.todoId },
@@ -412,6 +425,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
         ...(operation === "block" ? { note: t("drawer.taskSuccessorNote") } : {}),
         ...(operation === "defer" && resumeWhen ? { resume_when: resumeWhen } : {}),
         todo_id: todo.todoId,
+        ...(proof ?? {}),
       },
       summary: `${label}：${todo.text}`,
     });
@@ -711,6 +725,12 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                 </div>
               </details>
               <button className="personal-primary-action" onClick={() => void previewTodoTransition(selection.item, "complete", t("drawer.taskComplete"))} type="button"><Check size={17} />{t("drawer.taskComplete")}</button>
+              <details className="personal-task-completion-proof">
+                <summary>{t("drawer.taskCompletionProof")}</summary>
+                <label><textarea aria-label={t("drawer.taskCompletionProof")} rows={4}
+                  value={todoCompletionProof} onChange={(event) => setTodoCompletionProof(event.target.value)} />
+                  <small>{t("drawer.taskCompletionProofHint")}</small></label>
+              </details>
             </div> : null}
             {selection.item.evidence ? <section className="personal-detail-card" aria-label={t("drawer.evidence")}>
               <h4>{t("drawer.evidence")}</h4>
@@ -1143,7 +1163,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                   ? t("actionReview.operation_result_delivery_pending")
                   : t(`actionReview.${selection.item.reviewPlan.reason}`)}</p> : null}
               {selection.item.status === "ready" && selection.item.actionKind !== "team.plan" && !decisionFrame ? <p className="personal-proposal-explainer">{t("drawer.proposalExplainer")}</p> : null}
-              {selection.item.fields.length ? <dl>{selection.item.fields.map((field) => <div key={field.key}><dt>{field.label}</dt><dd>{field.value}</dd></div>)}</dl> : null}
+              {visibleProposalFields.length ? <dl>{visibleProposalFields.map((field) => <div key={field.key}><dt>{field.label}</dt><dd>{field.value}</dd></div>)}</dl> : null}
             </section>}
             {selection.item.reviewPlan?.creationProgress?.goalId && selection.item.status !== "applied" ? <div className="personal-proposal-state is-applied" role="status" data-testid="goal-creation-committed"><Check size={16} /><span>
               <strong>{t("proposal.field.goalId")}: {selection.item.reviewPlan.creationProgress.goalId} · {t("proposal.status.applied")}</strong>
@@ -1218,6 +1238,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               <div className="personal-diagnostics">
                 <code>goal_id: {goalId}</code><code>kind: {selection.kind}</code>
                 {selection.kind === "run" ? <><code>session_id: {selection.item.sessionId ?? t("drawer.notLinked")}</code><code>turn_id: {selection.item.turnId ?? t("common.none")}</code><code>adapter: {selection.item.agentId}</code><code>status: {selection.item.sessionStatus ?? selection.item.status}</code></> : selection.kind === "proposal" ? <><code>action: {selection.item.actionKind}</code><code>status: {selection.item.status}</code></> : <><code>schedule_id: {selection.item.scheduleId}</code><code>status: {selection.item.status ?? "active"}</code></>}
+                {completionProofFields.map(field => <code key={field.key}>{field.key}: {field.value}</code>)}
               </div>
             ) : null}
           </>

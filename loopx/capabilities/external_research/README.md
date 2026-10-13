@@ -209,6 +209,16 @@ including failures. Neither timestamp establishes publication or first availabil
 每条成功来源的 `accessed_at` 在有界读取后记录 UTC 观察时间；回执的
 `completed_at` 在全部读取尝试（包括失败）结束后记录。两者均不证明发布或首次可得时间。
 
+Failure limitations identify the reached step: public repository visibility,
+source file read, or source text validation. HTTP status codes remain visible;
+exception messages, response bodies and transport reasons remain redacted.
+The step is diagnostic context, not proof of a timeout, missing permission or
+source unavailability beyond this attempt. Partial successful reads are retained.
+
+失败局限会标明实际到达的步骤：仓库公开性核验、来源文件读取或文本验证。保留 HTTP
+状态码，不暴露异常正文、响应内容或传输原因；步骤只辅助诊断，不能据此推断超时、
+权限缺失或该来源永久不可用。部分成功的来源仍保留。
+
 ```bash
 loopx external-evidence plan --public-github \
   --objective "Inspect public source" --user-activity "Choose a source" \

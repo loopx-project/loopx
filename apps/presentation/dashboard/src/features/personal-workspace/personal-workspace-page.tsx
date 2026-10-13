@@ -1,7 +1,7 @@
 import {useDeliveryReview} from "./delivery-review-state";
 import {useGoalWorkspaceDigest} from "./goal-masthead";
 import { goalCreateRequest } from "./goal-create-request";
-import { todoCompletionPreviewFeedback } from "./todo-completion-feedback";
+import { todoCompletionPreviewFeedback, todoCompletionProofRequired } from "./todo-completion-feedback";
 import { readSteeringRequest, retainSteeringRequest, retireSteeringRequest } from "./steering-recovery";
 import { useConversationInputState } from "./use-conversation-input-state";
 import type { ConversationHistoryStatus } from "../../data/use-conversation-history";
@@ -1516,6 +1516,9 @@ export function PersonalWorkspacePage({
       });
       setActionFeedback(null);
     } catch (error) {
+      if (todoCompletionProofRequired(error)) {
+        setSelection({kind: "todo", item: todo});
+      }
       setActionFeedback(t("feedback.previewFailed", {
         error: error instanceof Error ? error.message : String(error),
       }));

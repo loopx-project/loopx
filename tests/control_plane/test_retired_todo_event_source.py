@@ -234,7 +234,9 @@ def test_real_directory_lifecycle_uses_canonical_state_despite_stale_audit(tmp_p
         payload = cli("status")
         indexed = next(row for row in payload["todo_index"]["items"] if row["todo_id"] == target)
         assert indexed["status"] == expected
-        directory = cli("agent-directory", "--agent-id", agent)
+        # This journey owns the synthetic project, not a repeated boundary scan
+        # of the checkout that happens to be the CLI harness's working directory.
+        directory = cli("agent-directory", "--agent-id", agent, "--scan-path", str(tmp_path))
         work = next(row for row in directory["rows"] if row["agent_id"] == agent)["work"]
         if expected == "done":
             assert work is None
@@ -280,8 +282,11 @@ def test_real_directory_lifecycle_uses_canonical_state_despite_stale_audit(tmp_p
         unavailable = runtime / "unavailable-provider"
         authority.rename(unavailable)
         for command in ("status", "agent-directory"):
-            failure = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
-                "--runtime-root", str(runtime), "--format", "json", command, "--goal-id", "goal-a"],
+            arguments = [sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+                "--runtime-root", str(runtime), "--format", "json", command, "--goal-id", "goal-a"]
+            if command == "agent-directory":
+                arguments.extend(["--scan-path", str(tmp_path)])
+            failure = subprocess.run(arguments,
                 capture_output=True, text=True, timeout=60)
             if failure.stdout.strip():
                 failed = json.loads(failure.stdout)

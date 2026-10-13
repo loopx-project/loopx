@@ -921,9 +921,14 @@ and verify the trusted original-conversation route before publishing an Inbox
 entry. An independent receiver may consume the entry before the sender receives
 its acknowledgement. A failed route write/readback must leave no visible work;
 a prepared route without an entry is inert and an exact retry can finish it.
-Keep the existing request identity and conflict checks. This matches the peer
-request's route-before-entry ordering; it changes Python filesystem IO ordering,
-not the shared TypeScript request or return-state authority. Exercise App,
+Both manager and peer publication use the existing TypeScript request owner to
+compare the original request and plan replay. Generated receiver guidance may
+change across releases; retain the saved guidance without treating that change
+as new source content. After an interrupted peer publication, the original
+operation supplies the missing entry's guidance. Changed source, semantic brief,
+recipient, Goal instance or selected route still conflicts. The adapters retain
+their source authorization, locks, route preparation and byte-for-byte storage
+readback; no request store, revision fence or execution grant is added. Exercise App,
 Goal Chat and external-audience ingress, immediate receiver results, interrupted
 publication and original-transcript return after restart. This qualification
 does not establish native worker selection, execution or the full A24 journey.

@@ -1082,6 +1082,7 @@ def test_trusted_manager_profile_reaches_app_server_and_turn_prompt(
         assert "effective runtime profile is trusted_owner" in prompt
         assert "Do not edit files" not in prompt
         assert "loopx_public_source_read" not in prompt
+        assert "For bounded workspace edits" in prompt
     finally:
         session.close()
 
@@ -1239,8 +1240,31 @@ def test_project_resume_uses_effective_host_settings_without_widening_grant(
         session.send("Continue the project request.")
         assert sent[0][1]["model"] == resume["model"]
         assert sent[0][1]["effort"] == resume["config"]["model_reasoning_effort"]
+        prompt = sent[0][1]["input"][0]["text"]
+        assert ("For bounded workspace edits" in prompt) is (grant == "workspace_write")
+        assert ("Do not edit files" in prompt) is (grant == "workspace_read")
     finally:
         session.close()
+
+
+@pytest.mark.parametrize("execution_mode", [False, True])
+def test_focused_edit_guidance_reaches_confirmed_execution_only(tmp_path, monkeypatch, execution_mode):
+    session = chat_agent.CodexChatAgentSession(
+        process=SimpleNamespace(poll=lambda: None), messages=queue.Queue(),
+        thread_id="focused-edit-thread", work_dir=tmp_path, execution_mode=execution_mode,
+    )
+    sent = []
+    monkeypatch.setattr(session, "_request", lambda method, params, **kw: (
+        sent.append((method, params)) or {"turn": {"id": "focused-edit-turn"}}))
+    monkeypatch.setattr(session, "_next_event", lambda **kw: {
+        "method": "turn/completed", "params": {"turn": {"status": "completed"}},
+    })
+    session.send("Repair the named files; preserve the other project files.")
+    assert sent[0][0] == "turn/start" and sent[0][1]["threadId"] == session.thread_id
+    prompt = sent[0][1]["input"][0]["text"]
+    assert ("For bounded workspace edits" in prompt) is execution_mode
+    assert ("Do not edit files" in prompt) is not execution_mode
+    assert "protected_action" in prompt and "gate" in prompt
 
 
 @pytest.mark.parametrize("config", [[], {"model": 42}, {"model_reasoning_effort": {"invalid": "high"}}])

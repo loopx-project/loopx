@@ -4,6 +4,7 @@ import {mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink} from "node:fs/
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {captureConfigurationBackup, restoreConfigurationBackup, verifyConfigurationBackup} from "../../loopx/control_plane/configuration_backup.ts";
+import {EffectRuntimeConflictError, EffectRuntimeRequestError} from "../../loopx/control_plane/effect_runtime_errors.ts";
 
 function snapshot() {
   return captureConfigurationBackup({data: {machine_configuration: {schema_version: "loopx_machine_configuration_v0", namespaces: {
@@ -26,7 +27,8 @@ test("checkpoint preserves complete optional configuration and never certifies p
     assert.deepEqual(JSON.parse(await readFile(join(destination, "configuration-backup.json"), "utf8")), backup);
     assert.deepEqual(JSON.parse(await readFile(join(destination, "machine/configuration.json"), "utf8")),
       (backup.data as Record<string, unknown>).machine_configuration);
-    await assert.rejects(restoreConfigurationBackup({...request, execute: true}), /already exists/);
+    await assert.rejects(restoreConfigurationBackup({...request, execute: true}),
+      error => error instanceof EffectRuntimeConflictError && /already exists/.test(error.message));
     assert.deepEqual(JSON.parse(await readFile(join(destination, "configuration-backup.json"), "utf8")), backup);
   } finally {await rm(root, {recursive: true, force: true});}
 });
@@ -48,7 +50,8 @@ test("competing restores publish one complete checkpoint without replacing it", 
 
 test("tampering, extra envelope fields, duplicate identities and foreign reviewed digest reject before restore", async () => {
   const backup = snapshot();
-  assert.throws(() => verifyConfigurationBackup({...backup, data: {machine_configuration: null, goals: []}}), /digest mismatch/);
+  assert.throws(() => verifyConfigurationBackup({...backup, data: {machine_configuration: null, goals: []}}),
+    error => error instanceof EffectRuntimeRequestError && /digest mismatch/.test(error.message));
   assert.throws(() => verifyConfigurationBackup({...backup, privacy_certified: true}), /envelope/);
   assert.throws(() => verifyConfigurationBackup({...backup, extra: true}), /envelope/);
   const data = backup.data as Record<string, unknown>;
@@ -64,9 +67,10 @@ test("dangling targets and symlink ancestors cannot redirect recovery", async ()
     await mkdir(join(root, "physical"));
     await symlink(join(root, "physical"), join(root, "alias"), process.platform === "win32" ? "junction" : "dir");
     await symlink(join(root, "missing"), join(root, "dangling"), process.platform === "win32" ? "junction" : "file");
-    for (const destination of [join(root, "alias/new"), join(root, "dangling")]) {
-      await assert.rejects(restoreConfigurationBackup({backup, destination, expected_sha256: backup.sha256, execute: true}));
-    }
+    await assert.rejects(restoreConfigurationBackup({backup, destination: join(root, "alias/new"), expected_sha256: backup.sha256, execute: true}),
+      error => error instanceof EffectRuntimeRequestError);
+    await assert.rejects(restoreConfigurationBackup({backup, destination: join(root, "dangling"), expected_sha256: backup.sha256, execute: true}),
+      error => error instanceof EffectRuntimeConflictError);
   } finally {await rm(root, {recursive: true, force: true});}
 });
 

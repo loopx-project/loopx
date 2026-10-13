@@ -4,7 +4,7 @@ from typing import Any
 
 from ...agents.agent_scope import (
     agent_scope_blocking_handoff_gates,
-    agent_scope_count_advancement_items,
+    agent_scope_count_advancement_items as _count_advancement_items,
     agent_scope_item_claimed_by,
     agent_scope_item_claimed_by_agent_or_unclaimed,
 )
@@ -26,6 +26,7 @@ from ...todos.succession_warning import (
     TODO_SUCCESSION_WARNING_REASON_CODE,
     todo_succession_gap_items,
 )
+from ...todos.user_gate import open_todo_count as _open_todo_count
 from ...work_items.autonomous_replan_ack import (
     autonomous_replan_ack_matches_agent,
     autonomous_replan_ack_matches_frontier,
@@ -550,12 +551,6 @@ def build_vision_gap_judge(
     }
 
 
-def _open_todo_count(summary: dict[str, Any] | None) -> int:
-    if not isinstance(summary, dict):
-        return 0
-    return safe_non_negative_int(summary.get("open_count"))
-
-
 def _blocking_user_open_count(summary: dict[str, Any] | None) -> int:
     if not isinstance(summary, dict):
         return 0
@@ -579,10 +574,6 @@ def _todo_item_is_actionable_open(item: dict[str, Any]) -> bool:
 
 def _todo_task_class(item: dict[str, Any]) -> str:
     return str(item.get("task_class") or "").strip()
-
-
-def _count_advancement_items(items: Any, *, claimed_by: str | None = None) -> int:
-    return agent_scope_count_advancement_items(items, claimed_by=claimed_by)
 
 
 def _summary_task_counts(summary: dict[str, Any] | None) -> dict[str, int]:

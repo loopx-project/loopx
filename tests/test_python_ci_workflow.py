@@ -306,6 +306,7 @@ def test_four_shards_execute_each_test_once_and_merge_portable_coverage(
         key: value for key, value in os.environ.items()
         if not key.startswith(("COVERAGE", "COV_CORE", "PYTEST"))
     }
+    env["PYTHONPATH"] = str(WORKFLOW_ROOT)
     seen: list[set[str]] = []
     for shard in (1, 2, 3, 4):
         root = tmp_path / f"checkout-{shard}"
@@ -404,6 +405,7 @@ def test_shard_names_failed_cases_before_the_remaining_tests_finish(tmp_path: Pa
     )
     env = {key: value for key, value in os.environ.items()
            if not key.startswith(("COVERAGE", "COV_CORE", "PYTEST"))}
+    env["PYTHONPATH"] = str(WORKFLOW_ROOT)
     log = tmp_path / "progress.log"
     with log.open("w") as output:
         process = subprocess.Popen(args, cwd=tmp_path, env=env, stdout=output, stderr=subprocess.STDOUT)

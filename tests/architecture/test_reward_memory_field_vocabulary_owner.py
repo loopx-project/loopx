@@ -167,84 +167,113 @@ def folded_value(node: ast.expr) -> tuple[str, object] | None:
     return None
 
 
+def _analyse(source: str):
+    """Derive the consumed sites once; syntax trees remain temporary."""
+
+    tree = ast.parse(source)
+    bindings = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            names = frozenset(t.id for t in node.targets if isinstance(t, ast.Name))
+            bindings.append((node.lineno, names, folded_value(node.value)))
+    members, strings = [], []
+    for node in ast.walk(tree):
+        value = collection_members(node)
+        if value is not None:
+            members.append((node.lineno, value))
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            strings.append((node.lineno, node.value))
+    return bindings, members, strings
+
+
+def _binding_lines(bindings, name, kind, payload):
+    return [line for line, names, value in bindings
+            if name in names and value == (kind, payload)]
+
+
+def _sites(analysis, name, kind, payload):
+    bindings, members, strings = analysis
+    named = _binding_lines(bindings, name, kind, payload)
+    inline = ([line for line, value in members if value == payload] if kind == "members"
+              else [line for line, value in strings if payload in value])
+    return named, inline
+
+
 def binding_sites(source: str, name: str, kind: str, payload: object) -> list[int]:
     """Module-level assignments that bind this name to the owner's folded value."""
 
-    found: list[int] = []
-    for node in ast.parse(source).body:
-        if not isinstance(node, ast.Assign):
-            continue
-        if not any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
-            continue
-        folded = folded_value(node.value)
-        if folded is not None and folded == (kind, payload):
-            found.append(node.lineno)
-    return found
+    return _binding_lines(_analyse(source)[0], name, kind, payload)
 
 
 def member_literal_sites(source: str, members: frozenset[str]) -> list[int]:
-    tree = ast.parse(source)
-    return [
-        node.lineno
-        for node in ast.walk(tree)
-        if folded_value(node) == ("members", members)
-    ]
+    return _sites(_analyse(source), "", "members", members)[1]
 
 
 def body_literal_sites(source: str, body: str) -> list[int]:
-    tree = ast.parse(source)
-    return [
-        node.lineno
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and body in node.value
-    ]
+    return _sites(_analyse(source), "", "body", body)[1]
 
 
-def scan_sets(name: str) -> tuple[list[str], list[str]]:
-    members, owner_path, _module, _consumers = SET_DECISIONS[name]
-    return _scan(name, "members", members, owner_path, member_literal_sites, {})
-
-
-def scan_patterns(name: str) -> tuple[list[str], list[str]]:
-    body, owner_path, _module, _consumers = PATTERN_DECISIONS[name]
-    declared = DECLARED_EMBEDDED_BODIES.get(body, {})
-    return _scan(name, "body", body, owner_path, lambda s, v: body_literal_sites(s, v), declared)
-
-
-def _scan(name, kind, payload, owner_path, value_sites, declared) -> tuple[list[str], list[str]]:
-    bindings: list[str] = []
-    per_file: dict[str, list[int]] = {}
+def _repository_scan():
+    queries = [(name, "members", spec[0], spec[1], {})
+               for name, spec in SET_DECISIONS.items()]
+    queries += [(name, "body", spec[0], spec[1], DECLARED_EMBEDDED_BODIES.get(spec[0], {}))
+                for name, spec in PATTERN_DECISIONS.items()]
+    bindings = {name: [] for name, *_ in queries}
+    sites = {name: {} for name, *_ in queries}
     for path in sorted(PACKAGE_ROOT.rglob("*.py")):
         rel = path.relative_to(REPO_ROOT).as_posix()
-        source = path.read_text(encoding="utf-8")
-        if rel != owner_path:
-            for lineno in binding_sites(source, name, kind, payload):
-                bindings.append(f"{rel}:{lineno} rebinds {name} to the same {kind}")
-            for lineno in value_sites(source, payload):
-                per_file.setdefault(rel, []).append(lineno)
-    unexplained = [
-        f"{rel}:{lineno} states the same {kind} inline"
-        for rel, lines in per_file.items()
-        if rel not in declared
-        for lineno in lines
-    ]
-    for rel, count in declared.items():
-        seen = len(per_file.get(rel, []))
-        if seen != count:
-            unexplained.append(f"{rel} declares {count} embedded site(s), found {seen}")
-    return bindings, unexplained
+        analysis = _analyse(path.read_text(encoding="utf-8"))
+        for name, kind, payload, owner_path, _declared in queries:
+            if rel == owner_path:
+                continue
+            named, inline = _sites(analysis, name, kind, payload)
+            bindings[name].extend(f"{rel}:{line} rebinds {name} to the same {kind}"
+                                  for line in named)
+            if inline:
+                sites[name][rel] = inline
+    result = {}
+    for name, kind, _payload, _owner, declared in queries:
+        unexplained = [f"{rel}:{line} states the same {kind} inline"
+                       for rel, lines in sites[name].items() if rel not in declared
+                       for line in lines]
+        for rel, count in declared.items():
+            seen = len(sites[name].get(rel, []))
+            if seen != count:
+                unexplained.append(f"{rel} declares {count} embedded site(s), found {seen}")
+        result[name] = bindings[name], unexplained
+    return result
+
+
+def _repository_reader():
+    # Source is fixed for a module's tests. Retain only a complete findings view;
+    # failures leave the reader empty so a repaired source can be retried.
+    result = None
+
+    def read(name):
+        nonlocal result
+        if result is None:
+            result = _repository_scan()
+        bindings, inline = result[name]
+        return list(bindings), list(inline)
+
+    return read
+
+
+@pytest.fixture(scope="module")
+def repository_findings():
+    return _repository_reader()
 
 
 @pytest.mark.parametrize("name", sorted(SET_DECISIONS))
-def test_only_the_owner_module_binds_each_field_vocabulary(name: str) -> None:
-    bindings, inline = scan_sets(name)
+def test_only_the_owner_module_binds_each_field_vocabulary(name: str, repository_findings) -> None:
+    bindings, inline = repository_findings(name)
     assert bindings == [], "\n".join(bindings)
     assert inline == [], f"{name} is still spelled out somewhere: " + "\n".join(inline)
 
 
 @pytest.mark.parametrize("name", sorted(PATTERN_DECISIONS))
-def test_only_the_owner_module_compiles_each_pattern(name: str) -> None:
-    bindings, embedded = scan_patterns(name)
+def test_only_the_owner_module_compiles_each_pattern(name: str, repository_findings) -> None:
+    bindings, embedded = repository_findings(name)
     assert bindings == [], "\n".join(bindings)
     assert embedded == [], f"{name} body appears undeclared: " + "\n".join(embedded)
 
@@ -412,3 +441,39 @@ def test_the_two_scan_layers_see_exactly_what_they_should(label: str, source: st
         assert hits_body, label
     else:
         assert not hits_members and not hits_body, label
+
+
+@pytest.mark.parametrize("source,owner,named,inline", [
+    ('_SOURCE_FIELDS = ["source_kind", "source_ref", "actor_ref", "actor_role"]\n', False, 1, 1),
+    ('ALLOWED = ["source_kind", "source_ref", "actor_ref", "actor_role"]\n', False, 0, 1),
+    ('_SOURCE_FIELDS = ["other"]\n', False, 0, 0),
+    ('_SOURCE_FIELDS = ["source_kind", "source_ref", "actor_ref", "actor_role"]\n', True, 0, 0),
+])
+def test_repository_findings_preserve_refusals_and_retry(tmp_path, monkeypatch, source, owner, named, inline):
+    monkeypatch.setitem(globals(), "REPO_ROOT", tmp_path)
+    monkeypatch.setitem(globals(), "PACKAGE_ROOT", tmp_path / "loopx")
+    declared = tmp_path / "loopx/capabilities/issue_fix/pr_description.py"
+    declared.parent.mkdir(parents=True)
+    body = PATTERN_DECISIONS["_REPO_PATTERN"][0]
+    declared.write_text("\n".join(f"P{index} = {body!r}" for index in range(3)))
+    path = tmp_path / (SET_DECISIONS["_SOURCE_FIELDS"][1] if owner else "loopx/extra.py")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("BROKEN = (\n")
+    read = _repository_reader()
+    with pytest.raises(SyntaxError):
+        read("_SOURCE_FIELDS")
+    path.write_text(source)
+    bindings, sites = read("_SOURCE_FIELDS")
+    assert len(bindings) == named
+    assert len(sites) == inline
+    bindings.clear()
+    sites.clear()
+    assert tuple(map(len, read("_SOURCE_FIELDS"))) == (named, inline)
+    # Other decisions and the declared embedded sites are part of this same scan.
+    assert read("_REPO_PATTERN") == ([], [])
+    if owner:
+        declared.write_text("ONE = " + repr(body))
+        _, rejected = _repository_reader()("_REPO_PATTERN")
+        assert rejected == [
+            "loopx/capabilities/issue_fix/pr_description.py declares 3 embedded site(s), found 1"
+        ]
