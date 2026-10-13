@@ -986,6 +986,106 @@ stops new operations; retain historical readers and fences and use the existing
 lifecycle owner for forward retirement. Never remove committed intent to resume
 an old writer.
 
+### 9.4 Local request-derived changes and cancellation recovery
+
+The local candidate now connects §5.1 to the existing request and Goal owners.
+It requires an exact `source_session_v1` Goal, the configured local runtime,
+existing canonical File/SQLite authority, frozen Goal intent/policy, and a
+local private request addressed to a registered receiver. An independently
+bound host execution or external source is not qualified by this profile.
+No command below activates a Goal, launches a model, or grants more work scope.
+
+The existing request entry retains its original message, brief and identity.
+Its `collaboration_request_control_v0` field owns ordered corrections, per-revision
+read/assessment facts, one unresolved effect reservation and operation receipts.
+`request_control_contract.ts` owns the bounded wire values shared by the Goal
+owner and frontend. These are request-domain contracts, not additional entries
+or proof claims in the original 26-vocabulary acceptance.
+
+A `goal_request_work_graph_amendment_v0` proposal carries an exact
+`source_request` reference: `request_id`, `request_revision`, `request_digest`.
+Before commit the request owner reserves the original operation with that
+reference, receiver, proposal, Goal/work/intent basis and actual authority-source
+identity. The Goal owner's existing work planner still decides the allowed delta.
+Commit and source-authorized conditional abort compete for the same durable
+operation receipt. A lost response remains unresolved until that receipt is read
+and linked back to the request; an absent receipt or a fresh operation id does
+not release the reservation. A definitive stale Goal basis records `rejected`
+without changing Goal work. Current request state and the historical Goal outcome
+are separate observations.
+
+A correction may advance the request while the old reserved effect is unknown.
+The source entry attempts conditional abort after recording that correction.
+The old binding remains immutable; another effect cannot begin until its exact
+terminal receipt is linked. Cancellation before reservation closes admission.
+Cancellation after reservation remains pending; if commit already won, the
+result reports that committed Goal change and retains its created work. It does
+not claim rollback, cancel independent Goal work, or settle its execution or
+acceptance. Source/provider identity changes retain a recovery hold rather than
+writing an abort into another authority store.
+
+**Owner journey.** Open the original private conversation's delegation details.
+Edit the brief or cancel the request there; Goal/receiver/source identities are
+already bound to the original message. Saving validates and writes in one user
+gesture. A failed current read clears current controls. Unknown write responses
+retain the original request across reload; retry that exact operation. A typed
+stale-basis refusal reloads the latest revision for editing. Pending cancellation
+and committed/aborted/rejected outcomes remain distinct. Historical Goal instances
+remain read-only here; this is not restored-runtime authorization.
+
+**Receiver journey.** `manager-inbox read` supplies the current brief, revision,
+digest and `source_request` reference. Acknowledge with `--request-revision N
+--request-digest DIGEST`, and report with `--request-revision N`. MCP
+`assess_request` and `return_result` accept the same explicit revision fields.
+An omitted revision continues to name original revision 1; late original results
+remain appendable without satisfying a newer request. A new revision's first
+conclusion uses the existing immutable result-update chain automatically.
+Returned peer and conversation results identify their source revision.
+
+Use the existing governed proposal fields plus `source_request` when proposing
+this request's fixed-template work. Commit with the retained `proposal_id`,
+`proposal_digest`, `source_request` and stable `--operation-id`; the adapter
+reserves and links through the real owners. Removing source context from a
+request-derived proposal does not make its commit independent.
+
+The original requester can inspect, revise, cancel or recover through:
+
+```sh
+loopx --registry REGISTRY --runtime-root RUNTIME --format json manager-inbox control \
+  --goal-id GOAL --goal-instance-id INSTANCE --agent-id REQUESTER \
+  --peer-agent-id RECEIVER --request-id REQUEST --control-operation inspect
+```
+
+For `revise`/`cancel`, supply `--operation-id` and `--control-file` containing
+`expected_revision`, `expected_digest`, `reason`, and (for revise) the complete
+`brief`; use `--execute` to write. Omit `--agent-id` only for the authenticated
+original local conversation owner. `recover --execute` reads the original
+terminal receipt and may conditionally abort an already cancelled or superseded reservation;
+it never reassigns an unknown effect. The bound peer MCP `control_peer_request`
+uses the same source owner. Browser writes cannot impersonate a receiver/peer.
+
+Limits: eight request revisions, sixteen effect reservations, sixty-four request
+operation receipts and the existing 128,000-byte entry read boundary. Admission
+reserves space for a maximum legal cancellation and terminal linkage, including
+JSON escaping; oversized new work is refused before persistence. Replays do not
+consume additional capacity. Source text and artifacts keep their existing
+owners and limits; there is no new automatic private-locator service.
+
+Validation combines actual source registration, request IO, canonical File/SQLite
+transactions, independent CLI/MCP consumers, original-conversation HTTP and
+packaged UI; shared Goal transactions also require isolated real PostgreSQL.
+Synthetic source progress observations are not model behavior. General request
+reassignment, arbitrary host effects, live Lark/model qualification, restored
+writer activation and whole M2/G1 acceptance remain unqualified. Existing Lark
+tracking consumes the same revision/control facts with its audience filtering;
+no live transport send is inferred from readback tests.
+
+Before use, the code can be reverted. After control/proposal records exist,
+stop new admission and retain readers, original request/Goal receipts and fences.
+Do not erase the control field or roll back only one side to make work eligible.
+Restoration and a wider runtime/profile rollout retain their existing ownership
+and qualification gates.
+
 ## 10. Staged delivery
 
 1. **Stage 0 — characterization and RFC.** Record own-lane, unclaimed,
