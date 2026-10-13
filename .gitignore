@@ -40,6 +40,7 @@ logs/
 
 # Legacy semantic census reports are derived locally, never repository authority.
 /loopx/semantics/inventory_v0.json
+/loopx/semantics/project_registry_io_manifest_v1.json
 
 # Frontend delivery artifacts are built and qualified from source.
 /loopx/web/chat/

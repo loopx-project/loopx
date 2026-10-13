@@ -1,1 +1,2 @@
 graft loopx/web/chat
+exclude loopx/semantics/project_registry_io_manifest_v1.json

@@ -16,8 +16,8 @@ from .production import run_typescript_scan
 
 
 PROJECT_REGISTRY_IO_MANIFEST_SCHEMA = "loopx_project_registry_io_manifest_v1"
-PROJECT_REGISTRY_IO_MANIFEST = (
-    Path("loopx") / "semantics" / "project_registry_io_manifest_v1.json"
+DIRECT_IO_CLASSIFICATIONS_PATH = (
+    Path("loopx") / "semantics" / "project_registry_io_classifications_v1.json"
 )
 SOURCE_ROOT = "loopx"
 PROJECT_REGISTRY_SOURCE_SUFFIXES = frozenset({".py", ".ts", ".tsx", ".js", ".mjs"})
@@ -453,17 +453,12 @@ def _site_rows(
 def build_project_registry_io_manifest(
     repo_root: Path,
     *,
-    previous: dict[str, Any] | None = None,
+    classifications: dict[str, str] | None = None,
     sources: list[SourceFile] | None = None,
 ) -> dict[str, Any]:
-    previous_rows = previous.get("sites", []) if isinstance(previous, dict) else []
-    classifications = {
-        row["site"]: row["classification"]
-        for row in previous_rows
-        if isinstance(row, dict)
-        and isinstance(row.get("site"), str)
-        and isinstance(row.get("classification"), str)
-    }
+    """Compute the census; only reviewed direct-I/O classifications are tracked."""
+    if classifications is None:
+        classifications = load_project_registry_io_classifications(repo_root)
     observations = collect_project_registry_io(repo_root, sources)
     return {
         "schema_version": PROJECT_REGISTRY_IO_MANIFEST_SCHEMA,
@@ -478,27 +473,54 @@ def build_project_registry_io_manifest(
     }
 
 
+def load_project_registry_io_classifications(repo_root: Path) -> dict[str, str]:
+    path = repo_root / DIRECT_IO_CLASSIFICATIONS_PATH
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or any(
+        not isinstance(site, str) or not isinstance(classification, str)
+        for site, classification in payload.items()
+    ):
+        raise ValueError("project registry I/O classifications must map sites to strings")
+    return payload
+
+
 def render_project_registry_io_manifest(manifest: dict[str, Any]) -> str:
     return json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
 
 
 def validate_project_registry_io_manifest(
     repo_root: Path,
-    manifest: dict[str, Any],
+    manifest: dict[str, Any] | None = None,
     *,
+    classifications: dict[str, str] | None = None,
     sources: list[SourceFile] | None = None,
 ) -> list[str]:
-    if manifest.get("schema_version") != PROJECT_REGISTRY_IO_MANIFEST_SCHEMA:
+    """Check current source policy, or an explicit export against current source."""
+    if manifest is not None and manifest.get("schema_version") != PROJECT_REGISTRY_IO_MANIFEST_SCHEMA:
         return ["project registry I/O manifest schema is unsupported"]
+    if classifications is None:
+        classifications = load_project_registry_io_classifications(repo_root)
     expected = build_project_registry_io_manifest(
         repo_root,
-        previous=manifest,
+        classifications=classifications,
         sources=sources,
     )
+    if manifest is None:
+        manifest = expected
     actual_rows = manifest.get("sites")
     if not isinstance(actual_rows, list):
         return ["project registry I/O manifest sites must be a list"]
     errors: list[str] = []
+    direct_sites = {
+        row["site"] for row in expected["sites"]
+        if row["kind"] in {"direct_json_read", "direct_json_write"}
+    }
+    stale_classifications = sorted(set(classifications) - direct_sites)
+    if stale_classifications:
+        errors.append(f"stale project registry I/O classifications: {stale_classifications}")
+    for classified_site, label in sorted(classifications.items()):
+        if label not in ALLOWED_DIRECT_CLASSIFICATIONS:
+            errors.append(f"invalid project registry I/O classification: {classified_site}: {label}")
     site_names = [
         row.get("site")
         for row in actual_rows

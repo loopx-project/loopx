@@ -8,8 +8,8 @@ from the complete tracked tree on each run, never loaded from a report file.
 Vocabulary changes, forks and registry weakening remain checked; ordinary
 carrier edits require no generated snapshot commit. Only tracked sources are
 read, and no private data is printed. The project-registry I/O census is also
-checked through its own tracked-product source policy so moved or unclassified
-sites fail premerge.
+computed through its own tracked-product source policy. Unclassified direct
+I/O and stale reviewed classifications fail premerge; moved sites need no export.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ from loopx.semantics.field_use import (  # noqa: E402
     FACTS, ROLES, field_use_summary, lexical_module_count, render_field_uses, scan_field_uses,
 )
 from loopx.semantics.project_registry_io import (  # noqa: E402
-    PROJECT_REGISTRY_IO_MANIFEST, validate_project_registry_io_manifest,
+    validate_project_registry_io_manifest,
 )
 from scripts.generate_semantic_bindings import build_artifacts  # noqa: E402
 from loopx.canary.maintainability_ratchet import evaluate_maintainability_findings  # noqa: E402
@@ -1172,15 +1172,10 @@ def main() -> int:
     coverage = check_coverage_floor(registry)
     sources = load_sources(REPO_ROOT)
     check_retired_lease_input(registry, sources)
-    registry_io_manifest = json.loads(
-        (REPO_ROOT / PROJECT_REGISTRY_IO_MANIFEST).read_text(encoding="utf-8")
-    )
-    registry_io_errors = validate_project_registry_io_manifest(
-        REPO_ROOT, registry_io_manifest,
-    )
+    registry_io_errors = validate_project_registry_io_manifest(REPO_ROOT)
     require(not registry_io_errors, "; ".join(registry_io_errors)
-            + "; regenerate with uv run python scripts/generate_project_registry_io_manifest.py "
-            "and review any direct-I/O classifications")
+            + "; inspect with uv run python scripts/generate_project_registry_io_manifest.py "
+            "and review direct-I/O classifications in project_registry_io_classifications_v1.json")
     inventory, ratchets = check_inventory(registry, sources)
     check_owned_vocabularies(registry, inventory)
     for path, expected in build_artifacts().items():
