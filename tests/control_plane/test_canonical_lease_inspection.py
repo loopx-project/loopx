@@ -186,10 +186,10 @@ def test_inactive_legacy_inspection_does_not_project_todos(tmp_path, monkeypatch
     state = tmp_path / "state.md"
     state.write_text("---\nhandoff_mode: hard_lease\n---\n# Synthetic state\n")
     registry.write_text(json.dumps({"goals": [{"id": GOAL, "repo": str(tmp_path), "state_file": str(state)}]}))
-    import loopx.todos
+    from loopx.control_plane.todos import list_readback
     def forbidden_projection(**_):
         raise AssertionError("inactive inspection must not parse Todo history")
-    monkeypatch.setattr(loopx.todos, "list_goal_todos", forbidden_projection)
+    monkeypatch.setattr(list_readback, "list_goal_todos", forbidden_projection)
     runtime = tmp_path / "runtime"
     missing = _inspect(registry, runtime)
     assert missing["active"] is False and missing["lease"] is None
@@ -211,13 +211,13 @@ def test_legacy_inspection_reloads_lease_after_demanding_todo_facts(tmp_path, mo
     lease_path.parent.mkdir(parents=True)
     lease = {"schema_version": "task_lease_v0", "status": "active", "owner": "agent-a", "expires_at": "2099-01-01T00:00:00Z"}
     lease_path.write_text(json.dumps(lease))
-    import loopx.todos
+    from loopx.control_plane.todos import list_readback
     calls = []
     def release_during_projection(**_):
         calls.append(True)
         lease_path.write_text(json.dumps({**lease, "status": "released"}))
         return {"todos": [{"todo_id": TODO, "status": "open", "claimed_by": None, "excluded_agents": []}]}
-    monkeypatch.setattr(loopx.todos, "list_goal_todos", release_during_projection)
+    monkeypatch.setattr(list_readback, "list_goal_todos", release_during_projection)
     result = _inspect(registry, runtime)
     assert len(calls) == 1
     assert result["active"] is False

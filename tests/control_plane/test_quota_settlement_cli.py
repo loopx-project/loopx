@@ -2697,8 +2697,13 @@ def test_prior_host_closeout_reads_archived_exact_todo(
 
 
 def test_standard_codex_app_settlement_is_receipted_and_idempotent(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from examples.control_plane.quota_plan_fixtures import write_codex_heartbeat_fixture
+
+    codex_home = tmp_path / "codex-home"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CODEX_THREAD_ID", "scheduler-fixture")
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_read_only_todo(project)
     binding = (
@@ -2886,6 +2891,12 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
         TURN_ID,
         "--execute",
     ]
+    # Matching Host facts cannot revive the superseded receipt; the fresh
+    # Turn below must still acknowledge this real isolated host observation.
+    write_codex_heartbeat_fixture(
+        codex_home, goal_id=GOAL_ID, agent_id=AGENT_ID,
+        rrule="FREQ=MINUTELY;INTERVAL=3",
+    )
     ack_rc, ack = _run_cli(
         registry_path,
         runtime,
@@ -5589,8 +5600,13 @@ def test_pending_action_selection_does_not_commit_after_new_user_gate(
 
 @pytest.mark.parametrize("write_vision", [True, False], ids=["qualified-vision", "missing-vision"])
 def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
-    tmp_path: Path, write_vision: bool,
+    tmp_path: Path, write_vision: bool, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from examples.control_plane.quota_plan_fixtures import write_codex_heartbeat_fixture
+
+    codex_home = tmp_path / "codex-home"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CODEX_THREAD_ID", "scheduler-fixture")
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_autonomous_replan_fixture(project, runtime, registry_path)
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
@@ -5761,6 +5777,28 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
     ] == "autonomous_replan"
     assert _spend_run_count(runtime) == 1
 
+    # A settled receipt retains the original recipe, not authority to invent
+    # current Host facts. Missing and different cadences cannot mutate state.
+    for observed in (None, "FREQ=MINUTELY;INTERVAL=6"):
+        if observed is not None:
+            write_codex_heartbeat_fixture(
+                codex_home, goal_id=GOAL_ID, agent_id=AGENT_ID, rrule=observed,
+            )
+        refused_rc, refused = _run_cli(
+            registry_path, runtime, *original_scheduler_ack_args,
+        )
+        assert refused_rc == 1, refused
+        assert refused["scheduler_commit"]["reason_code"] == "rrule_mismatch"
+        assert refused["scheduler_commit"]["written"] is False
+        assert not Path(refused["scheduler_commit"]["path"]).exists()
+        assert _spend_run_count(runtime) == 1
+
+    # Simulate the host update through the existing isolated manifest fixture;
+    # command-line hints alone do not prove the actual Codex Host readback.
+    write_codex_heartbeat_fixture(
+        codex_home, goal_id=GOAL_ID, agent_id=AGENT_ID,
+        rrule="FREQ=MINUTELY;INTERVAL=3",
+    )
     ack_rc, ack = _run_cli(
         registry_path,
         runtime,

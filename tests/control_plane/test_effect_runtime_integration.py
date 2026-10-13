@@ -11,6 +11,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from runtime_retirement_diagnostics import (
+    failure_trace, file_state, instrument_copied_runtime, retained_stderr, trace_events,
+)
 
 from loopx.control_plane import effect_runtime
 from loopx.control_plane.coordination.runtime_shadow import (
@@ -598,6 +601,7 @@ def test_identical_release_does_not_reuse_a_retired_lazy_loader(
 def test_runtime_decode_change_rotates_identity_and_starts_replacement(
     tmp_path: Path,
     monkeypatch,
+    request,
 ) -> None:
     source_root = Path(effect_runtime.__file__).resolve().parent
     staged_root = tmp_path / "control_plane"
@@ -606,6 +610,24 @@ def test_runtime_decode_change_rotates_identity_and_starts_replacement(
         target = staged_root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
+    instrument_copied_runtime(staged_root)
+    captures: list[int] = []
+    popen = effect_runtime.subprocess.Popen
+
+    def close_captures():
+        for descriptor in captures:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+    request.addfinalizer(close_captures)
+
+    def capture_runtime_stderr(args, *positional, **options):
+        retained_stderr(args, options, staged_root, captures)
+        return popen(args, *positional, **options)
+
+    monkeypatch.setattr(effect_runtime.subprocess, "Popen", capture_runtime_stderr)
 
     runtime_dir = tmp_path / "runtime"
     monkeypatch.setattr(effect_runtime, "_control_plane_root", lambda: staged_root)
@@ -626,14 +648,43 @@ def test_runtime_decode_change_rotates_identity_and_starts_replacement(
     assert original_info != replacement_info
     assert replacement_info.exists()
 
+    shutdown_started = time.monotonic()
     effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
+    shutdown_acknowledged = time.monotonic()
     deadline = time.monotonic() + 2
     while (
         original_info.exists() or replacement_info.exists()
     ) and time.monotonic() < deadline:
         time.sleep(0.025)
-    assert not original_info.exists()
-    assert not replacement_info.exists()
+    try:
+        assert not original_info.exists()
+        assert not replacement_info.exists()
+    except AssertionError:
+        try:
+            print("runtime retirement diagnostic: " + json.dumps({
+                "shutdown_request_seconds": shutdown_started,
+                "shutdown_ack_seconds": shutdown_acknowledged,
+                "assertion_seconds": time.monotonic(),
+                "deadline_seconds": deadline,
+                "original_pid": int(original["pid"]),
+                "replacement_pid": int(replacement["pid"]),
+                "original": file_state(original_info, int(original["pid"])),
+                "replacement": file_state(replacement_info, int(replacement["pid"])),
+                "replacement_alive": effect_runtime._pid_is_alive(replacement["pid"]),
+                "replacement_lock": file_state(Path(str(replacement_info) + ".ts-effect.lock"), int(replacement["pid"])),
+                "events": failure_trace(captures),
+                "event_clock": "performance.now milliseconds per PID; not aligned with Python monotonic seconds",
+                "trace_limit": "first 16 KiB / last 64 events per stderr; shared-offset reads may race writes; later cleanup and Windows sharing unobserved",
+            }))
+        except Exception:
+            # Diagnostics must never replace or suppress the original failure.
+            pass
+        raise
+
+
+def test_runtime_retirement_trace_filters_private_stderr() -> None:
+    raw = b'private path/token\nloopx_fixture_retirement:{"event":{}}\nloopx_fixture_retirement:{"event":"lock_release_error","code":"EPERM","token":"private","path":"private","pid":12,"ms":1}\n'
+    assert trace_events(raw) == [{"event": "lock_release_error", "pid": 12, "ms": 1, "code": "EPERM"}]
 
 
 def test_typed_write_rejects_cross_effect_overwrite(

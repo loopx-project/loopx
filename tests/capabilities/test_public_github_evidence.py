@@ -4,7 +4,7 @@ import argparse
 import copy
 import hashlib
 import json
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -90,6 +90,60 @@ def test_partial_reads_are_observed_not_admitted_or_complete(monkeypatch):
     assert any("HTTP 404" in item for item in before["limitations"])
     rejected = readback(p, receipt, admission(p, receipt, "reject"))
     assert rejected["retirement"]["reason"] == "parent_rejected"
+
+
+@pytest.mark.parametrize("failed_step,expected", [
+    ("visibility", "public repository visibility check"),
+    ("download", "source file read"),
+    ("decode", "source text validation"),
+])
+def test_failed_source_identifies_reached_step_without_exception_details(
+    monkeypatch, failed_step, expected,
+):
+    calls = []
+
+    def fail_at_step(url):
+        calls.append(url)
+        visibility = url.startswith("https://api.github.com/")
+        if failed_step == "visibility" or (failed_step == "download" and not visibility):
+            raise URLError("sensitive-error-detail")
+        return b'{"private": false}' if visibility else b"\xffsensitive-error-detail"
+
+    monkeypatch.setattr(provider, "_read", fail_at_step)
+    p = plan()
+    receipt = provider.execute_public_github(p)["receipt"]
+    assert receipt["status"] == "failed" and receipt["sources"] == []
+    assert len(calls) == (1 if failed_step == "visibility" else 2)
+    result = readback(p, receipt, admission(p, receipt, "reject"))
+    assert any(expected in item for item in result["limitations"])
+    assert "sensitive-error-detail" not in json.dumps(result)
+    assert result["original_source_fallback_allowed"]
+    assert result["downstream_source_refs"] == []
+    assert result["retirement"]["reason"] == "parent_rejected"
+
+
+def test_partial_http_failure_step_reaches_cli_and_shared_sinks(tmp_path, monkeypatch):
+    from loopx.extensions.lark.presentation.message_card import build_lark_markdown_reply_card
+
+    monkeypatch.setattr(provider, "_read", reader)
+    p = plan([REF, SECOND])
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(p), encoding="utf-8")
+    payloads = []
+    args = argparse.Namespace(command="external-evidence", external_evidence_action="execute",
+        plan_json=str(path), execute=True)
+    assert cli.handle_external_evidence_command(args, output_format=lambda _: "json",
+        print_payload=lambda payload, *_: payloads.append(payload)) == 0
+    receipt = payloads[0]["receipt"]
+    assert receipt["status"] == "succeeded" and len(receipt["sources"]) == 1
+    result = readback(p, receipt)
+    assert any("Source 2: HTTP 404 during source file read" == item for item in result["limitations"])
+    markdown = render_readback(result)
+    card = build_lark_markdown_reply_card(markdown)
+    assert "source file read" in markdown
+    assert "source file read" in card["elements"][0]["text"]["content"]
+    assert result["parent_admission"] is None
+    assert result["evidence_coverage_observed"] is False
 
 
 @pytest.mark.parametrize("mutate", ["source_refs", "search_terms", "objective"])

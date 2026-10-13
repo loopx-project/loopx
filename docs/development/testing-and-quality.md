@@ -603,6 +603,11 @@ individual shards. Relative coverage paths make reports portable across runners.
 Each shard has a 60-minute job ceiling for setup, the full partition and report
 upload; individual test deadlines stay unchanged. Verbose progress names failed
 cases before the suite finishes, so an interrupted run retains their identities.
+An explicitly loaded CI observer also streams pytest-owned phase durations from
+the xdist controller. Read the downloaded log with
+`node scripts/ci/pytest_timing.ts JOB_LOG`; incomplete evidence remains incomplete
+and does not replace JUnit, coverage or the required gate. See the
+[timing observation boundary](ci-impact-selection.md#four-complete-python-shards).
 The reusable Sonar workflow consumes that same run's XML and never reruns
 pytest or reads cross-run artifacts. Missing Sonar tokens still skip analysis
 successfully; test jobs receive no Sonar secret. The trigger is the union of
@@ -615,6 +620,10 @@ Linux 全套测试分到四台 hosted runner，每台保留两个 xdist worker�
 合并后再执行原有 19.6% 门槛；不要求单个分片达到全套覆盖率。coverage 使用相对路径，
 每个分片的作业上限为 60 分钟，覆盖环境准备、完整分片和报告上传；单项测试超时
 保持不变。详细进度在套件结束前就记录失败用例名称，运行中断后仍可定位这些用例。
+CI 同时在 xdist controller 流式记录 pytest 原生 phase 耗时。下载日志后用
+`node scripts/ci/pytest_timing.ts JOB_LOG` 回读；不完整证据保持不完整，不能替代
+JUnit、coverage 或必过门禁。归属与测量边界见
+[分片耗时记录](ci-impact-selection.md#four-complete-python-shards)。
 Sonar 只复用同一次 run 的 XML，不重复测试、不跨 run 取产物。缺少 token 仍成功跳过
 Sonar，测试 job 不接收 Sonar secret。触发范围取原有两套 workflow 的并集；纯前端
 PR 使用前述豁免，Sonar 配置变更仍全量运行，包括没有 token 的 fork。

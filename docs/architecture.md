@@ -175,17 +175,28 @@ claim, gate, monitor, quota, writeback, recovery, and terminal closure. See the
 The executable boundary policy lives in
 [`test_control_plane_import_boundaries.py`](../tests/architecture/test_control_plane_import_boundaries.py):
 
-- `test_control_plane_does_not_gain_outward_dependencies` rejects control-plane
-  imports of presentation, CLI, capability, or benchmark-adapter layers.
+- `test_control_plane_has_no_unreviewed_outward_dependencies` rejects
+  control-plane imports of presentation, CLI, capability, or benchmark-adapter
+  layers unless the existing maintainability policy records the exact edge,
+  its review reason, and its retirement plan.
 - `test_status_has_no_forbidden_outward_dependencies` rejects status imports of
   benchmark-adapter or presentation layers.
 - `test_quota_markdown_is_owned_by_the_presentation_layer` protects the renderer
   ownership and CLI composition boundary.
 
-These are zero-exception checks. The former quota-Markdown and status
-verifier-bootstrap edges have been removed; there is no remaining debt
-allowlist for these checks. Run the linked architecture test file to inspect
-current violations rather than maintaining an edge inventory in prose.
+The control-plane check shares
+[`REVIEWED_MAINTAINABILITY_EXCEPTIONS`](../loopx/canary/maintainability_ratchet.py)
+with the maintainability ratchet. Its retained legacy Todo writer bridge keeps
+the existing Explore completion-evidence guard until that writer retires.
+Exceptions match complete source/target identities; neighboring modules and
+targets remain rejected, and a retired edge makes its exception stale. This
+replaces the former unconditional rejection that contradicted the already
+reviewed migration debt. It adds no exception or import to the runtime.
+
+The status and quota-Markdown checks remain zero-exception: their former
+verifier-bootstrap and renderer edges have been removed. Run the linked
+architecture test file for current violations and the ratchet for reviewed
+debt, invalid or stale exceptions, and growth beyond unchanged ceilings.
 
 Adapter-specific enrichment belongs behind application/plugin composition
 rather than in the status core. Move an edge only after characterization

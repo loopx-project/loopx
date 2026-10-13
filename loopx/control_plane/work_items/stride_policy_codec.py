@@ -13,7 +13,7 @@ from typing import Any
 
 @lru_cache(maxsize=1)
 def stride_strategy_options() -> tuple[str, ...]:
-    contract = json.loads(files("loopx.control_plane").joinpath("stride_strategy_schema.json").read_text())
+    contract = json.loads(files("loopx.control_plane").joinpath("stride_strategy_schema.json").read_text(encoding="utf-8"))
     return tuple(contract["enum"])
 
 
