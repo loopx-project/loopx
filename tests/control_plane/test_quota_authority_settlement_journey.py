@@ -78,14 +78,37 @@ def test_stale_markdown_cannot_admit_terminal_or_blocked_work(tmp_path, provider
 
 @pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
 def test_exact_selection_reaches_work_beyond_display_limits(tmp_path, provider):
-    project, runtime, registry, path, _ = _source(tmp_path, provider=provider)
+    project, runtime, registry, path, prefix = _source(tmp_path, provider=provider)
     if provider != "legacy":
-        path.unlink()  # Display is not a prerequisite for promoted admission.
+        # Canonical Todo admission does not need displayed rows. Goal intent
+        # and constraints remain required independently of the Todo provider.
+        path.write_text(prefix)
     code, guard = _guard(project, runtime, registry)
     assert code == 0, guard
     assert guard["decision"] == "run"
     assert guard["selected_todo"]["todo_id"] == cli.TODO_ID
     assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == cli.TODO_ID
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_canonical_todos_cannot_replace_missing_goal_intent(tmp_path, provider):
+    project, runtime, registry, path, _ = _source(tmp_path, provider=provider)
+    before = list_goal_todos(registry_path=registry, goal_id=cli.GOAL_ID,
+                            runtime_root_arg=str(runtime), todo_id=cli.TODO_ID)
+    path.unlink()
+    # A read-only canonical Todo lookup still works; it cannot authorize a
+    # delivery whose Goal objective and constraints are unavailable.
+    assert list_goal_todos(registry_path=registry, goal_id=cli.GOAL_ID,
+                           runtime_root_arg=str(runtime), todo_id=cli.TODO_ID) == before
+    code, guard = _guard(project, runtime, registry)
+    assert code == 1
+    assert guard["should_run"] is False
+    assert not guard.get("selected_todo")
+    assert cli._heartbeat_receipt_count(runtime, cli.TURN_ID) == 0
+    assert cli._spend_run_count(runtime) == 0
+    assert not path.exists()
+    assert list_goal_todos(registry_path=registry, goal_id=cli.GOAL_ID,
+                           runtime_root_arg=str(runtime), todo_id=cli.TODO_ID) == before
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -245,7 +268,7 @@ def test_semantic_progress_replay_keeps_original_turn_after_todo_wait(tmp_path, 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_migrated_hard_lease_can_write_settle_retry_and_continue(tmp_path, provider):
-    project, runtime, registry, path, _ = _source(
+    project, runtime, registry, path, prefix = _source(
         tmp_path, provider=provider, handoff_mode="legacy",
         extra=f"claimed_by={cli.AGENT_ID}",
     )
@@ -263,7 +286,8 @@ def test_migrated_hard_lease_can_write_settle_retry_and_continue(tmp_path, provi
     assert code == 0 and migrated["status"] == "applied", migrated
     assert Path(migrated["backup_path"]).is_file()
     assert migrated["execution_authority_granted"] is False
-    path.unlink()  # The migrated journey cannot use the old Markdown writer.
+    # Remove Todo display while retaining the independent Goal frame.
+    path.write_text(prefix)
 
     code, guard = _guard(project, runtime, registry)
     assert code == 0 and guard["decision"] == "run", guard

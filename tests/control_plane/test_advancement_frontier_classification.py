@@ -16,6 +16,37 @@ def item(identity, **fields):
     return {"todo_id": identity, "status": "open", "task_class": "advancement_task", **fields}
 
 
+@pytest.mark.parametrize("summary, expected", [
+    (None, 0), ([], 0), ({}, 0), ({"open_count": None}, 0),
+    ({"open_count": -2}, 0), ({"open_count": "bad"}, 0),
+    ({"open_count": []}, 0), ({"open_count": "12"}, 12),
+    ({"open_count": True}, 1), ({"open_count": 2.9}, 2),
+    ({"open_count": 9007199254740993}, 9007199254740993),
+])
+def test_frontier_open_counts_keep_legacy_read_compatibility(summary, expected):
+    from copy import deepcopy
+    from loopx.control_plane.goals import goal_frontier
+
+    before = deepcopy(summary)
+    assert goal_frontier._open_todo_count(summary) == expected
+    assert summary == before
+
+
+@pytest.mark.parametrize("claim, expected", [(None, 2), ("worker-a", 1),
+    ("worker-b", 0), ("__unclaimed__", 1)])
+def test_frontier_advancement_counts_keep_claim_and_terminal_boundaries(claim, expected):
+    from copy import deepcopy
+    from loopx.control_plane.goals import goal_frontier
+
+    rows = [item("todo_own", claimed_by="worker-a"), item("todo_free"),
+            item("todo_closed", status="done"), item("todo_marked_done", done=True),
+            item("todo_monitor", task_class="continuous_monitor"),
+            item("todo_deferred", status="deferred"), None]
+    before = deepcopy(rows)
+    assert goal_frontier._count_advancement_items(rows, claimed_by=claim) == expected
+    assert rows == before
+
+
 @pytest.mark.parametrize("agent", ["worker-a", None])
 def test_executable_slot_wins_and_peer_visibility_never_grants_selection(agent):
     source = [item("todo_own", claimed_by="worker-a"), item("todo_free"),

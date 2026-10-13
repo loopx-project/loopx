@@ -91,6 +91,10 @@ li[data-check="blocked"] .goal-team-check-pill { border-color: transparent; back
 .goal-team-lineage ul { list-style: none; padding: 0; margin: 12px 0; }
 .goal-team-lineage li { display: grid; gap: 8px; padding: 0 0 16px 16px; border-left: 2px solid var(--pw-line, #ebebeb); overflow-wrap: anywhere; }
 .goal-team-lineage button { justify-self: start; max-width: 100%; overflow-wrap: anywhere; text-align: start; }
+.goal-team-adoption { margin-top: 16px; }
+.goal-team-adoption label { display: block; margin-block: 12px; }
+.goal-team-adoption select { display: block; max-width: 100%; margin-top: 6px; }
+.goal-team-adoption > button { margin-block: 6px; }
 .goal-team-episode { margin-block: 20px; border: 1px solid var(--pw-line, #ebebeb); border-radius: 10px; padding: 16px; background: var(--pw-bg, #fafafa); }
 .goal-team-episode-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .goal-team-episode > p { color: var(--pw-muted, #666); line-height: 1.5; }

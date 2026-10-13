@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { normalizeCollaborationRequest, normalizeCollaborationSourceContext } from "../../loopx/control_plane/collaboration/semantic_request.ts";
+import { normalizeCollaborationRequest, normalizeCollaborationSourceContext, planCollaborationRequestPublication } from "../../loopx/control_plane/collaboration/semantic_request.ts";
 
 const target = { goal_id: "allocation", agent_id: "reviewer" };
 const brief = {
@@ -43,4 +43,36 @@ for (const source_message of [" x \n", "x".repeat(32000), "字".repeat(32000), "
 }
 for (const source_message of [" ", "x".repeat(32001), "😀".repeat(26000), "\u0000".repeat(17000)]) {
   assert.throws(() => normalizeCollaborationSourceContext({source_message}), /source_message|source context exceeds/);
+}
+
+// Only generated guidance and exact entry metadata can differ on replay.
+// Semantic context, source, recipient, lifetime and selected route stay bound.
+for (const peer of [false, true]) {
+  const request = {...target, brief, request_id: "a".repeat(64), source_id: "source-1",
+    instruction: "Current generated guide", goal_ref: {goal_id: target.goal_id, goal_instance_id: "ginst_" + "b".repeat(32)},
+    ...(peer ? {source_kind: "peer", source_agent_id: "builder", inherited_context: {message: "original context"}} : {})};
+  const operation = {...request, instruction: "Original guide"};
+  const entry = {...operation, delivered_at: "2026-01-01T00:00:00Z", ...(!peer ? {source_channel: "manager"} : {})};
+  const params = {request, operation: peer ? operation : null, entry};
+  const before = structuredClone(params);
+  assert.deepEqual(planCollaborationRequestPublication(params).entry, entry);
+  assert.equal(planCollaborationRequestPublication(params).replayed, true);
+  assert.deepEqual(params, before);
+  if (peer) {
+    assert.deepEqual(planCollaborationRequestPublication({...params, entry: null}), {
+      replayed: false, operation, entry: operation,
+    });
+  }
+  for (const change of [
+    {source_id: "another-source"}, {agent_id: "another-peer"},
+    {goal_ref: {...request.goal_ref, goal_instance_id: "ginst_" + "c".repeat(32)}},
+    {brief: {...brief, context: "New request"}}, {host_route: {thread_id: "new-thread"}},
+    {unexpected: "extra source field"}, ...(peer ? [{inherited_context: {message: "changed parent"}}] : []),
+  ]) {
+    assert.throws(() => planCollaborationRequestPublication({...params, request: {...request, ...change}}), /identity conflict/);
+  }
+  if (peer) {
+    assert.throws(() => planCollaborationRequestPublication({...params, entry: {...entry, source_channel: "manager"}}), /identity conflict/);
+    assert.throws(() => planCollaborationRequestPublication({...params, operation: {...operation, delivered_at: entry.delivered_at}}), /identity conflict/);
+  }
 }

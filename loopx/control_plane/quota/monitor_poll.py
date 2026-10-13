@@ -142,6 +142,44 @@ def resolve_due_monitor_candidate(
     }
 
 
+def _monitor_poll_receipt_path(runtime_root: Path, goal_id: str, effect_id: str) -> Path:
+    return (runtime_root / "goals" / goal_id / "runs" / ".transactions" /
+            "quota-monitor-poll" / f"{hashlib.sha256(effect_id.encode()).hexdigest()[:24]}.json")
+
+
+def resolve_monitor_poll_target(
+    *, registry_path: Path | None, runtime_root: Path | None, goal_id: str,
+    target_key: str | None, before: dict[str, Any], turn_instance_id: str | None,
+    execute: bool, goal_ref: Mapping[str, Any] | None,
+) -> tuple[str | None, str | None]:
+    due = resolve_due_monitor_candidate(registry_path=registry_path, runtime_root=runtime_root,
+        goal_id=goal_id, todo_id=None, target_key=target_key)
+    if due:
+        return normalize_todo_id(due["todo_id"]), None
+    if not execute or runtime_root is None or not turn_instance_id or not target_key or registry_path is None:
+        return None, None
+    try:
+        item = resolve_monitor_todo_item(registry_path=registry_path, runtime_root=runtime_root,
+            goal_id=goal_id, target_key=target_key)
+    except ValueError:
+        return None, None
+    todo_id = normalize_todo_id(item.get("todo_id"))
+    effect_id = _monitor_poll_effect_id(runtime_root=runtime_root, goal_id=goal_id,
+        agent_id=quota_decision_agent_id(before), turn_instance_id=normalize_turn_instance_id(turn_instance_id),
+        todo_id=todo_id, target_key=target_key, goal_ref=goal_ref)
+    expected_effect = f"quota-monitor-poll:{goal_id}:{quota_decision_agent_id(before)}:{normalize_turn_instance_id(turn_instance_id)}:todo:{todo_id}"
+    if effect_id != expected_effect:
+        # Historical target/turn-only effects can have a null Todo on the wire.
+        # The provider's resolved Todo cannot rewrite their frozen fingerprint.
+        return None, None
+    # Existence is only a transport route to the original operation. TypeScript
+    # validates scope, fingerprint and frozen admission before replay/recovery.
+    # Without that operation, retain current due admission and the original wire.
+    if _monitor_poll_receipt_path(runtime_root, goal_id, effect_id).exists():
+        return todo_id, effect_id
+    return None, None
+
+
 def _decision_packet(
     before: dict[str, Any],
     *,
@@ -739,6 +777,7 @@ def record_quota_monitor_poll_for_decision(
     _index_lock_held: bool = False,
     status_reloader: Callable[[], dict[str, Any]] | None = None,
     goal_ref: Mapping[str, Any] | None = None,
+    recovery_effect_id: str | None = None,
 ) -> dict[str, Any]:
     del render_markdown
     normalized_turn_id = normalize_turn_instance_id(turn_instance_id)
@@ -855,6 +894,14 @@ def record_quota_monitor_poll_for_decision(
     def transact(
         source_admission: Mapping[str, Any] | None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
+        # Recheck the transport precondition inside the same quota admission as
+        # the native receipt read. A legal no-effect abort may have removed it
+        # since target selection; that must never turn recovery into a new poll.
+        if recovery_effect_id is not None and (
+            effect_id != recovery_effect_id or
+            not _monitor_poll_receipt_path(runtime_root, goal_id, effect_id).exists()
+        ):
+            raise ValueError("original Monitor poll transaction is unavailable; reconcile its original operation before retrying")
         common = {
             "effect_id": effect_id,
             "runtime_root": runtime_root,
@@ -876,8 +923,7 @@ def record_quota_monitor_poll_for_decision(
 
         # Validate explicit claim routing before quota reserves a pending effect.
         # Exact retries keep their frozen admission if registry membership changed.
-        receipt_path = (runtime_root / "goals" / goal_id / "runs" / ".transactions" /
-                        "quota-monitor-poll" / f"{hashlib.sha256(effect_id.encode()).hexdigest()[:24]}.json")
+        receipt_path = _monitor_poll_receipt_path(runtime_root, goal_id, effect_id)
         if next_claimed_by and registry_path is not None and not receipt_path.exists():
             plan_todo_authoring_scope(
                 command="create", role="agent", goal_id=goal_id,

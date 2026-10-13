@@ -5,21 +5,22 @@ import type {JsonObject} from "./effect_program.ts";
 import {requireJsonObject, requireNonEmptyString} from "./runtime_decode.ts";
 import {canonicalAuthorityJson, canonicalAuthoritySha256, hasExactAuthorityKeys} from "./coordination/authority_store_codec.ts";
 import {durableWriteJson} from "./effect_runtime_io.ts";
+import {EffectRuntimeConflictError, EffectRuntimeRequestError} from "./effect_runtime_errors.ts";
 
 const SCHEMA = "loopx_configuration_backup_v0";
 
 function content(value: unknown): JsonObject {
   const data = requireJsonObject(canonicalAuthorityJson(value), "configuration backup data");
-  if (!hasExactAuthorityKeys(data, ["machine_configuration", "goals"])) throw new Error("configuration backup data fields are invalid");
+  if (!hasExactAuthorityKeys(data, ["machine_configuration", "goals"])) throw new EffectRuntimeRequestError("configuration backup data fields are invalid");
   if (data.machine_configuration !== null) requireJsonObject(data.machine_configuration, "machine configuration");
-  if (!Array.isArray(data.goals)) throw new Error("configuration backup goals must be an array");
+  if (!Array.isArray(data.goals)) throw new EffectRuntimeRequestError("configuration backup goals must be an array");
   const identities = new Set<string>();
   for (const item of data.goals) {
     const entry = requireJsonObject(item, "configuration backup Goal");
-    if (!hasExactAuthorityKeys(entry, ["goal_id", "goal_configuration"])) throw new Error("configuration backup Goal fields are invalid");
+    if (!hasExactAuthorityKeys(entry, ["goal_id", "goal_configuration"])) throw new EffectRuntimeRequestError("configuration backup Goal fields are invalid");
     const id = requireNonEmptyString(entry.goal_id, "configuration backup Goal id");
     const goal = requireJsonObject(entry.goal_configuration, "Goal configuration");
-    if (identities.has(id) || goal.id !== id) throw new Error("configuration backup Goal identity is ambiguous");
+    if (identities.has(id) || goal.id !== id) throw new EffectRuntimeRequestError("configuration backup Goal identity is ambiguous");
     identities.add(id);
   }
   return data;
@@ -36,11 +37,11 @@ export function verifyConfigurationBackup(value: unknown): JsonObject {
   const backup = requireJsonObject(canonicalAuthorityJson(value), "configuration backup");
   if (!hasExactAuthorityKeys(backup, ["schema_version", "privacy_certified", "activation_performed", "data", "sha256"])
     || backup.schema_version !== SCHEMA || backup.privacy_certified !== false || backup.activation_performed !== false) {
-    throw new Error("configuration backup envelope is invalid");
+    throw new EffectRuntimeRequestError("configuration backup envelope is invalid");
   }
   const data = content(backup.data);
   const {sha256, ...body} = backup;
-  if (sha256 !== canonicalAuthoritySha256(body)) throw new Error("configuration backup digest mismatch");
+  if (sha256 !== canonicalAuthoritySha256(body)) throw new EffectRuntimeRequestError("configuration backup digest mismatch");
   return {ok: true, schema_version: SCHEMA, sha256, goal_count: (data.goals as unknown[]).length,
     machine_configuration_present: data.machine_configuration !== null,
     privacy_certified: false, activation_performed: false, readback_verified: true};
@@ -50,7 +51,7 @@ async function requirePhysicalParent(path: string): Promise<void> {
   // Reject pre-existing symlink ancestors; do not silently follow another runtime.
   for (let current = path; ; current = dirname(current)) {
     const stat = await lstat(current);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("configuration restore parent must be a physical directory");
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new EffectRuntimeRequestError("configuration restore parent must be a physical directory");
     if (dirname(current) === current) break;
   }
 }
@@ -59,14 +60,14 @@ export async function restoreConfigurationBackup(value: unknown): Promise<JsonOb
   const request = requireJsonObject(value, "configuration backup restore");
   const backup = requireJsonObject(request.backup, "configuration backup");
   const verification = verifyConfigurationBackup(backup);
-  if (request.expected_sha256 !== verification.sha256) throw new Error("reviewed configuration backup digest changed");
+  if (request.expected_sha256 !== verification.sha256) throw new EffectRuntimeRequestError("reviewed configuration backup digest changed");
   const destination = requireNonEmptyString(request.destination, "configuration restore destination");
-  if (!isAbsolute(destination) || resolve(destination) !== destination) throw new Error("configuration restore requires a normalized absolute destination");
+  if (!isAbsolute(destination) || resolve(destination) !== destination) throw new EffectRuntimeRequestError("configuration restore requires a normalized absolute destination");
   const parent = dirname(destination);
   await requirePhysicalParent(parent);
-  try { await lstat(destination); throw new Error("configuration restore destination already exists"); }
+  try { await lstat(destination); throw new EffectRuntimeConflictError("configuration restore destination already exists"); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  if (request.execute !== true && request.execute !== false) throw new Error("configuration restore execute must be a boolean");
+  if (request.execute !== true && request.execute !== false) throw new EffectRuntimeRequestError("configuration restore execute must be a boolean");
   if (!request.execute) return {...verification, status: "preview", written: false};
   const staging = await mkdtemp(join(parent, ".loopx-configuration-"));
   try {
@@ -106,5 +107,5 @@ export async function configurationBackupOperation(value: unknown): Promise<Json
   if (request.action === "capture") return captureConfigurationBackup(request);
   if (request.action === "verify") return verifyConfigurationBackup(request.backup);
   if (request.action === "restore") return restoreConfigurationBackup(request);
-  throw new Error("unsupported configuration backup operation");
+  throw new EffectRuntimeRequestError("unsupported configuration backup operation");
 }
