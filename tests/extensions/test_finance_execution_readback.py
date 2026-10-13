@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from decimal import Inexact, Rounded, ROUND_DOWN, localcontext
+from fractions import Fraction
 from pathlib import Path
 import json
 import os
@@ -302,3 +304,89 @@ def test_actual_cli_readback_and_legacy_simulation_modes():
         argv, input=json.dumps(request), text=True, capture_output=True, env=env
     )
     assert process.returncode == 1 and json.loads(process.stdout)["simulation"] is True
+
+
+@pytest.mark.parametrize("precision", [2, 7, 28, 80])
+def test_tiny_quantity_and_fee_deltas_are_exact_under_any_caller_context(precision):
+    t = terms()
+    under = "1.9999999999999999999999999999"
+    over = "2.0000000000000000000000000001"
+    excess_fee = "0.20000000000000000000000000001"
+    with localcontext() as context:
+        context.prec = precision
+        context.rounding = ROUND_DOWN
+        context.traps[Inexact] = True
+        context.traps[Rounded] = True
+        context.clear_flags()
+        before = str(context)
+        with pytest.raises(ValueError, match="exceed confirmed quantity"):
+            reduce(t, observation(t, fills=[fill(over)], order_state="filled"))
+        r = reduce(t, observation(t, fills=[fill(under)], order_state="filled"))
+        assert Fraction(r["filled_quantity"]) == Fraction(under)
+        assert r["state"] == "submission_unknown"
+        assert r["financial_readback_complete"] is False
+        r = reduce(
+            t,
+            observation(
+                t,
+                fills=[fill(fee=excess_fee)],
+                order_state="filled",
+                protection_state="active",
+            ),
+        )
+        assert Fraction(r["fee"]) == Fraction(excess_fee)
+        assert r["fee_cap_exceeded"] is True
+        assert r["financial_readback_complete"] is False
+        bad = {**t, "maximum_fee": "not-a-number"}
+        with pytest.raises(ValueError):
+            reduce(bad, observation(bad))
+        assert str(context) == before
+
+
+def test_one_thousand_mixed_scale_fills_use_independent_fraction_oracle():
+    t = terms()
+    quantities = ["1e-100", "0.001", "1e-256", "0.00001"] * 250
+    fees = ["1e-60", "0.0008", "1e-256", "0"] * 250
+    fills = [
+        fill(q, fill_id=f"fill:{i}", fee=f)
+        for i, (q, f) in enumerate(zip(quantities, fees, strict=True))
+    ]
+    with localcontext() as context:
+        context.prec = 2
+        r = reduce(t, observation(t, fills=fills, order_state="open"))
+    assert Fraction(r["filled_quantity"]) == sum(map(Fraction, quantities))
+    assert Fraction(r["fee"]) == sum(map(Fraction, fees))
+    assert Fraction(r["fee"]) > Fraction(t["maximum_fee"])
+    assert r["fee_cap_exceeded"] is True and r["financial_readback_complete"] is False
+    assert r["state"] == "partially_filled"
+    with pytest.raises(ValueError, match="bounded list"):
+        reduce(t, observation(t, fills=fills + [fill("0.001", fill_id="fill:1000")]))
+
+
+@pytest.mark.parametrize("value", ["1e257", "1e-257", "9" * 79 + "9", "1e255"])
+def test_supported_numbers_remain_exact_or_explicitly_out_of_range(value):
+    t = terms()
+    # 80 coefficient digits and exponent255 are individually supported;
+    # an excessive fill must still be rejected rather than rounded to target.
+    with pytest.raises(ValueError):
+        reduce(t, observation(t, fills=[fill(value)]))
+
+
+@pytest.mark.parametrize("value", ["1e257", "1e-257", "99e256"])
+def test_exponent_range_fails_before_financial_classification(value):
+    t = terms()
+    with pytest.raises(ValueError, match="exponent"):
+        reduce(t, observation(t, fills=[fill("1", fee=value)]))
+
+
+def test_multi_fill_fee_cap_keeps_the_smallest_accepted_increment():
+    t = terms()
+    fills = [
+        fill("1", fill_id="fill:1", fee="0.1"),
+        fill("1", fill_id="fill:2", fee="0.10000000000000000000000000001"),
+    ]
+    r = reduce(
+        t, observation(t, fills=fills, order_state="filled", protection_state="active")
+    )
+    assert Fraction(r["fee"]) == sum(Fraction(f["fee"]) for f in fills)
+    assert r["fee_cap_exceeded"] is True and r["financial_readback_complete"] is False

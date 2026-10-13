@@ -100,7 +100,7 @@ def test_manifest_requires_only_the_simulation_permission() -> None:
             "capability_id": "human-confirmed-operation-executor",
             "protocol": "finance_operation_executor_v0",
             "provider_id": "loopx-finance-execution",
-            "provider_version": "0.1.1",
+            "provider_version": "0.1.2",
         }
     ]
 
@@ -128,7 +128,7 @@ def test_manifest_registers_the_capability_it_implements() -> None:
             "capability_id": "human-confirmed-operation-executor",
             "protocol": "finance_operation_executor_v0",
             "provider_id": "loopx-finance-execution",
-            "provider_version": "0.1.1",
+            "provider_version": "0.1.2",
             "provider_state": {
                 "declared": True,
                 "installed": False,

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Context, Decimal, InvalidOperation
 from typing import Any
 
 from .simulator import _digest, _token
@@ -19,6 +19,7 @@ from .simulator import _digest, _token
 TERMS_SCHEMA = "finance_execution_terms_v0"
 SUMMARY_SCHEMA = "finance_order_summary_v0"
 OBSERVATION_SCHEMA = "finance_execution_observation_v0"
+_MAX_NUMBER_EXPONENT = 256
 _DECIMALS = {"quantity", "limit_price", "leverage", "maximum_fee"}
 _TERMS = {
     "account_ref",
@@ -52,12 +53,38 @@ def _number(value: object, name: str, *, zero: bool = False) -> Decimal:
     if not isinstance(value, str) or len(value) > 80:
         raise ValueError(f"{name} requires a finite decimal string")
     try:
-        result = Decimal(value)
+        # Construction keeps all supplied digits. An explicit parsing context
+        # isolates invalid-input flags/traps from the caller's ambient context.
+        result = Decimal(value, context=Context(traps=[InvalidOperation]))
     except InvalidOperation as exc:
         raise ValueError(f"{name} requires a finite decimal string") from exc
     if not result.is_finite() or result < 0 or (not zero and result == 0):
         raise ValueError(f"{name} is outside its supported range")
+    if (
+        abs(result.as_tuple().exponent) > _MAX_NUMBER_EXPONENT
+        or abs(result.adjusted()) > _MAX_NUMBER_EXPONENT
+    ):
+        raise ValueError(f"{name} exponent is outside the supported range")
     return result
+
+
+def _exact_sum(values: list[Decimal]) -> Decimal:
+    """Sum validated, bounded decimals without context-dependent arithmetic.
+
+    At most 1000 fills, 80-character numbers and exponents in -256..256
+    bound coefficient alignment to at most 512 decimal places. Integer
+    coefficients and tuple construction preserve the smallest accepted delta;
+    neither operation rounds or changes a Decimal context.
+    """
+    if not values:
+        return Decimal(0)
+    parts = [value.as_tuple() for value in values]
+    exponent = min(part.exponent for part in parts)
+    total = sum(
+        int("".join(map(str, part.digits))) * 10 ** (part.exponent - exponent)
+        for part in parts
+    )
+    return Decimal((0, tuple(map(int, str(total))), exponent))
 
 
 def _time(value: object, name: str) -> datetime:
@@ -230,8 +257,8 @@ def reconcile_execution(
     fills = row["fills"]
     if not isinstance(fills, list) or len(fills) > 1000:
         raise ValueError("fills requires a bounded list")
-    quantity = Decimal(0)
-    fees = Decimal(0)
+    quantities: list[Decimal] = []
+    known_fees: list[Decimal] = []
     fee_known = bool(fills)
     seen = set()
     for fill in fills:
@@ -265,13 +292,15 @@ def reconcile_execution(
             order["side"] == "sell" and price < limit
         ):
             raise ValueError("fill is outside the confirmed price bound")
-        quantity += _number(f["quantity"], "fill.quantity")
+        quantities.append(_number(f["quantity"], "fill.quantity"))
         if f["fee"] is None:
             fee_known = False
         elif f["fee_unit"] != order["fee_unit"]:
             raise ValueError("fill fee unit drifted")
         else:
-            fees += _number(f["fee"], "fill.fee", zero=True)
+            known_fees.append(_number(f["fee"], "fill.fee", zero=True))
+    quantity = _exact_sum(quantities)
+    fees = _exact_sum(known_fees)
     target = _number(order["quantity"], "quantity")
     if quantity > target:
         raise ValueError("fills exceed confirmed quantity")

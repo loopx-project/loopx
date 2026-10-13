@@ -69,6 +69,14 @@ Equivalent decimal formatting is accepted for top-level numbers; protection
 lists remain exact. The original terms digest always binds the original
 JSON values, not a rounded or reformulated order.
 
+Numeric inputs retain every supplied digit within an explicit bounded policy:
+at most 80 characters, with both the stored decimal exponent and the adjusted
+exponent in -256..256. Unsupported magnitudes/scales fail before classification.
+Up to 1000 fills are summed using aligned integer coefficients and exact Decimal
+tuple construction; caller precision, rounding and traps cannot turn a tiny
+underfill/overfill or fee-cap excess into a complete result. No global Decimal
+context is modified. The original M1 simulator keeps its existing numeric policy.
+
 `retained-execution.json` contains those same `terms`, one `observation`, the
 original `operation_id` and the original `attempt_id`. The observation schema is
 `finance_execution_observation_v0`: exact operation/attempt/terms digest and
