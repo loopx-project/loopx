@@ -1023,6 +1023,9 @@ def refresh_state_run(
                 goal_id=safe_goal_id,
                 agent_id=normalized_agent_id,
             )
+        effective_replan_goal = resolve_todo_replan_cadence_goal(
+            registry_goal or {"id": safe_goal_id}, runtime_root,
+        )
         if agent_vision_packet is not None:
             agent_vision = prepare_vision_refresh(
                 agent_vision_packet,
@@ -1032,7 +1035,7 @@ def refresh_state_run(
                 merge_patch=merge_agent_vision_patch,
                 require_path_delta_for_durable_change=autonomous_replan_recorded,
                 allow_terminal_stride_path=(
-                    ((registry_goal or {}).get("execution_profile") or {}).get("stride_strategy")
+                    (effective_replan_goal.get("execution_profile") or {}).get("stride_strategy")
                     == "evidence_conditioned_v1"
                 ),
             )
@@ -1111,11 +1114,9 @@ def refresh_state_run(
             state_text=state_text,
             goal_id=safe_goal_id,
             progress_observation=normalized_progress_observation,
-            registry_goal=registry_goal,
+            registry_goal=effective_replan_goal,
             effective_turn_cadence=effective_turn_cadence_context(
-                resolve_todo_replan_cadence_goal(
-                    registry_goal or {"id": safe_goal_id}, runtime_root,
-                ), runtime_root,
+                effective_replan_goal, runtime_root,
                 registry_path=registry_path, goal_ref=goal_ref,
                 source_admission=source_admission,
             ),
