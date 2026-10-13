@@ -11,6 +11,8 @@ import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlit
 import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {TODO_DOMAIN_READ_RECORD_SCHEMA} from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
 import {executeGoalAmendment} from "../../loopx/control_plane/goals/goal_amendment_authority.ts";
+import {projectRequestAmendmentReceipt} from "../../loopx/control_plane/goals/goal_amendment_authority.ts";
+import {planRequestControl, requestControlView} from "../../loopx/control_plane/collaboration/request_control.ts";
 import {executeCoordinationTodoClaim} from "../../loopx/control_plane/coordination/todo_claim.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
@@ -32,6 +34,71 @@ function basis(view: JsonObject): JsonObject {
   return {base_goal_revision: intent.goal_revision, base_intent_digest: intent.intent_digest, base_work_digest: view.work_digest};
 }
 for (const provider of ["file", "sqlite", "postgresql"] as const) {
+  for (const winner of ["commit", "abort_request", "correction"] as const) {
+    test(`${provider}: one request terminal wins ${winner}, including concurrent retry and lost linkage`,
+      {skip: provider === "postgresql" && !process.env.LOOPX_TEST_POSTGRES_URL}, async t => {
+      const directory = await mkdtemp(join(tmpdir(), "request-amendment-owner-"));
+      t.after(() => rm(directory, {recursive: true, force: true}));
+      let store: AuthorityStore;
+      if (provider === "postgresql") {
+        const pool = new Pool({connectionString: process.env.LOOPX_TEST_POSTGRES_URL}); t.after(() => pool.end());
+        const database = {connect: async () => {const client = await pool.connect(); return {
+          query: (sql: string, values?: readonly unknown[]) => client.query(sql, values ? [...values] : undefined), release: () => client.release()};}};
+        await installPostgreSqlAuthorityStoreSchema(database, "postgresql:" + "b".repeat(32));
+        store = new PostgreSqlAuthorityStore(database, {tenant_id: directory, goal_id: goalRef.goal_id});
+      } else store = provider === "file" ? new FileAuthorityStore(directory, goalRef.goal_id) : new SqliteAuthorityStore(directory, goalRef.goal_id);
+      await store.commitAuthority({expected_provider_revision: null, operation_id: "seed", events: [], receipts: [], next_projection: {
+        goal_id: goalRef.goal_id, todos: [], leases: [], todo_read_model: coordinationTodoReadModel([], TODO_DOMAIN_READ_RECORD_SCHEMA)}});
+      const initial = await store.loadAuthority(); if (initial.status !== "loaded") throw new Error("missing");
+      await executeGoalAmendment(store, request("configure", {actor_agent_id: null, operation_id: "root", root_intent: rootIntent,
+        policy, expected_provider_revision: initial.provider_revision}));
+      const goal = await executeGoalAmendment(store, request("request_basis"));
+      await executeGoalAmendment(store, request("adopt", {...basis(goal), operation_id: "adopt-root"}));
+      let entry: JsonObject = {schema_version: "loopx_manager_context_entry_v2", request_id: "a".repeat(64), goal_id: goalRef.goal_id,
+        goal_ref: goalRef, agent_id: "agent-a", source_kind: "peer", source_agent_id: "agent-b", source_id: "peer:source", delivered_at: "2026-10-12T00:00:00Z",
+        brief: {schema_version: "collaboration_brief_v0", purpose: "Validate the contract", context: "Use the current source", constraints: ["No remote changes"],
+          inputs: [], acceptance: ["Independent check passes"], return_requirement: "Return findings"}};
+      const legacy = {request_id: entry.request_id, goal_ref: goalRef, goal_id: goalRef.goal_id, agent_id: "agent-a",
+        decision: "adopt", reason: "Check this request", decided_at: entry.delivered_at};
+      const control = (operation: string, fields: JsonObject, actor: "source" | "receiver", extra: JsonObject = {}) => {
+        const result = planRequestControl({entry, input: {operation, ...fields}, source: {actor, actor_agent_id: actor === "source" ? "agent-b" : "agent-a",
+          goal_active: true, observed_at: entry.delivered_at, legacy_assessment: legacy, ...extra}});
+        if (result.changed) entry = result.entry as JsonObject; return result;
+      };
+      const observed = requestControlView(entry, legacy);
+      const sourceRequest = {request_id: entry.request_id, request_revision: observed.revision, request_digest: observed.revision_digest};
+      const prepared = await executeGoalAmendment(store, request("propose", {...basis(goal), operation_id: "propose", proposal_id: "request-proposal",
+        template_id: "contract-check", replan_obligation_id: obligation, evidence_refs: ["evidence:request"],
+        source_request: sourceRequest, source: {...source, request_entry: entry}}));
+      const proposal = prepared.proposal as JsonObject;
+      const reserved = control("reserve", {operation_id: "reserve", expected_revision: observed.revision, expected_digest: observed.revision_digest}, "receiver",
+        {amendment: {operation_id: "effect", proposal_id: proposal.proposal_id, proposal_digest: proposal.digest, ...basis(goal),
+          authority_source_sha256: goal.authority_source_sha256}});
+      const reservation = (reserved.result as JsonObject).reservation as JsonObject;
+      const oldSource = structuredClone(entry);
+      if (winner === "correction") control("revise", {operation_id: "correct", expected_revision: observed.revision,
+        expected_digest: observed.revision_digest, brief: {...entry.brief as JsonObject, context: "Use the corrected input"}, reason: "Input changed"}, "source");
+      else control("cancel", {operation_id: "cancel", expected_revision: observed.revision, expected_digest: observed.revision_digest, reason: "Stop this request"}, "source");
+      const effect = (operation: "commit" | "abort_request", snapshot: JsonObject) => request(operation, {
+        operation_id: "effect", proposal_id: proposal.proposal_id, proposal_digest: proposal.digest,
+        source: {...source, request_entry: snapshot, request_reservation_digest: reservation.digest}});
+      const before = await store.loadAuthority();
+      const first = await executeGoalAmendment(store, effect(winner === "correction" ? "abort_request" : winner, winner === "commit" ? oldSource : entry));
+      assert.equal(first.request_outcome, winner === "commit" ? "committed" : "aborted");
+      const retries = await Promise.all([executeGoalAmendment(store, effect("commit", oldSource)), executeGoalAmendment(store, effect("abort_request", entry))]);
+      assert.ok(retries.every(row => row.request_outcome === first.request_outcome));
+      const receipt = await executeGoalAmendment(store, request("receipt", {receipt_operation_id: "effect"}));
+      const terminal = projectRequestAmendmentReceipt({entry, reservation_digest: reservation.digest, receipt}).terminal as JsonObject;
+      assert.equal((requestControlView(entry).active_reservation as JsonObject).digest, reservation.digest);
+      control("settle", {operation_id: "link", reservation_digest: reservation.digest}, "source", {terminal});
+      assert.equal(requestControlView(entry).active_reservation, null);
+      assert.equal(requestControlView(entry).control_state, winner === "correction" ? "open" : "cancelled");
+      const after = await store.loadAuthority(); if (after.status !== "loaded" || before.status !== "loaded") throw new Error("missing");
+      assert.equal((after.head.todos as unknown[]).length, winner === "commit" ? 1 : 0);
+      if (winner !== "commit") assert.deepEqual(after.head, before.head);
+      assert.equal((receipt.receipts as unknown[]).length, 1);
+    });
+  }
   test(`${provider}: governed commit publishes one work item and basis; response loss replays original receipt`, {skip: provider === "postgresql" && !process.env.LOOPX_TEST_POSTGRES_URL}, async t => {
     const directory = await mkdtemp(join(tmpdir(), "amendment-owner-"));t.after(() => rm(directory, {recursive: true, force: true}));
     let store: AuthorityStore;
