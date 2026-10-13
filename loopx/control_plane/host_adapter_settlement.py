@@ -116,7 +116,10 @@ def _request_payload(
 
 
 @contextmanager
-def host_vision_request(request: HostTodoSettlementRequest, vision: dict | None, unchanged: str):
+def host_vision_request(
+    request: HostTodoSettlementRequest, vision: dict | None, unchanged: str,
+    *, allow_terminal_stride_path: bool = False,
+):
     """Materialize authored JSON for the existing CLI codec, never as public state."""
     if vision is not None and unchanged:
         raise ValueError("choose a vision patch or an unchanged reason, not both")
@@ -129,7 +132,8 @@ def host_vision_request(request: HostTodoSettlementRequest, vision: dict | None,
     # This is syntax/budget preflight only: refresh-state still validates against
     # the real baseline and current replan/settlement state at writeback time.
     prepare_vision_refresh(vision, goal_id=request.goal_id, agent_id=request.agent_id,
-        existing_agent_vision=None, merge_patch=False, require_path_delta_for_durable_change=False)
+        existing_agent_vision=None, merge_patch=False, require_path_delta_for_durable_change=False,
+        allow_terminal_stride_path=allow_terminal_stride_path)
     with tempfile.TemporaryDirectory(prefix="loopx-host-vision-") as directory:
         path = Path(directory) / "vision.json"
         path.write_text(json.dumps(vision, ensure_ascii=False, allow_nan=False), encoding="utf-8")

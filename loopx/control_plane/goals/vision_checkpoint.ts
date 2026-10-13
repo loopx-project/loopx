@@ -203,6 +203,7 @@ interface VisionRefreshPrepareRequest {
   existing_agent_vision: JsonObject | null;
   merge_patch: boolean;
   require_path_delta_for_durable_change: boolean;
+  allow_terminal_stride_path: boolean;
 }
 
 interface VisionRefreshFinalizeRequest {
@@ -556,6 +557,8 @@ function decodePrepareRequest(request: JsonObject): VisionRefreshPrepareRequest 
       request.require_path_delta_for_durable_change,
       "require_path_delta_for_durable_change",
     ),
+    allow_terminal_stride_path: request.allow_terminal_stride_path === undefined ? false
+      : requiredBoolean(request.allow_terminal_stride_path, "allow_terminal_stride_path"),
   };
 }
 
@@ -641,9 +644,12 @@ function prepareVisionRefresh(request: VisionRefreshPrepareRequest): JsonObject 
   const [pathDelta, pathDeltaUsage] = normalizeGoalPathDelta(updatePacket.path_delta);
   Object.assign(fieldUsage, pathDeltaUsage);
   const [strideDecision, strideUsage] = normalizeStrideDecision(updatePacket.stride_decision, boundedPublicText);
-  if (strideDecision && (!pathDelta || !["continue", "no_change", "replan"].includes(String(pathDelta.outcome)) ||
+  const allowedStridePaths = request.allow_terminal_stride_path
+    ? ["continue", "no_change", "replan", "stop"]
+    : ["continue", "no_change", "replan"];
+  if (strideDecision && (!pathDelta || !allowedStridePaths.includes(String(pathDelta.outcome)) ||
       !Array.isArray(pathDelta.evidence_refs) || !pathDelta.evidence_refs.length)) {
-    throw new EffectRuntimeRequestError("stride_decision requires a fresh evidence-linked path decision");
+    throw new EffectRuntimeRequestError("stride_decision requires an evidence-linked path decision");
   }
   Object.assign(fieldUsage, strideUsage);
   const [fallbackDeclarations, fallbackUsage] = normalizeFallbackDeclarations(

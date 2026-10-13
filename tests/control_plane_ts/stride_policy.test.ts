@@ -77,6 +77,82 @@ test("an accepted schema and vector do not authorize work or certify gain; stale
   assert.equal(projectReplanSemantics({operation: "qualify", obligation, stride_decision: proposal}).accepted, false);
 });
 
+test("every enabled due review records stride even when progress, a successor or a blocker is the exit", () => {
+  const obligation = {obligation_id: proposal.reference_obligation_id,
+    triggers: [{kind: "periodic_review_due"}],
+    replan_context: {stride_strategy: "evidence_conditioned_v1", context_id: contextId}};
+  const authored = buildVisionCheckpoint(request).agent_vision;
+  const withoutDecision = {...authored, stride_decision: undefined};
+  for (const outcome of ["new_surface", "new_runnable_successor", "new_concrete_blocker"]) {
+    const observation_delta = {delta_kinds: [outcome], evidence_novel: true};
+    const refused = projectReplanSemantics({operation: "qualify", obligation,
+      observation_delta, agent_vision: withoutDecision});
+    assert.equal(refused.accepted, false, outcome);
+    assert.equal(refused.reason_code, "stride_decision_required", outcome);
+    assert.equal(projectReplanSemantics({operation: "qualify", obligation,
+      observation_delta, agent_vision: authored}).accepted, true, outcome);
+    assert.equal(projectReplanSemantics({operation: "qualify", obligation: {...obligation,
+      replan_context: {stride_strategy: "off"}}, observation_delta}).accepted, true, outcome);
+  }
+  const stale = projectReplanSemantics({operation: "qualify", obligation,
+    observation_delta: {delta_kinds: ["new_concrete_blocker"]},
+    agent_vision: {...authored, stride_decision: {...proposal,
+      reference_obligation_id: "replan-" + "b".repeat(16)}}});
+  assert.equal(stale.accepted, false);
+  assert.equal(stale.reason_code, "stride_reference_obligation_mismatch");
+  const foreignContext = projectReplanSemantics({operation: "qualify", obligation,
+    observation_delta: {delta_kinds: ["new_concrete_blocker"]},
+    agent_vision: {...authored, stride_decision: {...proposal,
+      reference_context_id: "replan-context-" + "b".repeat(24)}}});
+  assert.equal(foreignContext.accepted, false);
+  assert.equal(foreignContext.reason_code, "stride_review_basis_mismatch");
+  const bareDecision = projectReplanSemantics({operation: "qualify", obligation,
+    observation_delta: {delta_kinds: ["new_concrete_blocker"]},
+    agent_vision: {stride_decision: proposal}});
+  assert.equal(bareDecision.accepted, false);
+  assert.equal(bareDecision.reason_code, "stride_path_evidence_required");
+});
+
+test("terminal due review can record stride without manufacturing a continuing path", () => {
+  const terminalPacket = {...packet,
+    state: "no_followup", path_delta: {...packet.path_delta, outcome: "stop"}};
+  assert.throws(() => buildVisionCheckpoint({...request, agent_vision_packet: terminalPacket}), /stride_decision requires/);
+  assert.throws(() => buildVisionCheckpoint({...request, allow_terminal_stride_path: "true",
+    agent_vision_packet: terminalPacket}), /allow_terminal_stride_path/);
+  const terminal = buildVisionCheckpoint({...request, allow_terminal_stride_path: true,
+    agent_vision_packet: terminalPacket}).agent_vision;
+  const obligation = {obligation_id: proposal.reference_obligation_id,
+    triggers: [{kind: "periodic_review_due"}],
+    replan_context: {stride_strategy: "evidence_conditioned_v1", context_id: contextId}};
+  const observation_delta = {delta_kinds: ["coverage_backed_no_followup"]};
+  assert.equal(projectReplanSemantics({operation: "qualify", obligation, observation_delta,
+    agent_vision: {...terminal, stride_decision: undefined}}).accepted, false);
+  assert.equal(projectReplanSemantics({operation: "qualify", obligation, observation_delta,
+    agent_vision: terminal}).accepted, true);
+});
+
+test("a successor Todo transition cannot silently settle an enabled due review", () => {
+  const obligation = {obligation_id: proposal.reference_obligation_id,
+    triggers: [{kind: "periodic_review_due"}]};
+  const semantic_delta = {schema_version: "replan_semantic_delta_v0", accepted: true,
+    obligation_id: proposal.reference_obligation_id, successor_todo_id: "todo_successor",
+    outcomes: ["new_runnable_successor"], satisfying_outcomes: ["new_runnable_successor"]};
+  const ack = {schema_version: "autonomous_replan_ack_v0", recorded: true,
+    source: "todo_replan_successor_transition", semantic_delta};
+  const candidate = {obligation, ack};
+  assert.deepEqual(projectReplanSemantics({operation: "transition_eligibility", obligation,
+    stride_strategy: "evidence_conditioned_v1"}), {allowed: false});
+  const transition = {operation: "turn_transition", guard_scoped: true,
+    selected_obligation_id: proposal.reference_obligation_id,
+    transition_candidates: [candidate]};
+  assert.equal(projectReplanSemantics({...transition, stride_strategy: "evidence_conditioned_v1"}).semantic_delta, null);
+  assert.deepEqual(projectReplanSemantics({...transition, stride_strategy: "off"}).semantic_delta, semantic_delta);
+  const bound = projectReplanSemantics({operation: "receipt_bound_obligation", guard_scoped: true,
+    selected_obligation_id: proposal.reference_obligation_id, current_obligation: obligation,
+    transition_candidates: [candidate], replay_phase: "open", stride_strategy: "evidence_conditioned_v1"});
+  assert.equal((bound.obligation as Record<string, unknown>).resolution_mode, undefined);
+});
+
 test("all three actions preserve independently planned complete work and validation", () => {
   const axes = {...proposal.axes,
     work_slice: {plan: "Finish the expanded engine and paired independent repetitions.", reason: "The complete experiment is needed to resolve uncertainty."},

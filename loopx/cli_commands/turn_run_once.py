@@ -68,6 +68,7 @@ def execute_turn_run_once(
     args: argparse.Namespace,
     *,
     payload: dict[str, Any],
+    decision: Mapping[str, Any] | None = None,
     registry_path: Path,
     runtime_root: Path,
     runtime_root_arg: str | None,
@@ -873,6 +874,8 @@ def execute_turn_run_once(
         execution_started = bool(args.execute)
         result = run_loopx_turn_once(
             payload,
+            decision_capture_payload=decision,
+            require_decision_capture=True,
             host_argv=raw_argv,
             host_runner=host_runner,
             session_binding_resolver=session_binding_resolver,

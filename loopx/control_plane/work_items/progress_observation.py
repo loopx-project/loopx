@@ -345,16 +345,33 @@ def required_semantic_outcomes(obligation: Mapping[str, Any]) -> list[str]:
     return list(replan_writeback_requirements(obligation)["required_any_of"])
 
 
+def replan_successor_transition_allowed(
+    obligation: Mapping[str, Any], *, stride_strategy: str = "off",
+) -> bool:
+    """Ask the typed owner whether a Todo transition can settle this review."""
+    try:
+        result = effect_runtime_result("work_item.replan_semantics.project", {
+            "operation": "transition_eligibility", "obligation": dict(obligation),
+            "stride_strategy": stride_strategy,
+        })
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from None
+    if not isinstance(result, Mapping) or not isinstance(result.get("allowed"), bool):
+        raise RuntimeError("TypeScript transition eligibility shape mismatch")
+    return result["allowed"]
+
+
 def guarded_replan_transition_delta(
     *, guard_scoped: bool, selected_obligation_id: str | None,
-    transition_acks: list[dict[str, Any] | None],
+    transition_candidates: list[dict[str, Any]], stride_strategy: str = "off",
 ) -> dict[str, Any] | None:
     """Adapt revalidated canonical receipts to the TS-owned exact Turn gate."""
     try:
         result = effect_runtime_result("work_item.replan_semantics.project", {
             "operation": "turn_transition", "guard_scoped": guard_scoped,
             "selected_obligation_id": selected_obligation_id,
-            "transition_acks": transition_acks,
+            "transition_candidates": transition_candidates,
+            "stride_strategy": stride_strategy,
         })
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None

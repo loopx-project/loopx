@@ -197,3 +197,67 @@ test("record validation rejects a required field outside the declared schema", (
     /required fields are absent from fields: role/,
   );
 });
+
+test("canonical records own nested containers and sort keys by Unicode code point", () => {
+  const nested = {z: [{b: 2, a: 1}], a: null};
+  const input = Object.assign(Object.create(null), {
+    "\u{10000}": 4, "\ue000": 3, nested,
+  });
+  Object.defineProperty(input, "__proto__", {
+    value: {tag: "owned"}, enumerable: true, writable: true,
+  });
+  const contract = {
+    fields: ["\u{10000}", "\ue000", "nested", "__proto__"], required_fields: ["nested"],
+  };
+  const result = canonicalCoordinationRecord(input, contract, "record");
+  assert.equal(JSON.stringify(result),
+    '{"__proto__":{"tag":"owned"},"nested":{"a":null,"z":[{"a":1,"b":2}]},"\ue000":3,"\u{10000}":4}');
+  assert.equal(Object.getPrototypeOf(result), Object.prototype);
+  assert.ok(Object.hasOwn(result, "__proto__"));
+  assert.notEqual(result.nested, nested);
+  const owned = result.nested as {z: {a: number; b: number}[]};
+  assert.notEqual(owned.z, nested.z);
+  assert.notEqual(owned.z[0], nested.z[0]);
+  owned.z[0]!.a = 99;
+  assert.equal(nested.z[0]!.a, 1);
+  const retry = canonicalCoordinationRecord(input, contract, "record");
+  assert.notEqual(retry, result);
+  assert.notEqual(retry.nested, result.nested);
+  assert.equal((retry.nested as typeof nested).z[0]!.a, 1);
+});
+
+test("strict JSON and schema errors retain their rejection order", () => {
+  const contract = {fields: ["payload"], required_fields: ["payload"]};
+  const invalidContract = {fields: ["payload"], required_fields: ["absent"]};
+  assert.throws(() => canonicalCoordinationRecord(
+    {unversioned: Infinity}, invalidContract, "record"), /JSON numbers must be finite/);
+  assert.throws(() => canonicalCoordinationRecord(
+    {unversioned: true}, invalidContract, "record"),
+    /record required fields are absent from fields: absent/);
+  assert.throws(() => canonicalCoordinationRecord(
+    {z_extra: true, a_extra: true}, contract, "record"),
+    /record has unversioned fields: a_extra, z_extra/);
+  assert.throws(() => canonicalCoordinationRecord({}, contract, "record"),
+    /record omits required fields: payload/);
+  const cycle: Record<string, unknown> = {};
+  cycle.self = cycle;
+  for (const value of [undefined, 1n, cycle, new Date(0)]) {
+    assert.throws(() => canonicalCoordinationRecord(
+      {payload: value, extra: true}, contract, "record"),
+      /value must be strict JSON|JSON value must be acyclic|JSON objects must be plain objects/);
+  }
+});
+
+test("generic contracts retain inherited-field selection and strict JSON rejection", () => {
+  for (const required_fields of [[], ["__proto__"]]) {
+    assert.deepEqual(canonicalCoordinationRecord({}, {
+      fields: ["__proto__"], required_fields,
+    }, "record"), JSON.parse('{"__proto__":{}}'));
+  }
+  assert.throws(() => canonicalCoordinationRecord({}, {
+    fields: ["constructor"], required_fields: [],
+  }, "record"), /value must be strict JSON/);
+  assert.deepEqual(canonicalCoordinationRecord({constructor: null}, {
+    fields: ["constructor"], required_fields: [],
+  }, "record"), {constructor: null});
+});

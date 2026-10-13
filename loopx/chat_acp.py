@@ -61,6 +61,7 @@ class ACPStdioAdapter:
     work_dir: Path
     agent_work_dir: Path
     agent_capabilities: dict[str, Any]
+    session_config_options: dict[str, dict[str, Any]] = field(default_factory=dict)
     execution_mode: bool = False
     startup_timeout_sec: float = 30.0
     idle_timeout_sec: float = 180.0
@@ -90,6 +91,7 @@ class ACPStdioAdapter:
         idle_timeout_sec: float = 180.0,
         hard_timeout_sec: float = 900.0,
         execution_mode: bool = False,
+        config_values: dict[str, str] | None = None,
     ) -> "ACPStdioAdapter":
         if not command:
             raise ValueError("ACP command is required")
@@ -200,6 +202,12 @@ class ACPStdioAdapter:
                 adapter.session_id = str(result.get("sessionId") or "")
                 if not adapter.session_id:
                     raise adapter._runtime_error("ACP Agent did not return a session id.")
+            adapter.session_config_options = adapter._session_config_options(result)
+            # ACP session recovery restores the upstream configuration.  Some
+            # providers omit configOptions from session/load, so reapplying the
+            # stored pick here would turn a valid recovery into a false error.
+            if config_values and not resume_thread_id:
+                adapter.set_config_values(config_values)
             return adapter
         except Exception:
             adapter._terminate()
@@ -235,6 +243,81 @@ class ACPStdioAdapter:
             "interrupt": True,
             "tool_calls": True,
         }
+
+    @staticmethod
+    def _session_config_options(result: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        """Normalize ACP's optional session configuration readback.
+
+        Values are retained only in the live adapter.  The dashboard receives a
+        deliberately small projection, so provider-specific response fields
+        and any local launch details cannot leak through the discovery API.
+        """
+        raw = result.get("configOptions")
+        if not isinstance(raw, list):
+            return {}
+        options: dict[str, dict[str, Any]] = {}
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            config_id = str(item.get("id") or "")
+            if not config_id.strip() or len(config_id) > 80:
+                continue
+            if item.get("type", "select") != "select":
+                continue
+            choices: list[dict[str, str]] = []
+            raw_choices = item.get("options") if isinstance(item.get("options"), list) else []
+            for entry in raw_choices:
+                group_choices = entry.get("options") if isinstance(entry, dict) else None
+                candidates = group_choices if isinstance(group_choices, list) else [entry]
+                for choice in candidates:
+                    if not isinstance(choice, dict):
+                        continue
+                    value = choice.get("value")
+                    if not isinstance(value, str) or not value or len(value) > 160:
+                        continue
+                    label = _compact_label(choice.get("name") or choice.get("label") or value, fallback=value)
+                    choices.append({"value": value, "label": label})
+            selected = str(item.get("currentValue") or item.get("value") or "")
+            options[config_id] = {
+                "label": _compact_label(item.get("name") or item.get("label") or config_id, fallback=config_id),
+                "category": str(item.get("category") or ""),
+                "selected": selected if len(selected) <= 160 else "",
+                "options": choices,
+            }
+        return options
+
+    def model_options(self) -> dict[str, Any] | None:
+        for config_id, option in self.session_config_options.items():
+            if option["category"] == "model":
+                return {"id": config_id, "label": option["label"], "selected": option["selected"], "options": option["options"]}
+        if "model" in self.session_config_options:
+            option = self.session_config_options["model"]
+            return {"id": "model", "label": option["label"], "selected": option["selected"], "options": option["options"]}
+        return None
+
+    @property
+    def current_model_id(self) -> str | None:
+        model = self.model_options()
+        return (str(model["selected"]) or None) if model else None
+
+    def set_config_values(self, values: dict[str, str]) -> None:
+        """Apply caller-selected ACP options after the session exists."""
+        for config_id, value in values.items():
+            if config_id == "model":
+                model = self.model_options()
+                config_id = str(model["id"]) if model else config_id
+            known = self.session_config_options.get(config_id)
+            if known is None:
+                raise self._runtime_error("ACP Agent does not offer the selected configuration.", error_code="unsupported_configuration")
+            allowed = {str(item["value"]) for item in known["options"]}
+            if value not in allowed:
+                raise self._runtime_error("ACP Agent rejected an unavailable configuration value.", error_code="unsupported_configuration")
+            result = self._request(
+                "session/set_config_option",
+                {"sessionId": self.session_id, "configId": config_id, "type": "id", "value": value},
+                timeout_sec=self.startup_timeout_sec,
+            )
+            self.session_config_options = self._session_config_options(result)
 
     def _write(self, payload: dict[str, Any]) -> None:
         if self.process.stdin is None:
@@ -359,7 +442,10 @@ class ACPStdioAdapter:
             if not isinstance(update, dict):
                 return
             kind = str(update.get("sessionUpdate") or "")
-            if kind == "agent_message_chunk":
+            if kind == "config_option_update":
+                self.session_config_options = self._session_config_options(update)
+                event_sink("agent.model_config", {"model_id": self.current_model_id})
+            elif kind == "agent_message_chunk":
                 content = update.get("content")
                 if isinstance(content, dict) and content.get("type") == "text":
                     chunk = str(content.get("text") or "")

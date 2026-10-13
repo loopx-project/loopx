@@ -28,12 +28,15 @@ function restoreRequests(): Map<string, SteeringRequest> {
   }
 }
 
-function persistRequests() {
+function persistRequests(): boolean {
   try {
-    window.sessionStorage.setItem(storageKey, JSON.stringify([...requestCache()]));
+    const serialized = JSON.stringify([...requestCache()]);
+    window.sessionStorage.setItem(storageKey, serialized);
+    return window.sessionStorage.getItem(storageKey) === serialized;
   } catch {
-    // Unavailable browser storage retains drafts/retries in this shared page cache.
-    // No provider action or delivery conclusion follows from this cache.
+    // Keep the editable page draft, but callers must not dispatch without a
+    // durable retry identity that survives a lost response and a page reload.
+    return false;
   }
 }
 
@@ -47,9 +50,16 @@ export function readSteeringRequest(key: string) {
   return requestCache().get(key);
 }
 
-export function retainSteeringRequest(key: string, request: SteeringRequest) {
+export function retainSteeringRequest(key: string, request: SteeringRequest): boolean {
   requestCache().set(key, request);
-  persistRequests();
+  if (persistRequests()) return true;
+  // Another conversation's unsaved draft may prevent rewriting the whole cache.
+  // Only the current request's exact durable identity qualifies its retry.
+  const durable = restoreRequests().get(key);
+  return durable?.sessionId === request.sessionId
+    && durable.turnId === request.turnId
+    && durable.text === request.text
+    && durable.id === request.id;
 }
 
 export function retireSteeringRequest(key: string, id: string) {

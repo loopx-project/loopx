@@ -12,7 +12,9 @@ import {launchBrowser, loadPlaywright, waitForHttp} from "../../../../examples/d
 process.env.LOOPX_PERSONAL_WORKSPACE_PACKAGED = "1";
 const {repoRoot, outputDir, port, startServer} = await import("../../../../examples/personal-workspace-browser/fixture.mjs");
 const {openWorkspacePage} = await import("../../../../examples/personal-workspace-browser/scenario-context.mjs");
-const fixture = spawn(resolveTestPython({repoRoot}), ["-u", "apps/presentation/dashboard/smoke/team-adoption-http-fixture.py"],
+const sourceChain = process.argv.includes("--source-chain");
+const fixture = spawn(resolveTestPython({repoRoot}), ["-u", "apps/presentation/dashboard/smoke/team-adoption-http-fixture.py",
+  ...(sourceChain ? ["--source-chain"] : [])],
   {cwd: repoRoot, stdio: ["pipe", "pipe", "pipe"]});
 const exited = once(fixture, "exit");
 const lines = createInterface({input: fixture.stdout});
@@ -57,6 +59,48 @@ try {
   });
   Object.assign(mode, {enabled: true, paused: true, active_turn_id: null, native: {status: "paused", tokenBudget: 100000}});
   const results = page.getByRole("region", {name: "团队成果", exact: true});
+  if (sourceChain) {
+    // The displayed source is itself a consumer. Its domain output remains
+    // accepted when its input is withdrawn; current_use must still fence UI use.
+    await results.getByRole("button", {name: "reviewer · report.md", exact: true}).click();
+    await results.locator(".goal-team-result-reader > details > summary").click();
+    const adoption = results.locator(".goal-team-adoption");
+    await adoption.locator("summary").click();
+    await adoption.getByRole("button", {name: "查找使用此版本的后续结果", exact: true}).click();
+    await adoption.getByLabel("后续结果", {exact: true}).waitFor();
+    await results.getByLabel("当前报告", {exact: true}).waitFor();
+    const before = await command("inspect");
+    assert.equal(before.result.current_use.state, "current");
+    await command("withdraw");
+    const unavailable = await command("inspect");
+    assert.equal(unavailable.result.status, "accepted", "Historical acceptance stays intact");
+    assert.equal(unavailable.result.current_use.state, "unavailable");
+    assert.deepEqual(unavailable.result.artifacts, before.result.artifacts, "Same output bytes, different use eligibility");
+    await adoption.getByRole("button", {name: "阅读后续结果", exact: true}).click();
+    await page.waitForFunction(() => !document.querySelector(".goal-team-adoption")
+      || document.querySelector(".goal-team-adoption").getAttribute("aria-busy") === "false");
+    await mkdir(outputDir, {recursive: true});
+    await page.screenshot({path: resolve(outputDir, "team-source-chain-real-observation.png"), animations: "disabled"});
+    await results.getByRole("alert").filter({hasText: "产物或验收已变化"}).waitFor();
+    assert.equal(await results.getByLabel("当前报告", {exact: true}).count(), 0);
+    assert.equal(writes.length, 0, "A refused source read cannot offer or submit adoption");
+    await mkdir(outputDir, {recursive: true});
+    await page.screenshot({path: resolve(outputDir, "team-source-chain-real-desktop.png"), animations: "disabled"});
+    await page.setViewportSize({width: 390, height: 844}); await page.emulateMedia({reducedMotion: "reduce"});
+    assert.ok(await results.evaluate(el => el.scrollWidth <= el.clientWidth));
+    await page.screenshot({path: resolve(outputDir, "team-source-chain-real-mobile.png"), animations: "disabled"});
+    await command("restore");
+    await results.getByRole("button", {name: "刷新成果", exact: true}).focus();
+    await page.keyboard.press("Enter");
+    await results.getByLabel("当前报告", {exact: true}).waitFor();
+    const recovered = await command("inspect");
+    assert.equal(recovered.result.current_use.state, "current");
+    assert.ok(recovered.session_unchanged);
+    assert.deepEqual(recovered.host_invocations, ["1", "1", "1"]);
+    assert.equal(writes.length, 0);
+    assert.equal(api.turnRequests.length, 0);
+    console.log("team-source-chain: passed (packaged real HTTP/SQLite, historical output retained, source input withdrawal/refusal, keyboard recovery, zero adoption/dispatch)");
+  } else {
   await results.getByRole("button", {name: "analyst · output.json", exact: true}).click();
   await results.locator(".goal-team-result-reader > details > summary").click();
   const adoption = results.locator(".goal-team-adoption");
@@ -104,6 +148,7 @@ try {
   assert.equal(writes.length, 1, "Readback recovery never records a new adoption");
   assert.equal(api.turnRequests.length, 0);
   console.log("team-adoption-recovery: passed (packaged report, real HTTP/SQLite/checks/receipts, explicit decision, lost ACK, exact use withdrawal/recovery, no dispatch, mobile/keyboard)");
+  }
 } catch (error) {
   if (workspace) console.error({body: (await workspace.page.locator("body").innerText()).slice(-3000), errors: workspace.errors});
   throw error;

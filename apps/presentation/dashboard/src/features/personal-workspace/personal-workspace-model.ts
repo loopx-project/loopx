@@ -8,6 +8,7 @@ import type { AttentionDetails } from "./attention-details";
 import type { WorkspaceLoadError, WorkspaceReadScope } from "../../data/workspace-progressive-status";
 import type { TodoItem } from "../../data/status";
 import { goalWorkKind, type GoalHostThreadActivity, type WorkspaceGoalExecution } from "./goal-activity";
+import { receiptRetryReadback } from "./monitor-readback";
 import type { DigestAttentionSummary } from "../../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
 export type WorkspaceGoalState =
   | "需修复"
@@ -39,6 +40,8 @@ export type WorkspaceAgentTodo = {
   resumeReady?: boolean | null;
   resumeInvalidReason?: string | null;
   resumeReceiptId?: string | null;
+  /** Read-only provenance from the Run that owns this temporary retry. */
+  retryReadback?: { observedAt: string; dueAt: string; turnId: string } | null;
   blockedReason?: string | null;
   claimedBy?: string | null;
   dependencies?: string[];
@@ -93,6 +96,7 @@ export function workspaceAgentTodoFromItem(todo: Pick<TodoItem,
     resumeInvalidReason: typeof todo.resume_condition?.invalid_state === "string"
       ? todo.resume_condition.invalid_state : null,
     resumeReceiptId: typeof receiptId === "string" && receiptId.trim() ? receiptId.trim() : null,
+    retryReadback: receiptRetryReadback(todo),
     validationDigest: todo.completion_validation_sha256 ?? null,
     validationRevision: todo.completion_validation_revision ?? null,
     validationRevisionActor: todo.completion_validation_revision_history.at(-1)?.actor_agent_id ?? null,
@@ -555,6 +559,7 @@ export type PersonalWorkspaceCallbacks = {
   onStartLoopX?: (operation: "start" | "resume", agentId: string, goalId: string,
     settings?: LoopXModeSettings) => void;
   onSelectAgent?: (agentId: string) => void;
+  onSelectAgentModel?: (agentId: string, modelId: string) => void;
   onSelectChannel?: (channel: WorkspaceChannel) => void;
   onSelectGoal?: (goalId: string | null, view: WorkspaceGoalTab) => void;
   onSelectTodo?: (todoId: string | null) => void;

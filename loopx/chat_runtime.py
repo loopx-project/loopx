@@ -55,9 +55,10 @@ from .chat_store import (
     CHAT_SESSION_MODE_ATTACHED,
     TERMINAL_TURN_STATES,
     ChatSessionStore,
+    normalize_agent_model_id,
     utc_now,
 )
-from .chat_providers import ClaudeCodeAdapter, direct_model_from_environment
+from .chat_providers import ClaudeCodeAdapter, codex_model_options, direct_model_from_environment
 from .attached_session import (
     enqueue_attached_agent_turn,
     require_current_attached_session,
@@ -390,6 +391,44 @@ class ChatRuntimeController:
         )
         return [*builtins, *(endpoint.public_summary() for endpoint in self.endpoint_registry.list())]
 
+    def inspect_agent_model_options(self, agent_id: str, *, work_dir: Path) -> dict[str, Any]:
+        """Read model choices from one selected, available ACP endpoint.
+
+        This is intentionally not a PATH scan: the controller launches only an
+        endpoint already present in the built-in catalog or owner-local registry.
+        The temporary upstream session is closed before returning.
+        """
+        capability = next((row for row in self.capabilities() if row["agent_id"] == agent_id), None)
+        if capability is None or not capability.get("available"):
+            raise agent_endpoint_error(agent_id, reason=str((capability or {}).get("unavailable_reason") or ""))
+        if agent_id == "codex":
+            return {"agent_id": agent_id, "model": codex_model_options(self.codex_bin), "supported": True}
+        if agent_id == "claude-code":
+            return {
+                "agent_id": agent_id,
+                "supported": True,
+                "model": {
+                    "id": "model", "label": "Model", "selected": "sonnet",
+                    "options": [
+                        {"value": "sonnet", "label": "Sonnet"},
+                        {"value": "opus", "label": "Opus"},
+                        {"value": "fable", "label": "Fable"},
+                    ],
+                },
+            }
+        if str(capability.get("adapter_kind")) != "acp":
+            return {"agent_id": agent_id, "model": None, "supported": False}
+        adapter = self._start_adapter(
+            agent_id=agent_id,
+            work_dir=work_dir,
+            goal_id=None,
+            objective="",
+        )
+        try:
+            return {"agent_id": agent_id, "model": adapter.model_options(), "supported": True}
+        finally:
+            adapter.close_session()
+
     @staticmethod
     def _managed_upstream_mode(session: dict[str, Any]) -> str:
         if session.get("agent_id") == "codex":
@@ -437,6 +476,7 @@ class ChatRuntimeController:
         loopx_tools: bool = False,
         executor_model: Mapping[str, str | None] | None = None,
         project_context: dict[str, str] | None = None,
+        agent_config: dict[str, str] | None = None,
     ) -> ChatRuntimeAdapter:
         if project_context is not None:
             project_context_policy.validate_project_native_executor(agent_id, project_context)
@@ -479,6 +519,8 @@ class ChatRuntimeController:
                 if goal_id == MANAGER_AGENT_GOAL_ID and not execution_mode
                 else executor_model or {}
             )
+            if agent_config and agent_config.get("model"):
+                model_config = {**model_config, "model": agent_config["model"]}
             return CodexAppServerAdapter.start(
                 codex_bin=self.codex_bin,
                 codex_home=self.codex_home,
@@ -520,6 +562,7 @@ class ChatRuntimeController:
                 resume_thread_id=resume_thread_id,
                 tool_scope="read_only",
                 context_summary=f"{goal_id}: {objective}".strip() if goal_id is not None else objective.strip(),
+                model=agent_config.get("model") if agent_config else None,
             )
         if agent_id == MANAGED_TURN_HOST:
             # The managed host has no interactive session transport, so this
@@ -565,6 +608,7 @@ class ChatRuntimeController:
                 idle_timeout_sec=self.idle_timeout_sec,
                 hard_timeout_sec=self.hard_timeout_sec,
                 execution_mode=execution_mode,
+                config_values=agent_config,
             )
         endpoint = self.endpoint_registry.get(agent_id)
         if endpoint is not None:
@@ -577,6 +621,7 @@ class ChatRuntimeController:
                 idle_timeout_sec=self.idle_timeout_sec,
                 hard_timeout_sec=self.hard_timeout_sec,
                 execution_mode=execution_mode,
+                config_values=agent_config,
             )
         raise ValueError(f"unknown Agent endpoint: {agent_id}")
 
@@ -595,7 +640,10 @@ class ChatRuntimeController:
         project_ref: str | None = None,
         conversation_binding_id: str | None = None,
         source_context: dict[str, Any] | None = None,
+        agent_model_id: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
+        if agent_model_id:
+            agent_model_id = normalize_agent_model_id(agent_model_id)
         capability = next((item for item in self.capabilities() if item["agent_id"] == agent_id), None)
         if mode not in {"resume_latest", "new"}:
             raise ValueError("mode must be resume_latest or new")
@@ -680,6 +728,11 @@ class ChatRuntimeController:
                     latest = None
                 if latest is not None and goal_instance_id is not None and latest.get("goal_instance_id") != goal_instance_id:
                     latest = None
+                if latest is not None and agent_model_id and latest.get("agent_model_id") != agent_model_id:
+                    # A model is a session binding for ACP.  Never silently
+                    # retarget an existing conversation when the user chose a
+                    # different one; a new session makes that boundary visible.
+                    latest = None
                 if latest is not None and latest.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
                     return latest, True
             if capability is None:
@@ -702,20 +755,26 @@ class ChatRuntimeController:
                 manager_runtime=manager_runtime,
                 project_context=project_context,
                 executor_model=alloc.manager_executor_model(manager_executor_allocation),
+                agent_config={"model": agent_model_id} if agent_model_id else None,
             )
-            persisted = self.store.create_session(
-                goal_id=goal_id,
-                goal_instance_id=goal_instance_id,
-                agent_id=agent_id,
-                executor_endpoint_id=agent_id,
-                adapter_kind=str(capability["adapter_kind"]),
-                upstream_thread_id=adapter.upstream_thread_id,
-                upstream_mode="chat" if agent_id == "codex" else "default",
-                channel_id=selected_channel,
-                codex_home=str(codex_context.home_for_project(self.codex_home, project_context)) if agent_id == "codex" else None,
-                project_context=project_context,
-                steward_context=steward_context,
-            )
+            try:
+                persisted = self.store.create_session(
+                    goal_id=goal_id,
+                    goal_instance_id=goal_instance_id,
+                    agent_id=agent_id,
+                    executor_endpoint_id=agent_id,
+                    adapter_kind=str(capability["adapter_kind"]),
+                    upstream_thread_id=adapter.upstream_thread_id,
+                    upstream_mode="chat" if agent_id == "codex" else "default",
+                    channel_id=selected_channel,
+                    codex_home=str(codex_context.home_for_project(self.codex_home, project_context)) if agent_id == "codex" else None,
+                    project_context=project_context,
+                    steward_context=steward_context,
+                    agent_model_id=adapter.current_model_id if isinstance(adapter, ACPStdioAdapter) else agent_model_id,
+                )
+            except Exception:
+                adapter.close_session()
+                raise
             persisted = self.project_contexts.initialize_bound_scope(self.store, persisted, runtime_root=self.coordination_runtime_root)
             if is_manager_channel(selected_channel):
                 assert manager_runtime is not None
@@ -945,6 +1004,7 @@ class ChatRuntimeController:
                     if model_allocation is not None else alloc.restored_executor_model(session)),
                 manager_runtime=manager_runtime,
                 project_context=session.get("project_context"),
+                agent_config={"model": str(session["agent_model_id"])} if session.get("agent_model_id") else None,
             )
             if session.get("upstream_mode") == CODEX_GOAL_CHAT_MODE:
                 try:
@@ -970,6 +1030,8 @@ class ChatRuntimeController:
         with self.lock:
             self.adapters[session_id] = adapter
         try:
+            if isinstance(adapter, ACPStdioAdapter):
+                self.store.update_session(session_id, agent_model_id=adapter.current_model_id)
             if session.get("agent_id") == "codex" and session.get("codex_home") is None:
                 # A legacy session is bound only after successful upstream resume,
                 # not when a service happens to start in a new environment.
@@ -1584,6 +1646,9 @@ class ChatRuntimeController:
                     expected_statuses={"starting", "running", "interrupting"},
                     upstream_turn_id=payload["upstream_turn_id"],
                 )
+            if kind == "agent.model_config":
+                self.store.update_session(session_id, agent_model_id=payload.get("model_id"))
+                return
             with self.lock:
                 if (session_id, turn_id) in self.cancelled_turns:
                     return

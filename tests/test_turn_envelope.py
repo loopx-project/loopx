@@ -1132,7 +1132,7 @@ def test_protocol_packet_monitor_action_derives_without_residue() -> None:
     assert "summary" not in packet
 
 
-def test_contract_capsule_stays_bounded_with_replan_and_vision_contracts() -> None:
+def test_contract_capsule_keeps_vision_obligations_under_budget_pressure() -> None:
     source = _full_decision()
     source["execution_profile"] = {
         "cadence": "bounded_progress_segment",
@@ -1181,8 +1181,15 @@ def test_contract_capsule_stays_bounded_with_replan_and_vision_contracts() -> No
         envelope["contract_capsule"]["agent_scope_frontier"]["requires_replan"] is True
     )
     assert envelope["contract_capsule"]["vision_continuation_audit"]["required"] is True
-    assert envelope["compaction"]["within_budget"] is True
-    assert envelope["compaction"]["envelope_json_bytes"] < TURN_ENVELOPE_BUDGET_BYTES
+    audit = envelope["contract_capsule"]["vision_continuation_audit"]
+    assert audit["required_before_closeout"] == source["vision_continuation_audit"]["required_before_closeout"]
+    assert audit["recommended_action"] == source["vision_continuation_audit"]["recommended_action"]
+    # The existing 8 KiB limit is diagnostic. Retaining obligations must warn,
+    # rather than silently discard clauses or reinterpret this as admission.
+    assert envelope["compaction"]["within_budget"] is False
+    assert envelope["compaction"]["budget_bytes"] == TURN_ENVELOPE_BUDGET_BYTES
+    assert envelope["compaction"]["warning"]["code"] == "turn_envelope_budget_exceeded"
+    assert envelope["ok"] is True
 
 
 def test_turn_envelope_retains_configured_cadence_floor_and_host_boundary() -> None:

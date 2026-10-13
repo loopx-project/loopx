@@ -153,6 +153,71 @@ def test_bad_vision_is_rejected_before_todo_completion_and_can_be_corrected(tmp_
     assert len(spends(runtime)) == 1
 
 
+@pytest.mark.parametrize("machine_enabled", [False, True])
+def test_terminal_stride_preflight_uses_effective_strategy_before_todo_effects(
+    tmp_path, monkeypatch, machine_enabled,
+):
+    control, project, runtime = control_at(tmp_path)
+    monkeypatch.chdir(project)
+    if machine_enabled:
+        from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
+        from loopx.capabilities.machine_configuration.store import configure_machine_configuration
+
+        owner = build_builtin_machine_configuration_registry()
+        configuration = {"schema_version": "loopx_machine_configuration_v0", "namespaces": {
+            "todo_replan_cadence": {"schema_version": "todo_replan_cadence_machine_defaults_v2",
+                "count_unit": "completed_todos", "count": 1,
+                "stride_strategy": "evidence_conditioned_v1"}}}
+        preview = configure_machine_configuration(
+            runtime_root=runtime, registry=owner, configuration=configuration)
+        configure_machine_configuration(
+            runtime_root=runtime, registry=owner, configuration=configuration,
+            execute=True, expected_plan_revision=preview["plan_revision"])
+    authored = vision("vision_patch_proposed")
+    authored["path_delta"].update(outcome="stop", stopped=["Stop this route until provenance is checked."])
+    authored["path_delta"].pop("retained")
+    authored["stride_decision"] = {
+        "schema_version": "stride_decision_v2", "strategy_version": "evidence_conditioned_v1",
+        "reference_context_id": "replan-context-" + "e" * 24,
+        "reference_obligation_id": "replan-" + "e" * 16,
+        "basis": "uncertain_evidence", "action": "verify",
+        "axes": {axis: {"plan": "Verify the bounded source outcome.",
+                         "reason": "Acceptance remains unqualified."}
+                 for axis in ("work_slice", "route_distance", "validation_scope")},
+        "next_probe": {"scope": "One isolated local source check.",
+            "prediction": "The source check distinguishes the route.",
+            "adoption_criterion": "Adopt only a verified source outcome.",
+            "cost_bound": "One source and contrary case.",
+            "minimum_evidence": "Source result and contrary-case result."}}
+    state = project / "ACTIVE_GOAL_STATE.md"
+    before = state.read_bytes()
+    calls = []
+    original = control.run_cli
+
+    def recorded(args, **kwargs):
+        calls.append(args)
+        return original(args, **kwargs)
+
+    monkeypatch.setattr(control, "run_cli", recorded)
+    if machine_enabled:
+        result = json.loads(control.complete_task("todo_reducer", fixture.AGENT,
+            "Synthetic acceptance", successor_todo_ids=["todo_cli"], agent_vision=authored))
+        assert result["ok"] is True, result
+        assert len(spends(runtime)) == 1
+    else:
+        with pytest.raises(ValueError, match="stride_decision requires an evidence-linked path decision"):
+            control.complete_task("todo_reducer", fixture.AGENT, "Synthetic acceptance",
+                successor_todo_ids=["todo_cli"], agent_vision=authored)
+        assert calls == []
+        assert state.read_bytes() == before
+        assert not list(runtime.glob("goals/*/runs/index.jsonl"))
+        corrected = json.loads(control.complete_task("todo_reducer", fixture.AGENT,
+            "Synthetic acceptance", successor_todo_ids=["todo_cli"],
+            agent_vision=vision("vision_patch_proposed")))
+        assert corrected["ok"] is True, corrected
+        assert len(spends(runtime)) == 1
+
+
 @pytest.mark.parametrize("length", [240, 241])
 def test_unchanged_reason_preflight_precedes_all_completion_effects(tmp_path, monkeypatch, length):
     control, project, runtime = control_at(tmp_path)

@@ -22,6 +22,7 @@ from ..runtime.runtime_projection_route import (
     collect_runtime_projection_route_diagnostics,
 )
 from ..projection_envelope_facts import seal_projection_envelope, source_fact
+from ..quota.blocked_retry import overlay_status_turn_retries
 from ..runtime.time import now_utc_iso, parse_timestamp, utc_isoformat
 from ..todos.todo_index import MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL
 from ...registry import registry_goals
@@ -159,6 +160,7 @@ def collect_status(
     # No later projection consumes canonical rows; release retained archive
     # data before assembling the rest of the display.
     del todo_snapshot
+    queue = overlay_status_turn_retries(history, queue, observed_at=now_utc_iso())
     runtime_summaries = context.build_runtime_summaries(
         history=history,
         queue=queue,

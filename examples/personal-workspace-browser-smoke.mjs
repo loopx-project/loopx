@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import {goalWorkspaceCreateScenario} from "./personal-workspace-browser/goal-workspace-create.mjs";
+import {agentModelSelectionScenario} from "./personal-workspace-browser/agent-model-selection.mjs";
 import {goalWorkspaceM2Scenario} from "./personal-workspace-browser/goal-workspace-m2.mjs";
 import {goalWorkspaceSelectionScenario} from "./personal-workspace-browser/goal-workspace-selection.mjs";
 import { replanCadenceScenario } from "./personal-workspace-browser/replan-cadence.mjs";
@@ -106,6 +107,7 @@ scenarioCatalog.push(goalWorkspaceM2Scenario);
 scenarioCatalog.push(goalWorkspaceCreateScenario);
 scenarioCatalog.push(goalWorkspaceSelectionScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
+scenarioCatalog.push(agentModelSelectionScenario);
 const scenarios = requestedScenario
   ? scenarioCatalog.filter((scenario) => scenario.id === requestedScenario)
   : scenarioCatalog;

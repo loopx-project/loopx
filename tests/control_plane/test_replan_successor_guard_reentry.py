@@ -13,6 +13,8 @@ import loopx
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 from test_replan_successor_durable_ack import AGENT, GOAL, history
 
+from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
+from loopx.capabilities.machine_configuration.store import configure_machine_configuration
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.goals.goal_vision import compact_goal_vision_packet, normalize_goal_vision_packet
 from loopx.goal_mode_mcp import GoalModeMCPConfig, GoalModeMCPControlPlane
@@ -96,6 +98,75 @@ def _add(call, obligation_id: str):
         "--text", "Independently verify the source artifact", "--task-class", "advancement_task",
         "--action-kind", "validate", "--target-key", "independent-source-artifact",
         "--operation-id", "periodic-source-successor", "--replan-obligation-id", obligation_id)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_machine_default_stride_due_allows_evidence_linked_terminal_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    call, runtime, index = _fixture(tmp_path, monkeypatch, provider, future_monitor=False)
+    assert "stride_strategy" not in json.loads((tmp_path / "registry.json").read_text())["goals"][0].get("execution_profile", {})
+    owner = build_builtin_machine_configuration_registry()
+    configuration = {"schema_version": "loopx_machine_configuration_v0", "namespaces": {
+        "todo_replan_cadence": {"schema_version": "todo_replan_cadence_machine_defaults_v2",
+            "count_unit": "completed_todos", "count": 1,
+            "stride_strategy": "evidence_conditioned_v1"}}}
+    preview = configure_machine_configuration(
+        runtime_root=runtime, registry=owner, configuration=configuration)
+    configure_machine_configuration(
+        runtime_root=runtime, registry=owner, configuration=configuration,
+        execute=True, expected_plan_revision=preview["plan_revision"])
+
+    turn = "machine-default-terminal-review"
+    guard = _guard(call, turn)
+    obligation = guard["autonomous_replan_obligation"]
+    assert "periodic_review_due" in {trigger["kind"] for trigger in obligation["triggers"]}
+    control = guard["replan_action_packet"]["stride_control"]
+    assert control["strategy_version"] == "evidence_conditioned_v1"
+    common = ("refresh-state", "--goal-id", GOAL, "--agent-id", AGENT,
+        "--replan-obligation-id", obligation["obligation_id"], "--turn-instance-id", turn,
+        "--classification", "source_review", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_gap", "--progress-result-class", "blocked",
+        "--progress-blocker-id", "fixture:unverified-source",
+        "--progress-evidence-id", "fixture:provenance-refusal",
+        "--no-global-sync", "--suppress-external-sinks")
+    before = index.read_bytes()
+    rejected = call(*common, expected_code=1)
+    assert "stride_decision" in rejected["error"]
+    assert index.read_bytes() == before
+
+    decision = {
+        "schema_version": "stride_decision_v2", "strategy_version": "evidence_conditioned_v1",
+        "reference_context_id": control["reference_context_id"],
+        "reference_obligation_id": obligation["obligation_id"],
+        "basis": "uncertain_evidence", "action": "verify",
+        "axes": {
+            "work_slice": {"plan": "Complete the source provenance check.",
+                "reason": "The pending decision needs one independent result."},
+            "route_distance": {"plan": "Retain the current method while checking provenance.",
+                "reason": "No result yet supports replacing the route."},
+            "validation_scope": {"plan": "Check the source and a contrary case.",
+                "reason": "Both outcomes distinguish a valid source from a false lead."}},
+        "next_probe": {"scope": "One complete provenance verification.",
+            "prediction": "Only checked source evidence supports continuation.",
+            "adoption_criterion": "Adopt only after the checked source meets acceptance.",
+            "cost_bound": "One source and its contrary case.",
+            "minimum_evidence": "A checked source result and contrary-case result."}}
+    packet = {"schema_version": "goal_vision_replan_contract_v0",
+        "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "The source outcome remains unproven."},
+        "path_delta": {"schema_version": "goal_path_delta_v0", "outcome": "stop",
+            "prior_assumption": "The source might support the next decision.",
+            "observed_reality": "The source still lacks independent validation.",
+            "retained": ["Original source acceptance"],
+            "changed": ["Stop this route until the source is checked"],
+            "evidence_refs": ["evidence:source-provenance-review"]},
+        "stride_decision": decision}
+    packet_path = tmp_path / "terminal-review.json"
+    packet_path.write_text(json.dumps(packet))
+    accepted = call(*common, "--agent-vision-json", str(packet_path))
+    assert accepted["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True
+    assert json.loads(Path(accepted["json_path"]).read_text())["agent_vision"]["stride_decision"] == decision
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

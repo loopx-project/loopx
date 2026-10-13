@@ -530,6 +530,41 @@ both fresh refusal **before any effect** and original-operation recovery. Do not
 deliver one PR per fallback. Use one cohesive normal-writer cutoff package,
 then a separate producer cleanup when its last callers and outboxes are settled.
 
+**Admission ordering for the 2.0 implementation.** The existing promotion fence
+is not itself the release cutoff. Today, a missing fence permits legacy writes;
+the Python adapter also returns early when that file is absent. Changing only
+the TypeScript missing-fence decision would leave that Python path open.
+Conversely, denying every legacy operation would block the original lease
+release required by cold import: an expired but unreleased lease is still an
+import refusal. The implementation must distinguish the following operations
+through the existing typed transaction owners, before deleting their callers:
+
+| Operation on an unmigrated source | Required cutoff behavior and retained owner |
+| --- | --- |
+| Fresh Todo, team-plan or Monitor mutation; new execution grant, renewal or ownership transfer | Refuse before source replacement, capture preparation or a new execution receipt. Route to reviewed cold import; do not enable creation settings, invent a store or fall back after a selected provider failure. Python transports the typed decision and cannot bypass it with a missing-file check. |
+| Original lease release or close of its existing execution fence, including an expired active lease | Preserve the original owner/key/version, generation and lock-token checks in `work_items/task_lease_lifecycle.ts`; allow settlement/abort without a new holder verification or execution grant. A wrong owner, stale proof or corrupt record must still refuse. Never delete a lease to make import pass. |
+| Original business receipt replay | Validate the original identity and return the recorded result before fresh-work admission. `work_items/team_plan_adapter.py` currently reads an unpromoted receipt inside its legacy write transaction; move that recovery route with the cutoff. Retain the Monitor receipt owner and keep promoted historical replay from draining old source state. A changed intent is a new operation, not recovery. |
+| Prepared or committed shadow work | Use the existing bounded drain and source/receipt reconciliation. Business replay success does not promise that its inline drain finished. Explicit catch-up must retain its budget, cursor and original identity; ambiguous source replacement remains a refusal. Do not recreate a business write to obtain a new capture. |
+| Explicit import, supported backup/format recovery and Markdown display | Keep their specific owners and source checks. `state_migration.py` and `projects/registry.py` also call the current fence/replacement helpers, so a blanket replacement of those helpers is not a complete cutoff. Recovery must not reopen normal writers or consume historical receipts as fresh authority. |
+
+The public entrypoints must preserve this distinction. CLI and packaged App
+should offer the existing reviewed import path for an unmigrated Goal; a missing
+selected provider instead requires restoration of that provider. Supported Lark
+entrypoints must return the same typed refusal and recovery boundary. A preview
+must not advertise a fresh legacy write that confirmation will reject. These
+are implementation requirements, not a shipped 2.0 switch or a new setting.
+
+The decisive combined acceptance starts with a cold source carrying an expired
+unreleased lease and an interrupted original operation: reject fresh work,
+release only the original lease, reconcile the original receipt/outbox, import,
+perform a canonical write, then restart and retry the old operation without
+losing the new write. Repeat for File and SQLite, wrong/stale release proofs,
+changed replay intent, malformed history and unavailable selected providers.
+Run it through the normal wheel and affected packaged entrypoints with the
+retired normal writers physically absent. Existing cold-import lease refusal,
+lease lifecycle retry, Monitor catch-up and team-plan replay tests characterize
+the components; they do not establish this future cutoff journey by themselves.
+
 Deliver complete, reversible PR packages in this order:
 
 1. **Direct source import and support boundary.** Qualify the existing
@@ -617,6 +652,32 @@ restore 分别验收。typed transaction、CLI 和 App 存储设置已实现，�
 creation opt-out、team-plan batch、Monitor、ownership/source lease 和 active
 binding/capture。上述表格逐族指定现有 owner、正常写入截止及历史恢复义务；
 消费者离开 `todos.py` 或 canonical 测试通过，不代表这些 writer 已无调用。
+
+**2.0 准入顺序：**现有 promotion fence 不能直接充当发布截止开关。TS 在缺少
+fence 时允许旧写入，Python 还有文件不存在即返回的快速路径；只改 TS 会漏掉
+后者。反过来全面拒绝 legacy 操作，会同时阻止导入所需的原租约释放。即使租约
+已过期，只要仍是 active，冷导入仍须拒绝，不能删记录或伪造结算来绕过。
+
+截止包须在既有 typed transaction owner 区分新工作与原操作恢复：新 Todo、
+team-plan、Monitor 写入和新授权、续租、转移，在源写入、capture prepare 或
+新执行回执前拒绝；原租约释放及原执行 fence 关闭/中止继续核验原
+owner/key/version/generation 和 lock token，不重新 holder verify 或授予执行权。原业务回执先校验身份再读回结果，不能重新执行；team-plan 当前把未
+晋升回执读取放在 legacy 写事务内部，截止时须一起调整，Monitor 晋升后的旧回执
+重放仍不得 drain 旧源。改 intent、错 owner、过期版本或损坏历史继续明确拒绝。
+
+pending shadow 继续按原源字节和回执独立、有界地对账。业务重试成功不保证内联
+drain 已追平，也不能重做业务写入来生成新 capture。`state_migration.py` 和
+`projects/registry.py` 同样调用当前 fence/replacement helper；不能整体替换
+helper 后就宣告所有入口截止。显式导入、受支持格式/备份恢复和 Markdown 展示
+保留专属校验，同时不得重新打开正常 writer。CLI、packaged App 和受支持 Lark
+入口须区分“未迁移，走审核导入”和“已选 provider 缺失，先恢复 provider”，预览
+也不能许诺确认时会拒绝的旧写入；不新增开关或暗中开启已有创建设置。
+
+组合准出从“冷旧源＋过期未释放租约＋中断原操作”开始：拒绝新工作 → 仅原证明
+释放租约 → 原回执/outbox 对账 → 导入 → 新 canonical 写入 → 重启并重放旧操作，
+新写入不丢失。覆盖 File/SQLite、错误/过期释放证明、变更 intent、坏历史及
+provider 缺失；在正常 wheel/受影响 packaged 入口及旧正常 writer 物理缺席下
+验证。现有各组件测试只是这条未来截止旅程的依据，不是整条旅程已通过的证明。
 
 按上面的四个完整阶段推进：安装态 CLI/App 直接导入与支持边界 → 核心开发者
 SQLite 可逆试用 → 同边界

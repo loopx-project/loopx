@@ -603,6 +603,10 @@ function readPersonalAgentSelections() {
   }
 }
 
+function agentModelSelectionKey(contextId: string, agentId: string) {
+  return `${contextId}:${agentId}`;
+}
+
 type PersonalManagerAnswer = {
   lines: string[];
   text: string;
@@ -1406,6 +1410,7 @@ function PersonalGoalHome({
   const agentDefaultForContext = (targetContextId: string) =>
     targetContextId === "manager" ? stewardExecutorAgentId ?? defaultAgentId : defaultAgentId;
   const [selectedAgents, setSelectedAgents] = useState<Record<string, string>>(readPersonalAgentSelections);
+  const [selectedAgentModels, setSelectedAgentModels] = useState<Record<string, string>>({});
   const selectedAgentId = selectedAgents[contextId] ?? agentDefaultForContext(contextId);
   const selectedAgent = selectAvailableChatAgent(agentOptions, selectedAgentId, defaultAgentId);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
@@ -1584,7 +1589,11 @@ function PersonalGoalHome({
     return () => { controller.abort(); clearTimeout(timer); };
   }, [readOnly, conversationReturnSessionKey]);
 
-  function recordSessionAdmission(session: ChatSessionSummary) {
+  function recordSessionAdmission(targetContextId: string, session: ChatSessionSummary) {
+    const key = agentModelSelectionKey(targetContextId, session.agent_id);
+    const currentModel = session.agent_model_id ?? "";
+    setSelectedAgentModels((current) => current[key] === currentModel
+      ? current : { ...current, [key]: currentModel });
     const queues = chatSessionQueuesFollowUps(session);
     const supportsSteering = chatSessionSupportsSteering(session);
     setSteeringSessionIds((current) => {
@@ -1712,6 +1721,7 @@ function PersonalGoalHome({
         if (cancelled) return;
         const latest = currentChannelSession(history, selectedAgent.agentId);
         latestDiscoveredSessionId = latest?.session_id ?? null;
+        if (latest) recordSessionAdmission(targetContextId, latest);
         if (latest && !latest.resumable) {
           newSessionRequired.current.add(sessionKey);
           recordRuntimeBinding(targetContextId, {
@@ -1726,12 +1736,13 @@ function PersonalGoalHome({
         // actually made for this context is sent.
         const sessionEndpoint =
           targetContext.kind === "manager" ? selectedAgents[targetContextId] : selectedAgent.agentId;
-        const created = await createChatSession(targetContext, sessionEndpoint, "resume_latest");
+        const created = await createChatSession(targetContext, sessionEndpoint, "resume_latest", undefined,
+          latest?.agent_model_id ?? selectedAgentModels[agentModelSelectionKey(targetContextId, sessionEndpoint ?? selectedAgent.agentId)]);
         if (cancelled) return;
         if (targetContext.kind === "manager" && created.session.manager_runtime) {
           setManagerRuntime(created.session.manager_runtime);
         }
-        recordSessionAdmission(created.session);
+        recordSessionAdmission(targetContextId, created.session);
         sessionIds.current.set(sessionKey, created.session_id);
         const activeSnapshot = history.snapshots.find(
           (snapshot) => snapshot.session.session_id === created.session_id,
@@ -2216,8 +2227,8 @@ function PersonalGoalHome({
     const key = `${goalId}:${agentId}`;
     const existing = sessionIds.current.get(key);
     if (existing) return existing;
-    const session = await createChatSession({ kind: "goal", goalId }, agentId, newSessionRequired.current.has(key) ? "new" : "resume_latest", signal);
-    recordSessionAdmission(session.session);
+    const session = await createChatSession({ kind: "goal", goalId }, agentId, newSessionRequired.current.has(key) ? "new" : "resume_latest", signal, selectedAgentModels[key]);
+    recordSessionAdmission(goalId, session.session);
     sessionIds.current.set(key, session.session_id);
     newSessionRequired.current.delete(key);
     recordRuntimeBinding(goalId, {agentId, resumable: true, sessionId: session.session_id, status: session.session.status});
@@ -2310,11 +2321,12 @@ function PersonalGoalHome({
         const mode = newSessionRequired.current.has(sessionKey) ? "new" : "resume_latest";
         const sessionEndpoint =
           targetContext.kind === "manager" ? selectedAgents[targetContextId] : selectedRoute.agentId;
-        const session = await createChatSession(targetContext, sessionEndpoint, mode, preparationController.signal);
+        const session = await createChatSession(targetContext, sessionEndpoint, mode, preparationController.signal,
+          selectedAgentModels[agentModelSelectionKey(targetContextId, sessionEndpoint ?? selectedRoute.agentId)]);
         if (targetContextId === "manager" && session.session.manager_runtime) {
           setManagerRuntime(session.session.manager_runtime);
         }
-        recordSessionAdmission(session.session);
+        recordSessionAdmission(targetContextId, session.session);
         sessionId = session.session_id;
         sessionIds.current.set(sessionKey, sessionId);
         recordRuntimeBinding(targetContextId, {
@@ -2392,16 +2404,20 @@ function PersonalGoalHome({
       // stored identity before offering a link; a failed read never hides the
       // visible answer or retries the model Turn.
       const completedMessageId = streamingMessageId;
-      if ((response.message || streamedText).length >= MIN_SEPARATE_ANSWER_LENGTH) {
-        void fetchChatSession(sessionId).then((stored) => {
+      void fetchChatSession(sessionId).then((stored) => {
+        const key = `${targetContextId}:${stored.session.agent_id}`;
+        if (sessionIds.current.get(key) === sessionId && !newSessionRequired.current.has(key)) {
+          recordSessionAdmission(targetContextId, stored.session);
+        }
+        if ((response.message || streamedText).length >= MIN_SEPARATE_ANSWER_LENGTH) {
           const answer = stored.messages.find((item) =>
             item.turn_id === streamed.turnId && ["agent", "assistant"].includes(item.role));
           if (answer) updateConversationMessage(targetContextId, completedMessageId, {
             sourceMessageId: answer.message_id, sourceSessionId: sessionId,
             collaboration: answer.collaboration, returnDelivery: answer.return_delivery,
           });
-        }).catch(() => { /* The original conversation remains readable. */ });
-      }
+        }
+      }).catch(() => { /* The original conversation remains readable. */ });
       const todoProposals = response.proposals.filter(isTodoProposal);
       // The channel already states where a team plan is confirmed: its answer
       // names the Goal whose workspace holds the card, so a manager-channel
@@ -2585,7 +2601,7 @@ function PersonalGoalHome({
     if (!sessionId) return;
     try {
       const restored = await resumeChatSession(sessionId);
-      recordSessionAdmission(restored.session);
+      recordSessionAdmission(targetContextId, restored.session);
       sessionIds.current.set(sessionKey, sessionId);
       newSessionRequired.current.delete(sessionKey);
       recordRuntimeBinding(targetContextId, {
@@ -2631,6 +2647,16 @@ function PersonalGoalHome({
     }
     setSelectedAgents((current) => ({ ...current, [contextId]: agentId }));
     setAgentMenuOpen(false);
+  }
+
+  function chooseAgentModel(agentId: string, modelId: string) {
+    const selectionKey = agentModelSelectionKey(contextId, agentId);
+    if (selectedAgentModels[selectionKey] === modelId) return;
+    setSelectedAgentModels((current) => current[selectionKey] === modelId ? current : { ...current, [selectionKey]: modelId });
+    const key = `${contextId}:${agentId}`;
+    sessionIds.current.delete(key);
+    newSessionRequired.current.add(key);
+    recordRuntimeBinding(contextId, null);
   }
 
   function openGoalChat(goalId: string) {
@@ -3094,6 +3120,7 @@ function PersonalGoalHome({
           },
           onRetryResumeRun: retryManagerSession,
           onSelectAgent: chooseAgent,
+          onSelectAgentModel: chooseAgentModel,
           onSelectGoal: (goalId, view) => { onSelectGoal(goalId ?? "", view); setMobilePanel("chat"); },
           onSelectView,
           onSelectTodo,
@@ -3118,6 +3145,7 @@ function PersonalGoalHome({
         } : undefined}
         readOnly={readOnly}
         selectedAgentId={selectedAgent.agentId}
+        selectedAgentModelId={selectedAgentModels[agentModelSelectionKey(contextId, selectedAgent.agentId)]}
         selectedGoalId={selectedGoal?.goalId ?? null}
         serviceNotice={executionDiscoveryError
           ? <p className="personal-service-notice" role="status">{t(executionDiscoveryError === "partial" ? "runs.discoveryPartial" : "runs.discoveryOffline")}</p>

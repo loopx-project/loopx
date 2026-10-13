@@ -81,6 +81,7 @@ def test_python_prepare_facade_sends_raw_provider_context(monkeypatch) -> None:
             "existing_agent_vision": None,
             "merge_patch": True,
             "require_path_delta_for_durable_change": True,
+            "allow_terminal_stride_path": False,
         },
     }
 

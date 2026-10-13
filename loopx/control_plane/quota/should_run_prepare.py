@@ -192,6 +192,7 @@ def _preserve_receipt_bound_replan_obligation(
     agent_id: str | None = None,
     replay_phase: ReceiptBoundReplayPhase | None = None,
     transition_candidates: list[dict[str, Any]] | None = None,
+    stride_strategy: str = "off",
 ) -> dict[str, Any] | None:
     preserved_replan_id = normalize_todo_replan_obligation_id(
         receipt_bound_replan_obligation_id
@@ -206,6 +207,7 @@ def _preserve_receipt_bound_replan_obligation(
             "agent_id": agent_id,
             "replay_phase": replay_phase.value if replay_phase is not None else None,
             "transition_candidates": transition_candidates or [],
+            "stride_strategy": stride_strategy,
         })
     except EffectRuntimeRejected as exc:
         if exc.diagnostic_code == "heartbeat_receipt_identity_conflict":
@@ -858,6 +860,7 @@ def _prepare_quota_should_run_item(
             agent_id=agent_frontier_id,
             replay_phase=receipt_bound_replay_phase,
             transition_candidates=goal_frontier_context.get("replan_transition_candidates"),
+            stride_strategy=goal_frontier_context["stride_strategy"],
         )
     )
     replan_scope = goal_frontier_context.get("replan_scope") or {}

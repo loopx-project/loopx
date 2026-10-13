@@ -99,9 +99,15 @@ export function canonicalCoordinationRecord(
       `${label} omits required fields: ${missing.join(", ")}`,
     );
   }
-  return canonicalAuthorityObject(Object.fromEntries(
-    contract.fields.flatMap((field) => field in record ? [[field, record[field]]] : []),
-  ), label);
+  // Preserve the generic contract's legacy `in` selection for inherited fields.
+  // Shipped Todo contracts need no reconstruction: normalization already owns
+  // every allowed field and nested container in canonical order.
+  if (contract.fields.some((field) => !Object.hasOwn(record, field) && field in record)) {
+    return canonicalAuthorityObject(Object.fromEntries(
+      contract.fields.flatMap((field) => field in record ? [[field, record[field]]] : []),
+    ), label);
+  }
+  return record;
 }
 
 export function canonicalCoordinationTodoRecord(

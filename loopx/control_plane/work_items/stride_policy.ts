@@ -272,12 +272,14 @@ export function strideControlContract(context: JsonObject, obligationId: unknown
     previous_review_options: {adoption: decisionSchema.adoption_options, information_gain: decisionSchema.information_options, goal_gain: decisionSchema.gain_options},
     explore_basis: context.explore_basis ?? null, explore_dispositions: decisionSchema.explore_dispositions,
     minimal_example: example,
-    attachment: "agent_vision.stride_decision", requires_structured_fresh_path: true,
-    rule: "Enabled fresh Vision path reviews require an explicit grow/switch/verify action and a concrete plan/reason for each axis. " +
+    attachment: "agent_vision.stride_decision", requires_evidence_linked_path: true,
+    required_on_periodic_review: true,
+    rule: "Every due periodic review with this strategy enabled must record a stride decision before settlement, including when a typed progress, successor, blocker or terminal outcome is also reported. " +
+      "The decision requires an evidence-linked Vision path (including a terminal stop when supported by evidence), an explicit grow/switch/verify action and a concrete plan/reason for each axis. " +
       "Grow expands a supported route; switch names the reference method and changed mechanism; verify resolves a named grow-or-switch question. Size every action for a coherent accepted deliverable or complete interpretable experiment, including ordinary engineering and maintenance. Grow changes useful completed scope, not authority or settlement boundaries. " +
       "The minimal example demonstrates syntax, not the recommended action for the current evidence. " +
       "When a previous decision is delivered, assess its adoption, information and goal gain in previous_review against its exact reference. " +
       "When Explore basis is delivered, assess applicable findings/alternatives in explore_review; missing or omitted evidence stays unknown. " +
-      "These are Agent claims and proposal-shape obligations, not execution authority or utility certification. Other source-specific exits remain unchanged.",
+      "These are Agent claims and proposal-shape obligations, not execution authority or utility certification. Other source-specific outcomes remain legal but cannot bypass a due stride review.",
   };
 }

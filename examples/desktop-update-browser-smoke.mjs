@@ -41,6 +41,7 @@ try {
   let startupTiming = null;
   let failUpdate = false;
   let fastInstallFailure = false;
+  let installFailureCode = "app_install_failed";
   let rollbackAvailable = true;
   let checkFailure = null;
   let checkUpToDate = false;
@@ -79,8 +80,8 @@ try {
     calls.push({ command, args });
     if (fastInstallFailure && args.action === "apply") {
       rollbackAvailable = true;
-      nativeState = { phase: "error", details: { code: "app_install_failed" } };
-      throw new Error("app_install_failed");
+      nativeState = { phase: "error", details: { code: installFailureCode } };
+      throw installFailureCode;
     }
     if (checkFailure && args.action === "check") return { phase: "error", details: { code: checkFailure } };
     if (checkUpToDate && args.action === "check") {
@@ -185,12 +186,26 @@ try {
   assert.equal(await page.getByText("恢复上个版本", { exact: true }).count(), 0);
   const beforeFailedInstall = calls.length;
   await page.getByRole("button", { name: "更新并准备重启", exact: true }).click();
-  await page.getByText("更新未完成。请重试；启动失败可尝试修复当前版本。").waitFor();
+  await page.getByText("App 更新未完成，已确认当前版本完好。可继续使用或重新检查更新。").waitFor();
   await page.getByText("恢复上个版本", { exact: true }).waitFor({ timeout: 2000 });
   await page.getByText("恢复上个版本", { exact: true }).click();
   assert.equal(await page.getByRole("button", { name: "确认恢复上版", exact: true }).isEnabled(), true);
   assert.deepEqual(calls.slice(beforeFailedInstall).map((call) => call.args.action), ["apply"], "readback must not repeat installation or automatically roll back");
   await page.screenshot({ path: resolve(output, "update-fast-failure-recovery.png") });
+  // Actual replacement can remove the App before a second move fails.
+  // Preserve the native recovery code; a runtime-only repair cannot restore it.
+  installFailureCode = "app_install_incomplete";
+  nativeRuntimeSelection = { explicit: false, remembered: true, bundled_repair_available: false };
+  await page.getByRole("button", { name: "检查更新", exact: true }).click();
+  await page.getByRole("button", { name: "更新并准备重启", exact: true }).click();
+  await page.getByText(/App 安装未完成，当前版本可能不完整/).waitFor({ timeout: 2000 });
+  assert.equal(await page.getByRole("button", { name: "修复当前版本", exact: true }).isEnabled(), false);
+  assert.equal(await page.getByRole("button", { name: "确认恢复上版", exact: true }).isEnabled(), true);
+  await page.getByText(/当前 App 无法重装运行时/).waitFor();
+  assert.equal(await page.locator(".personal-update-panel").getByRole("button", { name: "重启完成更新", exact: true }).count(), 0);
+  await page.screenshot({ path: resolve(output, "update-incomplete-recovery.png") });
+  installFailureCode = "app_install_failed";
+  nativeRuntimeSelection = { explicit: false, remembered: true, bundled_repair_available: true };
   // A later action owns recovery metadata even if an earlier terminal read
   // returns last. The stale backup observation must not revive its control.
   const delayedRecoveryStatus = delayNextStatus("error");
@@ -217,7 +232,7 @@ try {
   await page.getByRole("button", { name: "更新 LoopX", exact: true }).click();
   await page.getByText("高级选项", { exact: true }).click();
   assert.equal(await page.getByRole("button", { name: "修复当前版本", exact: true }).isEnabled(), false);
-  await page.getByText(/当前运行时由其他安装方式或启动参数管理/).waitFor();
+  await page.getByText(/当前 App 无法重装运行时/).waitFor();
   const beforeForget = calls.length;
   await page.getByRole("button", { name: "清除记住的运行时选择", exact: true }).click();
   await page.getByText("正在连接更新后的服务…", { exact: true }).waitFor();

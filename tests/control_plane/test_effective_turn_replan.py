@@ -19,6 +19,8 @@ from tests.control_plane.test_quota_settlement_cli import (
     _configure_selectable_alternative,
     ALTERNATIVE_TODO_ID,
 )
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.work_items.replan_history_codec import (
     effective_turn_cadence_context,
 )
@@ -299,6 +301,127 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
         )["threshold"]
         == (device_count or 6)
     )
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_due_stride_review_survives_successor_transition_until_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    data = json.loads(registry.read_text())
+    data["goals"][0]["quota"]["allowed_slots"] = 4
+    registry.write_text(json.dumps(data))
+    rc, listed = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
+    assert rc == 0, listed
+    initialize_canonical_authority(runtime, GOAL_ID, build_todo_runtime_shadow_projection(
+        goal_id=GOAL_ID, todos=listed["todos"], handoff_mode="soft_claim", leases=[]),
+        state_path=project / data["goals"][0]["state_file"], provider=provider)
+
+    def call(*args: str, expected_code: int = 0) -> dict:
+        code, result = _run_cli(registry, runtime, *args, cwd=project)
+        assert code == expected_code, result
+        return result
+
+    call("configure-goal", "--goal-id", GOAL_ID, "--execution-replan-after-turns", "2",
+         "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
+    for index in range(2):
+        turn = f"stride-cadence-{index}"
+        guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+                     "--agent-id", AGENT_ID, "--turn-instance-id", turn,
+                     "--scan-path", str(project))
+        assert guard["selected_todo"]["todo_id"] == TODO_ID
+        call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+             "--todo-id", TODO_ID, "--turn-instance-id", turn,
+             "--classification", "validated_progress", "--delivery-batch-scale", "implementation",
+             "--delivery-outcome", "outcome_progress", "--delivery-boundary", "in_flight_continuation",
+             "--no-global-sync", "--suppress-external-sinks")
+        call("quota", "spend-slot", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+             "--todo-id", TODO_ID, "--turn-instance-id", turn,
+             "--slots", "1", "--source", "heartbeat", "--execute")
+
+    guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+                 "--agent-id", AGENT_ID, "--turn-instance-id", "stride-due-review",
+                 "--scan-path", str(project))
+    obligation = guard["autonomous_replan_obligation"]
+    assert "periodic_review_due" in {trigger["kind"] for trigger in obligation["triggers"]}
+    assert guard["replan_action_packet"]["stride_control"]["required_on_periodic_review"] is True
+    successor = call("todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
+        "--claimed-by", AGENT_ID, "--text", "Validate a new independent source",
+        "--task-class", "advancement_task", "--action-kind", "validate",
+        "--target-key", "independent-source", "--replan-obligation-id", obligation["obligation_id"])
+    assert successor["todo_id"]
+    reread = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+                  "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+                  "--turn-instance-id", "stride-due-review",
+                  "--scan-path", str(project))
+    assert reread["heartbeat_receipt"]["settlement_identity"]["replan_obligation_id"] == obligation["obligation_id"]
+    assert reread["autonomous_replan_obligation"]["obligation_id"] == obligation["obligation_id"]
+    assert reread["autonomous_replan_obligation"].get("resolution_mode") != "receipt_bound_replan_settlement"
+    assert reread["replan_action_packet"]["stride_control"]["required_on_periodic_review"] is True
+    rejected = call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--replan-obligation-id", obligation["obligation_id"],
+        "--turn-instance-id", "stride-due-review",
+        "--classification", "typed_blocker_writeback", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_gap", "--progress-result-class", "blocked",
+        "--progress-blocker-id", "fixture:blocked-source",
+        "--progress-evidence-id", "fixture:blocked-source-evidence",
+        "--no-global-sync", "--suppress-external-sinks", expected_code=1)
+    assert rejected.get("appended") is not True
+    assert "stride_decision" in rejected["error"]
+    decision_path = tmp_path / "stride-review.json"
+    control = reread["replan_action_packet"]["stride_control"]
+    decision = {
+        "schema_version": "stride_decision_v2", "strategy_version": "evidence_conditioned_v1",
+        "reference_context_id": control["reference_context_id"],
+        "reference_obligation_id": obligation["obligation_id"],
+        "basis": "uncertain_evidence", "action": "verify",
+        "axes": {
+            "work_slice": {"plan": "Complete the independent source validation.",
+                           "reason": "One complete check resolves the pending evidence question."},
+            "route_distance": {"plan": "Retain the current delivery route while checking its source.",
+                               "reason": "No result yet supports replacing the route."},
+            "validation_scope": {"plan": "Check the source result and a contrary case.",
+                                 "reason": "Both cases distinguish a usable source from a false lead."},
+        },
+        "next_probe": {"scope": "One bounded independent source validation.",
+                       "prediction": "The source supports the original acceptance.",
+                       "adoption_criterion": "Adopt only if the checked source meets acceptance.",
+                       "cost_bound": "One source and its contrary case before replanning.",
+                       "minimum_evidence": "A checked result and a contrary-case result."},
+    }
+    vision_packet = {
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "The original delivery remains open while the new source is validated."},
+        "path_delta": {"schema_version": "goal_path_delta_v0", "outcome": "replan",
+            "prior_assumption": "The first source was sufficient for the next validation.",
+            "observed_reality": "The reviewed evidence identifies another source to validate.",
+            "retained": ["Original acceptance and validation boundary"],
+            "changed": ["Validate the independent source before claiming completion"],
+            "evidence_refs": ["evidence:independent-source-review"]},
+        "stride_decision": decision,
+    }
+    decision_path.write_text(json.dumps({**vision_packet,
+        "stride_decision": {**decision, "reference_context_id": "replan-context-" + "b" * 24}}))
+    foreign = call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--replan-obligation-id", obligation["obligation_id"],
+        "--turn-instance-id", "stride-due-review", "--agent-vision-json", str(decision_path),
+        "--classification", "bounded_replan_progress", "--delivery-batch-scale", "implementation",
+        "--delivery-outcome", "outcome_progress", "--no-global-sync", "--suppress-external-sinks",
+        expected_code=1)
+    assert foreign.get("appended") is not True
+    assert "context" in foreign["error"].lower()
+    decision_path.write_text(json.dumps(vision_packet))
+    accepted = call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--replan-obligation-id", obligation["obligation_id"],
+        "--turn-instance-id", "stride-due-review", "--agent-vision-json", str(decision_path),
+        "--classification", "bounded_replan_progress", "--delivery-batch-scale", "implementation",
+        "--delivery-outcome", "outcome_progress", "--no-global-sync", "--suppress-external-sinks")
+    assert accepted["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True
+    persisted = json.loads(Path(accepted["json_path"]).read_text())
+    assert persisted["agent_vision"]["stride_decision"] == decision
 
 
 @pytest.mark.parametrize("invalid", [0, 7, True, 2.5, "2"])

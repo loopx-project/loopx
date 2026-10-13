@@ -9,6 +9,17 @@ import loopx.chat_store as chat_store
 from loopx.chat_store import CHAT_SESSION_SCHEMA_VERSION, ChatSessionStore
 
 
+def test_agent_model_value_keeps_provider_protocol_characters() -> None:
+    assert chat_store.normalize_agent_model_id("vendor/model-fast") == "vendor/model-fast"
+    assert chat_store.normalize_agent_model_id("vendor/model  fast") == "vendor/model  fast"
+
+
+@pytest.mark.parametrize("value", ["", "model\nnext", "x" * 161])
+def test_agent_model_value_rejects_empty_controls_and_unbounded_values(value: str) -> None:
+    with pytest.raises(ValueError, match="agent_model_id"):
+        chat_store.normalize_agent_model_id(value)
+
+
 def test_session_id_cannot_escape_sessions_directory(tmp_path: Path) -> None:
     store = ChatSessionStore(tmp_path)
     (store.root / "session.json").write_text(

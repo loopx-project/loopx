@@ -3,7 +3,7 @@ import {adoptLoopXTeamWork, fetchLoopXTeamWork, readLoopXTeamWork, type Delegati
 import {isMarkdownArtifact, TeamArtifactReport} from "./team-artifact-content";
 
 const accepted = (row: DelegationReadback) => row.status === "accepted"
-  && !row.error && !row.recovery_required && Boolean(row.artifacts?.length);
+  && row.current_use?.state !== "unavailable" && !row.error && !row.recovery_required && Boolean(row.artifacts?.length);
 const sameResult = (expected: DelegationReadback, observed: DelegationReadback) => accepted(observed)
   && expected.operation_id === observed.operation_id && expected.request_id === observed.request_id
   && expected.agent_id === observed.agent_id && expected.todo_id === observed.todo_id

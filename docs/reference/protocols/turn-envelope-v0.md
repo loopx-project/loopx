@@ -58,6 +58,49 @@ unchanged. This opt-in detail link does not change action-signature coverage.
 为补读上下文重跑 guard。读取前核对身份和源哈希；旧观察不提供新的执行权限。
 文件损坏或丢失不能自动重跑，选 Todo、lease 变化等仍需按原契约重新准入。
 
+### Native Turn Host capture
+
+Executing `turn run-once --execute` now saves the original full decision before
+Host invocation and binds the received envelope's detail route to that private
+observation. This is the native Turn execution default; ordinary quota capture
+remains opt-in. `turn plan`, `managed-step` inspection and `run-once` previews
+remain read-only. No new capability or configuration switch is introduced.
+
+The Turn journal owns the native Turn identity. Its capture reference includes
+Goal, Agent, Turn instance, Turn key and the existing source-decision hash; it
+does not invent a heartbeat admission receipt inside the saved decision. The
+TypeScript envelope owner validates the observation and binding. Python only
+publishes and reads the private file under the Turn journal lock. Captures live
+in the journal directory's `decisions` child, outside the journal file inventory,
+and are published atomically with owner-only file permissions without replacing
+an existing observation. They can contain private Goal context and must not be
+included in public logs or artifacts.
+
+Host retry validates and reuses the original journal's capture even if current
+source text changes. Reading detail does not invoke quota or spend a slot.
+Current source admission, cancellation, workspace/lease and mutation checks
+retain their existing owners; the observation grants no fresh authority.
+Missing, corrupt, wrong-identity or source-hash-mismatched captures refuse Host
+reinvocation. Restore the original evidence rather than reconstructing it from
+a new guard. A capture published before a journal write failure is retained;
+a different observation cannot overwrite it on retry.
+
+Compatibility: terminal journal readback and recovery using an already cached
+typed Host result retain the original effect receipts and do not need to launch
+a Host. An older journal without capture cannot safely reconstruct the omitted
+original context for another Host attempt. Preserve that journal, resolve its
+pending effects using the existing recovery path, then start a fresh Turn when
+permitted. Downgrading code must preserve journals and captures; deleting them
+is not rollback. This transport qualification does not establish live model,
+packaged App/Lark or overall convergence acceptance.
+
+中文：原生 `turn run-once --execute` 在启动 Host 前保存完整原始决策，实际短包详情
+与失败重试均读取该快照，预览不写入。Turn 身份来自原 journal，不伪造 heartbeat
+准入记录。旧观察不授予新权限；缺失、损坏或身份／哈希不符时拒绝重新启动 Host。
+无快照的旧 journal 保留终态回读和已缓存结果的结算恢复，但不能重新构造当时的完整
+上下文后继续调用 Host；先处置原效果，再按当前准入创建新 Turn。文件含私有上下文，
+保留在运行时目录，禁止放入公开产物。
+
 For repeated host-owned guards, `--decision-output-root ./private-decisions`
 allocates a unique child directory per invocation below an **existing** directory.
 It is mutually exclusive with `--decision-output-dir`; both require an explicit
@@ -145,6 +188,22 @@ selected Todo context; text aliases require exact equality, never a case-folded
 or truncated-prefix match. Supplied selected text survives envelope serialization
 intact. Hosts must honor the reads; signing does not prove execution or model
 adherence. Full Goal requirement coverage and global closeout remain open.
+
+The continuation-audit capsule preserves the source's complete ordered
+`required_before_closeout`, continuation guidance, current `vision_gap_judge`,
+accepted evidence kinds and insufficient-proof conditions. These are decision
+obligations, so display truncation must not remove their clauses or list tails.
+They enter the existing action signature; editing a step, its order or the judge
+changes the signed dimensions. Detailed acceptance-gap records stay in the same
+captured full decision. Historical saved envelopes retain their original
+signatures; this projection change grants no closure or execution authority.
+The 8 KiB warning remains diagnostic when required meaning exceeds it.
+
+中文：验收 capsule 完整保留原来源的有序步骤、继续执行说明、当前结束／继续判断、
+认可的证据种类和不能作为证明的条件；展示裁剪不能丢掉条款或列表尾部。新投影使用
+既有签名维度，历史 envelope 的签名不重写。详细验收记录仍从同次捕获读取，体积
+超过 8 KiB 时保留 warning，不以缩短义务或放大预算替代语义验收。
+
 No new frontend/Lark operation or configuration is introduced. Regenerate saved
 expanded heartbeat prompts to consume the new contract; bootstrap prompts reload
 installed rules on their next wake. This source-checkout change does not upgrade

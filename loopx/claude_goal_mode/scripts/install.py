@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -32,6 +34,99 @@ MCP_VENV = Path.home() / ".local" / "share" / "loopx" / "mcp-venv"
 
 def _p(*parts) -> str:
     return str(PLUGIN_ROOT.joinpath(*parts)).replace("\\", "/")
+
+
+def _is_git_bash(path: str) -> bool:
+    """True when `path` is the MSYS/Cygwin bash Claude Code dispatches to.
+
+    The WSL `bash.exe` that sits on some PATHs is a Linux shell, not the Git
+    Bash Claude Code spawns for a Windows command string, and its `uname` says
+    `Linux`; the System32 alias is rejected by name and everything else by
+    asking the candidate for its `uname`."""
+    system32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
+    resolved = os.path.normcase(os.path.realpath(path))
+    system32_resolved = os.path.normcase(os.path.realpath(system32))
+    if resolved == system32_resolved or resolved.startswith(system32_resolved + os.sep):
+        return False
+    try:
+        probe = subprocess.run([path, "-c", "uname -s"], capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return probe.returncode == 0 and probe.stdout.decode("utf-8", "replace").startswith(
+        ("MINGW", "MSYS", "CYGWIN")
+    )
+
+
+# Claude Code honors `CLAUDE_CODE_GIT_BASH_PATH` only when the file name is one
+# of these (env-vars reference, 2.1.219+); any other name is ignored and Git
+# Bash detection continues as if the variable were unset - even when the file
+# exists and runs.
+_GIT_BASH_OVERRIDE_NAMES = frozenset({"bash.exe", "sh.exe", "bash", "sh"})
+
+
+def _git_bash() -> str | None:
+    """The Git Bash Claude Code runs a shell-form command string with, if any.
+
+    Claude Code passes a hook or statusline string to Git Bash on Windows when
+    Git Bash is installed, to PowerShell when it is not, and to `/bin/sh` on
+    macOS/Linux (Claude Code hooks reference, "Exec form and shell form"). It
+    finds Git Bash through its `CLAUDE_CODE_GIT_BASH_PATH` override, the Git
+    installation or a `bash` on PATH, or a default Git for Windows location;
+    this mirrors those sources so the encoding can follow the same choice. Like
+    that consumer, an override whose file name is not `bash.exe`, `sh.exe`,
+    `bash` or `sh` (compared case-insensitively) is ignored and detection
+    continues as if it were unset."""
+    if sys.platform != "win32":
+        return None
+    candidates: list[str] = []
+    override = os.environ.get("CLAUDE_CODE_GIT_BASH_PATH")
+    if override and Path(override).name.lower() in _GIT_BASH_OVERRIDE_NAMES:
+        candidates.append(override)
+    git = shutil.which("git")
+    if git:
+        root = Path(git).resolve().parent.parent
+        candidates += [str(root / "bin" / "bash.exe"), str(root / "usr" / "bin" / "bash.exe")]
+    on_path = shutil.which("bash")
+    if on_path:
+        candidates.append(on_path)
+    for base, sub in (
+        (os.environ.get("ProgramFiles"), "Git"),
+        (os.environ.get("ProgramFiles(x86)"), "Git"),
+        (os.environ.get("LocalAppData"), "Programs/Git"),
+    ):
+        if base:
+            candidates.append(str(Path(base) / sub / "bin" / "bash.exe"))
+    for candidate in candidates:
+        if os.path.isfile(candidate) and _is_git_bash(candidate):
+            return candidate
+    return None
+
+
+def _uses_powershell() -> bool:
+    """Whether Claude Code runs these command strings through PowerShell.
+
+    A Windows host without Git Bash gets PowerShell for shell-form hooks and
+    the statusline; every other host runs `/bin/sh` or Git Bash."""
+    return sys.platform == "win32" and _git_bash() is None
+
+
+def _shell_literal(value: str, *, powershell: bool) -> str:
+    """Render `value` as one literal token the consumer shell reads back whole.
+
+    Double quotes are not literal in either shell: `$NAME` expands inside them
+    and an inner `"` can close the token. Single quotes are literal in both, so
+    POSIX/Git Bash targets get `shlex.quote`'s form and PowerShell a `'...'`
+    string with its `''` escape. A bare Windows path would lose its
+    backslashes under Git Bash, so those are quoted too."""
+    if powershell:
+        return "'" + value.replace("'", "''") + "'"
+    return shlex.quote(value)
+
+
+def _shell_command(value: str, *, powershell: bool) -> str:
+    """`_shell_literal` in command position: PowerShell needs its `&` operator."""
+    token = _shell_literal(value, powershell=powershell)
+    return f"& {token}" if powershell else token
 
 
 def _launches_python(py: str) -> bool:
@@ -74,13 +169,16 @@ def deep_merge(base: dict, add: dict) -> dict:
 
 def hardening_block() -> dict:
     """The OPTIONAL per-tool gate + statusline. Not installed unless --harden."""
-    py = _python_cmd()
+    powershell = _uses_powershell()
+    py = _shell_command(_python_cmd(), powershell=powershell)
+    gate = _shell_literal(_p("hooks", "goal_policy.py"), powershell=powershell)
+    status = _shell_literal(_p("statusline", "goal_status.py"), powershell=powershell)
     return {
         "hooks": {
             "PreToolUse": [{"matcher": "*", "hooks": [
-                {"type": "command", "command": f'{py} "{_p("hooks", "goal_policy.py")}"', "timeout": 10}]}],
+                {"type": "command", "command": f"{py} {gate}", "timeout": 10}]}],
         },
-        "statusLine": {"type": "command", "command": f'{py} "{_p("statusline", "goal_status.py")}"'},
+        "statusLine": {"type": "command", "command": f"{py} {status}"},
     }
 
 
@@ -216,8 +314,11 @@ def install_mcp(
 # ---- /loopx command ----------------------------------------------------------
 
 def command_md() -> str:
-    entry = _p("scripts", "goalmode_cmd.py")
-    py = _python_cmd()
+    # The `!` line runs through the Bash tool - `sh`/Git Bash on every host - so
+    # it is always a POSIX literal, never the PowerShell form; a Windows host
+    # without Git Bash cannot run `!` lines at all (README).
+    entry = _shell_literal(_p("scripts", "goalmode_cmd.py"), powershell=False)
+    py = _shell_literal(_python_cmd(), powershell=False)
     return (
         "---\n"
         "description: loopx goal-mode setup (NOT Claude Code's built-in /goal). "
@@ -227,7 +328,7 @@ def command_md() -> str:
         f"allowed-tools: Bash({py}:*)\n"
         "---\n\n"
         "Run the loopx setup helper and read its output:\n\n"
-        f"!`{py} \"{entry}\" $ARGUMENTS`\n\n"
+        f"!`{py} {entry} $ARGUMENTS`\n\n"
         "The output is loopx control-plane SETUP / status info — it is the COMPLETE, user-facing "
         "result. Show it to the user VERBATIM and STOP. Do NOT do any work, claim todos, write "
         "files, or loop here: the WORK runs when the user types Claude Code's native `/loop` (which "

@@ -14,6 +14,7 @@ from ...todos.todo_semantics import todo_item_is_actionable_open, todo_item_task
 from ...work_items.progress_observation import (
     replan_obligation_trigger_checkpoints,
     replan_obligation_trigger_kinds,
+    replan_successor_transition_allowed,
     required_semantic_outcomes,
 )
 from ...work_items.autonomous_replan_obligation import ensure_replan_novelty_policy
@@ -40,10 +41,15 @@ def autonomous_replan_ack_satisfies_obligation(
     replan_obligation: dict[str, Any] | None,
     acceptance_gaps: list[dict[str, Any]] | None,
     todo_succession_gap_open: bool = False,
+    stride_strategy: str = "off",
 ) -> bool:
     """Reject ACKs that miss the obligation's typed semantic outcome."""
 
     if not autonomous_replan_ack_has_frontier_delta(ack):
+        return False
+    if ack.get("source") == "todo_replan_successor_transition" and not replan_successor_transition_allowed(
+        replan_obligation or {}, stride_strategy=stride_strategy,
+    ):
         return False
     semantic_delta = ack.get("semantic_delta") if isinstance(ack, dict) else {}
     obligation_id = str((replan_obligation or {}).get("obligation_id") or "").strip()
@@ -75,6 +81,7 @@ def replan_successor_transition_ack(
     agent_id: str | None,
     replan_obligation: dict[str, Any] | None,
     agent_todo_items: Iterable[dict[str, Any]] | None = None,
+    stride_strategy: str = "off",
 ) -> dict[str, Any] | None:
     """Project an exact runnable-successor Todo as the replan receipt.
 
@@ -150,6 +157,10 @@ def replan_successor_transition_ack(
         explore_result_node_refs=successor.get("explore_result_node_refs"),
     )
     if successor_binding is None:
+        return None
+    if not replan_successor_transition_allowed(
+        replan_obligation or {}, stride_strategy=stride_strategy,
+    ):
         return None
     if trigger_checkpoints is None:
         trigger_checkpoints = replan_obligation_trigger_checkpoints(replan_obligation or {})

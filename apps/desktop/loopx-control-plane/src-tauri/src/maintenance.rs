@@ -330,6 +330,7 @@ pub fn desktop_update_status(app: AppHandle, state: State<'_, Maintenance>) -> V
         "explicit": selection.as_ref().is_some_and(|selected| selected.environment_override),
         "remembered": selection.as_ref().is_some_and(|selected| selected.explicit),
         "bundled_repair_available": selection.is_some()
+            && bundled_runtime::repair_resources_available(&app)
             && !state.separately_managed_runtime.load(Ordering::Acquire),
     });
     let rollback_available = crate::update_backup::available(&app);
