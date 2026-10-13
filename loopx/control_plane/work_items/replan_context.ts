@@ -7,7 +7,7 @@ import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {FRESH_PATH_DISPOSITIONS, requiredSemanticOutcomes} from "./replan_semantics.ts";
 import {readReplanSnapshot} from "./replan_history_snapshot.ts";
 import {normalizeGoalPathDelta} from "../goals/vision_checkpoint.ts";
-import {normalizeStrideDecision, normalizeStrideStrategy} from "./stride_policy.ts";
+import {normalizeRecordedStrideDecision, normalizeStrideStrategy, projectStrideExploreBasis} from "./stride_policy.ts";
 
 const CONTEXT_SCHEMA = "replan_context_v0";
 // Replan is an infrequent decision, not the ordinary guard's display window.
@@ -135,7 +135,7 @@ function recordedDecision(row: JsonObject): JsonObject | null {
   if (source.goal_ref != null && (!ref || ref.goal_id !== row.goal_id ||
       typeof ref.goal_instance_id !== "string" || !ID.test(ref.goal_instance_id))) return null;
   let stride: JsonObject | null;
-  try { [stride] = normalizeStrideDecision(objectOrNull(source.agent_vision)?.stride_decision); }
+  try { stride = normalizeRecordedStrideDecision(objectOrNull(source.agent_vision)?.stride_decision); }
   catch { return null; }
   const decision = {history_evidence_ref: "replan-evidence-" + digest(publicEvidenceRow(row)),
     generated_at: row.generated_at, todo_id: row.todo_id, turn_instance_id: source.turn_instance_id,
@@ -236,7 +236,7 @@ export function validateReplanContext(value: unknown): JsonObject {
     identifier(previous.history_evidence_ref, "previous_decision.history_evidence_ref");
     identifier(previous.turn_instance_id, "previous_decision.turn_instance_id");
     normalizeGoalPathDelta(previous.path_delta);
-    normalizeStrideDecision(previous.stride_decision);
+    normalizeRecordedStrideDecision(previous.stride_decision);
   }
   return context;
 }
@@ -366,11 +366,13 @@ export function projectReplanContext(value: unknown): JsonObject {
   const ledger = [...coverage].filter(([key]) => selectedCoverage.has(key)).map(([, value]) => value);
   const core = coreGoal(request.goal_facts);
   const strideStrategy = normalizeStrideStrategy(request.stride_strategy);
+  const exploreBasis = strideStrategy !== "off" ? projectStrideExploreBasis(request.explore_context, goal, agent) : null;
   const followthrough = agent && strideStrategy !== "off"
     ? decisionFollowthrough(rows, request.goal_facts, request.from_full_index === true) : null;
   const contextId = "replan-context-" + digest({goal, agent, obligationId, core, ledger, shown, frontier,
     ...(strideStrategy !== "off" ? {stride_strategy: strideStrategy} : {}),
-    ...(followthrough ? {decision_followthrough: followthrough} : {})});
+    ...(followthrough ? {decision_followthrough: followthrough} : {}),
+    ...(exploreBasis ? {explore_basis: exploreBasis} : {})});
   const context: JsonObject = {
     schema_version: CONTEXT_SCHEMA, context_id: contextId, goal_id: goal, agent_id: agent,
     obligation_id: obligationId, evidence_source: "compact_run_history", delivery: "host_projected",
@@ -383,6 +385,7 @@ export function projectReplanContext(value: unknown): JsonObject {
   };
   if (strideStrategy !== "off") context.stride_strategy = strideStrategy;
   if (followthrough) context.decision_followthrough = followthrough;
+  if (exploreBasis) context.explore_basis = exploreBasis;
   if (omitted.length) context.omitted_evidence = {
     distinct_observation_count: omitted.length,
     newest_at: omitted[0].row.generated_at, oldest_at: omitted.at(-1)!.first,

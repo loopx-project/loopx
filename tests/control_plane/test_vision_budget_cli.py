@@ -141,3 +141,61 @@ def test_authoring_example_material_closeout_has_no_missing_path_replan(tmp_path
         persisted = result["agent_vision"]
         assert persisted["path_delta"]["outcome"] == "continue"
         assert persisted["path_delta"]["evidence_refs"]
+
+
+def test_historical_stride_probe_whitespace_roundtrips_with_strategy_off(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "examples/project/goal-vision-refresh-state-budget-smoke.py"
+    spec = importlib.util.spec_from_file_location("historical_stride_fixture", source)
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    registry, runtime, _ = fixture.write_fixture(tmp_path)
+    expected = {"scope": "One complete experiment.", "prediction": "Distinguish the remaining explanations.",
+                "adoption_criterion": "Retain a validated gain.", "cost_bound": "One bounded comparison."}
+    packet = {"vision_patch": {"vision_summary": "Preserve the historical proposal."},
+        "path_delta": {"outcome": "continue", "prior_assumption": "The recorded route is bounded.",
+                       "observed_reality": "The historical read contract remains applicable.",
+                       "retained": ["The recorded proposal"], "evidence_refs": ["evidence:historical-probe"]},
+        "stride_decision": {
+        "schema_version": "stride_decision_v1", "strategy_version": "evidence_conditioned_v1",
+        "reference_context_id": "replan-context-" + "a" * 24,
+        "reference_obligation_id": "replan-" + "a" * 16, "basis": "unexplained_gap",
+        "next_probe": {key: " " * 4000 + value + " " * 4000 for key, value in expected.items()}}}
+    path = tmp_path / "vision.json"
+    fixture.write_json(path, packet)
+    completed = fixture.run_cli(registry, runtime, vision_path=path,
+        check=False, dry_run=False, autonomous_replan_recorded=False)
+    result = fixture.payload(completed)
+    assert completed.returncode == 0, result
+    assert result["agent_vision"]["stride_decision"]["next_probe"] == expected
+    usage = result["agent_vision"]["vision_budget"]["field_usage"]
+    for key, value in expected.items():
+        assert usage["stride_decision.next_probe." + key] == len(value)
+    index = runtime / "goals" / fixture.GOAL_ID / "runs/index.jsonl"
+    persisted = json.loads(index.read_text().splitlines()[-1])["agent_vision"]
+    assert persisted["stride_decision"]["next_probe"] == expected
+    status = fixture.run_status(registry, runtime)
+    goal = next(g for g in status["run_history"]["goals"] if g["id"] == fixture.GOAL_ID)
+    assert goal["latest_runs"][0]["agent_vision"]["stride_decision"]["next_probe"] == expected
+    read_budget = goal["latest_runs"][0]["agent_vision"]["vision_budget"]
+    for key in ("status", "field_usage", "total_usage", "total_limit"):
+        assert read_budget[key] == persisted["vision_budget"][key]
+
+    # Malformed supplied historical values must reject before any append, not
+    # be silently replaced by the compatibility mapping. Omission above is legal.
+    vector = {"work_slice": "shrink", "route_distance": "grow", "validation_scope": "shrink"}
+    changes = [{"axes": value} for value in (None, False, {**vector, "extra": "hold"})]
+    for field in ("reference_context_id", "reference_obligation_id"):
+        for value in ([packet["stride_decision"][field]], {"value": packet["stride_decision"][field]}):
+            changes.append({field: value})
+    journal_before = index.read_bytes()
+    for change in changes:
+        invalid = copy.deepcopy(packet)
+        invalid["stride_decision"].update(change)
+        fixture.write_json(path, invalid)
+        rejected = fixture.run_cli(registry, runtime, vision_path=path,
+            check=False, dry_run=False, autonomous_replan_recorded=False)
+        assert rejected.returncode != 0, change
+        assert index.read_bytes() == journal_before
+    after = fixture.run_status(registry, runtime)
+    after_goal = next(g for g in after["run_history"]["goals"] if g["id"] == fixture.GOAL_ID)
+    assert after_goal["latest_runs"][0]["agent_vision"] == goal["latest_runs"][0]["agent_vision"]

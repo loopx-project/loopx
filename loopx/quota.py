@@ -939,6 +939,11 @@ def build_quota_should_run(
         build_quota_should_run as _build_quota_should_run,
     )
 
+    def read_explore_context(read_goal_id: str, read_agent_id: str | None):
+        from .capabilities.explore.turn_context import read_replan_explore_context
+
+        return read_replan_explore_context(source_status=status_payload, goal_id=read_goal_id, agent_id=read_agent_id)
+
     return _build_quota_should_run(
         status_payload,
         goal_id=goal_id,
@@ -963,6 +968,7 @@ def build_quota_should_run(
         workspace_path=workspace_path,
         goal_ref=goal_ref,
         authoritative_fallback_todo_items=authoritative_fallback_todo_items,
+        replan_explore_reader=read_explore_context,
     )
 
 

@@ -333,8 +333,8 @@ test("versioned stride advice is opt-in and never a semantic discharge", () => {
   assert.deepEqual((withStrategy.planning_guidance as string[]).slice(0, 5), base.planning_guidance);
   assert.equal((withStrategy.planning_guidance as string[]).length, 6);
   assert.deepEqual(withStrategy.required_any_of, base.required_any_of);
-  assert.match((withStrategy.planning_guidance as string[])[5], /work-slice size, mechanism distance and validation breadth independently/);
-  assert.match((withStrategy.planning_guidance as string[])[5], /do not force a pivot from elapsed time or one noisy result/);
+  assert.match((withStrategy.planning_guidance as string[])[5], /work size, route distance and validation breadth independently/);
+  assert.match((withStrategy.planning_guidance as string[])[5], /Do not restart unfinished coherent work/);
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: enabled,
     planning_guidance: withStrategy.planning_guidance}).accepted, false);
   for (const version of ["future_v2", null, 1]) {

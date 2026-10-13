@@ -484,6 +484,7 @@ def build_replan_context(
     newest_first_runs: Iterable[Mapping[str, Any]],
     source_status: Mapping[str, Any] | None = None,
     stride_strategy: str = "off",
+    explore_context: Mapping[str, Any] | None = None,
     goal_acceptance_contract: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     from .replan_context_codec import project_replan_context
@@ -492,7 +493,7 @@ def build_replan_context(
         goal_id=goal_id, agent_id=agent_id or obligation.get("agent_id"),
         runs=newest_first_runs, obligation=obligation, source_status=source_status,
         goal_acceptance_contract=goal_acceptance_contract, stride_strategy=stride_strategy,
-        history_newest_first=True,
+        history_newest_first=True, explore_context=explore_context,
     )
 
 

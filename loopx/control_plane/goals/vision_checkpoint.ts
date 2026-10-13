@@ -11,7 +11,7 @@ import {
   type DeliveryOutcome,
 } from "../work_items/delivery_outcome.ts";
 
-import {normalizeStrideDecision, STRIDE_DECISION_SCHEMA, STRIDE_PROBE_LIMITS} from "../work_items/stride_policy.ts";
+import {normalizeStrideDecision, STRIDE_DECISION_SCHEMA, RECORDED_STRIDE_SCHEMA, STRIDE_PROBE_LIMITS, STRIDE_AXIS_NAMES, STRIDE_PLAN_LIMIT, STRIDE_REASON_LIMIT, STRIDE_REVIEW_LIMIT} from "../work_items/stride_policy.ts";
 
 export const VISION_REFRESH_REQUEST_SCHEMA = "loopx_vision_refresh_request_v0";
 export const VISION_REFRESH_PREPARED_SCHEMA_VERSION =
@@ -568,10 +568,10 @@ function prepareVisionRefresh(request: VisionRefreshPrepareRequest): JsonObject 
     for (const [field, value] of Object.entries(container)) {
       if (prefix === "agent_vision" && field === "path_delta") continue;
       if (prefix === "agent_vision" && field === "stride_decision") continue;
-      if (field === STRIDE_DECISION_SCHEMA ||
+      if (field === STRIDE_DECISION_SCHEMA || field === RECORDED_STRIDE_SCHEMA ||
           (prefix === "agent_vision.vision_patch" && field === "stride_decision") ||
           (typeof value === "object" && value !== null && !Array.isArray(value) &&
-           (value as JsonObject).schema_version === STRIDE_DECISION_SCHEMA)) {
+           [STRIDE_DECISION_SCHEMA, RECORDED_STRIDE_SCHEMA].includes(String((value as JsonObject).schema_version)))) {
         throw new EffectRuntimeRequestError(`${prefix}.${field} must be supplied as agent_vision.stride_decision`);
       }
       if (field === GOAL_PATH_DELTA_SCHEMA_VERSION ||
@@ -689,8 +689,15 @@ function prepareVisionRefresh(request: VisionRefreshPrepareRequest): JsonObject 
   }
   if (strideDecision) {
     for (const [field, limit] of Object.entries(STRIDE_PROBE_LIMITS)) {
-      fieldLimits[`stride_decision.next_probe.${field}`] = limit;
+      if (Object.hasOwn(strideDecision.next_probe as JsonObject, field)) fieldLimits[`stride_decision.next_probe.${field}`] = limit;
     }
+    if (strideDecision.axis_reasons) for (const axis of STRIDE_AXIS_NAMES) fieldLimits[`stride_decision.axis_reasons.${axis}`] = STRIDE_REASON_LIMIT;
+    if (strideDecision.schema_version === STRIDE_DECISION_SCHEMA) for (const axis of STRIDE_AXIS_NAMES) {
+      fieldLimits[`stride_decision.axes.${axis}.plan`] = STRIDE_PLAN_LIMIT;
+      fieldLimits[`stride_decision.axes.${axis}.reason`] = STRIDE_REASON_LIMIT;
+    }
+    if (strideDecision.previous_review) fieldLimits["stride_decision.previous_review.lesson"] = STRIDE_REVIEW_LIMIT;
+    if (strideDecision.explore_review) fieldLimits["stride_decision.explore_review.reason"] = STRIDE_REVIEW_LIMIT;
   }
   fieldLimits["fallback_declarations"] = VISION_FALLBACK_DECLARATION_ENTRY_LIMIT;
   fieldLimits["fallback_declarations[]"] = VISION_FALLBACK_DECLARATION_ID_LIMIT;

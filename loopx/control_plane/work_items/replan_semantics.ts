@@ -3,7 +3,7 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { optionalNonEmptyString, requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import { visionAuthoringContract } from "../goals/vision_checkpoint.ts";
 import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
-import {normalizeStrideDecision, normalizeStrideStrategy, strideControlContract, stridePlanningGuidance} from "./stride_policy.ts";
+import {normalizeStrideDecision, normalizeStrideStrategy, STRIDE_DECISION_SCHEMA, strideControlContract, stridePlanningGuidance, strideReviewMismatch} from "./stride_policy.ts";
 
 const PROGRESS_OUTCOMES = [
   "new_surface", "new_hypothesis", "new_probe_family", "new_runnable_successor",
@@ -352,9 +352,11 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   const structuredReview = normalizeStrideStrategy(context.stride_strategy) !== "off";
   const freshPath = Boolean(String(patch.acceptance_summary ?? "").trim() &&
     FRESH_PATH_DISPOSITIONS.has(String(path.outcome ?? "").trim()) && strings(path.evidence_refs).length);
-  const missingStride = structuredReview && freshPath && !strideDecision;
+  const independentStride = strideDecision?.schema_version === STRIDE_DECISION_SCHEMA;
+  const missingStride = structuredReview && freshPath && (!strideDecision || !independentStride);
   const staleStride = !!strideDecision && structuredReview &&
     strideDecision.reference_obligation_id !== obligation.obligation_id;
+  const reviewMismatch = strideDecision && structuredReview ? strideReviewMismatch(strideDecision, context) : null;
   let outcomes = strings(observation.delta_kinds);
   if (outcomes.some(value => (CAPABILITY_OUTCOMES as readonly string[]).includes(value))) {
     throw new EffectRuntimeRequestError("capability evidence must be qualified by its owning capability, not generic progress");
@@ -380,10 +382,10 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   const inconsistentTerminal = outcomes.includes("coverage_backed_no_followup") &&
     (vision.state !== "no_followup" || path.outcome !== "stop");
   if (inconsistentTerminal) outcomes = outcomes.filter(outcome => outcome !== "coverage_backed_no_followup");
-  if (freshPath && !missingStride && !staleStride && !outcomes.includes("fresh_vision_path_outcome")) {
+  if (freshPath && !missingStride && !staleStride && !reviewMismatch && !outcomes.includes("fresh_vision_path_outcome")) {
     outcomes.push("fresh_vision_path_outcome");
   }
-  if (staleStride || missingStride) outcomes = outcomes.filter(outcome => outcome !== "fresh_vision_path_outcome");
+  if (staleStride || missingStride || reviewMismatch) outcomes = outcomes.filter(outcome => outcome !== "fresh_vision_path_outcome");
   const satisfying = inconsistentTerminal ? [] : outcomes.filter(outcome => required.includes(outcome as SemanticOutcome));
   const replayRefused = (replayed || knownBlocker) && !satisfying.length && !inconsistentTerminal;
   const identityRefused = identityWithoutEvidence && !satisfying.length && !inconsistentTerminal;
@@ -392,8 +394,9 @@ export function projectReplanSemantics(value: unknown): JsonObject {
     outcomes, satisfying_outcomes: satisfying, required_any_of: required,
     observation_fingerprint: observation.observation_fingerprint ?? null,
     reason: satisfying.length ? "writeback changes an outcome accepted by this obligation source"
-      : missingStride ? "enabled stride review requires agent_vision.stride_decision from the delivered control contract"
+      : missingStride ? "enabled stride review requires agent_vision.stride_decision with independent axes/reasons and minimum_evidence from the delivered control contract"
       : staleStride ? "stride decision must reference the admitted replan obligation; reassess against its evidence"
+      : reviewMismatch ? reviewMismatch
       : inconsistentTerminal ? "coverage-backed no-follow-up requires agent_vision.state=no_followup and path_delta.outcome=stop"
       : replayRefused ? (knownBlocker
         ? "replan does not accept a blocker already recorded in its baseline, window or coverage ledger"
@@ -402,6 +405,7 @@ export function projectReplanSemantics(value: unknown): JsonObject {
       : "writeback does not satisfy this obligation's typed outcomes",
     ...(missingStride && !satisfying.length ? {reason_code: "stride_decision_required"}
       : staleStride && !satisfying.length ? {reason_code: "stride_reference_obligation_mismatch"}
+      : reviewMismatch && !satisfying.length ? {reason_code: "stride_review_basis_mismatch"}
       : inconsistentTerminal ? {reason_code: "no_followup_vision_path_inconsistent"}
       : replayRefused ? {reason_code: "progress_observation_replayed"}
       : identityRefused ? {reason_code: "progress_identity_without_new_evidence"} : {}),

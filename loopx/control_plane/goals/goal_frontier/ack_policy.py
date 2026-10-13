@@ -183,3 +183,21 @@ def replan_successor_transition_ack(
     if frontier_identity:
         ack["frontier_identity"] = frontier_identity
     return ack
+
+
+def attach_rejected_replan_feedback(
+    obligation: dict[str, Any] | None, feedback: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Preserve the existing rejected-claim readback without changing the duty."""
+    if not obligation or not feedback:
+        return obligation
+    obligation = dict(obligation)
+    obligation["replan_ack_feedback"] = feedback
+    first_claim = next((item for item in feedback.get("rejected_claims") or []
+                        if isinstance(item, dict)), None)
+    if first_claim:
+        obligation["recommended_action"] = (
+            "previous replan ACK was rejected: "
+            f"{first_claim.get('kind')}: {first_claim.get('reason')}; "
+            + str(obligation.get("recommended_action") or "replan again"))
+    return obligation
