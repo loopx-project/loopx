@@ -201,6 +201,7 @@ class ChatActionStore:
         available_transitions: Sequence[Any],
         idempotency_key: str,
         canonical_update_basis: Mapping[str, Any] | None = None,
+        workspace_binding: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         selected_kind = str(action_kind or "").strip()
         if selected_kind not in ACTION_KINDS:
@@ -224,6 +225,8 @@ class ChatActionStore:
                 "available_transitions": list(available_transitions),
                 **({"canonical_update_basis": dict(canonical_update_basis)}
                    if canonical_update_basis is not None else {}),
+                **({"workspace_binding": dict(workspace_binding)}
+                   if workspace_binding is not None else {}),
             },
             path="preview",
         )

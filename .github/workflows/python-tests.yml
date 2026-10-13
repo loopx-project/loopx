@@ -210,6 +210,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      - name: Install checkout for Python-backed browser scenarios
+        run: |
+          python -m pip install --disable-pip-version-check -e .
+          echo "LOOPX_TEST_PYTHON=$(python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
@@ -393,6 +397,15 @@ jobs:
           name: chat-bundle-${{ github.sha }}
           path: loopx/web/chat/
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install checkout for Python-backed browser scenarios
+        run: |
+          python -m pip install --disable-pip-version-check -e .
+          echo "LOOPX_TEST_PYTHON=$(python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
+
       - name: Set up the qualified Node.js runtime
         uses: actions/setup-node@v6
         with:
@@ -552,6 +565,7 @@ jobs:
         # Each runner retains the measured two-worker pool.
         run: >-
           python -m pytest -v -n 2 -m "not stage2c_e2e"
+          -p scripts.ci.pytest_timing
           --splits 4 --group ${{ matrix.shard }}
           --splitting-algorithm least_duration
           --durations=25 --durations-min=1

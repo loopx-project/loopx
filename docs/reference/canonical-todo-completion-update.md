@@ -14,7 +14,46 @@ loopx todo update --goal-id example --todo-id todo_observation \
 Use the same operation id and intent after a lost response. A new annotation
 uses a new id (omitting the id generates one). `--dry-run` validates and previews
 without running declared validation, writing a receipt, or delivering a display.
-Agent completion continues to require `loopx todo complete`.
+Agent completion keeps its dedicated terminal owner (`loopx todo complete` or
+the reviewed Chat action below).
+
+### Chat/App completion with original execution proof
+
+The existing `todo.update` Chat action with `operation=complete` also transports
+caller-supplied `agent_id`, `task_lease_idempotency_key` and
+`task_lease_expected_version` to the same terminal owner. Previously, Chat
+rejected these proof parameters before reaching that owner. Both proof fields
+are required together with an explicit Agent; other update operations reject
+them. Missing proof retains the existing mode-dependent refusal.
+
+In the App, open the Task's **Original execution proof** disclosure and paste the responsible
+Agent's original JSON proof containing those three fields. Use the existing
+**Mark complete** preview, inspect the intended effect, then confirm and read
+back the completed Task. A list completion refused for missing proof opens that
+same Task inspector. Editing the proof requires a fresh preview. The proof draft
+is cleared when changing Tasks and is not saved as a browser preference.
+
+The App neither inspects a lease to fabricate proof nor acquires a competing
+execution. Providing JSON does not grant ownership or waive validation.
+Where execution proof is required, the terminal owner checks current actor, claim, execution key, version, expiry,
+registry witness and provider revision. A changed or expired execution must be
+reconciled through its owning lifecycle. Retry the original reviewed proposal
+after a lost response; its receipt recovers the committed completion and display
+without releasing a new lease or repeating the completion effect. Proof-bearing
+proposal retries require a version supporting this transport; older versions do
+not supply these fields. This does not
+qualify live-model execution, other host surfaces, sustained SQLite operation or
+legacy writer retirement.
+
+App 的任务详情 **原执行证明** 折叠区接收负责 Agent 提供的原 JSON 证明，字段为
+`agent_id`、`task_lease_idempotency_key`、`task_lease_expected_version`。仍按
+**标记完成 → 检查 → 确认 → 读回** 操作；列表因缺少证明拒绝时打开同一任务详情。
+换任务会清除证明草稿，修改证明须重新预览。App 不读租约补造证明、不自动领取或
+改变归属；有效性、过期、CAS、验证与重放仍由原 TS owner 判定。失响应后重试原
+proposal，不重复完成效果。此路径不代表 live model、其他 Host、持续 SQLite
+运行或整个 legacy writer 退役已通过。
+
+Synthetic packaged examples: [desktop original-proof input](assets/todo-completion-proof/desktop.png) and [narrow English refusal](assets/todo-completion-proof/narrow-en.png). These illustrate the local transport journey, not a live Agent or native desktop qualification.
 
 ## Revising an open Todo validator
 

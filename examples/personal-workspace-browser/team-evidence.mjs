@@ -269,6 +269,82 @@ export const teamEvidenceScenario = {
       await content.waitFor();
       assert.equal(api.turnRequests.length, 0, "Evidence reading must not start a model");
       await page.screenshot({path: resolve(outputDir, "team-evidence-desktop.png"), animations: "disabled"});
+      // Reading a consumer is not adoption. Only the explicit owner decision
+      // writes; a lost post-commit acknowledgement reconciles without rewriting.
+      delete mode.fixtureAdoptionState;
+      await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
+      await content.waitFor();
+      await evidence.locator(".goal-team-lineage-detail > summary").click();
+      const adoption = evidence.locator(".goal-team-adoption");
+      await adoption.locator("summary").click();
+      const consumerInventory = async route => {
+        const body = route.request().method() === "POST" ? route.request().postDataJSON() : {};
+        if (body.operation !== "operations") return route.fallback();
+        return route.fulfill({json: {items: [{record_id: "b".repeat(64), operation_id: "accepted-synthesis",
+          agent_id: "synthesizer", status: "accepted", recovery_required: false}],
+          has_more: false, next_cursor: null, page_readback_complete: true}});
+      };
+      await page.route("**/api/chat/sessions/*/loopx", consumerInventory);
+      await adoption.getByRole("button", {name: "查找使用此版本的后续结果", exact: true}).click();
+      await adoption.getByLabel("后续结果", {exact: true}).waitFor();
+      assert.equal(api.loopxModeRequests.filter(row => row.operation === "adopt").length, 0);
+      await adoption.getByRole("button", {name: "阅读后续结果", exact: true}).click();
+      await adoption.getByLabel("证据内容: report.md", {exact: true}).waitFor();
+      assert.equal(api.loopxModeRequests.filter(row => row.operation === "adopt").length, 0);
+      const lostAdoptionAck = async route => {
+        const body = route.request().method() === "POST" ? route.request().postDataJSON() : {};
+        if (body.operation !== "adopt") return route.fallback();
+        api.loopxModeRequests.push({sessionId: configured.sessionId, ...body});
+        mode.fixtureAdoptionState = "current";
+        return route.fulfill({status: 503, json: {error: "Fixture acknowledgement lost after commit"}});
+      };
+      await page.route("**/api/chat/sessions/*/loopx", lostAdoptionAck);
+      const confirmAdoption = adoption.getByRole("button", {name: "确认采用于此结果", exact: true});
+      await confirmAdoption.focus(); await page.keyboard.press("Enter");
+      await adoption.getByText("采用已记录，指定版本与后续结果当前有效。", {exact: true}).waitFor();
+      const decisions = api.loopxModeRequests.filter(row => row.operation === "adopt");
+      assert.equal(decisions.length, 1, "Post-commit reconciliation sends no duplicate decision");
+      assert.deepEqual({operation_id: decisions[0].operation_id, consumer_operation_id: decisions[0].consumer_operation_id},
+        {operation_id: "accepted-analysis", consumer_operation_id: "accepted-synthesis"});
+      await adoption.scrollIntoViewIfNeeded();
+      await page.screenshot({path: resolve(outputDir, "team-adoption-desktop.png"), animations: "disabled"});
+      await page.setViewportSize({width: 390, height: 844});
+      await page.emulateMedia({reducedMotion: "reduce"});
+      assert(await adoption.evaluate(el => el.scrollWidth <= el.clientWidth), "Adoption stays readable at 390px");
+      await page.screenshot({path: resolve(outputDir, "team-adoption-mobile.png"), animations: "disabled"});
+      await page.setViewportSize({width: 1512, height: 982});
+      await page.unroute("**/api/chat/sessions/*/loopx", lostAdoptionAck);
+      // An unavailable reconciliation keeps the reviewed pair and requires an
+      // explicit retry; it cannot silently select or dispatch different work.
+      delete mode.fixtureAdoptionState;
+      await adoption.getByRole("button", {name: "查找使用此版本的后续结果", exact: true}).click();
+      await adoption.getByRole("button", {name: "阅读后续结果", exact: true}).click();
+      await adoption.getByLabel("证据内容: report.md", {exact: true}).waitFor();
+      const unavailableReconciliation = async route => {
+        const body = route.request().method() === "POST" ? route.request().postDataJSON() : {};
+        if (body.operation !== "read" || body.operation_id !== "accepted-analysis") return route.fallback();
+        return route.fulfill({status: 503, json: {error: "Fixture readback unavailable"}});
+      };
+      await page.route("**/api/chat/sessions/*/loopx", lostAdoptionAck);
+      await page.route("**/api/chat/sessions/*/loopx", unavailableReconciliation);
+      await adoption.getByRole("button", {name: "确认采用于此结果", exact: true}).click();
+      await adoption.getByRole("button", {name: "重试同一采用决定", exact: true}).waitFor();
+      assert.equal(await adoption.getByLabel("后续结果", {exact: true}).isDisabled(), true);
+      assert.equal(await adoption.getByRole("button", {name: "查找使用此版本的后续结果", exact: true}).isDisabled(), true);
+      assert.equal(api.loopxModeRequests.filter(row => row.operation === "adopt").length, 2);
+      await page.unroute("**/api/chat/sessions/*/loopx", unavailableReconciliation);
+      await page.unroute("**/api/chat/sessions/*/loopx", lostAdoptionAck);
+      await adoption.getByRole("button", {name: "重试同一采用决定", exact: true}).click();
+      await adoption.getByText("采用已记录，指定版本与后续结果当前有效。", {exact: true}).waitFor();
+      const retriedDecisions = api.loopxModeRequests.filter(row => row.operation === "adopt");
+      assert.equal(retriedDecisions.length, 3);
+      assert.deepEqual(retriedDecisions[2], retriedDecisions[1], "Retry retains the exact reviewed adoption pair");
+      mode.fixtureAdoptionState = "unavailable";
+      await adoption.getByRole("button", {name: "查找使用此版本的后续结果", exact: true}).click();
+      await adoption.getByText("已检查的工作中没有可核验的使用结果。", {exact: true}).waitFor();
+      assert.equal(await adoption.getByRole("button", {name: "确认采用于此结果", exact: true}).count(), 0);
+      assert.equal(api.loopxModeRequests.filter(row => row.operation === "adopt").length, 3);
+      await page.unroute("**/api/chat/sessions/*/loopx", consumerInventory);
       // Lose the first acknowledgement; retry must preserve identity and content.
       let first = true;
       await page.route("**/api/chat/sessions/*/loopx", async route => {

@@ -32,6 +32,7 @@ from ...control_plane.collaboration.inbox import (
     _write as _write,
     acknowledge as acknowledge,
     normalize_request as normalize_request,
+    plan_request_publication,
     normalize_source_context,
     pending as pending,
 )
@@ -159,42 +160,19 @@ def deliver(
             / (request_id + ".json")
         )
 
-        def persist_entry() -> bool:
-            # Generated receiver guidance may change across releases. Preserve
-            # the saved guide as history; compare only the original request.
-            request_content = {key: item for key, item in value.items() if key != "instruction"}
-            exists = path.exists()
-            if (
-                exists
-                and {
-                    key: item
-                    for key, item in _read(path).items()
-                    if key not in {"delivered_at", "source_channel", "instruction"}
-                }
-                != request_content
-            ):
-                raise ValueError("context request identity conflict")
-            if not exists:
+        def persist_entry(plan) -> bool:
+            expected = plan["entry"]
+            if not plan["replayed"]:
                 from .tracking import _now
 
-                _write(
-                    path,
-                    value
-                    | {
-                        "delivered_at": _now(),
-                        "source_channel": session.get("channel_id"),
-                    },
-                )
-            if (
-                {
-                    key: item
-                    for key, item in _read(path).items()
-                    if key not in {"delivered_at", "source_channel", "instruction"}
-                }
-                != request_content
-            ):
+                expected = expected | {"delivered_at": _now(), "source_channel": session.get("channel_id")}
+                _write(path, expected)
+            if _read(path) != expected:
                 raise ValueError("context delivery readback failed")
-            return exists
+            return plan["replayed"]
+
+        def publication_plan():
+            return plan_request_publication(value, entry=_read(path) if path.exists() else None)
 
         from .roundtrip import _register_unlocked, register
 
@@ -205,12 +183,14 @@ def deliver(
                 goal_scope,
                 path.with_suffix(".lock"),
             ):
+                plan = publication_plan()
                 _register_unlocked(runtime_root, value, session, turn, source_store=source_store)
-                exists = persist_entry()
+                exists = persist_entry(plan)
         else:
             with exclusive_file_lock(path.with_suffix(".lock")):
+                plan = publication_plan()
                 register(runtime_root, value, session, turn, source_store=source_store)
-                exists = persist_entry()
+                exists = persist_entry(plan)
         return {
             "request_id": request_id,
             "status": "delivered",

@@ -21,6 +21,7 @@ import {
   type SettlementResult,
 } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import { hasMonitorPollTransaction } from "./monitor_poll_commit.ts";
 import {
   jsonObject,
   requireJsonObject,
@@ -1373,9 +1374,21 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
     : withQuotaAccountingOwner;
   return await withOwner(
     request.owner,
-    async () => readQuotaSettlementFromRequest(
-      request,
-      await readQuotaSettlementSnapshot(request.runtime_root, request.goal_id),
-    ),
+    async () => {
+      const result = readQuotaSettlementFromRequest(request,
+        await readQuotaSettlementSnapshot(request.runtime_root, request.goal_id));
+      const identity = jsonObject(jsonObject(jsonObject(result.identity)?.result)?.value);
+      if (identity && request.refresh_retry &&
+          jsonObject(result.refresh_recovery)?.decision !== "reject" &&
+          isTurnScopedSettlementOutcome(request.refresh_retry.delivery_outcome,
+            request.refresh_retry.progress_observation, optionalString(identity.todo_id)) &&
+          request.refresh_retry.delivery_outcome === "outcome_gap" &&
+          await hasMonitorPollTransaction(request.runtime_root, identity as unknown as SettlementIdentity, request.owner)) {
+        throw new EffectRuntimeRequestError(
+          "a stored Monitor poll may already have committed its observation; recover the exact monitor-poll before an unavailable closeout",
+        );
+      }
+      return result;
+    },
   );
 }

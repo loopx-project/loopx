@@ -133,6 +133,33 @@ def module_source(rel_path: str) -> str:
     return (REPO_ROOT / rel_path).read_text(encoding="utf-8")
 
 
+def _analyse(source: str, names: frozenset[str]):
+    """Derive named bindings and string sites without retaining syntax trees."""
+
+    tree = ast.parse(source)
+    bindings = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            targets = frozenset(t.id for t in node.targets if isinstance(t, ast.Name))
+            if targets & names:
+                bindings.append((node.lineno, targets, ast.unparse(node.value)))
+    strings = [(node.lineno, node.value) for node in ast.walk(tree)
+               if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+    return bindings, strings
+
+
+def _binding_lines(bindings, name: str, value: str | None):
+    return [line for line, names, expression in bindings
+            if name in names and (value is None or expression == repr(value))]
+
+
+def _sites(analysis, name: str, value: str | None):
+    bindings, strings = analysis
+    named = _binding_lines(bindings, name, value)
+    inline = [] if value is None else [line for line, text in strings if value in text]
+    return named, inline
+
+
 def module_level_binds(source: str, name: str, value: str | None = None) -> list[int]:
     """Lines where this module restates the owner's *value* under this name.
 
@@ -143,16 +170,7 @@ def module_level_binds(source: str, name: str, value: str | None = None) -> list
     name-only view used by the neighbour probes.
     """
 
-    tree = ast.parse(source)
-    found: list[int] = []
-    for node in tree.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        if not any(isinstance(target, ast.Name) and target.id == name for target in node.targets):
-            continue
-        if value is None or ast.unparse(node.value) == repr(value):
-            found.append(node.lineno)
-    return found
+    return _binding_lines(_analyse(source, frozenset({name}))[0], name, value)
 
 
 def literal_sites(source: str, value: str) -> list[int]:
@@ -163,53 +181,65 @@ def literal_sites(source: str, value: str) -> list[int]:
     into an f-string, and an f-string interpolation is not a literal at all.
     """
 
-    tree = ast.parse(source)
-    return [
-        node.lineno
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and value in node.value
-    ]
+    return _sites(_analyse(source, frozenset()), "", value)[1]
 
 
-def scan(name: str) -> tuple[list[str], list[str]]:
-    """Return (undefined-owner findings, unexplained literal findings) for one decision."""
-
-    owner_path, _, value, _ = DECISIONS[name]
-    declared = DECLARED_LITERAL_SITES.get(value, {})
-    bindings_found: list[str] = []
-    per_file: dict[str, list[int]] = {}
+def _repository_scan():
+    bindings = {name: [] for name in DECISIONS}
+    sites = {name: {} for name in DECISIONS}
+    names = frozenset(DECISIONS)
     for path in sorted(PACKAGE_ROOT.rglob("*.py")):
         rel = path.relative_to(REPO_ROOT).as_posix()
-        if rel == owner_path:
-            continue
-        source = path.read_text(encoding="utf-8")
-        for lineno in module_level_binds(source, name, value):
-            bindings_found.append(f"{rel}:{lineno} restates {name}={value!r}")
-        lines = literal_sites(source, value)
-        if lines:
-            per_file[rel] = lines
-    unexplained = [
-        f"{rel}:{lineno} spells {value!r}"
-        for rel, lines in per_file.items()
-        if rel not in declared
-        for lineno in lines
-    ]
-    for rel, count in declared.items():
-        seen = len(per_file.get(rel, []))
-        if seen != count:
-            unexplained.append(f"{rel} declares {count} site(s), found {seen}")
-    return bindings_found, unexplained
+        analysis = _analyse(path.read_text(encoding="utf-8"), names)
+        for name, (owner_path, _module, value, _consumers) in DECISIONS.items():
+            if rel == owner_path:
+                continue
+            named, inline = _sites(analysis, name, value)
+            bindings[name].extend(f"{rel}:{line} restates {name}={value!r}" for line in named)
+            if inline:
+                sites[name][rel] = inline
+    result = {}
+    for name, (_owner, _module, value, _consumers) in DECISIONS.items():
+        declared = DECLARED_LITERAL_SITES.get(value, {})
+        unexplained = [f"{rel}:{line} spells {value!r}"
+                       for rel, lines in sites[name].items() if rel not in declared
+                       for line in lines]
+        for rel, count in declared.items():
+            seen = len(sites[name].get(rel, []))
+            if seen != count:
+                unexplained.append(f"{rel} declares {count} site(s), found {seen}")
+        result[name] = bindings[name], unexplained
+    return result
+
+
+def _repository_reader():
+    # Cache only the completed module-test findings, never ASTs or raw source.
+    result = None
+
+    def read(name):
+        nonlocal result
+        if result is None:
+            result = _repository_scan()
+        bindings, inline = result[name]
+        return list(bindings), list(inline)
+
+    return read
+
+
+@pytest.fixture(scope="module")
+def repository_findings():
+    return _repository_reader()
 
 
 @pytest.mark.parametrize("name", sorted(DECISIONS))
-def test_only_the_owner_module_defines_the_name(name: str) -> None:
-    bindings_found, _ = scan(name)
+def test_only_the_owner_module_defines_the_name(name: str, repository_findings) -> None:
+    bindings_found, _ = repository_findings(name)
     assert bindings_found == [], "\n".join(bindings_found)
 
 
 @pytest.mark.parametrize("name", sorted(DECISIONS))
-def test_no_other_module_spells_the_value_out(name: str) -> None:
-    _, literals = scan(name)
+def test_no_other_module_spells_the_value_out(name: str, repository_findings) -> None:
+    _, literals = repository_findings(name)
     assert literals == [], "\n".join(literals)
 
 
@@ -401,3 +431,37 @@ def test_the_scan_leaves_a_folded_consumer_alone(label: str, source: str) -> Non
     assert [
         name for name, (_o, _m, folded, _c) in DECISIONS.items() if literal_sites(source, folded)
     ] == [], label
+
+
+@pytest.mark.parametrize("source,owner,named,inline", [
+    ('REQUEST_SCHEMA = "semantic_preference_provider_request_v0"\n', False, 1, 1),
+    ('help = "Public-safe semantic_preference_provider_request_v0 here"\n', False, 0, 1),
+    ('REQUEST_SCHEMA = "a_different_document_v0"\n', False, 0, 0),
+    ('REQUEST_SCHEMA = "semantic_preference_provider_request_v0"\n', True, 0, 0),
+])
+def test_repository_findings_preserve_refusals_and_retry(tmp_path, monkeypatch, source, owner, named, inline):
+    monkeypatch.setitem(globals(), "REPO_ROOT", tmp_path)
+    monkeypatch.setitem(globals(), "PACKAGE_ROOT", tmp_path / "loopx")
+    declared = tmp_path / "loopx/capabilities/reward_memory/registry.py"
+    declared.parent.mkdir(parents=True)
+    declared.write_text(f"SCHEMA = {DECISIONS['RESPONSE_SCHEMA'][2]!r}\n")
+    path = tmp_path / (DECISIONS["REQUEST_SCHEMA"][0] if owner else "loopx/extra.py")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("BROKEN = (\n")
+    read = _repository_reader()
+    with pytest.raises(SyntaxError):
+        read("REQUEST_SCHEMA")
+    path.write_text(source)
+    bindings, sites = read("REQUEST_SCHEMA")
+    assert len(bindings) == named
+    assert len(sites) == inline
+    bindings.clear()
+    sites.clear()
+    assert tuple(map(len, read("REQUEST_SCHEMA"))) == (named, inline)
+    assert read("RESPONSE_SCHEMA") == ([], [])
+    if owner:
+        declared.write_text("")
+        _, rejected = _repository_reader()("RESPONSE_SCHEMA")
+        assert rejected == [
+            "loopx/capabilities/reward_memory/registry.py declares 1 site(s), found 0"
+        ]

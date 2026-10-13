@@ -642,7 +642,11 @@ def handle_support_control_command(
                 claude_bin=args.claude_bin,
                 kiro_cli_bin=getattr(args, "kiro_cli_bin", KIRO_CLI_BIN),
                 lark_cli_bin=args.lark_cli_bin,
-                startup_timeout_sec=max(0.1, float(args.startup_timeout_seconds)),
+                startup_timeout_sec=(
+                    max(0.1, float(args.startup_timeout_seconds))
+                    if args.startup_timeout_seconds is not None
+                    else None
+                ),
                 idle_timeout_sec=max(0.1, float(args.idle_timeout_seconds)),
                 hard_timeout_sec=max(0.1, float(args.hard_timeout_seconds)),
                 assets_dir=Path(args.assets_dir).expanduser()

@@ -316,6 +316,14 @@ records native Codex MCP execution and a real-model correction/acceptance/adopti
 qualification. This retires the earlier host-approval blocker; it does not prove
 the released first-use journey, two continuing cycles or observer comprehension.
 Reuse the existing version-bound readback, feedback and scoped pause owners.
+The report details now expose the existing requester adoption operation: inspect
+an accepted downstream result using the exact displayed version, then explicitly
+record the decision through the configured coordinator. Discovery and reading
+remain read-only; lost acknowledgement is reconciled against the durable receipt,
+and changed receiver inputs withdraw current adoption. This completes an App
+operation over already accepted work, not the live L1 qualification or an
+independent-verifier receipt. The real correction, verifier and requester-use
+acceptance above remains required.
 The presentation slice in #4828 returns readable reports to the original Goal
 conversation and compares an explicitly selected dependency with the accepted
 output, preferring the same artifact name/type. The referenced artifact and hash

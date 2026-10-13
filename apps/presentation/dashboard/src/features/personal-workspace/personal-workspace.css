@@ -1216,6 +1216,11 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-task-management[open] > summary { border-color: #9db3e9; color: var(--pw-blue-ink); }
 .personal-task-management > div { position: absolute; bottom: calc(100% + 9px); left: 0; display: grid; gap: 9px; width: 390px; padding: 14px; border: 1px solid var(--pw-line-strong); border-radius: 12px; background: #fff; box-shadow: 0 16px 38px rgb(30 40 64 / 16%); }
 .personal-task-management > div > strong { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); font-weight: 600; }
+.personal-task-completion-proof { grid-column: 1 / -1; min-width: 0; font-size: var(--text-body); overflow-wrap: anywhere; }
+.personal-task-completion-proof > label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding-top: 8px; }
+.personal-task-completion-proof > summary { cursor: pointer; }
+.personal-task-completion-proof textarea { width: 100%; min-width: 0; min-height: 96px; resize: vertical; padding: 8px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: var(--pw-bg); color: var(--pw-text); font: var(--text-caption)/var(--leading-body) var(--font-mono); }
+.personal-task-completion-proof small { color: var(--pw-muted); }
 .personal-task-management-secondary { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding-top: 4px; border-top: 1px solid var(--pw-line); }
 .personal-task-management-secondary button { min-height: 34px; border: 1px solid var(--pw-line-strong); border-radius: 8px; background: #fff; color: var(--pw-text); cursor: pointer; font-size: var(--text-caption); line-height: var(--leading-caption); }
 .personal-task-management-secondary button:hover { background: #f6f7fa; }

@@ -22,6 +22,21 @@ test("execution is explicit and preserves native lifecycle/allowance", () => {
   assert.throws(() => planChatMode({...input, operation: "resume", native: {status: "active"}}), /paused/);
 });
 
+test("owner adoption records completed work without execution or allowance changes", () => {
+  const adoption = {...input, operation: "adopt", settings: {agent_id: "lead"}};
+  for (const loopx_mode of [{enabled: false}, {enabled: true, paused: true}, {enabled: true}]) {
+    assert.deepEqual(planChatMode({...adoption, session: {...session, loopx_mode, active_turn_id: "running"}}),
+      {operation: "adopt"});
+  }
+  assert.throws(() => planChatMode({...adoption, goal_active: false}), /stopped/);
+  assert.throws(() => planChatMode({...adoption, execution_binding_valid: false}), /bindings/);
+  assert.throws(() => planChatMode({...adoption, registered_agents: []}), /registered/);
+  for (const change of [{channel_id: "manager"}, {session_mode: "attached_host"}, {agent_id: "other"}]) {
+    assert.throws(() => planChatMode({...adoption, session: {...session, ...change}}), /local managed/);
+  }
+  assert.throws(() => planChatMode({...adoption, origin: "host"}), /local managed/);
+});
+
 test("neither registration nor a role name grants execution", () => {
   for (const changes of [
     {origin: "external"}, {goal_active: false}, {execution_binding_valid: false},

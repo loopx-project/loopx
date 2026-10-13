@@ -10,7 +10,7 @@ const readableRows = (page: DelegationInventory) => page.items.filter(row =>
 const AUTO_DISCOVERY_PAGES = 3;
 const MAX_INSPECTED_PAGES = 10;
 
-/** Read-only entry in the original conversation, using the same scoped delegation API. */
+/** Original-conversation result reader and explicit requester adoption. */
 export function GoalTeamResults({sessionId, zh, refreshKey}: {sessionId: string; zh: boolean; refreshKey: string}) {
   const [pages, setPages] = useState<DelegationInventory[]>([]);
   const [selection, setSelection] = useState<{result: DelegationReadback; artifact: TeamArtifact} | null>(null);
@@ -121,7 +121,12 @@ export function GoalTeamResults({sessionId, zh, refreshKey}: {sessionId: string;
           : (zh ? `已检查 ${pages.length} 页；还有未检查的工作。` : `${pages.length} pages inspected; more work remains unseen.`)}</p> : null}
       </nav> : null}
       {selection ? <div ref={report} tabIndex={-1} className="goal-team-result-reader" aria-label={zh ? "当前报告" : "Current report"}>
-        <details><summary>{adoptionSummary}</summary><GoalTeamLineage result={selection.result} zh={zh} onInspect={operationId => void read(operationId)}/></details>
+        <details><summary>{adoptionSummary}</summary><GoalTeamLineage result={selection.result} zh={zh} onInspect={operationId => void read(operationId)}
+          sessionId={sessionId} onObservation={value => {
+            const artifact = value?.artifacts?.find(row => row.ref === selection.artifact.ref && row.sha256 === selection.artifact.sha256);
+            if (value && artifact) setSelection({result: value, artifact});
+            else {setSelection(null); setError(changed);}
+          }}/></details>
         <TeamArtifactReport key={`${selection.result.operation_id}:${selection.artifact.sha256}`} artifact={selection.artifact} zh={zh} heading={zh ? "已通过当前验收" : "Currently accepted"}/>
         {selection.result.artifacts && selection.result.artifacts.length > 1 ? <label>{zh ? "其他产物" : "Other artifacts"}<select value={selection.artifact.ref}
           onChange={event => {const artifact = selection.result.artifacts!.find(row => row.ref === event.target.value); if (artifact) {
