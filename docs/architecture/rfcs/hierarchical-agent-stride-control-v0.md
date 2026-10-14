@@ -1018,9 +1018,15 @@ review settles, restore the preregistered normal cadence through
 `configure-goal` before admitting research work. The isolated native receiver
 qualification records independent grow axes, adopts one two-candidate complete
 slice and verifies unchanged deadline, pending cooldown, consumed rounds and
-incumbent. The default receiver path is exercised separately; run
-`benchmark/tests/test_checkpoint_joint_receiver.py` in another fresh guest with
-`LOOPX_JOINT_RECEIVER_STRIDE=1` for the stride variant. This is an
+incumbent. The default receiver path is exercised separately. The public
+[`qualify_checkpoint_joint.py`](../../../benchmark/tests/qualify_checkpoint_joint.py)
+entry reproduces the six-work-wake source with a non-root controller, then runs
+ordinary and stride receivers in separate fresh guests; the
+[benchmark procedure](../../../benchmark/README.md#controller-only-native-capsule-transport)
+pins the checkpoint provider, prepares guest dependencies and lists explicit
+native CLI/Node inputs. Missing prerequisites fail rather than skip qualification.
+Its private receipt and logs retain input provenance; read-only Git members
+exercise the controller boundary. This is an
 explicit tested composition, not an automatic restore hook or a new default.
 A Todo-successor repair alone is not a spendable periodic strategy review.
 Matched branches must declare the same preparation/cadence transition and charge

@@ -348,22 +348,24 @@ python -m benchmark.edgebench.checkpoint_judge --checkpoint-capture \
   --tasks-dir /path/to/tasks --log-dir /path/to/private-run-logs
 ```
 
-This adapter's supported SForge source is the public compatibility fork at
-[`0e20fb499ee248f012d6467c00b3dec00a29fe85`](https://github.com/huangruiteng/EdgeBench/commit/0e20fb499ee248f012d6467c00b3dec00a29fe85).
-It exposes the existing native judge/admission owner; the upstream `sforge==1.1.0`
-distribution does not provide that seam. Enabling capture against an unsupported
-provider fails before adding routes. This pin qualifies the capture prerequisite,
-not an upstream release or restored admission. From this LoopX checkout, prepare
-an isolated Python 3.13 environment and verify the actual imported source:
+The supported public checkpoint provider is the compatibility fork at
+[`071a884012754127f28f5b84be10f533a42db527`](https://github.com/loopx-agent/EdgeBench/commit/071a884012754127f28f5b84be10f533a42db527).
+It contains `sforge.harness.checkpoint` and the native
+`create_app(..., checkpoints=True)` seam used by the controller below. The earlier
+`0e20fb499ee248f012d6467c00b3dec00a29fe85` compatibility pin and upstream
+`sforge==1.1.0` do not contain that API and cannot qualify joint continuation.
+Enabling capture against an unsupported provider fails before adding routes.
+This is pinned proposed source, not an upstream release. From this LoopX checkout,
+prepare an isolated Python 3.12 environment and verify the imported API:
 
 ```sh
 CKPT_PROVIDER_ROOT=$(mktemp -d)
-git clone https://github.com/huangruiteng/EdgeBench.git "$CKPT_PROVIDER_ROOT/provider"
-git -C "$CKPT_PROVIDER_ROOT/provider" checkout --detach 0e20fb499ee248f012d6467c00b3dec00a29fe85
-uv venv --python 3.13 "$CKPT_PROVIDER_ROOT/venv"
+git clone https://github.com/loopx-agent/EdgeBench.git "$CKPT_PROVIDER_ROOT/provider"
+git -C "$CKPT_PROVIDER_ROOT/provider" checkout --detach 071a884012754127f28f5b84be10f533a42db527
+uv venv --python 3.12 "$CKPT_PROVIDER_ROOT/venv"
 uv pip install --python "$CKPT_PROVIDER_ROOT/venv/bin/python" \
   -e '.[test]' -e "$CKPT_PROVIDER_ROOT/provider" 'httpx>=0.28,<1'
-"$CKPT_PROVIDER_ROOT/venv/bin/python" -c 'import sforge,loopx; print(sforge.__file__); print(loopx.__file__)'
+"$CKPT_PROVIDER_ROOT/venv/bin/python" -c 'import inspect,sforge,loopx,sforge.harness.checkpoint; from sforge.harness.judge_server import create_app; assert "checkpoints" in inspect.signature(create_app).parameters; print(sforge.__file__); print(loopx.__file__)'
 "$CKPT_PROVIDER_ROOT/venv/bin/python" -m pytest -q benchmark/tests/test_checkpoint_judge.py
 # Linux with an owned disposable Docker daemon; grades only synthetic fixtures.
 LOOPX_EDGEBENCH_DOCKER_SMOKE=1 "$CKPT_PROVIDER_ROOT/venv/bin/python" -m pytest -q \
@@ -517,10 +519,10 @@ continued research.
 ### Controller-only native capsule transport
 
 The read-only participant above does **not** implement the newer native capsule
-API. The separate controller adapter targets
-[EdgeBench PR #23](https://github.com/ByteDance-Seed/EdgeBench/pull/23), pinned at
-`57dce5dd1fded9d5d5cbd44fa59c59d27a068d62`; this is proposed source, not a released
-upstream version. Start that pinned native judge with `sforge serve --checkpoints`.
+API. The separate controller adapter targets the API proposed in
+[EdgeBench PR #23](https://github.com/ByteDance-Seed/EdgeBench/pull/23), using the
+public compatibility pin `071a884012754127f28f5b84be10f533a42db527` above.
+Start that pinned native judge with `sforge serve --checkpoints`.
 Its private controller configuration file has exactly `url`, `admin_secret` and
 `bank_root` (the native log directory's `checkpoints` directory). Keep this file,
 the bank and controller process outside every solver's filesystem/network authority.
@@ -636,6 +638,50 @@ Omit the controller file and `controller_handoff` on a new run to disable automa
 controller capture; removing the checkpoint request disables capture entirely.
 Existing artifacts remain inert, and the source trial is not restarted by disabling it.
 
+To reproduce **joint source capture and both fresh-guest receivers**, use
+[`qualify_checkpoint_joint.py`](tests/qualify_checkpoint_joint.py) from the current
+LoopX checkout. Run the controller on Linux as the ordinary owner of an explicitly
+owned disposable Docker daemon. Prepare the provider/venv above, install this
+checkout's Node dependencies with `npm ci`, and put a compatible **Host** Node on
+`PATH`. Separately supply Linux **amd64** binaries for `codex-cli 0.160.0` and Node
+`24.21.0`, and a caller-prepared `python:3.12-slim` image. These inputs are explicit;
+the qualification does not download a native CLI, pull an image or use model
+credentials. Build Python 3.12 guest dependencies from the pinned provider:
+
+```sh
+set -eu
+"$CKPT_PROVIDER_ROOT/venv/bin/python" -c 'import sys,tomllib; from pathlib import Path; d=tomllib.loads((Path(sys.argv[1])/"pyproject.toml").read_text()); print("\n".join(d["project"]["dependencies"]+d["dependency-groups"]["dev"]))' \
+  "$CKPT_PROVIDER_ROOT/provider" > "$CKPT_PROVIDER_ROOT/guest-requirements.txt"
+mkdir "$CKPT_PROVIDER_ROOT/guest-deps"
+docker image inspect python:3.12-slim >/dev/null
+docker run --rm --platform linux/amd64 --user "$(id -u):$(id -g)" \
+  -v "$CKPT_PROVIDER_ROOT:/qualification" python:3.12-slim \
+  python -m pip install --target /qualification/guest-deps \
+  -r /qualification/guest-requirements.txt
+# Set these to the explicitly prepared Linux amd64 binaries.
+CKPT_GUEST_CODEX=/absolute/path/to/codex
+CKPT_GUEST_NODE=/absolute/path/to/node
+"$CKPT_PROVIDER_ROOT/venv/bin/python" -m benchmark.tests.qualify_checkpoint_joint \
+  --provider-source "$CKPT_PROVIDER_ROOT/provider" \
+  --native-binary "$CKPT_GUEST_CODEX" --guest-node "$CKPT_GUEST_NODE" \
+  --guest-dependencies "$CKPT_PROVIDER_ROOT/guest-deps" \
+  --output "$CKPT_PROVIDER_ROOT/joint-result"
+```
+
+The public fixture runs six actual native work wakes, captures the pending
+pre-decision guard and continues the source; the ordinary and stride receivers
+then use separate fresh guests with no mounted source authority. It includes a
+read-only Git member to exercise the non-root controller boundary. Only the model
+response stream and grading/backend fixtures are synthetic; the native CLI,
+canonical SQLite authority, worker, supervisor and capsule transport are real.
+Check `result.json`, `source.log`, `ordinary.log` and `stride.log` in the private
+output directory; failure is an error, including missing prerequisites, and a
+second attempt needs a new output directory. Keep its controller config, native
+stores, reports and logs private. Cleanup removes only containers owned by this
+invocation. This reproduces mechanical continuation; the receipt remains
+`research_point_qualified=false`. A real later research point, scientific policy
+benefit and the packaged frontend restore journey still need separate acceptance.
+
 An explicit **SForge phase-clock participant** preserves a declared Host file's
 remaining duration alongside native opportunities. Add
 `--phase-deadline-file /private/source-phase-deadline` to capture, and
@@ -706,7 +752,7 @@ runtime receipt 绑定摘要；programmatic adapter 也可指定已放入 guest 
 已放入 guest 的声明文件丢失、权限失败或损坏只记录捕获失败，原工作仍按
 完整的原始 quota guard 继续；准入 owner 不可用仍停止。首次 replan 捕获
 失败后，修复声明不得把后来的状态补记成同一原点。评测参与者使用上文明确的
-公开 SForge fork/pin 和 Python 3.13；普通 upstream 安装缺少该 seam 时明确
+公开 SForge fork/pin 和 Python 3.12；普通 upstream 安装缺少该 seam 时明确
 拒绝。Codex 原生会话的真实分页/compaction 与隔离 fork 须单独验证。
 评测机会及 incumbent 参与者也分配未占用的 ID，并在封存的
 `point_metadata.evaluation_opportunity` 中记录实际映射；无 incumbent 时对应值为 null。
@@ -733,8 +779,13 @@ worker 保留原 guard，controller 暂停全部容器写入者，核对仍有�
 文件 witness，再封存原生评测机会、incumbent 及剩余预算。源变化、过期或失去
 交接会拒绝；可恢复的捕获失败不取消原研究，也不得改用稍后的状态。解除暂停后，
 源会话继续使用原 packet 和 deadline。
-真实 native worker、Docker 与 native HTTP 的合成验证覆盖了联合捕获和源接续；
-产物仍是 `research_point_qualified=false`。独立目标环境的新权限准入、有效工作、
-联合丢回复恢复及后续评测尚待一体验证，不能据此重启研究实验。新运行省略
+上文的公开复现命令使用固定 provider `071a884`、Python 3.12、显式 Linux amd64
+Codex/Node 及调用者准备的 Docker 镜像。非 root controller 从六个真实工作 wake
+形成模型决策前捕获，保留只读 Git 对象；普通与 stride receiver 在两个全新 guest
+分别验证新权限准入、完整历史、剩余预算/冷却及实际接续。模型响应和评分为合成
+fixture，原生 CLI、worker、supervisor、SQLite 和 capsule transport 使用真实路径。
+结果及三份日志只存私有输出，失败或缺少前置条件明确报错，重试须使用新目录；
+产物仍是 `research_point_qualified=false`。真实中后期研究点、策略净收益及安装后的
+frontend restore 旅程仍须另行验收。新运行省略
 controller 文件及 handoff 开关即可关闭；移除 checkpoint 请求关闭全部捕获，
 已有产物保持惰性。

@@ -824,9 +824,14 @@ periodic review。检查读取保留的研究/代码与公开评测机会，不�
 复盘结算后，通过 `configure-goal` 恢复预注册的正常频率，再准入研究工作。
 隔离的 native receiver 验证已记录三个轴独立计划的 grow，实际采用一次包含
 两个候选的完整工作切片，并检查 deadline、未到期冷却、已用轮次和 incumbent
-不变；默认 receiver 路径单独验证。在另一个全新 guest 中设置
-`LOOPX_JOINT_RECEIVER_STRIDE=1`，运行
-`benchmark/tests/test_checkpoint_joint_receiver.py` 可验证 stride 变体。
+不变；默认 receiver 路径单独验证。公开的
+[`qualify_checkpoint_joint.py`](../../../benchmark/tests/qualify_checkpoint_joint.py)
+入口先由非 root controller 捕获六个真实工作 wake 后的源状态，再在两个全新
+guest 分别运行普通和 stride receiver；
+[benchmark 操作步骤](../../../benchmark/README.md#controller-only-native-capsule-transport)
+固定 checkpoint provider、准备 guest 依赖并列出显式 Codex/Node 输入。
+缺少前置条件会报错，不以 skip 充当资格通过。私有 receipt 与日志保留输入来源，
+只读 Git 对象覆盖 controller 的权限边界。
 这是显式且经测试的组合，不是恢复时自动
 触发的 hook，也不改变默认行为。补后继 Todo 的生命周期修复本身不等于可记账的
 periodic 策略复盘。匹配分支须声明相同的准备/频率迁移，并计入完整成本。
