@@ -15,6 +15,7 @@ import {settlementIdentity} from "../effect_program.ts";
 import {normalizeHeartbeatReplanObligationId, normalizeHeartbeatTodoId} from "../quota/heartbeat_receipt_identity.ts";
 import {EffectRuntimeConflictError} from "../effect_runtime_errors.ts";
 import {EffectiveAction} from "../quota/effective_action.generated.ts";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 
 const SCHEMA = "loopx_checkpoint_artifact_set_v0";
 type Component = {id: string; source_path: string};
@@ -173,7 +174,7 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
       throw new Error("checkpoint restored capture fields are invalid");
     }
     const sha = requireNonEmptyString(request.checkpoint_sha256, "restored checkpoint digest");
-    if (!/^[a-f0-9]{64}$/.test(sha)) throw new Error("invalid restored checkpoint digest");
+    if (!BARE_SHA256_PATTERN.test(sha)) throw new Error("invalid restored checkpoint digest");
     const goal = requireNonEmptyString(request.goal_id, "checkpoint destination Goal");
     const agent = requireNonEmptyString(request.agent_id, "checkpoint destination Agent");
     if (request.current_obligation_id !== null && !normalizeHeartbeatReplanObligationId(request.current_obligation_id)) {
