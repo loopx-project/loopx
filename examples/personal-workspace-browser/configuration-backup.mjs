@@ -4,7 +4,7 @@ import {mkdtemp, readFile, realpath, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join, resolve} from "node:path";
 import {repoRoot, outputDir} from "./fixture.mjs";
-import {openWorkspacePage} from "./scenario-context.mjs";
+import {fetchWorkspaceBackend, openWorkspacePage} from "./scenario-context.mjs";
 import {resolveTestPython} from "../../scripts/test-python.mjs";
 
 // Only the backup routes use a real disposable server. Other workspace state
@@ -66,8 +66,7 @@ export const configurationBackupScenario = {
       const {port} = backend;
       context = await openWorkspacePage(browser, url, {beforeGoto: async (_api, page) => {
         await page.route("**/api/chat/configuration-backup/**", async route => {
-          const path = new URL(route.request().url()).pathname;
-          const response = await route.fetch({url: `http://127.0.0.1:${port}${path}`});
+          const response = await fetchWorkspaceBackend(route, `http://127.0.0.1:${port}`);
           await route.fulfill({response});
         });
       }});
