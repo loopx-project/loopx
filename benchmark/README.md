@@ -674,7 +674,11 @@ CKPT_GUEST_NODE=/absolute/path/to/node
 The public fixture runs six actual native work wakes, captures the pending
 pre-decision guard and continues the source; the ordinary and stride receivers
 then use separate fresh guests with no mounted source authority. It includes a
-read-only Git member to exercise the non-root controller boundary. Only the model
+whole declared workspace directory and a read-only Git member. Receivers run as
+the ordinary non-root owner, select the workspace by its sealed source path and
+materialize it through the typed artifact owner. Copied source registry/state
+files remain historical: current authority uses a fresh external registry/runtime,
+and the old Goal cannot be admitted through it. Only the model
 response stream and grading/backend fixtures are synthetic; the native CLI,
 canonical SQLite authority, worker, supervisor and capsule transport are real.
 Check `result.json`, `source.log`, `ordinary.log` and `stride.log` in the private
@@ -785,7 +789,9 @@ worker 保留原 guard，controller 暂停全部容器写入者，核对仍有�
 源会话继续使用原 packet 和 deadline。
 上文的公开复现命令使用固定 provider `071a884`、Python 3.12、显式 Linux amd64
 Codex/Node 及调用者准备的 Docker 镜像。非 root controller 从六个真实工作 wake
-形成模型决策前捕获，保留只读 Git 对象；普通与 stride receiver 在两个全新 guest
+形成模型决策前捕获，保留完整声明的目录及只读 Git 对象；普通与 stride receiver
+以非 root 身份在两个全新 guest 按封存源路径定位任务目录，由类型化 owner 物化；
+原注册表/状态只是历史，新的外置 registry/runtime 不授予原 Goal 权限。
 分别验证新权限准入、完整历史、剩余预算/冷却及实际接续。模型响应和评分为合成
 fixture，原生 CLI、worker、supervisor、SQLite 和 capsule transport 使用真实路径。
 结果及三份日志只存私有输出，失败或缺少前置条件明确报错，重试须使用新目录；

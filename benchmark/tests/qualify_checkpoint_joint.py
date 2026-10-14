@@ -82,7 +82,7 @@ def main():
     def guest(command, volumes, env, log):
         container = client.containers.create(image, command, platform="linux/amd64",
             network_disabled=True, volumes={**base, **volumes}, working_dir="/source",
-            environment={**environment, **env})
+            user=f"{os.getuid()}:{os.getgid()}", environment={**environment, **env})
         try:
             container.start()
             status = container.wait(timeout=300)
@@ -131,7 +131,7 @@ def main():
         packet = json.loads((point / "checkpoint.json").read_bytes())
         metadata = packet["point_metadata"]
         assert metadata["held_decision_component_id"] and metadata["decision_sha256"]
-        git_object = point / "components/readonly_workspace/.git/objects/ab/retained-object"
+        git_object = point / "components/task_workspace/.git/objects/ab/retained-object"
         assert git_object.read_text() == "Readonly source evidence" and git_object.stat().st_mode & 0o777 == 0o444
         home = Path(metadata["native_session"]["guest_home"])
         config = source_files / home.relative_to("/qualification") / "config.toml"
@@ -140,13 +140,17 @@ def main():
             name = "stride" if stride else "ordinary"
             results = output / name
             results.mkdir()
+            guest_workspace = results / "workspace-root"
+            guest_workspace.mkdir()
             guest(["python", "-m", "pytest", "benchmark/tests/test_checkpoint_joint_receiver.py",
                    "-q", "-rs", "-p", "no:cacheprovider", "--basetemp=/results/test",
                    "--junitxml=/results/junit.xml"],
                   {str(point): {"bind": "/point", "mode": "ro"},
                    str(config): {"bind": "/captured-config.toml", "mode": "ro"},
+                   str(guest_workspace): {"bind": "/qualification", "mode": "rw"},
                    str(results): {"bind": "/results", "mode": "rw"}},
                   {"LOOPX_JOINT_RECEIVER_POINT": "/point", "LOOPX_JOINT_RECEIVER_CONFIG": "/captured-config.toml",
+                   "LOOPX_RUNTIME_ROOT": "/results/transport-runtime",
                    **({"LOOPX_JOINT_RECEIVER_STRIDE": "1"} if stride else {})}, output / f"{name}.log")
         assert subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip() == source_revision, "Source changed during qualification"
         assert not subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"], text=True).strip(), "Source changed during qualification"

@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -28,6 +29,7 @@ from benchmark.tests.test_checkpoint_controller import controllers  # noqa: F401
 def test_captured_point_continues_with_fresh_authority(
     tmp_path, monkeypatch, capsys, request
 ):
+    assert os.getuid() != 0, "Workspace continuation must qualify the actual non-root writer"
     from benchmark.edgebench.checkpoint_controller import restore
     from benchmark.runtime.codex import Execution
     from benchmark.runtime.native_checkpoint import (
@@ -65,11 +67,36 @@ def test_captured_point_continues_with_fresh_authority(
     assert not workspace.exists() and not home.exists(), (
         "receiver must have fresh fixed guest paths"
     )
-    workspace.mkdir(parents=True)
+    # Select the sealed declared workspace by its exact source path. Actual
+    # workers declare a directory with caller-owned IDs, not a single code file.
+    roots = [entry for entry in snapshot["components"]
+             if entry["source_path"] == str(workspace)]
+    assert len(roots) == 1, "Requires one declared full native workspace"
+    materialized = tmp_path / "materialized-point"
+    verified = effect_runtime_result("runtime.checkpoint_artifacts", {
+        "action": "materialize", "root": str(unit), "expected_sha256": digest,
+        "destination": str(materialized),
+    })
+    assert verified["materialized"] and not verified["activation_performed"]
+    source_workspace = materialized / "components" / roots[0]["id"]
+    assert source_workspace.is_dir()
+    shutil.copytree(source_workspace, workspace)
     monkeypatch.chdir(workspace)
     candidate = workspace / "candidate.txt"
-    candidate.write_bytes((unit / "components/code").read_bytes())
     captured_candidate = candidate.read_text()
+    # Retained source registry/state files are historical inputs. Current CLI
+    # authority must use a fresh registry/runtime outside this copied tree.
+    historical_registry = workspace / ".loopx/registry.json"
+    historical_bytes = historical_registry.read_bytes()
+    historical = json.loads(historical_bytes)
+    original_runtime = Path(historical["common_runtime_root"])
+    assert not original_runtime.exists()
+    source_goal = metadata["loopx_state"]["goal_id"]
+    assert historical["goals"][0]["id"] == source_goal
+    assert (workspace / "evidence-6.json").read_bytes() == (source_workspace / "evidence-6.json").read_bytes()
+    retained_object = workspace / ".git/objects/ab/retained-object"
+    assert retained_object.read_text() == "Readonly source evidence"
+    assert retained_object.stat().st_mode & 0o777 == 0o444
     registry, runtime = tmp_path / "registry.json", tmp_path / "runtime"
     goal, agent, turn = "joint-receiver", "joint-researcher", "joint-work"
     prefix = [
@@ -125,6 +152,13 @@ def test_captured_point_continues_with_fresh_authority(
         ),
         "--execute",
     )
+    assert historical_registry.read_bytes() == historical_bytes
+    assert json.loads(registry.read_bytes())["goals"][0]["id"] == goal
+    assert runtime != original_runtime and not original_runtime.exists()
+    rejected = main([*prefix, "quota", "should-run", "--goal-id", source_goal,
+                     "--agent-id", agent, "--turn-instance-id", "foreign-source"])
+    capsys.readouterr()
+    assert rejected != 0, "Source Goal must not acquire destination authority"
     todo = cli(
         "todo",
         "add",

@@ -391,8 +391,7 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
     logs = Path("/logs/agent/wakes")
     candidate = project / "candidate.txt"
     candidate.write_text("0")
-    readonly_workspace = tmp_path / "readonly-workspace"
-    git_object = readonly_workspace / ".git" / "objects" / "ab" / "retained-object"
+    git_object = project / ".git" / "objects" / "ab" / "retained-object"
     git_object.parent.mkdir(parents=True)
     git_object.write_text("Readonly source evidence")
     git_object.chmod(0o444)
@@ -508,8 +507,7 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
         assert len(set(work_turns)) == 6 and len(calls) == 13
         request = tmp_path / "request.json"
         request.write_text(json.dumps({"destination": str(logs.parent / "checkpoints"),
-            "components": [{"id": "code", "source_path": str(candidate)},
-                           {"id": "readonly_workspace", "source_path": str(readonly_workspace)}],
+            "components": [{"id": "task_workspace", "source_path": str(project)}],
             "point_metadata": {},
             "trigger": "fresh_replan", "native_session": True, "loopx_state": True,
             "evaluation_opportunity": True, "controller_handoff": True}))
