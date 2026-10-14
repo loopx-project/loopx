@@ -838,8 +838,13 @@ returns. Preparation and context-reading cost belong in the comparison. Omit all
 restore flags for the unchanged cold entry; never reuse an ambiguous trial
 folder as a new attempt.
 
-The adapter is still undergoing installed-worker qualification. Artifact/session
-admission or preparation alone does **not** qualify a research continuation,
-matched strategy result, or the frontend restore journey. The decisive remaining
-check is the ordinary installed worker's current preparation and replan followed
-by useful work and native feedback under the original remaining allowance.
+The ordinary installed worker has passed a synthetic joined qualification:
+native session continuation, current preparation and accepted replan, restored
+normal cadence, candidate work and released native feedback under the original
+remaining allowance. It reused one immutable captured prefix and preserved its
+source. Native app-server-generated skills are preserved outside discovery before
+linking the current installed skills; ordinary skill identity checks still apply.
+This used real Codex processes and native HTTP with deterministic local inference
+and synthetic grading. It does **not** qualify scientific research utility,
+matched strategy results, or the frontend restore journey. Actual task/profile
+admission and measured continuation outcomes remain required.

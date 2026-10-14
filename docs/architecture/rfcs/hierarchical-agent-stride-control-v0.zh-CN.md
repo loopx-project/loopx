@@ -777,10 +777,11 @@ worker 后再发布惰性联合产物。真实持续写入容器与 native HTTP 
 释放；恢复失败不发布产物。此项仅关闭手动 provider 的文件写入屏障缺口，未
 资格化进程内存、native cursor、外部 writer、自动策略决策前交接或隔离接续。
 
-普通 SForge worker 的显式 warm 入口正在组合这些既有 owner。它在新的当前
+普通 SForge worker 的显式 warm 入口组合这些既有 owner。它在新的当前
 准备 Todo 上采用完整保留证据，先接受当前 replan，再恢复正常复盘节奏。
-安装后的 worker 路径与其后有效工作、原生反馈仍待联合验收；单独参与者成功
-不能关闭此验收。参见 [warm 入口契约](../../../benchmark/README.md#explicit-warm-worker-composition-qualification-in-progress)。
+安装后的 worker 路径已通过合成联合接续：真实原生进程配合确定性本地推理，
+完成当前准备/replan、候选工作与原生反馈释放。科研收益、真实题目/profile
+准入和前端操作旅程仍未资格化。参见 [warm 入口契约](../../../benchmark/README.md#explicit-warm-worker-composition-qualification-in-progress)。
 
 原生新注册不等于恢复准入。真实原生 Docker 资格测试中，source 已消耗十二次
 中的一次，且冷却仍有效；同额度的新注册却立即受理 `agent-1`，保留十二次未用
