@@ -214,7 +214,11 @@ def main(argv=None):
     config = SForgeConfig(
         agent_model=args.model, agent_effort=args.effort,
         agent_timeout=args.timeout, log_dir=args.log_dir, tasks_dir=args.tasks_dir,
-        work_cpu_limit=4, work_mem_limit="16g", judge_cpu_limit=4, judge_mem_limit="8g",
+        work_cpu_limit=4, work_mem_limit="16g",
+        # A restored judge already owns its captured resource profile. Cold
+        # defaults must not replace or conflict with that live registration.
+        judge_cpu_limit=None if args.restore_checkpoint else 4,
+        judge_mem_limit=None if args.restore_checkpoint else "8g",
     )
     if args.api_proxy_url:
         config.agent_extra_env = {
