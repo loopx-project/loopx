@@ -178,10 +178,14 @@ def _reply_runner(state: dict[str, Any]):
             if "--content" in args:
                 state["reply_content"] = args[args.index("--content") + 1]
                 state["reply_type"] = "post"
-                state["reply_text"] = json.loads(state["reply_content"])["zh_cn"]["content"][0][0]["text"]
+                state["reply_text"] = json.loads(state["reply_content"])["zh_cn"][
+                    "content"
+                ][0][0]["text"]
             else:
                 state["reply_text"] = args[args.index("--text") + 1]
-                state["reply_content"] = json.dumps({"text": state["reply_text"]}, ensure_ascii=False)
+                state["reply_content"] = json.dumps(
+                    {"text": state["reply_text"]}, ensure_ascii=False
+                )
                 state["reply_type"] = "text"
             payload = (
                 {
@@ -189,7 +193,7 @@ def _reply_runner(state: dict[str, Any]):
                         {
                             "body": {
                                 "msg_type": state["reply_type"],
-                                "content": state["reply_content"]
+                                "content": state["reply_content"],
                             }
                         }
                     ]
@@ -352,9 +356,7 @@ def test_manager_captures_unaddressed_context_without_granting_turn_authority(
 
     common = {
         "target_payload": read_goal_channel_targets(target_path),
-        "binding_payloads": {
-            "goal-alpha": read_goal_channel_binding(binding_path)
-        },
+        "binding_payloads": {"goal-alpha": read_goal_channel_binding(binding_path)},
         "runtime_root": tmp_path / "runtime",
         "answer": answer,
     }
@@ -433,9 +435,12 @@ def test_manager_captures_unaddressed_context_without_granting_turn_authority(
             "sender_id": "ou_owner_fixture",
         }
     ]
-    assert inspect_lark_event_inbox(
-        project=common["runtime_root"], config_path=replied["inbox_config_ref"]
-    )["pending_count"] == 0
+    assert (
+        inspect_lark_event_inbox(
+            project=common["runtime_root"], config_path=replied["inbox_config_ref"]
+        )["pending_count"]
+        == 0
+    )
 
 
 @pytest.mark.parametrize("authority_mode", [None, "future_mode"])
@@ -562,9 +567,7 @@ def test_manager_authorized_turn_quietly_recovers_history_as_context(
 
     result = runtime.process_lark_goal_topic_event(
         target_payload=read_goal_channel_targets(target_path),
-        binding_payloads={
-            "goal-alpha": read_goal_channel_binding(binding_path)
-        },
+        binding_payloads={"goal-alpha": read_goal_channel_binding(binding_path)},
         event={
             "event_id": "evt_current_authorized",
             "message_id": "om_current_authorized",
@@ -590,9 +593,7 @@ def test_manager_authorized_turn_quietly_recovers_history_as_context(
     )
     assert provider_calls
     assert all("reactions" not in call for call in provider_calls)
-    config = json.loads(
-        (tmp_path / "runtime" / result["inbox_config_ref"]).read_text()
-    )
+    config = json.loads((tmp_path / "runtime" / result["inbox_config_ref"]).read_text())
     assert config["topic_root_message_id"] == "om_topic_alpha"
     projection = inspect_lark_event_inbox(
         project=tmp_path / "runtime",
@@ -715,7 +716,10 @@ def test_agent_session_topic_acks_after_effect_and_verified_reply(
 
     assert result["ok"] is True
     assert result["status"] == "replied_and_acknowledged", result
-    assert state["reply_text"] == "work completed\n\n• Evidence verified\n• Next step recorded"
+    assert (
+        state["reply_text"]
+        == "work completed\n\n• Evidence verified\n• Next step recorded"
+    )
     projection = inspect_lark_event_inbox(
         project=tmp_path / "runtime",
         config_path=Path(result["inbox_config_ref"]),
@@ -1271,7 +1275,9 @@ def test_alias_consumer_routes_all_chats_of_its_bot_app() -> None:
         "oc_first",
         "oc_second",
     ]
-    snapshot["target_payload"]["targets"]["canonical"]["channel"]["chat_id"] = "oc_second"
+    snapshot["target_payload"]["targets"]["canonical"]["channel"]["chat_id"] = (
+        "oc_second"
+    )
     for profile in ("canonical", "alias"):
         snapshot["binding_payloads"][profile]["bindings"][profile]["topic"] = {
             "root_message_id": f"om_{profile}"
@@ -1723,7 +1729,7 @@ def test_profile_stream_dispatches_only_team_plan_callbacks_for_bound_chats(
                         "target_ref": "mew-second",
                     }
                 }
-            }
+            },
         },
     }
     callback = {
@@ -1783,7 +1789,9 @@ def test_profile_stream_dispatches_only_team_plan_callbacks_for_bound_chats(
 
     assert result["ok"] is True
     assert len(captured_args) == 2
-    callback_args = next(args for args in captured_args if "card.action.trigger" in args)
+    callback_args = next(
+        args for args in captured_args if "card.action.trigger" in args
+    )
     assert (
         'select(.chat_id == "oc_public_fixture" or '
         '.chat_id == "oc_second_fixture")' in callback_args
@@ -1888,12 +1896,21 @@ def test_profile_stream_restarts_when_the_review_callback_source_disconnects(
 
 @pytest.mark.parametrize(
     "exit_reason,stop_requested,returncode",
-    [("timeout", False, 0), ("limit", False, 0), ("signal", False, 0),
-     ("unknown", False, 0), ("", False, 0), ("signal", True, 0),
-     ("timeout", False, 1)],
+    [
+        ("timeout", False, 0),
+        ("limit", False, 0),
+        ("signal", False, 0),
+        ("unknown", False, 0),
+        ("", False, 0),
+        ("signal", True, 0),
+        ("timeout", False, 1),
+    ],
 )
 def test_profile_stream_waits_for_provider_ready_before_reporting_listening(
-    tmp_path: Path, exit_reason: str, stop_requested: bool, returncode: int,
+    tmp_path: Path,
+    exit_reason: str,
+    stop_requested: bool,
+    returncode: int,
 ) -> None:
     from loopx.extensions.lark.goal_topic_runtime import stream_lark_goal_topic_profile
 
@@ -1964,15 +1981,23 @@ def test_profile_stream_waits_for_provider_ready_before_reporting_listening(
         health_sink=lambda update: health.append(dict(update)),
     )
 
-    planned = stop_requested or (exit_reason in {"timeout", "limit"} and returncode == 0)
+    planned = stop_requested or (
+        exit_reason in {"timeout", "limit"} and returncode == 0
+    )
     assert result == {
         "ok": planned,
-        "status": "stopped" if stop_requested else "stream_ended" if planned else "source_disconnected",
+        "status": "stopped"
+        if stop_requested
+        else "stream_ended"
+        if planned
+        else "source_disconnected",
         **({} if planned else {"error_code": "lark_event_source_disconnected"}),
         "event_count": 0,
         "replied_count": 0,
     }
-    assert [item["status"] for item in health] == (["starting"] if stop_requested else ["starting", "listening"])
+    assert [item["status"] for item in health] == (
+        ["starting"] if stop_requested else ["starting", "listening"]
+    )
 
 
 def test_profile_poll_routes_provider_event_through_existing_reply_path(
@@ -2071,7 +2096,10 @@ def test_profile_poll_routes_provider_event_through_existing_reply_path(
     assert state["consume_args"][:3] == ["fake-lark", "--profile", "mew"]
     assert "event" in state["consume_args"]
     projection = state["consume_args"][state["consume_args"].index("--jq") + 1]
-    assert "message_id:(.message_id // .message.message_id // .event.message.message_id // .id)" in projection
+    assert (
+        "message_id:(.message_id // .message.message_id // .event.message.message_id // .id)"
+        in projection
+    )
     assert "root_id:(.root_id // .message.root_id" in projection
     assert "parent_id:(.parent_id // .reply_to" in projection
     assert "thread_id" in projection
@@ -2448,11 +2476,15 @@ def test_profile_poll_does_not_reply_or_invoke_agent_when_message_mentions_other
 
 
 @pytest.mark.parametrize("reaction_ok", [True, False, None])
-def test_manager_receives_reaction_before_answer_and_preserves_sender(tmp_path, monkeypatch, reaction_ok):
+def test_manager_receives_reaction_before_answer_and_preserves_sender(
+    tmp_path, monkeypatch, reaction_ok
+):
     from loopx.extensions.lark import goal_topic_runtime as runtime
+
     target_path, binding_path = tmp_path / "targets.json", tmp_path / "bindings.json"
     _seed_legacy_topic(target_path, binding_path)
     original_decide = runtime.decide_lark_topic_event
+
     def manager_decision(**kw):
         result = original_decide(**kw)
         result["route"] = {
@@ -2462,35 +2494,65 @@ def test_manager_receives_reaction_before_answer_and_preserves_sender(tmp_path, 
             "ingress_mode": "session_queue",
         }
         return result
+
     monkeypatch.setattr(runtime, "decide_lark_topic_event", manager_decision)
     state = {}
     runner = _reply_runner(state)
     stages = []
     if reaction_ok is None:
+
         def unavailable(**kw):
             raise OSError("private receipt unavailable")
-        monkeypatch.setattr(runtime, "ensure_lark_event_inbox_received_reaction", unavailable)
+
+        monkeypatch.setattr(
+            runtime, "ensure_lark_event_inbox_received_reaction", unavailable
+        )
+
     def with_reactions(args):
         if args[3:6] == ["im", "reactions", "create"]:
             stages.append("received")
             assert args[args.index("--message-id") + 1] == "om_incoming"
-            assert json.loads(args[args.index("--data") + 1])["reaction_type"]["emoji_type"] == "Get"
-            return {"returncode": 0 if reaction_ok else 1, "stdout": json.dumps({"ok": reaction_ok, "data": {"reaction_id": "reaction_fixture"}})}
+            assert (
+                json.loads(args[args.index("--data") + 1])["reaction_type"][
+                    "emoji_type"
+                ]
+                == "Get"
+            )
+            return {
+                "returncode": 0 if reaction_ok else 1,
+                "stdout": json.dumps(
+                    {"ok": reaction_ok, "data": {"reaction_id": "reaction_fixture"}}
+                ),
+            }
         if args[3:6] == ["im", "reactions", "delete"]:
             stages.append("cleanup")
             return {"returncode": 0, "stdout": json.dumps({"ok": True})}
         return runner(args)
+
     def answer(route, text):
         stages.append("answer")
         assert stages == (["answer"] if reaction_ok is None else ["received", "answer"])
         assert route["source_sender_id"] == "ou_owner_fixture"
         return "Received the original intent."
-    kwargs = dict(target_payload=read_goal_channel_targets(target_path),
-                  binding_payloads={"goal-alpha": read_goal_channel_binding(binding_path)},
-                  event={"event_id": "evt_incoming", "message_id": "om_incoming", "chat_id": "oc_public_fixture",
-                         "root_id": "om_topic_alpha", "create_time": "2026-08-14T21:00:00Z",
-                         "content": "@linkmacbot forward this", "mentioned": True, "sender_type": "user", "sender_id": "ou_owner_fixture"},
-                  runtime_root=tmp_path / "runtime", answer=answer, reply_runner=with_reactions)
+
+    kwargs = dict(
+        target_payload=read_goal_channel_targets(target_path),
+        binding_payloads={"goal-alpha": read_goal_channel_binding(binding_path)},
+        event={
+            "event_id": "evt_incoming",
+            "message_id": "om_incoming",
+            "chat_id": "oc_public_fixture",
+            "root_id": "om_topic_alpha",
+            "create_time": "2026-08-14T21:00:00Z",
+            "content": "@linkmacbot forward this",
+            "mentioned": True,
+            "sender_type": "user",
+            "sender_id": "ou_owner_fixture",
+        },
+        runtime_root=tmp_path / "runtime",
+        answer=answer,
+        reply_runner=with_reactions,
+    )
     result = runtime.process_lark_goal_topic_event(**kwargs)
     assert result["ok"], result
     assert result["status"] == "replied_and_acknowledged"
@@ -2498,17 +2560,28 @@ def test_manager_receives_reaction_before_answer_and_preserves_sender(tmp_path, 
     if reaction_ok:
         from loopx.extensions.lark.event_inbox import load_lark_event_inbox_config
         from loopx.extensions.lark.inbox_reactions import lark_inbox_reaction_receipts
+
         config = load_lark_event_inbox_config(
-            project=kwargs["runtime_root"], config_path=result["inbox_config_ref"])
+            project=kwargs["runtime_root"], config_path=result["inbox_config_ref"]
+        )
         assert config["reply"]["received_reaction_policy"] == "retain"
-        assert lark_inbox_reaction_receipts(
-            inbox=config["inbox_path"], message_id="om_incoming")["received"]["emoji_type"] == "Get"
+        assert (
+            lark_inbox_reaction_receipts(
+                inbox=config["inbox_path"], message_id="om_incoming"
+            )["received"]["emoji_type"]
+            == "Get"
+        )
     before = list(stages)
-    assert runtime.process_lark_goal_topic_event(**kwargs)["status"] == "already_acknowledged"
+    assert (
+        runtime.process_lark_goal_topic_event(**kwargs)["status"]
+        == "already_acknowledged"
+    )
     assert stages == before
 
 
-def test_concurrent_manager_delivery_answers_one_source_message_once(tmp_path, monkeypatch):
+def test_concurrent_manager_delivery_answers_one_source_message_once(
+    tmp_path, monkeypatch
+):
     from loopx.extensions.lark import goal_topic_runtime as runtime
 
     target_path, binding_path = tmp_path / "targets.json", tmp_path / "bindings.json"
@@ -2527,7 +2600,8 @@ def test_concurrent_manager_delivery_answers_one_source_message_once(tmp_path, m
 
     monkeypatch.setattr(runtime, "decide_lark_topic_event", manager_decision)
     monkeypatch.setattr(
-        runtime, "ensure_lark_event_inbox_received_reaction",
+        runtime,
+        "ensure_lark_event_inbox_received_reaction",
         lambda **_kwargs: {"ok": True, "status": "already_received"},
     )
     entered, release = threading.Event(), threading.Event()
@@ -2544,10 +2618,14 @@ def test_concurrent_manager_delivery_answers_one_source_message_once(tmp_path, m
         target_payload=read_goal_channel_targets(target_path),
         binding_payloads={"goal-alpha": read_goal_channel_binding(binding_path)},
         event={
-            "event_id": "evt_one_source", "message_id": "om_one_source",
-            "chat_id": "oc_public_fixture", "root_id": "om_topic_alpha",
-            "create_time": "2026-08-14T21:00:00Z", "content": "@linkmacbot question",
-            "sender_type": "user", "sender_id": "ou_owner_fixture",
+            "event_id": "evt_one_source",
+            "message_id": "om_one_source",
+            "chat_id": "oc_public_fixture",
+            "root_id": "om_topic_alpha",
+            "create_time": "2026-08-14T21:00:00Z",
+            "content": "@linkmacbot question",
+            "sender_type": "user",
+            "sender_id": "ou_owner_fixture",
         },
         runtime_root=tmp_path / "runtime",
         answer=answer,
@@ -2566,72 +2644,103 @@ def test_concurrent_manager_delivery_answers_one_source_message_once(tmp_path, m
         assert second.result(timeout=5)["status"] == "already_acknowledged"
     assert answers == ["answer"]
     sends = [
-        call for call in state["calls"]
+        call
+        for call in state["calls"]
         if "+messages-reply" in call and "--dry-run" not in call
     ]
     assert len(sends) == 1
 
 
-@pytest.mark.parametrize("error_code,label", [
-    ("cyber_policy", "安全策略拦截"),
-    ("rate_limit_exceeded", "请求频率限制"),
-    ("server_overloaded", "当前模型繁忙"),
-    ("runtime_unavailable", "本地运行环境初始化失败"),
-    ("resume_failed", "原 Agent 会话恢复失败"),
-    ("private-upstream-detail", "管家处理失败"),
-])
+@pytest.mark.parametrize(
+    "error_code,label",
+    [
+        ("cyber_policy", "安全策略拦截"),
+        ("rate_limit_exceeded", "请求频率限制"),
+        ("server_overloaded", "当前模型繁忙"),
+        ("runtime_unavailable", "本地运行环境初始化失败"),
+        ("resume_failed", "原 Agent 会话恢复失败"),
+        ("private-upstream-detail", "管家处理失败"),
+    ],
+)
 @pytest.mark.parametrize("reply_ok", [True, False])
 def test_manager_terminal_failure_replies_once_before_ack(
-    tmp_path, monkeypatch, error_code, label, reply_ok,
+    tmp_path,
+    monkeypatch,
+    error_code,
+    label,
+    reply_ok,
 ):
     from loopx.extensions.lark import goal_topic_runtime as runtime
 
     target_path, binding_path = tmp_path / "targets.json", tmp_path / "bindings.json"
     _seed_legacy_topic(target_path, binding_path)
     original_decide = runtime.decide_lark_topic_event
+
     def manager_decision(**kw):
         result = original_decide(**kw)
         result["route"].update(
-            conversation_kind="manager", ingress_mode="session_queue",
+            conversation_kind="manager",
+            ingress_mode="session_queue",
             authority_mode="turn_authorized",
             event_id=kw["event"]["event_id"],
             connector={"response_policy": "topic_reply"},
         )
         return result
+
     monkeypatch.setattr(runtime, "decide_lark_topic_event", manager_decision)
-    monkeypatch.setattr(runtime, "ensure_lark_event_inbox_received_reaction",
-                        lambda **kw: {"ok": True, "status": "already_received"})
+    monkeypatch.setattr(
+        runtime,
+        "ensure_lark_event_inbox_received_reaction",
+        lambda **kw: {"ok": True, "status": "already_received"},
+    )
     state = {}
     runner = _reply_runner(state)
     calls = []
+
     def answer(route, text):
         calls.append(text)
-        raise runtime.LarkGoalTopicTurnFailed(error_code, runtime._session_turn_effect(route))
+        raise runtime.LarkGoalTopicTurnFailed(
+            error_code, runtime._session_turn_effect(route)
+        )
+
     def reply(args):
         if not reply_ok and "+messages-reply" in args and "--dry-run" not in args:
             return {"returncode": 1, "stdout": "", "stderr": "private-transport-detail"}
         return runner(args)
+
     kwargs = dict(
         target_payload=read_goal_channel_targets(target_path),
         binding_payloads={"goal-alpha": read_goal_channel_binding(binding_path)},
-        event={"event_id": "evt_incoming", "message_id": "om_incoming",
-               "chat_id": "oc_public_fixture", "root_id": "om_topic_alpha",
-               "create_time": "2026-08-14T21:00:00Z", "content": "@linkmacbot report",
-               "mentioned": True, "sender_type": "user"},
-        runtime_root=tmp_path / "runtime", answer=answer, reply_runner=reply,
+        event={
+            "event_id": "evt_incoming",
+            "message_id": "om_incoming",
+            "chat_id": "oc_public_fixture",
+            "root_id": "om_topic_alpha",
+            "create_time": "2026-08-14T21:00:00Z",
+            "content": "@linkmacbot report",
+            "mentioned": True,
+            "sender_type": "user",
+        },
+        runtime_root=tmp_path / "runtime",
+        answer=answer,
+        reply_runner=reply,
     )
     result = runtime.process_lark_goal_topic_event(**kwargs)
     assert result["ok"] is False
     assert label in state["reply_text"]
     assert "private-" not in state["reply_text"] + str(result)
     assert "不会自动重放" in state["reply_text"]
-    pending = inspect_lark_event_inbox(project=kwargs["runtime_root"],
-                                      config_path=Path(result["inbox_config_ref"]))
+    pending = inspect_lark_event_inbox(
+        project=kwargs["runtime_root"], config_path=Path(result["inbox_config_ref"])
+    )
     if reply_ok:
         assert result["status"] == "processing_failed"
         assert result["failure_reply_verified"] and result["source_acknowledged"]
         assert pending["items"] == []
-        assert runtime.process_lark_goal_topic_event(**kwargs)["status"] == "already_acknowledged"
+        assert (
+            runtime.process_lark_goal_topic_event(**kwargs)["status"]
+            == "already_acknowledged"
+        )
         assert len(calls) == 1
     else:
         assert any(x["message_id"] == "om_incoming" for x in pending["items"])
@@ -2640,7 +2749,9 @@ def test_manager_terminal_failure_replies_once_before_ack(
 
 @pytest.mark.parametrize("answer_value", ["raise", "empty"])
 def test_manager_untyped_or_empty_answer_gets_bounded_failure_receipt(
-    tmp_path, monkeypatch, answer_value,
+    tmp_path,
+    monkeypatch,
+    answer_value,
 ):
     from loopx.extensions.lark import goal_topic_runtime as runtime
 
@@ -2651,7 +2762,8 @@ def test_manager_untyped_or_empty_answer_gets_bounded_failure_receipt(
     def manager_decision(**kw):
         result = original_decide(**kw)
         result["route"].update(
-            conversation_kind="manager", ingress_mode="session_queue",
+            conversation_kind="manager",
+            ingress_mode="session_queue",
             authority_mode="turn_authorized",
             event_id=kw["event"]["event_id"],
             connector={"response_policy": "topic_reply"},
@@ -2704,7 +2816,10 @@ def test_manager_untyped_or_empty_answer_gets_bounded_failure_receipt(
         config_path=Path(result["inbox_config_ref"]),
     )
     assert pending["items"] == []
-    assert runtime.process_lark_goal_topic_event(**kwargs)["status"] == "already_acknowledged"
+    assert (
+        runtime.process_lark_goal_topic_event(**kwargs)["status"]
+        == "already_acknowledged"
+    )
     assert len(answer_calls) == 1
 
 
@@ -2729,7 +2844,10 @@ def test_manager_untyped_or_empty_answer_gets_bounded_failure_receipt(
 )
 @pytest.mark.parametrize("reply_ok", [True, False])
 def test_manager_report_delivery_recovers_safe_format_and_keeps_pending_body(
-    tmp_path, monkeypatch, body, reply_ok,
+    tmp_path,
+    monkeypatch,
+    body,
+    reply_ok,
 ):
     from loopx.extensions.lark import goal_topic_runtime as runtime
     from loopx.extensions.lark.inbox_reply import send_lark_inbox_message
@@ -2742,7 +2860,8 @@ def test_manager_report_delivery_recovers_safe_format_and_keeps_pending_body(
     def manager_decision(**kw):
         result = original_decide(**kw)
         result["route"].update(
-            conversation_kind="manager", ingress_mode="session_queue",
+            conversation_kind="manager",
+            ingress_mode="session_queue",
             authority_mode="turn_authorized",
             event_id=kw["event"]["event_id"],
             connector={"response_policy": "topic_reply"},
@@ -2750,14 +2869,20 @@ def test_manager_report_delivery_recovers_safe_format_and_keeps_pending_body(
         return result
 
     monkeypatch.setattr(runtime, "decide_lark_topic_event", manager_decision)
-    monkeypatch.setattr(runtime, "ensure_lark_event_inbox_received_reaction",
-                        lambda **kw: {"ok": True, "status": "already_received"})
+    monkeypatch.setattr(
+        runtime,
+        "ensure_lark_event_inbox_received_reaction",
+        lambda **kw: {"ok": True, "status": "already_received"},
+    )
     state, answered = {}, []
     runner = _reply_runner(state)
 
     def answer(route, text):
         answered.append(text)
-        return {"response_text": body, "effect_receipt": runtime._session_turn_effect(route)}
+        return {
+            "response_text": body,
+            "effect_receipt": runtime._session_turn_effect(route),
+        }
 
     def reply(args):
         if not reply_ok and "+messages-reply" in args and "--dry-run" not in args:
@@ -2767,11 +2892,19 @@ def test_manager_report_delivery_recovers_safe_format_and_keeps_pending_body(
     kwargs = dict(
         target_payload=read_goal_channel_targets(target_path),
         binding_payloads={"goal-alpha": read_goal_channel_binding(binding_path)},
-        event={"event_id": "evt_incoming", "message_id": "om_incoming",
-               "chat_id": "oc_public_fixture", "root_id": "om_topic_alpha",
-               "create_time": "2026-08-14T21:00:00Z", "content": "@linkmacbot report",
-               "mentioned": True, "sender_type": "user"},
-        runtime_root=tmp_path / "runtime", answer=answer, reply_runner=reply,
+        event={
+            "event_id": "evt_incoming",
+            "message_id": "om_incoming",
+            "chat_id": "oc_public_fixture",
+            "root_id": "om_topic_alpha",
+            "create_time": "2026-08-14T21:00:00Z",
+            "content": "@linkmacbot report",
+            "mentioned": True,
+            "sender_type": "user",
+        },
+        runtime_root=tmp_path / "runtime",
+        answer=answer,
+        reply_runner=reply,
     )
     result = runtime.process_lark_goal_topic_event(**kwargs)
     if body == r"private\nformat":
@@ -2811,7 +2944,10 @@ def test_manager_report_delivery_recovers_safe_format_and_keeps_pending_body(
                                       config_path=Path(result["inbox_config_ref"]))
     if reply_ok:
         assert pending["items"] == []
-        assert runtime.process_lark_goal_topic_event(**kwargs)["status"] == "already_acknowledged"
+        assert (
+            runtime.process_lark_goal_topic_event(**kwargs)["status"]
+            == "already_acknowledged"
+        )
         assert len(answered) == 1
     else:
         assert any(x["message_id"] == "om_incoming" for x in pending["items"])
@@ -2820,12 +2956,16 @@ def test_manager_report_delivery_recovers_safe_format_and_keeps_pending_body(
         assert len(answered) == 1
     # Root notifications retain their existing compact limit.
     with pytest.raises(LarkOutboundTextError):
-        send_lark_inbox_message(project=kwargs["runtime_root"],
-                               config_path=result["inbox_config_ref"], text="x" * 1201)
+        send_lark_inbox_message(
+            project=kwargs["runtime_root"],
+            config_path=result["inbox_config_ref"],
+            text="x" * 1201,
+        )
 
 
 def test_manager_delivery_reuses_saved_answer_after_transport_restart(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     from loopx.extensions.lark import goal_topic_runtime as runtime
 
@@ -2880,9 +3020,7 @@ def test_manager_delivery_reuses_saved_answer_after_transport_restart(
 
     kwargs = {
         "target_payload": read_goal_channel_targets(target_path),
-        "binding_payloads": {
-            "goal-alpha": read_goal_channel_binding(binding_path)
-        },
+        "binding_payloads": {"goal-alpha": read_goal_channel_binding(binding_path)},
         "event": event,
         "runtime_root": tmp_path / "runtime",
         "answer": answer,
@@ -2918,9 +3056,7 @@ def test_manager_delivery_reuses_saved_answer_after_transport_restart(
     assert second_state["reply_text"] == "完整答复\n＠LoopX 管家仅为显示文本"
     assert json.loads(delivery_files[0].read_text())["status"] == "sent_verified"
 
-    monkeypatch.setattr(
-        runtime, "acknowledge_lark_event_inbox", original_acknowledge
-    )
+    monkeypatch.setattr(runtime, "acknowledge_lark_event_inbox", original_acknowledge)
     third_state = {}
     third_runner = _reply_runner(third_state)
 
@@ -2939,9 +3075,12 @@ def test_manager_delivery_reuses_saved_answer_after_transport_restart(
     receipt = json.loads(delivery_files[0].read_text())
     assert receipt["status"] == "acknowledged"
     assert "delivery_text" not in receipt
-    assert inspect_lark_event_inbox(
-        project=kwargs["runtime_root"], config_path=Path(second["inbox_config_ref"])
-    )["items"] == []
+    assert (
+        inspect_lark_event_inbox(
+            project=kwargs["runtime_root"], config_path=Path(second["inbox_config_ref"])
+        )["items"]
+        == []
+    )
 
 
 def test_manager_retries_saved_proposal_delivery_before_source_ack(
@@ -2989,9 +3128,7 @@ def test_manager_retries_saved_proposal_delivery_before_source_ack(
 
     delivery_calls: list[tuple[str, ...]] = []
 
-    def deliver(
-        route: Mapping[str, Any], proposal_ids: list[str]
-    ) -> dict[str, Any]:
+    def deliver(route: Mapping[str, Any], proposal_ids: list[str]) -> dict[str, Any]:
         assert route["source_sender_id"] == "ou_owner_fixture"
         delivery_calls.append(tuple(proposal_ids))
         if len(delivery_calls) == 1:
@@ -3010,9 +3147,7 @@ def test_manager_retries_saved_proposal_delivery_before_source_ack(
     first_state: dict[str, Any] = {}
     kwargs = {
         "target_payload": read_goal_channel_targets(target_path),
-        "binding_payloads": {
-            "goal-alpha": read_goal_channel_binding(binding_path)
-        },
+        "binding_payloads": {"goal-alpha": read_goal_channel_binding(binding_path)},
         "event": event,
         "runtime_root": tmp_path / "runtime",
         "answer": answer,
@@ -3046,7 +3181,8 @@ def test_manager_retries_saved_proposal_delivery_before_source_ack(
 
 
 def test_a_fully_sent_part_sequence_settles_after_an_interrupted_receipt_write(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     """The reader already has every part; the delivery must stop saying pending.
 
@@ -3069,7 +3205,8 @@ def test_a_fully_sent_part_sequence_settles_after_an_interrupted_receipt_write(
     def manager_decision(**kwargs):
         result = original_decide(**kwargs)
         result["route"].update(
-            conversation_kind="manager", ingress_mode="session_queue",
+            conversation_kind="manager",
+            ingress_mode="session_queue",
             authority_mode="turn_authorized",
             event_id=kwargs["event"]["event_id"],
             connector={"response_policy": "topic_reply"},
@@ -3123,7 +3260,8 @@ def test_a_fully_sent_part_sequence_settles_after_an_interrupted_receipt_write(
     assert first["source_acknowledged"] is False
     config_path = Path(first["inbox_config_ref"])
     state_path = delivery_path(
-        project=kwargs["runtime_root"], config_path=config_path,
+        project=kwargs["runtime_root"],
+        config_path=config_path,
         message_id="om_incoming",
     )
     saved = json.loads(state_path.read_text())
@@ -3150,7 +3288,8 @@ def test_a_fully_sent_part_sequence_settles_after_an_interrupted_receipt_write(
     assert second["saved_response_reused"] is True
     assert len(answered) == 1
     assert [
-        call for call in state["calls"]
+        call
+        for call in state["calls"]
         if "+messages-reply" in call and "--dry-run" not in call
     ] == delivered_once
     settled = json.loads(state_path.read_text())
@@ -3163,7 +3302,8 @@ def test_a_fully_sent_part_sequence_settles_after_an_interrupted_receipt_write(
 
 
 def test_a_part_whose_readback_failed_is_reconciled_instead_of_sent_twice(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     """An ambiguous part send must be confirmed, not repeated.
 
@@ -3184,7 +3324,8 @@ def test_a_part_whose_readback_failed_is_reconciled_instead_of_sent_twice(
     def manager_decision(**kwargs):
         result = original_decide(**kwargs)
         result["route"].update(
-            conversation_kind="manager", ingress_mode="session_queue",
+            conversation_kind="manager",
+            ingress_mode="session_queue",
             authority_mode="turn_authorized",
             event_id=kwargs["event"]["event_id"],
             connector={"response_policy": "topic_reply"},
@@ -3242,7 +3383,8 @@ def test_a_part_whose_readback_failed_is_reconciled_instead_of_sent_twice(
     assert first["status"] == "reply_delivery_pending"
     config_path = Path(first["inbox_config_ref"])
     state_path = delivery_path(
-        project=kwargs["runtime_root"], config_path=config_path,
+        project=kwargs["runtime_root"],
+        config_path=config_path,
         message_id="om_incoming",
     )
     saved = json.loads(state_path.read_text())
@@ -3276,7 +3418,8 @@ def test_a_part_whose_readback_failed_is_reconciled_instead_of_sent_twice(
 
 
 def test_a_long_manager_answer_is_delivered_as_one_message(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     """A 3000-character steward answer is one message, not a bounded sequence.
 
@@ -3298,7 +3441,8 @@ def test_a_long_manager_answer_is_delivered_as_one_message(
     def manager_decision(**kwargs):
         result = original_decide(**kwargs)
         result["route"].update(
-            conversation_kind="manager", ingress_mode="session_queue",
+            conversation_kind="manager",
+            ingress_mode="session_queue",
             authority_mode="turn_authorized",
             event_id=kwargs["event"]["event_id"],
             connector={"response_policy": "topic_reply"},
@@ -3362,7 +3506,8 @@ def test_a_long_manager_answer_is_delivered_as_one_message(
 
 
 def test_a_stalled_part_sequence_tells_the_reader_what_was_delivered(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     """A partly delivered answer must not look like a complete one.
 
@@ -3382,7 +3527,8 @@ def test_a_stalled_part_sequence_tells_the_reader_what_was_delivered(
     def manager_decision(**kwargs):
         result = original_decide(**kwargs)
         result["route"].update(
-            conversation_kind="manager", ingress_mode="session_queue",
+            conversation_kind="manager",
+            ingress_mode="session_queue",
             authority_mode="turn_authorized",
             event_id=kwargs["event"]["event_id"],
             connector={"response_policy": "topic_reply"},
@@ -3466,7 +3612,8 @@ def test_a_stalled_part_sequence_tells_the_reader_what_was_delivered(
 
     saved = json.loads(
         delivery_path(
-            project=kwargs["runtime_root"], config_path=config_path,
+            project=kwargs["runtime_root"],
+            config_path=config_path,
             message_id="om_incoming",
         ).read_text()
     )
@@ -3478,7 +3625,10 @@ def test_a_stalled_part_sequence_tells_the_reader_what_was_delivered(
 @pytest.mark.parametrize("manager", [False, True])
 @pytest.mark.parametrize("thread", [False, True])
 def test_quoted_reply_reaches_real_chat_store_and_protocol_turn(
-    tmp_path: Path, manager: bool, thread: bool,
+    tmp_path: Path,
+    manager: bool,
+    thread: bool,
+    monkeypatch: Any,
 ) -> None:
     """Real inbox/controller/store; only the external provider/model are fixtures."""
     import runpy
@@ -3486,25 +3636,39 @@ def test_quoted_reply_reaches_real_chat_store_and_protocol_turn(
 
     from loopx.chat_runtime import ChatRuntimeController
     from loopx.chat_store import ChatSessionStore
-    from loopx.extensions.lark.event_collector_runtime import enrich_lark_event_reply_context
-    from loopx.extensions.lark.goal_topic_runtime import answer_lark_goal_topic, process_lark_goal_topic_event
+    from loopx.extensions.lark.event_collector_runtime import (
+        enrich_lark_event_reply_context,
+    )
+    from loopx.extensions.lark.goal_topic_runtime import (
+        answer_lark_goal_topic,
+        process_lark_goal_topic_event,
+    )
 
     executable = tmp_path / "codex"
-    fixture = runpy.run_path(str(Path(__file__).parents[2] / "examples/loopx-chat-runtime-smoke.py"))
+    fixture = runpy.run_path(
+        str(Path(__file__).parents[2] / "examples/loopx-chat-runtime-smoke.py")
+    )
     executable.write_text(fixture["FAKE_CODEX"], encoding="utf-8")
     executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
+    from test_chat_ordinary_project import _python_app_server_fixture
+
+    _python_app_server_fixture(monkeypatch, executable)
     store = ChatSessionStore(tmp_path / "chat")
     controller = ChatRuntimeController(store=store, codex_bin=str(executable))
     parent_text = "Dependency review is ready; the draft card has not been approved."
     messages = {
         "om_question": {
-            "message_id": "om_question", "chat_id": "oc_public_fixture",
-            "content": "Where is the card?", "root_id": "om_topic_alpha",
-            "parent_id": "om_parent", "mentions": [],
+            "message_id": "om_question",
+            "chat_id": "oc_public_fixture",
+            "content": "Where is the card?",
+            "root_id": "om_topic_alpha",
+            "parent_id": "om_parent",
+            "mentions": [],
             "sender": {"sender_type": "user", "id": "ou_owner_fixture"},
         },
         "om_parent": {
-            "message_id": "om_parent", "chat_id": "oc_public_fixture",
+            "message_id": "om_parent",
+            "chat_id": "oc_public_fixture",
             "body": {"content": json.dumps({"text": parent_text})},
             "sender": {"sender_type": "app", "id": "cli_public_fixture"},
         },
@@ -3515,27 +3679,53 @@ def test_quoted_reply_reaches_real_chat_store_and_protocol_turn(
         question = messages["om_question"]
         question.pop("parent_id")
         question.pop("root_id")
-        question.update(thread_id="omt_fixture", thread_message_position="2",
-                        mentions=[{"name": "linkmacbot", "id": "cli_public_fixture"}])
-        root = {"message_id": "om_topic_alpha", "chat_id": "oc_public_fixture",
-                "thread_id": "omt_fixture", "thread_message_position": "-1",
-                "content": "Review the initial draft."}
-        revised = {**root, "message_id": "om_revision", "thread_message_position": "1",
-                   "content": parent_text}
+        question.update(
+            thread_id="omt_fixture",
+            thread_message_position="2",
+            mentions=[{"name": "linkmacbot", "id": "cli_public_fixture"}],
+        )
+        root = {
+            "message_id": "om_topic_alpha",
+            "chat_id": "oc_public_fixture",
+            "thread_id": "omt_fixture",
+            "thread_message_position": "-1",
+            "content": "Review the initial draft.",
+        }
+        revised = {
+            **root,
+            "message_id": "om_revision",
+            "thread_message_position": "1",
+            "content": parent_text,
+        }
         messages["om_topic_alpha"] = {**root, "thread_replies": [revised, question]}
 
     def provider(argv: list[str], **_kwargs: Any):
         mid = argv[argv.index("--message-ids") + 1]
-        return subprocess.CompletedProcess(argv, 0, json.dumps({
-            "ok": True, "data": {"messages": [messages[mid]]},
-        }), "")
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            json.dumps(
+                {
+                    "ok": True,
+                    "data": {"messages": [messages[mid]]},
+                }
+            ),
+            "",
+        )
 
     event = enrich_lark_event_reply_context(
-        {"schema_version": "lark_event_inbox_event_v0", "message_id": "om_question",
-         "event_id": "evt_question", "chat_id": "oc_public_fixture",
-         **({"root_id": "om_topic_alpha"} if thread else {})},
-        runner=provider, command_prefix=["lark-cli"], profile="mew",
-        profile_app_id="cli_public_fixture", configured_chat_id="oc_public_fixture",
+        {
+            "schema_version": "lark_event_inbox_event_v0",
+            "message_id": "om_question",
+            "event_id": "evt_question",
+            "chat_id": "oc_public_fixture",
+            **({"root_id": "om_topic_alpha"} if thread else {}),
+        },
+        runner=provider,
+        command_prefix=["lark-cli"],
+        profile="mew",
+        profile_app_id="cli_public_fixture",
+        configured_chat_id="oc_public_fixture",
     )
     target_path, binding_path = tmp_path / "targets.json", tmp_path / "binding.json"
     _seed_legacy_topic(target_path, binding_path)
@@ -3544,32 +3734,51 @@ def test_quoted_reply_reaches_real_chat_store_and_protocol_turn(
     def answer(route: Any, text: str):
         return answer_lark_goal_topic(
             route={**route, **({"conversation_kind": "manager"} if manager else {})},
-            text=text, work_dir=tmp_path, objective="Inspect dependency review.",
+            text=text,
+            work_dir=tmp_path,
+            objective="Inspect dependency review.",
             runtime_controller=controller,
         )
 
     options = dict(
         target_payload=read_goal_channel_targets(target_path),
         binding_payloads={"goal-alpha": read_goal_channel_binding(binding_path)},
-        runtime_root=tmp_path / "runtime", answer=answer,
+        runtime_root=tmp_path / "runtime",
+        answer=answer,
         reply_runner=_reply_runner(state),
     )
     try:
         result = process_lark_goal_topic_event(**options, event=event)
         assert result["status"] == "replied_and_acknowledged"
         session = store.list_sessions()[0]
-        user_messages = [r for r in store.messages(session["session_id"]) if r["role"] == "user"]
+        user_messages = [
+            r for r in store.messages(session["session_id"]) if r["role"] == "user"
+        ]
         assert len(user_messages) == 1
         assert parent_text in user_messages[0]["text"]
         assert "context only" in user_messages[0]["text"]
         assert user_messages[0]["text"].endswith("Where is the card?")
         assert state["reply_text"] == "Runtime response."
         readback = inspect_lark_event_inbox(
-            project=tmp_path / "runtime", config_path=result["inbox_config_ref"], limit=0,
+            project=tmp_path / "runtime",
+            config_path=result["inbox_config_ref"],
+            limit=0,
         )
         assert readback["processed_count"] == 1
-        assert process_lark_goal_topic_event(**options, event=event)["status"] == "already_acknowledged"
-        assert len([r for r in store.messages(session["session_id"]) if r["role"] == "user"]) == 1
+        assert (
+            process_lark_goal_topic_event(**options, event=event)["status"]
+            == "already_acknowledged"
+        )
+        assert (
+            len(
+                [
+                    r
+                    for r in store.messages(session["session_id"])
+                    if r["role"] == "user"
+                ]
+            )
+            == 1
+        )
     finally:
         for session in store.list_sessions():
             controller.close_session(session["session_id"])
@@ -3578,18 +3787,42 @@ def test_quoted_reply_reaches_real_chat_store_and_protocol_turn(
 def test_message_event_projection_preserves_flat_cli_and_raw_provider_provenance():
     import shutil
     from loopx.extensions.lark.goal_topic_runtime import _EVENT_PROJECTION
+
     jq = shutil.which("jq")
     if jq is None:
         pytest.skip("jq runtime is unavailable")
-    expected = {"event_id": "event_fixture", "message_id": "om_fixture", "sender_id": "ou_fixture",
-        "sender_type": "user", "chat_id": "oc_fixture", "chat_type": "p2p", "message_type": "text"}
+    expected = {
+        "event_id": "event_fixture",
+        "message_id": "om_fixture",
+        "sender_id": "ou_fixture",
+        "sender_type": "user",
+        "chat_id": "oc_fixture",
+        "chat_type": "p2p",
+        "message_type": "text",
+    }
     flat = {**expected, "content": "plain rendered text", "create_time": "123"}
-    nested = {"header": {"event_id": expected["event_id"]}, "event": {
-        "sender": {"sender_id": {"open_id": expected["sender_id"]}, "sender_type": "user"},
-        "message": {key: value for key, value in flat.items() if key not in {"event_id", "sender_id", "sender_type"}}}}
+    nested = {
+        "header": {"event_id": expected["event_id"]},
+        "event": {
+            "sender": {
+                "sender_id": {"open_id": expected["sender_id"]},
+                "sender_type": "user",
+            },
+            "message": {
+                key: value
+                for key, value in flat.items()
+                if key not in {"event_id", "sender_id", "sender_type"}
+            },
+        },
+    }
     for payload in [flat, nested]:
-        completed = subprocess.run([jq, "-c", _EVENT_PROJECTION], input=json.dumps(payload), text=True,
-                                   capture_output=True, check=True)
+        completed = subprocess.run(
+            [jq, "-c", _EVENT_PROJECTION],
+            input=json.dumps(payload),
+            text=True,
+            capture_output=True,
+            check=True,
+        )
         row = json.loads(completed.stdout)
         for key, value in expected.items():
             assert row[key] == value
