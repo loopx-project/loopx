@@ -281,27 +281,38 @@ def test_real_cli_returns_while_http_response_is_held_and_disable_survives(isola
     assert str(isolated) not in json.dumps(received)
 
 
-def test_real_cli_first_result_reaches_http_without_next_day_return(isolated, collector, monkeypatch):
+@pytest.mark.parametrize('version', ['1.4.0', '2.0.0a1', '2.0.0b2', '2.0.0rc3'])
+def test_real_cli_first_result_reaches_http_without_next_day_return(isolated, collector, monkeypatch, version):
     endpoint, received, accepted, release = collector
     monkeypatch.setenv('LOOPX_USAGE_PING_ENDPOINT', endpoint)
+    monkeypatch.setattr(usage_ping, '__version__', version)
     release.set()
-    setup = 'import sys; from pathlib import Path; from loopx import usage_ping; usage_ping.select_default_runtime_root=lambda: Path(sys.argv[1]); from loopx.cli_runtime import main; '
-    command = [sys.executable, '-c', setup + 'raise SystemExit(main(["version", "--format", "json"]))', str(isolated)]
+    setup = ('import sys,loopx; from pathlib import Path; loopx.__version__=sys.argv[2]; '
+             'from loopx import usage_ping; usage_ping.select_default_runtime_root=lambda: Path(sys.argv[1]); '
+             'from loopx.cli_runtime import main; ')
+    command = [sys.executable, '-c', setup + 'raise SystemExit(main(["version", "--format", "json"]))',
+               str(isolated), version]
     first = subprocess.run(command, capture_output=True, text=True, timeout=30)
     assert first.returncode == 0 and 'random installation ID' in first.stderr
     assert received == []
     second = subprocess.run(command, capture_output=True, text=True, timeout=30)
     assert second.returncode == 0 and json.loads(second.stdout) == json.loads(first.stdout)
+    assert json.loads(second.stdout)['version'] == version
+    schemas = {'loopx_usage_ping_v1', 'loopx_usage_diagnostics_v1', 'loopx_installation_usage_v1'}
     deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and not any(p['schema'] == 'loopx_usage_diagnostics_v1' for p in received):
+    while time.monotonic() < deadline and not schemas.issubset({p['schema'] for p in received}):
         time.sleep(0.02)
+    assert schemas.issubset({p['schema'] for p in received}), 'every versioned channel must reach HTTP'
+    assert next(p for p in received if p['schema'] == 'loopx_usage_ping_v1')['version'] == version
+    profile = next(p for p in received if p['schema'] == 'loopx_installation_usage_v1')['profiles'][0]
+    assert profile['version'] == version
     aggregates = [p for p in received if p['schema'] == 'loopx_usage_diagnostics_v1']
     assert len(aggregates) == 1, 'one completed command must not depend on a next-day invocation'
     assert set(aggregates[0]) == {'schema', 'counters'}
     counters = aggregates[0]['counters']
     assert len(counters) == 1 and counters[0]['feature'] == 'version'
     assert counters[0]['outcome'] == 'ok' and counters[0]['count'] == 1
-    assert counters[0]['version'] and counters[0]['context'] == 'unknown'
+    assert counters[0]['version'] == version and counters[0]['context'] == 'unknown'
     assert usage_ping.control('status')['aggregate_preview'] is None
     usage_ping.control('disable')
 
