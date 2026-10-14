@@ -70,7 +70,7 @@ export function projectManagedOperationTransport(input: JsonObject): JsonObject 
   const supportedHosts = ["codex-cli"];
   const supportedSandboxes = ["read-only", "workspace-write"];
   const reason = typeof input.host !== "string" || !supportedHosts.includes(input.host) ? "operation_transport_host_unsupported"
-    : !supportedSandboxes.includes(String(input.sandbox)) ? "operation_transport_sandbox_unsupported"
+    : typeof input.sandbox !== "string" || !supportedSandboxes.includes(input.sandbox) ? "operation_transport_sandbox_unsupported"
     : typeof input.model !== "string" || !ID.test(input.model)
       || typeof input.reasoning_effort !== "string"
       || !["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(input.reasoning_effort)

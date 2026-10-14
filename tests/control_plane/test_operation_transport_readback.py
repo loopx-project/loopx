@@ -23,6 +23,19 @@ def test_supported_host_readback_never_coerces_an_invalid_host(host):
     assert result["transport"]["configuration_valid"] is False
 
 
+@pytest.mark.parametrize("sandbox", [["read-only"], ["workspace-write"], {"sandbox": "read-only"}, None, True, 1])
+def test_supported_sandbox_readback_never_coerces_an_invalid_sandbox(sandbox):
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+
+    result = effect_runtime_result("operation.managed_transport.project", {
+        "host": "codex-cli", "sandbox": sandbox, "model": "test-model",
+        "reasoning_effort": "high",
+    })
+    assert result["reason"] == "operation_transport_sandbox_unsupported"
+    assert result["remediation"] == ["select_supported_operation_sandbox"]
+    assert result["transport"]["configuration_valid"] is False
+
+
 @pytest.mark.parametrize(
     ("options", "reason", "remedy"),
     [
