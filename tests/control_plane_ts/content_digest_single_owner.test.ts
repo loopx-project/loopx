@@ -100,6 +100,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/collaboration/delegation_result_use.ts",
   "control_plane/collaboration/goal_instance_lifecycle.ts",
   "control_plane/collaboration/inbox_receipts.ts",
+  "control_plane/collaboration/request_control.ts",
   "control_plane/collaboration/result_publication.ts",
   "control_plane/collaboration/return_delivery.ts",
   "control_plane/collaboration/semantic_request.ts",
