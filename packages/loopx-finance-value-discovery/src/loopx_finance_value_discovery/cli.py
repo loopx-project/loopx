@@ -65,6 +65,7 @@ from .funding_event import (
     assess_funding_event_pair,
 )
 from .funding_presentation import FINANCE_FUNDING_RESEARCH_INPUT_SCHEMA_VERSION
+from .quantity_presentation import FINANCE_QUANTITY_RESEARCH_INPUT_SCHEMA_VERSION
 from .quantity_reconciliation import (
     FINANCE_QUANTITY_INPUT_SCHEMA_VERSION,
     assess_quantity_reconciliation,
@@ -268,6 +269,7 @@ def run(argv: Sequence[str] | None = None) -> int:
             elif schema_version in {
                 FINANCE_RESEARCH_DASHBOARD_INPUT_SCHEMA_VERSION,
                 FINANCE_FUNDING_RESEARCH_INPUT_SCHEMA_VERSION,
+                FINANCE_QUANTITY_RESEARCH_INPUT_SCHEMA_VERSION,
             }:
                 from .dashboard import build_finance_research_dashboard_packet
 

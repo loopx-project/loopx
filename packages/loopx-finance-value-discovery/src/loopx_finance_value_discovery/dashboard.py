@@ -723,6 +723,13 @@ def build_finance_research_dashboard_packet(
 
     if payload.get("schema_version") == FINANCE_FUNDING_RESEARCH_INPUT_SCHEMA_VERSION:
         return build_funding_event_research_packet(payload)
+    from .quantity_presentation import (
+        FINANCE_QUANTITY_RESEARCH_INPUT_SCHEMA_VERSION,
+        build_quantity_research_packet,
+    )
+
+    if payload.get("schema_version") == FINANCE_QUANTITY_RESEARCH_INPUT_SCHEMA_VERSION:
+        return build_quantity_research_packet(payload)
     record = _record(
         payload,
         context="input",
