@@ -832,6 +832,10 @@ guest 分别运行普通和 stride receiver；
 固定 checkpoint provider、准备 guest 依赖并列出显式 Codex/Node 输入。
 缺少前置条件会报错，不以 skip 充当资格通过。私有 receipt 与日志保留输入来源，
 只读 Git 对象覆盖 controller 的权限边界。
+源声明整个 workspace 目录并保留调用者的 component ID；非 root receiver 按
+封存的原 workspace 路径定位，由类型化 owner 物化。复制的源 registry/state
+只是历史，新外置 registry/runtime 拒绝原 Goal 准入，同时保留证据并完成候选
+写入。这资格化目录与写入者衔接，不证明真实题目数据集或科研接续收益。
 这是显式且经测试的组合，不是恢复时自动
 触发的 hook，也不改变默认行为。补后继 Todo 的生命周期修复本身不等于可记账的
 periodic 策略复盘。匹配分支须声明相同的准备/频率迁移，并计入完整成本。

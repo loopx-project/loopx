@@ -1026,7 +1026,14 @@ ordinary and stride receivers in separate fresh guests; the
 pins the checkpoint provider, prepares guest dependencies and lists explicit
 native CLI/Node inputs. Missing prerequisites fail rather than skip qualification.
 Its private receipt and logs retain input provenance; read-only Git members
-exercise the controller boundary. This is an
+exercise the controller boundary. The source now declares its whole workspace
+directory with a caller-owned component ID. Non-root receivers select that
+directory by the sealed original workspace path and use the typed materialization
+owner; retained source registry/state files remain historical beside a fresh
+external registry/runtime. Admission of the source Goal through the fresh registry
+is rejected, while retained evidence and actual candidate writes remain usable.
+This qualifies the directory/writer seam, not a real task dataset or scientific
+continuation result. This is an
 explicit tested composition, not an automatic restore hook or a new default.
 A Todo-successor repair alone is not a spendable periodic strategy review.
 Matched branches must declare the same preparation/cadence transition and charge
