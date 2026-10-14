@@ -67,12 +67,14 @@ export function ManagerBrief({ goals, onSelectGoal, operations = [], onSelectOpe
   const running = active.filter((goal) => goalWorkKind(goal) === "executing");
   const claimed = active.filter((goal) => goalWorkKind(goal) === "claimed");
   const queued = active.filter((goal) => goal.state === "已安排" && goalWorkKind(goal) === "none").length;
+  const modeUnrecognized = active.filter(goal => goalWorkKind(goal) === "unrecognized").length;
   const executionRead = active.some((goal) => goal.execution && goal.execution.kind !== "unknown");
   const executionPending = active.some((goal) => !goal.execution);
   const completed = recentCompletions(active);
   const completedTotal = active.reduce((sum, goal) => sum + Math.max(goal.doneTodoCount ?? 0, goal.agentTodos.filter((todo) => todo.done && todo.status === "done" && todo.taskClass === "advancement_task").length), 0);
   const runningEmpty = executionRead
-    ? queued ? t("brief.runningEmptyQueued", { count: queued }) : t("brief.runningEmpty")
+    ? modeUnrecognized ? t("brief.runningModeUnrecognized", { count: modeUnrecognized })
+      : queued ? t("brief.runningEmptyQueued", { count: queued }) : t("brief.runningEmpty")
     : executionPending ? t("brief.runningReading") : t("activity.executionUnknown");
   return (
     <section aria-label={t("brief.title")} className="personal-brief">

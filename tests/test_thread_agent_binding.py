@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -497,6 +498,90 @@ def test_resolve_agent_thread_never_falls_back_to_the_global_registry(
     payload = json.loads(output.getvalue())
     assert payload["status"] == "missing"
     assert payload["matches"] == []
+
+
+def test_resolve_agent_thread_uses_canonical_project_registry_from_linked_worktree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    primary = tmp_path / "primary"
+    primary.mkdir()
+    subprocess.run(["git", "init", "--quiet"], cwd=primary, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "loopx-test@example.com"],
+        cwd=primary,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "LoopX Test"], cwd=primary, check=True
+    )
+    (primary / "README.md").write_text("fixture\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=primary, check=True)
+    subprocess.run(
+        ["git", "commit", "--quiet", "-m", "Create fixture"],
+        cwd=primary,
+        check=True,
+    )
+    linked = tmp_path / "linked"
+    subprocess.run(
+        ["git", "worktree", "add", "--quiet", "--detach", str(linked)],
+        cwd=primary,
+        check=True,
+    )
+
+    source_path = _registry(primary, ["agent-a"])
+    assert bind_thread_agent_in_registry(
+        registry_path=source_path,
+        goal_id="goal",
+        host_surface="codex-app",
+        thread_id="thread-a",
+        agent_id="agent-a",
+        execute=True,
+    )["ok"] is True
+    runtime_root = tmp_path / "runtime"
+    global_path = global_registry_path(runtime_root)
+    global_path.parent.mkdir(parents=True)
+    global_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "goals": [
+                    {
+                        "id": "goal",
+                        "repo": str(primary),
+                        "source_registry": str(source_path),
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(linked)
+    output = io.StringIO()
+
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main(
+            [
+                "--runtime-root",
+                str(runtime_root),
+                "--format",
+                "json",
+                "resolve-agent-thread",
+                "--host-surface",
+                "codex-app",
+                "--thread-id",
+                "thread-a",
+            ]
+        )
+
+    assert exit_code == 0
+    payload = json.loads(output.getvalue())
+    assert payload["status"] == "bound"
+    assert payload["goal_id"] == "goal"
+    assert payload["agent_id"] == "agent-a"
+    assert "registry" not in payload
+    assert str(tmp_path) not in output.getvalue()
 
 
 def test_project_binding_resolution_fails_closed_across_goals(tmp_path: Path) -> None:

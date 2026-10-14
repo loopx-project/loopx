@@ -175,6 +175,7 @@ from .cli_commands import (
     register_worker_bridge_commands,
     register_workflow_skills_command,
 )
+from .cli_commands.zcode_goal import handle_zcode_goal_command, register_zcode_goal_command
 from .cli_commands.opencode2_goal_worker import (
     handle_opencode2_goal_worker_command,
     register_opencode2_goal_worker_command,
@@ -281,6 +282,7 @@ def build_parser() -> LoopXArgumentParser:
     register_usage_ping_command(sub, add_subcommand_format)
 
     register_opencode2_goal_worker_command(sub)
+    register_zcode_goal_command(sub, add_subcommand_format)
 
     register_worker_bridge_commands(sub, add_subcommand_format)
 
@@ -444,6 +446,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "usage-ping":
         return handle_usage_ping_command(args, print_payload)
+
+    if args.command == "zcode-goal":
+        return handle_zcode_goal_command(args, registry_path=registry_path, print_payload=print_payload, output_format=output_format)
 
     if args.command == "opencode2-goal-worker":
         return handle_opencode2_goal_worker_command(args, print_payload)

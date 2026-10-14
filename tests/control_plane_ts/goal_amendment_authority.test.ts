@@ -191,8 +191,11 @@ test("semantically corrupt persisted proposals and future peer adoptions fail cl
   const baseline = await store.loadAuthority();if (baseline.status !== "loaded") throw new Error("missing");
   const intent = baseline.head.shared_goal_intent as JsonObject;
   const proposal = (intent.proposals as JsonObject[])[0];
+  assert.deepEqual(((await executeGoalAmendment(store, request("inspect"))).intent as JsonObject).proposals, [proposal]);
   const corruptions = [
     ...[{base_goal_revision: "1"}, {base_goal_revision: 2}, {base_work_digest: "invalid"},
+      ...["A".repeat(64), "a".repeat(63), "a".repeat(65), "g".repeat(64), "sha256:" + "a".repeat(64)]
+        .map(base_work_digest => ({base_work_digest})),
       {template_digest: "bad"}, {evidence_refs: ["/home/operator/log"]}, {proposer_agent_id: "outsider"},
       {replan_obligation_id: null}].map(patch => {
         const merged: JsonObject = {...proposal, ...patch};

@@ -465,7 +465,7 @@ def test_compact_quota_should_run_cli_payload_bounds_boundary_authority_entries(
     assert full == payload
 
 
-def test_compact_quota_should_run_cli_payload_bounds_repeated_vision_detail() -> None:
+def test_compact_quota_deduplicates_vision_without_losing_decision_rules() -> None:
     judge = {
         "schema_version": "vision_gap_judge_v0",
         "done": False,
@@ -576,6 +576,11 @@ def test_compact_quota_should_run_cli_payload_bounds_repeated_vision_detail() ->
     assert len(json.dumps(compact, indent=2)) <= 40_000
     assert compact["selected_todo"] == payload["selected_todo"]
     assert compact["interaction_contract"]["mode"] == "bounded_delivery"
+    assert {
+        key: value
+        for key, value in compact["vision_continuation_audit"].items()
+        if key != "payload_compaction"
+    } == audit
     assert compact["vision_continuation_audit"]["vision_gap_judge"]["decision"] == (
         "continue"
     )

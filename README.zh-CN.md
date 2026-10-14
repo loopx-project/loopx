@@ -243,8 +243,15 @@ owner-run showcase，不代表连续算力执行、独立复现或生产结果�
   [公开 Issue](https://github.com/zilliztech/mfs/issues/166)和七个合并 PR 检查；
   LoopX 归因与用户报告的 `10 亿+` token 规模仍按用户自述标记。
   [检查完整案例](docs/showcases/cases/independent-public-engine-refactor.md)。
+- **外部独立用户 · vLLM 性能优化合入上游。**
+  [Zheng Cai](https://x.com/zigzagcai/status/2109952174822408443) 公开报告以
+  LoopX 为 workflow engine，持续做 profiling、研究、实验和正确性检查。
+  [vLLM PR #54951](https://github.com/vllm-project/vllm/pull/54951) 已合并；
+  sparse indexer 优化报告的总 token 吞吐提升 **32.59%**，条件为
+  GLM-5.3-Flash、1M 输入 token、4×H200、TP4、C1。
+  [查看工作流、完整测试条件与证据边界](docs/showcases/cases/independent-vllm-long-context-optimization.md)。
 
-这里长期只维护当前最强的三个案例，不复制全量清单。完整的 contributor case、
+这里展示四个外部独立用户案例，不复制全量清单。完整的 contributor case、
 creator dogfooding、reproducible demo 和证据强度标签见
 [Showcase 全量目录](docs/showcases/README.md)。
 
@@ -721,7 +728,17 @@ benchmark 证据、operator surface 与 IM integration、shared-goal 跨 host �
 
 ## License
 
+Copyright 2026 LoopX contributors。LoopX 由
+[`@huangruiteng`](https://github.com/huangruiteng) 创建，创建者与社区贡献记录见
+[Authors and Contributors](docs/project/authors.md)。
+
 从 `v0.4.8` 起采用 Apache License 2.0，见 [LICENSE](LICENSE) 与
 [NOTICE](NOTICE)。`v0.4.7` 及更早版本永久保留原 MIT 许可；历史许可证全文与
 notice 保存在 [LICENSE-MIT](LICENSE-MIT)。[许可证政策](docs/project/licensing.md)
 说明版本、贡献、专利授权与 open-core 边界。
+
+不得以 AI 生成、代码重写、跨语言转换或项目改名为由，删除或规避适用许可证要求保留的
+版权、署名及 NOTICE 通知。若分发内容构成 LoopX 的衍生作品，相关义务仍然适用。
+该说明不限制适用许可证允许的修改与再分发。具体见
+[复用与署名说明](docs/project/licensing.md#reuse-ports-and-attribution)及
+[名称与标识使用](docs/project/trademarks.md)；衍生分发不得冒充官方 LoopX 版本。

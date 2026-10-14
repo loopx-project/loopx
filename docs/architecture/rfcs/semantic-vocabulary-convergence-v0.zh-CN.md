@@ -832,17 +832,18 @@ uv run --extra test python scripts/generate_semantic_inventory.py --report --con
 
 ## 11. 规范性交付计划
 
-`bfbb5ac60` 上的实现读回（[讨论 #4738 的 PR-03 事实校正](https://github.com/loopx-project/loopx/discussions/4738#discussioncomment-18514184)）：
-M0/M0.5 检查已执行；Q3/Q6 已按第 12 节描述实现；M2 Turn 生成物已被
-`transaction.py`、`settlement.ts` 和 loop controller 消费。下表保留各里程碑的
-验收义务，不是“从未开始的工作”清单。历史测量保留原 SHA；本次读回不证明实现资格或晋升；RFC 合入另行接受设计。
+`43173c0b8c8761abee4cdddc665f0f0f20f194f7` 上的实现读回（2026-10-12）：
+M0/M0.5 守卫和 Q3/Q6 类型化槽位已实现；M2 生成契约被 transaction、settlement 和
+controller 消费。Stage 1 的 composition/replay/selection/inbox 及交叠 #4764 已合入。
+#4794 停止新 `protocol_action_packet` 写入，保留历史格式、签名投影及其余五个旧字段。
+#4747/#4795 已是合入见证，不再是待合并提案；#5317 交付独立 #4743 的开发期 advisory，
+不替代本 tracker 的来源义务。
 
-六个旧字段仍在写入。`protocol_action_packet` 退休仍需目标发布版本、消费者范围、
-历史签名和回滚契约。[PR #4747](https://github.com/loopx-project/loopx/pull/4747)
-中的 `settlement_binding_kind` witness 是提议中的 pilot，在此基线上尚未合入，
-也不构成其他跨运行时词表的闭合。F6 仍未证明。PR-07/08 构建改动必须保持阶段
-优先级；[PR #4764](https://github.com/loopx-project/loopx/pull/4764) 正在交叠路径上
-修改同一 Turn 的延期选择和 monitor 结算，声称组合行为等价前须核对其最终结果。
+[当前登记来源清单](ledger/semantic-vocabulary-convergence-v0/2026-10-12-registered-source-treatment.zh-CN.md)
+列出 26 项、当前主干上的执行证据及兼容边界。#6313 的两项含义处置已由 owner 合入；
+原 Host-ACK fixture 修复已由 #6344 进入主干，并在 `60d833b13` 重验通过；来源清单
+集成与最终单一版本 owner 验收仍开放，#6285 的剩余增强独立处理。F1/F2 保持 6/26，
+不抬高 producer 范围或声称通用 F6；历史测量保留原 SHA，下表验收义务不变。
 
 | 里程碑 | 交付行为 | 进入门 | 退出证据 | 回滚 |
 | --- | --- | --- | --- | --- |
@@ -854,11 +855,12 @@ M0/M0.5 检查已执行；Q3/Q6 已按第 12 节描述实现；M2 Turn 生成物
 | M3 | 有条件逐字段退役：删除必须消除已证实的重复权威或不必要的消费者维护；派生兼容投影可以保留 | 说明净收益、目标版本、消费者、历史格式/签名和回滚窗口；停写前评审 unresolved 与计算式键证据 | 获准迁移、新输出及历史读取/拒绝测试、被替代代码实际删除、批准范围对应预算更新；保留有用投影不属于迁移失败 | 在声明的兼容窗口内恢复获准 writer |
 | M4 | 随迁移 RFC 的每次 replacement-first 切换调低孪生预算 | 每个切换 PR | 同 diff 中的预算修改 | 无需；预算跟随代码 |
 
-**#4447 阶段验收提案。** 本 RFC 的长期里程碑不全部构成单个交付 tracker
-的关闭条件。[#4447](https://github.com/loopx-project/loopx/issues/4447) 结合
+**#4447 阶段验收。** 本 RFC 的长期里程碑不全部构成单个交付 tracker
+的关闭条件。[#4789](https://github.com/loopx-project/loopx/pull/4789) 已合入范围修订，
+由 [#4447](https://github.com/loopx-project/loopx/issues/4447) 结合
 [讨论 #4738](https://github.com/loopx-project/loopx/discussions/4738) 的阶段方案，
 分别验收守卫的真实采用、有限生产路径的重复维护消除和来源证据闭合。
-关闭 tracker 前必须由维护者接受该范围；本提案不认证交付完成，也不改变运行时检查。
+关闭 tracker 前仍须维护者接受完整交付证据；范围修订不认证交付完成，也不改变运行时检查。
 
 下表记录长期目标，不是无条件删除配额，也不是 #4447 的验收清单；每一行都是一个
 注册表预算或 smoke 可检查的词表属性。标为*未决*的行等待第 12 节的决策，这也

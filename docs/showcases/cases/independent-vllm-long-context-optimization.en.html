@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LoopX Showcase: vLLM long-context optimization merged upstream</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="../showcase-page.css">
+</head>
+<body>
+<div class="gh">
+  <div class="grain"></div>
+  <article>
+
+    <nav class="nav" aria-label="Showcase navigation">
+      <a href="../index.en.html">Showcases</a>
+      <a href="../showcase-catalog.json">Catalog</a>
+      <a href="independent-vllm-long-context-optimization.html">中文</a>
+    </nav>
+
+    <div class="mlab">2026-10-13 · inference-performance-optimization</div>
+    <h1>vLLM long-context optimization merged upstream</h1>
+    <div class="accent">Zheng Cai reports LoopX as the workflow engine behind continuous vLLM optimization; the resulting sparse-indexer PR merged upstream. Reported +32.59% total-token throughput: GLM-5.3-Flash, 1M input, 4×H200, TP4, C1.</div>
+    <p>Continuing exploration and validation produced an inspectable upstream optimization. The LoopX maintainer highlights developer attention as a motivation; no quantitative attention or cost savings are established.</p>
+    <div class="chips"><span>Independent user</span><span>Public repo + user report</span><span>Upstream merged</span><span>Reported measurements</span></div>
+
+
+    <div class="section-head"><span>01</span><h2>Case context</h2></div>
+    <div class="text-stack"><p>Inference optimization requires repeated profiling, paper/code research, experiments, correctness checks, and review. The author reports LoopX as the workflow engine for this process; validation across models and workloads remains substantial engineering work.</p></div>
+
+    <div class="section-head"><span>02</span><h2>Repository evidence</h2></div>
+    <div class="panel">
+      <div class="panel-row"><div class="panel-key">Proof</div><div class="panel-val"><p>An author-reported LoopX optimization workflow led to an inspectable sparse-indexer change merged into vLLM.</p></div></div>
+      <div class="panel-row"><div class="panel-key">LoopX intervention</div><div class="panel-val"><p>author-reported workflow engine: profiling, research, hypotheses, experiments, correctness and speed checks</p></div></div>
+    </div>
+    <div class="metric-grid"><div class="metric"><strong>+32.59%</strong><span>reported C1 total tok/s · 1M, 4×H200, TP4</span></div><div class="metric"><strong>54.154 → 40.388s</strong><span>reported server TTFT · same configuration</span></div><div class="metric"><strong>2026-10-11</strong><span>public upstream merge date (UTC)</span></div></div>
+    <div class="evidence-grid"><div class="evidence-card"><div class="evidence-label">Proof</div><p>An author-reported LoopX optimization workflow led to an inspectable sparse-indexer change merged into vLLM.</p></div></div>
+
+
+    <div class="section-head"><span>03</span><h2>LoopX behavior</h2></div>
+    <ul class="flow"><li><span class="flow-num">1</span><div class="flow-body"><div class="flow-title">Author reports using LoopX as the workflow engine for an agent-driven vLLM inference-optimization framework.</div></div></li><li><span class="flow-num">2</span><div class="flow-body"><div class="flow-title">Author describes profiling, paper/code research, hypotheses, experiments, and correctness/speed measurement.</div></div></li><li><span class="flow-num">3</span><div class="flow-body"><div class="flow-title">Author attributes cost-balanced sparse-indexer query-row sharding to continuous iteration.</div></div></li><li><span class="flow-num">4</span><div class="flow-body"><div class="flow-title">Upstream PR #54951 merged on October 11, 2026; the author retains validation, review follow-up, and maintenance ownership.</div></div></li></ul>
+
+    <div class="section-head"><span>04</span><h2>What the user sees</h2></div>
+    <div class="text-stack"><p>Continuing exploration and validation produced an inspectable upstream optimization. The LoopX maintainer highlights developer attention as a motivation; no quantitative attention or cost savings are established.</p></div>
+
+    <div class="section-head"><span>05</span><h2>Repository sources</h2></div>
+    <div class="source-list"><a class="source-ref" href="independent-vllm-long-context-optimization.md"><span>Case note</span><code>docs/showcases/cases/independent-vllm-long-context-optimization.md</code></a><a class="source-ref" href="https://x.com/zigzagcai/status/2109952174822408443"><span>Author: LoopX as workflow engine (October 13, 2026)</span><code>https://x.com/zigzagcai/status/2109952174822408443</code></a><a class="source-ref" href="https://x.com/zigzagcai/status/2109952350299316499"><span>Author: profiling, research, experiments, correctness</span><code>https://x.com/zigzagcai/status/2109952350299316499</code></a><a class="source-ref" href="https://x.com/zigzagcai/status/2109952500262645847"><span>Author: continuous iteration</span><code>https://x.com/zigzagcai/status/2109952500262645847</code></a><a class="source-ref" href="https://github.com/vllm-project/vllm/pull/54951"><span>vLLM PR #54951: merge and reported measurements</span><code>https://github.com/vllm-project/vllm/pull/54951</code></a><a class="source-ref" href="https://x.com/huangruiteng/status/2109984101092737107"><span>LoopX maintainer: exploration, human feedback, verifiable outcomes</span><code>https://x.com/huangruiteng/status/2109984101092737107</code></a><a class="source-ref" href="https://x.com/huangruiteng/status/2109988844162703786"><span>LoopX maintainer: validation and developer attention</span><code>https://x.com/huangruiteng/status/2109988844162703786</code></a></div>
+    <div class="boundary-box"><p><strong>Evidence boundary.</strong> The upstream merge is public repository evidence. LoopX use and the workflow are author reports; measurements are upstream-reported, not independently rerun or an isolated LoopX uplift. +32.59% is total input + output throughput at 1,000,000 input tokens: GLM-5.3-Flash, 4×H200, TP4, C1, 256 output tokens, 65,536-token batch budget, legacy runner + explicit FA3, four fresh-process ABBA/BAAB pairs, warmups excluded. It is not saturated serving throughput. Measured base 5893426b88f7 / optimized 16934c6e76e5 differ from final PR head a9fd692db809; merge commit 3e8e1364ff41. Runtime, costs, configuration, and intervention counts remain unknown. Targeted correctness is not broad quality or bitwise equivalence; short-input and cross-platform non-regression are not established.</p></div>
+    <div class="chips"><a class="case-link" href="independent-vllm-long-context-optimization.md">Case note</a></div>
+
+    <footer>Generated from docs/showcases/showcase-catalog.json. Private links, raw chats, local state, and internal media are excluded.</footer>
+  </article>
+</div>
+</body>
+</html>

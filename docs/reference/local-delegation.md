@@ -766,6 +766,31 @@ of the new tool description, not injected into those older threads' shared promp
 `page_readback_complete` 只表示本页是否均成功读取；二者都不代表整个团队已完成。
 此入口不创建 Agent、不扩大授权，也不唤醒闲置的 Codex 对话。Goal Chat LoopX 模式的协调员由 Chat 服务在结果被接受后唤醒一次，且只回到「启动该操作的回合所属会话」——该绑定由受信任的 Chat 宿主写在操作记录旁，模型不提供路由；见 [Goal Chat 续跑](goal-chat-continuation.md)。
 
+### Prepare a code-edit worktree
+
+Use the existing `task-lease acquire --write-worktree "$PWD"` from the root of
+an independent Git worktree, with the Todo's full declared scopes and current
+lease version. Overlapping files in another verified checkout are integration
+advisories; the same physical checkout and shared-state leases retain their
+exclusion rules. This does not change task ownership, permissions or acceptance.
+
+Normal npm executable links are supported when they point directly to a regular
+file inside that physical checkout **and inside the declared scopes**. Targets
+must use the checkout's resolved path; directory aliases, chained or unresolved
+links, external targets and Git administration remain unsupported. Ignored
+dependencies are inspected too. A rejected link returns a path-free explanation;
+restore it and retry the original acquisition identity. A saved receipt cannot
+authorize a workspace that has since become redirected. No dependency deletion,
+scope reduction or configuration switch is needed for normal `.bin` links.
+
+中文：在独立 Git worktree 根目录按原 Todo 的完整范围与当前 lease 版本申请
+`--write-worktree "$PWD"`。不同工作树的文件重叠只提示集成风险，同一物理工作树
+和共享状态的排斥规则保持。正常 npm `.bin` 链接可直接指向同一物理工作树、
+已声明范围内的常规文件；目标使用工作树解析后的路径。目录别名、链式或无法解析
+的链接、外部目标及 Git 管理目录仍不支持，ignored 依赖也会检查。拒绝原因不泄露
+本机路径；恢复链接后复用原申请身份重试，历史回执不能授权已经跳转的工作树。
+无需删除正常依赖、缩小声明或新增开关，不改变任务归属、权限或验收。
+
 ### Check a binding before new work
 
 `delegate inspect --binding-id independent-review` uses the same task,

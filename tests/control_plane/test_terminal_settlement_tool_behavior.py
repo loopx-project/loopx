@@ -40,6 +40,7 @@ def _writeback_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
         command.replace("<validated_progress>", "terminal_settlement_validated")
         .replace("<scale>", "single_surface")
         .replace("<outcome>", "outcome_progress")
+        .replace("<boundary>", "semantic_closeout")
         .replace('"${LOOPX_TURN:?}"', "turn-test-001")
     )
     return ScriptedExecToolAction(command=command)

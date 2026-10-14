@@ -229,7 +229,9 @@ def test_source_spend_rejects_stale_goal_before_any_write_and_stamps_successor(
     runs_dir = runtime_root / "goals" / GOAL_ID / "runs"
     assert not (runs_dir / "index.jsonl").exists()
     assert not (runs_dir / ".transactions").exists()
-    assert not list(runs_dir.glob("*.json"))
+    # Windows lock-holder metadata is not a committed quota run.
+    assert not [path for path in runs_dir.glob("*.json")
+                if not path.name.endswith(".lock.holder.json")]
     assert not list(runs_dir.glob("*.md"))
     assert not list(tmp_path.rglob("*.ts-effect.lock"))
 

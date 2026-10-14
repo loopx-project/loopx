@@ -51,3 +51,22 @@ export const goalAcceptanceObservationSchema = z.object({
   goal_acceptance_contract: goalAcceptanceContractSchema.optional(),
 });
 export type GoalAcceptanceObservation = z.infer<typeof goalAcceptanceObservationSchema>;
+
+/** Present the current owner observation without promoting retained checks.
+ * Equal contract revisions alone cannot establish unchanged work. */
+export function projectGoalAcceptanceCriteria(contract: Extract<NonNullable<GoalAcceptanceObservation["goal_acceptance_contract"]>, {enabled: true}>) {
+  const receipt = contract.verification;
+  const sameContract = receipt?.contract_revision === contract.revision && receipt.contract_digest === contract.digest;
+  const results = new Map(receipt?.results.map(result => [result.criterion_id, result.passed]));
+  return contract.criteria.map(criterion => {
+    let state: typeof contract.status = "unverified";
+    if (contract.status === "held") state = "held";
+    else if (contract.status !== "unverified" && receipt && results.has(criterion.id)) {
+      if (contract.status === "stale" || !sameContract) state = "stale";
+      else if (results.get(criterion.id) === false) state = "failed";
+      else if (receipt.todo_id !== null || contract.status === "partial") state = "partial";
+      else state = "accepted";
+    }
+    return {...criterion, state};
+  });
+}

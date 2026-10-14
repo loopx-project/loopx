@@ -10,8 +10,8 @@ and size/count budgets.
 | --- | --- | --- | --- | --- | --- | --- |
 | `heartbeat_prompt_json` | heartbeat automation | wake and route one bounded turn | `quota should-run`, `status`, or `review-packet --handoff-only` | `json_chars <= 5400` plus `interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 30` |
 | `review_packet_handoff_only_json` | project-agent handoff | forward the smallest sufficient task packet | full `review-packet` or run-history artifact | `json_chars <= 3000` plus `handoff_interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 18` |
-| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 15500` | `nested_keys <= 376` | `top_level_keys <= 54` |
-| `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 23000` | `nested_keys <= 350` | `top_level_keys <= 27` |
+| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 16500` | `nested_keys <= 376` | `top_level_keys <= 54` |
+| `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 24000` | `nested_keys <= 350` | `top_level_keys <= 27` |
 
 These four budgets measure compact machine payloads. For
 `heartbeat_prompt_json`, the measured payload is the actual
@@ -159,6 +159,77 @@ also record UTF-8 bytes, line count, JSON parseability, pretty-print overhead,
 semantic anchors, collection-growth slope, and bootstrap duplication. Every
 declared agent-facing surface must name an owner, consumer action, and cold-path
 fallback.
+
+The complete vision-rule qualification preserves the original fixtures and
+failures. The same 36-Todo / 12-run default quota stdout measures 45,313
+characters with the old lossy projection and 48,418 with the complete audit;
+explicit vision detail remains 57,346. Its separate real-vision ceiling changes
+from 46,000 to 50,000, leaving 1,582 characters. Differing channel judges remain
+inline: a subset is not an identical duplicate. The original 40,000-character
+compactor fixture remains unchanged. Crowded Turn JSON already measured 21,238
+characters / 477 lines on both formatter versions, above 18,000 / 460; its
+qualified ceilings are 22,500 / 500, leaving 1,262 characters / 23 lines.
+
+Raw quota is a different boundary. The unchanged packet measures 15,201 compact
+JSON characters with the ordinary temporary root and 15,865 with the original
+longer root. Preserve full command routes; its ceiling changes from 15,500 to
+16,500, leaving 635 characters on that failing fixture. Both roots retain 368
+bounded nested keys and 52 top-level keys, below the unchanged 376 / 54 guards.
+That same longer-root run then exposes a previously masked status failure:
+23,274 characters against 23,000 (ordinary root: 22,560). Preserve complete
+source revisions and paths; 24,000 leaves 726 characters, with 336 nested /
+26 top-level keys still below the unchanged 350 / 27 guards.
+Characters, UTF-8 bytes and line counts are measured separately. These local
+measurements do not qualify native Windows or arbitrary path lengths. Other
+surface/mode ceilings, collection-growth guards, production overflow diagnostics,
+execution quota and permissions remain unchanged; original failures remain
+failed historical evidence. See the [budget decision guide](../../development/testing-and-quality.md#budget-failure-decisions).
+
+完整 vision 规则资格化保留原夹具与失败：同一 36 Todo／12 run 默认 quota 输出从
+有损的 45,313 字符变为完整的 48,418，详情仍为 57,346；独立真实 vision 展示上限
+46,000→50,000，余量 1,582。不同 channel 的 judge 子集仍内联，不能当相同副本
+引用；原 40,000 字符 compactor 夹具不变。Turn 在两个版本均为 21,238 字符／477
+行，原 18,000／460 失败保留，新限 22,500／500，余量 1,262 字符／23 行。
+raw quota 在普通／原较长临时根目录为 15,201／15,865 字符，完整命令路由保留；
+上限 15,500→16,500，失败夹具余量 635。两者结构均为 368 nested／52 top-level
+keys，376／54 不变。字符、UTF-8 字节与行分别测量；不宣称原生 Windows 或任意
+路径长度已验。其它模式、增长、生产超限诊断、执行配额与权限不变。
+同一长根目录随后暴露此前被 quota 失败遮住的 status 原失败：23,274>23,000，
+普通根目录为 22,560。完整 source revision／路径保留，新限 24,000、余量 726；
+336 nested／26 top-level keys 仍低于不变的 350／27 限制。
+
+The shared CLI printer now emits compact UTF-8 JSON with one terminal newline,
+including default quota, detail selectors, and typed error results. This is a
+default presentation change across commands using `print_payload`, not a quota
+policy or schema change. It removes indentation and separator whitespace only:
+all fields, unknown future fields, string whitespace, escaped newlines, ordering,
+and in-response references remain. Markdown and paths that print directly
+(such as message-only bootstrap output) retain their existing presentation.
+For human inspection use `--format markdown` or pipe JSON through `jq .`.
+
+The same 36-Todo / 12-run vision workload compares the pinned two-space printer
+with the compact printer on each identical decided payload:
+
+| Quota JSON mode | Previous chars / UTF-8 bytes / lines | Compact chars / UTF-8 bytes / lines |
+| --- | --- | --- |
+| Default | 48,418 / 48,418 / 1,090 | 39,726 / 39,726 / 1 |
+| Vision detail | 57,346 / 57,346 / 1,226 | 47,201 / 47,201 / 1 |
+| All detail | 70,850 / 70,850 / 1,607 | 57,186 / 57,186 / 1 |
+
+The default saves 8,692 presentation characters (18.0%) without removing a
+rule. Across 336 measurements (three populations, vision off/on, both formats,
+default and explicit modes), all 162 shared-printer JSON pairs decode to the
+complete original payload; all Markdown and direct-output measurements match.
+Raw compact-payload, structural, growth and emitted ceilings remain unchanged,
+including the original 40,000-character fixture. These local measurements do
+not establish token, model, native Windows or installed-release improvements.
+
+共用 CLI 打印器默认输出紧凑 UTF-8 JSON，以一个换行结尾；默认 quota、详情和类型化
+错误都只删除展示缩进与分隔空白。字段、未知未来字段、字符串空白、转义换行、顺序
+及引用保持完整，Markdown 与直接输出路径不变；人工查看可用 `--format markdown`
+或 `jq .`。同一 36 Todo／12 run 的默认输出从 48,418 降至 39,726 字符，节省
+8,692（18.0%），完整规则保留。336 项配对测量中的 162 项共用 JSON 输出解码值
+完全相同；原始预算及增长限制不改，不将字符收益宣称为 token 或模型收益。
 
 The same matrix characterizes explicit mode switches instead of assuming that
 the default command represents them. Covered variants are

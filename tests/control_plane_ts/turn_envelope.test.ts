@@ -939,6 +939,11 @@ test("native Turn capture binds the original observation without inventing admis
   assert.equal(decision.heartbeat_receipt, undefined);
   assert.equal((bound.detail_ref as JsonObject).full_decision, "cat -- /tmp/native-turn/decision.json");
   assert.deepEqual(evaluateTurnEnvelope({...request, envelope: bound}), bound);
+  for (const turn_key of ["a".repeat(64), "sha256:" + "A".repeat(64),
+      "sha256:" + "a".repeat(63), "sha256:" + "a".repeat(65), "sha256:" + "g".repeat(64)]) {
+    assert.throws(() => evaluateTurnEnvelope({...request, turn_key}),
+      /Turn decision capture does not match the original observation/);
+  }
   for (const change of [{reason: "new source"}, {goal_id: "other"},
     {agent_identity: {agent_id: "other"}}, {ok: false}]) {
     assert.throws(() => evaluateTurnEnvelope({...request, payload: {...decision, ...change}}),

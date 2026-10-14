@@ -46,3 +46,25 @@ assert.equal(next.acceptance.goal_acceptance_contract.revision, 8);
 assert.notEqual(next.acceptance.goal_acceptance_contract.digest, contract.digest);
 assert.deepEqual(contract, before, "Rendering must not mutate the supplied contract");
 console.log("Goal acceptance contract API/export: off parity, association/verification distinction, source/revision and negative cases passed");
+
+const {projectGoalAcceptanceCriteria} = await import("../node_modules/.cache/delivery-review/data/goal-acceptance-observation.js");
+for (const status of ["stale", "held", "partial"]) {
+  const value = verifiedContract(status);
+  value.verification.contract_revision = value.revision;
+  value.verification.contract_digest = value.digest;
+  const before = structuredClone(value);
+  assert.deepEqual(projectGoalAcceptanceCriteria(value).map(row => row.state), [status],
+    "Equal revisions cannot upgrade the owner's currentness or scope");
+  assert.deepEqual(value, before, "Historical evidence stays intact");
+}
+const current = verifiedContract("accepted");
+current.criteria.push({id: "other", description: "Another commitment"});
+assert.deepEqual(projectGoalAcceptanceCriteria(current).map(row => row.state), ["accepted", "unverified"]);
+current.verification.results.push({criterion_id: "other", passed: false, exit_code: 1});
+current.status = "failed";
+assert.deepEqual(projectGoalAcceptanceCriteria(current).map(row => row.state), ["accepted", "failed"]);
+current.verification.contract_digest = "b".repeat(64);
+assert.deepEqual(projectGoalAcceptanceCriteria(current).map(row => row.state), ["stale", "stale"]);
+current.verification = null;
+assert.deepEqual(projectGoalAcceptanceCriteria(current).map(row => row.state), ["unverified", "unverified"]);
+console.log("Acceptance criteria: current work, scope, digest and retained missing criteria passed");

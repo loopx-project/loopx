@@ -599,6 +599,29 @@ def _attach_effective_configuration(entry: dict[str, Any]) -> None:
     capability_default = (
         entry.get("default") if isinstance(entry.get("default"), Mapping) else None
     )
+    if (
+        entry["capability_id"] == "todo_replan_cadence"
+        and goal_override is not None
+        and set(goal_override) == {"stride_strategy"}
+    ):
+        from .todo_replan_cadence.machine_defaults import (
+            cadence_configuration_value,
+            default_replan_cadence_configuration,
+        )
+
+        # The Goal chooses the strategy while the existing review cadence stays
+        # live. Keep `current` sparse so readback does not claim a pinned count.
+        inherited_cadence = (
+            cadence_configuration_value(machine_default)
+            if machine_default is not None
+            else default_replan_cadence_configuration()
+        )
+        goal_override = {
+            "count_unit": inherited_cadence["count_unit"],
+            "count": inherited_cadence["count"],
+            **goal_override,
+        }
+        entry["effective_value_policy"] = "goal_stride_over_live_review_cadence"
     entry["effective_configuration"] = resolve_capability_configuration(
         str(entry["capability_id"]),
         goal_override=goal_override,

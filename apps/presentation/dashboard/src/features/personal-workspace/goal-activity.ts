@@ -2,8 +2,20 @@
 // thread records. Open Todos, quota eligibility, registration, a persistent
 // session or a thread binding never imply it. Attached hosts only surface turns
 // they claimed from LoopX, and the claim timestamp is their only activity fact.
+// A turn whose session mode is missing or outside the closed set is neither:
+// the owner reports it open, but not who executes it, so it is `unrecognized`.
 export type WorkspaceGoalExecution =
-  | { kind: "running"; hostClaimed: boolean; hostSurfaces: string[]; lastActivityAt: string | null; claimedAt: string | null; quiet: boolean }
+  | {
+    kind: "running";
+    /** Which fact leads: managed or host-observed execution, a bare attached claim, or only turns of unrecognized mode. */
+    work: Exclude<GoalWorkKind, "none">;
+    hostSurfaces: string[];
+    lastActivityAt: string | null;
+    claimedAt: string | null;
+    quiet: boolean;
+    /** Open turns whose mode is unrecognized; reported beside a leading fact instead of joining it. */
+    unrecognizedModeTurns: number;
+  }
   | { kind: "idle"; hostSurfaces: string[] }
   | { kind: "unknown" };
 
@@ -13,7 +25,8 @@ export type GoalSessionFact = {
   active_turn_id: string | null;
   host_surface?: string | null;
   last_activity_at?: string | null;
-  session_mode?: string;
+  /** Raw owner value; only the two explicit wire modes establish execution or a claim. */
+  session_mode?: string | null;
   status?: string;
   updated_at?: string | null;
 };
@@ -40,10 +53,6 @@ function hostSurfacesOf(sessions: readonly GoalSessionFact[]) {
   return Array.from(new Set(sessions
     .filter((session) => session.session_mode === "attached_host" && session.host_surface)
     .map((session) => String(session.host_surface))));
-}
-
-function isAttachedTurn(session: GoalSessionFact) {
-  return session.session_mode === "attached_host";
 }
 
 /** Newest recorded time in one group; the group's own clock, never another mode's. */
@@ -80,22 +89,27 @@ export function goalExecution(
     return sessions === null ? { kind: "unknown" } : { kind: "idle", hostSurfaces: hostSurfacesOf(open) };
   }
   // Claims retain their own clock. Only managed activity and observed host
-  // events can refresh execution, including in mixed-source observations.
-  const managedTurns = active.filter((session) => !isAttachedTurn(session));
-  const claimedAt = newestRecordedTime(active.filter(isAttachedTurn));
+  // events can refresh execution, including in mixed-source observations. A
+  // turn of unrecognized mode contributes to neither clock.
+  const managedTurns = active.filter((session) => session.session_mode === "managed_runtime");
+  const attachedTurns = active.filter((session) => session.session_mode === "attached_host");
+  const unrecognizedModeTurns = active.length - managedTurns.length - attachedTurns.length;
+  const claimedAt = newestRecordedTime(attachedTurns);
   const lastActivityAt = [
     newestRecordedTime(managedTurns),
     ...hostTurns.map((thread) => thread.lastEventAt),
   ].filter(Boolean).sort().at(-1) ?? null;
   const lastActivityMs = lastActivityAt ? Date.parse(lastActivityAt) : Number.NaN;
-  const hostClaimed = hostTurns.length === 0 && managedTurns.length === 0;
+  const work = managedTurns.length > 0 || hostTurns.length > 0 ? "executing"
+    : attachedTurns.length > 0 ? "claimed" : "unrecognized";
   return {
     kind: "running",
-    hostClaimed,
+    work,
     hostSurfaces: Array.from(new Set([...hostSurfacesOf(active), ...hostTurns.map((thread) => thread.hostSurface)])),
     lastActivityAt,
     claimedAt,
-    quiet: !hostClaimed && !Number.isNaN(lastActivityMs) && now - lastActivityMs > quietTurnMinutes * 60_000,
+    quiet: work === "executing" && !Number.isNaN(lastActivityMs) && now - lastActivityMs > quietTurnMinutes * 60_000,
+    unrecognizedModeTurns,
   };
 }
 
@@ -145,26 +159,31 @@ type GoalActivityInput = {
 /**
  * The unfinished-work fact a Goal carries, in the vocabulary its chip and lane
  * already show. `executing` needs a managed turn's own activity; an attached
- * host claim alone is `claimed` and is never counted as execution.
+ * host claim alone is `claimed` and is never counted as execution; an open turn
+ * whose mode cannot be read is `unrecognized`, which is neither.
  */
-export type GoalWorkKind = "executing" | "claimed" | "none";
+export type GoalWorkKind = "executing" | "claimed" | "unrecognized" | "none";
 
 /** `none` covers an idle, unreadable or absent execution, so only a live turn is actionable work. */
 export function goalWorkKind(goal: Pick<GoalActivityInput, "execution">): GoalWorkKind {
   if (goal.execution?.kind !== "running") return "none";
-  return goal.execution.hostClaimed ? "claimed" : "executing";
+  return goal.execution.work;
 }
 
 export function presentGoalActivity(goal: GoalActivityInput): GoalActivity {
   const work = goal.activationState === "active" ? goalWorkKind(goal) : "none";
   const execution = work === "none" ? null : goal.execution as Extract<WorkspaceGoalExecution, { kind: "running" }>;
-  const running = work !== "none";
+  const running = work === "executing" || work === "claimed";
   const live = work === "executing" && execution !== null && !execution.quiet;
   if (goal.activationState === "stopped" || goal.state === "已停止") return { labelKey: "state.stopped", tone: "stopped", live: false, alsoKey: null };
-  if (goal.state === "等你" || goal.needsYou) return { labelKey: "state.needsYou", tone: "attention", live, alsoKey: running ? "activity.alsoRunning" : null };
-  if (goal.state === "需修复") return { labelKey: "state.needsRepair", tone: "danger", live, alsoKey: running ? "activity.alsoRunning" : null };
-  if (work === "claimed") return { labelKey: "activity.hostClaimed", tone: "running", live: false, alsoKey: null };
-  if (work === "executing") return { labelKey: "activity.running", tone: live ? "running" : "attention", live, alsoKey: null };
+  if (goal.state === "等你" || goal.needsYou) return { labelKey: "state.needsYou", tone: "attention", live, alsoKey: running ? "activity.alsoRunning" : work === "unrecognized" ? "activity.alsoModeUnrecognized" : null };
+  if (goal.state === "需修复") return { labelKey: "state.needsRepair", tone: "danger", live, alsoKey: running ? "activity.alsoRunning" : work === "unrecognized" ? "activity.alsoModeUnrecognized" : null };
+  // A turn of unrecognized mode stays visible beside the leading fact rather
+  // than being counted as managed execution or as a host claim.
+  const modeAlsoKey = execution && execution.work !== "unrecognized" && execution.unrecognizedModeTurns > 0 ? "activity.alsoModeUnrecognized" : null;
+  if (work === "claimed") return { labelKey: "activity.hostClaimed", tone: "running", live: false, alsoKey: modeAlsoKey };
+  if (work === "unrecognized") return { labelKey: "activity.modeUnrecognized", tone: "attention", live: false, alsoKey: null };
+  if (work === "executing") return { labelKey: "activity.running", tone: live ? "running" : "attention", live, alsoKey: modeAlsoKey };
   if (goal.state === "等待条件") return { labelKey: "state.waiting", tone: "waiting", live: false, alsoKey: null };
   if (goal.state === "已安排") {
     const hostThreads = goal.hostThreadActivity?.threads ?? [];

@@ -352,8 +352,11 @@ def test_due_stride_review_survives_successor_transition_until_decision(
         "--task-class", "advancement_task", "--action-kind", "validate",
         "--target-key", "independent-source", "--replan-obligation-id", obligation["obligation_id"])
     assert successor["todo_id"]
+    # Choose the alternative to the owned default explicitly. The autonomous
+    # replan route must not depend on the original delivery being unclaimed.
+    assert guard["agent_lane_next_action"]["todo_id"] == TODO_ID
     reread = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
-                  "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+                  "--agent-id", AGENT_ID, "--todo-id", successor["todo_id"],
                   "--turn-instance-id", "stride-due-review",
                   "--scan-path", str(project))
     assert reread["heartbeat_receipt"]["settlement_identity"]["replan_obligation_id"] == obligation["obligation_id"]

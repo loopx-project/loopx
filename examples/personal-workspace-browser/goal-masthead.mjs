@@ -21,7 +21,7 @@ const acceptance = {
   next_action: null, next_action_source: null,
   goal_acceptance_contract: {
     enabled: true, revision: 2, digest: `sha256:${"a".repeat(64)}`, objective: "Reconcile operating cash flow for three fiscal years from primary filings.",
-    scope: { kind: "all_advancement" }, non_goals: [], held_todo_ids: [], status: "partial",
+    scope: { kind: "all_advancement" }, non_goals: [], held_todo_ids: [], status: "failed",
     criteria: [
       { id: "sources", description: "Every figure cites a primary filing" },
       { id: "reconcile", description: "Totals reconcile to the reported statements" },
@@ -99,8 +99,8 @@ export const goalMastheadScenario = {
 
       await page.locator(".personal-goal-tabs button", { hasText: "概览" }).click();
       const direction = page.locator(".goal-overview-direction");
-      assert.match(await direction.innerText(), /Reconcile operating cash flow[\s\S]*1\/3 项条件已核验/);
-      assert.equal(await direction.locator(".goal-overview-criteria .is-failing").count(), 1);
+      assert.match(await direction.innerText(), /Reconcile operating cash flow[\s\S]*1\/3 项条件当前通过/);
+      assert.equal(await direction.locator(".goal-overview-criteria .is-failed").count(), 1);
       assert.equal(await page.locator(".goal-overview-usage").count(), 0, "Usage moved to the vitals strip");
       await page.screenshot({ path: resolve(outputDir, "goal-masthead-overview.png"), animations: "disabled" });
 

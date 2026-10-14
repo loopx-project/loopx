@@ -13,6 +13,7 @@ from loopx.capabilities.pr_review_queue import (
     build_review_template,
 )
 from loopx.capabilities.pr_review_queue.review_contract import build_review_execution_contract
+from loopx.capabilities.pr_review_queue.review_body import REQUIRED_FINAL_SECTIONS, check_review_body
 
 
 def _item(*, areas: dict[str, int]) -> dict[str, object]:
@@ -674,3 +675,46 @@ def test_motivation_publishes_existing_problem_context_before_implementation():
     assert set(publication["fields"] + publication["increment_fields"]) <= (
         set(context["fields"]) | set(context["fields_by_verdict"]["justified_increment"]))
     assert "not truth or comprehension" in publication["rule"]
+
+
+def test_review_packet_and_template_share_optional_visual_explanation(capsys):
+    fixture = Path(__file__).resolve().parents[2] / "examples/fixtures/pr-review.public.json"
+    assert cli_main(["--format", "json", "pr-review", "--fixture", str(fixture)]) == 0
+    packet = json.loads(capsys.readouterr().out)
+    contract = packet["agent_response_contract"]["review_execution_contract"]
+    problem = next(row for row in contract["evidence_requirements"]
+                   if row["evidence_id"] == "problem_context")
+    visual = problem["publication"]["visual_explanation"]
+    actionable = [row for row in packet["pull_requests"] if row["review_action_kind"]]
+    assert actionable
+    for row in actionable:
+        template = row["review_template"]
+        assert template["visual_explanation"] == visual
+        assert [section["label"] for section in template["sections"]] == REQUIRED_FINAL_SECTIONS
+        assert "visual_explanation" not in row["review_plan"]["required_evidence_ids"]
+        assert "visual_explanation" not in row["review_plan"]["result_template"]
+    rule = visual["rule"]
+    assert visual["section"] == "改动思路"
+    for boundary in ("simple edits may need only prose", "reviewed exact head",
+                     "illustrative", "not execution or test evidence",
+                     "rendered diagram", "prose/table fallback",
+                     "never a new required result field", "publication/merge authority"):
+        assert boundary in rule
+
+
+def test_mermaid_explanation_preserves_prose_floors_and_does_not_certify_evidence():
+    head = "a" * 40
+    body = (Path(__file__).resolve().parents[2] / "examples/fixtures/pr-review.body.md").read_text()
+    body = body.replace("HEAD_OID", head).replace("VERDICT", "APPROVE")
+    diagram = "```mermaid\nflowchart TD\nA[" + "explanation" * 100 + "] --> B[Result]\n```\n"
+    baseline = check_review_body(body, head_oid=head, behavior_bearing=True)
+    illustrated = check_review_body(body.replace("## 改动思路", "## 改动思路\n" + diagram),
+                                    head_oid=head, behavior_bearing=True)
+    assert baseline["valid"] and illustrated["valid"]
+    assert baseline["section_lengths"] == illustrated["section_lengths"]
+    assert not illustrated["evidence_truth_verified"]
+    start, end = body.index("## 改动思路"), body.index("## 具体改动")
+    diagram_only = body[:start] + "## 改动思路\n" + diagram + body[end:]
+    rejected = check_review_body(diagram_only, head_oid=head, behavior_bearing=True)
+    assert not rejected["valid"]
+    assert any(reason.startswith("section_too_short:改动思路") for reason in rejected["invalid_reasons"])

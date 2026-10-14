@@ -825,10 +825,58 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
                 "qualified_with_warning."
             ),
         },
+        "task_environment_access": {
+            "policy_schema": "benchmark_task_environment_access_v0",
+            "receipt_schema": "benchmark_task_environment_access_receipt_v0",
+            "authority": "benchmark_task",
+            "purpose": "task_submission",
+            "hint": (
+                "Declare an exact task-owned namespace and variable-name set only "
+                "when the benchmark task contract exposes a solver submission "
+                "capability. Access must use the runner-owned typed read operation, "
+                "and the runner must separately attest that provider credentials "
+                "are excluded from the solver shell."
+            ),
+            "fail_closed_on": [
+                "broad_environment_enumeration",
+                "undeclared_variable_name",
+                "dynamic_namespace_filter",
+                "provider_credential_value",
+                "missing_provider_credential_isolation_attestation",
+            ],
+            "public_receipt_boundary": (
+                "authorization id and digest, purpose, counts and a variable-name "
+                "digest only; raw names and values stay private"
+            ),
+        },
+        "declared_feedback_protocol": {
+            "default": "official_feedback_blinded",
+            "opt_in": {
+                "feedback": "declared",
+                "timing": "during_solving",
+            },
+            "required_runner_attestations": [
+                "evaluation_protocol_enforced",
+                "evaluation_log_complete",
+                "verifier_started_after_submission",
+            ],
+            "evidence_binding": [
+                "exact_policy_sha256",
+                "exact_trajectory_sha256",
+                "ordered_submissions",
+                "declared_channel_deliveries",
+                "acknowledged_feedback_transport",
+            ],
+            "boundary": (
+                "Only a preregistered policy plus complete private runner evidence "
+                "replaces the blind-protocol attestations; prose or partial score "
+                "logs remain unqualified."
+            ),
+        },
         "role_boundary": {
             "solver": (
                 "must not access hidden tests, grader or verifier sources, expected "
-                "answers, or official feedback during the solving phase"
+                "answers, or undeclared official feedback during the solving phase"
             ),
             "active_campaign_monitor": (
                 "may inspect the solver-owned trajectory and exact-job runtime while "
@@ -967,6 +1015,26 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
         {
             "schema_version": "benchmark_integrity_qualification_v0",
             "module": "loopx.capabilities.benchmark_toolkit.integrity",
+            "doc": "loopx/capabilities/benchmark_toolkit/README.md",
+        },
+        {
+            "schema_version": "benchmark_task_environment_access_v0",
+            "module": "loopx.capabilities.benchmark_toolkit.integrity",
+            "doc": "loopx/capabilities/benchmark_toolkit/README.md",
+        },
+        {
+            "schema_version": "benchmark_task_environment_access_receipt_v0",
+            "module": "loopx.capabilities.benchmark_toolkit.integrity",
+            "doc": "loopx/capabilities/benchmark_toolkit/README.md",
+        },
+        {
+            "schema_version": "benchmark_task_environment_read_v0",
+            "module": "loopx.capabilities.benchmark_toolkit.environment_access",
+            "doc": "loopx/capabilities/benchmark_toolkit/README.md",
+        },
+        {
+            "schema_version": "benchmark_task_environment_read_result_v0",
+            "module": "loopx.capabilities.benchmark_toolkit.environment_access",
             "doc": "loopx/capabilities/benchmark_toolkit/README.md",
         },
         {

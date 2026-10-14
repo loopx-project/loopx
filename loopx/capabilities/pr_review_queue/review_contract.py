@@ -9,7 +9,7 @@ from .approval_closeout import approval_closeout_contract
 from .architecture_assessment import ARCHITECTURE_ASSESSMENT
 
 # Increment when review requirements change without changing the packet shape.
-REVIEW_POLICY_REVISION = 20
+REVIEW_POLICY_REVISION = 21
 
 # Agent-consumed prose is observable behavior even when JSON shape is stable.
 # Reuse the existing semantic verdicts; this is evidence within the same review.
@@ -45,11 +45,35 @@ DECISION_TEXT_ASSESSMENT = {
 
 # Reuse the existing evidence fields for publication, rather than inventing a
 # second problem assessment or treating a jargon denylist as comprehension.
+VISUAL_EXPLANATION_PUBLICATION: dict[str, Any] = {
+    "section": "改动思路",
+    "rule": (
+        "Consider a small visual explanation when it helps a reader understand a material "
+        "before/after change, branching control flow, state transition, dependency or authority boundary. "
+        "Choose by explanatory value, not PR size or file-count heuristics; simple edits may need only prose. "
+        "Prefer one portable Mermaid diagram in the existing review body, with a short caption and "
+        "a plain-language explanation of the changed behavior. Use a table when it communicates "
+        "the comparison more clearly. Name the actual trigger, relevant decision and result; "
+        "label old/new paths and important failure or stop branches without inventing actors or states. "
+        "Bind the caption to the reviewed exact head and link the inspected source symbols; "
+        "recheck the diagram after a head change. Mark a source-derived diagram as illustrative, "
+        "not execution or test evidence. Unknown or untested paths stay explicit. "
+        "Keep labels public-safe and readable; inspect the rendered diagram before publication, "
+        "or use the prose/table fallback and disclose that rendering was not verified. "
+        "A diagram is optional presentation guidance, never a new required result field, evidence "
+        "receipt, approval condition or substitute for findings, validation, the complete Chinese "
+        "five-section review and English verdict. Code blocks still do not satisfy explanatory "
+        "section floors. Reuse the existing Markdown surface; do not create an image service, "
+        "upload private artifacts or infer publication/merge authority."
+    ),
+}
+
 PROBLEM_EXPLANATION_PUBLICATION: dict[str, Any] = {
     "section": "动机",
     "fields": ["affected_caller_or_operator", "before_after_scenario",
                "observable_outcome", "non_goals"],
     "increment_fields": ["remaining_gap"],
+    "visual_explanation": VISUAL_EXPLANATION_PUBLICATION,
     "rule": (
         "Write these existing problem_context fields as concise public-safe plain-language "
         "sentences and publish their wording in 动机 before architecture and specification detail. "
@@ -374,6 +398,7 @@ def build_review_template(item: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": "pr_review_five_block_template_v0",
         "purpose": "Empty scaffold only; fill it from the verified review evidence, not PR metadata.",
+        "visual_explanation": deepcopy(VISUAL_EXPLANATION_PUBLICATION),
         "sections": [
             _section(
                 "动机",
@@ -407,6 +432,7 @@ def build_review_template(item: Mapping[str, Any]) -> dict[str, Any]:
             "Open the body with one `Reviewer:` line (reviewer_declaration.body_marker) "
             "carrying result.reviewer's actor_kind, model and provider. "
             "The capability-owned review_execution_contract is the evidence and completeness authority. Save the exact final Markdown in result.review_body before check-result; publish that checked body and read it back. Section floors reject empty shells, not certify reasoning. Explain concrete paths and counterexamples; do not pad or duplicate evidence to meet a floor."
+            " Follow visual_explanation when a diagram or table improves understanding; retain the complete prose review."
         ),
     }
 

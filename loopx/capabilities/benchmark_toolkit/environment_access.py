@@ -22,6 +22,13 @@ _ORCHESTRATOR_TOOL_NAMES = frozenset({"exec", "functions.exec"})
 _SHELL_EXECUTABLES = frozenset({"bash", "dash", "fish", "ksh", "sh", "zsh"})
 _PYTHON_EXECUTABLE_PATTERN = re.compile(r"(?i)^(?:python(?:[0-9.]+)?|pypy[0-9.]*)$")
 _JAVASCRIPT_EXECUTABLES = frozenset({"node", "nodejs"})
+BENCHMARK_TASK_ENVIRONMENT_READ_TOOL = "benchmark_task_environment_read"
+BENCHMARK_TASK_ENVIRONMENT_READ_SCHEMA_VERSION = (
+    "benchmark_task_environment_read_v0"
+)
+BENCHMARK_TASK_ENVIRONMENT_READ_RESULT_SCHEMA_VERSION = (
+    "benchmark_task_environment_read_result_v0"
+)
 
 _JavascriptToken = tuple[str, str]
 
@@ -455,12 +462,109 @@ def _javascript_environment_probe(code: str) -> bool:
     return False
 
 
-def _shell_segment_has_credential_probe(tokens: tuple[str, ...]) -> bool:
+def _shell_wrapper_command(
+    executable: str,
+    arguments: tuple[str, ...],
+) -> tuple[str, ...]:
+    remaining = list(arguments)
+    if executable == "command":
+        while remaining and remaining[0].startswith("-"):
+            option = remaining.pop(0)
+            if option in {"-v", "-V"}:
+                return ()
+            if option == "--":
+                break
+        return tuple(remaining)
+    if executable == "exec":
+        while remaining and remaining[0].startswith("-"):
+            option = remaining.pop(0)
+            if option == "--":
+                break
+            if option in {"-a", "--argv0"}:
+                if not remaining:
+                    return ()
+                remaining.pop(0)
+        return tuple(remaining)
+    return ()
+
+
+def _xargs_command(arguments: tuple[str, ...]) -> tuple[str, ...]:
+    """Return the utility position from a bounded GNU/POSIX xargs argv."""
+
+    long_options_with_value = {
+        "--arg-file",
+        "--delimiter",
+        "--max-args",
+        "--max-procs",
+        "--max-chars",
+        "--process-slot-var",
+    }
+    long_options_with_optional_attached_value = {
+        "--eof",
+        "--replace",
+        "--max-lines",
+    }
+    short_options_with_value = frozenset("adEILnPs")
+    short_options_with_optional_attached_value = frozenset("eil")
+    short_options_without_value = frozenset("0ortpx")
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--":
+            return arguments[index + 1 :]
+        if not argument.startswith("-") or argument == "-":
+            return arguments[index:]
+        if argument.startswith("--"):
+            option, separator, _ = argument.partition("=")
+            if option in {"--help", "--version"}:
+                return ()
+            if option in long_options_with_value and not separator:
+                index += 2
+            elif option in long_options_with_optional_attached_value:
+                index += 1
+            else:
+                index += 1
+            continue
+
+        cluster = argument[1:]
+        consume_next = False
+        for offset, option in enumerate(cluster):
+            if option in short_options_without_value:
+                continue
+            if option in short_options_with_value:
+                consume_next = offset == len(cluster) - 1
+                break
+            if option in short_options_with_optional_attached_value:
+                break
+            # Unknown xargs options fail closed by treating the next token as a
+            # possible utility rather than skipping an unproven value.
+            break
+        index += 2 if consume_next else 1
+    return ()
+
+
+def _shell_segment_has_credential_probe(
+    tokens: tuple[str, ...],
+    *,
+    depth: int = 0,
+) -> bool:
+    if depth >= 8:
+        return True
     executable, arguments = _shell_executable(tokens)
     if not executable:
         return False
     if executable in {"env", "printenv"}:
         return True
+    if executable in {"command", "exec"}:
+        wrapped = _shell_wrapper_command(executable, arguments)
+        return bool(wrapped) and _shell_segment_has_credential_probe(
+            wrapped, depth=depth + 1
+        )
+    if executable == "xargs":
+        wrapped = _xargs_command(arguments)
+        return bool(wrapped) and _shell_segment_has_credential_probe(
+            wrapped, depth=depth + 1
+        )
     if any(_PROC_ENVIRON_PATTERN.search(argument) for argument in arguments):
         return True
     if executable in _SHELL_EXECUTABLES:
@@ -490,6 +594,11 @@ def _shell_command_has_credential_probe(command: str) -> bool:
 def credential_probe_present(function_name: str, raw_arguments: object) -> bool:
     """Classify executed command fields without scanning source-search prose."""
 
+    if (
+        function_name.strip().casefold()
+        == BENCHMARK_TASK_ENVIRONMENT_READ_TOOL.casefold()
+    ):
+        return True
     commands = _command_strings(function_name, raw_arguments)
     if any(_shell_command_has_credential_probe(command) for command in commands):
         return True
@@ -500,3 +609,70 @@ def credential_probe_present(function_name: str, raw_arguments: object) -> bool:
     ):
         return _javascript_environment_probe(raw_arguments["input"])
     return False
+
+
+def authorized_task_environment_probe_count(
+    function_name: str,
+    raw_arguments: object,
+    raw_observation: object,
+    *,
+    authorization_id: str,
+    authorization_sha256: str,
+    variable_names: frozenset[str],
+) -> int:
+    """Count one typed runner read covered by the task-owned env contract.
+
+    Shell commands are intentionally never authorized here. Even an absolute
+    executable name can be shadowed by an exported shell function, so only a
+    runner-owned typed operation can prove which task values were requested and
+    returned. Raw names and values remain private in the trajectory.
+    """
+
+    if (
+        function_name != BENCHMARK_TASK_ENVIRONMENT_READ_TOOL
+        or not isinstance(raw_arguments, Mapping)
+        or set(raw_arguments)
+        != {
+            "schema_version",
+            "authorization_id",
+            "authorization_sha256",
+            "variable_names",
+        }
+        or raw_arguments.get("schema_version")
+        != BENCHMARK_TASK_ENVIRONMENT_READ_SCHEMA_VERSION
+        or raw_arguments.get("authorization_id") != authorization_id
+        or raw_arguments.get("authorization_sha256") != authorization_sha256
+    ):
+        return 0
+    requested_names = raw_arguments.get("variable_names")
+    if (
+        not isinstance(requested_names, list)
+        or not requested_names
+        or not all(isinstance(name, str) for name in requested_names)
+        or len(requested_names) != len(set(requested_names))
+        or not set(requested_names).issubset(variable_names)
+    ):
+        return 0
+    if (
+        not isinstance(raw_observation, Mapping)
+        or set(raw_observation)
+        != {
+            "schema_version",
+            "authorization_id",
+            "authorization_sha256",
+            "values",
+        }
+        or raw_observation.get("schema_version")
+        != BENCHMARK_TASK_ENVIRONMENT_READ_RESULT_SCHEMA_VERSION
+        or raw_observation.get("authorization_id") != authorization_id
+        or raw_observation.get("authorization_sha256") != authorization_sha256
+    ):
+        return 0
+    values = raw_observation.get("values")
+    if (
+        not isinstance(values, Mapping)
+        or set(values) != set(requested_names)
+        or not all(isinstance(value, str) for value in values.values())
+    ):
+        return 0
+    return 1

@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
 from loopx.chat_runtime import ChatRuntimeController
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
-from loopx.chat_store import ChatSessionStore
+from loopx.chat_store import CHAT_TURN_SCHEMA_VERSION, ChatSessionStore
 
 
 class _HealthyAdapter:
@@ -39,11 +39,14 @@ class _HealthyAdapter:
 
 
 def _turn_count(store: ChatSessionStore, session_id: str) -> int:
-    return sum(
-        1
-        for path in (store.sessions_root / session_id / "turns").glob("*.json")
-        if not path.name.endswith(".events.json")
-    )
+    count = 0
+    for path in (store.sessions_root / session_id / "turns").glob("*.json"):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise TypeError("persisted turn-directory JSON must be an object")
+        if payload.get("schema_version") == CHAT_TURN_SCHEMA_VERSION:
+            count += 1
+    return count
 
 
 def main() -> int:
@@ -59,6 +62,7 @@ def main() -> int:
         json.dumps(
             {
                 "schema_version": "0.1",
+                "common_runtime_root": str(root),
                 "goals": [
                     {
                         "id": "goal-one",

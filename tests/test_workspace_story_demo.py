@@ -10,6 +10,7 @@ import pytest
 from demo.workspace.__main__ import prepare
 from loopx.control_plane.todos.handoff_mode import show_goal_handoff_mode
 from loopx.todos import list_goal_todos
+from loopx.control_plane.work_items.task_lease import inspect_task_lease
 
 
 def test_refuses_existing_work_and_symlink(tmp_path):
@@ -69,11 +70,18 @@ def test_real_state_replay_is_local_and_repeatable(tmp_path, monkeypatch):
         )["todos"]
 
     before = {g["id"]: todos(g["id"]) for g in manifest["goals"]}
-    for rows in before.values():
+    for goal_id, rows in before.items():
         agents = [t for t in rows if t["role"] == "agent"]
         assert len(agents) == 20
         assert len({t["claimed_by"] for t in agents}) == 4
         assert sum(t["status"] == "done" for t in agents) == 7
+        completed = next(t for t in agents if t["status"] == "done")
+        lease = inspect_task_lease(
+            registry_path=root / "registry.json", runtime_root=root / "runtime",
+            goal_id=goal_id, todo_id=completed["todo_id"],
+        )
+        assert lease["handoff_mode"] == "soft_claim"
+        assert lease["lease"] is None, "authored replay must not create execution leases"
         assert sum(t["status"] == "deferred" for t in agents) == 2
         assert sum(t["status"] == "blocked" for t in agents) == 4
         assert len([t for t in rows if t["role"] == "user" and not t["done"]]) == 2

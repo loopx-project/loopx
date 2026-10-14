@@ -820,6 +820,7 @@ export function PersonalWorkspacePage({
   readOnly = false,
   typedActionsRevision = 0,
   selectedAgentId: controlledAgentId,
+  selectedAgentModelId,
   selectedGoalId: controlledGoalId,
   statusSourceControl,
   serviceNotice,
@@ -847,6 +848,7 @@ export function PersonalWorkspacePage({
   // re-reads the store instead of waiting for the next mount.
   typedActionsRevision?: number;
   selectedAgentId?: string;
+  selectedAgentModelId?: string;
   selectedGoalId?: string | null;
   statusSourceControl?: StatusSourceControl;
   serviceNotice?: ReactNode;
@@ -2154,6 +2156,7 @@ export function PersonalWorkspacePage({
               else setSelectedGoalTab(tab);
             }}
             onSelectAgent={selectAgent}
+            onSelectAgentModel={(modelId) => callbacks.onSelectAgentModel?.(selectedAgentId, modelId)}
             onReturnManagerHome={() => {
               if (selectedWorkspaceRef) workspaceConversations?.onSelect(null);
               setSelectedGoalTab("overview");
@@ -2161,6 +2164,7 @@ export function PersonalWorkspacePage({
               window.requestAnimationFrame(() => channelScrollRef.current?.scrollTo({ behavior: "smooth", top: 0 }));
             }}
             selectedAgentId={selectedAgentId}
+            selectedAgentModelId={selectedAgentModelId}
             refreshState={refreshState}
             readOnlySourceLabel={readOnly ? statusSourceControl?.activeSource.label : undefined}
             selectedGoal={selectedGoal}

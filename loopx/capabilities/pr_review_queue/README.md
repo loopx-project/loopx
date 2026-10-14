@@ -93,6 +93,25 @@ code-symbol and negative-walkthrough applicability. Inventory-only rows expose
 no executable review artifacts. Host skills route and publish this packet; they
 must not maintain a second explanation checklist.
 
+Policy revision 21 adds optional visual explanation guidance to that same
+contract and each actionable PR's five-section template. Use a small Mermaid
+diagram or table when it clarifies a before/after behavior, branching flow,
+state transition, dependency or authority boundary; simple edits can stay in
+prose. Place it in **改动思路**, explain it briefly, and bind its caption and
+source links to the exact reviewed head. Recheck it when the head changes.
+Source-derived diagrams are illustrative, not test evidence. Inspect rendered
+labels and branches before publication; use a prose/table fallback with the
+rendering limitation when necessary. No image service, new setting, result
+field or diagram completion gate is introduced. The complete bilingual review,
+findings, source coverage, section floors and merge checks still apply.
+
+同一能力合同与每个可执行 PR 的五段模板现在提供按需图示指导：复杂的前后行为、
+分支流程、状态迁移、依赖和权限边界可用一张小 Mermaid 图或表格说明；简单改动
+保持简洁文字。图放在「改动思路」，附短解释、实际审查 head 和源码链接，改后重新
+核对。源码推导图标为示意，不能充当测试证据；发布前检查真实渲染，无法核验时改用
+文字或表格并说明缺口。该指导不新增设置、图生成服务、结果字段或配图门禁，完整
+双语评审、发现、来源读取和合并资格仍沿用原合同。
+
 Architecture judgment is part of `change_proportionality.architecture_assessment`,
 not a second review checklist. Policy revision 19 asks the reviewer to separate
 the PR's behavior-bearing mechanisms into invariants, optional policies,

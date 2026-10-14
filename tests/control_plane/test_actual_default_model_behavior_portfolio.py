@@ -561,6 +561,7 @@ def _terminal_writeback_action(
             command.replace("<validated_progress>", "terminal_settlement_validated")
             .replace("<scale>", "single_surface")
             .replace("<outcome>", "outcome_progress")
+            .replace("<boundary>", "semantic_closeout")
             .replace('"${LOOPX_TURN:?}"', "turn-portfolio-terminal")
         )
     )
@@ -717,7 +718,7 @@ def _real_tool_actors(root: Path) -> dict[str, Any]:
     }
 
 
-def test_live_packet_builder_uses_production_blocking_gate_plan(tmp_path: Path) -> None:
+def test_live_packet_builder_preserves_gate_and_vision_contracts(tmp_path: Path) -> None:
     sources, packets = build_actual_default_model_behavior_scenario_inputs(tmp_path)
 
     selected = packets["turn_selected_todo"]
@@ -762,14 +763,14 @@ def test_live_packet_builder_uses_production_blocking_gate_plan(tmp_path: Path) 
     assert replan["vision_continuation_audit"]["payload_compaction"] == {
         "schema_version": "quota_cli_vision_continuation_compaction_v0",
         "mode": "compact_hot_path",
-        "omitted_fields": [
-            "acceptance_gaps",
-            "acceptance_requirements",
-            "authoritative_evidence_kinds",
-            "not_satisfied_by",
-        ],
+        "omitted_fields": [],
         "full_detail_cold_path": "quota should-run --include-detail vision",
     }
+    assert model_behavior_semantic_contract_from_packet(
+        replan, arm="full_packet"
+    ) == model_behavior_semantic_contract_from_packet(
+        sources["turn_required_vision_replan"], arm="full_packet"
+    )
     assert (
         replan["goal_frontier_projection"]["vision_continuation_audit"][
             "projection_ref"

@@ -126,6 +126,8 @@ def replace_process(executable, argv):
     seen.append((executable, argv))
     raise SystemExit(73)
 os.execv = replace_process
+import subprocess
+subprocess.call = lambda argv: replace_process(argv[0], argv)
 """
     result = run_entry(entry, native_argv(), setup=setup, assertions="""
 assert len(seen) == 1

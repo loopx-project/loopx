@@ -1,4 +1,4 @@
-import {observeLeaseWorktree, type LeaseWorkspace} from "./task_lease_workspace.ts";
+import {LeaseWorktreeObservationError, observeLeaseWorktree, type LeaseWorkspace} from "./task_lease_workspace.ts";
 import {isCanonicalTodoId} from "../todos/identity.ts";
 import {executeCanonicalTaskLeaseAcquire} from "../coordination/task_lease_acquire.ts";
 import {withCanonicalTaskLeaseAuthority} from "./canonical_task_lease_lifecycle.ts";
@@ -1029,7 +1029,8 @@ export async function executeTaskLeaseAcquire(
         "--write-worktree requires canonical authority and nonempty code-edit scopes", "invalid_worktree_lease_request");
       try { request.write_workspace = await observeLeaseWorktree(request.write_worktree, path =>
         evaluateTaskLeaseWriteScopesOverlap({left: request.write_scopes, right: [path]}).overlap === true); }
-      catch { throw new TaskLeaseAcquireError("cannot verify independent Git worktree and origin for --write-worktree", "invalid_worktree_lease_request"); }
+      catch (error) { throw new TaskLeaseAcquireError(error instanceof LeaseWorktreeObservationError
+        ? error.message : "cannot verify independent Git worktree and origin for --write-worktree", "invalid_worktree_lease_request"); }
     }
   } catch (error) {
     if (error instanceof TaskLeaseAcquireError || error instanceof ShadowManagementError || error instanceof LegacyCoordinationWriteError) {

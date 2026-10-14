@@ -9,13 +9,29 @@ from __future__ import annotations
 import json
 import hashlib
 import math
+import re
 import time
 
 import pytest
 from _pytest.subtests import SubtestReport
 
+from scripts.ci.pytest_failure_context import PREFIX as FAILURE_PREFIX
+from scripts.ci.pytest_failure_context import exception_type_name, failure_context
+
 
 PREFIX = "LOOPX_PYTEST_TIMING "
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item, call):
+    report = yield
+    if call.excinfo is not None:
+        try:
+            report.loopx_failure_type = exception_type_name(call.excinfo.type, item.config.rootpath.resolve())
+        except Exception:
+            # Optional diagnostic metadata never replaces pytest's own report.
+            report.loopx_failure_type = None
+    return report
 
 
 def pytest_configure(config):
@@ -31,9 +47,9 @@ class TimingObserver:
         self.started = time.perf_counter()
         self.collection = None
 
-    def emit(self, **row):
+    def emit(self, *, _prefix=PREFIX, **row):
         row["elapsed_seconds"] = round(time.perf_counter() - self.started, 6)
-        line = PREFIX + json.dumps(row, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
+        line = _prefix + json.dumps(row, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
         reporter = self.config.pluginmanager.get_plugin("terminalreporter")
         if reporter is not None:
             reporter.ensure_newline()
@@ -66,6 +82,18 @@ class TimingObserver:
             self.record_collection([item.nodeid for item in session.items])
 
     def pytest_runtest_logreport(self, report):
+        test_id = hashlib.sha256(report.nodeid.encode("utf-8", errors="surrogatepass")).hexdigest()
+        display = report.nodeid.partition("[")[0][:256]
+        if report.failed:
+            try:
+                self.emit(_prefix=FAILURE_PREFIX, version=1, test_id=test_id,
+                          display_nodeid=display if re.fullmatch(r"[A-Za-z0-9_./:-]+", display) else None,
+                          phase=report.when, subtest=isinstance(report, SubtestReport),
+                          **failure_context(report, self.config.rootpath.resolve()))
+            except Exception:
+                # Do not mask the original failure, halt remaining tests or
+                # lose timing/JUnit if optional context construction/IO fails.
+                pass
         # A subtest is nested within its collected item's call phase. Its
         # duration is already included there; it is not another selected item
         # or another call phase. Keep pytest's own subtest result reporting.
@@ -74,9 +102,8 @@ class TimingObserver:
         duration = report.duration
         # Parameter payloads can be huge or trigger hosted secret masking,
         # corrupting JSON. Hash full identity; display only the parent name.
-        self.emit(event="phase", test_id=hashlib.sha256(
-            report.nodeid.encode("utf-8", errors="surrogatepass")).hexdigest(),
-                  display_nodeid=report.nodeid.partition("[")[0][:256], phase=report.when,
+        self.emit(event="phase", test_id=test_id,
+                  display_nodeid=display, phase=report.when,
                   outcome=report.outcome,
                   seconds=duration if math.isfinite(duration) and duration >= 0 else None)
 

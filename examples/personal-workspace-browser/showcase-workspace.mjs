@@ -39,7 +39,7 @@ const recentDone = [
 const contract = (verificationResults) => ({
   enabled: true, revision: 3, digest: `sha256:${"b".repeat(64)}`,
   objective: "Every billing export is produced from the ledger API, and its totals reconcile with the finance warehouse.",
-  scope: { kind: "all_advancement" }, non_goals: [], held_todo_ids: [], status: "partial",
+  scope: { kind: "all_advancement" }, non_goals: [], held_todo_ids: [], status: "failed",
   criteria: [
     { id: "regions", description: "All 14 regional exports read from the ledger API" },
     { id: "idempotent", description: "Replaying an export never duplicates a ledger entry" },

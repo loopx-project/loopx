@@ -17,6 +17,11 @@ on:
         description: "Existing GitHub Release tag to attach desktop artifacts to"
         required: false
         type: string
+      publication_probe:
+        description: "Read-only builder publication preflight; never attaches Release assets"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -78,6 +83,22 @@ jobs:
           cache-dependency-path: |
             apps/desktop/loopx-control-plane/package-lock.json
             apps/presentation/dashboard/package-lock.json
+
+      - name: Check out immutable preflight tooling
+        if: github.event_name == 'workflow_dispatch' && inputs.publication_probe == true
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          persist-credentials: false
+
+      - name: Capture read-only release source
+        if: github.event_name == 'workflow_dispatch' && inputs.publication_probe == true
+        timeout-minutes: 2
+        env:
+          PUBLICATION_PROBE: "true"
+          RELEASE_TAG: ${{ steps.identity.outputs.release-tag }}
+        run: node .release-tooling/scripts/ci/desktop_release_preflight.ts capture
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -168,10 +189,46 @@ jobs:
           Copy-Item apps/desktop/loopx-control-plane/src-tauri/target/release/bundle/nsis/*.exe dist/desktop/
 
       - name: Attest desktop artifacts
+        id: binary-attestation
         if: github.event_name != 'pull_request'
         uses: actions/attest@v4
         with:
           subject-path: ${{ matrix.artifact-path }}
+
+      - name: Record preflight source subjects
+        if: github.event_name == 'workflow_dispatch' && inputs.publication_probe == true
+        timeout-minutes: 2
+        env:
+          PUBLICATION_PROBE: "true"
+          RELEASE_TAG: ${{ steps.identity.outputs.release-tag }}
+        run: node .release-tooling/scripts/ci/desktop_release_preflight.ts record
+
+      - name: Attest preflight source record
+        if: github.event_name == 'workflow_dispatch' && inputs.publication_probe == true
+        id: source-attestation
+        timeout-minutes: 2
+        uses: actions/attest@v4
+        with:
+          subject-path: .desktop-preflight/source/source.json
+
+      - name: Preserve preflight attestation bundles
+        if: github.event_name == 'workflow_dispatch' && inputs.publication_probe == true
+        env:
+          PUBLICATION_PROBE: "true"
+          RELEASE_TAG: ${{ steps.identity.outputs.release-tag }}
+          SOURCE_BUNDLE: ${{ steps.source-attestation.outputs.bundle-path }}
+          BINARY_BUNDLE: ${{ steps.binary-attestation.outputs.bundle-path }}
+        run: node .release-tooling/scripts/ci/desktop_release_preflight.ts bundles
+
+      - name: Upload isolated preflight source
+        if: github.event_name == 'workflow_dispatch' && inputs.publication_probe == true
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-source-${{ runner.os == 'macOS' && 'macos' || 'windows' }}-${{ github.run_attempt }}
+          path: .desktop-preflight/source
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Upload desktop artifact
         uses: actions/upload-artifact@v7
@@ -181,8 +238,56 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Check peer success and publication budget
+        if: github.event_name == 'workflow_dispatch' && inputs.publication_probe == true && runner.os == 'Windows'
+        id: preflight
+        timeout-minutes: 2
+        env:
+          PUBLICATION_PROBE: "true"
+          RELEASE_TAG: ${{ steps.identity.outputs.release-tag }}
+        run: node .release-tooling/scripts/ci/desktop_release_preflight.ts admit
+
+      - name: Download same-run Mac desktop artifact
+        id: mac-desktop
+        if: github.event_name == 'workflow_dispatch' && inputs.publication_probe == true && runner.os == 'Windows' && steps.preflight.outputs.eligible == 'true'
+        timeout-minutes: 2
+        uses: actions/download-artifact@v7
+        with:
+          name: loopx-macos-${{ steps.identity.outputs.release-tag }}
+          path: dist/desktop
+
+      - name: Download same-run Mac source proof
+        id: mac-source
+        if: github.event_name == 'workflow_dispatch' && inputs.publication_probe == true && runner.os == 'Windows' && steps.preflight.outputs.eligible == 'true'
+        timeout-minutes: 2
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ steps.preflight.outputs.mac-source }}
+          path: .desktop-preflight/mac-source
+
+      - name: Verify read-only publication preflight
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.publication_probe == true && runner.os == 'Windows' && steps.preflight.outputs.eligible == 'true'
+        timeout-minutes: 5
+        env:
+          PUBLICATION_PROBE: "true"
+          RELEASE_TAG: ${{ steps.identity.outputs.release-tag }}
+          GH_TOKEN: ${{ github.token }}
+          PEER_ARTIFACT_DOWNLOAD: ${{ steps.mac-desktop.outcome }}
+          PEER_SOURCE_DOWNLOAD: ${{ steps.mac-source.outcome }}
+        run: node .release-tooling/scripts/ci/desktop_release_preflight.ts verify
+
+      - name: Preserve read-only preflight result
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.publication_probe == true && runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-publication-preflight-${{ github.run_attempt }}
+          path: .desktop-preflight/report.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+
   upload-release:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && inputs.publication_probe == true)
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10

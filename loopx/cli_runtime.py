@@ -96,7 +96,9 @@ def print_payload(
 	from .usage_ping import capture_result
 	capture_result(payload)
 	if fmt == "json":
-		print(json.dumps(payload, ensure_ascii=False, indent=2))
+		# JSON is the machine contract; retain every value and remove only
+		# presentation whitespace. Human-readable output remains Markdown.
+		print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 	else:
 		print(markdown_renderer(payload))
 
@@ -174,6 +176,35 @@ def resolve_cli_registry(
 	)
 	if project_register_uses_default_registry:
 		registry_path = Path(args.knowledge_root).expanduser() / ".loopx" / "registry.json"
+	if (
+		args.command == "resolve-agent-thread"
+		and not registry_was_configured
+		and not registry_path.exists()
+	):
+		try:
+			runtime_root = (
+				Path(args.runtime_root).expanduser()
+				if args.runtime_root
+				else select_default_runtime_root()
+			)
+		except ValueError as exc:
+			raise SystemExit(str(exc)) from exc
+		from .project_alias import resolve_canonical_project_alias
+
+		alias = resolve_canonical_project_alias(
+			Path.cwd(), global_registry=global_registry_path(runtime_root)
+		)
+		source_registry = alias.get("source_registry")
+		canonical_project = alias.get("canonical_project")
+		if alias.get("applied") and source_registry and canonical_project:
+			source_path = Path(str(source_registry)).expanduser().resolve()
+			expected_path = (
+				Path(str(canonical_project)).expanduser().resolve()
+				/ ".loopx"
+				/ "registry.json"
+			)
+			if source_path == expected_path and source_path.is_file():
+				registry_path = source_path
 	if (
 		args.command not in _REGISTRY_OPTIONAL_COMMANDS
 		and not (args.command == "canary" and not getattr(args, "goal_id", None))

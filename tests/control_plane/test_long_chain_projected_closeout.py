@@ -1,6 +1,7 @@
 """Follow the long-chain packet through one real, durable CLI Turn (#4667)."""
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -69,10 +70,10 @@ def test_managed_turn_counts_advancement_without_monitor_backlog(
         assert _spend_run_count(runtime) == 0
 
 
-@pytest.mark.parametrize("explore_enabled", [False, True])
+@pytest.mark.parametrize("explore_enabled", [False, True, "paged"])
 @pytest.mark.parametrize("action", ["switch", "grow"])
 def test_projected_vision_replan_settles_without_a_meta_successor(
-    tmp_path: Path, explore_enabled: bool, action: str,
+    tmp_path: Path, explore_enabled: bool | str, action: str,
 ) -> None:
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selected_todo_replan_fixture(project, registry)
@@ -102,6 +103,14 @@ def test_projected_vision_replan_settles_without_a_meta_successor(
             goal_id=GOAL_ID, agent_id=AGENT_ID, node_id="route-counterexample",
             finding_id="finding-negative", title="Scoped counterexample", status="refuted",
             summary="This negative result applies to the prior inputs only."))
+        if explore_enabled == "paged":
+            # Same-Goal peer findings are reusable by the reviewing Agent.
+            for index in range(1, 8):
+                append_explore_result_event(log, build_explore_finding_event(
+                    goal_id=GOAL_ID, agent_id="research-peer", node_id="route-counterexample",
+                    finding_id=f"finding-{index}", title=f"Scoped peer result {index}",
+                    status="confirmed", summary=f"Applies only to synthetic input {index}.",
+                    tags=["writeback-result"], recorded_at=f"2026-01-01T00:00:0{index}Z"))
     # Fourteen commitments plus a shared candidate is not this lane's long chain.
     last_id = "todo_chain_000000000014"
     source = source.replace(
@@ -237,6 +246,20 @@ def test_projected_vision_replan_settles_without_a_meta_successor(
             "considered_refs": ["finding-negative"],
             "reason": "Counterexample applies to prior inputs; compare the changed route.",
         }
+        if explore_enabled == "paged":
+            command = basis["result_page"]["next_command"]
+            page = json.loads(subprocess.run(
+                [sys.executable, "-m", "loopx.cli", *command[1:]],
+                cwd=project, capture_output=True, text=True, check=True,
+            ).stdout)["graph"]
+            assert [row["finding_id"] for row in page["writeback_results"]] == [
+                "finding-4", "finding-3", "finding-2"]
+            assert "finding-4" not in {row["finding_id"] for row in basis["finding_refs"]}
+            assert page["result_page"]["revision"] == basis["result_page"]["revision"]
+            valid_packet["stride_decision"]["explore_review"].update(
+                disposition="used", considered_refs=["finding-4"],
+                result_pages=[{key: page["result_page"][key] for key in ("revision", "offset", "limit")}],
+            )
         decision.write_text(json.dumps(valid_packet))
     legacy_packet = {key: value for key, value in valid_packet.items() if key != "stride_decision"}
     decision.write_text(json.dumps(legacy_packet))
@@ -249,6 +272,8 @@ def test_projected_vision_replan_settles_without_a_meta_successor(
     old_decision = old_packet["stride_decision"]
     old_decision["schema_version"] = "stride_decision_v1"
     old_decision.pop("action")
+    if explore_enabled == "paged":
+        old_decision["explore_review"].pop("result_pages")
     old_decision["axis_reasons"] = {key: axis["reason"] for key, axis in old_decision["axes"].items()}
     old_decision["axes"] = {"work_slice": "shrink", "route_distance": "grow", "validation_scope": "hold"}
     decision.write_text(json.dumps(old_packet))
@@ -257,6 +282,57 @@ def test_projected_vision_replan_settles_without_a_meta_successor(
     assert rc == 1
     assert "requires agent_vision.stride_decision" in refused["error"]
     assert _spend_run_count(runtime) == 0
+    if explore_enabled == "paged":
+        def source_files():
+            return {str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+                    for base in (project, runtime / "goals" / GOAL_ID)
+                    for path in base.rglob("*")
+                    if path.is_file() and path.suffix in {".json", ".jsonl", ".md"}}
+
+        def refuse(packet, reason):
+            decision.write_text(json.dumps(packet))
+            unchanged = source_files()
+            rc, refusal = _run_cli(registry, runtime,
+                *_projected_cli_args(refresh, turn_instance_id=TURN_ID), cwd=project)
+            assert rc == 1 and reason in refusal["error"], refusal
+            assert source_files() == unchanged
+            assert _spend_run_count(runtime) == 0
+
+        for mismatch in ("missing-page", "wrong-page", "foreign-finding", "forged-membership"):
+            invalid = json.loads(json.dumps(valid_packet))
+            review = invalid["stride_decision"]["explore_review"]
+            if mismatch == "missing-page":
+                review.pop("result_pages")
+            elif mismatch == "wrong-page":
+                review["result_pages"][0]["offset"] = 0
+            elif mismatch == "foreign-finding":
+                review["considered_refs"] = ["foreign-finding"]
+            else:
+                review["result_pages"][0]["finding_refs"] = ["finding-4"]
+            refuse(invalid, "result page requires" if mismatch == "forged-membership" else "undelivered")
+
+        # A change outside the first page must invalidate the old page binding.
+        append_explore_result_event(log, build_explore_finding_event(
+            goal_id=GOAL_ID, agent_id="research-peer", node_id="route-counterexample",
+            finding_id="finding-4", title="Scoped peer result 4", status="confirmed",
+            summary="Revised applicability: synthetic input 4 with the corrected precondition.",
+            tags=["writeback-result"], recorded_at="2026-01-01T00:00:04Z"))
+        refuse(valid_packet, "result pages")
+        current = guard(TURN_ID)
+        assert current["heartbeat_receipt"]["settlement_identity"] == before["heartbeat_receipt"]["settlement_identity"]
+        current_control = current["replan_action_packet"]["stride_control"]
+        assert current_control["reference_obligation_id"] == control["reference_obligation_id"]
+        valid_packet["stride_decision"]["reference_context_id"] = current_control["reference_context_id"]
+        valid_packet["stride_decision"]["explore_review"]["revision"] = current_control["explore_basis"]["revision"]
+        command = current_control["explore_basis"]["result_page"]["next_command"]
+        unchanged = source_files()
+        reread = json.loads(subprocess.run([sys.executable, "-m", "loopx.cli", *command[1:]],
+            cwd=project, capture_output=True, text=True, check=True).stdout)["graph"]
+        assert source_files() == unchanged
+        assert reread["writeback_results"][0]["finding_id"] == "finding-4"
+        assert "corrected precondition" in reread["writeback_results"][0]["summary"]
+        valid_packet["stride_decision"]["explore_review"]["result_pages"] = [
+            {key: reread["result_page"][key] for key in ("revision", "offset", "limit")}]
     decision.write_text(json.dumps(valid_packet))
     refreshed = call(*_projected_cli_args(refresh, turn_instance_id=TURN_ID))
     assert refreshed["vision_checkpoint"]["satisfied"] is True

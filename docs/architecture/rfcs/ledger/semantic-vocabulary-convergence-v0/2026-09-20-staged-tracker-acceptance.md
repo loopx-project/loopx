@@ -1,5 +1,8 @@
 # Staged tracker acceptance and conditional field retirement
 
+Current readback: [registered source treatment](2026-10-12-registered-source-treatment.md). The observations below retain their original baseline; they are not current PR status.
+
+
 Status: **proposal**, not a completed migration or approval record. Baseline:
 `36134771355f05c9bcc5657ce739bb86426383dc`. Delivery status and the ordered
 work plan belong to [#4447](https://github.com/loopx-project/loopx/issues/4447);

@@ -1184,9 +1184,11 @@ def test_managed_start_waits_before_host_and_replay_needs_no_new_admission(
     assert denied["admission"]["next_eligible_at_ms"] == 9000
     assert denied["effects"]["host_invoked"] is False
     assert calls == {"host": 0, "admit": 1, "writeback": 0, "spend": 0, "scheduler": 0}
-    assert not list(
-        (tmp_path / "runtime" / "goals" / "fixture-goal" / "turns").glob("*.json")
-    )
+    # Lock-holder metadata is not a committed Turn journal on Windows.
+    assert not turn_journal_path(
+        tmp_path / "runtime", goal_id="fixture-goal",
+        turn_key=str(plan["transaction"]["turn_key"]),
+    ).exists()
 
     def allow(_identity: object) -> dict[str, object]:
         calls["admit"] += 1

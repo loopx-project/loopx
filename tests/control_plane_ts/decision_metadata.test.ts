@@ -42,6 +42,25 @@ test("decision metadata normalizes compact and object forms without duplicate sc
   ]);
 });
 
+test("declared scope inputs retain every kind and granularity without becoming authority", () => {
+  // These are author-input witnesses, not inferred decisions or proof
+  // that an author followed the separate kind=other authoring contract.
+  for (const kind of ["private_read", "write_scope", "resource", "production", "public_claim", "direction", "other"]) {
+    assert.deepEqual(normalizeTodoDecisionScope(`${kind}:action:example`), {
+      schema_version: "decision_scope_v0", kind, granularity: "action", scope_key: "example",
+    });
+  }
+  for (const granularity of ["action", "lane", "goal", "project", "global"]) {
+    assert.deepEqual(normalizeTodoDecisionScope(`direction:${granularity}:example`), {
+      schema_version: "decision_scope_v0", kind: "direction", granularity, scope_key: "example",
+    });
+  }
+  for (const granularity of ["team", 42, null]) {
+    assert.throws(() => normalizeTodoDecisionScope({kind: "direction", granularity, scope_key: "example"}),
+      /unsupported|not a supported/);
+  }
+});
+
 for (const [label, value] of [
   ["unknown kind", {kind: "secret", granularity: "goal", scope_key: "release"}],
   ["invalid key", {kind: "direction", granularity: "goal", scope_key: "../release"}],

@@ -1,5 +1,8 @@
 # Executed settlement and receipt source boundaries
 
+Current readback: [registered source treatment](2026-10-12-registered-source-treatment.md). The observations below retain their original baseline; they are not current PR status.
+
+
 Measured from `36134771355f05c9bcc5657ce739bb86426383dc`, for #4447 Stage 2a.
 The scope revision in #4789 remains a proposal. This entry changes neither RFC
 acceptance nor the F1/F2 production domain: **7/26**, with these four entries

@@ -42,6 +42,7 @@ PRIMARY_CASE_ORDER = [
     "2026-07-cpp-accuracy-long-run",
     "2026-07-four-day-unattended-agent",
     "2026-07-public-engine-refactor",
+    "2026-10-vllm-long-context-optimization",
     "2026-06-27-overnight-pr-batch",
     "2026-06-24-pr-issue-auto-fix",
     "2026-06-23-agent-to-agent-pr-comments",
@@ -1106,7 +1107,7 @@ def render_case_page(case: dict[str, Any], lang: str, primary: bool) -> str:
     outcome_block = render_text_stack([str(item) for item in details.get("user_outcome", [])])
     sources_block = render_source_refs([(str(label), str(path)) for label, path in details.get("source_refs", [])], output)
     shared_assets = case.get("page_assets") == "shared"
-    diagram = control_diagram(case, lang)
+    diagram = control_diagram(case, lang) if frontend.get("show_control_diagram", True) else ""
     if shared_assets:
         diagram = " ".join(line.strip() for line in diagram.splitlines() if line.strip())
     return f"""<!doctype html>
@@ -1263,7 +1264,12 @@ def update_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
         case_id = str(case.get("id"))
         if case_id in PRIMARY_CASE_ORDER:
             case["showcase_rank"] = rank
-            case["showcase_table"] = SHOWCASE_TABLE[case_id]
+            # Catalog-authored cases carry their own proof and intervention.
+            # Retain the legacy defaults without duplicating new case copy here.
+            table = SHOWCASE_TABLE.get(case_id, case.get("showcase_table"))
+            if not isinstance(table, dict):
+                raise ValueError(f"primary showcase {case_id} needs a showcase_table")
+            case["showcase_table"] = table
             if not isinstance(case.get("frontend_card"), dict):
                 metaphor, default_badges = DEFAULT_FRONTEND.get(
                     case_id,
@@ -1271,7 +1277,7 @@ def update_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
                 )
                 case["frontend_card"] = {
                     "visual_metaphor": metaphor,
-                    "primary_metric_hint": SHOWCASE_TABLE[case_id]["proof_point"],
+                    "primary_metric_hint": table["proof_point"],
                     "badges": default_badges,
                     "story_beats": first_items(case.get("loopx_behavior"), 4),
                 }

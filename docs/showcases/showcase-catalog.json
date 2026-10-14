@@ -1,6 +1,6 @@
 {
   "schema_version": "loopx_showcase_catalog_v1",
-  "updated_at": "2026-09-04",
+  "updated_at": "2026-10-14",
   "redaction_policy": {
     "public_repo_may_include": [
       "sanitized domain labels",
@@ -56,6 +56,12 @@
       "disposition": "not_promoted",
       "case_id": null,
       "reason": "The material is a positive assessment and a comparable harness report, not evidence that the referenced workloads used LoopX."
+    },
+    {
+      "source_key": "vllm-pr-54951-public-workflow",
+      "disposition": "promoted_case",
+      "case_id": "2026-10-vllm-long-context-optimization",
+      "reason": "The author explicitly names LoopX as workflow engine in public October 13, 2026 posts; upstream PR #54951 independently establishes a merge. Reported measurements retain their conditions and limits."
     }
   ],
   "cases": [
@@ -443,6 +449,146 @@
       "showcase_rank": 3
     },
     {
+      "id": "2026-10-vllm-long-context-optimization",
+      "date": "2026-10-13",
+      "title": "vLLM long-context optimization merged upstream",
+      "status": "public_repository_plus_user_report_case",
+      "case_type": "independent_user",
+      "evidence_strength": "public_repository_plus_user_report",
+      "case_page": "docs/showcases/cases/independent-vllm-long-context-optimization.md",
+      "demo_command": null,
+      "domain": "inference-performance-optimization",
+      "audience": [
+        "maintainer",
+        "inference-engineer",
+        "long-running-agent-operator"
+      ],
+      "pattern_tags": [
+        "independent_user",
+        "public_repository",
+        "continuous_exploration",
+        "validation",
+        "upstream_delivery"
+      ],
+      "headline": "Zheng Cai reports LoopX as the workflow engine behind continuous vLLM optimization; the resulting sparse-indexer PR merged upstream. Reported +32.59% total-token throughput: GLM-5.3-Flash, 1M input, 4×H200, TP4, C1.",
+      "problem": "Inference optimization requires repeated profiling, paper/code research, experiments, correctness checks, and review. The author reports LoopX as the workflow engine for this process; validation across models and workloads remains substantial engineering work.",
+      "loopx_behavior": [
+        "Author reports using LoopX as the workflow engine for an agent-driven vLLM inference-optimization framework.",
+        "Author describes profiling, paper/code research, hypotheses, experiments, and correctness/speed measurement.",
+        "Author attributes cost-balanced sparse-indexer query-row sharding to continuous iteration.",
+        "Upstream PR #54951 merged on October 11, 2026; the author retains validation, review follow-up, and maintenance ownership."
+      ],
+      "runtime_signal": {
+        "duration": "not reported",
+        "agent_scale": "not reported",
+        "human_intervention": "not quantified; author owns validation, review follow-up, and maintenance"
+      },
+      "user_value": "Continuing exploration and validation produced an inspectable upstream optimization. The LoopX maintainer highlights developer attention as a motivation; no quantitative attention or cost savings are established.",
+      "evidence_links": [
+        {
+          "label": "Author: LoopX as workflow engine (October 13, 2026)",
+          "url": "https://x.com/zigzagcai/status/2109952174822408443",
+          "kind": "public_user_report"
+        },
+        {
+          "label": "Author: profiling, research, experiments, correctness",
+          "url": "https://x.com/zigzagcai/status/2109952350299316499",
+          "kind": "public_user_report"
+        },
+        {
+          "label": "Author: continuous iteration",
+          "url": "https://x.com/zigzagcai/status/2109952500262645847",
+          "kind": "public_user_report"
+        },
+        {
+          "label": "vLLM PR #54951: merge and reported measurements",
+          "url": "https://github.com/vllm-project/vllm/pull/54951",
+          "kind": "merged_pull_request"
+        },
+        {
+          "label": "LoopX maintainer: exploration, human feedback, verifiable outcomes",
+          "url": "https://x.com/huangruiteng/status/2109984101092737107",
+          "kind": "public_maintainer_commentary"
+        },
+        {
+          "label": "LoopX maintainer: validation and developer attention",
+          "url": "https://x.com/huangruiteng/status/2109988844162703786",
+          "kind": "public_maintainer_commentary"
+        }
+      ],
+      "evidence_assets": [],
+      "evidence_boundary": "The upstream merge is public repository evidence. LoopX use and the workflow are author reports; measurements are upstream-reported, not independently rerun or an isolated LoopX uplift. +32.59% is total input + output throughput at 1,000,000 input tokens: GLM-5.3-Flash, 4×H200, TP4, C1, 256 output tokens, 65,536-token batch budget, legacy runner + explicit FA3, four fresh-process ABBA/BAAB pairs, warmups excluded. It is not saturated serving throughput. Measured base 5893426b88f7 / optimized 16934c6e76e5 differ from final PR head a9fd692db809; merge commit 3e8e1364ff41. Runtime, costs, configuration, and intervention counts remain unknown. Targeted correctness is not broad quality or bitwise equivalence; short-input and cross-platform non-regression are not established.",
+      "showcase_table": {
+        "proof_point": "An author-reported LoopX optimization workflow led to an inspectable sparse-indexer change merged into vLLM.",
+        "loopx_intervention": "author-reported workflow engine: profiling, research, hypotheses, experiments, correctness and speed checks"
+      },
+      "frontend_card": {
+        "visual_metaphor": "profiling and hypotheses become measured experiments and an upstream reviewable optimization",
+        "primary_metric_hint": "Upstream-reported +32.59% C1 total-token throughput at 1M input on 4×H200, TP4",
+        "badges": [
+          "independent_user",
+          "Upstream merged",
+          "Reported measurements"
+        ],
+        "story_beats": [
+          "author names LoopX as workflow engine",
+          "agents research and test optimization hypotheses",
+          "correctness and performance measurements retain their conditions",
+          "the resulting sparse-indexer optimization merges into vLLM"
+        ],
+        "show_control_diagram": false
+      },
+      "evidence_metrics": [
+        {
+          "value": "+32.59%",
+          "labels": {
+            "en": "reported C1 total tok/s · 1M, 4×H200, TP4",
+            "zh": "报告 C1 总吞吐 · 1M、4×H200、TP4"
+          }
+        },
+        {
+          "value": "54.154 → 40.388s",
+          "labels": {
+            "en": "reported server TTFT · same configuration",
+            "zh": "报告 server TTFT · 相同配置"
+          }
+        },
+        {
+          "value": "2026-10-11",
+          "labels": {
+            "en": "public upstream merge date (UTC)",
+            "zh": "公开上游合并日期（UTC）"
+          }
+        }
+      ],
+      "localizations": {
+        "zh": {
+          "title": "vLLM 长上下文优化：已合入上游",
+          "headline": "Zheng Cai 公开报告以 LoopX 为 workflow engine 持续探索并验证 vLLM 优化，成果已合入上游。报告总 token 吞吐 +32.59%：GLM-5.3-Flash、1M 输入、4×H200、TP4、C1。",
+          "problem": "推理优化需要反复 profiling、论文和代码研究、实验、正确性检查及评审。作者将 LoopX 作为这一过程的 workflow engine；跨模型和 workload 的验证仍是重要工程工作。",
+          "proof_point": "作者报告的 LoopX 优化工作流，推进成可检查的 sparse indexer 优化，并合入 vLLM。",
+          "loopx_intervention": "作者报告的 workflow engine：profiling、研究、假设、实验、正确性与速度检查",
+          "loopx_behavior": [
+            "作者公开说明以 LoopX 为 agent-driven vLLM 推理优化框架的 workflow engine。",
+            "作者介绍 profiling、论文/代码研究、假设、实验、正确性和速度测量。",
+            "作者说明通过持续迭代找到 sparse indexer query 行的计算量均衡切分方案。",
+            "上游 PR #54951 于 2026-10-11 合并；验证、评审跟进和维护责任仍属于作者。"
+          ],
+          "user_value": "持续探索和验证推进成可核验的上游优化。LoopX 维护者强调释放开发者精力，但这里没有精力或成本节省的定量结论。",
+          "evidence_boundary": "上游合并是公开仓库事实；LoopX 使用及工作流来自作者报告。性能是上游报告结果，未独立复跑或隔离 LoopX 因果增益。+32.59% 指总输入加输出吞吐，条件为 GLM-5.3-Flash、1,000,000 输入 token、4×H200、TP4、C1、256 输出 token、65,536-token batch budget、legacy runner + 显式 FA3；四组 fresh-process ABBA/BAAB 配对排除 warmup，不代表饱和服务吞吐。测量基线 5893426b88f7 / 优化版本 16934c6e76e5 与最终 PR head a9fd692db809 分开，merge commit 为 3e8e1364ff41。运行时长、成本、具体配置和干预次数未知；针对性正确性不代表全面质量或逐位等价，也不宣称短输入和其他平台全面无回归。"
+        }
+      },
+      "interactive_page": "docs/showcases/cases/independent-vllm-long-context-optimization.html",
+      "interactive_page_zh": "docs/showcases/cases/independent-vllm-long-context-optimization.html",
+      "interactive_page_en": "docs/showcases/cases/independent-vllm-long-context-optimization.en.html",
+      "localized_pages": {
+        "zh": "docs/showcases/cases/independent-vllm-long-context-optimization.html",
+        "en": "docs/showcases/cases/independent-vllm-long-context-optimization.en.html"
+      },
+      "showcase_rank": 4,
+      "page_assets": "shared"
+    },
+    {
       "id": "2026-06-27-overnight-pr-batch",
       "date": "2026-06-27",
       "title": "Overnight PR batch with reviewable control",
@@ -498,7 +644,7 @@
         "zh": "docs/showcases/cases/0627-overnight-pr-batch.html",
         "en": "docs/showcases/cases/0627-overnight-pr-batch.en.html"
       },
-      "showcase_rank": 4,
+      "showcase_rank": 5,
       "showcase_table": {
         "proof_point": "High-throughput multi-lane work can remain PR-sized, reviewable, and merge-safe.",
         "loopx_intervention": "todo claim, review packet, self-merge boundary, focused smoke, public-boundary scan"
@@ -588,7 +734,7 @@
         "zh": "docs/showcases/cases/0624-pr-issue-auto-fix.html",
         "en": "docs/showcases/cases/0624-pr-issue-auto-fix.en.html"
       },
-      "showcase_rank": 5,
+      "showcase_rank": 6,
       "showcase_table": {
         "proof_point": "Issue and review feedback can enter an executable repair loop.",
         "loopx_intervention": "issue-fix workflow, command pack, repro smoke, PR review feedback"
@@ -678,7 +824,7 @@
         "zh": "docs/showcases/cases/0623-agent-to-agent-pr-comments.html",
         "en": "docs/showcases/cases/0623-agent-to-agent-pr-comments.en.html"
       },
-      "showcase_rank": 6,
+      "showcase_rank": 7,
       "showcase_table": {
         "proof_point": "Multiple agents can coordinate around PR review comments without losing owner review.",
         "loopx_intervention": "claimed_by, handoff gate, review packet, comment/fix loop"
@@ -768,7 +914,7 @@
         "zh": "docs/showcases/cases/0623-overnight-project-refactor.html",
         "en": "docs/showcases/cases/0623-overnight-project-refactor.en.html"
       },
-      "showcase_rank": 7,
+      "showcase_rank": 8,
       "showcase_table": {
         "proof_point": "Long unattended refactors can split into moderate PR slices instead of one unreviewable diff.",
         "loopx_intervention": "loop, todo follow-up, supersede, PR-sized slices"
@@ -873,7 +1019,7 @@
         "zh": "docs/showcases/cases/0619-dynamic-workflow-hardware-agent.html",
         "en": "docs/showcases/cases/0619-dynamic-workflow-hardware-agent.en.html"
       },
-      "showcase_rank": 8,
+      "showcase_rank": 9,
       "showcase_table": {
         "proof_point": "Fuzzy goals, multiple workers, and long unattended runs can still converge.",
         "loopx_intervention": "goal state, worker handoff, dynamic workflow"
@@ -1032,7 +1178,7 @@
         "zh": "docs/showcases/cases/0619-loopx-self-iteration.html",
         "en": "docs/showcases/cases/0619-loopx-self-iteration.en.html"
       },
-      "showcase_rank": 9,
+      "showcase_rank": 10,
       "showcase_table": {
         "proof_point": "A high-churn multi-lane project can keep state, boundaries, and evidence coherent.",
         "loopx_intervention": "todo, quota, gate, evidence, review packet, frontstage"
@@ -1122,7 +1268,7 @@
         "zh": "docs/showcases/cases/0617-blocked-p0-safe-rotation.html",
         "en": "docs/showcases/cases/0617-blocked-p0-safe-rotation.en.html"
       },
-      "showcase_rank": 10,
+      "showcase_rank": 11,
       "showcase_table": {
         "proof_point": "A user decision should not block all safe work.",
         "loopx_intervention": "concrete user todo, safe fallback, quota control"

@@ -835,6 +835,49 @@ agent what to do and how to request the omitted detail.
 完整诊断包保留为显式 drill-down。只有默认路径仍能告诉 agent 下一步做什么、以及
 如何请求被省略细节时，字段才能移出默认热路径。
 
+The default `quota should-run` CLI preserves the complete
+`vision_continuation_audit` once, including judge identity, evidence requirements,
+research/writeback instructions, and done/continue conditions. Only identical
+copies in the same response reference that owner; differing channel rules remain
+inline. This restores rules previously omitted by the default projection;
+`--include-detail vision` still returns the full inline audit. The existing
+40,000-character fixture budget remains unchanged: the same workload measures
+30,697 characters before repair and 33,205 after repair, with 56,401 in detail.
+These are JSON fixture measurements, not token costs or model-behavior evidence.
+
+The shared CLI printer subsequently removes JSON presentation whitespace,
+preserving the complete decided payload and Markdown. Default and explicit
+detail JSON using that printer become one line; use `jq .` for indentation.
+The paired 36-Todo / 12-run default measures 48,418→39,726 characters, with
+identical decoded values and unchanged budgets. The [interface contract](../reference/contracts/interface-budget-contract.md)
+records the full character, UTF-8 byte, line and mode comparison. Check all
+affected shared-printer commands, vision-off paths, unknown fields and typed
+errors; do not count unchanged direct-output paths as new serialization gains.
+
+共用 CLI JSON 打印器仅删除展示空白，完整决策值与 Markdown 保持不变；默认及详情
+JSON 变为单行，人工缩进可用 `jq .`。同一 36 Todo／12 run 默认输出
+48,418→39,726 字符，预算不改。验证须覆盖所有受影响命令、vision 关闭、未知字段
+与类型化错误，直接输出路径的原样结果不算新增节省。
+
+The complete emitted-CLI qualification is a separate workload: the original
+36-Todo / 12-run vision case measures 45,313 lossy / 48,418 complete characters.
+Its 46,000 ceiling becomes 50,000 after checking all affected modes and preserving
+every decision clause. The [interface contract](../reference/contracts/interface-budget-contract.md)
+records that tradeoff and the independently attributed Turn/raw-quota failures,
+metrics, headroom and platform limits; the 40,000 fixture above stays unchanged.
+
+默认 `quota should-run` CLI 完整保留一份 `vision_continuation_audit`，包括 judge
+身份、证据要求、研究／回写指令及 done/continue 条件；仅同一响应内完全相同的
+副本引用该 owner，不同 channel 的规则仍内联。这恢复了默认投影此前省略的规则；
+`--include-detail vision` 仍返回完整内联 audit。原有 40,000 字符 fixture 预算不变，
+同一负载修复前／后为 30,697／33,205 字符，详情为 56,401 字符。这是 JSON fixture
+测量，不代表 token 成本或模型行为证据。
+
+完整 CLI 输出是另一负载：原 36 Todo／12 run vision 场景为有损 45,313／完整
+48,418 字符；保留全部决策义务并核对受影响模式后，46,000 展示上限调至 50,000。
+接口合同记录取舍及独立归因的 Turn／raw quota 原失败、指标、余量和平台限制；
+上述 40,000 字符夹具保持不变。
+
 ### Roadmap-Aligned Optimization
 
 For recurring command, recovery or retrieval costs, use the existing
@@ -916,6 +959,56 @@ change. Historical thresholds do not freeze a regression budget. This history is
 not a waived regression or a frozen SLO pass. An unchanged base failure must be
 attributed before it is distinguished from a new candidate regression.
 
+The matched qualification (`82b118229` main / `399d1bdd9` merged candidate)
+retains admitted work context, exact selected Todo text and acceptance, ordered
+required reads, captured scheduler decisions and complete registry/runtime
+command routes. All 96 Linux character and line measurements match; prose and
+routed commands match after excluding generated clock and receipt metadata.
+Windows has 93 equal measurements and three bootstrap JSON rows two characters
+smaller on the candidate, with unchanged routes, shapes and action signatures.
+These are unchanged upstream presentation failures, not new candidate growth.
+
+The complete matrix measures Windows maxima of 21,796 / 579 lines for small
+quota JSON, 35,771 / 836 for crowded quota, 45,578 / 834 for crowded diagnosis,
+14,848 / 375 for multi-Agent planning, 14,449 / 365 for transaction detail,
+13,055 / 53 for compact heartbeat and 11,381 / 279 for the multi-subagent Turn
+Envelope. Small Markdown work/read context reaches 8,434 / 134 for quota and
+3,701 / 90 for the envelope; cold quota Markdown reaches 8,508 / 134. The
+separate real-vision fixture measures 41,564 JSON characters, and crowded Turn
+planning with vision reaches 17,236. Preserve those caller clauses and routes
+rather than removing current work, acceptance or independently runnable actions.
+
+Only the exceeded presentation ceilings change (characters / lines):
+
+| Surface and format | Previous ceiling | Qualified ceiling |
+| --- | --- | --- |
+| Diagnosis JSON, small / crowded | 21,000 / 470; 45,000 / 850 | 22,500 / 500; 47,000 / 850 |
+| Quota JSON, small / crowded | 20,000 / 520; 35,000 / 830 | 23,000 / 620; 37,000 / 880 |
+| Quota Markdown, small / crowded / multi-Agent | 6,700 / 72; 7,800 / 78; 7,000 / 75 | 9,000 / 150; 7,800 / 90; 7,000 / 85 |
+| Turn plan JSON, small / crowded / multi-Agent | 12,000 / 320; 16,000 / 420; 12,000 / 320 | 14,000 / 360; 18,000 / 470; 16,000 / 400 |
+| Turn plan Markdown, small / multi-Agent | 300 / 12 | 650 / 12 |
+| Transaction detail JSON | 13,000 / 360 | 15,500 / 400 |
+| Compact heartbeat JSON | 13,000 / 58 | 14,000 / 58 |
+| Turn Envelope JSON / Markdown | 9,000 / 250; 650 / 20 | 12,000 / 300; 4,000 / 100 |
+| Cold quota Markdown, scheduler / other selectors | 6,700 / 72; 7,800 / 78 | 9,000 / 150 |
+| Separate real-vision quota JSON fixture | 41,000 characters | 43,000 characters |
+
+Per-Todo and fixed growth remain unchanged: quota growth is 13,847 Linux /
+13,975 Windows against 35*300 + 6,000; planning is 4,198 / 3,475 against
+35*60 + 4,700; diagnosis is 23,601 / 23,881 against 35*520 + 7,000.
+Bootstrap duplication, semantic/parity assertions and unaffected ceilings stay
+active. The production Turn Envelope's 8,192-byte performance diagnostic and
+its overflow warning remain unchanged. Linux crowded-plan, multi-Agent-plan
+and multi-subagent envelopes still measure 10,631 / 9,256 / 9,176 compact UTF-8
+bytes and report `within_budget=false` with `turn_envelope_budget_exceeded`;
+these unchanged warnings are not a green performance SLO. This diagnostic is
+never admission or execution authority. The repair grants no execution quota,
+spending or provider permissions and does not rewrite original failures as passes.
+
+本轮依据相同 main/候选和完整矩阵保留当前工作、验收、必读项及完整命令路由，
+仅修正已超过的展示回归预算。时钟与生成回执元数据不作逐字节一致声明；每 Todo
+和固定增长、重复度、生产性能诊断及执行配额边界不变，原失败仍按失败记录保留。
+
 Classify the limit by its owning contract before deciding how to repair a
 failure. This applies to output size/structure and latency regression budgets;
 it does not grant execution quota, spending, or provider authority.
@@ -966,37 +1059,57 @@ it does not grant execution quota, spending, or provider authority.
    or promotion thresholds stay fixed for that result; revised thresholds belong
    to a new qualification, never a relabeled historical pass.
 
-The fixed public CLI matrix at `2244b96f1e2e5c90bef43ae4c140c0994bfcc07a`
-and the settled-Turn cadence candidate exposed stale absolute ceilings on both
-revisions. The 96-row comparison retained 1/36/18 Todos and 1/12/12 history
-records, full command paths, enabled multi-subagent and blocking-gate cases.
-Quota's selected-Todo source carries current requirements, read freshness,
-before-work ordering and unavailable-source recovery; Turn transports that
-same context, and diagnose serves both selected and Goal-array consumers.
-Retain these caller contracts while calibrating the existing regression limits:
+The latest qualification pins true main `e47e4507a` and merged candidate
+`3955d1c8b` on the same public fixture, with explicit per-probe source imports.
+It retains 1/36/18 Todos, 1/12/12 history records, complete command routes,
+enabled multi-subagent and blocking-gate cases. All 96 character and line
+measurements match on each platform. Complete Linux consumer strings match
+apart from generated clock, receipt and source-decision hash metadata; raw
+output is not asserted byte-identical.
 
-| Output / 输出 | Same base/head measurement / 同口径测量 | Revised ceiling / 新上限 |
-| --- | --- | --- |
-| Quota small JSON / Markdown | 21,871 / 8,690 chars; 579 / 134 lines | 22,000 / 9,000 chars; 600 / 140 lines |
-| Quota crowded JSON / Markdown | 35,710 / 7,772 chars; 836 / 84 lines | 36,000 / 7,800 chars; 850 / 90 lines |
-| Quota explicit-detail Markdown | 8,760 chars; 134 lines | 9,000 chars; 140 lines |
-| Turn small / crowded / multi-agent JSON | 12,060 / 16,250 / 14,098 chars | 12,500 / 17,000 / 14,500 chars |
-| Crowded quota / Turn JSON with Agent vision | 41,503 / 16,679 chars; 939 / 427 lines | 42,000 / 17,000 chars; Turn 440 lines |
-| Turn transaction detail JSON | 13,688 chars | 14,000 chars |
-| TurnEnvelope JSON / enabled multi-subagent / Markdown | 10,498 / 11,426 / 3,949 chars; 255 / 279 / 90 lines | 12,000 JSON / 4,100 Markdown chars; 300 / 95 lines |
-| Diagnose small / crowded JSON | 21,521 / 45,122 chars | 22,000 / 46,000 chars |
+Retain the selected-Todo source and requirements, read freshness, before-work
+ordering and unavailable-source recovery. Long lanes still replan before
+continuing, use evidence-linked vision authoring, retain existing runnable
+work when appropriate and choose a reasonable in-scope next step or explain
+why none remains. Current preference instructions belong to participating
+hooks. These obligations and complete registry/runtime routes are retained;
+no lossless deletion of them is demonstrated by the size failures.
 
-Only exceeded character/line guards change; semantic, duplication, per-Todo and
-fixed-growth assertions retain their existing limits. Headroom is bounded by
-the frozen workload, not a universal percentage. This calibration changes
-output regression guards, leaving execution quota, envelope wire limits and
-frozen experiment/promotion criteria with their existing owners. The original
-failures remain failures under the old ceilings; rerun the complete matrix and
-affected semantic tests under the revised contract.
+The original Linux 151 tests, enforced matrix and true-main differential pass
+under the accepted main ceilings. Windows records three failures / 148 passes
+in the original suite; complete measurement exposes five over-limit rows plus
+the separate Agent-vision case. The same main costs fail there too. Calibrate
+only these six presentation lanes, preserving the original failed result:
 
-同一冻结负载在主干和候选上均超出旧回归预算；保留当前任务原文、读取时序、
-新鲜度、恢复和停止条件，并按上表校准已有输出检查。增长、语义及去重检查仍独立
-生效；此调整不授予执行额度，也不改写历史实验或验收结果。
+| Output | Previous chars / lines | Windows chars / lines | Revised chars / lines |
+| --- | --- | --- | --- |
+| Turn small JSON | 12,500 / 320 | 13,467 / 335 | 14,000 / 350 |
+| Turn multi-Agent JSON | 14,500 / 370 | 14,982 / 375 | 15,500 / 390 |
+| Turn crowded JSON with Agent vision | 17,000 / 440 | 17,371 / 444 | 18,000 / 460 |
+| Turn small Markdown | 300 / 12 | 565 / 10 | 600 / 12 |
+| Compact heartbeat JSON | 13,000 / 58 | 13,055 / 53 | 13,500 / 58 |
+| Turn transaction detail JSON | 14,000 / 360 | 14,584 / 365 | 15,000 / 380 |
+
+Only these character/line guards change. Same-workload Linux observations are
+12,044 / 296 small Turn JSON, 14,082 / 357 multi-Agent, 16,242 / 416 crowded,
+145 / 6 small Markdown, 12,779 / 53 compact heartbeat and 13,672 / 348
+transaction detail. Platform rendering needs bounded headroom; fixtures,
+semantic and bootstrap repetition checks, and all per-Todo/fixed-growth limits
+stay active. Measured Linux quota / Turn / diagnose growth is
+13,847 / 4,198 / 23,601 against 16,500 / 6,800 / 25,200 respectively.
+
+The production 8,192-byte performance diagnostic retains its own boundary.
+Linux crowded/multi-Agent Turn envelopes measure 10,766 / 9,391 UTF-8 bytes;
+plain envelope, transaction detail and multi-subagent measure
+8,544 / 8,539 / 9,312. They still report `within_budget=false` and
+`turn_envelope_budget_exceeded`; small Turn and blocking-user-gate remain
+within at 8,057 / 6,045. These warnings are not a green performance SLO or
+admission authority. This calibration grants no execution quota, spending or
+provider permission and does not rewrite frozen experiment/promotion results.
+
+本轮固定真实 main/候选和同一负载，逐条保留当前任务、读取时序、新鲜度、恢复、
+继续前 replan、证据关联及合理下一步要求。仅调整 Windows 同样在 main 上超限的
+六处展示预算；增长、重复度、生产性能诊断及执行权限边界不变，原失败保留。
 
 1. **同口径测量。** 记录 base/head、负载、指标和测量边界。紧凑 JSON 字符、UTF-8
    字节、嵌套键数、真实 stdout 和 token 不可互换。延迟要保留样本窗口、负载和

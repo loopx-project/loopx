@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 from ..chat import redact_local_paths
 from ..feedback import validate_goal_id
+from ..capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
 from ..control_plane.goals.goal_amendment_runtime import execute_goal_amendment
 from ..control_plane.goals.source_session_registry_state import current_goal_ref
 from ..control_plane.projects.registry_codec import load_project_registry
@@ -83,10 +84,12 @@ class GoalAmendmentRequestMixin:
                 if len(query.get("operation_id", [])) != 1 or len(query.get("goal_instance_id", [])) != 1:
                     raise ValueError("Historical lookup requires one operation and exact Goal instance")
                 result = execute_goal_amendment(registry_path=source, goal_id=goal_id, goal_instance_id=query["goal_instance_id"][0],
-                    operation="receipt", actor_agent_id=None, parameters={"receipt_operation_id": query["operation_id"][0]})
+                    operation="receipt", actor_agent_id=None, parameters={"receipt_operation_id": query["operation_id"][0]},
+                    replan_configuration_reader=resolve_todo_replan_cadence_goal)
             else:
                 result = execute_goal_amendment(registry_path=source, goal_id=goal_ref["goal_id"],
-                    goal_instance_id=goal_ref["goal_instance_id"], operation="inspect", actor_agent_id=None)
+                    goal_instance_id=goal_ref["goal_instance_id"], operation="inspect", actor_agent_id=None,
+                    replan_configuration_reader=resolve_todo_replan_cadence_goal)
             self._send_json(_public(result))
         except (OSError, TypeError, ValueError) as exc:
             self._send_error(redact_local_paths(str(exc)), status=400, error_code="goal_amendment_unavailable")
@@ -104,7 +107,8 @@ class GoalAmendmentRequestMixin:
             parameters = body["parameters"]
             if set(parameters) != {"permission_scope", "terminal_conditions", "policy", "expected_provider_revision"}:
                 raise ValueError("Only initial root policy fields are accepted here")
-            common = dict(registry_path=source, goal_id=goal_id, goal_instance_id=str(body["goal_instance_id"]), actor_agent_id=None)
+            common = dict(registry_path=source, goal_id=goal_id, goal_instance_id=str(body["goal_instance_id"]), actor_agent_id=None,
+                replan_configuration_reader=resolve_todo_replan_cadence_goal)
             current = execute_goal_amendment(**common, operation="inspect")
             if current.get("ok") is not True:
                 self._send_json(_public(current))

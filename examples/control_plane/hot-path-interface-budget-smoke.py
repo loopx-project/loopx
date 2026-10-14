@@ -75,7 +75,10 @@ SURFACE_BUDGETS = {
         # One Agent-channel carrier avoids duplicating them in the CLI channel.
         # M3 adds one validated cadence readback envelope to the quota packet:
         # 357 -> 368 nested keys and 51 -> 52 top-level keys.
-        "max_json_chars": 15_500,
+        # Identical raw packet: 15,201 at the ordinary temp root, 15,865 at
+        # the original longer root. Full command routes are useful; retain
+        # them with 635 chars of headroom, without widening structural guards.
+        "max_json_chars": 16_500,
         "max_nested_keys": 376,
         "max_top_level_keys": 54,
     },
@@ -87,7 +90,10 @@ SURFACE_BUDGETS = {
         # this unchanged fixture (21,895 -> 22,560). Keep the internal source
         # revisions: quota consumes this status projection before its own CLI
         # compaction. The contract records why modest headroom is appropriate.
-        "max_json_chars": 23_000,
+        # The original longer temp root exposes 23,274 chars with unchanged
+        # 336 nested / 26 top-level keys. Preserve source revisions and full
+        # paths; 24k leaves 726 chars without widening structural guards.
+        "max_json_chars": 24_000,
         "max_nested_keys": 350,
         "max_top_level_keys": 27,
     },

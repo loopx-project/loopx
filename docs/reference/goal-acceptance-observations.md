@@ -30,6 +30,16 @@ The proposed [Goal direction baseline](../architecture/rfcs/goal-direction-basel
 material declarations and revision-bound usage receipts are not implemented here;
 historical progress does not establish that current direction materials were read.
 
+Goal Overview counts only currently passing criteria within the configured
+scope. The acceptance owner's `stale`, `held` and task-only `partial` states
+remain visible even when the retained receipt has the same contract revision.
+All declared criteria remain listed; reading them does not revalidate evidence
+or complete the Goal. Historical receipts remain in Delivery & evidence.
+
+中文：概览只统计当前覆盖范围内通过的条款。即使合同版本相同，依据已过期、
+关联待确认和仅任务检查通过仍分别显示；所有已声明条款都保留。查看不会重新
+验证依据或完成 Goal，历史回执仍可在“交付与依据”中读取。
+
 Status also exposes a separate `run_history.goals[].artifact_lifecycle` readout
 and Markdown summary: observed phase, evidence milestones, guards and next steps.
 It consumes the current Goal's session-runtime work observation before display

@@ -168,6 +168,10 @@ export type WorkspaceGoal = {
     lastActivityAt?: string | null;
     state?: string | null;
   }>;
+  /** Canonical registered identities; discovered task claimants do not grant binding authority. */
+  registeredAgentIds?: string[];
+  /** Host-compatible registered IDs from the canonical backend; absence grants no controls. */
+  zcodeGoalEligibleAgentIds?: string[];
   agentLaneCount?: number;
   agentLabel?: string;
   agentSentence: string;
@@ -558,6 +562,7 @@ export type PersonalWorkspaceCallbacks = {
   onStartLoopX?: (operation: "start" | "resume", agentId: string, goalId: string,
     settings?: LoopXModeSettings) => void;
   onSelectAgent?: (agentId: string) => void;
+  onSelectAgentModel?: (agentId: string, modelId: string) => void;
   onSelectChannel?: (channel: WorkspaceChannel) => void;
   onSelectGoal?: (goalId: string | null, view: WorkspaceGoalTab) => void;
   onSelectTodo?: (todoId: string | null) => void;

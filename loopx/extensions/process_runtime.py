@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import os
 import signal
@@ -14,6 +14,7 @@ from typing import BinaryIO
 
 _PROCESS_IO_CHUNK_BYTES = 64 * 1024
 _PROCESS_TERMINATE_GRACE_SECONDS = 1.0
+_PROCESS_GROUP_STOP_TIMEOUT_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -31,25 +32,59 @@ def _wait_for_process(process: subprocess.Popen[bytes] | subprocess.Popen[str], 
     return True
 
 
+def _posix_owned_group_has_exited(process_group_id: int, timeout: float) -> bool:
+    snapshot = subprocess.run(
+        ["ps", "-A", "-o", "pgid=", "-o", "stat="],
+        capture_output=True, text=True, encoding="utf-8", check=False,
+        timeout=timeout,
+    )
+    if snapshot.returncode != 0 or not snapshot.stdout.strip():
+        raise RuntimeError("owned POSIX process-group observation failed")
+    live = False
+    for line in snapshot.stdout.splitlines():
+        if not line.strip():
+            continue
+        fields = line.split()
+        if len(fields) != 2 or not fields[0].isdecimal():
+            raise RuntimeError("invalid owned POSIX process-group observation")
+        # Zombies cannot execute. Stopped and unknown states remain live.
+        if int(fields[0]) == process_group_id and not fields[1].startswith("Z"):
+            live = True
+    return not live
+
+
+def _wait_for_posix_process_group_stop(process_group_id: int) -> None:
+    deadline = time.monotonic() + _PROCESS_GROUP_STOP_TIMEOUT_SECONDS
+    while True:
+        try:
+            os.killpg(process_group_id, 0)
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            # Darwin can report EPERM for a dead, unreaped group. Require
+            # observation rather than accepting a sent signal as cleanup.
+            pass
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("owned POSIX process group did not stop before cleanup deadline")
+        try:
+            exited = _posix_owned_group_has_exited(process_group_id, remaining)
+        except (OSError, subprocess.TimeoutExpired, UnicodeError) as error:
+            raise RuntimeError("owned POSIX process-group observation failed") from error
+        if exited:
+            return
+        time.sleep(min(.01, max(0, deadline - time.monotonic())))
+
+
 def _darwin_owned_group_has_exited(process: subprocess.Popen[bytes] | subprocess.Popen[str]) -> bool:
     # Darwin can report EPERM rather than ESRCH for a now-empty process group.
     # A reaped leader alone does not prove its descendants have exited.
     if sys.platform != "darwin" or process.poll() is None:
         return False
     try:
-        snapshot = subprocess.run(
-            ["/bin/ps", "-axo", "pgid="], capture_output=True, text=True,
-            encoding="utf-8", check=False, timeout=1,
-        )
-    except (OSError, subprocess.TimeoutExpired, UnicodeError):
+        return _posix_owned_group_has_exited(process.pid, 1)
+    except (OSError, subprocess.TimeoutExpired, UnicodeError, RuntimeError):
         return False
-    groups = snapshot.stdout.split()
-    return (
-        snapshot.returncode == 0
-        and bool(groups)
-        and all(group.isdecimal() for group in groups)
-        and str(process.pid) not in groups
-    )
 
 
 def _terminate_posix_process_group(
@@ -78,9 +113,14 @@ def _terminate_posix_process_group(
         except PermissionError:
             if not _darwin_owned_group_has_exited(process):
                 raise
+            process.wait()
+            return
     if process.poll() is None:
         process.kill()
         process.wait()
+    # KILL delivery is asynchronous; reaping only the leader does not prove
+    # descendants stopped writing. Observe absence or an all-zombie group.
+    _wait_for_posix_process_group_stop(process_group_id)
 
 
 def _terminate_windows_process_tree(
@@ -112,7 +152,10 @@ def terminate_process_tree(
 
     POSIX callers must launch with ``start_new_session=True``. Zero grace sends
     one force-kill signal, not TERM followed by KILL against an exiting group.
-    This is OS transport only; callers own deadlines and failure decisions.
+    After KILL, POSIX cleanup confirms absence or only zombie members within a
+    one-second observation budget. Unknown/failed observation raises rather than
+    certifying cleanup. This is OS transport only; callers own execution deadlines
+    and failure decisions.
     """
     if os.name == "posix":
         _terminate_posix_process_group(process, grace_seconds)
@@ -127,6 +170,74 @@ def terminate_process_tree(
         process.kill()
         process.wait()
 
+
+
+def prepare_owned_process_cleanup(process: subprocess.Popen[bytes]) -> Callable[[], None]:
+    """Retain diagnostic tree ownership even if its leader exits.
+
+    Windows callers must create the child suspended (CREATE_SUSPENDED) so
+    it cannot spawn descendants before assignment to the private Job Object.
+    POSIX callers must start a new session, as for terminate_process_tree.
+    """
+    if os.name != "nt":
+        return lambda: terminate_process_tree(process, 0)
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    native = ctypes.WinDLL("ntdll")
+    kernel.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    kernel.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p]
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    native.NtResumeProcess.argtypes = [wintypes.HANDLE]
+    native.NtResumeProcess.restype = ctypes.c_long
+
+    class Accounting(ctypes.Structure):
+        _fields_ = [(name, ctypes.c_longlong) for name in ("user", "kernel", "period_user", "period_kernel")] + [
+            (name, wintypes.DWORD) for name in ("faults", "total", "active", "terminated")]
+
+    job = kernel.CreateJobObjectW(None, None)
+    if not job:
+        process.kill()
+        process.wait()
+        raise OSError("Owned process job creation failed")
+    try:
+        if not kernel.AssignProcessToJobObject(job, int(process._handle)):
+            raise OSError("Owned process job assignment failed")
+        if native.NtResumeProcess(int(process._handle)) != 0:
+            raise OSError("Owned process resume failed")
+    except BaseException:
+        process.kill()
+        process.wait()
+        kernel.CloseHandle(job)
+        raise
+    closed = False
+
+    def cleanup() -> None:
+        nonlocal closed
+        if closed:
+            return
+        try:
+            if not kernel.TerminateJobObject(job, 1):
+                raise OSError("Owned process job termination failed")
+            deadline = time.monotonic() + 1
+            while True:
+                accounting = Accounting()
+                if not kernel.QueryInformationJobObject(job, 1, ctypes.byref(accounting), ctypes.sizeof(accounting), None):
+                    raise OSError("Owned process job observation failed")
+                if accounting.active == 0:
+                    process.wait(timeout=max(.01, deadline - time.monotonic()))
+                    return
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("Owned process job cleanup unconfirmed")
+                time.sleep(.01)
+        finally:
+            kernel.CloseHandle(job)
+            closed = True
+    return cleanup
 
 def run_capped_process(
     argv: Sequence[str],

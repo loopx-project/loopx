@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -92,6 +94,24 @@ def main() -> int:
         "- name: Replace desktop checksum manifest last"
     )
 
+    # Opt-in is a read-only CI provider mode; ordinary publishing keeps its owner.
+    assert text.count("contents: write") == 1
+    assert_contains(text, "contents: read\n      id-token: write\n      attestations: write")
+    assert_contains(text, "publication_probe:")
+    assert_contains(text, "type: boolean\n        default: false")
+    assert_contains(
+        text,
+        "if: github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && inputs.publication_probe == true)",
+    )
+    assert_contains(text, "ref: ${{ github.workflow_sha }}")
+    assert_contains(text, "path: .release-tooling")
+    assert_contains(text, "persist-credentials: false")
+    assert_contains(text, "name: desktop-source-")
+    assert_contains(text, "timeout-minutes: 30")
+    assert_contains(text, "timeout-minutes: 10")
+    assert_absent(text, "continue-on-error")
+    assert_absent(text, "actions: write")
+
     with tempfile.TemporaryDirectory(prefix="loopx-desktop-release-") as temporary:
         dist_dir = Path(temporary)
         version = "0.5.4"
@@ -130,6 +150,13 @@ def main() -> int:
         else:
             raise AssertionError("desktop release accepted a stale checksum manifest")
 
+    subprocess.run(
+        ["node", str(REPO_ROOT / "examples/desktop-release-preflight-smoke.mjs")],
+        cwd=REPO_ROOT,
+        env={**os.environ, "LOOPX_TEST_PYTHON": sys.executable},
+        check=True,
+        timeout=30,
+    )
     print("desktop-release-workflow-smoke: ok")
     return 0
 

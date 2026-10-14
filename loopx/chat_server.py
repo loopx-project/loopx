@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .presentation import configuration_api as config_api
 from .attached_session_api import AttachedSessionRequestMixin
+from .zcode_goal_mode.api import ZCodeGoalRequestMixin
 from .chat import (
     TodoReviewPreviewConflict,
     apply_todo_review_preview,
@@ -47,7 +48,7 @@ from .chat_manager import (
 )
 from .chat_session_open import open_chat_session
 from .chat_ssh_source_api import SshSourceRequestMixin
-from .chat_store import ChatSessionStore
+from .chat_store import ChatSessionStore, normalize_agent_model_id
 from .extensions.lark.private_conversation_api import PrivateConversationRequestMixin, PRIVATE_CONVERSATIONS_PATH
 from .extensions.lark.conversation_identity import observe_lark_conversation_identity
 from .extensions.lark.private_conversations import LarkPrivateConversations
@@ -116,6 +117,7 @@ DEFAULT_CHAT_PATH = "/chat/"
 DEFAULT_CHAT_STATUS_PATH = "/status.json"
 CHAT_CAPABILITIES_PATH = "/api/chat/capabilities"
 CHAT_ENDPOINTS_PATH = "/api/chat/endpoints"
+CHAT_AGENT_MODEL_OPTIONS_PATH = "/api/chat/agent-model-options"
 CHAT_SESSIONS_PATH = "/api/chat/sessions"
 CHAT_ATTACH_SESSION_PATH = f"{CHAT_SESSIONS_PATH}/attach"
 CHAT_PROJECTION_MESSAGES_PATH = "/api/chat/projection-messages"
@@ -456,6 +458,7 @@ class ChatHTTPServer(ThreadingHTTPServer):
 
 
 class ChatRequestHandler(
+    ZCodeGoalRequestMixin,
     PrivateConversationRequestMixin,
     CompletedTodoRequestMixin,
     ExploreResultsRequestMixin,
@@ -582,7 +585,7 @@ class ChatRequestHandler(
     def _create_session(self) -> None:
         try:
             body = self._read_json()
-            unknown = set(body) - {"goal_id", "agent_id", "mode", "context_kind", "project_ref"}
+            unknown = set(body) - {"goal_id", "agent_id", "agent_model_id", "mode", "context_kind", "project_ref"}
             if unknown:
                 raise ValueError("unknown session field")
             goal_id = _compact_text(body.get("goal_id"), limit=160) or self.server.selected_goal_id or ""
@@ -591,6 +594,8 @@ class ChatRequestHandler(
             # own default through its own owner instead of inheriting whatever
             # executor this client happens to ship with.
             requested_endpoint = _compact_text(body.get("agent_id"), limit=80)
+            model_value = body.get("agent_model_id")
+            requested_model = normalize_agent_model_id(model_value) if model_value not in (None, "") else None
             mode = _compact_text(body.get("mode"), limit=40) or "resume_latest"
             context_kind = _compact_text(body.get("context_kind"), limit=40) or "goal"
             if context_kind not in {"goal", "manager", "project"}:
@@ -630,6 +635,7 @@ class ChatRequestHandler(
                 objective=runtime_objective,
                 mode=mode,
                 requested_endpoint=requested_endpoint,
+                agent_model_id=requested_model,
                 **({"project_ref": project_ref} if context_kind == "project" else {}),
             )
         except CodexChatAgentError as exc:
@@ -646,12 +652,35 @@ class ChatRequestHandler(
                 "session_id": public["session_id"],
                 "goal_id": public["goal_id"],
                 "agent_id": public.get("executor_endpoint_id") or requested_endpoint,
+                "agent_model_id": public.get("agent_model_id"),
                 "context_kind": context_kind,
                 "resumed": resumed,
                 "session": public,
             },
             status=200 if resumed else 201,
         )
+
+    def _agent_model_options(self) -> None:
+        try:
+            body = self._read_json()
+            if set(body) != {"agent_id"}:
+                raise ValueError("agent_id is required")
+            agent_id = _compact_text(body.get("agent_id"), limit=80)
+            if not agent_id:
+                raise ValueError("agent_id is required")
+            # Discovery is deliberately bounded to a selected, known endpoint.
+            # It opens no persisted LoopX Chat session and exposes no command or
+            # local workspace data to the browser.
+            result = self.server.runtime_controller.inspect_agent_model_options(
+                agent_id, work_dir=Path.cwd()
+            )
+        except CodexChatAgentError as exc:
+            self._send_error(str(exc), status=424, gate=exc.gate, error_code=exc.error_code)
+            return
+        except Exception as exc:  # noqa: BLE001 - compact local validation error.
+            self._send_error(str(exc))
+            return
+        self._send_json({"ok": True, "schema_version": "loopx_chat_agent_model_options_v1", **result})
 
     def _record_projection_exchange(self) -> None:
         """Persist a status-only exchange in the same owner-local message store."""
@@ -1389,6 +1418,8 @@ class ChatRequestHandler(
             return self._handle_extension_presentation_surfaces()
         if path == DEFAULT_EXTENSION_PROJECTION_PATH:
             return self._handle_extension_projection(parse_qs(urlparse(self.path).query))
+        if self._dispatch_zcode_goal(path):
+            return
         if path == "/api/chat/projects":
             contexts = self.server.runtime_controller.project_contexts.available()
             roots = [Path(context["workspace_path"]) for context in contexts]
@@ -1498,8 +1529,11 @@ class ChatRequestHandler(
         if not self._require_loopback_origin():
             return
         path = urlparse(self.path).path
+        if self._dispatch_zcode_goal(path, apply=True):
+            return
         post_dispatch = {
             CHAT_SESSIONS_PATH: self._create_session,
+            CHAT_AGENT_MODEL_OPTIONS_PATH: self._agent_model_options,
             CHAT_ATTACH_SESSION_PATH: self._attach_session,
             CHAT_PROJECTION_MESSAGES_PATH: self._record_projection_exchange,
             CHAT_ACTION_PREVIEW_PATH: self._action_preview,

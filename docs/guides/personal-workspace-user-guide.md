@@ -82,6 +82,18 @@ graph TD
    - `[汇总所有 Goal 进展 (立即发送)]`：带有蓝色高亮标识，点击后**立即发送**并在右下角弹出托盘展示全局总结；
    - `[创建新 Goal (草稿)]`：快速填入目标模板草稿。
 
+### Unrecognized execution observations / 执行方式未知
+
+A session with an open Turn but a missing or unknown execution mode is shown
+as unknown. It contributes neither managed execution nor a host claim, and its
+timestamp cannot refresh another worker's activity. The workspace brief,
+sidebar and Goal vitals use the same distinction. Explicit managed activity or
+an independent host observation still establishes execution.
+
+会话有未结束的回合，但执行方式缺失或未知时，界面显示“执行方式未知”，
+不计入正在执行或宿主已领取，也不会用它的时间刷新其他工作的活跃状态。
+首页摘要、侧栏和 Goal 状态保持一致；明确的托管执行或独立宿主观测仍正常显示。
+
 ### 问答中的等待与失败
 
 前端与飞书的 Chat 回答保留项目内文件的相对位置，例如 `./notes/report.md`，便于核对产物；机器目录、项目外路径及另外声明为私有的目录仍隐藏。项目根目录本身显示为 `[project]`。本机 Markdown 链接保留可读标题，不发送无法在飞书使用的本地链接；状态、提议和权限门禁仍使用完整路径脱敏。这仅改变展现，不授予读取或写入权限。

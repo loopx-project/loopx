@@ -426,37 +426,14 @@ def _compact_action_portfolio(portfolio: dict[str, Any]) -> dict[str, Any]:
 def _compact_vision_continuation_audit(
     audit: dict[str, Any],
 ) -> dict[str, Any]:
-    retained_fields = (
-        "schema_version",
-        "required",
-        "agent_id",
-        "decision",
-        "selected_todo_is_goal_completion",
-        "closeout_allowed_without_evidence",
-        "trigger_count",
-        "trigger_kinds",
-        "required_before_closeout",
-        "recommended_action",
-        "outcome_checkpoint_diagnostics",
-    )
-    compact = {key: audit[key] for key in retained_fields if key in audit}
-    judge = audit.get("vision_gap_judge")
-    if isinstance(judge, dict):
-        retained_judge_fields = (
-            "schema_version",
-            "done",
-            "decision",
-            "reason",
-            "evidence_read_instruction",
-        )
-        compact["vision_gap_judge"] = {
-            key: judge[key] for key in retained_judge_fields if key in judge
-        }
-    omitted_fields = sorted(set(audit) - set(compact))
+    # This is an executable decision contract, including the evidence and
+    # continuation rules in its prose. Keep it complete once; identical
+    # nested copies can reference this in-response owner below.
+    compact = dict(audit)
     compact["payload_compaction"] = {
         "schema_version": QUOTA_CLI_VISION_COMPACTION_SCHEMA_VERSION,
         "mode": "compact_hot_path",
-        "omitted_fields": omitted_fields,
+        "omitted_fields": [],
         "full_detail_cold_path": QUOTA_CLI_VISION_DETAIL_COMMAND,
     }
     return compact

@@ -32,6 +32,7 @@ PRIMARY_SHOWCASE_IDS = [
     "2026-07-cpp-accuracy-long-run",
     "2026-07-four-day-unattended-agent",
     "2026-07-public-engine-refactor",
+    "2026-10-vllm-long-context-optimization",
     "2026-06-27-overnight-pr-batch",
     "2026-06-24-pr-issue-auto-fix",
     "2026-06-23-agent-to-agent-pr-comments",

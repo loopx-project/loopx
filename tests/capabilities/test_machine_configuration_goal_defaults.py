@@ -331,7 +331,7 @@ def test_product_default_and_namespace_removal_use_six_settled_turns(tmp_path, m
     assert _history_goal(registry_path, runtime_root)["execution_profile"]["replan_after_effective_turns"] == 6
 
 
-def test_stride_version_inherits_as_one_review_configuration_and_rolls_back(tmp_path: Path) -> None:
+def test_stride_version_inherits_and_rolls_back(tmp_path: Path) -> None:
     from loopx.chat_goal_configuration_api import _goal_capability_options
     from loopx.capabilities.goal_inspection import inspect_goal_capabilities
 
@@ -350,7 +350,7 @@ def test_stride_version_inherits_as_one_review_configuration_and_rolls_back(tmp_
     configure_machine_configuration(runtime_root=runtime_root, registry=owner,
         configuration=configuration, execute=True, expected_plan_revision=preview["plan_revision"])
     assert _history_goal(registry_path, runtime_root)["execution_profile"]["stride_strategy"] == "evidence_conditioned_v1"
-    # A legacy Goal override pins the whole review configuration, including off.
+    # A cadence-only Goal override retains the previous default-off meaning.
     configure_goal(registry_path=registry_path, goal_id=GOAL_ID,
         execution_replan_after_turns=3, execute=True)
     assert "stride_strategy" not in _history_goal(registry_path, runtime_root)["execution_profile"]
@@ -389,6 +389,86 @@ def test_stride_version_inherits_as_one_review_configuration_and_rolls_back(tmp_
         configure_goal(registry_path=registry_path, goal_id=GOAL_ID,
             execution_replan_after_turns=3, execution_stride_strategy="future_v2", execute=True)
     assert registry_path.read_bytes() == before
+
+
+def test_goal_stride_only_uses_live_review_interval(tmp_path: Path) -> None:
+    from loopx.chat_goal_configuration_api import _goal_capability_options
+    from loopx.capabilities.goal_inspection import inspect_goal_capabilities
+
+    _repo, registry_path, runtime_root = _fixture(tmp_path)
+    options = _goal_capability_options("todo_replan_cadence", {
+        "stride_strategy": "evidence_conditioned_v1",
+    })
+    assert options == {
+        "execution_stride_strategy": "evidence_conditioned_v1",
+        "clear_execution_replan_after_turns": True,
+        "clear_execution_replan_after_todos": True,
+    }
+    before = registry_path.read_bytes()
+    preview = configure_goal(registry_path=registry_path, goal_id=GOAL_ID, **options)
+    assert preview["ok"] and preview["changed"]
+    assert registry_path.read_bytes() == before
+    configure_goal(registry_path=registry_path, goal_id=GOAL_ID, execute=True, **options)
+    raw = json.loads(registry_path.read_text())["goals"][0]["execution_profile"]
+    assert raw["stride_strategy"] == "evidence_conditioned_v1"
+    assert "replan_after_effective_turns" not in raw
+    assert "replan_after_completed_todos" not in raw
+    inherited = _history_goal(registry_path, runtime_root)["execution_profile"]
+    assert inherited["replan_after_completed_todos"] == 2
+    assert inherited["stride_strategy"] == "evidence_conditioned_v1"
+
+    def review() -> dict[str, object]:
+        inspection = inspect_goal_capabilities(
+            registry_path=registry_path, runtime_root=runtime_root, goal_id=GOAL_ID,
+        )["configuration"]
+        return next(row for row in inspection["capability_catalog"]["capabilities"]
+                    if row["capability_id"] == "todo_replan_cadence")
+
+    first = review()
+    assert first["current"] == {"stride_strategy": "evidence_conditioned_v1"}
+    assert first["effective_configuration"]["configuration"] == {
+        "count_unit": "completed_todos", "count": 2,
+        "stride_strategy": "evidence_conditioned_v1",
+    }
+
+    machine_registry = build_builtin_machine_configuration_registry()
+    machine = _machine_configuration()
+    machine["namespaces"]["todo_replan_cadence"] = {
+        "schema_version": "todo_replan_cadence_machine_defaults_v2",
+        "count_unit": "effective_turns", "count": 4, "stride_strategy": "off",
+    }
+    preview = configure_machine_configuration(
+        runtime_root=runtime_root, registry=machine_registry, configuration=machine,
+    )
+    configure_machine_configuration(
+        runtime_root=runtime_root, registry=machine_registry, configuration=machine,
+        execute=True, expected_plan_revision=preview["plan_revision"],
+    )
+    projected = _history_goal(registry_path, runtime_root)["execution_profile"]
+    assert projected["replan_after_effective_turns"] == 4
+    assert projected["stride_strategy"] == "evidence_conditioned_v1"
+    second = review()
+    assert second["current"] == first["current"]
+    assert second["effective_configuration"]["configuration"]["count"] == 4
+    assert second["effective_configuration"]["effective_revision"] != first["effective_configuration"]["effective_revision"]
+
+    configure_goal(registry_path=registry_path, goal_id=GOAL_ID,
+        execution_replan_after_turns=3, execute=True)
+    assert _history_goal(registry_path, runtime_root)["execution_profile"]["replan_after_effective_turns"] == 3
+    assert _history_goal(registry_path, runtime_root)["execution_profile"]["stride_strategy"] == "evidence_conditioned_v1"
+    # Strategy-only capability JSON replaces its interval override; the CLI's
+    # strategy-only patch above does not silently clear a stored interval.
+    configure_goal(registry_path=registry_path, goal_id=GOAL_ID, execute=True, **options)
+    raw = json.loads(registry_path.read_text())["goals"][0]["execution_profile"]
+    assert "replan_after_effective_turns" not in raw
+    assert raw["stride_strategy"] == "evidence_conditioned_v1"
+    assert _history_goal(registry_path, runtime_root)["execution_profile"]["replan_after_effective_turns"] == 4
+
+    configure_goal(registry_path=registry_path, goal_id=GOAL_ID,
+        execution_stride_strategy="off", execute=True)
+    assert _history_goal(registry_path, runtime_root)["execution_profile"]["stride_strategy"] == "off"
+    with pytest.raises(ValueError, match="stride_strategy"):
+        _goal_capability_options("todo_replan_cadence", {"stride_strategy": "unknown"})
 
 
 @pytest.mark.parametrize("schema_version, strategy", [

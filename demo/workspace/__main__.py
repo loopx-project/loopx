@@ -17,7 +17,7 @@ from loopx.bootstrap import bootstrap_project
 from loopx.configure_goal import configure_goal
 from loopx.control_plane.todos.handoff_mode import set_goal_handoff_mode
 from loopx.state_refresh import refresh_state_run
-from loopx.todos import add_goal_todo, complete_goal_todo, update_goal_todo
+from loopx.todos import add_goal_todo, complete_goal_todo
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
@@ -72,16 +72,37 @@ def write_story_artifacts(project: Path, story: dict[str, Any], notice: str) -> 
 
 def seed_delivery_tasks(story: dict[str, Any], registry: Path, runtime: Path) -> list[dict[str, Any]]:
     """Record each story dependency as the typed relation its state allows."""
-    todos: list[dict[str, Any]] = []
     ids: dict[str, str] = {}
     by_key = {task["key"]: task for task in story["tasks"]}
     dependents: dict[str, list[str]] = {}
     for task in story["tasks"]:
         if task.get("after"):
             dependents.setdefault(task["after"], []).append(task["key"])
-    for task in story["tasks"]:
+    # Author dependency metadata during creation. A blocked Todo cannot acquire
+    # an execution lease merely to add its relationship after the fact.
+    pending = dict(by_key)
+    while pending:
+        ready = None
+        for task in pending.values():
+            linked = [key for key in dependents.get(task["key"], [])
+                      if by_key[key]["status"] != "deferred"]
+            if len(linked) > 1 and task["status"] != "done":
+                raise ValueError(f"{task['key']} can unblock only one task")
+            required = ([task["after"]] if task["status"] == "deferred"
+                        else linked if task["status"] != "done" else [])
+            if all(key in ids for key in required):
+                ready = task
+                break
+        if ready is None:
+            raise ValueError("Story task relationships contain a cycle or missing predecessor")
+        task = ready
         owner, status, title = task["agent"], task["status"], task["title"]
         after = task.get("after")
+        linked = [key for key in dependents.get(task["key"], [])
+                  if by_key[key]["status"] != "deferred"]
+        required_scope = ([{"schema_version": "decision_scope_v0", "kind": "direction",
+                            "granularity": "action", "scope_key": f"{story['id']}:{after[5:]}"}]
+                          if after and after.startswith("gate:") else None)
         result = checked(
             add_goal_todo(
                 registry_path=registry,
@@ -95,11 +116,14 @@ def seed_delivery_tasks(story: dict[str, Any], registry: Path, runtime: Path) ->
                 claimed_by=owner,
                 status="open" if status == "done" else status,
                 resume_when="todo_done:" + ids[after] if status == "deferred" else None,
+                unblocks_todo_id=ids[linked[0]] if linked and status != "done" else None,
+                required_decision_scopes=required_scope,
                 note=f"Phase: {task['phase']}. See BRIEF.md and calculations.json.",
             )
         )
         ids[task["key"]] = result["todo_id"]
-        todos.append({**task, "todo_id": result["todo_id"]})
+        pending.pop(task["key"])
+    todos = [{**task, "todo_id": ids[task["key"]]} for task in story["tasks"]]
     for task in story["tasks"]:
         # Deferred work already waits on its condition; the rest needs a link.
         linked = [
@@ -117,19 +141,6 @@ def seed_delivery_tasks(story: dict[str, Any], registry: Path, runtime: Path) ->
                     evidence="Scenario replay checkpoint; BRIEF.md, working-table.csv and calculations.json retain the planning inputs. No live execution receipt claimed.",
                     successor_todo_ids=[ids[key] for key in linked] or None,
                     no_followup=not linked,
-                )
-            )
-        elif linked:
-            if len(linked) > 1:
-                raise ValueError(f"{task['key']} can unblock only one task")
-            checked(
-                update_goal_todo(
-                    registry_path=registry,
-                    runtime_root_arg=str(runtime),
-                    goal_id=story["id"],
-                    todo_id=ids[task["key"]],
-                    agent_id=task["agent"],
-                    unblocks_todo_id=ids[linked[0]],
                 )
             )
     return todos
@@ -189,6 +200,11 @@ def seed_story(root: Path, story: dict[str, Any], notice: str) -> dict[str, Any]
     gated = {t["after"]: t["todo_id"] for t in todos if (t.get("after") or "").startswith("gate:")}
     gates = {}
     for decision in story["gates"]:
+        targets = [todo for todo in todos if todo.get("after") == "gate:" + decision["key"]]
+        if len(targets) != 1:
+            raise ValueError("Each demo decision must have one direct dependent")
+        scope = {"schema_version": "decision_scope_v0", "kind": "direction",
+                 "granularity": "action", "scope_key": f"{story['id']}:{decision['key']}"}
         gate = checked(
             add_goal_todo(
                 registry_path=registry,
@@ -199,6 +215,7 @@ def seed_story(root: Path, story: dict[str, Any], notice: str) -> dict[str, Any]
                 action_kind="approve",
                 blocks_agent=decision["agent"],
                 unblocks_todo_id=gated["gate:" + decision["key"]],
+                decision_scope=scope,
                 text="[P0] " + decision["title"],
             )
         )
@@ -206,27 +223,6 @@ def seed_story(root: Path, story: dict[str, Any], notice: str) -> dict[str, Any]
             "todo_id": gate["todo_id"],
             "agent": decision["agent"],
         }
-    # The App and CLI replay share the canonical User completion relationship.
-    # Do not teach the demo a second writer that opens the dependent afterward.
-    for key, gate in gates.items():
-        targets = [todo for todo in todos if todo.get("after") == "gate:" + key]
-        if len(targets) != 1:
-            raise ValueError("Each demo decision must have one direct dependent")
-        target = targets[0]
-        scope = {"schema_version": "decision_scope_v0", "kind": "direction",
-                 "granularity": "action", "scope_key": f"{story['id']}:{key}"}
-        checked(update_goal_todo(
-            registry_path=registry, runtime_root_arg=str(runtime),
-            goal_id=story["id"], todo_id=gate["todo_id"],
-            unblocks_todo_id=target["todo_id"], decision_scope=scope,
-            agent_id=gate["agent"], reason="Bind the demo decision to its dependent.",
-        ))
-        checked(update_goal_todo(
-            registry_path=registry, runtime_root_arg=str(runtime),
-            goal_id=story["id"], todo_id=target["todo_id"],
-            required_decision_scopes=[scope], agent_id=target["agent"],
-            reason="Wait for the demo owner decision.",
-        ))
     monitors = []
     for owner, title, cadence, target in story["monitors"]:
         monitor = checked(
@@ -352,9 +348,10 @@ def run_isolated(args: argparse.Namespace, root: Path) -> None:
     env = {
         k: v
         for k, v in os.environ.items()
-        if k in {"PATH", "LANG", "LC_ALL", "TMPDIR", "SYSTEMROOT"}
+        if k in {"PATH", "LANG", "LC_ALL", "TMPDIR", "TEMP", "TMP", "SYSTEMROOT"}
     }
-    env.update(HOME=str(home), CODEX_HOME=str(home / ".codex"), PYTHONPATH=str(REPO))
+    env.update(HOME=str(home), USERPROFILE=str(home),
+               CODEX_HOME=str(home / ".codex"), PYTHONPATH=str(REPO))
     # Paths and ports are data, never arguments to an interpreter invocation.
     result = subprocess.run(
         [sys.executable, "-m", "demo.workspace", args.command, "--_isolated"],

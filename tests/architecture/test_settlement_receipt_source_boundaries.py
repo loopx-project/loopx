@@ -8,6 +8,7 @@ vocabularies in F1/F2 or establish whole-program producer completeness.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from itertools import product
@@ -232,22 +233,30 @@ def test_committed_replay_constructs_receipts_without_executing_again(
 
 
 # Explicit injected envelopes prove decoder admission only, never production.
-@pytest.mark.parametrize(
-    "kind",
-    [
-        "invalid_identity",
-        "receipt_missing",
-        "identity_mismatch",
-        "writeback_missing",
-        "writeback_rejected",
-        "quota_spend_rejected",
-        "terminal_closeout_rejected",
-        "cancelled",
-        "permission_denied",
-        "budget_rejected",
-        "effect_outcome_unknown",
-    ],
-)
+EXTERNAL_FAILURE_KINDS = [
+    "invalid_identity",
+    "receipt_missing",
+    "receipt_unbound",
+    "identity_mismatch",
+    "writeback_missing",
+    "writeback_rejected",
+    "quota_spend_rejected",
+    "terminal_closeout_rejected",
+    "cancelled",
+    "permission_denied",
+    "budget_rejected",
+    "effect_outcome_unknown",
+]
+
+
+def test_failure_input_witnesses_cover_the_registered_wire_domain():
+    registry = json.loads((ROOT / "loopx/semantics/vocabulary_v0.json").read_text())
+    assert set(EXTERNAL_FAILURE_KINDS) == set(
+        registry["vocabularies"]["settlement_failure_kind"]["values"]
+    )
+
+
+@pytest.mark.parametrize("kind", EXTERNAL_FAILURE_KINDS)
 def test_external_failure_envelope_survives_ts_and_python_decoders(kind):
     envelope = {
         "value": None,
@@ -262,6 +271,38 @@ def test_external_failure_envelope_survives_ts_and_python_decoders(kind):
     assert result == {"execute": False, "result": envelope}
     _, _, failure = decode_settlement_result_payload(result["result"])
     assert failure.kind.value == kind
+
+
+def test_native_lease_permission_denial_is_a_real_source_without_a_write(tmp_path):
+    source = tmp_path / "authority.json"
+    source.write_text("isolated-authority-v1")
+    runtime = tmp_path / "runtime"
+    request = {
+        "schema_version": "loopx_task_lease_acquire_native_v0",
+        "runtime_root": str(runtime), "goal_id": "witness-goal",
+        "todo_id": "todo_witness", "owner": "witness-agent",
+        "idempotency_key": "witness-turn", "ttl_seconds": 120,
+        "write_scopes": [], "expected_version": None,
+        "authority": {
+            "handoff_mode": "legacy",
+            "registered_agent_candidates": [["witness-agent"]],
+            "todos": [{"todo_id": "todo_witness", "status": "open",
+                       "claimed_by": None, "excluded_agents": ["witness-agent"]}],
+            "todo_projection_error": None,
+            "source_receipts": [{"source_id": "authority", "path": str(source),
+                                 "state": "file", "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}],
+        },
+    }
+    direct = _direct("lease_acquire", request)
+    bridged = effect_runtime_result("task_lease.acquire.native", request)
+    assert bridged == direct
+    assert direct["ok"] is False
+    # Lease settlement summaries have their own wire shape (step, not step_kind).
+    assert direct["settlement"]["receipts"] == []
+    assert direct["settlement"]["failure"] == {
+        "step": "validation", "kind": "permission_denied", "code": "owner_excluded_from_todo",
+    }
+    assert not list(runtime.rglob("task-leases/*.json"))
 
 
 @pytest.mark.parametrize(
@@ -377,6 +418,21 @@ def _readback_fixture(
         "infer_turn_instance_id": False,
         "allow_unbound_binding": False,
     }
+
+
+def test_unbound_guard_readback_produces_the_distinct_failure(tmp_path, identity):
+    request = _readback_fixture(tmp_path, identity)
+    events = tmp_path / "goals" / identity["goal_id"] / "rollout-event-log.jsonl"
+    guard = json.loads(events.read_text().splitlines()[0])
+    guard["details"] = {}
+    events.write_text(json.dumps(guard) + "\n")
+    direct = _direct("readback", request)
+    bridged = effect_runtime_result("quota.settlement.read", request)
+    assert bridged == direct
+    _, receipts, failure = decode_settlement_result_payload(direct["settlement"]["result"])
+    assert failure.kind.value == "receipt_unbound"
+    assert receipts == ()
+    assert failure.details["binding_kind"] == "unbound"
 
 
 @pytest.mark.parametrize(

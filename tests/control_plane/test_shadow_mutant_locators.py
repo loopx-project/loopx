@@ -1,6 +1,7 @@
 """Every Stage 2C mutation must still target the current production source."""
 from __future__ import annotations
 
+import ast
 import importlib.util
 import sys
 from pathlib import Path
@@ -26,3 +27,19 @@ def test_mutation_targets_current_production_source(case) -> None:
         original = (ROOT / relative_path).read_text(encoding="utf-8")
         mutated = edit(original)
         assert mutated != original, f"{case.name}: mutation did not change {relative_path}"
+
+
+@pytest.mark.parametrize("name", ["fence_outside_lock", "source_binding_outside_lock"])
+def test_lock_mutations_preserve_executable_dry_run_and_locked_body(name: str) -> None:
+    case = next(case for case in HARNESS.CASES if case.name == name)
+    relative_path, edit = case.edits[0]
+    mutated = edit((ROOT / relative_path).read_text(encoding="utf-8"))
+    compile(mutated, relative_path, "exec")
+    function = next(node for node in ast.parse(mutated).body
+                    if isinstance(node, ast.FunctionDef)
+                    and node.name == "legacy_todo_write_transaction")
+    guard, locks = function.body[-2:]
+    assert isinstance(guard, ast.If) and ast.unparse(guard.test) == "not dry_run"
+    assert isinstance(locks, ast.With) and len(locks.items) == 2
+    assert len(locks.body) == 1 and isinstance(locks.body[0], ast.Expr)
+    assert isinstance(locks.body[0].value, ast.Yield)

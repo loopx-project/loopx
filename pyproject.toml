@@ -36,6 +36,7 @@ deepseek-harness = [
   "deepseek-harness-sdk==0.1.5rc1",
 ]
 test = [
+  "distlib>=0.3.9,<1; sys_platform == 'win32'",
   "resvg-py==0.5.0",
   "defusedxml==0.7.1",
   "pillow>=11,<13",
@@ -92,6 +93,7 @@ include = ["loopx*"]
 "loopx.opencode2_goal_mode" = ["*.mjs", "README.md"]
 "loopx.pi_goal_mode" = ["*.ts", "*.mjs", "README.md"]
 "loopx.kunluncode_goal_mode" = ["README.md"]
+"loopx.zcode_goal_mode" = ["README.md", "*.ts", "contract.json", "images/*.png"]
 
 [tool.setuptools.data-files]
 "share/loopx/skills/loopx-material" = [

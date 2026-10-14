@@ -888,6 +888,7 @@ def open_manager_session(
     mode: str = "resume_latest",
     provider: str = "",
     audience: str = "",
+    agent_model_id: str | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Open the steward channel's Session through its own endpoint owner.
 
@@ -926,6 +927,7 @@ def open_manager_session(
         channel_id=channel_id,
         agent_goal_id=MANAGER_AGENT_GOAL_ID,
         manager_executor_allocation=allocation,
+        agent_model_id=agent_model_id,
     )
 
 

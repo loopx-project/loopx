@@ -175,7 +175,7 @@ def apply_todo_replan_cadence_machine_default(
         else "replan_after_completed_todos"
     )
     profile[field] = cadence["count"]
-    if cadence.get("stride_strategy", "off") != "off":
+    if "stride_strategy" not in profile and cadence.get("stride_strategy", "off") != "off":
         profile["stride_strategy"] = cadence["stride_strategy"]
     projected["execution_profile"] = profile
     return projected

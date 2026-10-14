@@ -277,8 +277,15 @@ independent reproduction, or a production result.
   visible in a [public issue](https://github.com/zilliztech/mfs/issues/166) and
   seven merged PRs; attribution and the reported `1B+` token scale remain user
   reports. [Inspect the case](docs/showcases/cases/independent-public-engine-refactor.md).
+- **Independent user · vLLM optimization merged upstream.**
+  [Zheng Cai](https://x.com/zigzagcai/status/2109952174822408443) reports using
+  LoopX as the workflow engine for profiling, research, experiments, and
+  correctness checks. [vLLM PR #54951](https://github.com/vllm-project/vllm/pull/54951)
+  merged a sparse-indexer optimization; its reported **32.59%** total-token
+  throughput gain is for GLM-5.3-Flash at 1M input tokens, 4×H200, TP4, C1.
+  [Inspect the workflow, full conditions, and evidence boundary](docs/showcases/cases/independent-vllm-long-context-optimization.md).
 
-These are the three strongest current cases, not the full inventory. Browse the
+These are four featured independent-user cases, not the full inventory. Browse the
 [complete Showcase catalog](docs/showcases/README.md) for contributor cases,
 creator dogfooding, reproducible demos, and explicit evidence-strength labels.
 
@@ -805,10 +812,23 @@ coordination, and an explicitly staged architecture and research incubator.
 
 ## License
 
+Copyright 2026 LoopX contributors. Created by
+[`@huangruiteng`](https://github.com/huangruiteng); see the public
+[creator and contributor record](docs/project/authors.md).
+
 Apache License 2.0 beginning with `v0.4.8`. See [LICENSE](LICENSE) and
 [NOTICE](NOTICE). Releases through `v0.4.7` remain under their original MIT
 terms; the historical text and notice are preserved in
 [LICENSE-MIT](LICENSE-MIT). The [licensing policy](docs/project/licensing.md)
 explains the version, contribution, patent-grant, and open-core boundaries.
+
+You must not use AI generation, code rewriting, cross-language translation,
+or project renaming as grounds to remove or evade copyright, attribution, or
+NOTICE retention requirements under the applicable license. If the distributed
+material is a derivative work of LoopX, those obligations still apply. This
+clarification does not restrict modifications or redistribution permitted by
+the applicable license. See [reuse and attribution](docs/project/licensing.md#reuse-ports-and-attribution)
+and [name and marks guidance](docs/project/trademarks.md); a derivative
+distribution must not be presented as an official LoopX release.
 
 [osai-verify: eb42dd9cf910399988f0]: #

@@ -11,6 +11,7 @@ from unittest.mock import Mock
 
 import pytest
 
+import loopx.extensions.process_runtime as process_runtime
 from loopx.extensions.process_runtime import run_capped_process, terminate_process_tree
 
 
@@ -27,9 +28,12 @@ def test_zero_grace_sends_one_force_kill_and_reaps_leader(
         signals.append((pid, sig))
 
     monkeypatch.setattr(os, "killpg", killpg)
+    stopped = Mock()
+    monkeypatch.setattr(process_runtime, "_wait_for_posix_process_group_stop", stopped)
     terminate_process_tree(process, grace_seconds=0)
 
     assert signals == [(process.pid, signal.SIGKILL)]
+    stopped.assert_called_once_with(process.pid)
     process.kill.assert_called_once_with()
     process.wait.assert_called_once_with()
 
@@ -68,7 +72,7 @@ def test_darwin_empty_group_permission_error_is_confirmed_before_acceptance(
 
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr(os, "killpg", killpg)
-    snapshot = Mock(return_value=subprocess.CompletedProcess([], 0, "1\n6789\n", ""))
+    snapshot = Mock(return_value=subprocess.CompletedProcess([], 0, "1 S\n6789 Z\n", ""))
     monkeypatch.setattr(subprocess, "run", snapshot)
     terminate_process_tree(process, grace_seconds)
     assert signals[-1] == signal.SIGKILL
@@ -78,12 +82,12 @@ def test_darwin_empty_group_permission_error_is_confirmed_before_acceptance(
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process-group regression")
 @pytest.mark.parametrize("platform,leader_status,returncode,groups", [
-    ("darwin", None, 0, "1\n"),
-    ("darwin", 0, 0, "1\n12345\n"),
-    ("darwin", 0, 1, "1\n"),
+    ("darwin", None, 0, "1 S\n"),
+    ("darwin", 0, 0, "1 S\n12345 S\n"),
+    ("darwin", 0, 1, "1 S\n"),
     ("darwin", 0, 0, ""),
     ("darwin", 0, 0, "invalid\n"),
-    ("linux", 0, 0, "1\n"),
+    ("linux", 0, 0, "1 S\n"),
 ])
 def test_permission_error_stays_failure_when_owned_group_exit_is_unproven(
     monkeypatch: pytest.MonkeyPatch, platform: str,
@@ -101,6 +105,133 @@ def test_permission_error_stays_failure_when_owned_group_exit_is_unproven(
     monkeypatch.setattr(subprocess, "run", Mock(return_value=
         subprocess.CompletedProcess([], returncode, groups, "")))
     with pytest.raises(PermissionError, match="cannot signal"):
+        terminate_process_tree(process, 0)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group regression")
+def test_zero_grace_waits_for_live_descendants_after_leader_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+    process = Mock(spec=subprocess.Popen)
+    process.pid = 12345
+    process.poll.return_value = 0
+    signals = []
+    monkeypatch.setattr(os, "killpg", lambda pid, sig: signals.append((pid, sig)))
+    snapshots = Mock(side_effect=[
+        subprocess.CompletedProcess([], 0, "1 S\n12345 S\n", ""),
+        subprocess.CompletedProcess([], 0, "1 S\n12345 Z\n", ""),
+    ])
+    monkeypatch.setattr(subprocess, "run", snapshots)
+    pause = Mock()
+    monkeypatch.setattr(time, "sleep", pause)
+    terminate_process_tree(process, 0)
+    assert signals == [(12345, signal.SIGKILL), (12345, 0), (12345, 0)]
+    assert snapshots.call_count == 2
+    pause.assert_called_once()
+    process.kill.assert_not_called()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group regression")
+@pytest.mark.parametrize("state", ["T", "?", "S"])
+def test_stopped_or_unknown_group_state_does_not_certify_cleanup(
+    monkeypatch: pytest.MonkeyPatch, state: str,
+) -> None:
+    process = Mock(spec=subprocess.Popen)
+    process.pid = 12345
+    process.poll.return_value = 0
+    monkeypatch.setattr(os, "killpg", lambda _pid, _sig: None)
+    monkeypatch.setattr(subprocess, "run", Mock(return_value=
+        subprocess.CompletedProcess([], 0, f"1 S\n12345 {state}\n", "")))
+    clock = iter([0, .25, .5, 1.1])
+    monkeypatch.setattr(time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(time, "sleep", Mock())
+    with pytest.raises(TimeoutError, match="cleanup deadline"):
+        terminate_process_tree(process, 0)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group regression")
+@pytest.mark.parametrize("returncode,output", [(1, "1 S\n"), (0, ""), (0, "12345\n"), (0, "bad S\n")])
+def test_failed_or_malformed_observation_does_not_certify_cleanup(
+    monkeypatch: pytest.MonkeyPatch, returncode: int, output: str,
+) -> None:
+    process = Mock(spec=subprocess.Popen)
+    process.pid = 12345
+    process.poll.return_value = 0
+    monkeypatch.setattr(os, "killpg", lambda _pid, _sig: None)
+    monkeypatch.setattr(subprocess, "run", Mock(return_value=
+        subprocess.CompletedProcess([], returncode, output, "")))
+    with pytest.raises(RuntimeError, match="process-group observation"):
+        terminate_process_tree(process, 0)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group regression")
+@pytest.mark.parametrize("error", [subprocess.TimeoutExpired(["ps"], 1), FileNotFoundError("ps absent")])
+def test_unavailable_observation_is_an_explicit_cleanup_failure(
+    monkeypatch: pytest.MonkeyPatch, error: Exception,
+) -> None:
+    process = Mock(spec=subprocess.Popen)
+    process.pid = 12345
+    process.poll.return_value = 0
+    monkeypatch.setattr(os, "killpg", lambda _pid, _sig: None)
+    monkeypatch.setattr(subprocess, "run", Mock(side_effect=error))
+    with pytest.raises(RuntimeError, match="process-group observation failed") as raised:
+        terminate_process_tree(process, 0)
+    assert raised.value.__cause__ is error
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group regression")
+def test_signal_zero_permission_requires_fresh_zombie_observation(monkeypatch: pytest.MonkeyPatch) -> None:
+    process = Mock(spec=subprocess.Popen)
+    process.pid = 12345
+    process.poll.return_value = 0
+
+    def signal_group(_pid: int, sig: int) -> None:
+        if sig == 0:
+            raise PermissionError("group observation denied")
+
+    monkeypatch.setattr(os, "killpg", signal_group)
+    snapshot = Mock(return_value=subprocess.CompletedProcess([], 0, "1 S\n12345 Z+\n", ""))
+    monkeypatch.setattr(subprocess, "run", snapshot)
+    terminate_process_tree(process, 0)
+    snapshot.assert_called_once()
+    process.kill.assert_not_called()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group regression")
+@pytest.mark.parametrize("grace_seconds", [0, .1])
+def test_return_waits_until_child_with_closed_pipes_cannot_execute(
+    tmp_path: Path, grace_seconds: float,
+) -> None:
+    ready = tmp_path / "child-pid"
+    heartbeat = tmp_path / "heartbeat"
+    child_code = (
+        "import os,signal,time; from pathlib import Path; "
+        "signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+        f"Path({str(ready)!r}).write_text(str(os.getpid()))\n"
+        f"while True: Path({str(heartbeat)!r}).touch(); time.sleep(.005)\n"
+    )
+    provider_code = (
+        "import subprocess,sys,time; "
+        f"subprocess.Popen([sys.executable,'-c',{child_code!r}], "
+        "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
+        "time.sleep(30)"
+    )
+    process = subprocess.Popen([sys.executable, "-c", provider_code], start_new_session=True,
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 5
+        while not heartbeat.exists() and time.monotonic() < deadline:
+            time.sleep(.005)
+        assert heartbeat.exists()
+        child_pid = int(ready.read_text())
+        terminate_process_tree(process, grace_seconds)
+        assert process.poll() is not None
+        # Independently observe the child immediately after return, without a
+        # quiet-period delay that could hide asynchronous KILL delivery.
+        snapshot = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "stat="],
+                                  check=True, capture_output=True, text=True, timeout=1)
+        states = [line.split()[1] for line in snapshot.stdout.splitlines()
+                  if line.split() and line.split()[0] == str(child_pid)]
+        assert all(state.startswith("Z") for state in states), states
+    finally:
         terminate_process_tree(process, 0)
 
 
