@@ -301,11 +301,14 @@ def test_blocked_stack_writer_exits_after_only_its_pytest_parent_is_killed(tmp_p
             process.kill()  # Leave the writer alive: its own deadline must stop it.
             process.wait(timeout=4)
             while True:
-                state = subprocess.run(
+                inspected = subprocess.run(
                     ["ps", "-p", writer_pid, "-o", "stat="],
-                    capture_output=True, text=True, timeout=2, check=False).stdout.strip()
-                if not state or state.startswith("Z"):
+                    capture_output=True, text=True, timeout=2, check=False)
+                assert inspected.returncode in (0, 1), inspected.stderr
+                state = inspected.stdout.strip()
+                if inspected.returncode == 1 or state.startswith("Z"):
                     break
+                assert state, "process inspection returned no state"
                 assert time.monotonic() < deadline, "orphan diagnostic writer remained blocked"
                 time.sleep(0.02)
             assert os.get_blocking(unread_stderr_pipe)
