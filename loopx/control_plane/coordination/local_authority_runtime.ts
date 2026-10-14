@@ -1413,7 +1413,7 @@ export async function terminalLifecycleLocalCoordinationTodo(
           result.conflict_kind === "provider_revision_mismatch"; attempt++) result = await execute();
       return {...result, ...providerEvidence};
       } finally {await researchEvidence.close();}
-    }, {businessWrite: "todo_terminal"});
+    });
   } catch (error) {
     return {schema_version: COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA,
       status: "failed", changed: false,

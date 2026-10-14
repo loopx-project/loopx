@@ -36,7 +36,7 @@ function bytes(path: string): Buffer {
 export async function withTerminalDeliverySources<T>(
   root: string, goalId: string, input: JsonObject, write: () => Promise<T>,
 ): Promise<T> {
-  if (input.delivery_context == null) return withCanonicalWriter(root, goalId, input.dry_run === true, write);
+  if (input.delivery_context == null) return withCanonicalWriter(root, goalId, input.dry_run === true, write, {businessWrite: "todo_terminal"});
   const context = requireJsonObject(input.delivery_context, "delivery context");
   const registry = requireJsonObject(input.registry_source, "registry source");
   const state = resolve(requireNonEmptyString(context.state_file, "delivery state file"));
@@ -44,7 +44,7 @@ export async function withTerminalDeliverySources<T>(
     withFileMutationLock(requireNonEmptyString(registry.path, "registry path"), () =>
       withCanonicalWriter(root, goalId, false, () =>
         withFileMutationLock(legacyCoordinationTodoLockPath(root, goalId), () =>
-          withFileMutationLock(state, write, 30_000), 30_000)), 30_000), 30_000);
+          withFileMutationLock(state, write, 30_000), 30_000), {businessWrite: "todo_terminal"}), 30_000), 30_000);
 }
 
 /** Called only after durable receipt recovery, against the head used for CAS. */

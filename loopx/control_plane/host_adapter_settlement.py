@@ -113,7 +113,13 @@ def _request_payload(
         payload["goal_ref"] = dict(request.goal_ref)
     if request.turn_instance_id is not None:
         payload["turn_instance_id"] = request.turn_instance_id
-    if request.vision_path or request.vision_unchanged_reason or request.checkpoint_read_context_id or phase in {"vision_refresh", "vision_context"} or request.first_delivery:
+    if (
+        request.vision_path
+        or request.vision_unchanged_reason
+        or request.checkpoint_read_context_id
+        or phase in {"vision_refresh", "vision_context"}
+        or request.first_delivery
+    ):
         payload.update(
             schema_version="loopx_host_todo_completion_transaction_v1",
             vision_path=request.vision_path,
@@ -121,9 +127,12 @@ def _request_payload(
             checkpoint_read_context_id=request.checkpoint_read_context_id,
         )
     if request.first_delivery or request.current_agent_checkpoint:
-        payload.update(schema_version="loopx_host_todo_completion_transaction_v2", first_delivery=True,
+        payload.update(
+            schema_version="loopx_host_todo_completion_transaction_v2",
+            first_delivery=True,
             delivery_read_context_id=request.delivery_read_context_id,
-            current_agent_checkpoint=request.current_agent_checkpoint)
+            current_agent_checkpoint=request.current_agent_checkpoint,
+        )
     elif request.delivery_read_context_id:
         payload["delivery_read_context_id"] = request.delivery_read_context_id
     return payload
@@ -150,15 +159,52 @@ def host_vision_request(
         allow_terminal_stride_path=allow_terminal_stride_path)
     with tempfile.TemporaryDirectory(prefix="loopx-host-vision-") as directory:
         path = Path(directory) / "vision.json"
-        path.write_text(json.dumps(vision, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+        path.write_text(
+            json.dumps(vision, ensure_ascii=False, allow_nan=False), encoding="utf-8"
+        )
         yield replace(request, vision_path=str(path))
 
 
-def refresh_host_todo_vision(request: HostTodoSettlementRequest, *, run_cli: HostCliRunner) -> str:
+def settle_host_todo_wait(
+    request: HostTodoSettlementRequest,
+    reason: str,
+    *,
+    run_cli: HostCliRunner,
+) -> str:
+    """Transport a typed quiet wait on the original admitted unfinished work."""
+    payload = {**_request_payload(request, phase="wait"), "wait_reason": reason}
+    plan = _runtime_reduction(payload, phase="wait")
+    if isinstance(plan.get("result"), Mapping):
+        return json.dumps(dict(plan["result"]), ensure_ascii=False, sort_keys=True)
+    args = _string_tuple(plan.get("args"), label="wait args")
+    legacy = plan.get("legacy_args")
+    output = run_cli(
+        list(args),
+        legacy_args=list(_string_tuple(legacy, label="wait legacy args"))
+        if legacy
+        else None,
+    )
+    result = _runtime_reduction({**payload, "guard_output": output}, phase="wait").get(
+        "result"
+    )
+    if not isinstance(result, Mapping):
+        raise RuntimeError("TypeScript host wait result shape mismatch")
+    return json.dumps(dict(result), ensure_ascii=False, sort_keys=True)
+
+
+def refresh_host_todo_vision(
+    request: HostTodoSettlementRequest, *, run_cli: HostCliRunner
+) -> str:
     """Repair the original checkpoint; no lifecycle operation, new Turn or spend."""
-    phase = "vision_refresh" if (
-        request.vision_path or request.vision_unchanged_reason or request.checkpoint_read_context_id
-    ) else "vision_context"
+    phase = (
+        "vision_refresh"
+        if (
+            request.vision_path
+            or request.vision_unchanged_reason
+            or request.checkpoint_read_context_id
+        )
+        else "vision_context"
+    )
     plan = _runtime_reduction(_request_payload(request, phase=phase), phase=phase)
     _runtime_identity(plan.get("identity"))
     args = plan.get("args")
@@ -175,10 +221,14 @@ def project_host_interaction(output: str) -> str:
         return output
     if not isinstance(packet, dict):
         return output
-    projection = _runtime_reduction({
-        "schema_version": "loopx_host_todo_completion_transaction_v1",
-        "phase": "project_guard", "packet": packet,
-    }, phase="project_guard")
+    projection = _runtime_reduction(
+        {
+            "schema_version": "loopx_host_todo_completion_transaction_v1",
+            "phase": "project_guard",
+            "packet": packet,
+        },
+        phase="project_guard",
+    )
     if not isinstance(projection.get("packet"), dict):
         raise RuntimeError("TypeScript host interaction projection shape mismatch")
     return json.dumps(projection["packet"], ensure_ascii=False)
@@ -293,9 +343,13 @@ def _decode_provider_steps(value: Any) -> tuple[_ProviderStep, ...]:
         or len(raw_steps) not in {2, 3, 4, 5}
     ):
         raise RuntimeError("TypeScript host provider plan shape mismatch")
-    expected = (("guard", "delivery_context") if len(raw_steps) == 2 else
-        ("guard", "lifecycle_completion", "direction_context") if len(raw_steps) == 3 else
-        HOST_ADAPTER_SETTLEMENT_STEP_KINDS[: len(raw_steps)])
+    expected = (
+        ("guard", "delivery_context")
+        if len(raw_steps) == 2
+        else ("guard", "lifecycle_completion", "direction_context")
+        if len(raw_steps) == 3
+        else HOST_ADAPTER_SETTLEMENT_STEP_KINDS[: len(raw_steps)]
+    )
     steps: list[_ProviderStep] = []
     for index, raw in enumerate(raw_steps):
         if not isinstance(raw, Mapping) or raw.get("step_kind") != expected[index]:
@@ -422,13 +476,22 @@ def settle_host_todo_completion(
     )
     if finalized.get("decision") == "execute":
         token = finalized.get("resume_checkpoint_read_context_id")
-        if (not request.current_agent_checkpoint or request.checkpoint_read_context_id is not None
-                or not isinstance(token, str) or not token
-                or finalized.get("identity") != prepared["identity"]):
+        if (
+            not request.current_agent_checkpoint
+            or request.checkpoint_read_context_id is not None
+            or not isinstance(token, str)
+            or not token
+            or finalized.get("identity") != prepared["identity"]
+        ):
             raise RuntimeError("Committed direction recovery binding is invalid")
         request = replace(request, checkpoint_read_context_id=token)
-        outcomes = _run_provider_plan(_decode_provider_steps(finalized["provider_effect"]), run_cli=run_cli)
-        finalized = _runtime_reduction(_request_payload(request, phase="finalize", provider_outcomes=outcomes), phase="finalize")
+        outcomes = _run_provider_plan(
+            _decode_provider_steps(finalized["provider_effect"]), run_cli=run_cli
+        )
+        finalized = _runtime_reduction(
+            _request_payload(request, phase="finalize", provider_outcomes=outcomes),
+            phase="finalize",
+        )
     result = finalized.get("result")
     if (
         finalized.get("decision") not in {"complete", "blocked", "provider_result"}

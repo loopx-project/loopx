@@ -11,6 +11,7 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { normalizeVisionUnchangedReason } from "../goals/vision_checkpoint.ts";
 import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import { projectMcpInteraction } from "./host_interaction.ts";
+import { TURN_CONTROLLER_CONTRACT } from "./turn_contract_generated.ts";
 import {
   jsonObject,
   requireBoolean,
@@ -30,7 +31,7 @@ export const HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION =
 export const HOST_ADAPTER_SETTLEMENT_SCHEMA_VERSION =
   "host_adapter_todo_settlement_v0";
 
-const PHASES = ["prepare", "finalize", "classify_guard", "vision_refresh", "vision_context", "project_guard"] as const;
+const PHASES = ["prepare", "finalize", "classify_guard", "vision_refresh", "vision_context", "project_guard", "wait"] as const;
 export const HOST_ADAPTER_SETTLEMENT_STEP_KINDS = [
   "guard",
   "lifecycle_completion",
@@ -1081,6 +1082,48 @@ function finalize(request: HostTodoCompletionRequest): JsonObject {
   });
 }
 
+
+// Unfinished MCP work uses the same scoped guard owner. No lifecycle, vision,
+// result validation, writeback or quota effect belongs to this quiet wait.
+function waitForUnfinishedWork(request: HostTodoCompletionRequest, value: JsonObject): JsonObject {
+  const reason = requireNonEmptyString(value.wait_reason, "wait_reason").trim();
+  if (!reason || reason.length > 240) throw new EffectRuntimeRequestError("wait_reason must contain 1..240 characters");
+  if (request.completion_args.length || request.no_follow_up || request.first_delivery ||
+      request.current_agent_checkpoint || request.vision_path || request.vision_unchanged_reason ||
+      request.checkpoint_read_context_id || request.delivery_read_context_id) {
+    throw new EffectRuntimeRequestError("unfinished wait cannot submit completion or a vision decision");
+  }
+  if (request.turn_instance_id === null) {
+    return {schema_version: HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION, phase: "wait",
+      result: {schema_version: HOST_ADAPTER_SETTLEMENT_SCHEMA_VERSION, ok: false, completed: false,
+        error: "Read should_run before waiting on an admitted unfinished Todo."}};
+  }
+  const {payload: identity} = expectedIdentity(request);
+  if (value.guard_output === undefined) {
+    const guard = providerSteps(request, identity)[0];
+    return {schema_version: HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION, phase: "wait", identity,
+      args: [...guard.args], legacy_args: guard.legacy_args};
+  }
+  if (typeof value.guard_output !== "string") throw new EffectRuntimeRequestError("guard_output must be a string");
+  let guard: JsonObject | null = null;
+  try {guard = jsonObject(JSON.parse(value.guard_output));} catch { /* Reject corrupt provider output below. */ }
+  const selection = guardSelection(value.guard_output);
+  const selected = jsonObject(guard?.selected_todo);
+  const valid = guard?.ok === true && guard.should_run === true && guard.normal_delivery_allowed === true &&
+    guard.work_input_restored === true && selected?.status === "open" && selected.todo_id === request.todo_id &&
+    selection.state === "selected" && selection.todo_id === request.todo_id &&
+    selection.settlement_identity !== null && guardIdentityMatches(selection, identity);
+  if (!valid) return {schema_version: HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION, phase: "wait", identity,
+    result: blockedResult(request, "guard", reasonFrom(guard) || "Current guard does not admit unfinished work on the original Turn.")};
+  return {schema_version: HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION, phase: "wait", identity,
+    result: {schema_version: HOST_ADAPTER_SETTLEMENT_SCHEMA_VERSION, ok: true, completed: false,
+      settlement_complete: false, goal_id: request.goal_id, todo_id: request.todo_id, settlement_identity: identity,
+      result_kind: TURN_CONTROLLER_CONTRACT.vocabularies.turn_result_kind.WAIT, reason,
+      task_validation: {status: "not_required", validator_kind: "stop_result"},
+      effects: {host_invoked: false, todo_completed: false, state_written: false, quota_spent: false},
+      next_tool: "should_run"}};
+}
+
 export function evaluateHostTodoCompletion(value: JsonObject): JsonObject {
   const phase = decodePhase(value);
   if (phase === "project_guard") {
@@ -1102,6 +1145,7 @@ export function evaluateHostTodoCompletion(value: JsonObject): JsonObject {
     };
   }
   const request = decodeRequest(value, phase);
+  if (phase === "wait") return waitForUnfinishedWork(request, value);
   if (phase === "finalize") return finalize(request);
   const { payload: identity } = expectedIdentity(request);
   if (phase === "vision_context") {
