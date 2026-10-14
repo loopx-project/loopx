@@ -33,3 +33,8 @@ li{margin:12px 0}
 .flow strong{display:block;font-size:18px;margin-bottom:8px}.flow span{display:block;font-size:14px;line-height:1.6;color:var(--muted)}
 footer{border-top:1px solid var(--line);margin-top:48px;padding-top:20px}
 @media(max-width:640px){main{padding:26px 20px 56px}.language{margin-bottom:28px}h1{font-size:32px}.subtitle{font-size:20px}.lead{font-size:19px}h2{font-size:25px}.flow{grid-template-columns:1fr}.flow li{display:grid;grid-template-columns:70px 1fr;border-right:0;border-bottom:1px solid var(--line);gap:10px;padding:12px 8px}.flow li:last-child{border-bottom:0}.flow strong{margin:0}.flow span{align-self:center}td,th{min-width:120px;padding:10px}nav{gap:8px 17px}aside{padding-left:18px}}
+
+/* Purpose-specific links back into the Blog reading routes. */
+.article-route { display: block; margin-top: 32px; padding-top: 24px; border-top: 1px solid #ebebeb; font-size: 14px; line-height: 1.7; }
+.article-route p { margin: 0; }
+.article-route a { display: inline-flex; align-items: center; min-height: 44px; }

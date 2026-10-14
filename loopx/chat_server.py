@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import re
 import time
 import uuid
 from collections.abc import Callable, Mapping
@@ -104,9 +105,7 @@ from .state_projection import build_active_state_structured_projection
 from .status_server import (
     DEFAULT_EXTENSION_PRESENTATION_SURFACES_PATH,
     DEFAULT_EXTENSION_PROJECTION_PATH,
-    cors_response_headers,
     is_loopback_host,
-    is_loopback_origin,
     parse_strict_json_object,
 )
 
@@ -135,11 +134,35 @@ CHAT_ACTIONS_PATH = "/api/actions"
 CHAT_ACTION_PREVIEW_PATH = f"{CHAT_ACTIONS_PATH}/preview"
 
 
+_CHAT_HOST_AUTHORITY = re.compile(
+    r"(127\.0\.0\.1|localhost|\[::1\])(?::([0-9]{1,5}))?", re.ASCII | re.IGNORECASE
+)
+
+
+def _chat_authority(value: str) -> tuple[str, int] | None:
+    match = _CHAT_HOST_AUTHORITY.fullmatch(value)
+    if match is None:
+        return None
+    port = int(match.group(2) or 80)
+    if not 1 <= port <= 65535:
+        return None
+    return match.group(1).lower(), port
+
+
+def _chat_origin_allowed(origin: str, host: tuple[str, int]) -> bool:
+    return origin.startswith("http://") and _chat_authority(origin.removeprefix("http://")) == host
+
+
 def chat_cors_response_headers(origin: str | None) -> dict[str, str]:
-    headers = cors_response_headers(origin)
-    if headers:
-        headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
-    return headers
+    # The request gate validates this origin before a route or response can use it.
+    if origin is None:
+        return {}
+    return {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Vary": "Origin",
+    }
 
 
 def default_chat_assets_dir() -> Path:
@@ -473,6 +496,19 @@ class ChatRequestHandler(
 ):
     server: ChatHTTPServer
 
+    def parse_request(self) -> bool:
+        if not super().parse_request():
+            return False
+        self._cors_origin: str | None = None
+        hosts = self.headers.get_all("Host", [])
+        origins = self.headers.get_all("Origin", [])
+        host = _chat_authority(hosts[0]) if len(hosts) == 1 else None
+        if host is None or len(origins) > 1 or (origins and not _chat_origin_allowed(origins[0], host)):
+            self._send_error("LoopX Chat requires a loopback Host and an allowed browser origin.", status=403)
+            return False
+        self._cors_origin = origins[0] if origins else None
+        return True
+
     def _send_json(self, payload: dict[str, Any], *, status: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         self.send_response(status)
@@ -480,7 +516,7 @@ class ChatRequestHandler(
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        for key, value in chat_cors_response_headers(self.headers.get("Origin")).items():
+        for key, value in chat_cors_response_headers(self._cors_origin).items():
             self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
@@ -521,9 +557,9 @@ class ChatRequestHandler(
         return parse_strict_json_object(self.rfile.read(length))
 
     def _require_loopback_origin(self) -> bool:
-        if is_loopback_origin(self.headers.get("Origin")):
+        if self._cors_origin is not None or not self.headers.get_all("Origin", []):
             return True
-        self._send_error("LoopX Chat only accepts loopback browser origins.", status=403)
+        self._send_error("LoopX Chat only accepts allowed browser origins.", status=403)
         return False
 
     def _ssh_hosts(self) -> None:
@@ -886,7 +922,7 @@ class ChatRequestHandler(
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
         self.send_header("X-Accel-Buffering", "no")
-        for key, value in chat_cors_response_headers(self.headers.get("Origin")).items():
+        for key, value in chat_cors_response_headers(self._cors_origin).items():
             self.send_header(key, value)
         self.end_headers()
         cursor = str(last_event_id or "0")
@@ -1576,7 +1612,7 @@ class ChatRequestHandler(
 
     def do_OPTIONS(self) -> None:
         self.send_response(204)
-        for key, value in chat_cors_response_headers(self.headers.get("Origin")).items():
+        for key, value in chat_cors_response_headers(self._cors_origin).items():
             self.send_header(key, value)
         self.end_headers()
 

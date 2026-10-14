@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 850" width="1280" height="850" role="img" aria-labelledby="title desc">
+  <title id="title">语义开发：一次受边界约束的目标迁移</title>
+  <desc id="desc">一个明确构造的示例：从孤立微基准到混合负载 p95 的验收语义变化。既有证据保留适用范围，反馈不会自动升级为广泛权限。</desc>
+  <rect width="1280" height="850" fill="#fafafa"/>
+
+  <g font-family="Arial, PingFang SC, Noto Sans CJK SC, sans-serif" fill="#171717">
+    <text x="52" y="36" font-size="18" fill="#4d4d4d" letter-spacing="0.04em">语义软件开发 / 明确构造示例</text>
+    <text x="52" y="76" font-size="32" font-weight="600">语义开发：一次受边界约束的目标迁移</text>
+    <text x="52" y="110" font-size="18" fill="#4d4d4d">反馈改变验收语义；既有证据保留其适用范围，授权边界不会随对话自动扩大。</text>
+    <rect x="929" y="16" width="299" height="42" rx="21" fill="#f2f2f2" stroke="#ebebeb" stroke-width="2"/>
+    <text x="1078" y="44" text-anchor="middle" font-size="18" fill="#4d4d4d">非真实 vLLM PR 轨迹</text>
+    <line x1="52" y1="136" x2="1228" y2="136" stroke="#ebebeb" stroke-width="2"/>
+
+    <!-- trajectory spine -->
+    <line x1="144" y1="172" x2="640" y2="172" stroke="#b8b8b8" stroke-width="3"/>
+    <line x1="640" y1="172" x2="1136" y2="172" stroke="#0070f3" stroke-width="4"/>
+    <circle cx="144" cy="172" r="15" fill="#171717"/>
+    <circle cx="640" cy="172" r="19" fill="#ffffff" stroke="#0070f3" stroke-width="4"/>
+    <circle cx="640" cy="172" r="7" fill="#0070f3"/>
+    <circle cx="1136" cy="172" r="15" fill="#ffffff" stroke="#0070f3" stroke-width="3"/>
+    <line x1="144" y1="187" x2="144" y2="208" stroke="#b8b8b8" stroke-width="2"/>
+    <line x1="640" y1="191" x2="640" y2="208" stroke="#0070f3" stroke-width="3"/>
+    <line x1="1136" y1="187" x2="1136" y2="208" stroke="#0070f3" stroke-width="3"/>
+
+    <!-- BEFORE -->
+    <rect x="52" y="208" width="344" height="340" rx="16" fill="#ffffff" stroke="#ebebeb" stroke-width="2"/>
+    <text x="76" y="242" font-size="18" font-weight="600">之前 / BEFORE</text>
+    <line x1="76" y1="260" x2="372" y2="260" stroke="#ebebeb" stroke-width="2"/>
+    <text x="76" y="298" font-size="24" font-weight="600">目标：改善推理延迟</text>
+    <circle cx="82" cy="332" r="4" fill="#171717"/>
+    <text x="98" y="338" font-size="18">候选：rA</text>
+    <circle cx="82" cy="372" r="4" fill="#171717"/>
+    <text x="98" y="378" font-size="18">证据：孤立微基准通过</text>
+    <circle cx="82" cy="412" r="4" fill="#f5a623"/>
+    <text x="98" y="418" font-size="18">缺口：真实混合负载 p95 未测量</text>
+    <line x1="76" y1="510" x2="372" y2="510" stroke="#ebebeb" stroke-width="2"/>
+    <text x="76" y="534" font-size="18" fill="#4d4d4d">发布门：gated（等待完整证据）</text>
+
+    <!-- FEEDBACK / PROPOSAL -->
+    <rect x="428" y="208" width="424" height="340" rx="16" fill="#edf6ff" stroke="#b8dcff" stroke-width="2"/>
+    <line x1="428" y1="208" x2="428" y2="548" stroke="#0070f3" stroke-width="5"/>
+    <text x="456" y="242" font-size="20" font-weight="600" fill="#005bbf">新反馈 → 有界提案</text>
+    <line x1="456" y1="260" x2="824" y2="260" stroke="#b8dcff" stroke-width="2"/>
+    <line x1="454" y1="286" x2="454" y2="462" stroke="#0070f3" stroke-width="3"/>
+    <circle cx="454" cy="286" r="10" fill="#0070f3"/>
+    <text x="478" y="292" font-size="18" font-weight="600">人工反馈</text>
+    <text x="478" y="320" font-size="18">“混合负载 p95 才是关键；</text>
+    <text x="478" y="344" font-size="18">不要用速度换正确性。”</text>
+    <circle cx="454" cy="374" r="10" fill="#0070f3"/>
+    <text x="478" y="380" font-size="18" font-weight="600">模型提案</text>
+    <text x="478" y="408" font-size="18">验收修订为 v2</text>
+    <text x="478" y="432" font-size="18">新增后继：固定工作负载 serving 对比</text>
+    <circle cx="454" cy="462" r="10" fill="#0070f3"/>
+    <text x="478" y="468" font-size="18" font-weight="600">领域评估</text>
+    <text x="478" y="496" font-size="18">校验提案与证据适用范围</text>
+    <path d="M824 374h18l-8-7m8 7-8 7" fill="none" stroke="#0070f3" stroke-width="3"/>
+
+    <!-- AFTER -->
+    <rect x="884" y="208" width="344" height="340" rx="16" fill="#ffffff" stroke="#b8dcff" stroke-width="2"/>
+    <text x="908" y="242" font-size="18" font-weight="600" fill="#005bbf">之后 / ACCEPTED STATE</text>
+    <line x1="908" y1="260" x2="1204" y2="260" stroke="#b8dcff" stroke-width="2"/>
+    <circle cx="914" cy="294" r="4" fill="#171717"/>
+    <text x="930" y="300" font-size="18">目标：改善推理延迟</text>
+    <circle cx="914" cy="334" r="5" fill="#0070f3"/>
+    <text x="930" y="340" font-size="18" fill="#005bbf">验收版本：v2</text>
+    <circle cx="914" cy="374" r="5" fill="#0070f3"/>
+    <text x="930" y="380" font-size="18" fill="#005bbf">证据适用性：rA → isolate only</text>
+    <circle cx="914" cy="414" r="5" fill="#0070f3"/>
+    <text x="930" y="420" font-size="18" fill="#005bbf">下一步：后继任务 + 混合负载 p95</text>
+    <circle cx="914" cy="454" r="4" fill="#f5a623"/>
+    <text x="930" y="460" font-size="18">发布门：gated（仍未放行）</text>
+    <line x1="908" y1="480" x2="1204" y2="480" stroke="#ebebeb" stroke-width="2"/>
+    <text x="908" y="508" font-size="18" fill="#4d4d4d">所有者已接受</text>
+    <text x="908" y="534" font-size="18" fill="#4d4d4d">内核已核验：范围 · 身份 · 版本</text>
+
+    <!-- evidence split -->
+    <line x1="52" y1="580" x2="1228" y2="580" stroke="#ebebeb" stroke-width="2"/>
+    <line x1="72" y1="610" x2="600" y2="610" stroke="#171717" stroke-width="2"/>
+    <circle cx="72" cy="610" r="11" fill="#171717"/>
+    <path d="M67 610l4 4 7-8" fill="none" stroke="#ffffff" stroke-width="2"/>
+    <text x="98" y="606" font-size="18" font-weight="600">不变事实 / UNCHANGED FACT</text>
+    <text x="72" y="640" font-size="18">rA 孤立微基准结果仍有效，仅适用于 rA / isolate。</text>
+    <text x="72" y="666" font-size="18">它不满足 v2 的端到端验收。</text>
+
+    <line x1="680" y1="610" x2="1228" y2="610" stroke="#0070f3" stroke-width="3"/>
+    <circle cx="680" cy="610" r="11" fill="#0070f3"/>
+    <path d="M675 610h10m-5-5v10" stroke="#ffffff" stroke-width="2"/>
+    <text x="706" y="606" font-size="18" font-weight="600" fill="#005bbf">新增义务 / NEW OBLIGATION</text>
+    <text x="680" y="640" font-size="18" fill="#005bbf">v2 端到端：混合负载 p95 + 正确性 / 回滚检查。</text>
+    <text x="680" y="666" font-size="18" fill="#005bbf">后继比较完成前，发布仍 gated。</text>
+
+    <!-- authorized execution boundary -->
+    <line x1="52" y1="690" x2="1228" y2="690" stroke="#ebebeb" stroke-width="2"/>
+    <text x="52" y="716" font-size="18" font-weight="600">授权执行边界 / AUTHORIZED EXECUTION BOUNDARY</text>
+    <text x="1228" y="716" text-anchor="end" font-size="18" fill="#005bbf">反馈 ≠ 自动升级为广泛权限</text>
+    <line x1="148" y1="764" x2="1132" y2="764" stroke="#0070f3" stroke-width="3"/>
+    <path d="M392 764l-8-6m8 6-8 6M692 764l-8-6m8 6-8 6M992 764l-8-6m8 6-8 6" fill="none" stroke="#0070f3" stroke-width="3"/>
+    <circle cx="148" cy="764" r="13" fill="#171717"/>
+    <circle cx="448" cy="764" r="13" fill="#0070f3"/>
+    <circle cx="748" cy="764" r="13" fill="#0070f3"/>
+    <circle cx="1048" cy="764" r="13" fill="#0070f3"/>
+    <text x="148" y="742" text-anchor="middle" font-size="18" font-weight="600">所有者接受目标 + v2</text>
+    <text x="448" y="742" text-anchor="middle" font-size="18" font-weight="600">内核核验范围 / 身份 / 版本</text>
+    <text x="748" y="742" text-anchor="middle" font-size="18" font-weight="600">持久化已接受状态</text>
+    <text x="1048" y="742" text-anchor="middle" font-size="18" font-weight="600">运行时工具执行授权后继</text>
+
+    <!-- continuity -->
+    <line x1="52" y1="804" x2="1228" y2="804" stroke="#b8b8b8" stroke-width="2"/>
+    <text x="52" y="836" font-size="18" fill="#005bbf">跨会话连续性：下一位 worker 读取已接受状态，而不只是聊天记录。</text>
+    <text x="1228" y="836" text-anchor="end" font-size="18" fill="#4d4d4d">独立的正确性 / 回滚工作仍可继续。</text>
+  </g>
+</svg>

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
-from pathlib import Path
 
 import pytest
 
@@ -10,9 +8,7 @@ from loopx.capabilities.benchmark_toolkit import (
     BENCHMARK_RUNTIME_OBSERVATION_SCHEMA_VERSION,
     build_benchmark_runtime_observation,
 )
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
+from tests.source_cli import run_source_cli
 
 @pytest.mark.parametrize(
     (
@@ -194,7 +190,6 @@ def test_runtime_observation_rejects_non_boolean_facts(
 
 def test_runtime_observation_cli_can_fail_closed() -> None:
     command = [
-        str(REPO_ROOT / "scripts/loopx"),
         "benchmark",
         "runtime-observation",
         "--admission-active",
@@ -206,13 +201,7 @@ def test_runtime_observation_cli_can_fail_closed() -> None:
         "--format",
         "json",
     ]
-    completed = subprocess.run(
-        command,
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    completed = run_source_cli(command, check=False)
 
     assert completed.returncode == 1
     receipt = json.loads(completed.stdout)

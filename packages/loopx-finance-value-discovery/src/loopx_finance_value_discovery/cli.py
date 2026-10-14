@@ -65,6 +65,11 @@ from .funding_event import (
     assess_funding_event_pair,
 )
 from .funding_presentation import FINANCE_FUNDING_RESEARCH_INPUT_SCHEMA_VERSION
+from .quantity_presentation import FINANCE_QUANTITY_RESEARCH_INPUT_SCHEMA_VERSION
+from .quantity_reconciliation import (
+    FINANCE_QUANTITY_INPUT_SCHEMA_VERSION,
+    assess_quantity_reconciliation,
+)
 
 FINANCE_RESEARCH_DASHBOARD_INPUT_SCHEMA_VERSION = "finance_research_dashboard_input_v0"
 
@@ -121,6 +126,10 @@ def _direct_parser() -> argparse.ArgumentParser:
         help="Compare ordered stock instants; never derive a cash flow.",
     )
     stock_parser.add_argument("--input-json", required=True)
+    quantity_parser = sub.add_parser(
+        "assess-quantity", help="Reconcile declared quantity stocks and signed flows; no cash or trading admission.",
+    )
+    quantity_parser.add_argument("--input-json", required=True)
     cash_parser = sub.add_parser(
         "assess-cash",
         help="Reconcile six source-column signed cash amounts and retain unknowns.",
@@ -234,7 +243,9 @@ def run(argv: Sequence[str] | None = None) -> int:
             if not isinstance(payload, Mapping):
                 raise ValueError("provider input must be a JSON object")
             schema_version = payload.get("schema_version")
-            if schema_version == FINANCE_FUNDING_EVENT_INPUT_SCHEMA_VERSION:
+            if schema_version == FINANCE_QUANTITY_INPUT_SCHEMA_VERSION:
+                packet = assess_quantity_reconciliation(payload)
+            elif schema_version == FINANCE_FUNDING_EVENT_INPUT_SCHEMA_VERSION:
                 packet = assess_funding_event_pair(payload)
             elif schema_version == FINANCE_CASH_RECONCILIATION_INPUT_SCHEMA_VERSION:
                 packet = assess_cash_reconciliation(payload)
@@ -258,6 +269,7 @@ def run(argv: Sequence[str] | None = None) -> int:
             elif schema_version in {
                 FINANCE_RESEARCH_DASHBOARD_INPUT_SCHEMA_VERSION,
                 FINANCE_FUNDING_RESEARCH_INPUT_SCHEMA_VERSION,
+                FINANCE_QUANTITY_RESEARCH_INPUT_SCHEMA_VERSION,
             }:
                 from .dashboard import build_finance_research_dashboard_packet
 
@@ -283,6 +295,8 @@ def run(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "assess-period":
             packet = assess_period_comparison(_load_json(args.input_json))
+        elif args.command == "assess-quantity":
+            packet = assess_quantity_reconciliation(_load_json(args.input_json))
         elif args.command == "assess-funding-event":
             packet = assess_funding_event_pair(_load_json(args.input_json))
         elif args.command == "assess-stock-change":
@@ -357,7 +371,7 @@ def run(argv: Sequence[str] | None = None) -> int:
                 "replay-beta, evaluate-pack, replay-pack, list-packs, "
                 "render-lark-card, build-operation-request, or "
                 "evaluate-contract-liquidity, evaluate-position, assess-period, "
-                "assess-period-difference, assess-stock-change, assess-funding-event, or assess-cash"
+                "assess-period-difference, assess-stock-change, assess-quantity, assess-funding-event, or assess-cash"
             )
     except Exception as exc:
         # Position inputs are private; malformed values never enter diagnostics.

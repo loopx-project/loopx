@@ -841,9 +841,11 @@ controller 消费。Stage 1 的 composition/replay/selection/inbox 及交叠 #47
 
 [当前登记来源清单](ledger/semantic-vocabulary-convergence-v0/2026-10-12-registered-source-treatment.zh-CN.md)
 列出 26 项、当前主干上的执行证据及兼容边界。#6313 的两项含义处置已由 owner 合入；
-原 Host-ACK fixture 修复已由 #6344 进入主干，并在 `60d833b13` 重验通过；来源清单
-集成与最终单一版本 owner 验收仍开放，#6285 的剩余增强独立处理。F1/F2 保持 6/26，
-不抬高 producer 范围或声称通用 F6；历史测量保留原 SHA，下表验收义务不变。
+原 Host-ACK fixture 修复已由 #6344 进入主干，并在 `60d833b13` 重验通过；#6285 的
+结算链回读用例（`5ea7497b5`，2026-10-13）与 #6270 来源清单及见证（`1c2542df7`，
+2026-10-14）均已合入主干。最终单一版本 owner 验收仍开放；该账本中 `c185e3f0c` 的
+集成读回是候选记录，不是验收。F1/F2 保持 6/26，不抬高 producer 范围或声称通用 F6；
+历史测量保留原 SHA，下表验收义务不变。
 
 | 里程碑 | 交付行为 | 进入门 | 退出证据 | 回滚 |
 | --- | --- | --- | --- | --- |

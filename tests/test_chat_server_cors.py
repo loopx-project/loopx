@@ -61,17 +61,19 @@ def _request(
     origin: str | None,
     path: str = "/api/chat/capabilities",
     body: bytes | None = None,
+    headers: dict[str, str] | None = None,
 ) -> http.client.HTTPResponse:
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-    headers = {"Origin": origin} if origin else {}
-    connection.request(method, path, body=body, headers=headers)
+    request_headers = {"Origin": origin} if origin is not None else {}
+    request_headers.update(headers or {})
+    connection.request(method, path, body=body, headers=request_headers)
     return connection.getresponse()
 
 
-def test_chat_json_echoes_loopback_cors_origin() -> None:
+def test_chat_json_echoes_same_origin() -> None:
     server, thread = _start_server()
     try:
-        origin = "http://127.0.0.1:49152"
+        origin = f"http://127.0.0.1:{server.server_port}"
         response = _request(
             server.server_address[1],
             method="GET",
@@ -127,17 +129,26 @@ def test_chat_keeps_its_startup_identity_after_package_replacement(monkeypatch: 
         server.server_close()
 
 
-def test_chat_json_rejects_foreign_cors_origin() -> None:
+@pytest.mark.parametrize("origin_kind", ["other_port", "other_loopback_name", "https", "foreign", "malformed"])
+def test_chat_json_rejects_other_browser_origins(origin_kind: str) -> None:
     server, thread = _start_server()
     try:
+        port = server.server_port
+        origins = {
+            "other_port": f"http://127.0.0.1:{port + 1 if port < 65535 else port - 1}",
+            "other_loopback_name": f"http://localhost:{port}",
+            "https": f"https://127.0.0.1:{port}",
+            "foreign": "https://evil.example",
+            "malformed": f"http://127.0.0.1:{port}/unexpected",
+        }
         response = _request(
-            server.server_address[1],
+            port,
             method="GET",
-            origin="https://evil.example",
+            origin=origins[origin_kind],
         )
         response.read()
 
-        assert response.status == 200
+        assert response.status == 403
         assert response.getheader("Access-Control-Allow-Origin") is None
     finally:
         server.shutdown()
@@ -145,10 +156,10 @@ def test_chat_json_rejects_foreign_cors_origin() -> None:
         server.server_close()
 
 
-def test_chat_options_exposes_loopback_preflight_only() -> None:
+def test_chat_options_exposes_same_origin_preflight_only() -> None:
     server, thread = _start_server()
     try:
-        origin = "http://127.0.0.1:49152"
+        origin = f"http://127.0.0.1:{server.server_port}"
         response = _request(
             server.server_address[1],
             method="OPTIONS",
@@ -161,6 +172,116 @@ def test_chat_options_exposes_loopback_preflight_only() -> None:
         assert response.getheader("Access-Control-Allow-Methods") == (
             "GET, POST, DELETE, OPTIONS"
         )
+        denied = _request(
+            server.server_port,
+            method="OPTIONS",
+            origin="http://127.0.0.1:49152" if server.server_port != 49152 else "http://127.0.0.1:49153",
+        )
+        denied.read()
+        assert denied.status == 403
+        assert denied.getheader("Access-Control-Allow-Origin") is None
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_other_loopback_page_cannot_write_projection_messages() -> None:
+    server, thread = _start_server()
+    try:
+        port = server.server_port
+        body = json.dumps({"context_kind": "manager", "question": "fixture question", "answer": "fixture answer"}).encode()
+        denied = _request(
+            port,
+            method="POST",
+            path="/api/chat/projection-messages",
+            origin=f"http://127.0.0.1:{port + 1 if port < 65535 else port - 1}",
+            body=body,
+            headers={"Content-Type": "application/json"},
+        )
+        denied.read()
+        assert denied.status == 403
+        assert server.chat_store.list_sessions() == []
+
+        allowed = _request(
+            port,
+            method="POST",
+            path="/api/chat/projection-messages",
+            origin=f"http://127.0.0.1:{port}",
+            body=body,
+            headers={"Content-Type": "application/json"},
+        )
+        allowed.read()
+        assert allowed.status == 201
+        assert len(server.chat_store.list_sessions()) == 1
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+@pytest.mark.parametrize("host", ["evil.example", "localhost.evil.example", "127.0.0.1:0", "127.0.0.1:99999"])
+def test_chat_rejects_non_loopback_or_invalid_host(host: str) -> None:
+    server, thread = _start_server()
+    try:
+        response = _request(server.server_port, method="GET", origin=None, headers={"Host": host})
+        response.read()
+        assert response.status == 403
+        assert response.getheader("Access-Control-Allow-Origin") is None
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+@pytest.mark.parametrize("header", ["missing_host", "duplicate_host", "duplicate_origin"])
+def test_chat_rejects_missing_or_ambiguous_authority(header: str) -> None:
+    server, thread = _start_server()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+        connection.putrequest("GET", "/api/chat/sessions", skip_host=True)
+        if header != "missing_host":
+            connection.putheader("Host", f"127.0.0.1:{server.server_port}")
+        if header == "duplicate_host":
+            connection.putheader("Host", f"127.0.0.1:{server.server_port}")
+        if header == "duplicate_origin":
+            connection.putheader("Origin", f"http://127.0.0.1:{server.server_port}")
+            connection.putheader("Origin", "http://127.0.0.1:49152")
+        connection.endheaders()
+        response = connection.getresponse()
+        response.read()
+        assert response.status == 403
+        assert response.getheader("Access-Control-Allow-Origin") is None
+        connection.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+@pytest.mark.parametrize("origin", ["tauri://localhost", "http://tauri.localhost"])
+def test_chat_rejects_unrelated_desktop_boot_origin(origin: str) -> None:
+    server, thread = _start_server()
+    try:
+        response = _request(server.server_port, method="GET", origin=origin)
+        response.read()
+        assert response.status == 403
+        assert response.getheader("Access-Control-Allow-Origin") is None
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_chat_accepts_forwarded_loopback_authority_when_origin_matches() -> None:
+    server, thread = _start_server()
+    try:
+        forwarded_port = server.server_port + 1 if server.server_port < 65535 else server.server_port - 1
+        origin = f"http://localhost:{forwarded_port}"
+        response = _request(server.server_port, method="GET", origin=origin, headers={"Host": f"localhost:{forwarded_port}"})
+        response.read()
+        assert response.status == 200
+        assert response.getheader("Access-Control-Allow-Origin") == origin
     finally:
         server.shutdown()
         thread.join(timeout=5)

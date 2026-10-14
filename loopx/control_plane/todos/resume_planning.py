@@ -75,6 +75,7 @@ def build_todo_resume_planning_request(
         "has_deferred_count": "deferred_count" in value,
         "has_visible_deferred_count": bool(value.get("deferred_count")),
         "deferred_count": value.get("deferred_count"),
+        "deferred_work_counts": value.get("deferred_work_counts"),
         "available_capabilities": (
             normalize_required_capabilities(available_capabilities)
             if available_capabilities is not None else None
@@ -96,3 +97,36 @@ def project_todo_resume_planning(
     if not isinstance(result, dict) or result.get("schema_version") != "todo_resume_planning_v0":
         raise RuntimeError("TypeScript Todo resume planning shape mismatch")
     return result
+
+
+def read_todo_deferred_work_counts(value: Any) -> dict[str, Any]:
+    """Decode source counts; only historical nonempty inputs need a typed projection."""
+    if not isinstance(value, dict) or not value:
+        return {"ready": 0, "blocked": 0, "unknown": None, "complete": False,
+                "ready_by_agent": {}}
+    counts = value.get("deferred_work_counts")
+    if counts is None:
+        counts = project_todo_resume_planning(value)["deferred_lanes"]["deferred_work_counts"]
+
+    def count(raw: Any) -> bool:
+        # Match the co-deployed TypeScript Number.isSafeInteger wire decoder.
+        return type(raw) is int and 0 <= raw <= 2**53 - 1
+
+    if (not isinstance(counts, dict)
+        or "unknown" not in counts
+        or not all(count(counts.get(key)) for key in ("ready", "blocked"))
+        or counts.get("unknown") is not None and not count(counts.get("unknown"))
+        or type(counts.get("complete")) is not bool
+        or counts["complete"] and counts.get("unknown") != 0):
+        raise ValueError("invalid deferred work counts")
+    claims = counts.get("ready_by_agent")
+    if (not isinstance(claims, dict)
+        or any(not isinstance(agent, str) or not agent or not count(total)
+               for agent, total in claims.items())
+        or sum(claims.values()) > counts["ready"]):
+        raise ValueError("invalid deferred ready claimant counts")
+    total = value.get("deferred_count")
+    if (count(total) and counts.get("unknown") is not None
+        and counts["ready"] + counts["blocked"] + counts["unknown"] != total):
+        raise ValueError("deferred work counts disagree with the source total")
+    return {**counts, "ready_by_agent": dict(claims)}

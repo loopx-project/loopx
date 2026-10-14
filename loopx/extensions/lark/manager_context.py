@@ -20,6 +20,7 @@ from .event_inbox import (
 from ..external_connector_runtime import EFFECT_RECEIPT_SCHEMA_VERSION, ExternalEffectKind
 from ...file_lock import exclusive_file_lock
 from .goal_channel_targets import goal_channel_target_for_name
+from .private_json import write_private_json_atomic
 from .turn_start_sync import sync_lark_turn_start_inbox
 
 MANAGER_CONTEXT_ITEM_LIMIT = 8
@@ -243,13 +244,7 @@ def _write_retention_receipts(path: Path, receipts: Mapping[str, Any]) -> None:
         "receipts": dict(receipts),
         "updated_at": datetime.now(UTC).isoformat(),
     }
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    os.chmod(temporary, 0o600)
-    temporary.replace(path)
-    os.chmod(path, 0o600)
+    write_private_json_atomic(path, payload)
 
 
 def compact_manager_context(

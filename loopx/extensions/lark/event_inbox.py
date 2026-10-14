@@ -33,6 +33,7 @@ from .identity_shapes import (  # noqa: F401
     LARK_CHAT_ID_PATTERN as CHAT_ID_PATTERN,
     LARK_MESSAGE_ID_PATTERN as MESSAGE_ID_PATTERN,
 )
+from .private_json import write_private_json_atomic
 
 EVENT_SCHEMA_VERSION = "lark_event_inbox_event_v0"
 CONFIG_SCHEMA_VERSION = "lark_event_inbox_config_v0"
@@ -640,19 +641,9 @@ def ingest_lark_event_inbox(
         os.chmod(inbox, 0o700)
         for event in accepted.values():
             path = inbox / f"{event['message_id']}.json"
-            temporary = path.with_suffix(".json.tmp")
-            temporary.write_text(
-                json.dumps(
-                    {"schema_version": EVENT_SCHEMA_VERSION, **event},
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                )
-                + "\n",
-                encoding="utf-8",
+            write_private_json_atomic(
+                path, {"schema_version": EVENT_SCHEMA_VERSION, **event},
             )
-            os.chmod(temporary, 0o600)
-            temporary.replace(path)
-            os.chmod(path, 0o600)
     return {
         "ok": True,
         "schema_version": "lark_event_inbox_ingest_v0",
@@ -753,14 +744,7 @@ def _material_review_ledger(inbox: Path) -> tuple[Path, dict[str, Any]]:
 def _write_material_review_ledger(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(path.parent, 0o700)
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    os.chmod(temporary, 0o600)
-    temporary.replace(path)
-    os.chmod(path, 0o600)
+    write_private_json_atomic(path, payload)
 
 
 def _acknowledge_lark_event_inbox_state(
@@ -781,14 +765,7 @@ def _acknowledge_lark_event_inbox_state(
             "message_ids": merged,
             "last_processed_at": datetime.now(UTC).isoformat(),
         }
-        temporary = processed_path.with_suffix(".json.tmp")
-        temporary.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        os.chmod(temporary, 0o600)
-        temporary.replace(processed_path)
-        os.chmod(processed_path, 0o600)
+        write_private_json_atomic(processed_path, payload)
     return {
         "ok": True,
         "schema_version": "lark_event_inbox_ack_v0",

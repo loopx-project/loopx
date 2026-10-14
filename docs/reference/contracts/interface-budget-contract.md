@@ -10,7 +10,7 @@ and size/count budgets.
 | --- | --- | --- | --- | --- | --- | --- |
 | `heartbeat_prompt_json` | heartbeat automation | wake and route one bounded turn | `quota should-run`, `status`, or `review-packet --handoff-only` | `json_chars <= 5400` plus `interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 30` |
 | `review_packet_handoff_only_json` | project-agent handoff | forward the smallest sufficient task packet | full `review-packet` or run-history artifact | `json_chars <= 3000` plus `handoff_interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 18` |
-| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 16500` | `nested_keys <= 376` | `top_level_keys <= 54` |
+| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 16500` | `nested_keys <= 386` | `top_level_keys <= 54` |
 | `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 24000` | `nested_keys <= 350` | `top_level_keys <= 27` |
 
 These four budgets measure compact machine payloads. For
@@ -23,13 +23,21 @@ indentation and Markdown wrappers can make emitted output materially larger;
 the emitted-output qualification matrix below measures that separate boundary
 through the real CLI entry point.
 
-The M3 automatic-cadence readback raises the quota fixture from 357 to 368
-nested keys. The 11-key increase is one always-present, validated readback:
-Goal, Agent and automation scope, configuration revision, effective minimum and
-the owner's four-field eligibility union. The 376-key ceiling leaves eight keys
-of headroom. The same envelope moves the fixture from 51 to 52 top-level keys;
-the 54-key ceiling leaves two keys of headroom. The JSON-size ceiling does not
-change.
+The current quota fixture retains 378 nested keys: the M3 automatic-cadence
+readback established 368, and full-source frontier counts add ten keys for
+deferred readiness and explicit known/unknown coverage. On the same synthetic
+workload, base/head measure 14,897/15,115 JSON characters, 368/378 nested keys
+and 52/52 top-level keys. Dashboard status grows 22,256/22,362 characters while
+its 336 nested and 26 top-level keys stay unchanged. The quota nested-key
+ceiling moves from 376 to 386, preserving eight keys of headroom. Character,
+top-level, per-Todo growth and other surface ceilings remain unchanged. These
+facts prevent hidden rows from becoming blocked work; removing the coverage
+fields to meet the old ceiling would lose useful meaning.
+
+同一合成 workload 的 quota 在 base/head 分别为 14,897/15,115 字符、368/378
+嵌套键和 52/52 顶层键。新增十个键保留 deferred 就绪计数及 known/unknown 证据；
+只将嵌套键预算从 376 调至 386，仍留八键余量。字符、顶层键、每任务增长和其他
+surface 上限不变；不通过删除来源完整性来把未展示任务误报为 blocked。
 
 The successful thin heartbeat projection contains only `schema_version`,
 `ok`, `goal_id`, optional `agent_id`, `task_body`, and the compact

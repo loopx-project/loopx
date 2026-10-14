@@ -1,0 +1,134 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "input_sha256",
+    "operands",
+    "state",
+    "reason_codes",
+    "numeric_accuracy_assessments",
+    "candidate_net_quantity",
+    "candidate_expected_closing_quantity",
+    "candidate_closing_difference",
+    "reconciled_closing_quantity",
+    "quantity_reconciled",
+    "arithmetic_assurance",
+    "coverage_assurance",
+    "ordering_assurance",
+    "source_evidence_authenticated",
+    "financial_admission",
+    "cash_flow_derived",
+    "exact_cash",
+    "trading_allowed"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "finance_quantity_reconciliation_assessment_v1"
+    },
+    "input_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "operands": {
+      "$ref": "https://loopx.dev/finance/quantity-reconciliation-input-v1.schema.json"
+    },
+    "state": {
+      "enum": [
+        "consistent",
+        "conflict",
+        "incomplete",
+        "ineligible"
+      ]
+    },
+    "reason_codes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "maxLength": 128
+      }
+    },
+    "numeric_accuracy_assessments": {
+      "type": "object"
+    },
+    "candidate_net_quantity": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "candidate_expected_closing_quantity": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "candidate_closing_difference": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reconciled_closing_quantity": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "quantity_reconciled": {
+      "type": "boolean"
+    },
+    "arithmetic_assurance": {
+      "const": "exact_lexical_quantity_at_same_declared_scale"
+    },
+    "coverage_assurance": {
+      "const": "caller_asserted_not_authenticated"
+    },
+    "ordering_assurance": {
+      "const": "caller_asserted_not_authenticated_event_time"
+    },
+    "source_evidence_authenticated": {
+      "const": false
+    },
+    "financial_admission": {
+      "const": false
+    },
+    "cash_flow_derived": {
+      "const": false
+    },
+    "exact_cash": {
+      "type": "null"
+    },
+    "trading_allowed": {
+      "const": false
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loopx.dev/finance/quantity-reconciliation-response-v1.schema.json",
+  "title": "Bounded exact quantity reconciliation, not evidence or trading admission"
+}

@@ -199,6 +199,16 @@ def _run_cli(
     *args: str,
     cwd: Path = REPO_ROOT,
 ) -> tuple[int, dict[str, Any]]:
+    # These status-backed fixture calls audit their synthetic project instead
+    # of the installed package. Keep scheduler protocols and explicit scans intact.
+    if (
+        args[:2] in (("quota", "should-run"), ("quota", "spend-slot"))
+        and registry_path.parent.name == ".loopx"
+        and not any(
+            arg.split("=", 1)[0] in {"--scan-path", "--scan-root"} for arg in args
+        )
+    ):
+        args = (*args, "--scan-path", str(registry_path.parent.parent))
     result = subprocess.run(
         [
             sys.executable,

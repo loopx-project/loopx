@@ -7,9 +7,12 @@ legacy-work-basis and reserved-value changes reached main. The production
 identical to that main; only its existing witnesses and records are added.
 The [staged scope revision](https://github.com/loopx-project/loopx/pull/4789)
 remains the acceptance boundary. **26 rows inventoried is not 26 formal producer
-proofs or tracker closure.** The source-inventory PR still needs integration
-and final owner closeout. The original three Host-ACK fixture failures have
-already been repaired on main through #6344; #6285 is not an additional merge
+proofs or tracker closure.** #6270 merged as
+`1c2542df730e51fd50c892a1236e1b7166768a7b` (2026-10-14); final owner closeout on
+one revision is still open, and the integrated readback at the end of this
+record is a candidate for it. The original three Host-ACK fixture failures were
+repaired on main through #6344; #6285 merged separately as
+`5ea7497b52f4b094ee2e4528f92bf69b934a25ee` (2026-10-13) and was never a merge
 prerequisite for those same cases.
 
 The registry still contains 26 entries, including `task_lease_lifecycle_operation`
@@ -157,13 +160,13 @@ The ordinary scenario still refuses the superseded Turn before acknowledging
 the current one. Original ACK, persisted scheduler state and byte-stable replay
 assertions pass without relaxing the Host-readback rule.
 
-[#6285](https://github.com/loopx-project/loopx/pull/6285) remains a separate open
-proposal at `f6c8aae7a7e8ba917861992a1ad21eb29477bf26`. Its current diff still adds
-shared fixture setup, extra ordinary-Turn absent/mismatched cases and explicit
-applied-RRULE readback; it is not byte-identical to main or reported as merged.
-Those remaining changes do not make the original three main failures recur.
-Do not duplicate its patch here or require another merge merely to count the
-same fixture repair twice.
+[#6285](https://github.com/loopx-project/loopx/pull/6285) merged as
+`5ea7497b52f4b094ee2e4528f92bf69b934a25ee` on 2026-10-13 after an exact-head
+approved review at `f6c8aae7a7e8ba917861992a1ad21eb29477bf26`. It adds shared
+fixture setup, extra ordinary-Turn absent/mismatched cases and explicit
+applied-RRULE readback to the same settlement CLI file. Those cases do not make
+the original three failures recur, and the same fixture repair is credited once,
+to #6344.
 
 Historical results remain tied to their original snapshots: main
 `509c38c502d3d0b4eafb01550efcdc4b5b5a1d17` had 206 passed / 3 failed in this group,
@@ -263,11 +266,26 @@ instruction” claim is obsolete. Advisory findings do not become blocking proof
 The current baseline includes #6251 typed-failure and #6268 canonical-selection
 repairs, #6260 shared consistency, #6290 legacy-work-basis repair and #6313 source
 disposition. These resolve named code/meaning gaps; they do not extend #4447's
-original closure scope. The original Host-ACK blocker is resolved in main;
-the additional source witnesses and inventory in #6270 are still proposed.
-Stage 3 and the issue remain open for that integration and final owner closeout
-on one revision with explicit passed/failed/untested evidence. A remaining
-#6285 enhancement is not a new closure condition for this tracker.
+original closure scope. The original Host-ACK blocker is resolved in main, and
+the #6270 source witnesses and inventory are integrated. Stage 3 and the issue
+remain open only for final owner closeout on one revision with explicit
+passed/failed/untested evidence; the merged #6285 cases are not a closure
+condition for this tracker.
 Installed frontend/Lark/live-model, general Goal/team qualification and blanket
 F6 proof are outside this tracker. No production provider, permission or
 persistence format changes here; raw logs and local Goal state stay private.
+
+## Integrated readback at `c185e3f0cf19419a1786c882b006eb4567ff449e` (2026-10-14)
+
+Candidate record for Stage 3, not owner acceptance. The exact selections above
+were re-run on canonical main after #6270 merged: 663 Python domain and
+monitor-recovery cases, 706 semantic/value-note cases, 448 native TypeScript
+cases and 211 critical settlement/scope/source cases passed with no skips.
+The drift smoke passes at 26 entries / 51 owner symbols with F1/F2 6/26, F3 0/26,
+F4 4/4, F5 1/1, F6 0/0 and 45 unresolved producer sites, 17 unable to provide
+evidence. Failed: the full Python suite is not green on this revision;
+`tests/control_plane/test_effect_interpreter_packet.py::test_real_executor_uses_verdict_and_replays_persisted_plan`
+fails in CI and locally with `LoopX Turn route is not host executable`, outside
+these evidence groups and outside this tracker's scope. Untested: installed
+frontend/Lark, live models and whole-tree F6. Counts are evidence boundaries,
+not a completion percentage.

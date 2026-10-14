@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -13,8 +12,8 @@ from loopx.capabilities.benchmark_toolkit import (
     build_benchmark_four_arm_contract_from_spec,
     compact_benchmark_four_arm_contract,
 )
+from tests.source_cli import run_source_cli
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
 BASE_GOAL = "Complete the requested benchmark task."
 DOMAIN_HINT = "Implement the public requirements, validate them, and review the diff."
 
@@ -157,9 +156,8 @@ def test_cli_defaults_to_a_prompt_redacted_qualification_receipt(
         encoding="utf-8",
     )
 
-    completed = subprocess.run(
+    completed = run_source_cli(
         [
-            str(REPO_ROOT / "scripts/loopx"),
             "benchmark",
             "four-arm-contract",
             "--spec-json",
@@ -168,9 +166,6 @@ def test_cli_defaults_to_a_prompt_redacted_qualification_receipt(
             "--format",
             "json",
         ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
         check=True,
     )
     payload = json.loads(completed.stdout)
@@ -198,9 +193,8 @@ def test_cli_can_return_prompts_only_under_explicit_runner_opt_in(
         encoding="utf-8",
     )
 
-    completed = subprocess.run(
+    completed = run_source_cli(
         [
-            str(REPO_ROOT / "scripts/loopx"),
             "benchmark",
             "four-arm-contract",
             "--spec-json",
@@ -209,9 +203,6 @@ def test_cli_can_return_prompts_only_under_explicit_runner_opt_in(
             "--format",
             "json",
         ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
         check=True,
     )
     payload = json.loads(completed.stdout)

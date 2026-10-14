@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -23,18 +22,13 @@ from loopx.capabilities.benchmark_toolkit import (
     read_benchmark_upload_receipt,
     simulate_benchmark_upload,
 )
+from tests.source_cli import run_source_cli
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _loopx_json(*args: str) -> dict[str, object]:
-    result = subprocess.run(
-        [str(REPO_ROOT / "scripts/loopx"), *args],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=True,
-    )
+    result = run_source_cli(list(args), check=True)
     return json.loads(result.stdout)
 
 

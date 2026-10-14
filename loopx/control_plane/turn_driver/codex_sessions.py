@@ -177,9 +177,14 @@ def _store_codex_cli_session(
     operation_reasoning_effort: str | None = None,
     require_absent: bool = False,
     checkpoint_artifact_sha256: str | None = None,
+    checkpoint_artifact_root: str | None = None,
 ) -> None:
     if checkpoint_artifact_sha256 is not None and not re.fullmatch(r"[0-9a-f]{64}", checkpoint_artifact_sha256):
         raise ValueError("checkpoint session source digest is invalid")
+    if checkpoint_artifact_root is not None and (
+            checkpoint_artifact_sha256 is None or not Path(checkpoint_artifact_root).is_absolute() or
+            str(Path(checkpoint_artifact_root).resolve()) != checkpoint_artifact_root):
+        raise ValueError("checkpoint session source root must be physical and digest-bound")
     path = _session_path(runtime_root, lineage, session_scope)
     with exclusive_file_lock(path):
         if require_absent and (path.exists() or path.is_symlink()):
@@ -188,15 +193,22 @@ def _store_codex_cli_session(
         # but cannot migrate to a replacement session, profile or Goal lifetime.
         prior = load_codex_cli_session(runtime_root, lineage=lineage, session_scope=session_scope)
         retained_source = None
+        retained_root = None
         if prior and (prior.get("session_id"), prior.get("goal_ref"), prior.get("session_profile_digest")) == (
             session_id, dict(goal_ref) if goal_ref is not None else None, session_profile_digest
         ):
             retained_source = prior.get("checkpoint_artifact_sha256")
+            retained_root = prior.get("checkpoint_artifact_root")
         if retained_source is not None:
             if not isinstance(retained_source, str) or not re.fullmatch(r"[0-9a-f]{64}", retained_source):
                 raise ValueError("stored checkpoint session source digest is invalid")
             if checkpoint_artifact_sha256 not in (None, retained_source):
                 raise ValueError("checkpoint session source digest cannot change")
+            if retained_root is not None and (not isinstance(retained_root, str) or
+                    not Path(retained_root).is_absolute() or str(Path(retained_root).resolve()) != retained_root):
+                raise ValueError("stored checkpoint session source root is invalid")
+            if retained_root is not None and checkpoint_artifact_root not in (None, retained_root):
+                raise ValueError("checkpoint session source root cannot change")
         _write_codex_cli_session(
             runtime_root,
             lineage=lineage,
@@ -208,6 +220,7 @@ def _store_codex_cli_session(
             operation_model=operation_model,
             operation_reasoning_effort=operation_reasoning_effort,
             checkpoint_artifact_sha256=checkpoint_artifact_sha256 or retained_source,
+            checkpoint_artifact_root=checkpoint_artifact_root or retained_root,
         )
 
 
@@ -223,6 +236,7 @@ def _write_codex_cli_session(
     operation_model: str | None = None,
     operation_reasoning_effort: str | None = None,
     checkpoint_artifact_sha256: str | None = None,
+    checkpoint_artifact_root: str | None = None,
 ) -> None:
     normalized_session_id = _valid_session_id(session_id)
     if not normalized_session_id:
@@ -253,6 +267,8 @@ def _write_codex_cli_session(
                 payload["goal_ref"] = dict(goal_ref)
             if checkpoint_artifact_sha256 is not None:
                 payload["checkpoint_artifact_sha256"] = checkpoint_artifact_sha256
+            if checkpoint_artifact_root is not None:
+                payload["checkpoint_artifact_root"] = checkpoint_artifact_root
             if operation_profile_digest is not None:
                 payload["operation_transport"] = "app-server-operation-tools-v0"
                 payload["operation_profile_digest"] = operation_profile_digest

@@ -79,6 +79,63 @@ The runner supplies no HEAD-moved/clean-worktree/exit-only substitute and never
 calls hidden benchmark verification to provide intermediate feedback. Independent
 validator protection remains the environment owner's responsibility.
 
+## Offline and git-less task images
+
+Task containers are often slim images without a git binary or any route to
+package registries. The LoopX install inside a trial stays offline when the
+host prepares two inputs before staging:
+
+- Build the Chat bundle once on the host with `python3 scripts/chat_bundle.py
+  ensure`. Source staging validates the prepared `loopx/web/chat` delivery
+  against its manifest and carries it into the archive, so in-container
+  installation never needs `npm ci` or a registry. Without a prepared bundle,
+  the in-container build records the staged source revision through
+  `LOOPX_RESOLVED_SOURCE_GIT_COMMIT`, which the Harbor adapter supplies from
+  the commit it verified during staging; a missing git binary takes the same
+  fallback as a failed `rev-parse`.
+- Models served through gateway aliases that the pinned Codex binary does not
+  ship in its built-in catalog get a reduced tool surface (with some binaries
+  only the bare `exec` tool), and the `web_search` setting has no effect.
+  Stage a `model-catalog.json` next to the offline Codex binary
+  (`CODEX_OFFLINE_DIR`); the installer copies it into the container and the
+  trial home references it via `model_catalog_json`. The `web_search` agent
+  kwarg then takes effect in the shared runtime (default remains `disabled`),
+  and the requested model is unchanged.
+
+  A catalog entry is **not** capability-only. Real entries can select a tool
+  mode and carry `model_messages` that become prompt content; a valid
+  `code_mode_only` entry makes the real client send `tools: []`, which is
+  strictly worse than no catalog. The renderer therefore rejects entries whose
+  `tool_mode` is set, and rejects catalogs with no entry for the requested
+  model. Because configuration cannot prove delivered tools, qualify every
+  pinned binary/catalog pair once at the first-request boundary — a local
+  stub captures the request and stops inference with a deliberate 400, so no
+  credentials or model spend are involved — and keep the receipt with the
+  study:
+
+  ```bash
+  python3 -m benchmark.runtime.toolface --codex-bin "$CODEX_OFFLINE_DIR/codex" \
+      --model <gateway-alias> --model-catalog "$CODEX_OFFLINE_DIR/model-catalog.json" \
+      --web-search live --expect web_search --expect apply_patch \
+      --receipt toolface-receipt.json
+  ```
+
+  Do not hand-write a "minimal" entry: the entry schema is internal to the
+  client and changes between versions. The pinned `codex-cli 0.151.0` refuses
+  to start without `display_name`, `model_messages`,
+  `supported_reasoning_levels`, `truncation_policy` and further
+  non-capability fields, while newer builds reject different omissions first
+  (a 0.162 alpha fails on a missing `display_name` alone) — all before any
+  HTTP request. Derive the entry instead: take a complete entry your pinned
+  binary already accepts (from its shipped catalog, or a gateway-published
+  catalog for an official model), copy it verbatim, and change only `slug`
+  to the gateway alias. The capability fields that shape the toolface
+  (`supports_search_tool`, `web_search_tool_type`, `apply_patch_tool_type`,
+  `shell_type`) are inherited from the donor entry; leave `tool_mode` unset
+  as above. Then qualify the pinned binary/catalog pair and keep the receipt
+  — a client that cannot parse the entry now fails the qualification fast
+  with its own stderr, instead of a silent timeout.
+
 ## Task entry and planning ablation
 
 `task_entry` is independent of the execution mode:

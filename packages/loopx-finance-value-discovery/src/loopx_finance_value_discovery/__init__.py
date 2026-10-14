@@ -1,6 +1,11 @@
 """Finance value-discovery extension."""
 
 from importlib import import_module
+from .quantity_reconciliation import (
+    FINANCE_QUANTITY_INPUT_SCHEMA_VERSION,
+    FINANCE_QUANTITY_SCHEMA_VERSION,
+    assess_quantity_reconciliation,
+)
 
 from .funding_event import (
     FINANCE_FUNDING_EVENT_INPUT_SCHEMA_VERSION,
@@ -86,6 +91,9 @@ from .replay import (
 )
 
 __all__ = [
+    "FINANCE_QUANTITY_INPUT_SCHEMA_VERSION",
+    "FINANCE_QUANTITY_SCHEMA_VERSION",
+    "assess_quantity_reconciliation",
     "FINANCE_FUNDING_EVENT_INPUT_SCHEMA_VERSION",
     "FINANCE_FUNDING_EVENT_SCHEMA_VERSION",
     "assess_funding_event_pair",

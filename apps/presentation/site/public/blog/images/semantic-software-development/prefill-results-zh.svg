@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 760" width="1240" height="760" role="img" aria-labelledby="title desc">
+<title id="title">vLLM 预填充路径实测性能</title>
+<desc id="desc">公开 vLLM PR 54951 中作者报告的四组独立进程 A/B 重启对：TTFT 从 54.154 秒降至 40.388 秒，输入加输出 token 吞吐从 17856.28 升至 23675.18 token 每秒。本文未独立复现，也不能据此隔离 LoopX 的因果增益。</desc>
+<rect width="1240" height="760" fill="#fafafa"/>
+<g font-family="Geist Sans, Geist, Arial, PingFang SC, Noto Sans CJK SC, sans-serif" fill="#171717">
+  <text x="48" y="42" font-family="Geist Mono, Geist Mono Variable, SFMono-Regular, Menlo, Consolas, PingFang SC, Noto Sans CJK SC, monospace" font-size="18" font-weight="600" letter-spacing="2" fill="#0070f3">VLLM / 实测性能</text>
+  <text x="48" y="82" font-size="32" font-weight="600">预填充路径：更低首 token 延迟，更高 token 吞吐</text>
+  <text x="48" y="111" font-size="20" fill="#4d4d4d">固定负载 · 4 组独立进程 A/B 重启对 · 从零基线对比</text>
+
+  <rect x="48" y="136" width="1144" height="96" rx="12" fill="#ffffff" stroke="#ebebeb"/>
+  <line x1="68" y1="154" x2="68" y2="214" stroke="#0070f3" stroke-width="4"/>
+  <text x="88" y="164" font-family="Geist Mono, Geist Mono Variable, SFMono-Regular, Menlo, Consolas, PingFang SC, Noto Sans CJK SC, monospace" font-size="18" font-weight="600" fill="#0070f3">测试设置</text>
+  <text x="88" y="194" font-size="18" fill="#4d4d4d">PR #54951 · 作者报告</text>
+
+  <line x1="254" y1="154" x2="254" y2="214" stroke="#ebebeb"/>
+  <text x="286" y="164" font-size="18" fill="#8f8f8f">模型</text>
+  <text x="286" y="194" font-size="20" font-weight="500">GLM-5.3-Flash</text>
+
+  <line x1="482" y1="154" x2="482" y2="214" stroke="#ebebeb"/>
+  <text x="514" y="164" font-size="18" fill="#8f8f8f">硬件</text>
+  <text x="514" y="194" font-size="20" font-weight="500">4× H200 · TP4</text>
+
+  <line x1="662" y1="154" x2="662" y2="214" stroke="#ebebeb"/>
+  <text x="694" y="164" font-size="18" fill="#8f8f8f">负载</text>
+  <text x="694" y="194" font-size="20" font-weight="500">1,000,000 输入 · 256 输出</text>
+
+  <line x1="934" y1="154" x2="934" y2="214" stroke="#ebebeb"/>
+  <text x="966" y="164" font-size="18" fill="#8f8f8f">批预算</text>
+  <text x="966" y="194" font-size="20" font-weight="500">65,536 tokens</text>
+
+  <text x="88" y="218" font-size="18" fill="#4d4d4d">C1 sequential · legacy runner + explicit FA3 sparse backend · n=4 独立进程 A/B 重启对</text>
+
+  <rect x="48" y="260" width="558" height="380" rx="16" fill="#ffffff" stroke="#ebebeb"/>
+  <text x="76" y="301" font-size="26" font-weight="600">TTFT</text>
+  <text x="564" y="301" text-anchor="end" font-size="22" font-weight="600" fill="#0070f3">−25.42%</text>
+  <text x="76" y="332" font-size="18" fill="#4d4d4d">秒 · 越低越好 · 零基线</text>
+
+  <line x1="130" y1="380" x2="560" y2="380" stroke="#ebebeb" stroke-width="1.5"/>
+  <line x1="130" y1="444.7" x2="560" y2="444.7" stroke="#ebebeb" stroke-width="1.5"/>
+  <line x1="130" y1="509.3" x2="560" y2="509.3" stroke="#ebebeb" stroke-width="1.5"/>
+  <line x1="130" y1="574" x2="560" y2="574" stroke="#171717" stroke-width="2"/>
+  <line x1="130" y1="380" x2="130" y2="574" stroke="#d1d1d1" stroke-width="1.5"/>
+  <text x="112" y="386" text-anchor="end" font-size="18" fill="#8f8f8f">60</text>
+  <text x="112" y="451" text-anchor="end" font-size="18" fill="#8f8f8f">40</text>
+  <text x="112" y="516" text-anchor="end" font-size="18" fill="#8f8f8f">20</text>
+  <text x="112" y="580" text-anchor="end" font-size="18" fill="#8f8f8f">0</text>
+
+  <rect x="184" y="398" width="108" height="176" rx="8" fill="#b8b8b8"/>
+  <rect x="386" y="443.4" width="108" height="130.6" rx="8" fill="#0070f3"/>
+  <text x="238" y="386" text-anchor="middle" font-size="20" font-weight="600">54.154 s</text>
+  <text x="440" y="431" text-anchor="middle" font-size="20" font-weight="600" fill="#0070f3">40.388 s</text>
+  <text x="238" y="617" text-anchor="middle" font-size="20" font-weight="600">基线</text>
+  <text x="440" y="617" text-anchor="middle" font-size="20" font-weight="600" fill="#0070f3">优化后</text>
+
+  <rect x="634" y="260" width="558" height="380" rx="16" fill="#ffffff" stroke="#ebebeb"/>
+  <text x="662" y="301" font-size="26" font-weight="600">输入 + 输出 token 吞吐</text>
+  <text x="1150" y="301" text-anchor="end" font-size="22" font-weight="600" fill="#0070f3">+32.59%</text>
+  <text x="662" y="332" font-size="18" fill="#4d4d4d">tok/s · 越高越好 · 零基线</text>
+
+  <line x1="716" y1="380" x2="1146" y2="380" stroke="#ebebeb" stroke-width="1.5"/>
+  <line x1="716" y1="444.7" x2="1146" y2="444.7" stroke="#ebebeb" stroke-width="1.5"/>
+  <line x1="716" y1="509.3" x2="1146" y2="509.3" stroke="#ebebeb" stroke-width="1.5"/>
+  <line x1="716" y1="574" x2="1146" y2="574" stroke="#171717" stroke-width="2"/>
+  <line x1="716" y1="380" x2="716" y2="574" stroke="#d1d1d1" stroke-width="1.5"/>
+  <text x="698" y="386" text-anchor="end" font-size="18" fill="#8f8f8f">30k</text>
+  <text x="698" y="451" text-anchor="end" font-size="18" fill="#8f8f8f">20k</text>
+  <text x="698" y="516" text-anchor="end" font-size="18" fill="#8f8f8f">10k</text>
+  <text x="698" y="580" text-anchor="end" font-size="18" fill="#8f8f8f">0</text>
+
+  <rect x="770" y="458.5" width="108" height="115.5" rx="8" fill="#b8b8b8"/>
+  <rect x="972" y="420.9" width="108" height="153.1" rx="8" fill="#0070f3"/>
+  <text x="824" y="447" text-anchor="middle" font-size="20" font-weight="600">17,856.28 tok/s</text>
+  <text x="1026" y="410" text-anchor="middle" font-size="20" font-weight="600" fill="#0070f3">23,675.18 tok/s</text>
+  <text x="824" y="617" text-anchor="middle" font-size="20" font-weight="600">基线</text>
+  <text x="1026" y="617" text-anchor="middle" font-size="20" font-weight="600" fill="#0070f3">优化后</text>
+
+  <line x1="48" y1="660" x2="1192" y2="660" stroke="#ebebeb"/>
+  <text x="48" y="694" font-size="18" fill="#4d4d4d">来源：vLLM PR #54951 · 作者报告；本文未独立复现；不能据此隔离 LoopX 的因果增益。</text>
+  <text x="48" y="728" font-size="18" fill="#4d4d4d">固定负载；两张图是同一组运行的不同指标，增益不可相乘。吞吐是 C1 总 token 吞吐，不是饱和服务吞吐。</text>
+</g>
+</svg>

@@ -44,6 +44,7 @@ _RETAINED_LANE_LIMITS = {
 }
 _RETAINED_DICTS = {
     "work_counts",
+    "deferred_work_counts",
     "monitor_writeback",
     "source_proof",
     "terminal_closure_proof",
@@ -219,7 +220,7 @@ def compact_thin_todo_summary(
                 omitted_nonempty_lane_count += bool(value)
             continue
         if isinstance(value, dict):
-            if key == "work_counts":
+            if key in {"work_counts", "deferred_work_counts"}:
                 compact[key] = value
             elif key == "payload_compaction":
                 source_view = _summary_source_view(value)

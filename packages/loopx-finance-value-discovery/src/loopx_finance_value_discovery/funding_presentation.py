@@ -13,7 +13,7 @@ from typing import Any
 
 from .funding_event import FundingRateKind, assess_funding_event_pair
 from .replay import canonical_sha256
-from .presentation_validation import evidence_reference, record
+from .presentation_validation import public_reference_tree, record
 
 
 FINANCE_FUNDING_RESEARCH_INPUT_SCHEMA_VERSION = (
@@ -23,20 +23,6 @@ FINANCE_FUNDING_RESEARCH_INPUT_SCHEMA_VERSION = (
 
 def _declared(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-
-def _public_references(value: Any, context: str = "funding input") -> None:
-    """Keep embedded references under the existing publication URL boundary."""
-    if isinstance(value, Mapping):
-        for key, child in value.items():
-            path = f"{context}.{key}"
-            if child is not None and (key == "ref" or key.endswith("_ref")):
-                evidence_reference(child, context=path)
-            else:
-                _public_references(child, path)
-    elif isinstance(value, list):
-        for index, child in enumerate(value):
-            _public_references(child, f"{context}[{index}]")
 
 
 def _layer(order: int, label: str, points: list[str]) -> dict[str, Any]:
@@ -91,7 +77,7 @@ def build_funding_event_research_packet(payload: Mapping[str, Any]) -> dict[str,
         raise ValueError("unsupported funding research input version")
     assessment = assess_funding_event_pair(wrapper.get("funding_event_input"))
     original = assessment["input"]
-    _public_references(original)
+    public_reference_tree(original, "funding input")
     decision_at = original["decision_at"]
     layers = [
         _layer(

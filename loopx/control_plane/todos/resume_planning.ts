@@ -1,5 +1,6 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import {countDeferredTodoWork, readDeferredTodoWorkCounts} from "./summary_lanes.ts";
 import {
   jsonObject, requireJsonObject, requireBoolean, requireInteger,
   requireStringArray, optionalNonEmptyString,
@@ -192,11 +193,12 @@ function decodeSources(value: unknown): Record<SourceKey, Item[]> {
   return sources;
 }
 
-function deferredPlan(sources: Record<SourceKey, Item[]>, capabilities: unknown) {
+function deferredPlan(sources: Record<SourceKey, Item[]>, capabilities: unknown, observed: Item[]) {
   let deferredItems = deferred(sources.deferred_items.length ? sources.deferred_items : sources.items);
   const projectedCandidates = deferred(sources.deferred_resume_candidates);
   let candidates = projectedCandidates.filter((entry) => entry.payload.resume_ready === true);
   let capacityFields: JsonObject | null = null;
+  let countSource = observed;
   if (capabilities !== null) {
     // deferred_items is a bounded presentation lane while
     // deferred_resume_candidates retains semantically selected rows that may
@@ -205,19 +207,23 @@ function deferredPlan(sources: Record<SourceKey, Item[]>, capabilities: unknown)
     // Put the explicit candidate lane first so its lossless payload wins when
     // the same Todo is also present in a compact display lane.
     const displayIdentities = new Set(deferredItems.map(itemIdentity));
-    const reevaluated = resolveCapacity(ordered(unique([
+    const selected = ordered(unique([
       ...projectedCandidates,
       ...deferredItems,
-    ])), sources.items,
+    ]));
+    const reevaluated = resolveCapacity(unique([...selected, ...observed]), sources.items,
       requireStringArray(capabilities, "available_capabilities"));
-    deferredItems = reevaluated.filter((entry) => displayIdentities.has(itemIdentity(entry)));
-    candidates = reevaluated.filter((entry) => entry.payload.resume_ready === true);
+    const selectedIds = new Set(selected.map(itemIdentity));
+    const selectedReevaluated = reevaluated.filter(entry => selectedIds.has(itemIdentity(entry)));
+    deferredItems = selectedReevaluated.filter((entry) => displayIdentities.has(itemIdentity(entry)));
+    candidates = selectedReevaluated.filter((entry) => entry.payload.resume_ready === true);
+    countSource = reevaluated;
     capacityFields = { deferred_items: payloads(deferredItems), deferred_resume_candidates: payloads(candidates) };
     // Existing summary readers treat an empty explicit deferred lane as absent,
     // including after capacity resolution; retain that compatibility fallback.
     if (!deferredItems.length) deferredItems = deferred(sources.items);
   }
-  return { deferredItems, candidates, capacityFields };
+  return { deferredItems, candidates, capacityFields, countSource };
 }
 
 function monitorIds(sources: Record<SourceKey, Item[]>): Set<string> {
@@ -298,13 +304,35 @@ export function projectTodoResumePlanning(value: unknown): JsonObject {
     hasVisibleCount: requireBoolean(request.has_visible_deferred_count, "has_visible_deferred_count"),
     count: request.deferred_count,
   };
-  const { deferredItems, candidates, capacityFields } = deferredPlan(sources, request.available_capabilities);
+  // A producer's complete counts survive presentation truncation. Re-evaluate
+  // available rows only when current capabilities can change their readiness;
+  // any unseen remainder then remains explicitly unknown.
+  const sourceRows = [
+    ...sources.deferred_resume_candidates, ...sources.deferred_items, ...sources.items,
+  ];
+  const identities = new Map<string, Item>();
+  const conflicting = new Set<string>();
+  for (const row of sourceRows) {
+    const id = itemIdentity(row), previous = identities.get(id);
+    if (previous && (row.status !== previous.status || row.ready !== previous.ready || row.claim !== previous.claim)) conflicting.add(id);
+    if (!previous) identities.set(id, row);
+  }
+  const observed = deferred([...identities.values()]).map(row => conflicting.has(itemIdentity(row))
+    ? {...row, ready: null, claim: null} : row);
+  const {deferredItems, candidates, capacityFields, countSource} =
+    deferredPlan(sources, request.available_capabilities, observed);
+  const counts = request.deferred_work_counts != null && request.available_capabilities === null
+    ? readDeferredTodoWorkCounts(request.deferred_work_counts, request.deferred_count)
+    : countDeferredTodoWork(countSource.map(row => ({
+      ready: conflicting.has(itemIdentity(row)) ? null : row.ready, claim: row.claim,
+    })),
+      request.has_deferred_count === true ? request.deferred_count : null);
   const resumeBlocked = blocked(sources.resume_blocked_items.length ? sources.resume_blocked_items
     : [...sources.items, ...sources.backlog_items, ...sources.first_open_items]);
   const monitorItems = monitorBlocked(resumeBlocked);
   return {
     schema_version: RESUME_PLANNING_RESULT,
-    deferred_lanes: deferredVisibility(deferredItems, candidates, display),
+    deferred_lanes: {...deferredVisibility(deferredItems, candidates, display), deferred_work_counts: counts},
     resume_blocked_lanes: blockedVisibility(resumeBlocked, monitorItems, display),
     capacity_fields: capacityFields,
     deferred_items: payloads(deferredItems), monitor_blocked_items: payloads(monitorItems),

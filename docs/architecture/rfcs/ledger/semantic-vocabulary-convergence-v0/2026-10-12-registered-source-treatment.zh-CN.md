@@ -4,9 +4,11 @@
 本次在结算失败、选择、旧工作基线及保留值处置合入后，更新既有 #6270 清单。
 候选的 `loopx/`、`apps/`、`packages/` 生产树与此 main 完全相同，只增加既有见证和记录。
 验收仍沿 [#4789 分阶段范围](https://github.com/loopx-project/loopx/pull/4789)。
-**26 行清单不是 26 项正式 producer 证明，也不是 tracker 关闭。** 来源清单 PR 仍需
-集成并由 owner 完成最终验收。原先三个 Host-ACK fixture 失败已由 #6344 在主干修复；
-不再把另合一次 #6285 当作这些场景通过的前提。
+**26 行清单不是 26 项正式 producer 证明，也不是 tracker 关闭。** #6270 已于
+2026-10-14 合入（`1c2542df730e51fd50c892a1236e1b7166768a7b`）；owner 对单一版本的
+最终验收仍开放，本记录末尾的集成读回是其候选。原先三个 Host-ACK fixture 失败已由
+#6344 在主干修复；#6285 于 2026-10-13 另行合入（`5ea7497b52f4b094ee2e4528f92bf69b934a25ee`），
+从来不是这些场景通过的前提。
 
 注册表仍为 26 项，已用实际 `task_lease_lifecycle_operation` 替换退休的 `lease_action`。
 F1/F2 仍是 **6/26**：五项 kernel 和 settlement-binding witness。其余二十项跨运行时
@@ -110,11 +112,11 @@ Todo-less 场景保留缺失/不匹配 manifest 的拒绝、无 scheduler 写入
 普通场景仍先拒绝过期 Turn，再确认当前 Turn。原 ACK、持久 scheduler 状态和字节
 稳定重放断言均通过，没有放宽宿主回读规则。
 
-[#6285](https://github.com/loopx-project/loopx/pull/6285) 仍是独立开放提案，当前 head 为
-`f6c8aae7a7e8ba917861992a1ad21eb29477bf26`。其剩余差异包括共享 fixture、普通 Turn
-额外缺失/不匹配反例和 applied-RRULE 显式回读；不能说它与 main 字节相同或已经合并。
-这些剩余增强不会使原三个主干失败重新成立，不在本 PR 复制其补丁，也不为了给同一
-fixture 修复重复记账而要求再合一次。
+[#6285](https://github.com/loopx-project/loopx/pull/6285) 已于 2026-10-13 在 exact-head
+`f6c8aae7a7e8ba917861992a1ad21eb29477bf26` 获批准评审后合入（`5ea7497b52f4b094ee2e4528f92bf69b934a25ee`）。
+它为同一个 settlement CLI 测试文件加入共享 fixture、普通 Turn 额外缺失/不匹配反例和
+applied-RRULE 显式回读。这些用例不会使原三个失败重新成立；同一 fixture 修复只记一次，
+归于 #6344。
 
 旧结果保留原截面：main `509c38c502d3d0b4eafb01550efcdc4b5b5a1d17` 的该组为
 206 passed / 3 failed；另一个加入当时 #6285 fixture 的隔离组合中，settlement CLI
@@ -207,8 +209,20 @@ uv run --extra test python -m pytest -q \
 
 当前基线已包含 #6251 typed-failure、#6268 canonical-selection、#6260 shared
 consistency、#6290 legacy-work-basis 及 #6313 含义处置。它们消除了具体代码/含义
-缺口，不扩大 #4447 原关闭范围。原 Host-ACK 阻塞已在主干解决；#6270 新来源见证与
-清单仍待集成。Stage 3 与 issue 为此集成及 owner 最终验收保持开放，验收须点名一个
-revision 及其 passed/failed/untested 边界；#6285 剩余增强不是本 tracker 的新关闭条件。安装前端/Lark、真实模型、完整
+缺口，不扩大 #4447 原关闭范围。原 Host-ACK 阻塞已在主干解决；#6270 来源见证与清单
+已集成。Stage 3 与 issue 仅为 owner 最终验收保持开放，验收须点名一个 revision 及其
+passed/failed/untested 边界；已合入的 #6285 用例不是本 tracker 的关闭条件。安装前端/Lark、真实模型、完整
 Goal/团队资格和通用 F6 不属本 tracker；本次不改生产 provider/权限/持久格式，日志及
 本地 Goal 状态保留在私有位置。
+
+## `c185e3f0cf19419a1786c882b006eb4567ff449e` 上的集成读回（2026-10-14）
+
+Stage 3 的候选记录，不是 owner 验收。#6270 合入后，在正式主干上按上文原选择重跑：
+领域+monitor 恢复 663 项、语义/value-note 706 项、原生 TypeScript 448 项、关键
+结算/scope/来源组 211 项全部通过，无跳过。drift smoke 通过：26 项 / 51 个 owner
+符号，F1/F2 6/26、F3 0/26、F4 4/4、F5 1/1、F6 0/0，45 个 producer 站点未解析，其中
+17 个不能提供证据。失败：同一版本的完整 Python 套件不绿，
+`tests/control_plane/test_effect_interpreter_packet.py::test_real_executor_uses_verdict_and_replays_persisted_plan`
+在 CI 与本地均以 `LoopX Turn route is not host executable` 失败，不在上述证据组内，
+也不属本 tracker 范围。未测：已安装前端/Lark、真实模型、全树 F6。计数只是证据边界，
+不是完成百分比。

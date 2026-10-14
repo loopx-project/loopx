@@ -132,7 +132,8 @@ def _verify_interrupted_guard(turns: list[dict], guard: dict) -> None:
 
 
 def native_session_checkpoint(env: dict[str, str], session_id: str, *, timeout: float,
-                              interrupted_guard: dict | None = None) -> dict[str, Any]:
+                              interrupted_guard: dict | None = None,
+                              retained_history: dict | None = None) -> dict[str, Any]:
     home = Path(env["CODEX_HOME"])
     if not session_id or timeout <= 0:
         raise ValueError("native checkpoint requires a session and an open capture window")
@@ -164,6 +165,12 @@ def native_session_checkpoint(env: dict[str, str], session_id: str, *, timeout: 
             raise ValueError("native checkpoint session workspace differs from the declared code basis")
         turns = _complete_history(request, session_id, interrupted_guard=interrupted_guard)
         ids = [t["id"] for t in turns]
+        if retained_history is not None:
+            original = retained_history["turn_ids"]
+            prefix = json.dumps(turns[:len(original)], sort_keys=True, separators=(",", ":")).encode()
+            if (len(ids) <= len(original) or ids[:len(original)] != original or
+                    hashlib.sha256(prefix).hexdigest() != retained_history["visible_history_sha256"]):
+                raise ValueError("native continuation lost or changed retained checkpoint history")
     members = []
     for entry in sorted(home.iterdir()):
         if entry.name in {"sessions", "archived_sessions", "session_index.jsonl"} or re.fullmatch(
@@ -434,6 +441,8 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
                                               goal_admission=wake.admission)
             if not binding or binding.get("checkpoint_artifact_sha256") != expected_sha256:
                 raise ValueError("destination session binding already exists without this checkpoint admission")
+            if binding.get("checkpoint_artifact_root") not in (None, str(unit)):
+                raise ValueError("destination checkpoint source root differs from the original admission")
             if wake.digest != source_profile:
                 raise ValueError("checkpoint source session profile changed")
             native = metadata["native_session"]
@@ -461,7 +470,7 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
             raise ValueError("destination Goal configuration changed during native checkpoint reconstruction")
         receipt: dict[str, Any] = {}
         wake = BenchmarkSessionWake(env, execution, receipt)
-        wake._bind_verified_fork(result["session_id"], source_profile, expected_sha256)
+        wake._bind_verified_fork(result["session_id"], source_profile, expected_sha256, str(unit))
     return {**result, "destination_goal_ref": wake.goal_ref, "destination_agent_id": lineage["agent_id"],
             "session_binding_admitted": True, "session_profile_digest": wake.digest}
 

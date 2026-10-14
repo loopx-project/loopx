@@ -1,0 +1,268 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" role="img" aria-labelledby="title desc">
+  <title id="title">vLLM PR #54951: Prefill query-row sharding</title>
+  <desc id="desc">Before the optimization, every TP rank repeats MQA scoring and top-k over all prefill query rows. After the optimization, contiguous query-row slices are assigned by relative work to TP ranks; each rank scores its slice against the full key history, then all_gatherv restores int32 top-k indices in original row order. Attention remains exact and decode kernels are unchanged.</desc>
+  <rect width="1440" height="900" fill="#fafafa"/>
+  <g font-family="PingFang SC,Noto Sans CJK SC,Arial,sans-serif">
+    <text x="60" y="50" font-size="20" fill="#0070f3" font-weight="600">vLLM / PR #54951</text>
+    <text x="60" y="96" font-size="40" fill="#171717" font-weight="600">Prefill query-row sharding</text>
+    <text x="60" y="130" font-size="24" fill="#4d4d4d">Balance independent MQA top-k work across TP ranks</text>
+    <text x="60" y="158" font-size="18" fill="#666666">Mechanism schematic · exact attention · decode kernels unchanged</text>
+    <line x1="60" y1="182" x2="1380" y2="182" stroke="#dedede" stroke-width="1"/>
+
+    <line x1="730" y1="210" x2="730" y2="810" stroke="#ebebeb" stroke-width="1"/>
+
+    <text x="60" y="220" font-size="20" fill="#0070f3" font-weight="600">BEFORE</text>
+    <text x="60" y="258" font-size="24" fill="#171717" font-weight="600">Every TP rank receives all query rows</text>
+    <text x="60" y="288" font-size="18" fill="#4d4d4d">The same row work is repeated on every rank</text>
+    <text x="60" y="310" font-size="18" fill="#4d4d4d">Schematic: 3 TP ranks (separate from any measured TP4 configuration)</text>
+
+    <!-- Before: three schematic TP ranks repeat the same query strip. -->
+    <circle cx="84" cy="365" r="22" fill="#171717"/>
+    <text x="84" y="372" text-anchor="middle" font-size="18" fill="#ffffff" font-weight="600">TP0</text>
+    <rect x="120" y="343" width="240" height="44" rx="8" fill="#edf5ff" stroke="#0070f3" stroke-width="1.5"/>
+    <line x1="150" y1="343" x2="150" y2="387" stroke="#9cc8f7"/>
+    <line x1="180" y1="343" x2="180" y2="387" stroke="#9cc8f7"/>
+    <line x1="210" y1="343" x2="210" y2="387" stroke="#9cc8f7"/>
+    <line x1="240" y1="343" x2="240" y2="387" stroke="#9cc8f7"/>
+    <line x1="270" y1="343" x2="270" y2="387" stroke="#9cc8f7"/>
+    <line x1="300" y1="343" x2="300" y2="387" stroke="#9cc8f7"/>
+    <line x1="330" y1="343" x2="330" y2="387" stroke="#9cc8f7"/>
+    <text x="135" y="371" text-anchor="middle" font-size="18" fill="#171717">q0</text>
+    <text x="165" y="371" text-anchor="middle" font-size="18" fill="#171717">q1</text>
+    <text x="195" y="371" text-anchor="middle" font-size="18" fill="#171717">q2</text>
+    <text x="225" y="371" text-anchor="middle" font-size="18" fill="#171717">q3</text>
+    <text x="255" y="371" text-anchor="middle" font-size="18" fill="#171717">q4</text>
+    <text x="285" y="371" text-anchor="middle" font-size="18" fill="#171717">q5</text>
+    <text x="315" y="371" text-anchor="middle" font-size="18" fill="#171717">q6</text>
+    <text x="345" y="371" text-anchor="middle" font-size="18" fill="#171717">q7</text>
+    <line x1="372" y1="365" x2="382" y2="365" stroke="#0070f3" stroke-width="2"/>
+    <polyline points="374,359 382,365 374,371" fill="none" stroke="#0070f3" stroke-width="2"/>
+    <rect x="396" y="337" width="150" height="56" rx="10" fill="#ffffff" stroke="#171717" stroke-width="1.5"/>
+    <text x="471" y="361" text-anchor="middle" font-size="18" fill="#171717" font-weight="600">MQA score</text>
+    <text x="471" y="382" text-anchor="middle" font-size="18" fill="#4d4d4d">+ top-k</text>
+    <rect x="396" y="405" width="150" height="30" rx="15" fill="#f2f2f2" stroke="#a1a1a1" stroke-width="1"/>
+    <line x1="416" y1="411" x2="416" y2="429" stroke="#c6c6c6"/>
+    <line x1="438" y1="411" x2="438" y2="429" stroke="#c6c6c6"/>
+    <line x1="504" y1="411" x2="504" y2="429" stroke="#c6c6c6"/>
+    <line x1="526" y1="411" x2="526" y2="429" stroke="#c6c6c6"/>
+    <text x="471" y="425" text-anchor="middle" font-size="18" fill="#4d4d4d">full K history</text>
+    <line x1="566" y1="365" x2="590" y2="365" stroke="#0070f3" stroke-width="2"/>
+    <polyline points="582,359 590,365 582,371" fill="none" stroke="#0070f3" stroke-width="2"/>
+    <rect x="598" y="345" width="78" height="40" rx="8" fill="#f2f2f2" stroke="#b8b8b8" stroke-width="1"/>
+    <text x="637" y="371" text-anchor="middle" font-size="18" fill="#171717">idx</text>
+
+    <circle cx="84" cy="490" r="22" fill="#171717"/>
+    <text x="84" y="497" text-anchor="middle" font-size="18" fill="#ffffff" font-weight="600">TP1</text>
+    <rect x="120" y="468" width="240" height="44" rx="8" fill="#edf5ff" stroke="#0070f3" stroke-width="1.5"/>
+    <line x1="150" y1="468" x2="150" y2="512" stroke="#9cc8f7"/>
+    <line x1="180" y1="468" x2="180" y2="512" stroke="#9cc8f7"/>
+    <line x1="210" y1="468" x2="210" y2="512" stroke="#9cc8f7"/>
+    <line x1="240" y1="468" x2="240" y2="512" stroke="#9cc8f7"/>
+    <line x1="270" y1="468" x2="270" y2="512" stroke="#9cc8f7"/>
+    <line x1="300" y1="468" x2="300" y2="512" stroke="#9cc8f7"/>
+    <line x1="330" y1="468" x2="330" y2="512" stroke="#9cc8f7"/>
+    <text x="135" y="496" text-anchor="middle" font-size="18" fill="#171717">q0</text>
+    <text x="165" y="496" text-anchor="middle" font-size="18" fill="#171717">q1</text>
+    <text x="195" y="496" text-anchor="middle" font-size="18" fill="#171717">q2</text>
+    <text x="225" y="496" text-anchor="middle" font-size="18" fill="#171717">q3</text>
+    <text x="255" y="496" text-anchor="middle" font-size="18" fill="#171717">q4</text>
+    <text x="285" y="496" text-anchor="middle" font-size="18" fill="#171717">q5</text>
+    <text x="315" y="496" text-anchor="middle" font-size="18" fill="#171717">q6</text>
+    <text x="345" y="496" text-anchor="middle" font-size="18" fill="#171717">q7</text>
+    <line x1="372" y1="490" x2="382" y2="490" stroke="#0070f3" stroke-width="2"/>
+    <polyline points="374,484 382,490 374,496" fill="none" stroke="#0070f3" stroke-width="2"/>
+    <rect x="396" y="462" width="150" height="56" rx="10" fill="#ffffff" stroke="#171717" stroke-width="1.5"/>
+    <text x="471" y="486" text-anchor="middle" font-size="18" fill="#171717" font-weight="600">MQA score</text>
+    <text x="471" y="507" text-anchor="middle" font-size="18" fill="#4d4d4d">+ top-k</text>
+    <rect x="396" y="530" width="150" height="30" rx="15" fill="#f2f2f2" stroke="#a1a1a1" stroke-width="1"/>
+    <line x1="416" y1="536" x2="416" y2="554" stroke="#c6c6c6"/>
+    <line x1="438" y1="536" x2="438" y2="554" stroke="#c6c6c6"/>
+    <line x1="504" y1="536" x2="504" y2="554" stroke="#c6c6c6"/>
+    <line x1="526" y1="536" x2="526" y2="554" stroke="#c6c6c6"/>
+    <text x="471" y="550" text-anchor="middle" font-size="18" fill="#4d4d4d">full K history</text>
+    <line x1="566" y1="490" x2="590" y2="490" stroke="#0070f3" stroke-width="2"/>
+    <polyline points="582,484 590,490 582,496" fill="none" stroke="#0070f3" stroke-width="2"/>
+    <rect x="598" y="470" width="78" height="40" rx="8" fill="#f2f2f2" stroke="#b8b8b8" stroke-width="1"/>
+    <text x="637" y="496" text-anchor="middle" font-size="18" fill="#171717">idx</text>
+
+    <circle cx="84" cy="615" r="22" fill="#171717"/>
+    <text x="84" y="622" text-anchor="middle" font-size="18" fill="#ffffff" font-weight="600">TP2</text>
+    <rect x="120" y="593" width="240" height="44" rx="8" fill="#edf5ff" stroke="#0070f3" stroke-width="1.5"/>
+    <line x1="150" y1="593" x2="150" y2="637" stroke="#9cc8f7"/>
+    <line x1="180" y1="593" x2="180" y2="637" stroke="#9cc8f7"/>
+    <line x1="210" y1="593" x2="210" y2="637" stroke="#9cc8f7"/>
+    <line x1="240" y1="593" x2="240" y2="637" stroke="#9cc8f7"/>
+    <line x1="270" y1="593" x2="270" y2="637" stroke="#9cc8f7"/>
+    <line x1="300" y1="593" x2="300" y2="637" stroke="#9cc8f7"/>
+    <line x1="330" y1="593" x2="330" y2="637" stroke="#9cc8f7"/>
+    <text x="135" y="621" text-anchor="middle" font-size="18" fill="#171717">q0</text>
+    <text x="165" y="621" text-anchor="middle" font-size="18" fill="#171717">q1</text>
+    <text x="195" y="621" text-anchor="middle" font-size="18" fill="#171717">q2</text>
+    <text x="225" y="621" text-anchor="middle" font-size="18" fill="#171717">q3</text>
+    <text x="255" y="621" text-anchor="middle" font-size="18" fill="#171717">q4</text>
+    <text x="285" y="621" text-anchor="middle" font-size="18" fill="#171717">q5</text>
+    <text x="315" y="621" text-anchor="middle" font-size="18" fill="#171717">q6</text>
+    <text x="345" y="621" text-anchor="middle" font-size="18" fill="#171717">q7</text>
+    <line x1="372" y1="615" x2="382" y2="615" stroke="#0070f3" stroke-width="2"/>
+    <polyline points="374,609 382,615 374,621" fill="none" stroke="#0070f3" stroke-width="2"/>
+    <rect x="396" y="587" width="150" height="56" rx="10" fill="#ffffff" stroke="#171717" stroke-width="1.5"/>
+    <text x="471" y="611" text-anchor="middle" font-size="18" fill="#171717" font-weight="600">MQA score</text>
+    <text x="471" y="632" text-anchor="middle" font-size="18" fill="#4d4d4d">+ top-k</text>
+    <rect x="396" y="655" width="150" height="30" rx="15" fill="#f2f2f2" stroke="#a1a1a1" stroke-width="1"/>
+    <line x1="416" y1="661" x2="416" y2="679" stroke="#c6c6c6"/>
+    <line x1="438" y1="661" x2="438" y2="679" stroke="#c6c6c6"/>
+    <line x1="504" y1="661" x2="504" y2="679" stroke="#c6c6c6"/>
+    <line x1="526" y1="661" x2="526" y2="679" stroke="#c6c6c6"/>
+    <text x="471" y="675" text-anchor="middle" font-size="18" fill="#4d4d4d">full K history</text>
+    <line x1="566" y1="615" x2="590" y2="615" stroke="#0070f3" stroke-width="2"/>
+    <polyline points="582,609 590,615 582,621" fill="none" stroke="#0070f3" stroke-width="2"/>
+    <rect x="598" y="595" width="78" height="40" rx="8" fill="#f2f2f2" stroke="#b8b8b8" stroke-width="1"/>
+    <text x="637" y="621" text-anchor="middle" font-size="18" fill="#171717">idx</text>
+
+    <line x1="60" y1="708" x2="668" y2="708" stroke="#dedede" stroke-width="1"/>
+    <text x="60" y="744" font-size="21" fill="#0070f3" font-weight="600">Repeated work: MQA score + top-k × every rank</text>
+    <text x="60" y="776" font-size="18" fill="#4d4d4d">The same q0…q7 strip appears on TP0 / TP1 / TP2</text>
+
+    <text x="760" y="220" font-size="20" fill="#0070f3" font-weight="600">AFTER</text>
+    <text x="760" y="258" font-size="24" fill="#171717" font-weight="600">Contiguous query-row slices, cost balanced</text>
+    <text x="760" y="288" font-size="18" fill="#4d4d4d">Row counts may differ; every rank still sees the full key history</text>
+
+    <text x="820" y="318" font-size="18" fill="#0070f3" font-weight="600">Global query rows (schematic)</text>
+    <text x="820" y="341" font-size="18" fill="#4d4d4d">Contiguous slices; row counts may differ; schematic partition</text>
+    <text x="876" y="356" text-anchor="middle" font-size="18" fill="#0070f3" font-weight="600">TP0 slice</text>
+    <text x="988" y="356" text-anchor="middle" font-size="18" fill="#0070f3" font-weight="600">TP1 slice</text>
+    <text x="1100" y="356" text-anchor="middle" font-size="18" fill="#0070f3" font-weight="600">TP2 slice</text>
+
+    <!-- After: a variable-width global row strip, partitioned into contiguous slices. -->
+    <rect x="820" y="365" width="38" height="48" rx="6" fill="#edf5ff" stroke="#0070f3" stroke-width="1.5"/>
+    <rect x="858" y="365" width="42" height="48" fill="#edf5ff" stroke="#0070f3" stroke-width="1.5"/>
+    <rect x="900" y="365" width="32" height="48" rx="6" fill="#edf5ff" stroke="#0070f3" stroke-width="1.5"/>
+    <rect x="932" y="365" width="28" height="48" fill="#f4f4f4" stroke="#8f8f8f" stroke-width="1.5"/>
+    <rect x="960" y="365" width="44" height="48" fill="#f4f4f4" stroke="#8f8f8f" stroke-width="1.5"/>
+    <rect x="1004" y="365" width="40" height="48" rx="6" fill="#f4f4f4" stroke="#8f8f8f" stroke-width="1.5"/>
+    <rect x="1044" y="365" width="60" height="48" fill="#edf5ff" stroke="#0070f3" stroke-width="1.5"/>
+    <rect x="1104" y="365" width="52" height="48" rx="6" fill="#edf5ff" stroke="#0070f3" stroke-width="1.5"/>
+    <line x1="932" y1="358" x2="932" y2="420" stroke="#0070f3" stroke-width="2.5"/>
+    <line x1="1044" y1="358" x2="1044" y2="420" stroke="#0070f3" stroke-width="2.5"/>
+    <text x="839" y="395" text-anchor="middle" font-size="18" fill="#171717">q0</text>
+    <text x="879" y="395" text-anchor="middle" font-size="18" fill="#171717">q1</text>
+    <text x="916" y="395" text-anchor="middle" font-size="18" fill="#171717">q2</text>
+    <text x="946" y="395" text-anchor="middle" font-size="18" fill="#171717">q3</text>
+    <text x="982" y="395" text-anchor="middle" font-size="18" fill="#171717">q4</text>
+    <text x="1024" y="395" text-anchor="middle" font-size="18" fill="#171717">q5</text>
+    <text x="1074" y="395" text-anchor="middle" font-size="18" fill="#171717">q6</text>
+    <text x="1130" y="395" text-anchor="middle" font-size="18" fill="#171717">q7</text>
+    <text x="876" y="438" text-anchor="middle" font-size="18" fill="#4d4d4d">3 rows</text>
+    <text x="988" y="438" text-anchor="middle" font-size="18" fill="#4d4d4d">3 rows</text>
+    <text x="1100" y="438" text-anchor="middle" font-size="18" fill="#4d4d4d">2 rows</text>
+
+    <!-- TP0 slice lane -->
+    <circle cx="786" cy="477" r="22" fill="#171717"/>
+    <text x="786" y="484" text-anchor="middle" font-size="18" fill="#ffffff" font-weight="600">TP0</text>
+    <rect x="820" y="455" width="38" height="44" rx="7" fill="#edf5ff" stroke="#0070f3" stroke-width="1.5"/>
+    <rect x="858" y="455" width="42" height="44" fill="#edf5ff" stroke="#0070f3" stroke-width="1.5"/>
+    <rect x="900" y="455" width="32" height="44" rx="7" fill="#edf5ff" stroke="#0070f3" stroke-width="1.5"/>
+    <text x="839" y="483" text-anchor="middle" font-size="18" fill="#171717">q0</text>
+    <text x="879" y="483" text-anchor="middle" font-size="18" fill="#171717">q1</text>
+    <text x="916" y="483" text-anchor="middle" font-size="18" fill="#171717">q2</text>
+    <line x1="946" y1="477" x2="965" y2="477" stroke="#0070f3" stroke-width="2"/>
+    <polyline points="957,471 965,477 957,483" fill="none" stroke="#0070f3" stroke-width="2"/>
+    <rect x="976" y="449" width="138" height="56" rx="10" fill="#ffffff" stroke="#171717" stroke-width="1.5"/>
+    <text x="1045" y="473" text-anchor="middle" font-size="18" fill="#171717" font-weight="600">MQA score</text>
+    <text x="1045" y="494" text-anchor="middle" font-size="18" fill="#4d4d4d">+ top-k</text>
+    <rect x="976" y="508" width="138" height="24" rx="12" fill="#f2f2f2" stroke="#8f8f8f" stroke-width="1"/>
+    <line x1="994" y1="512" x2="994" y2="528" stroke="#c6c6c6"/>
+    <line x1="1012" y1="512" x2="1012" y2="528" stroke="#c6c6c6"/>
+    <line x1="1078" y1="512" x2="1078" y2="528" stroke="#c6c6c6"/>
+    <line x1="1096" y1="512" x2="1096" y2="528" stroke="#c6c6c6"/>
+    <text x="1045" y="525" text-anchor="middle" font-size="18" fill="#4d4d4d">full K history</text>
+    <line x1="1114" y1="477" x2="1128" y2="477" stroke="#0070f3" stroke-width="2"/>
+    <polyline points="1120,471 1128,477 1120,483" fill="none" stroke="#0070f3" stroke-width="2"/>
+    <rect x="1136" y="457" width="54" height="40" rx="8" fill="#f2f2f2" stroke="#b8b8b8" stroke-width="1"/>
+    <text x="1163" y="483" text-anchor="middle" font-size="18" fill="#171717">idx</text>
+
+    <!-- TP1 slice lane -->
+    <circle cx="786" cy="562" r="22" fill="#171717"/>
+    <text x="786" y="569" text-anchor="middle" font-size="18" fill="#ffffff" font-weight="600">TP1</text>
+    <rect x="820" y="540" width="28" height="44" rx="7" fill="#f4f4f4" stroke="#8f8f8f" stroke-width="1.5"/>
+    <rect x="848" y="540" width="44" height="44" fill="#f4f4f4" stroke="#8f8f8f" stroke-width="1.5"/>
+    <rect x="892" y="540" width="40" height="44" rx="7" fill="#f4f4f4" stroke="#8f8f8f" stroke-width="1.5"/>
+    <text x="834" y="568" text-anchor="middle" font-size="18" fill="#171717">q3</text>
+    <text x="870" y="568" text-anchor="middle" font-size="18" fill="#171717">q4</text>
+    <text x="912" y="568" text-anchor="middle" font-size="18" fill="#171717">q5</text>
+    <line x1="946" y1="562" x2="965" y2="562" stroke="#0070f3" stroke-width="2"/>
+    <polyline points="957,556 965,562 957,568" fill="none" stroke="#0070f3" stroke-width="2"/>
+    <rect x="976" y="534" width="138" height="56" rx="10" fill="#ffffff" stroke="#171717" stroke-width="1.5"/>
+    <text x="1045" y="558" text-anchor="middle" font-size="18" fill="#171717" font-weight="600">MQA score</text>
+    <text x="1045" y="579" text-anchor="middle" font-size="18" fill="#4d4d4d">+ top-k</text>
+    <rect x="976" y="593" width="138" height="24" rx="12" fill="#f2f2f2" stroke="#8f8f8f" stroke-width="1"/>
+    <line x1="994" y1="597" x2="994" y2="613" stroke="#c6c6c6"/>
+    <line x1="1012" y1="597" x2="1012" y2="613" stroke="#c6c6c6"/>
+    <line x1="1078" y1="597" x2="1078" y2="613" stroke="#c6c6c6"/>
+    <line x1="1096" y1="597" x2="1096" y2="613" stroke="#c6c6c6"/>
+    <text x="1045" y="610" text-anchor="middle" font-size="18" fill="#4d4d4d">full K history</text>
+    <line x1="1114" y1="562" x2="1128" y2="562" stroke="#0070f3" stroke-width="2"/>
+    <polyline points="1120,556 1128,562 1120,568" fill="none" stroke="#0070f3" stroke-width="2"/>
+    <rect x="1136" y="542" width="54" height="40" rx="8" fill="#f2f2f2" stroke="#b8b8b8" stroke-width="1"/>
+    <text x="1163" y="568" text-anchor="middle" font-size="18" fill="#171717">idx</text>
+
+    <!-- TP2 slice lane -->
+    <circle cx="786" cy="647" r="22" fill="#171717"/>
+    <text x="786" y="654" text-anchor="middle" font-size="18" fill="#ffffff" font-weight="600">TP2</text>
+    <rect x="820" y="625" width="60" height="44" rx="7" fill="#edf5ff" stroke="#0070f3" stroke-width="1.5"/>
+    <rect x="880" y="625" width="52" height="44" rx="7" fill="#edf5ff" stroke="#0070f3" stroke-width="1.5"/>
+    <text x="850" y="653" text-anchor="middle" font-size="18" fill="#171717">q6</text>
+    <text x="906" y="653" text-anchor="middle" font-size="18" fill="#171717">q7</text>
+    <line x1="946" y1="647" x2="965" y2="647" stroke="#0070f3" stroke-width="2"/>
+    <polyline points="957,641 965,647 957,653" fill="none" stroke="#0070f3" stroke-width="2"/>
+    <rect x="976" y="619" width="138" height="56" rx="10" fill="#ffffff" stroke="#171717" stroke-width="1.5"/>
+    <text x="1045" y="643" text-anchor="middle" font-size="18" fill="#171717" font-weight="600">MQA score</text>
+    <text x="1045" y="664" text-anchor="middle" font-size="18" fill="#4d4d4d">+ top-k</text>
+    <rect x="976" y="678" width="138" height="24" rx="12" fill="#f2f2f2" stroke="#8f8f8f" stroke-width="1"/>
+    <line x1="994" y1="682" x2="994" y2="698" stroke="#c6c6c6"/>
+    <line x1="1012" y1="682" x2="1012" y2="698" stroke="#c6c6c6"/>
+    <line x1="1078" y1="682" x2="1078" y2="698" stroke="#c6c6c6"/>
+    <line x1="1096" y1="682" x2="1096" y2="698" stroke="#c6c6c6"/>
+    <text x="1045" y="695" text-anchor="middle" font-size="18" fill="#4d4d4d">full K history</text>
+    <line x1="1114" y1="647" x2="1128" y2="647" stroke="#0070f3" stroke-width="2"/>
+    <polyline points="1120,641 1128,647 1120,653" fill="none" stroke="#0070f3" stroke-width="2"/>
+    <rect x="1136" y="627" width="54" height="40" rx="8" fill="#f2f2f2" stroke="#b8b8b8" stroke-width="1"/>
+    <text x="1163" y="653" text-anchor="middle" font-size="18" fill="#171717">idx</text>
+
+    <!-- Local indices converge, then all_gatherv restores the global row order. -->
+    <polyline points="1190,477 1206,477 1206,730 915,730 915,748" fill="none" stroke="#0070f3" stroke-width="2"/>
+    <polyline points="1190,562 1206,562 1206,730" fill="none" stroke="#0070f3" stroke-width="2"/>
+    <polyline points="1190,647 1206,647 1206,730" fill="none" stroke="#0070f3" stroke-width="2"/>
+    <polyline points="909,740 915,748 921,740" fill="none" stroke="#0070f3" stroke-width="2"/>
+    <text x="1218" y="720" font-size="18" fill="#4d4d4d">local top-k</text>
+    <rect x="820" y="748" width="190" height="58" rx="10" fill="#ffffff" stroke="#0070f3" stroke-width="1.5"/>
+    <text x="915" y="773" text-anchor="middle" font-size="20" fill="#171717" font-weight="600">all_gatherv</text>
+    <text x="915" y="795" text-anchor="middle" font-size="18" fill="#4d4d4d">restore row order</text>
+    <line x1="1010" y1="777" x2="1030" y2="777" stroke="#0070f3" stroke-width="2"/>
+    <polyline points="1022,771 1030,777 1022,783" fill="none" stroke="#0070f3" stroke-width="2"/>
+    <rect x="1035" y="748" width="336" height="48" rx="8" fill="#edf5ff" stroke="#0070f3" stroke-width="1.5"/>
+    <line x1="1097" y1="748" x2="1097" y2="796" stroke="#9cc8f7"/>
+    <line x1="1147" y1="748" x2="1147" y2="796" stroke="#9cc8f7"/>
+    <line x1="1175" y1="748" x2="1175" y2="796" stroke="#9cc8f7"/>
+    <line x1="1217" y1="748" x2="1217" y2="796" stroke="#9cc8f7"/>
+    <line x1="1259" y1="748" x2="1259" y2="796" stroke="#9cc8f7"/>
+    <line x1="1305" y1="748" x2="1305" y2="796" stroke="#9cc8f7"/>
+    <line x1="1337" y1="748" x2="1337" y2="796" stroke="#9cc8f7"/>
+    <text x="1066" y="778" text-anchor="middle" font-size="18" fill="#171717">q0</text>
+    <text x="1122" y="778" text-anchor="middle" font-size="18" fill="#171717">q1</text>
+    <text x="1161" y="778" text-anchor="middle" font-size="18" fill="#171717">q2</text>
+    <text x="1196" y="778" text-anchor="middle" font-size="18" fill="#171717">q3</text>
+    <text x="1238" y="778" text-anchor="middle" font-size="18" fill="#171717">q4</text>
+    <text x="1282" y="778" text-anchor="middle" font-size="18" fill="#171717">q5</text>
+    <text x="1321" y="778" text-anchor="middle" font-size="18" fill="#171717">q6</text>
+    <text x="1354" y="778" text-anchor="middle" font-size="18" fill="#171717">q7</text>
+    <text x="1203" y="828" text-anchor="middle" font-size="18" fill="#4d4d4d">int32 top-k indices · original query-row order</text>
+
+    <line x1="60" y1="838" x2="1380" y2="838" stroke="#dedede" stroke-width="1"/>
+    <text x="60" y="874" font-size="20" fill="#0070f3" font-weight="600">Attention remains exact</text>
+    <line x1="326" y1="855" x2="326" y2="880" stroke="#d0d0d0"/>
+    <text x="350" y="874" font-size="20" fill="#171717" font-weight="600">Decode kernels unchanged</text>
+    <line x1="700" y1="855" x2="700" y2="880" stroke="#d0d0d0"/>
+    <text x="724" y="874" font-size="18" fill="#4d4d4d">Schematic only: slice widths show relative work, not measured dimensions.</text>
+  </g>
+</svg>

@@ -41,6 +41,7 @@ from ....presentation.explore_views import (
     explore_source_revision,
     validate_explore_view_freshness,
 )
+from ..private_json import write_private_json_atomic
 from .kanban import (
     DEFAULT_CLI_BIN,
     CommandRunner,
@@ -295,14 +296,13 @@ def read_lark_explore_local_config(path: Path) -> dict[str, Any]:
 
 def write_lark_explore_local_config(path: Path, payload: dict[str, Any]) -> None:
     config_path = path.expanduser()
-    config_path.parent.mkdir(parents=True, exist_ok=True)
     to_write = dict(payload)
     to_write.pop("ok", None)
     to_write.pop("exists", None)
     to_write.pop("path", None)
     to_write["schema_version"] = LARK_EXPLORE_LOCAL_CONFIG_VERSION
     to_write["updated_at"] = now_lark_datetime()
-    config_path.write_text(json.dumps(to_write, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_private_json_atomic(config_path, to_write)
 
 
 def lark_explore_config_from_payload(

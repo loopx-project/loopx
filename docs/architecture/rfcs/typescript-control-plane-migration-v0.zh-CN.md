@@ -806,8 +806,11 @@ Todo 来源；frontier 和报告事实复用同一完整已求值快照。展示
 
 Todo 摘要 lane 与裁剪前工作计数现共用 `todos/summary_lanes.ts`，删除 Python 的
 lane 分类和隐藏任务推断循环。quota 在作用域筛选后重新计数，不完整来源状态贯穿
-压缩与重复投影；公开 canonical Todo 列表保留同版本 acceptance 限制。见
-[计数语义](../../reference/todo-work-counts.md)。本切片闭合摘要到 work-lane 的计数
+压缩与重复投影；公开 canonical Todo 列表保留同版本 acceptance 限制。Goal frontier
+现复用同一工作计数和 TS 在裁剪前产出的 deferred 就绪计数，移除对展示列表重新计数、
+把未展示行推成 blocked 的旧规则。File/SQLite CLI 在 Markdown 丢失后仍保留完整计数；
+authority 不可用仍拒绝，不完整来源保留 unknown。见
+[计数语义](../../reference/todo-work-counts.md)。本切片闭合摘要到 work-lane/frontier 的计数
 消费者，不代表所有 T3 来源或 D1 展示交付完成；旧格式解码、renderer 及其他摘要策略仍保留。
 
 

@@ -708,12 +708,18 @@ def _selection_recovery_command(
     registry_path: str | None = None,
 ) -> str:
     identity = payload.get("agent_identity") if isinstance(payload.get("agent_identity"), dict) else {}
+    try:
+        scheduler_args = render_scheduler_execution_args(
+            scheduler_execution_context=scheduler_execution_context,
+        )
+    except ValueError:
+        scheduler_args = ""
     return selection.action_selection_recovery_command(
         goal_id=str(payload.get("goal_id") or "<GOAL_ID>"),
         agent_id=identity.get("agent_id"), runtime_root=runtime_root,
         registry_path=registry_path,
         turn_instance_id=turn_instance_id, available_capabilities=available_capabilities,
-        scheduler_args=render_scheduler_execution_args(scheduler_execution_context=scheduler_execution_context),
+        scheduler_args=scheduler_args,
     ) + _goal_ref_cli_arg(payload)
 
 

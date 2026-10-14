@@ -51,6 +51,23 @@ test("concrete independent plans retain action choice and fit the shared vision 
   assert.ok(Number(budget.total_usage) < 1800);
 });
 
+test("goal-value questions are enabled review input, not persisted decisions or extra admission gates", () => {
+  assert.equal(strideControlContract({stride_strategy: "off"}), null);
+  assert.deepEqual(stridePlanningGuidance("off"), []);
+  const contract = strideControlContract({stride_strategy: "evidence_conditioned_v1"}, proposal.reference_obligation_id)!;
+  assert.deepEqual(Object.keys(contract.decision_value_review as object),
+    ["work_slice", "route_distance", "validation_scope"]);
+  // All existing legal choices remain valid without answering a new field.
+  for (const action of ["grow", "switch", "verify"]) {
+    const decision = normalizeStrideDecision({...proposal, action})[0]!;
+    assert.equal(decision.action, action);
+    assert.equal(Object.hasOwn(decision, "decision_value_review"), false);
+  }
+  // Copying read-only advice into a proposal cannot become new authority/state.
+  assert.throws(() => normalizeStrideDecision({...proposal,
+    decision_value_review: contract.decision_value_review}), /unsupported fields/);
+});
+
 test("invalid, ambiguous, oversized and misplaced control proposals fail authoring", () => {
   for (const patch of [{basis: "plateau_from_elapsed_time"}, {strategy_version: "future_v2"},
     {axes: {work_slice: "shrink", route_distance: "grow", validation_scope: "grow"}},

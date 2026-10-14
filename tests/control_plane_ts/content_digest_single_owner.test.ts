@@ -133,6 +133,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/presentation/action_review_plan.ts",
   "control_plane/quota/refresh_external_delivery.ts",
   "control_plane/quota/turn_envelope.ts",
+  "control_plane/runtime/checkpoint_artifacts.ts",
   "control_plane/runtime/execution_identity.ts",
   "control_plane/runtime/usage_statistics_cycles.ts",
   "control_plane/runtime/usage_statistics_goal_contract.ts",

@@ -44,6 +44,43 @@ test("capacity evaluation and claim lanes use one snapshot without mutating it",
   assert.equal(unavailable.current_agent_deferred_resume_count, 0);
 });
 
+test("readiness counts retain unseen work and revalidate capacity instead of reusing stale totals", () => {
+  const input = request({has_deferred_count: true, deferred_count: 12,
+    deferred_work_counts: {ready: 12, blocked: 0, unknown: 0, complete: true,
+      ready_by_agent: {"agent-a": 12}}});
+  (input.sources as JsonObject).items = [fact("todo_capacity", {claim: "agent-a"})];
+  const counts = () => (projectTodoResumePlanning(input).deferred_lanes as JsonObject).deferred_work_counts;
+  assert.deepEqual(counts(), input.deferred_work_counts);
+  input.available_capabilities = [];
+  assert.deepEqual(counts(), {ready: 0, blocked: 1, unknown: 11, complete: false, ready_by_agent: {}});
+  input.available_capabilities = ["compiler"];
+  assert.deepEqual(counts(), {ready: 1, blocked: 0, unknown: 11, complete: false, ready_by_agent: {"agent-a": 1}});
+});
+
+test("malformed source counts cannot fabricate complete readiness", () => {
+  for (const fields of [{ready: -1}, {blocked: 0.5}, {unknown: null},
+    {ready_by_agent: {"agent-a": 2}}, {complete: "true"},
+    {ready: 2**53, ready_by_agent: {"agent-a": 2**53}}, {blocked: 2**53},
+    {unknown: 2**53, complete: false}]) {
+    const input = request({deferred_work_counts: {ready: 1, blocked: 0, unknown: 0,
+      complete: true, ready_by_agent: {"agent-a": 1}, ...fields}});
+    assert.throws(() => projectTodoResumePlanning(input), /counts/);
+  }
+});
+
+test("historical duplicate readiness or claim conflicts stay unknown across capacity reads", () => {
+  for (const conflicting of [{ready: false}, {claim: "agent-b"}, {status: "open"}]) {
+    for (const capabilities of [null, ["compiler"]]) {
+      const ready = fact("todo_conflict", {ready: true, ready_truthy: true, claim: "agent-a"});
+      const input = request({has_deferred_count: true, deferred_count: 1, available_capabilities: capabilities});
+      (input.sources as JsonObject).deferred_resume_candidates = [ready];
+      (input.sources as JsonObject).items = [{...ready, ...conflicting}];
+      const counts = (projectTodoResumePlanning(input).deferred_lanes as JsonObject).deferred_work_counts;
+      assert.deepEqual(counts, {ready: 0, blocked: 0, unknown: 1, complete: false, ready_by_agent: {}});
+    }
+  }
+});
+
 test("capability reevaluation retains ready candidates outside the deferred display bound", () => {
   const visible = fact("todo_visible", { claim: "agent-a" });
   const ready = fact("todo_ready", {

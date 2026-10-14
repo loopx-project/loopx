@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import os
 import sqlite3
@@ -74,6 +75,30 @@ def counter(container):
     stream, _ = container.get_archive("/data/counter")
     with tarfile.open(fileobj=io.BytesIO(b"".join(stream))) as archive:
         return int(archive.extractfile("counter").read())
+
+
+def test_ordinary_controller_stages_root_private_native_configuration(writer, tmp_path):
+    from benchmark.tests.qualify_checkpoint_joint import _stage_source_configuration
+
+    assert os.getuid() != 0, "Qualify the ordinary controller, not a privileged reader"
+    container, _ = writer
+    raw = b'model = "fixture"\n'
+    command = ("from pathlib import Path; p=Path('/private-codex'); p.mkdir(mode=0o700); "
+               f"f=p/'config.toml'; f.write_bytes({raw!r}); f.chmod(0o600)")
+    assert container.exec_run(["python", "-c", command], user="root").exit_code == 0
+    assert container.exec_run(["stat", "-c", "%u %a", "/private-codex",
+                               "/private-codex/config.toml"]).output == b"0 700\n0 600\n"
+    rejected = container.exec_run(["python", "-c",
+        "from pathlib import Path; Path('/private-codex/config.toml').read_bytes()"], user=str(os.getuid()))
+    assert rejected.exit_code != 0 and b"PermissionError" in rejected.output
+    native = {"guest_home": "/private-codex", "config_sha256": hashlib.sha256(raw).hexdigest()}
+    config = _stage_source_configuration(container, native, tmp_path / "staged")
+    assert config.read_bytes() == raw and config.stat().st_uid == os.getuid()
+    assert config.stat().st_mode & 0o777 == 0o600
+    with pytest.raises(ValueError, match="differs from the sealed checkpoint"):
+        _stage_source_configuration(container, {**native, "config_sha256": "f" * 64}, tmp_path / "wrong")
+    assert container.exec_run(["stat", "-c", "%u %a", "/private-codex",
+                               "/private-codex/config.toml"]).output == b"0 700\n0 600\n"
 
 
 def test_archive_keeps_private_directory_modes_without_special_bits(writer, tmp_path):

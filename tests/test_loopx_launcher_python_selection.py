@@ -7,8 +7,14 @@ import shutil
 import subprocess
 import sys
 
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason="the POSIX source launcher runs only on POSIX hosts",
+)
 
 
 def _write_stub(path: Path, body: str) -> None:

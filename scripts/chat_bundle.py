@@ -95,19 +95,29 @@ def _build(previous: Path | None, *, install: bool) -> None:
             raise RuntimeError(
                 "source changed while building; retry without concurrent edits"
             )
-        revision = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True
-        )
-        source_revision = (
-            revision.stdout.strip()
-            if revision.returncode == 0
-            else os.environ.get("LOOPX_RESOLVED_SOURCE_GIT_COMMIT")
-        )
-        finish_delivery(staged, previous, current, before, source_revision)
+        finish_delivery(staged, previous, current, before, _source_revision())
     print(
         "Chat bundle built and verified; current and previous delivery assets retained."
     )
 
+
+
+def _source_revision() -> str | None:
+    """Resolve the built delivery's source revision.
+
+    Staged benchmark sources are git archives inside task containers that
+    often lack a git binary entirely; a missing executable must take the same
+    environment fallback as a failed rev-parse.
+    """
+    try:
+        revision = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True
+        )
+    except FileNotFoundError:
+        return os.environ.get("LOOPX_RESOLVED_SOURCE_GIT_COMMIT")
+    if revision.returncode == 0:
+        return revision.stdout.strip()
+    return os.environ.get("LOOPX_RESOLVED_SOURCE_GIT_COMMIT")
 
 def finish_delivery(
     staged: Path,

@@ -5,7 +5,7 @@ import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireBoolean, requireJsonObject, requireStringLiteral} from "../runtime_decode.ts";
 import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
-import {projectTodoSummaryLanes, type TodoSummaryLane} from "./summary_lanes.ts";
+import {countDeferredTodoWork, projectTodoSummaryLanes, type TodoSummaryLane} from "./summary_lanes.ts";
 import {projectSummaryFrontierIndex} from "./frontier_revision.ts";
 import {projectTodoClosure, projectTodoSuccession, SUCCESSION_FACT_COLUMNS, SUCCESSION_EVALUATION_COLUMNS} from "./succession.ts";
 
@@ -148,6 +148,10 @@ export function projectTodoSummary(value: unknown): SummaryProjection {
     advancement_done_count: selected.done_items.filter(index => rows[index].task_class === "advancement_task").length,
     deferred_count: selected.deferred_items.length, monitor_due_count: selected.monitor_due_items.length,
     monitor_schedule_gap_count: selected.monitor_schedule_gap_items.length,
+    deferred_work_counts: countDeferredTodoWork(selected.deferred_items.map(index => ({
+      ready: typeof rows[index].resume_ready === "boolean" ? rows[index].resume_ready as boolean : null,
+      claim: rows[index].claim as string | null,
+    })), selected.deferred_items.length),
   };
   const lanes: Record<string, DisplayLane> = {};
   if (request.schema_version === "todo_summary_projection_request_v3") {

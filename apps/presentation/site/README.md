@@ -46,6 +46,35 @@ Keep source-document exports, private references, and unreviewed media outside
 the public tree. Follow `docs/development/design.md` and obtain first-screen
 review before changing the Blog or its homepage entry.
 
+### Editorial responsibilities and reading routes
+
+Keep the chronological catalog, and offer question-based routes alongside it.
+The route is a reading aid, not another content store. Each article owns one
+explanation; new introductory pieces should link to that owner rather than
+repeat its full mechanisms, measurements, or history.
+
+| Reader question | Article owner | Follow-up |
+| --- | --- | --- |
+| How does agent-assisted coding become sustained development? | `semantic-software-development` — short introduction, public engineering case, and agentic-software framing | Scenarios or core architecture |
+| Which kinds of work fit? | `application-scenarios` — complex delivery, exploration, ongoing responsibilities | Handbook for use; research for measured evidence |
+| How does the semantic control plane work? | `from-one-shot-agents-to-long-horizon-control` — core architecture, effects and recovery | Kanban for collaboration objects |
+| How do agents coordinate work? | `agent-facing-kanban` — claims, leases, gates, evidence and transitions | Core architecture for system boundaries |
+| What has evaluation established? | `edgebench-feedback-and-memory` — scoped findings and counterevidence | Scenario-specific research briefs |
+| Where has reliability failed? | `five-freshness-incidents` — freshness failures and corrective contracts | Core architecture; retain unresolved limits |
+| How do improvements enter subsequent work? | `long-horizon-rsi` — bootstrapping history and self-improvement thesis | Development introduction; adoption evidence |
+
+Both editions preserve the same role, section anchors, and source boundaries.
+Related-reading links should state the next article's purpose, not just list
+titles. Historical publication dates and experimental settings stay with their
+original articles. The Developer Book owns current operating instructions;
+essays do not become a competing setup manual. A personal source document and
+its adapted Blog article remain separate editions, not automatic mirrors.
+
+Sharing sessions can combine an engineering case, the core mechanism, a
+collaboration walkthrough, and selected research or postmortem evidence. Do
+not expand the introductory essay into a second architecture reference merely
+to fit every speaking route into one document.
+
 The header and primary homepage CTA download the complete Apple Silicon Mac App
 preview from the highest complete stable `vX.Y.Z` release at build time. Pages
 opts in with `LOOPX_SITE_RESOLVE_DESKTOP_RELEASE=1`. The resolver in

@@ -1207,8 +1207,12 @@ Todo summary lanes and pre-limit work counts now share `todos/summary_lanes.ts`.
 Python's lane classification and hidden-work inference loops are removed; quota
 recomputes counts after scope selection and carries incomplete source knowledge
 through compaction/reprojection. Public canonical Todo lists retain the same
-revision's acceptance guard. See [count semantics](../../reference/todo-work-counts.md).
-This closes the summary-to-work-lane count consumer, not every T3 source or D1
+revision's acceptance guard. Goal frontier now consumes that same work count
+and typed pre-limit deferred readiness count, retiring its display-length
+recount and unseen-row-as-blocked inference. File/SQLite CLI readback preserves
+counts after Markdown loss; unavailable authority still refuses. Partial source
+counts retain unknown coverage. See [count semantics](../../reference/todo-work-counts.md).
+This closes the summary-to-work-lane/frontier count consumers, not every T3 source or D1
 projection delivery; legacy codecs/renderers and other summary policies remain.
 
 

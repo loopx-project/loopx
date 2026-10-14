@@ -18,7 +18,7 @@ from harbor.utils.trajectory_utils import format_trajectory_json
 
 from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_strategy
 
-from .codex_offline import CodexOffline, stage_portable_python
+from .codex_offline import MODEL_CATALOG_REMOTE, CodexOffline, stage_portable_python
 from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution
 
 
@@ -260,7 +260,12 @@ class BenchmarkCodex(CodexOffline):
             install = await self.exec_as_agent(
                 environment,
                 command=f"bash {_SRC}/scripts/install-local.sh",
-                env=self._profile_env(),
+                # Task containers may lack git; the chat bundle build records
+                # the staged source revision from this environment fallback.
+                env={
+                    **self._profile_env(),
+                    "LOOPX_RESOLVED_SOURCE_GIT_COMMIT": actual_commit,
+                },
                 timeout_sec=1200,
             )
             if "error" in (install.stderr or "").lower():
@@ -549,6 +554,10 @@ class BenchmarkCodex(CodexOffline):
                 "OPENAI_BASE_URL": self._get_env("OPENAI_BASE_URL") or "",
                 "OPENAI_API_KEY": self._get_env("OPENAI_API_KEY") or "",
                 "CODEX_WIRE_API": self._get_env("CODEX_WIRE_API") or "responses",
+                "LOOPX_WEB_SEARCH": self._web_search,
+                "LOOPX_MODEL_CATALOG": (
+                    MODEL_CATALOG_REMOTE if self._model_catalog_staged else ""
+                ),
             }
         )
         return env

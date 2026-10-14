@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 
+import pytest
+
 
 from test_goal_amendment_authority import source_goal  # noqa: F401
 from loopx.cli import main
@@ -47,6 +49,83 @@ def setup(source_goal, tmp_path, capsys):
     request = {"material_id": "contract", "source_path": "direction.md", "required_revision": "sha256:" + hashlib.sha256(document.read_bytes()).hexdigest(),
                "authority_digest": view["authority_digest"], "operation_id": "material-read"}
     return f, document, config, request
+
+
+def test_source_gate_utf8_preserves_retirement_fence_in_ascii_locale(source_goal):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from loopx.control_plane.goals.source_session_turn_effects import (
+        decide_source_turn_effect_close_locked,
+        source_turn_effect_gate_path,
+        write_source_turn_effect_gate_locked,
+    )
+
+    f = source_goal
+    gate, changed = decide_source_turn_effect_close_locked(
+        registry_path=f["registry"], goal_id=f["ref"]["goal_id"],
+        requested_goal_ref=f["ref"], current_goal_ref=f["ref"],
+        reserved_goal_ref={**f["ref"], "goal_instance_id": "ginst_" + "a" * 32},
+        operation_id="recreate-方向", request_digest="sha256:" + "b" * 64,
+    )
+    assert changed and gate["state"] == "closing"
+    path = source_turn_effect_gate_path(f["registry"], f["ref"]["goal_id"])
+    script = """
+import locale, sys
+from loopx.cli import main
+locale.setlocale(locale.LC_CTYPE, 'C')
+assert sys.flags.utf8_mode == 0
+assert locale.getpreferredencoding(False).lower().replace('-', '') != 'utf8'
+raise SystemExit(main(sys.argv[1:]))
+"""
+    args = [sys.executable, "-X", "utf8=0", "-c", script,
+        "--registry", str(f["registry"]), "--format", "json", "goal-direction",
+        "--operation", "inspect", "--goal-id", f["ref"]["goal_id"],
+        "--goal-instance-id", f["ref"]["goal_instance_id"], "--agent-id", "agent-a"]
+    env = {**os.environ, "LC_ALL": "C", "PYTHONCOERCECLOCALE": "0", "PYTHONIOENCODING": "utf-8"}
+    # Same legal gate, two JSON spellings: escaped ASCII control and the actual
+    # source producer's UTF-8 output. Neither may bypass the retirement fence.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(json.dumps(gate, ensure_ascii=True).encode("ascii"))
+    expected = {"schema_version": "goal_direction_result_v0", "ok": False,
+        "status": "failed", "changed": False,
+        "reason": "Goal lifetime does not admit direction operation",
+        "execution_authority_granted": False, "acceptance_assessed": False}
+    control = subprocess.run(args, cwd=Path(__file__).resolve().parents[2], env=env, capture_output=True, timeout=60)
+    assert control.returncode == 1, control.stderr
+    assert json.loads(control.stdout) == expected
+    write_source_turn_effect_gate_locked(registry_path=f["registry"], goal_id=f["ref"]["goal_id"], gate=gate)
+    before = path.read_bytes()
+    assert "方向".encode("utf-8") in before
+    actual = subprocess.run(args, cwd=Path(__file__).resolve().parents[2], env=env, capture_output=True, timeout=60)
+    assert actual.returncode == 1, actual.stderr
+    assert json.loads(actual.stdout) == expected
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("content", [b'{"state":', b"\xff"])
+def test_malformed_source_gate_stays_rejected_without_authority_mutation(source_goal, tmp_path, capsys, content):
+    from loopx.control_plane.goals.source_session_turn_effects import source_turn_effect_gate_path
+
+    f = source_goal
+    before = call(f, tmp_path, capsys, "inspect", actor="agent-a")[1]
+    state = f["state"].read_bytes()
+    path = source_turn_effect_gate_path(f["registry"], f["ref"]["goal_id"])
+    original = path.read_bytes() if path.exists() else None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    code, refused = call(f, tmp_path, capsys, "inspect", actor="agent-a")
+    assert code == 1 and refused["ok"] is False, refused
+    assert path.read_bytes() == content and f["state"].read_bytes() == state
+    if original is None:
+        path.unlink()
+    else:
+        path.write_bytes(original)
+    after = call(f, tmp_path, capsys, "inspect", actor="agent-a")[1]
+    assert after["provider_revision"] == before["provider_revision"]
+    assert after["enabled"] is False and after["projection"] is None
 
 
 def test_actual_read_then_same_agent_acknowledgement_and_drift(source_goal, tmp_path, capsys):

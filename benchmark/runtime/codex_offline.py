@@ -12,6 +12,11 @@ _DEFAULT_OFFLINE_DIR = str(
 )
 
 _STAGE_DIR = "/tmp/codex-offline"
+# Codex only offers its full tool surface (web_search, apply_patch, update_plan,
+# write_stdin) to slugs in its model catalog. Gateway aliases such as
+# gpt-5.6-sol are unknown to the shipped binary, so a catalog file must be
+# staged next to the offline binary and referenced via model_catalog_json.
+MODEL_CATALOG_REMOTE = "/usr/local/share/codex/model-catalog.json"
 
 _RETRY_FLAGS = (
     "-c model_providers.harbor.name=harbor"
@@ -35,6 +40,7 @@ class CodexOffline(Codex):
             raise ValueError("unsupported web_search setting")
         self._goals = str(goals)
         self._web_search = web_search
+        self._model_catalog_staged = False
         super().__init__(*args, **kwargs)
 
     @staticmethod
@@ -60,6 +66,7 @@ class CodexOffline(Codex):
         rg_bin = (offline_dir / "rg").resolve()
         sidecar_bin = (offline_dir / "codex-code-mode-host").resolve()
         bwrap_bin = offline_dir / "codex-resources" / "bwrap"
+        catalog = offline_dir / "model-catalog.json"
         if not codex_bin.is_file():
             raise FileNotFoundError(
                 f"离线 codex 二进制不存在: {codex_bin}。"
@@ -80,6 +87,9 @@ class CodexOffline(Codex):
             await environment.upload_file(rg_bin, f"{_STAGE_DIR}/rg")
         if bwrap_bin.is_file():
             await environment.upload_file(bwrap_bin, f"{_STAGE_DIR}/bwrap")
+        if catalog.is_file():
+            await environment.upload_file(catalog, f"{_STAGE_DIR}/model-catalog.json")
+            self._model_catalog_staged = True
 
         await self.exec_as_root(
             environment,
@@ -94,16 +104,21 @@ class CodexOffline(Codex):
                 f"if [ -f {_STAGE_DIR}/bwrap ]; then "
                 f"  install -m 0755 {_STAGE_DIR}/bwrap /usr/local/bin/bwrap; "
                 "fi; "
+                f"if [ -f {_STAGE_DIR}/model-catalog.json ]; then "
+                f"  install -D -m 0644 {_STAGE_DIR}/model-catalog.json {MODEL_CATALOG_REMOTE}; "
+                "fi; "
                 f"rm -rf {_STAGE_DIR}; "
                 "mkdir -p /logs/agent; "
                 f"chown {shlex.quote(str(environment.default_user or 'root'))} /logs/agent; "
                 "{ /usr/local/bin/codex --version; "
                 "  md5sum /usr/local/bin/codex /usr/local/bin/codex-code-mode-host; "
+                f"  [ -f {MODEL_CATALOG_REMOTE} ] && md5sum {MODEL_CATALOG_REMOTE} || echo 'model-catalog: none'; "
                 "} > /logs/agent/codex_version.txt 2>&1; "
                 "cat /logs/agent/codex_version.txt"
             ),
         )
 
         self.logger.info(
-            f"codex 离线安装完成（来源 {offline_dir}，含 code-mode sidecar）"
+            f"codex 离线安装完成（来源 {offline_dir}，含 code-mode sidecar，"
+            f"model catalog {'已装' if self._model_catalog_staged else '无'}）"
         )

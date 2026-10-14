@@ -659,3 +659,137 @@ def test_missing_task_path_fails_before_install(tmp_path, monkeypatch, stdout, r
     monkeypatch.setattr(CodexOffline, "install", unexpected)
     with pytest.raises(RuntimeError, match="task container PATH"):
         asyncio.run(agent.install(SimpleNamespace(exec=task_exec)))
+
+
+def test_trial_home_stages_model_catalog_and_honors_web_search(tmp_path):
+    catalog = tmp_path / "model-catalog.json"
+    catalog.write_text(json.dumps({"models": [{"slug": "fixture-model"}]}))
+    args = settings(tmp_path) | {"web_search": "live", "model_catalog": catalog}
+    prepare_codex_home(**args)
+    config = tomllib.loads((args["home"] / "config.toml").read_text())
+    assert config["model_catalog_json"] == str(catalog.resolve())
+    assert config["web_search"] == "live"
+    defaults = settings(tmp_path) | {"home": tmp_path / "default-home"}
+    prepare_codex_home(**defaults)
+    rendered = tomllib.loads((defaults["home"] / "config.toml").read_text())
+    assert rendered["web_search"] == "disabled"
+    assert "model_catalog_json" not in rendered
+    with pytest.raises(ValueError, match="web_search"):
+        prepare_codex_home(**(settings(tmp_path) | {
+            "home": tmp_path / "ws-home", "web_search": "on"}))
+    with pytest.raises(ValueError, match="model catalog missing"):
+        prepare_codex_home(**(settings(tmp_path) | {
+            "home": tmp_path / "missing-home",
+            "model_catalog": tmp_path / "absent.json"}))
+
+
+def test_chat_bundle_revision_survives_missing_git_binary(tmp_path, monkeypatch):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "chat_bundle_script", Path(__file__).resolve().parents[2] / "scripts/chat_bundle.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setenv("LOOPX_RESOLVED_SOURCE_GIT_COMMIT", "feedbeef")
+
+    def missing(*args, **kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(module.subprocess, "run", missing)
+    assert module._source_revision() == "feedbeef"
+
+    class Failed:
+        returncode = 1
+        stdout = ""
+
+    monkeypatch.setattr(module.subprocess, "run", lambda *a, **k: Failed())
+    assert module._source_revision() == "feedbeef"
+
+    class Resolved:
+        returncode = 0
+        stdout = "abc123\n"
+
+    monkeypatch.setattr(module.subprocess, "run", lambda *a, **k: Resolved())
+    assert module._source_revision() == "abc123"
+
+
+@pytest.mark.parametrize(
+    "catalog_body, message",
+    [
+        ("not json", "not valid JSON"),
+        (json.dumps({"models": "nope"}), '"models" list'),
+        (json.dumps({"models": [{"slug": "someone-else"}]}), "no entry for"),
+        (json.dumps({"models": [{"slug": "fixture-model",
+                                 "tool_mode": "code_mode_only"}]}), "tool_mode"),
+    ],
+)
+def test_model_catalog_counterexamples_fail_before_a_trial(tmp_path, catalog_body, message):
+    catalog = tmp_path / "model-catalog.json"
+    catalog.write_text(catalog_body)
+    with pytest.raises(ValueError, match=message):
+        prepare_codex_home(**(settings(tmp_path) | {"model_catalog": catalog}))
+
+
+def test_model_catalog_admits_capability_fields_and_model_messages(tmp_path):
+    # model_messages is prompt content; it is disclosed, not rejected, and the
+    # qualification boundary below is the check that actual tools survive.
+    catalog = tmp_path / "model-catalog.json"
+    catalog.write_text(json.dumps({"models": [{
+        "slug": "fixture-model", "tool_mode": None,
+        "supports_search_tool": True, "model_messages": ["be terse"],
+    }]}))
+    prepare_codex_home(**(settings(tmp_path) | {"model_catalog": catalog}))
+
+
+def test_toolface_qualification_captures_first_request_and_rejects_empty(tmp_path):
+    from benchmark.runtime import toolface
+
+    fake = tmp_path / "codex"
+    fake.write_text("""#!/usr/bin/env python3
+import json, os, re, sys, urllib.request
+if sys.argv[1:2] == ["--version"]:
+    print("codex-cli 0.0.0-fake"); raise SystemExit(0)
+if os.environ.get("FAKE_DIE"):
+    print("error: model catalog entry is missing field display_name", file=sys.stderr)
+    raise SystemExit(2)
+home = os.environ["CODEX_HOME"]
+config = open(os.path.join(home, "config.toml")).read()
+base = re.search(r'base_url = "([^"]+)"', config).group(1)
+model = re.search(r'model = "([^"]+)"', config).group(1)
+tools = json.loads(os.environ.get("FAKE_TOOLS", "[]"))
+namespaces = [] if os.environ.get("FAKE_NO_NAMESPACE") else [
+    {"name": "functions", "tools": [{"name": "exec"}]}]
+body = {"model": model, "tools": tools,
+        "input": [{"type": "additional_tools", "tools": namespaces}]}
+request = urllib.request.Request(base + "/responses",
+    data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+try:
+    urllib.request.urlopen(request, timeout=10)
+except Exception:
+    pass
+raise SystemExit(1)
+""")
+    fake.chmod(0o755)
+    receipt = toolface.qualify_toolface(
+        {"web_search", "apply_patch", "exec"},
+        codex_bin=fake, model="fixture-model", timeout_sec=30,
+        extra_env={"FAKE_TOOLS": json.dumps(
+            [{"type": "web_search"}, {"name": "apply_patch"}])},
+    )
+    assert receipt["binary_version"] == "codex-cli 0.0.0-fake"
+    assert receipt["tools"] == ["apply_patch", "functions.exec", "web_search"]
+    with pytest.raises(RuntimeError, match="missing"):
+        toolface.qualify_toolface(
+            {"web_search"}, codex_bin=fake, model="fixture-model",
+            timeout_sec=30, extra_env={"FAKE_TOOLS": json.dumps(
+                [{"name": "apply_patch"}])})
+    with pytest.raises(RuntimeError, match="empty tool list"):
+        toolface.qualify_toolface(
+            set(), codex_bin=fake, model="fixture-model", timeout_sec=30,
+            extra_env={"FAKE_TOOLS": "[]", "FAKE_NO_NAMESPACE": "1"})
+    # A client that cannot parse its catalog dies before any request; the
+    # qualification must surface the client's own words, not a timeout.
+    with pytest.raises(RuntimeError, match="missing field display_name"):
+        toolface.qualify_toolface(
+            set(), codex_bin=fake, model="fixture-model", timeout_sec=30,
+            extra_env={"FAKE_DIE": "1"})

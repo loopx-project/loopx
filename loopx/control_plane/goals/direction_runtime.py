@@ -47,7 +47,7 @@ def _source(*, registry_path: Path, goal_id: str, goal_instance_id: str, agent_i
             gate_path = source_turn_effect_gate_path(registry_path, goal_id)
             source = {"profile_id": registry.get("profile_id"), "current_goal_ref": ref,
                 "goal_status": goal.get("status"), "registered_agents": registered_agent_ids_for_goal(goal),
-                "gate": json.loads(gate_path.read_text()) if gate_path.exists() else None,
+                "gate": json.loads(gate_path.read_text(encoding="utf-8")) if gate_path.exists() else None,
                 "registry_source": transaction.source_read_witness(), "accounting_admission": admission,
                 "legacy_authority_present": bool(goal.get("authority_registry") or goal.get("authority_sources"))}
             yield {"goal_ref": requested, "actor_agent_id": agent_id, "runtime_root": str(root),

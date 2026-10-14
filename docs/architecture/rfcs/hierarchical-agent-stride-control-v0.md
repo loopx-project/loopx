@@ -662,6 +662,22 @@ not a command to resize work. Verification must resolve a named next decision;
 repeating unchanged checks is not a default policy. The next probe declares
 minimum evidence for a coherent accepted deliverable or interpretable experiment, its prediction, adoption criterion and full cost.
 
+The enabled review now supplies `decision_value_review` questions for the three
+existing axes. Identify the remaining authoritative goal gap, its limiting
+component and plausible headroom before choosing the next mechanism. Compare
+continuation with one feasible different approach that could affect that
+component, including complete cost. A changed auxiliary mechanism can be useful,
+but its novelty does not establish that it addresses the remaining gap. Local or
+synthetic improvement needs applicable transfer evidence; repeated identical
+outcomes are not new information. Prefer the smallest coverage that resolves the
+choice to another broad sweep, while preserving relevant failure evidence.
+
+These questions guide existing axis plans/reasons and `next_probe`; they add no
+decision field, settlement gate, automatic pivot, family ban or strategy version.
+Missing headroom remains unknown. Transport and proposal validation establish
+delivery of this advice; model adoption, stronger results and net efficiency
+still require same-state continuation and full-cost qualification.
+
 Ordinary engineering, organizing and maintenance use the same strategy and
 existing Todo/Next Action. `grow` may complete related implementation,
 integration, validation and readback as one useful delivery slice, reducing
@@ -1007,6 +1023,70 @@ delayed reads and leader-only signalling do not repair it. That profile refuses
 mid-wake native capture before signalling and releases the original tool response.
 Linux interrupted and completed-wake capture retain their separate qualification;
 strict history, ambiguity, source and deadline predicates remain unchanged.
+
+An explicit destination preparation can reuse the existing cadence owner for
+its first review: configure `--execution-replan-after-turns 1`, perform and settle
+one actual restoration check, then admit the newly due periodic review. That
+check reads retained research/code and public opportunity without changing the
+candidate or submitting it. The review uses current Goal/Todo/lease and fresh
+context identities; source settlements remain historical evidence. After the
+review settles, restore the preregistered normal cadence through
+`configure-goal` before admitting research work. The isolated native receiver
+qualification records independent grow axes, adopts one two-candidate complete
+slice and verifies unchanged deadline, pending cooldown, consumed rounds and
+incumbent. The default receiver path is exercised separately. The public
+[`qualify_checkpoint_joint.py`](../../../benchmark/tests/qualify_checkpoint_joint.py)
+entry reproduces the six-work-wake source with a non-root controller, then runs
+ordinary and stride receivers in separate fresh guests; the
+[benchmark procedure](../../../benchmark/README.md#controller-only-native-capsule-transport)
+pins the checkpoint provider, prepares guest dependencies and lists explicit
+native CLI/Node inputs. Missing prerequisites fail rather than skip qualification.
+Its private receipt and logs retain input provenance; read-only Git members
+exercise the controller boundary. The source now declares its whole workspace
+directory with a caller-owned component ID. Non-root receivers select that
+directory by the sealed original workspace path and use the typed materialization
+owner; retained source registry/state files remain historical beside a fresh
+external registry/runtime. Admission of the source Goal through the fresh registry
+is rejected, while retained evidence and actual candidate writes remain usable.
+This qualifies the directory/writer seam, not a real task dataset or scientific
+continuation result. This is an
+explicit tested composition, not an automatic restore hook or a new default.
+A Todo-successor repair alone is not a spendable periodic strategy review.
+Matched branches must declare the same preparation/cadence transition and charge
+its full cost. Scripted native-provider execution qualifies transport and
+mechanical adoption, not model judgment, restored Explore graph authority or
+scientific benefit; later-point selection and real branch admission remain open.
+
+Re-enabling capture on a restored conversation requires a destination decision,
+not merely a new Goal/Agent or a locally unseen replan ID. Both pre-model and
+mid-wake hooks refuse capture until the canonical current-Goal settlement
+contains an accepted semantic replan whose Vision evidence references
+`checkpoint:<artifact-sha256>`, and the destination native history has completed
+a continuation with the original full history prefix intact. The consumed
+obligation itself remains ineligible; a subsequent genuinely new node can be
+captured. Retry, restart and a lost admission response preserve the original
+source-root/digest binding. This is a machine-enforced capture barrier, not
+additional execution or budget authority.
+
+Completed pre-model points now retain the original pending guard as a sealed
+participant, as interrupted points already do. The pending packet is read as
+historical decision evidence under the destination's current guard; source
+commands, claims, identities and effects must not execute again. Older pending
+points without that participant cannot re-enable capture. After consumption the
+Host stops repeating this context. Continuation reads the digest-bound manifest
+basis and verifies the particular pending packet and native history it uses;
+it does not rehash large code/incumbent archives every work wake or claim that
+this limited read is fresh full-member verification. Native admission still
+requires full artifact verification. Capture alone never automatically restores
+a branch. An external restore-every-new-point orchestrator must exercise the same
+barrier and current admission; its existence or successful scientific outcome
+does not follow from this receiver qualification.
+
+The artifact copy also preserves read-only file modes without requesting write
+access merely to sync the copied bytes. A non-root controller capture of a
+`0444` participant failed before this fix and now succeeds; Git object stores
+are an ordinary source of such members. Root-only container qualification was
+insufficient for this Host boundary. Source permissions and bytes remain unchanged.
 
 Committed native session admission now retains the captured artifact digest in
 the original atomic session binding. Exact controller retries after a lost binding

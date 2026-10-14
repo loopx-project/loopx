@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -14,9 +13,7 @@ from loopx.capabilities.benchmark_toolkit import (
     capture_traex_benchmark_evidence,
     convert_traex_events_to_atif,
 )
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
+from tests.source_cli import run_source_cli
 
 def _route_event(model: str, provider: str = "trae") -> dict[str, object]:
     return {
@@ -462,9 +459,8 @@ def test_cli_writes_private_atif_and_public_safe_route_receipt(tmp_path: Path) -
         encoding="utf-8",
     )
 
-    completed = subprocess.run(
+    completed = run_source_cli(
         [
-            str(REPO_ROOT / "scripts/loopx"),
             "benchmark",
             "traex-evidence",
             "--source-jsonl",
@@ -482,9 +478,6 @@ def test_cli_writes_private_atif_and_public_safe_route_receipt(tmp_path: Path) -
             "--format",
             "json",
         ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
         check=True,
     )
 

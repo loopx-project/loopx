@@ -84,6 +84,42 @@ export function countTodoWork(rows: readonly WorkCountRow[], sourceOpenCount: nu
     complete: complete && sourceOpenCount === rows.length, agent_id: agentId};
 }
 
+/** Readiness counts describe source facts, never the length of a display lane.
+ * Missing rows or missing evaluations remain unknown, rather than blocked. */
+export function countDeferredTodoWork(
+  rows: readonly {ready: boolean | null; claim: string | null}[], total: unknown,
+): JsonObject {
+  const known = typeof total === "number" && Number.isSafeInteger(total) && total >= rows.length;
+  const ready = rows.filter(row => row.ready === true);
+  const blocked = rows.filter(row => row.ready === false).length;
+  const byAgent = new Map<string, number>();
+  for (const row of ready) if (row.claim) byAgent.set(row.claim, (byAgent.get(row.claim) ?? 0) + 1);
+  const unknown = known ? total - ready.length - blocked : null;
+  return {ready: ready.length, blocked, unknown, complete: known && unknown === 0,
+    ready_by_agent: Object.fromEntries(byAgent)};
+}
+
+export function readDeferredTodoWorkCounts(value: unknown, total?: unknown): JsonObject {
+  const counts = requireJsonObject(value, "deferred work counts");
+  const count = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+  if (!count(counts.ready) || !count(counts.blocked) ||
+      counts.unknown !== null && !count(counts.unknown) ||
+      typeof counts.complete !== "boolean" || counts.complete && counts.unknown !== 0) {
+    throw new EffectRuntimeRequestError("deferred work counts are invalid");
+  }
+  const claims = requireJsonObject(counts.ready_by_agent, "deferred ready claimant counts");
+  if (Object.entries(claims).some(([agent, value]) => !agent || !count(value)) ||
+      Object.values(claims).reduce<number>((sum, value) => sum + Number(value), 0) > Number(counts.ready)) {
+    throw new EffectRuntimeRequestError("deferred ready claimant counts exceed the source");
+  }
+  if (count(total) && counts.unknown !== null &&
+      Number(counts.ready) + Number(counts.blocked) + Number(counts.unknown) !== total) {
+    throw new EffectRuntimeRequestError("deferred work counts disagree with the source total");
+  }
+  return {ready: counts.ready, blocked: counts.blocked, unknown: counts.unknown,
+    complete: counts.complete, ready_by_agent: {...claims}};
+}
+
 /** Filter already evaluated full-source rows. Keep their original ordinals:
  * consumers must not confuse a selected position with a source identity. */
 function selectRows(rows: readonly Row[], source: readonly unknown[], value: unknown): {rows: Row[]; full: boolean} {
