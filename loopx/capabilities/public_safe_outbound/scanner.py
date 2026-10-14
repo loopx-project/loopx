@@ -135,14 +135,18 @@ def _location(path: Path, root: Path | None) -> str:
 
     The receipt is public-safe, so a hit may name a file only relative to the
     scan root; an absolute path with no root is reduced to its final
-    component rather than echoed back.
+    component rather than echoed back. When the root *is* the file under
+    scan, the label is the file's own name -- ``relative_to`` would only say
+    ``.``, which names nothing an operator can act on.
     """
-    if root is not None:
+    if root is not None and root.is_dir():
         try:
             return path.resolve().relative_to(root.resolve()).as_posix()
         except (OSError, ValueError):
             pass
-    return path.as_posix() if not path.is_absolute() else path.name
+    if not path.is_absolute():
+        return path.as_posix()
+    return path.name
 
 
 def _normalize_text(text: str) -> str:

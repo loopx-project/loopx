@@ -34,7 +34,7 @@
 ## 用法
 
 ```bash
-# 扫描一个路径下所有文本文件
+# 扫描一个路径下的文本文件（见下方选择规则）
 python -m loopx.capabilities.public_safe_outbound.scan_cli \
   --scan-root <repo> --format json
 
@@ -67,4 +67,12 @@ installed/enabled，可经 `loopx capability list` / `show` 查看。
   `content_unreadable` / `content_too_large`，`ok` 保持 false；目录等
   不指向文件的路径跳过。未扫描原因与命中位置一样只含相对标签或原因码，不含绝对路径。
 - 不做任何写操作、不读取 secrets 文件内容（仅规则扫描）。
+- **文件选择是排除式，不是后缀白名单**：默认扫描根目录下所有常规文件，因此
+  `.env`、`Dockerfile`、`Makefile`、`id_rsa`、`credentials` 这类无后缀或点文件
+  都会被检查（白名单式曾把它们静默跳过，而 `node_modules`/`.venv` 因含 `.js`/`.py`
+  反而被走遍）。被排除的是版本控制、依赖、缓存、构建与虚拟环境目录
+  （`.git`、`node_modules`、`.venv`、`dist`、`build`、`__pycache__`、各类
+  `*_cache` 等，见 `scan_cli.SKIP_PARTS`）以及图片、音视频、归档、原生库、字体、
+  数据库等二进制后缀（见 `scan_cli.BINARY_SUFFIXES`；`.svg` 属文本，仍会扫描）。
+  单文件读取由 `limit_bytes`（默认 1 MB）封顶。
 - 规则为公开可维护列表，可按项目追加（`scanner.RULES`）。
