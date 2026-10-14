@@ -20,10 +20,9 @@ from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_
 
 from .codex_offline import MODEL_CATALOG_REMOTE, CodexOffline, stage_portable_python
 from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution
+from .layout import _ROOT, _SRC, _CONTROL, _CODEX_HOME
 
 
-_ROOT = "/opt/loopx-benchmark"
-_SRC = f"{_ROOT}/source"
 _PYTHON = f"{_ROOT}/python"
 _NODE = f"{_ROOT}/node"
 _PROFILE = f"{_ROOT}/profile"
@@ -31,13 +30,11 @@ _PROFILE_HOME = f"{_PROFILE}/home"
 _SHARED_CODEX_HOME = f"{_PROFILE}/codex-home"
 _SHARED_SKILLS = f"{_SHARED_CODEX_HOME}/skills"
 _CLI = f"{_PROFILE}/bin/loopx"
-_CONTROL = f"{_ROOT}/control"
 _REGISTRY = f"{_CONTROL}/registry.json"
 _LOOPX_RUNTIME = f"{_ROOT}/state/runtime"
 _SCHEDULER_STATE = f"{_CONTROL}/scheduler-state.json"
 _TASK_DOC = f"{_CONTROL}/task.md"
 _BASH_ENV = f"{_CONTROL}/bash-env"
-_CODEX_HOME = f"{_ROOT}/codex-home"
 _WORKER_MODULE = "benchmark.runtime.worker"
 _WAKE_LOG_DIR = "/logs/agent/wakes"
 _GOAL_ID = "benchmark-goal"

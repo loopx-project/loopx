@@ -951,6 +951,13 @@ resume prevents publication. This closes the manual provider's file-writer
 barrier gap only. No process memory, native cursor eligibility, external writers,
 automatic pre-decision handoff or isolated continuation are qualified by it.
 
+The ordinary SForge worker's explicit warm entry is being integrated with these
+owners. It uses a fresh current preparation Todo with full retained evidence,
+then requires an accepted current replan before restoring the normal cadence.
+Its installed-worker path and subsequent useful native-feedback continuation
+remain qualification work; standalone participant success does not close this
+acceptance. See the [warm entry contract](../../../benchmark/README.md#explicit-warm-worker-composition-qualification-in-progress).
+
 A native fresh registration is not restored admission. In the controlled native
 Docker qualification, one of twelve source submissions was consumed and its
 cooldown remained active. A same-limit fresh registration admitted `agent-1`

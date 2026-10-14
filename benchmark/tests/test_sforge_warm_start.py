@@ -9,7 +9,6 @@ from types import SimpleNamespace
 
 import pytest
 
-pytest.importorskip("harbor")
 from benchmark.runtime import sforge_warm_start as warm
 from loopx.control_plane.effect_runtime import effect_runtime_result
 
@@ -114,3 +113,17 @@ def test_normal_cadence_requires_accepted_current_replan_and_is_applied_once(tmp
     assert len(calls) == 1
     with pytest.raises(ValueError, match="lineage"):
         warm.finish_preparation({**env, "LOOPX_AGENT_ID": "another-agent"})
+
+
+def test_guest_helper_does_not_require_host_harbor_package():
+    import subprocess
+    import sys
+    script = """import sys
+class RejectHostDependency:
+    def find_spec(self, name, path=None, target=None):
+        if name == 'harbor' or name.startswith('harbor.'):
+            raise AssertionError('guest imported a host-only package')
+sys.meta_path.insert(0, RejectHostDependency())
+from benchmark.runtime.sforge_warm_start import restore_workspace, prepare_context
+"""
+    subprocess.run([sys.executable, "-c", script], check=True)

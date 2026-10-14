@@ -18,7 +18,7 @@ import tempfile
 import time
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
-from benchmark.runtime.harbor import _CODEX_HOME, _CONTROL, _SRC
+from benchmark.runtime.layout import _CODEX_HOME, _CONTROL, _SRC
 
 
 @dataclass(frozen=True)
