@@ -237,3 +237,87 @@ test("a native background model failure is observed, paused and retained", async
   assert.equal(status.ok, false);
   assert.equal(status.reason, "zcode_native_execution_failed");
 });
+
+const basisA = {acceptance: {revision: 3, contract_digest: "a".repeat(64)}, authority_sources: [{id: "src-1", revision: 2}, {id: "src-0", revision: "r1"}]};
+const basisAReordered = {...basisA, authority_sources: [basisA.authority_sources[1], basisA.authority_sources[0]]};
+test("resume with the same recorded criterion/source basis keeps the native target running", async () => {
+  const f = await connected();
+  await f.controller.operate("start", undefined, undefined, basisA);
+  assert.deepEqual(f.journals.at(-1)?.goal_basis, basisA);
+  await f.controller.operate("pause");
+  const resumed = await f.controller.operate("resume", undefined, undefined, basisAReordered);
+  assert.equal(resumed.ok, true);
+  assert.equal(resumed.native?.running, true);
+  assert.equal(f.calls.filter(c => c === "resume").length, 1);
+});
+test("a changed acceptance revision refuses a plain resume and keeps the target paused", async () => {
+  const f = await connected();
+  await f.controller.operate("start", undefined, undefined, basisA);
+  await f.controller.operate("pause");
+  const refused = await f.controller.operate("resume", undefined, undefined,
+    {...basisA, acceptance: {revision: 4, contract_digest: "b".repeat(64)}});
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, "goal_basis_changed");
+  assert.equal(refused.native?.status, "paused");
+  assert.equal(refused.native?.target_id, "target-a");
+  assert.equal(f.calls.includes("resume"), false);
+  assert.deepEqual(f.journals.at(-1)?.goal_basis, basisA, "the recorded basis is not rewritten to follow new intent");
+});
+test("a changed declared-source revision refuses a plain resume", async () => {
+  const f = await connected();
+  await f.controller.operate("start", undefined, undefined, basisA);
+  await f.controller.operate("pause");
+  const refused = await f.controller.operate("resume", undefined, undefined,
+    {...basisA, authority_sources: [{id: "src-1", revision: 3}, {id: "src-0", revision: "r1"}]});
+  assert.equal(refused.reason, "goal_basis_changed");
+  assert.equal(f.calls.includes("resume"), false);
+});
+test("a resume that cannot present the current basis stays paused", async () => {
+  const f = await connected();
+  await f.controller.operate("start", undefined, undefined, basisA);
+  await f.controller.operate("pause");
+  const refused = await f.controller.operate("resume");
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, "goal_basis_unavailable");
+  assert.equal(f.calls.includes("resume"), false);
+});
+test("stop then start consumes the current basis through a fresh native objective", async () => {
+  const f = await connected();
+  await f.controller.operate("start", undefined, undefined, basisA);
+  await f.controller.operate("pause");
+  const current = {...basisA, acceptance: {revision: 4, contract_digest: "b".repeat(64)}};
+  assert.equal((await f.controller.operate("resume", undefined, undefined, current)).reason, "goal_basis_changed");
+  const stopped = await f.controller.operate("stop");
+  assert.equal(stopped.native?.target_id, null);
+  assert.equal(f.journals.at(-1)?.goal_basis, undefined);
+  const started = await f.controller.operate("start", undefined, undefined, current);
+  assert.equal(started.native?.running, true);
+  assert.deepEqual(f.journals.at(-1)?.goal_basis, current);
+  assert.equal(f.calls.filter(c => c === "set").length, 2);
+});
+test("a journal recorded before any basis resumes as before and discloses nothing false", async () => {
+  const f = await connected();
+  await f.controller.operate("start");
+  assert.equal(f.journals.at(-1)?.goal_basis, undefined);
+  await f.controller.operate("pause");
+  const resumed = await f.controller.operate("resume", undefined, undefined, basisA);
+  assert.equal(resumed.ok, true);
+  assert.equal(f.journals.at(-1)?.goal_basis, undefined, "resume never records a basis it did not deliver");
+});
+test("a malformed recorded basis is an unsupported binding", async () => {
+  const f = await connected();
+  const state = structuredClone(f.controller.state);
+  (state as unknown as {goal_basis: unknown}).goal_basis = {acceptance: {revision: "3", contract_digest: null}, authority_sources: []};
+  const {writeFile, mkdtemp, rm} = await import("node:fs/promises");
+  const {join} = await import("node:path");
+  const {tmpdir} = await import("node:os");
+  const {readState} = await import("../../loopx/zcode_goal_mode/runtime.ts");
+  const dir = await mkdtemp(join(tmpdir(), "zcode-basis-"));
+  try {
+    const path = join(dir, "binding.json");
+    await writeFile(path, JSON.stringify(state));
+    await assert.rejects(readState(path), /Unsupported ZCode binding/);
+    await writeFile(path, JSON.stringify({...state, goal_basis: basisA}));
+    assert.deepEqual((await readState(path))?.goal_basis, basisA);
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});

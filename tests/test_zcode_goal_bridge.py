@@ -686,3 +686,56 @@ def test_provider_must_echo_creation_witness_even_when_null(authority, monkeypat
     monkeypatch.setattr(bridge, "_run_json", lambda *args, **kwargs: {"ok": True, "goal_id": "delivery", "goal_ref": {"goal_id": "delivery", "goal_instance_id": INSTANCE_A}, "agent_id": "zcode-worker"})
     with pytest.raises(bridge.ZCodeGoalBridgeError, match="did not match"):
         bridge.zcode_goal_operation(action="status", registry_path=registry, goal_id="delivery", agent_id="zcode-worker")
+
+
+def test_bind_start_and_resume_carry_the_current_goal_basis(authority, monkeypatch, tmp_path):
+    registry, project, payload = authority
+    payload["goals"][0]["authority_sources"] = [
+        {"id": "src-b", "revision": 2}, {"source_id": "src-a", "revision": "r7"}, {"id": "src-c"}, "not-a-source"]
+    registry.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(bridge, "inspect_goal_acceptance", lambda **kwargs: pytest.fail("an unpromoted Goal has no acceptance owner to read"))
+    requests = _stub_operation(monkeypatch)
+    cli = tmp_path / "zcode.mjs"
+    cli.write_text("", encoding="utf-8")
+    bridge.zcode_goal_operation(action="bind", registry_path=registry, goal_id="delivery", agent_id="zcode-worker", project=project, cli_path=str(cli))
+    bridge.zcode_goal_operation(action="start", registry_path=registry, goal_id="delivery", agent_id="zcode-worker")
+    bridge.zcode_goal_operation(action="resume", registry_path=registry, goal_id="delivery", agent_id="zcode-worker")
+    expected = {"acceptance": None, "authority_sources": [
+        {"id": "src-a", "revision": "r7"}, {"id": "src-b", "revision": 2}, {"id": "src-c", "revision": None}]}
+    native = [request for _, request in requests if request is not None]
+    assert [request["action"] for request in native] == ["bind", "start", "resume"]
+    assert all(request["goal_basis"] == expected for request in native)
+    assert "task_body" not in native[2], "resume re-reads the basis, not a whole prompt"
+
+
+def test_promoted_acceptance_revision_is_part_of_the_basis(authority, monkeypatch):
+    registry, _, _ = authority
+    seen = []
+    monkeypatch.setattr(bridge, "local_authority_is_promoted", lambda **kwargs: True)
+    monkeypatch.setattr(bridge, "inspect_goal_acceptance", lambda **kwargs: seen.append(kwargs) or {
+        "ok": True, "status": "loaded", "revision": 5, "contract_digest": "c" * 64, "provider_revision": "p9"})
+    requests = _stub_operation(monkeypatch)
+    bridge.zcode_goal_operation(action="resume", registry_path=registry, goal_id="delivery", agent_id="zcode-worker")
+    assert seen[0]["goal_id"] == "delivery" and "agent_id" not in seen[0]
+    _, native = requests[0]
+    assert native["goal_basis"] == {"acceptance": {"revision": 5, "contract_digest": "c" * 64}, "authority_sources": []}
+
+
+def test_unreadable_acceptance_basis_fails_closed_before_the_provider(authority, monkeypatch):
+    registry, _, _ = authority
+    monkeypatch.setattr(bridge, "local_authority_is_promoted", lambda **kwargs: True)
+    monkeypatch.setattr(bridge, "inspect_goal_acceptance", lambda **kwargs: (_ for _ in ()).throw(ValueError("authority unavailable")))
+    requests = _stub_operation(monkeypatch)
+    with pytest.raises(bridge.ZCodeGoalBridgeError, match="acceptance basis is unavailable") as failure:
+        bridge.zcode_goal_operation(action="resume", registry_path=registry, goal_id="delivery", agent_id="zcode-worker")
+    assert failure.value.code == "zcode_goal_basis_unavailable" and failure.value.status == 503
+    assert requests == [], "no provider effect is issued under an unknown basis"
+
+
+def test_status_pause_and_stop_do_not_read_the_basis(authority, monkeypatch):
+    registry, _, _ = authority
+    monkeypatch.setattr(bridge, "local_authority_is_promoted", lambda **kwargs: pytest.fail("read-only and stop operations need no basis"))
+    requests = _stub_operation(monkeypatch)
+    for action in ("status", "pause", "stop"):
+        bridge.zcode_goal_operation(action=action, registry_path=registry, goal_id="delivery", agent_id="zcode-worker")
+    assert all("goal_basis" not in request for _, request in requests)
