@@ -81,6 +81,8 @@ def main():
 
     controller = output / "controller"
     controller.mkdir()
+    source_files = output / "source-files"
+    source_files.mkdir()
     patch = pytest.MonkeyPatch()
     fixture = controllers.__wrapped__(controller, patch)
     supervisor = container = None
@@ -97,7 +99,7 @@ def main():
                   "'-q','-rs','-p','no:cacheprovider','--basetemp=/qualification/source-tmp']))")
         container = client.containers.create(image, ["python", "-c", script],
             platform="linux/amd64", network_disabled=True,
-            volumes={**base, str(output): {"bind": "/qualification", "mode": "rw"}},
+            volumes={**base, str(source_files): {"bind": "/qualification", "mode": "rw"}},
             working_dir="/source", environment={**environment, "NODE_OPTIONS": "--experimental-sqlite",
                                                "LOOPX_CHECKPOINT_EXTERNAL_CONTROLLER": "1"})
         supervisor = CheckpointSupervisor(files[0], output / "points")
@@ -117,7 +119,7 @@ def main():
         git_object = point / "components/readonly_workspace/.git/objects/ab/retained-object"
         assert git_object.read_text() == "Readonly source evidence" and git_object.stat().st_mode & 0o777 == 0o444
         home = Path(metadata["native_session"]["guest_home"])
-        config = output / home.relative_to("/qualification") / "config.toml"
+        config = source_files / home.relative_to("/qualification") / "config.toml"
         config.resolve(strict=True)
         for stride in (False, True):
             name = "stride" if stride else "ordinary"
