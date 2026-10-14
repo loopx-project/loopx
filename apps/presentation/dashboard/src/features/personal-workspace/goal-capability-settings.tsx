@@ -24,7 +24,8 @@ type CapabilityCatalogProps = Readonly<{
   callbacks: PersonalWorkspaceCallbacks;
   catalog: CapabilityConfigurationCatalog;
   goalId: string;
-  onApplied: () => void;
+  loading: boolean;
+  onApplied: () => Promise<void>;
   notification?: WorkspaceGoalNotification;
   onNotificationChanged: () => void;
 }>;
@@ -60,9 +61,10 @@ function goalWriteDraft(selected: CapabilityConfigurationCatalog["capabilities"]
   return writable;
 }
 
-function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
+function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Readonly<{
   goalId: string;
-  onApplied: () => void;
+  loading: boolean;
+  onApplied: () => Promise<void>;
   selected: CapabilityConfigurationCatalog["capabilities"][number] | undefined;
   t: ReturnType<typeof useWorkspaceI18n>["t"];
 }>) {
@@ -104,7 +106,7 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
   }, [selected]);
 
   async function preview(configuration: Record<string, unknown> | null) {
-    if (!selected || mutation.busy || !jsonValid) return;
+    if (!selected || loading || mutation.busy || !jsonValid) return;
     setMutation((current) => ({ ...current, busy: "preview", partialWrite: null }));
     setError(null);
     try {
@@ -118,7 +120,7 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
   }
 
   async function apply() {
-    if (!selected || !mutation.preview || mutation.busy || !jsonValid) return;
+    if (!selected || loading || !mutation.preview || mutation.busy || !jsonValid) return;
     setMutation((current) => ({ ...current, busy: "apply" }));
     setError(null);
     try {
@@ -134,7 +136,7 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
         partialWrite: result.status === "partial_write" ? result : null,
         preview: null,
       }));
-      if (result.status !== "partial_write") onApplied();
+      if (result.status !== "partial_write") await onApplied();
     } catch (reason) {
       setMutation((current) => ({ ...current, preview: null }));
       setError(reason instanceof Error ? reason.message : t("capabilities.applyFailed"));
@@ -144,6 +146,7 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
   }
 
   function changeDraft(key: string, value: unknown) {
+    if (loading || mutation.busy) return;
     setMutation((current) => ({
       ...current,
       draft: selected?.capability_id === "periodic_report"
@@ -156,7 +159,7 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
   }
 
   function changeJson(text: string) {
-    if (!selected || mutation.busy) return;
+    if (!selected || loading || mutation.busy) return;
     setJsonDraft(text);
     const parsed = parseEditableCapabilityJson(selected.configuration_editor, text);
     setMutation((current) => ({ ...current, preview: null, draft: parsed
@@ -170,7 +173,7 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
   }
 
   function changeMode() {
-    if (mutation.busy || !jsonValid) return;
+    if (loading || mutation.busy || !jsonValid) return;
     if (editorMode === "guided" && selected) {
       const jsonValue = selected.capability_id === "todo_replan_cadence"
         ? goalWriteDraft(selected, mutation.draft, editorMode, mutation.cadenceOverride)
@@ -234,7 +237,7 @@ function CapabilityMutationFeedback({ mutationError, onApplied, partialWrite, pr
   );
 }
 
-function CapabilityCatalog({ callbacks, catalog, goalId, notification, onApplied, onNotificationChanged }: CapabilityCatalogProps) {
+function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, onApplied, onNotificationChanged }: CapabilityCatalogProps) {
   const { locale, t } = useWorkspaceI18n();
   const orderedCapabilities = useMemo(
     () => orderCapabilitiesForPresentation(
@@ -255,9 +258,12 @@ function CapabilityCatalog({ callbacks, catalog, goalId, notification, onApplied
     () => selected ? localizeCapability(selected, locale) : undefined,
     [locale, selected],
   );
-  const capabilityMutation = useCapabilityMutation({ goalId, onApplied, selected: localizedSelected, t });
+  const capabilityMutation = useCapabilityMutation({ goalId, loading, onApplied, selected: localizedSelected, t });
   const { apply, changeDraft, changeJson, changeMode, editorMode, jsonDraft, jsonValid, error: mutationError, mutation, preview: requestPreview } = capabilityMutation;
   const { busy, draft, partialWrite, preview } = mutation;
+  // A refreshed observation can replace `selected` and reset local mutation
+  // state. The existing catalog read still owns admission until it settles.
+  const editorBusy = loading || Boolean(busy);
 
   if (!selected || !localizedSelected) {
     return <p className="personal-capability-empty">{t("capabilities.empty")}</p>;
@@ -269,12 +275,12 @@ function CapabilityCatalog({ callbacks, catalog, goalId, notification, onApplied
     ?? (!supportsGoal ? t("capabilities.machineOnly") : t("capabilities.previewOnly"));
 
   async function createPreview() {
-    if (!localizedSelected || !editorAvailable || busy || !jsonValid) return;
+    if (!localizedSelected || !editorAvailable || editorBusy || !jsonValid) return;
     await requestPreview(draft);
   }
 
   async function createClearPreview() {
-    if (!editorAvailable || busy) return;
+    if (!editorAvailable || editorBusy) return;
     await requestPreview(null);
   }
 
@@ -357,7 +363,7 @@ function CapabilityCatalog({ callbacks, catalog, goalId, notification, onApplied
         {editorAvailable ? <>
           {editorMode === "json" || !localizedSelected.configuration_editor.fields.some((field) => field.key === "enabled" && field.input_kind === "boolean") ? (
             <div className="personal-capability-editor-mode">
-              <button disabled={Boolean(busy) || !jsonValid} onClick={changeMode} type="button"><Code2 aria-hidden size={14} />{t(editorMode === "guided" ? "machine.editJson" : "machine.backToForm")}</button>
+              <button disabled={editorBusy || !jsonValid} onClick={changeMode} type="button"><Code2 aria-hidden size={14} />{t(editorMode === "guided" ? "machine.editJson" : "machine.backToForm")}</button>
             </div>
           ) : null}
           {editorMode === "guided" ? <section className="personal-capability-field-summary">
@@ -367,16 +373,16 @@ function CapabilityCatalog({ callbacks, catalog, goalId, notification, onApplied
                 : `Review interval follows ${selected.machine_current ? "device" : "product"} defaults; this Goal sets the stride strategy.`}
             </p> : null}
             <CapabilityConfigurationFields
-              disabled={Boolean(busy)}
+              disabled={editorBusy}
               copy={localizedCapabilityFieldCopy(locale, localizedSelected.capability_id)}
               editor={localizedSelected.configuration_editor}
               onChange={changeDraft}
               value={draft}
-              enabledAction={<button className="personal-capability-edit-json" onClick={changeMode} type="button"><Code2 aria-hidden size={14} />{t("machine.editJson")}</button>}
+              enabledAction={<button className="personal-capability-edit-json" disabled={editorBusy} onClick={changeMode} type="button"><Code2 aria-hidden size={14} />{t("machine.editJson")}</button>}
             />
           </section> : <label className="personal-capability-json-editor" htmlFor="goal-configuration-json">
             <span>{t("capabilities.jsonConfiguration")}</span>
-            <textarea id="goal-configuration-json" aria-describedby="goal-configuration-json-help" disabled={Boolean(busy)} onChange={(event) => changeJson(event.target.value)} rows={12} spellCheck={false} value={jsonDraft} />
+            <textarea id="goal-configuration-json" aria-describedby="goal-configuration-json-help" disabled={editorBusy} onChange={(event) => changeJson(event.target.value)} rows={12} spellCheck={false} value={jsonDraft} />
             <small id="goal-configuration-json-help">{t("capabilities.jsonHelp")}</small>
             {!jsonValid ? <span className="personal-machine-validation" role="alert">{t("capabilities.jsonInvalid")}</span> : null}
           </label>}
@@ -385,14 +391,14 @@ function CapabilityCatalog({ callbacks, catalog, goalId, notification, onApplied
         {editorAvailable ? (
           <footer className="personal-capability-actions">
             {localizedSelected.current && localizedSelected.available_scopes.includes("machine") ? (
-              <button disabled={Boolean(busy) || !jsonValid} onClick={() => void createClearPreview()} type="button">
+              <button disabled={editorBusy || !jsonValid} onClick={() => void createClearPreview()} type="button">
                 {t("capabilities.restoreInheritance")}
               </button>
             ) : null}
-            <button disabled={Boolean(busy) || !jsonValid} onClick={() => void createPreview()} type="button">
+            <button disabled={editorBusy || !jsonValid} onClick={() => void createPreview()} type="button">
               {busy === "preview" ? t("common.loading") : t("capabilities.previewChanges")}
             </button>
-            <button className="is-primary" disabled={Boolean(busy) || !preview || !jsonValid} onClick={() => void apply()} type="button">
+            <button className="is-primary" disabled={editorBusy || !preview || !jsonValid} onClick={() => void apply()} type="button">
               {busy === "apply" ? t("common.loading") : t("capabilities.applyPreview")}
             </button>
           </footer>
@@ -418,7 +424,7 @@ export function GoalCapabilitySettings({ callbacks, goalId, notification, onChan
   const [loading, setLoading] = useState(false);
   const readGeneration = useRef(0);
 
-  function load() {
+  async function load() {
     if (!goalId) return;
     const generation = ++readGeneration.current;
     setLoading(true);
@@ -426,7 +432,7 @@ export function GoalCapabilitySettings({ callbacks, goalId, notification, onChan
     // Withdraw the previous observation during a recheck; preserve navigation.
     setInspection(current => current ? {...current, capability_catalog: {...current.capability_catalog,
       capabilities: current.capability_catalog.capabilities.map(item => item.observation ? {...item, observation: undefined} : item)}} : null);
-    void fetchGoalConfiguration(goalId)
+    await fetchGoalConfiguration(goalId)
       .then(value => {if (generation === readGeneration.current) setInspection(value);})
       .catch((reason: unknown) => {if (generation === readGeneration.current) setError(reason instanceof Error ? reason.message : t("capabilities.loadFailed"));})
       .finally(() => {if (generation === readGeneration.current) setLoading(false);});
@@ -457,6 +463,7 @@ export function GoalCapabilitySettings({ callbacks, goalId, notification, onChan
         callbacks={callbacks}
         catalog={inspection.capability_catalog}
         goalId={goalId}
+        loading={loading}
         notification={notification}
         onApplied={load}
         onNotificationChanged={onChanged}

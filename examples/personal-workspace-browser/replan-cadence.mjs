@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import { outputDir, waitForInputValue } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
@@ -22,13 +23,38 @@ export const replanCadenceScenario = {
       schema_version: "todo_replan_cadence_machine_defaults_v0", completed_todos: 2,
     } };
     let context;
+    let heldReadback;
+    let goalApplyCount = 0;
+    function holdGoalReadback() {
+      let started, release;
+      const readback = {
+        started: new Promise((resolve) => { started = resolve; }),
+        released: new Promise((resolve) => { release = resolve; }),
+        start: () => started(),
+        release: (fail = false) => release(fail),
+      };
+      heldReadback = readback;
+      return readback;
+    }
     try {
       context = await openWorkspacePage(browser, url, { collectCoverage,
         beforeGoto: async (_api, page) => {
           for (const endpoint of ["machine-configuration", "goal-configuration"]) {
             await page.route(`**/api/chat/${endpoint}**`, async (route) => {
               const parsed = new URL(route.request().url());
-              await route.fulfill({ response: await route.fetch({ url: authority.url + parsed.pathname + parsed.search }) });
+              if (parsed.pathname.endsWith("/goal-configuration/apply")) goalApplyCount++;
+              const response = await route.fetch({ url: authority.url + parsed.pathname + parsed.search });
+              if (heldReadback && parsed.pathname === "/api/chat/goal-configuration" && route.request().method() === "GET") {
+                const pending = heldReadback;
+                pending.start();
+                const fail = await pending.released;
+                heldReadback = null;
+                if (fail) {
+                  await route.fulfill({ status: 503, json: { ok: false, error: "Configuration readback unavailable" } });
+                  return;
+                }
+              }
+              await route.fulfill({ response });
             });
           }
         },
@@ -156,7 +182,19 @@ export const replanCadenceScenario = {
       await waitForInputValue(count, "3");
       await strategy.selectOption("off");
       await page.getByRole("button", { name: "预览变更", exact: true }).click();
+      const delayedReadback = holdGoalReadback();
       await applyGoalPreview();
+      await delayedReadback.started;
+      assert.equal(await count.isDisabled(), true, "A committed write must keep the editor closed until its readback settles");
+      assert.equal(await strategy.isDisabled(), true);
+      assert.equal(await page.getByRole("button", { name: "编辑 JSON", exact: true }).isDisabled(), true);
+      assert.equal(await page.getByRole("button", { name: "预览变更", exact: true }).isDisabled(), true);
+      const goalCatalog = page.getByRole("navigation", { name: "Goal 能力目录" });
+      await goalCatalog.getByRole("button", { name: "周期报告", exact: true }).click();
+      await goalCatalog.getByRole("button", { name: /Goal 复盘与步幅/ }).click();
+      assert.equal(await count.isDisabled(), true, "Resetting capability-local state must not reopen an unsettled catalog read");
+      await page.screenshot({ path: resolve(outputDir, "replan-cadence-saving-readback.png"), animations: "disabled" });
+      delayedReadback.release();
       let goalCadence = await readGoalCadence();
       if (JSON.stringify(goalCadence.current) !== JSON.stringify({ stride_strategy: "off" })
         || goalCadence.effective_configuration.configuration.count !== 3) {
@@ -224,7 +262,23 @@ export const replanCadenceScenario = {
       await page.getByRole("navigation", { name: "Goal capability catalog" }).getByRole("button", { name: /Goal review and stride/ }).click();
       await waitForInputValue(englishCount, "6");
       if (await englishUnit.inputValue() !== "effective_turns" || await englishStrategy.inputValue() !== "off") throw new Error("Goal editor did not restore product defaults");
-      return { coverageEntries: context.coverageEntries, note: "Packaged default six effective Turns, machine v0→v2 migration, strategy-only JSON/form inheritance across later machine changes, equal-value explicit pin and interval-only clear, default-off/versioned strategy, invalid preview, Goal override/clear, device removal, mobile keyboard and English labels through real handlers." };
+      await englishCount.fill("5");
+      await page.getByRole("button", { name: "Preview changes", exact: true }).click();
+      const failedReadback = holdGoalReadback();
+      await applyGoalPreview("Apply preview");
+      await failedReadback.started;
+      assert.equal(await englishCount.isDisabled(), true);
+      const committedApplies = goalApplyCount;
+      failedReadback.release(true);
+      await page.getByRole("alert").filter({ hasText: "Configuration readback unavailable" }).waitFor();
+      assert.equal(await englishCount.count(), 0, "A failed readback must not expose a stale editor");
+      assert.equal((await readGoalCadence()).current.count, 5, "Readback failure does not undo the committed write");
+      await page.screenshot({ path: resolve(outputDir, "replan-cadence-readback-error.png"), animations: "disabled" });
+      await page.getByRole("button", { name: "Retry", exact: true }).click();
+      await page.getByRole("navigation", { name: "Goal capability catalog" }).getByRole("button", { name: /Goal review and stride/ }).click();
+      await waitForInputValue(englishCount, "5");
+      assert.equal(goalApplyCount, committedApplies, "Readback recovery must not submit the mutation again");
+      return { coverageEntries: context.coverageEntries, note: "Packaged default six effective Turns, machine v0→v2 migration, strategy-only JSON/form inheritance across later machine changes, equal-value explicit pin and interval-only clear, default-off/versioned strategy, invalid preview, Goal override/clear, device removal, mobile keyboard and English labels through real handlers. Delayed post-apply readback keeps editing closed across capability changes; failed readback recovers the committed value without another mutation." };
     } catch (error) {
       if (context) {
         await context.page.screenshot({ path: resolve(outputDir, "replan-cadence-failure.png"), animations: "disabled" });
@@ -232,6 +286,7 @@ export const replanCadenceScenario = {
       }
       throw error;
     } finally {
+      heldReadback?.release();
       await context?.close();
       await authority.close();
     }
