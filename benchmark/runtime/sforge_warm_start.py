@@ -120,6 +120,22 @@ def restore_workspace(declaration: dict, workspace: Path):
     shutil.copytree(source, workspace, symlinks=True)
 
 
+def _release_native_skills_directory(home: Path) -> None:
+    """Leave skill installation to the ordinary worker after native fork.
+
+    App-server creates an empty directory while opening the restored session.
+    It is not a captured skill installation. Never remove contents or replace
+    a link: the ordinary worker still owns installed-skill identity checks.
+    """
+    skills = home / "skills"
+    if skills.is_dir() and not skills.is_symlink():
+        try:
+            skills.rmdir()
+        except OSError as error:
+            raise ValueError("Native receiver skills directory is not empty or removable; "
+                             "inspect it before continuing") from error
+
+
 def prepare_context(env: dict[str, str], declaration: dict) -> dict:
     """Join actual session + research owners on one freshly bootstrapped Goal."""
     from benchmark.runtime.codex import Execution
@@ -137,6 +153,7 @@ def prepare_context(env: dict[str, str], declaration: dict) -> dict:
     execution = Execution(context="resume", sandbox=env["LOOPX_CODEX_SANDBOX"])
     native = admit_native_checkpoint_session(env, unit, digest, Path(declaration["config"]),
                                             execution=execution, timeout=30)
+    _release_native_skills_directory(Path(env["CODEX_HOME"]))
     def cli(*args):
         result = subprocess.run([*loopx_command(env), *args], env=env,
             cwd=env["LOOPX_PROJECT"], text=True, capture_output=True, timeout=60, check=True)

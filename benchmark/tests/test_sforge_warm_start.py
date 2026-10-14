@@ -13,6 +13,39 @@ from benchmark.runtime import sforge_warm_start as warm
 from loopx.control_plane.effect_runtime import effect_runtime_result
 
 
+@pytest.mark.parametrize("existing", ["empty", "nonempty", "foreign-link", "installed-link"])
+def test_native_fork_skills_rejoin_ordinary_installer_without_erasing_contents(tmp_path, existing):
+    from benchmark.runtime.codex import Execution, prepare_codex_home
+    home, installed, foreign = (tmp_path / name for name in ("home", "installed", "foreign"))
+    for path in (home, installed, foreign):
+        path.mkdir()
+    skills = home / "skills"
+    if existing.endswith("link"):
+        skills.symlink_to(installed if existing == "installed-link" else foreign)
+    else:
+        skills.mkdir()
+        if existing == "nonempty":
+            (skills / ".retained").write_text("must survive")
+    if existing == "nonempty":
+        with pytest.raises(ValueError, match="not empty or removable"):
+            warm._release_native_skills_directory(home)
+        assert (skills / ".retained").read_text() == "must survive"
+        return
+    warm._release_native_skills_directory(home)
+    def ordinary_prepare():
+        prepare_codex_home(home, execution=Execution(context="resume"), workspace=tmp_path,
+            model="gpt-5", effort="high", base_url="http://localhost:1/v1", api_key="synthetic",
+            wire_api="responses", skills=installed)
+    if existing == "foreign-link":
+        with pytest.raises(ValueError, match="skills changed"):
+            ordinary_prepare()
+        assert skills.resolve() == foreign
+    else:
+        ordinary_prepare()
+        assert skills.is_symlink() and skills.resolve() == installed
+        ordinary_prepare()
+
+
 @pytest.fixture
 def point(tmp_path):
     workspace = tmp_path / "workspace"
