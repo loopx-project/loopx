@@ -1,0 +1,116 @@
+"""Warm receiver composition; captured authority is never installed as current."""
+import asyncio
+from dataclasses import replace
+import hashlib
+import json
+import shutil
+import time
+from types import SimpleNamespace
+
+import pytest
+
+pytest.importorskip("harbor")
+from benchmark.runtime import sforge_warm_start as warm
+from loopx.control_plane.effect_runtime import effect_runtime_result
+
+
+@pytest.fixture
+def point(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "candidate").write_text("retained candidate")
+    (workspace / "candidate").chmod(0o600)
+    config = tmp_path / "config.toml"
+    config.write_text("[features]\ngoals = false\n")
+    context = tmp_path / "context.json"
+    context.write_text(json.dumps({"snapshot": {"todos": [{"todo_id": "source-todo"}]}}))
+    components = [{"id": "workspace", "source_path": str(workspace)},
+                  {"id": "context", "source_path": str(context)}]
+    metadata = {
+        "native_session": {"guest_workspace": str(workspace), "guest_home": warm._CODEX_HOME,
+                           "config_sha256": hashlib.sha256(config.read_bytes()).hexdigest()},
+        "loopx_state": {"goal_id": "source-goal", "agent_id": "source-agent"},
+        "worker_file_snapshot": {"components": components[:1]},
+        "research_context": {"component_id": "context", "member_path": "",
+                             "sha256": hashlib.sha256(context.read_bytes()).hexdigest()},
+    }
+    observed = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
+    unit = tmp_path / "point"
+    sealed = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "capture", "components": components,
+        "point_metadata": metadata, "expected_source_sha256": observed["source_sha256"], "destination": str(unit)})
+    start = warm.WarmStart(unit, sealed["sha256"], config, "new-goal", "new-agent", "source-todo", int(time.time()) + 600)
+    return start, workspace
+
+
+@pytest.mark.parametrize("change", [
+    {"goal_id": "source-goal"}, {"agent_id": "source-agent"}, {"source_todo_id": "missing"},
+    {"deadline_epoch": 1}, {"deadline_epoch": True}, {"normal_cadence": 0}, {"normal_cadence": True},
+])
+def test_invalid_participant_rejects_before_workspace_or_authority_changes(point, change):
+    start, workspace = point
+    before = (workspace / "candidate").read_bytes()
+    with pytest.raises(ValueError):
+        replace(start, **change).verify(str(workspace))
+    assert (workspace / "candidate").read_bytes() == before
+    assert not workspace.with_name("workspace.before-checkpoint").exists()
+
+
+def test_restore_replaces_image_files_preserves_modes_and_refuses_second_attempt(point):
+    start, workspace = point
+    assert start.verify(str(workspace))
+    (workspace / "stale-image-file").write_text("not captured")
+    declaration = {"root": str(start.root), "sha256": start.sha256}
+    warm.restore_workspace(declaration, workspace)
+    assert not (workspace / "stale-image-file").exists()
+    assert (workspace / "candidate").read_text() == "retained candidate"
+    assert (workspace / "candidate").stat().st_mode & 0o777 == 0o600
+    with pytest.raises(ValueError, match="already prepared"):
+        warm.restore_workspace(declaration, workspace)
+    assert workspace.with_name("workspace.before-checkpoint").is_dir()
+
+
+def test_staging_preserves_sealed_modes(point, monkeypatch, tmp_path):
+    start, workspace = point
+    control = tmp_path / "control"
+    control.mkdir()
+    monkeypatch.setattr(warm, "_CONTROL", str(control))
+    commands = []
+    class Environment:
+        async def upload_dir(self, source, target):
+            shutil.copytree(source, target)
+        async def upload_file(self, source, target):
+            shutil.copyfile(source, target)
+        async def exec(self, command, **kwargs):
+            commands.append(command)
+            return SimpleNamespace(return_code=0)
+    asyncio.run(start.stage(Environment(), str(workspace)))
+    assert "chmod -R" not in commands[0]
+    effect_runtime_result("runtime.checkpoint_artifacts", {"action": "verify", "root": str(control / "restored-point"),
+        "expected_sha256": start.sha256})
+    declaration = json.loads((control / "warm-start.json").read_bytes())
+    assert declaration["deadline_epoch"] == start.deadline_epoch
+
+
+def test_normal_cadence_requires_accepted_current_replan_and_is_applied_once(tmp_path, monkeypatch):
+    from benchmark.runtime import checkpoint_continuation, worker
+    declaration = tmp_path / "warm.json"
+    declaration.write_text(json.dumps({"sha256": "a" * 64, "normal_cadence": 6,
+                                       "goal_id": "current", "agent_id": "receiver"}))
+    env = {"LOOPX_WARM_START": str(declaration), "LOOPX_GOAL_ID": "current",
+           "LOOPX_AGENT_ID": "receiver", "LOOPX_PROJECT": str(tmp_path)}
+    monkeypatch.setattr(worker, "loopx_command", lambda env: ["loopx"])
+    gate = {"capture_allowed": False, "checkpoint_sha256": "a" * 64}
+    monkeypatch.setattr(checkpoint_continuation, "restored_capture_gate", lambda env: gate)
+    calls = []
+    def configure(command, **kwargs):
+        calls.append(command)
+        return '{"ok": true}'
+    monkeypatch.setattr("subprocess.check_output", configure)
+    assert warm.finish_preparation(env) == {"preparation_complete": False}
+    assert not calls
+    gate.update(capture_allowed=True, review_turn_id="accepted-current-replan")
+    assert warm.finish_preparation(env)["preparation_complete"]
+    assert warm.finish_preparation(env)["normal_cadence"] == 6
+    assert len(calls) == 1
+    with pytest.raises(ValueError, match="lineage"):
+        warm.finish_preparation({**env, "LOOPX_AGENT_ID": "another-agent"})

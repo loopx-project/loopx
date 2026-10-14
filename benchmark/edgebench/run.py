@@ -123,6 +123,13 @@ def main(argv=None):
                         help="Host-private native checkpoint controller; requires full fresh-replan handoff")
     parser.add_argument("--checkpoint-request", type=Path,
                         help="Explicit host JSON declaration staged into a heartbeat worker; omitted disables capture")
+    parser.add_argument("--restore-checkpoint", type=Path,
+                        help="Explicit complete checkpoint to continue under fresh native/Goal identities")
+    parser.add_argument("--restore-sha256")
+    parser.add_argument("--restore-config", type=Path)
+    parser.add_argument("--restore-goal")
+    parser.add_argument("--restore-agent")
+    parser.add_argument("--restore-source-todo")
     parser.add_argument("--eval-interval", type=int,
                         help="Native default: 0 (no periodic evaluation); other modes use task defaults; explicit 0 disables")
     parser.add_argument("--submission-cooldown", type=int,
@@ -155,6 +162,12 @@ def main(argv=None):
     handoff = checkpoint_request is not None and declaration.get("controller_handoff", False)
     if bool(args.checkpoint_controller_file) != handoff or (handoff and args.feedback != "native"):
         parser.error("controller file and full controller_handoff must be enabled together with native feedback")
+    restore_values = (args.restore_sha256, args.restore_config, args.restore_goal,
+                      args.restore_agent, args.restore_source_todo)
+    if bool(args.restore_checkpoint) != all(restore_values) or (not args.restore_checkpoint and any(restore_values)):
+        parser.error("Warm continuation requires checkpoint, digest, config, fresh Goal/Agent and source Todo together")
+    if args.restore_checkpoint and (not handoff or args.eval_interval != 0 or args.replan_after_todos is not None):
+        parser.error("Warm continuation requires full native checkpoint capture, no periodic evaluation and effective-Turn cadence")
     # One directory is one attempt: never reuse native registration or overwrite
     # source/profile evidence after an ambiguous launch.
     trial = args.log_dir / "runs" / args.run_id / args.task
@@ -200,7 +213,29 @@ def main(argv=None):
             "HTTPS_PROXY": args.api_proxy_url, "HTTP_PROXY": args.api_proxy_url,
             "NO_PROXY": f"localhost,127.0.0.1,{urlsplit(args.judge_url).hostname}",
         }
+    warm_start = None
+    restored_registration = None
+    if args.restore_checkpoint is not None:
+        from benchmark.runtime.sforge_warm_start import WarmStart
+        from benchmark.edgebench.checkpoint_controller import restore
+        from loopx.control_plane.effect_runtime import effect_runtime_result
+        # The native API version is a required provider prerequisite. Do not
+        # cold-register if an installed provider cannot continue the checkpoint.
+        from sforge.harness.restored_registration import RestoredRegistration
+        effect_runtime_result("runtime.checkpoint_artifacts", {
+            "action": "verify", "root": str(args.restore_checkpoint), "expected_sha256": args.restore_sha256})
+        metadata = json.loads((args.restore_checkpoint / "checkpoint.json").read_bytes())["point_metadata"]
+        snapshot = metadata["worker_file_snapshot"]
+        capsule = args.restore_checkpoint / "components" / snapshot["native_capsule_component_id"]
+        clock = trial / "restored-phase-deadline"
+        # Validate session/workspace participants before native registration.
+        candidate = WarmStart(args.restore_checkpoint, args.restore_sha256, args.restore_config,
+            args.restore_goal, args.restore_agent, args.restore_source_todo,
+            int(time.time()) + args.timeout, args.replan_after_turns or 6)
+        candidate.verify(task.cwd)
+        warm_start = candidate
     agent = SForgeWorker(config, profile=args.worker, cwd=task.cwd,
+                         warm_start=warm_start,
                          timeout_seconds=args.timeout, feedback_prompt=feedback_prompt, feedback=args.feedback,
                          workspace_instructions=workspace_instructions,
                          task_objective=task_objective,
@@ -240,6 +275,19 @@ def main(argv=None):
     for image in (task.work_image_key, task.judge_image_key):
         if not backend.image_exists(image):
             raise RuntimeError(f"Missing native image: {image}")
+    if warm_start is not None:
+        activated = restore(args.checkpoint_controller_file, root=capsule,
+            expected_sha256=snapshot["native_capsule_sha256"], run_id=args.run_id,
+            phase_deadline_file=clock)
+        epoch = int(clock.read_text())
+        warm_start = WarmStart(candidate.root, candidate.sha256, candidate.config,
+            candidate.goal_id, candidate.agent_id, candidate.source_todo_id, epoch, candidate.normal_cadence)
+        reference = json.loads((capsule / "checkpoint.json").read_bytes())["point_metadata"]["native_reference"]
+        restored_registration = RestoredRegistration(reference["checkpoint_id"],
+            reference["manifest_sha256"], epoch, capsule / "components/native_judge/manifest.json")
+        # Deliberately do not persist activation credentials in the public run receipt.
+        del activated
+        agent.warm_start = warm_start
     receipt = {
         "run_id": args.run_id, "task": args.task, "worker": args.worker,
         "task_entry": agent.task_entry,
@@ -252,6 +300,10 @@ def main(argv=None):
         "feedback": args.feedback, "internet": task.internet,
         "eval_interval": args.eval_interval, "submission_cooldown": args.submission_cooldown,
         "status": "starting", "score_countable": False,
+        **({"restored_checkpoint_sha256": warm_start.sha256,
+            "original_deadline_epoch": warm_start.deadline_epoch,
+            "receiver_preparation_cadence": 1, "normal_replan_cadence": warm_start.normal_cadence}
+           if warm_start is not None else {}),
         **({"online_admission_epoch": sampler.epoch, "offline_scoring_complete": False}
            if sampler is not None else {}),
         **({"feedback_payload": FEEDBACK_PAYLOAD, "evaluator": sampler.evaluators[args.task]}
@@ -270,10 +322,11 @@ def main(argv=None):
     try:
         result, was_interrupted, elapsed = _observe_run(lambda: run_agent(
             task_spec=task, agent=agent, config=config, backend=backend,
-            run_id=args.run_id, model=args.model, timeout=args.timeout,
+            run_id=args.run_id, model=args.model, timeout=None if warm_start else args.timeout,
             judge_url=args.judge_url, eval_interval=args.eval_interval,
             submission_cooldown=args.submission_cooldown, internet=task.internet,
-            disable_auto_eval=args.feedback == "best-only",
+            disable_auto_eval=args.feedback == "best-only" or warm_start is not None,
+            **({"restored_registration": restored_registration} if restored_registration is not None else {}),
             disable_stop_hook=False, disable_auto_resume=agent.resume_cmd is None,
             max_submissions=0 if args.feedback != "native" else None,
         ))

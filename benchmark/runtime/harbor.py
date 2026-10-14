@@ -64,6 +64,9 @@ class BenchmarkCodex(CodexOffline):
         planning_timeout_sec=300,
         turn_envelope=False,
         task_objective=None,
+        goal_id=_GOAL_ID,
+        agent_id=_AGENT_ID,
+        defer_codex_home=False,
         **kwargs,
     ):
         if isinstance(validation_command, str):
@@ -109,6 +112,8 @@ class BenchmarkCodex(CodexOffline):
                 raise ValueError("checkpoint_request_path requires a settled-work worker")
             from .checkpoint import normalize_checkpoint_request_path
             self.checkpoint_request_path = normalize_checkpoint_request_path(checkpoint_request_path)
+        self.goal_id, self.agent_id = goal_id, agent_id
+        self.defer_codex_home = defer_codex_home
         self._task_path = "/usr/local/bin:/usr/bin:/bin"
         self._phase_number = 0
         self._seeded_todo_id: str | None = None
@@ -220,7 +225,7 @@ class BenchmarkCodex(CodexOffline):
                 f"mkdir -p {_SRC} {_PYTHON} {_NODE} {_PROFILE_HOME} "
                 f"{_SHARED_CODEX_HOME} {_PROFILE}/bin {_PROFILE}/releases {_PROFILE}/man "
                 f"{_CONTROL} "
-                f"{_LOOPX_RUNTIME} {_CODEX_HOME} "
+                f"{_LOOPX_RUNTIME} {'' if self.defer_codex_home else _CODEX_HOME} "
                 f"{_WAKE_LOG_DIR}; chmod -R 0777 {_ROOT} {_WAKE_LOG_DIR}"
             ),
             timeout_sec=180,
@@ -240,12 +245,12 @@ class BenchmarkCodex(CodexOffline):
                 # as the environment user; the archive is extracted by root.
                 f"chown -R {shlex.quote(str(environment.default_user or 'root'))} {_SRC}; "
                 f"chmod -R a+rX {_SRC} {_PYTHON} {_NODE}; "
-                f"chmod -R a+rwX {_PROFILE} {_CONTROL} {_CODEX_HOME} {_WAKE_LOG_DIR}"
+                f"chmod -R a+rwX {_PROFILE} {_CONTROL} {'' if self.defer_codex_home else _CODEX_HOME} {_WAKE_LOG_DIR}"
             ),
             timeout_sec=300,
         )
         auth_path = self._get_env("CODEX_AUTH_JSON_PATH")
-        if auth_path:
+        if auth_path and not self.defer_codex_home:
             await environment.upload_file(
                 Path(auth_path).resolve(), f"{_CODEX_HOME}/auth.json"
             )
@@ -398,7 +403,7 @@ class BenchmarkCodex(CodexOffline):
                     "--project",
                     ".",
                     "--goal-id",
-                    _GOAL_ID,
+                    self.goal_id,
                     "--objective",
                     self.task_objective,
                     "--goal-doc",
@@ -418,9 +423,9 @@ class BenchmarkCodex(CodexOffline):
                 [
                     "configure-goal",
                     "--goal-id",
-                    _GOAL_ID,
+                    self.goal_id,
                     "--registered-agent",
-                    _AGENT_ID,
+                    self.agent_id,
                     "--boundary-authority-scope",
                     "**",
                     "--boundary-authority-source",
@@ -431,7 +436,7 @@ class BenchmarkCodex(CodexOffline):
                     str(expected),
                     *stride_args,
                     "--agent-work-mode",
-                    f"{_AGENT_ID}=active",
+                    f"{self.agent_id}=active",
                     "--execute",
                 ],
                 cwd=cwd,
@@ -443,7 +448,7 @@ class BenchmarkCodex(CodexOffline):
                 [
                     "configure-goal",
                     "--goal-id",
-                    _GOAL_ID,
+                    self.goal_id,
                     option,
                     str(expected),
                     *stride_args,
@@ -456,7 +461,7 @@ class BenchmarkCodex(CodexOffline):
             await self._seed_phase(environment, cwd=cwd)
 
         cadence = await self._loopx(
-            environment, ["configure-goal", "--goal-id", _GOAL_ID], cwd=cwd,
+            environment, ["configure-goal", "--goal-id", self.goal_id], cwd=cwd,
         )
         configured_state = cadence.get("after") or cadence.get("before") or {}
         configured = configured_state.get("execution_profile", {}).get(key)
@@ -478,18 +483,18 @@ class BenchmarkCodex(CodexOffline):
         )
         if self._seeded_todo_id:
             listed = await self._loopx(environment, [
-                "todo", "list", "--goal-id", _GOAL_ID, "--role", "agent",
+                "todo", "list", "--goal-id", self.goal_id, "--role", "agent",
                 "--todo-id", self._seeded_todo_id,
             ], cwd=cwd)
             current = listed["todo"]
             if current and current.get("status") in {"open", "blocked"}:
-                if current.get("claimed_by") != _AGENT_ID:
+                if current.get("claimed_by") != self.agent_id:
                     raise RuntimeError("Seeded task Todo is no longer owned by this agent")
                 # New phase input revises our still-live generic task; do not
                 # strand it behind an unfinished predecessor or clear a wait.
                 await self._loopx(environment, [
-                    "todo", "update", "--goal-id", _GOAL_ID,
-                    "--todo-id", self._seeded_todo_id, "--agent-id", _AGENT_ID,
+                    "todo", "update", "--goal-id", self.goal_id,
+                    "--todo-id", self._seeded_todo_id, "--agent-id", self.agent_id,
                     "--text", text, "--execute",
                 ], cwd=cwd)
                 return
@@ -499,7 +504,7 @@ class BenchmarkCodex(CodexOffline):
                 "todo",
                 "add",
                 "--goal-id",
-                _GOAL_ID,
+                self.goal_id,
                 "--role",
                 "agent",
                 "--text",
@@ -509,7 +514,7 @@ class BenchmarkCodex(CodexOffline):
                 "--action-kind",
                 "benchmark_task",
                 "--claimed-by",
-                _AGENT_ID,
+                self.agent_id,
                 "--status",
                 "open",
                 "--execute",
@@ -528,8 +533,8 @@ class BenchmarkCodex(CodexOffline):
                 "LOOPX_CLI": _CLI,
                 "LOOPX_REGISTRY": _REGISTRY,
                 "LOOPX_RUNTIME_ROOT": _LOOPX_RUNTIME,
-                "LOOPX_GOAL_ID": _GOAL_ID,
-                "LOOPX_AGENT_ID": _AGENT_ID,
+                "LOOPX_GOAL_ID": self.goal_id,
+                "LOOPX_AGENT_ID": self.agent_id,
                 "LOOPX_PROJECT": cwd,
                 "LOOPX_TASK_DOC": self._task_document,
                 "LOOPX_WAKE_LOG_DIR": _WAKE_LOG_DIR,

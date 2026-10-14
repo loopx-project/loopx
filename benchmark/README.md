@@ -811,3 +811,35 @@ fixture，原生 CLI、worker、supervisor、SQLite 和 capsule transport 使用
 frontend restore 旅程仍须另行验收。新运行省略
 controller 文件及 handoff 开关即可关闭；移除 checkpoint 请求关闭全部捕获，
 已有产物保持惰性。
+
+### Explicit warm worker composition (qualification in progress)
+
+The native heartbeat launcher accepts a complete point through
+`--restore-checkpoint POINT --restore-sha256 SHA --restore-config CONFIG
+--restore-goal NEW_GOAL --restore-agent NEW_AGENT --restore-source-todo SOURCE_TODO`.
+All six inputs are required together. Keep the existing native
+`--eval-interval 0`, full `--capture-before-replan` handoff and
+`--checkpoint-controller-file` configuration. The native provider must expose
+`RestoredRegistration`; an older provider fails instead of cold-registering.
+
+This adapter composes existing artifact, Codex session, Todo-continuation and
+native-judge owners. It preserves the captured workspace and effective Codex
+configuration, admits a distinct native session and fresh Goal/Agent, and adopts
+retained research as evidence on a current preparation Todo. Historical registry,
+claims, leases and settlement records are not installed as current authority.
+Fresh credentials come from the ordinary runner credential source. The native
+activation's absolute deadline includes receiver installation and preparation;
+restarting the entry cannot grant another full budget or submission allowance.
+
+Both comparison arms first settle actual preparation at cadence one and consume
+the retained decision through a current semantic replan. The existing joint
+continuation gate must accept that replan before the declared normal cadence
+returns. Preparation and context-reading cost belong in the comparison. Omit all
+restore flags for the unchanged cold entry; never reuse an ambiguous trial
+folder as a new attempt.
+
+The adapter is still undergoing installed-worker qualification. Artifact/session
+admission or preparation alone does **not** qualify a research continuation,
+matched strategy result, or the frontend restore journey. The decisive remaining
+check is the ordinary installed worker's current preparation and replan followed
+by useful work and native feedback under the original remaining allowance.
