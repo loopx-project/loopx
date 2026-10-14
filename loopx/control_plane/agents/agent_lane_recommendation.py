@@ -496,6 +496,11 @@ def build_agent_lane_next_action(
                 if not claimed_by:
                     payload["claim_required_before_work"] = True
                 return payload
+            # The scoped gate selector is authoritative for this crossing. A
+            # ready deferred successor intentionally yields no delivery action
+            # so the frontier can project successor_replan_required. Falling
+            # through here could reselect the exact Todo covered by the gate.
+            return None
 
     candidate_sources: list[tuple[str, list[Any]]] = []
     # An empty projected list is authoritative; falling back would bypass the gate.
