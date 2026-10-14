@@ -1337,6 +1337,16 @@ export async function executeCoordinationTodoTerminalLifecycle(
         }
       }
     }
+    if (replay?.reason_code === "coordination_operation_identity_mismatch" &&
+        normalized.operation_identity.kind === "completion_turn" &&
+        !normalized.requested_no_followup && normalized.defer_no_followup !== true) {
+      // The derived checkpoint phase disappears after settlement. Recover only
+      // the exact original RESULT request for an ordinary continuation; every
+      // supplied intent, actor, lease, read identity and validation stays bound.
+      const originalInput = {...input, defer_no_followup: true};
+      const original = await terminalReceipt(originalInput, terminalRequestSha(originalInput)).read(store);
+      if (original?.status === "replayed") return original;
+    }
     if (replay !== null) return replay;
     if (normalized.operation_identity.kind === "completion_turn" && normalized.requested_no_followup && normalized.defer_no_followup !== true) {
       // Older adapters used the ordinary id for an already accepted closeout.
