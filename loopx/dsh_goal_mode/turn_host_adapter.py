@@ -58,6 +58,7 @@ from ..control_plane.turn_driver.host_binding import (
     dsh_output_token_budget,
 )
 from ..control_plane.turn_driver.host_failure import BuiltInHostError
+from ..entrypoint import pin_utf8_stdio
 
 from .host_failure_map import classify_dsh_failure, classify_dsh_terminal_reason
 
@@ -598,6 +599,12 @@ def run_dsh_host(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    if argv is None:
+        # This is the stdio transport LoopX (or another host) starts as a
+        # subprocess; the raw streams carry UTF-8 JSON, so they must not use the
+        # host locale codec. Explicit-argv callers embed the adapter in their own
+        # process and keep their own streams.
+        pin_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--provider",

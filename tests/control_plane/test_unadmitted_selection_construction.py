@@ -13,6 +13,10 @@ from loopx.control_plane.work_items import interaction_contract
 from loopx.control_plane.effect_program import interpret_quota_should_run_packet
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+from loopx.control_plane.scheduler.execution_context import (
+    resolve_scheduler_execution_context,
+    scheduler_execution_context_for_runtime_profile,
+)
 from loopx.control_plane.work_items.action_selection_contract import (
     action_selection_needs_recovery,
     action_selection_context,
@@ -32,6 +36,47 @@ def _source(state: str) -> dict:
             "recovery_action": "reenter_guard_without_selection",
         },
     }
+
+
+@pytest.mark.parametrize("state", ["deferred", "rejected"])
+@pytest.mark.parametrize(
+    ("scheduler_context", "expected_profile"),
+    [
+        pytest.param(None, None, id="omitted"),
+        pytest.param(resolve_scheduler_execution_context(None), None, id="unresolved"),
+        pytest.param(
+            scheduler_execution_context_for_runtime_profile("generic_cli"),
+            "generic_cli",
+            id="declared",
+        ),
+    ],
+)
+def test_refused_selection_recovery_preserves_optional_scheduler_context(
+    state, scheduler_context, expected_profile,
+):
+    contract = interaction_contract.build_interaction_contract(
+        _source(state), scheduler_execution_context=scheduler_context,
+        turn_instance_id="selection-turn", runtime_root="fixture runtime",
+        registry_path="fixture registry.json", available_capabilities=["shell"],
+    )
+    assert contract["agent_channel"]["must_attempt"] is False
+    assert contract["agent_channel"]["delivery_allowed"] is False
+    assert contract["cli_channel"]["spend_allowed_now"] is False
+    assert contract["cli_channel"]["spend_after_validation"] is False
+    [command] = contract["cli_channel"]["next_cli_actions"]
+    assert contract["agent_channel"]["primary_action"] == command
+    argv = shlex.split(command)
+    for flag, expected in {
+        "--registry": "fixture registry.json", "--runtime-root": "fixture runtime",
+        "--goal-id": "selection-fixture", "--agent-id": "fixture-agent",
+        "--turn-instance-id": "selection-turn", "--available-capability": "shell",
+    }.items():
+        assert argv[argv.index(flag) + 1] == expected
+    assert "--todo-id" not in argv and "--replan-obligation-id" not in argv
+    if expected_profile is None:
+        assert "--runtime-profile" not in argv
+    else:
+        assert argv[argv.index("--runtime-profile") + 1] == expected_profile
 
 
 @pytest.mark.parametrize("state", ["deferred", "rejected"])

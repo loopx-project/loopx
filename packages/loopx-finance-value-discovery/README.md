@@ -617,3 +617,61 @@ old arithmetic/research inputs and refuses this new wrapper.
 复用同一发布引用。预测、声明已实现、费用未知及来源版本/时钟分开；不补零、
 不虚构概率，不据展示授予交易或金融准入。卡片只准备，不发送；错引用、
 已关闭或旧 revision 拒绝，恢复后按原 hash 重新读取。
+
+
+### Quantity stocks and signed flows (candidate 0.8.15)
+
+`assess-quantity` compares **opening stock + declared increases − declared
+decreases = closing stock** within one source artifact, instrument/class and
+ownership pool. Its unit is a quantity (`share`, `native_contract` or `item`)
+plus a scale; it never borrows the cash contract's `currency` field.
+
+```bash
+loopx-finance-value-discovery assess-quantity \
+  --input-json packages/loopx-finance-value-discovery/examples/quantity-reconciliation-v1.json
+# Installed extension/provider stdin uses the same schema and owner.
+loopx-finance-value-discovery < quantity-reconciliation-v1.json
+```
+
+The example explicitly declares a single pool, exact producer accuracy, complete
+two-flow coverage and source-row order: opening 100, increase 25, decrease 8,
+closing 117. These are synthetic declarations, not authenticated ownership.
+Each stock/flow carries its evidence reference, source digest/capture clock,
+identity, quantity unit/scale, value/accuracy and source ordinal. Flows also
+carry an explicit `increase` or `decrease`; a transaction code alone never
+selects a sign. The original input is retained in `operands`.
+
+Only compatible, ordered, unique and completely covered operands with
+producer-declared exact accuracy can return `quantity_reconciled=true`. Missing
+opening is retained; it is never inferred by subtracting flows from closing.
+Missing flow/value/direction/coverage yields an incomplete assessment. Unknown
+pool, class, version, unit, source or precision withholds a reconciled result.
+A different class/pool/unit/scale/source digest, repeated flow reference or
+invalid ordinal window also prevents combination. Finite decimals do not become
+exact because an integer was displayed. A mismatching exact closing balance is
+a conflict. Loaded zero and an explicitly covered zero-flow interval are valid.
+
+Candidate lexical arithmetic can be retained when accuracy or other evidence
+remains unproven, but the qualified result stays null. Quantities are at the
+same declared scale; there is no unit/class/rights conversion. Two reporting
+persons do not multiply a transaction: the source consumer must supply unique
+flow refs and establish the actual ownership scope. Source row order and
+capture clocks do not certify event time, earliest publication or PIT.
+
+This is the optional provider's CLI/stdin computation stage. Source adapters
+retain extraction, pool and coverage interpretation. Disable the isolated
+Finance node through `loopx extension disable loopx-finance-value-discovery
+--state-file <isolated-state> --execute`; a disabled native invocation refuses.
+An explicitly called local binary is separate from native activation. Preserve
+the previous revision and use the existing extension rollback/upgrade commands
+for controlled recovery. No default node or account is activated by this API.
+
+The existing numeric-accuracy owner now also supplies bounded Decimal parsing;
+legacy cash/stock commands retain their input and error contracts. This stage
+does not add an App/Lark quantity journey, automatic source interpretation,
+source authentication, cash, financial admission or trading permission. Those
+consumer/presentation and adoption boundaries remain separately qualified.
+
+份额/合约数与货币分别建模，同类别与同持有池的数量核对不推导现金或交易权限。
+opening、覆盖、付收方向或精度未知时保留未知，不反推、不补零。合成示例通过
+只证明声明下的词法算术；来源认证、PIT、界面/卡片与实际采用另行验收。

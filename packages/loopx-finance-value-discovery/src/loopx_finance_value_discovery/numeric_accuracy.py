@@ -24,6 +24,19 @@ class NumericAccuracyState(StrEnum):
     SIGNIFICANT_DIGITS_DECLARED = "significant_digits_declared"
 
 
+def bounded_decimal(
+    value: Any, declaration: Any, *, label: str = "number"
+) -> tuple[Decimal, dict[str, Any]]:
+    """Reuse numeric accuracy and the bounded arithmetic operand contract."""
+    if not isinstance(value, str) or len(value) > 128:
+        raise ValueError(f"{label} requires a bounded finite numeric string")
+    assessment = assess_numeric_accuracy(value, declaration)
+    number = Decimal(value)
+    if abs(number.adjusted()) > 64 or abs(number.as_tuple().exponent) > 64:
+        raise ValueError(f"{label} is outside the bounded decimal range")
+    return number, assessment
+
+
 def assess_numeric_accuracy(
     value: str, declaration: Mapping[str, str | None] | None
 ) -> dict[str, Any]:
