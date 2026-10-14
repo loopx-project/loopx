@@ -182,3 +182,45 @@ def test_overlay_workspace_backup_survives_cross_device_rename(point, monkeypatc
     assert (backup / "image-only").read_text() == "original image"
     assert not (workspace / "image-only").exists()
     assert (workspace / "candidate").read_text() == "retained candidate"
+
+
+@pytest.mark.parametrize("existing", ["none", "run", "attempt"])
+def test_warm_launcher_reserves_host_attempt_without_preempting_native_run(tmp_path, monkeypatch, existing):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.edgebench import run as entry
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps({"destination": "/logs/agent/checkpoints", "point_metadata": {},
+        "components": [{"id": "code", "source_path": "/task"}], "trigger": "fresh_replan",
+        "native_session": True, "loopx_state": True, "evaluation_opportunity": True,
+        "controller_handoff": True}))
+    native_run = tmp_path / "runs" / "receiver"
+    attempt = tmp_path / ".warm-attempts" / "receiver"
+    if existing != "none":
+        folder = native_run if existing == "run" else attempt
+        folder.mkdir(parents=True)
+        (folder / "retained").write_text("original")
+    monkeypatch.setenv("LOOPX_SRC_DIR", str(tmp_path))
+    monkeypatch.setenv("LOOPX_EXPECTED_COMMIT", "unused")
+    class AdmissionBoundary(Exception):
+        pass
+    def at_source_check(*args):
+        assert attempt.is_dir() and not native_run.exists()
+        raise AdmissionBoundary()
+    monkeypatch.setattr(entry, "source_pins", at_source_check)
+    argv = ["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
+        "--run-id", "receiver", "--worker", "heartbeat-explore", "--model", "fixture", "--effort", "high",
+        "--judge-url", "http://localhost:1", "--checkpoint-request", str(request),
+        "--checkpoint-controller-file", str(tmp_path / "controller.json"),
+        "--restore-checkpoint", str(tmp_path / "point"), "--restore-sha256", "a" * 64,
+        "--restore-config", str(tmp_path / "config.toml"), "--restore-goal", "new-goal",
+        "--restore-agent", "new-agent", "--restore-source-todo", "source-todo"]
+    with pytest.raises(AdmissionBoundary if existing == "none" else FileExistsError):
+        entry.main(argv)
+    if existing != "none":
+        assert (folder / "retained").read_text() == "original"
+    else:
+        # An interrupted/uncertain attempt cannot silently obtain another budget.
+        with pytest.raises(FileExistsError):
+            entry.main(argv)
+        assert not native_run.exists()

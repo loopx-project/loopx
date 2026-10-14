@@ -171,7 +171,15 @@ def main(argv=None):
     # One directory is one attempt: never reuse native registration or overwrite
     # source/profile evidence after an ambiguous launch.
     trial = args.log_dir / "runs" / args.run_id / args.task
-    trial.mkdir(parents=True, exist_ok=False)
+    if args.restore_checkpoint is None:
+        trial.mkdir(parents=True, exist_ok=False)
+    else:
+        # Native restore exclusively reserves runs/<run_id>. Host launch state
+        # must not create that directory before admission, including its clock.
+        if trial.parent.exists():
+            raise FileExistsError("Warm destination run already exists")
+        attempt = args.log_dir / ".warm-attempts" / args.run_id
+        attempt.mkdir(mode=0o700, parents=True, exist_ok=False)
     product = Path(os.environ["LOOPX_SRC_DIR"]).resolve()
     runner = Path(os.environ.get("LOOPX_RUNNER_SRC_DIR", str(product))).resolve()
     pins = source_pins(product, runner, os.environ["LOOPX_EXPECTED_COMMIT"],
@@ -227,7 +235,7 @@ def main(argv=None):
         metadata = json.loads((args.restore_checkpoint / "checkpoint.json").read_bytes())["point_metadata"]
         snapshot = metadata["worker_file_snapshot"]
         capsule = args.restore_checkpoint / "components" / snapshot["native_capsule_component_id"]
-        clock = trial / "restored-phase-deadline"
+        clock = attempt / "restored-phase-deadline"
         # Validate session/workspace participants before native registration.
         candidate = WarmStart(args.restore_checkpoint, args.restore_sha256, args.restore_config,
             args.restore_goal, args.restore_agent, args.restore_source_todo,
@@ -285,6 +293,8 @@ def main(argv=None):
         reference = json.loads((capsule / "checkpoint.json").read_bytes())["point_metadata"]["native_reference"]
         restored_registration = RestoredRegistration(reference["checkpoint_id"],
             reference["manifest_sha256"], epoch, capsule / "components/native_judge/manifest.json")
+        # The native owner may already have materialized preserved submissions.
+        trial.mkdir(parents=True, exist_ok=True)
         # Deliberately do not persist activation credentials in the public run receipt.
         del activated
         agent.warm_start = warm_start
