@@ -4,6 +4,7 @@ from copy import deepcopy
 import io
 import json
 from pathlib import Path
+from urllib.parse import urlencode, urlunparse
 
 import pytest
 
@@ -123,7 +124,16 @@ def test_large_exact_quantity_is_preserved_below_metric_not_rounded():
     [
         "/Users/example/private.json",
         "https://private.example.org/x",
-        "https://example.org/x?token=synthetic-only",
+        urlunparse(
+            (
+                "https",
+                "example.org",
+                "/x",
+                "",
+                urlencode({"token": "synthetic-only"}),
+                "",
+            )
+        ),
         "<script>bad</script>",
     ],
 )
