@@ -396,11 +396,20 @@ class SForgeWorker(CodexAgent):
         env["CODEX_HOME"] = _CODEX_HOME
         result = asyncio.run(self.environment.exec(
             f"{_PYTHON}/bin/python3 -m benchmark.runtime.sforge_warm_start {action} "
-            f"--declaration {_CONTROL}/warm-start.json", env=env, user=user))
+            f"--declaration {_CONTROL}/warm-start.json"
+            + (f" > {_CONTROL}/checkpoint-context.json" if action == "context" else ""),
+            env=env, user=user))
         if result.return_code:
             raise RuntimeError("Checkpoint receiver " + action + " failed: " + result.stdout[-2000:])
         if action == "context":
-            (self.log_dir / "checkpoint-context.json").write_text(result.stdout)
+            # The transport combines stderr with stdout; native CLI diagnostics
+            # must not corrupt the machine-readable receipt.
+            receipt = asyncio.run(self.environment.exec(
+                f"cat {_CONTROL}/checkpoint-context.json", env=env, user=user))
+            if receipt.return_code:
+                raise RuntimeError("Checkpoint context receipt is unavailable")
+            value = json.loads(receipt.stdout)
+            (self.log_dir / "checkpoint-context.json").write_text(json.dumps(value))
 
     def _install_workspace_instructions(self):
         """Preserve task instructions and verify the policy before model entry."""
