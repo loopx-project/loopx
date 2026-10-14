@@ -180,7 +180,7 @@ capability 包直接采用现有 `extension.toml` 契约，不做扩展。唯一
 | 无 Node 的仅内核安装 | 无 Node 的 runner 上 package-smoke：`pip install loopx-core && loopx --help && loopx status --format json` | 退出码 0 | 不含有副作用命令 |
 | 无 Node 的有副作用命令类型化失败 | 同一 runner：`loopx heartbeat-prompt ...` | `node_unavailable` 诊断，非零退出 | — |
 | 缺失 capability 包 = off state | 仅安装 `loopx-core`；`loopx capability list` | capability 报告不可用，核心命令不受影响 | — |
-| 无内核真相重复 | import 边界测试 + 审查 `packages/*/src` 是否 import 内核私有模块 | 零违规 | 与现状一致，仅静态 import |
+| 无内核真相重复 | import 边界测试 + `tests/architecture/test_package_kernel_import_ratchet.py`（钉住 `packages/*/src` 下每一个 `loopx.*` import） | 不新增包 → 内核 import；退役的边必须在同一 PR 降低 pin | 仅静态 import；3 个包（`loopx-ark-turn`、`loopx-finance-value-discovery`、`loopx-jev`）现存 13 条边仍被钉住，“零”是目标而非实测状态 |
 | meta-package 一致性 | `pip install loopx` 后跑现有完整 smoke | 与拆分前 smoke 一致 | — |
 
 以上确定性一致性行是每个里程碑的必需项；本 RFC 不做任何实机 qualification 或性能主张。
@@ -229,6 +229,20 @@ capability 包直接采用现有 `extension.toml` 契约，不做扩展。唯一
 - **证据：** 与附录 C E1–E3 相同命令；测得漂移为 `loopx/*.py` 143 → 148、`loopx/chat_*.py` 37 → 38、capability → `control_plane` 的 import 74 → 80、`loopx/*.py` 行数 7.88 万 → 7.98 万。内核侧 capability import 数（E2，52 处）与 `packages/` 数量（9）未变。
 - **已知缺口：** 全部里程碑；D1–D4 仍为未决。
 - **对规范性设计的影响：** 第 2、5 节的预算数字跟随新基线；"随时间只降不升"的决策不变。
+
+### 2026-10-14 — 包 → 内核 import 钉住
+
+- **基线：** `70bc98198`。
+- **交付：** `tests/architecture/test_package_kernel_import_ratchet.py` 与
+  `package_kernel_import_pins.json` 钉住三个 co-located 包今天 import 的 13 个
+  `loopx.*` 模块。新增一条边即失败；移除一条边必须在同一 PR 降低 pin。
+- **证据：** 对 `packages/*/src/**/*.py` 做 AST 扫描，包含函数体内 import。
+  `loopx-ark-turn` import 了 `file_lock` 与 `control_plane.turn_driver.host_candidate`
+  却未声明 `loopx` 依赖；`loopx-jev` import 了 7 个 `control_plane`/`capabilities`
+  模块；`loopx-finance-value-discovery` import 了 2 个 `extensions` 模块。
+- **已知缺口：** 第 9 节该行仍以零违规为目标；被钉住的边是 M4/M5 的迁移积压，
+  不是被认可的接口。D1–D4 仍未决。
+- **对规范设计的影响：** 无；该行的证据列从人工审查改为可执行检查。
 
 ## 附录 B：决策日志
 

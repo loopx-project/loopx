@@ -269,7 +269,7 @@ changes.
 | Kernel-only install without Node | package-smoke lane on a runner without Node: `pip install loopx-core && loopx --help && loopx status --format json` | exit 0 | Effectful commands excluded |
 | Effectful command without Node fails typed | same runner: `loopx heartbeat-prompt ...` | `node_unavailable` diagnostic, exit non-zero | — |
 | Absent capability package = off state | install `loopx-core` only; `loopx capability list` | capability reported unavailable, core commands unaffected | — |
-| No kernel truth duplicated | import-boundary tests + review of `packages/*/src` for kernel-private imports | zero violations | Static imports only, as today |
+| No kernel truth duplicated | import-boundary tests + `tests/architecture/test_package_kernel_import_ratchet.py` (pins every `loopx.*` import under `packages/*/src`) | no new package → kernel import; a retired edge lowers the pin in the same PR | Static imports only; 13 pre-existing edges in 3 packages (`loopx-ark-turn`, `loopx-finance-value-discovery`, `loopx-jev`) remain pinned, so "zero" is a target, not the measured state |
 | Meta-package parity | `pip install loopx` then existing full smoke | identical to pre-split smoke | — |
 
 Deterministic conformance rows above are required for each milestone; no live
@@ -341,6 +341,24 @@ qualification or performance claim is made by this RFC.
 - **Known gaps:** all milestones; D1–D4 remain open.
 - **Effect on normative design:** the budget numbers in Sections 2 and 5
   follow the new base; the decision to lower the count over time is unchanged.
+
+### 2026-10-14 — Package → kernel import pin
+
+- **Baseline:** `70bc98198`.
+- **Delivered:** `tests/architecture/test_package_kernel_import_ratchet.py` and
+  `package_kernel_import_pins.json` pin the 13 `loopx.*` modules that three
+  co-located packages import today. A new edge fails; a removed edge must
+  lower the pin in the same PR.
+- **Evidence:** AST scan of `packages/*/src/**/*.py`, including function-body
+  imports. `loopx-ark-turn` imports `file_lock` and
+  `control_plane.turn_driver.host_candidate` without declaring `loopx` as a
+  dependency; `loopx-jev` imports seven `control_plane`/`capabilities`
+  modules; `loopx-finance-value-discovery` imports two `extensions` modules.
+- **Known gaps:** the Section 9 row still names zero violations as the
+  target; the pinned edges are the migration backlog for M4/M5, not a
+  sanctioned surface. D1–D4 remain open.
+- **Effect on normative design:** none; the row's evidence column now points
+  at an executable check instead of a manual review.
 
 ## Appendix B: Decision log
 
