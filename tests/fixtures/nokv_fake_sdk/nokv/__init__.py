@@ -16,13 +16,21 @@ __version__ = "0.11.0" if _SHAPE == "0.11.0" else "0.11.1"
 API_VERSION = 1
 _CURRENT_INCARNATION = "a" * 32
 
+# Keep a missing schema distinct from an SDK-declared schema in the handshake.
+# This fixture metadata does not qualify an actual distribution or backend.
+_schema = os.environ.get("LOOPX_FAKE_NOKV_PROTOCOL_SCHEMA")
+if _schema:
+    WORKSPACE_PROTOCOL_SCHEMA = _schema
+
 
 class RoutingConfig:
-    # Union of the two real wheels the helper is qualified against: the 0.11.x
-    # releases provide etcd/static, the metadata-runtimes line provides seeds.
-    @staticmethod
-    def seeds(endpoints: list[str]) -> object:
-        return ("seeds", endpoints)
+    # Independently omit the selected constructor to exercise a routing
+    # capability mismatch without removing the current publication fence.
+    if os.environ.get("LOOPX_FAKE_NOKV_RELEASE_SHAPE") != "1":
+
+        @staticmethod
+        def seeds(endpoints: list[str]) -> object:
+            return ("seeds", endpoints)
 
     @staticmethod
     def etcd(endpoints: list[str], key_prefix: str, lease_ttl_seconds: int) -> object:

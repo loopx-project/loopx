@@ -290,7 +290,17 @@ server.on("close", () => {
   })().finally(() => process.exit(0));
 });
 
+function failListenerStartup(error: Error): never {
+  const { code } = effectRuntimeErrorPayload(error);
+  const diagnosticCode = code === "io_permission_denied"
+    ? "runtime_host_permission_denied" : code;
+  failStartup(diagnosticCode,
+    `TypeScript Effect runtime could not start its loopback listener (${diagnosticCode})`);
+}
+
+server.once("error", failListenerStartup);
 server.listen(0, "127.0.0.1", async () => {
+  server.removeListener("error", failListenerStartup);
   try {
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("invalid address");
