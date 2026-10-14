@@ -50,6 +50,32 @@ def upsert_todo_metadata(
     return True
 
 
+def record_todo_mutation_actor(
+    lines: list[str],
+    update_result: dict[str, Any],
+    actor: str | None,
+) -> None:
+    """Transport accepted mutation provenance inside the held writer transaction.
+
+    Authority remains with the existing lifecycle decision. An unchanged replay
+    must not mint a new actor or advance the source timestamp.
+    """
+    if not update_result.get("changed"):
+        return
+    if actor is None:
+        return
+    match = find_todo_block(
+        lines, todo_id=update_result["todo_id"], role=update_result["role"],
+    )
+    if match is None:
+        raise RuntimeError("Authorized Todo disappeared before provenance writeback")
+    block = match[4]
+    metadata_line = metadata_line_for_todo_block(block, {"last_actor_agent_id": actor})
+    updated = upsert_todo_metadata(lines, block, metadata_line)
+    update_result["metadata_updated"] = updated or update_result["metadata_updated"]
+    update_result["last_actor_agent_id"] = actor
+
+
 def link_generated_successor_todo_ids(
     lines: list[str],
     *,
@@ -152,6 +178,7 @@ def _field_update_plan(
                     **{key: block.get(key)
                     for key in (
                         "text",
+                        "note",
                         "todo_id",
                         "status",
                         "claimed_by",
@@ -336,6 +363,7 @@ def apply_todo_update_to_lines(
     normalized_status = plan["normalized_status"]
     target_status = plan["target_status"]
     updates = plan["metadata_updates"]
+    accepted_actor = updates.pop("last_actor_agent_id", None)
     text = updates.pop("text", text)
     updated_priority = updates.pop("priority", todo_priority_label(block))
     updates.pop("title", None)
@@ -354,7 +382,7 @@ def apply_todo_update_to_lines(
         metadata_line = metadata_line_for_todo_block(block, updates)
     metadata_updated = upsert_todo_metadata(lines, block, metadata_line)
     effective_metadata = parse_todo_metadata_line(metadata_line or "") or {}
-    return serialize_todo_update_result(
+    result = serialize_todo_update_result(
         role=resolved_role, section=section, todo=block.get("text"),
         todo_id=normalized_todo_id, status=target_status, priority=updated_priority,
         status_changed=status_changed, text_changed=text_changed,
@@ -362,3 +390,5 @@ def apply_todo_update_to_lines(
         monitor_poll_transition=plan.get("monitor_poll_transition"),
         external_wait_transition=plan.get("external_wait_transition"),
     )
+    record_todo_mutation_actor(lines, result, accepted_actor)
+    return result

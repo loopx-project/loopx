@@ -17,6 +17,20 @@ function plan(intent: JsonObject = {}, source: JsonObject = todo, extra: JsonObj
       enforce_monitor_boundedness: true, items: [source, monitor, successor], ...extra}});
 }
 
+test("planning keeps lifecycle attribution, including priority display and unchanged copy", () => {
+  const source = {todo_id: "todo_attribution", role: "agent", status: "open",
+    task_class: "advancement_task", claimed_by: "agent-a", last_actor_agent_id: "agent-a",
+    text: "[P2] Retained work", note: "Retained note", evidence: "old"};
+  for (const intent of [{evidence: "new"}, {evidence: ""}, {priority: "P1"},
+    {clear_priority: true}, {evidence: "new", note: source.note}]) {
+    assert.equal((plan(intent, source, {actor_agent_id: "agent-b"}).metadata_updates as JsonObject)
+      .last_actor_agent_id, undefined);
+  }
+  assert.equal((plan({evidence: "new", note: "Corrected note"}, source,
+    {actor_agent_id: "agent-b"}).metadata_updates as JsonObject).last_actor_agent_id, "agent-b");
+  assert.equal(source.last_actor_agent_id, "agent-a");
+});
+
 test("partial topology edits validate the effective retained wait", () => {
   for (const edit of [{successor_todo_ids: []}, {status: "blocked"}, {task_class: "continuous_monitor"}]) {
     assert.throws(() => plan(edit), /external-wait/);

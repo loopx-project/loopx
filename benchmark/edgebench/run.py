@@ -119,6 +119,10 @@ def main(argv=None):
                          help="Explicit completed-Todo cadence ablation for heartbeat profiles")
     parser.add_argument("--stride-strategy", choices=stride_strategy_options(),
                         help="Explicit heartbeat Goal-review strategy; omitted keeps the ordinary off treatment")
+    parser.add_argument("--checkpoint-controller-file", type=Path,
+                        help="Host-private native checkpoint controller; requires full fresh-replan handoff")
+    parser.add_argument("--checkpoint-request", type=Path,
+                        help="Explicit host JSON declaration staged into a heartbeat worker; omitted disables capture")
     parser.add_argument("--eval-interval", type=int,
                         help="Native default: 0 (no periodic evaluation); other modes use task defaults; explicit 0 disables")
     parser.add_argument("--submission-cooldown", type=int,
@@ -142,6 +146,15 @@ def main(argv=None):
         parser.error("Replan cadence requires a heartbeat worker")
     if args.stride_strategy is not None and not args.worker.startswith("heartbeat-"):
         parser.error("--stride-strategy requires a heartbeat worker")
+    checkpoint_request = None
+    if args.checkpoint_request is not None:
+        if not args.worker.startswith("heartbeat-"):
+            parser.error("--checkpoint-request requires a heartbeat worker")
+        from benchmark.runtime.checkpoint import read_checkpoint_request
+        declaration, checkpoint_request = read_checkpoint_request(str(args.checkpoint_request))
+    handoff = checkpoint_request is not None and declaration.get("controller_handoff", False)
+    if bool(args.checkpoint_controller_file) != handoff or (handoff and args.feedback != "native"):
+        parser.error("controller file and full controller_handoff must be enabled together with native feedback")
     # One directory is one attempt: never reuse native registration or overwrite
     # source/profile evidence after an ambiguous launch.
     trial = args.log_dir / "runs" / args.run_id / args.task
@@ -196,7 +209,9 @@ def main(argv=None):
                          replan_after_turns=args.replan_after_turns,
                          replan_after_todos=args.replan_after_todos,
                          **({"stride_strategy": args.stride_strategy}
-                            if args.stride_strategy is not None else {}))
+                            if args.stride_strategy is not None else {}),
+                         **({"checkpoint_request": checkpoint_request}
+                            if checkpoint_request is not None else {}))
     if args.api_proxy_url:
         agent.default_api_base_url = args.api_proxy_url
     logger = logging.getLogger("edgebench-runtime")
@@ -214,9 +229,14 @@ def main(argv=None):
         judge_url=args.judge_url.replace("host.docker.internal", "127.0.0.1"),
         admin_secret=get_admin_secret(args.log_dir), logger=logger, sampler=sampler,
     ) if args.feedback == "best-only" else None)
+    checkpoint = None
+    if args.checkpoint_controller_file is not None:
+        from benchmark.edgebench.checkpoint_supervisor import CheckpointSupervisor
+        checkpoint = CheckpointSupervisor(args.checkpoint_controller_file, trial / "checkpoints")
     backend = RecordingDockerBackend(log_dir=trial / "collected", logger=logger,
                                      oauth_proxy=bool(args.api_proxy_url),
-                                     blind_api_endpoint=blind_endpoint, feedback=feedback)
+                                     blind_api_endpoint=blind_endpoint, feedback=feedback,
+                                     **({"checkpoint": checkpoint} if checkpoint is not None else {}))
     for image in (task.work_image_key, task.judge_image_key):
         if not backend.image_exists(image):
             raise RuntimeError(f"Missing native image: {image}")
@@ -242,6 +262,8 @@ def main(argv=None):
            if agent.replan_after_todos is not None else {}),
         **({"stride_strategy": args.stride_strategy}
            if args.stride_strategy is not None else {}),
+        **({"checkpoint_request_sha256": hashlib.sha256(checkpoint_request).hexdigest()}
+           if checkpoint_request is not None else {}),
     }
     receipt_path = trial / "runtime-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2))

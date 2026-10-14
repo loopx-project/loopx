@@ -2,17 +2,26 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import shlex
+import socket
 import tempfile
 from pathlib import Path
 
 from ..control_plane.quota.error_codes import QuotaCommandValidationError
+from ..control_plane.turn_driver.decision_capture import validate_handoff_socket
 
 
 def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
     requested = getattr(args, "decision_output_dir", None)
     root = getattr(args, "decision_output_root", None)
+    handoff = getattr(args, "decision_handoff_socket", None)
+    if handoff is not None:
+        validate_handoff_socket(handoff)
+        if requested is None and root is None:
+            raise QuotaCommandValidationError("decision handoff requires an explicit decision capture destination")
     if requested is None and root is None:
         return None
     if requested is not None and root is not None:
@@ -76,6 +85,41 @@ def bind_capture_selection_transport(payload: dict, args: argparse.Namespace) ->
     if not isinstance(template, str):
         return
     suffix = " --decision-output-root " + shlex.quote(str(Path(root).expanduser().absolute()))
+    if getattr(args, "decision_handoff_socket", None):
+        suffix += " --decision-handoff-socket " + shlex.quote(args.decision_handoff_socket)
     if getattr(args, "turn_envelope", False):
         suffix += " --turn-envelope"
     selection["command_args_template"] = template + suffix
+
+
+def handoff_decision(directory: Path | None, socket_path: str | None) -> None:
+    """Withhold the original output until the Host releases these exact bytes.
+
+    No second guard, admission, settlement or retry is performed here. A lost
+    acknowledgement leaves the saved decision available for original-identity
+    recovery; it must never be silently replaced by a later observation.
+    """
+    if socket_path is None:
+        return
+    if directory is None:
+        raise ValueError("decision handoff requires a captured decision")
+    path = directory / "decision.json"
+    raw = path.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as channel:
+            channel.settimeout(120)
+            channel.connect(str(validate_handoff_socket(socket_path)))
+            channel.sendall(json.dumps({"path": str(path), "sha256": digest}).encode() + b"\n")
+            with channel.makefile("rb") as stream:
+                line = stream.readline(1025)
+            response = json.loads(line)
+            if response != {"released": True, "sha256": digest}:
+                raise ValueError("Host did not release the original decision digest")
+        if path.read_bytes() != raw:
+            raise ValueError("captured decision changed during handoff")
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            "Decision handoff failed after guard evaluation; inspect the original "
+            f"Turn receipt and {path}. Do not blindly rerun the guard."
+        ) from exc

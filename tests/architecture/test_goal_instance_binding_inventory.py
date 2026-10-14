@@ -9,7 +9,6 @@ import re
 import subprocess
 
 from loopx.semantics.project_registry_io import (
-    PROJECT_REGISTRY_IO_MANIFEST,
     validate_project_registry_io_manifest,
 )
 
@@ -179,8 +178,4 @@ def test_m1_observation_claims_are_bounded_to_the_selected_lifecycle() -> None:
 
 
 def test_goal_instance_inventory_does_not_replace_the_registry_io_census() -> None:
-    manifest = json.loads(
-        (REPO_ROOT / PROJECT_REGISTRY_IO_MANIFEST).read_text(encoding="utf-8")
-    )
-
-    assert validate_project_registry_io_manifest(REPO_ROOT, manifest) == []
+    assert validate_project_registry_io_manifest(REPO_ROOT) == []

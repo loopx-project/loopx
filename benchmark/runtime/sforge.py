@@ -21,9 +21,10 @@ from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
 from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, prepare_codex_home
 from .codex_offline import CodexOffline, stage_portable_python
 from .harbor import (
-    BenchmarkCodex, _GOAL_ID, _PYTHON, _SCHEDULER_STATE, _SRC,
+    BenchmarkCodex, _CONTROL, _GOAL_ID, _PYTHON, _SCHEDULER_STATE, _SRC,
 )
 from .scheduler import worker_command
+from .worker import PHASE_WORK_RESERVE_SECONDS
 
 
 # Experiment profiles, local to the research runner; not new LoopX modes.
@@ -91,7 +92,9 @@ class SForgeWorker(CodexAgent):
                  turn_envelope: bool = False,
                  replan_after_turns: int | None = None,
                  replan_after_todos: int | None = None,
-                 stride_strategy: str | None = None):
+                 stride_strategy: str | None = None,
+                 checkpoint_request_path: str | None = None,
+                 checkpoint_request: bytes | None = None):
         super().__init__(config)
         if profile not in PROFILES:
             raise ValueError("Unknown benchmark worker profile")
@@ -100,7 +103,7 @@ class SForgeWorker(CodexAgent):
         ):
             raise ValueError("turn_envelope requires a heartbeat worker")
         self.turn_envelope = turn_envelope
-        if timeout_seconds <= 160:
+        if timeout_seconds <= PHASE_WORK_RESERVE_SECONDS:
             raise ValueError("Worker budget must exceed the 160s startup/settlement reserve")
         if not config.agent_model or not config.agent_effort:
             raise ValueError("Explicit model and reasoning effort are required")
@@ -136,6 +139,19 @@ class SForgeWorker(CodexAgent):
             from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_strategy
             stride_strategy = normalize_stride_strategy(stride_strategy)
         self.stride_strategy = stride_strategy
+        self.checkpoint_request_path = None
+        self.checkpoint_request = checkpoint_request
+        if checkpoint_request is not None:
+            if checkpoint_request_path is not None or not profile.startswith("heartbeat-"):
+                raise ValueError("checkpoint_request requires a heartbeat profile and no guest-path override")
+            from .checkpoint import parse_checkpoint_request
+            parse_checkpoint_request(checkpoint_request)
+            checkpoint_request_path = f"{_CONTROL}/checkpoint-request.json"
+        if checkpoint_request_path is not None:
+            if not profile.startswith("heartbeat-"):
+                raise ValueError("checkpoint_request_path requires a heartbeat profile")
+            from .checkpoint import normalize_checkpoint_request_path
+            self.checkpoint_request_path = normalize_checkpoint_request_path(checkpoint_request_path)
         self.profile, self.cwd = profile, cwd
         if feedback not in FEEDBACK_MODES:
             raise ValueError("Unknown feedback mode")
@@ -160,7 +176,7 @@ class SForgeWorker(CodexAgent):
         self.timeout_seconds = timeout_seconds
         # Let one call use the trial budget. The shared worker recomputes the
         # remaining deadline on every continuation, retaining cleanup time.
-        self.turn_timeout = timeout_seconds - 160
+        self.turn_timeout = timeout_seconds - PHASE_WORK_RESERVE_SECONDS
         self.runtime = None
         self.prepared = False
         # Only the official profile delegates continuation to SForge. Heartbeat
@@ -222,9 +238,20 @@ class SForgeWorker(CodexAgent):
                 replan_after_turns=self.replan_after_turns,
                 replan_after_todos=self.replan_after_todos,
                 stride_strategy=self.stride_strategy,
+                checkpoint_request_path=self.checkpoint_request_path,
                 task_objective=self.task_objective,
             )
             asyncio.run(self.runtime.install(self.environment))
+            if self.checkpoint_request is not None:
+                with tempfile.TemporaryDirectory(prefix="benchmark-checkpoint-") as directory:
+                    declaration = Path(directory) / "request.json"
+                    declaration.write_bytes(self.checkpoint_request)
+                    asyncio.run(self.environment.upload_file(declaration, self.checkpoint_request_path))
+                result = backend.exec_run(handle, ["/bin/bash", "-c",
+                    f"chown agent:agent {shlex.quote(self.checkpoint_request_path)} && "
+                    f"chmod 0600 {shlex.quote(self.checkpoint_request_path)}"], user="root")
+                if result.exit_code:
+                    raise RuntimeError("Could not protect the explicit checkpoint declaration")
         # Prompt replacement describes the policy; the feedback mode owns access.
         if self.feedback != "native":
             result = backend.exec_run(handle, ["rm", "-f", "/usr/local/bin/sforge-submit"], user="root")
@@ -260,6 +287,8 @@ class SForgeWorker(CodexAgent):
             "task_entry": self.task_entry,
             "reasoning_effort": effort, "timeout_seconds": self.timeout_seconds,
             "loopx_usage_ping_enabled": False,
+            **({"checkpoint_capture_enabled": True}
+               if self.checkpoint_request_path is not None else {}),
             **({"planning_timeout_seconds": None}
                if self.task_entry == "loopx-planned" else {}),
             "stop_hook": self.profile == "official",

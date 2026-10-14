@@ -15,11 +15,12 @@ from .harbor import _CODEX_HOME, _CONTROL, _LOOPX_RUNTIME
 
 class RecordingDockerBackend(DockerBackend):
     def __init__(self, *, log_dir: Path, logger, oauth_proxy: bool = False,
-                 blind_api_endpoint: tuple[str, int] | None = None, feedback=None, client=None):
+                 blind_api_endpoint: tuple[str, int] | None = None, feedback=None, checkpoint=None, client=None):
         super().__init__(client)
         self.log_dir, self.logger = log_dir, logger
         self.blind_api_endpoint = blind_api_endpoint
         self.feedback = feedback
+        self.checkpoint = checkpoint
         self.execution_command = None
         self.execution_start_marker = None
         self.execution_receipt = None
@@ -34,6 +35,8 @@ class RecordingDockerBackend(DockerBackend):
         kwargs["extra_hosts"] = hosts
         if self.feedback is not None:
             self.feedback.bind(kwargs.get("environment"))
+        if self.checkpoint is not None:
+            self.checkpoint.bind(kwargs.get("environment"))
         kwargs["environment"] = self._agent_environment(kwargs.get("environment"))
         return super().create_container(image, name, **kwargs)
 
@@ -46,6 +49,8 @@ class RecordingDockerBackend(DockerBackend):
     def exec_run_with_timeout(self, handle, cmd, timeout=60, **kwargs):
         kwargs["environment"] = self._agent_environment(kwargs.get("environment"))
         is_solver = cmd == ["/bin/bash", "-c", getattr(self, "execution_command", None)]
+        if is_solver and self.checkpoint is not None:
+            self.checkpoint.start(handle.raw)
         try:
             result = super().exec_run_with_timeout(handle, cmd, timeout, **kwargs)
             if is_solver:
@@ -64,6 +69,8 @@ class RecordingDockerBackend(DockerBackend):
                 pending.replace(target)
             return result
         finally:
+            if is_solver and self.checkpoint is not None:
+                self.checkpoint.close()
             if is_solver and self.feedback is not None:
                 self.feedback.pause()
 
@@ -92,6 +99,8 @@ class RecordingDockerBackend(DockerBackend):
         self.feedback.start(self, handle)
 
     def cleanup_container(self, handle, logger=None):
+        if self.checkpoint is not None:
+            self.checkpoint.close()
         if self.feedback is not None:
             self.feedback.close()
         if handle is not None:

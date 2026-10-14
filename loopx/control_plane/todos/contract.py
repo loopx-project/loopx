@@ -1001,6 +1001,11 @@ _TODO_METADATA_FIELD_SCHEMA = (
         ),
     ),
     _TodoMetadataField(
+        "last_actor_agent_id",
+        normalize_todo_claimed_by,
+        invalid_message="last_actor_agent_id must be a public-safe agent token",
+    ),
+    _TodoMetadataField(
         "bound_agent",
         normalize_todo_bound_agent,
         invalid_message=(
@@ -1247,6 +1252,7 @@ def format_todo_metadata_line(
     decision_outcome: str | None = None,
     decision_scope_outcomes: Any = None,
     claimed_by: str | None = None,
+    last_actor_agent_id: str | None = None,
     bound_agent: str | None = None,
     goal_bound: bool | None = None,
     blocks_agent: str | None = None,

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LoopX Showcase: vLLM 长上下文优化：已合入上游</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="../showcase-page.css">
+</head>
+<body>
+<div class="gh">
+  <div class="grain"></div>
+  <article>
+
+    <nav class="nav" aria-label="Showcase navigation">
+      <a href="../index.html">Showcases</a>
+      <a href="../showcase-catalog.json">Catalog</a>
+      <a href="independent-vllm-long-context-optimization.en.html">English</a>
+    </nav>
+
+    <div class="mlab">2026-10-13 · inference-performance-optimization</div>
+    <h1>vLLM 长上下文优化：已合入上游</h1>
+    <div class="accent">Zheng Cai 公开报告以 LoopX 为 workflow engine 持续探索并验证 vLLM 优化，成果已合入上游。报告总 token 吞吐 +32.59%：GLM-5.3-Flash、1M 输入、4×H200、TP4、C1。</div>
+    <p>持续探索和验证推进成可核验的上游优化。LoopX 维护者强调释放开发者精力，但这里没有精力或成本节省的定量结论。</p>
+    <div class="chips"><span>外部独立用户</span><span>公开仓库 + 用户报告</span><span>Upstream merged</span><span>Reported measurements</span></div>
+
+
+    <div class="section-head"><span>01</span><h2>案例背景</h2></div>
+    <div class="text-stack"><p>推理优化需要反复 profiling、论文和代码研究、实验、正确性检查及评审。作者将 LoopX 作为这一过程的 workflow engine；跨模型和 workload 的验证仍是重要工程工作。</p></div>
+
+    <div class="section-head"><span>02</span><h2>仓库证据</h2></div>
+    <div class="panel">
+      <div class="panel-row"><div class="panel-key">证明点</div><div class="panel-val"><p>作者报告的 LoopX 优化工作流，推进成可检查的 sparse indexer 优化，并合入 vLLM。</p></div></div>
+      <div class="panel-row"><div class="panel-key">LoopX 介入</div><div class="panel-val"><p>作者报告的 workflow engine：profiling、研究、假设、实验、正确性与速度检查</p></div></div>
+    </div>
+    <div class="metric-grid"><div class="metric"><strong>+32.59%</strong><span>报告 C1 总吞吐 · 1M、4×H200、TP4</span></div><div class="metric"><strong>54.154 → 40.388s</strong><span>报告 server TTFT · 相同配置</span></div><div class="metric"><strong>2026-10-11</strong><span>公开上游合并日期（UTC）</span></div></div>
+    <div class="evidence-grid"><div class="evidence-card"><div class="evidence-label">证明点</div><p>作者报告的 LoopX 优化工作流，推进成可检查的 sparse indexer 优化，并合入 vLLM。</p></div></div>
+
+
+    <div class="section-head"><span>03</span><h2>LoopX 行为</h2></div>
+    <ul class="flow"><li><span class="flow-num">1</span><div class="flow-body"><div class="flow-title">作者公开说明以 LoopX 为 agent-driven vLLM 推理优化框架的 workflow engine。</div></div></li><li><span class="flow-num">2</span><div class="flow-body"><div class="flow-title">作者介绍 profiling、论文/代码研究、假设、实验、正确性和速度测量。</div></div></li><li><span class="flow-num">3</span><div class="flow-body"><div class="flow-title">作者说明通过持续迭代找到 sparse indexer query 行的计算量均衡切分方案。</div></div></li><li><span class="flow-num">4</span><div class="flow-body"><div class="flow-title">上游 PR #54951 于 2026-10-11 合并；验证、评审跟进和维护责任仍属于作者。</div></div></li></ul>
+
+    <div class="section-head"><span>04</span><h2>用户看到什么</h2></div>
+    <div class="text-stack"><p>持续探索和验证推进成可核验的上游优化。LoopX 维护者强调释放开发者精力，但这里没有精力或成本节省的定量结论。</p></div>
+
+    <div class="section-head"><span>05</span><h2>仓库来源</h2></div>
+    <div class="source-list"><a class="source-ref" href="independent-vllm-long-context-optimization.md"><span>案例说明</span><code>docs/showcases/cases/independent-vllm-long-context-optimization.md</code></a><a class="source-ref" href="https://x.com/zigzagcai/status/2109952174822408443"><span>Author: LoopX as workflow engine (October 13, 2026)</span><code>https://x.com/zigzagcai/status/2109952174822408443</code></a><a class="source-ref" href="https://x.com/zigzagcai/status/2109952350299316499"><span>Author: profiling, research, experiments, correctness</span><code>https://x.com/zigzagcai/status/2109952350299316499</code></a><a class="source-ref" href="https://x.com/zigzagcai/status/2109952500262645847"><span>Author: continuous iteration</span><code>https://x.com/zigzagcai/status/2109952500262645847</code></a><a class="source-ref" href="https://github.com/vllm-project/vllm/pull/54951"><span>vLLM PR #54951: merge and reported measurements</span><code>https://github.com/vllm-project/vllm/pull/54951</code></a><a class="source-ref" href="https://x.com/huangruiteng/status/2109984101092737107"><span>LoopX maintainer: exploration, human feedback, verifiable outcomes</span><code>https://x.com/huangruiteng/status/2109984101092737107</code></a><a class="source-ref" href="https://x.com/huangruiteng/status/2109988844162703786"><span>LoopX maintainer: validation and developer attention</span><code>https://x.com/huangruiteng/status/2109988844162703786</code></a></div>
+    <div class="boundary-box"><p><strong>证据边界.</strong> 上游合并是公开仓库事实；LoopX 使用及工作流来自作者报告。性能是上游报告结果，未独立复跑或隔离 LoopX 因果增益。+32.59% 指总输入加输出吞吐，条件为 GLM-5.3-Flash、1,000,000 输入 token、4×H200、TP4、C1、256 输出 token、65,536-token batch budget、legacy runner + 显式 FA3；四组 fresh-process ABBA/BAAB 配对排除 warmup，不代表饱和服务吞吐。测量基线 5893426b88f7 / 优化版本 16934c6e76e5 与最终 PR head a9fd692db809 分开，merge commit 为 3e8e1364ff41。运行时长、成本、具体配置和干预次数未知；针对性正确性不代表全面质量或逐位等价，也不宣称短输入和其他平台全面无回归。</p></div>
+    <div class="chips"><a class="case-link" href="independent-vllm-long-context-optimization.md">案例说明</a></div>
+
+    <footer>由 docs/showcases/showcase-catalog.json 生成。不包含私有链接、原始聊天、本地状态或内部媒体。</footer>
+  </article>
+</div>
+</body>
+</html>

@@ -198,6 +198,39 @@ keys，376／54 不变。字符、UTF-8 字节与行分别测量；不宣称原�
 普通根目录为 22,560。完整 source revision／路径保留，新限 24,000、余量 726；
 336 nested／26 top-level keys 仍低于不变的 350／27 限制。
 
+The shared CLI printer now emits compact UTF-8 JSON with one terminal newline,
+including default quota, detail selectors, and typed error results. This is a
+default presentation change across commands using `print_payload`, not a quota
+policy or schema change. It removes indentation and separator whitespace only:
+all fields, unknown future fields, string whitespace, escaped newlines, ordering,
+and in-response references remain. Markdown and paths that print directly
+(such as message-only bootstrap output) retain their existing presentation.
+For human inspection use `--format markdown` or pipe JSON through `jq .`.
+
+The same 36-Todo / 12-run vision workload compares the pinned two-space printer
+with the compact printer on each identical decided payload:
+
+| Quota JSON mode | Previous chars / UTF-8 bytes / lines | Compact chars / UTF-8 bytes / lines |
+| --- | --- | --- |
+| Default | 48,418 / 48,418 / 1,090 | 39,726 / 39,726 / 1 |
+| Vision detail | 57,346 / 57,346 / 1,226 | 47,201 / 47,201 / 1 |
+| All detail | 70,850 / 70,850 / 1,607 | 57,186 / 57,186 / 1 |
+
+The default saves 8,692 presentation characters (18.0%) without removing a
+rule. Across 336 measurements (three populations, vision off/on, both formats,
+default and explicit modes), all 162 shared-printer JSON pairs decode to the
+complete original payload; all Markdown and direct-output measurements match.
+Raw compact-payload, structural, growth and emitted ceilings remain unchanged,
+including the original 40,000-character fixture. These local measurements do
+not establish token, model, native Windows or installed-release improvements.
+
+共用 CLI 打印器默认输出紧凑 UTF-8 JSON，以一个换行结尾；默认 quota、详情和类型化
+错误都只删除展示缩进与分隔空白。字段、未知未来字段、字符串空白、转义换行、顺序
+及引用保持完整，Markdown 与直接输出路径不变；人工查看可用 `--format markdown`
+或 `jq .`。同一 36 Todo／12 run 的默认输出从 48,418 降至 39,726 字符，节省
+8,692（18.0%），完整规则保留。336 项配对测量中的 162 项共用 JSON 输出解码值
+完全相同；原始预算及增长限制不改，不将字符收益宣称为 token 或模型收益。
+
 The same matrix characterizes explicit mode switches instead of assuming that
 the default command represents them. Covered variants are
 `bootstrap-command-pack --message-only`, quota per-section and all-detail

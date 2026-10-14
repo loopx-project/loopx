@@ -15,8 +15,21 @@ import {
 } from "./decision_metadata.ts";
 
 import { normalizeMonitorConfiguration, validateMonitorConfigurationTarget } from "./monitor_metadata.ts";
+import {canonicalAuthorityBytes} from "../coordination/authority_store_codec.ts";
 
 export const TODO_PUBLIC_UPDATE_REQUEST_SCHEMA = "todo_public_update_request_v0";
+
+/** Shared provenance intent; callers still suppress unchanged replay and own admission. */
+export function shouldRecordTodoMutationActor(
+  todo: JsonObject, patch: JsonObject, clearFields: readonly string[],
+  planningIntent: JsonObject, monitorObservation: unknown,
+): boolean {
+  const rawCopyChanged = Object.entries(patch).some(([field, value]) =>
+    !Object.hasOwn(todo, field) || !canonicalAuthorityBytes(todo[field]).equals(canonicalAuthorityBytes(value))) ||
+    clearFields.some(field => Object.hasOwn(todo, field));
+  return rawCopyChanged || monitorObservation !== undefined ||
+    TODO_OWNERSHIP_INTENT_FIELDS.some(field => Object.hasOwn(planningIntent, field));
+}
 
 const SCOPE_INTENT_FIELDS = ["task_class", "status", "claimed_by", "bound_agent", "goal_bound",
   "blocks_agent", "clear_blocks_agent", "global_gate", "clear_global_gate", "excluded_agents",
@@ -100,5 +113,13 @@ export function planPublicTodoUpdate(value: unknown): JsonObject {
     monitor_context: {metadata: intent.monitor_metadata ?? null,
       observation: context.monitor_observation ?? null, role, task_class: scope.task_class,
       resume_when: scope.effective_resume_when, enforce_boundedness: context.enforce_monitor_boundedness}});
+  const copyPatch = Object.fromEntries(["text", "note"].flatMap(field =>
+    Object.hasOwn(intent, field) ? [[field, intent[field]]] : []));
+  if (context.actor_agent_id != null && shouldRecordTodoMutationActor(
+      todo, copyPatch, [], intent, context.monitor_observation ?? undefined)) {
+    // The legacy writer transports this after its material-change check; actor
+    // provenance alone must never turn an unchanged replay into a mutation.
+    plan.metadata_updates.last_actor_agent_id = context.actor_agent_id;
+  }
   return {...plan, ...(transition ? {external_wait_transition: transition} : {})};
 }

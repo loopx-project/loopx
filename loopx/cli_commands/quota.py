@@ -5,7 +5,7 @@ import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from .quota_capture import bind_capture_selection_transport, capture_decision, prepare_decision_capture
+from .quota_capture import bind_capture_selection_transport, capture_decision, handoff_decision, prepare_decision_capture
 from ..usage_goal import observe_quota_result
 
 from ..capabilities.explore.composition_frontier import (
@@ -458,6 +458,8 @@ def _emit_quota_result(
         )
     bind_capture_selection_transport(payload, args)
     capture_decision(capture_directory, payload)
+    if payload.get("ok") is True:
+        handoff_decision(capture_directory, getattr(args, "decision_handoff_socket", None))
     payload = _project_quota_cli_payload(
         payload, args, detail_sections,
         context.scheduler_context if context is not None else None,
@@ -502,6 +504,7 @@ def handle_quota_command(
         if capture_directory is None and (
             getattr(args, "decision_output_dir", None) is not None
             or getattr(args, "decision_output_root", None) is not None
+            or getattr(args, "decision_handoff_socket", None) is not None
         ):
             validate_quota_command_context_request(args)
             capture_directory = prepare_decision_capture(args)

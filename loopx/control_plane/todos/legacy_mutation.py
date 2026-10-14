@@ -899,7 +899,7 @@ def _update_goal_todo_legacy(
             monitor_metadata=monitor_intent["metadata"],
             public_context={
                 "goal_id": goal_id, "role": target_role,
-                "actor_agent_id": effective_agent_id,
+                "actor_agent_id": mutation_authority.get("actor_agent_id"),
                 "registered_agents": registered_agent_ids_from_registry(registry_path, goal_id),
                 "monitor_observation": monitor_intent["observation"],
                 "enforce_monitor_boundedness": enforce_monitor_boundedness,
@@ -986,7 +986,7 @@ def _complete_goal_todo_legacy(
     state_file: Path | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    from .line_update import apply_todo_update_to_lines, link_generated_successor_todo_ids
+    from .line_update import apply_todo_update_to_lines, link_generated_successor_todo_ids, record_todo_mutation_actor
     from ..coordination.runtime_shadow_writer_adapter import begin_todo_runtime_shadow_capture, write_captured_todo_state, settle_todo_runtime_shadow_capture
 
     shadow_runtime_root = effective_runtime_root(registry_path, runtime_root_arg)
@@ -1186,6 +1186,7 @@ def _complete_goal_todo_legacy(
             successor_todo_ids=normalized_successor_todo_ids if successor_todo_ids is not None else None,
             updated_at=updated_at,
         )
+        record_todo_mutation_actor(lines, update_result, mutation_authority.get("actor_agent_id"))
         unblock_resume, decision_scope_resolution = (
             apply_completed_user_todo_lifecycle(
                 lines,
@@ -1319,7 +1320,7 @@ def _supersede_goal_todo_legacy(
     state_file: Path | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    from .line_update import apply_todo_update_to_lines, link_superseding_todo_id
+    from .line_update import apply_todo_update_to_lines, link_superseding_todo_id, record_todo_mutation_actor
     from ..coordination.runtime_shadow_writer_adapter import begin_todo_runtime_shadow_capture, write_captured_todo_state, settle_todo_runtime_shadow_capture
 
     if successor_todo_ids:
@@ -1387,6 +1388,7 @@ def _supersede_goal_todo_legacy(
             note="superseded",
             updated_at=updated_at,
         )
+        record_todo_mutation_actor(lines, update_result, mutation_authority.get("actor_agent_id"))
         registered_agents = registered_agent_ids_from_registry(registry_path, goal_id)
         successor_intents = build_successor_intents(
             next_agent_todo=next_agent_todo,

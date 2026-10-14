@@ -153,6 +153,28 @@ def test_best_only_install_requires_ordinary_worker_hook_readback(tmp_path, monk
     assert len(staged) == int(profile in {"official", "single"})
 
 
+@pytest.mark.parametrize("capture_path", [None, "/control/checkpoint-request.json"])
+def test_checkpoint_request_reaches_sforge_worker_without_changing_default_profile(tmp_path, monkeypatch, capture_path):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+    async def installed(self, environment):
+        pass  # Exercise the real adapter handoff without starting a trial.
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    config = SForgeConfig(agent_model="fixture", agent_effort="xhigh")
+    worker = SForgeWorker(config, profile="heartbeat-explore", cwd="/task", checkpoint_request_path=capture_path)
+    worker.install_stop_hook(None, None, tmp_path, None)
+    env = worker.runtime._worker_env(cwd="/task")
+    profile = json.loads((tmp_path / "worker-profile.json").read_text())
+    assert env.get("LOOPX_CHECKPOINT_REQUEST") == capture_path
+    assert ("checkpoint_capture_enabled" in profile) is (capture_path is not None)
+    assert profile.get("checkpoint_capture_enabled") is (True if capture_path else None)
+    with pytest.raises(ValueError, match="checkpoint_request_path"):
+        SForgeWorker(config, profile="official", cwd="/task", checkpoint_request_path="/control/request.json")
+
+
 @pytest.mark.parametrize("profile,total,expected", [
     ("native-goal", 64800, 64640), ("native-goal", 1800, 1640),
     ("heartbeat-resume", 64800, 64640), ("heartbeat-explore", 64800, 64640),
@@ -202,6 +224,7 @@ def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path,
     pytest.importorskip("harbor")
     from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
     backend = object.__new__(RecordingDockerBackend)
+    backend.checkpoint = None
     backend.log_dir = tmp_path / "artifacts"
     backend.feedback = None
     copied, cleaned = [], []
@@ -255,6 +278,7 @@ def test_blind_policy_removes_judge_route_and_credentials_native_is_unchanged(mo
     pytest.importorskip("harbor")
     from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend, AllowedEndpoint
     backend = object.__new__(RecordingDockerBackend)
+    backend.checkpoint = None
     backend.auth_ips = []
     backend.blind_api_endpoint = None
     judge = AllowedEndpoint(ip="192.0.2.1", port=8080, hostname="judge")
@@ -457,6 +481,8 @@ def test_envelope_rejects_incompatible_sforge_worker(profile):
     ("official", ["--stride-strategy", "off"]),
     ("native-goal", ["--stride-strategy", "evidence_conditioned_v1"]),
     ("heartbeat-resume", ["--stride-strategy", "future_policy"]),
+    ("official", ["--checkpoint-request", "missing.json"]),
+    ("native-goal", ["--checkpoint-request", "missing.json"]),
 ])
 def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_path, profile, options):
     pytest.importorskip('sforge')
@@ -468,6 +494,104 @@ def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_pa
               '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999', *options])
     assert error.value.code == 2
     assert not (tmp_path / 'runs').exists()
+
+
+@pytest.mark.parametrize("missing", ["controller", "declaration", "native_feedback"])
+def test_controller_handoff_cannot_be_partially_enabled(tmp_path, missing):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.edgebench.run import main
+    request = tmp_path / "checkpoint.json"
+    request.write_text(json.dumps({"destination": "/logs/agent/checkpoints", "point_metadata": {},
+        "components": [{"id": "code", "source_path": "/task/code"}], "trigger": "fresh_replan",
+        "native_session": True, "loopx_state": True, "evaluation_opportunity": True,
+        "controller_handoff": True}))
+    options = [] if missing == "controller" else ["--checkpoint-controller-file", str(tmp_path / "private.json")]
+    if missing != "declaration":
+        options.extend(["--checkpoint-request", str(request)])
+    if missing == "native_feedback":
+        options.extend(["--feedback", "best-only"])
+    with pytest.raises(SystemExit) as error:
+        main(["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
+              "--run-id", "invalid", "--worker", "heartbeat-resume", "--model", "fixture",
+              "--effort", "xhigh", "--judge-url", "http://127.0.0.1:9999", *options])
+    assert error.value.code == 2 and not (tmp_path / "runs").exists()
+
+
+def test_checkpoint_supervisor_is_bound_to_container_and_only_solver_execution(tmp_path, monkeypatch):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from types import SimpleNamespace
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
+    calls = []
+    controller = SimpleNamespace(bind=lambda env: calls.append(("bind", env["SFORGE_TOKEN"])),
+        start=lambda raw: calls.append(("start", raw)), close=lambda: calls.append(("close",)))
+    backend = RecordingDockerBackend(log_dir=tmp_path / "collected", logger=None,
+                                    oauth_proxy=True, checkpoint=controller)
+    handle = SimpleNamespace(raw="exact-container")
+    monkeypatch.setattr(DockerBackend, "create_container", lambda *a, **kw: handle)
+    backend.create_container("image", "name", environment={"SFORGE_TOKEN": "synthetic"})
+    backend.execution_command = "solver"
+    monkeypatch.setattr(DockerBackend, "exec_run_with_timeout", lambda *a, **kw:
+        SimpleNamespace(exit_code=0, timed_out=False, elapsed_seconds=1))
+    backend.exec_run_with_timeout(handle, ["setup"])
+    assert calls == [("bind", "synthetic")]
+    backend.exec_run_with_timeout(handle, ["/bin/bash", "-c", "solver"])
+    assert calls == [("bind", "synthetic"), ("start", "exact-container"), ("close",)]
+
+
+@pytest.mark.parametrize("protect_fails", [False, True])
+def test_host_checkpoint_declaration_is_staged_verbatim_and_protected(tmp_path, monkeypatch, protect_fails):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from types import SimpleNamespace
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+    async def installed(self, environment):
+        pass  # Exercise the installation transport; no model or evaluator.
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    staged, commands = [], []
+    def copy(handle, source, target):
+        staged.append((str(target), source.read_bytes()))
+    def command(handle, cmd, **kwargs):
+        commands.append((cmd, kwargs))
+        return SimpleNamespace(exit_code=int(protect_fails))
+    backend = SimpleNamespace(copy_to_container=copy, exec_run=command)
+    declaration = b'{"destination":"/logs/agent/checkpoints","trigger":"fresh_replan", "native_session":true,"components":[{"id":"code","source_path":"/task"}],"point_metadata":{}}'
+    config = SForgeConfig(agent_model="fixture", agent_effort="xhigh")
+    worker = SForgeWorker(config, profile="heartbeat-resume", cwd="/task", checkpoint_request=declaration)
+    if protect_fails:
+        with pytest.raises(RuntimeError, match="protect the explicit checkpoint declaration"):
+            worker.install_stop_hook(backend, None, tmp_path, None)
+        assert not (tmp_path / "worker-profile.json").exists()
+    else:
+        worker.install_stop_hook(backend, None, tmp_path, None)
+        assert json.loads((tmp_path / "worker-profile.json").read_text())["checkpoint_capture_enabled"]
+    guest_path = "/opt/loopx-benchmark/control/checkpoint-request.json"
+    assert staged == [(guest_path, declaration)]
+    assert worker.runtime._worker_env(cwd="/task")["LOOPX_CHECKPOINT_REQUEST"] == guest_path
+    assert len(commands) == 1 and commands[0][1]["user"] == "root"
+    assert "chmod 0600" in commands[0][0][-1]
+    with pytest.raises(ValueError, match="no guest-path override"):
+        SForgeWorker(config, profile="heartbeat-resume", cwd="/task", checkpoint_request=declaration,
+                     checkpoint_request_path="/other")
+    with pytest.raises(ValueError, match="requires destination"):
+        SForgeWorker(config, profile="heartbeat-resume", cwd="/task", checkpoint_request=b'{}')
+
+
+def test_invalid_checkpoint_declaration_rejects_before_trial_registration(tmp_path):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.edgebench.run import main
+    declaration = tmp_path / "request.json"
+    declaration.write_text('{"components":[]}')
+    with pytest.raises(ValueError, match="requires destination"):
+        main(["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
+              "--run-id", "invalid", "--worker", "heartbeat-resume", "--model", "fixture",
+              "--effort", "xhigh", "--judge-url", "http://127.0.0.1:9999",
+              "--checkpoint-request", str(declaration)])
+    assert not (tmp_path / "runs").exists()
 
 
 @pytest.mark.parametrize("cadence_args,field,count", [
@@ -651,6 +775,7 @@ def test_recorded_solver_exit_does_not_take_status_from_output(tmp_path, monkeyp
     from types import SimpleNamespace
     from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
     backend = object.__new__(RecordingDockerBackend)
+    backend.checkpoint = None
     backend.log_dir = tmp_path / "collected"
     backend.blind_api_endpoint = None
     backend.feedback = None

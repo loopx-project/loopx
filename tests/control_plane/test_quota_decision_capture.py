@@ -199,6 +199,108 @@ def test_capture_root_allocates_private_distinct_children(tmp_path):
         prepare_decision_capture(request(None, decision_output_root=tmp_path, turn_instance_id=None))
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='Unix local Host transport')
+@pytest.mark.parametrize('release', ['exact', 'wrong_digest', 'disconnect', 'changed_capture'])
+def test_real_cli_handoff_preserves_original_receipt(tmp_path, release):
+    import hashlib
+    import socket
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    capture = tmp_path / 'handoff-capture'
+    with tempfile.TemporaryDirectory(prefix='quota-host-', dir='/tmp') as short:
+        endpoint = Path(short).resolve() / 'host.sock'
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(endpoint))
+            listener.listen(1)
+            listener.settimeout(20)
+            command = [sys.executable, '-m', 'loopx.cli', '--format', 'json',
+                       '--registry', str(registry), '--runtime-root', str(runtime),
+                       'quota', 'should-run', '--goal-id', GOAL_ID, '--agent-id', AGENT_ID,
+                       '--todo-id', TODO_ID, '--turn-instance-id', TURN_ID,
+                       '--runtime-profile', 'generic_cli', '--available-capability', 'shell',
+                       '--available-capability', 'filesystem_read',
+                       '--decision-output-dir', str(capture), '--decision-handoff-socket', str(endpoint)]
+            with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  text=True, env={**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[2])}) as process:
+                try:
+                    channel, _ = listener.accept()
+                    with channel:
+                        channel.settimeout(5)
+                        with channel.makefile('rb') as stream:
+                            message = json.loads(stream.readline())
+                        original = (capture / 'decision.json').read_bytes()
+                        digest = hashlib.sha256(original).hexdigest()
+                        assert message == {'path': str(capture / 'decision.json'), 'sha256': digest}
+                        receipts = _heartbeat_receipt_count(runtime, TURN_ID)
+                        assert receipts >= 1 and process.poll() is None
+                        # The actual CLI has persisted admission but cannot expose
+                        # successful output while the Host is taking its snapshot.
+                        import select
+                        assert not select.select([process.stdout], [], [], 0)[0]
+                        if release == 'changed_capture':
+                            (capture / 'decision.json').write_bytes(original + b'\n')
+                        if release != 'disconnect':
+                            channel.sendall(json.dumps({'released': True, 'sha256': (
+                                '0' * 64 if release == 'wrong_digest' else digest)}).encode() + b'\n')
+                    stdout, stderr = process.communicate(timeout=15)
+                    if release == 'exact':
+                        assert process.returncode == 0 and json.loads(stdout)['ok'] is True
+                        assert not stderr
+                    else:
+                        assert process.returncode != 0
+                        assert 'Do not blindly rerun' in stderr + stdout
+                    assert _heartbeat_receipt_count(runtime, TURN_ID) == receipts
+                    assert json.loads(original)['heartbeat_receipt']['turn_instance_id'] == TURN_ID
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
+
+
+def test_handoff_requires_explicit_capture_before_guard(tmp_path):
+    with pytest.raises(QuotaCommandValidationError, match='invalid decision handoff'):
+        prepare_decision_capture(request(None, decision_handoff_socket=str(tmp_path / 'missing')))
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='Unix local Host transport')
+def test_handoff_rejects_shared_or_symlink_endpoint_and_preserves_selection(tmp_path):
+    import socket
+    import tempfile
+    from pathlib import Path
+    from loopx.cli_commands.quota_capture import validate_handoff_socket, bind_capture_selection_transport
+
+    with tempfile.TemporaryDirectory(prefix='quota-host-', dir='/tmp') as short:
+        private = Path(short).resolve()
+        endpoint = private / 'host.sock'
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(endpoint))
+            assert validate_handoff_socket(str(endpoint)) == endpoint
+            alias = private / 'alias.sock'
+            alias.symlink_to(endpoint)
+            with pytest.raises(QuotaCommandValidationError):
+                validate_handoff_socket(str(alias))
+            private.chmod(0o755)
+            try:
+                with pytest.raises(QuotaCommandValidationError):
+                    validate_handoff_socket(str(endpoint))
+            finally:
+                private.chmod(0o700)
+            with pytest.raises(QuotaCommandValidationError, match='explicit decision capture'):
+                prepare_decision_capture(request(None, decision_handoff_socket=str(endpoint)))
+            payload = {'interaction_contract': {'cli_channel': {'selection_command': {
+                'command_args_template': 'quota should-run --todo-id TODO'}}}}
+            bind_capture_selection_transport(payload, request(None, decision_output_root=tmp_path,
+                                                              decision_handoff_socket=str(endpoint)))
+            words = shlex.split(payload['interaction_contract']['cli_channel']['selection_command']['command_args_template'])
+            assert words[-4:] == ['--decision-output-root', str(tmp_path), '--decision-handoff-socket', str(endpoint)]
+            assert '--turn-envelope' not in words  # Independent from display mode.
+
+
 def test_capture_root_accepts_guided_turn_before_identity_is_minted(tmp_path):
     target = prepare_decision_capture(request(
         None,

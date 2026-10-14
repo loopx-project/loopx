@@ -277,9 +277,16 @@ lease/frontier 影响后替代旧要求，不能禁止合法目标变更。代�
 可解析、范围相关、时效有效及 owning validator 的结果，保留失败和未测试的区别。
 现有 selected-work acceptance 不等于全局 Goal acceptance。
 
-全局收口须对账当前 revision 的全部适用要求、跨 Agent 剩余工作和待处理 amendment。
-一个 Agent 的 `no_followup` 或一个 Todo 完成，不能推出 `achieved`。压缩投影须保留
-身份及无损详情入口，不能用展示前缀替代源承诺。
+现有验收 owner 已验证版本化合同。当前且通过的 Todo-scoped verification 在没有
+适用工作守卫阻断时投影为 `partial`；failed、stale、held 保留各自状态。
+全量验证必须覆盖该合同全部 criterion。Accepted 的 `selected_work` 合同仍只覆盖
+声明工作；单次 acceptance 写入不改变 Goal 生命周期状态。
+
+全局收口还须对账当前已声明必要 Goal 要求的覆盖、跨 Agent 必需工作，以及会影响
+结论的 amendment。保留局部验收和历史回执，同时暴露全局缺口。可选探索分支无需
+全完成；持续型任务遵循声明的等待/终止合同，不能一次观察后永久完成，也不凭空
+制造无限循环。一个 Agent 的 `no_followup` 或空 frontier 不能推出 `achieved`。
+在所属受保护动作处重查适用性，不新增跨 owner 事务。压缩投影保留身份及无损详情入口。
 
 **交付边界：** 既有 typed interaction owner 在准入后生成 Goal 原文、已启用的
 canonical acceptance 与当前 Todo 精确详情读取。普通产品 heartbeat 与 TurnEnvelope
@@ -292,6 +299,30 @@ R1/R4/R5 与 S11，本 RFC 不隐式开启新的 acceptance policy。下一完�
 结构化 criterion 穿过任务切换和重启，在同一 owner 拒绝覆盖丢失并使过期证据失效。
 
 ### 3.8 失效证据与受影响消费者
+
+恢复和工作切换须保留 §3.7 中不同观察的含义。当前 `work_context.complete` 表示
+来源 adapter 未报告失败，完整 Goal 文档仍可能在 `required_reads` 中。
+Inline 精确 Todo/acceptance 正文只提供对应读取内容，不证明模型消费或标准通过。
+续接 note 有效、adoption receipt 成功和 journal `continue` 分别只限定各自边界，
+都不是全 Goal 完成或独立执行授权。
+
+压缩、替换 session 或交接之后，下一项新动作的验收须重新连接三类已有来源：
+当前 Goal 身份/意图、适用验收 criterion/revision、显式消费证据的版本。
+保留 pending reads 和 unknown；不要求这些读取组成跨 owner 事务，但相关版本变化时，
+所属动作边界须重新确认当前适用性。不增加 recovery-context 权威，不用共同词语
+推断依赖。Todo-facts 指纹或文件存在，不能证明三类来源都有效。
+
+原操作恢复另行处理：按既有身份与 fence 核对 journal/effect，不用新的 Goal 依据
+改写旧回执以强行续行。新依赖工作前重新准入并检查变化的标准或显式来源；合法恢复
+迁移本身不授权新工作，无关有效结果继续保留。验证上下文捕获后 criterion 改变、
+依赖工作前来源不可用、restore 期间 amendment 到达三类情形：原效果只核对一次，
+旧假设不授权下一动作，读取快照不复活已停止工作。完整要求覆盖和真实模型采用仍属
+§3.7/R4 未闭合验收，本澄清不宣称完成。
+
+[Goal Direction Baseline](goal-direction-baseline-v0.zh-CN.md) 的 M1 candidate
+可根据传入数据描述声明资料的漂移，目前没有生产回执 writer/consumer；它既不认证
+这些回执，也不提供本节所需的共享 Goal 意图版本或执行授权。未来组合方向与验收
+consumer 时仍须保留这条观察边界。
 
 本节是既有 acceptance 与显式 result-use owner 的待实现资格合同，不新增全局错误
 状态、taint graph 或自动 amendment 政策。历史完成与当前证据使用资格是不同事实。
@@ -323,8 +354,8 @@ R1/R4/R5 与 S11，本 RFC 不隐式开启新的 acceptance policy。下一完�
 不代表清除全部旧 session，也不证明模型理解了纠正。已经提交的外部 effect 继续
 服从自己的对账或显式授权补偿合同。
 
-**本地实现检查点：** 在 `44931b6d22a50b949d43354e6ea498fb6b68d231`
-观察到的直接来源检查缺口，已有候选实现：
+**源码实现检查点 `3dd3c550afecfa0c525a34e8744a3cf06774ac94`：**
+过去仅检查直接来源的缺口已有对应实现：
 [`delegation_result_use.ts`](../../../loopx/control_plane/collaboration/delegation_result_use.ts)
 拥有判定，[`delegation_results.py`](../../../loopx/control_plane/collaboration/delegation_results.py)
 采集 host 观察。read、start、adoption 与 settlement 资格化 requester 范围内的
@@ -335,7 +366,7 @@ R1/R4/R5 与 S11，本 RFC 不隐式开启新的 acceptance policy。下一完�
 的 link 成功，避免读回与准入分歧。
 
 [`test_delegation_result_use.py`](../../../tests/test_delegation_result_use.py)
-通过真实本机 worker、独立 validator 和 File/SQLite 存储验证 source → A → B：
+通过真实本机 provider 执行合成 worker 任务，以独立 validator 和 File/SQLite 存储验证 source → A → B：
 A input 变化时撤回当前使用，拒绝下游 start/adoption，保留历史，修复后恢复且不重复
 派发 accepted worker。typed 测试覆盖共享来源、循环与预算耗尽。打包 team/evidence
 经真实 HTTP 读回，撤下受影响报告、显示原因，并在修复后复验。CLI/MCP/Chat 共用

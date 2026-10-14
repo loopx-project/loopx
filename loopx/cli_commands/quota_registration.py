@@ -192,6 +192,12 @@ def register_quota_command(
         help="Create a unique private decision directory below this existing root on every guard invocation.",
     )
     quota_parser.add_argument(
+        "--decision-handoff-socket",
+        help=("Opt-in local Host rendezvous before printing a captured should-run decision. "
+              "Requires a capture destination and a same-user Unix socket in a private directory. "
+              "Waits at most 120s for a digest-bound release; failure retains the original receipt."),
+    )
+    quota_parser.add_argument(
         "--turn-instance-id",
         help=(
             "Stable heartbeat settlement id for `quota should-run`, "

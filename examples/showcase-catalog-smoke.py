@@ -29,6 +29,7 @@ PRIMARY_SHOWCASE_IDS = [
     "2026-07-cpp-accuracy-long-run",
     "2026-07-four-day-unattended-agent",
     "2026-07-public-engine-refactor",
+    "2026-10-vllm-long-context-optimization",
     "2026-06-27-overnight-pr-batch",
     "2026-06-24-pr-issue-auto-fix",
     "2026-06-23-agent-to-agent-pr-comments",
@@ -86,11 +87,11 @@ def main() -> int:
     assert frontstage_ids[: len(PRIMARY_SHOWCASE_IDS)] == PRIMARY_SHOWCASE_IDS, frontstage_ids
 
     source_coverage = catalog.get("source_coverage")
-    assert isinstance(source_coverage, list) and len(source_coverage) == 6, source_coverage
+    assert isinstance(source_coverage, list) and len(source_coverage) == 7, source_coverage
     source_keys = {row.get("source_key") for row in source_coverage}
     assert len(source_keys) == len(source_coverage), source_keys
     promoted = [row for row in source_coverage if row.get("disposition") == "promoted_case"]
-    assert {row.get("case_id") for row in promoted} == set(PRIMARY_SHOWCASE_IDS[:3]), promoted
+    assert {row.get("case_id") for row in promoted} == set(PRIMARY_SHOWCASE_IDS[:4]), promoted
 
     assert_public_safe(CATALOG)
     assert_public_safe(SHOWCASES)
@@ -144,6 +145,8 @@ def main() -> int:
             assert localized_path.is_file(), case
             assert_public_safe(localized_path)
             localized_text = read(localized_path)
+            if isinstance(frontend, dict) and frontend.get("show_control_diagram") is False:
+                assert 'aria-label="LoopX control-plane sketch"' not in localized_text, localized_page
             for phrase in FORBIDDEN_SHOWCASE_COPY:
                 assert phrase not in localized_text, f"{localized_page}: forbidden copy {phrase!r}"
             for phrase in FORBIDDEN_TRIVIAL_METRIC_COPY:
@@ -284,11 +287,12 @@ def main() -> int:
         "docs/showcases/cases/independent-cpp-accuracy-long-run.md",
         "docs/showcases/cases/independent-four-day-unattended-agent.md",
         "docs/showcases/cases/independent-public-engine-refactor.md",
+        "docs/showcases/cases/independent-vllm-long-context-optimization.md",
         "complete Showcase catalog",
     ):
         assert phrase in repo_readme, phrase
     featured_section = repo_readme.split("### Used In Real Projects", 1)[1].split("More inspectable surfaces:", 1)[0]
-    assert featured_section.count("- **Independent user") == 3, featured_section
+    assert featured_section.count("- **Independent user") == 4, featured_section
     assert "user-feedback-coverage.md" in showcase_index, showcase_index
     hosted_frontstage = "https://loopx-project.github.io/loopx/frontstage/"
     assert hosted_frontstage not in repo_readme, (

@@ -130,3 +130,26 @@ def test_native_worker_and_stable_bootstrap_cannot_use_capture(tmp_path):
     assert rc != 0 and rejected['ok'] is False
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 0
     assert not list(tmp_path.glob('decision-*'))
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='Requires a private Unix socket')
+def test_renderer_retains_owned_handoff_without_enabling_it_by_default(tmp_path):
+    import socket
+    import tempfile
+    args = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_profile='generic_cli',
+                turn_instance_id=TURN_ID, thin=True)
+    assert build_heartbeat_prompt(**args) == build_heartbeat_prompt(**args, decision_handoff_socket=None)
+    with tempfile.TemporaryDirectory(prefix='hb-handoff-', dir='/tmp') as directory:
+        endpoint = str(Path(directory).resolve() / 'host.sock')
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(endpoint)
+            packet = build_heartbeat_prompt(**args, decision_output_root=tmp_path,
+                                            decision_handoff_socket=endpoint)
+            for field in ('quota_guard_command', 'thin_prompt_command'):
+                argv = shlex.split(packet[field])
+                assert argv[argv.index('--decision-handoff-socket') + 1] == endpoint
+            assert '--decision-handoff-socket when present' in packet['task_body']
+            with pytest.raises(ValueError, match='capture root'):
+                build_heartbeat_prompt(**args, decision_handoff_socket=endpoint)
+    with pytest.raises(ValueError, match='invalid decision handoff socket'):
+        build_heartbeat_prompt(**args, decision_output_root=tmp_path, decision_handoff_socket=endpoint)

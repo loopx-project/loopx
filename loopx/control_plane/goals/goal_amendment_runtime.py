@@ -90,7 +90,7 @@ def _execute_goal_amendment(
             if not local_authority_is_promoted(runtime_root=root, goal_id=goal_id):
                 raise ValueError("amendment requires existing canonical authority; it never promotes a provider")
             gate_path = source_turn_effect_gate_path(registry_path, goal_id)
-            gate = json.loads(gate_path.read_text()) if gate_path.exists() else None
+            gate = json.loads(gate_path.read_text(encoding="utf-8")) if gate_path.exists() else None
             agents = registered_agent_ids_for_goal(goal)
             effective_replan_goal: Mapping[str, Any] | None = None
             derived = _derive_open_replan_obligation_inventory(runtime_root=root, goal_id=goal_id,

@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import json
 import os
+import socket
+import stat
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from ..quota.turn_envelope import bind_turn_decision_capture
+from ..quota.error_codes import QuotaCommandValidationError
 
 
 def write_decision_capture(
@@ -64,3 +67,18 @@ def prepare_turn_decision_capture(
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         write_decision_capture(path, observation)
     return {**plan, "turn_envelope": bound}
+
+
+def validate_handoff_socket(value: str) -> Path:
+    """A caller-owned local transport, not an authority or admission endpoint."""
+    path = Path(value)
+    try:
+        if (os.name != "posix" or not hasattr(socket, "AF_UNIX") or not path.is_absolute() or
+                path.resolve(strict=True) != path or
+                not stat.S_ISSOCK(path.stat().st_mode) or
+                path.parent.stat().st_mode & 0o077 or
+                path.stat().st_uid != os.getuid()):
+            raise OSError("expected a same-user socket in a private physical directory")
+    except OSError as exc:
+        raise QuotaCommandValidationError(f"invalid decision handoff socket: {exc}") from exc
+    return path

@@ -9,8 +9,47 @@ import {
   projectInteractionConsistencyValidation,
   projectInteractionRequiredReads,
   projectInteractionWorkContext,
+  projectBlockedSuccessorWaitObservation,
   type AgentInteractionChannel,
 } from "../../loopx/control_plane/work_items/interaction_contract.ts";
+import { evaluateTodoResumeConditions } from "../../loopx/control_plane/todos/resume_condition.ts";
+
+test("only a positively qualified unbound scheduled wait can omit observation", () => {
+  const todo = {todo_id: "todo_scheduled", status: "deferred", role: "agent",
+    task_class: "advancement_task", resume_when: "resume_at:2099-01-01T00:00:00Z"};
+  const evaluated = evaluateTodoResumeConditions({schema_version: "todo_resume_evaluation_request_v0",
+    items: [todo], source_items: [], evaluated_at: "2026-09-01T00:00:00Z"});
+  const condition = (evaluated.conditions as JsonObject[])[0].condition as JsonObject;
+  const wait = {schema_version: "goal_vision_wait_state_v0", state: "waiting",
+    reason_code: "exact_blocked_successor", automatic_resume: true, agent_id: "agent-a", waiting_todo_count: 1,
+    selected_todo_id: todo.todo_id, selected_todo_status: "deferred",
+    resume_when: todo.resume_when, resume_condition: condition};
+  const request = {effective_action: "agent_scope_wait", agent_id: "agent-a", vision_wait_state: wait};
+  assert.deepEqual(projectBlockedSuccessorWaitObservation(request), {required: false});
+  for (const status of ["committed", "replayed"]) {
+    assert.deepEqual(projectBlockedSuccessorWaitObservation({...request,
+      heartbeat_receipt: {status, settlement_binding_owed: true}}), {required: false});
+  }
+  for (const patch of [
+    {heartbeat_receipt: {status: "committed", settlement_identity: {todo_id: todo.todo_id}}},
+    {heartbeat_receipt: {status: "committed", settlement_identity: {todo_id: "todo_other"}}},
+    {heartbeat_receipt: {status: "committed", pending_action_selection: {todo_id: "todo_other"}}},
+    {heartbeat_receipt: {status: "unknown"}},
+    {heartbeat_receipt: "invalid"},
+    {agent_id: "agent-foreign"},
+    {vision_wait_state: {...wait, waiting_todo_count: 2}},
+    {vision_wait_state: {...wait, selected_todo_status: "done"}},
+    {vision_wait_state: {...wait, resume_condition: {...condition, satisfied: true}}},
+    {vision_wait_state: {...wait, resume_condition: {...condition, evaluated_at: "2099-01-01T00:00:00Z"}}},
+    {vision_wait_state: {...wait, resume_condition: {...condition, clock_provider: "author"}}},
+    {vision_wait_state: {...wait, resume_condition: {...condition, scheduled_for: "2098-01-01T00:00:00Z"}}},
+    {vision_wait_state: {...wait, resume_when: "resume_at:2099-01-01T00:00:00"}},
+    {vision_wait_state: {...wait, resume_condition: {kind: "resume_at", satisfied: false}}},
+    {vision_wait_state: {...wait, resume_when: "todo_done:todo_dependency",
+      resume_condition: {kind: "todo_done", satisfied: false}}},
+  ]) assert.deepEqual(projectBlockedSuccessorWaitObservation({...request, ...patch}), {required: true});
+  assert.deepEqual(projectBlockedSuccessorWaitObservation({...request, effective_action: "normal_run"}), {required: false});
+});
 
 // The host-facing type cannot represent delivery without an agent attempt.
 // @ts-expect-error delivery requires must_attempt=true

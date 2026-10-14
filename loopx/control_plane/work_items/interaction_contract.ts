@@ -14,6 +14,38 @@ import { EffectiveAction } from "../quota/effective_action.generated.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 import type { JsonObject } from "../effect_program.ts";
+import { AgentScopeFrontierAction } from "../agents/agent_scope_frontier.generated.ts";
+import { resumeConditionHasKnownPendingTarget } from "../todos/resume_condition.ts";
+
+/** A clock-backed wait needs no observation before its scheduled instant.
+ * This read model never relaxes an existing Turn binding or settlement fence.
+ * Dependency waits retain their bounded observation/replan policy. */
+export function projectBlockedSuccessorWaitObservation(request: JsonObject): JsonObject {
+  const wait = jsonObject(request.vision_wait_state);
+  const exact = request.effective_action === AgentScopeFrontierAction.AGENT_SCOPE_WAIT &&
+    wait?.schema_version === "goal_vision_wait_state_v0" && wait.state === "waiting" &&
+    wait.reason_code === "exact_blocked_successor" && wait.automatic_resume === true &&
+    typeof wait.selected_todo_id === "string" && !!wait.selected_todo_id &&
+    typeof wait.resume_when === "string" && !!wait.resume_when;
+  if (!exact || !wait) return {required: false};
+  const receipt = jsonObject(request.heartbeat_receipt);
+  const unbound = request.heartbeat_receipt == null || (!!receipt &&
+    ["committed", "replayed"].includes(String(receipt.status)) &&
+    !("settlement_identity" in receipt) && !("pending_action_selection" in receipt));
+  const condition = jsonObject(wait.resume_condition);
+  if (unbound && wait.agent_id === request.agent_id && wait.waiting_todo_count === 1 &&
+      ["open", "deferred"].includes(String(wait.selected_todo_status)) &&
+      condition?.kind === "resume_at") {
+    try {
+      if (resumeConditionHasKnownPendingTarget(condition, {
+        todo_id: wait.selected_todo_id, resume_when: wait.resume_when,
+      })) return {required: false};
+    } catch {
+      // An incomplete or malformed clock proof cannot relax the contract.
+    }
+  }
+  return {required: true};
+}
 
 export const INTERACTION_CONTRACT_SCHEMA_VERSION =
   "loopx_interaction_contract_v0";

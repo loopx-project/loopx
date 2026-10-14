@@ -391,6 +391,7 @@ def handle_support_control_command(
                 turn_granularity=turn_granularity,
                 turn_instance_id=args.turn_instance_id,
                 decision_output_root=args.decision_output_root,
+                decision_handoff_socket=args.decision_handoff_socket,
                 reward_memory_enabled=reward_memory_enabled,
             )
             if args.bootstrap and payload.get("ok"):

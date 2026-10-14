@@ -268,19 +268,20 @@ failure leaves the generated files untouched.
 - [Research Exploration Control Plane v0](research-exploration-control-plane-v0.md)
   ([中文版](research-exploration-control-plane-v0.zh-CN.md))
   - **Delivery on `main`:** Partially implemented.
-  - **Current boundary:** The explicit composition projection and successor
-    binding from M2 shipped in
-    [#3173](https://github.com/huangruiteng/loopx/pull/3173). The canonical
-    observation contract, shared write-time gate, model selection, and inferred
-    triggers have not been promoted.
+  - **Current boundary:** Ordinary result capture/readback and the explicit-only
+    M3 Goal/Todo/experiment write-time gate are implemented; the RFC's §5 retains
+    their local and remote qualification limits. The §11.5 single-experiment
+    result/adoption gate, model utility and inferred triggers remain unqualified.
+    Reuse existing capture and composition owners when connecting those gaps.
 - [Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.md)
   ([中文版](hierarchical-agent-stride-control-v0.zh-CN.md))
-  - **Delivery on `main`:** M1 observation slice implemented.
-  - **Current boundary:** Read-only stride observation and its synthetic
-    boundary fixture shipped in
-    [#3207](https://github.com/huangruiteng/loopx/pull/3207) and
-    [#3290](https://github.com/huangruiteng/loopx/pull/3290). Adaptive effect,
-    delivery, and authority stride selection remains research-only.
+  - **Delivery on `main`:** M1 observation and opt-in source-bound replan feedback
+    and structured proposals are implemented.
+  - **Current boundary:** Prior decisions and later recorded work reach the same
+    review owner; source/proposal validity does not prove model adoption or gain.
+    §11 targets one provider-result/adopted-work/next-review episode. Matched
+    research continuation and adaptive promotion retain separate gates; see the
+    [implementation comparison](../long-running-execution-exploration-and-correction.md).
 - [Post-Outcome Memory Utility Attribution v0](post-outcome-memory-utility-attribution-v0.md)
   ([中文版](post-outcome-memory-utility-attribution-v0.zh-CN.md))
   - **Delivery on `main`:** Stage 1 implemented.

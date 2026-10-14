@@ -362,6 +362,21 @@ def test_baseline_and_treatment_use_same_harbor_entry(tmp_path):
         assert agent.replan_after_turns == (6 if agent.execution.uses_loopx else None)
 
 
+def test_checkpoint_request_is_explicit_and_reaches_the_existing_worker_env(tmp_path, monkeypatch):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+    monkeypatch.setenv("LOOPX_CHECKPOINT_REQUEST", "/ambient-request.json")
+    off = BenchmarkCodex(logs_dir=tmp_path / "off", model_name="openai/fixture")
+    assert "LOOPX_CHECKPOINT_REQUEST" not in off._worker_env(cwd="/workspace")
+    on = BenchmarkCodex(logs_dir=tmp_path / "on", model_name="openai/fixture",
+                        checkpoint_request_path="/control/checkpoint-request.json")
+    assert on._worker_env(cwd="/workspace")["LOOPX_CHECKPOINT_REQUEST"] == "/control/checkpoint-request.json"
+    for settings in ({"execution_mode": "plain", "checkpoint_request_path": "/control/request.json"},
+                     {"checkpoint_request_path": "relative"}, {"checkpoint_request_path": "/control/../request.json"}):
+        with pytest.raises(ValueError, match="checkpoint_request_path"):
+            BenchmarkCodex(logs_dir=tmp_path / "invalid", model_name="openai/fixture", **settings)
+
+
 @pytest.mark.parametrize("existing", [False, True])
 @pytest.mark.parametrize("settings,field,value", [
     ({}, "replan_after_effective_turns", 6),

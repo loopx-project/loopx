@@ -678,8 +678,9 @@ output only. ok=false -> recovery, no delivery. Language=user. Honor `boundary`,
 Read `detail_ref.full_decision` for selection, replan, capability context or
 missing/truncated commands: same-invocation observation, not fresh admission.
 Selection uses the saved `interaction_contract.cli_channel.selection_command`.
-Keep the guard's --turn-envelope and --decision-output-root on every fresh
-selection/repair/replan guard; each call saves its own immutable observation.
+Keep all supplied guard transport flags (--turn-envelope, --decision-output-root,
+and --decision-handoff-socket when present) on every fresh selection/repair/replan
+guard; each call saves its own immutable observation.
 After a workspace or state change, re-enter the guard before continuing work.
 
 ```sh

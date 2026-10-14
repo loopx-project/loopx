@@ -60,6 +60,28 @@ scale remain user-reported.
 
 [Read the case and inspect all seven PRs](cases/independent-public-engine-refactor.md).
 
+### vLLM long-context optimization merged upstream
+
+**Independent user** · public upstream merge · author-reported LoopX workflow
+
+[Zheng Cai's public account](https://x.com/zigzagcai/status/2109952174822408443)
+describes LoopX as the workflow engine for an agent-driven framework that
+profiles vLLM, researches papers and code, tests hypotheses, and measures
+correctness and speed. [vLLM PR #54951](https://github.com/vllm-project/vllm/pull/54951)
+merged a cost-balanced TP row-sharding optimization for sparse-indexer prefill
+on October 11, 2026.
+
+The upstream report shows **32.59% higher total-token throughput** at
+1,000,000 input tokens for GLM-5.3-Flash on 4×H200, TP4, C1, 256 output tokens,
+a 65,536-token batch budget, legacy runner and explicit FA3. Four fresh-process
+paired comparisons exclude warmups. This is a reported result under those
+conditions, not saturated serving throughput or an isolated LoopX uplift.
+The practical value is sustaining exploration and validation until a concrete
+optimization is ready for upstream review, while retaining the developer's
+ownership of validation and maintenance.
+
+[Read the bilingual case, sources, and measurement limits](cases/independent-vllm-long-context-optimization.md).
+
 Open the [hosted Showcase index](https://loopx-project.github.io/loopx/docs/showcases/index.html)
 for the bilingual visual case surface. The
 [feedback coverage map](user-feedback-coverage.md) records every input cluster,
@@ -84,6 +106,9 @@ The machine-readable catalog lives in
 surfaces should consume that file instead of scraping prose.
 The first frontend surface contract lives in
 [frontend-surface.md](frontend-surface.md).
+Set `frontend_card.show_control_diagram` to `false` when a case's sources do
+not substantiate its internal control-plane path; the HTML case renderer then
+omits the generic sketch instead of illustrating an unverified mechanism.
 Seed-user feedback and case candidates should follow the
 [PoC feedback and case report loop](poc-feedback-case-report-loop.md) before
 they become catalog entries or Frontstage cards.
@@ -200,9 +225,10 @@ opt-in, and review signals stay separate from execution permission.
 | [13+ hour C++ algorithm accuracy run](cases/independent-cpp-accuracy-long-run.md) | Complex accuracy work risked local thrashing and context loss | Vision-aligned replan triggered public research and a new code-memory method | Improved precision is user-reported; public tool is inspectable |
 | [Four-day unattended agent run](cases/independent-four-day-unattended-agent.md) | Operator needed useful work without repeated prompting | Durable continuation plus a periodic report surface | Four days and usefulness are user-reported |
 | [Public Engine refactor](cases/independent-public-engine-refactor.md) | Monolithic Engine mixed nine responsibility areas | One durable goal became staged, PR-sized component extractions | Seven PRs are public; attribution and token scale are user-reported |
+| [vLLM long-context optimization](cases/independent-vllm-long-context-optimization.md) | Framework optimization requires repeated research, profiling, and validation | Author reports LoopX as the workflow engine for continuous exploration and experiments | Upstream merge is public; 32.59% C1 throughput gain is reported for a specific 1M-token configuration |
 
 The catalog and hosted index keep these external cases first. README files keep
-only the strongest three and link back here; the full inventory stays in this
+four featured independent-user cases and link back here; the full inventory stays in this
 directory.
 
 ## Contributor, Creator, And Demo Cases

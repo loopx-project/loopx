@@ -490,17 +490,34 @@ Use `--output .local/semantic-inventory.json` only when an exported report is us
 `--output <path> --check` checks that explicit report without repairing it.
 词表、owner 与预算继续入库并受检查；结构清单按需计算，无须为普通 PR 补生成文件。
 
-The same premerge semantic smoke validates the tracked project-registry I/O
-census, including call-site coordinates and direct-I/O classifications, using
-its existing tracked-product source policy. After moving a registered call, run
-`uv run python scripts/generate_project_registry_io_manifest.py` and review the
-diff; new direct I/O still requires classification. This is a source-checkout
-check requiring Git and Node development dependencies, not an installed-App
-health check. No model calls are involved.
+The same premerge semantic smoke computes the project-registry I/O census from
+the current tracked-product sources. The census and its call-site coordinates
+are derived, never committed or loaded by the smoke. Only reviewed direct-I/O
+classifications remain tracked in
+`loopx/semantics/project_registry_io_classifications_v1.json`, keyed by stable
+site identity without line or column numbers. Ordinary call moves need no
+regeneration commit; new direct I/O requires a reviewed classification, and
+removed or renamed classified sites fail until their stale entries are removed
+or updated. Reports cannot supply or override classifications.
 
-同一 premerge 语义检查也会校验项目注册表 I/O 清单，复用已有产品源码扫描规则，检查调用
-位置与直接 I/O 分类。移动调用后重新生成并审阅清单；新增直接 I/O 仍需分类。
-这属于需要 Git 和 Node 开发依赖的源码检查，不是安装版 App 健康检查，也不调用模型。
+`uv run python scripts/generate_project_registry_io_manifest.py` prints JSON
+without writing files. Add `--output .local/project-registry-io.json` to export
+an optional report; the same explicit `--output` with `--check` compares it to
+current source and policy without repairing it. `--check` alone is rejected.
+The legacy `project_registry_io_manifest_v1.json` path is ignored. This is a
+source-checkout check requiring Git and Node development dependencies, not an
+installed-App health check. No model calls are involved.
+
+同一 premerge 语义检查从当前受版本控制的产品源码即时计算项目注册表 I/O 清单。
+清单与调用坐标不入库，smoke 也不读取导出报告。仅人工审阅的直接 I/O 分类保留在
+`loopx/semantics/project_registry_io_classifications_v1.json`，以不含行列号的位点身份为键。
+普通代码移位无需补生成文件；新增直接 I/O 仍须审阅分类，删除或重命名已分类位点后须
+清理或更新失效条目。导出报告不能提供或覆盖分类。
+
+生成脚本默认向 stdout 输出 JSON，不写文件；`--output .local/project-registry-io.json`
+可导出本地报告，同一显式路径加 `--check` 可只读比较当前源码与分类。单独使用
+`--check` 会报错，旧清单路径已忽略。这属于需要 Git 和 Node 开发依赖的源码检查，
+不是安装版 App 健康检查，也不调用模型。
 
 Confirm the interpreter and imported checkout when diagnosing a mismatch:
 
@@ -827,6 +844,20 @@ inline. This restores rules previously omitted by the default projection;
 40,000-character fixture budget remains unchanged: the same workload measures
 30,697 characters before repair and 33,205 after repair, with 56,401 in detail.
 These are JSON fixture measurements, not token costs or model-behavior evidence.
+
+The shared CLI printer subsequently removes JSON presentation whitespace,
+preserving the complete decided payload and Markdown. Default and explicit
+detail JSON using that printer become one line; use `jq .` for indentation.
+The paired 36-Todo / 12-run default measures 48,418→39,726 characters, with
+identical decoded values and unchanged budgets. The [interface contract](../reference/contracts/interface-budget-contract.md)
+records the full character, UTF-8 byte, line and mode comparison. Check all
+affected shared-printer commands, vision-off paths, unknown fields and typed
+errors; do not count unchanged direct-output paths as new serialization gains.
+
+共用 CLI JSON 打印器仅删除展示空白，完整决策值与 Markdown 保持不变；默认及详情
+JSON 变为单行，人工缩进可用 `jq .`。同一 36 Todo／12 run 默认输出
+48,418→39,726 字符，预算不改。验证须覆盖所有受影响命令、vision 关闭、未知字段
+与类型化错误，直接输出路径的原样结果不算新增节省。
 
 The complete emitted-CLI qualification is a separate workload: the original
 36-Todo / 12-run vision case measures 45,313 lossy / 48,418 complete characters.

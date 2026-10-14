@@ -14,6 +14,36 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_machine_json_keeps_values_capture_and_human_renderer(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from copy import deepcopy
+
+    from loopx.cli_runtime import print_payload
+    from loopx import usage_ping
+
+    payload = {
+        "ok": False,
+        "error": "保留空格、换行\n和 \\\" 引号",
+        "future": {"unknown": [None, True, 3, {"projection_ref": "$.future"}]},
+        "instruction": "Read before work. Continue when evidence is missing.",
+    }
+    original = deepcopy(payload)
+    captured = []
+    monkeypatch.setattr(usage_ping, "capture_result", lambda value: captured.append(deepcopy(value)))
+    print_payload(payload, "json", lambda _: pytest.fail("JSON cannot use Markdown"))
+    stdout = capsys.readouterr().out
+    assert json.loads(stdout) == original
+    assert stdout.count("\n") == 1  # Newlines in values remain JSON escapes.
+    assert "保留空格" in stdout
+    assert payload == original
+    assert captured == [original]
+
+    print_payload(payload, "markdown", lambda value: "Readable result\n" + value["error"])
+    assert capsys.readouterr().out == "Readable result\n" + original["error"] + "\n"
+    assert captured == [original, original]
+
+
 def run_isolated_script(script: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-c", script],

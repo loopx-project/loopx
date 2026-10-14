@@ -62,6 +62,9 @@ loopx-openviking-semantic-preference = "loopx.extensions.openviking_semantic_pre
 [tool.setuptools.packages.find]
 include = ["loopx*"]
 
+[tool.setuptools.exclude-package-data]
+"loopx.semantics" = ["project_registry_io_manifest_v1.json"]
+
 [tool.setuptools.package-data]
 "loopx" = ["web/chat/*.html", "web/chat/*.json", "web/chat/assets/*", "web/chat/manifest.webmanifest", "web/chat/pwa/*"]
 "loopx.control_plane" = ["*.json", "*.ts", "presentation/*.ts"]

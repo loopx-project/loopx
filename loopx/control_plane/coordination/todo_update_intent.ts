@@ -7,7 +7,8 @@ import {AuthorityStoreProtocolError, canonicalAuthorityObject, canonicalAuthorit
   requireAuthorityStoreId} from "./authority_store_codec.ts";
 import {normalizeRegisteredTodoAgents, normalizeTodoAgent} from "./todo_agents.ts";
 import {canonicalTodoRecord} from "./todo_presentation.ts";
-import {TODO_OWNERSHIP_INTENT_FIELDS, planTodoAuthoringScope, TODO_AUTHORING_SCOPE_REQUEST_SCHEMA} from "../todos/authoring_scope.ts";
+import {planTodoAuthoringScope, TODO_AUTHORING_SCOPE_REQUEST_SCHEMA} from "../todos/authoring_scope.ts";
+import {shouldRecordTodoMutationActor} from "../todos/public_update.ts";
 import {normalizeNativePlanningIntent, planNativeTodoUpdate} from "../todos/native_update_plan.ts";
 import {decodeMonitorPollObservation, type MonitorPollObservation} from "../todos/monitor_metadata.ts";
 import {
@@ -156,10 +157,8 @@ export function prepareUpdatedTodo(
   // Preserve the public planner's legacy metadata semantics. Raw copy edits
   // already carry actor attribution, while planning-only updates historically
   // leave last_actor_agent_id untouched.
-  const rawCopyChanged = Object.entries(input.patch).some(([field, value]) =>
-    !Object.hasOwn(todo, field) || !canonicalAuthorityBytes(todo[field]).equals(canonicalAuthorityBytes(value))) ||
-    input.clear_fields.some(field => Object.hasOwn(todo, field));
-  if (rawCopyChanged || input.monitor_observation !== undefined || TODO_OWNERSHIP_INTENT_FIELDS.some(field => Object.hasOwn(input.planning_intent ?? {}, field))) {
+  if (shouldRecordTodoMutationActor(todo, input.patch, input.clear_fields,
+      input.planning_intent ?? {}, input.monitor_observation)) {
     next.last_actor_agent_id = input.actor_agent_id;
   }
   next.updated_at = input.now.toISOString().replace(/\.\d{3}Z$/u, "Z");

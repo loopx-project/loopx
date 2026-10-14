@@ -243,8 +243,15 @@ owner-run showcase，不代表连续算力执行、独立复现或生产结果�
   [公开 Issue](https://github.com/zilliztech/mfs/issues/166)和七个合并 PR 检查；
   LoopX 归因与用户报告的 `10 亿+` token 规模仍按用户自述标记。
   [检查完整案例](docs/showcases/cases/independent-public-engine-refactor.md)。
+- **外部独立用户 · vLLM 性能优化合入上游。**
+  [Zheng Cai](https://x.com/zigzagcai/status/2109952174822408443) 公开报告以
+  LoopX 为 workflow engine，持续做 profiling、研究、实验和正确性检查。
+  [vLLM PR #54951](https://github.com/vllm-project/vllm/pull/54951) 已合并；
+  sparse indexer 优化报告的总 token 吞吐提升 **32.59%**，条件为
+  GLM-5.3-Flash、1M 输入 token、4×H200、TP4、C1。
+  [查看工作流、完整测试条件与证据边界](docs/showcases/cases/independent-vllm-long-context-optimization.md)。
 
-这里长期只维护当前最强的三个案例，不复制全量清单。完整的 contributor case、
+这里展示四个外部独立用户案例，不复制全量清单。完整的 contributor case、
 creator dogfooding、reproducible demo 和证据强度标签见
 [Showcase 全量目录](docs/showcases/README.md)。
 

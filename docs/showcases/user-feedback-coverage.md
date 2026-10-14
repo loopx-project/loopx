@@ -14,6 +14,14 @@ private source URL or raw internal discussion.
 | `ecommerce-24x7-interest` | Not promoted | Not a realized case | Expresses interest in seller analytics and competitor monitoring; it does not report a completed LoopX deployment. |
 | `peer-harness-assessment` | Not promoted | Not a LoopX usage case | Positive assessment of the vision and a comparable harness, but not evidence that the reported workloads used LoopX. |
 
+## Later Public Sources
+
+These sources were added separately from the six-cluster manual import above.
+
+| Stable source key | Public disposition | Showcase mapping | Reason |
+| --- | --- | --- | --- |
+| `vllm-pr-54951-public-workflow` | Promoted | [vLLM long-context optimization](cases/independent-vllm-long-context-optimization.md) | October 13, 2026 author posts explicitly attribute the workflow engine to LoopX; vLLM PR #54951 independently establishes the upstream merge. Measurements retain their reported configuration and limits. |
+
 ## Import Boundary
 
 - Source revision: owner-approved manual revision `813`.

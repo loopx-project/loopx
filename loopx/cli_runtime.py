@@ -96,7 +96,9 @@ def print_payload(
 	from .usage_ping import capture_result
 	capture_result(payload)
 	if fmt == "json":
-		print(json.dumps(payload, ensure_ascii=False, indent=2))
+		# JSON is the machine contract; retain every value and remove only
+		# presentation whitespace. Human-readable output remains Markdown.
+		print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 	else:
 		print(markdown_renderer(payload))
 

@@ -795,7 +795,7 @@ The following IDs are durable acceptance anchors for engineering Todos and PRs. 
 | A20 | Context compaction and bounded projection omit a material rejected approach or unresolved question | Coverage exposes the omission; authorized drill-down restores required context or records a real gap; no unbounded TurnEnvelope, lost obligation or false completed handoff; frontend/Lark/CLI show the same actual restoration and result |
 | A21 | Short question and long evidence-rich investigation through owner Chat and Lark | The short answer is direct; the long answer has a readable conclusion, preserved full Markdown report, source/version links and bounded gaps. Frontend rendering treats model HTML as inert; Lark does not truncate away the conclusion or silently lose the report. Neither answer requires identical boilerplate sections |
 | A22 | Tool/progress events, reconnect, SSE replay and delayed final answer | The current phase and only host-emitted public activity are visible; replay deduplicates by event identity, keeps the complete final answer and does not restart the Turn. Failures and absent activity remain truthful |
-| A23 | Stop and steer an active Turn; stale button, duplicate ingress, completion race and unsupported adapter | Stop affects only the selected Turn and reports the actual outcome. Steering is received in that Turn or explicitly queued with a receipt; no correction silently disappears, later Turn stops, duplicate model run or worker cancellation |
+| A23 | Stop and steer an active Turn; stale button, duplicate ingress, completion race and unsupported adapter | Stop affects only the selected Turn and reports the actual outcome. Steering retains its original Turn and ingress identity; stale/unavailable targets are refused. Later queue delivery requires a previously permitted fallback or a new explicit delivery choice, with a distinct truthful receipt. No silent loss, retargeting, duplicate model run or unrelated worker cancellation |
 | A24 | Steward routes a product request to a responsible active Agent amid stopped, registered-only, stale and model-mismatched decoys | Fresh responsibility, authorization, runtime reachability, capacity and profile fit determine the recipient; receiver assessment, work and final evidenced conclusion return once to the original frontend/Lark conversation. Catalog discovery and inbox delivery alone fail |
 
 Run deterministic transition/compatibility tests, real installed-runtime qualification, then real frontend/Lark roundtrips with synthetic safe tasks and an authorized private canary. Record runtime/source versions and emitted receipts. Include mobile Lark and packaged frontend render/readback; backend tests alone do not pass A10. Provider receipt ambiguity and offline failure cases are required, not optional happy-path add-ons.
@@ -807,6 +807,33 @@ Measure ingress acknowledgement latency, first substantive response, handoff ass
 Target an ingress receipt within two seconds on a healthy local service, independently of model latency; this is an initial SLO to measure, not a model-response promise. Long work announces an actionable delay rather than emitting periodic noise. Cap model concurrency and per-turn investigation cost through existing runtime/Goal configuration; the manager's budget must not consume all worker capacity. Busy workers retain accepted work; queuing and next wake are visible.
 
 Use existing service recovery and receipt pumps. No manager-specific business automation for each kind of request. Expose configuration and failures through the existing CLI, capability settings and manager conversation. Troubleshooting distinguishes model failure, tool/policy denial, state conflict, unreachable receiver and transport formatting/delivery failure.
+
+**Turn-bound steering (A23):** preserve the requested Session, exact Turn,
+unchanged text and ingress identity through browser persistence, dispatch and
+replay. The current frontend requires persistent retry readback before sending;
+unavailable storage retains the editable draft. Unknown delivery retries the
+same target, while confirmed non-delivery follows the existing recovery rule.
+Backend/provider acknowledgement does not prove the Host's consumption point or
+the model's changed action. Qualify tools-in-flight, compaction and finalization
+against the selected Host's [declared input boundary](agent-session-execution-modes-v0.md),
+and preserve [requested/fallback/effective delivery semantics](desktop-execution-frontends-v0.md#agent-scoped-bot-ingress-modes).
+An exact steer must not silently become a new task on a later Turn.
+
+For the same long-running task, qualify each observed stage from its owning
+fact: queue acceptance from ingress, delivery from the Host receipt, consumption
+from the actual next request, adoption from subsequent work/artifact evidence,
+and acceptance from the configured validator. An unobserved stage stays unknown;
+the UI must not infer it from an earlier ACK. Preserve these distinctions in
+A23 readback using existing owners, not a new unified lifecycle writer. A
+reasoned decision to retain the current route is not a delivery failure.
+
+Continuation after correction or handoff also follows the
+[current Goal/criterion/source basis](shared-goal-alignment-and-governed-amendment-v0.md#38-invalid-evidence-and-affected-consumers).
+Receiving context, adopting a note and resuming a journal do not certify the
+receiver's next decision. Preserve original-operation recovery, then qualify
+new work against the current basis; read back the resulting artifact and return
+it through the original route. This does not qualify other Hosts or Lark by
+analogy with the local Chat path.
 
 **Realtime IM entry (S1/S5/S10):** qualify long-connection reception, durable
 admission, host execution and visible return separately. While one answer is

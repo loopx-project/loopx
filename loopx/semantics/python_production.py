@@ -51,11 +51,11 @@ def _import_module(path: str, node: ast.ImportFrom) -> str:
     return '.'.join(parts[:len(parts) - node.level + 1] + ([node.module] if node.module else []))
 
 
-_TREES: dict[tuple[str, int], ast.Module] = {}
+_TREES: dict[SourceFile, ast.Module] = {}
 
 
 def _parsed(source: SourceFile) -> ast.Module:
-    key = (source.path, hash(source.text))
+    key = source
     tree = _TREES.get(key)
     if tree is None:
         tree = _TREES[key] = ast.parse(source.text, filename=source.path)
@@ -139,7 +139,18 @@ def enum_members(source: SourceFile, symbol: str, *, strict: bool = False) -> di
 
 def python_literal_uses(source: SourceFile, field: str) -> set[str]:
     """Literal writes and direct dispatch operands; not alias/data-flow proof."""
-    tree = ast.parse(source.text, filename=source.path)
+    tree = _parsed(source)
+    nodes = list(ast.walk(tree))
+    # Inspect parsed names/keys, including escaped strings and normalized
+    # identifiers. Parse errors must still fail even when the field is absent.
+    if not any(
+        isinstance(node, ast.Name) and node.id == field
+        or isinstance(node, ast.Attribute) and node.attr == field
+        or isinstance(node, ast.Constant) and node.value == field
+        or isinstance(node, ast.keyword) and node.arg == field
+        for node in nodes
+    ):
+        return set()
 
     def reads(node: ast.AST) -> bool:
         if isinstance(node, ast.Name):
@@ -177,7 +188,7 @@ def python_literal_uses(source: SourceFile, field: str) -> set[str]:
     # conditions and does not inspect strings containing sample source text.
     rows = scan_python_production(source, field=field, enums={})
     result = set().union(*(row.values for row in rows))
-    for node in ast.walk(tree):
+    for node in nodes:
         if isinstance(node, ast.Compare):
             for left, operator, right in zip(
                 [node.left, *node.comparators[:-1]], node.ops, node.comparators, strict=True,
@@ -251,13 +262,13 @@ def _is_generator(node: ast.FunctionDef) -> bool:
     return False
 
 
-# Keyed the same way ``_TREES`` is, by path and text hash, because the table is
+# Keyed the same way ``_TREES`` is, by the complete frozen source, because the table is
 # derived from the module body alone and is the same for every vocabulary
 # scanned over that file. Keying it on ``id(tree)`` made its correctness depend
 # on ``_TREES`` never evicting: give that cache a bound and a reused id would
 # hand back another file's functions, binding a call to the wrong callee with
 # no symptom.
-_MODULE_FUNCTIONS: dict[tuple[str, int], dict[str, ast.FunctionDef]] = {}
+_MODULE_FUNCTIONS: dict[SourceFile, dict[str, ast.FunctionDef]] = {}
 
 
 def _enclosing_scope(tree: ast.Module, target: ast.Global) -> ast.AST:
@@ -287,7 +298,7 @@ def _module_functions(source: SourceFile, tree: ast.Module) -> dict[str, ast.Fun
     binding of the name -- a redefinition, class, import, assignment or
     ``del`` -- leaves the name unproven and the call keeps ``call_result``.
     """
-    key = (source.path, hash(source.text))
+    key = source
     known = _MODULE_FUNCTIONS.get(key)
     if known is not None:
         return known

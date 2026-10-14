@@ -36,6 +36,7 @@ def test_todo_metadata_round_trip_preserves_canonical_values() -> None:
             }
         ],
         claimed_by="codex-quality",
+        last_actor_agent_id="codex-quality",
         bound_agent="codex-main",
         goal_bound=False,
         blocks_agent="codex-side",
@@ -107,6 +108,7 @@ def test_todo_metadata_round_trip_preserves_canonical_values() -> None:
             }
         ],
         "claimed_by": "codex-quality",
+        "last_actor_agent_id": "codex-quality",
         "bound_agent": "codex-main",
         "goal_bound": False,
         "blocks_agent": "codex-side",
