@@ -72,9 +72,18 @@ does not mint a substitute instance identity. Lifecycle-only
 `source_session_v1` registry profiles remain unavailable for this runtime,
 as required by Core. Replacement identity or changed authority rejects work.
 
-Start uses the current canonical heartbeat task. Pause confirms cancellation
-has drained; resume retains the same session and target. Repeated start cannot
-replace an executing target. Cold recovery restores that session, pauses an
+Start uses the current canonical heartbeat task and journals the Goal basis it
+was delivered under: the acceptance-contract revision/digest, when a canonical
+authority exists, and each declared authority source's revision. Pause confirms
+cancellation has drained; resume retains the same session and target only while
+Core presents the same basis. A changed criterion or source after start refuses
+the plain resume with `goal_basis_changed`, and an unreadable basis refuses it
+with `goal_basis_unavailable`; the target stays paused and the recorded basis is
+not rewritten. Stop, then start, delivers a fresh objective under the current
+basis. Bindings journaled before the basis existed resume as before and record
+nothing they did not deliver. A matching basis proves current owning
+requirements were available at that boundary, not that the native model
+understood or acted on them. Repeated start cannot replace an executing target. Cold recovery restores that session, pauses an
 active target and never automatically resumes. The managed broker serializes
 operations and owns the app-server process tree; a guardian closes that tree
 if the broker dies. Its session database is isolated from other CLI/Desktop
