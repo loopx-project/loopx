@@ -697,6 +697,11 @@ that error grants no work or settlement authority. Successful, foreign and
 malformed readbacks retain the existing typed capture checks. This contains
 optional capture failure; it does not repair the underlying quota error.
 
+The qualifier exports only the source's digest-bound native configuration through
+the existing Docker archive transport into a controller-owned private directory.
+It works with a root source guest and ordinary controller/receivers, preserves
+source permissions, and never exports the source authentication files.
+
 An explicit **SForge phase-clock participant** preserves a declared Host file's
 remaining duration alongside native opportunities. Add
 `--phase-deadline-file /private/source-phase-deadline` to capture, and

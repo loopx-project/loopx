@@ -26,6 +26,19 @@ def require_one_pass(report):
         raise ValueError(f"Qualification requires one actual pass and no skip; inspect {report}")
 
 
+def _stage_source_configuration(container, native, destination):
+    from benchmark.edgebench.checkpoint_worker import _archive
+
+    # The source guest can be root while its controller is an ordinary user.
+    # Read only the bound config through the existing daemon archive seam;
+    # source UID/mode and auth files remain untouched.
+    config = _archive(container, str(Path(native["guest_home"]) / "config.toml"), destination)
+    config.chmod(0o600)
+    if hashlib.sha256(config.read_bytes()).hexdigest() != native["config_sha256"]:
+        raise ValueError("Source native configuration differs from the sealed checkpoint")
+    return config
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--provider-source", type=Path, required=True)
@@ -133,9 +146,7 @@ def main():
         assert metadata["held_decision_component_id"] and metadata["decision_sha256"]
         git_object = point / "components/task_workspace/.git/objects/ab/retained-object"
         assert git_object.read_text() == "Readonly source evidence" and git_object.stat().st_mode & 0o777 == 0o444
-        home = Path(metadata["native_session"]["guest_home"])
-        config = source_files / home.relative_to("/qualification") / "config.toml"
-        config.resolve(strict=True)
+        config = _stage_source_configuration(container, metadata["native_session"], output / "native-config")
         for stride in (False, True):
             name = "stride" if stride else "ordinary"
             results = output / name
