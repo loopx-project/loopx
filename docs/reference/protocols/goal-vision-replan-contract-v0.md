@@ -999,6 +999,14 @@ remains a lifecycle-only profile under its existing runtime admission restrictio
 No capability, provider or actor write authority is added. Required checkpoints
 continue the current Agent after the durable result; typed exemptions add no
 direction call.
+For unfinished work already admitted through ordinary MCP `should_run`, use
+`wait_task(todo_id, agent_id, reason)` for a quiet typed wait. It restores the
+original Turn and checks its current guard, leaves the Todo open, and performs
+no direction call, lifecycle completion, writeback or quota spend. It does not
+repair a completed result's pending direction; use `review_task_vision` and the
+original completion intent for that recovery. Resume unfinished work through
+`should_run` when ready and revalidate a retained candidate on changed facts.
+
 Default entrypoint qualification currently covers local-registry Legacy Markdown,
 File and SQLite. PostgreSQL has native result transaction/head/CAS conformance;
 the ordinary Python CLI/MCP/managed runtime does not supply the existing
