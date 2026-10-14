@@ -645,7 +645,7 @@ the xdist controller. Read the downloaded log with
 and does not replace JUnit, coverage or the required gate. See the
 [timing observation boundary](ci-impact-selection.md#four-complete-python-shards).
 Full Python shards also opt into `--ci-stall-after 120` on the existing pytest
-observer: a long-running test prints its executing thread's Python stack without
+observer: a long-running test attempts to print its executing thread's Python stack without
 terminating it or changing its result. This cooperative diagnostic needs the
 interpreter to schedule its observer thread; it does not diagnose native code
 that holds the GIL indefinitely. The dump is diagnostic evidence, not proof that the last named test
@@ -653,6 +653,12 @@ caused a stall. Reproduce with `-p scripts.ci.pytest_timing --ci-stall-after 120
 `--ci-stall-after` or set it to `0` to keep this default-off diagnostic disabled. This grants no authority to
 inspect other processes. Large text-boundary fixtures use short parameter IDs
 so verbose progress records their cases without printing the payload.
+Each triggered snapshot uses an isolated same-interpreter writer with a 100ms
+self-exit deadline, plus a 500ms parent communication timeout with kill/reap.
+This bounds pipe backpressure without changing shared stderr flags or leaving
+a persistently blocked writer after pytest exits; native process startup can add latency.
+Snapshots may be dropped on IO failure or backpressure. Default `0` starts no
+observer timer or writer process; pytest's own results and reports remain authoritative.
 The reusable Sonar workflow consumes that same run's XML and never reruns
 pytest or reads cross-run artifacts. Missing Sonar tokens still skip analysis
 successfully; test jobs receive no Sonar secret. The trigger is the union of
@@ -670,11 +676,15 @@ CI 同时在 xdist controller 流式记录 pytest 原生 phase 耗时。下载�
 JUnit、coverage 或必过门禁。归属与测量边界见
 [分片耗时记录](ci-impact-selection.md#four-complete-python-shards)。
 全量 Python 分片在既有 pytest observer 上显式启用 `--ci-stall-after 120`：测试
-超过该时长就输出其执行线程的 Python 栈，不终止测试或改变结果。此协作式诊断
+超过该时长就尝试输出其执行线程的 Python 栈，不终止测试或改变结果。此协作式诊断
 需要解释器调度观察线程，无法诊断始终占有 GIL 的原生代码。栈用于诊断，不能只凭
 最后一个测试名认定卡顿根因。本地加 `-p scripts.ci.pytest_timing --ci-stall-after 120`
 复现，省略此参数或设为 `0` 可保持默认关闭；它不授予检查其他进程的权限。大文本边界 fixture 使用简短参数 ID，详细进度保留用例身份，
 不打印整个载荷。
+每次触发栈输出时，使用同解释器的隔离 writer，100ms 自行退出；父进程另设
+500ms 通信期限，超时则终止并回收。管道背压不会改变共享 stderr 标志或留下
+持续阻塞的 writer；原生进程启动仍可能增加延迟。IO 失败或背压时可丢弃栈输出。
+默认 `0` 不启动观察 timer 或 writer 进程；pytest 原生结果和报告仍是权威。
 Sonar 只复用同一次 run 的 XML，不重复测试、不跨 run 取产物。缺少 token 仍成功跳过
 Sonar，测试 job 不接收 Sonar secret。触发范围取原有两套 workflow 的并集；纯前端
 PR 使用前述豁免，Sonar 配置变更仍全量运行，包括没有 token 的 fork。

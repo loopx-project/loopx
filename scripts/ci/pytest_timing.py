@@ -11,6 +11,7 @@ import hashlib
 import math
 import os
 import re
+import subprocess
 import time
 import sys
 import threading
@@ -26,6 +27,12 @@ from scripts.ci.pytest_failure_context import exception_type_name, failure_conte
 
 PREFIX = "LOOPX_PYTEST_TIMING "
 _STACK_FD = pytest.StashKey[int]()
+_STACK_WRITE_PROGRAM = (
+    "import os,sys,threading;"
+    "deadline=threading.Timer(0.1,lambda:os._exit(0));"
+    "deadline.daemon=True;deadline.start();"
+    "os.write(2,sys.stdin.buffer.read())"
+)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -49,11 +56,20 @@ def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, object, object
         while frame is not None and len(rows) <= 24:
             rows.append(f"  {frame.f_code.co_filename}:{frame.f_lineno} in {frame.f_code.co_name}")
             frame = frame.f_back
+        del frame
         if not finished.is_set():
             try:
-                os.write(item.config.stash[_STACK_FD],
-                         ("\n" + "\n".join(rows) + "\n").encode("utf-8", errors="backslashreplace"))
-            except OSError:
+                # A duplicate shares stderr's flags: never change them or
+                # write a potentially full pipe in this process. The isolated
+                # writer has its own exit deadline, even if pytest is killed;
+                # run's timeout also kills/reaps it before releasing this FD.
+                subprocess.run(
+                    [sys.executable, "-I", "-S", "-c", _STACK_WRITE_PROGRAM],
+                    input=("\n" + "\n".join(rows) + "\n").encode("utf-8", errors="backslashreplace"),
+                    stdout=subprocess.DEVNULL, stderr=item.config.stash[_STACK_FD],
+                    timeout=0.5, check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
                 # Optional diagnostics cannot replace pytest's result on IO failure.
                 pass
 
