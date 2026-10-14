@@ -6,6 +6,7 @@ held over Goal IO, and no caller-authored terminal outcome enters the linker.
 from __future__ import annotations
 
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Mapping
 
 from .request_control_source import _execute, execute_request_control, request_amendment_snapshot
@@ -45,21 +46,25 @@ def _reservation(snapshot: Mapping[str, Any], operation_id: Any) -> dict[str, An
 
 def _goal(registry: Path, root: Path, ref: Mapping[str, str], receiver: str,
           operation: str, parameters: Mapping[str, Any], *, context: Mapping[str, Any] | None = None,
+          replan_configuration_reader: Callable[[Mapping[str, Any], Path], Mapping[str, Any]],
           execute: bool = False) -> dict[str, Any]:
     return _execute_goal_amendment(registry_path=registry, runtime_root=root, goal_id=ref["goal_id"],
         goal_instance_id=ref["goal_instance_id"], actor_agent_id=None if operation == "receipt" else receiver,
-        operation=operation, parameters=parameters, request_context=context, execute=execute)
+        operation=operation, parameters=parameters, request_context=context, execute=execute,
+        replan_configuration_reader=replan_configuration_reader)
 
 
 def _finish(*, registry: Path, root: Path, ref: Mapping[str, str], receiver: str, actor: str | None,
             snapshot: dict[str, Any], reservation: dict[str, Any], execute: bool,
+            replan_configuration_reader: Callable[[Mapping[str, Any], Path], Mapping[str, Any]],
             attempt_observation: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Re-read the actual Goal receipt, then link it at the request owner."""
     terminal = None
     errors = []
     bound = reservation["binding"]
     try:
-        readback = _goal(registry, root, ref, receiver, "receipt", {"receipt_operation_id": bound["operation_id"]})
+        readback = _goal(registry, root, ref, receiver, "receipt", {"receipt_operation_id": bound["operation_id"]},
+            replan_configuration_reader=replan_configuration_reader)
         observation = effect_runtime_result("goal.amendment.request_receipt", {
             "entry": snapshot["_entry"], "reservation_digest": reservation["digest"], "receipt": readback})
         terminal = observation["terminal"]
@@ -92,6 +97,7 @@ def _finish(*, registry: Path, root: Path, ref: Mapping[str, str], receiver: str
 
 
 def execute_request_amendment(*, registry_path: Path, runtime_root: Path | None, goal_ref: Mapping[str, str],
+                              replan_configuration_reader: Callable[[Mapping[str, Any], Path], Mapping[str, Any]],
                               receiver_agent_id: str, parameters: Mapping[str, Any], execute: bool) -> dict[str, Any]:
     if set(parameters) != {"source_request", "operation_id", "proposal_id", "proposal_digest"}:
         raise ValueError("request-derived commit needs the original proposal, source basis and operation id")
@@ -106,7 +112,8 @@ def execute_request_amendment(*, registry_path: Path, runtime_root: Path | None,
     reservation = _reservation(snapshot, parameters["operation_id"])
     if reservation is None:
         # Resolve from the real Goal owner, not caller-provided policy/basis.
-        goal = _goal(registry_path, root, goal_ref, receiver_agent_id, "request_basis", {})
+        goal = _goal(registry_path, root, goal_ref, receiver_agent_id, "request_basis", {},
+            replan_configuration_reader=replan_configuration_reader)
         if goal.get("ok") is not True or not isinstance(goal.get("intent"), dict):
             raise ValueError("current Goal amendment authority is unavailable")
         proposal = next((row for row in goal["intent"]["proposals"] if row["proposal_id"] == parameters["proposal_id"]), None)
@@ -129,20 +136,24 @@ def execute_request_amendment(*, registry_path: Path, runtime_root: Path | None,
     context = {"entry": snapshot["_entry"], "reservation_digest": reservation["digest"], "preview": not execute}
     effect = {key: parameters[key] for key in ("operation_id", "proposal_id", "proposal_digest")}
     if not execute:
-        preview = _goal(registry_path, root, goal_ref, receiver_agent_id, "commit", effect, context=context)
+        preview = _goal(registry_path, root, goal_ref, receiver_agent_id, "commit", effect, context=context,
+            replan_configuration_reader=replan_configuration_reader)
         return {**preview, "request_preview": snapshot["view"], "request_reservation_recorded": not snapshot.get("planned", False)}
     try:
-        attempted = _goal(registry_path, root, goal_ref, receiver_agent_id, "commit", effect, context=context, execute=True)
+        attempted = _goal(registry_path, root, goal_ref, receiver_agent_id, "commit", effect, context=context, execute=True,
+            replan_configuration_reader=replan_configuration_reader)
         observation = {key: attempted[key] for key in ("status", "reason_code", "reason") if key in attempted}
     except (OSError, ValueError, EffectRuntimeRejected) as exc:
         # A failed response does not establish no effect. The exact receipt
         # read below owns that conclusion and keeps an absent result pending.
         observation = {"error": str(exc)}
     return _finish(registry=registry_path, root=root, ref=goal_ref, receiver=receiver_agent_id,
-        actor=receiver_agent_id, snapshot=snapshot, reservation=reservation, execute=True, attempt_observation=observation)
+        actor=receiver_agent_id, snapshot=snapshot, reservation=reservation, execute=True, attempt_observation=observation,
+        replan_configuration_reader=replan_configuration_reader)
 
 
 def recover_request_amendment(*, registry_path: Path, runtime_root: Path, goal_ref: Mapping[str, str],
+                              replan_configuration_reader: Callable[[Mapping[str, Any], Path], Mapping[str, Any]],
                               receiver_agent_id: str, request_id: str, actor_agent_id: str | None,
                               execute: bool = False) -> dict[str, Any]:
     root = _root(registry_path, runtime_root)
@@ -157,15 +168,18 @@ def recover_request_amendment(*, registry_path: Path, runtime_root: Path, goal_r
         try:
             attempted = _goal(registry_path, root, goal_ref, receiver_agent_id, "abort_request",
                 {key: bound[key] for key in ("operation_id", "proposal_id", "proposal_digest")},
-                context={"entry": snapshot["_entry"], "reservation_digest": reservation["digest"]}, execute=True)
+                context={"entry": snapshot["_entry"], "reservation_digest": reservation["digest"]}, execute=True,
+                replan_configuration_reader=replan_configuration_reader)
             observation = {key: attempted[key] for key in ("status", "reason_code", "reason") if key in attempted}
         except (OSError, ValueError, EffectRuntimeRejected) as exc:
             observation = {"error": str(exc)}  # Read the receipt; never infer an abort.
     return _finish(registry=registry_path, root=root, ref=goal_ref, receiver=receiver_agent_id,
-        actor=actor_agent_id, snapshot=snapshot, reservation=reservation, execute=execute, attempt_observation=observation)
+        actor=actor_agent_id, snapshot=snapshot, reservation=reservation, execute=execute, attempt_observation=observation,
+        replan_configuration_reader=replan_configuration_reader)
 
 
 def control_request(*, registry_path: Path, runtime_root: Path, goal_ref: Mapping[str, str],
+                    replan_configuration_reader: Callable[[Mapping[str, Any], Path], Mapping[str, Any]],
                     receiver_agent_id: str, request_id: str, actor_agent_id: str | None,
                     operation: str, parameters: Mapping[str, Any] | None = None, execute: bool = False) -> dict[str, Any]:
     """Shared source UI/CLI path; cancellation settles only through its owner."""
@@ -174,12 +188,12 @@ def control_request(*, registry_path: Path, runtime_root: Path, goal_ref: Mappin
     if operation == "recover":
         if parameters:
             raise ValueError("request recovery takes its binding from the original source")
-        return recover_request_amendment(**common, execute=execute)
+        return recover_request_amendment(**common, execute=execute, replan_configuration_reader=replan_configuration_reader)
     if operation not in {"inspect", "revise", "cancel"}:
         raise ValueError("source request control operation is unsupported")
     result = execute_request_control(**common, operation=operation, parameters=parameters, execute=execute)
     if execute and (operation == "cancel" or result["view"].get("recovery_operation") == "abort_request"):
-        recovery = recover_request_amendment(**common, execute=True)
+        recovery = recover_request_amendment(**common, execute=True, replan_configuration_reader=replan_configuration_reader)
         return {**result, "ok": recovery["ok"], "view": recovery.get("request_control", recovery.get("view")),
             "effect_recovery": recovery}
     return result

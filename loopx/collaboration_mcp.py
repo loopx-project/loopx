@@ -385,9 +385,11 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
             not revoke committed Goal work or grant new execution permission.
             """
             from .control_plane.collaboration.request_amendment import control_request
+            from .capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
 
             check_scope()
             return control_request(registry_path=registry, runtime_root=root, goal_ref=caller_goal_ref,
+                replan_configuration_reader=resolve_todo_replan_cadence_goal,
                 receiver_agent_id=receiver_agent_id, request_id=request_id, actor_agent_id=agent_id,
                 operation=operation, parameters=parameters, execute=execute)
 

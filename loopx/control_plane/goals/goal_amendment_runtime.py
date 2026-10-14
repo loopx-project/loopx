@@ -152,6 +152,7 @@ def _execute_goal_amendment(
 def execute_goal_amendment(
     *, registry_path: Path, goal_id: str, goal_instance_id: str,
     operation: str, actor_agent_id: str | None,
+    replan_configuration_reader: Callable[[Mapping[str, Any], Path], Mapping[str, Any]],
     parameters: Mapping[str, Any] | None = None,
     runtime_root: Path | None = None, execute: bool = False,
 ) -> dict[str, Any]:
@@ -161,7 +162,8 @@ def execute_goal_amendment(
         raise ValueError("request effect recovery must use its original request entrypoint")
     if "source_request" not in params:
         return _execute_goal_amendment(registry_path=registry_path, goal_id=goal_id, goal_instance_id=goal_instance_id,
-            operation=operation, actor_agent_id=actor_agent_id, parameters=params, runtime_root=runtime_root, execute=execute)
+            operation=operation, actor_agent_id=actor_agent_id, parameters=params, runtime_root=runtime_root, execute=execute,
+            replan_configuration_reader=replan_configuration_reader)
     if operation not in {"propose", "commit"} or actor_agent_id is None:
         raise ValueError("source request context requires an explicit receiver proposal or commit")
     from ..collaboration.request_amendment import execute_request_amendment, request_proposal_context
@@ -169,9 +171,9 @@ def execute_goal_amendment(
     if operation == "commit":
         return execute_request_amendment(registry_path=registry_path, runtime_root=runtime_root,
             goal_ref=exact_goal_ref(goal_id, goal_instance_id), receiver_agent_id=actor_agent_id,
-            parameters=params, execute=execute)
+            parameters=params, execute=execute, replan_configuration_reader=replan_configuration_reader)
     root, context = request_proposal_context(registry_path=registry_path, runtime_root=runtime_root,
         goal_ref=exact_goal_ref(goal_id, goal_instance_id), receiver_agent_id=actor_agent_id, reference=params["source_request"])
     return _execute_goal_amendment(registry_path=registry_path, goal_id=goal_id, goal_instance_id=goal_instance_id,
         operation="propose", actor_agent_id=actor_agent_id, parameters=params, runtime_root=root,
-        execute=execute, request_context=context)
+        execute=execute, request_context=context, replan_configuration_reader=replan_configuration_reader)

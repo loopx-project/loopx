@@ -8,6 +8,7 @@ from pathlib import Path
 from loopx.chat_server import serve_chat
 from loopx.chat_store import ChatSessionStore
 from loopx.capabilities.manager_context import deliver
+from loopx.capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
 from loopx.control_plane.goals.goal_amendment_runtime import execute_goal_amendment
 from loopx.control_plane.collaboration.request_control_source import (
     execute_request_control,
@@ -105,6 +106,7 @@ runs.write_text("".join(json.dumps(r) + "\n" for r in rows))
 
 def goal(op, params=None, actor="agent-a", execute=False):
     return execute_goal_amendment(
+        replan_configuration_reader=resolve_todo_replan_cadence_goal,
         registry_path=registry,
         runtime_root=runtime,
         goal_id=ref["goal_id"],

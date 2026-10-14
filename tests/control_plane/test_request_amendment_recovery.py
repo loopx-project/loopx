@@ -13,6 +13,7 @@ from loopx.control_plane.collaboration.request_control_source import execute_req
 from loopx.control_plane.collaboration.request_amendment import recover_request_amendment, control_request
 from loopx.control_plane.collaboration.inbox import _root, acknowledge
 from loopx.cli import main
+from loopx.capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
 from loopx.collaboration_mcp import register_collaboration_tools
 from loopx.control_plane.projects.registry_codec import source_session_registry_transaction
 
@@ -112,10 +113,22 @@ def test_request_control_refuses_wrong_actor_namespace_and_untrusted_effect_fact
         _control(f, "../not-a-request", "inspect")
 
 
-def test_real_request_reservation_goal_commit_and_terminal_linkage(source_goal, tmp_path, capsys):
+def test_real_request_reservation_goal_commit_and_terminal_linkage(source_goal, tmp_path, capsys, monkeypatch):
     f = source_goal
     rid, commit = _proposal(f, tmp_path, capsys)
     before = {p.relative_to(_root(f["runtime"])): p.read_bytes() for p in _root(f["runtime"]).rglob("*.json")}
+    # The current Goal configuration reader must pass through both the public
+    # request wrapper and its reserved-effect caller after integration.
+    from loopx.capabilities.todo_replan_cadence import machine_defaults
+
+    def unavailable(*_args, **_kwargs):
+        raise OSError("synthetic current configuration unavailable")
+
+    with monkeypatch.context() as missing_config:
+        missing_config.setattr(machine_defaults, "resolve_todo_replan_cadence_goal", unavailable)
+        code, refused = goal_call(f, tmp_path, capsys, "commit", commit, operation_id="commit-request", execute=False)
+        assert code == 1 and "configuration unavailable" in str(refused), refused
+    assert {p.relative_to(_root(f["runtime"])): p.read_bytes() for p in _root(f["runtime"]).rglob("*.json")} == before
     code, preview = goal_call(f, tmp_path, capsys, "commit", commit, operation_id="commit-request", execute=False)
     assert code == 0, preview
     assert preview["goal_changed"] is False and preview["terminal_recorded"] is False
@@ -128,7 +141,11 @@ def test_real_request_reservation_goal_commit_and_terminal_linkage(source_goal, 
     _, goal = goal_call(f, tmp_path, capsys, "inspect", agent=None)
     assert goal["intent"]["created_todo_ids"] == [applied["effect"]["todo_id"]]
     saved = {p.relative_to(_root(f["runtime"])): p.read_bytes() for p in _root(f["runtime"]).rglob("*.json")}
-    code, replayed = goal_call(f, tmp_path, capsys, "commit", commit, operation_id="commit-request", execute=True)
+    # Already committed history remains recoverable even if current proposal
+    # configuration is unavailable; it cannot authorize a new effect.
+    with monkeypatch.context() as missing_config:
+        missing_config.setattr(machine_defaults, "resolve_todo_replan_cadence_goal", unavailable)
+        code, replayed = goal_call(f, tmp_path, capsys, "commit", commit, operation_id="commit-request", execute=True)
     assert code == 0 and replayed["effect"] == applied["effect"]
     assert {p.relative_to(_root(f["runtime"])): p.read_bytes() for p in _root(f["runtime"]).rglob("*.json")} == saved
     assert goal_call(f, tmp_path, capsys, "inspect", agent=None)[1]["provider_revision"] == goal["provider_revision"]
@@ -137,6 +154,7 @@ def test_real_request_reservation_goal_commit_and_terminal_linkage(source_goal, 
 
 def _recover(f, rid, *, execute=True):
     return recover_request_amendment(registry_path=f["registry"], runtime_root=f["runtime"], goal_ref=f["ref"],
+        replan_configuration_reader=resolve_todo_replan_cadence_goal,
         receiver_agent_id="agent-a", request_id=rid, actor_agent_id="agent-b", execute=execute)
 
 
@@ -433,6 +451,7 @@ def test_source_correction_aborts_unknown_effect_and_next_revision_can_continue(
         assert goal_call(f, tmp_path, capsys, "commit", commit, operation_id="old-effect", execute=True)[0] == 1
     current = _control(f, rid, "inspect")["view"]
     corrected = control_request(registry_path=f["registry"], runtime_root=f["runtime"], goal_ref=f["ref"],
+        replan_configuration_reader=resolve_todo_replan_cadence_goal,
         receiver_agent_id="agent-a", request_id=rid, actor_agent_id="agent-b", operation="revise", execute=True,
         parameters={"operation_id": "correct-unknown", **_basis(current), "brief": {**BRIEF, "context": "Continue from corrected source"}, "reason": "Use the new input"})
     assert corrected["ok"] and corrected["view"]["control_state"] == "open", corrected

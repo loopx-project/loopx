@@ -114,7 +114,10 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                     raise ValueError("control parameters must be an object; use --operation-id for retry identity")
             if args.control_operation in {"revise", "cancel"}:
                 parameters["operation_id"] = args.operation_id
+            from ..capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
+
             result = control_request(registry_path=registry_path, runtime_root=runtime_root,
+                replan_configuration_reader=resolve_todo_replan_cadence_goal,
                 goal_ref=exact_goal_ref(args.goal_id, args.goal_instance_id), receiver_agent_id=receiver,
                 request_id=args.request_id, actor_agent_id=args.agent_id, operation=args.control_operation,
                 parameters=parameters, execute=args.execute)

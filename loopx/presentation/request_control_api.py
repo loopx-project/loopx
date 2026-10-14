@@ -16,6 +16,7 @@ from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRunti
 from ..control_plane.goals.goal_ref_validation import exact_goal_ref
 from ..control_plane.projects.registry_codec import load_project_registry
 from ..capabilities.manager_context import target_authority
+from ..capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
 from ..control_plane.collaboration.source_chat_observation import original_delivery_facts
 from .goal_source_routing import source_registry_for_goal
 
@@ -84,7 +85,8 @@ class RequestControlMixin:
             query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
             if set(query) != _ROUTING or any(len(value) != 1 for value in query.values()):
                 raise ValueError("request routing fields are required exactly once")
-            result = control_request(**self._request_control_source({key: values[0] for key, values in query.items()}), operation="inspect")
+            result = control_request(**self._request_control_source({key: values[0] for key, values in query.items()}), operation="inspect",
+                replan_configuration_reader=resolve_todo_replan_cadence_goal)
             self._send_json(_operator_payload(result))
         except (OSError, ValueError, TypeError, KeyError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
             self._send_error(redact_local_paths(str(exc)), status=400, error_code="request_control_unavailable")
@@ -97,6 +99,7 @@ class RequestControlMixin:
                     or not isinstance(body["parameters"], dict) or type(body["execute"]) is not bool):
                 raise ValueError("only original source correction, cancellation or recovery is accepted here")
             result = control_request(**self._request_control_source(body), operation=body["operation"],
+                replan_configuration_reader=resolve_todo_replan_cadence_goal,
                 parameters=body["parameters"], execute=body["execute"])
             self._send_json(_operator_payload(result))
         except (OSError, ValueError, TypeError, KeyError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
