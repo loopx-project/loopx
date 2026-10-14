@@ -68,7 +68,12 @@ class LeakRule:
     required_literals: tuple[str, ...]
 
     def is_candidate(self, folded_text: str) -> bool:
-        return any(literal in folded_text for literal in self.required_literals)
+        # This runs for every rule/file and candidate line; avoid allocating a
+        # generator while retaining the same substring-only short circuit.
+        for literal in self.required_literals:
+            if literal in folded_text:
+                return True
+        return False
 
 
 # Python's Unicode re.IGNORECASE matches ASCII I/i against both dotted and
