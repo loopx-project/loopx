@@ -15,12 +15,24 @@ export function normalizeStrideStrategy(value: unknown): string {
   }
   return value;
 }
+// Read-only questions for the existing three axes; not another decision schema,
+// result classifier, route ban or admission authority.
+const decisionValueReview = {
+  work_slice: "Compare the complete cost and useful outcome of continuation with one feasible alternative. " +
+    "Size work for the experiment that can change that choice; a larger test count is not greater decision value.",
+  route_distance: "Name the remaining authoritative goal gap, its limiting component and the plausible headroom. " +
+    "Compare a different approach that can affect that component. A changed auxiliary mechanism alone does not show that it addresses the gap.",
+  validation_scope: "Use evidence applicable to the limiting outcome and changed mechanism. " +
+    "Distinguish local or synthetic gains from authoritative transfer, and repeated identical outcomes from new information. " +
+    "Choose decisive coverage before broadening a sweep; retain uncertainty and relevant negative evidence.",
+};
 export function stridePlanningGuidance(value: unknown): string[] {
   if (normalizeStrideStrategy(value) === "off") return [];
   return ["Review actual adoption of the previous decision, new information and authoritative goal outcomes separately. " +
     "Choose grow to expand useful completed scope on a supported route, switch to test a different mechanism, or verify to resolve a route decision. " +
     "Describe work size, route distance and validation breadth independently as concrete plans, with a reason for each. " +
     "Name the reference method and the assumption or mechanism that changes; more tuning alone is not a route switch. " +
+    "Use the live decision_value_review questions to compare goal headroom and full cost through the three existing axes. " +
     "Work size must cover a coherent accepted deliverable or an experiment capable of an interpretable conclusion: a new route may need a larger " +
     "implementation and uncertain evidence may need broader validation. Expand useful work when evidence supports it; " +
     "do not respond to a persistent unexplained gap by repeatedly making the same work smaller. " +
@@ -287,6 +299,7 @@ export function strideControlContract(context: JsonObject, obligationId: unknown
     axis_names: decisionSchema.axis_names, actions: decisionSchema.actions,
     axis_plan_limit: decisionSchema.axis_plan_limit,
     axis_reason_limit: decisionSchema.axis_reason_limit, probe_field_limits: STRIDE_PROBE_LIMITS,
+    decision_value_review: {...decisionValueReview},
     review_text_limit: decisionSchema.review_text_limit,
     previous_decision_ref: previous,
     previous_review_options: {adoption: decisionSchema.adoption_options, information_gain: decisionSchema.information_options, goal_gain: decisionSchema.gain_options},
@@ -298,6 +311,7 @@ export function strideControlContract(context: JsonObject, obligationId: unknown
       "The decision requires an evidence-linked Vision path (including a terminal stop when supported by evidence), an explicit grow/switch/verify action and a concrete plan/reason for each axis. " +
       "Grow expands a supported route; switch names the reference method and changed mechanism; verify resolves a named grow-or-switch question. Size every action for a coherent accepted deliverable or complete interpretable experiment, including ordinary engineering and maintenance. Grow changes useful completed scope, not authority or settlement boundaries. " +
       "The minimal example demonstrates syntax, not the recommended action for the current evidence. " +
+      "decision_value_review is Agent guidance for the existing axis plans/reasons and next_probe, not additional proposal fields or a settlement gate. " +
       "When a previous decision is delivered, assess its adoption, information and goal gain in previous_review against its exact reference. " +
       "When Explore basis is delivered, assess applicable findings/alternatives in explore_review; missing or omitted evidence stays unknown. " +
       "These are Agent claims and proposal-shape obligations, not execution authority or utility certification. Other source-specific outcomes remain legal but cannot bypass a due stride review.",
