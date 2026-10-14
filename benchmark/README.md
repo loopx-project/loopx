@@ -647,11 +647,13 @@ checkout's Node dependencies with `npm ci`, and put a compatible **Host** Node o
 `PATH`. Separately supply Linux **amd64** binaries for `codex-cli 0.160.0` and Node
 `24.21.0`, and a caller-prepared `python:3.12-slim` image. These inputs are explicit;
 the qualification does not download a native CLI, pull an image or use model
-credentials. Build Python 3.12 guest dependencies from the pinned provider:
+credentials. The receiver also imports `harbor==0.20.0` to exercise the actual
+phase-command builder; it does not launch a Harbor job. Build Python 3.12 guest
+dependencies from the pinned provider plus this qualification prerequisite:
 
 ```sh
 set -eu
-"$CKPT_PROVIDER_ROOT/venv/bin/python" -c 'import sys,tomllib; from pathlib import Path; d=tomllib.loads((Path(sys.argv[1])/"pyproject.toml").read_text()); print("\n".join(d["project"]["dependencies"]+d["dependency-groups"]["dev"]))' \
+"$CKPT_PROVIDER_ROOT/venv/bin/python" -c 'import sys,tomllib; from pathlib import Path; d=tomllib.loads((Path(sys.argv[1])/"pyproject.toml").read_text()); print("\n".join(d["project"]["dependencies"]+d["dependency-groups"]["dev"]+["harbor==0.20.0"]))' \
   "$CKPT_PROVIDER_ROOT/provider" > "$CKPT_PROVIDER_ROOT/guest-requirements.txt"
 mkdir "$CKPT_PROVIDER_ROOT/guest-deps"
 docker image inspect python:3.12-slim >/dev/null
@@ -677,7 +679,8 @@ response stream and grading/backend fixtures are synthetic; the native CLI,
 canonical SQLite authority, worker, supervisor and capsule transport are real.
 Check `result.json`, `source.log`, `ordinary.log` and `stride.log` in the private
 output directory; failure is an error, including missing prerequisites, and a
-second attempt needs a new output directory. Keep its controller config, native
+skipped test cannot produce a passed receipt. A second attempt needs a new output
+directory. Keep its controller config, native
 stores, reports and logs private. Cleanup removes only containers owned by this
 invocation. This reproduces mechanical continuation; the receipt remains
 `research_point_qualified=false`. A real later research point, scientific policy

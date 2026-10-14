@@ -12,9 +12,18 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from xml.etree import ElementTree
 
 
 PROVIDER_REVISION = "071a884012754127f28f5b84be10f533a42db527"
+
+
+def require_one_pass(report):
+    cases = ElementTree.parse(report).findall(".//testcase")
+    if len(cases) != 1 or any(
+        c.find(tag) is not None for c in cases for tag in ("skipped", "failure", "error")
+    ):
+        raise ValueError(f"Qualification requires one actual pass and no skip; inspect {report}")
 
 
 def main():
@@ -79,6 +88,7 @@ def main():
             status = container.wait(timeout=300)
             log.write_bytes(container.logs())
             assert status["StatusCode"] == 0, f"Qualification failed; inspect {log}"
+            require_one_pass(log.parent / log.stem / "junit.xml")
         finally:
             container.remove(force=True)
 
@@ -99,7 +109,8 @@ def main():
                   "raise SystemExit(pytest.main(["
                   "'/source/benchmark/tests/test_native_checkpoint_handoff.py::"
                   "test_actual_worker_captures_pending_replan_before_native_model[planning]',"
-                  "'-q','-rs','-p','no:cacheprovider','--basetemp=/qualification/source-tmp']))")
+                  "'-q','-rs','-p','no:cacheprovider','--basetemp=/qualification/source-tmp',"
+                  "'--junitxml=/qualification/source.xml']))")
         container = client.containers.create(image, ["python", "-c", script],
             platform="linux/amd64", network_disabled=True,
             volumes={**base, str(source_files): {"bind": "/qualification", "mode": "rw"}},
@@ -113,6 +124,7 @@ def main():
         (output / "source.log").write_bytes(container.logs())
         supervisor.close()
         assert status["StatusCode"] == 0, f"Inspect {output / 'source.log'}"
+        require_one_pass(source_files / "source.xml")
         points = [p for p in (output / "points").iterdir() if p.is_dir() and not p.name.startswith(".")]
         assert len(points) == 1 and len(grades) == 1
         point = points[0]
@@ -129,7 +141,8 @@ def main():
             results = output / name
             results.mkdir()
             guest(["python", "-m", "pytest", "benchmark/tests/test_checkpoint_joint_receiver.py",
-                   "-q", "-rs", "-p", "no:cacheprovider", "--basetemp=/results/test"],
+                   "-q", "-rs", "-p", "no:cacheprovider", "--basetemp=/results/test",
+                   "--junitxml=/results/junit.xml"],
                   {str(point): {"bind": "/point", "mode": "ro"},
                    str(config): {"bind": "/captured-config.toml", "mode": "ro"},
                    str(results): {"bind": "/results", "mode": "rw"}},
