@@ -117,7 +117,8 @@ def main() -> int:
         print(compact_json(result))
     else:
         for hit in result.hits:
-            print(f"[{hit.rule_id}] {hit.label} @ {hit.location}")
+            line = f":{hit.line}" if hit.line is not None else ""
+            print(f"[{hit.rule_id}] {hit.label} @ {hit.location}{line}")
         if result.unscanned:
             print(f"UNSCANNED: {sorted(set(result.unscanned))}")
         if result.ok:

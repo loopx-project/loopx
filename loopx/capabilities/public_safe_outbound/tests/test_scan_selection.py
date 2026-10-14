@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from loopx.capabilities.public_safe_outbound.scan_cli import (
@@ -163,3 +167,44 @@ def test_a_clean_file_scan_root_is_still_clean(tmp_path: Path) -> None:
     assert result.ok is True
     assert result.hits == []
 
+
+def test_same_named_files_under_one_root_are_both_scanned(tmp_path: Path) -> None:
+    """The common-root path labels each file by its own relative path."""
+    _write(tmp_path, "one/entry.md", "intro\n" + ASSIGNMENT)
+    _write(tmp_path, "two/entry.md", ASSIGNMENT)
+    result = scan_paths(_iter_text_files(tmp_path), root=tmp_path)
+    assert result.ok is False
+    assert sorted((hit.location, hit.line) for hit in result.hits) == [
+        ("one/entry.md", 2),
+        ("two/entry.md", 1),
+    ]
+
+
+def test_scan_root_cli_reports_a_hit_without_content_or_absolute_paths(tmp_path: Path) -> None:
+    """The shipped entrypoint: exit 1, relative label, line, and no scanned bytes."""
+    _write(tmp_path, "one/entry.md", "clean line\n" + ASSIGNMENT)
+    _write(tmp_path, "two/entry.md", "nothing sensitive here")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "loopx.capabilities.public_safe_outbound.scan_cli",
+            "--scan-root",
+            str(tmp_path),
+            "--format",
+            "json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        # Only the generic rules: a marker file from the caller's shell must
+        # not change what this test observes.
+        env={key: value for key, value in os.environ.items() if key != "PUBLIC_SAFE_CONFIG"},
+    )
+    assert completed.returncode == 1, completed.stderr
+    receipt = json.loads(completed.stdout)
+    assert receipt["ok"] is False
+    assert [(hit["location"], hit["line"]) for hit in receipt["hits"]] == [("one/entry.md", 2)]
+    assert SECRET not in completed.stdout
+    assert "SERVICE_KEY" not in completed.stdout
+    assert str(tmp_path) not in completed.stdout
