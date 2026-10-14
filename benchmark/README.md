@@ -690,6 +690,13 @@ invocation. This reproduces mechanical continuation; the receipt remains
 `research_point_qualified=false`. A real later research point, scientific policy
 benefit and the packaged frontend restore journey still need separate acceptance.
 
+An enabled checkpoint rendezvous returns an explicit failed quota readback to
+its original caller without interrupting the writer or attempting capture.
+The original failure and recovery requirements remain unchanged; delivery of
+that error grants no work or settlement authority. Successful, foreign and
+malformed readbacks retain the existing typed capture checks. This contains
+optional capture failure; it does not repair the underlying quota error.
+
 An explicit **SForge phase-clock participant** preserves a declared Host file's
 remaining duration alongside native opportunities. Add
 `--phase-deadline-file /private/source-phase-deadline` to capture, and
