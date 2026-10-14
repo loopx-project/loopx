@@ -26,7 +26,7 @@ def test_native_fork_skills_rejoin_ordinary_installer_without_erasing_contents(t
         skills.mkdir()
         if existing == "nonempty":
             (skills / ".retained").write_text("must survive")
-    warm._preserve_native_skills_directory(home)
+    warm._prepare_native_skills(home, installed)
     if existing == "nonempty":
         assert (home / ".loopx-native-skills-before-install" / ".retained").read_text() == "must survive"
     def ordinary_prepare():
@@ -49,7 +49,7 @@ def test_native_skills_backup_never_overwrites_an_earlier_attempt(tmp_path):
     backup.mkdir()
     (backup / "retained").write_text("original")
     with pytest.raises(ValueError, match="backup already exists"):
-        warm._preserve_native_skills_directory(tmp_path)
+        warm._prepare_native_skills(tmp_path, tmp_path)
     assert (backup / "retained").read_text() == "original"
     assert (tmp_path / "skills").is_dir()
 
