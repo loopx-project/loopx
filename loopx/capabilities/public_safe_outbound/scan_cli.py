@@ -4,7 +4,9 @@ Usage:
   python -m loopx.capabilities.public_safe_outbound.scan_cli --scan-root <repo>
   git diff --cached | python -m loopx.capabilities.public_safe_outbound.scan_cli --diff
 
-Exit 0 = clean (public-safe); exit 1 = any hit (fail-closed).
+Exit 0 = clean (public-safe); exit 1 = any hit, or any input the scan could
+not read (fail-closed). A configured PUBLIC_SAFE_CONFIG that cannot be read
+also exits 1 rather than downgrading to the generic rules.
 """
 from __future__ import annotations
 
@@ -32,7 +34,7 @@ def main() -> int:
     args = p.parse_args()
 
     if args.scan_root:
-        result = scan_paths(_iter_text_files(args.scan_root))
+        result = scan_paths(_iter_text_files(args.scan_root), root=args.scan_root)
     elif args.diff:
         diff = sys.stdin.read()
         from .scanner import scan_texts
@@ -46,7 +48,14 @@ def main() -> int:
     else:
         for hit in result.hits:
             print(f"[{hit.rule_id}] {hit.label} @ {hit.location}")
-        print("PASS: public-safe" if result.ok else "FAIL: hits found")
+        if result.unscanned:
+            print(f"UNSCANNED: {sorted(set(result.unscanned))}")
+        if result.ok:
+            print("PASS: public-safe")
+        elif result.hits:
+            print("FAIL: hits found")
+        else:
+            print("FAIL: input could not be scanned")
     return 0 if result.ok else 1
 
 

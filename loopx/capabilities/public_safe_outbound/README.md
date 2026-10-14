@@ -8,7 +8,9 @@
   **由部署环境注入**（`PUBLIC_SAFE_CONFIG` 指向一个本地 JSON 文件，见下）；
 - 私有绝对路径：home 目录与 root 挂载等本地绝对路径；
 
-任一命中即失败（exit 1），不修改文件，输出 compact、打码的 JSON 结果。
+任一命中即失败（exit 1），不修改文件，输出 compact 的 JSON 结果。回执不含绝对路径：
+命中位置以扫描根为基准的相对路径标注；命中片段 `sample_masked` 是围绕匹配位置的
+有界窗口，匹配本身被打码，不是文件开头。
 
 ## 公司门禁 = 本地中心配置（不上传）
 
@@ -56,6 +58,13 @@ installed/enabled，可经 `loopx capability list` / `show` 查看。
 
 ## 边界
 
-- 保守设计：宁可误报也不漏报；命中样例只输出打码片段。
+- 保守设计：宁可误报也不漏报；命中样例只输出围绕匹配位置的有界窗口，匹配本身以
+  `***` 打码，不输出文件开头。
+- **失败关闭同样适用于"没扫到"**：`PUBLIC_SAFE_CONFIG` 未设置是文档化的
+  无配置模式（只跑通用规则）；已设置却读不到或解析失败时，扫描以 `ok=false`、
+  `unscanned_reasons=["config_unreadable"]` 结束，不会静默降级为通用规则。
+  被请求的文件读不到或超过 `limit_bytes` 时同样记为
+  `content_unreadable` / `content_too_large`，`ok` 保持 false；目录等
+  不指向文件的路径跳过。未扫描原因与命中位置一样只含相对标签或原因码，不含绝对路径。
 - 不做任何写操作、不读取 secrets 文件内容（仅规则扫描）。
 - 规则为公开可维护列表，可按项目追加（`scanner.RULES`）。
