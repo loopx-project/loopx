@@ -1605,6 +1605,75 @@ def test_declared_manifest_for_an_installed_id_must_repeat_the_active_revision(
         extension_catalog_entries([v2], state_file=state_file)
 
 
+def test_upgrade_and_rollback_preserve_a_disabled_extension(tmp_path: Path) -> None:
+    """Changing the active revision must not undo an operator's disable.
+
+    Before this guard, both `upgrade` and `rollback` wrote `enabled: True`
+    unconditionally, so a provider the operator had switched off came back
+    on as a side effect of a revision change.
+    """
+    provider = _provider(tmp_path / "provider")
+    v1 = _manifest(tmp_path / "v1.toml", entrypoint=provider, version="1.0.0")
+    v2 = _manifest(tmp_path / "v2.toml", entrypoint=provider, version="2.0.0")
+    state_file = tmp_path / "runtime" / "extensions.json"
+
+    installed = install_extension(v1, state_file=state_file, execute=True)
+    assert installed["enabled"] is True
+    assert disable_extension(
+        "test-semantic-extension", state_file=state_file, execute=True
+    )["changed"] is True
+
+    upgraded = install_extension(
+        v2, state_file=state_file, operation="upgrade", execute=True
+    )
+    assert upgraded["enabled"] is False
+    assert upgraded["revision"] != installed["revision"]
+    entry = json.loads(state_file.read_text(encoding="utf-8"))["extensions"][
+        "test-semantic-extension"
+    ]
+    assert entry["enabled"] is False
+    assert entry["active_revision"] == upgraded["revision"]
+    with pytest.raises(ValueError, match="is disabled"):
+        resolve_extension_activation("test-semantic-extension", state_file=state_file)
+
+    rolled_back = rollback_extension(
+        "test-semantic-extension", state_file=state_file, execute=True
+    )
+    assert rolled_back["enabled"] is False
+    assert rolled_back["revision"] == installed["revision"]
+    entry = json.loads(state_file.read_text(encoding="utf-8"))["extensions"][
+        "test-semantic-extension"
+    ]
+    assert entry["enabled"] is False
+    assert extension_status(state_file=state_file)["extensions"][0]["enabled"] is False
+
+    # The explicit enable path remains the only way back on.
+    assert enable_extension(
+        "test-semantic-extension", state_file=state_file, execute=True
+    )["changed"] is True
+    assert resolve_extension_activation(
+        "test-semantic-extension", state_file=state_file
+    )["revision"] == installed["revision"]
+
+
+def test_upgrade_and_rollback_keep_an_enabled_extension_enabled(tmp_path: Path) -> None:
+    provider = _provider(tmp_path / "provider")
+    v1 = _manifest(tmp_path / "v1.toml", entrypoint=provider, version="1.0.0")
+    v2 = _manifest(tmp_path / "v2.toml", entrypoint=provider, version="2.0.0")
+    state_file = tmp_path / "runtime" / "extensions.json"
+
+    install_extension(v1, state_file=state_file, execute=True)
+    upgraded = install_extension(
+        v2, state_file=state_file, operation="upgrade", execute=True
+    )
+    assert upgraded["enabled"] is True
+    rolled_back = rollback_extension(
+        "test-semantic-extension", state_file=state_file, execute=True
+    )
+    assert rolled_back["enabled"] is True
+    assert extension_status(state_file=state_file)["extensions"][0]["enabled"] is True
+
+
 def test_failed_upgrade_keeps_the_active_revision(tmp_path: Path) -> None:
     ready = _provider(tmp_path / "ready-provider")
     broken = _provider(tmp_path / "broken-provider", doctor_exit=2)

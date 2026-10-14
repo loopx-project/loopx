@@ -302,7 +302,9 @@ names the exact repair command.
 For a separately distributed provider, pass `--manifest <extension.toml>`.
 `upgrade` validates and probes the new manifest before changing the active
 revision. `rollback` probes the previous revision before switching back. A
-failed probe leaves the current revision untouched. Activation state contains
+failed probe leaves the current revision untouched. Neither operation changes
+the enablement decision: a disabled extension stays disabled across an upgrade
+or rollback until an explicit `enable`. Activation state contains
 validated manifest snapshots and revision ids in the private LoopX runtime
 root; it does not contain provider output or credentials.
 
