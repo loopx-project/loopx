@@ -347,6 +347,14 @@ validation and acceptance are reused. The profile is read back by the existing
 host owner; no new frontend configuration store or hidden default is added.
 Preflight reports an unpinned/unsupported configuration as unavailable. A valid
 argv is still runtime-unverified, not proof that a host or an operation ran.
+The typed operation transport readback lists `supported_hosts` and
+`supported_sandboxes`. An unsupported host returns
+`select_supported_operation_host`; an unsupported sandbox returns
+`select_supported_operation_sandbox`; missing model/effort returns
+`correct_execution_profile`. Transport refusals do not suggest model-credential
+environment variables. These are explicit recovery choices, not automatic host
+selection or an execution grant. Ordinary host availability remains independent:
+a launchable DSH model does not qualify the Codex-only operation connection.
 Use `workspace-write` only when the existing work grant requires it;
 `danger-full-access` is not accepted by this transport.
 
