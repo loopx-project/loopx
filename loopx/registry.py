@@ -48,11 +48,15 @@ def atomic_write_json(
     *,
     preserve_mode: bool = False,
 ) -> None:
-    """Goal-registry JSON writer; delegates the rename dance to the kernel owner."""
+    """Goal-registry JSON writer; delegates the rename dance to the kernel owner.
+
+    A new registry file keeps the umask-narrowed `mkstemp` mode rather than a
+    forced chmod, matching the writer this delegation replaced.
+    """
     write_json_atomic(
         path,
         payload,
-        mode=0o600,
+        mode=None,
         preserve_mode=preserve_mode,
         indent=2,
     )

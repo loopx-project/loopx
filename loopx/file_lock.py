@@ -36,7 +36,7 @@ def write_bytes_atomic(
     path: Path,
     payload: bytes,
     *,
-    mode: int | None = 0o600,
+    mode: int | None = None,
     preserve_mode: bool = False,
     directory_mode: int | None = None,
     fsync_directory: bool = False,
@@ -47,6 +47,10 @@ def write_bytes_atomic(
     own serialization, so on-disk bytes do not change; this only owns the temp
     file, the resulting file mode, the fsync policy and the atomic rename. The
     previous implementation existed in more than ten copies across the package.
+
+    `mode=None` leaves the `mkstemp` mode (0600 narrowed by the process umask)
+    untouched; an explicit `mode` is applied with chmod. `preserve_mode` keeps
+    an existing destination's mode and wins over both.
     """
     destination = Path(path).expanduser()
     destination.parent.mkdir(parents=True, exist_ok=True, mode=directory_mode or 0o777)
@@ -83,7 +87,7 @@ def write_json_atomic(
     path: Path,
     payload: Mapping[str, Any],
     *,
-    mode: int | None = 0o600,
+    mode: int | None = None,
     preserve_mode: bool = False,
     directory_mode: int | None = None,
     fsync_directory: bool = False,
