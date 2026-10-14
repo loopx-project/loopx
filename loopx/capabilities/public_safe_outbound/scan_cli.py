@@ -12,19 +12,24 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 from .scanner import compact_json, scan_paths
 
-# Version control, dependency, cache, build and virtualenv directories hold no
-# first-party text to review, and walking them spends the scan budget on
-# vendored copies. `.git`, `.hg` and `.svn` are also matched against a path's
-# own final name: in a linked worktree `.git` is a *file* holding a
-# `gitdir: /abs/path` pointer, which would otherwise be reported as a private
-# absolute path on every scan of the checkout.
-SKIP_PARTS = frozenset({
-    ".git", ".hg", ".svn",
+# Version-control metadata names. They are excluded wherever they appear below
+# the scan root, as a directory or as a file: in a linked worktree `.git` is a
+# *file* holding a `gitdir: /abs/path` pointer, which would otherwise be
+# reported as a private absolute path on every scan of the checkout.
+VCS_METADATA_NAMES = frozenset({".git", ".hg", ".svn"})
+
+# Directories whose contents tools write rather than people author in the
+# scanned tree: dependency installs, caches, build and coverage output, and
+# virtualenvs. They hold no first-party text to review, and walking them spends
+# the scan budget on vendored copies. Only a directory is matched; a file that
+# happens to be named `build` is still scanned. This is this scan's own policy
+# for walking a candidate tree on disk, not a shared source filter.
+TOOL_MANAGED_DIRECTORY_NAMES = frozenset({
     "node_modules", "bower_components",
     "__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache",
     ".cache", ".tox", ".nox", ".eggs",
@@ -48,8 +53,16 @@ BINARY_SUFFIXES = frozenset({
 })
 
 
-# VCS pointer names that must be skipped even when they name a file.
-VCS_POINTER_NAMES = frozenset({".git", ".hg", ".svn"})
+def _pruned_directory(name: str) -> bool:
+    return name in VCS_METADATA_NAMES or name in TOOL_MANAGED_DIRECTORY_NAMES
+
+
+def _is_candidate(relative_parts: tuple[str, ...]) -> bool:
+    """Whether a file below the scan root belongs to the outbound candidate set."""
+    *directories, name = relative_parts
+    if name in VCS_METADATA_NAMES or any(_pruned_directory(part) for part in directories):
+        return False
+    return Path(name).suffix.lower() not in BINARY_SUFFIXES
 
 
 def _iter_text_files(root: Path) -> Iterator[Path]:
@@ -62,31 +75,25 @@ def _iter_text_files(root: Path) -> Iterator[Path]:
     ``.venv`` were walked because ``.js`` and ``.py`` were allowed. What is
     left is read by ``scan_paths``, which bounds each file by ``limit_bytes``,
     so a stray binary cannot exhaust memory.
+
+    A file given as the root is the caller's explicit choice and is scanned
+    unless it is binary. Below a directory root, only the relative path counts:
+    where the root itself lives never excludes what is under it.
     """
-    for path in root.iterdir() if root.is_dir() else [root]:
-        if path.is_dir():
-            if VCS_POINTER_NAMES.intersection(path.parts) or SKIP_PARTS.intersection(
-                path.relative_to(root).parts
-            ):
+    if not root.is_dir():
+        if root.is_file() and root.suffix.lower() not in BINARY_SUFFIXES:
+            yield root
+        return
+    for entry in root.iterdir():
+        if entry.is_dir():
+            if _pruned_directory(entry.name):
                 continue
-            for nested in path.rglob("*"):
-                if not nested.is_file():
-                    continue
-                parts = nested.relative_to(root).parts
-                if SKIP_PARTS.intersection(parts[:-1]) or VCS_POINTER_NAMES.intersection(parts):
-                    continue
-                if nested.suffix.lower() in BINARY_SUFFIXES:
-                    continue
-                yield nested
-            continue
-        if not path.is_file():
-            continue
-        parts = path.relative_to(root).parts
-        if SKIP_PARTS.intersection(parts[:-1]) or VCS_POINTER_NAMES.intersection(parts):
-            continue
-        if path.suffix.lower() in BINARY_SUFFIXES:
-            continue
-        yield path
+            candidates: Iterable[Path] = entry.rglob("*")
+        else:
+            candidates = (entry,)
+        for path in candidates:
+            if path.is_file() and _is_candidate(path.relative_to(root).parts):
+                yield path
 
 
 def main() -> int:

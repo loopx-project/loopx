@@ -71,8 +71,10 @@ installed/enabled，可经 `loopx capability list` / `show` 查看。
   `.env`、`Dockerfile`、`Makefile`、`id_rsa`、`credentials` 这类无后缀或点文件
   都会被检查（白名单式曾把它们静默跳过，而 `node_modules`/`.venv` 因含 `.js`/`.py`
   反而被走遍）。被排除的是版本控制、依赖、缓存、构建与虚拟环境目录
-  （`.git`、`node_modules`、`.venv`、`dist`、`build`、`__pycache__`、各类
-  `*_cache` 等，见 `scan_cli.SKIP_PARTS`）以及图片、音视频、归档、原生库、字体、
-  数据库等二进制后缀（见 `scan_cli.BINARY_SUFFIXES`；`.svg` 属文本，仍会扫描）。
+  （版本控制元数据 `.git`/`.hg`/`.svn` 见 `scan_cli.VCS_METADATA_NAMES`，作为
+  目录或文件都排除；`node_modules`、`.venv`、`dist`、`build`、`__pycache__`、
+  各类 `*_cache` 等工具生成目录见 `scan_cli.TOOL_MANAGED_DIRECTORY_NAMES`，只排除
+  目录，同名文件仍扫描）以及图片、音视频、归档、原生库、字体、数据库等二进制后缀
+  （见 `scan_cli.BINARY_SUFFIXES`；`.svg` 属文本，仍会扫描）。
   单文件读取由 `limit_bytes`（默认 1 MB）封顶。
 - 规则为公开可维护列表，可按项目追加（`scanner.RULES`）。

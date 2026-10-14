@@ -6,10 +6,17 @@ from pathlib import Path
 
 from loopx.capabilities.public_safe_outbound.scan_cli import (
     BINARY_SUFFIXES,
-    SKIP_PARTS,
+    TOOL_MANAGED_DIRECTORY_NAMES,
+    VCS_METADATA_NAMES,
     _iter_text_files,
 )
 from loopx.capabilities.public_safe_outbound.scanner import compact_json, scan_paths
+
+# A synthetic credential, assembled at runtime so this source carries no
+# literal secret. The assignment label is deliberately neutral: the scanner
+# finds the value by its own shape, whatever variable holds it.
+SECRET = "sk" + "-abcdefghijklmnopqrstuvwxyz012345"
+ASSIGNMENT = "SERVICE_KEY=" + SECRET
 
 
 def _write(root: Path, relative: str, body: str) -> Path:
@@ -66,7 +73,24 @@ def test_vendored_and_vcs_trees_are_not_walked(tmp_path: Path) -> None:
     ):
         _write(tmp_path, relative, "hidden")
     assert _scanned_names(tmp_path) == {"src/main.py"}
-    assert SKIP_PARTS  # the deny-list is not silently emptied
+    # the deny-lists are not silently emptied
+    assert TOOL_MANAGED_DIRECTORY_NAMES and VCS_METADATA_NAMES
+
+
+def test_tool_managed_names_prune_directories_not_files(tmp_path: Path) -> None:
+    """`build` the directory is output; `build` the file is authored text."""
+    _write(tmp_path, "build", "a file that happens to be called build")
+    _write(tmp_path, "pkg/dist", "a file that happens to be called dist")
+    _write(tmp_path, "pkg/build/out.js", "generated")
+    assert _scanned_names(tmp_path) == {"build", "pkg/dist"}
+
+
+def test_a_root_below_a_vcs_named_directory_still_walks_its_subdirectories(tmp_path: Path) -> None:
+    """Only the path below the root decides; where the root lives does not."""
+    root = tmp_path / ".git" / "hooks-copy"
+    _write(root, "top.sh", "echo")
+    _write(root, "nested/inner.sh", "echo")
+    assert _scanned_names(root) == {"top.sh", "nested/inner.sh"}
 
 
 def test_binary_suffixes_are_skipped_but_svg_is_scanned(tmp_path: Path) -> None:
@@ -80,8 +104,7 @@ def test_binary_suffixes_are_skipped_but_svg_is_scanned(tmp_path: Path) -> None:
 
 def test_a_secret_in_a_dotfile_now_fails_the_scan(tmp_path: Path) -> None:
     """End-to-end: the whole point of widening the selection."""
-    secret = "sk" + "-abcdefghijklmnopqrstuvwxyz012345"
-    _write(tmp_path, ".env", "TOKEN=" + secret)
+    _write(tmp_path, ".env", ASSIGNMENT)
     result = scan_paths(_iter_text_files(tmp_path), root=tmp_path)
     assert result.ok is False
     assert [hit.location for hit in result.hits] == [".env"]
@@ -89,8 +112,7 @@ def test_a_secret_in_a_dotfile_now_fails_the_scan(tmp_path: Path) -> None:
 
 def test_vendored_secret_is_neither_read_nor_reported(tmp_path: Path) -> None:
     """Skipping a vendored tree must not register as unscanned content."""
-    secret = "sk" + "-abcdefghijklmnopqrstuvwxyz012345"
-    _write(tmp_path, "node_modules/pkg/index.js", "TOKEN=" + secret)
+    _write(tmp_path, "node_modules/pkg/index.js", ASSIGNMENT)
     result = scan_paths(_iter_text_files(tmp_path), root=tmp_path)
     assert result.ok is True
     assert result.unscanned == []
@@ -123,9 +145,8 @@ def test_vcs_pointer_inside_a_nested_directory_is_skipped(tmp_path: Path) -> Non
 
 def test_a_file_scan_root_scans_that_file(tmp_path: Path) -> None:
     """A file root must not silently select nothing and report a clean scan."""
-    secret = "sk" + "-abcdefghijklmnopqrstuvwxyz012345"
     target = tmp_path / "one.py"
-    target.write_text("TOKEN=" + secret, encoding="utf-8")
+    target.write_text(ASSIGNMENT, encoding="utf-8")
 
     selected = list(_iter_text_files(target))
     assert selected == [target]
@@ -141,3 +162,4 @@ def test_a_clean_file_scan_root_is_still_clean(tmp_path: Path) -> None:
     result = scan_paths(_iter_text_files(target), root=target)
     assert result.ok is True
     assert result.hits == []
+
