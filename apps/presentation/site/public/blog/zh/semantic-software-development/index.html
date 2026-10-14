@@ -79,6 +79,31 @@
 <li><strong>可演进的工程约束。</strong>在仓库里建立架构边界、RFC、测试、独立评审和发布门禁；让重构持续减少重复权威与代码腐化，而不是只增加补丁。</li>
 <li><strong>跟得上开发的评价。</strong>保存基线、候选修订、负载、预算和反例；将便宜的局部验证与昂贵的完整评测分开，并保留独立验收。多生成几个 diff，不会自动增加有效产出。</li>
 </ul>
+<h3>把体验反馈变成跨层验收</h3>
+<p>LoopX 的<a href="https://github.com/loopx-project/loopx/blob/f713e0f07c571a78a7c4405ab647ba41dbc492ba/docs/development/frontend-delivery.md#task-first-delivery--从用户任务开始">交付流程</a>从一项普通用户任务开始：哪里失败，用户要重复提供什么，哪些跳转和确认没有增加信息。界面改动要同时检查 App、CLI、消息入口及状态归属，再走构建后的实际页面并回读结果。这样，人的一句“这里不好用”可以推动交互、状态投影和回归测试一起改变；共享上下文的价值落在同一条验收链里。</p>
+<p>例如 Goal 工作区同时展示方向、验收条件、工作地图和需要人决定的事项。任务完成数与 Goal 验收分别表达，已有失败或未知不会被一个绿色总状态盖住。公开首屏先给本人看预览，浏览器检查再覆盖桌面、窄屏和键盘路径。下面是仓库中的合成 showcase 截图，用于检查产品表达，不是业务现场或效果实验。</p>
+<figure><div class="architecture-viewport" role="region" tabindex="0" aria-label="LoopX 合成 Goal 工作区：方向、验收与人的决定"><a href="../../images/semantic-software-development/workspace-practice.png" target="_blank" rel="noopener"><img src="../../images/semantic-software-development/workspace-practice.png" alt="LoopX 合成 Goal 工作区分别显示工作完成数、未通过或未知的目标验收，以及需要人的决定" width="1440" height="1000" loading="lazy"/></a></div><figcaption>LoopX 仓库的合成 Goal showcase：任务进展、目标验收和人的决定共同呈现；截图里的数字是展示数据。<a href="https://github.com/loopx-project/loopx/blob/f713e0f07c571a78a7c4405ab647ba41dbc492ba/docs/development/assets/goal-workspace/overview-desktop.png">原图</a>。<span class="architecture-hint">窄屏可横向滚动；点击查看原图。</span></figcaption></figure>
+
+<h3>用原子 CLI 和薄 skill 拼出完整回路</h3>
+<p>本机推进 LoopX 时，Agent 通过 CLI 读取当前工作、调用工具、提交结果和回读外部状态；下一步采用当次 <code>interaction_contract</code>，不复用上一轮命令清单。命令返回身份、修订、证据与后继动作，skill 负责把宿主接到已有能力。比如 <a href="https://github.com/loopx-project/loopx/blob/f713e0f07c571a78a7c4405ab647ba41dbc492ba/skills/loopx-pr-review/SKILL.md">PR-review skill</a>保持为薄适配层，审阅计划与完整性规则由 CLI capability 提供。拼装的是有读回和失败语义的操作，不只是一串 shell 命令。</p>
+<p>Agent-facing 输出同样需要设计。LoopX 曾恢复默认包中被遗漏的完整决策义务，再让相同内容只保留一份；共用打印器仅删除 JSON 展示空白。同一 36 Todo / 12 run 场景从 48,418 降到 39,726 字符，解码值相同。这是<a href="https://github.com/loopx-project/loopx/blob/f713e0f07c571a78a7c4405ab647ba41dbc492ba/docs/reference/contracts/interface-budget-contract.md">输出测量</a>，不是 token 或模型收益。短反馈链不能靠删掉停止条件、权限和证据要求来缩短。</p>
+
+<h3>让下一次修改更容易：类型、归属与持续重构</h3>
+<p>维护性先靠稳定的行为归属。新增枚举或闭集时，仓库要求说明它复用哪个 owner、是否扩展共享词汇；源码扫描核对重复定义与声明。已确定归属的 TypeScript 控制面判断，不应在 Python 适配层重新做一遍。<a href="https://github.com/loopx-project/loopx/blob/f713e0f07c571a78a7c4405ab647ba41dbc492ba/AGENTS.md#bounded-future-facing-refactoring">重构要求</a>还把代码量视为成本：优先移除重复权威、加强类型合同、缩小模块边界，避免为未来可能性先造框架。扫描是审阅辅助，不证明所有动态语义已经收敛。</p>
+<p>一个具体变化是 <a href="https://github.com/loopx-project/loopx/pull/6375">PR #6375</a>：原来注册表 I/O 清单连调用坐标一起入 Git，普通代码移位就要更新生成快照并处理冲突；后来改为检查时从当前源码计算，只跟踪审阅过的稳定分类。新增未分类 I/O、过期分类仍然失败，导出报告不能授予分类。这类重构减少下一轮的维护摩擦，同时保留原来的行为约束。</p>
+
+<h3>自动检查支持独立判断，发布权限单独保留</h3>
+<p><code>loopx pr-review</code>围绕具体 head 组织问题背景、证据命令、审阅结果和读回；head 改变，旧结论不能自动继承。<code>--check-result</code>能核对结果与正文是否完整一致，证据真假与架构取舍仍需审阅。<code>loopx canary premerge --from-git-diff</code>则按变更面选择风险切片。测试、自动审阅、本人决策和发布是分开的责任，检查通过不会自动授予合并权。</p>
+<p>本机迁移遇到大备份导入超限时，<a href="https://github.com/loopx-project/loopx/pull/6311">PR #6311</a>没有简单调高 16 MiB 上限：CLI 与 App 继续验证完整归档和所有成员，只把所选 Goal 必须的来源覆盖证明传入控制面，核心仍拒绝缺失来源。这次变化同时覆盖备份、传输、类型化校验与旧 Goal 恢复；私有任务内容没有进入公开 PR。问题是否闭合，要沿整个用户路径检查。</p>
+
+<h3>让评价跟上开发：分层、反例与资源取舍</h3>
+<p>更多代码会消耗更多独立评价。LoopX 将<a href="https://github.com/loopx-project/loopx/blob/f713e0f07c571a78a7c4405ab647ba41dbc492ba/docs/development/testing-and-quality.md#quality-layers--质量分层">验证分层</a>：日常跑确定性合同、受影响的真实入口和浏览器检查；canary 选择跨面的必要集合；付费模型行为验证及匹配的版本结果对照另行执行。预期结果来自独立不变量，保留反例与 mutation，不能照候选实现生成一个会通过的 golden。</p>
+<p>资源有限时，要减少重复和无关测试，保留能推翻当前结论的验证。真实模型读懂协议与长程任务产生收益是两种证据；源码、打包页面、安装现场也各有范围。未跑、跳过与失败分别记录。这套组织方式不能凭空增加评测算力，也尚未证明所有评测瓶颈已经解决。</p>
+
+<h3>本地到云端：复用语义，分别验收执行环境</h3>
+<p>LoopX 已把控制面合同、领域能力与 host/provider 适配分开；本机原型因此可以保留工作身份、验收和证据，再适配远端工具。当前<a href="https://github.com/loopx-project/loopx/blob/f713e0f07c571a78a7c4405ab647ba41dbc492ba/docs/architecture/rfcs/loopx-overall-roadmap-v0.md#r6-localcloud-convergence">R6 路线</a>区分“单一权威、混合执行”的过渡形态与完整跨 host 协作。前者不能通过复制一份可独立写入的 Goal 数据库来实现。</p>
+<p>完整验收仍要求至少两个真实 host，含一个云端 worker，并检查 tenant/actor 权限、撤销、断连、旧 writer 和不确定提交。共享合同减少重新表达需求的成本；云端资源、依赖与隔离仍需单独证明。这里已有可复用的分工，完整 Local/Cloud 资格仍是待完成的目标。</p>
+
 <p>当 Agent 的工作跨越多轮、多个会话和不同执行者，这些约束就需要成为可继承的状态。长程自主开发追求的是：不需要人判断时，持续推进有价值的工作；需要纠偏时，让一次反馈改变后续行动；证据不足或边际收益下降时，能够等待、换路或收口。</p>
 <p>如果这些改进又被用于改进开发系统本身，就出现了系统自迭代的闭环。已有<a href="../long-horizon-rsi/">自举与 RSI 文章</a>专门讨论这段沿革与边界；持续提交和修改自身代码，仍不能单独证明能力提升。</p>
 </section>
