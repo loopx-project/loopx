@@ -9,10 +9,9 @@ from pathlib import Path
 import re
 import shutil
 from typing import Any
-import uuid
 
 from .chat_store import utc_now
-from .file_lock import exclusive_file_lock
+from .file_lock import exclusive_file_lock, write_json_atomic
 from .kiro_cli_goal_mode import KIRO_CLI_CHAT_AGENT_ID
 
 
@@ -50,15 +49,14 @@ def _compact_label(value: Any, *, field: str, limit: int = 120) -> str:
 
 
 def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with temporary.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.chmod(temporary, 0o600)
-    os.replace(temporary, path)
+    write_json_atomic(
+        path,
+        payload,
+        mode=0o600,
+        directory_mode=0o700,
+        separators=(",", ":"),
+        indent=None,
+    )
 
 
 def _read(path: Path) -> dict[str, Any]:
