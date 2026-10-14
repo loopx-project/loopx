@@ -66,6 +66,10 @@ test("bootstrap is exactly replayable, has no mutation receipt and cannot overwr
 
 for (const kind of ["unsupported_name", "file_symlink", "directory_symlink", "parent_symlink", "non_file"] as const) {
   test(`source admission rejects ${kind} without changing the candidate`, async (t) => {
+    if (kind === "file_symlink" && process.platform === "win32") {
+      t.skip("file symlink creation needs Windows host privileges");
+      return;
+    }
     const f = await fixture(t);
     const before = await f.store.loadAuthority();
     let source = await sourceRequest(f, f.baseline);
@@ -80,12 +84,12 @@ for (const kind of ["unsupported_name", "file_symlink", "directory_symlink", "pa
     if (kind === "non_file") await mkdir(join(directory, "todo_retained.json"));
     if (kind === "directory_symlink") {
       await rm(directory, {recursive: true});
-      await symlink(outside, directory);
+      await symlink(outside, directory, process.platform === "win32" ? "junction" : "dir");
     }
     if (kind === "parent_symlink") {
       const goalDirectory = join(f.root, "goals", "goal-a");
       await rm(goalDirectory, {recursive: true});
-      await symlink(outside, goalDirectory);
+      await symlink(outside, goalDirectory, process.platform === "win32" ? "junction" : "dir");
     }
     if (kind !== "non_file") source = await sourceRequest(f, f.baseline);
     const result = await inspectCoordinationRuntimeShadow({...source,
@@ -186,7 +190,8 @@ test("qualification preserves unrecognized residue, symlink partitions and inval
   await writeFile(cursorPath, Buffer.concat([invalid.subarray(0, offset), Buffer.from([0xff]), invalid.subarray(offset + 3)]));
   assert.equal((await qualify(f, head)).reason_code, "outbox_file_invalid");
   await writeFile(cursorPath, original);
-  await symlink(directory, join(f.root, "authority-shadow", "outbox", "goal-a", "leases"));
+  await symlink(directory, join(f.root, "authority-shadow", "outbox", "goal-a", "leases"),
+    process.platform === "win32" ? "junction" : "dir");
   assert.equal((await qualify(f, head)).qualified, false);
 });
 

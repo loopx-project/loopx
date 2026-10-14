@@ -11,6 +11,14 @@ import pytest
 from benchmark.edgebench.feedback_hook import deliver, install
 from benchmark.edgebench import feedback_hook
 
+requires_posix_flock = pytest.mark.skipif(
+    feedback_hook.fcntl is None,
+    reason="delivery serializes its session reader with POSIX flock",
+)
+requires_posix_modes = pytest.mark.skipif(
+    os.name != 'posix', reason="the installer asserts POSIX file modes"
+)
+
 
 def packet(root, n=2):
     root.mkdir(exist_ok=True)
@@ -33,6 +41,7 @@ def packet(root, n=2):
     return value
 
 
+@requires_posix_flock
 def test_parallel_tools_resume_and_new_session(tmp_path):
     root, receipts = tmp_path / 'feedback', tmp_path / 'receipts'
     expected = packet(root)
@@ -56,6 +65,7 @@ def test_parallel_tools_resume_and_new_session(tmp_path):
     assert call('UserPromptSubmit') and not call()
 
 
+@requires_posix_flock
 @pytest.mark.parametrize('event_name', ['PostToolUse', 'SessionStart', 'UserPromptSubmit'])
 def test_waiting_reader_cannot_rewind_newer_delivery(tmp_path, monkeypatch, event_name):
     root, receipts = tmp_path / 'feedback', tmp_path / 'receipts'
@@ -92,6 +102,7 @@ def test_waiting_reader_cannot_rewind_newer_delivery(tmp_path, monkeypatch, even
     assert not call()  # A later hook must not replay the newest result either.
 
 
+@requires_posix_flock
 def test_empty_and_malformed_do_not_disclose(tmp_path):
     value = packet(tmp_path)
     event = {'session_id': 'test', 'hook_event_name': 'PostToolUse'}
@@ -106,6 +117,7 @@ def test_empty_and_malformed_do_not_disclose(tmp_path):
     assert not output.getvalue()
 
 
+@requires_posix_flock
 @pytest.mark.parametrize('fault', ['digest', 'task', 'submission', 'epoch', 'revision', 'invalid', 'schema'])
 def test_misbound_result_never_advances_session_cursor(tmp_path, fault):
     value = packet(tmp_path)
@@ -136,6 +148,7 @@ def test_misbound_result_never_advances_session_cursor(tmp_path, fault):
     assert stream.getvalue() and len(list(receipts.glob('*.json'))) == 1
 
 
+@requires_posix_modes
 def test_installer_preserves_official_stop_and_is_idempotent(tmp_path):
     settings = {'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': '/official-stop'}]}]}}
     (tmp_path / 'hooks.json').write_text(json.dumps(settings))
@@ -159,3 +172,11 @@ def test_installer_preserves_official_stop_and_is_idempotent(tmp_path):
     assert tmp_path.stat().st_mode & 0o777 == 0o755
     assert script.stat().st_mode & 0o777 == 0o644
     assert (tmp_path / 'hooks.json').stat().st_mode & 0o777 == 0o644
+
+
+def test_delivery_refuses_a_host_without_the_posix_session_lock(tmp_path, monkeypatch):
+    monkeypatch.setattr(feedback_hook, 'fcntl', None)
+    receipts = tmp_path / 'receipts'
+    with pytest.raises(OSError, match='session-lock backend'):
+        deliver({'session_id': 'test', 'hook_event_name': 'PostToolUse'}, tmp_path, receipts)
+    assert not receipts.exists()

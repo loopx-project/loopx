@@ -3,12 +3,18 @@
 import copy
 import csv
 import json
+import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from benchmark.edgebench.export_report import digest, export, verify, write
+
+
+ROOT = Path(__file__).resolve().parents[2]
+PUBLISHED_DATA = Path("benchmark/edgebench/studies/portfolio-ten-arm-20261006/data")
 
 
 @pytest.mark.parametrize("strategy", [None, "off", "evidence_conditioned_v1"])
@@ -394,3 +400,79 @@ def test_cli_rejects_inconsistent_reports(trial, operation):
     assert '"verified": true' not in result.stdout
     if operation == "export":
         assert not trial[2].exists()
+
+
+def _windows_text_writes(monkeypatch):
+    """Mirror the os.linesep translation CPython applies to Windows text writes."""
+    real_open = Path.open
+
+    def windows_text_write(self, mode="r", *args, **kwargs):
+        if "b" not in mode and any(flag in mode for flag in "wax"):
+            if kwargs.get("newline") is None:
+                kwargs["newline"] = "\r\n"
+        return real_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", windows_text_write)
+
+
+def _publish_and_recheck(tmp_path, build_data):
+    """Publish files through Git with text conversion forced on, then verify."""
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    subprocess.run(["git", "init", "-q", str(repository)], check=True)
+    shutil.copyfile(ROOT / ".gitattributes", repository / ".gitattributes")
+    data = build_data(repository)
+    (repository / "control.txt").write_bytes(b"control\n")
+
+    def git(*args):
+        return subprocess.run(
+            ["git", "-C", str(repository), "-c", "core.autocrlf=true", *args],
+            check=True, capture_output=True, text=True,
+        )
+
+    relative = data.relative_to(repository).as_posix()
+    pin = git("check-attr", "eol", f"{relative}/index.json").stdout
+    assert pin.strip().endswith("eol: lf"), "the LF pin must apply to this path"
+    git("add", "--", ".gitattributes", relative, "control.txt")
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    git("checkout-index", "--all", f"--prefix={checkout.as_posix()}/")
+    assert (checkout / "control.txt").read_bytes() == b"control\r\n", "conversion must be active"
+    restored = checkout / relative
+    assert verify(restored)["verified"] is True
+    for path in data.rglob("*"):
+        if path.is_file():
+            assert (restored / path.relative_to(data)).read_bytes() == path.read_bytes()
+    return restored
+
+
+def test_json_writer_ignores_host_text_newline_translation(tmp_path, monkeypatch):
+    _windows_text_writes(monkeypatch)
+    value = {"best_score": 2, "note": "first line\nsecond line"}
+    path = tmp_path / "value.json"
+    write(path, value)
+    expected = json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+    assert path.read_bytes() == expected.encode("utf-8")
+
+
+def test_published_archive_materializes_byte_exact_under_autocrlf(tmp_path):
+    def build(repository):
+        data = repository / PUBLISHED_DATA
+        shutil.copytree(ROOT / PUBLISHED_DATA, data)
+        return data
+
+    _publish_and_recheck(tmp_path, build)
+
+
+def test_exported_report_survives_autocrlf_publication(tmp_path, trial, monkeypatch):
+    """A Windows host writes CRLF for default text writes, but this export binds
+    its own bytes, so Git must store and restore exactly what was written."""
+    _windows_text_writes(monkeypatch)
+
+    def build(repository):
+        data = repository / "benchmark/edgebench/studies/review-roundtrip/data"
+        runs, selection, _unused, _task = trial
+        export(runs, selection, data, observed_at="2026-01-02T00:00:00+00:00")
+        return data
+
+    _publish_and_recheck(tmp_path, build)

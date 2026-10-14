@@ -1,11 +1,12 @@
 import {executeCanonicalTaskLeaseAcquire} from "../../loopx/control_plane/coordination/task_lease_acquire.ts";
 /** Disposable child for acquisition/lifecycle crash and race qualification. */
-import {readFileSync} from "node:fs";
+import {readFileSync, writeFileSync} from "node:fs";
 import {openLocalAuthorityStore} from "../../loopx/control_plane/coordination/local_authority_provider.ts";
 import {executeCanonicalTaskLeaseLifecycle} from "../../loopx/control_plane/coordination/task_lease_lifecycle.ts";
 import type {AuthorityStore} from "../../loopx/control_plane/coordination/authority_store.ts";
 const [path, mode, ttl] = process.argv.slice(2);
 const request = JSON.parse(readFileSync(path!, "utf8"));
+const stageMarkerPath = `${path}.stage`;
 const store = await openLocalAuthorityStore(request.runtime_root, request.goal_id);
 let release: () => void = () => {};
 const barrier = new Promise<void>(resolve => {release = resolve;});
@@ -19,9 +20,15 @@ const measured: AuthorityStore = {
     return head;
   },
   commitAuthority: async input => {
-    if (mode === "before") process.kill(process.pid, "SIGKILL");
+    if (mode === "before") {
+      writeFileSync(stageMarkerPath, mode);
+      process.kill(process.pid, "SIGKILL");
+    }
     const result = await store.commitAuthority(input);
-    if (mode === "after" && result.status === "applied") process.kill(process.pid, "SIGKILL");
+    if (mode === "after" && result.status === "applied") {
+      writeFileSync(stageMarkerPath, mode);
+      process.kill(process.pid, "SIGKILL");
+    }
     return result;
   },
 };

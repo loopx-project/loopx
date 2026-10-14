@@ -183,6 +183,8 @@
     "tests/control_plane_ts/chat_session_lifecycle.test.ts",
     "tests/control_plane_ts/test_python_runtime.test.ts",
     "loopx/control_plane/goals/direction_baseline.ts",
+    "loopx/control_plane/goals/direction_authority.ts",
+    "tests/control_plane_ts/direction_authority.test.ts",
     "tests/control_plane_ts/direction_baseline.test.ts",
     "loopx/zcode_goal_mode/*.ts",
     "tests/control_plane_ts/zcode*.test.ts"

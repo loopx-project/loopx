@@ -2,9 +2,10 @@ import {executeTaskLeaseAcquire} from "../../loopx/control_plane/work_items/task
 import assert from "node:assert/strict";
 import {createHash} from "node:crypto";
 import {mkdtemp, writeFile, rm, access} from "node:fs/promises";
+import {readFileSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
-import {spawn, spawnSync} from "node:child_process";
+import {spawn, spawnSync, type SpawnSyncReturns} from "node:child_process";
 import {fileURLToPath} from "node:url";
 import test, {type TestContext} from "node:test";
 import {executeTaskLeaseLifecycle, TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA_VERSION} from "../../loopx/control_plane/work_items/task_lease_lifecycle.ts";
@@ -26,6 +27,21 @@ import {atomicWriteJson} from "../../loopx/control_plane/effect_runtime_io.ts";
 
 const NOW = new Date("2026-09-13T10:05:00Z");
 const CHILD = fileURLToPath(new URL("./canonical_task_lease_renew_process.ts", import.meta.url));
+// The crash oracle must prove the child reached the requested commit boundary:
+// module-load, config-read and other start-up failures also exit non-zero.
+// POSIX keeps the self-delivered SIGKILL proof; Windows reports a
+// TerminateProcess status instead, so the child writes a stage marker at each
+// fault point and the parent reads it back before accepting the exit result.
+function assertChildCrashedAtCommitBoundary(child: SpawnSyncReturns<string>, boundary: "before" | "after", configPath: string): void {
+  assert.equal(child.error, undefined, child.error?.message);
+  let stage: string | undefined;
+  try { stage = readFileSync(`${configPath}.stage`, "utf8"); } catch { stage = undefined; }
+  assert.equal(stage, boundary, stage === undefined
+    ? `child never reached the ${boundary}-commit fault point (stderr: ${child.stderr})`
+    : `child died at stage "${stage}", not the ${boundary}-commit fault point (stderr: ${child.stderr})`);
+  assert.notEqual(child.status, 0);
+  if (process.platform !== "win32") assert.equal(child.signal, "SIGKILL", child.stderr);
+}
 test("lifecycle identity diagnostics follow the invalid field, not error wording", async () => {
   for (const [fields, code] of [
     [{goal_id: 42, todo_id: "todo_valid"}, "invalid_goal_id"],
@@ -126,7 +142,7 @@ for (const provider of ["file", "sqlite"] as const) {
       await writeFile(config, JSON.stringify({...command, operation: "acquire", now: acquireNow.toISOString()}));
       const before = await store.loadAuthority();
       const child = spawnSync(process.execPath, ["--no-warnings", "--experimental-sqlite", "--experimental-strip-types", CHILD, config, boundary, "600"], {encoding: "utf8", timeout: 30000});
-      assert.equal(child.signal, "SIGKILL", child.stderr);
+      assertChildCrashedAtCommitBoundary(child, boundary, config);
       if (boundary === "before") assert.deepEqual(await store.loadAuthority(), before);
       const result = await executeTaskLeaseAcquire(command, {now: () => acquireNow});
       assert.equal(result.ok, true, JSON.stringify(result)); assert.equal(result.status, boundary === "before" ? "applied" : "replayed");
@@ -266,7 +282,7 @@ for (const provider of ["file", "sqlite"] as const) {
       const config = join(root, "child.json"); await writeFile(config, JSON.stringify({...request, now: NOW.toISOString()}));
       const before = await store.loadAuthority();
       const child = spawnSync(process.execPath, ["--no-warnings", "--experimental-sqlite", "--experimental-strip-types", CHILD, config, boundary, "600"], {encoding: "utf8", timeout: 30000});
-      assert.equal(child.signal, "SIGKILL", child.stderr);
+      assertChildCrashedAtCommitBoundary(child, boundary, config);
       if (boundary === "before") assert.deepEqual(await store.loadAuthority(), before);
       const result = await executeTaskLeaseLifecycle(request, {now: () => NOW});
       assert.equal(result.ok, true); assert.equal(result.status, boundary === "before" ? "applied" : "replayed");
@@ -315,7 +331,7 @@ for (const provider of ["file", "sqlite"] as const) {
         const before = await store.loadAuthority();
         const child = spawnSync(process.execPath, ["--no-warnings", "--experimental-sqlite", "--experimental-strip-types", CHILD,
           config, boundary, "600"], {encoding: "utf8", timeout: 30000});
-        assert.equal(child.signal, "SIGKILL", child.stderr);
+        assertChildCrashedAtCommitBoundary(child, boundary, config);
         if (boundary === "before") assert.deepEqual(await store.loadAuthority(), before);
         const recovered = await executeTaskLeaseLifecycle(command, {now: () => NOW});
         assert.equal(recovered.ok, true, JSON.stringify(recovered));
@@ -355,7 +371,7 @@ for (const provider of ["file", "sqlite"] as const) {
       const before = await store.loadAuthority();
       const child = spawnSync(process.execPath, ["--no-warnings", "--experimental-sqlite", "--experimental-strip-types", CHILD,
         config, boundary, "600"], {encoding: "utf8", timeout: 30000});
-      assert.equal(child.signal, "SIGKILL", child.stderr);
+      assertChildCrashedAtCommitBoundary(child, boundary, config);
       if (boundary === "before") assert.deepEqual(await store.loadAuthority(), before);
       const recovered = await executeTaskLeaseLifecycle(command, {now: () => NOW});
       assert.equal(recovered.ok, true, JSON.stringify(recovered));
@@ -390,3 +406,28 @@ for (const provider of ["file", "sqlite"] as const) {
     });
   }
 }
+
+test("the commit-boundary crash guard rejects early exit, normal exit, timeout and wrong stage", async t => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-crash-guard-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const config = join(root, "child.json");
+  const flags = ["--no-warnings", "--experimental-sqlite", "--experimental-strip-types"];
+  // A start-up failure exits non-zero without ever reaching the commit boundary.
+  const missingConfig = join(root, "missing.json");
+  const startup = spawnSync(process.execPath, [...flags, CHILD, missingConfig, "before", "600"], {encoding: "utf8", timeout: 30000});
+  assert.notEqual(startup.status, 0);
+  assert.throws(() => assertChildCrashedAtCommitBoundary(startup, "before", missingConfig),
+    /never reached the before-commit fault point/);
+  // A normal exit, a spawn timeout and the other boundary must not satisfy the crash guard.
+  const normal = spawnSync(process.execPath, ["-e", "process.exit(0)"], {encoding: "utf8", timeout: 30000});
+  assert.equal(normal.status, 0);
+  assert.throws(() => assertChildCrashedAtCommitBoundary(normal, "before", config),
+    /never reached the before-commit fault point/);
+  const hung = spawnSync(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {encoding: "utf8", timeout: 1500});
+  assert.equal((hung.error as NodeJS.ErrnoException | undefined)?.code, "ETIMEDOUT");
+  assert.throws(() => assertChildCrashedAtCommitBoundary(hung, "before", config), /ETIMEDOUT/);
+  await writeFile(`${config}.stage`, "after");
+  const synthetic: SpawnSyncReturns<string> = {pid: 1, output: [], stdout: "", stderr: "",
+    status: process.platform === "win32" ? 1 : null, signal: process.platform === "win32" ? null : "SIGKILL", error: undefined};
+  assert.throws(() => assertChildCrashedAtCommitBoundary(synthetic, "before", config), /died at stage "after"/);
+});

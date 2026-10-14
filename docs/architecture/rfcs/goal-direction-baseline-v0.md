@@ -2,10 +2,10 @@
 
 - **RFC status:** Accepted
 - **Supersedes / closes:** none
-- **Delivery maturity:** Partial (M1 candidate; entry qualification pending; M2 unqualified)
+- **Delivery maturity:** Partial (M1 and explicit local M2 candidates; entry and general activation unqualified)
 - **Authors / owners:** LoopX maintainers and contributors
 - **Created:** 2026-09-10
-- **Last normative revision:** 2026-10-12
+- **Last normative revision:** 2026-10-13
 - **Implementation baseline:** `41a95d9`
 - **Tracking issue:** [#2831](https://github.com/huangruiteng/loopx/issues/2831)
 - **Related contracts:**
@@ -26,9 +26,12 @@ appendices are non-normative execution, decision, evidence, and fixture-plan
 records.
 
 RFC maturity and delivery maturity are independent. The candidate M1 TypeScript builder
-implements `goal_direction_baseline_v0` over supplied canonical inputs. No
-production receipt writer, declaration authoring command or runtime consumer
-is delivered; schema-valid synthetic receipts do not prove real consumption.
+implements `goal_direction_baseline_v0` over supplied canonical inputs. The explicit local candidate in §12.5 adds source-backed read offers, same-Agent
+acknowledgement and cold operator/Agent readback. It does not qualify general
+runtime activation or live model consumption; schema validity alone remains
+insufficient. M1 entry qualification remains pending owner approval of the
+Section 12 capacity and receipt decisions; M2 consumer/recovery UX approval
+is a separate pending gate. Implementation and tests do not grant either approval.
 
 The separate [acceptance contract v0](../../reference/goal-acceptance-observations.md#owner-authorized-contract-v0)
 does not implement this RFC's material declarations or usage receipts.
@@ -147,8 +150,8 @@ The implementation baseline already provides these relevant owners:
   projection facts, not a typed canonical Goal-intent revision.
 
 The M1 builder now binds declared direction materials to one Agent's supplied
-receipts. Production declaration authoring and receipt provenance remain M2
-dependencies. Shared-alignment source digests and Markdown state are not
+receipts. The §12.5 local source profile implements declaration authoring and read/ack
+provenance; other producer profiles and general activation remain M2 dependencies. Shared-alignment source digests and Markdown state are not
 substitutes for that provenance.
 
 ## 5. Proposed architecture
@@ -420,8 +423,8 @@ The M1 candidate is implemented in
 [`direction_baseline.ts`](../../../loopx/control_plane/goals/direction_baseline.ts).
 The existing [F2 smoke](../../../examples/goal-direction-baseline-f2-smoke.py)
 now exercises the actual TypeScript tests and two source mutations; its old
-fixture-local reducer is retired. No CLI, persistence, consumer, scheduler or
-quota path calls this builder. M2 remains separate.
+fixture-local reducer is retired. The explicit local M2 candidate below calls it through a cold Goal operation.
+Polling, scheduling and quota paths still do not call this builder.
 
 ## 12. Open decisions
 
@@ -545,6 +548,148 @@ duplicate declarations must agree. Optional items stay visible, but only
 required items contribute to aggregate state/reasons. Malformed full input
 refuses even for an optional item or peer. The §12.3 consumer/receipt-provenance
 requirements remain separate; this builder adds no receipt store or v0 fields.
+
+### 12.5 Explicit local M2 candidate and review boundary
+
+This candidate makes the §12.3 consumer/recovery proposal concrete for maintainer
+review under the existing §11 M2 entry gate. Implemented source and isolated
+validation do not approve activation on a live Goal. Its production entrypoints
+are `goal-direction` and the existing Goal settings disclosure. TypeScript
+`goals/direction_authority.ts` owns decisions and canonical writes; the Python
+`direction_runtime` adapter owns source observation, locking and bounded file IO.
+This is Goal authority, not material-catalog migration/reranking policy, and it
+creates no new capability or store. The existing local Decision Context provider
+and this transport share the same descriptor-bounded file-snapshot helper.
+
+The first profile requires an active exact `source_session_v1` Goal, registered
+peer ids and an existing File/SQLite canonical authority. Fresh creation uses
+`project register --canonical-storage file|sqlite`; it is not migration of an
+existing Goal. Existing registry-side material authority must be explicitly
+migrated by its owner before this profile is used; the candidate refuses a
+second authority. Under this profile `authority_registry` is the same logical
+Goal authority object in the canonical Goal head, with an exact-lifetime scope.
+Other Goal state, requirements, work, leases and acceptance remain unchanged.
+
+The typed owner checks the live lifetime, unique authority and provider basis
+before the operator configuration reads source bytes as well. A compact legacy
+authority summary is not treated as empty; migration is required. Disabling the
+reader remains available to the live owner without granting new source access.
+
+The operator declares a complete list of local Markdown sources, each with
+stable material id, purpose, topic refs, required/optional flag and an explicit
+public/public-safe/local-private boundary. The source path is transient input,
+resolved only inside the existing Goal repo/state/runtime roots. Relative paths
+are pinned to the repository; a missing file cannot fall through to a same-named
+state/runtime copy. Other authorized roots require an explicit absolute path. Its raw locator
+and body never enter the authority or receipt journal. A pending operator form
+retains its private path only in that tab's local recovery state until resolved. Actual bounded bytes
+supply the content revision; only the locator digest is retained. Declaration
+and apply bind a provider revision; the UI also pins the reviewed authority
+digest, so editing the file between preview/apply refuses. Unknown/private
+remote providers are unsupported. This is explicit owner-declared revision
+tracking, not a filesystem watcher: updating a source file requires the owner
+to review/update its declared revision, and a read against mismatching actual
+bytes records unavailability rather than a passing old receipt.
+
+Usage has two distinct steps:
+
+1. **Read.** The typed owner checks exact instance, registered Agent, current
+   declaration, source digest, revision and boundary before IO. Actual bounded
+   source bytes are returned transiently with an original-operation offer and
+   delivery digest. The offer is durable but creates no usage receipt: a lost
+   response cannot mark an Agent current. Retry the same read operation to
+   recover its offer only while the same revision can still be read.
+2. **Acknowledge.** That Agent explicitly acknowledges the exact offer/digest.
+   The existing canonical transaction adds one `material_usage_receipt_v0`
+   with `outcome=read`, inside an instance-bound provenance record. It cannot
+   accept an arbitrary supplied receipt, reuse another Agent's offer, or
+   acknowledge after a later availability observation invalidated the offer.
+   This proves a source-backed read plus declared acknowledgement, not human
+   or model understanding, actual route adoption, `used`, or `verified`.
+
+A later read failure records `unavailable` through the same owner and blocks
+an earlier passing receipt. The producer keeps `recorded_at` strictly increasing
+in canonical append order even if the host clock repeats or moves backward;
+this is ordering evidence, not an independent wall-clock attestation. Preview
+acknowledgements explicitly keep `receipt_recorded=false` and write no record. Repair the source and perform a new read/ack;
+never edit a receipt to make the projection current. Recreated/retired source
+lifetimes fence new operations including a delayed RPC after caller timeout.
+Original operation receipts remain historical; replay grants no current access
+or execution. A same-Agent exact-revision receipt permits a current projection;
+a peer's receipt is nontransferable. Combined authority/receipt input is bounded
+before commit; no partial projection is persisted to fit the budget.
+
+At 4,096 retained usage records, a new observation may replace one older
+record for the **same Agent/material only**. The displaced complete provenance
+record is retained as `archived_usage_record` in the same atomic operation
+receipt/journal; `receipt` with that operation id reads it back. Original
+operation receipts remain unchanged. This bounds the current projection, not
+the store's journal history or its separate provider capacity. A full store with
+no record for this pair refuses the new observation; it cannot evict another
+pair, and the unread pair remains blocked. New offers bind the complete retained
+same-pair usage digest, so an unavailable observation invalidates old offers even
+when the row count is unchanged; unrelated pairs remain valid. A monotonic scope
+`usage_generation` fences pre-upgrade offers that only carried a row count after
+the first replacement. A new read and acknowledgement recover normally without
+raising the limit. Keep compatible readers after such records exist; reverting
+to a reader that cannot interpret the generation is not a supported rollback.
+
+
+The existing settings path **Goal settings → Task ownership → Direction
+materials and revisions** lets the owner review/apply declarations, inspect
+registered Agents independently, recover unknown replies and disable the reader.
+The browser cannot read/ack as a peer or submit usage receipts. Agent CLI uses
+these operations, with writes explicitly enabled:
+
+```sh
+loopx --registry REGISTRY --format json goal-direction \
+  --goal-id GOAL --goal-instance-id INSTANCE --agent-id AGENT --operation inspect
+loopx --registry REGISTRY --format json goal-direction \
+  --goal-id GOAL --goal-instance-id INSTANCE --agent-id AGENT \
+  --operation read --request-json read.json --execute
+loopx --registry REGISTRY --format json goal-direction \
+  --goal-id GOAL --goal-instance-id INSTANCE --agent-id AGENT \
+  --operation acknowledge --request-json acknowledgement.json --execute
+```
+
+Synthetic packaged-interface examples: [review declaration](../../assets/goal-direction/declaration-preview.png),
+[revision drift](../../assets/goal-direction/revision-drift.png), and
+[narrow Agent readback](../../assets/goal-direction/peer-readback.png).
+These show operator/CLI qualification, not live model understanding.
+
+The Agent must already have the authorized local path from its task/provider
+context; this profile does not resolve a private locator from material id alone.
+That explicit-read boundary is separate from autonomous source discovery/handoff.
+`read.json` contains `operation_id`, `material_id`, the transient `source_path`,
+`required_revision` and `authority_digest` from inspect. The acknowledgement
+contains its own `operation_id`, the returned `offer.read_operation_id` and
+`delivery_digest`. To configure through CLI, omit Agent id and supply `materials`
+plus `expected_provider_revision` and `operation_id`; preview is the default.
+Each material contains `material_id`, `source_path`, `purpose`, `topics`,
+`required` and `boundary`. Include the preview's `expected_authority_digest`
+when applying a reviewed declaration. `receipt` takes `receipt_operation_id`
+and the original actor/lifetime. `disable` is an operator operation with current
+provider revision and its own operation id; it retains declarations and receipts.
+
+Cold inspect returns the M1 projection and a typed Agent-scoped `vision_gap`.
+Its `acceptance_basis` links the material baseline to the actually observed
+canonical acceptance contract revision/digest via its existing typed reader,
+explicitly `not_assessed`. An absent, disabled or non-instance-bound contract
+projects no linked revision. Configuring/verifying acceptance through the generic
+source-session CLI remains outside this candidate; no such writer gate is waived.
+It never marks whole-Goal acceptance green or writes a Vision/checkpoint,
+Todo, route, lease, scheduler or quota decision. Actual route changes retain
+`goal_path_delta_v0`; generic runtime and Lark activation are still unqualified.
+The local operator/registered-actor transport is the existing trust boundary,
+not a new authentication or independent-worker-attestation scheme.
+
+The candidate tests use real native registration, File/SQLite storage, local
+files and HTTP, plus the packaged settings interaction and separate Agent CLI.
+They qualify revision/peer/lifetime isolation, source-first IO, unknown response,
+replay, unavailable-source recovery, corruption and retained work. Synthetic
+actors/files do not demonstrate actual model reading or general autonomous
+collaboration. M2 promotion still needs the named consumer/UX review and any
+additional profile's own acceptance; an opt-in declaration is not that promotion.
 
 ---
 
@@ -674,6 +819,7 @@ projection. Run `node --experimental-strip-types --test tests/control_plane_ts/d
 and `uv run --extra test python examples/goal-direction-baseline-f2-smoke.py` with
 Node >=22.22.3. Run the existing `vision_checkpoint.test.ts` for route authority.
 No parallel Python reducer or Python/TypeScript consuming pair is introduced.
-Production receipt authenticity, instance-bound storage, live providers,
-production capacity freeze and the M2 CLI/frontend/Lark journey remain unqualified.
-Rollback removes this unconsumed builder; no canonical state needs migration.
+The §12.5 candidate qualifies an explicit local read/ack and instance-bound
+CLI/settings path. Live model consumption, other providers, production capacity
+promotion and Lark remain unqualified. Remove the unactivated candidate to roll
+back; after use, disable the reader and retain its canonical history and fences.

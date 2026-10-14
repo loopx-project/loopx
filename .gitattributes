@@ -1,2 +1,6 @@
 # Preserve the immutable archive's bytes even with core.autocrlf=true.
 benchmark/deepswe-gptxhigh-v1/** text eol=lf
+
+# Published study archives bind sha256 of their own LF bytes in index.json, so
+# a CRLF checkout must not rewrite them either.
+benchmark/edgebench/studies/**/data/** text eol=lf

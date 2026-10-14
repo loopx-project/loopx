@@ -26,6 +26,15 @@ wheel labelled `0.11.1` without that publication surface is refused as
 
 ## What it proves
 
+The report records each helper's ready-handshake schema declaration in
+`nokv_protocol_schema_observations` (open order; `null` where the SDK declares
+none, as the 0.11.x releases do). `nokv_protocol_schema` names a schema only
+when all three helpers declared the same one and is `null` otherwise. This is
+observed SDK metadata, not a new qualification or write-authority gate:
+disagreeing helpers do not fail the probe. An open refusal retains the
+helper's typed reason code while omitting its free-form reason from CLI stderr.
+The current SDK/API pin and incarnation-fenced publication checks still apply.
+
 Against one **already existing** NoKV workbench, the probe starts three
 independent helper processes and verifies:
 

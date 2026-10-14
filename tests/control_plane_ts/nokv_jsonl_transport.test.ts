@@ -7,7 +7,7 @@ import {
   NoKVTransportProtocolError,
   NoKVTransportUnavailableError,
 } from "../../loopx/control_plane/coordination/nokv_authority_store.ts";
-import { NoKVJsonLinesTransport } from "../../loopx/control_plane/coordination/nokv_jsonl_transport.ts";
+import { NoKVHelperOpenRefusedError, NoKVJsonLinesTransport } from "../../loopx/control_plane/coordination/nokv_jsonl_transport.ts";
 import { registerAuthorityStoreConformance } from "./authority_store_conformance.ts";
 import { resolveTestPython } from "../../scripts/test-python.mjs";
 
@@ -37,6 +37,7 @@ const FAKE_INCARNATION = "a".repeat(32);
 async function openSdkHelper(
   routing: Record<string, unknown> = ETCD_ROUTING,
   fakeSdkShape?: "0.11.0" | "0.11.1-unfenced",
+  extraEnv: Record<string, string> = {},
 ) {
   return await NoKVJsonLinesTransport.open({
     argv: [PYTHON, SDK_HELPER],
@@ -47,6 +48,7 @@ async function openSdkHelper(
     },
     env: {
       ...process.env,
+      ...extraEnv,
       PYTHONPATH: process.env.PYTHONPATH
         ? `${FAKE_SDK_ROOT}:${process.env.PYTHONPATH}`
         : FAKE_SDK_ROOT,
@@ -286,6 +288,35 @@ test("JSON-lines transport opens the real helper with seed routing", async () =>
   } finally {
     await transport.close();
   }
+});
+
+test("JSON-lines transport retains the SDK schema from the exact ready handshake", async () => {
+  const unknown = await openSdkHelper();
+  try {
+    assert.equal(unknown.sdkProtocolSchema, null);
+  } finally {
+    await unknown.close();
+  }
+  const declared = await openSdkHelper(SEEDS_ROUTING, undefined, {
+    LOOPX_FAKE_NOKV_PROTOCOL_SCHEMA: "nokv.workspace.rpc.v10",
+  });
+  try {
+    assert.equal(declared.sdkProtocolSchema, "nokv.workspace.rpc.v10");
+  } finally {
+    await declared.close();
+  }
+});
+
+test("a missing SDK routing constructor returns a typed open refusal", async () => {
+  await assert.rejects(
+    openSdkHelper(SEEDS_ROUTING, undefined, {LOOPX_FAKE_NOKV_RELEASE_SHAPE: "1"}),
+    (error: unknown) => error instanceof NoKVHelperOpenRefusedError
+      && error.reasonCode === "nokv_sdk_capability_mismatch"
+      && /RoutingConfig\.seeds/.test(error.message),
+  );
+  const supported = await openSdkHelper(ETCD_ROUTING, undefined,
+    {LOOPX_FAKE_NOKV_RELEASE_SHAPE: "1"});
+  await supported.close();
 });
 
 test("JSON-lines transport surfaces an unknown routing kind as a typed protocol failure", async () => {

@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
-import os
-import stat
 import time
 from collections.abc import Callable, Mapping
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from ...materials import read_bounded_material_file
 
 from .sources import (
     DecisionSourceExactRead,
@@ -112,39 +111,7 @@ class LocalFileDecisionSourceProvider:
         if source.provider_id != self.provider_id:
             raise ValueError("source provider identity does not match")
         path = Path(source.private_locator).expanduser()
-        if not path.is_file():
-            raise FileNotFoundError("configured authority file is unavailable")
-        if path.stat().st_size > self.max_bytes:
-            raise ValueError("configured authority file exceeds max_bytes")
-        # The preflight is only an early refusal. Bound the actual descriptor
-        # read too, including growth or replacement between stat and open.
-        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
-        descriptor = os.open(path, flags)
-        with os.fdopen(descriptor, "rb") as handle:
-            before = os.fstat(handle.fileno())
-            if not stat.S_ISREG(before.st_mode):
-                raise ValueError("configured authority source is not a regular file")
-            if before.st_size > self.max_bytes:
-                raise ValueError("configured authority file exceeds max_bytes")
-            content = handle.read(self.max_bytes + 1)
-            if len(content) > self.max_bytes:
-                raise ValueError("configured authority file exceeds max_bytes")
-            after = os.fstat(handle.fileno())
-            resolved = path.resolve()
-            current = resolved.stat()
-            identity_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
-            identity = tuple(getattr(before, field) for field in identity_fields)
-            if len(content) != before.st_size or any(
-                tuple(getattr(observed, field) for field in identity_fields) != identity
-                for observed in (after, current)
-            ):
-                raise ValueError("configured authority file changed during bounded read")
-        revision = hashlib.sha256(content).hexdigest()
-        observed_at = datetime.fromtimestamp(
-            before.st_mtime,
-            tz=timezone.utc,
-        ).isoformat()
-        return resolved, content, revision, observed_at
+        return read_bounded_material_file(path, self.max_bytes)
 
     def scan(
         self,

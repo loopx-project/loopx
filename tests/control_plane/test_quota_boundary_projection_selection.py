@@ -86,6 +86,95 @@ def test_workspace_and_boundary_guards_check_the_selected_todo_only(
     assert "boundary_projection_gap" not in packet
 
 
+def test_replan_route_does_not_leak_an_unselected_workspace_guard_to_monitor(
+    tmp_path: Any,
+) -> None:
+    product_delivery = quota_todo_item(
+        todo_id="todo_product_delivery001",
+        priority="P1",
+        title="Implement the product change.",
+        claimed_by=AGENT_ID,
+        task_repository="git:github.com/example/product",
+        required_write_scopes=["src/**"],
+    )
+    due_monitor = quota_todo_item(
+        todo_id="todo_due_monitor001",
+        index=2,
+        priority="P0",
+        title="Observe the benchmark run.",
+        task_class="continuous_monitor",
+        action_kind="monitor",
+        claimed_by=AGENT_ID,
+        task_repository="git:github.com/example/benchmark",
+        target_key="benchmark-run",
+        cadence="1h",
+        next_due_at="2020-01-01T00:00:00Z",
+    )
+    replan_obligation = {
+        "schema_version": "autonomous_replan_obligation_v0",
+        "required": True,
+        "stall_threshold": 2,
+        "trigger_count": 1,
+        "triggers": [{
+            "kind": "periodic_review_due",
+            "section": "run_history",
+            "text": "periodic route review is due",
+            "run_count": 6,
+            "threshold": 6,
+            "agent_id": AGENT_ID,
+        }],
+        "guidance_actions": ["keep", "split", "add", "retire", "ask_decision"],
+        "todo_actions": [{
+            "action": "add",
+            "role": "agent",
+            "priority": "P1",
+            "text": "write a compact replan record",
+        }],
+        "stop_condition": "stop at an authority boundary",
+        "recommended_action": "run the periodic route review",
+        "agent_id": AGENT_ID,
+        "replan_novelty_policy": {
+            "schema_version": "replan_evidence_delivery_policy_v0",
+            "evidence_source": "compact_run_history",
+            "delivery": "host_projected",
+            "writeback": "typed_semantic_delta",
+        },
+        "obligation_id": "replan-0123456789abcdef",
+    }
+    status = quota_status_payload(
+        goal_id=GOAL_ID,
+        status="active",
+        agent_todo_items=[product_delivery, due_monitor],
+        recommended_action=product_delivery["text"],
+        coordination={
+            "agent_model": "peer_v1",
+            "registered_agents": [AGENT_ID, "codex-peer"],
+            "write_scope": ["src/**"],
+        },
+        claim_scope_agent_id=AGENT_ID,
+        item_extra={"autonomous_replan_obligation": replan_obligation},
+        project_asset_extra={
+            "autonomous_replan_obligation": replan_obligation,
+            "autonomous_replan_obligations_by_agent": {
+                AGENT_ID: replan_obligation,
+            },
+        },
+    )
+
+    packet = build_quota_should_run(
+        status,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        workspace_path=tmp_path,
+    )
+
+    assert packet["decision"] == "autonomous_replan_required"
+    assert packet["effective_action"] == "autonomous_replan_required"
+    assert packet["work_lane_contract"]["selected_todo_id"] == due_monitor["todo_id"]
+    assert packet["selected_todo"] is None
+    assert "workspace_guard" not in packet
+
+
 @pytest.mark.parametrize("other_agent_gate", [False, True])
 def test_workspace_guard_keeps_alternative_todo_selection_available(
     monkeypatch: pytest.MonkeyPatch,

@@ -31,7 +31,7 @@ const goalA = {goal_id: goal, goal_instance_id: "ginst_aaaaaaaaaaaaaaaaaaaaaaaaa
 const goalB = {goal_id: goal, goal_instance_id: "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"};
 test("documented owner configuration satisfies the canonical acceptance contract", async () => {
   const reference = await readFile(new URL("../../docs/reference/goal-acceptance-observations.md", import.meta.url), "utf8");
-  const example = reference.match(/```json\n([\s\S]*?)\n```/);
+  const example = reference.match(/```json\r?\n([\s\S]*?)\r?\n```/);
   assert.ok(example, "the operation guide must include a runnable configuration");
   assert.doesNotThrow(() => normalizeGoalAcceptanceDocument(JSON.parse(example[1])));
 });
