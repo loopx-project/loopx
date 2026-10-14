@@ -25,7 +25,7 @@ def configuration_summary(goal: Mapping[str, Any]) -> dict[str, Any] | None:
             "count": completed_todo_replan_threshold(dict(profile)),
             **strategy,
         }
-    return None
+    return strategy or None
 
 
 __all__ = ["configuration_summary"]

@@ -376,12 +376,18 @@ Turn envelope 中保留：
 ### Configure and roll back the stride strategy
 
 Use the existing **Goal review and stride** capability editor, selecting device
-defaults or an explicit Goal target. Choose the review unit/count and strategy,
-preview once, confirm and read back the effective configuration/source. The
-whole Goal review override wins over the device review configuration; clearing
-it restores current device defaults. A legacy override without a strategy means
-`off`, even when the device strategy is enabled. No separate capability switch
-or per-field inheritance is added.
+defaults or an explicit Goal target. Preview, confirm and read back the effective
+configuration/source. A Goal can select only the strategy and keep inheriting
+the live device review interval (six settled work Turns by default). An explicit
+Goal review unit/count still pins that interval; an older cadence-only override
+without a strategy remains `off`, even when the device strategy is enabled.
+Clearing the interval alone retains the Goal strategy, while clearing both
+restores device defaults. There is no separate stride timer. Switching between
+JSON and the form preserves that choice: omitted interval fields keep inheritance,
+while explicit fields remain pinned even when they equal the current device value.
+A strategy-only Goal capability JSON object clears an existing interval override.
+The CLI's single-field strategy option retains a stored interval; use its explicit
+cadence-clear options to restore inheritance.
 
 ![Versioned stride strategy in the existing capability editor](assets/stride-strategy-editor.png)
 
@@ -392,8 +398,8 @@ installed-App adoption or research utility.
 CLI preview/apply and readback (replace `GOAL`):
 
 ```sh
-loopx configure-goal --goal-id GOAL --execution-replan-after-turns 6 --execution-stride-strategy evidence_conditioned_v1
-loopx configure-goal --goal-id GOAL --execution-replan-after-turns 6 --execution-stride-strategy evidence_conditioned_v1 --execute
+loopx configure-goal --goal-id GOAL --execution-stride-strategy evidence_conditioned_v1
+loopx configure-goal --goal-id GOAL --execution-stride-strategy evidence_conditioned_v1 --execute
 loopx --format json configure-goal --goal-id GOAL
 loopx configure-goal --goal-id GOAL --execution-stride-strategy off --execute
 ```
@@ -407,9 +413,14 @@ experiments, spend quota, clone a checkpoint, relax acceptance or rewrite a
 frozen experiment. Configuration is versioned; preregister the selected version
 and captured input scope for comparisons.
 
-在既有「Goal 复盘与步幅」能力中心中选择设备默认值或明确的 Goal，设置计数依据、
-周期和策略，预览、确认并回读生效来源。Goal 整体覆盖设备配置；旧 Goal 覆盖中
-没有策略则为 off。关闭策略保留复盘周期；清除整个覆盖恢复设备默认值。
+在既有「Goal 复盘与步幅」能力中心中选择设备默认值或明确的 Goal，预览、确认并
+回读生效来源。Goal 可仅选择策略，继续沿用设备的实时复盘周期（默认每 6 个已结算
+工作 Turn）；显式设置 Goal 计数依据和数量仍会固定该周期。旧的仅含周期覆盖没有
+策略时仍为 off。单独清除周期会保留 Goal 策略；两者都清除才恢复设备默认值。
+步幅策略没有第二个独立计时器。JSON 与表单切换保留原选择：省略周期字段继续
+继承，显式字段即使等于当前设备值也保持固定。Goal 能力 JSON 仅含策略时清除
+已有周期覆盖；CLI 单字段策略选项仍保留已存周期，要恢复继承须显式使用周期
+清除选项。关闭策略保留复盘周期。
 历史引用仍可读取。启用不会授权实验、消耗配额、复制 checkpoint、放宽验收或
 改写冻结实验；比较时预先记录策略版本与输入覆盖范围。
 
@@ -483,6 +494,24 @@ stale revisions and declaring unavailable evidence as empty are rejected. A
 changed evidence basis requires reassessment under the original Turn identity,
 not another quota debit. Disabled Explore adds no Explore assessment duty.
 
+For a considered finding omitted from the bounded basis, follow the global
+`result_page.next_command` (or increase its page size), then add
+`explore_review.result_pages: [{"revision": "<page revision>", "offset": 3, "limit": 3}]`.
+Copy these three coordinates from each page actually read; keep
+`explore_review.revision` bound to the original Explore basis. At most three
+distinct pages and three considered findings fit the existing Vision budget.
+Writeback replays the requested slices of the current, strictly validated
+Explore source and admits only findings present in those pages. The page
+revision binds the ordered full result contents and Goal/reader scope; it is
+not the bounded basis revision. Same-Goal peer findings remain reusable.
+Changed or unavailable source, forged membership and node-filtered pages are
+refused. Reread and reassess under the original Turn and obligation. This
+optional v2 field is retained in decision/history readback; ordinary reads stay
+read-only and no receipt store, claim, spawn or extra quota debit is created.
+Source replay verifies the declared citation, not that the model understood or
+adopted it. Existing v2 decisions without pages and historical v1 reads retain
+their behavior. Other detail routes are not supplemental citation sources.
+
 The typed owner validates shape, references and declared provenance before the
 fresh Vision path exit. When an enabled Goal reaches a periodic review, every
 accepted exit must also record a current `agent_vision.stride_decision`: a new
@@ -535,6 +564,13 @@ not improved model decisions or net efficiency.
 同一可选策略也覆盖普通工程、整理和维护：grow 扩大连贯的可验收交付，包含相关
 集成、验证和回读，不扩大权限、延迟结算或捆绑独立承诺。下次复盘核查质量与完整
 边际成本；合成准入链路只能证明协议采用，不能证明模型决策或净效率改善。
+
+补读全局结果分页后，可在 `explore_review.result_pages` 中附上实际读取页面的
+`revision`、`offset`、`limit`，最多三页；`explore_review.revision` 仍引用原有界
+证据版本。提交时从当前可信来源重放页面并核对 `considered_refs`，支持同一 Goal
+其他 Agent 产出的证据。来源变化、不可用、伪造成员或按节点筛选的页面会被拒绝，
+应在原 Turn 和原复盘义务下补读并重新评估。读取不写入回执或扣额度，分页引用随
+决策保留到历史和下次复盘；来源核验不证明模型理解、采用或研究收益。
 
 ### Path Delta
 

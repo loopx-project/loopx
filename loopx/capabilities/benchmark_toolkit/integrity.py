@@ -10,10 +10,14 @@ import shlex
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from enum import Enum
-from typing import Any
+from typing import Any, TypeGuard, cast
 from urllib.parse import urlsplit
 
-from .environment_access import _heredoc_delimiters, credential_probe_present
+from .environment_access import (
+    _heredoc_delimiters,
+    authorized_task_environment_probe_count,
+    credential_probe_present,
+)
 
 BENCHMARK_INTEGRITY_POLICY_SCHEMA_VERSION = "benchmark_integrity_policy_v0"
 BENCHMARK_RUNTIME_INTEGRITY_ATTESTATION_SCHEMA_VERSION = (
@@ -21,6 +25,12 @@ BENCHMARK_RUNTIME_INTEGRITY_ATTESTATION_SCHEMA_VERSION = (
 )
 BENCHMARK_INTEGRITY_QUALIFICATION_SCHEMA_VERSION = (
     "benchmark_integrity_qualification_v0"
+)
+BENCHMARK_TASK_ENVIRONMENT_ACCESS_SCHEMA_VERSION = (
+    "benchmark_task_environment_access_v0"
+)
+BENCHMARK_TASK_ENVIRONMENT_ACCESS_RECEIPT_SCHEMA_VERSION = (
+    "benchmark_task_environment_access_receipt_v0"
 )
 BENCHMARK_RESTRICTED_ACCESS_ADJUDICATION_SCHEMA_VERSION = (
     "benchmark_restricted_access_adjudication_v0"
@@ -53,6 +63,11 @@ REQUIRED_RUNTIME_ATTESTATIONS = (
     "verifier_started_after_agent",
     "official_feedback_blinded",
 )
+_DECLARED_FEEDBACK_RUNTIME_ATTESTATIONS = (
+    "evaluation_protocol_enforced",
+    "evaluation_log_complete",
+    "verifier_started_after_submission",
+)
 
 NETWORK_ACCESS_MODES = ("denied", "loopback_only", "permitted_solving")
 DEFAULT_NETWORK_ACCESS = "denied"
@@ -71,9 +86,15 @@ _COMMON_RUNTIME_ATTESTATIONS = (
     "case_local_control_state",
     "canonical_control_state_root",
     "independent_verifier",
+)
+_BLINDED_EVALUATION_RUNTIME_ATTESTATIONS = (
     "verifier_started_after_agent",
     "official_feedback_blinded",
 )
+_EVALUATION_PROTOCOL_OUTPUT_KINDS = frozenset(
+    {"score", "validation", "metrics", "summary", "diagnostics"}
+)
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 _DEFAULT_DENIED_ARGUMENT_MARKERS: dict[str, tuple[str, ...]] = {
     "restricted_answer_source_request": (
@@ -135,6 +156,8 @@ _COMMAND_ARGUMENT_FIELDS = ("args", "argv")
 # Unknown tools remain fail-closed and continue through the access-request scan.
 _NON_ACCESS_CONTROL_TOOLS = frozenset({"update_plan"})
 _PUBLIC_EVIDENCE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_TASK_ENVIRONMENT_NAMESPACE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{1,30}_$")
+_TASK_ENVIRONMENT_VARIABLE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{1,79}$")
 _REQUIRED_ADJUDICATION_REVIEW_SURFACES = frozenset(
     {"solver_trajectory", "tool_results", "final_workspace"}
 )
@@ -208,7 +231,11 @@ def _marker_present(text: str, marker: str) -> bool:
     )
 
 
-def required_runtime_attestations(network_access: str) -> tuple[str, ...]:
+def required_runtime_attestations(
+    network_access: str,
+    *,
+    declared_feedback: bool = False,
+) -> tuple[str, ...]:
     """Return the runner attestations required for one network access mode.
 
     ``denied`` (default) requires ``shell_network_denied`` for offline coding
@@ -217,7 +244,9 @@ def required_runtime_attestations(network_access: str) -> tuple[str, ...]:
     ``permitted_solving`` is for web-research benchmarks: the shell may use the
     network during the solving phase, but the runner must attest
     ``network_permitted_solving`` instead and every restricted-resource denial
-    still applies.
+    still applies. The default evaluation contract remains blinded. A validated
+    declared-feedback policy replaces only its two evaluation-order attestations
+    with the protocol, log, and post-submission verifier attestations.
     """
 
     mode = (
@@ -225,22 +254,48 @@ def required_runtime_attestations(network_access: str) -> tuple[str, ...]:
         if network_access in NETWORK_ACCESS_MODES
         else DEFAULT_NETWORK_ACCESS
     )
+    evaluation_attestations = (
+        _DECLARED_FEEDBACK_RUNTIME_ATTESTATIONS
+        if declared_feedback
+        else _BLINDED_EVALUATION_RUNTIME_ATTESTATIONS
+    )
     if mode == "permitted_solving":
-        return (*_COMMON_RUNTIME_ATTESTATIONS, NETWORK_PERMITTED_SOLVING_ATTESTATION)
+        return (
+            *_COMMON_RUNTIME_ATTESTATIONS,
+            *evaluation_attestations,
+            NETWORK_PERMITTED_SOLVING_ATTESTATION,
+        )
     if mode == "loopback_only":
-        return (*_COMMON_RUNTIME_ATTESTATIONS, LOOPBACK_ONLY_ATTESTATION)
-    return (*_COMMON_RUNTIME_ATTESTATIONS, "shell_network_denied")
+        return (
+            *_COMMON_RUNTIME_ATTESTATIONS,
+            *evaluation_attestations,
+            LOOPBACK_ONLY_ATTESTATION,
+        )
+    return (
+        *_COMMON_RUNTIME_ATTESTATIONS,
+        *evaluation_attestations,
+        "shell_network_denied",
+    )
 
 
 def _validated_policy(
     policy: Mapping[str, Any] | None,
-) -> tuple[str, bool, dict[str, tuple[str, ...]], str]:
+) -> tuple[
+    str,
+    bool,
+    dict[str, tuple[str, ...]],
+    str,
+    dict[str, object] | None,
+    dict[str, object] | None,
+]:
     if policy is None:
         return (
             "default",
             False,
             dict(_DEFAULT_DENIED_ARGUMENT_MARKERS),
             DEFAULT_NETWORK_ACCESS,
+            None,
+            None,
         )
     if policy.get("schema_version") != BENCHMARK_INTEGRITY_POLICY_SCHEMA_VERSION:
         raise ValueError("benchmark_integrity_policy_schema_mismatch")
@@ -274,7 +329,152 @@ def _validated_policy(
                 normalized.append(text)
         if normalized:
             markers[category] = (*markers.get(category, ()), *normalized)
-    return policy_id, policy_id_path_like, markers, raw_network_access
+    task_environment_access = _validated_task_environment_access(
+        policy.get("task_environment_access")
+    )
+    runtime_policy_projection = {
+        key: value
+        for key, value in policy.items()
+        if key != "task_environment_access"
+    }
+    evaluation_protocol = _validated_evaluation_protocol(
+        policy.get("evaluation_protocol"),
+        policy_sha256=_sha256_text(_canonical_text(runtime_policy_projection)),
+    )
+    return (
+        policy_id,
+        policy_id_path_like,
+        markers,
+        raw_network_access,
+        task_environment_access,
+        evaluation_protocol,
+    )
+
+
+def _validated_task_environment_access(
+    raw_access: object,
+) -> dict[str, object] | None:
+    if raw_access is None:
+        return None
+    if not isinstance(raw_access, Mapping):
+        raise TypeError("benchmark_task_environment_access_invalid")
+    if (
+        raw_access.get("schema_version")
+        != BENCHMARK_TASK_ENVIRONMENT_ACCESS_SCHEMA_VERSION
+    ):
+        raise ValueError("benchmark_task_environment_access_schema_mismatch")
+    authorization_id = str(raw_access.get("authorization_id") or "").strip()
+    if _PUBLIC_EVIDENCE_ID_PATTERN.fullmatch(authorization_id) is None:
+        raise ValueError("benchmark_task_environment_access_authorization_id_invalid")
+    authorization_sha256 = str(raw_access.get("authorization_sha256") or "")
+    if _SHA256_PATTERN.fullmatch(authorization_sha256) is None:
+        raise ValueError(
+            "benchmark_task_environment_access_authorization_sha256_invalid"
+        )
+    if raw_access.get("authority") != "benchmark_task":
+        raise ValueError("benchmark_task_environment_access_authority_invalid")
+    if raw_access.get("purpose") != "task_submission":
+        raise ValueError("benchmark_task_environment_access_purpose_invalid")
+    namespace = str(raw_access.get("namespace") or "").strip()
+    if _TASK_ENVIRONMENT_NAMESPACE_PATTERN.fullmatch(namespace) is None:
+        raise ValueError("benchmark_task_environment_access_namespace_invalid")
+    raw_names = raw_access.get("variable_names")
+    if (
+        not isinstance(raw_names, list)
+        or not raw_names
+        or len(raw_names) > 32
+        or not all(isinstance(name, str) for name in raw_names)
+    ):
+        raise ValueError("benchmark_task_environment_access_variables_invalid")
+    variable_names = tuple(sorted(dict.fromkeys(raw_names)))
+    if len(variable_names) != len(raw_names) or any(
+        _TASK_ENVIRONMENT_VARIABLE_PATTERN.fullmatch(name) is None
+        for name in variable_names
+    ):
+        raise ValueError("benchmark_task_environment_access_variables_invalid")
+    if any(not name.startswith(namespace) for name in variable_names):
+        raise ValueError(
+            "benchmark_task_environment_access_variable_outside_namespace"
+        )
+    return {
+        "authorization_id": authorization_id,
+        "authorization_sha256": authorization_sha256,
+        "authority": "benchmark_task",
+        "purpose": "task_submission",
+        "namespace": namespace,
+        "variable_names": variable_names,
+    }
+
+
+def _validated_evaluation_protocol(
+    raw_protocol: object,
+    *,
+    policy_sha256: str,
+) -> dict[str, object] | None:
+    if raw_protocol is None:
+        return None
+    if not isinstance(raw_protocol, Mapping):
+        raise TypeError("benchmark_evaluation_protocol_invalid")
+    protocol_id = str(raw_protocol.get("protocol_id") or "").strip()
+    if _PUBLIC_EVIDENCE_ID_PATTERN.fullmatch(protocol_id) is None:
+        raise ValueError("benchmark_evaluation_protocol_id_invalid")
+    if raw_protocol.get("feedback") != "declared":
+        raise ValueError("benchmark_evaluation_protocol_feedback_invalid")
+    if raw_protocol.get("timing") != "during_solving":
+        raise ValueError("benchmark_evaluation_protocol_timing_invalid")
+    raw_channels = raw_protocol.get("channels")
+    if (
+        not isinstance(raw_channels, list)
+        or not raw_channels
+        or len(raw_channels) > 8
+    ):
+        raise ValueError("benchmark_evaluation_protocol_channels_invalid")
+    channels: list[dict[str, object]] = []
+    seen_channel_ids: set[str] = set()
+    for raw_channel in raw_channels:
+        if not isinstance(raw_channel, Mapping):
+            raise TypeError("benchmark_evaluation_protocol_channel_invalid")
+        channel_id = str(raw_channel.get("channel_id") or "").strip()
+        if (
+            _PUBLIC_EVIDENCE_ID_PATTERN.fullmatch(channel_id) is None
+            or channel_id in seen_channel_ids
+        ):
+            raise ValueError("benchmark_evaluation_protocol_channel_id_invalid")
+        seen_channel_ids.add(channel_id)
+        if raw_channel.get("phase") != "solving":
+            raise ValueError("benchmark_evaluation_protocol_channel_phase_invalid")
+        raw_output_kinds = raw_channel.get("output_kinds")
+        if (
+            not isinstance(raw_output_kinds, list)
+            or not raw_output_kinds
+            or len(raw_output_kinds) > len(_EVALUATION_PROTOCOL_OUTPUT_KINDS)
+            or not all(isinstance(kind, str) for kind in raw_output_kinds)
+        ):
+            raise ValueError(
+                "benchmark_evaluation_protocol_output_kinds_invalid"
+            )
+        output_kinds = tuple(sorted(dict.fromkeys(raw_output_kinds)))
+        if (
+            len(output_kinds) != len(raw_output_kinds)
+            or not set(output_kinds).issubset(_EVALUATION_PROTOCOL_OUTPUT_KINDS)
+        ):
+            raise ValueError(
+                "benchmark_evaluation_protocol_output_kinds_invalid"
+            )
+        channels.append(
+            {
+                "channel_id": channel_id,
+                "phase": "solving",
+                "output_kinds": output_kinds,
+            }
+        )
+    return {
+        "protocol_id": protocol_id,
+        "feedback": "declared",
+        "timing": "during_solving",
+        "channels": tuple(channels),
+        "policy_sha256": policy_sha256,
+    }
 
 
 def _validated_restricted_access_adjudication(
@@ -617,6 +817,262 @@ def _network_request_scope(arguments: object) -> NetworkRequestScope:
     return scope
 
 
+def _nonnegative_int(value: object) -> TypeGuard[int]:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _positive_int(value: object) -> TypeGuard[int]:
+    return _nonnegative_int(value) and value > 0
+
+
+def _validated_declared_feedback_runtime(
+    *,
+    trajectory: Mapping[str, Any],
+    runtime_attestation: Mapping[str, Any],
+    protocol: Mapping[str, object],
+) -> tuple[dict[str, object] | None, list[str]]:
+    """Validate the private proof for task-declared feedback during solving."""
+
+    failures: list[str] = []
+    raw_runtime = runtime_attestation.get("evaluation_protocol")
+    if not isinstance(raw_runtime, Mapping):
+        return None, ["evaluation_protocol_runtime_evidence_missing"]
+    policy_sha256 = raw_runtime.get("policy_sha256")
+    if policy_sha256 != protocol["policy_sha256"]:
+        failures.append("evaluation_protocol_policy_mismatch")
+    if raw_runtime.get("trajectory_sha256") != _sha256_text(
+        _canonical_text(trajectory)
+    ):
+        failures.append("evaluation_protocol_trajectory_mismatch")
+    run_id = str(raw_runtime.get("run_id") or "")
+    if _PUBLIC_EVIDENCE_ID_PATTERN.fullmatch(run_id) is None:
+        failures.append("evaluation_protocol_run_id_invalid")
+
+    admitted_at = raw_runtime.get("policy_admitted_at_ms")
+    solver_started_at = raw_runtime.get("solver_started_at_ms")
+    solver_ended_at = raw_runtime.get("solver_ended_at_ms")
+    if (
+        _positive_int(admitted_at)
+        and _positive_int(solver_started_at)
+        and _positive_int(solver_ended_at)
+        and admitted_at <= solver_started_at <= solver_ended_at
+    ):
+        timeline: tuple[int, int, int] | None = (
+            admitted_at,
+            solver_started_at,
+            solver_ended_at,
+        )
+    else:
+        timeline = None
+        failures.append("evaluation_protocol_timeline_invalid")
+    solver_start_ms = timeline[1] if timeline is not None else 0
+    solver_end_ms = timeline[2] if timeline is not None else 0
+
+    raw_submissions_value = raw_runtime.get("submissions")
+    submissions = (
+        raw_submissions_value
+        if isinstance(raw_submissions_value, list)
+        else []
+    )
+    submissions_by_id: dict[str, dict[str, int]] = {}
+    previous_captured_at: int | None = None
+    post_solver_completion_indexes: list[int] = []
+    submissions_valid = (
+        isinstance(raw_submissions_value, list)
+        and bool(submissions)
+        and len(submissions) <= 10_000
+    )
+    if submissions_valid:
+        for submission_index, raw_submission in enumerate(submissions):
+            if not isinstance(raw_submission, Mapping):
+                submissions_valid = False
+                break
+            submission_id = str(raw_submission.get("submission_id") or "")
+            captured_at = raw_submission.get("captured_at_ms")
+            evaluation_started_at = raw_submission.get("evaluation_started_at_ms")
+            evaluation_completed_at = raw_submission.get(
+                "evaluation_completed_at_ms"
+            )
+            if (
+                _PUBLIC_EVIDENCE_ID_PATTERN.fullmatch(submission_id) is None
+                or submission_id in submissions_by_id
+                or _SHA256_PATTERN.fullmatch(
+                    str(raw_submission.get("submission_sha256") or "")
+                )
+                is None
+                or not _positive_int(captured_at)
+                or not _positive_int(evaluation_started_at)
+                or not _positive_int(evaluation_completed_at)
+                or timeline is None
+                or not (
+                    solver_start_ms
+                    <= captured_at
+                    <= solver_end_ms
+                    and captured_at
+                    <= evaluation_started_at
+                    <= evaluation_completed_at
+                )
+                or (
+                    previous_captured_at is not None
+                    and captured_at <= previous_captured_at
+                )
+            ):
+                submissions_valid = False
+                break
+            submissions_by_id[submission_id] = {
+                "evaluation_completed_at_ms": evaluation_completed_at
+            }
+            previous_captured_at = captured_at
+            if evaluation_completed_at > solver_end_ms:
+                post_solver_completion_indexes.append(submission_index)
+        if submissions_valid and (
+            len(post_solver_completion_indexes) > 1
+            or (
+                post_solver_completion_indexes
+                and post_solver_completion_indexes[0] != len(submissions) - 1
+            )
+        ):
+            submissions_valid = False
+    if not submissions_valid:
+        failures.append("evaluation_protocol_submissions_invalid")
+
+    protocol_channels = cast(
+        tuple[Mapping[str, object], ...], protocol["channels"]
+    )
+    declared_channels: dict[str, frozenset[str]] = {
+        str(channel["channel_id"]): frozenset(
+            cast(tuple[str, ...], channel["output_kinds"])
+        )
+        for channel in protocol_channels
+    }
+    raw_deliveries_value = raw_runtime.get("deliveries")
+    deliveries = (
+        raw_deliveries_value
+        if isinstance(raw_deliveries_value, list)
+        else []
+    )
+    deliveries_valid = (
+        submissions_valid
+        and isinstance(raw_deliveries_value, list)
+        and len(deliveries) <= 50_000
+    )
+    seen_deliveries: set[tuple[str, str, str]] = set()
+    delivered_submission_ids: set[str] = set()
+    if deliveries_valid:
+        for raw_delivery in deliveries:
+            if not isinstance(raw_delivery, Mapping):
+                deliveries_valid = False
+                break
+            submission_id = str(raw_delivery.get("submission_id") or "")
+            channel_id = str(raw_delivery.get("channel_id") or "")
+            feedback_sha256 = str(raw_delivery.get("feedback_sha256") or "")
+            delivered_at = raw_delivery.get("delivered_at_ms")
+            raw_output_kinds = raw_delivery.get("output_kinds")
+            output_kind_values = (
+                tuple(raw_output_kinds)
+                if isinstance(raw_output_kinds, list)
+                and raw_output_kinds
+                and all(isinstance(kind, str) for kind in raw_output_kinds)
+                else ()
+            )
+            output_kinds = frozenset(output_kind_values)
+            identity = (submission_id, channel_id, feedback_sha256)
+            submission = submissions_by_id.get(submission_id)
+            if (
+                submission is None
+                or channel_id not in declared_channels
+                or raw_delivery.get("phase") != "solving"
+                or not output_kinds
+                or len(output_kinds) != len(output_kind_values)
+                or not output_kinds.issubset(declared_channels[channel_id])
+                or _SHA256_PATTERN.fullmatch(feedback_sha256) is None
+                or identity in seen_deliveries
+                or not _positive_int(delivered_at)
+                or timeline is None
+                or not (
+                    submission["evaluation_completed_at_ms"]
+                    <= delivered_at
+                    <= solver_end_ms
+                )
+            ):
+                deliveries_valid = False
+                break
+            seen_deliveries.add(identity)
+            delivered_submission_ids.add(submission_id)
+        required_delivery_submission_ids = {
+            submission_id
+            for submission_id, submission in submissions_by_id.items()
+            if submission["evaluation_completed_at_ms"] <= solver_end_ms
+        }
+        # An explicit empty list is complete evidence only when the final
+        # submission drains after solving, so no in-solving delivery is due.
+        if delivered_submission_ids != required_delivery_submission_ids:
+            deliveries_valid = False
+    if not deliveries_valid:
+        failures.append("evaluation_protocol_deliveries_invalid")
+
+    raw_transport = runtime_attestation.get("feedback_transport")
+    transport = raw_transport if isinstance(raw_transport, Mapping) else None
+    transport_valid = deliveries_valid and transport is not None
+    if transport_valid and transport is not None:
+        request_count = transport.get("request_count")
+        response_ack_count = transport.get("response_ack_count")
+        intent_count = transport.get("intent_count")
+        ack_count = transport.get("ack_count")
+        record_digests = transport.get("record_digests")
+        if (
+            not _positive_int(request_count)
+            or not _positive_int(response_ack_count)
+            or not _nonnegative_int(intent_count)
+            or not _nonnegative_int(ack_count)
+        ):
+            transport_valid = False
+        else:
+            transport_valid = bool(
+                request_count == response_ack_count
+                and request_count >= len(submissions_by_id)
+                and intent_count == len(deliveries)
+                and ack_count == intent_count
+                and str(transport.get("run_id") or "") == run_id
+                and transport.get("deliveries_sha256")
+                == _sha256_text(_canonical_text(deliveries))
+                and _SHA256_PATTERN.fullmatch(
+                    str(transport.get("source_manifest_sha256") or "")
+                )
+                is not None
+                and isinstance(record_digests, Mapping)
+                and len(record_digests) == request_count + response_ack_count
+                and all(
+                    isinstance(key, str)
+                    and _SHA256_PATTERN.fullmatch(str(value or "")) is not None
+                    for key, value in record_digests.items()
+                )
+            )
+    if not transport_valid:
+        failures.append("evaluation_protocol_transport_invalid")
+
+    if failures:
+        return None, failures
+    return (
+        {
+            "feedback": "declared",
+            "timing": "during_solving",
+            "policy_sha256": policy_sha256,
+            "submission_count": len(submissions),
+            "delivery_count": len(deliveries),
+            "evidence_sha256": _sha256_text(
+                _canonical_text(
+                    {
+                        "evaluation_protocol": raw_runtime,
+                        "feedback_transport": transport,
+                    }
+                )
+            ),
+        },
+        [],
+    )
+
+
 def build_benchmark_integrity_qualification(
     *,
     trajectory: Mapping[str, Any],
@@ -632,7 +1088,14 @@ def build_benchmark_integrity_qualification(
     absence of a suspicious tool call cannot prove that isolation existed.
     """
 
-    policy_id, policy_id_path_like, markers, network_access = _validated_policy(policy)
+    (
+        policy_id,
+        policy_id_path_like,
+        markers,
+        network_access,
+        task_environment_access,
+        evaluation_protocol,
+    ) = _validated_policy(policy)
     adjudication = _validated_restricted_access_adjudication(
         restricted_access_adjudication
     )
@@ -673,6 +1136,7 @@ def build_benchmark_integrity_qualification(
     tool_call_count = 0
     observation_count = 0
     invalid_tool_call_count = 0
+    authorized_task_environment_probe_count_total = 0
     for index, raw_step in enumerate(steps, start=1):
         if not isinstance(raw_step, Mapping):
             structural_failures.append("trajectory_step_invalid")
@@ -687,8 +1151,12 @@ def build_benchmark_integrity_qualification(
                 invalid_tool_call_count += 1
                 continue
             tool_call_count += 1
+            raw_function_name = raw_call.get("function_name")
             function_name = _safe_label(
-                raw_call.get("function_name") or "unknown", limit=80
+                raw_function_name or "unknown", limit=80
+            )
+            exact_function_name = (
+                raw_function_name if isinstance(raw_function_name, str) else ""
             )
             raw_arguments = raw_call.get("arguments") or {}
             arguments = _canonical_text(raw_arguments)
@@ -708,8 +1176,42 @@ def build_benchmark_integrity_qualification(
                         for text in argument_texts
                     )
                 }
-                if credential_probe_present(function_name, raw_arguments):
-                    categories.add("credential_probe")
+                if credential_probe_present(exact_function_name, raw_arguments):
+                    authorized_probe_count = 0
+                    if (
+                        task_environment_access is not None
+                        and runtime_attestation.get(
+                            "provider_credential_shell_excluded"
+                        )
+                        is True
+                    ):
+                        authorized_probe_count = (
+                            authorized_task_environment_probe_count(
+                                exact_function_name,
+                                raw_arguments,
+                                raw_step.get("observation"),
+                                authorization_id=str(
+                                    task_environment_access["authorization_id"]
+                                ),
+                                authorization_sha256=str(
+                                    task_environment_access[
+                                        "authorization_sha256"
+                                    ]
+                                ),
+                                variable_names=frozenset(
+                                    cast(
+                                        tuple[str, ...],
+                                        task_environment_access["variable_names"],
+                                    )
+                                ),
+                            )
+                        )
+                    if authorized_probe_count:
+                        authorized_task_environment_probe_count_total += (
+                            authorized_probe_count
+                        )
+                    else:
+                        categories.add("credential_probe")
                 network_scope = _network_request_scope(raw_arguments)
                 if network_scope is NetworkRequestScope.LOOPBACK:
                     categories.add("loopback_network_request")
@@ -754,9 +1256,24 @@ def build_benchmark_integrity_qualification(
         attestation_failures.append("runtime_attestation_schema_mismatch")
     if runtime_attestation.get("authority") != "runner":
         attestation_failures.append("runtime_attestation_authority_not_runner")
-    for field in required_runtime_attestations(network_access):
+    runtime_attestations = required_runtime_attestations(
+        network_access,
+        declared_feedback=evaluation_protocol is not None,
+    )
+    for field in runtime_attestations:
         if runtime_attestation.get(field) is not True:
             attestation_failures.append(f"runtime_attestation_{field}_missing")
+    compact_evaluation_protocol: dict[str, object] | None = None
+    if evaluation_protocol is not None:
+        (
+            compact_evaluation_protocol,
+            evaluation_protocol_failures,
+        ) = _validated_declared_feedback_runtime(
+            trajectory=trajectory,
+            runtime_attestation=runtime_attestation,
+            protocol=evaluation_protocol,
+        )
+        attestation_failures.extend(evaluation_protocol_failures)
 
     counts = {
         category: int(evidence_counts.get(category, 0))
@@ -784,7 +1301,10 @@ def build_benchmark_integrity_qualification(
     confirmed_cheating_failures = (
         [
             "restricted_access_confirmed_cheating",
-            *restricted_access_review["suspected_categories"],
+            *cast(
+                tuple[str, ...],
+                restricted_access_review["suspected_categories"],
+            ),
         ]
         if cheating_detected
         else []
@@ -813,7 +1333,7 @@ def build_benchmark_integrity_qualification(
     else:
         classification = "integrity_policy_violation"
 
-    return {
+    receipt = {
         "ok": True,
         "schema_version": BENCHMARK_INTEGRITY_QUALIFICATION_SCHEMA_VERSION,
         "benchmark_id": benchmark_id,
@@ -833,7 +1353,7 @@ def build_benchmark_integrity_qualification(
         "network_access": network_access,
         "runtime_attestation_checks": {
             field: runtime_attestation.get(field) is True
-            for field in required_runtime_attestations(network_access)
+            for field in runtime_attestations
         },
         "audit_coverage": {
             "trajectory_schema_version": _safe_label(schema_version, limit=40),
@@ -861,3 +1381,37 @@ def build_benchmark_integrity_qualification(
             "confirmed_cheating_requires_disclosure_and_causal_use": True,
         },
     }
+    if task_environment_access is not None:
+        variable_names = cast(
+            tuple[str, ...], task_environment_access["variable_names"]
+        )
+        receipt["task_environment_access"] = {
+            "schema_version": (
+                BENCHMARK_TASK_ENVIRONMENT_ACCESS_RECEIPT_SCHEMA_VERSION
+            ),
+            "state": (
+                "rejected"
+                if counts["credential_probe"]
+                else "authorized"
+                if authorized_task_environment_probe_count_total
+                else "declared"
+            ),
+            "authorization_id": task_environment_access["authorization_id"],
+            "authorization_sha256": task_environment_access[
+                "authorization_sha256"
+            ],
+            "authority": task_environment_access["authority"],
+            "purpose": task_environment_access["purpose"],
+            "authorized_probe_count": (
+                authorized_task_environment_probe_count_total
+            ),
+            "variable_name_count": len(variable_names),
+            "variable_names_sha256": _sha256_text(
+                _canonical_text(variable_names)
+            ),
+            "raw_names_recorded": False,
+            "raw_values_recorded": False,
+        }
+    if compact_evaluation_protocol is not None:
+        receipt["evaluation_protocol"] = compact_evaluation_protocol
+    return receipt

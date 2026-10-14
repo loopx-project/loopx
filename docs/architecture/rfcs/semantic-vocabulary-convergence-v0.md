@@ -1036,23 +1036,22 @@ persistence proof.
 
 ## 11. Normative delivery plan
 
-Implementation readback at `bfbb5ac60` (fact correction for
-[discussion #4738, PR-03](https://github.com/loopx-project/loopx/discussions/4738#discussioncomment-18514184)):
-M0/M0.5 checks run today; Q3/Q6 choices are implemented as described in Section 12;
-M2 Turn generation is consumed by `transaction.py`, `settlement.ts` and the loop
-controller. Milestone rows below retain their acceptance obligations; they are
-not a list of work that has never started. Original measurements keep their
-original SHA. This readback does not imply implementation qualification or promotion; RFC merge separately accepts the design.
+Implementation readback at `43173c0b8c8761abee4cdddc665f0f0f20f194f7`
+(2026-10-12): M0/M0.5 guards and Q3/Q6 typed-slot choices are implemented;
+M2 generated contracts are consumed by the transaction, settlement and controller.
+The Stage 1 composition/replay/selection/inbox slices and overlapping #4764 are
+merged. #4794 stopped new `protocol_action_packet` writes; historical format,
+signature projection and the other five legacy fields remain. #4747 and #4795
+are merged witnesses, not pending proposals. #5317 supplies the separate #4743
+development-time advisory; it does not close this tracker's source obligations.
 
-The six legacy fields are still written. `protocol_action_packet` retirement
-still needs a target release, consumer scope and historical signature/rollback
-contract. The `settlement_binding_kind` witness in
-[PR #4747](https://github.com/loopx-project/loopx/pull/4747) is a proposed pilot,
-not merged evidence on this baseline and not closure of the other cross-runtime
-vocabularies. F6 remains unproved. PR-07/08 construction work must preserve
-stage precedence; [PR #4764](https://github.com/loopx-project/loopx/pull/4764)
-changes same-Turn deferred selection and monitor settlement on overlapping paths,
-so its outcome must be reconciled before claiming combined behavior parity.
+The [current registered-source inventory](ledger/semantic-vocabulary-convergence-v0/2026-10-12-registered-source-treatment.md)
+records all 26 entries, current-main evidence and compatibility boundaries.
+The owner merged both source-meaning dispositions in #6313. Main now includes
+the original Host-ACK fixture repair through #6344, verified on `60d833b13`.
+Source-inventory integration and final single-revision owner acceptance remain
+open; the remaining #6285 enhancements are separate. F1/F2 stays 6/26, with no source-domain inflation or F6-wide claim.
+Milestone obligations and historical measurements retain their original scope/SHA.
 
 | Milestone | Shipped behavior | Entry gate | Exit evidence | Rollback |
 | --- | --- | --- | --- | --- |
@@ -1064,13 +1063,13 @@ so its outcome must be reconciled before claiming combined behavior parity.
 | M3 | Conditional per-field retirement where removing a field eliminates demonstrated duplicate authority or unnecessary consumer maintenance; a derived compatibility projection may remain | Document net benefit, target version, consumers, historical formats/signatures and rollback window; review unresolved and dynamic-key evidence before stopping writes | Approved migration, new-output and historical-read/rejection tests, actual removal of replaced code, and updated budgets for the approved surface; retaining a useful projection is not a failed migration | Restore the approved writer within the declared compatibility window |
 | M4 | Twin budget lowered with each replacement-first cutover from the migration RFC | Each cutover PR | Budget edit in the same diff | None needed; budget follows code |
 
-**Staged acceptance proposal for #4447.** This RFC's long-range milestones are
-not all prerequisites for closing one delivery tracker. The staged proposal in
+**Staged acceptance for #4447.** This RFC's long-range milestones are
+not all prerequisites for closing one delivery tracker. The scope revision merged in [#4789](https://github.com/loopx-project/loopx/pull/4789), tracked by
 [#4447](https://github.com/loopx-project/loopx/issues/4447), informed by
 [discussion #4738](https://github.com/loopx-project/loopx/discussions/4738), separates
 verified guard adoption, bounded production-path simplification, and source
-evidence closure. Maintainer acceptance of that scope is required before tracker
-closure; this proposal does not certify delivery or change any runtime check.
+evidence closure. Maintainer acceptance of the completed delivery evidence is still required before
+tracker closure; the scope revision does not certify delivery or change runtime checks.
 
 The table below records long-range targets, not an unconditional deletion quota
 or the acceptance checklist for #4447; each row is a registry budget or a

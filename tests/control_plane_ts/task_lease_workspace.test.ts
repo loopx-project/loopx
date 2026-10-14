@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {execFileSync} from "node:child_process";
-import {mkdtemp, rm} from "node:fs/promises";
+import {mkdtemp, rm, mkdir, writeFile, symlink, realpath} from "node:fs/promises";
 import {platform, tmpdir} from "node:os";
 import {join} from "node:path";
-import {evaluateTaskLeaseAcquireDecision} from "../../loopx/control_plane/work_items/task_lease_acquire_decision.ts";
+import {evaluateTaskLeaseAcquireDecision, evaluateTaskLeaseWriteScopesOverlap} from "../../loopx/control_plane/work_items/task_lease_acquire_decision.ts";
 import {leaseWorkspace, sameLeaseCheckout, observeLeaseWorktree} from "../../loopx/control_plane/work_items/task_lease_workspace.ts";
 
 const repo = "git:github.com/example/project";
@@ -56,6 +56,79 @@ test("observed Git origins use the Todo repository identity contract", {
       await assert.rejects(observeLeaseWorktree(worktree, () => false));
     });
   }
+});
+
+test("normal executable file links preserve the declared independent checkout", {
+  skip: !["darwin", "linux"].includes(platform()),
+}, async t => {
+  const temporary = await mkdtemp(join(tmpdir(), "loopx-lease-links-"));
+  t.after(() => rm(temporary, {recursive: true, force: true}));
+  const main = join(temporary, "main"), checkout = join(temporary, "worktree");
+  const git = (...args: string[]) => execFileSync("git", args, {stdio: "pipe"});
+  git("init", main);
+  git("-C", main, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com",
+    "commit", "--allow-empty", "-m", "fixture");
+  git("-C", main, "config", "remote.origin.url", "https://github.com/example/project.git");
+  git("-C", main, "worktree", "add", "-b", "fixture", checkout);
+  const worktree = await realpath(checkout);
+  const overlaps = (path: string) => evaluateTaskLeaseWriteScopesOverlap({left: ["src/**"], right: [path]}).overlap === true;
+  const bin = join(worktree, "src/node_modules/.bin/tool");
+  const target = join(worktree, "src/node_modules/tool/bin.mjs");
+  await mkdir(join(worktree, "src/node_modules/.bin"), {recursive: true});
+  await mkdir(join(worktree, "src/node_modules/tool"), {recursive: true});
+  await writeFile(join(worktree, ".gitignore"), "node_modules/\n");
+  await writeFile(target, "export {};\n");
+  const original = await observeLeaseWorktree(worktree, overlaps);
+  for (const link of ["../tool/bin.mjs", target]) {
+    await symlink(link, bin);
+    assert.deepEqual(await observeLeaseWorktree(worktree, overlaps), original);
+    await rm(bin);
+  }
+
+  // Ignored dependencies are still inspected, and the same path must recover
+  // after a rejected redirection without changing scopes or checkout identity.
+  const outside = join(temporary, "outside.mjs");
+  await writeFile(outside, "export {};\n");
+  await symlink(outside, bin);
+  await assert.rejects(observeLeaseWorktree(worktree, overlaps), /file links/);
+  await rm(bin);
+  await symlink("../tool/bin.mjs", bin);
+  assert.deepEqual(await observeLeaseWorktree(worktree, overlaps), original);
+
+  await rm(bin);
+  for (const [name, destination] of [
+    ["directory", "../tool"], ["missing", "../tool/missing.mjs"],
+    ["self cycle", "tool"], ["Git administration", "../../../.git"],
+    ["out of scope", "../../../elsewhere.mjs"],
+  ]) {
+    await t.test(name, async () => {
+      await writeFile(join(worktree, "elsewhere.mjs"), "export {};\n");
+      await symlink(destination, bin);
+      await assert.rejects(observeLeaseWorktree(worktree, overlaps), /file links/);
+      await rm(bin);
+    });
+  }
+  await symlink(target, join(worktree, "src/node_modules/tool/chain.mjs"));
+  await symlink("../tool/chain.mjs", bin);
+  await assert.rejects(observeLeaseWorktree(worktree, overlaps), /file links/);
+  await rm(bin);
+  await symlink(join(worktree, "src/node_modules/tool"), join(worktree, "src/alias"));
+  await symlink(join(worktree, "src/alias/bin.mjs"), bin);
+  await assert.rejects(observeLeaseWorktree(worktree, overlaps), /file links/);
+  await rm(bin);
+  await symlink(join(worktree, "src/node_modules/.bin"), join(worktree, "src/node_modules/alias"));
+  await symlink("../alias/../tool/bin.mjs", bin);
+  await assert.rejects(observeLeaseWorktree(worktree, overlaps), /file links/);
+  await rm(bin);
+  await mkdir(join(temporary, "outside-directory"));
+  await symlink(`${worktree}/../outside-directory/../worktree/src/node_modules/tool/bin.mjs`, bin);
+  await assert.rejects(observeLeaseWorktree(worktree, overlaps), /file links/);
+  await rm(bin);
+
+  // A redirected ancestor is rejected even before its requested leaf exists.
+  await symlink(join(worktree, "src"), join(worktree, "future"));
+  await assert.rejects(observeLeaseWorktree(worktree, path =>
+    evaluateTaskLeaseWriteScopesOverlap({left: ["future/new/file.ts"], right: [path]}).overlap === true), /file links/);
 });
 
 function request(other: unknown = {...workspace, worktree: "4".repeat(64)}) {

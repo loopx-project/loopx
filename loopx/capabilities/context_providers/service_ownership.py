@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
+
+from ...file_lock import process_is_alive
 
 
 CONTEXT_PROVIDER_SERVICE_RECEIPT_SCHEMA_VERSION = (
@@ -27,16 +28,6 @@ _LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$")
 def _opaque_ref(kind: str, value: str) -> str:
     digest = hashlib.sha256(f"{kind}\n{value}".encode("utf-8")).hexdigest()[:20]
     return f"{kind}-{digest}"
-
-
-def _process_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 @dataclass(frozen=True)
@@ -158,7 +149,7 @@ def load_context_provider_service_ownership(
             reason_code="provider_service_ownership_receipt_invalid",
             ownership_mode=ownership_mode or "unknown",
         )
-    alive = _process_alive(pid)
+    alive = process_is_alive(pid)
     return ContextProviderServiceOwnership(
         provider=provider,
         status="verified" if alive else "unavailable",

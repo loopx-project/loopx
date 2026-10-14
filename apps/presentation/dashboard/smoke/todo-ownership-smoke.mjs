@@ -123,7 +123,7 @@ try {
     assert.ok(!completedGate.includes("needs_you"),"A done map gate cannot keep a task held by that decision");
     const todo = {todoId: "run-task", text: "Inspect execution", done: false, status: "open"};
     const goal = {goalId: "run-goal", title: "Execution facts", agentTodos: [todo],
-      execution: {kind: "running", hostClaimed: false, quiet: false, lastActivityAt: new Date().toISOString(), hostSurfaces: [], claimedAt: null}};
+      execution: {kind: "running", work: "executing", unrecognizedModeTurns: 0, quiet: false, lastActivityAt: new Date().toISOString(), hostSurfaces: [], claimedAt: null}};
     for (const [status, en, zh] of [
       ["queued", "Scheduled", "已安排"], ["running", "Running", "执行中"],
       ["waiting", "Waiting", "等待条件"], ["failed", "Needs review", "需检查"],
@@ -135,7 +135,7 @@ try {
       const expected = locale === "en" ? en : zh;
       assert.ok(board.includes(`personal-task-session-status">${expected}</span>`), `Task cards preserve ${status}`);
       assert.ok(timeline.includes(expected), `Timeline and task cards agree for ${status}`);
-      if (status === "running") for (const execution of [{kind: "unknown"}, {...goal.execution, quiet: true}, {...goal.execution, hostClaimed: true}]) {
+      if (status === "running") for (const execution of [{kind: "unknown"}, {...goal.execution, work: "unrecognized", unrecognizedModeTurns: 1}, {...goal.execution, quiet: true}, {...goal.execution, work: "claimed"}]) {
         const unknown = render(GoalTasksView, {goal: {...goal, execution}, items: [{kind: "run", id: "execution", run}], userTodos: [], onSelect() {}});
         assert.ok(!unknown.includes(`personal-task-session-status">${expected}</span>`), "A historical run cannot make unknown or stale work live");
       }

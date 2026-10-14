@@ -207,10 +207,12 @@ def handle_goal_amendment_proposal_command(
                 if "operation_id" in parameters:
                     raise ValueError("supply operation_id once")
                 parameters["operation_id"] = args.operation_id
+            from ..capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
             payload = execute_goal_amendment(registry_path=registry_path, goal_id=goal_id,
                 goal_instance_id=args.goal_instance_id, operation=args.governed,
                 actor_agent_id=args.agent_id, parameters=parameters,
-                runtime_root=runtime_root, execute=args.execute)
+                runtime_root=runtime_root, execute=args.execute,
+                replan_configuration_reader=resolve_todo_replan_cadence_goal)
             accepted = payload.get("ok") is True
             print_payload(payload, output_format(args), render_goal_amendment_proposal_markdown)
             return 0 if accepted else 1

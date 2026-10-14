@@ -4,9 +4,10 @@ import { outputDir } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
 
 // Execution is shown only from session-owner facts; open Todos, quota eligibility and bound host threads stay "queued".
-function taskSession(goalId, sessionId, activeTurnId, lastActivityAt, host = null) {
+function taskSession(goalId, sessionId, activeTurnId, lastActivityAt, host = null, mode = host ? "attached_host" : "managed_runtime") {
   return {
-    ...(host ? { session_mode: "attached_host", host_surface: host } : { session_mode: "managed" }),
+    session_mode: mode,
+    ...(host ? { host_surface: host } : {}),
     session_id: sessionId, goal_id: goalId, agent_id: "codex", adapter_kind: "codex",
     channel_id: `task.${sessionId}`, status: activeTurnId ? "busy" : "ready", active_turn_id: activeTurnId,
     last_error_code: null, created_at: lastActivityAt, updated_at: lastActivityAt, last_activity_at: lastActivityAt, resumable: true,
@@ -57,6 +58,22 @@ async function lane(page, key) {
     text: await section.innerText(),
     title: await section.locator("header span").innerText(),
   };
+}
+
+/** Whether the leading `prefix` of a row's status line is fully visible at the sidebar width. */
+async function leadVisible(row, prefix) {
+  return row.locator("small").evaluate((element, lead) => {
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node && !node.textContent.includes(lead)) node = walker.nextNode();
+    if (!node) return false;
+    const start = node.textContent.indexOf(lead);
+    const range = document.createRange();
+    range.setStart(node, start);
+    range.setEnd(node, start + lead.length);
+    const clip = element.getBoundingClientRect();
+    return range.getBoundingClientRect().right <= clip.right + 0.5;
+  }, prefix);
 }
 
 /** Brief tiles that escape their container, so a new bucket cannot break the row. */
@@ -256,6 +273,54 @@ export const goalActivityScenario = {
     } catch (error) {
       await english.page.screenshot({ path: resolve(outputDir, "goal-activity-english-failed.png") });
       await english.close();
+      throw error;
+    }
+
+    // A turn whose session mode is missing or outside the backend's closed set
+    // is not managed execution and not a host claim: it is named as unknown,
+    // never live, and the brief does not claim that nothing is running.
+    const unrecognized = await openWorkspacePage(browser, url, {
+      collectCoverage,
+      beforeGoto: (_api, page) => {
+        const recent = new Date(Date.now() - 2 * 60_000).toISOString();
+        page.__loopxRuntime.sessions.set("activity-unknown-mode", taskSession("progress-projection", "activity-unknown-mode", "turn-unknown-mode", recent, "codex-app", "cloud_runtime"));
+        const { session_mode: _omitted, ...missingMode } = taskSession("research-monitor", "activity-missing-mode", "turn-missing-mode", recent);
+        page.__loopxRuntime.sessions.set("activity-missing-mode", missingMode);
+      },
+    });
+    try {
+      const { page } = unrecognized;
+      for (const title of ["Progress Projection", "Research Monitor"]) {
+        const row = await goalRow(page, title);
+        await row.locator("small", { hasText: "执行方式未知" }).waitFor({ timeout: 15_000 });
+        assert.match(await row.locator("small").innerText(), /^执行方式未知 · 回合未结束/, `${title}: an unrecognized mode is named, not read as managed`);
+        assert.doesNotMatch(await row.locator("small").innerText(), /执行中|宿主已领取|Codex App 宿主/, `${title}: neither managed execution nor a host claim`);
+        assert.ok(await leadVisible(row, "执行方式未知"), `${title}: the unknown mode survives sidebar truncation`);
+      }
+      assert.equal(await page.locator(".personal-goal-list .personal-goal-mark.is-live").count(), 0, "An unrecognized mode is never live");
+      const runningTile = await briefTile(page, "running");
+      assert.equal(runningTile.count, 0, "An unrecognized mode never counts as running");
+      assert.match(runningTile.text, /没有可确认的执行 · 2 个 Goal 执行方式未知/, "The empty running tile discloses the open turns");
+      assert.equal(await page.getByTestId("personal-brief-claimed").count(), 0, "An unrecognized mode never counts as a host claim");
+      assert.equal(await page.getByTestId("personal-home-lane-running").count(), 0, "An unrecognized mode never enters the running lane");
+      await page.screenshot({ path: resolve(outputDir, "goal-activity-mode-unrecognized.png"), animations: "disabled" });
+      await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "en"));
+      await page.reload({ waitUntil: "networkidle" });
+      const englishRow = await goalRow(page, "Progress Projection");
+      await englishRow.locator("small", { hasText: "Mode unknown" }).waitFor({ timeout: 15_000 });
+      assert.match(await englishRow.locator("small").innerText(), /^Mode unknown · turn open/);
+      assert.ok(await leadVisible(englishRow, "Mode unknown"), "The English unknown mode survives sidebar truncation");
+      assert.match(await page.getByTestId("personal-brief-running").innerText(), /No verified run · 2 Goal\(s\) with unknown execution mode/);
+      await page.screenshot({ path: resolve(outputDir, "goal-activity-mode-unrecognized-english.png"), animations: "disabled" });
+      await page.setViewportSize({ width: 390, height: 844 });
+      assert.equal(await briefTileOverflow(page), 0, "The disclosed empty state fits the 390px mobile width");
+      await page.locator(".personal-mobile-menu").click();
+      assert.ok(await leadVisible(await goalRow(page, "Progress Projection"), "Mode unknown"), "The unknown mode survives truncation in the mobile navigation");
+      await page.screenshot({ path: resolve(outputDir, "goal-activity-mode-unrecognized-mobile.png"), animations: "disabled" });
+      coverageEntries.push(...await unrecognized.close());
+    } catch (error) {
+      await unrecognized.page.screenshot({ path: resolve(outputDir, "goal-activity-mode-unrecognized-failed.png") });
+      await unrecognized.close();
       throw error;
     }
 

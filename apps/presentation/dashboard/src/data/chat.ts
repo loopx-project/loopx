@@ -1,6 +1,6 @@
 import { HANDOFF_MODES, EXECUTION_HANDOFF_MODES } from "../../../../../loopx/control_plane/coordination/handoff_mode_vocabulary.js";
 import { normalizeGoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
-import { parseTurnStep, type TurnStep } from "./turn-steps";
+import { parseTurnStep, type TurnStep } from "./turn-steps.js";
 import { z } from "zod";
 import { actionSourceBasisSchema } from "./action-source-basis.js";
 
@@ -1718,7 +1718,7 @@ export const capabilityConfigurationCatalogSchema = z.object({
     available_scopes: z.array(z.enum(["goal", "machine"])),
     machine_namespace: z.string().optional(),
     goal_feature_id: z.string().optional(),
-    effective_value_policy: z.literal("goal_override_over_live_machine_default").optional(),
+    effective_value_policy: z.enum(["goal_override_over_live_machine_default", "goal_stride_over_live_review_cadence"]).optional(),
     availability: z.string().optional(),
     default: z.record(z.string(), z.unknown()).optional(),
     current: z.record(z.string(), z.unknown()).optional(),
@@ -2417,7 +2417,7 @@ export async function disconnectLarkGoalTopic(goalId: string, connectionId: stri
   );
 }
 
-export { CONTEXTS as usageContexts } from "../../../../../loopx/control_plane/runtime/usage_statistics_contract";
+export { CONTEXTS as usageContexts } from "../../../../../loopx/control_plane/runtime/usage_statistics_contract.js";
 const usageStatisticsSchema = z.object({
   consent: z.enum(["default", "enabled", "disabled"]),
   sending: z.boolean(), blocked_by: z.string().nullable(), endpoint: z.string().nullable(),
@@ -2527,6 +2527,7 @@ export async function changePrivateAgentTarget(bindingId: string, revision: numb
     method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({binding_id: bindingId, revision, ...target}),
   }));
 }
+
 
 // Display validation only; finding status semantics remain owned by Explore.
 const exploreResultPageSchema = z.object({

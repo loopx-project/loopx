@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -612,7 +613,8 @@ def assert_material_transition_followup() -> None:
         compact_contract = compact_after["interaction_contract"]
         assert compact_contract["agent_channel"]["must_attempt"] is True, compact_contract
         assert compact_contract["agent_channel"]["primary_action"], compact_contract
-        assert compact_contract["cli_channel"]["spend_after_validation"] is True, compact_contract
+        assert compact_contract["agent_channel"]["delivery_allowed"] is False, compact_contract
+        assert compact_contract["cli_channel"]["spend_after_validation"] is False, compact_contract
         runtime_root = runtime_root_from_registry(registry_path)
         rollout_events = load_rollout_events(rollout_event_log_path(runtime_root, GOAL_ID))
         monitor_events = [
@@ -633,6 +635,8 @@ def assert_material_transition_followup() -> None:
             "--available-capability",
             "external_evidence_poll",
             "--codex-app",
+            "--turn-instance-id",
+            "material-successor-selection",
         )
         assert handoff["ok"] is True, handoff
         assert handoff["decision"] == "run", handoff
@@ -650,7 +654,17 @@ def assert_material_transition_followup() -> None:
         assert scheduler["codex_app"]["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=3", scheduler
         contract = handoff["interaction_contract"]
         assert contract["agent_channel"]["must_attempt"] is True, contract
-        assert contract["cli_channel"]["spend_after_validation"] is True, contract
+        assert contract["agent_channel"]["delivery_allowed"] is False, contract
+        assert contract["cli_channel"]["spend_after_validation"] is False, contract
+        assert contract["cli_channel"]["selection_required"] is True, contract
+        assert "settlement_identity" not in handoff["heartbeat_receipt"], handoff
+        selection = contract["cli_channel"]["selection_command"]
+        selected = run_cli(registry_path, *shlex.split(
+            selection["command_args_template"].replace("{todo_id}", successor_id)
+        ))
+        assert selected["heartbeat_receipt"]["settlement_identity"]["todo_id"] == successor_id, selected
+        assert selected["interaction_contract"]["agent_channel"]["delivery_allowed"] is True, selected
+        assert not find_todo(state_file, successor_id).get("claimed_by")  # Selection is not a claim.
 
 
 def assert_external_material_transition_receipt_correlation() -> None:

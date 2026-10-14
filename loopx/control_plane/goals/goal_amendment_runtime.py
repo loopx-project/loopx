@@ -6,6 +6,7 @@ this named owner does not activate the generic source-session runtime profile.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -55,6 +56,7 @@ def _replan_readback(derived: Mapping[str, Any], inventory: list[dict[str, Any]]
 def _execute_goal_amendment(
     *, registry_path: Path, goal_id: str, goal_instance_id: str,
     operation: str, actor_agent_id: str | None,
+    replan_configuration_reader: Callable[[Mapping[str, Any], Path], Mapping[str, Any]],
     parameters: Mapping[str, Any] | None = None,
     runtime_root: Path | None = None, execute: bool = False,
     request_context: Mapping[str, Any] | None = None,
@@ -90,6 +92,7 @@ def _execute_goal_amendment(
             gate_path = source_turn_effect_gate_path(registry_path, goal_id)
             gate = json.loads(gate_path.read_text()) if gate_path.exists() else None
             agents = registered_agent_ids_for_goal(goal)
+            effective_replan_goal: Mapping[str, Any] | None = None
             derived = _derive_open_replan_obligation_inventory(runtime_root=root, goal_id=goal_id,
                 goal=goal, state_text="", goal_ref=goal_ref)
             obligations = _open_replan_obligation_inventory(goal_id=goal_id, registered_agents=agents, status_item=derived)
@@ -111,12 +114,17 @@ def _execute_goal_amendment(
                 "runtime_root": str(root), "observed_at": now_utc_iso(), "source": source}
 
             def inspect() -> dict[str, Any]:
+                nonlocal effective_replan_goal
                 value = effect_runtime_result("goal.amendment.execute", {**common, "operation": "inspect", "dry_run": True},
                     timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS)
                 if not isinstance(value, dict):
                     raise TypeError("Goal amendment readback is invalid")
+                # Resolve once for current review observations. Historical
+                # receipt lookup must not depend on current configuration IO.
+                if effective_replan_goal is None:
+                    effective_replan_goal = replan_configuration_reader(goal, root)
                 value["replan_observations"] = _replan_readback(derived, obligations, value,
-                    stride_strategy=(goal.get("execution_profile") or {}).get("stride_strategy", "off"))
+                    stride_strategy=(effective_replan_goal.get("execution_profile") or {}).get("stride_strategy", "off"))
                 return value
 
             if operation in {"propose", "commit", "claim"}:

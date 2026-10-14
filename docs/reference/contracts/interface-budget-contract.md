@@ -10,8 +10,8 @@ and size/count budgets.
 | --- | --- | --- | --- | --- | --- | --- |
 | `heartbeat_prompt_json` | heartbeat automation | wake and route one bounded turn | `quota should-run`, `status`, or `review-packet --handoff-only` | `json_chars <= 5400` plus `interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 30` |
 | `review_packet_handoff_only_json` | project-agent handoff | forward the smallest sufficient task packet | full `review-packet` or run-history artifact | `json_chars <= 3000` plus `handoff_interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 18` |
-| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 15500` | `nested_keys <= 376` | `top_level_keys <= 54` |
-| `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 23000` | `nested_keys <= 350` | `top_level_keys <= 27` |
+| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 16500` | `nested_keys <= 376` | `top_level_keys <= 54` |
+| `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 24000` | `nested_keys <= 350` | `top_level_keys <= 27` |
 
 These four budgets measure compact machine payloads. For
 `heartbeat_prompt_json`, the measured payload is the actual
@@ -159,6 +159,44 @@ also record UTF-8 bytes, line count, JSON parseability, pretty-print overhead,
 semantic anchors, collection-growth slope, and bootstrap duplication. Every
 declared agent-facing surface must name an owner, consumer action, and cold-path
 fallback.
+
+The complete vision-rule qualification preserves the original fixtures and
+failures. The same 36-Todo / 12-run default quota stdout measures 45,313
+characters with the old lossy projection and 48,418 with the complete audit;
+explicit vision detail remains 57,346. Its separate real-vision ceiling changes
+from 46,000 to 50,000, leaving 1,582 characters. Differing channel judges remain
+inline: a subset is not an identical duplicate. The original 40,000-character
+compactor fixture remains unchanged. Crowded Turn JSON already measured 21,238
+characters / 477 lines on both formatter versions, above 18,000 / 460; its
+qualified ceilings are 22,500 / 500, leaving 1,262 characters / 23 lines.
+
+Raw quota is a different boundary. The unchanged packet measures 15,201 compact
+JSON characters with the ordinary temporary root and 15,865 with the original
+longer root. Preserve full command routes; its ceiling changes from 15,500 to
+16,500, leaving 635 characters on that failing fixture. Both roots retain 368
+bounded nested keys and 52 top-level keys, below the unchanged 376 / 54 guards.
+That same longer-root run then exposes a previously masked status failure:
+23,274 characters against 23,000 (ordinary root: 22,560). Preserve complete
+source revisions and paths; 24,000 leaves 726 characters, with 336 nested /
+26 top-level keys still below the unchanged 350 / 27 guards.
+Characters, UTF-8 bytes and line counts are measured separately. These local
+measurements do not qualify native Windows or arbitrary path lengths. Other
+surface/mode ceilings, collection-growth guards, production overflow diagnostics,
+execution quota and permissions remain unchanged; original failures remain
+failed historical evidence. See the [budget decision guide](../../development/testing-and-quality.md#budget-failure-decisions).
+
+完整 vision 规则资格化保留原夹具与失败：同一 36 Todo／12 run 默认 quota 输出从
+有损的 45,313 字符变为完整的 48,418，详情仍为 57,346；独立真实 vision 展示上限
+46,000→50,000，余量 1,582。不同 channel 的 judge 子集仍内联，不能当相同副本
+引用；原 40,000 字符 compactor 夹具不变。Turn 在两个版本均为 21,238 字符／477
+行，原 18,000／460 失败保留，新限 22,500／500，余量 1,262 字符／23 行。
+raw quota 在普通／原较长临时根目录为 15,201／15,865 字符，完整命令路由保留；
+上限 15,500→16,500，失败夹具余量 635。两者结构均为 368 nested／52 top-level
+keys，376／54 不变。字符、UTF-8 字节与行分别测量；不宣称原生 Windows 或任意
+路径长度已验。其它模式、增长、生产超限诊断、执行配额与权限不变。
+同一长根目录随后暴露此前被 quota 失败遮住的 status 原失败：23,274>23,000，
+普通根目录为 22,560。完整 source revision／路径保留，新限 24,000、余量 726；
+336 nested／26 top-level keys 仍低于不变的 350／27 限制。
 
 The same matrix characterizes explicit mode switches instead of assuming that
 the default command represents them. Covered variants are

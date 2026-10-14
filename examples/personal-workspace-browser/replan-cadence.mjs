@@ -88,12 +88,86 @@ export const replanCadenceScenario = {
         return packet.capability_catalog.capabilities.find((row) => row.capability_id === "todo_replan_cadence");
       }
       if (await strategy.inputValue() !== "evidence_conditioned_v1") throw new Error("Goal did not inherit strategy version");
+      await page.getByRole("button", { name: "编辑 JSON", exact: true }).click();
+      await page.locator("#goal-configuration-json").fill(JSON.stringify({ stride_strategy: "evidence_conditioned_v1" }));
+      await page.getByRole("button", { name: "返回表单", exact: true }).click();
+      if (await unit.inputValue() !== "effective_turns" || await count.inputValue() !== "3") {
+        throw new Error("JSON-to-form conversion lost the effective review interval");
+      }
+      await page.getByRole("button", { name: "预览变更", exact: true }).click();
+      await applyGoalPreview();
+      const converted = await readGoalCadence();
+      if (converted.effective_configuration.configuration.count !== 3
+        || converted.effective_configuration.configuration.count_unit !== "effective_turns") {
+        throw new Error("JSON-to-form save substituted the product-default interval");
+      }
+      await page.getByText("复盘周期沿用设备默认；步幅策略由本 Goal 设置。", { exact: true }).waitFor();
+      await page.screenshot({ path: resolve(outputDir, "replan-cadence-json-form.png"), animations: "disabled" });
+      if (JSON.stringify(converted.current) !== JSON.stringify({ stride_strategy: "evidence_conditioned_v1" })) {
+        throw new Error("JSON-to-form strategy-only save pinned a cadence");
+      }
+      async function changeMachineCount(value) {
+        const change = { namespace: "todo_replan_cadence", namespace_configuration: {
+          schema_version: "todo_replan_cadence_machine_defaults_v2", count_unit: "effective_turns", count: value,
+          stride_strategy: "evidence_conditioned_v1",
+        } };
+        const planned = await request(base + "/preview", change);
+        await request(base + "/apply", { ...change, expected_plan_revision: planned.plan_revision });
+      }
+      async function reopenGoalCadence() {
+        await page.reload({ waitUntil: "networkidle" });
+        await page.getByRole("button", { name: "设置", exact: true }).click();
+        await page.locator(".personal-settings-tabs").getByRole("button", { name: "能力中心", exact: true }).click();
+        await page.getByRole("radio", { name: "单个 Goal", exact: true }).check();
+        await page.getByRole("combobox", { name: "目标 Goal", exact: true }).selectOption("multi-agent-projection");
+        await page.getByRole("navigation", { name: "Goal 能力目录" }).getByRole("button", { name: /Goal 复盘与步幅/ }).click();
+      }
+      await changeMachineCount(4);
+      if ((await readGoalCadence()).effective_configuration.configuration.count !== 4) {
+        throw new Error("Strategy-only Goal did not follow a later machine policy");
+      }
+      await reopenGoalCadence();
+      await waitForInputValue(count, "4");
+      await page.getByRole("button", { name: "编辑 JSON", exact: true }).click();
+      await page.locator("#goal-configuration-json").fill(JSON.stringify({
+        count_unit: "effective_turns", count: 4, stride_strategy: "evidence_conditioned_v1",
+      }));
+      await page.getByRole("button", { name: "返回表单", exact: true }).click();
+      await page.getByRole("button", { name: "预览变更", exact: true }).click();
+      await applyGoalPreview();
+      if ((await readGoalCadence()).current.count !== 4) {
+        throw new Error("JSON-to-form lost an explicit cadence matching the machine policy");
+      }
+      await changeMachineCount(3);
+      if ((await readGoalCadence()).effective_configuration.configuration.count !== 4) {
+        throw new Error("An explicit Goal cadence unexpectedly followed the machine policy");
+      }
+      await page.getByRole("button", { name: "编辑 JSON", exact: true }).click();
+      await page.locator("#goal-configuration-json").fill(JSON.stringify({ stride_strategy: "evidence_conditioned_v1" }));
+      await page.getByRole("button", { name: "返回表单", exact: true }).click();
+      await page.getByRole("button", { name: "预览变更", exact: true }).click();
+      await applyGoalPreview();
+      const intervalCleared = await readGoalCadence();
+      if (JSON.stringify(intervalCleared.current) !== JSON.stringify({ stride_strategy: "evidence_conditioned_v1" })
+        || intervalCleared.effective_configuration.configuration.count !== 3) {
+        throw new Error("Clearing only the cadence through JSON-to-form lost the strategy or retained the pin");
+      }
+      await reopenGoalCadence();
+      await waitForInputValue(count, "3");
+      await strategy.selectOption("off");
+      await page.getByRole("button", { name: "预览变更", exact: true }).click();
+      await applyGoalPreview();
+      let goalCadence = await readGoalCadence();
+      if (JSON.stringify(goalCadence.current) !== JSON.stringify({ stride_strategy: "off" })
+        || goalCadence.effective_configuration.configuration.count !== 3) {
+        throw new Error("Goal strategy-only override pinned or lost the inherited review interval");
+      }
       await count.fill("2");
       await strategy.selectOption("off");
       await page.getByRole("button", { name: "预览变更", exact: true }).click();
       await applyGoalPreview();
       await page.getByRole("button", { name: "恢复沿用设备默认", exact: true }).waitFor();
-      let goalCadence = await readGoalCadence();
+      goalCadence = await readGoalCadence();
       if (goalCadence.effective_configuration.source !== "goal_override" || goalCadence.current.count !== 2) throw new Error("Goal override readback failed");
       if (goalCadence.current.stride_strategy !== "off") throw new Error("Goal stride opt-out failed");
       if ((await request(base)).machine_configuration.namespaces.todo_replan_cadence.stride_strategy !== "evidence_conditioned_v1") throw new Error("Goal override changed machine strategy");
@@ -150,7 +224,7 @@ export const replanCadenceScenario = {
       await page.getByRole("navigation", { name: "Goal capability catalog" }).getByRole("button", { name: /Goal review and stride/ }).click();
       await waitForInputValue(englishCount, "6");
       if (await englishUnit.inputValue() !== "effective_turns" || await englishStrategy.inputValue() !== "off") throw new Error("Goal editor did not restore product defaults");
-      return { coverageEntries: context.coverageEntries, note: "Packaged default six effective Turns, machine v0→v2 migration and default-off/versioned stride activation/Goal opt-out, invalid preview, Goal override/clear and device removal through real handlers." };
+      return { coverageEntries: context.coverageEntries, note: "Packaged default six effective Turns, machine v0→v2 migration, strategy-only JSON/form inheritance across later machine changes, equal-value explicit pin and interval-only clear, default-off/versioned strategy, invalid preview, Goal override/clear, device removal, mobile keyboard and English labels through real handlers." };
     } catch (error) {
       if (context) {
         await context.page.screenshot({ path: resolve(outputDir, "replan-cadence-failure.png"), animations: "disabled" });

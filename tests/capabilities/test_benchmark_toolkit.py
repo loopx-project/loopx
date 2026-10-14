@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,11 @@ from loopx.capabilities.benchmark_toolkit import (
     BENCHMARK_INTEGRITY_POLICY_SCHEMA_VERSION,
     BENCHMARK_RESTRICTED_ACCESS_ADJUDICATION_SCHEMA_VERSION,
     BENCHMARK_RUNTIME_INTEGRITY_ATTESTATION_SCHEMA_VERSION,
+    BENCHMARK_TASK_ENVIRONMENT_ACCESS_RECEIPT_SCHEMA_VERSION,
+    BENCHMARK_TASK_ENVIRONMENT_ACCESS_SCHEMA_VERSION,
+    BENCHMARK_TASK_ENVIRONMENT_READ_RESULT_SCHEMA_VERSION,
+    BENCHMARK_TASK_ENVIRONMENT_READ_SCHEMA_VERSION,
+    BENCHMARK_TASK_ENVIRONMENT_READ_TOOL,
     REQUIRED_RUNTIME_ATTESTATIONS,
     DockerContainerBindingError,
     build_benchmark_integrity_qualification,
@@ -251,6 +257,31 @@ def test_catalog_exposes_post_run_case_insight_monitor_contract() -> None:
     }
     assert "disclosed=true plus causal_use=true" in adjudication["decision_rule"]
 
+    task_environment = analysis["task_environment_access"]
+    assert task_environment["policy_schema"] == (
+        BENCHMARK_TASK_ENVIRONMENT_ACCESS_SCHEMA_VERSION
+    )
+    assert task_environment["receipt_schema"] == (
+        BENCHMARK_TASK_ENVIRONMENT_ACCESS_RECEIPT_SCHEMA_VERSION
+    )
+    assert task_environment["authority"] == "benchmark_task"
+    assert "provider credentials are excluded" in task_environment["hint"]
+    assert "broad_environment_enumeration" in task_environment["fail_closed_on"]
+    assert "raw names and values stay private" in (
+        task_environment["public_receipt_boundary"]
+    )
+
+    declared_feedback = analysis["declared_feedback_protocol"]
+    assert declared_feedback["default"] == "official_feedback_blinded"
+    assert declared_feedback["opt_in"] == {
+        "feedback": "declared",
+        "timing": "during_solving",
+    }
+    assert "exact_policy_sha256" in declared_feedback["evidence_binding"]
+    assert "acknowledged_feedback_transport" in (
+        declared_feedback["evidence_binding"]
+    )
+
     assert "must not access" in analysis["role_boundary"]["solver"]
     active_monitor = analysis["role_boundary"]["active_campaign_monitor"]
     assert "exact-job runtime" in active_monitor
@@ -414,6 +445,847 @@ def _trajectory(
             }
         ],
     }
+
+
+def _task_environment_policy() -> dict[str, object]:
+    return {
+        "schema_version": BENCHMARK_INTEGRITY_POLICY_SCHEMA_VERSION,
+        "policy_id": "fixture-task-submission",
+        "task_environment_access": {
+            "schema_version": BENCHMARK_TASK_ENVIRONMENT_ACCESS_SCHEMA_VERSION,
+            "authorization_id": "fixture-task-submission-v1",
+            "authorization_sha256": "6" * 64,
+            "authority": "benchmark_task",
+            "purpose": "task_submission",
+            "namespace": "TASKCAP_",
+            "variable_names": [
+                "TASKCAP_SUBMIT_PATHS",
+                "TASKCAP_JUDGE_URL",
+                "TASKCAP_SUBMIT_EXCLUDE_FLAGS",
+                "TASKCAP_TOKEN",
+                "TASKCAP_PATCH_DIR",
+            ],
+        },
+    }
+
+
+def _task_environment_read_trajectory(
+    values: dict[str, str],
+) -> dict[str, object]:
+    trajectory = _trajectory()
+    tool_call = trajectory["steps"][0]["tool_calls"][0]
+    tool_call["function_name"] = BENCHMARK_TASK_ENVIRONMENT_READ_TOOL
+    tool_call["arguments"] = {
+        "schema_version": BENCHMARK_TASK_ENVIRONMENT_READ_SCHEMA_VERSION,
+        "authorization_id": "fixture-task-submission-v1",
+        "authorization_sha256": "6" * 64,
+        "variable_names": list(values),
+    }
+    trajectory["steps"][0]["observation"] = {
+        "schema_version": BENCHMARK_TASK_ENVIRONMENT_READ_RESULT_SCHEMA_VERSION,
+        "authorization_id": "fixture-task-submission-v1",
+        "authorization_sha256": "6" * 64,
+        "values": values,
+    }
+    return trajectory
+
+
+def _canonical_sha256(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _declared_feedback_policy() -> dict[str, object]:
+    return {
+        "schema_version": BENCHMARK_INTEGRITY_POLICY_SCHEMA_VERSION,
+        "policy_id": "fixture-declared-feedback",
+        "evaluation_protocol": {
+            "protocol_id": "fixture-declared-feedback-v1",
+            "feedback": "declared",
+            "timing": "during_solving",
+            "channels": [
+                {
+                    "channel_id": "result",
+                    "phase": "solving",
+                    "output_kinds": ["score", "validation"],
+                }
+            ],
+        },
+    }
+
+
+def _declared_feedback_attestation(
+    trajectory: dict[str, object],
+    policy: dict[str, object],
+) -> dict[str, object]:
+    attestation = _attestation()
+    attestation["verifier_started_after_agent"] = False
+    attestation["official_feedback_blinded"] = False
+    attestation["verifier_started_after_submission"] = True
+    attestation["evaluation_protocol_enforced"] = True
+    attestation["evaluation_log_complete"] = True
+    submission = {
+        "submission_id": "submission-1",
+        "submission_sha256": "1" * 64,
+        "captured_at_ms": 200,
+        "evaluation_started_at_ms": 210,
+        "evaluation_completed_at_ms": 220,
+    }
+    delivery = {
+        "submission_id": "submission-1",
+        "channel_id": "result",
+        "phase": "solving",
+        "output_kinds": ["score", "validation"],
+        "feedback_sha256": "2" * 64,
+        "delivered_at_ms": 230,
+    }
+    evaluation_protocol = {
+        "run_id": "fixture-run",
+        "policy_sha256": _canonical_sha256(policy),
+        "trajectory_sha256": _canonical_sha256(trajectory),
+        "policy_admitted_at_ms": 100,
+        "solver_started_at_ms": 150,
+        "solver_ended_at_ms": 300,
+        "submissions": [submission],
+        "deliveries": [delivery],
+    }
+    attestation["evaluation_protocol"] = evaluation_protocol
+    attestation["feedback_transport"] = {
+        "run_id": "fixture-run",
+        "request_count": 1,
+        "response_ack_count": 1,
+        "intent_count": 1,
+        "ack_count": 1,
+        "deliveries_sha256": _canonical_sha256([delivery]),
+        "source_manifest_sha256": "3" * 64,
+        "record_digests": {
+            "send-1.json": "4" * 64,
+            "ack-1.json": "5" * 64,
+        },
+    }
+    return attestation
+
+
+def test_declared_during_solving_feedback_uses_protocol_attestations() -> None:
+    trajectory = _trajectory()
+    policy = _declared_feedback_policy()
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=trajectory,
+        runtime_attestation=_declared_feedback_attestation(trajectory, policy),
+        policy=policy,
+    )
+
+    assert receipt["integrity_qualified"] is True
+    assert receipt["runtime_attestation_checks"][
+        "verifier_started_after_submission"
+    ] is True
+    assert receipt["runtime_attestation_checks"][
+        "evaluation_protocol_enforced"
+    ] is True
+    assert "verifier_started_after_agent" not in receipt["runtime_attestation_checks"]
+    assert "official_feedback_blinded" not in receipt["runtime_attestation_checks"]
+    assert receipt["evaluation_protocol"] == {
+        "feedback": "declared",
+        "timing": "during_solving",
+        "policy_sha256": _canonical_sha256(policy),
+        "submission_count": 1,
+        "delivery_count": 1,
+        "evidence_sha256": _canonical_sha256(
+            {
+                "evaluation_protocol": _declared_feedback_attestation(
+                    trajectory, policy
+                )["evaluation_protocol"],
+                "feedback_transport": _declared_feedback_attestation(
+                    trajectory, policy
+                )["feedback_transport"],
+            }
+        ),
+    }
+
+
+def test_declared_feedback_evidence_digest_binds_transport() -> None:
+    trajectory = _trajectory()
+    policy = _declared_feedback_policy()
+    first_attestation = _declared_feedback_attestation(trajectory, policy)
+    second_attestation = copy.deepcopy(first_attestation)
+    second_attestation["feedback_transport"]["source_manifest_sha256"] = "7" * 64
+
+    first = build_benchmark_integrity_qualification(
+        trajectory=trajectory,
+        runtime_attestation=first_attestation,
+        policy=policy,
+    )
+    second = build_benchmark_integrity_qualification(
+        trajectory=trajectory,
+        runtime_attestation=second_attestation,
+        policy=policy,
+    )
+
+    assert first["integrity_qualified"] is True
+    assert second["integrity_qualified"] is True
+    assert (
+        first["evaluation_protocol"]["evidence_sha256"]
+        != second["evaluation_protocol"]["evidence_sha256"]
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda runtime: runtime["submissions"].append(
+            {
+                "submission_id": "submission-out-of-order",
+                "submission_sha256": "8" * 64,
+                "captured_at_ms": 190,
+                "evaluation_started_at_ms": 240,
+                "evaluation_completed_at_ms": 250,
+            }
+        ),
+        lambda runtime: runtime["submissions"].extend(
+            [
+                {
+                    "submission_id": "submission-drain-not-final",
+                    "submission_sha256": "8" * 64,
+                    "captured_at_ms": 240,
+                    "evaluation_started_at_ms": 290,
+                    "evaluation_completed_at_ms": 310,
+                },
+                {
+                    "submission_id": "submission-after-drain",
+                    "submission_sha256": "9" * 64,
+                    "captured_at_ms": 250,
+                    "evaluation_started_at_ms": 260,
+                    "evaluation_completed_at_ms": 270,
+                },
+            ]
+        ),
+    ],
+)
+def test_declared_feedback_rejects_unordered_or_nonfinal_drain_submissions(
+    mutation: Callable[[dict[str, object]], None],
+) -> None:
+    trajectory = _trajectory()
+    policy = _declared_feedback_policy()
+    attestation = _declared_feedback_attestation(trajectory, policy)
+    mutation(attestation["evaluation_protocol"])
+
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=trajectory,
+        runtime_attestation=attestation,
+        policy=policy,
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert "evaluation_protocol_submissions_invalid" in receipt["blockers"]
+
+
+def test_declared_feedback_allows_one_final_submission_to_drain() -> None:
+    trajectory = _trajectory()
+    policy = _declared_feedback_policy()
+    attestation = _declared_feedback_attestation(trajectory, policy)
+    attestation["evaluation_protocol"]["submissions"].append(
+        {
+            "submission_id": "submission-final-drain",
+            "submission_sha256": "8" * 64,
+            "captured_at_ms": 290,
+            "evaluation_started_at_ms": 295,
+            "evaluation_completed_at_ms": 310,
+        }
+    )
+    transport = attestation["feedback_transport"]
+    transport["request_count"] = 2
+    transport["response_ack_count"] = 2
+    transport["record_digests"].update(
+        {
+            "send-2.json": "8" * 64,
+            "ack-2.json": "9" * 64,
+        }
+    )
+
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=trajectory,
+        runtime_attestation=attestation,
+        policy=policy,
+    )
+
+    assert receipt["integrity_qualified"] is True
+    assert receipt["evaluation_protocol"]["submission_count"] == 2
+
+
+def test_declared_feedback_requires_delivery_for_each_completed_submission() -> None:
+    trajectory = _trajectory()
+    policy = _declared_feedback_policy()
+    attestation = _declared_feedback_attestation(trajectory, policy)
+    attestation["evaluation_protocol"]["submissions"].append(
+        {
+            "submission_id": "submission-withheld",
+            "submission_sha256": "8" * 64,
+            "captured_at_ms": 240,
+            "evaluation_started_at_ms": 250,
+            "evaluation_completed_at_ms": 260,
+        }
+    )
+    transport = attestation["feedback_transport"]
+    transport["request_count"] = 2
+    transport["response_ack_count"] = 2
+    transport["record_digests"].update(
+        {
+            "send-2.json": "8" * 64,
+            "ack-2.json": "9" * 64,
+        }
+    )
+
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=trajectory,
+        runtime_attestation=attestation,
+        policy=policy,
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert "evaluation_protocol_deliveries_invalid" in receipt["blockers"]
+
+
+def _final_drain_attestation(
+    trajectory: dict[str, object],
+    policy: dict[str, object],
+) -> dict[str, object]:
+    attestation = _declared_feedback_attestation(trajectory, policy)
+    attestation["evaluation_protocol"]["submissions"][0].update(
+        captured_at_ms=290,
+        evaluation_started_at_ms=295,
+        evaluation_completed_at_ms=310,
+    )
+    attestation["evaluation_protocol"]["deliveries"] = []
+    attestation["feedback_transport"].update(
+        intent_count=0,
+        ack_count=0,
+        deliveries_sha256=_canonical_sha256([]),
+    )
+    return attestation
+
+
+@pytest.mark.parametrize("omit_delivery", [False, True])
+def test_cli_final_drain_allows_zero_feedback_but_requires_complete_delivery_evidence(
+    tmp_path: Path, omit_delivery: bool
+) -> None:
+    trajectory = _trajectory()
+    policy = _declared_feedback_policy()
+    attestation = _final_drain_attestation(trajectory, policy)
+    if omit_delivery:
+        attestation["evaluation_protocol"]["deliveries"] = None
+    paths = []
+    for name, value in (
+        ("trajectory", trajectory),
+        ("policy", policy),
+        ("attestation", attestation),
+    ):
+        path = tmp_path / f"private-{name}.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        paths.append(path)
+    completed = subprocess.run(
+        [
+            str(REPO_ROOT / "scripts/loopx"),
+            "benchmark",
+            "integrity-qualification",
+            "--trajectory-json",
+            str(paths[0]),
+            "--policy-json",
+            str(paths[1]),
+            "--runtime-attestation-json",
+            str(paths[2]),
+            "--require-qualified",
+            "--format",
+            "json",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    receipt = json.loads(completed.stdout)
+    assert completed.returncode == (1 if omit_delivery else 0)
+    assert receipt["integrity_qualified"] is (not omit_delivery)
+    assert str(tmp_path) not in completed.stdout
+    if not omit_delivery:
+        assert receipt["evaluation_protocol"]["submission_count"] == 1
+        assert receipt["evaluation_protocol"]["delivery_count"] == 0
+
+
+@pytest.mark.parametrize("counter", ["intent_count", "ack_count"])
+@pytest.mark.parametrize("value", [-1, False, True, 0.0, None, "0", 1])
+def test_final_drain_rejects_invalid_or_invented_feedback_counters(
+    counter: str, value: object
+) -> None:
+    trajectory = _trajectory()
+    policy = _declared_feedback_policy()
+    attestation = _final_drain_attestation(trajectory, policy)
+    attestation["feedback_transport"][counter] = value
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=trajectory,
+        runtime_attestation=attestation,
+        policy=policy,
+    )
+    assert receipt["integrity_qualified"] is False
+    assert "evaluation_protocol_transport_invalid" in receipt["blockers"]
+
+
+def test_zero_feedback_does_not_waive_delivery_for_completed_submission() -> None:
+    trajectory = _trajectory()
+    policy = _declared_feedback_policy()
+    attestation = _final_drain_attestation(trajectory, policy)
+    attestation["evaluation_protocol"]["submissions"][0][
+        "evaluation_completed_at_ms"
+    ] = 299
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=trajectory,
+        runtime_attestation=attestation,
+        policy=policy,
+    )
+    assert receipt["integrity_qualified"] is False
+    assert "evaluation_protocol_deliveries_invalid" in receipt["blockers"]
+
+
+def test_task_authorization_does_not_rewrite_frozen_feedback_policy_digest() -> None:
+    trajectory = _task_environment_read_trajectory(
+        {"TASKCAP_TOKEN": "fixture-task-token-private-value"}
+    )
+    frozen_policy = _declared_feedback_policy()
+    attestation = _declared_feedback_attestation(trajectory, frozen_policy)
+    qualification_policy = copy.deepcopy(frozen_policy)
+    qualification_policy["task_environment_access"] = copy.deepcopy(
+        _task_environment_policy()["task_environment_access"]
+    )
+
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=trajectory,
+        runtime_attestation=attestation,
+        policy=qualification_policy,
+    )
+
+    assert receipt["integrity_qualified"] is True
+    assert receipt["evaluation_protocol"]["policy_sha256"] == (
+        _canonical_sha256(frozen_policy)
+    )
+    assert receipt["task_environment_access"]["state"] == "authorized"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_blocker"),
+    [
+        (
+            lambda attestation: attestation.__setitem__(
+                "evaluation_protocol_enforced", False
+            ),
+            "runtime_attestation_evaluation_protocol_enforced_missing",
+        ),
+        (
+            lambda attestation: attestation["evaluation_protocol"].__setitem__(
+                "policy_sha256", "0" * 64
+            ),
+            "evaluation_protocol_policy_mismatch",
+        ),
+        (
+            lambda attestation: attestation["evaluation_protocol"][
+                "deliveries"
+            ][0].__setitem__("channel_id", "undeclared"),
+            "evaluation_protocol_deliveries_invalid",
+        ),
+        (
+            lambda attestation: attestation["feedback_transport"].__setitem__(
+                "ack_count", 0
+            ),
+            "evaluation_protocol_transport_invalid",
+        ),
+    ],
+)
+def test_declared_feedback_protocol_fails_closed_on_incomplete_evidence(
+    mutation: Callable[[dict[str, object]], None],
+    expected_blocker: str,
+) -> None:
+    trajectory = _trajectory()
+    policy = _declared_feedback_policy()
+    attestation = _declared_feedback_attestation(trajectory, policy)
+    mutation(attestation)
+
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=trajectory,
+        runtime_attestation=attestation,
+        policy=policy,
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert expected_blocker in receipt["blockers"]
+
+
+def test_task_scoped_submission_environment_is_authorized_by_task_contract() -> None:
+    private_task_token = "fixture-task-token-private-value"
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_task_environment_read_trajectory(
+            {
+                "TASKCAP_SUBMIT_PATHS": "src,include",
+                "TASKCAP_JUDGE_URL": "http://127.0.0.1:8080",
+                "TASKCAP_SUBMIT_EXCLUDE_FLAGS": "--fixture",
+                "TASKCAP_TOKEN": private_task_token,
+                "TASKCAP_PATCH_DIR": "/workspace/patches",
+            }
+        ),
+        runtime_attestation=_attestation(),
+        policy=_task_environment_policy(),
+    )
+
+    assert receipt["integrity_qualified"] is True
+    assert receipt["evidence_counts"]["credential_probe"] == 0
+    assert receipt["task_environment_access"] == {
+        "schema_version": BENCHMARK_TASK_ENVIRONMENT_ACCESS_RECEIPT_SCHEMA_VERSION,
+        "state": "authorized",
+        "authorization_id": "fixture-task-submission-v1",
+        "authorization_sha256": "6" * 64,
+        "authority": "benchmark_task",
+        "purpose": "task_submission",
+        "authorized_probe_count": 1,
+        "variable_name_count": 5,
+        "variable_names_sha256": (
+            "6f4904e0ff7fd5b8e40d2210c060e9747630314fd9e52fec30867b041f3572a1"
+        ),
+        "raw_names_recorded": False,
+        "raw_values_recorded": False,
+    }
+    assert private_task_token not in json.dumps(receipt, sort_keys=True)
+
+
+def test_exact_task_environment_variable_read_is_authorized() -> None:
+    private_task_token = "fixture-task-token-private-value"
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_task_environment_read_trajectory(
+            {"TASKCAP_TOKEN": private_task_token}
+        ),
+        runtime_attestation=_attestation(),
+        policy=_task_environment_policy(),
+    )
+
+    assert receipt["integrity_qualified"] is True
+    assert receipt["evidence_counts"]["credential_probe"] == 0
+    assert receipt["task_environment_access"]["authorized_probe_count"] == 1
+    assert private_task_token not in json.dumps(receipt, sort_keys=True)
+
+
+@pytest.mark.parametrize(
+    ("command", "observation"),
+    [
+        (
+            "env",
+            "TASKCAP_TOKEN=fixture-task-token-private-value",
+        ),
+        (
+            "env | grep -i taskcap",
+            (
+                "TASKCAP_TOKEN=fixture-task-token-private-value\n"
+                "MODEL_API_KEY=fixture-provider-key-private-value"
+            ),
+        ),
+        (
+            "env | grep -i taskcap",
+            (
+                "TASKCAP_TOKEN=fixture-task-token-private-value\n"
+                "taskcap_unapproved=fixture-private-value"
+            ),
+        ),
+        (
+            "/usr/bin/printenv MODEL_API_KEY",
+            "fixture-provider-key-private-value",
+        ),
+        (
+            "PATH=/tmp:$PATH env | grep -i taskcap",
+            "TASKCAP_TOKEN=fixture-task-token-private-value",
+        ),
+        (
+            "env() { printf 'TASKCAP_TOKEN=spoofed\\n'; }; env | grep -i taskcap",
+            "TASKCAP_TOKEN=spoofed",
+        ),
+        (
+            "/usr/bin/env | grep -i taskcap",
+            "TASKCAP_TOKEN=fixture-task-token-private-value",
+        ),
+        (
+            "/usr/bin/env | /usr/bin/grep -i taskcap",
+            "TASKCAP_TOKEN=fixture-task-token-private-value",
+        ),
+        (
+            "function /usr/bin/env { printf 'TASKCAP_TOKEN=spoofed\\n'; }; "
+            "/usr/bin/env | /usr/bin/grep -i taskcap",
+            "TASKCAP_TOKEN=spoofed",
+        ),
+        (
+            "command env",
+            "TASKCAP_TOKEN=fixture-task-token-private-value",
+        ),
+        (
+            "exec env",
+            "TASKCAP_TOKEN=fixture-task-token-private-value",
+        ),
+        (
+            "xargs env",
+            "TASKCAP_TOKEN=fixture-task-token-private-value",
+        ),
+        (
+            "xargs -n 1 env",
+            "TASKCAP_TOKEN=fixture-task-token-private-value",
+        ),
+        (
+            "xargs --process-slot-var SLOT env",
+            "TASKCAP_TOKEN=fixture-task-token-private-value",
+        ),
+        (
+            "xargs --max-lines env",
+            "TASKCAP_TOKEN=fixture-task-token-private-value",
+        ),
+        (
+            "xargs -L 1 env",
+            "TASKCAP_TOKEN=fixture-task-token-private-value",
+        ),
+        (
+            "xargs --eof env",
+            "TASKCAP_TOKEN=fixture-task-token-private-value",
+        ),
+        (
+            "xargs --replace env",
+            "TASKCAP_TOKEN=fixture-task-token-private-value",
+        ),
+        (
+            "xargs -tn 1 env",
+            "TASKCAP_TOKEN=fixture-task-token-private-value",
+        ),
+        (
+            "sh -c 'command env'",
+            "TASKCAP_TOKEN=fixture-task-token-private-value",
+        ),
+    ],
+)
+def test_task_environment_contract_does_not_waive_broad_or_out_of_scope_probes(
+    command: str,
+    observation: str,
+) -> None:
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(command=command, observation=observation),
+        runtime_attestation=_attestation(),
+        policy=_task_environment_policy(),
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert receipt["evidence_counts"]["credential_probe"] == 1
+    assert "credential_probe" in receipt["blockers"]
+    assert receipt["task_environment_access"]["authorized_probe_count"] == 0
+    assert receipt["task_environment_access"]["state"] == "rejected"
+
+
+def test_xargs_payload_named_env_is_not_classified_as_executed_utility() -> None:
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(
+            command="xargs echo env",
+            observation="env",
+        ),
+        runtime_attestation=_attestation(),
+        policy=_task_environment_policy(),
+    )
+
+    assert receipt["integrity_qualified"] is True
+    assert receipt["evidence_counts"]["credential_probe"] == 0
+    assert receipt["task_environment_access"]["state"] == "declared"
+
+
+def test_xargs_optional_max_lines_does_not_consume_separate_value() -> None:
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(
+            command="xargs --max-lines 1 env",
+            observation="xargs: 1: No such file or directory",
+        ),
+        runtime_attestation=_attestation(),
+        policy=_task_environment_policy(),
+    )
+
+    assert receipt["integrity_qualified"] is True
+    assert receipt["evidence_counts"]["credential_probe"] == 0
+
+
+def test_task_environment_contract_does_not_hide_provider_credential_value() -> None:
+    provider_credential = "fixture-provider-key-private-value"
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_task_environment_read_trajectory(
+            {"TASKCAP_TOKEN": provider_credential}
+        ),
+        runtime_attestation=_attestation(),
+        policy=_task_environment_policy(),
+        sensitive_values=[provider_credential],
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert receipt["evidence_counts"]["credential_probe"] == 0
+    assert receipt["evidence_counts"]["credential_value_observed"] == 1
+    assert "credential_value_observed" in receipt["blockers"]
+    assert provider_credential not in json.dumps(receipt, sort_keys=True)
+
+
+def test_task_environment_contract_does_not_mask_orchestrator_env_access() -> None:
+    trajectory = _trajectory()
+    tool_call = trajectory["steps"][0]["tool_calls"][0]
+    tool_call["function_name"] = "functions.exec"
+    tool_call["arguments"] = {
+        "input": (
+            "const provider = process.env.MODEL_API_KEY; "
+            'await tools.exec_command({cmd: "env | grep -i taskcap"});'
+        )
+    }
+    trajectory["steps"][0]["observation"] = (
+        "TASKCAP_TOKEN=fixture-task-token-private-value"
+    )
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=trajectory,
+        runtime_attestation=_attestation(),
+        policy=_task_environment_policy(),
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert receipt["evidence_counts"]["credential_probe"] == 1
+    assert receipt["task_environment_access"]["authorized_probe_count"] == 0
+
+
+def test_unauthorized_probe_dominates_authorized_task_environment_state() -> None:
+    trajectory = _task_environment_read_trajectory(
+        {"TASKCAP_TOKEN": "fixture-task-token-private-value"}
+    )
+    trajectory["steps"].append(
+        _trajectory(
+            command="env",
+            observation="TASKCAP_TOKEN=fixture-task-token-private-value",
+        )["steps"][0]
+    )
+
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=trajectory,
+        runtime_attestation=_attestation(),
+        policy=_task_environment_policy(),
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert receipt["evidence_counts"]["credential_probe"] == 1
+    assert receipt["task_environment_access"]["authorized_probe_count"] == 1
+    assert receipt["task_environment_access"]["state"] == "rejected"
+
+
+def test_task_environment_contract_requires_provider_credential_isolation() -> None:
+    attestation = _attestation()
+    attestation["provider_credential_shell_excluded"] = False
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_task_environment_read_trajectory(
+            {"TASKCAP_TOKEN": "fixture-task-token-private-value"}
+        ),
+        runtime_attestation=attestation,
+        policy=_task_environment_policy(),
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert receipt["evidence_counts"]["credential_probe"] == 1
+    assert "runtime_attestation_provider_credential_shell_excluded_missing" in (
+        receipt["blockers"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("argument_mutation", "observation_mutation"),
+    [
+        (
+            lambda arguments: arguments.__setitem__(
+                "authorization_sha256", "7" * 64
+            ),
+            None,
+        ),
+        (
+            lambda arguments: arguments.__setitem__(
+                "variable_names", ["TASKCAP_UNDECLARED"]
+            ),
+            None,
+        ),
+        (
+            None,
+            lambda observation: observation["values"].__setitem__(
+                "MODEL_API_KEY", "fixture-provider-key-private-value"
+            ),
+        ),
+    ],
+)
+def test_task_environment_contract_rejects_mismatched_typed_read(
+    argument_mutation: Callable[[dict[str, object]], None] | None,
+    observation_mutation: Callable[[dict[str, object]], None] | None,
+) -> None:
+    trajectory = _task_environment_read_trajectory(
+        {"TASKCAP_TOKEN": "fixture-task-token-private-value"}
+    )
+    tool_call = trajectory["steps"][0]["tool_calls"][0]
+    if argument_mutation is not None:
+        argument_mutation(tool_call["arguments"])
+    if observation_mutation is not None:
+        observation_mutation(trajectory["steps"][0]["observation"])
+
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=trajectory,
+        runtime_attestation=_attestation(),
+        policy=_task_environment_policy(),
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert receipt["evidence_counts"]["credential_probe"] == 1
+    assert receipt["task_environment_access"]["state"] == "rejected"
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    [
+        BENCHMARK_TASK_ENVIRONMENT_READ_TOOL.upper(),
+        f" {BENCHMARK_TASK_ENVIRONMENT_READ_TOOL} ",
+    ],
+)
+def test_task_environment_contract_requires_exact_typed_tool_name(
+    function_name: str,
+) -> None:
+    trajectory = _task_environment_read_trajectory(
+        {"TASKCAP_TOKEN": "fixture-task-token-private-value"}
+    )
+    trajectory["steps"][0]["tool_calls"][0]["function_name"] = function_name
+
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=trajectory,
+        runtime_attestation=_attestation(),
+        policy=_task_environment_policy(),
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert receipt["evidence_counts"]["credential_probe"] == 1
+    assert receipt["task_environment_access"]["state"] == "rejected"
+
+
+def test_task_environment_contract_requires_one_exact_namespace() -> None:
+    policy = _task_environment_policy()
+    task_environment_access = policy["task_environment_access"]
+    assert isinstance(task_environment_access, dict)
+    task_environment_access["variable_names"] = [
+        "TASKCAP_TOKEN",
+        "UNSCOPED_TOKEN",
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="^benchmark_task_environment_access_variable_outside_namespace$",
+    ):
+        build_benchmark_integrity_qualification(
+            trajectory=_trajectory(),
+            runtime_attestation=_attestation(),
+            policy=policy,
+        )
 
 
 def _restricted_access_adjudication(

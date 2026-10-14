@@ -1083,7 +1083,9 @@ def refresh_state_run(
 
             return read_replan_explore_context(
                 source_status={"registry": str(registry_path), "runtime_root": str(runtime_root)},
-                goal_id=read_goal_id, agent_id=read_agent_id)
+                goal_id=read_goal_id, agent_id=read_agent_id,
+                review_pages=((agent_vision or {}).get("stride_decision") or {}).get(
+                    "explore_review", {}).get("result_pages"))
 
         replan_qualification = qualify_refresh_replan_writeback(
             replan_explore_reader=read_explore_context,

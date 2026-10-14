@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -47,6 +48,19 @@ def main() -> int:
         )
         assert missing.verified is False
         assert missing.reason_code == "provider_service_ownership_receipt_unavailable"
+
+        exited_provider = subprocess.Popen([sys.executable, "-c", "pass"])
+        exited_provider.wait()
+        write_receipt(receipt, generation="generation-1", pid=exited_provider.pid)
+        exited = load_context_provider_service_ownership(
+            receipt,
+            expected_provider="contract-provider",
+        )
+        assert exited.verified is False
+        assert exited.reason_code == "provider_service_process_unavailable"
+        exited_public = exited.public_packet(required=True)
+        assert exited_public["ok"] is False
+        assert exited_public["progress_disposition"] == "not_started"
 
         write_receipt(receipt, generation="generation-1", pid=os.getpid())
         before = load_context_provider_service_ownership(

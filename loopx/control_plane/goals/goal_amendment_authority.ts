@@ -1,6 +1,7 @@
 /** Governed work-graph amendments. Only the trusted source adapter may supply
  * lifecycle/actor facts; provider persistence alone grants no amendment power. */
 import {createHash} from "node:crypto";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import type {JsonObject} from "../effect_program.ts";
 import type {AuthorityStore, AuthorityStoreHead} from "../coordination/authority_store.ts";
 import {canonicalAuthorityObject, canonicalAuthoritySha256, AuthorityStoreProtocolError} from "../coordination/authority_store_codec.ts";
@@ -161,7 +162,7 @@ function readIntent(head: JsonObject): IntentState | null {
     id(p.proposal_id, "proposal id");
     requireValue(rules.eligible_agents.includes(id(p.proposer_agent_id, "proposal Agent")), "stored proposal actor is outside the root policy");
     integer(p.base_goal_revision, "proposal revision", 1, revision);
-    requireValue(p.base_intent_digest === raw.intent_digest && /^[a-f0-9]{64}$/.test(text(p.base_work_digest, "proposal work digest")), "stored proposal basis is invalid");
+    requireValue(p.base_intent_digest === raw.intent_digest && BARE_SHA256_PATTERN.test(text(p.base_work_digest, "proposal work digest")), "stored proposal basis is invalid");
     requireValue(rules.templates.some(t => t.id === p.template_id && t.digest === p.template_digest), "stored proposal template is invalid");
     evidenceRefs(p.evidence_refs);
     requireValue(/^replan-[a-f0-9]{16}$/.test(text(p.replan_obligation_id, "proposal obligation")), "stored proposal obligation is invalid");

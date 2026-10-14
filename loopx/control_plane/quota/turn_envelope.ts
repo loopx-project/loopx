@@ -1,5 +1,6 @@
 import { EffectiveAction } from "./effective_action.generated.ts";
 import { createHash } from "node:crypto";
+import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 import {
   interpretQuotaShouldRunPacket,
@@ -944,7 +945,7 @@ function bindTurnDecisionCapture(request: JsonObject): JsonObject {
   const turnKey = scalarString(request.turn_key, "capture Turn key");
   const signature = object(envelope.action_signature);
   if (!path.trim() || path.includes("\0") || !turnId.trim() ||
-      !/^sha256:[0-9a-f]{64}$/.test(turnKey) || payload.ok !== true ||
+      !ENVELOPED_SHA256_PATTERN.test(turnKey) || payload.ok !== true ||
       payload.goal_id !== envelope.goal_id ||
       object(payload.agent_identity).agent_id !== envelope.agent_id ||
       signature.source_decision_hash !== canonicalHash(payload)) {

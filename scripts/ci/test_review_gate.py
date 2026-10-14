@@ -290,10 +290,10 @@ class PythonShardAdmissionTests(unittest.TestCase):
         script = self.script("pytest", "Combine complete coverage and enforce the existing floor")
         # Execute the workflow's file guard, before the coverage tool itself.
         guard = script.split("python -m coverage combine", 1)[0]
-        for absent in (None, 1, 2, 3, 4):
+        for absent in (None, 1, 2, 3, 4, 5, 6):
             for empty in (False, True):
                 with tempfile.TemporaryDirectory() as directory:
-                    for shard in range(1, 5):
+                    for shard in range(1, 7):
                         path = Path(directory) / f"coverage-shards/python-coverage-{shard}/.coverage"
                         path.parent.mkdir(parents=True)
                         if shard != absent or empty:
@@ -314,9 +314,9 @@ class PythonShardAdmissionTests(unittest.TestCase):
         # A ref/run/PR component would silently restore per-run admission.
         self.assertEqual(re.findall(r"\$\{\{\s*(.*?)\s*\}\}", template), ["matrix.shard"])
         groups = {re.sub(r"\$\{\{.*?\}\}", str(shard), template).casefold()
-                  for shard in range(1, 5)}
-        self.assertEqual(len(groups), 4)
-        self.assertEqual(job["strategy"]["matrix"]["shard"], ["1", "2", "3", "4"])
+                  for shard in range(1, 7)}
+        self.assertEqual(len(groups), 6)
+        self.assertEqual(job["strategy"]["matrix"]["shard"], ["1", "2", "3", "4", "5", "6"])
         self.assertEqual(job["strategy"]["fail-fast"], "false")
         # GateTests executes the current workflow's PR lifecycle expressions,
         # including closed events whose ref changes to main. Keep that semantic

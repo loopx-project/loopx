@@ -219,26 +219,28 @@ def remove_native_update_maintenance(source: str) -> str:
     return source[:start] + function + source[end:]
 
 
-def move_guard_outside_lock(name: str) -> Callable[[str], str]:
-    def apply(source: str) -> str:
-        function = next(node for node in ast.parse(source).body
-                        if isinstance(node, ast.FunctionDef)
-                        and node.name == "legacy_todo_write_transaction")
-        calls = [node for node in ast.walk(function) if isinstance(node, ast.Expr)
-                 and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
-                 and node.value.func.id == name]
-        if len(calls) != 1:
-            raise ValueError("guard locator drift; review lock protocol")
-        call = calls[0]
-        lines = source.splitlines(keepends=True)
-        segment = "".join(lines[call.lineno - 1:call.end_lineno])
-        text = "".join(lines[:call.lineno - 1] + lines[call.end_lineno:])
-        start = text.index("    with exclusive_cross_runtime_file_lock(\n",
-                           text.index("def legacy_todo_write_transaction("))
-        # Preserve the exact arguments while moving only the actual guard.
-        unindented = "".join(line[4:] for line in segment.splitlines(keepends=True))
-        return text[:start] + "    if not dry_run:\n" + unindented + text[start:]
-    return apply
+def move_todo_guard_outside_lock(source: str) -> str:
+    function = next(node for node in ast.parse(source).body
+                    if isinstance(node, ast.FunctionDef)
+                    and node.name == "legacy_todo_write_transaction")
+    guards = [node for node in ast.walk(function) if isinstance(node, ast.If)
+              and isinstance(node.test, ast.UnaryOp) and isinstance(node.test.op, ast.Not)
+              and isinstance(node.test.operand, ast.Name) and node.test.operand.id == "dry_run"
+              and len(node.body) == 1 and not node.orelse
+              and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Call)
+              and isinstance(node.body[0].value.func, ast.Name)
+              and node.body[0].value.func.id == "require_legacy_todo_write_allowed"]
+    locks = [node for node in function.body if isinstance(node, ast.With)]
+    if len(guards) != 1 or len(locks) != 1 or guards[0] not in locks[0].body:
+        raise ValueError("guard locator drift; review lock protocol")
+    guard, lock = guards[0], locks[0]
+    lines = source.splitlines(keepends=True)
+    # Both race oracles exercise the same combined admission owner. Move its
+    # whole dry-run condition so the locked body remains executable.
+    segment = "".join(line[4:] for line in lines[guard.lineno - 1:guard.end_lineno])
+    return "".join(lines[:lock.lineno - 1]) + segment + "".join(
+        lines[lock.lineno - 1:guard.lineno - 1] + lines[guard.end_lineno:]
+    )
 
 
 WRITER_TEST = "tests/control_plane/test_shadow_writer_boundaries.py::"
@@ -265,9 +267,9 @@ CASES.extend([
          "archive selection preserves imported order"),
     Case("remove_fence", ((COORDINATION + "legacy_writer_fence.py", remove_fence),), FENCE_TEST),
     Case("fence_outside_lock", ((COORDINATION + "legacy_writer_fence.py",
-         move_guard_outside_lock("require_legacy_coordination_write_allowed")),), FENCE_TEST),
+         move_todo_guard_outside_lock),), FENCE_TEST),
     Case("source_binding_outside_lock", ((COORDINATION + "legacy_writer_fence.py",
-         move_guard_outside_lock("require_registry_source_write_allowed")),),
+         move_todo_guard_outside_lock),),
          WRITER_TEST + "test_waiting_override_writer_rechecks_registry_binding_inside_shared_state_lock"),
     Case("remove_refresh_source_recheck", (("loopx/state_refresh.py", replacement(
         "            if normalized_next_action:",

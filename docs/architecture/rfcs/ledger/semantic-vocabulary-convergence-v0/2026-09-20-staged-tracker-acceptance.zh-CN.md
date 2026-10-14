@@ -1,5 +1,8 @@
 # Tracker 阶段验收与有条件字段退役
 
+当前读回见[登记来源处理](2026-10-12-registered-source-treatment.zh-CN.md)。下文保留原基线观测，不代表当前 PR 状态。
+
+
 状态：**提案**，不是迁移完成或批准记录。基线：
 `36134771355f05c9bcc5657ce739bb86426383dc`。
 交付状态与有序工作计划归 [#4447](https://github.com/loopx-project/loopx/issues/4447)

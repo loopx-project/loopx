@@ -31,16 +31,16 @@
 .goal-overview-progress { display: flex; align-items: center; gap: 12px; margin-top: 8px; color: var(--pw-muted); font-size: var(--text-caption); font-variant-numeric: tabular-nums; line-height: var(--leading-caption); }
 .goal-criteria-meter { display: flex; flex: 0 1 160px; gap: 3px; height: 4px; }
 .goal-criteria-meter i { flex: 1; border-radius: 2px; background: var(--pw-line); }
-.goal-criteria-meter .is-verified { background: var(--pw-green); }
-.goal-criteria-meter .is-failing { background: var(--pw-red); }
+.goal-criteria-meter .is-accepted { background: var(--pw-green); }
+.goal-criteria-meter .is-failed { background: var(--pw-red); }
 
 .goal-overview-criteria { border-top: 1px solid var(--pw-line); }
 .goal-overview-criteria li { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 40px; padding: 8px 0; border-bottom: 1px solid var(--pw-line); font-size: var(--text-body); line-height: var(--leading-body); transition: opacity var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-out); }
 .goal-overview-criteria svg { color: var(--pw-faint); }
 .goal-overview-criteria small { color: var(--pw-faint); font-size: var(--text-caption); line-height: var(--leading-caption); }
-.goal-overview-criteria .is-verified svg { color: var(--pw-green); }
-.goal-overview-criteria .is-verified > span { color: var(--pw-muted); }
-.goal-overview-criteria .is-failing svg, .goal-overview-criteria .is-failing small { color: var(--pw-red); }
+.goal-overview-criteria .is-accepted svg { color: var(--pw-green); }
+.goal-overview-criteria .is-accepted > span { color: var(--pw-muted); }
+.goal-overview-criteria .is-failed svg, .goal-overview-criteria .is-failed small { color: var(--pw-red); }
 
 .goal-overview-summary .goal-overview-run { display: inline-flex; justify-self: start; gap: 8px; margin: 0; padding: 0; min-height: 28px; border: 0; background: transparent; }
 .goal-overview-run small { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }

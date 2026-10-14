@@ -222,6 +222,16 @@ async function assertPairedLinkRejected(blogDir, slug, anchor, message) {
 
 const modulePath = fileURLToPath(import.meta.url);
 if (process.argv[1] && resolve(process.argv[1]) === modulePath) {
+  const articleUrl = "https://loopx-project.github.io/loopx/blog/example/";
+  const counterpartUrl = "https://loopx-project.github.io/loopx/blog/zh/example/";
+  for (const href of ["../zh/example/", "../../blog/zh/example/", counterpartUrl]) {
+    deepStrictEqual(hasAnchorToHref(`<a href="${href}">中文</a>`, counterpartUrl, articleUrl), true);
+  }
+  for (const href of ["../zh/other/", "https://example.invalid/loopx/blog/zh/example/", "http://["]) {
+    deepStrictEqual(hasAnchorToHref(`<a href="${href}">中文</a>`, counterpartUrl, articleUrl), false);
+  }
+  deepStrictEqual(hasAnchorToHref(`<link href="${counterpartUrl}" rel="alternate">`, counterpartUrl, articleUrl), false);
+  deepStrictEqual(hasAnchorToHref(`<a data-href="${counterpartUrl}">中文</a>`, counterpartUrl, articleUrl), false);
   // Independent expectations for unsorted input, partial dates, ties and undated posts.
   const dates = ["2026-09", "", "2026-09-15", "2026-10-02", "2026-09-26"];
   deepStrictEqual(dates.sort(comparePublicationDates), ["2026-10-02", "2026-09-26", "2026-09-15", "2026-09", ""]);

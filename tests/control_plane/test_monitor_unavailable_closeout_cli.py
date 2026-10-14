@@ -34,6 +34,7 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(
         tmp_path, required_capability="network" if scenario == "capability_restore" else None,
+        claimed=False,  # The replacement below authors the Monitor's claim.
     )
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state.write_text(state.read_text().replace(

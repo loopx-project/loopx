@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Exercise the shipped delivery view with synthetic status and read-only API fixtures.
 import assert from "node:assert/strict";
+import {mkdir} from "node:fs/promises";
 import { execFileSync, spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
@@ -54,6 +55,29 @@ try {
     if (await navigation.isVisible()) await navigation.click();
     await page.locator(".personal-goal-link").first().click();
     await page.getByRole("button", { name: locale === "en" ? "Overview" : "概览", exact: true }).click();
+    // The owner can invalidate work without changing the contract revision.
+    const imageDir = resolve(root, "output/playwright/acceptance-currentness");
+    await mkdir(imageDir, {recursive: true});
+    for (const status of ["stale", "held", "partial", "accepted", "failed", "unverified"]) {
+      const value = verifiedContract(status);
+      if (value.verification) {
+        value.verification.contract_revision = value.revision;
+        value.verification.contract_digest = value.digest;
+      }
+      payload.run_history.goals[0].acceptance_observation = {...acceptance, goal_acceptance_contract: value};
+      await page.reload({waitUntil: "networkidle"});
+      const direction = page.locator(".goal-overview-direction");
+      await direction.waitFor();
+      const toggle = direction.locator(".goal-direction-toggle");
+      if (await toggle.isVisible() && await toggle.getAttribute("aria-expanded") === "false") await toggle.click();
+      await direction.getByText(contract.criteria[0].description, {exact: true}).waitFor();
+      await page.screenshot({path: resolve(imageDir, `${locale}-${status}.png`), animations: "disabled"});
+      const passing = direction.locator(".goal-overview-criteria .is-verified, .goal-overview-criteria .is-accepted");
+      assert.equal(await passing.count(), status === "accepted" ? 1 : 0, `${status}: retained checks are not current whole-scope success`);
+      assert.equal(await direction.locator(".goal-overview-criteria li").count(), value.criteria.length);
+    }
+    payload.run_history.goals[0].acceptance_observation = acceptance;
+    await page.reload({waitUntil: "networkidle"});
     const review = page.locator(".delivery-review");
     const section = review.locator(".delivery-acceptance-contract");
     const refresh = review.getByRole("button", { name: locale === "en" ? "Refresh snapshot" : "刷新快照", exact: true });

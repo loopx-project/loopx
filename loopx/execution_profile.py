@@ -157,8 +157,6 @@ def compact_execution_profile(value: Any) -> dict[str, Any]:
     if "stride_strategy" in value:
         from .control_plane.work_items.stride_policy_codec import normalize_stride_strategy
         profile["stride_strategy"] = normalize_stride_strategy(value["stride_strategy"])
-        if not any(key in value for key in ("replan_after_effective_turns", "replan_after_completed_todos")):
-            raise ValueError("a Goal stride strategy requires an explicit review cadence in the same profile")
 
     if "replan_after_effective_turns" in value and "replan_after_completed_todos" in value:
         raise ValueError("choose one review cadence unit")
@@ -291,11 +289,6 @@ def apply_goal_execution_profile_change(
         profile.pop("replan_after_completed_todos", None)
     if clear_replan_after_completed_todos:
         profile.pop("replan_after_completed_todos", None)
-    if stride_strategy is None and (clear_replan_after_completed_todos or clear_replan_after_effective_turns) and not any(
-        key in profile for key in ("replan_after_effective_turns", "replan_after_completed_todos")
-    ):
-        # This capability is one review configuration, not per-field inheritance.
-        profile.pop("stride_strategy", None)
     goal["execution_profile"] = configure_execution_profile(
         profile,
         turn_granularity=turn_granularity,

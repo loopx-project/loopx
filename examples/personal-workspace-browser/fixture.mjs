@@ -563,6 +563,13 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       });
     }
     for (const fixtureGoal of fixture.run_history.goals) {
+      if (state.registeredAgentsByGoal?.[fixtureGoal.id]) {
+        fixtureGoal.coordination = {...fixtureGoal.coordination, registered_agents: state.registeredAgentsByGoal[fixtureGoal.id]};
+      }
+      // This is the backend's provider admission projection; browser fixtures never infer hosts from names.
+      if (state.zcodeEligibleAgentsByGoal?.[fixtureGoal.id]) {
+        fixtureGoal.zcode_goal_eligible_agent_ids = state.zcodeEligibleAgentsByGoal[fixtureGoal.id];
+      }
       if (state.goalSubagentConfigurationEnabled) {
         fixtureGoal.spawn_policy = projectedSubagentConfiguration(fixtureGoal.id, fixtureGoal.spawn_policy);
       } else {
@@ -1913,10 +1920,10 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     if (apply) {
       state.actionApplies.push(apply[1]);
       if (actionKinds.get(apply[1]) === "heartbeat.bind" && !state.allowNextHeartbeatApply) {
-        const gate = {kind: "host_activation_required", summary: "需要 Codex App 宿主创建 Heartbeat 自动化。", next_action: "确认宿主自动化后重新验证。"};
-        // The real owner persists a discovered gate. A later list read must
-        // not resurrect preview_ready and erase the guarded apply result.
-        const proposal = {...actionProposals.get(apply[1]), status: "gated", gate};
+        const gate = { kind: "host_activation_required", summary: "需要 Codex App 宿主创建 Heartbeat 自动化。", next_action: "确认宿主自动化后重新验证。" };
+        // ChatRequestHandler persists mark_gated before returning 409. Keeping
+        // preview_ready here let canonical polling erase the host gate.
+        const proposal = { ...actionProposals.get(apply[1]), status: "gated", gate, failure: null, updated_at: "2026-08-13T01:00:01Z" };
         actionProposals.set(apply[1], proposal);
         await route.fulfill({ contentType: "application/json", json: { ok: false, schema_version: "loopx_chat_action_gate_v1", error: "Host activation required", error_code: "protected_action", gate, proposal, write_attempted: false }, status: 409 });
         return;

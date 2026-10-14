@@ -52,13 +52,14 @@ Frontstage Pages 只验收并发布公共网站和 projection demo，保留构�
 预算、静态宿主 prompt 和后端 Python/TS 逻辑暂不享受免跑；它们仍可能改变核心行为。
 新增一种豁免只需审阅其业务边界和保留的验收，不要求列举全部替代测试文件。
 
-## Four complete Python shards
+## Six complete Python shards
 
-Full Python qualification uses four runners with two xdist workers each:
-`--splits 4 --group N --splitting-algorithm least_duration`. It still partitions
+Full Python qualification uses six shard jobs with two xdist workers each:
+`--splits 6 --group N --splitting-algorithm least_duration`. It still partitions
 the whole collection, excluding only the separately executed Stage2c marker.
 No tests are removed. Without timing history the splitter uses equal weights;
-four-way parallelism is not a claim of perfect duration balancing.
+six shards do not establish perfect duration balancing. Each numbered shard
+shares its queue across workflow runs without replacing another current head.
 
 The shard command explicitly loads `scripts.ci.pytest_timing`. Its controller
 streams pytest's setup/call/teardown durations to Actions logs as each report
@@ -88,6 +89,19 @@ only a lower bound; use job/step timestamps for setup and runner occupancy.
 These observations do not become a timing cache, change selection or establish
 qualification. Missing durations still use the existing equal-weight fallback.
 
+The same observer flushes failed reports as separate `LOOPX_PYTEST_FAILURE`
+JSON lines, including nested failures without counting their duration again.
+They retain the same hashed identity, phase, a known exception class and up to
+eight repository-relative source positions with literal-redacted assertion
+expressions. Messages, parameters, locals and captured IO are omitted from the
+new JSON; pytest's existing output is unchanged. Unknown classes or unavailable
+source context remain null, and an observer error may omit a diagnostic record.
+Only reports received by the controller are covered; collection failures,
+worker death before sending and unseen reports at interruption are excluded.
+These locations are diagnostic context, not complete cause attribution or
+authenticated evidence. JUnit, exit status, full collection and gates remain
+required. The timing reader ignores this separate prefix.
+
 分片在 controller 中随 pytest 的 setup/call/teardown 报告写入 Actions 日志，
 无需等待最终 JUnit 或耗时汇总。下载单个 job 日志后运行
 `node scripts/ci/pytest_timing.ts JOB_LOG`，可回读选中／完成数量、已观察耗时、
@@ -96,6 +110,10 @@ worker 秒数、各阶段总和与最慢用例。缺失、损坏或矛盾记录�
 仅收集项的报告提供 phase 耗时；pytest/unittest 子测试仍由 pytest 输出结果，
 其成本已包含在父项 call 中，不重复记入 phase。旧 observer 把子测试混入普通 phase
 的日志仍作为矛盾证据拒绝，reader 不猜测应丢弃哪条重复记录。
+同一 observer 收到失败报告后立即输出 `LOOPX_PYTEST_FAILURE` 脱敏源码位置、异常类和
+断言结构；子测试单独保留失败位置，不重复计时。新增 JSON 不含消息、参数、locals 或
+捕获的 IO，原 pytest 输出不变。未知类、缺失源码或诊断异常仍是证据缺口；未送达的
+报告与收集失败不在覆盖范围，不能据此完成原因归因、证明真实性或豁免完整门禁。
 并发 phase 总和不是
 runner-minutes、排队时长或 CPU 时间；不完整记录仅给出下界，环境准备与占用须结合
 job/step 时间戳。记录不进入 timing cache、不改变测试选择、不替代门禁；没有耗时
@@ -110,15 +128,16 @@ timestamp/ANSI framing; phase identity, ordering and completion checks remain st
 reader 接受 GitHub 日志分块拼接产生的行首 BOM，再读取时间戳和 ANSI 包装；
 phase 身份、顺序与完整性检查保持严格。
 
-The aggregate requires every shard to succeed and all four coverage files to
+The aggregate requires every shard to succeed and all six coverage files to
 exist before combining them. The existing full-suite coverage floor remains.
 No Python or backend TypeScript coverage artifact or Sonar run is manufactured
 when those lanes are exempt. Dashboard coverage remains scoped to the frontend.
 
-全量 Python 从 2 个分片扩大到 4 个，每片仍为 2 个 worker，不提高单机进程争抢。
-真实 pytest-split/xdist/coverage 回归覆盖分片集合互斥、并集完整、四份报告合并以及
+全量 Python 采用 6 个分片，每片仍为 2 个 worker，不提高单机进程争抢。
+各分片号在 workflow 之间共享队列，不替换其他当前 head 的待执行资格。
+真实 pytest-split/xdist/coverage 回归覆盖分片集合互斥、并集完整、六份报告合并以及
 缺失任意报告时拒绝通过。分片增加会增加安装开销与同时占用的 runner；应看实际
-critical path 和 runner-minutes，而不是宣称“4 片必然快一倍”。
+critical path 和 runner-minutes，而不是根据分片数宣称必然加速。
 
 ## Override and evidence
 

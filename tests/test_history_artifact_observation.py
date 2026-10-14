@@ -149,7 +149,7 @@ def test_public_history_and_status_keep_artifacts_with_canonical_todos(history_c
     from loopx.control_plane.testing.canary_harness import write_fixture_registry
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, runtime, _, _ = history_case
+    registry, runtime, index, _ = history_case
     state = tmp_path / "state.md"
     state.write_text("---\nstatus: active\n---\n# Example\n\n## Agent Todo\n")
     write_fixture_registry(project=tmp_path, registry_path=registry, runtime_root=runtime,

@@ -58,7 +58,7 @@
 | [RFC：Provider-Neutral Post-Writeback Capability Hooks v0](provider-neutral-post-writeback-capability-hooks-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC: Provider-Neutral Turn-Start Inbox Hook v0](provider-neutral-turn-start-inbox-hook-v0.md) | 已接受 | none | — |
 | [RFC：研究型探索控制面 v0](research-exploration-control-plane-v0.zh-CN.md) | 已接受 | 无 | — |
-| [RFC：语义词表收敛与提交期漂移检查（v0）](semantic-vocabulary-convergence-v0.zh-CN.md) | 已接受 | 无 | [6 条](ledger/semantic-vocabulary-convergence-v0/) |
+| [RFC：语义词表收敛与提交期漂移检查（v0）](semantic-vocabulary-convergence-v0.zh-CN.md) | 已接受 | 无 | [7 条](ledger/semantic-vocabulary-convergence-v0/) |
 | [RFC：共享 Goal 对齐与受治理 Amendment 协议（v0）](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md) | 已接受 | 无 | [2 条](ledger/shared-goal-alignment-and-governed-amendment-v0/) |
 | [RFC：LoopX 共享控制面权威与可插拔状态 Provider（v0）](shared-goal-authority-state-provider-v0.zh-CN.md) | 已接受 | 无 | [24 条](ledger/shared-goal-authority-state-provider-v0/) |
 | [RFC: Single-Owner Local Daemon (v0)](single-owner-local-daemon-v0.md) | 已接受 | none | — |

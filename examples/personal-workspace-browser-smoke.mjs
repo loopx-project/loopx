@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { selectScenarioShard } from "./personal-workspace-browser/shard.mjs";
+import { zcodeGoalScenario } from "./personal-workspace-browser/zcode-goal.mjs";
 import {goalWorkspaceCreateScenario} from "./personal-workspace-browser/goal-workspace-create.mjs";
 import {agentModelSelectionScenario} from "./personal-workspace-browser/agent-model-selection.mjs";
 import {goalWorkspaceM2Scenario} from "./personal-workspace-browser/goal-workspace-m2.mjs";
@@ -103,6 +105,7 @@ scenarioCatalog.push(researchResultsScenario);
 scenarioCatalog.push(prReviewAgentOrderScenario);
 scenarioCatalog.push(taskInspectorReturnScenario);
 scenarioCatalog.push(replanCadenceScenario);
+scenarioCatalog.push(zcodeGoalScenario);
 scenarioCatalog.push(goalWorkspaceM2Scenario);
 scenarioCatalog.push(goalWorkspaceCreateScenario);
 scenarioCatalog.push(goalWorkspaceSelectionScenario);
@@ -110,7 +113,7 @@ const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
 scenarioCatalog.push(agentModelSelectionScenario);
 const scenarios = requestedScenario
   ? scenarioCatalog.filter((scenario) => scenario.id === requestedScenario)
-  : scenarioCatalog;
+  : selectScenarioShard(scenarioCatalog, process.env.LOOPX_PERSONAL_WORKSPACE_SHARD);
 
 async function main() {
   if (collectCoverage && packaged) {
@@ -132,6 +135,7 @@ async function main() {
     browser = await launchBrowser(loadPlaywright().chromium);
     for (const scenario of scenarios) {
       const startedAt = Date.now();
+      console.log(`scenario-start=${scenario.id}`);
       try {
         // Existing scenarios assert Chinese copy; the locale scenario exercises
         // browser preferences explicitly and receives the unmodified browser.
@@ -153,9 +157,10 @@ async function main() {
         };
         throw error;
       } finally {
+        console.log(`scenario-end=${scenario.id} duration_ms=${Date.now() - startedAt}`);
         await writeFile(
           resolve(outputDir, "acceptance-results.json"),
-          `${JSON.stringify({ scenarios: results }, null, 2)}\n`,
+          `${JSON.stringify({ shard: process.env.LOOPX_PERSONAL_WORKSPACE_SHARD, catalog_count: scenarioCatalog.length, selected: scenarios.map(scenario => scenario.id), scenarios: results }, null, 2)}\n`,
           "utf8",
         );
       }

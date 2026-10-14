@@ -15,7 +15,8 @@ import "./goal-masthead.css";
 function digestExecution(execution: WorkspaceGoal["execution"]): DigestExecution | undefined {
   if (!execution) return undefined;
   if (execution.kind !== "running") return execution.kind === "idle" ? { kind: "idle" } : { kind: "unknown" };
-  return { kind: "running", observed: !execution.hostClaimed, quiet: execution.quiet, lastActivityAt: execution.lastActivityAt };
+  if (execution.work === "unrecognized") return {kind: "unknown"};
+  return { kind: "running", observed: execution.work === "executing", quiet: execution.quiet, lastActivityAt: execution.lastActivityAt };
 }
 
 export function useGoalWorkspaceDigest(goal: WorkspaceGoal | null, userTodos: WorkspaceModel["userTodos"], items: WorkspaceTimelineItem[], map?: GoalWorkMap | null): GoalWorkspaceDigest {

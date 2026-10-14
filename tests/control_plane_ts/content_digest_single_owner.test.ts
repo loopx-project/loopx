@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import test from "node:test";
 import { fileURLToPath } from "node:url";
+import test from "node:test";
 import ts from "typescript";
 
 import {
@@ -92,6 +92,7 @@ const DECLARED_UNFOLDABLE: Record<string, { count: number; reason: string }> = {
 const CANONICAL_CONSUMERS = [
   "control_plane/agents/supervisor_event_append.ts",
   "control_plane/capabilities/change_quality_validation.ts",
+  "control_plane/capabilities/explore_result_page.ts",
   "control_plane/capabilities/external_evidence.ts",
   "control_plane/capabilities/goal_capability_organization.ts",
   "control_plane/collaboration/chat_mode.ts",
@@ -122,6 +123,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/effect_runtime_snapshot.ts",
   "control_plane/goals/acceptance_authority.ts",
   "control_plane/goals/acceptance_contract.ts",
+  "control_plane/goals/goal_amendment_authority.ts",
   "control_plane/goals/goal_amendment_proposal.ts",
   "control_plane/goals/operator_actions.ts",
   "control_plane/goals/shared_goal_alignment.ts",
@@ -129,6 +131,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/governed_capability.ts",
   "control_plane/presentation/action_review_plan.ts",
   "control_plane/quota/refresh_external_delivery.ts",
+  "control_plane/quota/turn_envelope.ts",
   "control_plane/runtime/execution_identity.ts",
   "control_plane/runtime/usage_statistics_cycles.ts",
   "control_plane/runtime/usage_statistics_goal_contract.ts",
@@ -143,10 +146,13 @@ const CANONICAL_CONSUMERS = [
   "control_plane/work_items/replan_context.ts",
   "control_plane/work_items/replan_history_snapshot.ts",
   "control_plane/work_items/refresh_recommendation.ts",
+  "control_plane/work_items/stride_policy.ts",
   "control_plane/work_items/task_lease_acquire.ts",
   "control_plane/work_items/task_lease_lifecycle.ts",
   "control_plane/work_items/task_lease_lifecycle_request.ts",
   "control_plane/work_items/task_lease_workspace.ts",
+  "zcode_goal_mode/cli.ts",
+  "zcode_goal_mode/runtime.ts",
 ];
 
 function packageFiles(dir: string, base = ""): string[] {

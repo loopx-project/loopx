@@ -39,7 +39,7 @@ def successor_state(obligation_id: str, *, owner: str = AGENT) -> str:
             f"updated_at={quote('2026-08-01T01:00:00Z', safe='')} -->\n")
 
 
-def test_cli_successor_refresh_resets_periodic_window(tmp_path: Path, capsys) -> None:
+def test_cli_completed_todo_successor_refresh_resets_periodic_window(tmp_path: Path, capsys) -> None:
     project = tmp_path / "project"
     project.mkdir()
     state = project / "ACTIVE_GOAL_STATE.md"
@@ -53,8 +53,8 @@ def test_cli_successor_refresh_resets_periodic_window(tmp_path: Path, capsys) ->
     registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
         "id": GOAL, "status": "active", "repo": str(project), "state_file": state.name,
         # Exercise the periodic-history window instead of the live machine default.
-        "execution_profile": {"replan_after_completed_todos": 1},
         "coordination": {"agent_model": "peer_v1", "registered_agents": [AGENT]},
+        "execution_profile": {"replan_after_completed_todos": 5},
     }]}))
     obligation = autonomous_replan_obligation_from_runs(runs, agent_todos={}, agent_id=AGENT)
     assert obligation is not None

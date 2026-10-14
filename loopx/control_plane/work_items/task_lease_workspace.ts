@@ -1,10 +1,10 @@
 /** Filesystem observations for code-edit leases, never a shared-state fence. */
 import {execFile} from "node:child_process";
 import {promisify} from "node:util";
-import {realpath, stat, readFile, lstat, opendir} from "node:fs/promises";
+import {realpath, stat, readFile, readlink, lstat, opendir} from "node:fs/promises";
 import {platform} from "node:os";
 import {createHash} from "node:crypto";
-import {isAbsolute, resolve} from "node:path";
+import {dirname, isAbsolute, relative, resolve, sep} from "node:path";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
@@ -20,6 +20,44 @@ export interface LeaseWorkspace extends JsonObject {
 }
 const run = promisify(execFile);
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+
+/** Only these locally authored, path-free diagnostics may cross the CLI boundary. */
+export class LeaseWorktreeObservationError extends EffectRuntimeRequestError {}
+
+async function requireInternalFileLink(root: string, full: string, overlaps: (path: string) => boolean): Promise<void> {
+  const message = "worktree file links must point directly to a regular file within the declared checkout scopes; "
+    + "directory, chained, unresolved, external and Git administration links are unsupported";
+  try {
+    const link = await readlink(full);
+    const absolute = isAbsolute(link);
+    if (absolute && !link.startsWith(`${root}${sep}`)) throw new LeaseWorktreeObservationError(message);
+    let current = absolute ? root : dirname(full);
+    // Inspect unnormalized components too: resolve() alone could erase a
+    // redirected directory or an outside-and-back route before checking it.
+    for (const component of (absolute ? link.slice(root.length + 1) : link).split(sep)) {
+      if (!component || component === ".") continue;
+      current = resolve(current, component);
+      const location = relative(root, current);
+      if (component === ".git" || location === ".." || location.startsWith(`..${sep}`)
+          || isAbsolute(location) || (await lstat(current)).isSymbolicLink()) {
+        throw new LeaseWorktreeObservationError(message);
+      }
+    }
+    const target = resolve(dirname(full), link);
+    const child = relative(root, target);
+    // Direct regular-file targets suffice for npm executable links. Requiring
+    // physical == lexical also detects changed parents; do not turn internal
+    // directory aliases into new write scopes.
+    if (!child || child === ".." || child.startsWith(`..${sep}`) || isAbsolute(child)
+        || child.split(sep).includes(".git") || !overlaps(child.split(sep).join("/"))
+        || !(await lstat(target)).isFile() || await realpath(full) !== target) {
+      throw new LeaseWorktreeObservationError(message);
+    }
+  } catch {
+    // A known dangling link must not enter the deleted-entry ENOENT fallback.
+    throw new LeaseWorktreeObservationError(message);
+  }
+}
 
 export function leaseWorkspace(value: unknown): LeaseWorkspace | null {
   if (value == null) return null;
@@ -47,7 +85,7 @@ export function sameLeaseCheckout(left: unknown, right: unknown): boolean {
 }
 
 export async function observeLeaseWorktree(path: string, overlaps: (path: string) => boolean): Promise<LeaseWorkspace> {
-  if (!isAbsolute(path)) throw new EffectRuntimeRequestError("worktree observation requires an absolute caller path");
+  if (!isAbsolute(path)) throw new LeaseWorktreeObservationError("worktree observation requires an absolute caller path");
   const cwd = await realpath(path);
   const git = async (...args: string[]) => (await run("git", ["-C", cwd, ...args],
     {timeout: 5000, maxBuffer: 4 * 1024 * 1024, env: {...process.env, GIT_OPTIONAL_LOCKS: "0"}})).stdout.trim();
@@ -55,11 +93,11 @@ export async function observeLeaseWorktree(path: string, overlaps: (path: string
   const directory = await realpath(await git("rev-parse", "--absolute-git-dir"));
   const common = await realpath(resolve(cwd, await git("rev-parse", "--git-common-dir")));
   if (root !== cwd || directory === common || !(await stat(resolve(root, ".git"))).isFile()) {
-    throw new EffectRuntimeRequestError("--write-worktree requires the root of an independent Git worktree");
+    throw new LeaseWorktreeObservationError("--write-worktree requires the root of an independent Git worktree");
   }
   // Code-edit leases must not describe shared Git administration or paths
-  // redirected out of the checkout. Unknown/untracked symlinks also fail closed.
-  if (overlaps(".git")) throw new EffectRuntimeRequestError("worktree scopes cannot include Git administration");
+  // redirected out of the checkout. Direct in-scope file links remain local.
+  if (overlaps(".git")) throw new LeaseWorktreeObservationError("worktree scopes cannot include Git administration");
   // Inspect physical entries, including ignored files. Git's tracked/untracked
   // inventory is not an isolation boundary. Subtree overlap also checks a
   // redirected ancestor when the requested leaf does not exist yet.
@@ -72,8 +110,10 @@ export async function observeLeaseWorktree(path: string, overlaps: (path: string
       const full = resolve(root, relative);
       try {
         const info = await lstat(full);
-        if (info.isSymbolicLink() || !(await realpath(full)).startsWith(`${root}/`)) {
-          throw new EffectRuntimeRequestError("worktree scope contains a redirected path");
+        if (info.isSymbolicLink()) {
+          await requireInternalFileLink(root, full, overlaps);
+        } else if (!(await realpath(full)).startsWith(`${root}/`)) {
+          throw new LeaseWorktreeObservationError("worktree scope contains a redirected path");
         }
         if (info.isDirectory()) pending.push(relative);
       } catch (error) {
@@ -85,7 +125,7 @@ export async function observeLeaseWorktree(path: string, overlaps: (path: string
   const scp = /^[^@/:]+@([^/:]+):(.+)$/u.exec(remote);
   const url = scp ? new URL(`ssh://${scp[1]}/${scp[2]}`) : new URL(remote);
   if (!["git:", "ssh:", "https:", "http:"].includes(url.protocol) || !url.hostname || url.search || url.hash) {
-    throw new EffectRuntimeRequestError("worktree origin must identify a Git repository");
+    throw new LeaseWorktreeObservationError("worktree origin must identify a Git repository");
   }
   // Validate the transport above, but share the Todo's raw-remote identity codec.
   const repository = leaseWriteRepository(normalizeTodoRepository(remote))!;
@@ -95,6 +135,6 @@ export async function observeLeaseWorktree(path: string, overlaps: (path: string
   const machine = platform() === "darwin"
     ? /"IOPlatformUUID"\s*=\s*"([^"]+)"/u.exec((await run("ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], {timeout: 5000})).stdout)?.[1]
     : platform() === "linux" ? (await readFile("/etc/machine-id", "utf8")).trim() : null;
-  if (!machine) throw new EffectRuntimeRequestError("host identity unavailable for worktree isolation");
+  if (!machine) throw new LeaseWorktreeObservationError("host identity unavailable for worktree isolation");
   return {host: digest(machine), common_directory: await key(common), worktree: await key(root), repository};
 }
