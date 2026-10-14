@@ -11,10 +11,12 @@ DIRECT_LOADER_ALLOWLIST = {
     "loopx/authority.py",
     "loopx/control_plane/coordination/new_goal_storage_transport.py",
     "loopx/chat_server.py",
+    "loopx/presentation/goal_direction_api.py",
     "loopx/chat_status_api.py",
     "loopx/control_plane/goals/goal_amendment_runtime.py",
     "loopx/control_plane/goals/source_session_registration.py",
     "loopx/presentation/goal_amendment_api.py",
+    "loopx/presentation/goal_source_routing.py",
     "loopx/attached_session.py",
     "loopx/bootstrap.py",
     "loopx/capabilities/manager_context/__init__.py",
@@ -29,6 +31,7 @@ DIRECT_LOADER_ALLOWLIST = {
     "loopx/control_plane/collaboration/peers.py",
     "loopx/control_plane/collaboration/source_grant_observation.py",
     "loopx/control_plane/goals/first_party_host_admission.py",
+    "loopx/control_plane/goals/direction_runtime.py",
     "loopx/control_plane/goals/source_session_recreation.py",
     "loopx/control_plane/goals/source_session_turn_effects.py",
     "loopx/control_plane/coordination/authority_source_capture.py",
@@ -125,9 +128,12 @@ def test_direct_project_registry_loaders_have_source_session_denial() -> None:
     metadata_readers = {
         **METADATA_READER_FUNCTIONS,
         "loopx/chat_server.py": {"serve_chat"},
+        "loopx/presentation/goal_direction_api.py": {"_direction_route"},
         "loopx/chat_status_api.py": {"_status"},
+        "loopx/control_plane/goals/direction_runtime.py": {"_source"},
         "loopx/control_plane/coordination/new_goal_storage_transport.py": {"initialize_goal_storage_target"},
-        "loopx/presentation/goal_amendment_api.py": {"_source_registry", "_amendment_inspect"},
+        "loopx/presentation/goal_amendment_api.py": {"_amendment_inspect"},
+        "loopx/presentation/goal_source_routing.py": {"source_registry_for_goal"},
     }
     for relative, expected in metadata_readers.items():
         tree = ast.parse((REPO_ROOT / relative).read_text(encoding="utf-8"))

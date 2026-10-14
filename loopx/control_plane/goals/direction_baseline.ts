@@ -64,6 +64,8 @@ function text(value: unknown, reason: DirectionReason, limit = 180): string {
 function optionalText(value: unknown, reason: DirectionReason): string | null {
   return value === undefined || value === null || value === "" ? null : text(value, reason);
 }
+/** Shared identity boundary for the pure reader and its source-backed writer. */
+export function validateDirectionIdentity(value: unknown): string {return text(value, "direction_input_invalid");}
 // Stable JSON excludes object insertion order. Arrays are sorted by their owning rules.
 function canonical(value: unknown): string {
   return JSON.stringify(value, (_key, current) => current && typeof current === "object" && !Array.isArray(current)
@@ -190,8 +192,8 @@ export function buildGoalDirectionBaseline(input: unknown): DirectionBaseline | 
   // An absent declaration leaves existing callers completely untouched, even with legacy inputs.
   if (registry && typeof registry === "object" && !Array.isArray(registry)
       && !Object.hasOwn(registry, "goal_direction_requirements")) return null;
-  const goal = text(request.goal_id, "direction_input_invalid");
-  const agent = text(request.agent_id, "direction_input_invalid");
+  const goal = validateDirectionIdentity(request.goal_id);
+  const agent = validateDirectionIdentity(request.agent_id);
   const generated = text(request.generated_at, "direction_input_invalid");
   timestamp(generated, "direction_input_invalid");
   const result = empty(goal, agent, generated);
