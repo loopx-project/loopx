@@ -7,7 +7,7 @@ import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 import { resolveTestPython } from "../../scripts/test-python.mjs";
 import { outputDir, repoRoot } from "./fixture.mjs";
-import { openWorkspacePage } from "./scenario-context.mjs";
+import { fetchWorkspaceBackend, openWorkspacePage } from "./scenario-context.mjs";
 
 const REASON = "Waiting for the upstream dataset export to be published";
 const CHANGED_REASON = "The replacement export requires independent validation";
@@ -110,7 +110,7 @@ export const blockedReasonReadbackScenario = {
             beforeGoto: async (_api, page) => {
               await page.route("**/status.json*", async (route) => {
                 if (new URL(route.request().url()).pathname !== "/status.json") { await route.fallback(); return; }
-                const response = await route.fetch({ url: `${authority.url}/status.json` });
+                const response = await fetchWorkspaceBackend(route, authority.url);
                 assert.equal(response.status(), 200);
                 const payload = await response.json();
                 // Missing optional fields are a transport counterexample,
@@ -129,11 +129,11 @@ export const blockedReasonReadbackScenario = {
                 await route.fulfill({ response, json: payload });
               });
               await page.route("**/api/chat/todo/detail?*", async route => {
-                const response = await route.fetch({ url: `${authority.url}${new URL(route.request().url()).pathname}${new URL(route.request().url()).search}` });
+                const response = await fetchWorkspaceBackend(route, authority.url);
                 await route.fulfill({ response });
               });
               await page.route("**/api/chat/completed-todos?*", async route => {
-                const response = await route.fetch({ url: `${authority.url}${new URL(route.request().url()).pathname}${new URL(route.request().url()).search}` });
+                const response = await fetchWorkspaceBackend(route, authority.url);
                 await route.fulfill({ response });
               });
               page.on("request", (request) => { if (request.method() !== "GET" && /actions|todo/.test(request.url())) writes += 1; });

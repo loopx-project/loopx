@@ -99,6 +99,7 @@ entrypoint_missing              -> identity cannot be resolved
 doctor_not_configured           -> doctor_args is empty
 probe_required                  -> resolvable, but no --execute
 provider_unavailable            -> probe exited nonzero
+api_incompatible                -> installed snapshot's requires_loopx_api rejects this runtime
 entrypoint_changed_during_probe -> identity differed across the probe
 ready                           -> usable
 ```
@@ -283,6 +284,7 @@ Corresponding tests: `tests/extensions/test_extension_runtime.py`.
 | Symptom | Inspect first |
 | --- | --- |
 | `entrypoint_missing` | Whether the package is installed in the environment that runs `loopx` |
+| `api_incompatible` | Whether the installed snapshot's `requires_loopx_api` admits this LoopX; upgrade to a compatible manifest or roll back, then re-run doctor |
 | Install preview succeeds but list is unchanged | Whether `--execute` was omitted |
 | "already installed" | Whether the id is already installed; install does not merge idempotently |
 | Doctor is stale | Whether the executable, interpreter, module source, or view validator changed |

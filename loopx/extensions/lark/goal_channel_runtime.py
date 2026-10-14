@@ -51,13 +51,15 @@ from .goal_channel_transport import (
     pin_readback_verified,
     verified_app_id,
 )
-from .presentation.kanban import (
+from .cli_transport import (
     DEFAULT_CLI_BIN,
     CommandRunner,
+    default_subprocess_runner,
+)
+from .presentation.kanban import (
     LarkKanbanConfig,
     build_record_list_command,
     default_lark_kanban_config_path,
-    default_subprocess_runner,
     lark_kanban_config_from_payload,
     lark_kanban_doctor,
     read_lark_kanban_local_config,

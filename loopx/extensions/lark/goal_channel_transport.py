@@ -15,7 +15,7 @@ from .identity_shapes import (  # noqa: F401
     LARK_MESSAGE_ID_SEARCH as MESSAGE_ID_PATTERN,
     LARK_OPEN_ID_SEARCH as OPEN_ID_PATTERN,
 )
-from .presentation.kanban import CommandRunner
+from .cli_transport import CommandRunner
 
 SAFE_PROFILE_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}")
 REQUIRED_GOAL_TOPIC_SCOPES = ("im:message", "im:message:readonly")

@@ -73,6 +73,7 @@ class CheckpointSupervisor:
         mailbox = "/logs/agent/checkpoint-controller"
         remote = mailbox + "/ready.json"
         seen = set()
+        read_failures = 0
         try:
             while not self.stop.is_set():
                 with tempfile.TemporaryDirectory(prefix=".controller-poll-", dir=self.destination) as temp:
@@ -80,8 +81,19 @@ class CheckpointSupervisor:
                     try:
                         raw = _archive(container, remote, stage / "ready").read_bytes()
                     except NotFound:
+                        read_failures = 0
                         self.stop.wait(5)
                         continue
+                    except tarfile.ReadError:
+                        # ready.json can disappear between Docker's stat and
+                        # archive stream as the source closes its handoff. Only
+                        # retry the read, never a capture identity or mutation.
+                        read_failures += 1
+                        if read_failures >= 3:
+                            raise
+                        self.stop.wait(5)
+                        continue
+                    read_failures = 0
                     digest = hashlib.sha256(raw).hexdigest()
                     if digest in seen:
                         self.stop.wait(5)
@@ -102,7 +114,7 @@ class CheckpointSupervisor:
                         if remaining <= 0:
                             raise TimeoutError("Checkpoint handoff deadline expired")
                         captured = capture_worker(self.controller_file, token=self.token, capture_id=nonce,
-                            destination=self.destination / nonce, request_file=request, timeout=min(30, remaining))
+                            destination=self.destination / nonce, request_file=request, timeout=remaining)
                         response.update(ok=True, capture=captured)
                     except Exception as error:
                         # Optional capture failure resumes the original source;

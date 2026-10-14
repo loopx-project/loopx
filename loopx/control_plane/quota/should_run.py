@@ -80,9 +80,14 @@ def _apply_selected_todo_guards(
     that selection while the policy route is recomputed with any resulting repair.
     """
 
+    # Replan owns this Turn without selecting a delivery Todo. Both guard
+    # helpers can fall back to a recommendation when given no selection.
+    if route.replan_decision_allowed:
+        return route
+
     selected_todo = selected_todo_projection(
         agent_lane_next_action=route.agent_lane_next_action,
-        work_lane_contract=(None if route.replan_decision_allowed else route.payload_work_lane_contract),
+        work_lane_contract=route.payload_work_lane_contract,
         agent_scope_frontier=route.agent_scope_frontier,
     )
     if (
@@ -110,7 +115,6 @@ def _apply_selected_todo_guards(
         if (
             (route.normal_delivery_allowed or route.recovery_allowed)
             and not prepared.inbox_priority_due
-            and not route.replan_decision_allowed
             and (held_selection or no_runnable_work)
         ):
             prepared.normal_delivery_allowed = False
@@ -127,13 +131,7 @@ def _apply_selected_todo_guards(
     local_workspace = observe_goal_local_workspace(
         prepared.item, selected_todo, goal_boundary.get("write_scope", [])
     )
-    if not prepared.inbox_priority_due and not (
-        selected_todo is None and route.replan_decision_allowed
-    ):
-        # Autonomous replan owns this Turn before any delivery Todo is selected.
-        # Falling back to the first executable Todo here can attach that Todo's
-        # workspace guard to a later route (for example, a due read-only monitor)
-        # even though the guarded Todo was never selected for execution.
+    if not prepared.inbox_priority_due:
         workspace_guard = build_agent_workspace_guard(
             prepared.item,
             prepared.agent_identity,

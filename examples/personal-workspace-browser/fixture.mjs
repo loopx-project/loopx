@@ -397,7 +397,7 @@ function filterStatusFixtureToScope(fixture, matchesScope) {
   }
 }
 
-export async function installApi(page, { goalSubagentConfigurationEnabled = true, initialActionProposals = [], managerChannelBinding = null, notificationProjection = null, progressiveWorkspace = false, runtimeAgents = null, userActionAttention = false, presentationApi = false } = {}) {
+export async function installApi(page, { fixturePort = port, goalSubagentConfigurationEnabled = true, initialActionProposals = [], managerChannelBinding = null, notificationProjection = null, progressiveWorkspace = false, runtimeAgents = null, userActionAttention = false, presentationApi = false } = {}) {
   let turnCounter = 0;
   const runtime = page.__loopxRuntime ??= { actionProposals: new Map(), goalSubagentConfigurations: new Map(), goalExploreConfigurations: new Map(), larkConnections: [], messages: new Map(), sessions: new Map(), turnMessages: new Map() };
   const actionProposals = runtime.actionProposals;
@@ -501,7 +501,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     get larkConnections() { return runtime.larkConnections; },
     get goalSubagentConfigurations() { return runtime.goalSubagentConfigurations; },
   };
-  await page.route(`http://127.0.0.1:${port}/status.json*`, async (route) => {
+  await page.route(`http://127.0.0.1:${fixturePort}/status.json*`, async (route) => {
     state.statusRequestCount += 1;
     const requestUrl = new URL(route.request().url());
     const requestedGoalId = requestUrl.searchParams.get("goal_id");
@@ -901,14 +901,14 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
   await page.route("**/periodic-report-workspace-projection?*", async (route) => {
     await route.fulfill({ contentType: "application/json", json: { ok: true, projection: periodicReportProjection }, status: 200 });
   });
-  await page.route(`http://127.0.0.1:${port}/api/ssh-source/ensure`, async (route) => {
+  await page.route(`http://127.0.0.1:${fixturePort}/api/ssh-source/ensure`, async (route) => {
     await route.fulfill({
       contentType: "application/json",
       json: { ok: true, status_url: "http://127.0.0.1:8876/status.json", tunnel_required: true, remote_started: true },
       status: 200,
     });
   });
-  await page.route(`http://127.0.0.1:${port}/ssh-hosts`, async (route) => {
+  await page.route(`http://127.0.0.1:${fixturePort}/ssh-hosts`, async (route) => {
     await route.fulfill({
       contentType: "application/json",
       json: {
@@ -940,9 +940,17 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       status: 200,
     });
   });
+  const sidebarOrders = new Map();
   await page.route("**/api/chat/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    if (url.pathname === "/api/chat/sidebar-goal-order") {
+      const body = request.method() === "POST" ? request.postDataJSON() : null;
+      const source = body?.source ?? url.searchParams.get("source");
+      if (body && (!body.only_if_absent || !sidebarOrders.has(source))) sidebarOrders.set(source, body.order);
+      await route.fulfill({ json: { ok: true, order: sidebarOrders.get(source) ?? null } });
+      return;
+    }
     if (url.pathname === "/api/chat/todo/detail") {
       const goalId = url.searchParams.get("goal_id");
       const todoId = url.searchParams.get("todo_id");

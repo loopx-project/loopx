@@ -29,7 +29,7 @@ from .control_plane.chat_turn_acceptance import (
     AcceptedManagedTurn,
     plan_managed_turn_acceptance,
 )
-from .file_lock import exclusive_file_lock
+from .file_lock import exclusive_file_lock, write_json_atomic
 
 
 CHAT_STORE_SCHEMA_VERSION = "loopx_chat_store_v1"
@@ -127,16 +127,15 @@ def _session_channel(payload: dict[str, Any]) -> str:
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any], *, preserve_mode: bool = False) -> None:
-    previous_mode = path.stat().st_mode & 0o777 if preserve_mode and path.exists() else 0o600
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    temporary.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with temporary.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.chmod(temporary, previous_mode)
-    os.replace(temporary, path)
+    write_json_atomic(
+        path,
+        payload,
+        mode=0o600,
+        preserve_mode=preserve_mode,
+        directory_mode=0o700,
+        separators=(",", ":"),
+        indent=None,
+    )
 
 
 def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:

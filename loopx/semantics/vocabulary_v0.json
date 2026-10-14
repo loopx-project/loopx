@@ -13,7 +13,7 @@
   "formal_model": {
     "schema_version": "loopx_semantic_formal_model_v0",
     "universes": {
-      "vocabularies": "V: registered vocabulary identifiers; Producers(V) ⊆ V is exactly the subset declaring a producers key (including compatibility-only entries with an empty list). Kernel(V) ⊆ Producers(V). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 20 cross_runtime vocabularies outside Producers(V) are unverified.",
+      "vocabularies": "V: registered vocabulary identifiers; Producers(V) ⊆ V is exactly the subset declaring a producers key (including compatibility-only entries with an empty list). Kernel(V) ⊆ Producers(V). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 21 cross_runtime vocabularies outside Producers(V) are unverified.",
       "values": "U(v): ambient runtime values; S(v): registered admitted values",
       "sites": "L: source locations that define, produce, consume, interpret, pass through, project, or persist values",
       "scopes": "Scope: global or bounded_context(context_id); ScopeDeclarations are the forked names the registry declares as bounded contexts",
@@ -73,25 +73,25 @@
     "invariants": [
       {
         "id": "F1_producer_closedness",
-        "statement": "∀v ∈ Producers(V): Produced_scan(v) ⊆ S(v) ⊆ U(v), where Produced_scan(v) is the production the fixed forms observe inside the code-owned scan reach. Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 20 cross_runtime vocabularies outside Producers(V) are unverified. Production outside the scan reach is unverified rather than proven closed.",
+        "statement": "∀v ∈ Producers(V): Produced_scan(v) ⊆ S(v) ⊆ U(v), where Produced_scan(v) is the production the fixed forms observe inside the code-owned scan reach. Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 21 cross_runtime vocabularies outside Producers(V) are unverified. Production outside the scan reach is unverified rather than proven closed.",
         "enforcement": "m0_5",
         "evidence": "bounded production-form AST scan over the PRODUCER_ROOTS/PRODUCER_FILES reach in loopx/semantics/production.py; check_producers visits only vocabularies that declare producers, and validate_production claims no whole-program closedness; unresolved dynamic sites are reported, not treated as proven safe",
         "domain": {
           "quantifies_over": "vocabularies[producers].producers",
           "verified": 6,
-          "registered": 26,
+          "registered": 27,
           "evidence_bound": "producer_scan_reach"
         }
       },
       {
         "id": "F2_canonical_value_liveness",
-        "statement": "∀v ∈ Producers(V): Canonical(v) ⊆ Produced_scan(v) ∪ CompatibilityOnly(v). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 20 cross_runtime vocabularies outside Producers(V) are unverified. Liveness outside the walked set is not proven.",
+        "statement": "∀v ∈ Producers(V): Canonical(v) ⊆ Produced_scan(v) ∪ CompatibilityOnly(v). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 21 cross_runtime vocabularies outside Producers(V) are unverified. Liveness outside the walked set is not proven.",
         "enforcement": "m0_5",
         "evidence": "every value of a vocabulary in Producers(V) has a producer recognised inside the scan reach, an executable input witness, or an explicit compatibility-only reason; a value whose only producer lies outside the reach would be reported as dead, not silently accepted",
         "domain": {
           "quantifies_over": "vocabularies[producers].producers",
           "verified": 6,
-          "registered": 26,
+          "registered": 27,
           "evidence_bound": "producer_scan_reach"
         }
       },
@@ -103,7 +103,7 @@
         "domain": {
           "quantifies_over": "vocabularies[*]",
           "verified": 0,
-          "registered": 26,
+          "registered": 27,
           "evidence_bound": "inventory_only"
         }
       },
@@ -170,8 +170,8 @@
     }
   },
   "coverage_floor": {
-    "vocabularies": 26,
-    "owner_symbols": 51,
+    "vocabularies": 27,
+    "owner_symbols": 53,
     "literal_scan_fields": 1,
     "projections": 1,
     "relations": 9,
@@ -759,6 +759,31 @@
         "outcome_gap": "The only branch that selects it is a forced downgrade during an autonomous-replan refresh, applied when the agent claimed progress or a primary outcome but the built repair-delta contract carries no delta or the delta kinds fail the accountable-progress check. Otherwise the delivering agent declares it. It settles a blocker for exactly one Turn, and only when the same writeback carries a typed progress observation with result_class blocked, a stable blocker id, a work item id matching exactly one of the todo or replan obligation, and stable evidence ids.",
         "outcome_progress": "Selected when a machine-observable material transition is established: a monitor poll whose observation reports a material change, a Host adapter whose returned result kind is one of validated_progress, repair_required or replan_required, or a verifier approving the Todo. Declared through the CLI it is an accountable outcome and triggers completion validation, and it is the exact value delivery continuity requires before it will resume an in-flight delivery.",
         "primary_goal_outcome": "No branch in the tree selects this value; it is claimed by the delivering agent on refresh-state and the code only bounds the claim negatively. diagnoseDeliveryClaim rejects it when the turn kind is contract-only preparation, when the turn is a blocker writeback or the progress observation is blocked, or when follow-through is still required, and the replan writeback downgrades it to outcome_gap when the delta is empty. What the claim asserts positively is stated in prose in docs/quota-allocation.md and docs/integration.md, not derived anywhere in code."
+      }
+    },
+    "delivery_turn_kind": {
+      "meaning": "Why a delivery Turn counts: the kind of work the writeback performed, recorded beside delivery_outcome.",
+      "tier": "cross_runtime",
+      "status": "canonical",
+      "owners": {
+        "python": "loopx/control_plane/work_items/delivery_outcome.py::DeliveryTurnKind",
+        "typescript": "loopx/control_plane/work_items/delivery_history.ts::DELIVERY_TURN_KINDS"
+      },
+      "values": [
+        "contract_only_preparation",
+        "compact_evidence",
+        "blocker_writeback",
+        "product_path_execution",
+        "outcome_gap",
+        "unknown"
+      ],
+      "value_notes": {
+        "contract_only_preparation": "The Turn touched contracts, plans or surface only. delivery_history derives it from a surface_only outcome; diagnoseDeliveryClaim rejects it beside outcome_progress or primary_goal_outcome (progress_with_preparation_only). long_task_cadence treats it as follow-through still owing.",
+        "compact_evidence": "The Turn produced bounded evidence rather than a product path. long_task_cadence reads it, together with a multi_surface batch scale, as a cadence signal that keeps the delivery in its current stride.",
+        "blocker_writeback": "The Turn wrote back a blocker. delivery_history derives it from a blocked typed progress observation; diagnoseDeliveryClaim rejects it beside primary_goal_outcome (primary_outcome_with_blocker); status.py reads it as the handoff-blocked signal.",
+        "product_path_execution": "The Turn executed on the product path. delivery_history derives it from a primary_goal_outcome; long_task_cadence reads it as the kind that advances cadence.",
+        "outcome_gap": "The Turn's own kind is the gap: the writeback declared work but no accountable delta. Shares its spelling with delivery_outcome.outcome_gap; the two fields are read independently.",
+        "unknown": "No kind was recorded or the recorded value is outside this set. delivery_history returns it for an unrecognized explicit value; Python normalizes an unrecognized value to None rather than to this member."
       }
     },
     "delivery_workspace_kind": {

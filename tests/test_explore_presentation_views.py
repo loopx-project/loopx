@@ -998,7 +998,7 @@ def test_visual_configuration_auto_create_reuses_existing_document(
         return {"ok": False, "returncode": 1, "stderr": "should not be invoked"}
 
     monkeypatch.setattr(
-        "loopx.extensions.lark.presentation.explore_results._run_command",
+        "loopx.extensions.lark.presentation.explore_results.run_command",
         fail_runner,
     )
 

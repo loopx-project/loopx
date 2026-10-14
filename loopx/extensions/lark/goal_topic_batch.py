@@ -9,7 +9,7 @@ from typing import Any
 from ...control_plane.todos.contract import normalize_todo_claimed_by
 from .goal_channel_contracts import operation_packet
 from .goal_topic_connections import connect_lark_goal_topic
-from .presentation.kanban import (
+from .cli_transport import (
     DEFAULT_CLI_BIN,
     CommandRunner,
     default_subprocess_runner,

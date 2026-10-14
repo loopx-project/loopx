@@ -86,8 +86,13 @@ def test_workspace_and_boundary_guards_check_the_selected_todo_only(
     assert "boundary_projection_gap" not in packet
 
 
-def test_replan_route_does_not_leak_an_unselected_workspace_guard_to_monitor(
+@pytest.mark.parametrize("with_due_monitor", [False, True])
+@pytest.mark.parametrize("write_scope", [["src/**"], []], ids=["covered", "missing"])
+def test_replan_route_does_not_guard_an_unselected_delivery_todo(
     tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    with_due_monitor: bool,
+    write_scope: list[str],
 ) -> None:
     product_delivery = quota_todo_item(
         todo_id="todo_product_delivery001",
@@ -144,12 +149,15 @@ def test_replan_route_does_not_leak_an_unselected_workspace_guard_to_monitor(
     status = quota_status_payload(
         goal_id=GOAL_ID,
         status="active",
-        agent_todo_items=[product_delivery, due_monitor],
+        agent_todo_items=(
+            [product_delivery, due_monitor]
+            if with_due_monitor else [product_delivery]
+        ),
         recommended_action=product_delivery["text"],
         coordination={
             "agent_model": "peer_v1",
             "registered_agents": [AGENT_ID, "codex-peer"],
-            "write_scope": ["src/**"],
+            "write_scope": write_scope,
         },
         claim_scope_agent_id=AGENT_ID,
         item_extra={"autonomous_replan_obligation": replan_obligation},
@@ -159,6 +167,24 @@ def test_replan_route_does_not_leak_an_unselected_workspace_guard_to_monitor(
                 AGENT_ID: replan_obligation,
             },
         },
+    )
+    guarded_todo_ids: list[str | None] = []
+
+    def _record_workspace_guard_selection(
+        *args: object,
+        selected_todo: dict[str, Any] | None = None,
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        guarded_todo_ids.append((selected_todo or {}).get("todo_id"))
+        return {
+            "schema_version": "agent_workspace_guard_v1",
+            "reason": "the delivery Todo requires another workspace",
+            "required_action": "move to the delivery workspace",
+        }
+
+    monkeypatch.setattr(
+        "loopx.control_plane.quota.should_run.build_agent_workspace_guard",
+        _record_workspace_guard_selection,
     )
 
     packet = build_quota_should_run(
@@ -170,9 +196,15 @@ def test_replan_route_does_not_leak_an_unselected_workspace_guard_to_monitor(
 
     assert packet["decision"] == "autonomous_replan_required"
     assert packet["effective_action"] == "autonomous_replan_required"
-    assert packet["work_lane_contract"]["selected_todo_id"] == due_monitor["todo_id"]
-    assert packet["selected_todo"] is None
+    if with_due_monitor:
+        assert packet["work_lane_contract"]["selected_todo_id"] == due_monitor["todo_id"]
+        assert packet["selected_todo"] is None
+    else:
+        assert packet["selected_todo"]["todo_id"] == product_delivery["todo_id"]
     assert "workspace_guard" not in packet
+    assert "boundary_projection_gap" not in packet
+    assert packet["self_repair_allowed"] is False
+    assert guarded_todo_ids == []
 
 
 @pytest.mark.parametrize("other_agent_gate", [False, True])

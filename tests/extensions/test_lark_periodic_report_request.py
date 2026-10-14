@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -23,7 +25,7 @@ from loopx.extensions.lark.goal_channel_contracts import (
 )
 from loopx.extensions.lark.goal_channel_targets import add_lark_goal_channel_target
 from loopx.extensions.lark.event_inbox import _event_from_payload
-from loopx.extensions.runtime import install_extension
+from loopx.extensions.runtime import disable_extension, install_extension
 from loopx.extensions.lark import periodic_report_request
 
 
@@ -268,6 +270,303 @@ def test_request_port_discovery_preserves_multiple_complete_adapters(
     assert ports.select_source_adapter("source-b").adapter_id == "source-b"
     with pytest.raises(ValueError, match="ambiguous"):
         ports.select_source_adapter(None)
+
+
+def test_request_ports_name_declared_adapters_that_failed_activation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A declared adapter that did not activate is reported, not dropped.
+
+    Discovery already isolates factory/lifecycle failures as content-free
+    records; the request path used to discard them, so an operator saw only
+    "source adapter is unavailable" with no adapter id or next action.
+    """
+    from loopx.extensions.hook_adapters import ExtensionHookAdapterFailure
+
+    def bind_source(**_kwargs: object) -> dict[str, object]:
+        return {}
+
+    def settle_source(**_kwargs: object) -> dict[str, object]:
+        return {}
+
+    def port(adapter_id: str, port_name: str) -> ExtensionHookAdapterPortBinding:
+        return ExtensionHookAdapterPortBinding(
+            extension_id=f"fixture-{adapter_id}",
+            adapter_id=adapter_id,
+            capability_id="periodic-report",
+            target_hook_id=REQUEST_HOOK_ID,
+            phase=REQUEST_ADAPTER_PHASE,
+            port_name=port_name,
+            handler=bind_source if port_name == REQUEST_BIND_PORT else settle_source,
+        )
+
+    failure = ExtensionHookAdapterFailure(
+        extension_id="fixture-source-broken",
+        adapter_id="source-broken",
+        capability_id="periodic-report",
+        target_hook_id=REQUEST_HOOK_ID,
+        phase=REQUEST_ADAPTER_PHASE,
+    )
+    monkeypatch.setattr(
+        request_action,
+        "discover_extension_hook_adapters",
+        lambda **_kwargs: ExtensionHookAdapterDiscovery(
+            ports=(
+                port("source-partial", REQUEST_BIND_PORT),
+                port("source-dup", REQUEST_BIND_PORT),
+                port("source-dup", REQUEST_BIND_PORT),
+                port("source-dup", REQUEST_SETTLE_PORT),
+            ),
+            failures=(failure,),
+        ),
+    )
+    ports = discover_periodic_report_request_ports(
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+        goal_id="goal-alpha",
+        agent_id="agent-alpha",
+    )
+
+    assert ports.adapter_ids == ()
+    assert ports.failed_adapters == {
+        "source-broken": "extension_hook_adapter_unavailable",
+        "source-dup": "ambiguous_adapter_ports",
+        "source-partial": "incomplete_adapter_ports",
+    }
+    assert ports.state_error_code is None
+    with pytest.raises(ValueError) as named:
+        ports.select_source_adapter("source-broken")
+    assert "source-broken is declared but was not activated" in str(named.value)
+    assert "extension_hook_adapter_unavailable" in str(named.value)
+    assert "loopx extension doctor" in str(named.value)
+    with pytest.raises(ValueError) as unknown:
+        ports.select_source_adapter("never-declared")
+    assert str(unknown.value).endswith(": never-declared")
+    with pytest.raises(ValueError) as unselected:
+        ports.select_source_adapter(None)
+    assert "declared adapters were not activated" in str(unselected.value)
+    assert "source-broken (extension_hook_adapter_unavailable)" in str(unselected.value)
+    assert "source-dup (ambiguous_adapter_ports)" in str(unselected.value)
+
+
+def test_request_ports_name_unreadable_extension_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        request_action,
+        "discover_extension_hook_adapters",
+        lambda **_kwargs: ExtensionHookAdapterDiscovery(
+            ports=(), failures=(), state_error_code="extension_state_unavailable"
+        ),
+    )
+    ports = discover_periodic_report_request_ports(
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+        goal_id="goal-alpha",
+        agent_id="agent-alpha",
+    )
+    assert ports.state_error_code == "extension_state_unavailable"
+    with pytest.raises(ValueError, match="extension state could not be read"):
+        ports.select_source_adapter(None)
+
+
+_PROBE_FACTORY_MODULE = "loopx_probe_periodic_report_source_hooks"
+
+
+def _install_probe_source_extension(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, Path]:
+    """Install an effect-free source extension through the real lifecycle."""
+
+    package_root = tmp_path / "probe-package"
+    package_root.mkdir()
+    (package_root / f"{_PROBE_FACTORY_MODULE}.py").write_text(
+        "def build_adapter(context):\n"
+        "    def refuse(**_kwargs):\n"
+        "        raise AssertionError('probe ports must not be invoked')\n"
+        f"    return {{{REQUEST_BIND_PORT!r}: refuse, {REQUEST_SETTLE_PORT!r}: refuse}}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(package_root))
+    monkeypatch.delitem(sys.modules, _PROBE_FACTORY_MODULE, raising=False)
+    provider = tmp_path / "probe-provider"
+    provider.write_text(f"#!{sys.executable}\nraise SystemExit(0)\n", encoding="utf-8")
+    provider.chmod(0o755)
+    manifest = tmp_path / "extension.toml"
+    adapter = """
+[[hook_adapters]]
+id = "{adapter_id}"
+capability_id = "{capability_id}"
+target_hook_id = "{hook_id}"
+phase = "{phase}"
+factory = "{module}:build_adapter"
+required_permissions = ["probe.source.read"]
+ports = [{ports}]
+"""
+    manifest.write_text(
+        f"""\
+schema_version = "loopx_extension_manifest_v0"
+id = "probe-extension"
+version = "1.0.0"
+requires_loopx_api = ">=1,<2"
+permissions = ["probe.source.read"]
+
+[runtime]
+protocol = "probe_extension_lifecycle_v0"
+entrypoint = {json.dumps(str(provider))}
+doctor_args = ["--doctor"]
+required_permissions = []
+timeout_seconds = 5
+"""
+        + adapter.format(
+            adapter_id="probe-source",
+            capability_id="periodic-report",
+            hook_id=REQUEST_HOOK_ID,
+            phase=REQUEST_ADAPTER_PHASE,
+            module=_PROBE_FACTORY_MODULE,
+            ports=f'"{REQUEST_BIND_PORT}", "{REQUEST_SETTLE_PORT}"',
+        )
+        # Same extension, another capability's hook: outside this request scope.
+        + adapter.format(
+            adapter_id="other-hook-source",
+            capability_id="sample-report",
+            hook_id="sample_report.request",
+            phase=REQUEST_ADAPTER_PHASE,
+            module=_PROBE_FACTORY_MODULE,
+            ports='"sample_report.request.bind_source"',
+        ),
+        encoding="utf-8",
+    )
+    state_file = tmp_path / "runtime" / "extensions" / "state.json"
+    installed = install_extension(manifest, state_file=state_file, execute=True)
+    assert installed["doctor"]["verified"] is True
+    return provider, state_file
+
+
+def _tree_digest(root: Path, *, exclude: Path) -> dict[str, str]:
+    return {
+        str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and exclude not in path.parents
+    }
+
+
+def _request_cli(
+    capsys: pytest.CaptureFixture[str],
+    *,
+    registry: Path,
+    runtime_root: Path,
+    selector: str | None,
+) -> tuple[int, dict[str, object]]:
+    from loopx.cli import main
+
+    code = main(
+        [
+            "--registry",
+            str(registry),
+            "--runtime-root",
+            str(runtime_root),
+            "--format",
+            "json",
+            "periodic-report",
+            "request",
+            "--goal-id",
+            "goal-alpha",
+            "--agent-id",
+            "agent-alpha",
+            "--source-ref",
+            "om_probe_request",
+            *(["--source-adapter-id", selector] if selector else []),
+            "--execute",
+        ]
+    )
+    return code, json.loads(capsys.readouterr().out)
+
+
+def test_request_cli_without_installed_extensions_keeps_the_plain_refusal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"goals": []}), encoding="utf-8")
+    for selector, suffix in ((None, ""), ("never-declared", ": never-declared")):
+        code, payload = _request_cli(
+            capsys,
+            registry=registry,
+            runtime_root=tmp_path / "runtime",
+            selector=selector,
+        )
+        assert (code, payload["ok"]) == (1, False)
+        assert payload["error"] == (
+            "periodic-report request source adapter is unavailable" + suffix
+        )
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["registry.json"]
+
+
+@pytest.mark.parametrize(
+    ("lifecycle", "expected_code"),
+    [
+        ("disabled", "extension_disabled"),
+        ("doctor_stale", "extension_doctor_not_ready"),
+        ("state_unreadable", "extension_state_unavailable"),
+    ],
+)
+def test_request_cli_names_real_lifecycle_loss_for_every_selector(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    lifecycle: str,
+    expected_code: str,
+) -> None:
+    provider, state_file = _install_probe_source_extension(tmp_path, monkeypatch)
+    runtime_root = state_file.parent.parent
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"goals": []}), encoding="utf-8")
+
+    # Positive control: while ready, the probe is one complete adapter and its
+    # factory is imported, so "not imported" below is not vacuous.
+    ready = discover_periodic_report_request_ports(
+        registry_path=registry,
+        runtime_root=runtime_root,
+        goal_id="goal-alpha",
+        agent_id="agent-alpha",
+    )
+    assert ready.adapter_ids == ("probe-source",)
+    assert ready.failed_adapters == {}
+    assert _PROBE_FACTORY_MODULE in sys.modules
+    del sys.modules[_PROBE_FACTORY_MODULE]
+
+    if lifecycle == "disabled":
+        disable_extension("probe-extension", state_file=state_file, execute=True)
+    elif lifecycle == "doctor_stale":
+        # Changing the doctor-verified executable invalidates its identity.
+        provider.write_text(
+            provider.read_text(encoding="utf-8") + "# changed\n", encoding="utf-8"
+        )
+    else:
+        state_file.write_text("{not json", encoding="utf-8")
+    before = _tree_digest(tmp_path, exclude=tmp_path / "probe-package")
+
+    for selector in (None, "probe-source", "never-declared"):
+        code, payload = _request_cli(
+            capsys, registry=registry, runtime_root=runtime_root, selector=selector
+        )
+        error = str(payload["error"])
+        assert (code, payload["ok"]) == (1, False), (selector, payload)
+        assert error.startswith("periodic-report request source adapter is unavailable")
+        if selector:
+            assert selector in error
+        if lifecycle == "state_unreadable":
+            # Unreadable state hides every declaration, known or not.
+            assert f"extension state could not be read ({expected_code})" in error
+        elif selector == "never-declared":
+            assert "probe-source" not in error and expected_code not in error
+        else:
+            assert "probe-source" in error and f"({expected_code})" in error
+            assert "loopx extension doctor" in error
+        assert "other-hook-source" not in error
+        assert _PROBE_FACTORY_MODULE not in sys.modules
+        assert _tree_digest(tmp_path, exclude=tmp_path / "probe-package") == before
+    assert not (runtime_root / "goals").exists()
 
 
 def test_lark_inbox_rejects_same_name_mention_with_different_provider_identity() -> (

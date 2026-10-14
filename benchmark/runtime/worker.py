@@ -320,6 +320,9 @@ def run_once(env: dict[str, str]) -> dict:
                 execution, timeout_seconds=(remaining - PHASE_WORK_RESERVE_SECONDS if execution.timeout_seconds is None
                                              else min(execution.timeout_seconds, remaining - PHASE_WORK_RESERVE_SECONDS))
             )
+        if env.get("LOOPX_WARM_START"):
+            from benchmark.runtime.sforge_warm_start import finish_preparation
+            receipt["warm_preparation"] = finish_preparation(env)
         prepare_codex_home(
             home,
             execution=execution,

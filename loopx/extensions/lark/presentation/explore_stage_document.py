@@ -10,7 +10,11 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
-from .kanban import CommandRunner, _command_error, _run_command
+from ..cli_transport import (
+    CommandRunner,
+    command_error,
+    run_command,
+)
 
 
 class StageDocumentConfig(Protocol):
@@ -279,12 +283,12 @@ def ensure_stage_whiteboards(
                 "action": action,
                 "ok": bool(command.get("ok")),
                 "returncode": command.get("returncode"),
-                "error": None if command.get("ok") else _command_error(command),
+                "error": None if command.get("ok") else command_error(command),
             }
         )
 
     if execute and docx_token:
-        outline_command = _run_command(
+        outline_command = run_command(
             _docs_fetch_command(
                 config,
                 docx_token=docx_token,
@@ -307,7 +311,7 @@ def ensure_stage_whiteboards(
                 [],
                 reconciliation_commands,
                 reconciliation,
-                _command_error(outline_command)
+                command_error(outline_command)
                 if not outline_command.get("ok")
                 else "Evidence Stage outline could not be parsed",
             )
@@ -368,7 +372,7 @@ def ensure_stage_whiteboards(
         )
         for stage_index in indexes_to_inspect:
             for heading_block_id in headings_by_stage.get(stage_index, []):
-                section_command = _run_command(
+                section_command = run_command(
                     _docs_fetch_command(
                         config,
                         docx_token=docx_token,
@@ -399,7 +403,7 @@ def ensure_stage_whiteboards(
                         [],
                         reconciliation_commands,
                         reconciliation,
-                        _command_error(section_command)
+                        command_error(section_command)
                         if not section_command.get("ok")
                         else (
                             f"Evidence Stage {stage_index:02d} conflicts with an "
@@ -475,7 +479,7 @@ def ensure_stage_whiteboards(
             if revision is not None:
                 delete_args.extend(["--revision-id", str(revision)])
             delete_args.extend(["--format", "json"])
-            delete_command = _run_command(
+            delete_command = run_command(
                 delete_args,
                 execute=True,
                 runner=runner,
@@ -489,9 +493,9 @@ def ensure_stage_whiteboards(
                     [],
                     reconciliation_commands,
                     reconciliation,
-                    _command_error(delete_command),
+                    command_error(delete_command),
                 )
-            verification_command = _run_command(
+            verification_command = run_command(
                 _docs_fetch_command(
                     config,
                     docx_token=docx_token,
@@ -514,7 +518,7 @@ def ensure_stage_whiteboards(
                     [],
                     reconciliation_commands,
                     reconciliation,
-                    _command_error(verification_command)
+                    command_error(verification_command)
                     if not verification_command.get("ok")
                     else "updated Evidence Stage outline could not be parsed",
                 )
@@ -582,7 +586,7 @@ def ensure_stage_whiteboards(
     section_commands: list[dict[str, Any]] = []
     for stage in missing:
         stage_index = int(stage.get("stage_index") or 0)
-        command = _run_command(
+        command = run_command(
             [
                 config.cli_bin,
                 "docs",
@@ -609,7 +613,7 @@ def ensure_stage_whiteboards(
                 section_commands,
                 reconciliation_commands,
                 reconciliation,
-                _command_error(command),
+                command_error(command),
             )
         if execute:
             section = _created_stage_section(command)
@@ -640,7 +644,7 @@ def ensure_stage_whiteboards(
             }
 
     if execute and docx_token and missing:
-        verification_command = _run_command(
+        verification_command = run_command(
             _docs_fetch_command(
                 config,
                 docx_token=docx_token,
@@ -663,7 +667,7 @@ def ensure_stage_whiteboards(
                 section_commands,
                 reconciliation_commands,
                 reconciliation,
-                _command_error(verification_command)
+                command_error(verification_command)
                 if not verification_command.get("ok")
                 else "created Evidence Stage outline could not be parsed",
             )

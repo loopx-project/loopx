@@ -8,7 +8,7 @@ import {createInterface} from "node:readline";
 import {promisify} from "node:util";
 import {repoRoot,outputDir} from "./fixture.mjs";
 import {resolveTestPython} from "../../scripts/test-python.mjs";
-import {openWorkspacePage} from "./scenario-context.mjs";
+import {fetchWorkspaceBackend, openWorkspacePage} from "./scenario-context.mjs";
 
 export const goalWorkspaceCreateScenario = {
   id:"goal-workspace-create",
@@ -30,7 +30,7 @@ export const goalWorkspaceCreateScenario = {
           const request=route.request(),path=new URL(request.url());
           if(path.pathname==='/api/actions/preview')requests.push(request.postDataJSON());
           if(path.pathname.endsWith('/apply')&&refuseApply){await route.fulfill({status:503,json:{ok:false,error:'Synthetic temporary transport refusal'}});return;}
-          const response=await route.fetch({url:`${backend}${path.pathname}${path.search}`});await route.fulfill({response});
+          const response=await fetchWorkspaceBackend(route,backend);await route.fulfill({response});
         });
       }});
       const {page}=context;

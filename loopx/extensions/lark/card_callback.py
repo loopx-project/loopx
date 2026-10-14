@@ -17,7 +17,7 @@ from .goal_channel_message_delivery import (
     normalized_card_text,
 )
 from .goal_channel_transport import call, json_payload, lark_args
-from .presentation.kanban import CommandRunner
+from .cli_transport import CommandRunner
 
 
 def callback_timestamp(value: object, *, subject: str) -> str:

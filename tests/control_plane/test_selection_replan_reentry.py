@@ -7,8 +7,9 @@ import pytest
 from test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, SELECTED_REPLAN_TODO_ID, TODO_ID,
     _configure_autonomous_replan_fixture, _configure_selected_todo_replan_fixture,
-    _configure_selectable_alternative, _heartbeat_receipt_count, _projected_cli_args,
-    _run_cli, _run_generated_cli, _spend_run_count, _write_fixture,
+    _configure_selectable_alternative, _heartbeat_receipt_count,
+    _initialize_git_checkout, _projected_cli_args, _run_cli, _run_generated_cli,
+    _spend_run_count, _write_fixture,
 )
 
 
@@ -255,6 +256,67 @@ def test_reentry_never_replaces_retained_selection_with_recommended_todo(tmp_pat
     assert facts["retained_selection"] is True
     assert facts["retained_selection_todo_id"] == retained_todo_id
     assert facts["receipt_replan_obligation_id"] == identity["replan_obligation_id"]
+
+
+@pytest.mark.parametrize("write_scope", [["src/**"], []], ids=["covered", "missing"])
+def test_replan_preempts_unselected_todo_guards_on_selection_reentry(tmp_path, write_scope):
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state.write_text(
+        state.read_text(encoding="utf-8").replace(
+            "task_class=advancement_task action_kind=validate ",
+            "task_class=advancement_task action_kind=implement "
+            "task_repository=git:github.com/example/product "
+            "required_write_scopes=src/** ",
+        ),
+        encoding="utf-8",
+    )
+    registry_data = json.loads(registry.read_text(encoding="utf-8"))
+    registry_data["goals"][0]["coordination"]["registered_agents"].append(
+        "codex-peer"
+    )
+    registry_data["goals"][0]["coordination"]["write_scope"] = write_scope
+    registry.write_text(json.dumps(registry_data) + "\n", encoding="utf-8")
+    _initialize_git_checkout(project)
+
+    turn = "turn-selection-replan-workspace-guard"
+    guard = (
+        "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", turn,
+        "--scan-path", str(project),
+    )
+    rc, first = _run_cli(registry, runtime, *guard, cwd=project)
+    assert rc == 0, first
+    assert first["decision"] == "autonomous_replan_required"
+    assert "workspace_guard" not in first
+    assert "boundary_projection_gap" not in first
+    assert first["self_repair_allowed"] is False
+
+    retained_todo_id = "todo_chain_000000000001"
+    rc, resumed = _run_cli(
+        registry, runtime, *guard, "--todo-id", retained_todo_id, cwd=project
+    )
+
+    assert rc == 0, resumed
+    assert resumed["decision"] == "autonomous_replan_required"
+    assert resumed["effective_action"] == "autonomous_replan_required"
+    assert "workspace_guard" not in resumed
+    assert "boundary_projection_gap" not in resumed
+    assert resumed["self_repair_allowed"] is False
+    assert resumed.get("selected_todo") is None
+    assert resumed["retained_action_selection"]["disposition"] == (
+        "bind_autonomous_replan"
+    )
+    assert resumed["heartbeat_receipt"]["pending_action_selection"] == {
+        "todo_id": retained_todo_id,
+        "state": "deferred_to_fresh_turn",
+        "reason": "autonomous_replan_preemption",
+        "settlement_bound": False,
+    }
+    identity = resumed["heartbeat_receipt"]["settlement_identity"]
+    assert identity["binding_kind"] == "autonomous_replan"
+    assert "todo_id" not in identity
 
 
 @pytest.mark.parametrize("changed_gate", ["user_gate", "quota"])

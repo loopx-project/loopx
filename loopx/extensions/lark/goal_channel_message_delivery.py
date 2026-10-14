@@ -26,7 +26,7 @@ from .goal_channel_transport import (
     lark_args,
     verified_app_id,
 )
-from .presentation.kanban import CommandRunner
+from .cli_transport import CommandRunner
 
 
 class GoalChannelDeliveryStageError(ValueError):

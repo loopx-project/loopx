@@ -4,7 +4,7 @@ import argparse
 from collections.abc import Callable
 
 from ..control_plane.todos.contract import TODO_CONTINUATION_POLICY_VALUES
-from ..control_plane.todos.mutation_api import ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE
+from ..control_plane.todos.completed_archive import ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE
 from .todo_argument_validation import (
     TODO_ACTION_FIELDS,
     register_todo_linkage_arguments,

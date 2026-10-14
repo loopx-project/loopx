@@ -5954,6 +5954,7 @@ def test_todoless_blocked_replan_settles_read_only_external_evidence_without_wor
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_autonomous_replan_fixture(project, runtime, registry_path)
+    _initialize_git_checkout(project)
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["coordination"]["registered_agents"].append(
         "codex-settlement-peer"
@@ -6032,6 +6033,25 @@ def test_todoless_blocked_replan_settles_read_only_external_evidence_without_wor
     assert "delivery_workspace" not in refresh
     assert refresh["settlement_result"]["ok"] is True
 
+    # The replan writeback can expose a different repository-writing Todo before
+    # the original Turn spends its quota. That fresh workspace guard belongs to
+    # the new Todo; it must not rewrite the completed replan settlement, whose
+    # typed identity already declares that no delivery workspace was required.
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").replace(
+            "## Agent Todo\n\n",
+            "## Agent Todo\n\n"
+            "- [ ] [P0] Implement the next repository delivery.\n"
+            "  <!-- loopx:todo todo_id=todo_post_replan_delivery status=open "
+            "task_class=advancement_task action_kind=implement "
+            f"claimed_by={AGENT_ID} target_key=post-replan-delivery "
+            "task_repository=git:github.com/example/next-delivery "
+            "required_write_scopes=src/** required_capabilities=filesystem_write -->\n",
+        ),
+        encoding="utf-8",
+    )
+
     spend_rc, spend = _run_cli(
         registry_path,
         runtime,
@@ -6051,6 +6071,9 @@ def test_todoless_blocked_replan_settles_read_only_external_evidence_without_wor
     )
 
     assert spend_rc == 0, spend
+    assert spend["before"]["effective_action"] == "agent_workspace_repair", spend[
+        "before"
+    ]
     assert spend["settlement_workspace_requirement"]["requirement"] == (
         "not_required"
     )

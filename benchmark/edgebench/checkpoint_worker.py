@@ -20,7 +20,7 @@ from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.file_lock import exclusive_file_lock
 from benchmark.runtime.checkpoint import _participant_id
 
-from .checkpoint_controller import _controller, _physical, capture
+from .checkpoint_controller import _controller, _physical, _remaining, capture
 
 
 def _request(path: Path) -> dict:
@@ -158,6 +158,7 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
 
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("Worker capture timeout must be finite and positive")
+    deadline = time.monotonic() + timeout
     request = _request(request_file)
     controller = _controller(controller_file)
     destination = Path(destination)
@@ -171,9 +172,9 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
     attempts.mkdir(exist_ok=True, mode=0o700)
     _physical(attempts)
     (attempts / capture_id).mkdir(mode=0o700)  # First attempt, including failures, wins.
-    client = docker.from_env(timeout=timeout)
+    client = docker.from_env(timeout=_remaining(deadline))
     try:
-        with exclusive_file_lock(_worker_lock(client, request["container_id"]), timeout_seconds=timeout,
+        with exclusive_file_lock(_worker_lock(client, request["container_id"]), timeout_seconds=_remaining(deadline),
                                  operation="checkpoint_worker_capture"):
             container = client.containers.get(request["container_id"])
             container.reload()
@@ -210,13 +211,16 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                                 type(prepared["deadline_epoch"]) not in (int, float) or
                                 not math.isfinite(prepared["deadline_epoch"]) or time.time() >= prepared["deadline_epoch"]):
                             raise ValueError("Worker handoff is expired or differs from the original capture")
+                    if prepared is not None:
+                        deadline = min(deadline, time.monotonic() + prepared["deadline_epoch"] - time.time())
                     for entry in request["components"]:
+                        client.api.timeout = _remaining(deadline)
                         copied = _archive_component(container, entry["source_path"], stage / "workers" / entry["id"])
                         components.append({"id": entry["id"], "source_path": str(copied)})
                     if prepared is not None:
                         observed = effect_runtime_result("runtime.checkpoint_artifacts", {
                             "action": "probe", "components": components,
-                        }, retry_safe=False)
+                        }, timeout=_remaining(deadline), retry_safe=False)
                         if observed["source_sha256"] != prepared["source_sha256"]:
                             changed = []
                             for key, rows in observed["source_witness"].items():
@@ -229,7 +233,7 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                             raise TimeoutError("Worker handoff expired before evaluator capture")
                     phase = _archive(container, request["phase_deadline_path"], stage / "phase")
                     native = capture(controller_file, token=token, capture_id=capture_id,
-                        destination=stage / "native", timeout=timeout, phase_deadline_file=phase)
+                        destination=stage / "native", timeout=_remaining(deadline), phase_deadline_file=phase)
                     container.reload()
                     if not container.attrs["State"]["Running"] or not container.attrs["State"]["Paused"]:
                         raise RuntimeError("Worker writer barrier changed during capture")
@@ -237,6 +241,9 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                     # An uncertain/lost reply keeps this original attempt's
                     # cleanup obligation. Its identity cannot be retried later.
                     if pause_may_have_committed:
+                        # Cleanup retains a bounded transport allowance even if
+                        # the capture window is exhausted; never strand our writer.
+                        client.api.timeout = timeout
                         container.reload()
                         if container.attrs["State"]["Paused"]:
                             container.unpause()
@@ -257,10 +264,11 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                 }}
                 if prepared is not None:
                     metadata["writer_barrier"] = "docker_pause"
-                probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
+                probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components},
+                                              timeout=_remaining(deadline), retry_safe=False)
                 return effect_runtime_result("runtime.checkpoint_artifacts", {
                     "action": "capture", "components": components, "destination": str(destination),
                     "expected_source_sha256": probe["source_sha256"], "point_metadata": metadata,
-                }, retry_safe=False)
+                }, timeout=_remaining(deadline), retry_safe=False)
     finally:
         client.close()

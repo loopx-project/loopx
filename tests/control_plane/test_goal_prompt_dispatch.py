@@ -1,5 +1,6 @@
 """Native Goal bootstrap delegates policy to the current quota contract."""
 
+import json
 import os
 import re
 import shutil
@@ -91,7 +92,10 @@ def test_emitted_heartbeat_bootstrap_expands_turn_before_real_guard(shell, tmp_p
     result = subprocess.run([executable, "-c", script], cwd=project, env=env,
                             capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stderr
-    assert '"ok": true' in result.stdout
+    guard = json.loads(result.stdout)
+    assert guard["ok"] is True
+    assert guard["goal_id"] == runner.GOAL
+    assert guard["heartbeat_receipt"]["turn_instance_id"] == "2026-09-01T00:00:00Z"
     # Prefix assignment is a genuine shell failure, not a LoopX rejection.
     broken = script.replace("LOOPX_TURN=2026-09-01T00:00:00Z\n",
                             "LOOPX_TURN=2026-09-01T00:00:00Z ", 1)

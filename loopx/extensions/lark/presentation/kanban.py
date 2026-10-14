@@ -3,11 +3,10 @@ from __future__ import annotations
 import json
 import re
 import shlex
-import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from ....control_plane.todos.contract import (
@@ -25,6 +24,7 @@ from ....presentation.projection_source_reconcile import (
     plan_projection_source_reconcile,
     validate_projection_source_reconcile_request,
 )
+from .. import cli_transport
 from ..private_json import write_private_json_atomic
 from . import issue_fix_surface
 from .projection_rows import (
@@ -55,24 +55,8 @@ LARK_KANBAN_LOCAL_CONFIG_VERSION = "loopx_lark_kanban_local_config_v0"
 LARK_KANBAN_SYNC_PROJECTION_VERSION = "loopx_lark_kanban_sync_projection_v0"
 DEFAULT_TABLE_NAME = "LoopX Control Plane"
 DEFAULT_AGENT_ID = "codex-kanban-worker"
-DEFAULT_CLI_BIN = "lark-cli"
 DEFAULT_STATUS_QUEUE_VIEW = "Worker Queue"
 OPERATOR_CARD_FIELDS = ["Task", "Claim", "Priority", "User Gate", "Evidence", "Status"]
-_LARK_CREDENTIAL_ARGUMENTS = frozenset(
-    {
-        "--access-key",
-        "--access-token",
-        "--ak",
-        "--app-secret",
-        "--authorization",
-        "--bearer-token",
-        "--client-secret",
-        "--secret-key",
-        "--sk",
-        "--tenant-access-token",
-        "--user-access-token",
-    }
-)
 
 STATUS_TODO = "Todo"
 STATUS_CLAIMED = "Claimed"
@@ -86,10 +70,6 @@ CLAIM_HUMAN = "Human"
 CLAIM_AGENT = "Agent"
 
 TEXT_LIMIT = 4000
-OUTPUT_LIMIT = 1800
-
-
-CommandRunner = Callable[[list[str], Optional[Path], Optional[float]], dict[str, Any]]
 
 
 def _select_options(names: list[str]) -> list[dict[str, str]]:
@@ -453,135 +433,6 @@ def lark_kanban_feasibility_cases(
     ]
 
 
-def default_subprocess_runner(
-    args: list[str],
-    cwd: Path | None = None,
-    timeout: float | None = None,
-) -> dict[str, Any]:
-    completed = subprocess.run(
-        args,
-        cwd=str(cwd) if cwd else None,
-        timeout=timeout,
-        capture_output=True,
-        text=True, encoding="utf-8", errors="replace",
-    )
-    return {
-        "returncode": completed.returncode,
-        "stdout": completed.stdout,
-        "stderr": completed.stderr,
-        "timed_out": False,
-    }
-
-
-def _run_command(
-    args: list[str],
-    *,
-    execute: bool,
-    runner: CommandRunner = default_subprocess_runner,
-    cwd: Path | None = None,
-    timeout_seconds: float | None = None,
-) -> dict[str, Any]:
-    credential_argument = next(
-        (
-            argument.split("=", 1)[0].lower()
-            for argument in args
-            if argument.split("=", 1)[0].lower() in _LARK_CREDENTIAL_ARGUMENTS
-        ),
-        None,
-    )
-    if credential_argument:
-        raise ValueError(
-            f"{credential_argument} must remain in lark-cli auth; "
-            "the Kanban adapter never accepts inline credentials"
-        )
-    command = shlex.join(args)
-    if not execute:
-        return {
-            "command": command,
-            "executed": False,
-            "ok": True,
-            "returncode": None,
-            "stdout": "",
-            "stderr": "",
-            "json": None,
-        }
-    try:
-        result = runner(args, cwd, timeout_seconds)
-    except subprocess.TimeoutExpired as exc:
-        return {
-            "command": command,
-            "executed": True,
-            "ok": False,
-            "returncode": None,
-            "stdout": str(exc.stdout or ""),
-            "stderr": str(exc.stderr or ""),
-            "timed_out": True,
-            "json": None,
-        }
-    except OSError as exc:
-        return {
-            "command": command,
-            "executed": True,
-            "ok": False,
-            "returncode": None,
-            "stdout": "",
-            "stderr": str(exc),
-            "json": None,
-        }
-    stdout = str(result.get("stdout") or "")
-    stderr = str(result.get("stderr") or "")
-    parsed = _parse_json(stdout)
-    ok = int(result.get("returncode") or 0) == 0 and _parsed_ok(parsed)
-    return {
-        "command": command,
-        "executed": True,
-        "ok": ok,
-        "returncode": result.get("returncode"),
-        "stdout": stdout,
-        "stderr": stderr,
-        "json": parsed,
-    }
-
-
-def _parse_json(text: str) -> Any:
-    stripped = text.strip()
-    if not stripped:
-        return None
-    try:
-        return json.loads(stripped)
-    except json.JSONDecodeError:
-        return None
-
-
-def _parsed_ok(parsed: Any) -> bool:
-    if parsed is None:
-        return True
-    if not isinstance(parsed, dict):
-        return True
-    if parsed.get("ok") is False:
-        return False
-    if parsed.get("code") not in (None, 0):
-        return False
-    return True
-
-
-def _command_error(command_result: dict[str, Any]) -> str:
-    parsed = command_result.get("json")
-    if isinstance(parsed, dict):
-        error = parsed.get("error")
-        if isinstance(error, dict):
-            return str(error.get("message") or error)
-        if error:
-            return str(error)
-        if parsed.get("msg") and parsed.get("code") not in (None, 0):
-            return str(parsed.get("msg"))
-    stderr = " ".join(str(command_result.get("stderr") or "").split())
-    if stderr:
-        return stderr[:OUTPUT_LIMIT]
-    stdout = " ".join(str(command_result.get("stdout") or "").split())
-    return stdout[:OUTPUT_LIMIT]
-
-
 def _compact_text(value: Any, *, limit: int = TEXT_LIMIT) -> str:
     text = " ".join(str(value or "").split())
     if len(text) <= limit:
@@ -682,7 +533,7 @@ class LarkKanbanConfig:
     base_token: str
     table_id: str
     view_id: str | None = DEFAULT_STATUS_QUEUE_VIEW
-    cli_bin: str = DEFAULT_CLI_BIN
+    cli_bin: str = cli_transport.DEFAULT_CLI_BIN
     identity: str = "user"
 
 
@@ -777,7 +628,7 @@ def save_lark_kanban_board_config(
     base_url: str | None = None,
     base_name: str | None = None,
     table_name: str | None = None,
-    cli_bin: str = DEFAULT_CLI_BIN,
+    cli_bin: str = cli_transport.DEFAULT_CLI_BIN,
     identity: str = "user",
     view_ids: dict[str, str] | None = None,
     merge_existing: bool = True,
@@ -833,7 +684,7 @@ def lark_kanban_config_from_payload(payload: dict[str, Any]) -> LarkKanbanConfig
         **{"base_" + "token": base_token},
         table_id=table_id,
         view_id=str(board.get("view_id") or DEFAULT_STATUS_QUEUE_VIEW),
-        cli_bin=str(board.get("cli_bin") or DEFAULT_CLI_BIN),
+        cli_bin=str(board.get("cli_bin") or cli_transport.DEFAULT_CLI_BIN),
         identity=str(board.get("identity") or "user"),
     )
 
@@ -899,7 +750,7 @@ def build_create_board_plan(
     *,
     base_name: str,
     table_name: str,
-    cli_bin: str = DEFAULT_CLI_BIN,
+    cli_bin: str = cli_transport.DEFAULT_CLI_BIN,
     identity: str = "bot",
     base_token: str | None = None,
     user_open_id: str | None = None,
@@ -1022,18 +873,18 @@ def create_lark_kanban_board(
     *,
     base_name: str,
     table_name: str = DEFAULT_TABLE_NAME,
-    cli_bin: str = DEFAULT_CLI_BIN,
+    cli_bin: str = cli_transport.DEFAULT_CLI_BIN,
     identity: str = "bot",
     base_token: str | None = None,
     user_open_id: str | None = None,
     execute: bool = False,
-    runner: CommandRunner = default_subprocess_runner,
+    runner: cli_transport.CommandRunner = cli_transport.default_subprocess_runner,
 ) -> dict[str, Any]:
     commands: list[dict[str, Any]] = []
     effective_base_token = base_token
     table_id: str | None = None
     if not effective_base_token:
-        create = _run_command(
+        create = cli_transport.run_command(
             [cli_bin, "base", "+base-create", "--as", identity, "--name", base_name],
             execute=execute,
             runner=runner,
@@ -1057,7 +908,7 @@ def create_lark_kanban_board(
                 )
                 return _board_payload(False, commands, effective_base_token, table_id)
     token = effective_base_token or "<base-token-from-create>"
-    table_create = _run_command(
+    table_create = cli_transport.run_command(
         [
             cli_bin,
             "base",
@@ -1083,7 +934,7 @@ def create_lark_kanban_board(
         table_id = _extract_table_id(table_create.get("json")) or table_name
     table_ref = table_id or table_name
     if user_open_id:
-        grant = _run_command(
+        grant = cli_transport.run_command(
             [
                 cli_bin,
                 "drive",
@@ -1119,7 +970,7 @@ def create_lark_kanban_board(
         if grant.get("executed") and not grant.get("ok"):
             return _board_payload(False, commands, effective_base_token, table_id)
     for command in _view_configuration_commands(cli_bin=cli_bin, identity=identity, base_token=token, table_id=table_ref, view_ids={view["name"]: view["name"] for view in lark_kanban_views()}):
-        result = _run_command(command, execute=execute, runner=runner)
+        result = cli_transport.run_command(command, execute=execute, runner=runner)
         commands.append(result)
         if result.get("executed") and not result.get("ok"):
             return _board_payload(False, commands, effective_base_token, table_id)
@@ -1138,7 +989,7 @@ def _board_payload(
         "base_token": base_token,
         "table_id": table_id,
         "commands": commands,
-        "error": None if ok else next((_command_error(item) for item in commands if not item.get("ok")), "unknown"),
+        "error": None if ok else next((cli_transport.command_error(item) for item in commands if not item.get("ok")), "unknown"),
     }
 
 
@@ -1267,7 +1118,7 @@ def use_lark_kanban_board(
     base_token: str | None = None,
     table_id: str | None = None,
     view_id: str | None = None,
-    cli_bin: str = DEFAULT_CLI_BIN,
+    cli_bin: str = cli_transport.DEFAULT_CLI_BIN,
     identity: str = "user",
 ) -> dict[str, Any]:
     parsed = parse_lark_base_url(base_url) if base_url else {}
@@ -1293,10 +1144,10 @@ def setup_lark_kanban_board(
     base_url: str | None = None,
     base_token: str | None = None,
     table_id: str | None = None,
-    cli_bin: str = DEFAULT_CLI_BIN,
+    cli_bin: str = cli_transport.DEFAULT_CLI_BIN,
     identity: str = "user",
     execute: bool = False,
-    runner: CommandRunner = default_subprocess_runner,
+    runner: cli_transport.CommandRunner = cli_transport.default_subprocess_runner,
 ) -> dict[str, Any]:
     commands: list[dict[str, Any]] = []
     warnings: list[str] = []
@@ -1349,7 +1200,7 @@ def setup_lark_kanban_board(
         )
 
     def partial_enrichment_payload(command_result: dict[str, Any]) -> dict[str, Any]:
-        error = _command_error(command_result)
+        error = cli_transport.command_error(command_result)
         warnings.append(f"usable board config saved; view enrichment skipped: {error}")
         return _setup_payload(
             True,
@@ -1366,7 +1217,7 @@ def setup_lark_kanban_board(
 
     if not effective_base_token:
         created_base = True
-        create = _run_command(
+        create = cli_transport.run_command(
             [
                 cli_bin,
                 "base",
@@ -1404,7 +1255,7 @@ def setup_lark_kanban_board(
             effective_base_token = "<base-token-from-create>"
     if not effective_table_id:
         if created_base:
-            blocks = _run_command(
+            blocks = cli_transport.run_command(
                 [
                     cli_bin,
                     "base",
@@ -1439,7 +1290,7 @@ def setup_lark_kanban_board(
                 effective_table_id = "<table-id-from-base-block-list>"
         else:
             created_table = True
-            table_create = _run_command(
+            table_create = cli_transport.run_command(
                 [
                     cli_bin,
                     "base",
@@ -1480,7 +1331,7 @@ def setup_lark_kanban_board(
     save_usable_config()
 
     if execute and not created_base and not created_table:
-        field_list = _run_command(
+        field_list = cli_transport.run_command(
             [cli_bin, "base", "+field-list", "--as", identity, "--base-token", effective_base_token, "--table-id", effective_table_id, "--format", "json", "--limit", "200"],
             execute=True,
             runner=runner,
@@ -1489,7 +1340,7 @@ def setup_lark_kanban_board(
         if not field_list.get("ok"):
             return partial_enrichment_payload(field_list)
         for definition in issue_fix_surface.missing_field_definitions(field_list.get("json"), lark_kanban_field_definitions()):
-            field_create = _run_command(
+            field_create = cli_transport.run_command(
                 [cli_bin, "base", "+field-create", "--as", identity, "--base-token", effective_base_token, "--table-id", effective_table_id, "--json", json.dumps(definition, ensure_ascii=False)],
                 execute=True,
                 runner=runner,
@@ -1501,7 +1352,7 @@ def setup_lark_kanban_board(
         for migration in issue_fix_surface.field_definition_migrations(
             field_list.get("json"), lark_kanban_field_definitions()
         ):
-            field_update = _run_command(
+            field_update = cli_transport.run_command(
                 [
                     cli_bin,
                     "base",
@@ -1542,7 +1393,7 @@ def setup_lark_kanban_board(
     missing_view_names = [view["name"] for view in lark_kanban_views() if view["name"] not in view_ids]
     should_create_views = bool(missing_view_names) and (created_base or not created_table)
     if should_create_views:
-        view_create = _run_command(
+        view_create = cli_transport.run_command(
             [
                 cli_bin,
                 "base",
@@ -1587,7 +1438,7 @@ def setup_lark_kanban_board(
         table_id=effective_table_id,
         view_ids=view_ids,
     ):
-        result = _run_command(command, execute=execute, runner=runner)
+        result = cli_transport.run_command(command, execute=execute, runner=runner)
         commands.append(result)
         if execute and not result.get("ok"):
             if config_payload:
@@ -1646,11 +1497,11 @@ def _setup_payload(
         payload["partial"] = True
         payload["enrichment_ok"] = False
         payload["enrichment_error"] = enrichment_error or next(
-            (_command_error(item) for item in commands if not item.get("ok")),
+            (cli_transport.command_error(item) for item in commands if not item.get("ok")),
             "unknown",
         )
     elif not ok:
-        payload["error"] = error or next((_command_error(item) for item in commands if not item.get("ok")), "unknown")
+        payload["error"] = error or next((cli_transport.command_error(item) for item in commands if not item.get("ok")), "unknown")
     return payload
 
 
@@ -1661,9 +1512,9 @@ def _refresh_view_ids(
     base_token: str,
     table_id: str,
     commands: list[dict[str, Any]],
-    runner: CommandRunner,
+    runner: cli_transport.CommandRunner,
 ) -> dict[str, str]:
-    view_list = _run_command(
+    view_list = cli_transport.run_command(
         [
             cli_bin,
             "base",
@@ -1720,9 +1571,9 @@ def _inspect_lark_kanban_schema(
     config: LarkKanbanConfig,
     *,
     commands: list[dict[str, Any]],
-    runner: CommandRunner,
+    runner: cli_transport.CommandRunner,
 ) -> dict[str, Any]:
-    field_list = _run_command(
+    field_list = cli_transport.run_command(
         [
             config.cli_bin,
             "base",
@@ -1750,7 +1601,7 @@ def _inspect_lark_kanban_schema(
             "missing_fields": [],
             "incompatible_fields": [],
             "remediation_command": "loopx lark-kanban doctor --require-board",
-            "error": _command_error(field_list),
+            "error": cli_transport.command_error(field_list),
         }
     return _lark_kanban_schema_check(field_list.get("json"))
 
@@ -1775,11 +1626,11 @@ def _schema_check_error(schema_check: dict[str, Any]) -> str:
 def lark_kanban_doctor(
     *,
     config_path: Path,
-    cli_bin: str = DEFAULT_CLI_BIN,
+    cli_bin: str = cli_transport.DEFAULT_CLI_BIN,
     identity: str = "user",
     check_board: bool = True,
     require_board: bool = False,
-    runner: CommandRunner = default_subprocess_runner,
+    runner: cli_transport.CommandRunner = cli_transport.default_subprocess_runner,
 ) -> dict[str, Any]:
     commands: list[dict[str, Any]] = []
     issues: list[dict[str, str]] = []
@@ -1828,10 +1679,10 @@ def lark_kanban_doctor(
                 board_config.table_id,
             ],
         ):
-            result = _run_command(command, execute=True, runner=runner)
+            result = cli_transport.run_command(command, execute=True, runner=runner)
             commands.append(result)
             if not result.get("ok"):
-                issues.append({"severity": "error", "message": _command_error(result)})
+                issues.append({"severity": "error", "message": cli_transport.command_error(result)})
         if not any(issue["severity"] == "error" for issue in issues):
             schema_check = _inspect_lark_kanban_schema(
                 board_config,
@@ -1862,17 +1713,17 @@ def _lark_kanban_preflight(
     *,
     cli_bin: str,
     identity: str,
-    runner: CommandRunner,
+    runner: cli_transport.CommandRunner,
 ) -> dict[str, Any]:
     commands: list[dict[str, Any]] = []
     warnings: list[str] = []
-    version = _run_command([cli_bin, "--version"], execute=True, runner=runner)
+    version = cli_transport.run_command([cli_bin, "--version"], execute=True, runner=runner)
     commands.append(version)
     cli_ok = bool(version.get("ok"))
     version_tuple = _version_tuple(str(version.get("stdout") or ""))
     if cli_ok and version_tuple and version_tuple < (1, 0, 56):
         warnings.append("lark-cli should be upgraded to at least 1.0.56 for setup visible-field support")
-    auth = _run_command([cli_bin, "auth", "status"], execute=True, runner=runner)
+    auth = cli_transport.run_command([cli_bin, "auth", "status"], execute=True, runner=runner)
     commands.append(auth)
     identity_available = _identity_available(auth.get("json"), identity)
     for help_command in (
@@ -1882,7 +1733,7 @@ def _lark_kanban_preflight(
         [cli_bin, "base", "+view-set-group", "--help"],
         [cli_bin, "base", "+view-set-visible-fields", "--help"],
     ):
-        result = _run_command(help_command, execute=True, runner=runner)
+        result = cli_transport.run_command(help_command, execute=True, runner=runner)
         commands.append(result)
         if not result.get("ok"):
             warnings.append(f"missing lark-cli shortcut: {shlex.join(help_command[2:-1])}")
@@ -1985,7 +1836,7 @@ def sync_loopx_projection_to_lark_kanban(
     reconcile_source: bool = False,
     source_snapshot_complete: bool = False,
     execute: bool = False,
-    runner: CommandRunner = default_subprocess_runner,
+    runner: cli_transport.CommandRunner = cli_transport.default_subprocess_runner,
 ) -> dict[str, Any]:
     if not isinstance(projection, dict):
         raise ValueError("projection must be a JSON object")
@@ -2102,7 +1953,7 @@ def sync_loopx_projection_to_lark_kanban(
             source_id=resolved_source_id,
             public_safe=public_safe,
         )
-        result = _run_command(
+        result = cli_transport.run_command(
             build_record_upsert_command(config, record_id=record_map.get(key), values=values),
             execute=execute,
             runner=runner,
@@ -2125,7 +1976,7 @@ def sync_loopx_projection_to_lark_kanban(
 
     executed_remote_delete_count = 0
     if ok and reconcile_source and reconcile_plan["remote_delete_record_ids"]:
-        delete_result = _run_command(
+        delete_result = cli_transport.run_command(
             build_record_delete_command(
                 config,
                 record_ids=reconcile_plan["remote_delete_record_ids"],
@@ -2189,7 +2040,7 @@ def sync_loopx_todos_to_lark_kanban(
     include_done: bool = False,
     limit: int = 50,
     execute: bool = False,
-    runner: CommandRunner = default_subprocess_runner,
+    runner: cli_transport.CommandRunner = cli_transport.default_subprocess_runner,
 ) -> dict[str, Any]:
     from ....capabilities.issue_fix.outcome_projection import (
         build_issue_fix_outcome_collection_from_domain_state,
@@ -2302,7 +2153,7 @@ def sync_loopx_todos_to_lark_kanban(
             state_file=resolved_state_file,
             priority=todo_priority_label(block, text_mode="prefix") or "P2",
         )
-        result = _run_command(
+        result = cli_transport.run_command(
             build_record_upsert_command(config, record_id=record_map.get(key), values=values),
             execute=execute,
             runner=runner,
@@ -2338,7 +2189,7 @@ def sync_loopx_todos_to_lark_kanban(
                 goal_id=row_goal_id,
                 source_id=outcome_source_id,
             )
-            result = _run_command(
+            result = cli_transport.run_command(
                 build_record_upsert_command(
                     config,
                     record_id=record_map.get(key),
@@ -2403,7 +2254,7 @@ def sync_loopx_todos_to_lark_kanban(
 def _load_lark_todo_record_map(
     config: LarkKanbanConfig, *, config_path: Path | None, execute: bool,
     inspect_remote: bool,
-    commands: list[dict[str, Any]], runner: CommandRunner,
+    commands: list[dict[str, Any]], runner: cli_transport.CommandRunner,
 ) -> tuple[dict[str, Any], dict[str, str], list[dict[str, str]], bool | None]:
     local = read_lark_kanban_local_config(config_path) if config_path else {}
     record_map = _todo_record_map_from_local_config(local)
@@ -2417,7 +2268,7 @@ def _load_lark_todo_record_map(
         cli_bin=config.cli_bin,
         identity=config.identity,
     )
-    list_result = _run_command(build_record_list_command(list_config), execute=True, runner=runner)
+    list_result = cli_transport.run_command(build_record_list_command(list_config), execute=True, runner=runner)
     commands.append(list_result)
     remote_records: list[dict[str, str]] = []
     remote_complete = False
@@ -2533,9 +2384,9 @@ def seed_lark_kanban_task(
     *,
     task: dict[str, Any],
     execute: bool = False,
-    runner: CommandRunner = default_subprocess_runner,
+    runner: cli_transport.CommandRunner = cli_transport.default_subprocess_runner,
 ) -> dict[str, Any]:
-    result = _run_command(
+    result = cli_transport.run_command(
         build_record_upsert_command(config, record_id=None, values=task),
         execute=execute,
         runner=runner,
@@ -2555,7 +2406,7 @@ def seed_lark_kanban_records(
     *,
     records: list[dict[str, Any]],
     execute: bool = False,
-    runner: CommandRunner = default_subprocess_runner,
+    runner: cli_transport.CommandRunner = cli_transport.default_subprocess_runner,
 ) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     ok = True
@@ -2588,13 +2439,13 @@ def lark_kanban_heartbeat(
     execute_worker: bool = False,
     complete_on_success: bool = False,
     allowed_command_prefixes: list[str] | None = None,
-    runner: CommandRunner = default_subprocess_runner,
+    runner: cli_transport.CommandRunner = cli_transport.default_subprocess_runner,
     now: datetime | None = None,
     worker_timeout_seconds: float = 600.0,
 ) -> dict[str, Any]:
     commands: list[dict[str, Any]] = []
     if fixture is None:
-        list_result = _run_command(
+        list_result = cli_transport.run_command(
             build_record_list_command(config),
             execute=execute_lark,
             runner=runner,
@@ -2639,7 +2490,7 @@ def lark_kanban_heartbeat(
         "Last Heartbeat": timestamp,
         "Run History": append_history(task.get("Run History"), f"{timestamp} {agent_id}: claimed"),
     }
-    claim_result = _run_command(
+    claim_result = cli_transport.run_command(
         build_record_upsert_command(config, record_id=record_id, values=claim_values),
         execute=execute_lark,
         runner=runner,
@@ -2692,7 +2543,7 @@ def lark_kanban_heartbeat(
     else:
         workdir = Path(str(task.get("Workdir") or ".")).expanduser()
         worker_args = shlex.split(command)
-        worker_result = _run_command(
+        worker_result = cli_transport.run_command(
             worker_args,
             execute=True,
             runner=runner,
@@ -2706,15 +2557,15 @@ def lark_kanban_heartbeat(
             "reason": "completed" if worker_result.get("ok") else "failed",
             "command": command,
             "returncode": worker_result.get("returncode"),
-            "stdout": _compact_text(worker_result.get("stdout"), limit=OUTPUT_LIMIT),
-            "stderr": _compact_text(worker_result.get("stderr"), limit=OUTPUT_LIMIT),
+            "stdout": _compact_text(worker_result.get("stdout"), limit=cli_transport.OUTPUT_LIMIT),
+            "stderr": _compact_text(worker_result.get("stderr"), limit=cli_transport.OUTPUT_LIMIT),
         }
         final_status = STATUS_DONE if worker_result.get("ok") and complete_on_success else STATUS_REVIEW
         if not worker_result.get("ok"):
             final_status = STATUS_BLOCKED
         evidence = _compact_text(
             worker.get("stdout") or worker.get("stderr") or worker.get("reason"),
-            limit=OUTPUT_LIMIT,
+            limit=cli_transport.OUTPUT_LIMIT,
         )
         result_code = worker_result.get("returncode")
     finish_values = {
@@ -2731,7 +2582,7 @@ def lark_kanban_heartbeat(
         ),
         "Handoff": _handoff_for_status(final_status, agent_id=agent_id),
     }
-    finish_result = _run_command(
+    finish_result = cli_transport.run_command(
         build_record_upsert_command(config, record_id=record_id, values=finish_values),
         execute=execute_lark,
         runner=runner,

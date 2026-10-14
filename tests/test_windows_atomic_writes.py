@@ -14,6 +14,7 @@ from loopx.capabilities.benchmark_toolkit import native_codex_isolation
 from loopx.control_plane.heartbeat import automation_upgrade
 from loopx.control_plane.goals import botmux_runtime
 from loopx.extensions import presentation
+from loopx import file_lock
 from loopx.extensions.lark import private_json
 
 
@@ -111,7 +112,10 @@ def test_atomic_writers_skip_unsupported_windows_directory_fsync(
 ) -> None:
     target = tmp_path / f"{module.__name__.rsplit('.', 1)[-1]}.json"
     if os.name != "nt":
-        monkeypatch.setattr(module, "os", _WindowsOs(target.parent))
+        # `private_json` delegates to the kernel owner, so its Windows-unsafe
+        # `O_DIRECTORY`/`fchmod` calls now live in `file_lock.os`.
+        owner = file_lock if module is private_json else module
+        monkeypatch.setattr(owner, "os", _WindowsOs(target.parent))
 
     writer(target)
 

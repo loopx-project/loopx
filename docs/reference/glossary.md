@@ -40,6 +40,15 @@ Outcome class of a delivered work item.
 - typescript: [`DELIVERY_OUTCOMES`](../../loopx/control_plane/work_items/delivery_outcome.ts).
 - Values / 值: `surface_only`, `outcome_gap`, `outcome_progress`, `primary_goal_outcome`.
 
+## delivery_turn_kind
+
+Why a delivery Turn counts: the kind of work the writeback performed, recorded beside delivery_outcome.
+
+- Tier / 层级: `cross_runtime`; status / 状态: `canonical`.
+- python: [`DeliveryTurnKind`](../../loopx/control_plane/work_items/delivery_outcome.py).
+- typescript: [`DELIVERY_TURN_KINDS`](../../loopx/control_plane/work_items/delivery_history.ts).
+- Values / 值: `contract_only_preparation`, `compact_evidence`, `blocker_writeback`, `product_path_execution`, `outcome_gap`, `unknown`.
+
 ## delivery_workspace_identity_kind
 
 How a delivery workspace is identified.

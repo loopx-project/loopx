@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -29,6 +30,93 @@ try:  # pragma: no cover - imported only on Windows hosts.
     msvcrt: Any = importlib.import_module("msvcrt")
 except ImportError:  # pragma: no cover
     msvcrt = None
+
+
+def write_bytes_atomic(
+    path: Path,
+    payload: bytes,
+    *,
+    mode: int | None = None,
+    preserve_mode: bool = False,
+    directory_mode: int | None = None,
+    fsync_directory: bool = False,
+) -> None:
+    """Replace one file with `payload` through a same-directory temp file.
+
+    Kernel-owned owner of the temp-file/fsync/rename dance. Callers keep their
+    own serialization, so on-disk bytes do not change; this only owns the temp
+    file, the resulting file mode, the fsync policy and the atomic rename. The
+    previous implementation existed in more than ten copies across the package.
+
+    `mode=None` leaves the `mkstemp` mode (0600 narrowed by the process umask)
+    untouched; an explicit `mode` is applied with chmod. `preserve_mode` keeps
+    an existing destination's mode and wins over both.
+    """
+    destination = Path(path).expanduser()
+    destination.parent.mkdir(parents=True, exist_ok=True, mode=directory_mode or 0o777)
+    if preserve_mode and destination.exists():
+        mode = destination.stat().st_mode & 0o777
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+        dir=destination.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if mode is not None:
+            os.chmod(temporary, mode)
+        os.replace(temporary, destination)
+        if fsync_directory and os.name == "posix":
+            directory_fd = os.open(
+                destination.parent,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+            )
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def write_json_atomic(
+    path: Path,
+    payload: Mapping[str, Any],
+    *,
+    mode: int | None = None,
+    preserve_mode: bool = False,
+    directory_mode: int | None = None,
+    fsync_directory: bool = False,
+    indent: int | None = 2,
+    sort_keys: bool = False,
+    separators: tuple[str, str] | None = None,
+) -> None:
+    """Serialize `payload` as UTF-8 JSON and write it atomically.
+
+    Serialization stays a caller choice so each writer keeps byte-identical
+    output: `indent=2` reproduces the pretty form, `indent=None` with
+    `separators=(",", ":")` the compact form, and `sort_keys` the ordered
+    form. A single trailing newline matches the existing private-state writers.
+    """
+    text = json.dumps(
+        dict(payload),
+        ensure_ascii=False,
+        indent=indent if separators is None else None,
+        sort_keys=sort_keys,
+        separators=separators,
+    )
+    write_bytes_atomic(
+        path,
+        (text + "\n").encode("utf-8"),
+        mode=mode,
+        preserve_mode=preserve_mode,
+        directory_mode=directory_mode,
+        fsync_directory=fsync_directory,
+    )
 
 
 def _prepare_windows_lock(lock_file: TextIO) -> None:

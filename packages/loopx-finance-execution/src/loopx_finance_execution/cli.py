@@ -7,6 +7,7 @@ from collections.abc import Sequence
 
 from .simulator import execute_simulated_finance_operation
 from .order_readback import check_order_summary, reconcile_execution
+from .risk_readback import check_risk_bound
 
 
 def run(argv: Sequence[str] | None = None) -> int:
@@ -23,12 +24,28 @@ def run(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Read-only retained order/fill reduction; never resubmits.",
     )
+    readback.add_argument(
+        "--check-risk-bound",
+        action="store_true",
+        help="Read-only cash/loss budget check of declared venue bounds; grants no authority.",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.doctor:
         return 0
     try:
         request = json.load(sys.stdin)
-        if args.check_order_summary:
+        if args.check_risk_bound:
+            if not isinstance(request, dict) or set(request) != {
+                "terms",
+                "budget",
+                "exposure_bound",
+                "observed_at",
+                "now",
+                "maximum_age_seconds",
+            }:
+                raise ValueError("unsupported risk-bound request")
+            result = check_risk_bound(**request)
+        elif args.check_order_summary:
             if not isinstance(request, dict) or set(request) != {
                 "terms",
                 "summary",
@@ -58,7 +75,9 @@ def run(argv: Sequence[str] | None = None) -> int:
                     "error": type(exc).__name__,
                     **(
                         {"read_only": True}
-                        if args.check_order_summary or args.reconcile_execution
+                        if args.check_order_summary
+                        or args.reconcile_execution
+                        or args.check_risk_bound
                         else {"simulation": True}
                     ),
                     "external_write_performed": False,
