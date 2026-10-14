@@ -5,7 +5,10 @@ fn main() {
     std::process::exit(2);
 }
 
+// The example embeds the complete production owner; startup and other-engine
+// branches stay exercised by its library tests rather than this macOS fault path.
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 #[path = "../src/workspace_handoff.rs"]
 mod workspace_handoff;
 
