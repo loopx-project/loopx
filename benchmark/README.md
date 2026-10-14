@@ -640,7 +640,8 @@ Existing artifacts remain inert, and the source trial is not restarted by disabl
 
 To reproduce **joint source capture and both fresh-guest receivers**, use
 [`qualify_checkpoint_joint.py`](tests/qualify_checkpoint_joint.py) from the current
-LoopX checkout. Run the controller on Linux as the ordinary owner of an explicitly
+clean dedicated LoopX checkout; keep it frozen for the whole command. Run the
+controller on Linux as the ordinary owner of an explicitly
 owned disposable Docker daemon. Prepare the provider/venv above, install this
 checkout's Node dependencies with `npm ci`, and put a compatible **Host** Node on
 `PATH`. Separately supply Linux **amd64** binaries for `codex-cli 0.160.0` and Node

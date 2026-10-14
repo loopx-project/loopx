@@ -29,6 +29,9 @@ def main():
     if sys.platform != "linux" or os.getuid() == 0:
         parser.error("Run on Linux as the ordinary owner of a disposable Docker daemon")
     source = Path(__file__).resolve().parents[2]
+    source_revision = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
+    if subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"], text=True).strip():
+        parser.error("Use a clean dedicated source checkout and keep it frozen during qualification")
     provider = args.provider_source.resolve(strict=True)
     if subprocess.check_output(["git", "-C", str(provider), "rev-parse", "HEAD"], text=True).strip() != PROVIDER_REVISION:
         parser.error("Provider must be the documented immutable checkpoint revision")
@@ -132,9 +135,10 @@ def main():
                    str(results): {"bind": "/results", "mode": "rw"}},
                   {"LOOPX_JOINT_RECEIVER_POINT": "/point", "LOOPX_JOINT_RECEIVER_CONFIG": "/captured-config.toml",
                    **({"LOOPX_JOINT_RECEIVER_STRIDE": "1"} if stride else {})}, output / f"{name}.log")
+        assert subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip() == source_revision, "Source changed during qualification"
+        assert not subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"], text=True).strip(), "Source changed during qualification"
         receipt = {"passed": True, "controller_uid": os.getuid(), "provider_revision": PROVIDER_REVISION,
-                   "source_revision": subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip(),
-                   "source_tree_dirty": bool(subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"], text=True).strip()),
+                   "source_revision": source_revision, "source_tree_dirty": False,
                    "qualification_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in
                        [Path(__file__), source / "benchmark/tests/test_native_checkpoint_handoff.py",
                         source / "benchmark/tests/test_checkpoint_joint_receiver.py"]},
