@@ -1,6 +1,8 @@
 """Private source rendezvous never substitutes a late or foreign point."""
 import hashlib
 import json
+import os
+import sys
 import threading
 import time
 
@@ -55,3 +57,106 @@ def test_surviving_request_is_not_overwritten(tmp_path):
         await_controller_capture(tmp_path / "checkpoints", [], {},
             {"source_sha256": "later", "source_witness": {}}, time.time() + 1)
     assert ready.read_bytes() == b"original uncertain request"
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Qualifies the Linux writer process group")
+@pytest.mark.parametrize("use_selector", [False, True])
+def test_failed_guard_returns_to_original_writer_without_interrupt(tmp_path, use_selector):
+    """Optional capture must not abort the caller's quota failure recovery."""
+    from pathlib import Path
+    import socket
+    import sys
+    import tempfile
+
+    from benchmark.runtime.checkpoint import held_quota_decision
+    from benchmark.runtime.worker import child_process
+    project = tmp_path / "source"
+    project.mkdir()
+    capture_root = project / "captures"
+    capture_root.mkdir(mode=0o700)
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
+    with tempfile.TemporaryDirectory(prefix="failed-guard-", dir="/tmp") as short:
+        socket_path = Path(short).resolve() / "host.sock"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(socket_path))
+            listener.listen(1)
+            listener.settimeout(30)
+            failed = {"ok": False, "mode": "should-run", "goal_id": "failed-source",
+                      "decision": "skip", "should_run": False,
+                      "error_code": "quota_unexpected_collection_error"}
+            packet = capture_root / "original"
+            packet.mkdir()
+            decision = packet / "decision.json"
+            raw = json.dumps(failed).encode()
+            decision.write_bytes(raw)
+            # The transport must release this failed packet without invoking
+            # capture admission or interrupting the independent original writer.
+            code = (
+                "import socket,json; from pathlib import Path; "
+                "s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); "
+                f"s.connect({str(socket_path)!r}); "
+                f"s.sendall({(json.dumps({'path': str(decision), 'sha256': hashlib.sha256(raw).hexdigest()}).encode() + bytes([10]))!r}); "
+                "d=json.loads(s.makefile('rb').readline()); assert d['released'] is True; "
+                f"assert d['sha256']=={hashlib.sha256(raw).hexdigest()!r}; "
+                f"Path('observed-failure.json').write_bytes(Path({str(decision)!r}).read_bytes()); "
+                "Path('source-work').write_text('original writer recovered')"
+            )
+            with child_process([sys.executable, "-c", code], env={**env, "LOOPX_PROJECT": str(project)},
+                               stdout=None, stderr=None) as process:
+                process.stdin.close()
+                with held_quota_decision(listener, capture_root, goal_id="failed-source",
+                        agent_id="failed-agent", turn_instance_id="failed-guard",
+                        native_process=process,
+                        interrupt_when=(lambda _: False) if use_selector else None) as held:
+                    assert held["quota"]["ok"] is False
+                    assert held["intent"]["capture"] is False
+                    assert held["intent"]["execution_authority_granted"] is False
+                    assert "native_process_return_code" not in held
+                    assert process.poll() is None and not (project / "source-work").exists()
+                assert process.wait(timeout=30) == 0
+            assert (project / "source-work").read_text() == "original writer recovered"
+            assert (project / "observed-failure.json").read_bytes().strip() == raw
+            assert held["path"].read_bytes() == raw
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Requires the Host Unix rendezvous")
+@pytest.mark.parametrize("ok,goal", [(False, "foreign"), ("false", "source"), (None, "source")])
+def test_failure_dispatch_does_not_relax_foreign_or_malformed_readback(tmp_path, ok, goal):
+    import socket
+    import tempfile
+    from pathlib import Path
+
+    from benchmark.runtime.checkpoint import held_quota_decision
+    from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError
+
+    root = tmp_path / "decisions"
+    packet = root / "original"
+    packet.mkdir(parents=True)
+    decision = packet / "decision.json"
+    raw = json.dumps({"ok": ok, "goal_id": goal}).encode()
+    decision.write_bytes(raw)
+    responses = []
+    with tempfile.TemporaryDirectory(prefix="invalid-guard-", dir="/tmp") as short:
+        address = str(Path(short).resolve() / "host.sock")
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(address)
+            listener.listen(1)
+
+            def caller():
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as channel:
+                    channel.connect(address)
+                    channel.sendall(json.dumps({"path": str(decision),
+                        "sha256": hashlib.sha256(raw).hexdigest()}).encode() + b"\n")
+                    responses.append(channel.recv(4096))
+
+            thread = threading.Thread(target=caller)
+            thread.start()
+            try:
+                with pytest.raises(EffectRuntimeRemoteError):
+                    with held_quota_decision(listener, root, goal_id="source",
+                            agent_id="agent", turn_instance_id="turn"):
+                        pytest.fail("invalid readback cannot enter a capture boundary")
+            finally:
+                thread.join(5)
+            assert not thread.is_alive() and responses == [b""]
+    assert decision.read_bytes() == raw

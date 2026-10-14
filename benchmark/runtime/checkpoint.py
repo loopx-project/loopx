@@ -576,19 +576,27 @@ def held_quota_decision(listener, capture_root: Path, *, goal_id: str, agent_id:
         if hashlib.sha256(raw).hexdigest() != message["sha256"]:
             raise ValueError("decision handoff digest mismatch")
         quota = json.loads(raw)
+        # This is transport dispatch, not capture admission: an explicit quota
+        # failure still belongs to its original caller's recovery path. Do not
+        # signal that writer or submit its failure to the successful-readback
+        # selector. Successful and foreign/malformed packets retain typed checks.
+        failed_readback = isinstance(quota, dict) and quota.get("ok") is False and quota.get("goal_id") == goal_id
         interrupted = None
-        if native_process is not None and interrupt_when is None:
+        if not failed_readback and native_process is not None and interrupt_when is None:
             from .worker import interrupt_checkpoint_process
 
             # Interrupt before the typed selector: even this read can outlive a
             # native tool yield. Keep original bytes for same-identity recovery.
             interrupted = interrupt_checkpoint_process(native_process, timeout=min(interrupt_timeout, remaining()))
-        intent = effect_runtime_result("runtime.checkpoint_artifacts", {
-            "action": "select_replan", "quota": quota, "goal_id": goal_id,
-            "agent_id": agent_id, "turn_instance_id": (turn_instance_id if turn_instance_id is not None
-                else (quota.get("heartbeat_receipt") or {}).get("turn_instance_id")),
-        }, timeout=remaining())
-        if native_process is not None and interrupt_when is not None and interrupt_when(intent):
+        if failed_readback:
+            intent = {"capture": False, "reason": "quota_readback_failed", "execution_authority_granted": False}
+        else:
+            intent = effect_runtime_result("runtime.checkpoint_artifacts", {
+                "action": "select_replan", "quota": quota, "goal_id": goal_id,
+                "agent_id": agent_id, "turn_instance_id": (turn_instance_id if turn_instance_id is not None
+                    else (quota.get("heartbeat_receipt") or {}).get("turn_instance_id")),
+            }, timeout=remaining())
+        if not failed_readback and native_process is not None and interrupt_when is not None and interrupt_when(intent):
             from .worker import interrupt_checkpoint_process
 
             interrupted = interrupt_checkpoint_process(native_process, timeout=min(interrupt_timeout, remaining()))
