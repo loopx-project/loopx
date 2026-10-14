@@ -13,7 +13,7 @@ from decimal import Decimal, ROUND_HALF_UP, localcontext
 from enum import StrEnum
 from typing import Any
 
-from .numeric_accuracy import assess_numeric_accuracy
+from .numeric_accuracy import bounded_decimal
 from .period_semantics import (
     FINANCE_PERIOD_COMPARISON_INPUT_SCHEMA_VERSION,
     assess_period_comparison,
@@ -79,13 +79,7 @@ def _unit(value: Any) -> None:
 
 
 def _number(value: Any, accuracy: Any) -> tuple[Decimal, dict[str, Any]]:
-    if not isinstance(value, str) or len(value) > 128:
-        raise ValueError("cash amount requires a bounded finite numeric string")
-    assessment = assess_numeric_accuracy(value, accuracy)
-    number = Decimal(value)
-    if abs(number.adjusted()) > 64 or abs(number.as_tuple().exponent) > 64:
-        raise ValueError("cash amount is outside the bounded decimal range")
-    return number, assessment
+    return bounded_decimal(value, accuracy, label="cash amount")
 
 
 def _encoded(value: Decimal) -> str:
