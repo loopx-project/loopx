@@ -120,20 +120,21 @@ def restore_workspace(declaration: dict, workspace: Path):
     shutil.copytree(source, workspace, symlinks=True)
 
 
-def _release_native_skills_directory(home: Path) -> None:
+def _preserve_native_skills_directory(home: Path) -> None:
     """Leave skill installation to the ordinary worker after native fork.
 
-    App-server creates an empty directory while opening the restored session.
-    It is not a captured skill installation. Never remove contents or replace
-    a link: the ordinary worker still owns installed-skill identity checks.
+    App-server initializes its own bundled skills while opening the restored
+    session. Skills are not part of the imported native store. Preserve that
+    generated directory outside the discovery path; never merge it into the
+    installed skills or replace a link. The ordinary worker still owns the
+    installed-skill identity check. Call only after verified native admission.
     """
     skills = home / "skills"
     if skills.is_dir() and not skills.is_symlink():
-        try:
-            skills.rmdir()
-        except OSError as error:
-            raise ValueError("Native receiver skills directory is not empty or removable; "
-                             "inspect it before continuing") from error
+        backup = home / ".loopx-native-skills-before-install"
+        if backup.exists() or backup.is_symlink():
+            raise ValueError("Native skills backup already exists; inspect the original receiver attempt")
+        skills.rename(backup)
 
 
 def prepare_context(env: dict[str, str], declaration: dict) -> dict:
@@ -153,7 +154,7 @@ def prepare_context(env: dict[str, str], declaration: dict) -> dict:
     execution = Execution(context="resume", sandbox=env["LOOPX_CODEX_SANDBOX"])
     native = admit_native_checkpoint_session(env, unit, digest, Path(declaration["config"]),
                                             execution=execution, timeout=30)
-    _release_native_skills_directory(Path(env["CODEX_HOME"]))
+    _preserve_native_skills_directory(Path(env["CODEX_HOME"]))
     def cli(*args):
         result = subprocess.run([*loopx_command(env), *args], env=env,
             cwd=env["LOOPX_PROJECT"], text=True, capture_output=True, timeout=60, check=True)
