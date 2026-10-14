@@ -25,7 +25,7 @@ from ..extensions.lark.presentation.explore_singleflight import (
     explore_feishu_sync_busy_packet,
     explore_feishu_sync_singleflight,
 )
-from ..extensions.lark.presentation.kanban import DEFAULT_CLI_BIN
+from ..extensions.lark.cli_transport import DEFAULT_CLI_BIN
 from ..extensions.lark.presentation.sink_visibility import SINK_VISIBILITY_OWNER_ONLY, SINK_VISIBILITIES
 
 

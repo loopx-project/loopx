@@ -15,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from loopx.extensions.lark.presentation import issue_fix_surface  # noqa: E402
+from loopx.extensions.lark.cli_transport import run_command  # noqa: E402
 from loopx.extensions.lark.presentation.kanban import (  # noqa: E402
     CLAIM_UNCLAIMED,
     STATUS_CLAIMED,
@@ -23,7 +24,6 @@ from loopx.extensions.lark.presentation.kanban import (  # noqa: E402
     STATUS_REVIEW,
     STATUS_TODO,
     LarkKanbanConfig,
-    _run_command,
     _lark_record_from_todo_block,
     build_create_board_plan,
     default_lark_kanban_config_path,
@@ -66,7 +66,7 @@ def credential_boundary_smoke() -> None:
 
     for argument in ("--ak", "--sk", "--app-secret", "--access-token"):
         try:
-            _run_command(
+            run_command(
                 ["lark-cli", "base", "+record-list", argument, "fixture-secret"],
                 execute=True,
                 runner=forbidden_runner,
@@ -77,7 +77,7 @@ def credential_boundary_smoke() -> None:
             raise AssertionError(f"credential argument was accepted: {argument}")
     assert runner_called is False
 
-    dry_run = _run_command(
+    dry_run = run_command(
         [
             "lark-cli",
             "base",

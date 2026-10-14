@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Callable
 
 from ..extensions.lark import LARK_EXTENSION_ID, LARK_PROJECTION_SINK_PERMISSION
+from ..extensions.lark.cli_transport import DEFAULT_CLI_BIN
 from ..extensions.lark.presentation.kanban import (
     DEFAULT_AGENT_ID,
-    DEFAULT_CLI_BIN,
     DEFAULT_STATUS_QUEUE_VIEW,
     DEFAULT_TABLE_NAME,
     LarkKanbanConfig,
