@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { resolveTestPython } from "../../scripts/test-python.mjs";
 import { outputDir, repoRoot } from "./fixture.mjs";
-import { openWorkspacePage } from "./scenario-context.mjs";
+import { fetchWorkspaceBackend, openWorkspacePage } from "./scenario-context.mjs";
 
 // A disposable canonical File authority, real CLI create/list and real status
 // HTTP owner. No live Goal, collector, order, or confirmation is touched.
@@ -83,7 +83,7 @@ export const monitorReadbackScenario = {
             beforeGoto: async (_api, page) => {
               await page.route("**/status.json*", async (route) => {
                 if (new URL(route.request().url()).pathname !== "/status.json") { await route.fallback(); return; }
-                const response = await route.fetch({ url: `${authority.url}/status.json` });
+                const response = await fetchWorkspaceBackend(route, authority.url);
                 assert.equal(response.status(), 200);
                 const payload = await response.json();
                 // Inject a missing-fields legacy/partial projection only in the

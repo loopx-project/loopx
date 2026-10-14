@@ -6,7 +6,7 @@ import {tmpdir} from "node:os";
 import {join, resolve} from "node:path";
 import {createInterface} from "node:readline";
 import {repoRoot, outputDir} from "./fixture.mjs";
-import {openWorkspacePage} from "./scenario-context.mjs";
+import {fetchWorkspaceBackend, openWorkspacePage} from "./scenario-context.mjs";
 import {resolveTestPython} from "../../scripts/test-python.mjs";
 
 // Configuration uses the real source writer and an isolated shared registry.
@@ -44,8 +44,7 @@ export const prReviewAgentOrderScenario = {
       assert.ok(ready.port > 0);
       context = await openWorkspacePage(browser, url, {beforeGoto: async (_api, page) => {
         await page.route("**/api/chat/goal-configuration**", async route => {
-          const request = route.request(), parsed = new URL(request.url());
-          const response = await route.fetch({url: `http://127.0.0.1:${ready.port}${parsed.pathname}${parsed.search}`});
+          const response = await fetchWorkspaceBackend(route, `http://127.0.0.1:${ready.port}`);
           await route.fulfill({response});
         });
       }});
