@@ -2,10 +2,10 @@
 
 - **RFC 状态：** 已接受
 - **替代 / 关闭：** 无
-- **交付成熟度：** Partial（M1 候选；准入验收待完成；M2 未验收）
+- **交付成熟度：** Partial（M1 与显式本地 M2 均为候选；准入和通用启用未验收）
 - **作者 / 负责人：** LoopX 维护者与贡献者
 - **创建日期：** 2026-09-10
-- **最后规范修订：** 2026-10-12
+- **最后规范修订：** 2026-10-13
 - **实现基线：** `41a95d9`
 - **跟踪 Issue：** [#2831](https://github.com/huangruiteng/loopx/issues/2831)
 - **相关契约：**
@@ -23,8 +23,10 @@
 执行、决策、证据与 fixture 计划。
 
 RFC 成熟度与交付成熟度互相独立。M1 候选 TypeScript builder 已基于传入的完整 canonical
-输入实现 `goal_direction_baseline_v0`。生产 receipt writer、声明编写命令与运行时
-consumer 尚未交付；schema 合法的合成回执不证明真实阅读。
+输入实现 `goal_direction_baseline_v0`。§12.5 的显式本地候选新增来源支持的读取 offer、
+同 Agent 确认和 cold 回读；不代表通用运行时启用或模型真实消费，schema 合法仍不充分。
+M1 准入仍待 owner 批准第 12 节容量与回执决策；M2 consumer/recovery UX
+批准是另一项待完成 gate。实现和测试不授予其中任何批准。
 
 独立的[验收合同 v0](../../reference/goal-acceptance-observations.md#owner-authorized-contract-v0)
 不实现本 RFC 的材料声明或使用回执。#2831 的下一切片是**方向材料版本与验收基线关联**，
@@ -128,9 +130,9 @@ provider-neutral 材料元数据与当前 Agent 自己的 usage receipt，只暴
 - 当前 `shared_goal_alignment_v0` 绑定的是 event-log 或 canonical Todo
   projection 事实，并非 typed canonical Goal-intent revision。
 
-M1 builder 已将声明的方向材料与单个 Agent 的传入回执绑定。生产声明编写与回执
-provenance 仍属于 M2 依赖，不能用 shared-alignment source digest 或 Markdown
-state 代替真实阅读来源。
+M1 builder 已将声明的方向材料与单个 Agent 的传入回执绑定。§12.5 本地来源 profile
+实现声明和 read/ack provenance；其他生产者 profile 与通用启用仍是 M2 依赖，
+shared-alignment source digest 或 Markdown 不能替代真实读取来源。
 
 ## 5. 提议架构
 
@@ -376,8 +378,8 @@ required material。
 
 M1 候选实现在 [`direction_baseline.ts`](../../../loopx/control_plane/goals/direction_baseline.ts)。
 现有 [F2 smoke](../../../examples/goal-direction-baseline-f2-smoke.py) 已改为执行真实
-TypeScript 测试与两项源码 mutation，删除原 fixture-local reducer。没有 CLI、
-persistence、consumer、scheduler 或 quota 路径调用这个 builder。M2 保持独立。
+TypeScript 测试与两项源码 mutation，删除原 fixture-local reducer。下方本地 M2 候选
+通过显式 cold Goal 操作调用它；polling、scheduler、quota 仍不调用该 builder。
 
 ## 12. 开放决策
 
@@ -481,6 +483,106 @@ CLI 与前端必须共享该结果；Lark 在实际交互测试前仍单独保�
 只有 required 项影响聚合状态/原因。完整输入的非法行即使属于可选项或 peer，
 仍拒绝投影。§12.3 的 consumer/回执来源要求保持独立；纯构建器不新增回执
 存储或 v0 字段。
+
+### 12.5 显式本地 M2 候选与评审边界
+
+本候选将 §12.3 consumer/recovery 方案落实为可供维护者按 §11 入口门槛评审的实现；
+源码与隔离验证不等于批准在活跃 Goal 启用。入口为 `goal-direction` 和既有 Goal 设置。
+`goals/direction_authority.ts` 拥有决策/写入，Python `direction_runtime` 只处理来源、
+锁和有界文件 IO。这属于 Goal authority，不是材料目录的迁移/排序策略，不增加 capability
+或第二个 store；它与既有 Decision Context local-file provider 共用 descriptor-bounded
+文件快照 helper。
+
+首个 profile 要求活跃精确 `source_session_v1` Goal、已注册 peer 和已有 File/SQLite
+canonical authority。新建使用 `project register --canonical-storage file|sqlite`，
+不迁移既有 Goal。若来源 registry 已有材料 authority，必须先由原 owner 显式迁移；
+本实现拒绝建立第二份权威。此 profile 的 `authority_registry` 是 canonical Goal head
+内同一个逻辑权威对象，并绑定精确实例。原要求、工作、租约和验收保持不变。
+
+Operator 配置也先经过 TS 的活跃实例、唯一 authority 和 provider basis 检查，再读取
+来源字节。紧凑旧 authority 摘要不能当作空来源，仍须迁移；活跃 owner 可停用 reader，
+这个停止动作不授予新的来源读取权限。
+
+Operator 声明完整本地 Markdown 资料集：稳定 id、用途、topic、required/optional 和
+明确的 public/public-safe/local-private 边界。路径是仅用于本次读取的输入，只在既有
+Goal repo/state/runtime 根内解析；相对路径固定到 repo，文件缺失不能回退到同名的
+state/runtime 副本，其他已授权根须显式绝对路径；authority/journal 不保存原路径或正文；待确认的 operator 表单仅在当前浏览器 tab 的
+私有恢复状态保留路径，直至操作已处理。实际有界字节
+决定 content revision，只保留 locator digest。声明提交绑定 provider revision；UI 还
+固定已检查的 authority digest，预览后文件变化会拒绝。未知/远程私有 provider 不支持。
+这是 owner 显式声明的版本跟踪，不是文件 watcher：修改文件后须由 owner 更新声明；
+实际读取若与声明字节不符，记录 unavailable，而不是沿用旧成功。
+
+Usage 分两步：
+
+1. **Read。** TS 先检查实例、Agent、声明、来源摘要、版本和边界，再读取实际有界文件。
+   正文只临时返回，并附带原操作 offer/delivery digest。Offer 入库不产生 usage receipt，
+   丢响应不会令 Agent current；仅当同一版本仍可读取时，重试原操作恢复内容和 offer。
+2. **Acknowledge。** 同一 Agent 明确确认该 offer/digest，既有 canonical 事务添加一个
+   `outcome=read` 的 `material_usage_receipt_v0`，外层 provenance 绑定实例。不能注入任意
+   receipt、使用另一 Agent 的 offer，或确认已被后续可用性观察作废的旧 offer。这证明
+   来源支持的读取和明确确认，不证明人/模型理解、路线采纳、`used` 或 `verified`。
+
+后续真实读取失败由同一 owner 记录 unavailable，盖过旧成功。Producer 在 canonical
+追加顺序上保持 recorded_at 严格递增，即使宿主时钟相同或回退；这是顺序证据，不是
+独立墙钟证明。预览 acknowledge 明确 receipt_recorded=false，不产生记录。修复来源后重新 read/ack，
+不能编辑 receipt 让投影变绿。实例退休/重建会 fence 新操作，包括 caller 超时后的迟到
+RPC。原操作回执保持历史，不授予当前读取/执行权；peer receipt 不可转移。组合输入容量
+在提交前检查，不会为凑预算持久化部分投影。
+
+当前投影达到 4,096 条 usage 时，新观察只能替换**同一 Agent/material** 的一条旧记录。
+完整旧 provenance 以 `archived_usage_record` 保存在同一次原子操作的 receipt/journal，
+可用该 operation id 的 `receipt` 冷回读，原操作回执保持不变。这个限额约束当前投影，
+不代表 journal 历史或 provider 自身容量无限。满额时若该 pair 没有旧记录则拒绝，
+不挤掉其他 pair，未读 pair 继续 blocked。新 offer 绑定同 pair 完整 retained usage
+摘要，行数不变也不能让 unavailable 前的旧 offer 重新有效；其他 pair 不受影响。
+scope 的单调 `usage_generation` 在首次替换后拒绝升级前只有行数的旧 offer。
+新的 read/ack 可正常恢复，不提高上限。产生这些记录后须保留兼容 reader；回退到无法
+识别 generation 的旧 reader 不是受支持的 rollback。
+
+
+设置入口 **Goal 设置 → 任务所有权 → 方向依据与资料版本** 支持检查/应用声明、独立查看
+各 Agent、恢复未知响应和停用。浏览器不能代表 peer 读取、确认或提交 usage receipt。
+Agent CLI 的写入显式加 `--execute`：
+
+```sh
+loopx --registry REGISTRY --format json goal-direction \
+  --goal-id GOAL --goal-instance-id INSTANCE --agent-id AGENT --operation inspect
+loopx --registry REGISTRY --format json goal-direction \
+  --goal-id GOAL --goal-instance-id INSTANCE --agent-id AGENT \
+  --operation read --request-json read.json --execute
+loopx --registry REGISTRY --format json goal-direction \
+  --goal-id GOAL --goal-instance-id INSTANCE --agent-id AGENT \
+  --operation acknowledge --request-json acknowledgement.json --execute
+```
+
+合成打包界面示例：[检查声明](../../assets/goal-direction/declaration-preview.png)、
+[版本变化](../../assets/goal-direction/revision-drift.png)、
+[窄屏 Agent 回读](../../assets/goal-direction/peer-readback.png)。它们是 operator/CLI 验证，
+不是模型真实理解证据。
+
+Agent 须已从任务/provider 上下文获得获授权本地路径；本 profile 不从 material id
+自动解析私有 locator。显式读取和自主来源发现/handoff 是不同验收边界。
+`read.json` 包含 `operation_id`、`material_id`、临时 `source_path`，以及 inspect 的
+`required_revision`、`authority_digest`。确认请求包含自己的 `operation_id`、返回的
+`offer.read_operation_id` 和 `delivery_digest`。CLI configure 不带 Agent id，提交 materials、
+expected_provider_revision、operation_id，默认仅预览。每项材料含 material_id、
+source_path、purpose、topics、required、boundary；应用已审阅声明时带预览得到的
+expected_authority_digest。receipt 用 receipt_operation_id 和原 actor/实例；disable
+是带当前 provider revision/独立 operation id 的 operator 操作，保留声明和回执。
+
+Cold inspect 返回 M1 投影和 typed Agent-scoped vision_gap。acceptance_basis 引用实际
+观察的 canonical acceptance contract revision/digest（通过原 typed reader）及方向摘要，
+明确 not_assessed；没有合同、未启用或未绑定精确实例时不输出关联版本。通用 source-session
+CLI 的验收配置/执行仍在候选范围外，未放开其 writer gate；
+不能让整 Goal 验收变绿，不写 Vision/checkpoint、Todo、route、lease、scheduler 或 quota。
+实际改路线仍归 goal_path_delta_v0；通用 runtime 和 Lark 未启用。本机 operator/注册身份
+沿原可信 transport 边界，不声称新增身份认证或独立 worker 证明。
+
+候选用真实注册、File/SQLite、文件、HTTP、打包设置和独立 Agent CLI 验证版本/peer/实例
+隔离、先鉴权再 IO、未知响应、重试、来源不可用、损坏及原工作保持。合成身份/文件不证明
+真实模型读取或自主协作。M2 晋级仍须具名 consumer/UX 评审及新增 profile 验收；opt-in
+声明不是晋级批准。未启用前可移除候选；使用后停用 reader 并保留 canonical 历史/fence。
 
 ---
 
@@ -599,6 +701,6 @@ schema、最大字段宽度、conflict、组合最坏情况、端到端时延或
 `node --experimental-strip-types --test tests/control_plane_ts/direction_baseline.test.ts`
 与 `uv run --extra test python examples/goal-direction-baseline-f2-smoke.py`；既有
 `vision_checkpoint.test.ts` 验证路线 authority。没有新增平行 Python reducer 或
-Python/TypeScript 双消费路径。生产回执真实性、instance-bound storage、live provider、
-生产容量冻结和 M2 CLI/frontend/Lark 流程仍未验收。回退只移除尚未接入消费者的 builder，
-无需迁移 canonical state。
+Python/TypeScript 双消费路径。§12.5 候选验证显式本地 read/ack、精确实例和 CLI/设置
+链路；模型真实消费、其他 provider、生产容量 promotion 和 Lark 仍未验收。未启用前可
+移除候选；使用后须停用 reader 并保留 canonical 历史与 fences。

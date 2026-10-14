@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import os
+import stat
+from datetime import datetime, timezone
 import re
 from pathlib import Path
 from typing import Any
@@ -87,6 +91,7 @@ def resolve_review_material_path(
     raw_path: str,
     runtime_root: Path | None = None,
     state_path: Path | None = None,
+    repo_relative: bool = False,
 ) -> Path:
     parsed = urlparse(raw_path)
     if parsed.scheme and parsed.scheme != "file":
@@ -98,6 +103,8 @@ def resolve_review_material_path(
     roots = material_roots(goal, runtime_root=runtime_root, state_path=state_path)
     if not roots:
         raise ValueError("goal has no repo/state/runtime root for review material resolution")
+    if repo_relative and goal_repo(goal) is None:
+        raise ValueError("registered material requires the Goal repository root")
 
     raw = Path(path_text).expanduser()
     if raw.is_absolute():
@@ -107,6 +114,14 @@ def resolve_review_material_path(
         raise ValueError("review material path is outside the goal repo/state/runtime roots")
 
     candidates = [(root, (root / raw).resolve()) for root in roots]
+    if repo_relative:
+        # Registered direction sources cannot silently fall through to another
+        # namespace when a repository file disappears. Explicit absolute paths
+        # above still require one of the existing authorized roots.
+        root, candidate = candidates[0]
+        if not path_is_under(candidate, root):
+            raise ValueError("relative material path is outside the goal repository")
+        return candidate
     safe_candidates = [(root, candidate) for root, candidate in candidates if path_is_under(candidate, root)]
     if not safe_candidates:
         raise ValueError("review material path is outside the goal repo/state/runtime roots")
@@ -183,3 +198,40 @@ def read_review_material(
         "bytes": len(content.encode("utf-8")),
         "content": content,
     }
+
+
+def read_bounded_material_file(path: Path, max_bytes: int) -> tuple[Path, bytes, str, str]:
+    """One regular-file snapshot with the original descriptor/identity guards."""
+    if not path.is_file():
+        raise FileNotFoundError("configured authority file is unavailable")
+    if path.stat().st_size > max_bytes:
+        raise ValueError("configured authority file exceeds max_bytes")
+    # The preflight is only an early refusal. Bound the actual descriptor
+    # read too, including growth or replacement between stat and open.
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+    descriptor = os.open(path, flags)
+    with os.fdopen(descriptor, "rb") as handle:
+        before = os.fstat(handle.fileno())
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("configured authority source is not a regular file")
+        if before.st_size > max_bytes:
+            raise ValueError("configured authority file exceeds max_bytes")
+        content = handle.read(max_bytes + 1)
+        if len(content) > max_bytes:
+            raise ValueError("configured authority file exceeds max_bytes")
+        after = os.fstat(handle.fileno())
+        resolved = path.resolve()
+        current = resolved.stat()
+        identity_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        identity = tuple(getattr(before, field) for field in identity_fields)
+        if len(content) != before.st_size or any(
+            tuple(getattr(observed, field) for field in identity_fields) != identity
+            for observed in (after, current)
+        ):
+            raise ValueError("configured authority file changed during bounded read")
+    revision = hashlib.sha256(content).hexdigest()
+    observed_at = datetime.fromtimestamp(
+        before.st_mtime,
+        tz=timezone.utc,
+    ).isoformat()
+    return resolved, content, revision, observed_at

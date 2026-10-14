@@ -162,6 +162,11 @@ def register_heartbeat_control_commands(
         help="Opt into the short TurnEnvelope with full local captures; requires thin mode and an explicit host-owned Turn ID.",
     )
 
+    heartbeat_prompt_parser.add_argument(
+        "--decision-handoff-socket",
+        help="Retain the explicit private Host handoff on generated guards; requires --decision-output-root.",
+    )
+
     heartbeat_prequota_parser = subparsers.add_parser(
         "heartbeat-prequota",
         help=(

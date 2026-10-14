@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
@@ -174,8 +175,28 @@ def _store_codex_cli_session(
     operation_profile_digest: str | None = None,
     operation_model: str | None = None,
     operation_reasoning_effort: str | None = None,
+    require_absent: bool = False,
+    checkpoint_artifact_sha256: str | None = None,
 ) -> None:
-    with exclusive_file_lock(_session_path(runtime_root, lineage, session_scope)):
+    if checkpoint_artifact_sha256 is not None and not re.fullmatch(r"[0-9a-f]{64}", checkpoint_artifact_sha256):
+        raise ValueError("checkpoint session source digest is invalid")
+    path = _session_path(runtime_root, lineage, session_scope)
+    with exclusive_file_lock(path):
+        if require_absent and (path.exists() or path.is_symlink()):
+            raise ValueError("session binding already exists; read back the original admission")
+        # Provenance survives ordinary observations of this exact conversation,
+        # but cannot migrate to a replacement session, profile or Goal lifetime.
+        prior = load_codex_cli_session(runtime_root, lineage=lineage, session_scope=session_scope)
+        retained_source = None
+        if prior and (prior.get("session_id"), prior.get("goal_ref"), prior.get("session_profile_digest")) == (
+            session_id, dict(goal_ref) if goal_ref is not None else None, session_profile_digest
+        ):
+            retained_source = prior.get("checkpoint_artifact_sha256")
+        if retained_source is not None:
+            if not isinstance(retained_source, str) or not re.fullmatch(r"[0-9a-f]{64}", retained_source):
+                raise ValueError("stored checkpoint session source digest is invalid")
+            if checkpoint_artifact_sha256 not in (None, retained_source):
+                raise ValueError("checkpoint session source digest cannot change")
         _write_codex_cli_session(
             runtime_root,
             lineage=lineage,
@@ -186,6 +207,7 @@ def _store_codex_cli_session(
             operation_profile_digest=operation_profile_digest,
             operation_model=operation_model,
             operation_reasoning_effort=operation_reasoning_effort,
+            checkpoint_artifact_sha256=checkpoint_artifact_sha256 or retained_source,
         )
 
 
@@ -200,6 +222,7 @@ def _write_codex_cli_session(
     operation_profile_digest: str | None = None,
     operation_model: str | None = None,
     operation_reasoning_effort: str | None = None,
+    checkpoint_artifact_sha256: str | None = None,
 ) -> None:
     normalized_session_id = _valid_session_id(session_id)
     if not normalized_session_id:
@@ -228,6 +251,8 @@ def _write_codex_cli_session(
                 payload["session_profile_digest"] = session_profile_digest
             if goal_ref is not None:
                 payload["goal_ref"] = dict(goal_ref)
+            if checkpoint_artifact_sha256 is not None:
+                payload["checkpoint_artifact_sha256"] = checkpoint_artifact_sha256
             if operation_profile_digest is not None:
                 payload["operation_transport"] = "app-server-operation-tools-v0"
                 payload["operation_profile_digest"] = operation_profile_digest
@@ -241,6 +266,9 @@ def _write_codex_cli_session(
                 sort_keys=True,
             )
             handle.write("\n")
+            if checkpoint_artifact_sha256 is not None:
+                handle.flush()
+                os.fsync(handle.fileno())
         os.replace(temporary, path)
         path.chmod(0o600)
     finally:

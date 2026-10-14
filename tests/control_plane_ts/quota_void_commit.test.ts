@@ -724,13 +724,17 @@ test("receipt repair rejects paths outside the run directory and symbolic links"
     ...receipt.value,
     status: "prepared",
   }, null, 2)}\n`, "utf8");
-  await unlink(String(written.payload.json_path));
-  await symlink(outsidePath, String(written.payload.json_path));
-  await assert.rejects(
-    () => evaluateQuotaVoidCommit(params),
-    /JSON artifact must not be a symbolic link/,
-  );
-  await assert.rejects(() => readFile(outsidePath), /ENOENT/);
+  // File symlink creation needs Developer Mode or admin on Windows; the
+  // escaped-path rejection above still covers the outside-run-directory rule.
+  if (process.platform !== "win32") {
+    await unlink(String(written.payload.json_path));
+    await symlink(outsidePath, String(written.payload.json_path));
+    await assert.rejects(
+      () => evaluateQuotaVoidCommit(params),
+      /JSON artifact must not be a symbolic link/,
+    );
+    await assert.rejects(() => readFile(outsidePath), /ENOENT/);
+  }
 });
 
 test("legacy slot coercion truncates numeric strings and clamps both slot floors", async (t) => {

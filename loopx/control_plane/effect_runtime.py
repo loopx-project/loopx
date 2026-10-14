@@ -833,13 +833,12 @@ def _read_startup_stderr(capture: IO[bytes]) -> bytes:
 
 
 def _startup_diagnostic(raw: bytes) -> tuple[str, str] | None:
-    """Return the typed diagnostic a rejected managed runtime published.
+    """Return the typed diagnostic a managed runtime published before readiness.
 
-    A server that rejects its own startup configuration writes one JSON
-    envelope to stderr and exits before it listens, so a matching envelope is
-    the authoritative configuration error. Any other stderr content, such as a
-    Node.js stack trace, is not a typed diagnostic and must not be reported as
-    one.
+    Recognized startup failures publish a JSON envelope to stderr before exit,
+    so a matching envelope is the authoritative startup error. Any other stderr
+    content, such as a Node.js stack trace, is not a typed diagnostic and must
+    not be reported as one.
     """
 
     if not raw:
@@ -925,7 +924,7 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
         # Fixed daemon context, never a model-supplied executable argument.
         environment["LOOPX_EFFECT_RUNTIME_PYTHON"] = sys.executable
         # Capture stderr so a rejected startup can publish a typed
-        # configuration diagnostic instead of a bare exit status. The capture
+        # startup diagnostic instead of a bare exit status. The capture
         # is an unlinked temporary file, so it cannot deadlock the child on a
         # full pipe and it leaves no stale path behind.
         with tempfile.TemporaryFile() as startup_stderr:
@@ -976,6 +975,8 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
                     )
                     if diagnostic is not None:
                         code, message = diagnostic
+                        if code == "runtime_host_permission_denied":
+                            raise EffectRuntimeHostPermissionError()
                         raise EffectRuntimeStartupError(
                             message,
                             diagnostic_code=code,

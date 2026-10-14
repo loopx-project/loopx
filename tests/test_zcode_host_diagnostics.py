@@ -336,11 +336,17 @@ def test_probe_deadline_survives_descendant_inheriting_stdout(monkeypatch, capsy
     assert capsys.readouterr().err == ""
 
 
-@pytest.mark.parametrize("mode,expected", [("timeout_default", "timeout"), ("timeout", "timeout"), ("output_limit", "output_limit"), ("exit_pipe", "timeout"), ("exit_closed", "observed")])
-def test_probe_reclaims_persistent_descendants_before_return(tmp_path, monkeypatch, mode, expected):
-    if mode != "timeout_default":
+@pytest.mark.parametrize("mode,expected,child_startup_delay", [
+    ("timeout_default", "timeout", 0), ("timeout", "timeout", 0),
+    ("output_limit", "output_limit", 0), ("exit_pipe", "timeout", 0),
+    ("exit_closed", "observed", 0), ("exit_closed", "observed", .6),
+])
+def test_probe_reclaims_persistent_descendants_before_return(tmp_path, monkeypatch, mode, expected, child_startup_delay):
+    # Successful closure uses the shipped deadline so interpreter and child
+    # startup are not constrained by a deadline for deliberately blocked probes.
+    if mode not in {"timeout_default", "exit_closed"}:
         monkeypatch.setattr(diagnostics, "PROBE_TIMEOUT_SECONDS", .5)
-    child_script = "import time, pathlib, sys, os; p=pathlib.Path(sys.argv[1]); p.write_text(str(os.getpid())); n=0\nwhile True:\n n+=1; p.with_suffix('.pulse').write_text(str(n)); time.sleep(.01)"
+    child_script = f"import time; time.sleep({child_startup_delay!r})\nimport pathlib, sys, os; p=pathlib.Path(sys.argv[1]); p.write_text(str(os.getpid())); n=0\nwhile True:\n n+=1; p.with_suffix('.pulse').write_text(str(n)); time.sleep(.01)"
     path = tmp_path / "child.pid"
     parent = "import subprocess,sys,time,pathlib,os; p=pathlib.Path(sys.argv[1]); c=subprocess.Popen([sys.executable,'-c',sys.argv[2],str(p)],stdout=subprocess.DEVNULL if sys.argv[3]=='exit_closed' else None,stderr=subprocess.DEVNULL if sys.argv[3]=='exit_closed' else None)\nwhile not p.exists(): time.sleep(.01)\nif sys.argv[3]=='output_limit': print('x'*70000,flush=True)\nif sys.argv[3].startswith('exit'): sys.exit(0)\ntime.sleep(30)"
     for _ in range(2):

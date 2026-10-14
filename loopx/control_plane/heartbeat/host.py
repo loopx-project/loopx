@@ -29,15 +29,22 @@ def resolve_heartbeat_capture_root(
     brief: bool,
     native_goal_host: bool,
     turn_instance_id: str | None,
+    decision_handoff_socket: str | None = None,
 ) -> Path | None:
     """Validate capture transport for an already resolved host-owned Turn."""
     if root is None:
+        if decision_handoff_socket is not None:
+            raise ValueError("decision handoff requires an explicit decision capture root")
         return None
     if not thin or full or compact or brief or native_goal_host or not turn_instance_id:
         raise ValueError("--decision-output-root requires thin mode and an explicit host-owned Turn ID")
     directory = Path(root).expanduser().absolute()
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError("--decision-output-root must be an existing directory, not a symlink")
+    if decision_handoff_socket is not None:
+        from ..turn_driver.decision_capture import validate_handoff_socket
+
+        validate_handoff_socket(decision_handoff_socket)
     return directory
 
 

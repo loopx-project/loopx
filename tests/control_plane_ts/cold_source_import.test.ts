@@ -192,6 +192,10 @@ test("a committed original receipt remains readable after backup loss", async t 
 
 for (const variant of ["expired_active", "orphan_active", "symlink", "unsupported_filename"] as const) {
   test(`cold import rejects ${variant} lease facts rather than deleting them`, async t => {
+    if (variant === "symlink" && process.platform === "win32") {
+      t.skip("file symlink creation needs Windows host privileges");
+      return;
+    }
     const f = await fixture(t);
     const directory = join(f.f.root, "goals", "goal-a", "task-leases");
     await mkdir(directory, {recursive: true});

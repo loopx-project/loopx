@@ -31,6 +31,23 @@ export type NoKVJsonLinesProcessFactory = (
   options: SpawnOptionsWithoutStdio,
 ) => ChildProcessWithoutNullStreams;
 
+/**
+ * The helper answered the open handshake with a typed `failed` response.
+ *
+ * `reasonCode` is the helper's own code (for example
+ * `nokv_sdk_capability_mismatch` when the installed wheel cannot build the
+ * configured routing kind), so callers can classify a refused open without
+ * parsing the human-readable reason.
+ */
+export class NoKVHelperOpenRefusedError extends NoKVTransportProtocolError {
+  readonly reasonCode: string;
+
+  constructor(reasonCode: string, message: string) {
+    super(message);
+    this.reasonCode = reasonCode;
+  }
+}
+
 export interface NoKVJsonLinesTransportOptions {
   /** Explicit command plus arguments, for example `[python, helper.py]`. */
   argv: readonly string[];
@@ -100,6 +117,12 @@ export class NoKVJsonLinesTransport implements NoKVBlobTransport {
   private stdoutBuffer = Buffer.alloc(0);
   private terminalError: Error | null = null;
   private closing = false;
+  /**
+   * The wire schema the helper's SDK declared in its `ready` handshake, or
+   * `null` when the wheel exports none (the 0.11.x releases). Informational:
+   * the helper's own version guard stays the admission decision.
+   */
+  sdkProtocolSchema: string | null = null;
 
   constructor(
     options: NoKVJsonLinesTransportOptions,
@@ -167,12 +190,17 @@ export class NoKVJsonLinesTransport implements NoKVBlobTransport {
         );
       }
       if (response.status !== "ready") {
-        throw new NoKVTransportProtocolError(
-          response.status === "failed" && typeof response.reason === "string"
-            ? response.reason
-            : "NoKV helper did not acknowledge its open handshake",
-        );
+        const reason = response.status === "failed" && typeof response.reason === "string"
+          ? response.reason
+          : "NoKV helper did not acknowledge its open handshake";
+        if (response.status === "failed" && typeof response.reason_code === "string"
+          && response.reason_code.length > 0) {
+          throw new NoKVHelperOpenRefusedError(response.reason_code, reason);
+        }
+        throw new NoKVTransportProtocolError(reason);
       }
+      const schema = response.nokv_protocol_schema;
+      transport.sdkProtocolSchema = typeof schema === "string" && schema.length > 0 ? schema : null;
       return transport;
     } catch (error) {
       await transport.close();

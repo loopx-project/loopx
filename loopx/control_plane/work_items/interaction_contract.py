@@ -81,11 +81,18 @@ class InteractionContractPacket(_InteractionContractRequired, total=False):
 
 
 def _blocked_successor_wait_observation_required(payload: Mapping[str, object]) -> bool:
-    return bool(
-        payload.get("effective_action")
-        == AgentScopeFrontierAction.AGENT_SCOPE_WAIT.value
-        and exact_blocked_successor_wait_state(payload)
-    )
+    wait = exact_blocked_successor_wait_state(payload)
+    if payload.get("effective_action") != AgentScopeFrontierAction.AGENT_SCOPE_WAIT.value or not wait:
+        return False
+    identity = payload.get("agent_identity")
+    agent_id = identity.get("agent_id") if isinstance(identity, Mapping) else None
+    result = effect_runtime_result("work_item.blocked_wait_observation.project", {
+        "effective_action": payload.get("effective_action"),
+        "agent_id": agent_id,
+        "vision_wait_state": wait,
+        "heartbeat_receipt": payload.get("heartbeat_receipt"),
+    })
+    return result["required"] is True
 
 
 def _user_todo_item_is_explicitly_non_gating(item: dict[str, Any]) -> bool:

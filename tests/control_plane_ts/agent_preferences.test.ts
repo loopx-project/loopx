@@ -66,7 +66,9 @@ for (const [name, Store] of [["file", FileAuthorityStore], ["sqlite", SqliteAuth
 }
 
 test("known filesystem denial is not missing or corrupt preferences", async t => {
-  if (process.getuid?.() === 0) { t.skip("root bypasses POSIX read permission"); return; }
+  if (process.platform === "win32" || process.getuid?.() === 0) {
+    t.skip("mode 000 read denial needs a non-root POSIX host"); return;
+  }
   const root = await mkdtemp(join(tmpdir(), "preferences-permission-"));
   t.after(() => rm(root, {recursive: true, force: true}));
   const call = (fields: JsonObject = {}) => agentPreferences({...request, runtime_root: root, ...fields});

@@ -883,6 +883,20 @@ deferred-successor selection runs again. Missing vision checkpoints, closed
 stage succession, unsupported conditions, and continuous-monitor-as-gate
 repairs remain fail-closed and are not hidden by this wait path.
 
+For a single exact scheduled successor, the interaction contract allows a
+quiet no-op while the canonical `resume_at` condition has positive runtime-clock
+proof that it is still pending. It does not require a `monitor-poll` from an
+unbound heartbeat receipt or derive new work merely from repeated pre-due
+wakes. The scheduled instant and Todo lifecycle remain unchanged; once due,
+the normal explicit resume route applies. Existing bound Turns still owe
+their original settlement. Dependency waits, mixed waiting frontiers, and
+missing or invalid clock proofs retain the bounded observation policy.
+
+单个精确的定时 successor 若有原生运行时时钟证明尚未到期，交互契约允许安静等待，
+不要求无 Todo 绑定的 heartbeat 回执执行 `monitor-poll`，也不因重复提前唤醒而派生
+新工作。原恢复时间与 Todo 生命周期保留；到期后走正常显式恢复流程。已有绑定的
+Turn 仍需结算原工作；依赖等待、混合等待前沿和缺失或无效的时钟证据仍沿用有界观察策略。
+
 For completed handoff gates, record that rationale structurally as
 `no_followup=true`; status projects the gate as `cleared_no_followup` instead
 of waking the blocked agent with `successor_replan_required`.

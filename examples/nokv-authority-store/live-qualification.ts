@@ -25,6 +25,7 @@ import {
   type NoKVStoreIdentityResult,
 } from "../../loopx/control_plane/coordination/nokv_authority_store.ts";
 import {
+  NoKVHelperOpenRefusedError,
   NoKVJsonLinesTransport,
 } from "../../loopx/control_plane/coordination/nokv_jsonl_transport.ts";
 
@@ -48,6 +49,8 @@ export class QualificationFailure extends Error {
 
 export interface QualificationTransport extends NoKVBlobTransport {
   close(): Promise<void>;
+  /** Wire schema declared by the helper's SDK; absent or `null` when unknown. */
+  readonly sdkProtocolSchema?: string | null;
 }
 
 export interface QualificationOptions {
@@ -71,12 +74,21 @@ export interface QualificationReport {
   availability_or_ha_proven: false;
   nokv_sdk_version: typeof QUALIFIED_NOKV_SDK_VERSION;
   nokv_api_version: typeof QUALIFIED_NOKV_API_VERSION;
+  nokv_protocol_schema: string | null;
+  nokv_protocol_schema_observations: readonly (string | null)[];
 }
 
 export interface QualificationSequenceResult {
   checks: readonly { id: string; status: "passed" }[];
   final_generation: number;
   final_cursor: string;
+  /**
+   * The wire schema every opened helper declared, or `null` when they did not
+   * all declare the same one. The 0.11.x release wheels declare none.
+   */
+  nokv_protocol_schema: string | null;
+  /** Each opened helper's declared schema in open order; `null` where none. */
+  nokv_protocol_schema_observations: readonly (string | null)[];
 }
 
 export interface QualificationCliArguments {
@@ -274,6 +286,12 @@ function staleIncarnation(current: string): string {
 /** A fresh lower-layer publication identity; the probe never reuses one. */
 function freshPhysicalIdentity(): string {
   return randomUUID().replaceAll("-", "");
+}
+
+/** The schema every observation names; `null` when none declared one or they disagree. */
+function uniformProtocolSchema(observations: readonly (string | null)[]): string | null {
+  const [first = null, ...rest] = observations;
+  return rest.every((schema) => schema === first) ? first : null;
 }
 
 async function rawGeneration(
@@ -536,10 +554,13 @@ export async function exerciseQualificationSequence(
     );
     passed("loser_receipt_absent");
 
+    const protocolSchemas = opened.map((transport) => transport.sdkProtocolSchema ?? null);
     return {
       checks,
       final_generation: 3,
       final_cursor: "3",
+      nokv_protocol_schema: uniformProtocolSchema(protocolSchemas),
+      nokv_protocol_schema_observations: protocolSchemas,
     };
   } finally {
     await Promise.allSettled(opened.map(async (transport) => await transport.close()));
@@ -661,6 +682,11 @@ async function main(): Promise<number> {
     } else if (error instanceof NoKVTransportUnavailableError) {
       reasonCode = "nokv_backend_unavailable";
       reason = "NoKV backend or SDK helper is unavailable";
+    } else if (error instanceof NoKVHelperOpenRefusedError) {
+      // The helper's own typed code (for example nokv_sdk_capability_mismatch);
+      // its human-readable reason may echo configuration and stays out of stderr.
+      reasonCode = error.reasonCode;
+      reason = "NoKV SDK helper refused the open handshake";
     } else if (error instanceof NoKVTransportProtocolError) {
       reasonCode = "nokv_transport_protocol_failed";
       reason = "NoKV SDK helper violated the transport protocol";

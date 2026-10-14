@@ -11,7 +11,7 @@ import sys
 import time
 
 from .planning import task_plan_packet, validate_plan_readback
-from .worker import loopx_command, run_once
+from .worker import PHASE_WORK_RESERVE_SECONDS, loopx_command, run_once
 
 
 def prepare_entry(env: dict[str, str]) -> bool:
@@ -21,7 +21,7 @@ def prepare_entry(env: dict[str, str]) -> bool:
     remaining = float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time()
     if not math.isfinite(remaining):
         raise ValueError("Invalid planning budget")
-    if remaining <= 160:
+    if remaining <= PHASE_WORK_RESERVE_SECONDS:
         return False
     path = Path(env["LOOPX_PLANNING_RESULT"])
     if path.exists():
@@ -70,7 +70,7 @@ def main() -> int:
         # Native process completion must not qualify it as a finished trial.
         return 1
     # A successful plan may itself consume the remaining execution allowance.
-    if float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time() <= 160:
+    if float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time() <= PHASE_WORK_RESERVE_SECONDS:
         return 1
     # Native SForge owns environment filtering and the outer phase deadline;
     # retain its proxy/isolation inputs rather than launching from setup hooks.

@@ -5,13 +5,19 @@ source-bound official result; it neither blocks tools nor starts model turns.
 """
 from __future__ import annotations
 
-import fcntl
 import hashlib
+import importlib
 import json
 import re
 import shlex
 import sys
 from pathlib import Path
+from typing import Any
+
+try:  # POSIX-only: the installed hook serializes delivery with flock.
+    fcntl: Any = importlib.import_module("fcntl")
+except ImportError:  # imported on hosts that only read the report adapter chain
+    fcntl = None
 
 ROOT = Path('/opt/edgebench-feedback')
 EVENTS = ('PostToolUse', 'SessionStart', 'UserPromptSubmit')
@@ -20,6 +26,8 @@ FEEDBACK_PAYLOAD = 'official-result'
 
 
 def deliver(event, root=ROOT, receipts=Path('/logs/agent/best-feedback-delivery'), *, output=None):
+    if fcntl is None:
+        raise OSError('best-only delivery has no supported session-lock backend on this host')
     output = output or sys.stdout
     name, session = event.get('hook_event_name'), event.get('session_id')
     if name not in EVENTS or not isinstance(session, str) or not session:

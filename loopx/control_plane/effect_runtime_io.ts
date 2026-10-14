@@ -8,7 +8,7 @@ import {
   readSync,
   writeFileSync,
 } from "node:fs";
-import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, rmdir, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import type { JsonObject } from "./effect_program.ts";
@@ -482,6 +482,19 @@ export async function atomicWriteText(
   content: string,
 ): Promise<void> {
   await atomicWriteTextFile(path, content);
+}
+
+/** Publish a complete staged directory without replacing an existing target.
+ * Callers own source validation, staging cleanup and content durability.
+ */
+export async function publishNewDirectory(staging: string, destination: string): Promise<void> {
+  if (process.platform === "win32") await rename(staging, destination);
+  else {
+    // POSIX rename can replace an empty directory; reserve the name first.
+    await mkdir(destination, {mode: 0o700});
+    try {await rename(staging, destination);}
+    catch (error) {await rmdir(destination); throw error;}
+  }
 }
 
 export async function atomicWriteJson(

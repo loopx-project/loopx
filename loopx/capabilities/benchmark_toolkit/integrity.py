@@ -13,6 +13,8 @@ from enum import Enum
 from typing import Any, TypeGuard, cast
 from urllib.parse import urlsplit
 
+from ...control_plane.content_digest import BARE_SHA256_PATTERN as _SHA256_PATTERN
+
 from .environment_access import (
     _heredoc_delimiters,
     authorized_task_environment_probe_count,
@@ -94,7 +96,6 @@ _BLINDED_EVALUATION_RUNTIME_ATTESTATIONS = (
 _EVALUATION_PROTOCOL_OUTPUT_KINDS = frozenset(
     {"score", "validation", "metrics", "summary", "diagnostics"}
 )
-_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 _DEFAULT_DENIED_ARGUMENT_MARKERS: dict[str, tuple[str, ...]] = {
     "restricted_answer_source_request": (

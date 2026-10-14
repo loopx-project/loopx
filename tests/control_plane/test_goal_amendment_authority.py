@@ -355,3 +355,58 @@ def test_missing_authority_is_not_successful_inspect_or_configuration(source_goa
     # inferred from an absent provider or mutable Markdown.
     code, recovered = _call(f, tmp_path, capsys, "configure", _root(view), agent=None, operation_id="restore-root", execute=True)
     assert code == 0 and recovered["status"] == "applied", recovered
+
+
+@pytest.mark.parametrize("gate_case", ["open_ascii", "closing_unicode", "malformed_json", "invalid_utf8"])
+def test_gate_codec_preserves_native_amendment_admission(source_goal, tmp_path, capsys, monkeypatch, gate_case):
+    """A non-UTF-8 host must decode the source gate without bypassing its refusal."""
+    from loopx.control_plane.goals.source_session_turn_effects import source_turn_effect_gate_path
+
+    f = source_goal
+    code, before = _call(f, tmp_path, capsys, "inspect")
+    assert code == 0 and before["intent"] is None
+    gate_path = source_turn_effect_gate_path(f["registry"], f["ref"]["goal_id"])
+    gate_path.parent.mkdir(parents=True, exist_ok=True)
+    original = gate_path.read_bytes() if gate_path.exists() else None
+    gate = {"schema_version": "loopx_source_turn_effect_gate_v1", "state": "open", "goal_ref": f["ref"]}
+    if gate_case == "closing_unicode":
+        gate = {"schema_version": "loopx_source_turn_effect_gate_v1", "state": "closing",
+            "retired_goal_ref": f["ref"], "new_goal_ref": {**f["ref"], "goal_instance_id": "ginst_" + "b" * 32},
+            "operation_id": "recreate-复核", "request_digest": "sha256:" + "a" * 64}
+    raw = json.dumps(gate, ensure_ascii=False).encode("utf-8")
+    if gate_case == "malformed_json":
+        raw = b'{"state":'
+    elif gate_case == "invalid_utf8":
+        raw = b'{"state":"\xff"}'
+    gate_path.write_bytes(raw)
+    read_text = Path.read_text
+
+    def read_with_ascii_default(path, *args, **kwargs):
+        if path == gate_path and not args and kwargs.get("encoding") is None:
+            kwargs["encoding"] = "ascii"
+        return read_text(path, *args, **kwargs)
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "read_text", read_with_ascii_default)
+            code, result = _call(f, tmp_path, capsys, "configure", _root(before),
+                agent=None, operation_id="codec-root", execute=True)
+        if gate_case == "open_ascii":
+            assert code == 0 and result["status"] == "applied", result
+        else:
+            assert code == 1 and result["ok"] is False, result
+            if gate_case == "closing_unicode":
+                assert result.get("reason_code") == "goal_retirement_in_progress", result
+                assert result["execution_authority_granted"] is False
+    finally:
+        if original is None:
+            gate_path.unlink()
+        else:
+            gate_path.write_bytes(original)
+    code, after = _call(f, tmp_path, capsys, "inspect")
+    assert code == 0, after
+    if gate_case == "open_ascii":
+        assert after["intent"]["root_intent"] == _root(before)["root_intent"]
+    else:
+        assert after["provider_revision"] == before["provider_revision"]
+        assert after["intent"] is None

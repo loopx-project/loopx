@@ -59,6 +59,7 @@ class BenchmarkCodex(CodexOffline):
         replan_after_todos=None,
         replan_after_turns=None,
         stride_strategy=None,
+        checkpoint_request_path=None,
         task_entry=None,
         planning_timeout_sec=300,
         turn_envelope=False,
@@ -102,6 +103,12 @@ class BenchmarkCodex(CodexOffline):
             raise ValueError("stride_strategy requires a LoopX execution mode")
         self.stride_strategy = (normalize_stride_strategy(stride_strategy)
                                 if stride_strategy is not None else None)
+        self.checkpoint_request_path = None
+        if checkpoint_request_path is not None:
+            if self.execution.mode not in {"heartbeat", "turn"}:
+                raise ValueError("checkpoint_request_path requires a settled-work worker")
+            from .checkpoint import normalize_checkpoint_request_path
+            self.checkpoint_request_path = normalize_checkpoint_request_path(checkpoint_request_path)
         self._task_path = "/usr/local/bin:/usr/bin:/bin"
         self._phase_number = 0
         self._seeded_todo_id: str | None = None
@@ -525,6 +532,8 @@ class BenchmarkCodex(CodexOffline):
                 "LOOPX_SHARED_SKILLS": _SHARED_SKILLS,
                 "LOOPX_EXECUTION_MODE": self.execution.mode,
                 "LOOPX_TASK_ENTRY": self.execution.task_entry,
+                **({"LOOPX_CHECKPOINT_REQUEST": self.checkpoint_request_path}
+                   if self.checkpoint_request_path is not None else {}),
                 **({"LOOPX_TURN_ENVELOPE": "1"} if self.execution.turn_envelope else {}),
                 "LOOPX_ITERATION_CONTEXT": self.execution.context,
                 "LOOPX_CODEX_SANDBOX": self.execution.sandbox,

@@ -323,11 +323,22 @@ evidence, relevant scope, freshness and the owning validation result; preserve
 failed and untested outcomes. Existing selected-work acceptance is not global
 Goal acceptance.
 
-Global closeout must reconcile all applicable requirements at the current
-revision, remaining work across Agents and pending amendments. One Agent's
-`no_followup` or completed Todo cannot establish `achieved`. A compact projection
-must retain identity and a lossless detail route rather than substituting a
-display prefix for the source commitment.
+The existing acceptance owner already verifies a versioned contract. A current,
+passing Todo-scoped verification projects `partial` unless an applicable work
+guard holds it; failed, stale and held results keep their distinct status.
+Full verification must cover every criterion in that contract. An accepted
+`selected_work` contract remains limited to its declared work; no acceptance
+write alone changes Goal lifecycle status.
+
+Global closeout must additionally reconcile coverage of the current declared
+mandatory Goal requirements, required work across Agents and amendments that
+can affect the conclusion. Preserve local acceptance and historical receipts
+while exposing a remaining global gap. Optional exploration branches need not
+all finish; recurring work follows its declared wait/termination contract, not
+permanent completion after one observation or an invented endless loop. One
+Agent's `no_followup` or an empty frontier cannot establish `achieved`. Recheck
+applicability at the owning protected action; this requires no new cross-owner
+transaction. A compact projection retains identity and a lossless detail route.
 
 **Delivery boundary:** the existing typed interaction owner generates full Goal
 source reads, enabled canonical acceptance inspection and exact current-Todo
@@ -346,6 +357,41 @@ slice should map existing structured criteria through a work switch and restart,
 reject dropped coverage, and invalidate stale evidence under the same owner.
 
 ### 3.8 Invalid evidence and affected consumers
+
+Recovery and work switching must preserve the different observations defined
+in §3.7. `work_context.complete` currently means source adapters reported no
+failure; it can coexist with a full Goal document still in `required_reads`.
+An inline exact-Todo or acceptance body supplies that read's content, not proof
+that a model consumed it or that its criteria passed. A current continuation
+note, adoption receipt and journal `continue` each qualify their own boundary.
+None is a whole-Goal completion result or an independent execution grant.
+
+For the next new action after compaction, replacement or handoff, qualification
+must reconnect three existing sources: current Goal identity/intent, applicable
+acceptance criterion/revision, and the versions of explicitly consumed evidence.
+Preserve pending reads and unknowns. These reads need not be one cross-owner
+transaction; the owning action boundary must recheck their current applicability
+when a relevant revision changes. Do not add a recovery-context authority or
+infer dependencies from shared words. A Todo-facts fingerprint or file existence
+cannot establish the validity of all three sources.
+
+Original-operation recovery remains separate. Resolve its journal/effect under
+the existing identity and fences; never rewrite an old receipt with a new Goal
+basis to make it continue. Before new dependent work, obtain fresh admission and
+reassess any changed criterion or explicit source. A legal recovery transition
+does not by itself authorize that new work. Preserve unrelated valid results.
+Qualify a criterion change after context capture, a source becoming unavailable
+before dependent work, and an amendment arriving during restore: the original
+effect is reconciled once, stale assumptions do not authorize the next action,
+and stopped work is not revived by reading a snapshot. Full requirement coverage
+and real-model adoption remain the open §3.7/R4 acceptance, not completed by this
+clarification.
+
+The [Goal Direction Baseline](goal-direction-baseline-v0.md) M1 candidate can
+describe declared material drift from supplied inputs. It has no production
+receipt writer/consumer yet and neither authenticates those receipts nor supplies
+the shared Goal-intent revision or execution grant needed here. Preserve this
+observation boundary when composing future direction and acceptance consumers.
 
 This is a proposed qualification contract for existing acceptance and explicit
 result-use owners, not a new global error state, taint graph or automatic
@@ -390,8 +436,8 @@ new context delivery, not erasure of all previous sessions or proof that a model
 understood the correction. Already committed external effects retain their own
 reconciliation or explicitly authorized compensation contract.
 
-**Local implementation checkpoint:** the direct-only gap observed at
-`44931b6d22a50b949d43354e6ea498fb6b68d231` is addressed by the candidate
+**Source implementation checkpoint at `3dd3c550afecfa0c525a34e8744a3cf06774ac94`:**
+the former direct-only gap is addressed by the existing
 [`delegation_result_use.ts`](../../../loopx/control_plane/collaboration/delegation_result_use.ts)
 owner and [`delegation_results.py`](../../../loopx/control_plane/collaboration/delegation_results.py)
 host observations. Read, start, adoption and settlement qualify explicit,
@@ -404,7 +450,8 @@ Admission and adoption consume the aggregate result; expiry after per-link check
 also withdraws those links instead of preserving early success.
 
 [`test_delegation_result_use.py`](../../../tests/test_delegation_result_use.py)
-exercises real local workers, independent validators and both File/SQLite stores:
+exercises synthetic worker tasks through the real local provider, independent
+validators and both File/SQLite stores:
 source → A → B withdraws current use when A's input changes, refuses downstream
 start/adoption, retains history and recovers after repair without redispatching
 accepted workers. Typed tests cover shared sources, cycles and exhausted bounds.

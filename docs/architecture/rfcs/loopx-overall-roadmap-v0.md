@@ -98,6 +98,14 @@ separate from this source repair.
 
 These directly determine whether a long-running team is usable. A directory or README provides an implementation/contract entry, not installed readiness; read availability from `loopx capability list/show` and the selected release.
 
+The [execution, exploration and correction integration guide](../long-running-execution-exploration-and-correction.md)
+connects S3/S4/S6/S7/S10/S11 through existing Host, replan, Explore and acceptance
+owners. Its source comparison covers existing feedback, scoped wake, managed
+native Goal, contract acceptance and source-replayed Explore pages; Direction M1
+remains a pure candidate builder. Live adoption after current-basis recovery,
+whole-Goal requirement coverage and runtime benefit remain separate qualifications
+in the existing milestones; there is no parallel delivery program.
+
 | Area and existing entry | Streams | Next requirement in this roadmap |
 | --- | --- | --- |
 | [Goal Vision/replan](../../reference/protocols/goal-vision-replan-contract-v0.md), [work graph](../../reference/protocols/task-graph-projection-v0.md), [peer runtime](../../reference/protocols/peer-agent-runtime-v1.md), [supervisor](../../reference/protocols/peer-supervisor-v0.md) | S2/S3 | Exercise dependencies, replanning, acceptance and handoff in one real case; aggregate closeout consumes acceptance facts |

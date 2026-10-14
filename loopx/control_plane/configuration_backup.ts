@@ -1,10 +1,10 @@
 /** Configuration checkpoint IO. Configuration owners retain validation and activation. */
-import {lstat, mkdir, mkdtemp, readFile, rename, rm, rmdir} from "node:fs/promises";
+import {lstat, mkdir, mkdtemp, readFile, rm} from "node:fs/promises";
 import {dirname, isAbsolute, join, resolve} from "node:path";
 import type {JsonObject} from "./effect_program.ts";
 import {requireJsonObject, requireNonEmptyString} from "./runtime_decode.ts";
 import {canonicalAuthorityJson, canonicalAuthoritySha256, hasExactAuthorityKeys} from "./coordination/authority_store_codec.ts";
-import {durableWriteJson} from "./effect_runtime_io.ts";
+import {durableWriteJson, publishNewDirectory} from "./effect_runtime_io.ts";
 import {EffectRuntimeConflictError, EffectRuntimeRequestError} from "./effect_runtime_errors.ts";
 
 const SCHEMA = "loopx_configuration_backup_v0";
@@ -88,16 +88,7 @@ export async function restoreConfigurationBackup(value: unknown): Promise<JsonOb
     const receipt = {...verification, status: "restored", written: true,
       live_configuration_changed: false, configuration_files: files.map(([name]) => name)};
     await durableWriteJson(join(staging, "restore-receipt.json"), receipt);
-    if (process.platform === "win32") {
-      // Windows refuses a directory rename into an existing destination,
-      // so the absent-target rename publishes the complete checkpoint.
-      await rename(staging, destination);
-    } else {
-      // POSIX can replace an empty directory; reserve the name exclusively.
-      await mkdir(destination, {mode: 0o700});
-      try { await rename(staging, destination); }
-      catch (error) { await rmdir(destination); throw error; }
-    }
+    await publishNewDirectory(staging, destination);
     return receipt;
   } finally { await rm(staging, {recursive: true, force: true}); }
 }

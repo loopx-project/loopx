@@ -107,6 +107,10 @@ for (const field of ["resolution", "partition_projection", "partition_digest", "
 
 for (const changed of ["prepared", "marker", "symlink", "stale_lineage"] as const) {
   test(`changed ${changed} is rejected without a candidate commit`, async t => {
+    if (changed === "symlink" && process.platform === "win32") {
+      t.skip("file symlink creation needs Windows host privileges");
+      return;
+    }
     const f = await fixture(t);
     const request = await pendingEntry(f, 1, {handoff_mode: "hard_lease", todos: [todo()]});
     const r = selection(request), before = await f.store.loadAuthority();

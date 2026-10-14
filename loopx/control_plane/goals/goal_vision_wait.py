@@ -76,9 +76,19 @@ def _compact_resume_condition(value: Any) -> dict[str, Any]:
             "target_claimed_by",
             "capability",
             "provider",
+            "scheduled_for",
+            "evaluated_at",
+            "clock_provider",
+            "material_change",
+            "material_change_generation",
+            "invalid_state",
         )
         if value.get(key) is not None
     }
+    if value.get("kind") == "resume_at":
+        # Keep the complete positive clock proof for the typed interaction
+        # owner, including the explicit absence of an already-triggered receipt.
+        compact["resume_receipt"] = value.get("resume_receipt")
     compact["satisfied"] = False
     return compact
 

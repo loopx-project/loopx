@@ -48,8 +48,11 @@ test("snapshot rejects existing destinations and source aliases without modifyin
   await assert.rejects(snapshotSqliteDatabase(source, target), /EEXIST/);
   assert.equal(await readFile(target, "utf8"), "keep existing");
   await assert.rejects(snapshotSqliteDatabase(source, source), /distinct absolute/);
-  const alias = join(directory, "alias"); await symlink(source, alias);
-  await assert.rejects(snapshotSqliteDatabase(source, alias), /EEXIST/);
+  // File symlink creation needs Developer Mode or admin on Windows.
+  if (process.platform !== "win32") {
+    const alias = join(directory, "alias"); await symlink(source, alias);
+    await assert.rejects(snapshotSqliteDatabase(source, alias), /EEXIST/);
+  }
   assert.deepEqual(await readFile(source), original);
 });
 

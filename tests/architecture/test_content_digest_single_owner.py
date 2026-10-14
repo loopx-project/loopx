@@ -158,6 +158,7 @@ CONSUMER_MODULES = (
     "loopx.capabilities.benchmark_toolkit.behavior_finding",
     "loopx.capabilities.benchmark_toolkit.continuation",
     "loopx.capabilities.benchmark_toolkit.factorial_contrast",
+    "loopx.capabilities.benchmark_toolkit.integrity",
     "loopx.capabilities.benchmark_toolkit.runtime_continuity",
     "loopx.capabilities.benchmark_toolkit.study_projection",
     "loopx.capabilities.content_ops.item_lifecycle",
@@ -208,9 +209,15 @@ CONSUMER_MODULES = (
     "loopx.presentation.static_site",
 )
 
-# A consumer that hands `re` a pattern this file cannot fold. Pinned empty: folding reads
-# every construction in every consumer today, so adding an entry has to be argued.
-UNREADABLE_CONSUMER_CONSTRUCTIONS: dict[str, str] = {}
+# A consumer that hands `re` a pattern this file cannot fold. Folding reads
+# every construction except the declared marker reader, which is fenced below.
+UNREADABLE_CONSUMER_CONSTRUCTIONS: dict[str, str] = {
+    "loopx.capabilities.benchmark_toolkit.integrity": (
+        "_marker_present matches an escaped caller-supplied filename/token inside "
+        "command text with explicit basename boundaries; it does not validate a "
+        "whole-value digest. Its sole dynamic regex is fenced to that reader."
+    ),
+}
 
 # Reading `.pattern` off the owner and recompiling it states the decision a second time
 # while showing the scan no shape at all. Pinned empty; widening it is a review event.
@@ -1581,3 +1588,49 @@ def test_chat_bundle_source_digest_uses_the_owner_bare_shape() -> None:
     from loopx.presentation import chat_bundle
 
     assert chat_bundle.BARE_SHA256_PATTERN is BARE_SHA256_PATTERN
+
+
+@pytest.mark.parametrize("digest", (*BARE_ACCEPTS, *BARE_REJECTS))
+def test_benchmark_task_authorization_keeps_the_bare_digest_contract(
+    digest: str,
+) -> None:
+    from loopx.capabilities.benchmark_toolkit.integrity import (
+        BENCHMARK_TASK_ENVIRONMENT_ACCESS_SCHEMA_VERSION,
+        _validated_task_environment_access,
+    )
+
+    access = {
+        "schema_version": BENCHMARK_TASK_ENVIRONMENT_ACCESS_SCHEMA_VERSION,
+        "authorization_id": "digest-contract-fixture",
+        "authorization_sha256": digest,
+        "authority": "benchmark_task",
+        "purpose": "task_submission",
+        "namespace": "TASKCAP_",
+        "variable_names": ["TASKCAP_TOKEN"],
+    }
+    if digest in BARE_ACCEPTS:
+        normalized = _validated_task_environment_access(access)
+        assert normalized is not None
+        assert normalized["authorization_sha256"] == digest
+    else:
+        with pytest.raises(
+            ValueError,
+            match="benchmark_task_environment_access_authorization_sha256_invalid",
+        ):
+            _validated_task_environment_access(access)
+
+
+def test_benchmark_dynamic_regex_exemption_stays_in_the_marker_reader() -> None:
+    analysis = _module_of("loopx.capabilities.benchmark_toolkit.integrity")
+    unreadable = [item for item in analysis["constructions"] if not item["readable"]]
+    source = (PACKAGE_ROOT / "capabilities/benchmark_toolkit/integrity.py").read_text(
+        encoding="utf-8"
+    )
+    marker_reader = next(
+        node
+        for node in ast.parse(source).body
+        if isinstance(node, ast.FunctionDef) and node.name == "_marker_present"
+    )
+    assert len(unreadable) == 1, "the marker exception must not hide another matcher"
+    assert marker_reader.lineno <= unreadable[0]["line"] <= marker_reader.end_lineno
+    assert unreadable[0]["construction"] == "search", "not a whole-value reader"

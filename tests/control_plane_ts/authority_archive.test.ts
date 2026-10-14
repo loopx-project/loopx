@@ -22,7 +22,12 @@ function sqliteSkipReason(): string | undefined {
 const sqliteSkip = sqliteSkipReason();
 
 for (const platform of ["win32", "linux"] as const) {
-  test(`archive publication preserves the ${platform} directory-sync boundary`, async () => {
+  test(`archive publication preserves the ${platform} directory-sync boundary`, {
+    // A Windows kernel cannot fsync a directory handle, so the simulated Linux
+    // boundary is only reproducible on a POSIX host.
+    skip: platform === "linux" && process.platform === "win32"
+      ? "the linux directory-sync boundary needs a POSIX host" : false,
+  }, async () => {
     const root = await mkdtemp(join(tmpdir(), "authority-archive-"));
     const source = new FileAuthorityStore(join(root, "source"), "goal");
     const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;

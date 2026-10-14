@@ -141,7 +141,7 @@ milestone status.
 | Stall detection | Consecutive materially equivalent typed observations can derive a replan trigger. |
 | Semantic replan closure | New typed dimensions, a grounded successor, a concrete blocker, or coverage-backed terminal result can close the current obligation. |
 | Host-delivered context | Quota can project a compact coverage ledger and uncovered frontier without requiring a manual evidence-read ritual. |
-| Explore evidence | Explore owns append-only nodes, edges, findings, and bounded public-safe projections. |
+| Explore evidence and ordinary capture | Explore owns append-only nodes/edges/findings. Existing result attachments validate before primary work commit, then deliver an idempotent finding and Todo link; a partial link failure retains the committed work and replays the same operation. Bounded turn context returns scoped evidence. This is capture/readback, not the §11.5 decision-adoption gate. |
 | Research evidence and cold shadow | [Research observation v0](../../reference/protocols/research-observation-v0.md) composes generic progress with typed closure and explicit binary candidates. CLI summary and Lark node summaries share the read-only projection; exact experiment input fingerprints guard stale results. |
 | Explicit M3 composition gate | [PR #5280](https://github.com/loopx-project/loopx/pull/5280) merged as `1e6cae19f` on 2026-10-12. Opt-in Goal-frontier, Todo, experiment and input lineage share a typed write-time qualification across File and SQLite; stale or unrelated evidence cannot discharge the current obligation. The existing Goal capability editor and CLI own activation. This is an integrated rule, not evidence of accepted scientific results or natural-host use. |
 | Explore planning | Optional branch planners are read-only and return execution to quota, Todo, claim, and lease. |
@@ -615,8 +615,14 @@ or infer research truth from Todo churn.
 
 #### Bind a question and the scope of its evidence
 
-For the first real caller, compose an explicit versioned Explore attachment;
-do not add unknown fields to research observation v0. Its conceptual data are:
+Ordinary scoped findings already use `explore_result_attachment_v0` or the
+existing `explore_result_from_path_delta_v0` form through
+[work writeback](../../../loopx/capabilities/explore/README.md#results-from-ordinary-work-writeback).
+Reuse that capture/replay path. The first §11.5 caller must identify which
+additional result-validity and decision-adoption facts it needs, then extend a
+registered contract only where those facts are absent; do not invent a second
+result log or add unknown fields to research observation v0. The remaining
+decision contract needs the following conceptual data:
 
 | Data | Owning meaning |
 |---|---|
@@ -625,8 +631,9 @@ do not add unknown fields to research observation v0. Its conceptual data are:
 | Result and validity | Exact provider result revision/evidence, comparison and uncertainty/guardrail assessment. Failed, missing or incomparable measurements remain distinct from valid negative evidence. |
 | Decision and adoption | Exact input/result fingerprints, existing `continue`/`no_change`/`replan` path outcome, evidence refs and bound task step or grounded successor. A repeat needs a new discriminating question or an explicit replication/uncertainty reason and budget. |
 
-This is a design inventory, not an accepted wire schema or new global enum.
-Explore owns the future TS codec/reducer; compute/capture providers adapt it
+This is a design inventory for the additional decision contract, not a claim
+that generic result capture is missing, an accepted wire schema or a new global
+enum. Explore owns its TS codec/reducer; compute/capture providers adapt it
 without a parallel decision owner. Reuse nodes, findings, `supports`/`refutes`,
 closure and input-fingerprint semantics. Compose a versioned decision
 attachment with the existing Goal path delta and Todo-bound recommendation
@@ -655,8 +662,10 @@ an unchanged measurement is not novelty. No fixed failure count forces a pivot.
    is not research evidence.
 2. Under an explicit per-Goal opt-in, project one compact pending decision for
    its bound experiment/Todo: question, incumbent, applicable exclusions,
-   uncertainty/invalidity, input/result refs and remaining budget. Building the
-   projection needs neither a full log nor a new reasoning-model call.
+   uncertainty/invalidity, input/result refs and remaining budget. Bound the
+   delivered packet without truncating its source truth. Measure source-log
+   validation, indexing and bridge costs separately; current bounded views may
+   read a complete log. Projection alone needs no additional reasoning call.
 3. The normal admitted Agent decides. Continuing is legal if it states what
    new information the next probe should obtain and why the exclusion does not
    already answer it. A pivot names the changed question/mechanism and its
@@ -677,6 +686,39 @@ Binding is not proof of quality. Operational validity, new research information,
 native outcome improvement and Goal acceptance are separate observations. A
 useful negative result can be delivery without a score gain; a series of
 negative experiments must still expose changed knowledge and remaining frontier.
+
+Progressive evidence access already has a production writeback consumer: the
+current source replays declared Explore result pages before admitting omitted
+finding references. Reuse the page/basis and recovery rules in
+[Stride §7.6](hierarchical-agent-stride-control-v0.md#76-research-scope-and-evidence-conditioned-control);
+do not define a second pagination or adoption receipt here. Page eligibility,
+explicit delegated-result use and actual model adoption establish different
+facts. Qualify the sequence **provider result → current source readback →
+admitted work → attributable artifact → independent outcome → next review**.
+Exercise unavailable sources, valid but inapplicable findings, scoped negative
+evidence and results that support continuing the incumbent. Copying a finding
+or filling an evidence reference is insufficient; a justified no-change decision
+remains legal. Inspect omitted counterevidence and measure source scan, sort,
+hash, serialization and delivered context separately as history grows.
+
+#### Choose investigation by the decision it can change
+
+Initial uncertainty, a new opportunity, explicit user direction or counterevidence
+can justify exploration; repeated failure is neither required nor an automatic
+method-switch rule. Name the question, unchanged constraints, discriminating
+evidence, budget and stopping condition before selecting a source-reading,
+external-research or experiment workflow. These are ordinary work choices, not
+a new skill router or a mandatory sequence of skills. Parallel branches require
+distinct useful questions and existing capacity/authority.
+
+A skill report or child completion is candidate evidence. Retain sources,
+applicability, tested revision and unresolved contradictions through capture;
+do not infer findings by parsing arbitrary report prose. The next admitted
+decision may adopt, defer, repeat with a scoped reason or retain the incumbent.
+Record the exact task/step or result relationship through existing owners and
+inspect actual work before claiming adoption. No-change can be a useful result;
+ordinary work without a reusable finding needs no empty attachment. Capture,
+model use, independent outcome and full cost are separate qualification rows.
 
 #### Smallest usable path and qualification
 
@@ -716,6 +758,11 @@ model adoption and scientific utility under matched total budgets. Lower
 control cost must not come from hiding useful negative evidence.
 
 ### 11.6 Research scope review at the shared replan boundary
+
+See the [execution, exploration and correction integration guide](../long-running-execution-exploration-and-correction.md)
+for selecting a research method, returning evidence through the existing Explore
+attachment, and qualifying its effect on subsequent work. It reuses this RFC's
+owners without making exploration mandatory for ordinary execution.
 
 The [stride control loop](hierarchical-agent-stride-control-v0.md#76-research-scope-and-evidence-conditioned-control)
 complements result adoption. It asks whether the next experiment should change
