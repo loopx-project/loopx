@@ -113,7 +113,10 @@ def restore_workspace(declaration: dict, workspace: Path):
     original = workspace.with_name(workspace.name + ".before-checkpoint")
     if original.exists() or original.is_symlink():
         raise ValueError("Receiver workspace was already prepared; inspect the original attempt")
-    workspace.rename(original)
+    # Overlay-backed task-image directories may reject rename with EXDEV.
+    # shutil.move preserves a complete backup before removing that fresh image
+    # tree; a partial attempt still cannot be reused.
+    shutil.move(str(workspace), str(original))
     shutil.copytree(source, workspace, symlinks=True)
 
 

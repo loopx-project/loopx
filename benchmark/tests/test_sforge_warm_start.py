@@ -127,3 +127,17 @@ sys.meta_path.insert(0, RejectHostDependency())
 from benchmark.runtime.sforge_warm_start import restore_workspace, prepare_context
 """
     subprocess.run([sys.executable, "-c", script], check=True)
+
+
+def test_overlay_workspace_backup_survives_cross_device_rename(point, monkeypatch):
+    import errno
+    start, workspace = point
+    (workspace / "image-only").write_text("original image")
+    def cross_device(*args, **kwargs):
+        raise OSError(errno.EXDEV, "overlay directory rename")
+    monkeypatch.setattr("os.rename", cross_device)
+    warm.restore_workspace({"root": str(start.root), "sha256": start.sha256}, workspace)
+    backup = workspace.with_name("workspace.before-checkpoint")
+    assert (backup / "image-only").read_text() == "original image"
+    assert not (workspace / "image-only").exists()
+    assert (workspace / "candidate").read_text() == "retained candidate"
