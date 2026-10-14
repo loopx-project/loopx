@@ -11,7 +11,7 @@ import {testPythonCommand} from '../../../../scripts/test-python.mjs';
 import {launchBrowser,loadPlaywright} from '../../../../examples/dashboard-browser-smoke-support.mjs';
 const repo=resolve(import.meta.dirname,'../../../..');
 const output=resolve(repo,'output/playwright/request-control');await mkdir(output,{recursive:true});
-const root=await mkdtemp(resolve(tmpdir(),'request-control-browser-'));
+const root=await mkdtemp(resolve(tmpdir(),'rc-'));
 const socket=createServer();await new Promise(r=>socket.listen(0,'127.0.0.1',r));const port=socket.address().port;await new Promise(r=>socket.close(r));
 const command=testPythonCommand(await readFile(resolve(repo,'apps/presentation/dashboard/smoke/request-control-http-fixture.py'),'utf8'),{repoRoot:repo});
 const child=spawn(command.command,[...command.args,root,String(port)],{cwd:root,env:{...process.env,LOOPX_USAGE_PING:'0',TMPDIR:root,NODE_OPTIONS:'--experimental-sqlite'},stdio:['pipe','pipe','pipe']});
@@ -46,6 +46,47 @@ try{
   return card;
  }
  let card=await enter();let panel=card.locator('.personal-request-control');
+ await panel.getByRole('button',{name:'修正内容',exact:true}).click();
+ await panel.getByLabel('背景与补充',{exact:true}).fill('Use corrected evidence for this contract');
+ // A successful storage call is not proof that the whole original request can
+ // survive a lost reply and reload. Fault only browser retention; the real
+ // request/Goal owners and the response-loss route above stay in place.
+ await page.evaluate(()=>{
+  const set=Storage.prototype.setItem,get=Storage.prototype.getItem;
+  window.requestRetentionFault='drop';
+  Storage.prototype.setItem=function(key,value){
+   if(key.startsWith('loopx.request-control.')){
+    if(window.requestRetentionFault==='drop')return;
+    if(window.requestRetentionFault==='changed-content'){
+     const saved=JSON.parse(value);saved.parameters.brief.context='Different retained content';
+     return set.call(this,key,JSON.stringify(saved));
+    }
+   }
+   return set.call(this,key,value);
+  };
+  Storage.prototype.getItem=function(key){
+   if(key.startsWith('loopx.request-control.')&&window.requestRetentionFault==='unreadable')throw Error('Storage read unavailable');
+   return get.call(this,key);
+  };
+ });
+ for(const fault of ['drop','changed-content','unreadable']){
+  await page.evaluate(value=>{window.requestRetentionFault=value;},fault);
+  await panel.getByRole('button',{name:'保存修正',exact:true}).click();
+  await panel.getByText('无法保存恢复信息，本次操作尚未发送。',{exact:true}).waitFor();
+  assert.equal(writes.length,0,'unrecoverable request must never execute');
+  assert.equal((await fixture('inspect')).revision,1);
+  assert.equal(await panel.getByLabel('背景与补充',{exact:true}).inputValue(),'Use corrected evidence for this contract');
+  assert.equal(await panel.getByLabel('背景与补充',{exact:true}).isEnabled(),true);
+  assert.equal(await panel.getByRole('button',{name:'重试原操作',exact:true}).count(),0);
+ }
+ await panel.screenshot({path:resolve(output,'retention-unavailable.png')});
+ await page.evaluate(()=>{
+  window.requestRetentionFault=null;
+  for(const key of Object.keys(sessionStorage))if(key.startsWith('loopx.request-control.'))sessionStorage.removeItem(key);
+ });
+ await page.reload();card=await enter();panel=card.locator('.personal-request-control');
+ assert.equal(await panel.getByRole('button',{name:'重试原操作',exact:true}).count(),0);
+ assert.equal((await fixture('inspect')).revision,1);
  await panel.getByRole('button',{name:'修正内容',exact:true}).click();
  await panel.getByLabel('背景与补充',{exact:true}).fill('Use corrected evidence for this contract');
  await panel.getByRole('button',{name:'保存修正',exact:true}).click();
@@ -95,6 +136,6 @@ try{
  await english.getByText('Request cancelled',{exact:true}).waitFor();
  await english.screenshot({path:resolve(output,'english.png')});
  assert.deepEqual(errors,[]);
- console.log('PASS: real source registration, normal Chat entrance, original request correction, unknown reply/reload, stale edit, independent receiver CLI, reserved effect and cancellation terminal readback.');
+ console.log('PASS: real source registration, normal Chat entrance, silent-drop/changed-content/unreadable retention refuses execution and preserves draft, original request correction, unknown reply/reload/exact retry, stale edit, independent receiver CLI, reserved effect and cancellation terminal readback.');
 }catch(error){if(page){await page.screenshot({path:resolve(output,'failure.png'),fullPage:true}).catch(()=>{});await (await import('node:fs/promises')).writeFile(resolve(output,'failure.txt'),await page.locator('body').innerText());}throw error;}
 finally{await page?.unrouteAll({behavior:"ignoreErrors"}).catch(()=>{});await browser?.close();child.kill('SIGTERM');await new Promise(r=>child.exitCode!==null?r():child.once('exit',r));lines.close();await rm(root,{recursive:true,force:true});}

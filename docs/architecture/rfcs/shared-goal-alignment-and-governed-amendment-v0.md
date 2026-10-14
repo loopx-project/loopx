@@ -1027,8 +1027,11 @@ writing an abort into another authority store.
 **Owner journey.** Open the original private conversation's delegation details.
 Edit the brief or cancel the request there; Goal/receiver/source identities are
 already bound to the original message. Saving validates and writes in one user
-gesture. A failed current read clears current controls. Unknown write responses
-retain the original request across reload; retry that exact operation. A typed
+gesture. A failed current read clears current controls. Before dispatch, read
+back the complete retained request, including its route, operation, basis and
+content. If retention fails, keep the editable page draft and send no mutation;
+an in-memory value alone does not establish reload recovery. Unknown write responses
+retain that original request across reload; retry that exact operation. A typed
 stale-basis refusal reloads the latest revision for editing. Pending cancellation
 and committed/aborted/rejected outcomes remain distinct. Historical Goal instances
 remain read-only here; this is not restored-runtime authorization.

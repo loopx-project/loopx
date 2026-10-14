@@ -41,7 +41,13 @@ export function RequestControl({route, active, onReadback, onEditing}: {route: R
   const routeKey = requestControlRouteKey(route);
   const show = useCallback((value: RequestControlView | null) => {setView(value); onRead.current(value);}, []);
   const remember = (value: PendingRequestControl | null) => {
-    if (value) sessionStorage.setItem(storageKey, JSON.stringify(value)); else sessionStorage.removeItem(storageKey);
+    if (value) {
+      const serialized = JSON.stringify(value);
+      sessionStorage.setItem(storageKey, serialized);
+      // As with steering retention, dispatch only after the complete original
+      // request can be read back for an exact retry after response loss/reload.
+      if (sessionStorage.getItem(storageKey) !== serialized) throw new Error(c.storage);
+    } else sessionStorage.removeItem(storageKey);
     setPending(value);
   };
   const load = useCallback(async () => {
