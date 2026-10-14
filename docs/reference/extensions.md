@@ -790,30 +790,36 @@ execute or replace kernel logic.
 have already been decided by the Agent or caller. The adapter may bind and
 settle provider evidence, but it must not infer the action from provider text.
 
+The example below is a trimmed copy of the bundled `loopx-lark` manifest and
+loads with `loopx.extensions.manifest.load_extension_manifest`. A hook
+adapter's `required_permissions` must be a subset of the top-level
+`permissions`; a manifest that declares a hook permission it does not grant is
+rejected before install.
+
 ```toml
 schema_version = "loopx_extension_manifest_v0"
 id = "loopx-lark"
-version = "1.0.0"
+version = "1.7.0"
 requires_loopx_api = ">=1,<2"
-permissions = ["read_status", "read_todos", "external_write"]
+permissions = ["lark.inbox.read", "lark.inbox.write", "lark.projection_sink.use"]
 
 [runtime]
-protocol = "lark_kanban_provider_v0"
+protocol = "lark_extension_lifecycle_v0"
 python_module = "loopx.extensions.lark.provider"
 doctor_args = ["--doctor"]
-required_permissions = ["read_status", "read_todos"]
+required_permissions = []
 timeout_seconds = 30
 
 [[provides]]
-id = "lark-kanban"
+id = "lark-kanban-projection"
 kind = "projection_sink"
 title = "Lark Kanban projection"
-status = "active"
+status = "active-preview"
 visibility = "public"
-real_world_anchor = "operator-facing Lark Base projection"
-user_value = "Project public-safe LoopX status and todo rows into Lark."
-entry_command = "loopx lark-kanban sync"
-next_real_step = "Validate one explicitly enabled owner-approved sink."
+real_world_anchor = "LoopX todo and control-plane projections rendered into a configured Lark Base"
+user_value = "Give operators a bounded, lineage-preserving Kanban view without making Lark the control-plane source of truth."
+entry_command = "loopx lark-kanban sync-projection --projection-file <projection.json>"
+next_real_step = "Install or upgrade and explicitly enable the bundled provider before configuring a Lark Kanban sink."
 
 [[hook_adapters]]
 id = "lark-periodic-report-source"
