@@ -662,6 +662,22 @@ not a command to resize work. Verification must resolve a named next decision;
 repeating unchanged checks is not a default policy. The next probe declares
 minimum evidence for a coherent accepted deliverable or interpretable experiment, its prediction, adoption criterion and full cost.
 
+The enabled review now supplies `decision_value_review` questions for the three
+existing axes. Identify the remaining authoritative goal gap, its limiting
+component and plausible headroom before choosing the next mechanism. Compare
+continuation with one feasible different approach that could affect that
+component, including complete cost. A changed auxiliary mechanism can be useful,
+but its novelty does not establish that it addresses the remaining gap. Local or
+synthetic improvement needs applicable transfer evidence; repeated identical
+outcomes are not new information. Prefer the smallest coverage that resolves the
+choice to another broad sweep, while preserving relevant failure evidence.
+
+These questions guide existing axis plans/reasons and `next_probe`; they add no
+decision field, settlement gate, automatic pivot, family ban or strategy version.
+Missing headroom remains unknown. Transport and proposal validation establish
+delivery of this advice; model adoption, stronger results and net efficiency
+still require same-state continuation and full-cost qualification.
+
 Ordinary engineering, organizing and maintenance use the same strategy and
 existing Todo/Next Action. `grow` may complete related implementation,
 integration, validation and readback as one useful delivery slice, reducing
