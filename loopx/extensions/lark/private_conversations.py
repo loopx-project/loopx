@@ -221,7 +221,8 @@ class LarkPrivateConversations:
 
     def health(self) -> dict[str, dict[str, int]]:
         health: dict[str, dict[str, int]] = {}
-        for path in [*self.root.glob("*.json"), *self.root.glob("web-projections/*.json")]:
+        for path in [*self.root.glob("[0-9a-f]" * 24 + ".json"),
+                     *self.root.glob("web-projections/" + "[0-9a-f]" * 24 + ".json")]:
             row = _read_json(path)
             entry = health.setdefault(row["binding_id"], {"pending_count": 0, "recovery_count": 0})
             if row["status"] != "delivered":
@@ -1272,7 +1273,7 @@ class LarkPrivateConversations:
     def pending_delivery_paths(self) -> list[Path]:
         """The durable transport store is the queue; no in-memory admission."""
         paths = []
-        for path in sorted(self.root.glob("*.json")):
+        for path in sorted(self.root.glob("[0-9a-f]" * 24 + ".json")):
             row = _read_json(path)
             if row["status"] != "delivered":
                 paths.append(path)
@@ -1300,7 +1301,7 @@ class LarkPrivateConversations:
             enabled = {row["binding_id"] for row in self.bindings.read()["bindings"]
                        if row.get("enabled") is True and row.get("audience", "owner") == "owner"}
             sources: dict[str, dict[str, Any]] = {}
-            for path in sorted(self.root.glob("*.json")):
+            for path in sorted(self.root.glob("[0-9a-f]" * 24 + ".json")):
                 row = _read_json(path)
                 if (row.get("binding_id") in enabled and row.get("session_id")
                         and row.get("event", {}).get("chat_type") == "p2p"
