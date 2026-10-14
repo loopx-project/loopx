@@ -217,6 +217,30 @@ def test_invalid_amounts_are_rejected(value):
         check(r)
 
 
+@pytest.mark.parametrize("value", [True, 1, " TEST", "TEST "])
+def test_units_and_source_ids_require_exact_strings(value):
+    for object_name, field in [
+        ("terms", "price_unit"),
+        ("budget", "cash_unit"),
+        ("exposure_bound", "cash_unit"),
+        ("exposure_bound", "source_ref"),
+    ]:
+        r = request()
+        r[object_name][field] = value
+        with pytest.raises(ValueError):
+            check(r)
+
+
+def test_identically_malformed_boolean_units_cannot_pass():
+    r = request()
+    for name in ["instrument", "quantity_unit", "price_unit", "fee_unit"]:
+        r["terms"][name] = True
+    r["budget"]["cash_unit"] = r["exposure_bound"]["cash_unit"] = True
+    r["exposure_bound"]["terms_digest"] = _digest(r["terms"])
+    with pytest.raises(ValueError):
+        check(r)
+
+
 def test_cli_pass_held_and_redacted_error():
     env = {**os.environ, "PYTHONPATH": str(PACKAGE)}
     for r, expected in [

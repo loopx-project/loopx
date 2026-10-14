@@ -29,6 +29,11 @@ _BOUND_FIELDS = _AMOUNTS | {
 }
 
 
+def _opaque_id(value: object, name: str) -> None:
+    if not isinstance(value, str) or _token(value, field=name) != value:
+        raise ValueError(f"{name} requires an exact opaque string")
+
+
 def check_risk_bound(
     terms: object,
     budget: object,
@@ -46,6 +51,20 @@ def check_risk_bound(
     execution permit. Preserve this result beside the original source receipt.
     """
     order = _order(terms, TERMS_SCHEMA)
+    for name in (
+        "account_ref",
+        "venue",
+        "product",
+        "instrument",
+        "side",
+        "quantity_unit",
+        "order_type",
+        "price_unit",
+        "time_in_force",
+        "margin_mode",
+        "fee_unit",
+    ):
+        _opaque_id(order[name], name)
     limits = _object(
         budget,
         {"schema_version", "cash_unit", "maximum_input", "maximum_loss"},
@@ -53,7 +72,7 @@ def check_risk_bound(
     )
     if limits["schema_version"] != "finance_risk_budget_v0":
         raise ValueError("unsupported risk budget")
-    _token(limits["cash_unit"], field="cash_unit")
+    _opaque_id(limits["cash_unit"], "cash_unit")
     maximum_input = _number(limits["maximum_input"], "maximum_input")
     maximum_loss = _number(limits["maximum_loss"], "maximum_loss")
     if type(maximum_age_seconds) is not int or not 0 < maximum_age_seconds <= 300:
@@ -89,8 +108,8 @@ def check_risk_bound(
         bound = _object(exposure_bound, _BOUND_FIELDS, "exposure_bound")
         if bound["schema_version"] != "finance_exposure_bound_v0":
             raise ValueError("unsupported exposure bound")
-        _token(bound["source_ref"], field="source_ref")
-        _token(bound["cash_unit"], field="cash_unit")
+        _opaque_id(bound["source_ref"], "source_ref")
+        _opaque_id(bound["cash_unit"], "cash_unit")
         if bound["terms_digest"] != digest:
             reasons.append("terms_digest_mismatch")
         if bound["liability_scope"] not in {"capped", "uncapped", "unknown"}:
