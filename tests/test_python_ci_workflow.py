@@ -325,6 +325,9 @@ def test_six_shards_execute_each_test_once_and_merge_portable_coverage(
         )
         (root / "test_subject.py").write_text(
             "from ci_subject import first, second\n"
+            "import pytest, time\n"
+            "@pytest.fixture(autouse=True)\n"
+            "def slow_setup(): time.sleep(0.03)\n"
             "def test_first_one():\n    assert first() == 1\n"
             "def test_first_two():\n    assert first() == 1\n"
             "def test_second_one():\n    assert second() == 2\n"
@@ -338,6 +341,10 @@ def test_six_shards_execute_each_test_once_and_merge_portable_coverage(
             encoding="utf-8",
         )
         args = shlex.split(template.replace("${{ matrix.shard }}", str(shard)))
+        assert args[args.index("--ci-stall-after") + 1] == "120"
+        # Exercise the same diagnostic on a bounded real fixture. Dumping a
+        # stack must still permit complete collection, success and coverage.
+        args[args.index("--ci-stall-after") + 1] = "0.01"
         args[0] = sys.executable
         args[args.index("--cov=loopx")] = "--cov=ci_subject"
         result = subprocess.run(
@@ -345,6 +352,7 @@ def test_six_shards_execute_each_test_once_and_merge_portable_coverage(
             capture_output=True, text=True, timeout=60, check=False,
         )
         assert result.returncode == 0, result.stdout + result.stderr
+        assert "LOOPX_PYTEST_STACK " in result.stdout + result.stderr
         cases = ET.parse(root / "results.xml").findall(".//testcase")
         seen.append({case.attrib["name"] for case in cases})
         partial = subprocess.run(

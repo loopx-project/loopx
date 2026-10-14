@@ -34,7 +34,8 @@ def read_log(path, *, success=True):
 
 @pytest.mark.parametrize("verbosity", ["-v", "-q"])
 @pytest.mark.parametrize("workers", [0, 2])
-def test_real_xdist_timings_match_native_pytest_owner(tmp_path, verbosity, workers):
+@pytest.mark.parametrize("stack_timeout", [0, 0.01], ids=["no-stack", "stack"])
+def test_real_xdist_timings_match_native_pytest_owner(tmp_path, verbosity, workers, stack_timeout):
     (tmp_path / "test_subject.py").write_text(
         "import time, pytest\n"
         "def test_pass(): time.sleep(0.03)\n"
@@ -57,11 +58,13 @@ def test_real_xdist_timings_match_native_pytest_owner(tmp_path, verbosity, worke
     with log.open("w") as output:
         result = subprocess.run(
             [sys.executable, "-m", "pytest", verbosity, "-n", str(workers),
+             "--ci-stall-after", str(stack_timeout),
              "-p", "scripts.ci.pytest_timing", "--store-durations", "--clean-durations",
              "--durations-path", "native.json", "--junitxml=junit.xml"],
             cwd=tmp_path, env=environment(), stdout=output, stderr=subprocess.STDOUT,
             timeout=30, check=False)
     assert result.returncode == 1
+    assert ("LOOPX_PYTEST_STACK " in log.read_text()) == bool(stack_timeout)
     assert all(line.startswith(PREFIX) for line in log.read_text().splitlines()
                if PREFIX in line)
     report = read_log(log)
@@ -129,9 +132,87 @@ def test_real_pytest_subtest_cost_is_included_once_in_parent_call(tmp_path):
         sum(row["duration"] for row in parents), abs=1e-6)
 
 
+@pytest.mark.parametrize("delay", ["-1", "nan", "inf", "-inf"])
+def test_stall_snapshot_rejects_invalid_delay_before_running_tests(tmp_path, delay):
+    (tmp_path / "test_subject.py").write_text(
+        "from pathlib import Path\n"
+        "def test_unreachable(): Path('ran').touch()\n", encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "scripts.ci.pytest_timing",
+         "--ci-stall-after=" + delay], cwd=tmp_path, env=environment(),
+        capture_output=True, text=True, timeout=10, check=False)
+    assert result.returncode == 4
+    assert "must be finite and nonnegative" in result.stderr
+    assert not (tmp_path / "ran").exists()
+
+
+@pytest.mark.parametrize("stderr", ["None", "io.StringIO()"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_stall_snapshot_requires_original_descriptor_only_when_enabled(tmp_path, stderr, enabled):
+    (tmp_path / "test_subject.py").write_text(
+        "from pathlib import Path\n"
+        "def test_example(): Path('ran').touch()\n", encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, "-c", "import io, sys, pytest; sys.__stderr__ = " + stderr
+         + "; raise SystemExit(pytest.main(sys.argv[1:]))", "-q",
+         "-p", "scripts.ci.pytest_timing", "--ci-stall-after=" + str(int(enabled))],
+        cwd=tmp_path, env=environment(), capture_output=True, text=True,
+        timeout=10, check=False)
+    assert result.returncode == (4 if enabled else 0)
+    assert (tmp_path / "ran").exists() == (not enabled)
+    if enabled:
+        assert "requires an original stderr file descriptor" in result.stderr
+
+
+@pytest.mark.parametrize("workers", [0, 2])
+def test_stall_snapshot_output_failure_preserves_native_test_results(tmp_path, workers):
+    (tmp_path / "conftest.py").write_text(
+        "import os\nfrom pathlib import Path\n"
+        "original_write = os.write\n"
+        "def broken_snapshot(fd, data):\n"
+        "    if data.startswith(b'\\nLOOPX_PYTEST_STACK '):\n"
+        "        Path('attempt-' + str(os.getpid())).touch()\n"
+        "        raise OSError('diagnostic output unavailable')\n"
+        "    return original_write(fd, data)\n"
+        "def pytest_configure(config): os.write = broken_snapshot\n",
+        encoding="utf-8")
+    (tmp_path / "test_subject.py").write_text(
+        "import time\n"
+        "def test_pass(): time.sleep(0.03)\n"
+        "def test_fail():\n"
+        "    time.sleep(0.03)\n"
+        "    assert False\n", encoding="utf-8")
+    log = tmp_path / "io-failure.log"
+    with log.open("w") as output:
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", "-n", str(workers),
+             "-p", "scripts.ci.pytest_timing", "--ci-stall-after=0.01"],
+            cwd=tmp_path, env=environment(), stdout=output, stderr=subprocess.STDOUT,
+            timeout=30, check=False)
+    assert result.returncode == 1
+    assert list(tmp_path.glob("attempt-*"))
+    assert "LOOPX_PYTEST_STACK " not in log.read_text()
+    report = read_log(log)
+    assert report["execution_complete"] and report["pytest_exit_code"] == 1
+    assert report["selected_cases"] == report["finished_cases"] == 2
+
+
+@pytest.mark.parametrize("workers", [0, 2])
+def test_completed_tests_cancel_pending_stall_snapshot(tmp_path, workers):
+    (tmp_path / "test_subject.py").write_text("def test_quick(): pass\n", encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-n", str(workers),
+         "-p", "scripts.ci.pytest_timing", "--ci-stall-after=60"],
+        cwd=tmp_path, env=environment(), capture_output=True, text=True,
+        timeout=10, check=False)
+    assert result.returncode == 0
+    assert "LOOPX_PYTEST_STACK " not in result.stdout + result.stderr
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group kill; hosted shards are Linux")
 @pytest.mark.parametrize("verbosity", ["-v", "-q"])
-def test_killed_controller_leaves_partial_readable_native_observations(tmp_path, verbosity):
+@pytest.mark.parametrize("stack_timeout", [0, 0.1], ids=["no-stack", "stack"])
+def test_killed_controller_leaves_partial_readable_native_observations(tmp_path, verbosity, stack_timeout):
     (tmp_path / "test_subject.py").write_text(
         "import time\n"
         "def test_first(): time.sleep(0.03)\n"
@@ -140,6 +221,7 @@ def test_killed_controller_leaves_partial_readable_native_observations(tmp_path,
     with log.open("w") as output:
         process = subprocess.Popen(
             [sys.executable, "-m", "pytest", verbosity, "-n", "2",
+             "--ci-stall-after", str(stack_timeout),
              "-p", "scripts.ci.pytest_timing", "--junitxml=junit.xml"],
             cwd=tmp_path, env=environment(), stdout=output, stderr=subprocess.STDOUT,
             start_new_session=True)
@@ -148,7 +230,8 @@ def test_killed_controller_leaves_partial_readable_native_observations(tmp_path,
             while time.monotonic() < deadline:
                 rows = [json.loads(line.removeprefix(PREFIX))
                         for line in log.read_text().splitlines() if line.startswith(PREFIX)]
-                if any(row.get("phase") == "teardown" for row in rows):
+                stack_visible = not stack_timeout or "in test_wait\n" in log.read_text()
+                if any(row.get("phase") == "teardown" for row in rows) and stack_visible:
                     break
                 assert process.poll() is None, log.read_text()
                 time.sleep(0.02)
@@ -164,6 +247,7 @@ def test_killed_controller_leaves_partial_readable_native_observations(tmp_path,
     assert report["selected_cases"] == 2
     assert report["finished_cases"] == 1
     assert report["measured_worker_seconds"] >= 0.03
+    assert ("in test_wait\n" in log.read_text()) == bool(stack_timeout)
     assert not (tmp_path / "junit.xml").exists()
 
 
