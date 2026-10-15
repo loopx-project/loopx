@@ -962,17 +962,15 @@ function buildPersonalHomeModel(
         todoOrder,
         updatedAt: todo.updated_at ?? null,
       }; });
-    // Listed rows carry their own class; the rows the owner counts but does
-    // not list carry none, so they take the queue's own answer, exactly as a
-    // listed legacy row does. A partial listing therefore still reports the
-    // owner's count instead of forgetting it.
+    // The owner counts all open User Todos, not just gates. Queue-level
+    // waiting cannot classify unlisted rows in a mixed gate/action group.
+    // Complete classified rows qualify totals; a bounded read keeps unknown.
     const blockingListed = projected.filter((todo) => !todo.projectedDone && todo.blocking).length;
-    const unlisted = count === null ? 0 : Math.max(0, count - listedOpen);
-    const blockingCount = count === null ? null : blockingListed + (blocking ? unlisted : 0);
+    const complete = count !== null && count === listedOpen;
     attentionSummaries.set(item.goal_id, {
-      blocking: blockingCount,
-      optional: count === null || blockingCount === null ? null : count - blockingCount,
-      coverage: count === null ? "unknown" : count > listedOpen ? "partial" : "complete",
+      blocking: complete ? blockingListed : null,
+      optional: complete ? count - blockingListed : null,
+      coverage: count === null ? "unknown" : complete ? "complete" : "partial",
     });
     return projected;
   });

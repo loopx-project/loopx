@@ -207,6 +207,13 @@ export const goalMastheadScenario = {
     const native = JSON.parse(execFileSync(resolveTestPython(), [
       resolve(repoRoot, "examples/personal-workspace-browser/goal-attention-fixture.py"),
     ], { cwd: repoRoot, env: fixtureEnv, encoding: "utf8", timeout: 30_000 }));
+    const nativeCase = (...args) => JSON.parse(execFileSync(resolveTestPython(), [
+      resolve(repoRoot, "examples/personal-workspace-browser/goal-attention-fixture.py"), ...args,
+    ], { cwd: repoRoot, env: fixtureEnv, encoding: "utf8", timeout: 30_000 }));
+    const mixed = nativeCase("--mixed");
+    const complete = nativeCase("--full");
+    const mixedComplete = nativeCase("--mixed", "--full");
+    const optionalComplete = nativeCase("--optional", "--full");
     // Exercise source -> parser -> adapter -> digest -> packaged rendering.
     // Counts are removed from a real producer payload, not a prebuilt UI model.
     for (const locale of ["zh-CN", "en"]) {
@@ -257,7 +264,7 @@ export const goalMastheadScenario = {
         assert.equal(ui.errors.length, 0, ui.errors.join(" | "));
       } finally { coverageEntries.push(...await ui.close()); }
     }
-    for (const locale of ["zh-CN", "en"]) for (const mode of ["bounded", "optional", "empty", "unknown"]) {
+    for (const locale of ["zh-CN", "en"]) for (const mode of ["mixed", "bounded", "optional", "complete", "mixed-complete", "empty", "unknown"]) {
       const ui = await openWorkspacePage(browser, url, {
         collectCoverage,
         viewport: { width: locale === "en" ? 390 : 1512, height: 982 },
@@ -268,14 +275,9 @@ export const goalMastheadScenario = {
           api.transformStatus = (fixture) => {
             previous(fixture);
             const queue = fixture.attention_queue.items.find(item => item.goal_id === goalId);
-            Object.assign(queue, structuredClone(native));
-            if (mode === "optional") {
-              // Nothing waits on the owner: the Goal waits on its Agent and every
-              // listed row is an optional user action by its own class, since an
-              // explicit class owns its row regardless of the queue's answer.
-              queue.waiting_on = "agent";
-              for (const todo of [...queue.user_todos.items, ...queue.project_asset.user_todos.items]) todo.task_class = "user_action";
-            }
+            const source = mode === "mixed" ? mixed : mode === "complete" ? complete
+              : mode === "mixed-complete" ? mixedComplete : mode === "optional" ? optionalComplete : native;
+            Object.assign(queue, structuredClone(source));
             if (mode === "empty") {
               queue.user_todos.items = [];
               queue.project_asset.user_todos.items = [];
@@ -291,16 +293,23 @@ export const goalMastheadScenario = {
         if (locale === "en") await ui.page.locator(".personal-mobile-menu").click();
         await openGoal(ui.page, title);
         const needs = await vital(ui.page, locale === "en" ? "Needs you" : "等你决定");
-        assert.equal(needs.value, mode === "unknown" ? "—" : mode === "optional" ? "0" : "21");
-        assert.match(needs.sub, locale === "en" ? /oldest unknown/ : /最早时间未知/);
-        assert.match(needs.sub, new RegExp(`${mode === "empty" ? 0 : 3} ${locale === "en" ? "listed" : "项"}`));
+        const expected = mode === "complete" ? "21" : mode === "mixed-complete" ? "1" : mode === "optional" ? "0" : "—";
+        assert.equal(needs.value, expected, "Only complete classified rows qualify a blocking total; open User Todo totals do not classify hidden rows");
+        const partial = !["complete", "mixed-complete", "optional"].includes(mode);
+        if (partial) assert.match(needs.sub, locale === "en" ? /oldest unknown/ : /最早时间未知/);
+        const listed = ["complete", "mixed-complete", "optional"].includes(mode) ? 21 : mode === "empty" ? 0 : 3;
+        if (partial) assert.match(needs.sub, new RegExp(`${listed} ${locale === "en" ? "listed" : "项"}`));
         if (mode === "optional") assert.match(needs.sub, locale === "en" ? /21 optional/ : /21 项可选/);
         if (mode === "unknown") assert.doesNotMatch(needs.sub, /Nothing waiting|暂无等待/);
         await ui.page.getByRole("navigation", { name: /^(Goal 视图|Goal view)$/ }).getByRole("button", { name: /^(概览|Overview)$/ }).click();
         const rail = ui.page.locator(".goal-overview-attention");
-        assert.equal(await rail.locator(".goal-overview-count").textContent(), mode === "unknown" ? "—" : mode === "optional" ? "0" : "21", "Rail and strip retain the same owner total");
-        assert.match(await rail.textContent(), locale === "en" ? /oldest unknown/ : /最早时间未知/);
-        await rail.locator(".goal-overview-more").waitFor({ state: "visible" });
+        if (mode === "empty") {
+          assert.equal(await rail.count(), 0, "No unlisted row is invented as a decision card; the vital retains unknown and its partial qualifier");
+        } else {
+          assert.equal(await rail.locator(".goal-overview-count").textContent(), expected, "Rail and strip share the same qualified count or unknown");
+          if (partial) assert.match(await rail.textContent(), locale === "en" ? /oldest unknown/ : /最早时间未知/);
+          await rail.locator(".goal-overview-more").waitFor({ state: "visible" });
+        }
         await ui.page.screenshot({ path: resolve(outputDir, `goal-attention-${mode}-${locale}.png`), animations: "disabled" });
         assert.equal(ui.errors.length, 0, ui.errors.join(" | "));
         assert.equal(ui.api.turnRequests.length, 0, "Reading attention never starts a Turn");
