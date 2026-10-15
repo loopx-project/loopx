@@ -325,6 +325,10 @@ LOOPX_TEST_APP="/path/to/LoopX.app" \
 LOOPX_TEST_SIGNED_ARCHIVE="/path/to/LoopX.app.tar.gz" \
 LOOPX_TEST_INSTALL_PARENT="/Volumes/disposable-apfs-test-volume" cargo test --lib \
   real_release_installs_on_another_volume_and_keeps_the_old_app -- --ignored
+LOOPX_TEST_APP="/path/to/older/LoopX.app" \
+LOOPX_TEST_SIGNED_ARCHIVE="/path/to/LoopX.app.tar.gz" \
+LOOPX_TEST_UNSUPPORTED_INSTALL_PARENT="/Volumes/disposable-hfs-test-volume" cargo test --lib \
+  real_release_keeps_old_app_when_volume_rejects_atomic_exchange -- --ignored
 ```
 
 The first check copies the signed App into temporary directories, then exercises
@@ -335,7 +339,12 @@ The second verifies the updater archive with the shipped public key and rejects
 modified bytes. The third requires a writable disposable APFS volume separate
 from the system temporary directory. It copies the source App into a temporary
 directory there, installs the archive through the production filesystem adapter,
-and verifies both the replacement and retained previous App. These checks never
+and verifies both the replacement and retained previous App. The fourth requires
+a writable disposable HFS+ volume and a source App distinct from the update
+archive. It first confirms that the filesystem rejects atomic directory exchange,
+then verifies that the production installer fails while the original App's
+identity, executable and signature remain intact. The extracted candidate also
+remains intact; no sequential replacement is accepted. These checks never
 launch the App or write to an installed App or user data. They qualify the native
 replacement, recovery and signature boundaries; they do
 not replace packaged UI checks of download failure, restart, or runtime handoff.

@@ -281,4 +281,78 @@ mod tests {
             &synthetic_executable(Path::new(&source))
         ));
     }
+
+    #[test]
+    #[ignore = "requires distinct LOOPX_TEST_APP and LOOPX_TEST_SIGNED_ARCHIVE, plus a writable HFS+ LOOPX_TEST_UNSUPPORTED_INSTALL_PARENT"]
+    fn real_release_keeps_old_app_when_volume_rejects_atomic_exchange() {
+        let parent = std::env::var("LOOPX_TEST_UNSUPPORTED_INSTALL_PARENT").unwrap();
+        let root = tempfile::tempdir_in(parent).unwrap();
+
+        // Qualify the disposable filesystem independently of the installer.
+        // A permission failure or an APFS directory is not this regression.
+        let left = root.path().join("exchange-left");
+        let right = root.path().join("exchange-right");
+        fs::create_dir(&left).unwrap();
+        fs::create_dir(&right).unwrap();
+        let error = rustix::fs::renameat_with(
+            rustix::fs::CWD,
+            &left,
+            rustix::fs::CWD,
+            &right,
+            rustix::fs::RenameFlags::EXCHANGE,
+        )
+        .expect_err("the fixture must reject atomic directory exchange");
+        assert_eq!(error.raw_os_error(), libc::ENOTSUP);
+
+        let source = std::env::var("LOOPX_TEST_APP").unwrap();
+        let target = root.path().join("Installed.app");
+        assert!(std::process::Command::new("ditto")
+            .arg(&source)
+            .arg(&target)
+            .status()
+            .unwrap()
+            .success());
+        let original_info = fs::read(target.join("Contents/Info.plist")).unwrap();
+        let original_executable = fs::read(synthetic_executable(&target)).unwrap();
+        let bytes = fs::read(std::env::var("LOOPX_TEST_SIGNED_ARCHIVE").unwrap()).unwrap();
+        assert_eq!(
+            install_verified_archive(&synthetic_executable(&target), &bytes),
+            Err(InstallError::Failed)
+        );
+        assert_eq!(
+            fs::read(target.join("Contents/Info.plist")).unwrap(),
+            original_info
+        );
+        assert_eq!(
+            fs::read(synthetic_executable(&target)).unwrap(),
+            original_executable
+        );
+        for app in [&target, Path::new(&source)] {
+            assert!(crate::update_backup::installed_bundle_verifies(
+                &synthetic_executable(app)
+            ));
+        }
+
+        let staged = fs::read_dir(root.path())
+            .unwrap()
+            .map(Result::unwrap)
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".loopx-update-")
+            })
+            .unwrap()
+            .path()
+            .join("LoopX.app");
+        assert!(crate::update_backup::installed_bundle_verifies(
+            &synthetic_executable(&staged)
+        ));
+        // Identical inputs would hide an erroneous replacement with the new App.
+        assert_ne!(
+            fs::read(staged.join("Contents/Info.plist")).unwrap(),
+            original_info,
+            "use an old source App distinct from the update archive"
+        );
+    }
 }
