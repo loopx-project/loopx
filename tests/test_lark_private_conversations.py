@@ -169,6 +169,50 @@ def finish_group_turn(runtime, transport, *, message):
     return row
 
 
+@pytest.mark.parametrize("command", ["/status", "/stop", "/help"])
+def test_completed_command_recovery_leaves_provenance_to_delivery(ordinary, command):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    root = provider.topic("command-root", "/help")
+    event = provider.topic("completed-command", command, root=root["message_id"])
+    try:
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        path = next(path for path in transport.root.glob("*.json")
+                    if json.loads(path.read_text())["event"]["message_id"] == event["message_id"])
+        record = json.loads(path.read_text())
+        native_path = transport.core.root / f"{record['request_ref']}.json"
+        before = native_path.read_bytes()
+        assert json.loads(before)["status"] == "command_completed"
+
+        # There is no command execution to recover. Provider availability must
+        # not add an identity round-trip to this already committed Core state.
+        provider.calls.clear()
+        transport.core.recover(request_ref=record["request_ref"])
+        assert provider.calls == []
+        assert native_path.read_bytes() == before
+
+        pending = json.loads(before) | {"commission_adoption_pending": True}
+        native_path.write_text(json.dumps(pending))
+        transport.core.recover(request_ref=record["request_ref"])
+        assert any("auth" in call for call in provider.calls)
+        assert json.loads(native_path.read_text()) == pending
+        native_path.write_bytes(before)
+
+        # Skipping idle recovery does not skip the delivery owner's fresh check.
+        provider.bot_ready = False
+        assert transport.reconcile_request(path) == 0
+        assert provider.writes == []
+        assert json.loads(path.read_text())["status"] != "delivered"
+
+        provider.bot_ready = True
+        assert transport.reconcile_request(path) == 1
+        assert json.loads(path.read_text())["status"] == "delivered"
+        assert json.loads(native_path.read_text())["delivery_verified"] is True
+        assert len(provider.writes) == 1
+        assert provider.topic_writes[0][:2] == (event["chat_id"], root["message_id"])
+    finally:
+        runtime.close()
+
+
 def test_lark_transport_recovery_returns_on_original_admission_without_model_replay(ordinary, monkeypatch):  # noqa: F811
     from test_chat_turn_steering import install_transport_failure
 
@@ -1576,7 +1620,7 @@ def test_private_reply_workers_have_no_executor_backlog_and_stop_scheduling(tmp_
 
 
 
-def test_scoped_recovery_does_not_probe_unrelated_app_and_revocation_blocks_reply(ordinary):  # noqa: F811
+def test_completed_command_recovery_defers_app_probe_and_revocation_blocks_reply(ordinary):  # noqa: F811
     store, runtime, provider, transport = connect(ordinary)
     try:
         for profile in ["notes-app", "steward-app"]:
@@ -1587,7 +1631,7 @@ def test_scoped_recovery_does_not_probe_unrelated_app_and_revocation_blocks_repl
         original = transport.bindings.observe
         transport.bindings.observe = lambda profile: (observed.append(profile), original(profile))[1]
         transport.core.recover(request_ref=first["request_ref"])
-        assert observed == ["notes-app"]
+        assert observed == []  # A completed command has no Core work to recover.
         binding = transport.bindings.read()
         transport.bindings.disconnect(first["binding_id"], expected_revision=binding["revision"])
         assert transport.reconcile_request(transport.root / f"{first['request_ref']}.json") == 0
