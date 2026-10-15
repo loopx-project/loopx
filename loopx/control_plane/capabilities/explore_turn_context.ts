@@ -115,7 +115,33 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   }
   const resultNode = params.result_node == null ? null : requireNonEmptyString(params.result_node, "result_node");
   const resultRows = resultNode == null ? writebackResults : writebackResults.filter(row => row.node_id === resultNode);
-  const resultRevision = createHash("sha256").update(JSON.stringify([goal, agent, resultNode, resultRows])).digest("hex");
+  const nodeById = new Map(nodes.map(node => [node.node_id, node]));
+  const relationsByNode = new Map<unknown, JsonObject[]>();
+  for (const edge of rows(projection.edges)) {
+    for (const id of new Set([edge.from_node, edge.to_node])) {
+      const incident = relationsByNode.get(id) ?? [];
+      incident.push(edge);
+      relationsByNode.set(id, incident);
+    }
+  }
+  const currentQuestion = (row: JsonObject): JsonObject => {
+    const node = nodeById.get(row.node_id);
+    const relations = relationsByNode.get(row.node_id) ?? [];
+    return {
+      ...(node ? {question_status: node.status,
+        ...(node.blocked_reason ? {question_blocked_reason: node.blocked_reason} : {})} : {}),
+      ...(relations.length ? {
+        relations: relations.slice(0, 3).map(edge => ({...compact(edge, ["from_node", "to_node", "edge_type"]),
+          summary: String(edge.summary ?? "").slice(0, 320),
+          ...(String(edge.summary ?? "").length > 320 ? {summary_truncated: true} : {}),
+        })),
+        omitted_relations: Math.max(0, relations.length - 3),
+      } : {}),
+    };
+  };
+  const resultRevision = createHash("sha256").update(JSON.stringify([
+    goal, agent, resultNode, resultRows, resultRows.map(currentQuestion),
+  ])).digest("hex");
   if (params.result_revision != null && params.result_revision !== resultRevision) {
     throw new EffectRuntimeRequestError("Explore evidence changed; restart at result_offset 0 without result_revision");
   }
@@ -152,6 +178,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       writeback_results: visibleResults
         .map(row => ({...compact(row, ["finding_id", "node_id", "finding", "status", "evidence_refs"]),
           summary: String(row.summary ?? "").slice(0, EXPLORE_WRITEBACK_SUMMARY_LIMIT),
+          ...currentQuestion(row),
           ...findingDigest(row, findingSources)})),
       result_page: {
         total: resultRows.length, offset: resultOffset, limit: resultLimit,
@@ -172,6 +199,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       path_delta_attachment_schema: writeback.path_delta_attachment_schema,
       path_delta_attachment_template: writeback.path_delta_attachment_template,
       linked_question_attachment_template: writeback.linked_question_attachment_template,
+      optional_question_evolution_example: writeback.optional_question_evolution_example,
       result_writeback_guidance: writeback.guidance,
       result_attachment_template: writeback.attachment_template,
       record_node_template: command("node", "--title", "<hypothesis or experiment>", "--status", "exploring"),

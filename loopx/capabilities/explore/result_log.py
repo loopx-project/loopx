@@ -562,6 +562,7 @@ def append_explore_result_events(
     expected_goal_id: str,
     create_only_node_ids: Sequence[str] = (),
     require_ordered_prefix: bool = False,
+    expected_event_ids: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Append a validated batch once by event id under the result-log lock.
 
@@ -606,6 +607,13 @@ def append_explore_result_events(
             str(row["result_id"]): row for row in existing_by_id.values()
             if row.get("event_kind") == EVENT_KIND_NODE
         }
+        # Optional stateful result evolution must not overwrite a concurrent
+        # owner update or admit a relation against a stale graph. Exact replay
+        # remains read-only, including after later valid graph changes.
+        if (expected_event_ids is not None
+                and list(existing_by_id) != list(expected_event_ids)
+                and not all(existing_by_id.get(str(row["event_id"])) == row for row in validated)):
+            raise ValueError("Explore graph changed before question evolution; retry the committed writeback")
         pending: list[dict[str, Any]] = []
         for event in validated:
             event_id = str(event["event_id"])

@@ -2,7 +2,7 @@
 import {createHash} from "node:crypto";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
-import {requireJsonObject, requireStringArray, requireStringLiteral} from "../runtime_decode.ts";
+import {requireJsonObject, requireNonEmptyString, requireStringArray, requireStringLiteral} from "../runtime_decode.ts";
 import {normalizeGoalPathDelta} from "../goals/vision_checkpoint.ts";
 
 export const EXPLORE_RESULT_ATTACHMENT_SCHEMA = "explore_result_attachment_v0";
@@ -28,6 +28,11 @@ export function exploreResultWritebackAffordance(): JsonObject {
       schema_version: EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA,
       node_id: "<linked-question-id>", input_revision: "", status: "tentative",
     },
+    optional_question_evolution_example: {
+      question_update: {status: "resolved"},
+      relations: [{to_node: "<existing-node-id>", edge_type: "depends_on",
+        summary: "<observed prerequisite; omit relations when none changed>"}],
+    },
     guidance: [
       "After validating reusable evidence, put explore_result in the vision JSON already submitted with --agent-vision-json.",
       "For an open Todo under hard_lease, keep the active task lease through refresh-state and Explore graph/Todo-link delivery; release only after explore_result_delivery.ok=true.",
@@ -37,6 +42,11 @@ export function exploreResultWritebackAffordance(): JsonObject {
       "Prefer path_delta_attachment_template when this same packet contains an evidence-linked path_delta: supply the question, applicability, tested input revision and explicit finding status.",
       "For a new question, omit node_id: the hook derives its identity from the exact question and applicability, creates it and links this Todo; no explore node call is needed.",
       "To add to a known question, reuse its returned node_id and canonical scope.",
+      "At a meaningful experimental conclusion or route change, reuse that question and optionally add question_update and relations in this same result; no separate cleanup turn is needed.",
+      "Use question_update.status=resolved only when the scoped question is answered (including a negative answer), dead_end only for an explicitly stopped route, or exploring/open for remaining work; blocked requires blocked_reason.",
+      "Keep the answer, scope limits and next discriminating check in the existing interpretation or path_delta; finding status never determines question status.",
+      "Relations point from this question to an existing same-Goal node and require an evidence-backed summary; temporal order alone establishes neither dependency nor benefit.",
+      "Only the question's recorded owner may evolve it. Omission preserves the existing question state; preserve its exact title and applicability, and reopen explicitly only when new evidence warrants it.",
       "The hook reuses the complete observation and route decision.",
       "For an existing question linked to this Todo, use linked_question_attachment_template: omit both question and applicability to reuse its canonical scope.",
       "New or unlinked questions still require explicit scope; input_revision and status are never inferred.",
@@ -62,7 +72,49 @@ export function exploreResultWritebackAffordance(): JsonObject {
 }
 
 const FIELDS = ["schema_version", "node_id", "question", "applicability", "input_revision",
-  "observation", "interpretation", "status", "evidence_refs"];
+  "observation", "interpretation", "status", "evidence_refs", "question_update", "relations"];
+// Reuse the persisted Explore node/edge vocabulary, distinct from finding status.
+const QUESTION_STATUSES = ["open", "exploring", "blocked", "resolved", "dead_end"] as const;
+const RELATION_TYPES = ["subtopic_of", "depends_on", "answers", "supports", "refutes", "leads_to"] as const;
+function evolutionFields(row: JsonObject, node: string): JsonObject {
+  const result: JsonObject = {};
+  if (Object.hasOwn(row, "question_update")) {
+    const update = requireJsonObject(row.question_update, "question_update");
+    if (Object.keys(update).some(key => !["status", "blocked_reason"].includes(key))) {
+      throw new EffectRuntimeRequestError("question_update contains unknown fields");
+    }
+    const status = requireStringLiteral(update.status, QUESTION_STATUSES, "question status");
+    if (status === "blocked") {
+      result.question_update = {status, blocked_reason: text(update.blocked_reason, "blocked_reason", 320)};
+    } else {
+      if (Object.hasOwn(update, "blocked_reason")) {
+        throw new EffectRuntimeRequestError("blocked_reason requires blocked question status");
+      }
+      result.question_update = {status};
+    }
+  }
+  if (Object.hasOwn(row, "relations")) {
+    if (!Array.isArray(row.relations) || !row.relations.length || row.relations.length > 4) {
+      throw new EffectRuntimeRequestError("relations requires one to four explicit relations");
+    }
+    const seen = new Set<string>();
+    result.relations = row.relations.map(value => {
+      const relation = requireJsonObject(value, "question relation");
+      if (Object.keys(relation).some(key => !["to_node", "edge_type", "summary"].includes(key))) {
+        throw new EffectRuntimeRequestError("question relation contains unknown fields");
+      }
+      const to = explicitNodeId(relation.to_node);
+      const type = requireStringLiteral(relation.edge_type, RELATION_TYPES, "relation type");
+      const key = JSON.stringify([to, type]);
+      if (to === node || seen.has(key)) {
+        throw new EffectRuntimeRequestError("question relations cannot be self-links or duplicates");
+      }
+      seen.add(key);
+      return {to_node: to, edge_type: type, summary: text(relation.summary, "relation summary", 320)};
+    }).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  }
+  return result;
+}
 function text(value: unknown, field: string, limit: number): string {
   if (typeof value !== "string" || !value.trim() || value.length > limit) {
     throw new EffectRuntimeRequestError(`${field} requires nonempty text of at most ${limit} characters`);
@@ -109,11 +161,11 @@ function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope
     observation: text(row.observation, "observation", 320),
     interpretation: text(row.interpretation, "interpretation", 1200),
     status: requireStringLiteral(row.status, ["tentative", "confirmed", "refuted"], "finding status"),
-    evidence_refs: [...new Set(refs)]};
+    evidence_refs: [...new Set(refs)], ...evolutionFields(row, node)};
 }
 /** Explicit reference, not inferred evidence. Preserve every route item verbatim. */
 function attachmentFromPathDelta(row: JsonObject, visionPacket: unknown, linkedScope: unknown): JsonObject {
-  const fields = ["schema_version", "node_id", "question", "applicability", "input_revision", "status", "evidence_refs"];
+  const fields = ["schema_version", "node_id", "question", "applicability", "input_revision", "status", "evidence_refs", "question_update", "relations"];
   if (Object.keys(row).some(key => !fields.includes(key))) {
     throw new EffectRuntimeRequestError("Explore path_delta attachment contains unknown fields");
   }
@@ -166,6 +218,47 @@ export function normalizeExploreResultAttachment(params: JsonObject): JsonObject
     }
   }
   return result;
+}
+/** State-dependent preflight for the existing result writer; no graph effects. */
+export function planExploreQuestionEvolution(params: JsonObject): JsonObject {
+  const attachment = normalizeExploreResultAttachment({attachment: params.attachment});
+  if (!Object.hasOwn(attachment, "question_update") && !Object.hasOwn(attachment, "relations")) {
+    return {existing_node: null};
+  }
+  const agent = requireNonEmptyString(params.agent_id, "question owner");
+  if (!Array.isArray(params.nodes) || !Array.isArray(params.edges)) {
+    throw new EffectRuntimeRequestError("Question evolution requires the current Goal graph");
+  }
+  const nodes = params.nodes.map(row => requireJsonObject(row, "Explore node"));
+  const edges = params.edges.map(row => requireJsonObject(row, "Explore edge"));
+  const existing = nodes.find(node => node.node_id === attachment.node_id);
+  if (existing && (existing.agent_id !== agent || existing.node_kind !== "question")) {
+    throw new EffectRuntimeRequestError("Only the recorded question owner may evolve its state or relations");
+  }
+  if (existing && (existing.title !== attachment.question || existing.summary !== attachment.applicability)) {
+    throw new EffectRuntimeRequestError("Explore question evolution must preserve its canonical scope");
+  }
+  const proposed = (attachment.relations ?? []) as JsonObject[];
+  for (const relation of proposed) {
+    if (!nodes.some(node => node.node_id === relation.to_node)) {
+      throw new EffectRuntimeRequestError("Explore question relation target must already exist in this Goal");
+    }
+  }
+  for (const relation of proposed) {
+    if (!["depends_on", "subtopic_of"].includes(String(relation.edge_type))) continue;
+    const all: JsonObject[] = [...edges, ...proposed.map(row => ({...row, from_node: attachment.node_id}))];
+    const pending = [relation.to_node];
+    const seen = new Set<unknown>();
+    while (pending.length) {
+      const next = pending.pop();
+      if (next === attachment.node_id) throw new EffectRuntimeRequestError("Explore question relation creates a cycle");
+      if (seen.has(next)) continue;
+      seen.add(next);
+      pending.push(...all.filter(edge => edge.edge_type === relation.edge_type && edge.from_node === next)
+        .map(edge => edge.to_node));
+    }
+  }
+  return {existing_node: existing ?? null};
 }
 export function produceExploreResultIntent(params: JsonObject): JsonObject {
   const projection = requireJsonObject(params.projection, "writeback projection");
