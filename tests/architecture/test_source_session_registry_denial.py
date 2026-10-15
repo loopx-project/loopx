@@ -29,6 +29,9 @@ DIRECT_LOADER_ALLOWLIST = {
     "loopx/configure_goal.py",
     "loopx/control_plane/collaboration/goal_instance_scope.py",
     "loopx/control_plane/collaboration/peers.py",
+    "loopx/control_plane/collaboration/request_control_source.py",
+    "loopx/control_plane/collaboration/request_amendment.py",
+    "loopx/presentation/request_control_api.py",
     "loopx/control_plane/collaboration/source_grant_observation.py",
     "loopx/control_plane/goals/first_party_host_admission.py",
     "loopx/control_plane/goals/direction_runtime.py",
@@ -127,6 +130,9 @@ def test_direct_project_registry_loaders_have_source_session_denial() -> None:
     # native creation tests additionally prove the executable refusal boundary.
     metadata_readers = {
         **METADATA_READER_FUNCTIONS,
+        "loopx/control_plane/collaboration/request_control_source.py": {"_locked_request"},
+        "loopx/control_plane/collaboration/request_amendment.py": {"_root"},
+        "loopx/presentation/request_control_api.py": {"_request_control_source"},
         "loopx/chat_server.py": {"serve_chat"},
         "loopx/presentation/goal_direction_api.py": {"_direction_route"},
         "loopx/chat_status_api.py": {"_status"},

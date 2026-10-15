@@ -152,6 +152,11 @@ reconciliation 和 readback。任何单独 owner 都不能安全推断其他 own
 | [Effect Interpreter](agent-loop-effect-interpreter-v0.zh-CN.md) | 拥有 effect identity、settlement、未知结果 readback 和 replay 决策。恢复流程只向其路由原始证据。 |
 | [配置备份](../../reference/configuration-backup.md) | 保持配置处于隔离 checkpoint。Adoption 继续通过 machine 与 Goal configuration owner 完成。 |
 
+[研究 checkpoint CLI](../../reference/research-checkpoint.md)通过这些既有 owner
+显式分支历史，在不同的当前 Goal/Agent 下接纳会话，并通过当前 Todo 权限采用
+保留知识。它不恢复源 writer、timer 或 effect，也不满足本 RFC 的排他灾难替换
+或前端里程碑。
+
 ## 4. 当前系统契约
 
 在指定基线上，`loopx/state_backup.py` 会发现 runtime root、项目 `.loopx` 状态、

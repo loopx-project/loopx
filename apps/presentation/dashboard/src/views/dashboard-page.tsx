@@ -1,7 +1,7 @@
 import { normalizeGoalDraft, type GoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { withTurnActivity, type TurnStep } from "../data/turn-steps";
 import { conversationReturnSessions, conversationPendingReturnSessions, reconcileConversationHistory, reconcileConversationReturns } from "../data/conversation-returns";
-import { readConversationReturns } from "../data/conversation-return-observation";
+import { readConversationReturns, readTaskSessions } from "../data/conversation-return-observation";
 import { currentChannelSession, useConversationHistory } from "../data/use-conversation-history";
 import { useChatProjects } from "../data/use-chat-projects";
 import {compactWorkspaceText as compactShareText, workspaceAgentTodoFromItem} from "../features/personal-workspace/personal-workspace-model";
@@ -116,7 +116,7 @@ import {
   type WorkspaceAgentTodo,
 } from "../features/personal-workspace/personal-workspace-model";
 import { monitorTodoReadback } from "../features/personal-workspace/monitor-readback";
-import { goalExecution } from "../features/personal-workspace/goal-activity";
+import { goalExecution, taskSessionStatus } from "../features/personal-workspace/goal-activity";
 
 const protectedOperationLabels: Record<ProtectedActionProposal["operation"], string> = {
   delete: "删除",
@@ -1058,9 +1058,15 @@ function buildPersonalHomeModel(
       hostThreadActivity: goal.host_thread_activity ? {
         completeness: goal.host_thread_activity.completeness,
         threads: goal.host_thread_activity.threads.map((thread) => ({
+          agentId: thread.agent_id ?? null,
           hostSurface: thread.host_surface,
           lastEventAt: thread.last_event_at ?? null,
           state: thread.state,
+          deliveryWindow: thread.delivery_window ? {
+            state: thread.delivery_window.state,
+            ageHours: thread.delivery_window.age_hours ?? null,
+            reason: thread.delivery_window.reason ?? null,
+          } : null,
         })),
       } : undefined,
       acceptanceObservation: goal.acceptance_observation,
@@ -2010,6 +2016,8 @@ function PersonalGoalHome({
     let failures = 0;
     setExecutionSessions([]);
     setExecutionSessionSnapshots({});
+    const controller = new AbortController();
+    let snapshots: Record<string, ChatSessionSnapshot> = {};
     const discover = async () => {
       if (cancelled) return;
       if (document.hidden) {
@@ -2017,20 +2025,14 @@ function PersonalGoalHome({
         return;
       }
       try {
-        const listed = await fetchChatSessions({ goalId: selectedGoal.goalId });
+        const observed = await readTaskSessions(selectedGoal.goalId, snapshots, controller.signal);
         if (!cancelled) {
-          const taskSessions = listed.sessions.filter((session) => session.channel_id?.startsWith("task."));
-          setExecutionSessions(taskSessions);
-          const snapshots = await Promise.allSettled(taskSessions.map((session) => fetchChatSession(session.session_id)));
-          if (!cancelled) {
-            const partialFailure = snapshots.some((result) => result.status === "rejected");
-            failures = partialFailure ? failures + 1 : 0;
-            setExecutionDiscoveryError(partialFailure ? "partial" : null);
-            setExecutionSessionSnapshots(Object.fromEntries(snapshots.flatMap((result, index) => {
-              if (result.status !== "fulfilled") return [];
-              return [[taskSessions[index].session_id, result.value]];
-            })));
-          }
+          snapshots = observed.snapshots;
+          setExecutionSessions(observed.sessions);
+          const partialFailure = observed.unavailableSessionIds.length > 0;
+          failures = partialFailure ? failures + 1 : 0;
+          setExecutionDiscoveryError(partialFailure ? "partial" : null);
+          setExecutionSessionSnapshots(snapshots);
         }
       } catch {
         failures += 1;
@@ -2041,6 +2043,7 @@ function PersonalGoalHome({
     void discover();
     return () => {
       cancelled = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
   }, [readOnly, selectedGoal?.goalId]);
@@ -2538,9 +2541,10 @@ function PersonalGoalHome({
     ...(selectedGoal ? executionSessions.map((session): WorkspaceTimelineItem => {
       const todoId = session.channel_id?.startsWith("task.") ? session.channel_id.slice(5) : undefined;
       const todo = selectedGoal.agentTodos.find((candidate) => candidate.todoId === todoId);
-      const running = Boolean(session.active_turn_id);
       const snapshot = executionSessionSnapshots[session.session_id];
       const hasResult = snapshot?.messages.some((message) => isAgentResultMessage(message.role, message.text)) === true;
+      const status = taskSessionStatus(session, { done: todo?.done === true, hasResult });
+      const running = status === "running";
       return {
         id: `run:task:${session.session_id}`,
         kind: "run",
@@ -2548,12 +2552,12 @@ function PersonalGoalHome({
           agentId: session.agent_id,
           agentLabel: personalAgentLabel(session.agent_id),
           canInterrupt: running,
-          completedSteps: todo?.done || hasResult ? 1 : 0,
+          completedSteps: status === "completed" ? 1 : 0,
           goalId: selectedGoal.goalId,
           goalTitle: selectedGoal.title,
           latestActivity: running
             ? "Agent 正在执行，可进入 Session 查看过程或发送纠偏。"
-            : hasResult
+            : status === "completed" && hasResult
               ? "Agent 已返回结果，点击查看结果与完整运行记录。"
               : "执行 Session 已保留，可继续纠偏或恢复。",
           resumable: session.resumable,
@@ -2565,8 +2569,8 @@ function PersonalGoalHome({
             role: message.role === "user" ? "user" : isAgentResultMessage(message.role, message.text) ? "assistant" : "error",
             text: message.role === "user" ? message.text : visibleAgentMessage(message.text),
           })),
-          sessionStatus: hasResult ? "completed" : session.status,
-          status: todo?.done || hasResult ? "completed" : running ? "running" : session.status === "resume_failed" ? "failed" : "waiting",
+          sessionStatus: status === "completed" ? "completed" : session.status,
+          status,
           title: todo?.text ?? "Agent 执行任务",
           todoId,
           totalSteps: 1,

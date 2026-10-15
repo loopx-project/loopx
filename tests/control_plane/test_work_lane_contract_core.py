@@ -3,8 +3,13 @@ from __future__ import annotations
 import pytest
 
 from loopx.control_plane.testing.quota_fixtures import quota_status_payload
+from loopx.control_plane.quota.selected_todo_projection import (
+    selected_todo_projection,
+)
+from loopx.control_plane.todos.summary_item import todo_text_content_revision
 from loopx.control_plane.work_items.work_lane import (
     preserve_heartbeat_receipt_bound_work_lane,
+    scoped_user_gate_due_monitor_contract,
 )
 from loopx.control_plane.work_items.work_lane_context import (
     item_progress_scope,
@@ -15,6 +20,32 @@ from loopx.status import compact_post_handoff_run
 
 GOAL_ID = "work-lane-policy-fixture"
 PAST_DUE_AT = "2000-01-01T00:00:00+00:00"
+
+
+def test_scoped_gate_monitor_keeps_canonical_revision_for_selected_work_readback() -> None:
+    revision = "sha256:" + "a" * 64
+    lane = scoped_user_gate_due_monitor_contract(
+        {
+            "selected_executable": {
+                "todo_id": "todo_monitor",
+                "text": "Observe the independent target.",
+                "content_revision": revision,
+                "status": "open",
+                "task_class": "continuous_monitor",
+                "claimed_by": "agent-a",
+            }
+        },
+        current_contract={"lane": "advancement_task"},
+    )
+
+    assert lane is not None
+    assert lane["monitor_due_items"][0]["content_revision"] == revision
+    selected = selected_todo_projection(
+        agent_lane_next_action=None,
+        work_lane_contract=lane,
+    )
+    assert selected is not None
+    assert selected["content_revision"] == revision
 
 
 def _status(
@@ -133,6 +164,9 @@ def test_due_watch_only_monitor_is_an_auxiliary_no_spend_route() -> None:
             {
                 "index": 1,
                 "text": "[P0] Monitor one overdue dependency.",
+                "content_revision": todo_text_content_revision(
+                    "[P0] Monitor one overdue dependency."
+                ),
                 "todo_id": "todo_watch_due",
                 "status": "open",
                 "priority": "P0",

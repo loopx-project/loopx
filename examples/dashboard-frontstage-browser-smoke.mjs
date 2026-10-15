@@ -25,7 +25,7 @@ const staticServer = createServer(async (req, res) => {
   if (!file.startsWith(resolve(exportSite) + "/")) { res.writeHead(403).end(); return; }
   try {
     const body = await readFile(file);
-    res.setHeader("Content-Type", ({ ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".png": "image/png", ".svg": "image/svg+xml" })[extname(file)] ?? "application/octet-stream");
+    res.setHeader("Content-Type", ({ ".html": "text/html", ".md": "text/plain; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".png": "image/png", ".svg": "image/svg+xml" })[extname(file)] ?? "application/octet-stream");
     res.end(body);
   } catch { res.writeHead(404).end(); }
 });
@@ -264,6 +264,16 @@ try {
       assert.ok(await page.locator("#explore .resource-card").first().evaluate((a) => a === document.activeElement));
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "horizontal overflow");
       await page.screenshot({ path: resolve(output, `explore-${lang}-${width}.png`) });
+      const skillLink = page.locator('.site-footer a[href="/loopx/skill.md"]');
+      assert.equal(await skillLink.innerText(), lang === "zh" ? "Agent 使用指南" : "Agent skill guide");
+      await skillLink.focus();
+      assert.ok(await skillLink.evaluate((a) => a === document.activeElement), "skill link accepts keyboard focus");
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "footer fits narrow screens");
+      await page.screenshot({ path: resolve(output, `skill-footer-${lang}-${width}.png`) });
+      await Promise.all([page.waitForURL(`${publicOrigin}/loopx/skill.md`), skillLink.press("Enter")]);
+      assert.equal(await page.locator("body").innerText(), await readFile(resolve(exportSite, "skill.md"), "utf8"), "footer opens raw Markdown");
+      const missingSkill = await page.request.get(`${publicOrigin}/loopx/missing-skill.md`);
+      assert.equal(missingSkill.status(), 404, "missing Markdown must not masquerade as the homepage");
       // Follow the actual research and case links; the guide is built by MkDocs later.
       for (let i = process.env.LOOPX_PUBLIC_SITE_DIR ? 0 : 1; i < expected.length; i++) {
         await page.goto(`${publicOrigin}/loopx/${expected[i]}`);

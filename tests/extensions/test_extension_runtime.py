@@ -1487,6 +1487,63 @@ def test_install_disable_upgrade_and_rollback_preserve_verified_binding(
     ]
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize(
+    "damage",
+    ["legacy", "invalid_history", "missing_revision", "invalid_manifest", "no_proof", "forged_proof"],
+)
+def test_status_reads_unverified_records_without_affecting_healthy_extensions(
+    tmp_path: Path, damage: str, enabled: bool,
+) -> None:
+    provider = _provider(tmp_path / "provider")
+    state_file = tmp_path / "extensions.json"
+    for extension_id in ("test-semantic-extension", "healthy-extension"):
+        manifest = _manifest(
+            tmp_path / f"{extension_id}.toml", entrypoint=provider,
+            version="1.0.0", extension_id=extension_id,
+        )
+        install_extension(manifest, state_file=state_file, execute=True)
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    entry = state["extensions"]["test-semantic-extension"]
+    if damage == "legacy":
+        entry.clear()
+        entry["id"] = "test-semantic-extension"
+    elif damage == "invalid_history":
+        entry["revisions"] = {}
+    elif damage == "missing_revision":
+        entry["revisions"] = []
+    elif damage == "invalid_manifest":
+        entry["revisions"][0]["manifest"] = None
+    elif damage == "no_proof":
+        entry.pop("doctor_verified_revision")
+    else:
+        entry["doctor_verified_entrypoint_identities"] = ["unprobed-entrypoint"]
+    entry["enabled"] = enabled
+    state_file.write_text(json.dumps(state), encoding="utf-8")
+    original = state_file.read_bytes()
+
+    statuses = extension_status(state_file=state_file)["extensions"]
+    by_id = {status["id"]: status for status in statuses}
+    assert by_id["healthy-extension"]["doctor_verified"] is True
+    assert by_id["test-semantic-extension"]["enabled"] is enabled
+    assert by_id["test-semantic-extension"]["doctor_verified"] is False
+    assert extension_status(
+        state_file=state_file, extension_id="test-semantic-extension",
+    )["extensions"] == [by_id["test-semantic-extension"]]
+    with pytest.raises(ValueError):
+        resolve_extension_activation("test-semantic-extension", state_file=state_file)
+    with pytest.raises(ValueError):
+        resolve_extension_binding(
+            "test-semantic-extension", state_file=state_file,
+            capability_id="semantic-preference", protocol="semantic_preference_provider_v0",
+            permission="semantic_preference.read",
+        )
+    if damage in {"legacy", "invalid_history", "missing_revision", "invalid_manifest"}:
+        with pytest.raises(ValueError):
+            enable_extension("test-semantic-extension", state_file=state_file, execute=True)
+    assert state_file.read_bytes() == original
+
+
 def test_installed_snapshot_fails_closed_when_the_runtime_api_moves(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1603,6 +1660,204 @@ def test_declared_manifest_for_an_installed_id_must_repeat_the_active_revision(
 
     with pytest.raises(ValueError, match="duplicate capability provider `test-semantic-extension`"):
         extension_catalog_entries([v2], state_file=state_file)
+
+
+def test_upgrade_and_rollback_preserve_a_disabled_extension(tmp_path: Path) -> None:
+    """Changing the active revision must not undo an operator's disable.
+
+    Before this guard, both `upgrade` and `rollback` wrote `enabled: True`
+    unconditionally, so a provider the operator had switched off came back
+    on as a side effect of a revision change.
+    """
+    provider = _provider(tmp_path / "provider")
+    v1 = _manifest(tmp_path / "v1.toml", entrypoint=provider, version="1.0.0")
+    v2 = _manifest(tmp_path / "v2.toml", entrypoint=provider, version="2.0.0")
+    state_file = tmp_path / "runtime" / "extensions.json"
+
+    installed = install_extension(v1, state_file=state_file, execute=True)
+    assert installed["enabled"] is True
+    assert disable_extension(
+        "test-semantic-extension", state_file=state_file, execute=True
+    )["changed"] is True
+
+    upgraded = install_extension(
+        v2, state_file=state_file, operation="upgrade", execute=True
+    )
+    assert upgraded["enabled"] is False
+    assert upgraded["revision"] != installed["revision"]
+    entry = json.loads(state_file.read_text(encoding="utf-8"))["extensions"][
+        "test-semantic-extension"
+    ]
+    assert entry["enabled"] is False
+    assert entry["active_revision"] == upgraded["revision"]
+    with pytest.raises(ValueError, match="is disabled"):
+        resolve_extension_activation("test-semantic-extension", state_file=state_file)
+
+    rolled_back = rollback_extension(
+        "test-semantic-extension", state_file=state_file, execute=True
+    )
+    assert rolled_back["enabled"] is False
+    assert rolled_back["revision"] == installed["revision"]
+    entry = json.loads(state_file.read_text(encoding="utf-8"))["extensions"][
+        "test-semantic-extension"
+    ]
+    assert entry["enabled"] is False
+    assert extension_status(state_file=state_file)["extensions"][0]["enabled"] is False
+
+    # The explicit enable path remains the only way back on.
+    assert enable_extension(
+        "test-semantic-extension", state_file=state_file, execute=True
+    )["changed"] is True
+    assert resolve_extension_activation(
+        "test-semantic-extension", state_file=state_file
+    )["revision"] == installed["revision"]
+
+
+def test_upgrade_and_rollback_keep_an_enabled_extension_enabled(tmp_path: Path) -> None:
+    provider = _provider(tmp_path / "provider")
+    v1 = _manifest(tmp_path / "v1.toml", entrypoint=provider, version="1.0.0")
+    v2 = _manifest(tmp_path / "v2.toml", entrypoint=provider, version="2.0.0")
+    state_file = tmp_path / "runtime" / "extensions.json"
+
+    install_extension(v1, state_file=state_file, execute=True)
+    upgraded = install_extension(
+        v2, state_file=state_file, operation="upgrade", execute=True
+    )
+    assert upgraded["enabled"] is True
+    rolled_back = rollback_extension(
+        "test-semantic-extension", state_file=state_file, execute=True
+    )
+    assert rolled_back["enabled"] is True
+    assert extension_status(state_file=state_file)["extensions"][0]["enabled"] is True
+
+
+def _barrier_provider(path: Path, *, gate: Path, started: Path, release: Path) -> Path:
+    """A provider whose doctor blocks at an observable barrier.
+
+    Without ``gate`` the doctor passes at once, so install and upgrade are
+    unaffected. Once ``gate`` exists the doctor writes ``started`` and then
+    waits for ``release``, which lets a test complete another real CLI call
+    while the probe is in flight.
+    """
+    path.write_text(
+        f"""#!{sys.executable}
+import sys
+import time
+from pathlib import Path
+
+if "--doctor" not in sys.argv:
+    raise SystemExit(1)
+if Path({str(gate)!r}).exists():
+    Path({str(started)!r}).write_text("started", encoding="utf-8")
+    deadline = time.monotonic() + 30
+    while not Path({str(release)!r}).exists():
+        if time.monotonic() > deadline:
+            raise SystemExit(3)
+        time.sleep(0.02)
+raise SystemExit(0)
+""",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
+@pytest.mark.parametrize(
+    ("concurrent_command", "enabled_before", "enabled_after"),
+    [("disable", True, False), ("enable", False, True)],
+)
+def test_rollback_result_reports_the_enablement_committed_under_the_lock(
+    tmp_path: Path,
+    concurrent_command: str,
+    enabled_before: bool,
+    enabled_after: bool,
+) -> None:
+    """An enable/disable that lands during the rollback probe is preserved
+    and reported.
+
+    The rollback doctor runs outside the state lock. The committed state
+    already kept the concurrent decision, but the result carried the
+    pre-probe snapshot, so a caller of the real CLI saw `enabled` disagree
+    with `extension list` and could not tell whether a follow-up
+    enable/disable was needed. Both directions use real `loopx.cli`
+    subprocesses and a doctor that blocks at a file barrier.
+    """
+    extension_id = "test-semantic-extension"
+    gate, started, release = (
+        tmp_path / name for name in ("gate", "doctor-started", "release")
+    )
+    blocking = _barrier_provider(
+        tmp_path / "blocking-provider", gate=gate, started=started, release=release
+    )
+    v1 = _manifest(tmp_path / "v1.toml", entrypoint=blocking, version="1.0.0")
+    v1.write_text(
+        v1.read_text(encoding="utf-8").replace(
+            "timeout_seconds = 5", "timeout_seconds = 60"
+        ),
+        encoding="utf-8",
+    )
+    # The active revision keeps an unblocked doctor so a concurrent `enable`
+    # (which probes the active revision) cannot wait on the same barrier.
+    v2 = _manifest(
+        tmp_path / "v2.toml", entrypoint=_provider(tmp_path / "plain-provider"),
+        version="2.0.0",
+    )
+    state_file = tmp_path / "runtime" / "extensions.json"
+    installed = install_extension(v1, state_file=state_file, execute=True)
+    upgraded = install_extension(
+        v2, state_file=state_file, operation="upgrade", execute=True
+    )
+    if not enabled_before:
+        disable_extension(extension_id, state_file=state_file, execute=True)
+
+    def cli(*arguments: str) -> list[str]:
+        return [
+            sys.executable, "-m", "loopx.cli", "--format", "json", "extension",
+            *arguments, "--state-file", str(state_file),
+        ]
+
+    gate.write_text("", encoding="utf-8")
+    with subprocess.Popen(
+        cli("rollback", extension_id, "--execute"),
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    ) as rollback:
+        try:
+            deadline = time.monotonic() + 30
+            while not started.exists():
+                assert rollback.poll() is None, rollback.communicate()[1]
+                assert time.monotonic() < deadline, "rollback doctor never reached the barrier"
+                time.sleep(0.02)
+            # The rollback is inside its probe and does not hold the lock.
+            concurrent = subprocess.run(
+                cli(concurrent_command, extension_id, "--execute"),
+                capture_output=True, text=True, check=False, timeout=60,
+            )
+            assert concurrent.returncode == 0, concurrent.stderr
+            concurrent_payload = json.loads(concurrent.stdout)
+            assert concurrent_payload["changed"] is True
+            assert concurrent_payload["enabled"] is enabled_after
+            assert concurrent_payload["active_revision"] == upgraded["revision"]
+        finally:
+            release.write_text("", encoding="utf-8")
+        stdout, stderr = rollback.communicate(timeout=60)
+    assert rollback.returncode == 0, stderr
+    payload = json.loads(stdout)
+    assert payload["ok"] is True
+    assert payload["operation"] == "rollback"
+    assert payload["revision"] == installed["revision"]
+    assert payload["previous_revision"] == upgraded["revision"]
+    assert payload["enabled"] is enabled_after
+
+    entry = json.loads(state_file.read_text(encoding="utf-8"))["extensions"][extension_id]
+    assert entry["active_revision"] == installed["revision"]
+    assert entry["enabled"] is enabled_after
+    listing = subprocess.run(
+        cli("list"), capture_output=True, text=True, check=False, timeout=60,
+    )
+    assert listing.returncode == 0, listing.stderr
+    [listed] = json.loads(listing.stdout)["extensions"]
+    assert listed["active_revision"] == installed["revision"]
+    assert listed["enabled"] is payload["enabled"] is enabled_after
 
 
 def test_failed_upgrade_keeps_the_active_revision(tmp_path: Path) -> None:

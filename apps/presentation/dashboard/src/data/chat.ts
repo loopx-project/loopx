@@ -827,6 +827,7 @@ export type ChatVisibleMessage = {
   return_delivery?: {
     schema_version: "manager_return_delivery_status_v0";
     phase: "decision" | "conclusion";
+    request_revision?: number | null;
     status: string;
     created_at?: string | null;
     delivered_at?: string | null;

@@ -88,6 +88,9 @@ export type CollaborationReadback = {
   agent_id: string;
   goal_id?: string;
   decision_reason?: string;
+  request_revision?: number;
+  control_route?: import("./request-control").RequestControlRoute;
+  request_control?: import("./request-control").RequestControlView | null;
   brief: {
     purpose: string;
     context: string;
@@ -98,7 +101,7 @@ export type CollaborationReadback = {
   };
   read_status: string;
   decision: string;
-  returns: { phase: string; status: string }[];
+  returns: { phase: string; status: string; request_revision?: number | null }[];
 };
 
 export type ChatRouteCandidate = {

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -43,13 +44,17 @@ def main() -> int:
             "finance_market_snapshot",
         )
         assert completed.returncode == 0, completed.stderr
-        assert '"status": "migrated_to_extension"' in completed.stdout
-        assert (
-            '"replacement_extension_id": "loopx-finance-value-discovery"'
-            in completed.stdout
-        )
-        assert '"replacement_capability_id": null' in completed.stdout
-        assert '"legacy_connector_executes_finance": false' in completed.stdout
+        payload = json.loads(completed.stdout)
+        if command == "source-map":
+            migration = payload["source_profiles"][0]["migration"]
+        elif command == "install-check":
+            migration = payload["checks"][0]["migration"]
+        else:
+            migration = payload
+        assert migration["status"] == "migrated_to_extension", payload
+        assert migration["replacement_extension_id"] == "loopx-finance-value-discovery", payload
+        assert migration["replacement_capability_id"] is None, payload
+        assert migration["truth_contract"]["legacy_connector_executes_finance"] is False, payload
 
     doc = " ".join(DOC.read_text(encoding="utf-8").lower().split())
     for marker in (

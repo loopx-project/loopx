@@ -145,8 +145,8 @@ def _prepare_native_skills(home: Path, installed: Path) -> None:
 def prepare_context(env: dict[str, str], declaration: dict) -> dict:
     """Join actual session + research owners on one freshly bootstrapped Goal."""
     from benchmark.runtime.codex import Execution
-    from benchmark.runtime.native_checkpoint import admit_native_checkpoint_session
-    from benchmark.runtime.research_checkpoint import adopt_todo_context
+    from loopx.control_plane.turn_driver.codex_checkpoint import admit_native_checkpoint_session
+    from loopx.control_plane.runtime.research_checkpoint import adopt_todo_context
     from benchmark.runtime.worker import loopx_command
     import subprocess
 
@@ -158,7 +158,7 @@ def prepare_context(env: dict[str, str], declaration: dict) -> dict:
         raise ValueError("Original warm start allowance expired during installation")
     execution = Execution(context="resume", sandbox=env["LOOPX_CODEX_SANDBOX"])
     native = admit_native_checkpoint_session(env, unit, digest, Path(declaration["config"]),
-                                            execution=execution, timeout=30)
+                                            sandbox=execution.sandbox, timeout=30)
     _prepare_native_skills(Path(env["CODEX_HOME"]), Path(env["LOOPX_SHARED_SKILLS"]))
     def cli(*args):
         result = subprocess.run([*loopx_command(env), *args], env=env,

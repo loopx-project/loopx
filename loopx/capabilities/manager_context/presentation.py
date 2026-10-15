@@ -1,14 +1,16 @@
 """Owner-local collaboration readback in the conversation that delegated it."""
 
-from . import _read, _root
+from . import _read, _root, _hash
 from .tracking import _entry, _receipt
-from .roundtrip import _original_delivery_facts, reply_status
+from .roundtrip import reply_status
+from ...control_plane.collaboration.source_chat_observation import original_delivery_facts
 from ...chat import redact_local_paths
 from ...control_plane.collaboration import conversation_scope
 from ...control_plane.collaboration.goal_instance_scope import (
     collaboration_goal_scope,
     decide_collaboration_lifecycle,
 )
+from ...control_plane.collaboration.inbox import controlled_request_readback
 
 
 def project_collaboration(store, root, session_id, messages, *, registry):
@@ -44,6 +46,7 @@ def project_collaboration(store, root, session_id, messages, *, registry):
         except (OSError, ValueError, TypeError):
             continue
     result = []
+    revision_labels = {}
     for message in messages:
         tid = message.get("turn_id")
         if not tid or carriers.get(tid) != message.get("message_id"):
@@ -72,9 +75,9 @@ def project_collaboration(store, root, session_id, messages, *, registry):
                     scope=scope,
                 )
                 route = _read(_root(root) / "roundtrips" / (row["request_id"] + ".json"))
-                decide_collaboration_lifecycle(
+                lifetime = decide_collaboration_lifecycle(
                     scope, operation="original_request_inspect", record=row, route=route,
-                    initial_delivery=_original_delivery_facts(row, route, turn, source_id=row["source_id"]),
+                    initial_delivery=original_delivery_facts(row, route, turn, source_id=row["source_id"]),
                 )
             if (
                 route.get("session_id") != session_id
@@ -99,10 +102,7 @@ def project_collaboration(store, root, session_id, messages, *, registry):
                     return {key: safe(item) for key, item in value.items()}
                 return value
 
-            result.append(
-                {
-                    **message,
-                    "collaboration": {
+            collaboration = {
                         "schema_version": "collaboration_request_readback_v0",
                         "request_id": row["request_id"],
                         "agent_id": row["agent_id"],
@@ -118,10 +118,33 @@ def project_collaboration(store, root, session_id, messages, *, registry):
                         else decision.get("decision", "pending"),
                         "decision_reason": safe(decision.get("reason", "")) if not error else "",
                         "returns": reply_status(root, row),
-                    },
-                }
-            )
+            }
+            if scope.exact:
+                collaboration["control_route"] = {"available": lifetime.get("mode") == "current_instance",
+                    "goal_id": row["goal_id"], "goal_instance_id": row["goal_ref"]["goal_instance_id"],
+                    "agent_id": row["agent_id"], "request_id": row["request_id"], "session_id": session_id, "turn_id": tid}
+            controlled = controlled_request_readback(root, row)
+            if controlled is not None:
+                current = controlled.get("readback")
+                collaboration["request_control"] = safe(controlled.get("request_control_view"))
+                collaboration["receipt_warnings"] = controlled["warnings"]
+                if current is not None:
+                    collaboration.update(brief=safe(current["brief"]), request_revision=current["request_revision"],
+                        read_status=current["card_read_status"], decision=current["card_decision"],
+                        decision_reason=safe(current["decision"]["reason"] or ""))
+                else:
+                    collaboration.update(read_status="unavailable", decision="unavailable", decision_reason="")
+                revisions = controlled.get("result_revisions")
+                for reply in collaboration["returns"]:
+                    key = reply.get("result_key", reply["phase"])
+                    revision = next((value["request_revision"] for value in revisions or [] if value["result_key"] == key), None)
+                    reply["request_revision"] = revision
+                    revision_labels["handoff." + _hash([row["request_id"], key])] = revision
+            result.append({**message, "collaboration": collaboration})
         except (OSError, ValueError, KeyError, TypeError):
             # Missing readback is not a change to the saved conversation.
             result.append(message)
-    return result
+    return [{**message, "return_delivery": {**message["return_delivery"],
+             "request_revision": revision_labels[message["message_id"]]}}
+            if message.get("message_id") in revision_labels and isinstance(message.get("return_delivery"), dict)
+            else message for message in result]

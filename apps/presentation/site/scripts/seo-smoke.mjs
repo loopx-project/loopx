@@ -5,6 +5,23 @@ import { fileURLToPath } from "node:url";
 
 const directory = resolve(process.argv[2] ?? fileURLToPath(new URL("../dist", import.meta.url)));
 const origin = "https://loopx-project.github.io/loopx/";
+const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
+// Agent discovery must survive both Vite and the assembled Pages export as
+// Markdown, with links to the existing workflow owners rather than copies.
+const skill = await readFile(resolve(directory, "skill.md"), "utf8");
+assert.equal(skill, await readFile(new URL("../public/skill.md", import.meta.url), "utf8"), "publish the skill unchanged");
+assert.match(skill, /^---\nname: [a-z0-9-]+\ndescription: .+\n---\n/);
+for (const [, href] of skill.matchAll(/\]\((https:\/\/[^)]+)\)/g)) {
+  const url = new URL(href);
+  if (url.hostname === "github.com" && url.pathname.startsWith("/loopx-project/loopx/")) {
+    const sourcePath = url.pathname.replace(/^\/loopx-project\/loopx\/(?:blob|tree)\/main\//, "");
+    if (sourcePath !== url.pathname) await access(resolve(repoRoot, sourcePath));
+  }
+  if (process.argv.includes("--with-docs") && href.startsWith(origin)) {
+    const path = url.pathname.slice(new URL(origin).pathname.length);
+    await access(resolve(directory, path, path.endsWith("/") || !path ? "index.html" : ""));
+  }
+}
 const titles = new Set();
 for (const [path, subject] of [["", "long-running"], ["benchmarks/swe-marathon/", "SWE-Marathon"], ["benchmarks/lhtb/", "LHTB"]]) {
   const html = await readFile(resolve(directory, path, "index.html"), "utf8");
@@ -18,6 +35,10 @@ for (const [path, subject] of [["", "long-running"], ["benchmarks/swe-marathon/"
   assert.equal((html.match(/rel="canonical"/g) ?? []).length, 1);
   assert(html.includes(`rel="canonical" href="${origin}${path}"`), `${path}: canonical matches route`);
   if (!path) {
+    const footer = html.match(/<footer class="site-footer">(.*?)<\/footer>/s)?.[1] ?? "";
+    const basePath = html.match(/<script\b[^>]*\bsrc="([^"]*)site-assets\/[^"]+"/)?.[1];
+    assert(basePath !== undefined, "homepage contains the built application script");
+    assert(footer.includes(`href="${basePath}skill.md"`), "homepage footer discovers the skill under the built base");
     const structured = JSON.parse(html.match(/<script type="application\/ld\+json">(.*?)<\/script>/s)?.[1] ?? "null");
     assert.equal(structured?.["@type"], "SoftwareSourceCode");
     assert.equal(structured?.codeRepository, "https://github.com/loopx-project/loopx");
@@ -47,4 +68,4 @@ if (process.argv.includes("--with-docs")) {
   const index = await readFile(resolve(directory, "sitemap.xml"), "utf8");
   for (const [, url] of index.matchAll(/<loc>(.*?)<\/loc>/g)) await access(resolve(directory, url.slice(origin.length)));
 }
-console.log(`SEO publication: three prerendered routes, ${locations.length} canonical sitemap targets, assets and metadata passed`);
+console.log(`SEO publication: agent skill and owner links, three prerendered routes, ${locations.length} canonical sitemap targets, assets and metadata passed`);

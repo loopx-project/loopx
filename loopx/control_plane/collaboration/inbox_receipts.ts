@@ -1,13 +1,14 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { jsonObject, requireBoolean, requireJsonObject, requireStringLiteral } from "../runtime_decode.ts";
-import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
+import {receiverDecision, sameRequest} from "./semantic_request.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
+import {requestControlView} from "./request_control.ts";
+import {collaborationResultObservations} from "./result_publication.ts";
 
 type Observation =
   | Readonly<{ state: "absent" | "unavailable" }>
   | Readonly<{ state: "read"; value: JsonObject | null }>;
-type Decision = "adopt" | "defer" | "reject" | "no_change";
 type Warning = "decision_unreadable_or_conflicting" | "conclusion_unreadable_or_conflicting"
   | "decision_missing_for_conclusion";
 type InboxState = "pending" | "awaiting_conclusion" | "settled" | "receipt_unavailable";
@@ -61,33 +62,45 @@ function observation(value: unknown): Observation {
   return state === "read" ? { state, value: jsonObject(row.value) } : { state };
 }
 
-function sameGoalRef(left: unknown, right: unknown): boolean {
-  if (left === undefined && right === undefined) return true;
-  const a = parseExactGoalRef(left);
-  const b = parseExactGoalRef(right);
-  return a.kind === "parsed" && b.kind === "parsed"
-    && a.value.goalId.value === b.value.goalId.value
-    && a.value.goalInstanceId.value === b.value.goalInstanceId.value;
-}
-
-export function sameRequest(receipt: JsonObject | null, request: JsonObject, source: boolean): receipt is JsonObject {
-  return receipt !== null && ["request_id", "goal_id", "agent_id"].every((key) => receipt[key] === request[key])
-    && sameGoalRef(receipt.goal_ref, request.goal_ref)
-    && (!source || receipt.source_id === request.source_id);
-}
-
-export function receiverDecision(value: unknown): Decision | null {
-  switch (value) {
-    case "adopt": case "defer": case "reject": case "no_change": return value;
-    default: return null;
-  }
-}
 
 function inspect(value: unknown): JsonObject {
   const row = requireJsonObject(value, "inbox observation");
   const request = requireJsonObject(row.request, "inbox request");
   const routePresent = requireBoolean(row.route_present, "return route presence");
   const decision = observation(row.decision);
+  if (Object.hasOwn(request, "request_control")) {
+    let view: JsonObject | null = null;
+    let readback: JsonObject | null = null;
+    try {
+      const legacy = decision.state === "read" ? decision.value : null;
+      const priorRead = observation(row.read);
+      view = requestControlView(request, legacy, decision.state === "unavailable",
+        priorRead.state === "read" ? priorRead.value : null, priorRead.state === "unavailable");
+      const recorded = receiverDecision((view.assessment as JsonObject | null)?.decision);
+      const readAt = view.read_at, readUnavailable = view.read_readback === "unavailable";
+      const a = view.assessment as JsonObject | null;
+      readback = {request_revision: view.revision, request_revision_digest: view.revision_digest, brief: view.brief,
+        read: {status: readUnavailable ? "unavailable" : readAt !== null ? "supplied_to_receiver" : recorded ? "decision_exists_read_receipt_missing" : "not_recorded", at: readAt},
+        decision: {status: recorded ?? (view.assessment_readback === "unavailable" ? "unavailable" : "not_recorded"),
+          at: a?.assessed_at ?? null, reason: a?.reason ?? null},
+        card_read_status: readUnavailable ? "unavailable" : readAt !== null ? "supplied" : "pending",
+        card_decision: recorded ?? (view.assessment_readback === "unavailable" ? "unavailable" : "pending")};
+      const results = collaborationResultObservations(request, row.results, recorded, legacy);
+      const answered = results.some(result => result.value.phase === "conclusion"
+        && (result.value.request_revision ?? 1) === view!.revision);
+      const warnings: Warning[] = view.assessment_readback === "unavailable" ? ["decision_unreadable_or_conflicting"] : [];
+      const kind: InboxState = warnings.length ? "receipt_unavailable"
+        : view.control_state === "cancelled" ? "settled"
+        : view.active_reservation !== null ? "awaiting_conclusion"
+        : !recorded ? "pending" : answered ? "settled" : "awaiting_conclusion";
+      return {kind, recorded_decision: recorded, warnings, request_control_view: view, readback,
+        result_revisions: results.map(result => ({result_key: result.key, request_revision: result.value.request_revision ?? 1}))};
+    } catch (error) {
+      if (!(error instanceof EffectRuntimeRequestError)) throw error;
+      return {kind: "receipt_unavailable", recorded_decision: null,
+        warnings: ["conclusion_unreadable_or_conflicting"], request_control_view: view, readback, result_revisions: null};
+    }
+  }
   const conclusion = observation(row.conclusion);
   const recorded = decision.state === "read" && sameRequest(decision.value, request, false)
     ? receiverDecision(decision.value.decision) : null;

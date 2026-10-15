@@ -1,0 +1,26 @@
+{
+  "schema": "loopx_package_kernel_import_pins_v0",
+  "baseline_commit": "70bc98198ce9e8c33e461cc41fe77243d713dcf0",
+  "note": "Exact pin of every `loopx.*` module imported by a co-located package. The monorepo-distribution-split RFC says a package registers through CapabilityRegistry and never imports kernel-private modules; these are the pre-existing edges. Remove an entry in the PR that removes the import. Adding an entry needs a recorded design decision.",
+  "imports": {
+    "loopx-ark-turn": [
+      "loopx.control_plane.turn_driver.host_candidate",
+      "loopx.file_lock"
+    ],
+    "loopx-finance-value-discovery": [
+      "loopx.extensions.lark.presentation.message_card",
+      "loopx.extensions.presentation"
+    ],
+    "loopx-jev": [
+      "loopx.capabilities.progress_review.receipt",
+      "loopx.control_plane.effect_runtime",
+      "loopx.control_plane.goals.acceptance",
+      "loopx.control_plane.work_items.autonomous_replan_ack",
+      "loopx.control_plane.work_items.external_progress_review",
+      "loopx.control_plane.work_items.progress_observation",
+      "loopx.control_plane.work_items.progress_result",
+      "loopx.entrypoint",
+      "loopx.file_lock"
+    ]
+  }
+}

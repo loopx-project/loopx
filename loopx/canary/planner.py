@@ -1387,7 +1387,7 @@ def _read_catalog(catalog_path: Path | None = None) -> tuple[Path, str]:
 
 def _display_path(path: Path) -> str:
     try:
-        return str(path.relative_to(REPO_ROOT))
+        return path.relative_to(REPO_ROOT).as_posix()
     except ValueError:
         return str(path)
 

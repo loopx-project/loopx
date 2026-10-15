@@ -331,6 +331,14 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "purpose": "Plan an explicit local capture or inspect an existing profile without executing or uploading it.",
             },
             {
+                "command": "loopx goal-direction --help",
+                "purpose": "Inspect or explicitly configure a Goal material basis; writes require --execute.",
+            },
+            {
+                "command": "loopx zcode-goal --help",
+                "purpose": "Explicitly bind and inspect one managed ZCode CLI native Goal session.",
+            },
+            {
                 "command": "loopx promotion-readiness",
                 "purpose": "Record release-scoped canary readiness evidence in the shared runtime ledger.",
             },

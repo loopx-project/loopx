@@ -275,6 +275,71 @@ test("the preflight reads the persisted receipts and names the newest required c
   }
 });
 
+test("recovering an earlier Turn cannot depend on a later Turn", async () => {
+  // Turn ids are opaque. Deliberately reverse their lexical order; clocks and
+  // last replay order must not reverse the persisted causal relationship.
+  const earlier = "z-original";
+  const later = "a-followup";
+  const runtime = await runtimeWith([
+    receipt(earlier, closeoutRequired(earlier, "todo_original")),
+    receipt(later, closeoutRequired(later, "todo_followup")),
+    receipt(earlier, closeoutRequired(earlier, "todo_original")),
+  ]);
+  try {
+    assert.equal((await preflight(runtime.root, earlier)).status, "none");
+    const result = await preflight(runtime.root, later);
+    assert.equal(candidateFrom(result).prior_turn_instance_id, earlier);
+    assert.deepEqual(result.missing_receipts, [
+      "durable_writeback_receipt", "quota_spend_receipt",
+    ]);
+    // A genuinely fresh Turn still owes both outstanding closeouts.
+    assert.equal(candidateFrom(await preflight(runtime.root)).prior_turn_instance_id, earlier);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("an unbound first receipt fixes causality before its late binding upgrade", async () => {
+  const runtime = await runtimeWith([
+    receipt("original", {}),
+    receipt("followup", closeoutRequired("followup", "todo_followup")),
+    receipt("original", closeoutRequired("original", "todo_original")),
+  ]);
+  try {
+    assert.equal((await preflight(runtime.root, "original")).status, "none");
+    assert.equal(candidateFrom(await preflight(runtime.root, "followup")).binding_id, "todo_original");
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("a late replay of a causal predecessor remains owed by the original Turn", async () => {
+  const runtime = await runtimeWith([
+    receipt("predecessor", closeoutRequired("predecessor", "todo_predecessor")),
+    receipt("original", closeoutRequired("original", "todo_original")),
+    receipt("followup", closeoutRequired("followup", "todo_followup")),
+    receipt("predecessor", closeoutRequired("predecessor", "todo_predecessor")),
+  ]);
+  try {
+    assert.equal(candidateFrom(await preflight(runtime.root, "original")).binding_id, "todo_predecessor");
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("causal filtering does not hide conflicting later receipt identities", async () => {
+  const runtime = await runtimeWith([
+    receipt("original", closeoutRequired("original", "todo_original")),
+    receipt("followup", closeoutRequired("followup", "todo_alpha")),
+    receipt("followup", closeoutRequired("followup", "todo_beta")),
+  ]);
+  try {
+    await assert.rejects(() => preflight(runtime.root, "original"), /conflicting settlement identities/);
+  } finally {
+    await runtime.close();
+  }
+});
+
 test("exact preflight filters stale owners before selecting the newest Turn", async () => {
   const instanceA = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   const instanceB = "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";

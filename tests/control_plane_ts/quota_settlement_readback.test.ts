@@ -1155,6 +1155,34 @@ test("keeps the same-turn rebind when no earlier Turn owes a closeout", async t 
   }
 });
 
+test("an unbound earlier Turn never reports a later Turn as its owed predecessor", async () => {
+  const root = await fixture({guardUnbound: true});
+  try {
+    const eventsPath = join(root, "goals", goalId, "rollout-event-log.jsonl");
+    const original = JSON.parse((await readFile(eventsPath, "utf8")).split("\n")[0]!);
+    const later = {...original, event_id: "later-guard", run_id: "later-turn", details: {
+      todo_id: todoId, closeout_required: true,
+      settlement_effect_id: settlementIdentity({goal_id: goalId, agent_id: agentId,
+        todo_id: todoId, turn_instance_id: "later-turn"}).effect_id,
+    }};
+    // A delayed replay must not move the original Turn's causal position.
+    await appendFile(eventsPath, `${JSON.stringify(later)}\n${JSON.stringify(original)}\n`);
+    const result = await readQuotaSettlement(request(root));
+    const failure = (result.settlement as any).result.failure;
+    assert.equal(failure.kind, "receipt_unbound");
+    assert.equal(failure.details.owed_prior_turn, undefined);
+    assert.match(failure.reason, /quota should-run --turn-instance-id turn-settlement-1 --todo-id todo_settlement/);
+    const preflight = await preflightPriorHostTurnCloseout({
+      schema_version: PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
+      runtime_root: root, goal_id: goalId, agent_id: agentId,
+      exclude_turn_instance_id: turnId,
+    });
+    assert.equal(preflight.status, "none");
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 test("still reports a receipt bound to another work item as a mismatch", async () => {
   // The unbound state must not swallow the case where the receipt was bound and
   // the caller asked for something else: that is a real conflict, and its repair

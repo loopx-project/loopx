@@ -244,7 +244,7 @@ def test_real_cli_settlement_capture_verification_and_inert_materialization(
 def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch, source_moves, mutation_stage,
                                                        caller_id="code"):
     """Actual CLI settlement, native completed Turns and TS SQLite artifacts."""
-    from benchmark.tests.test_native_checkpoint import real_native_source
+    from tests.control_plane.codex_checkpoint_fixture import real_native_source
     from benchmark.runtime.codex import Execution
     from benchmark.runtime.sessions import BenchmarkSessionWake
     from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
@@ -320,7 +320,7 @@ def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch,
         # provider fork entry, retaining the original home for byte comparison.
         # Fixed paths are swapped in this fixture; this is not guest isolation.
         import shutil
-        from benchmark.runtime.native_checkpoint import fork_native_checkpoint
+        from loopx.control_plane.turn_driver.codex_checkpoint import fork_native_checkpoint
 
         native = manifest["point_metadata"]["native_session"]
         assert all(member["id"] != caller_id for member in native["store_members"])
@@ -636,7 +636,7 @@ def test_research_participants_preserve_legal_caller_ids(tmp_path, monkeypatch, 
 
 @pytest.mark.parametrize('gap', ['shared_registry','wrong_actor','wrong_runtime','missing_state','symlink_state','overlap'])
 def test_loopx_participant_rejects_wrong_or_ambiguous_routes(tmp_path, gap):
-    from benchmark.runtime.checkpoint import _loopx_state_components
+    from loopx.control_plane.runtime.research_checkpoint import _loopx_state_components
     project, runtime, registry = cli._write_fixture(tmp_path)
     runtime.mkdir()
     (project/'solver.py').write_text('candidate = 7\n')
@@ -667,7 +667,8 @@ def test_loopx_participant_rejects_wrong_or_ambiguous_routes(tmp_path, gap):
 
 
 def test_loopx_participant_preserves_legacy_and_current_owned_goal_directories(tmp_path):
-    from benchmark.runtime.checkpoint import _loopx_state_components, parse_checkpoint_request
+    from loopx.control_plane.runtime.research_checkpoint import _loopx_state_components
+    from benchmark.runtime.checkpoint import parse_checkpoint_request
     project, runtime, registry = cli._write_fixture(tmp_path)
     # These are legitimate controller partitions, not two Goal registrations.
     # Inventory follows the backup owner, not a basename-based Goal classifier.

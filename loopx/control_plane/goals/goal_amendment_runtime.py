@@ -53,12 +53,13 @@ def _replan_readback(derived: Mapping[str, Any], inventory: list[dict[str, Any]]
     return rows
 
 
-def execute_goal_amendment(
+def _execute_goal_amendment(
     *, registry_path: Path, goal_id: str, goal_instance_id: str,
     operation: str, actor_agent_id: str | None,
     replan_configuration_reader: Callable[[Mapping[str, Any], Path], Mapping[str, Any]],
     parameters: Mapping[str, Any] | None = None,
     runtime_root: Path | None = None, execute: bool = False,
+    request_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     requested = exact_goal_ref(goal_id, goal_instance_id)
     parameters = dict(parameters or {})
@@ -72,13 +73,13 @@ def execute_goal_amendment(
         raise ValueError("source Goal requires its configured runtime root")
     root = Path(configured_root).expanduser().resolve()
     lock_goal_ref = requested
-    if operation in {"inspect", "receipt"}:
+    if operation in {"inspect", "request_basis", "receipt"}:
         lock_goal_ref, _ = current_goal_ref(initial, goal_id=goal_id, require_active=False)
     with quota_accounting_admission(runtime_root=root, registry_path=registry_path,
         goal_id=goal_id, goal_ref=lock_goal_ref, operation="goal_amendment_source_read") as admission:
         with source_session_registry_transaction(registry_path, operation="goal_amendment_source_read") as transaction:
             registry = transaction.payload_copy()
-            goal_ref, goal = current_goal_ref(registry, goal_id=goal_id, require_active=operation not in {"inspect", "receipt"})
+            goal_ref, goal = current_goal_ref(registry, goal_id=goal_id, require_active=operation not in {"inspect", "request_basis", "receipt", "abort_request"})
             configured = registry.get("common_runtime_root")
             if not isinstance(configured, str) or not configured:
                 raise ValueError("source Goal requires its configured runtime root")
@@ -103,6 +104,12 @@ def execute_goal_amendment(
                 "registry_source": transaction.source_read_witness(), "accounting_admission": admission,
                 "gate": gate, "goal_status": goal.get("status"), "registered_agents": agents,
                 "open_replan_obligations": obligations}
+            if request_context is not None:
+                source["request_entry"] = dict(request_context["entry"])
+                if request_context.get("reservation_digest") is not None:
+                    source["request_reservation_digest"] = request_context["reservation_digest"]
+                if request_context.get("preview") is True:
+                    source["request_preview"] = True
             common = {"goal_ref": requested, "actor_agent_id": actor_agent_id,
                 "runtime_root": str(root), "observed_at": now_utc_iso(), "source": source}
 
@@ -132,7 +139,7 @@ def execute_goal_amendment(
                 result = effect_runtime_result("goal.amendment.execute", {
                     **parameters, **common, "operation": operation, "dry_run": not execute,
                 }, timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS)
-                if isinstance(result, dict) and operation != "receipt" and result.get("ok") is True and result.get("status") != "planned":
+                if isinstance(result, dict) and operation not in {"receipt", "request_basis"} and result.get("request_outcome") is None and result.get("ok") is True and result.get("status") != "planned":
                     # Current consumption is a separate readback; never rewrite
                     # the original operation's committed receipt or pending fact.
                     result["current_projection"] = inspect()
@@ -140,3 +147,33 @@ def execute_goal_amendment(
     if not isinstance(result, dict):
         raise TypeError("Goal amendment owner returned an invalid result")
     return result
+
+
+def execute_goal_amendment(
+    *, registry_path: Path, goal_id: str, goal_instance_id: str,
+    operation: str, actor_agent_id: str | None,
+    replan_configuration_reader: Callable[[Mapping[str, Any], Path], Mapping[str, Any]],
+    parameters: Mapping[str, Any] | None = None,
+    runtime_root: Path | None = None, execute: bool = False,
+) -> dict[str, Any]:
+    """Route explicit request-derived work through its source reservation owner."""
+    params = dict(parameters or {})
+    if operation in {"abort_request", "request_basis"}:
+        raise ValueError("request effect recovery must use its original request entrypoint")
+    if "source_request" not in params:
+        return _execute_goal_amendment(registry_path=registry_path, goal_id=goal_id, goal_instance_id=goal_instance_id,
+            operation=operation, actor_agent_id=actor_agent_id, parameters=params, runtime_root=runtime_root, execute=execute,
+            replan_configuration_reader=replan_configuration_reader)
+    if operation not in {"propose", "commit"} or actor_agent_id is None:
+        raise ValueError("source request context requires an explicit receiver proposal or commit")
+    from ..collaboration.request_amendment import execute_request_amendment, request_proposal_context
+
+    if operation == "commit":
+        return execute_request_amendment(registry_path=registry_path, runtime_root=runtime_root,
+            goal_ref=exact_goal_ref(goal_id, goal_instance_id), receiver_agent_id=actor_agent_id,
+            parameters=params, execute=execute, replan_configuration_reader=replan_configuration_reader)
+    root, context = request_proposal_context(registry_path=registry_path, runtime_root=runtime_root,
+        goal_ref=exact_goal_ref(goal_id, goal_instance_id), receiver_agent_id=actor_agent_id, reference=params["source_request"])
+    return _execute_goal_amendment(registry_path=registry_path, goal_id=goal_id, goal_instance_id=goal_instance_id,
+        operation="propose", actor_agent_id=actor_agent_id, parameters=params, runtime_root=root,
+        execute=execute, request_context=context, replan_configuration_reader=replan_configuration_reader)

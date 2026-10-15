@@ -203,9 +203,46 @@ test("replan capture selection requires the original admitted identity and grant
   await assert.rejects(checkpointArtifacts({...request, agent_id: "another-agent"}), /admitted identity/);
   await assert.rejects(checkpointArtifacts({...request, quota: {...quota, replan_action_packet:
     {...quota.replan_action_packet, obligation_id: "replan-fedcba9876543210"}}}), /admitted identity/);
-  await assert.rejects(checkpointArtifacts({...request, quota: {...quota, heartbeat_receipt:
-    {...quota.heartbeat_receipt, settlement_identity: {...identity, todo_id: "todo_conflict"}}}}), /admitted identity/);
+  for (const closeout_required of [false, true]) {
+    await assert.rejects(checkpointArtifacts({...request, quota: {...quota, heartbeat_receipt:
+      {...quota.heartbeat_receipt, closeout_required,
+        settlement_identity: {...identity, todo_id: "todo_conflict"}}}}), /admitted identity/);
+  }
   await assert.rejects(checkpointArtifacts({...request, quota: {...quota, ok: false}}), /matching current/);
+});
+
+test("receipt-owned replan settlement returns to its original writer without admitting capture", async () => {
+  const id = "replan-0123456789abcdef", turn = "fixture-turn";
+  const identity = {goal_id: "fixture-goal", agent_id: "fixture-agent", turn_instance_id: turn,
+    replan_obligation_id: id, binding_kind: "autonomous_replan", binding_id: id,
+    effect_id: `fixture-goal:fixture-agent:autonomous_replan:${id}:${turn}`};
+  const quota = {ok: true, goal_id: "fixture-goal", effective_action: "autonomous_replan_required",
+    replan_action_packet: {schema_version: "replan_action_packet_v0", decision: "settlement_pending",
+      obligation_id: id, settlement_only: true},
+    heartbeat_receipt: {status: "replayed", turn_instance_id: turn, semantic_replan_obligation_id: id,
+      settlement_identity: identity}};
+  const request = {action: "select_replan", quota, goal_id: "fixture-goal", agent_id: "fixture-agent", turn_instance_id: turn};
+  for (const decision of ["settlement_pending", "successor_transition_recorded", "vision_outcome_checkpoint_required"]) {
+    const before = structuredClone(quota);
+    assert.deepEqual(await checkpointArtifacts({...request, quota: {...quota,
+      replan_action_packet: {...quota.replan_action_packet, decision}}}), {
+      capture: false, reason: "turn_closeout_pending", execution_authority_granted: false,
+    });
+    assert.deepEqual(quota, before);
+  }
+  for (const [field, value] of Object.entries({goal_id: "foreign", agent_id: "foreign",
+    turn_instance_id: "foreign", effect_id: "foreign", todo_id: "todo_conflict"})) {
+    await assert.rejects(checkpointArtifacts({...request, quota: {...quota, heartbeat_receipt: {
+      ...quota.heartbeat_receipt, settlement_identity: {...identity, [field]: value}}}}), /admitted identity/);
+  }
+  await assert.rejects(checkpointArtifacts({...request, quota: {...quota, heartbeat_receipt: {
+    ...quota.heartbeat_receipt, settlement_identity: undefined, settlement_binding_owed: true}}}));
+  await assert.rejects(checkpointArtifacts({...request, quota: {...quota, replan_action_packet: {
+    ...quota.replan_action_packet, obligation_id: "replan-fedcba9876543210"}}}), /admitted identity/);
+  await assert.rejects(checkpointArtifacts({...request, quota: {...quota, replan_action_packet: {
+    ...quota.replan_action_packet, settlement_only: false}}}), /admitted identity/);
+  assert.equal((await checkpointArtifacts({...request, quota: {...quota, replan_action_packet: {
+    ...quota.replan_action_packet, decision: "replan_required", settlement_only: false}}})).capture, true);
 });
 
 test("committed semantic replan can capture before work selection without inventing settlement authority", async () => {

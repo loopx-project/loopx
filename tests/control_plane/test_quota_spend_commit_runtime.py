@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from loopx.control_plane.quota.spend_commit import (
+    QuotaRunIndexConflict,
     build_quota_slot_spend_event,
     record_quota_slot_spend_from_preview,
 )
@@ -294,9 +295,9 @@ def test_spend_quota_slot_rejects_reusing_a_stale_status_snapshot(
 
     assert written["appended"] is True
     with pytest.raises(
-        ValueError,
+        QuotaRunIndexConflict,
         match="quota run index compare-and-swap precondition failed",
-    ):
+    ) as conflict:
         spend_quota_slot(
             status,
             goal_id=GOAL_ID,
@@ -304,6 +305,7 @@ def test_spend_quota_slot_rejects_reusing_a_stale_status_snapshot(
             source="controller",
             effect_ref="provider-effect-b#quota_spend",
         )
+    assert conflict.value.reason_code == "index_digest_conflict"
     index_path = Path(written["index_path"])
     assert len(index_path.read_text(encoding="utf-8").splitlines()) == 1
 

@@ -115,7 +115,7 @@ class CheckpointWake:
             if research is None:
                 raise ValueError("controller checkpoint requires complete canonical research context")
         if self.request.get("native_session"):
-            from .native_checkpoint import native_session_checkpoint
+            from loopx.control_plane.turn_driver.codex_checkpoint import native_session_checkpoint
             from .checkpoint import native_binding_participant
             components, source_wake = native_binding_participant(self.env, components, metadata)
             guard = {"cli": self.env["LOOPX_CLI"], "workspace": self.env["LOOPX_PROJECT"],

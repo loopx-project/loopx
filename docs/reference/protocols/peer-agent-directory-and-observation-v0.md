@@ -131,6 +131,9 @@ an identity.
 Rules:
 
 - a row exists per registered Agent of the Goal, whether or not it is running;
+  `registered` is the Goal registry's answer for the row, so a diagnostic
+  claimant row a producer also carries says `false` and cannot read as a
+  member;
 - `peer_route` summarizes the thread bindings already published for that Agent as
   `{schema_version, agent_id, outcome, address_shared, candidate_count, candidates,
   scope, provenance}`. `outcome` describes only what this walk can prove:
@@ -383,7 +386,7 @@ is omitted, and delivery remains available through the durable hand-off path.
 ### Local producer (shipped)
 
 The first producer is `loopx agent-directory --goal-id <goal> [--agent-id
-<caller>]` (`loopx/cli_commands/agent_directory.py` over
+<caller>] [--cursor <agent-id>]` (`loopx/cli_commands/agent_directory.py` over
 `loopx/control_plane/agents/directory.py`). It reads the Goal's existing agent
 management projection, so identity, work, claims and staleness keep their
 current owners and the packet adds no second read of the registry or a lease
@@ -392,13 +395,35 @@ and the steward channel call one command.
 
 What it emits, and what it refuses to imply:
 
-- one row per registered Agent, whether or not that Agent holds projected work,
-  and no `presence` block at all while no provider is registered;
+- one bounded page of rows (at most 24), one row per Agent in that page of the
+  Goal's directory order whether or not the Agent holds projected work, and no
+  `presence` block at all while no provider is registered; a row the projection
+  carries only for a Todo claim says `registered: false`, so a diagnostic
+  claimant never reads as a member and never counts as one;
+- one page of a stable agent-id order: `next_cursor` is the last id read and
+  names the continuation whenever more rows follow this page, `--cursor` reads
+  the page after it, and a fresh scan carries `"cursor": null`. A cursor is a
+  position in that order, not a claim that the id is still registered. Caller
+  membership is proven by the Goal's registration facts, never by a page and
+  never by a Todo claim: a claim that outlived its registration cannot admit
+  its claimant, and paging cannot deny a registered caller their scope;
 - explicit `limitations` (`presence_provider_unavailable`,
   `presence_is_advisory`, `lease_state_not_projected`,
   `caller_identity_not_supplied`, `rows_truncated_at_cap`) together with
-  `registered_agent_count` and `omitted_row_count`, so a truncated directory
-  cannot be read as a complete one;
+  `registered_agent_count`, `omitted_row_count` and, when it carries any,
+  `diagnostic_agent_count`, so a truncated directory cannot be read as a
+  complete one and no reader has to reconcile two meanings of "registered":
+  `registered_agent_count` counts the Goal's registration facts alone — the same
+  set that proves a caller's membership — while `row_count` also covers the
+  diagnostic claimant rows the page publishes; `omitted_row_count` counts the
+  rows of that order this packet did not carry, so `row_count +
+  omitted_row_count == registered_agent_count + diagnostic_agent_count`;
+  `rows_truncated_at_cap` still marks every packet that does not return all
+  rows of the Goal's directory, while `next_cursor` tells a reader whether those
+  rows are reachable by continuing; the payload's own agent projection is
+  bounded too, so a page holding Agents it did not carry declares
+  `lease_state_not_projected` instead of letting their unprojected lane and
+  lease state read as "no evidence";
 - a typed scope gap (`audience_not_authorized`) and zero rows when the named
   caller is not a registered Agent of the Goal, instead of a listing that caller
   has no scope over;

@@ -429,6 +429,18 @@ commands bind the original actor and route. Receipt repair reuses the existing
 idempotent writer. This is a bounded M7.4 adoption with no shared executor or
 new authority store; it does not certify terminal Todo or Goal acceptance.
 
+Prior-host-Turn recovery uses the shared TS candidate owner in both the guard
+and settlement readback. A replayed Turn may depend only on Turns first
+recorded before it in the same admitted receipt history. A later Turn cannot
+block recovery of its predecessor; delayed replay or binding upgrade does not
+change that order. Turn identifiers and wall clocks are not ordering authority.
+Persisted identity conflicts still fail closed, and a fresh Turn still requires
+all outstanding closeouts. Real File/SQLite CLI coverage includes reopening a
+previously blocked task after another Turn was admitted, original-binding
+recovery, a failed-check closeout without spend, and one debit across successor
+replay. This fixes a local recovery cycle; installed-host and wider collaboration
+qualification remain separate.
+
 The R5 compact projection also retains the existing CLI settlement plan intact,
 including its effect identity, ordered conditional steps and host handoff. Action
 signature coverage v5 detects removal or mutation of that plan; packets without

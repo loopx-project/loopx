@@ -1,8 +1,9 @@
-"""Private checkpoint context transport through existing canonical Todo owners.
+"""Research checkpoint context IO through existing canonical Todo owners.
 
 Captured records are historical input, never a replacement authority store.
 Only the existing explicit continuation owner can adopt a note on an already
-claimed destination Todo. Graph/effect/vision reactivation is outside this seam.
+claimed destination Todo. Verified Explore knowledge may seed a fresh graph;
+historical execution observations, effects and vision authority are not revived.
 """
 from __future__ import annotations
 
@@ -135,11 +136,10 @@ def _handoff(env, payload):
 
 def _context_session(env, metadata):
     """Read the admitted native branch before publishing captured Todo context."""
-    from .codex import Execution
-    from .sessions import BenchmarkSessionWake
-    from .native_checkpoint import native_session_checkpoint
+    from ..turn_driver.codex_agent_session import CodexAgentSession
+    from ..turn_driver.codex_checkpoint import native_session_checkpoint
 
-    wake = BenchmarkSessionWake(env, Execution(context="resume", sandbox=env["LOOPX_CODEX_SANDBOX"]), {})
+    wake = CodexAgentSession(env, context="resume", sandbox=env["LOOPX_CODEX_SANDBOX"], receipt={})
     native = metadata["native_session"]
     if (not wake.session_id or wake.session_id == native["session_id"] or
             wake.digest != metadata.get("session", {}).get("session_profile_digest")):
@@ -159,7 +159,8 @@ def adopt_todo_context(env: dict[str, str], unit: Path, digest: str, *, source_t
     """Adopt retained context using the destination's current claim and lease.
 
     No Todo is created, completed or transferred, and no historical authority,
-    effect, strategy or graph is installed. Prepare/adopt each use stable original
+    effect or strategy is installed. Explore facts retain their source identity
+    without operational observation grants. Prepare/adopt each use stable original
     operation identities. A failed/uncertain call must be read back through that
     same owner; this adapter never guesses a new identity or starts model work.
     """
@@ -197,6 +198,17 @@ def adopt_todo_context(env: dict[str, str], unit: Path, digest: str, *, source_t
     retained = next((row for row in context["todos"] if row["todo_id"] == source_todo_id), None)
     if retained is None:
         raise ValueError("source Todo is absent from the captured context")
+    from loopx.capabilities.explore.result_log import (
+        append_explore_result_events, explore_result_log_path, rebase_explore_knowledge_events,
+    )
+    # Validate the entire sealed knowledge source before any destination write.
+    # Legacy context-only points keep their original continuation request bytes.
+    evidence = carrier.get("research_evidence", {})
+    if not isinstance(evidence, dict) or not isinstance(evidence.get("explore_events", []), list):
+        raise ValueError("retained Explore knowledge must be a complete event array")
+    knowledge = rebase_explore_knowledge_events(evidence.get("explore_events", []),
+        source_goal_id=source["goal_id"], destination_goal_id=env["LOOPX_GOAL_ID"],
+        source_ref="checkpoint:" + digest)
     session_id = _context_session(env, metadata)
     bound = select_codex_cli_session(Path(env["LOOPX_RUNTIME_ROOT"]), lineage={
         "goal_id": env["LOOPX_GOAL_ID"], "agent_id": env["LOOPX_AGENT_ID"]}, session_scope="agent")
@@ -279,9 +291,229 @@ def adopt_todo_context(env: dict[str, str], unit: Path, digest: str, *, source_t
         runtime_root=Path(env["LOOPX_RUNTIME_ROOT"]), goal_id=env["LOOPX_GOAL_ID"])
     if result.get("ok") is not True or not projection_delivery_requires_ack(result["projection_delivery"]):
         raise ValueError("continuation committed; reconcile its original projection receipt")
+    knowledge_result = None
+    if knowledge:
+        # Recheck fresh current ownership after continuation/projection recovery.
+        # An exact immutable prefix makes a lost append response recoverable,
+        # without reverting evidence recorded by subsequent destination work.
+        current_owner = _handoff(env, {**common, "action": "inspect"})
+        if (current_owner["claimed_by"] != env["LOOPX_AGENT_ID"] or
+                current_owner.get("execution_authority", {}).get("allowed") is not True):
+            raise ValueError("destination knowledge adoption lost current execution authority")
+        knowledge_result = append_explore_result_events(
+            explore_result_log_path(Path(env["LOOPX_RUNTIME_ROOT"]), env["LOOPX_GOAL_ID"]),
+            knowledge, expected_goal_id=env["LOOPX_GOAL_ID"], require_ordered_prefix=True)
     return {"context_adopted": True, "session_id": bound["session_id"], "todo_id": todo_id,
         "artifact": str(target), "context_sha256": declared["sha256"],
+        **({"explore_knowledge": knowledge_result} if knowledge_result is not None else {}),
         "continuation": result, "model_calls": 0, "research_point_qualified": False}
+
+
+def _participant_id(components, preferred):
+    """Automatic participants cannot reserve an otherwise legal caller ID."""
+    occupied = {entry["id"] for entry in components}
+    candidate, suffix = preferred, 0
+    while candidate in occupied:
+        suffix += 1
+        candidate = f"{preferred}_{suffix}"
+    return candidate
+
+
+def _loopx_state_components(env, components, output_dir):
+    """Adapt the existing backup owner's inventory for one explicitly scoped Goal.
+
+    No second state-discovery rule, archive execution or authority adoption.
+    The runtime owns its original evidence, quota and effect journals; this
+    adapter declares those private files to the inert artifact owner only.
+    """
+    from loopx.history import load_registry
+    from loopx.state_backup import build_state_backup_plan
+
+    project, runtime, registry = (Path(env[key]) for key in (
+        "LOOPX_PROJECT", "LOOPX_RUNTIME_ROOT", "LOOPX_REGISTRY"))
+    for path in (project, runtime, registry):
+        if not path.is_absolute() or path.resolve(strict=True) != path:
+            raise ValueError("LoopX checkpoint routes must be normalized physical paths")
+    raw_registry = registry.read_bytes()
+    source = load_registry(registry)
+    goals = source.get("goals", [])
+    if (len(goals) != 1 or goals[0].get("id") != env["LOOPX_GOAL_ID"] or
+            env["LOOPX_AGENT_ID"] not in goals[0].get("coordination", {}).get("registered_agents", [])):
+        raise ValueError("LoopX state capture requires an explicitly scoped single-Goal registry")
+    # Reject lexical route aliases before backup discovery resolves them.
+    goal = goals[0]
+    if Path(goal["repo"]) != project or Path(source.get("common_runtime_root", "")) != runtime:
+        raise ValueError("LoopX checkpoint routes differ from the registered Goal")
+    state = Path(goal["state_file"])
+    state = state if state.is_absolute() else Path(goal["repo"]) / state
+    if not state.is_file():
+        raise ValueError("LoopX checkpoint requires its registered active state source")
+    routes = [state, *(project / path for path in (
+        ".loopx", ".codex/goals", ".claude/goals", ".local/goals"))]
+    if any(path.exists() and path.resolve(strict=True) != path for path in routes):
+        raise ValueError("LoopX checkpoint state routes must not contain symlinks")
+    plan = build_state_backup_plan(project=project, runtime_root=runtime,
+        registry_path=registry, output_dir=output_dir,
+        include_registry_projects=False, include_automations=False, include_skills=False)
+    if plan["warnings"]:
+        raise ValueError("LoopX backup inventory is incomplete; reconcile its source routes before capture")
+    # Select physical parent roots once. A caller-declared parent can already
+    # cover a discovered file; do not duplicate the same runtime/registry/state.
+    entries = list(components)
+    targets = sorted(plan["included"], key=lambda entry: len(Path(entry["source_path"]).parts))
+    for target in targets:
+        path = Path(target["source_path"])
+        if any(path.is_relative_to(Path(entry["source_path"])) for entry in entries):
+            continue
+        if any(Path(entry["source_path"]).is_relative_to(path) for entry in entries):
+            raise ValueError("LoopX state inventory overlaps a narrower declared component; declare its parent once")
+        entries.append({"id": _participant_id(entries, f"loopx_state_{len(entries)}"), "source_path": str(path)})
+    coverage = [{"key": target["key"], "source_path": target["source_path"],
+                 "component_id": next(entry["id"] for entry in entries
+                     if Path(target["source_path"]).is_relative_to(Path(entry["source_path"]))) }
+                for target in plan["included"]]
+    if registry.read_bytes() != raw_registry:
+        raise ValueError("LoopX registry moved during participant inventory")
+    registry_component = next(entry for entry in entries if registry.is_relative_to(Path(entry["source_path"])))
+    return entries, {"goal_id": env["LOOPX_GOAL_ID"], "agent_id": env["LOOPX_AGENT_ID"],
+        "source_inventory": coverage, "registry_sha256": hashlib.sha256(raw_registry).hexdigest(),
+        "registry_component_id": registry_component["id"],
+        "registry_member_path": (registry.relative_to(Path(registry_component["source_path"])).as_posix()
+                                 if registry != Path(registry_component["source_path"]) else ""),
+        "execution_authority_granted": False}
+
+
+def native_binding_participant(env, components, metadata):
+    from ..turn_driver.codex_agent_session import CodexAgentSession
+    source_wake = CodexAgentSession(env, context="resume",
+        sandbox=env.get("LOOPX_CODEX_SANDBOX", "danger-full-access"), receipt={})
+    if source_wake.session_id != metadata["session"].get("session_id"):
+        raise ValueError("native checkpoint differs from the current source session binding")
+    # This sideband record belongs to the existing session owner. It
+    # must participate even when loopx_state was not requested: native
+    # store bytes alone cannot witness a binding/profile replacement.
+    from loopx.control_plane.turn_driver.codex_sessions import _session_path
+    binding_path = _session_path(source_wake.root, source_wake.lineage, "agent")
+    if not any(binding_path.is_relative_to(Path(entry["source_path"])) for entry in components):
+        components = [*components, {"id": _participant_id(components, "source_session_binding"),
+                                   "source_path": str(binding_path)}]
+    metadata["session"] = {**metadata["session"], "session_profile_digest": source_wake.digest}
+    return components, source_wake
+
+
+def research_participants(env, components, metadata, destination, evidence_path, deadline):
+    """Use the same inventory and historical context at either owned boundary."""
+    research = None
+    components, metadata["loopx_state"] = _loopx_state_components(env, components, destination)
+    from loopx.control_plane.coordination.local_authority import local_authority_is_promoted
+    if local_authority_is_promoted(runtime_root=Path(env["LOOPX_RUNTIME_ROOT"]), goal_id=env["LOOPX_GOAL_ID"]):
+        research = research_context(env, deadline=deadline)
+        evidence = evidence_path
+        research_raw = _encoded(research)
+        with os.fdopen(os.open(evidence, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as file:
+            file.write(research_raw)
+        parent = next((entry for entry in components if evidence.is_relative_to(Path(entry["source_path"]))), None)
+        if parent is None:
+            parent = {"id": _participant_id(components, "research_context"), "source_path": str(evidence)}
+            components = [*components, parent]
+        metadata["research_context"] = {"component_id": parent["id"],
+            "member_path": evidence.relative_to(Path(parent["source_path"])).as_posix() if evidence != Path(parent["source_path"]) else "",
+            "sha256": hashlib.sha256(research_raw).hexdigest(),
+            "provider_revision": research["snapshot"]["provider_revision"], "store_identity": research["snapshot"]["store_identity"]}
+    else:
+        metadata["canonical_context_unavailable"] = "Source coordination is unpromoted; its retained inventory remains inert."
+    return components, research
+
+
+def verify_research_participants(env, components, metadata, research, witness, deadline):
+    if research is not None:
+        if research_context(env, deadline=deadline) != research:
+            raise ValueError("canonical research context moved before sealing")
+        verify_context_sources(research, components, witness)
+        retained = metadata["research_context"]
+        member = next((entry for entry in witness[retained["component_id"]]
+            if entry["path"] == retained["member_path"]), None)
+        if member is None or member.get("sha256") != retained["sha256"]:
+            raise ValueError("canonical research context bytes moved before sealing")
+    declared = metadata["loopx_state"]
+    witness = witness[declared["registry_component_id"]]
+    member = next((entry for entry in witness if entry["path"] == declared["registry_member_path"]), None)
+    if member is None or member.get("sha256") != declared["registry_sha256"]:
+        raise ValueError("LoopX registry differs from the scoped participant inventory")
+
+
+def capture_research_checkpoint(env: dict[str, str], request: dict, *,
+                                turn_instance_id: str, timeout: float = 30) -> dict:
+    """Seal a quiescent, settled ordinary Goal boundary through existing owners.
+
+    The caller stops source work while capturing. Session/canonical history and
+    immutable byte witnesses are reread; this is not disaster reactivation.
+    Domain providers add their own participants through the same artifact owner.
+    """
+    import math
+    import tempfile
+    from ..quota.settlement import read_heartbeat_settlement
+    from ..turn_driver.codex_checkpoint import native_session_checkpoint
+    from ..turn_driver.codex_agent_session import CodexAgentSession
+
+    if (not isinstance(request, dict) or
+            set(request) != {"destination", "components", "point_metadata"} or
+            not isinstance(request["components"], list) or not request["components"] or
+            not isinstance(request["point_metadata"], dict)):
+        raise ValueError("research capture requires destination, explicit components and point_metadata")
+    if isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("research capture timeout must be finite and positive")
+    deadline = time.time() + timeout
+    runtime, registry = Path(env["LOOPX_RUNTIME_ROOT"]), Path(env["LOOPX_REGISTRY"])
+    def settled():
+        result = read_heartbeat_settlement(runtime, goal_id=env["LOOPX_GOAL_ID"],
+            agent_id=env["LOOPX_AGENT_ID"], todo_id=None, turn_instance_id=turn_instance_id,
+            resolve_original_binding=True, registry_path=registry)
+        if result is None or result.identity.value is None or (result.progress or {}).get("state") != "settled":
+            raise ValueError("research capture requires the source's settled current Turn")
+        return result
+    original = settled()
+    destination = Path(request["destination"])
+    if not destination.is_absolute() or destination.resolve() != destination or destination.exists():
+        raise ValueError("research capture destination must be a new physical absolute path")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".loopx-research-", dir=destination.parent) as temporary:
+        metadata = {"operator_metadata": request["point_metadata"],
+            "wake_turn_id": turn_instance_id, "settlement_effect_id": original.identity.value.effect_id,
+            "session": {}}
+        session = CodexAgentSession(env, context="resume", sandbox=env["LOOPX_CODEX_SANDBOX"], receipt=metadata)
+        if not session.session_id:
+            raise ValueError("research capture requires a current source session binding")
+        components, research = research_participants(env, request["components"], metadata,
+            destination, Path(temporary) / "research-context.json", deadline)
+        if research is None:
+            raise ValueError("research capture requires canonical source coordination")
+        components, observed_session = native_binding_participant(env, components, metadata)
+        native = native_session_checkpoint(env, session.session_id, timeout=max(.1, deadline-time.time()))
+        allocated = {}
+        for entry in native["components"]:
+            name = _participant_id(components, entry["id"])
+            allocated[entry["id"]] = name
+            components = [*components, {**entry, "id": name}]
+        metadata["native_session"] = {**native["metadata"], "store_members": [
+            {**entry, "id": allocated[entry["id"]]} for entry in native["metadata"]["store_members"]]}
+        probe = effect_runtime_result("runtime.checkpoint_artifacts", {
+            "action": "probe", "components": components, "deadline_epoch_ms": deadline*1000},
+            timeout=max(.1, deadline-time.time()), retry_safe=False)
+        if native_session_checkpoint(env, session.session_id, timeout=max(.1, deadline-time.time())) != native:
+            raise ValueError("native checkpoint source moved before sealing")
+        _, confirmed = native_binding_participant(env, components, metadata)
+        if ((confirmed.session_id, confirmed.goal_ref, confirmed.digest) !=
+                (observed_session.session_id, observed_session.goal_ref, observed_session.digest)):
+            raise ValueError("research checkpoint session binding moved before sealing")
+        verify_research_participants(env, components, metadata, research, probe["source_witness"], deadline)
+        if settled().identity.value != original.identity.value:
+            raise ValueError("research checkpoint source settlement moved")
+        result = effect_runtime_result("runtime.checkpoint_artifacts", {
+            "action": "capture", "destination": str(destination), "components": components,
+            "expected_source_sha256": probe["source_sha256"], "point_metadata": metadata,
+            "deadline_epoch_ms": deadline*1000}, timeout=max(.1, deadline-time.time()), retry_safe=False)
+    return result
 
 
 def main(argv=None):

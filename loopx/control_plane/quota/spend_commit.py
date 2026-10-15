@@ -26,6 +26,12 @@ QUOTA_SPEND_COMMIT_REQUEST_SCHEMA = "loopx_quota_spend_commit_request_v0"
 QUOTA_SPEND_COMMIT_RESULT_SCHEMA = "loopx_quota_spend_commit_result_v0"
 
 
+class QuotaRunIndexConflict(ValueError):
+    """A quota spend was definitively rejected by the run-index CAS."""
+
+    reason_code = "index_digest_conflict"
+
+
 def quota_spend_index_digest(index_path: Path) -> str | None:
     try:
         content = index_path.read_bytes()
@@ -106,7 +112,11 @@ def _quota_spend_commit_result(
     )
     try:
         result = effect_runtime_result("quota.spend.commit", params)
-    except (EffectRuntimeConflict, EffectRuntimeRejected) as exc:
+    except EffectRuntimeConflict as exc:
+        if exc.diagnostic_code == QuotaRunIndexConflict.reason_code:
+            raise QuotaRunIndexConflict(str(exc)) from None
+        raise ValueError(str(exc)) from None
+    except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None
     if (
         not isinstance(result, Mapping)
@@ -114,7 +124,10 @@ def _quota_spend_commit_result(
     ):
         raise RuntimeError("TypeScript quota spend commit result shape mismatch")
     if result.get("status") == "conflict":
-        raise ValueError(str(result.get("reason") or "quota spend commit conflict"))
+        reason = str(result.get("reason") or "quota spend commit conflict")
+        if result.get("reason_code") == QuotaRunIndexConflict.reason_code:
+            raise QuotaRunIndexConflict(reason)
+        raise ValueError(reason)
     return result
 
 

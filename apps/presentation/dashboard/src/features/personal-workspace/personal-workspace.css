@@ -139,6 +139,7 @@
 .personal-goal-link-copy strong { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow-wrap: anywhere; }
 .personal-goal-link-copy strong { font-size: var(--text-body); line-height: var(--leading-body); font-weight: 600; }
 .personal-goal-link-copy small { display: flex; align-items: center; gap: 5px; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
+.personal-goal-row-activity-copy { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Goal mark: identity from the Goal itself; the corner dot and ring carry state. */
 @property --pw-orbit { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
@@ -165,6 +166,8 @@
 .personal-goal-link-copy small.is-danger { color: var(--pw-red); }
 .personal-goal-activity-chip { --pw-tone: #a1a1a1; display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
 .personal-goal-activity-chip > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.personal-goal-window-badge { flex: none; padding: 1px 5px; border-radius: 99px; background: var(--pw-amber-bg); color: var(--pw-amber); font-size: var(--text-caption); line-height: var(--leading-caption); }
+.personal-goal-window-badge.is-missing { background: var(--pw-red-bg); color: var(--pw-red); }
 .personal-goal-activity-dot { position: relative; flex: none; width: 7px; height: 7px; box-sizing: border-box; border-radius: 50%; background: var(--pw-tone); }
 .personal-goal-activity-chip.is-queued .personal-goal-activity-dot, .personal-goal-activity-chip.is-waiting .personal-goal-activity-dot { border: 1.5px solid var(--pw-tone); background: transparent; }
 .personal-goal-activity-chip.is-live { color: var(--pw-text); }

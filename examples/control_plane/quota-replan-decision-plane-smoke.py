@@ -629,6 +629,8 @@ def assert_replan_beats_monitor_quiet_skip() -> None:
     assert guard["goal_frontier_projection"]["deferred_successors"] == {
         "ready_count": 0,
         "blocked_count": 0,
+        "unknown_count": 0,
+        "counts_complete": True,
         "current_agent_ready_count": 0,
         "ready_todo_ids": [],
     }, guard

@@ -2514,6 +2514,98 @@ def test_prior_turn_with_several_receipts_recovers_once(tmp_path: Path) -> None:
     assert packet["prior_event_id"] == "multi-receipt-identity-upgrade"
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_reopened_prior_turn_recovers_before_its_bound_successor(
+    tmp_path: Path, provider: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real lifecycle changes must not create a pair of reciprocal recoveries."""
+    from canonical_authority_fixture import (
+        initialize_canonical_authority, isolate_sqlite_runtime,
+    )
+    from loopx.control_plane.coordination.runtime_shadow import (
+        build_todo_runtime_shadow_projection,
+    )
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    rc, listed = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
+    assert rc == 0, listed
+    for todo in listed["todos"]:
+        if todo["todo_id"] == ALTERNATIVE_TODO_ID:
+            todo["claimed_by"] = AGENT_ID
+    initialize_canonical_authority(
+        runtime, GOAL_ID, build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID, handoff_mode="soft_claim", todos=listed["todos"],
+        ), state_path=project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md",
+        provider=provider,
+    )
+    guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID)
+    # Opaque ids deliberately sort opposite to their actual admission order.
+    original = ("--agent-id", AGENT_ID, "--turn-instance-id", "z-original",
+                "--todo-id", TODO_ID)
+    successor = ("--agent-id", AGENT_ID, "--turn-instance-id", "a-successor",
+                 "--todo-id", ALTERNATIVE_TODO_ID)
+    rc, first = _run_cli(registry, runtime, *guard, *original)
+    assert rc == 0 and first["heartbeat_receipt"]["closeout_required"], first
+    rc, blocked = _run_cli(
+        registry, runtime, "todo", "update", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--status", "blocked",
+        "--reason", "Checker unavailable; independent work can continue.",
+    )
+    assert rc == 0, blocked
+    rc, second = _run_cli(registry, runtime, *guard, *successor)
+    assert rc == 0 and second["heartbeat_receipt"]["closeout_required"], second
+    rc, reopened = _run_cli(
+        registry, runtime, "todo", "update", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--status", "open",
+        "--clear-resume-when", "--reason", "The checker is available again.",
+    )
+    assert rc == 0, reopened
+    rc, recovery = _run_cli(registry, runtime, *guard, *successor)
+    assert rc == 0, recovery
+    assert recovery["unsettled_host_turn_recovery"]["prior_turn_instance_id"] == "z-original"
+    rc, resumed = _run_cli(registry, runtime, *guard, *original)
+    assert rc == 0, resumed
+    assert resumed["effective_action"] != "unsettled_host_turn_recovery", resumed
+    assert resumed["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    assert resumed["heartbeat_receipt"]["settlement_identity"] == first["heartbeat_receipt"]["settlement_identity"]
+
+    # Recovery never permits rebinding the original Turn to the successor.
+    rc, mismatch = _run_cli(registry, runtime, *guard, *original[:-1], ALTERNATIVE_TODO_ID)
+    assert rc == 1 and mismatch["error_code"] == "heartbeat_receipt_identity_conflict", mismatch
+    assert _spend_run_count(runtime) == 0
+    rc, failed_check = _run_cli(
+        registry, runtime, "refresh-state", "--goal-id", GOAL_ID, *original,
+        "--classification", "checker_unqualified", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_gap", "--progress-result-class", "blocked",
+        "--progress-blocker-id", "checker:negative-result",
+        "--progress-evidence-id", "evidence:checker-negative-result",
+        "--no-global-sync", "--suppress-external-sinks", cwd=project,
+    )
+    assert rc == 0, failed_check
+    assert failed_check["settlement_progress"]["closeout_kind"] == "typed_blocked_writeback_no_spend"
+    rc, resumed_successor = _run_cli(registry, runtime, *guard, *successor)
+    assert rc == 0, resumed_successor
+    assert resumed_successor["effective_action"] != "unsettled_host_turn_recovery", resumed_successor
+    assert resumed_successor["heartbeat_receipt"]["settlement_identity"] == second["heartbeat_receipt"]["settlement_identity"]
+    rc, progress = _run_cli(
+        registry, runtime, "refresh-state", "--goal-id", GOAL_ID, *successor,
+        "--classification", "successor_validation", "--delivery-batch-scale", "implementation",
+        "--delivery-outcome", "outcome_progress", "--delivery-boundary", "in_flight_continuation",
+        "--no-global-sync", "--suppress-external-sinks", cwd=project,
+    )
+    assert rc == 0, progress
+    spend = ("quota", "spend-slot", "--goal-id", GOAL_ID, *successor,
+             "--slots", "1", "--source", "heartbeat", "--execute")
+    rc, spent = _run_cli(registry, runtime, *spend)
+    assert rc == 0 and spent["appended"] is True, spent
+    rc, replay = _run_cli(registry, runtime, *spend)
+    assert rc == 0 and replay["idempotent_replay"] is True, replay
+    assert _spend_run_count(runtime) == 1
+
+
 @pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
 @pytest.mark.parametrize("hidden_count", [0, 6])
 def test_prior_host_closeout_survives_hidden_todo_lifecycle(

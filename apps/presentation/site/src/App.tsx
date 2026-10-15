@@ -1153,6 +1153,7 @@ export function App() {
           <a href={`${basePath}blog/${language === "zh" ? "zh/" : ""}`}>Blog</a>
           <a href={`${basePath}docs/guides/personal-workspace-user-guide/`}>Personal Workspace</a>
           <a href={`${basePath}docs/`}>Docs</a>
+          <a href={`${basePath}skill.md`}>{language === "zh" ? "Agent 使用指南" : "Agent skill guide"}</a>
         </nav>
       </footer>
 

@@ -245,6 +245,65 @@ def test_host_phase_and_native_opportunities_continue_without_offline_refill(
     assert len(destination.state.judge.tokens) == 1 and len(grades) == 2
 
 
+def test_explicit_phase_extension_is_first_activation_bound_without_native_refill(
+        controllers, tmp_path, monkeypatch):
+    import requests
+    source, destination, first, second, files, grades = controllers
+    token = register(source, first, max_agent_submissions=3, submission_cooldown=3600)
+    assert submit(first, token, 7).status_code == 200
+    phase = tmp_path / "source-phase"
+    phase.write_text(f"{int(time.time()) + 7200}\n")
+    original = phase.read_bytes()
+    unit = tmp_path / "unit"
+    point = transport.capture(files[0], token=token, capture_id="d" * 32,
+                              destination=unit, phase_deadline_file=phase)
+    retained = json.loads((unit / "checkpoint.json").read_bytes())["point_metadata"]["host_phase_budget"]["remaining_seconds"]
+    target = tmp_path / "continued-phase"
+    started = time.time()
+    result = transport.restore(files[1], root=unit, expected_sha256=point["sha256"],
+        run_id="extended-branch", phase_deadline_file=target, phase_extension_seconds=64800)
+    deadline = int(target.read_text())
+    assert started + retained + 64800 - 1 <= deadline <= time.time() + retained + 64800
+    binding = json.loads(target.with_name(target.name + ".restore.json").read_text())
+    assert binding["binding"]["phase_extension_seconds"] == 64800
+    history = requests.get(second + "/api/v1/history", params={"token": result["token"]}, timeout=5).json()
+    assert history["agent_submissions"] == 1 and history["best_score"] == 7
+    assert submit(second, result["token"], 8).status_code == 429
+    info = destination.state.judge.tokens[result["token"]]
+    assert info["next_agent"] == 2 and info["next_auto"] == 1
+    assert info["max_agent_submissions"] == 3 and info["submission_cooldown"] == 3600
+    accepted_clock = info["last_agent_submit_at"]
+    # A delayed readback must retain the first activation's deadline and native timer.
+    clock = time.time() + 120
+    monkeypatch.setattr(transport, "time", SimpleNamespace(time=lambda: clock))
+    assert transport.restore(files[1], root=unit, expected_sha256=point["sha256"],
+        run_id="extended-branch", phase_deadline_file=target, recover=True,
+        phase_extension_seconds=64800) == result
+    assert int(target.read_text()) == deadline and info["last_agent_submit_at"] == accepted_clock
+    for changed in (0, 64801):
+        with pytest.raises(ValueError, match="original activation"):
+            transport.restore(files[1], root=unit, expected_sha256=point["sha256"],
+                run_id="extended-branch", phase_deadline_file=target, recover=True,
+                phase_extension_seconds=changed)
+    assert phase.read_bytes() == original and len(grades) == 1
+    assert len(destination.state.judge.tokens) == 1
+
+
+@pytest.mark.parametrize("extension", [-1, True, 1.5, None, 2 ** 53])
+def test_invalid_phase_extension_rejects_before_controller_access(tmp_path, extension):
+    with pytest.raises(ValueError, match="non-negative integer"):
+        transport.restore(tmp_path / "absent-controller", root=tmp_path / "absent-point",
+            expected_sha256="a" * 64, run_id="branch", phase_deadline_file=tmp_path / "phase",
+            phase_extension_seconds=extension)
+    assert not (tmp_path / "phase").exists()
+
+
+def test_phase_extension_requires_a_captured_clock_before_controller_access(tmp_path):
+    with pytest.raises(ValueError, match="captured Host phase clock"):
+        transport.restore(tmp_path / "absent-controller", root=tmp_path / "absent-point",
+            expected_sha256="a" * 64, run_id="branch", phase_extension_seconds=64800)
+
+
 @pytest.mark.parametrize("fault", ["missing_clock", "exhausted", "existing", "alias", "modified"])
 def test_host_phase_faults_refuse_before_native_admission(controllers, tmp_path, fault):
     source, destination, first, second, files, grades = controllers
@@ -461,6 +520,38 @@ def test_invalid_controller_import_never_registers_or_regrades(controllers, tmp_
     assert destination.state.judge.tokens == {} and len(grades) == 1
     if fault == "existing_bank":
         assert (bank / "foreign").read_text() == "keep"
+
+
+def test_controller_connects_to_declared_origin_without_environment_proxy(monkeypatch):
+    pytest.importorskip("fastapi")
+    from fastapi import FastAPI, Request
+    from fastapi.responses import JSONResponse
+
+    origin, proxy = FastAPI(), FastAPI()
+    origin_requests, proxy_requests = [], []
+
+    async def capture(request):
+        origin_requests.append(await request.json())
+        return {"source": "declared-origin"}
+
+    capture.__annotations__["request"] = Request
+    origin.post("/api/v1/checkpoint/capture")(capture)
+
+    @proxy.middleware("http")
+    async def intercept(request, call_next):
+        proxy_requests.append(await request.body())
+        return JSONResponse({"source": "unexpected-proxy"})
+
+    with server(origin) as url, server(proxy) as proxy_url:
+        for key in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY"):
+            monkeypatch.setenv(key, proxy_url)
+        for key in ("no_proxy", "NO_PROXY"):
+            monkeypatch.setenv(key, "")
+        result = transport._post({"url": url, "admin_secret": "synthetic-credential"},
+                                 "/api/v1/checkpoint/capture", {"token": "source"}, 5)
+    assert result == {"source": "declared-origin"}
+    assert origin_requests == [{"token": "source", "admin_secret": "synthetic-credential"}]
+    assert proxy_requests == []
 
 
 def test_redirect_never_forwards_controller_authority(tmp_path):

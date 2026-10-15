@@ -276,6 +276,8 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         request_id: str,
         decision: Literal["adopt", "defer", "reject", "no_change"],
         reason: str,
+        request_revision: int | None = None,
+        request_digest: str | None = None,
     ) -> dict:
         """Record your independent decision; this does not change task ownership or priority."""
         check_scope()
@@ -288,6 +290,8 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
             reason,
             registry=registry,
             caller_goal_ref=caller_goal_ref,
+            request_revision=request_revision,
+            request_revision_digest=request_digest,
         )
 
     @server.tool()
@@ -343,7 +347,7 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         + conversation_answer_instruction()
     ))
     def return_result(request_id: str, text: str, update_id: str | None = None,
-                      attachment_refs: list[str] | None = None) -> dict:
+                      attachment_refs: list[str] | None = None, request_revision: int | None = None) -> dict:
         """Return a conclusion to the original requester. For a later changed fact,
         append an update with a stable update_id; retry with the same id and text.
         Neither a blocker nor a returned result certifies completion of the work.
@@ -362,10 +366,32 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
             text,
             update_id=update_id,
             attachment_refs=attachment_refs,
+            request_revision=request_revision,
             workspace=workspace,
             registry=registry,
             caller_goal_ref=caller_goal_ref,
         )
+
+    if caller_goal_ref is not None:
+        @server.tool()
+        def control_peer_request(request_id: str, receiver_agent_id: str,
+                                 operation: Literal["inspect", "revise", "cancel", "recover"],
+                                 parameters: dict | None = None, execute: bool = False) -> dict:
+            """Control your own exact-profile peer request using its current revision/digest.
+
+            Revise/cancel need a stable operation_id in parameters. Preview by
+            default. Recovery reads the original effect; cancellation remains
+            pending until its original Goal terminal receipt is linked. It does
+            not revoke committed Goal work or grant new execution permission.
+            """
+            from .control_plane.collaboration.request_amendment import control_request
+            from .capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
+
+            check_scope()
+            return control_request(registry_path=registry, runtime_root=root, goal_ref=caller_goal_ref,
+                replan_configuration_reader=resolve_todo_replan_cadence_goal,
+                receiver_agent_id=receiver_agent_id, request_id=request_id, actor_agent_id=agent_id,
+                operation=operation, parameters=parameters, execute=execute)
 
     @server.tool()
     def consume_peer_result(request_id: str, result_key: str = "conclusion") -> dict:

@@ -12,7 +12,12 @@ function GoalRowActivity({ goal, showLoad }: { goal: WorkspaceGoal; showLoad: bo
   const { t } = useWorkspaceI18n();
   const activity = useGoalActivity(goal);
   if (goal.loadState && showLoad) return <small>{t(goal.loadState === "error" ? "startup.goalError" : "startup.goalLoading")}</small>;
-  return <small className={`is-${activity.tone}`} title={activity.text}>{activity.text}</small>;
+  return (
+    <small className={`is-${activity.tone}`} title={activity.text}>
+      <span className="personal-goal-row-activity-copy">{activity.text}</span>
+      {activity.windowBadge ? <span className={`personal-goal-window-badge is-${activity.windowBadge.state}`}>{t(activity.windowBadge.labelKey)}</span> : null}
+    </small>
+  );
 }
 
 export function GoalSidebar({

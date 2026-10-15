@@ -587,12 +587,14 @@ def _locator_retirement_pending(info_path: Path) -> bool:
         return True
 
 
-def restart_effect_runtime(*, timeout: float = 5.0) -> dict[str, Any]:
+def restart_effect_runtime(*, timeout: float = 5.0, wait_for_exit: bool = False) -> dict[str, Any]:
     """Stop the managed runtime serving this source revision.
 
     The replacement runtime resolves Node from the PATH of the next request, so
     this is the operator action after installing a qualified Node: a runtime
-    started earlier keeps its own Node until it exits.
+    started earlier keeps its own Node until it exits. ``wait_for_exit`` is for
+    disposable namespace owners: serving retirement alone permits a delayed
+    exit-time cache write, whereas filesystem cleanup requires observed exit.
     """
 
     fingerprint = _runtime_fingerprint()
@@ -640,6 +642,23 @@ def restart_effect_runtime(*, timeout: float = 5.0) -> dict[str, Any]:
             stopped = True
             break
         time.sleep(0.05)
+    if stopped and wait_for_exit:
+        # Locator retirement proves serving stopped, not that Node's optional
+        # exit-time cache writer has finished. Namespace owners must observe
+        # actual exit before incrementally deleting its files. The managed
+        # POSIX runtime is launched in its own session; only observe that group.
+        if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+            stopped = False
+        elif os.name == "posix":
+            from ..extensions.process_runtime import _wait_for_posix_process_group_stop
+            try:
+                _wait_for_posix_process_group_stop(pid)
+            except (OSError, RuntimeError, TimeoutError):
+                stopped = False
+        else:
+            while _pid_is_alive(pid) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            stopped = not _pid_is_alive(pid)
     return {
         "schema_version": EFFECT_RUNTIME_RESTART_SCHEMA_VERSION,
         "status": "stopped" if stopped else "shutdown_pending",

@@ -32,11 +32,11 @@ def test_captured_point_continues_with_fresh_authority(
     assert os.getuid() != 0, "Workspace continuation must qualify the actual non-root writer"
     from benchmark.edgebench.checkpoint_controller import restore
     from benchmark.runtime.codex import Execution
-    from benchmark.runtime.native_checkpoint import (
+    from loopx.control_plane.turn_driver.codex_checkpoint import (
         admit_native_checkpoint_session,
         native_session_checkpoint,
     )
-    from benchmark.runtime.research_checkpoint import adopt_todo_context
+    from loopx.control_plane.runtime.research_checkpoint import adopt_todo_context
     from benchmark.runtime.sessions import BenchmarkSessionWake
     from benchmark.runtime.worker import native_command
     from loopx.cli import main
@@ -198,34 +198,35 @@ def test_captured_point_continues_with_fresh_authority(
             unit,
             digest,
             config,
-            execution=execution,
+            sandbox=(execution).sandbox,
             timeout=30,
         )
     with pytest.raises(EffectRuntimeRemoteError):
         admit_native_checkpoint_session(
-            env, unit, "f" * 64, config, execution=execution, timeout=30
+            env, unit, "f" * 64, config, sandbox=(execution).sandbox, timeout=30
         )
     assert not home.exists()
-    original_bind = BenchmarkSessionWake._bind_verified_fork
+    from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
+    original_bind = CodexAgentSession._bind_verified_fork
 
     def lose_binding_reply(self, *args):
         original_bind(self, *args)
         raise TimeoutError("synthetic loss after committed native binding")
 
     with monkeypatch.context() as lost:
-        lost.setattr(BenchmarkSessionWake, "_bind_verified_fork", lose_binding_reply)
+        lost.setattr(CodexAgentSession, "_bind_verified_fork", lose_binding_reply)
         with pytest.raises(TimeoutError, match="committed native binding"):
             admit_native_checkpoint_session(
-                env, unit, digest, config, execution=execution, timeout=30
+                env, unit, digest, config, sandbox=(execution).sandbox, timeout=30
             )
     admitted = admit_native_checkpoint_session(
-        env, unit, digest, config, execution=execution, timeout=30
+        env, unit, digest, config, sandbox=(execution).sandbox, timeout=30
     )
     assert (
         admitted["session_id"] != native["session_id"] and admitted["model_calls"] == 0
     )
     replay = admit_native_checkpoint_session(
-        env, unit, digest, config, execution=execution, timeout=30
+        env, unit, digest, config, sandbox=(execution).sandbox, timeout=30
     )
     assert replay["session_id"] == admitted["session_id"] and replay["history_verified"]
     lease = cli(
@@ -253,12 +254,26 @@ def test_captured_point_continues_with_fresh_authority(
         lease_version=lease["lease"]["version"],
     )
     adopted = adopt_todo_context(env, unit, digest, **context_args)
+    from loopx.capabilities.explore.result_log import explore_result_log_path, load_explore_result_events_strict
+    source_events = carrier["research_evidence"]["explore_events"]
+    assert len(source_events) == 2 and adopted["explore_knowledge"]["appended_event_count"] == 2
+    imported_log = explore_result_log_path(runtime, goal)
+    imported_bytes = imported_log.read_bytes()
+    imported = load_explore_result_events_strict(imported_log, goal_id=goal)
+    assert all(row["run_id"].startswith("checkpoint:" + digest + ":") for row in imported)
+    assert all("research_observation" not in row for row in imported)
     assert (
         adopt_todo_context(env, unit, digest, **context_args)["continuation"][
             "adoption"
         ]["status"]
         == "replayed"
     )
+    assert imported_log.read_bytes() == imported_bytes
+    if stride_continuation:
+        knowledge_read = cli("explore", "turn-context", "--goal-id", goal, "--agent-id", agent)
+        inherited = knowledge_read["graph"]["writeback_results"][0]
+        assert inherited["finding_id"] == "restart-counterexample" and inherited["status"] == "refuted"
+        assert inherited["summary"] == source_events[-1]["summary"]
     binding = [
         "--goal-id",
         goal,
@@ -493,7 +508,7 @@ else:
         assert retained["turn_ids"][:-1] == native["turn_ids"]
         with pytest.raises(ValueError):
             admit_native_checkpoint_session(
-                env, unit, digest, config, execution=execution, timeout=30
+                env, unit, digest, config, sandbox=(execution).sandbox, timeout=30
             )
         vision = tmp_path / "vision.json"
         vision.write_text(
@@ -650,10 +665,11 @@ else:
                 },
             )
             if "explore_review" in decision:
+                assert any(row["finding_id"] == "restart-counterexample" for row in control["explore_basis"]["finding_refs"])
                 decision["explore_review"].update(
-                    disposition="no_applicable_evidence",
-                    considered_refs=[],
-                    reason="The fresh graph contains no findings; retained source context is inert evidence, not reactivated graph authority.",
+                    disposition="used",
+                    considered_refs=["restart-counterexample"],
+                    reason="The inherited scoped counterexample rules out restarting at one in this synthetic fixture; retain six and continue.",
                 )
             identity = reviewed["heartbeat_receipt"]["settlement_identity"]
             review_binding = (

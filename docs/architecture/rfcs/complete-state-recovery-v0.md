@@ -181,6 +181,12 @@ This RFC composes existing owners; it does not replace them:
 | [Effect Interpreter](agent-loop-effect-interpreter-v0.md) | Owns effect identity, settlement, unknown-outcome readback, and replay decisions. Recovery only routes original evidence to it. |
 | [Configuration backup](../../reference/configuration-backup.md) | Keeps configuration in an isolated checkpoint. Adoption continues through machine and Goal configuration owners. |
 
+The [research checkpoint CLI](../../reference/research-checkpoint.md) is an
+explicit history-branching consumer of these owners. It creates a distinct
+current Goal/Agent session and adopts retained knowledge through current Todo
+authority. It does not restore the source writer, timers or effects, and does
+not satisfy this RFC's exclusive disaster replacement or frontend milestones.
+
 ## 4. Current-system contract
 
 At the named baseline, `loopx/state_backup.py` discovers the runtime root,

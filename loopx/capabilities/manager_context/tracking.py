@@ -11,6 +11,7 @@ from ...control_plane.collaboration.inbox import (
     _now as _now,
     _receipt as _receipt,
     record_read as record_read,
+    controlled_request_readback,
 )
 from ...control_plane.collaboration.goal_instance_scope import (
     collaboration_goal_scope,
@@ -148,6 +149,27 @@ def query(
             item["decision"]["reason"] = decision.get("reason")
         else:
             item["decision"]["reason_visibility"] = "owner_only"
+        controlled = controlled_request_readback(root, row)
+        if controlled is not None:
+            item["warnings"] += controlled["warnings"]
+            current = controlled.get("readback")
+            if current is not None:
+                item.update(request_revision=current["request_revision"], read=current["read"], decision=dict(current["decision"]))
+                if owner_scope:
+                    item["brief"] = current["brief"]
+                    item["request_control"] = controlled["request_control_view"]
+                else:
+                    item["decision"].pop("reason", None)
+                    item["decision"]["reason_visibility"] = "owner_only"
+                    item["request_control"] = {"control_state": controlled["request_control_view"]["control_state"]}
+            else:
+                item["request_control"] = None
+                item["read"] = {"status": "unavailable", "at": None}
+                item["decision"] = {"status": "unavailable", "at": None}
+            revisions = controlled.get("result_revisions")
+            for reply in item["return_replies"]:
+                key = reply.get("result_key", reply["phase"])
+                reply["request_revision"] = next((value["request_revision"] for value in revisions or [] if value["result_key"] == key), None)
         projected.append(item)
     return {
         "source": "manager_context_receipts_and_core_todos",

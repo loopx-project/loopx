@@ -19,10 +19,14 @@ export function normalizeStrideStrategy(value: unknown): string {
 // result classifier, route ban or admission authority.
 const decisionValueReview = {
   work_slice: "Compare the complete cost and useful outcome of continuation with one feasible alternative. " +
-    "Size work for the experiment that can change that choice; a larger test count is not greater decision value.",
+    "Name the observation that would change that choice, and size a complete experiment to obtain it. " +
+    "A larger test count is not greater decision value; preserve unfinished decisive work rather than restart its setup.",
   route_distance: "Name the remaining authoritative goal gap, its limiting component and the plausible headroom. " +
-    "Compare a different approach that can affect that component. A changed auxiliary mechanism alone does not show that it addresses the gap.",
+    "Compare a different approach that can affect that component. Distinguish an unexecuted intervention, failed transfer and insufficient route potential: they imply different next experiments. " +
+    "A changed auxiliary mechanism alone does not show that it addresses the gap.",
   validation_scope: "Use evidence applicable to the limiting outcome and changed mechanism. " +
+    "First establish that the intervention actually changes the relevant behavior; unchanged outcomes may require tracing its activation rather than a wider parameter sweep. " +
+    "Choose a comparison or negative control that separates the surviving explanations, and state what each possible result would change. " +
     "Distinguish local or synthetic gains from authoritative transfer, and repeated identical outcomes from new information. " +
     "Choose decisive coverage before broadening a sweep; retain uncertainty and relevant negative evidence.",
 };
@@ -314,6 +318,7 @@ export function strideControlContract(context: JsonObject, obligationId: unknown
       "decision_value_review is Agent guidance for the existing axis plans/reasons and next_probe, not additional proposal fields or a settlement gate. " +
       "When a previous decision is delivered, assess its adoption, information and goal gain in previous_review against its exact reference. " +
       "When Explore basis is delivered, assess applicable findings/alternatives in explore_review; missing or omitted evidence stays unknown. " +
+      "An empty current projection does not establish that retained historical research is absent; distinguish unread or unprojected evidence from an exhausted alternative. " +
       "These are Agent claims and proposal-shape obligations, not execution authority or utility certification. Other source-specific outcomes remain legal but cannot bypass a due stride review.",
   };
 }

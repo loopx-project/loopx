@@ -13,6 +13,8 @@ export type WorkspaceLocale = "en" | "zh-CN";
 
 const en = {
   "zcode.executionFailed": "ZCode native execution failed. Check the host session and model configuration, then read status again.",
+  "zcode.goalBasisChanged": "Goal acceptance criteria or declared sources changed after this native Goal started. The target stays paused; stop it and start again so the native session consumes the current basis.",
+  "zcode.goalBasisUnavailable": "No proven current Goal basis is available for this native Goal: either the current basis could not be read, or the binding started before a basis was recorded. The target stays paused; read status, then stop and start again so the native session consumes the current basis.",
   "zcode.currentModel": "Current model",
   "zcode.modelNotSelected": "Not selected",
   "zcode.model": "Configured model",
@@ -1341,6 +1343,11 @@ const en = {
   "activity.inHost": "handled by a {host} thread; the host owns live state",
   "activity.hostClaimed": "Claimed by host",
   "activity.hostIdle": "{host} thread idle",
+  "activity.hostWindowFresh": "{agent} on {host}: activity within its expected window",
+  "activity.hostWindowStale": "{agent} on {host}: activity outside its expected window ({hours} h)",
+  "activity.hostWindowMissing": "{agent} on {host}: activity not observed",
+  "activity.hostWindowStaleShort": "window stale",
+  "activity.hostWindowMissingShort": "no host activity",
   "activity.claimedAt": "claimed {time}",
   "activity.viaHost": "{host} host",
   "activity.quiet": "no new activity for {minutes} min",
@@ -1490,6 +1497,8 @@ export type WorkspaceMessageKey = keyof typeof en;
 
 const zhCN: Record<WorkspaceMessageKey, string> = {
   "zcode.executionFailed": "ZCode 原生执行失败。请检查宿主会话与模型配置，再回读状态。",
+  "zcode.goalBasisChanged": "该原生 Goal 启动后，Goal 验收条件或声明来源已变更。目标保持暂停；请先停止再启动，让原生会话消费当前依据。",
+  "zcode.goalBasisUnavailable": "该原生 Goal 没有可证明的当前依据：当前依据无法读取，或该绑定在记录依据之前就已启动。目标保持暂停；请回读状态，然后先停止再启动，让原生会话消费当前依据。",
   "zcode.currentModel": "当前模型",
   "zcode.modelNotSelected": "未选择",
   "zcode.model": "已配置模型",
@@ -2817,6 +2826,11 @@ const zhCN: Record<WorkspaceMessageKey, string> = {
   "activity.inHost": "由 {host} 线程负责，执行情况以宿主为准",
   "activity.hostClaimed": "宿主已领取",
   "activity.hostIdle": "{host} 线程空闲",
+  "activity.hostWindowFresh": "{agent}（{host}）：活动处于预期时间窗内",
+  "activity.hostWindowStale": "{agent}（{host}）：活动超出预期时间窗（{hours} 小时）",
+  "activity.hostWindowMissing": "{agent}（{host}）：未观察到活动",
+  "activity.hostWindowStaleShort": "活动超时",
+  "activity.hostWindowMissingShort": "未观察到活动",
   "activity.claimedAt": "领取于{time}",
   "activity.viaHost": "{host} 宿主",
   "activity.quiet": "已 {minutes} 分钟无新动静",

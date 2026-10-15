@@ -576,6 +576,20 @@ export const runGoalSchema = z.object({
       turn_started_at: z.string().optional().nullable(),
       last_turn_ended_at: z.string().optional().nullable(),
       last_event_at: z.string().optional().nullable(),
+      // This is cadence evidence about observed host activity, not proof that
+      // a scheduled prompt was delivered or an agent started.
+      delivery_window: z.object({
+        schema_version: z.string().optional(),
+        state: z.enum(["fresh", "stale", "missing", "unknown"]).catch("unknown"),
+        reason: z.enum(["no_expectation", "no_observation", "unparseable_observation"]).optional().nullable(),
+        last_observed_at: z.string().optional().nullable(),
+        age_seconds: z.number().optional().nullable(),
+        age_hours: z.number().optional().nullable(),
+        expected_interval_minutes: z.number().optional().nullable(),
+        window_minutes: z.number().optional().nullable(),
+        tolerance: z.number().optional().nullable(),
+        source: z.string().optional().nullable(),
+      }).optional().nullable(),
     })).optional().default([]),
   }).optional().nullable().catch(null),
   index_exists: z.boolean().optional().default(false),

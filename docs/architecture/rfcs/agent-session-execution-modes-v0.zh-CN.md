@@ -489,7 +489,7 @@ root，都不同于注册身份数和展示上限。不要只为展示这些观�
 | 重启与崩溃下的接入 | 在已绑定会话期间杀掉宿主 | 无孤儿执行器；替换绑定只有一个属主且模式正确 | 对新宿主未验证 |
 | 关闭态一致性 | 在没有任何挂接绑定、也没有预览宿主的情况下运行 | 既有托管行为、路由与默认值不变 | 对新宿主未验证 |
 | 已声明输入边界 | 工具批次、压缩和终结期间交付纠正 | 保留确切目标/来源；进入下一合格 Host 输入或真实 pending/拒绝；不隐式取消工具或改投 | 按 adapter 验证；协议 fixture 不证明模型采用 |
-| Native 身份不变但依据变化 | 暂停后在同 Goal instance 改适用 criterion/source 再恢复，另测 restore 中 amendment | 原 target/effect 保留；第一项新受保护动作消费当前依据或保持 pending/paused；不改旧回执 | 既有 native 身份/恢复测试之外，仍需组合资格验证 |
+| Native 身份不变但依据变化 | 暂停后在同 Goal instance 改适用 criterion/source 再恢复，另测 restore 中 amendment | 原 target/effect 保留；第一项新受保护动作消费当前依据或保持 pending/paused；不改旧回执 | 托管 ZCode provider 在 start 时记录 acceptance/source revision 依据；依据变化时拒绝直接 resume（`goal_basis_changed`）；没有可证明的依据时同样拒绝，无论是当前不可读，还是依据存在之前写入的 journal 从未记录（`goal_basis_unavailable`），目标保持暂停，直到 stop/start 重新交付 objective 并记录其依据；含依据前 journal 的升级路径，由 [`zcode_native_goal.test.ts`](../../../tests/control_plane_ts/zcode_native_goal.test.ts) 与 [`test_zcode_goal_bridge.py`](../../../tests/test_zcode_goal_bridge.py) 覆盖。resume 后模型实际消费、restore 中 amendment 及其他 Host 仍待资格验证 |
 
 确定性的包测试不足以支撑接入。新宿主至少需要一条真实宿主行：一个真实进程、一次真实
 绑定、一次真实重启。

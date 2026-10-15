@@ -33,7 +33,10 @@ from ..agents.agent_scope import (
     _attach_agent_identity_contracts,
 )
 from ..agents.capability_gate import missing_required_capabilities
-from ..agents.agent_scope_frontier import read_frontier_action
+from ..agents.agent_scope_frontier import (
+    build_agent_scope_frontier_payload,
+    read_frontier_action,
+)
 from ..goals.goal_frontier import (
     AUTONOMOUS_REPLAN_REQUIRED_MODE,
 )
@@ -694,6 +697,54 @@ def _resolve_agent_lane_delivery_route(
     return selected_action
 
 
+def _scoped_gate_deferred_replan_frontier(
+    prepared: _QuotaDecisionPreparation,
+) -> dict[str, Any] | None:
+    """Keep an authoritative gate fallback in the replan lane.
+
+    The fallback selector may choose a ready deferred successor while an open
+    advancement remains covered by the gate. That choice is a lifecycle replan,
+    not permission to fall through to the gated advancement candidate.
+    """
+
+    fallback = prepared.scoped_user_gate_fallback
+    selected = (
+        fallback.get("selected_executable")
+        if isinstance(fallback, dict)
+        else None
+    )
+    agent_id = normalize_todo_claimed_by(
+        (prepared.agent_identity or {}).get("agent_id")
+    )
+    if (
+        not agent_id
+        or not isinstance(selected, dict)
+        or selected.get("fallback_kind") != "deferred_successor_replan"
+    ):
+        return None
+    todo_id = normalize_todo_id(selected.get("todo_id")) or "<todo_id>"
+    return build_agent_scope_frontier_payload(
+        agent_id=agent_id,
+        action=AgentScopeFrontierAction.SUCCESSOR_REPLAN_REQUIRED,
+        quiet_noop_allowed=False,
+        spend_policy="spend once after validated successor replan/todo writeback",
+        reason=(
+            f"scoped user gate fallback selected ready deferred successor {todo_id}; "
+            "resolve its lifecycle before selecting another advancement"
+        ),
+        recommended_action=(
+            "Run a bounded successor replan: reopen, supersede, or record a "
+            f"no-follow-up rationale for {todo_id}."
+        ),
+        requires_replan=True,
+        candidate_counts={"deferred_resume_candidate_count": 1},
+        extra_fields={
+            "deferred_resume_candidates": [selected],
+            "scoped_user_gate_fallback": True,
+        },
+    )
+
+
 @dataclass(slots=True)
 class _QuotaDecisionRoute:
     normal_delivery_allowed: bool
@@ -1089,15 +1140,18 @@ def _resolve_quota_should_run_route(
             selected_recommended_action,
             agent_lane_next_action=agent_lane_next_action,
         )
-        agent_scope_frontier = _agent_scope_no_candidate_frontier(
-            agent_identity=prepared.agent_identity,
-            agent_todo_summary=prepared.agent_todo_summary,
-            agent_lane_next_action=agent_lane_next_action,
-            work_lane_contract=prepared.work_lane_contract,
-            candidate_should_run=bool(
-                (should_run and normal_delivery_allowed)
-                or ready_deferred_resume_candidates
-            ),
+        agent_scope_frontier = (
+            _scoped_gate_deferred_replan_frontier(prepared)
+            or _agent_scope_no_candidate_frontier(
+                agent_identity=prepared.agent_identity,
+                agent_todo_summary=prepared.agent_todo_summary,
+                agent_lane_next_action=agent_lane_next_action,
+                work_lane_contract=prepared.work_lane_contract,
+                candidate_should_run=bool(
+                    (should_run and normal_delivery_allowed)
+                    or ready_deferred_resume_candidates
+                ),
+            )
         )
         if (
             isinstance(agent_scope_frontier, dict)
