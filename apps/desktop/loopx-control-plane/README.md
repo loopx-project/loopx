@@ -321,6 +321,10 @@ LOOPX_TEST_APP="/path/to/LoopX.app" cargo test --lib \
   real_release_backup_restores_damage_and_rejects_tampering -- --ignored
 LOOPX_TEST_SIGNED_ARCHIVE="/path/to/LoopX.app.tar.gz" cargo test \
   --test signed_bundle -- --ignored
+LOOPX_TEST_APP="/path/to/LoopX.app" \
+LOOPX_TEST_SIGNED_ARCHIVE="/path/to/LoopX.app.tar.gz" \
+LOOPX_TEST_INSTALL_PARENT="/Volumes/disposable-apfs-test-volume" cargo test --lib \
+  real_release_installs_on_another_volume_and_keeps_the_old_app -- --ignored
 ```
 
 The first check copies the signed App into temporary directories, then exercises
@@ -328,11 +332,26 @@ the production restore path after removing its executable, a sealed runtime
 resource, or the entire target bundle. It also rejects a tampered backup before
 journaling or replacement and checks that the source artifact remains intact.
 The second verifies the updater archive with the shipped public key and rejects
-modified bytes. Neither check launches the App or writes to an installed App or
-user data. These qualify the native recovery and signature boundaries; they do
+modified bytes. The third requires a writable disposable APFS volume separate
+from the system temporary directory. It copies the source App into a temporary
+directory there, installs the archive through the production filesystem adapter,
+and verifies both the replacement and retained previous App. These checks never
+launch the App or write to an installed App or user data. They qualify the native
+replacement, recovery and signature boundaries; they do
 not replace packaged UI checks of download failure, restart, or runtime handoff.
 
 ### Recover An Interrupted App Update
+
+On writable macOS installations, the signed update is extracted beside the
+installed App and its bundle integrity is verified before the same atomic
+exchange used by recovery. This also works when the App is on a different
+APFS volume from the system temporary directory. The previous App remains in
+the retained staging directory as well as the verified recovery backup. A
+failed extraction or exchange leaves the current App in place. Filesystems
+without atomic directory exchange, including HFS+, require manual App
+replacement; no delete-and-move fallback is used. Administrator-owned install
+directories retain the existing system authorization path. Windows installation
+and separately managed CLI selection are unchanged.
 
 If replacement leaves the App incomplete and a backup is available, the update
 panel exposes **Restore previous version** directly. Restore it, then choose
