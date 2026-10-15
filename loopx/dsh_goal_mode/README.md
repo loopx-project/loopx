@@ -44,6 +44,13 @@ Flags: `--provider`, `--model`, `--max-tokens`, `--workspace`,
 option is an explicit test hook; LoopX does not machine-enforce where it may be
 used, and the caller already owns local host-execution authority.
 
+LoopX exchanges the request and the result as UTF-8, so the adapter pins its
+own stdio to UTF-8. On a host with another default codec (`cp936` on zh-CN
+Windows stays `gbk` even though the bytes are UTF-8) an unpinned adapter rejects
+a non-ASCII request (`invalid request JSON on stdin`) and dies in the final
+`print(...)` on a result carrying a character outside GBK.
+`tests/test_dsh_goal_mode_stdio_utf8.py` guards both directions.
+
 ## In-process host (`--host dsh`)
 
 `loopx turn run-once --host dsh` runs the same adapter inside the CLI process

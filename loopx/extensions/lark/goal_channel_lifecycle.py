@@ -39,10 +39,7 @@ from .goal_channel_targets import (
     goal_channel_target_for_name,
     read_goal_channel_targets,
 )
-from .presentation.kanban import (
-    CommandRunner,
-    default_subprocess_runner,
-)
+from .cli_transport import CommandRunner, default_subprocess_runner
 
 FailureStage = Literal[
     "lifecycle",

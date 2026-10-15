@@ -15,20 +15,10 @@ from ..capabilities.todo_replan_cadence.machine_defaults import resolve_todo_rep
 from ..control_plane.goals.goal_amendment_runtime import execute_goal_amendment
 from ..control_plane.goals.source_session_registry_state import current_goal_ref
 from ..control_plane.projects.registry_codec import load_project_registry
-from ..control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
+from .goal_source_routing import source_registry_for_goal
 
 CHAT_GOAL_AMENDMENT_PATH = "/api/chat/goal-amendment"
 
-
-def _source_registry(invoked: Path, goal_id: str) -> Path:
-    payload = load_project_registry(invoked)
-    if payload.get("profile_id") == "source_session_v1":
-        return invoked
-    route = resolve_goal_source_runtime_route(registry_path=invoked, goal_id=goal_id)
-    path = route.get("source_registry")
-    if not isinstance(path, str) or not path:
-        raise ValueError("Goal source authority could not be resolved")
-    return Path(path)
 
 
 def _public(value: dict[str, Any]) -> dict[str, Any]:
@@ -69,7 +59,7 @@ class GoalAmendmentRequestMixin:
         selected = getattr(self.server, "selected_goal_id", None)
         if selected and selected != goal_id:
             raise ValueError("Goal is outside this workspace")
-        return _source_registry(self.server.registry_path, goal_id)
+        return source_registry_for_goal(self.server.registry_path, goal_id)
 
     def _amendment_inspect(self) -> None:
         try:

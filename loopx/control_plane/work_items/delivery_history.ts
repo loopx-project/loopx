@@ -4,11 +4,15 @@ import { requireJsonObject } from "../runtime_decode.ts";
 import { resumeConditionHasKnownPendingTarget } from "../todos/resume_condition.ts";
 import { DELIVERY_OUTCOMES, diagnoseDeliveryClaim, isTurnScopedSettlementOutcome, type DeliveryOutcome } from "./delivery_outcome.ts";
 
-const TURN_KINDS = [
-  "contract_only_preparation", "compact_evidence", "blocker_writeback",
-  "product_path_execution", "outcome_gap", "unknown",
+export const DELIVERY_TURN_KINDS = [
+  "contract_only_preparation",
+  "compact_evidence",
+  "blocker_writeback",
+  "product_path_execution",
+  "outcome_gap",
+  "unknown",
 ] as const;
-type TurnKind = typeof TURN_KINDS[number];
+type TurnKind = typeof DELIVERY_TURN_KINDS[number];
 type BatchScale = "test_only" | "single_surface" | "multi_surface" | "implementation" | "unknown";
 type OutcomeSignal = DeliveryOutcome | "unknown" | "not_configured";
 
@@ -68,7 +72,7 @@ function outcomeSignal(raw: string, floorConfigured: boolean): OutcomeSignal {
 function turnKind(run: DeliveryRun, outcome: OutcomeSignal): TurnKind {
   const explicit = run.delivery_turn_kind.trim();
   // An unsupported explicit kind stays unknown; narrative is never a fallback.
-  if (explicit) return TURN_KINDS.find((kind) => kind === explicit) ?? "unknown";
+  if (explicit) return DELIVERY_TURN_KINDS.find((kind) => kind === explicit) ?? "unknown";
   const binding = Boolean(run.todo_id) !== Boolean(run.replan_obligation_id)
     ? (run.todo_id || run.replan_obligation_id).trim() : null;
   if (outcome === "outcome_gap" && isTurnScopedSettlementOutcome(outcome, run.progress_observation, binding)) {

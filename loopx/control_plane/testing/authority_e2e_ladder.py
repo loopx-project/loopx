@@ -414,6 +414,8 @@ def _row_nokv_live_qualification(context: RowContext) -> RowOutcome:
         final_cursor=report.get("final_cursor"),
         nokv_sdk_version=report.get("nokv_sdk_version"),
         nokv_api_version=report.get("nokv_api_version"),
+        nokv_protocol_schema=report.get("nokv_protocol_schema"),
+        nokv_protocol_schema_observations=report.get("nokv_protocol_schema_observations"),
         config_sha256_prefix=_nokv_authority_config_sha256(config_path)[:12],
         workbench_sha256_prefix=sha256_hex(workbench)[:12],
         tenant_id=tenant_id,

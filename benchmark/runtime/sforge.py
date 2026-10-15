@@ -9,6 +9,7 @@ import shlex
 import shutil
 import tarfile
 import tempfile
+import time
 import uuid
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
@@ -21,7 +22,7 @@ from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
 from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, prepare_codex_home
 from .codex_offline import CodexOffline, stage_portable_python
 from .harbor import (
-    BenchmarkCodex, _CONTROL, _GOAL_ID, _PYTHON, _SCHEDULER_STATE, _SRC,
+    BenchmarkCodex, _CONTROL, _CODEX_HOME, _PYTHON, _SCHEDULER_STATE, _SRC,
 )
 from .scheduler import worker_command
 from .worker import PHASE_WORK_RESERVE_SECONDS
@@ -94,7 +95,8 @@ class SForgeWorker(CodexAgent):
                  replan_after_todos: int | None = None,
                  stride_strategy: str | None = None,
                  checkpoint_request_path: str | None = None,
-                 checkpoint_request: bytes | None = None):
+                 checkpoint_request: bytes | None = None,
+                 warm_start=None):
         super().__init__(config)
         if profile not in PROFILES:
             raise ValueError("Unknown benchmark worker profile")
@@ -152,6 +154,11 @@ class SForgeWorker(CodexAgent):
                 raise ValueError("checkpoint_request_path requires a heartbeat profile")
             from .checkpoint import normalize_checkpoint_request_path
             self.checkpoint_request_path = normalize_checkpoint_request_path(checkpoint_request_path)
+        self.warm_start = warm_start
+        if warm_start is not None:
+            if not profile.startswith("heartbeat-") or feedback != "native" or self.task_entry != "loopx-planned":
+                raise ValueError("Warm checkpoint continuation requires a planned native heartbeat worker")
+            warm_start.verify(cwd)
         self.profile, self.cwd = profile, cwd
         if feedback not in FEEDBACK_MODES:
             raise ValueError("Unknown feedback mode")
@@ -240,8 +247,16 @@ class SForgeWorker(CodexAgent):
                 stride_strategy=self.stride_strategy,
                 checkpoint_request_path=self.checkpoint_request_path,
                 task_objective=self.task_objective,
+                **({"goal_id": self.warm_start.goal_id, "agent_id": self.warm_start.agent_id,
+                    "defer_codex_home": True} if self.warm_start is not None else {}),
             )
             asyncio.run(self.runtime.install(self.environment))
+            if self.warm_start is not None:
+                asyncio.run(self.warm_start.stage(self.environment, self.cwd))
+                self._warm_command("workspace", user="root")
+                result = backend.exec_run(handle, ["chown", "-R", "-P", "agent:agent", self.cwd], user="root")
+                if result.exit_code:
+                    raise RuntimeError("Restored workspace is not writable by its receiver")
             if self.checkpoint_request is not None:
                 with tempfile.TemporaryDirectory(prefix="benchmark-checkpoint-") as directory:
                     declaration = Path(directory) / "request.json"
@@ -304,7 +319,7 @@ class SForgeWorker(CodexAgent):
         }, indent=2))
 
     def format_run_cmd(self, prompt_path, *, model=None, cwd="", internet=True, resume=False):
-        if self.workspace_instructions is not None and not self.instructions_installed:
+        if self.workspace_instructions is not None and not self.instructions_installed and self.warm_start is None:
             self._install_workspace_instructions()
         if self.feedback_prompt is not None and not self.prompt_installed:
             with tempfile.TemporaryDirectory(prefix="benchmark-prompt-") as directory:
@@ -329,36 +344,72 @@ class SForgeWorker(CodexAgent):
                 asyncio.run(self.runtime._prepare_phase(self.environment, result.stdout, cwd=self.cwd))
                 if self.profile == "heartbeat-explore":
                     observed = asyncio.run(self.runtime._loopx(self.environment, [
-                        "configure-goal", "--goal-id", _GOAL_ID,
+                        "configure-goal", "--goal-id", self.runtime.goal_id,
                         "--explore-graph-enabled", "--explore-harness-enabled",
                         "--explore-harness-profile", "adaptive-resilient", "--execute",
                     ], cwd=self.cwd))
                     (self.log_dir / "explore-activation.json").write_text(json.dumps(observed))
             else:
                 asyncio.run(self.runtime._write_task_document(self.environment, result.stdout))
+            if self.warm_start is not None:
+                self._warm_command("context")
+                auth = Path(os.environ["CODEX_AUTH_JSON_PATH"]).resolve()
+                asyncio.run(self.environment.upload_file(auth, f"{_CODEX_HOME}/auth.json"))
+                protected = self.backend.exec_run(self.handle, ["/bin/bash", "-c",
+                    f"chown agent:agent {_CODEX_HOME}/auth.json && chmod 0600 {_CODEX_HOME}/auth.json"], user="root")
+                if protected.exit_code:
+                    raise RuntimeError("Could not protect fresh receiver credentials")
             self.prepared = True
         env = self.runtime._worker_env(cwd=self.cwd)
+        if self.warm_start is not None:
+            env["LOOPX_WARM_START"] = f"{_CONTROL}/warm-start.json"
         command = worker_command(env, python=f"{_PYTHON}/bin/python3", source=_SRC,
                                  state_file=_SCHEDULER_STATE, host_timeout=self.turn_timeout)
-        if self.task_entry == "loopx-planned":
+        if self.task_entry == "loopx-planned" and self.warm_start is None:
             env["LOOPX_PLANNING_RESULT"] = "/opt/loopx-benchmark/control/planning-phase-001.json"
             command = [f"{_PYTHON}/bin/python3", "-m", "benchmark.runtime.sforge_entry", *command]
         # Persist the phase deadline for repeated command preparation. Reusing
         # an entry command must never grant another full trial budget.
         deadline = "/opt/loopx-benchmark/control/phase-deadline"
         started = "/opt/loopx-benchmark/control/execution-started"
+        if self.warm_start is not None:
+            if self.warm_start.deadline_epoch <= time.time():
+                raise ValueError("Original checkpoint allowance expired during receiver setup")
+            clock = (f"test ! -e {deadline}; printf '%s\\n' {self.warm_start.deadline_epoch} > {deadline}; ")
+        else:
+            clock = f"test -f {deadline} || echo $(( $(date +%s) + {self.timeout_seconds} )) > {deadline}; "
         exports = " ".join(f"{key}={shlex.quote(value)}" for key, value in env.items())
         return self._execution_command(
-            f"set -eu; test -f {deadline} || echo $(( $(date +%s) + {self.timeout_seconds} )) > {deadline}; "
+            f"set -eu; {clock}"
             f"export LOOPX_PHASE_DEADLINE_EPOCH=$(cat {deadline}); "
             f"remaining=$(( LOOPX_PHASE_DEADLINE_EPOCH - $(date +%s) )); "
             f'if test "$remaining" -le 0; then test -f {started}; exit $?; fi; '
-            + (f"touch {started}; " if self.task_entry != "loopx-planned" else "")
+            + (f"touch {started}; " if self.task_entry != "loopx-planned" or self.warm_start is not None else "")
             + f"set +e; timeout --signal=TERM --kill-after=30 ${{remaining}}s env {exports} {shlex.join(command)}; "
             f"phase_rc=$?; if test $phase_rc -eq 124 && test -f {started} "
             '&& test "$(date +%s)" -ge "$LOOPX_PHASE_DEADLINE_EPOCH"; then exit 0; fi; exit $phase_rc',
             execution_start_marker=started,
         )
+
+    def _warm_command(self, action, *, user="agent"):
+        env = self.runtime._worker_env(cwd=self.cwd)
+        env["CODEX_HOME"] = _CODEX_HOME
+        result = asyncio.run(self.environment.exec(
+            f"{_PYTHON}/bin/python3 -m benchmark.runtime.sforge_warm_start {action} "
+            f"--declaration {_CONTROL}/warm-start.json"
+            + (f" > {_CONTROL}/checkpoint-context.json" if action == "context" else ""),
+            env=env, user=user))
+        if result.return_code:
+            raise RuntimeError("Checkpoint receiver " + action + " failed: " + result.stdout[-2000:])
+        if action == "context":
+            # The transport combines stderr with stdout; native CLI diagnostics
+            # must not corrupt the machine-readable receipt.
+            receipt = asyncio.run(self.environment.exec(
+                f"cat {_CONTROL}/checkpoint-context.json", env=env, user=user))
+            if receipt.return_code:
+                raise RuntimeError("Checkpoint context receipt is unavailable")
+            value = json.loads(receipt.stdout)
+            (self.log_dir / "checkpoint-context.json").write_text(json.dumps(value))
 
     def _install_workspace_instructions(self):
         """Preserve task instructions and verify the policy before model entry."""

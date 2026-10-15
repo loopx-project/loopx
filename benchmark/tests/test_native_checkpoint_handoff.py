@@ -350,7 +350,9 @@ def test_checkpoint_interrupt_timeout_reaps_without_qualifying_capture(tmp_path)
 def test_midwake_native_profile_refusal_precedes_interruption(tmp_path, monkeypatch, platform, native, interrupt):
     from benchmark.runtime.checkpoint_wake import CheckpointWake
 
-    wake = CheckpointWake({"LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes")}, {"turn_id": "fixture-turn"})
+    wake = CheckpointWake({"LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes"),
+        "LOOPX_RUNTIME_ROOT": str(tmp_path / "runtime"), "LOOPX_GOAL_ID": "fixture",
+        "LOOPX_AGENT_ID": "researcher"}, {"turn_id": "fixture-turn"})
     wake.request, wake.raw = {"native_session": native}, b"fixture declaration"
     monkeypatch.setattr(sys, "platform", platform)
     intent = {"capture": True, "obligation_id": "replan-0123456789abcdef"}
@@ -389,6 +391,10 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
     logs = Path("/logs/agent/wakes")
     candidate = project / "candidate.txt"
     candidate.write_text("0")
+    git_object = project / ".git" / "objects" / "ab" / "retained-object"
+    git_object.parent.mkdir(parents=True)
+    git_object.write_text("Readonly source evidence")
+    git_object.chmod(0o444)
     executable = tmp_path / "loopx-cli"
     executable.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + ' -m loopx.cli "$@"\n')
     executable.chmod(0o700)
@@ -501,7 +507,8 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
         assert len(set(work_turns)) == 6 and len(calls) == 13
         request = tmp_path / "request.json"
         request.write_text(json.dumps({"destination": str(logs.parent / "checkpoints"),
-            "components": [{"id": "code", "source_path": str(candidate)}], "point_metadata": {},
+            "components": [{"id": "task_workspace", "source_path": str(project)}],
+            "point_metadata": {},
             "trigger": "fresh_replan", "native_session": True, "loopx_state": True,
             "evaluation_opportunity": True, "controller_handoff": True}))
         phase.update(kind="review", tool_sent=False)

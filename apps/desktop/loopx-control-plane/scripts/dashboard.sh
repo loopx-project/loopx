@@ -44,7 +44,7 @@ cd "${DASHBOARD_DIR}"
 
 case "${1:-}" in
   dev)
-    export VITE_LOOPX_CHAT_ORIGIN="http://127.0.0.1:8767"
+    export VITE_LOOPX_CHAT_ORIGIN=""
     exec npm run dev:web
     ;;
   build)

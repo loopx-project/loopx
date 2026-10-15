@@ -55,7 +55,7 @@ from .manager_reply_delivery import (
     validate_team_plan_delivery_receipt,
     write_delivery as write_manager_delivery,
 )
-from .presentation.kanban import CommandRunner, default_subprocess_runner
+from .cli_transport import CommandRunner, default_subprocess_runner
 from .presentation.team_plan import (
     TEAM_PLAN_CARD_ACTION_SCHEMA_VERSION,
     build_team_plan_result_card,

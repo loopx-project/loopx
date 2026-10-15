@@ -37,6 +37,19 @@ fragments cannot certify completeness. A missing task is never guessed to be
 advancement work. Invalid count envelopes and differently scoped count reuse
 fail explicitly.
 
+Goal frontier reads the same `work_counts`, rather than counting its bounded
+`executable_backlog_items` again. Its `normalized_progress` retains
+`agent_counts_complete` and `agent_unclassified_open_count`, so an incomplete
+source cannot become an exact total when the display is compacted.
+
+`deferred_work_counts` carries `ready`, `blocked`, `unknown`, `complete` and
+`ready_by_agent` from the same typed source before display limits. Goal frontier
+uses these facts for `deferred_successors`; twelve ready successors do not become
+eight ready and four blocked. Missing evaluations and unseen rows are unknown;
+an undeclared source total has `unknown=null`. The reported ready/blocked counts
+are lower bounds while `complete=false`. Current capability re-evaluation
+replaces prior readiness for observed rows and cannot certify unseen rows.
+
 The TypeScript `todos/summary_lanes.ts` owner returns indexes into the one input
 array instead of repeating full Todo bodies for each lane. The Python adapter
 normalizes legacy fields/timestamps and validates the returned ordinal bounds.
@@ -126,6 +139,14 @@ no-follow-up、superseded 或 deferred。显式空 gate 投影不重建旧来源
 `hidden` 表示未取得、无法分类的来源行，不是界面折叠的行数。`complete=false` 时，
 已分类数量只是下界，重复投影也不能把未知变成完整，更不能据此声称“只剩 Monitor”。
 旧摘要按 Todo 身份去重，矛盾片段不能证明完整；缺失任务不再被猜成 advancement。
+
+Goal frontier 复用同一 `work_counts`，不再对截断后的 `executable_backlog_items`
+重新计数；`normalized_progress.agent_counts_complete` 与
+`agent_unclassified_open_count` 保留完整性和未分类数量。`deferred_work_counts`
+在展示裁剪前提供 ready、blocked、unknown、complete 和 ready_by_agent，
+后继投影不再把 12 个已就绪任务误报为 8 个就绪、4 个受阻。未取得的行或缺失的
+ready 求值保持 unknown，来源总数未声明时 unknown 为 null；complete=false 时
+ready/blocked 只是下界。能力变化只重新求值已取得的行，不能证明未取得行的状态。
 
 TS 统一批量 lane 分类与计数，Python 保留旧格式解码、时间适配和展示。返回数组位置
 索引减少同一任务在多个 lane 的重复传输；一个批次使用同一观察时刻。排序、延期与

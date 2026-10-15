@@ -106,10 +106,12 @@ const FAKE_INCARNATION = "a".repeat(32);
 
 class FakeQualificationTransport implements QualificationTransport {
   readonly backend: Backend;
+  readonly sdkProtocolSchema?: string | null;
   closed = false;
 
-  constructor(backend: Backend) {
+  constructor(backend: Backend, sdkProtocolSchema?: string | null) {
     this.backend = backend;
+    this.sdkProtocolSchema = sdkProtocolSchema;
   }
 
   async storeIdentity(workbench: string): Promise<NoKVStoreIdentityResult> {
@@ -256,6 +258,40 @@ test("qualification proves create, ambiguous reconciliation, contention, and fre
     Array(report.checks.length).fill("passed"));
   assert.equal(opened.length, 3);
   assert.ok(opened.every((transport) => transport.closed));
+});
+
+test("qualification keeps every helper's SDK schema and names one only when all agree", async () => {
+  const v9 = "nokv.workspace.rpc.v9";
+  const v10 = "nokv.workspace.rpc.v10";
+  const cases: { declared: (string | null | undefined)[]; schema: string | null }[] = [
+    { declared: [undefined, undefined, undefined], schema: null },
+    { declared: [v9, v9, v9], schema: v9 },
+    { declared: [null, v9, v10], schema: null },
+    { declared: [v9, v10, v9], schema: null },
+    { declared: [v9, v9, null], schema: null },
+  ];
+  for (const { declared, schema } of cases) {
+    const backend: Backend = {
+      blob: null,
+      ignoreCas: false,
+      publishCalls: 0,
+      pretendAppliedWithoutWriteOnCall: null,
+    };
+    let opened = 0;
+    const report = await exerciseQualificationSequence(BASE_OPTIONS, async () =>
+      new FakeQualificationTransport(backend, declared[opened++]));
+
+    const label = JSON.stringify(declared);
+    assert.equal(opened, 3, label);
+    assert.deepEqual(
+      report.nokv_protocol_schema_observations,
+      declared.map((value) => value ?? null),
+      label,
+    );
+    assert.equal(report.nokv_protocol_schema, schema, label);
+    // The schema is observed metadata: disagreeing helpers do not fail the probe.
+    assert.equal(report.checks.length, 15, label);
+  }
 });
 
 test("qualification rejects a backend that accepts a stale incarnation fence", async () => {

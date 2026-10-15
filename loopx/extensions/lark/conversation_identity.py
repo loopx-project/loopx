@@ -14,7 +14,7 @@ from typing import Any
 from .goal_channel_transport import APP_ID_PATTERN, call, json_payload, lark_args
 from .identity_shapes import LARK_OPEN_ID_PATTERN as OPEN_ID_PATTERN
 from .goal_topic_connections import _profile_ref
-from .presentation.kanban import CommandRunner
+from .cli_transport import CommandRunner
 
 
 def identity_ref(*values: str) -> str:

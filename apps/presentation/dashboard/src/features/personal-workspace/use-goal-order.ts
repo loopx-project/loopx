@@ -1,4 +1,4 @@
-import { useRef, useState, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { decodeGoalOrder, goalOrderStorageKey, moveGoal, orderedGoals } from "./goal-order";
 import type { WorkspaceGoal } from "./personal-workspace-model";
 
@@ -8,7 +8,59 @@ export function useGoalOrder(goals: WorkspaceGoal[], source: string) {
   const [order, setOrder] = useState(() => {
     try { return decodeGoalOrder(localStorage.getItem(key)); } catch { return []; }
   });
+  const orderRef = useRef(order);
+  const editVersion = useRef(0);
+  const saver = useRef<((next: string[]) => void) | null>(null);
   const [saveFailed, setSaveFailed] = useState(false);
+  useEffect(() => {
+    let disposed = false;
+    let loaded = false;
+    let queue = Promise.resolve();
+    const initialVersion = editVersion.current;
+    async function request(next?: string[], onlyIfAbsent = false) {
+      const response = await fetch(`/api/chat/sidebar-goal-order?source=${encodeURIComponent(source)}`, {
+        ...(next ? { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ source, order: next, only_if_absent: onlyIfAbsent }) } : {}),
+        signal: AbortSignal.timeout(5_000),
+      });
+      const body: unknown = await response.json();
+      if (!response.ok || !body || typeof body !== "object" || !("ok" in body) || body.ok !== true
+        || !("order" in body) || (body.order !== null && (!Array.isArray(body.order)
+          || !body.order.every((id: unknown) => typeof id === "string")))) throw new Error("Goal order unavailable");
+      return body.order as string[] | null;
+    }
+    async function load() {
+      const saved = await request();
+      loaded = true;
+      if (!disposed && initialVersion === editVersion.current && saved !== null) {
+        orderRef.current = saved;
+        setOrder(saved);
+        try { localStorage.setItem(key, JSON.stringify(saved)); } catch { /* Durable save remains authoritative. */ }
+      }
+      return saved;
+    }
+    const ready = load();
+    // Each move updates immediately, but writes wait for hydration and for the
+    // preceding write. Neither a late read nor a late failure can undo a move.
+    function persist(next: string[], version: number, migration = false) {
+      queue = queue.then(async () => {
+        try { await ready; } catch { if (!loaded) await load(); }
+        if (disposed) return;
+        const saved = await request(next, migration);
+        if (!disposed && version === editVersion.current) {
+          if (migration && saved !== null) { orderRef.current = saved; setOrder(saved); }
+          setSaveFailed(false);
+        }
+      }).catch(() => { if (!disposed && version === editVersion.current) setSaveFailed(true); });
+    }
+    saver.current = (next) => persist(next, editVersion.current);
+    void ready.then((saved) => {
+      if (disposed || initialVersion !== editVersion.current) return;
+      if (saved === null && orderRef.current.length) persist(orderRef.current, initialVersion, true);
+      else setSaveFailed(false);
+    }).catch(() => { if (!disposed) setSaveFailed(true); });
+    return () => { disposed = true; saver.current = null; };
+  }, [key, source]);
   const [lastMoved, setLastMoved] = useState<{ title: string; position: number } | null>(null);
   const [target, setTarget] = useState<{ id: string; after: boolean } | null>(null);
   const gesture = useRef<{ id: string; x: number; y: number; dragging: boolean } | null>(null);
@@ -16,15 +68,18 @@ export function useGoalOrder(goals: WorkspaceGoal[], source: string) {
   const sorted = orderedGoals(goals, order);
   const visible = sorted.map((goal) => goal.goalId);
   function move(from: string, to: string, after: boolean) {
-    const next = moveGoal(order, visible, from, to, after);
-    if (next === order) return;
+    const current = orderRef.current;
+    const next = moveGoal(current, visible, from, to, after);
+    if (next === current) return;
+    orderRef.current = next;
+    editVersion.current += 1;
     setOrder(next);
     const nextGoals = orderedGoals(goals, next);
     const position = nextGoals.findIndex((goal) => goal.goalId === from);
     const moved = nextGoals[position];
     if (moved) setLastMoved({ title: moved.title, position: position + 1 });
-    try { localStorage.setItem(key, JSON.stringify(next)); setSaveFailed(false); }
-    catch { setSaveFailed(true); }
+    try { localStorage.setItem(key, JSON.stringify(next)); } catch { /* The server can still save it. */ }
+    saver.current?.(next);
   }
   function cancel() { gesture.current = null; setTarget(null); }
   return {

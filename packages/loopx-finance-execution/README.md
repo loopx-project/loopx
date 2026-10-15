@@ -97,7 +97,52 @@ not complete. Every response returns `execution_allowed=false`,
 `resubmit_allowed=false` for reconciliation and `external_write_performed=false`.
 Calling reconciliation again after restart only re-reads retained facts.
 
-A DSH/Ego executor can consume these checks after native approval consumption,
+### Declared cash and loss bounds
+
+`loopx-finance-execution --check-risk-bound < risk-readback.json` adds a
+read-only pre-submit check. The request contains `terms`, `budget`,
+`exposure_bound`, `observed_at`, `now` and `maximum_age_seconds` (1..300).
+`terms` uses the same immutable `finance_execution_terms_v0` schema.
+
+`budget` uses `finance_risk_budget_v0`: `cash_unit`, `maximum_input` and
+`maximum_loss`, both positive decimal strings. `exposure_bound` is null when
+unavailable, or a `finance_exposure_bound_v0` object with these required fields:
+
+| Field | Meaning |
+| --- | --- |
+| `terms_digest`, `source_ref` | Original exact terms SHA256 and retained producer evidence |
+| `cash_unit` | Same unit as the budget, price and fee; no inferred FX |
+| `maximum_cash_committed` | Actual capped cash/collateral allocation, not order notional |
+| `maximum_additional_liability` | Explicit bound on liability outside that allocation |
+| `maximum_total_cost` | Upper bound covering fees, funding, exit/slippage and other charges |
+| `liability_scope` | `capped`, `uncapped` or `unknown` |
+| `automatic_margin_addition` | Boolean or null; only explicit false is supported |
+
+The three amount fields are nonnegative decimal strings or null. Unknown is
+never zero. Cross margin, uncapped/unknown liability and automatic/unknown
+collateral addition are held. This initial check supports fully paid `spot`
+buys in cash mode at 1x and `linear_perpetual` isolated orders, with quantity
+in the instrument's base unit. Inverse/contract-multiplier products, shorts in
+cash mode and undeclared unit conversions are unsupported. Cash allocation
+must cover quantity times limit price; isolated allocation must at least cover
+that notional divided by leverage. These are exact lower-bound comparisons,
+not an estimate of a venue's actual liability cap.
+
+Both conservative upper bounds include all committed cash, additional liability
+and total cost. Stops and expected exit prices never reduce the loss bound.
+Missing facts, digest/unit drift, stale evidence, expiry and budget excess are
+held. Arithmetic does not depend on the caller's Decimal precision or traps.
+
+`within_declared_bound` means only that these declared values fit the budget.
+The venue producer must independently authenticate their scope, completeness
+and maximum-liability mechanism. Every response explicitly returns
+`venue_bound_authenticated=false`, `execution_allowed=false` and
+`external_write_performed=false`. This does not reserve account capacity or
+install a venue client; unknown production facts must not be filled by a model.
+The schemas and closed vocabulary belong to this optional Finance provider,
+not a new Core approval or permission contract.
+
+A DSH/Ego executor can consume the readback checks after native approval consumption,
 but this package does not yet qualify that transport, a live browser worker,
 account reservation or original-group delivery. The configured model must be
 read back from the actual runtime; `dsh` or `high` in a card is not proof of it.
@@ -105,7 +150,7 @@ The existing M1 card and result-return path stays unchanged. Disable the new
 readback path by omitting its flag; rollback uses the original extension
 revision and normal lifecycle. No new background worker or timer is installed.
 
-中文：这两条命令只核验金融条款与保留的场所事实，不批准、下单、重提或取得账户
+中文：这些命令只核验金融条款与保留的场所事实，不批准、下单、重提或取得账户
 权限。摘要缺字段、过期、参数变化即停止；未知提交与部分成交保留，费用缺证不补零，
 成交与保护分别验收。原生批准/一次消费、DSH真实宿主、场所适配、账户总额度及原群
 投递仍须独立资格化。省略新参数即保留原M1模拟路径，回滚复用原extension revision。

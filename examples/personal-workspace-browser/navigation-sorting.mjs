@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { runDurableGoalOrder } from "./durable-goal-order.mjs";
 
 import {
   installApi,
@@ -12,7 +13,7 @@ export const navigationSortingScenario = {
   async run({ browser, collectCoverage, url }) {
     const context = await openWorkspacePage(browser, url, { collectCoverage });
     const { checkpointCoverage, page } = context;
-    const notes = [];
+    const notes = [await runDurableGoalOrder(browser)];
     const pass = (criterion, note) => notes.push(`${criterion}: ${note}`);
     try {
       // Network idleness can precede the per-Goal projection merge. Assert the

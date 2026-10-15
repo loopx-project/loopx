@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import os
 import sqlite3
@@ -76,6 +77,30 @@ def counter(container):
         return int(archive.extractfile("counter").read())
 
 
+def test_ordinary_controller_stages_root_private_native_configuration(writer, tmp_path):
+    from benchmark.tests.qualify_checkpoint_joint import _stage_source_configuration
+
+    assert os.getuid() != 0, "Qualify the ordinary controller, not a privileged reader"
+    container, _ = writer
+    raw = b'model = "fixture"\n'
+    command = ("from pathlib import Path; p=Path('/private-codex'); p.mkdir(mode=0o700); "
+               f"f=p/'config.toml'; f.write_bytes({raw!r}); f.chmod(0o600)")
+    assert container.exec_run(["python", "-c", command], user="root").exit_code == 0
+    assert container.exec_run(["stat", "-c", "%u %a", "/private-codex",
+                               "/private-codex/config.toml"]).output == b"0 700\n0 600\n"
+    rejected = container.exec_run(["python", "-c",
+        "from pathlib import Path; Path('/private-codex/config.toml').read_bytes()"], user=str(os.getuid()))
+    assert rejected.exit_code != 0 and b"PermissionError" in rejected.output
+    native = {"guest_home": "/private-codex", "config_sha256": hashlib.sha256(raw).hexdigest()}
+    config = _stage_source_configuration(container, native, tmp_path / "staged")
+    assert config.read_bytes() == raw and config.stat().st_uid == os.getuid()
+    assert config.stat().st_mode & 0o777 == 0o600
+    with pytest.raises(ValueError, match="differs from the sealed checkpoint"):
+        _stage_source_configuration(container, {**native, "config_sha256": "f" * 64}, tmp_path / "wrong")
+    assert container.exec_run(["stat", "-c", "%u %a", "/private-codex",
+                               "/private-codex/config.toml"]).output == b"0 700\n0 600\n"
+
+
 def test_archive_keeps_private_directory_modes_without_special_bits(writer, tmp_path):
     from benchmark.edgebench.checkpoint_worker import _archive
     container, _ = writer
@@ -87,8 +112,8 @@ def test_archive_keeps_private_directory_modes_without_special_bits(writer, tmp_
     assert (copied / "child").stat().st_mode & 0o7777 == 0o700
 
 
-@pytest.mark.parametrize("fault", [None, "source_moved", "expired"])
-def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writer, tmp_path, fault):
+@pytest.mark.parametrize("fault", [None, "source_moved", "expired", "read_race"])
+def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writer, tmp_path, monkeypatch, fault):
     from loopx.control_plane.effect_runtime import effect_runtime_result
     from benchmark.edgebench.checkpoint_worker import _archive
     from benchmark.edgebench.checkpoint_supervisor import CheckpointSupervisor
@@ -114,6 +139,16 @@ def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writ
         assert container.exec_run(["python", "-c", "from pathlib import Path; Path('/candidate').write_text('later')"]).exit_code == 0
     assert container.exec_run(["python", "-c", "from pathlib import Path; "
         "Path('/logs/agent/checkpoint-controller/ready.json').write_text(" + repr(json.dumps(request)) + ")"]).exit_code == 0
+    if fault == "read_race":
+        from benchmark.edgebench import checkpoint_supervisor
+        original = checkpoint_supervisor._archive
+        reads = []
+        def interrupted_archive(*args):
+            reads.append(True)
+            if len(reads) == 1:
+                raise tarfile.ReadError("request removed during Docker archive")
+            return original(*args)
+        monkeypatch.setattr(checkpoint_supervisor, "_archive", interrupted_archive)
     supervisor = CheckpointSupervisor(files[0], tmp_path / "points")
     supervisor.bind({"SFORGE_TOKEN": token})
     supervisor.start(container)
@@ -123,9 +158,9 @@ def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writ
     finally:
         supervisor.close()
     response = json.loads((tmp_path / "points" / (nonce + ".json")).read_bytes())
-    assert response["ok"] is (fault is None)
+    assert response["ok"] is (fault in {None, "read_race"})
     unit = tmp_path / "points" / nonce
-    if fault is None:
+    if fault in {None, "read_race"}:
         manifest = json.loads((unit / "checkpoint.json").read_bytes())
         metadata = manifest["point_metadata"]
         assert metadata["synthetic_boundary"] is True
@@ -395,3 +430,64 @@ def test_rejected_pause_preserves_foreign_barrier(
     with pytest.raises(FileExistsError):
         capture_worker(files[0], token=token, capture_id="3" * 32,
             destination=tmp_path / "retry", request_file=request)
+
+
+def test_capture_budget_is_shared_and_exhaustion_releases_writer(controllers, writer, tmp_path, monkeypatch):
+    from benchmark.edgebench import checkpoint_worker
+
+    source, _, first, _, files, grades = controllers
+    container, request = writer
+    token = register(source, first)
+    original = checkpoint_worker._archive_component
+    def slow_archive(*args):
+        copied = original(*args)
+        time.sleep(2.1)
+        return copied
+    monkeypatch.setattr(checkpoint_worker, "_archive_component", slow_archive)
+    unit = tmp_path / "expired"
+    with pytest.raises(TimeoutError, match="capture window"):
+        capture_worker(files[0], token=token, capture_id="5" * 32,
+            destination=unit, request_file=request, timeout=2)
+    container.reload()
+    assert container.attrs["State"]["Running"] and not container.attrs["State"]["Paused"]
+    assert not unit.exists() and not grades
+    assert not (Path(json.loads(files[0].read_text())["bank_root"]) / ("5" * 32)).exists()
+    with pytest.raises(FileExistsError):
+        capture_worker(files[0], token=token, capture_id="5" * 32,
+            destination=tmp_path / "retry", request_file=request)
+    # A different later boundary remains useful; the failed identity is not replayed.
+    monkeypatch.setattr(checkpoint_worker, "_archive_component", original)
+    budgets = []
+    actual = checkpoint_worker.effect_runtime_result
+    def checked_artifact(method, params, **kwargs):
+        assert kwargs["retry_safe"] is False
+        assert 10 < kwargs["timeout"] <= 45
+        budgets.append(kwargs["timeout"])
+        return actual(method, params, **kwargs)
+    monkeypatch.setattr(checkpoint_worker, "effect_runtime_result", checked_artifact)
+    monkeypatch.setattr(transport, "effect_runtime_result", checked_artifact)
+    result = capture_worker(files[0], token=token, capture_id="6" * 32,
+        destination=tmp_path / "later", request_file=request, timeout=45)
+    assert result["sha256"] and len(budgets) == 4
+    assert budgets == sorted(budgets, reverse=True)
+    assert not grades
+
+
+def test_persistent_mailbox_read_error_remains_visible(writer, tmp_path, monkeypatch):
+    from benchmark.edgebench import checkpoint_supervisor
+
+    container, _ = writer
+    # No native admission is needed to exercise the read-only poll boundary.
+    supervisor = object.__new__(checkpoint_supervisor.CheckpointSupervisor)
+    supervisor.destination = tmp_path
+    supervisor.failure = None
+    supervisor.stop = threading.Event()
+    monkeypatch.setattr(supervisor.stop, "wait", lambda seconds: None)
+    reads = []
+    def broken(*args):
+        reads.append(True)
+        raise tarfile.ReadError("persistent invalid archive")
+    monkeypatch.setattr(checkpoint_supervisor, "_archive", broken)
+    supervisor._run(container)
+    assert len(reads) == 3 and isinstance(supervisor.failure, tarfile.ReadError)
+    assert json.loads((tmp_path / "supervisor-failure.json").read_text()) == {"error_kind": "ReadError"}

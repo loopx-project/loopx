@@ -175,9 +175,19 @@ def _activation_result(result: dict, body: dict) -> None:
         raise ValueError("Native activation result differs from the original request")
 
 
+def _remaining(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("Checkpoint capture window closed")
+    return remaining
+
+
 def capture(controller_file: Path, *, token: str, capture_id: str, destination: Path,
             timeout: float = 30, phase_deadline_file: Path | None = None) -> dict:
     """Capture one native-owned point without exporting controller configuration."""
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("Checkpoint capture timeout must be finite and positive")
+    deadline = time.monotonic() + timeout
     if not re.fullmatch(r"[0-9a-f]{32}", capture_id):
         raise ValueError("Capture identity must be the declared 32-hex native identity")
     destination = Path(destination)
@@ -200,7 +210,7 @@ def capture(controller_file: Path, *, token: str, capture_id: str, destination: 
         # A later source cannot replace the Host clock at that native point.
         (attempts / capture_id).mkdir(mode=0o700)
     reference = _reference(_post(controller, "/api/v1/checkpoint/capture",
-        {"token": token, "capture_id": capture_id}, timeout))
+        {"token": token, "capture_id": capture_id}, _remaining(deadline)))
     if reference["checkpoint_id"] != capture_id:
         raise ValueError("Native capture returned a different identity")
     folder = _physical(controller["bank_root"] / capture_id)
@@ -212,12 +222,13 @@ def capture(controller_file: Path, *, token: str, capture_id: str, destination: 
             raise ValueError("Host phase deadline moved across native capture")
         components.append({"id": "host_phase_deadline", "source_path": str(phase_deadline_file)})
         metadata["host_phase_budget"] = _phase_budget(phase_raw, native)
-    probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
+    probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components},
+                                  timeout=_remaining(deadline), retry_safe=False)
     result = effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "capture", "components": components, "destination": str(destination),
         "expected_source_sha256": probe["source_sha256"],
         "point_metadata": metadata,
-    }, retry_safe=False)
+    }, timeout=_remaining(deadline), retry_safe=False)
     # Bind the actually copied bytes, not merely a prior source observation.
     _bound_bank(destination / "components/native_judge", reference)
     if phase_raw is not None and (destination / "components/host_phase_deadline").read_bytes() != phase_raw:

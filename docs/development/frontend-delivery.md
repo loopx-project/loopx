@@ -132,6 +132,31 @@ can require a rebuild. Text inputs normalize CRLF so a CI-built bundle remains
 valid on Windows; delivered bytes are always hashed exactly. This is integrity
 and freshness metadata, not a signature or a replacement for release attestations.
 
+### Goal sidebar order
+
+Goal dragging and keyboard move controls save presentation order through
+`/api/chat/sidebar-goal-order` into the private runtime's
+`presentation/sidebar-goal-order-v1.json`. Local App, browser and CLI-launched
+Chat servers that share that runtime read the same preference after a port
+change, restart or runtime upgrade. Status sources retain separate orders;
+missing or stopped Goal ids remain in the saved list. This changes display
+order only, without changing Goal priority, lifecycle or execution.
+
+The existing TypeScript ordering functions remain the semantic owner. The
+Python presentation adapter validates and atomically stores the list under a
+file lock; it is not a capability configuration namespace. Existing same-origin
+browser preferences migrate only when the durable source has no value. An old
+origin's inaccessible browser storage cannot be recovered automatically. Read
+or save failure keeps the current page usable and displays unsaved feedback;
+another move retries. Reverting to an older runtime preserves the private file,
+although that runtime continues to use its browser-local preference.
+
+The packaged `navigation-sorting` browser scenario uses synthetic workspace
+records with the real HTTP preference owner. It checks pointer/keyboard moves,
+refresh, service restart on another port, delayed hydration, rapid moves,
+failure/retry and browser-cache migration. It does not certify native WebView
+crash recovery or an already-installed App's adoption of a proposed PR.
+
 ## PR qualification and releases
 
 PR CI builds and verifies a clean bundle once, then uploads

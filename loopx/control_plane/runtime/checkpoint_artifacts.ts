@@ -7,7 +7,7 @@ import {createReadStream} from "node:fs";
 import {copyFile, lstat, mkdir, mkdtemp, open, readFile, readdir, rm} from "node:fs/promises";
 import {dirname, isAbsolute, join, resolve, sep} from "node:path";
 import type {JsonObject} from "../effect_program.ts";
-import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
+import {jsonObject, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {canonicalAuthoritySha256, hasExactAuthorityKeys} from "../coordination/authority_store_codec.ts";
 import {snapshotSqliteDatabase} from "../coordination/sqlite_backup.ts";
 import {durableWriteJson, publishNewDirectory} from "../effect_runtime_io.ts";
@@ -15,6 +15,7 @@ import {settlementIdentity} from "../effect_program.ts";
 import {normalizeHeartbeatReplanObligationId, normalizeHeartbeatTodoId} from "../quota/heartbeat_receipt_identity.ts";
 import {EffectRuntimeConflictError} from "../effect_runtime_errors.ts";
 import {EffectiveAction} from "../quota/effective_action.generated.ts";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 
 const SCHEMA = "loopx_checkpoint_artifact_set_v0";
 type Component = {id: string; source_path: string};
@@ -134,7 +135,9 @@ async function copyComponent(source: string, destination: string, snapshotDataba
     // SQLite's existing physical snapshot owner seals committed WAL contents.
     if (snapshotDatabases && await sqliteFile(source)) await snapshotSqliteDatabase(source, destination);
     else await copyFile(source, destination);
-    const handle = await open(destination, "r+");
+    // copyFile preserves a read-only participant's mode. Syncing its bytes
+    // needs no write access; r+ fails for an ordinary non-root controller.
+    const handle = await open(destination, "r");
     try {await handle.sync();} finally {await handle.close();}
   } else throw new Error("checkpoint source contains an unsupported file type");
 }
@@ -166,6 +169,42 @@ async function verify(root: string, expected: unknown): Promise<JsonObject> {
 }
 export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
   const request = requireJsonObject(value, "checkpoint artifacts request");
+  if (request.action === "restore_capture") {
+    if (!hasExactAuthorityKeys(request, ["action", "checkpoint_sha256", "goal_id", "agent_id", "current_obligation_id", "review"])) {
+      throw new Error("checkpoint restored capture fields are invalid");
+    }
+    const sha = requireNonEmptyString(request.checkpoint_sha256, "restored checkpoint digest");
+    if (!BARE_SHA256_PATTERN.test(sha)) throw new Error("invalid restored checkpoint digest");
+    const goal = requireNonEmptyString(request.goal_id, "checkpoint destination Goal");
+    const agent = requireNonEmptyString(request.agent_id, "checkpoint destination Agent");
+    if (request.current_obligation_id !== null && !normalizeHeartbeatReplanObligationId(request.current_obligation_id)) {
+      throw new Error("restored checkpoint current replan identity is invalid");
+    }
+    const review = jsonObject(request.review), identity = jsonObject(review?.identity);
+    const progress = jsonObject(review?.progress), run = jsonObject(review?.writeback_run);
+    const guard = jsonObject(review?.semantic_replan_guard), ack = jsonObject(run?.autonomous_replan_ack);
+    const delta = jsonObject(ack?.semantic_delta), path = jsonObject(jsonObject(run?.agent_vision)?.path_delta);
+    const id = normalizeHeartbeatReplanObligationId(delta?.obligation_id);
+    const todo = normalizeHeartbeatTodoId(identity?.todo_id);
+    const boundReplan = normalizeHeartbeatReplanObligationId(identity?.replan_obligation_id);
+    // The adapter must obtain these records from the existing canonical
+    // settlement owner. Copied source runs, slot debit alone, a neutral ACK or
+    // the still-pending decision being captured cannot release this barrier.
+    const accepted = !!identity && !!run && identity.goal_id === goal && identity.agent_id === agent &&
+      run.goal_id === goal && run.agent_id === agent && run.turn_instance_id === identity.turn_instance_id &&
+      normalizeHeartbeatTodoId(run.todo_id) === todo &&
+      normalizeHeartbeatReplanObligationId(run.replan_obligation_id) === boundReplan &&
+      typeof identity.turn_instance_id === "string" && identity.turn_instance_id.length > 0 &&
+      identity.effect_id === settlementIdentity({goal_id: goal, agent_id: agent, todo_id: todo,
+        replan_obligation_id: boundReplan, turn_instance_id: identity.turn_instance_id}).effect_id &&
+      progress?.state === "settled" && ack?.schema_version === "autonomous_replan_ack_v0" && ack.recorded === true &&
+      delta?.schema_version === "replan_semantic_delta_v0" && delta.accepted === true && !!id &&
+      guard?.selected_obligation_id === id && request.current_obligation_id !== id &&
+      Array.isArray(path?.evidence_refs) && path.evidence_refs.includes(`checkpoint:${sha}`);
+    return {capture_allowed: accepted, reason: accepted ? "restored_replan_completed" : "restored_replan_pending",
+      ...(accepted ? {review_obligation_id: id} : {}),
+      execution_authority_granted: false};
+  }
   if (request.action === "select_replan") {
     if (!hasExactAuthorityKeys(request, ["action", "quota", "goal_id", "agent_id", "turn_instance_id"])) {
       throw new Error("checkpoint replan selection fields are invalid");
@@ -208,6 +247,17 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
     }
     return {capture: true, obligation_id: id, settlement_effect_id: identity.effect_id,
       execution_authority_granted: false};
+  }
+  if (request.action === "read_basis") {
+    if (!hasExactAuthorityKeys(request, ["action", "root", "expected_sha256"])) throw new Error("checkpoint basis fields are invalid");
+    const root = absolute(request.root, "checkpoint root");
+    await physical(join(root, "checkpoint.json"));
+    const manifest = manifestBody(JSON.parse(await readFile(join(root, "checkpoint.json"), "utf8")));
+    if (manifest.sha256 !== request.expected_sha256) throw new Error("checkpoint reviewed digest mismatch");
+    // This reads a digest-bound declaration after admission's full member
+    // verification. It does not claim current integrity of every component.
+    return {point_metadata: manifest.point_metadata, components: manifest.components,
+      integrity_verified: false, execution_authority_granted: false};
   }
   const fields = request.action === "probe" ? ["action", "components"] :
     request.action === "verify" ? ["action", "root", "expected_sha256"] :

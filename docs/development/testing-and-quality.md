@@ -458,6 +458,19 @@ negative 或 mutation-style 断言，并让各 provider 复用同一 envelope �
 
 ### Local Validation Environment / 本地验证环境
 
+`npm run typecheck:control-plane` discovers all TypeScript sources under
+`loopx/control_plane/` and `loopx/zcode_goal_mode/`, including standalone bridges
+launched from Python and control-plane test drivers. New source files in these
+owners need no per-file compiler registration. Tests and examples retain their
+explicit compile entries; this does not claim every TypeScript test is
+typechecked. `npm run test:control-plane` separately discovers and executes
+`tests/control_plane_ts/*.test.ts`.
+
+`npm run typecheck:control-plane` 按既有目录发现全部控制面与 ZCode TypeScript
+源码，包含 Python 启动的独立桥接入口和控制面测试驱动；新增源码无需逐个登记。
+测试与示例仍保留显式编译范围，不代表全部 TypeScript 测试均已通过类型检查；
+`npm run test:control-plane` 另行发现并运行 `tests/control_plane_ts/*.test.ts`。
+
 Run from the repository or dedicated worktree root with `uv`. The project's
 `requires-python` declares Python `>=3.11`; it does not require an executable
 named `python3.11`. `uv` selects a compatible interpreter, creates `.venv`, and

@@ -5,7 +5,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +13,7 @@ from .control_plane import compact_control_plane_policy, control_plane_policy_su
 from .control_plane.goals.contract_health import contract_error_diagnostic
 from .control_plane.projects.registry_codec import load_registry
 from .execution_profile import compact_execution_profile, execution_profile_summary
+from .file_lock import write_json_atomic
 from .explore_graph import compact_explore_graph_policy
 from .orchestration import compact_orchestration_policy, orchestration_policy_summary
 from .presentation.markdown import markdown_code, markdown_table_row, markdown_table_separator
@@ -48,26 +48,18 @@ def atomic_write_json(
     *,
     preserve_mode: bool = False,
 ) -> None:
-    path = path.expanduser()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    mode = path.stat().st_mode & 0o777 if preserve_mode and path.exists() else None
-    descriptor, temporary = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        dir=str(path.parent),
+    """Goal-registry JSON writer; delegates the rename dance to the kernel owner.
+
+    A new registry file keeps the umask-narrowed `mkstemp` mode rather than a
+    forced chmod, matching the writer this delegation replaced.
+    """
+    write_json_atomic(
+        path,
+        payload,
+        mode=None,
+        preserve_mode=preserve_mode,
+        indent=2,
     )
-    temporary_path = Path(temporary)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        if mode is not None:
-            os.chmod(temporary_path, mode)
-        os.replace(temporary_path, path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
 
 
 def stable_path_key(path: Path) -> str:

@@ -90,7 +90,6 @@ import {
 import { mergeScopedStatusProjections } from "../data/status-merge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
-import { Badge } from "../components/ui/badge";
 import {
   agentFamily,
   presentedAgentFamily,
@@ -105,24 +104,14 @@ import {
 import {
   goalHasExecutionSummary,
   normalizePersonalHomeModel,
-  type WorkspaceAgentOption,
-  type WorkspaceAttention,
-  type WorkspaceGoal,
   type WorkspaceGoalTab,
   type WorkspaceGoalUsage,
-  type WorkspaceHomeLane,
   type WorkspaceImageAttachment,
-  type WorkspaceModel,
-  type WorkspaceOutput,
-  type WorkspaceRun,
-  type WorkspaceSchedule,
-  type WorkspaceScheduleKind,
   type WorkspaceSystemHealth,
   type WorkspaceTimelineItem,
   type WorkspaceWorker,
   type WorkspaceGoalNotification,
   type WorkspaceGoalArchiveLoadState,
-  type WorkspaceActionPreview,
   type WorkspaceActionPreviewRequest,
   type WorkspaceAgentTodo,
 } from "../features/personal-workspace/personal-workspace-model";
@@ -189,15 +178,12 @@ import {
   loadStatusSourceCatalog,
   localStatusSource,
   activeStatusSourceForUrl,
-  projectedStatusSourceForUrl,
   removeStatusSource,
   saveStatusSourceCatalog,
   type StatusSource,
 } from "../data/status-source-catalog";
 
 const defaultGlobalStatusUrl = defaultLocalStatusSourceUrl;
-
-type BadgeVariant = "neutral" | "info" | "success" | "warning" | "danger";
 
 type DataSource =
   | { kind: "example"; label: string }
@@ -612,16 +598,6 @@ type PersonalManagerAnswer = {
   text: string;
 };
 
-const personalGoalStateVariant: Record<PersonalGoalState, BadgeVariant> = {
-  "需修复": "danger",
-  "等你": "warning",
-  "等待条件": "info",
-  "已安排": "info",
-  "安静运行": "neutral",
-  "已停止": "neutral",
-  "已完成": "neutral",
-};
-
 function personalGoalTitle(goalId: string, displayName?: string | null) {
   const registeredDisplayName = cleanShareText(displayName);
   if (registeredDisplayName) {
@@ -676,30 +652,6 @@ function personalAgentCapability(agentId: string, adapterKind?: string | null) {
     default:
       return PERSONAL_AGENT_FALLBACK_CAPABILITY;
   }
-}
-
-function personalVisibleAgentMessage(value: string) {
-  const openTag = "<loopx-review-json>";
-  const closeTag = "</loopx-review-json>";
-  const start = value.lastIndexOf(openTag);
-  const end = value.lastIndexOf(closeTag);
-  if (start < 0 || end <= start) return value.trim();
-  const envelope = value.slice(start + openTag.length, end).trim();
-  try {
-    const parsed = JSON.parse(envelope) as { message?: unknown };
-    if (typeof parsed.message === "string" && parsed.message.trim()) return parsed.message.trim();
-  } catch {
-    const match = envelope.match(/"message"\s*:\s*("(?:\\.|[^"\\])*")/s);
-    if (match) {
-      try {
-        const message = JSON.parse(match[1]);
-        if (typeof message === "string" && message.trim()) return message.trim();
-      } catch {
-        // Fall through to the bounded visible answer before the malformed envelope.
-      }
-    }
-  }
-  return value.slice(0, start).trim();
 }
 
 function personalTodosForQueueItem(item: QueueItem, role: "user" | "agent") {
@@ -830,23 +782,6 @@ function personalAgentTodoFacts(row: GoalDirectoryRow): {
     || (firstOpen ? cleanShareText(firstOpen.title ?? "") || cleanShareText(firstOpen.text ?? "") : "")
     || null;
   return { doneTodoCount, nextTodoText, recentCompleted };
-}
-
-function personalVisiblePlanTodos(todos: WorkspaceAgentTodo[], limit = 4) {
-  if (todos.length <= limit) {
-    return todos;
-  }
-  const firstOpenIndex = todos.findIndex((todo) => !todo.done);
-  if (firstOpenIndex < 0) {
-    return todos.slice(-limit);
-  }
-  const start = Math.max(0, Math.min(firstOpenIndex - 2, todos.length - limit));
-  return todos.slice(start, start + limit);
-}
-
-function personalDecisionPrimaryLabel(goal: PersonalGoalItem) {
-  const signal = `${goal.needsYouTaskClass ?? ""} ${goal.needsYouActionKind ?? ""}`.toLowerCase();
-  return /approve|approval|merge|release|submit|write|publish/.test(signal) ? "确认处理" : "回复 Agent";
 }
 
 function isPersonalGoalTerminal(row: GoalDirectoryRow) {
@@ -1245,7 +1180,6 @@ function PersonalGoalHome({
   selectedTodoId,
   onSelectTodo,
   onSelectView,
-  isLoading,
   onGoalActivationStateChange,
   onGoalDeleted,
   onSelectGoal,
@@ -1260,14 +1194,12 @@ function PersonalGoalHome({
   selectedWorkspaceRef,
   statusSourceControl,
   theme,
-  toggleTheme,
 }: {
   goalArchiveLoadState: WorkspaceGoalArchiveLoadState;
   selectedView?: WorkspaceGoalTab;
   selectedTodoId?: string | null;
   onSelectTodo: (todoId: string | null) => void;
   onSelectView: (view: WorkspaceGoalTab) => void;
-  isLoading: boolean;
   onGoalActivationStateChange: (goalId: string, activationState: "active" | "stopped") => void;
   onGoalDeleted: (goalId: string) => void;
   onSelectGoal: (goalId: string, view?: WorkspaceGoalTab) => void;
@@ -1282,7 +1214,6 @@ function PersonalGoalHome({
   selectedGoalId: string;
   statusSourceControl: StatusSourceControl;
   theme: "light" | "dark";
-  toggleTheme: () => void;
 }) {
   const readOnly = statusSourceControl.activeSource.readOnly;
   const remoteGoalLifecycleHost = statusSourceControl.activeSource.kind === "ssh_tunnel"
@@ -1349,13 +1280,6 @@ function PersonalGoalHome({
   const sessionDiscoveryKey = model.goals.some((goal) => goal.activationState === "active" && goal.loadState === "loading")
     ? "loading" : model.goals.map((goal) => `${goal.goalId}:${goal.agentId}`).join("|");
   const contextId = conversationContextKey(conversationContext);
-  const managerSummary = model.goals.some((goal) => goal.activationState === "active" && goal.loadState)
-    ? "Goal 状态正在逐个更新，当前统计尚不完整。"
-    : (model.systemHealth ? !model.systemHealth.ok : !payload.ok)
-    ? "LoopX 当前存在状态问题，可以打开运行详情查看原因。"
-    : model.openUserTodoCount > 0
-      ? `你有 ${model.openUserTodoCount} 项需要处理，其中 ${model.blockingTodoCount} 项正在阻塞 Agent。`
-      : "暂时没有需要你处理的事项，Agent 会按当前计划继续推进。";
   const discoveredAgents: PersonalAgentOption[] = runtimeAgents.length > 0
     ? runtimeAgents.map((agent) => ({
         agentId: agent.agent_id,
@@ -1415,12 +1339,7 @@ function PersonalGoalHome({
   const [selectedAgentModels, setSelectedAgentModels] = useState<Record<string, string>>({});
   const selectedAgentId = selectedAgents[contextId] ?? agentDefaultForContext(contextId);
   const selectedAgent = selectAvailableChatAgent(agentOptions, selectedAgentId, defaultAgentId);
-  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const [mobilePanel, setMobilePanel] = useState<"chat" | "goals">("chat");
-  const [managerInput, setManagerInput] = useState("");
   const [messagesByContext, setMessagesByContext] = useState<Record<string, PersonalManagerMessage[]>>({});
-  const [sendingContextId, setSendingContextId] = useState<string | null>(null);
   const [runtimeBindings, setRuntimeBindings] = useState<Record<string, PersonalRuntimeBinding>>({});
   // Bound Sessions whose mode queues a message sent while a Turn runs, read
   // from the Session owner each time this page binds a Session.
@@ -1451,12 +1370,6 @@ function PersonalGoalHome({
   // reported Session and Turn also own the context's Turn controls, so the
   // Adjust/Interrupt the pending reply shows act on that exact Turn.
   const turnHandoffs = useRef(new Map<string, { agentId: string; failedReads: number; messageId: number; sessionId: string; turnId: string }>());
-  const agentMenuRef = useRef<HTMLDivElement>(null);
-  const agentTriggerRef = useRef<HTMLButtonElement>(null);
-  const detailsCloseRef = useRef<HTMLButtonElement>(null);
-  const detailsTriggerRef = useRef<HTMLButtonElement>(null);
-  const managerInputRef = useRef<HTMLInputElement>(null);
-  const managerQuickPrompts = ["我现在该做什么？", "哪些 Goal 在等我？", "Agent 在做什么？"];
   const contextMessages = messagesByContext[contextId] ?? [];
   const conversationHistory = useConversationHistory({
     agentId: conversationContext.kind === "manager" ? undefined : selectedAgent.agentId,
@@ -1473,25 +1386,6 @@ function PersonalGoalHome({
   // the Goal's own Agent.
   const answerIdentityLabel = (targetContextId: string, goalFallback: string) =>
     targetContextId === "manager" ? t("header.manager") : goalFallback;
-  const goalUserTodos = selectedGoal
-    ? model.userTodos.filter((todo) => todo.goalId === selectedGoal.goalId)
-    : model.userTodos;
-  const goalAgentTodos = selectedGoal?.agentTodos ?? [];
-  const visiblePlanTodos = personalVisiblePlanTodos(goalAgentTodos, selectedGoal?.needsYou ? 3 : 4);
-  const completedAgentTodoCount = goalAgentTodos.filter((todo) => todo.done).length;
-  const goalProgressLabel = goalAgentTodos.length > 0
-    ? `${completedAgentTodoCount}/${goalAgentTodos.length}`
-    : "暂无计划";
-  const questionModel = selectedGoal
-    ? {
-        ...model,
-        blockingTodoCount: goalUserTodos.filter((todo) => todo.blocking).length,
-        goals: [selectedGoal],
-        openUserTodoCount: goalUserTodos.length,
-        userTodos: goalUserTodos,
-        visibleUserTodos: goalUserTodos,
-      }
-    : model;
 
   useEffect(() => {
     const resolved = resolveLocalStatusUrl(
@@ -1771,7 +1665,6 @@ function PersonalGoalHome({
           status: "running",
           turnId: activeTurnId,
         });
-        setSendingContextId(targetContextId);
         recoveryController = observer;
         streamControllers.current.set(targetContextId, observer);
         let streamedText = "";
@@ -1808,7 +1701,6 @@ function PersonalGoalHome({
             sessionId: created.session_id,
             status: "ready",
           });
-          setSendingContextId((current) => current === targetContextId ? null : current);
         };
         retireRecoveryObservation = () => {
           // Leaving retires the view immediately, even while durable proposal
@@ -2153,44 +2045,6 @@ function PersonalGoalHome({
     };
   }, [readOnly, selectedGoal?.goalId]);
 
-  useEffect(() => {
-    if (!agentMenuOpen) {
-      return;
-    }
-    const focusHandle = window.requestAnimationFrame(() => {
-      agentMenuRef.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus();
-    });
-    return () => {
-      window.cancelAnimationFrame(focusHandle);
-      agentTriggerRef.current?.focus();
-    };
-  }, [agentMenuOpen]);
-
-  useEffect(() => {
-    if (!detailsOpen) {
-      return;
-    }
-    const focusHandle = window.requestAnimationFrame(() => detailsCloseRef.current?.focus());
-    return () => {
-      window.cancelAnimationFrame(focusHandle);
-      detailsTriggerRef.current?.focus();
-    };
-  }, [detailsOpen]);
-
-  useEffect(() => {
-    if (!agentMenuOpen && !detailsOpen) {
-      return;
-    }
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setAgentMenuOpen(false);
-        setDetailsOpen(false);
-      }
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [agentMenuOpen, detailsOpen]);
-
   function appendManagerAssistantMessage(
     targetContextId: string,
     message: Omit<PersonalManagerMessage, "id" | "role">,
@@ -2270,8 +2124,6 @@ function PersonalGoalHome({
         { sourceCreatedAt: new Date().toISOString(), attachments: route?.attachments, id: userMessageId, lines: [], role: "user", text: question },
       ],
     }));
-    setManagerInput("");
-    setSendingContextId(targetContextId);
 
     if ((selectedRoute.agentId === "status-only" && targetContext.kind !== "project")
       || (targetContext.kind === "goal" && !targetGoal)) {
@@ -2298,7 +2150,6 @@ function PersonalGoalHome({
       }).catch(() => {
         // The current projection answer remains visible when local history persistence is unavailable.
       });
-      setSendingContextId(null);
       return;
     }
 
@@ -2553,7 +2404,6 @@ function PersonalGoalHome({
           status: "ready",
         });
       }
-      setSendingContextId((current) => current === targetContextId ? null : current);
     }
   }
 
@@ -2592,7 +2442,6 @@ function PersonalGoalHome({
           text: "已中断。你可以在当前会话继续发送消息。",
         });
       }
-      setSendingContextId((current) => current === targetContextId ? null : current);
     }
   }
 
@@ -2648,7 +2497,6 @@ function PersonalGoalHome({
       return;
     }
     setSelectedAgents((current) => ({ ...current, [contextId]: agentId }));
-    setAgentMenuOpen(false);
   }
 
   function chooseAgentModel(agentId: string, modelId: string) {
@@ -2663,43 +2511,7 @@ function PersonalGoalHome({
 
   function openGoalChat(goalId: string) {
     onSelectGoal(goalId, "chat");
-    setMobilePanel("chat");
   }
-
-  function beginDecisionReply(value: string) {
-    setManagerInput(value);
-    managerInputRef.current?.focus();
-  }
-
-  const selectedGoalStateVariant = selectedGoal ? personalGoalStateVariant[selectedGoal.state] : "neutral";
-  const selectedGoalHeaderSummary = selectedGoal
-    ? `${selectedAgent.label} · ${selectedGoal.state}${goalAgentTodos.length > 0 ? ` ${goalProgressLabel}` : ""}${goalUserTodos.length > 0 ? ` · ${goalUserTodos.length} 项等你` : ""}`
-    : "跨 Goal 的个人工作入口";
-  const diagnosis = selectedGoal?.state === "需修复" || (!selectedGoal && !payload.ok)
-    ? {
-        impact: "可见进度可能已经过期，受影响的执行路径会暂停。",
-        label: "需要关注",
-        owner: selectedGoal ? personalAgentLabel(selectedGoal.agentId) : "LoopX 管家",
-        suggestion: selectedGoal?.nextSentence ?? "刷新 LoopX 状态并检查健康信息。",
-        title: selectedGoal?.agentSentence ?? "LoopX 状态需要检查",
-      }
-    : selectedGoal?.state === "等你"
-      ? {
-          impact: selectedGoal.needsYouBlocking
-            ? "这项 Gate 约束的路径暂停；独立执行路径仍按 interaction contract 推进。"
-            : "Agent 可以继续推进；这项用户待办会持续保留。",
-          label: selectedGoal.needsYouBlocking ? "等待你的决定" : "有一项待办等你",
-          owner: "你",
-          suggestion: selectedGoal.needsYou ?? selectedGoal.nextSentence,
-          title: selectedGoal.needsYou ?? "请处理当前用户待办",
-        }
-      : {
-          impact: selectedGoal ? "Agent 可以按当前计划继续。" : "各 Goal 会按各自 interaction contract 推进。",
-          label: "运行正常",
-          owner: selectedGoal ? personalAgentLabel(selectedGoal.agentId) : "LoopX 管家",
-          suggestion: selectedGoal?.nextSentence ?? "继续观察跨 Goal 状态。",
-          title: selectedGoal ? "当前没有阻止 Agent 继续的运行异常" : "当前没有全局健康异常",
-        };
 
   const workspaceTimeline: WorkspaceTimelineItem[] = [
     ...(conversationContext.kind === "manager" && runtimeBindings.manager?.status === "resume_failed" ? [{
@@ -3123,7 +2935,7 @@ function PersonalGoalHome({
           onRetryResumeRun: retryManagerSession,
           onSelectAgent: chooseAgent,
           onSelectAgentModel: chooseAgentModel,
-          onSelectGoal: (goalId, view) => { onSelectGoal(goalId ?? "", view); setMobilePanel("chat"); },
+          onSelectGoal: (goalId, view) => onSelectGoal(goalId ?? "", view),
           onSelectView,
           onSelectTodo,
           onSendMessage: async (message, agentId, targetContextId, attachments) => sendManagerQuestion(message, { agentId, contextId: targetContextId, attachments }),
@@ -3645,7 +3457,6 @@ export function DashboardPage() {
       onSelectView={(view) => {
         void navigate({ search: current => ({ ...current, view: view === "chat" ? "conversation" : view }) });
       }}
-      isLoading={isLoading}
       onGoalActivationStateChange={(goalId, activationState) => {
         statusRequestFenceRef.current.projectionRevision += 1;
         setPayload((current) => withGoalActivationState(current, goalId, activationState));
@@ -3675,7 +3486,6 @@ export function DashboardPage() {
       selectedWorkspaceRef={search.workspace ?? null}
       statusSourceControl={statusSourceControl}
       theme={theme}
-      toggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
     />
   );
 }

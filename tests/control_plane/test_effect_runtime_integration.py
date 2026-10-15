@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 from runtime_retirement_diagnostics import (
-    failure_trace, file_state, instrument_copied_runtime, retained_stderr, trace_events,
+    failure_trace, file_state, observe_copied_runtime, trace_events,
 )
 
 from loopx.control_plane import effect_runtime
@@ -603,34 +603,8 @@ def test_runtime_decode_change_rotates_identity_and_starts_replacement(
     monkeypatch,
     request,
 ) -> None:
-    source_root = Path(effect_runtime.__file__).resolve().parent
-    staged_root = tmp_path / "control_plane"
-    for relative in effect_runtime._runtime_source_files(source_root):
-        source = source_root / relative
-        target = staged_root / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
-    instrument_copied_runtime(staged_root)
-    captures: list[int] = []
-    popen = effect_runtime.subprocess.Popen
-
-    def close_captures():
-        for descriptor in captures:
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
-
-    request.addfinalizer(close_captures)
-
-    def capture_runtime_stderr(args, *positional, **options):
-        retained_stderr(args, options, staged_root, captures)
-        return popen(args, *positional, **options)
-
-    monkeypatch.setattr(effect_runtime.subprocess, "Popen", capture_runtime_stderr)
-
+    staged_root, captures = observe_copied_runtime(tmp_path, monkeypatch, request)
     runtime_dir = tmp_path / "runtime"
-    monkeypatch.setattr(effect_runtime, "_control_plane_root", lambda: staged_root)
     monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
     monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "250")
 
@@ -685,6 +659,53 @@ def test_runtime_decode_change_rotates_identity_and_starts_replacement(
 def test_runtime_retirement_trace_filters_private_stderr() -> None:
     raw = b'private path/token\nloopx_fixture_retirement:{"event":{}}\nloopx_fixture_retirement:{"event":"lock_release_error","code":"EPERM","token":"private","path":"private","pid":12,"ms":1}\n'
     assert trace_events(raw) == [{"event": "lock_release_error", "pid": 12, "ms": 1, "code": "EPERM"}]
+
+
+@pytest.mark.parametrize("details,expected", [
+    ({"code": "EISDIR", "syscall": "read", "errno": -21},
+     {"code": "EISDIR", "syscall": "read", "errno": -21}),
+    ({"code": "EINVAL", "syscall": "rename", "errno": -22},
+     {"code": "EINVAL", "syscall": "rename", "errno": -22}),
+    ({"code": "private-code", "syscall": "private/path", "errno": "private"},
+     {"code": None, "syscall": None}),
+    ({"code": "EPERM", "syscall": "open", "errno": True},
+     {"code": "EPERM", "syscall": "open"}),
+])
+def test_runtime_request_trace_keeps_only_safe_system_error_fields(details, expected) -> None:
+    payload = {"event": "request_error", **details, "path": "private", "token": "private",
+               "message": "private", "stack": "private"}
+    raw = ("loopx_fixture_retirement:" + json.dumps(payload) + "\n").encode()
+    assert trace_events(raw) == [{"event": "request_error", **expected}]
+
+
+def test_runtime_request_observation_preserves_error_payloads(tmp_path, monkeypatch, request) -> None:
+    source = effect_runtime._control_plane_root() / "effect_runtime_errors.ts"
+    root, _ = observe_copied_runtime(tmp_path, monkeypatch, request)
+    script = '''
+const rows = [];
+for (const url of process.argv.slice(1)) {
+  const m = await import(url);
+  const boundary = new m.EffectRuntimeRequestError("safe detail");
+  Object.defineProperty(boundary, "syscall", {get() {throw new Error("private getter");}});
+  rows.push([
+    m.effectRuntimeErrorPayload(boundary),
+    m.effectRuntimeErrorPayload({code: "EISDIR", syscall: "read", errno: -21, path: "private"}),
+    m.effectRuntimeErrorPayload(null),
+  ]);
+}
+console.log(JSON.stringify(rows));
+'''
+    result = effect_runtime.subprocess.run([
+        effect_runtime._node_executable(), "--input-type=module", "--eval", script,
+        source.as_uri(), (root / "effect_runtime_errors.ts").as_uri(),
+    ], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    expected = [
+        {"kind": "request_rejected", "code": "invalid_request", "message": "safe detail"},
+        {"kind": "io_permanent", "code": "io_is_directory", "message": "Effect runtime filesystem operation failed"},
+        {"kind": "internal_failure", "code": "unexpected_handler_error", "message": "Effect runtime handler failed unexpectedly"},
+    ]
+    assert json.loads(result.stdout) == [expected, expected]
 
 
 def test_typed_write_rejects_cross_effect_overwrite(
@@ -1312,9 +1333,10 @@ def test_managed_runtime_releases_memory_after_idle_timeout(
 @pytest.mark.parametrize("shutdown", [False, True], ids=["idle", "shutdown"])
 @pytest.mark.parametrize("disconnect", [False, True], ids=["connected", "timed-out"])
 def test_runtime_drains_admitted_write_before_exit(
-    tmp_path: Path, monkeypatch, shutdown: bool, disconnect: bool,
+    tmp_path: Path, monkeypatch, request, capsys, shutdown: bool, disconnect: bool,
 ) -> None:
     """Socket lifetime must not define the lifetime of an accepted effect."""
+    _, captures = observe_copied_runtime(tmp_path, monkeypatch, request)
     runtime_dir = tmp_path / "runtime"
     monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
     monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "250")
@@ -1385,6 +1407,21 @@ def test_runtime_drains_admitted_write_before_exit(
                 time.sleep(0.025)
             assert not info_path.exists(), "settled runtime must still retire when idle or stopped"
             assert json.loads(journal_path.read_text(encoding="utf-8")) == journal
+            assert capsys.readouterr().out == "", "healthy drains must stay quiet"
+    except Exception as error:
+        try:
+            print("runtime drain diagnostic: " + json.dumps({
+                "shutdown": shutdown,
+                "disconnected": disconnect,
+                "permanent_io_error": isinstance(error, effect_runtime.EffectRuntimePermanentIOError),
+                "runtime": file_state(info_path, int(original["pid"])),
+                "journal": file_state(journal_path, int(original["pid"])),
+                "events": failure_trace(captures),
+                "trace_limit": "first 16 KiB / last 64 events; shared-offset reads may race writes",
+            }))
+        except Exception:
+            pass  # Preserve the original failure even when observation fails.
+        raise
     finally:
         lock_path.unlink(missing_ok=True)
         cleanup_deadline = time.monotonic() + 3
@@ -1395,6 +1432,45 @@ def test_runtime_drains_admitted_write_before_exit(
             time.sleep(0.025)
         if effect_runtime._pid_is_alive(original["pid"]):
             os.kill(int(original["pid"]), signal.SIGTERM)
+
+
+@pytest.mark.parametrize("diagnostics_available", [True, False])
+def test_runtime_drain_io_failure_reports_cause_without_suppressing_error(
+    tmp_path: Path, monkeypatch, request, capsys, diagnostics_available: bool,
+) -> None:
+    """A real directory substitution must fail the original accepted-write test."""
+    journal = tmp_path / "admitted-turn.json"
+    lock = Path(f"{journal}.ts-effect.lock")
+    unlink = Path.unlink
+    injected = False
+
+    def substitute_directory(path, *args, **kwargs):
+        nonlocal injected
+        if path == lock and not injected:
+            injected = True
+            journal.mkdir()
+        return unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", substitute_directory)
+    if not diagnostics_available:
+        def failed_observation(_):
+            raise OSError("synthetic unavailable observation")
+        monkeypatch.setitem(globals(), "failure_trace", failed_observation)
+    with pytest.raises(effect_runtime.EffectRuntimePermanentIOError):
+        test_runtime_drains_admitted_write_before_exit(
+            tmp_path, monkeypatch, request, capsys, shutdown=True, disconnect=False,
+        )
+    output = capsys.readouterr().out
+    prefix = "runtime drain diagnostic: "
+    reports = [json.loads(line[len(prefix):]) for line in output.splitlines() if line.startswith(prefix)]
+    assert len(reports) == (1 if diagnostics_available else 0)
+    if diagnostics_available:
+        assert reports[0]["permanent_io_error"] is True
+        errors = [row for row in reports[0]["events"] if row["event"] == "request_error"]
+        assert any(row.get("code") == "EISDIR" and row.get("syscall") in {"read", "open"}
+                   and type(row.get("errno")) is int for row in errors)
+    assert journal.is_dir(), "diagnostics cannot pretend the write committed"
+    assert str(tmp_path) not in output and "fixture-holder" not in output
 
 
 def _envelope(code: str, received: str) -> bytes:

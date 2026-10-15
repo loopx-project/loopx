@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
-from pathlib import Path
 
 import pytest
 
@@ -17,6 +15,7 @@ from loopx.execution_profile import (
     compact_execution_profile,
     execution_profile_with_turn_granularity,
 )
+from tests.source_cli import run_source_cli
 
 
 @pytest.mark.parametrize("invalid", [0, -1, 6, True, 2.5, "3", None])
@@ -83,12 +82,10 @@ def test_clearing_an_absent_cadence_override_is_a_noop(tmp_path):
 
 
 def test_cli_cadence_roundtrip_syncs_to_an_isolated_runtime(tmp_path):
-    root = Path(__file__).resolve().parents[2]
     registry = tmp_path / "registry.json"
     registry.write_text(json.dumps({"goals": [{"id": "example", "status": "active"}]}))
-    result = subprocess.run(
+    result = run_source_cli(
         [
-            str(root / "scripts/loopx"),
             "--registry",
             str(registry),
             "--format",
@@ -102,10 +99,7 @@ def test_cli_cadence_roundtrip_syncs_to_an_isolated_runtime(tmp_path):
             "2",
             "--execute",
         ],
-        cwd=root,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-        capture_output=True,
-        text=True,
         check=True,
     )
     assert json.loads(result.stdout)["changed_fields"] == ["execution_profile"]

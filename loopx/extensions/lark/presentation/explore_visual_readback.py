@@ -8,7 +8,11 @@ import time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .kanban import CommandRunner, _command_error, _run_command
+from ..cli_transport import (
+    CommandRunner,
+    command_error,
+    run_command,
+)
 
 
 VISUAL_READBACK_RETRY_DELAYS_SECONDS = (0.25, 0.5, 1.0, 2.0, 4.0)
@@ -86,7 +90,7 @@ def readback_visual_delivery_marker(
         else retry_delays
     )
     for attempt_index in range(len(effective_retry_delays) + 1):
-        result = _run_command(
+        result = run_command(
             command,
             execute=True,
             runner=runner,
@@ -152,7 +156,7 @@ def readback_visual_delivery_marker(
         "error": (
             None
             if result.get("ok") and marker_observed
-            else _command_error(result)
+            else command_error(result)
             if not result.get("ok")
             else "remote whiteboard raw nodes do not contain the expected delivery marker"
         ),
@@ -195,16 +199,16 @@ def publish_visual_with_readback(
             not reconciled_existing_delivery and not prepublish_command.get("ok")
         )
     if not execute:
-        result = _run_command(command, execute=False, runner=runner)
+        result = run_command(command, execute=False, runner=runner)
         publish_attempts = [result]
     elif reconciled_existing_delivery or prepublish_readback_blocked:
-        result = _run_command(command, execute=False, runner=runner)
+        result = run_command(command, execute=False, runner=runner)
         publish_attempts = []
     else:
         source_path.parent.mkdir(parents=True, exist_ok=True)
         source_path.write_text(published_source, encoding="utf-8")
         try:
-            result = _run_command(
+            result = run_command(
                 command,
                 execute=True,
                 runner=runner,
@@ -225,7 +229,7 @@ def publish_visual_with_readback(
                 retry_command[token_index] = (
                     "loopx-retry-" + hashlib.sha256(retry_material).hexdigest()[:32]
                 )
-                result = _run_command(
+                result = run_command(
                     retry_command,
                     execute=True,
                     runner=runner,

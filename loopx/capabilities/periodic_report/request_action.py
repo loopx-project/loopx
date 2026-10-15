@@ -5,7 +5,7 @@ import json
 import re
 import sys
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from importlib import import_module
 from pathlib import Path
@@ -72,10 +72,43 @@ class PeriodicReportRequestAdapter:
 @dataclass(frozen=True, slots=True)
 class PeriodicReportRequestPorts:
     adapters: Mapping[str, PeriodicReportRequestAdapter]
+    # Declared adapters that matched this hook but were not activated, keyed
+    # by adapter id with a content-free code. Selection names them instead of
+    # reporting a merely absent provider.
+    failed_adapters: Mapping[str, str] = field(default_factory=dict)
+    state_error_code: str | None = None
 
     @property
     def adapter_ids(self) -> tuple[str, ...]:
         return tuple(sorted(self.adapters))
+
+    def _unavailable_detail(self, selected_id: str | None = None) -> str:
+        if selected_id and selected_id in self.failed_adapters:
+            return (
+                f": {selected_id} is declared but was not activated "
+                f"({self.failed_adapters[selected_id]}); inspect "
+                "`loopx extension doctor <extension-id> --execute`"
+            )
+        if self.state_error_code:
+            # An unreadable state hides every declaration, so an explicit id
+            # can be neither confirmed nor ruled out: report the loss itself.
+            selected = f" {selected_id};" if selected_id else ""
+            return (
+                f":{selected} extension state could not be read "
+                f"({self.state_error_code})"
+            )
+        if selected_id:
+            return f": {selected_id}"
+        if self.failed_adapters:
+            failed = ", ".join(
+                f"{adapter_id} ({code})"
+                for adapter_id, code in sorted(self.failed_adapters.items())
+            )
+            return (
+                f": declared adapters were not activated: {failed}; inspect "
+                "`loopx extension doctor <extension-id> --execute`"
+            )
+        return ""
 
     def select_source_adapter(
         self, adapter_id: str | None
@@ -85,14 +118,17 @@ class PeriodicReportRequestPorts:
             selected = self.adapters.get(selected_id)
             if selected is None:
                 raise ValueError(
-                    "periodic-report request source adapter is unavailable: "
-                    f"{selected_id}"
+                    "periodic-report request source adapter is unavailable"
+                    + self._unavailable_detail(selected_id)
                 )
             return selected
         if len(self.adapters) == 1:
             return next(iter(self.adapters.values()))
         if not self.adapters:
-            raise ValueError("periodic-report request source adapter is unavailable")
+            raise ValueError(
+                "periodic-report request source adapter is unavailable"
+                + self._unavailable_detail()
+            )
         raise ValueError(
             "periodic-report request source adapter is ambiguous; "
             "select one with --source-adapter-id"
@@ -187,7 +223,24 @@ def discover_periodic_report_request_ports(
         if adapter_id not in ambiguous_adapter_ids
         and set(ports) == {REQUEST_BIND_PORT, REQUEST_SETTLE_PORT}
     }
-    return PeriodicReportRequestPorts(adapters=complete)
+    failed_adapters = {
+        failure.adapter_id: failure.error_code
+        for failure in discovery.failures
+        if failure.adapter_id not in complete
+    }
+    for adapter_id, ports in sorted(adapter_ports.items()):
+        if adapter_id in complete or adapter_id in failed_adapters:
+            continue
+        failed_adapters[adapter_id] = (
+            "ambiguous_adapter_ports"
+            if adapter_id in ambiguous_adapter_ids
+            else "incomplete_adapter_ports"
+        )
+    return PeriodicReportRequestPorts(
+        adapters=complete,
+        failed_adapters=failed_adapters,
+        state_error_code=getattr(discovery, "state_error_code", None),
+    )
 
 
 def _normalize_source_receipt(

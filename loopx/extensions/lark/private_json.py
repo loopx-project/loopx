@@ -1,43 +1,21 @@
 from __future__ import annotations
 
-import json
-import os
-import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+from ...file_lock import write_json_atomic
 
 
 def write_private_json_atomic(
     path: Path,
     payload: Mapping[str, Any],
 ) -> None:
-    destination = path.expanduser()
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{destination.name}.",
-        suffix=".tmp",
-        dir=destination.parent,
+    """Lark private-state JSON; kernel owner performs the atomic rename."""
+    write_json_atomic(
+        path,
+        payload,
+        mode=0o600,
+        fsync_directory=True,
+        indent=2,
     )
-    temporary = Path(temporary_name)
-    try:
-        # Windows has no fchmod; mkstemp already created the file for this user only.
-        if hasattr(os, "fchmod"):
-            os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(dict(payload), handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, destination)
-        if os.name == "posix":
-            directory_fd = os.open(
-                destination.parent,
-                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
-            )
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-    finally:
-        temporary.unlink(missing_ok=True)

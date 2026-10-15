@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -11,9 +10,7 @@ from loopx.capabilities.benchmark_toolkit import (
     BENCHMARK_TREATMENT_CONTINUATION_RECEIPT_SCHEMA_VERSION,
     build_benchmark_treatment_continuation_receipt,
 )
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
+from tests.source_cli import run_source_cli
 
 def _observation() -> dict[str, object]:
     return {
@@ -170,9 +167,8 @@ def test_cli_emits_public_safe_receipt(tmp_path: Path) -> None:
     observation_path = tmp_path / "observation.json"
     observation_path.write_text(json.dumps(_observation()), encoding="utf-8")
 
-    completed = subprocess.run(
+    completed = run_source_cli(
         [
-            str(REPO_ROOT / "scripts/loopx"),
             "benchmark",
             "treatment-continuation-receipt",
             "--observation-json",
@@ -180,10 +176,7 @@ def test_cli_emits_public_safe_receipt(tmp_path: Path) -> None:
             "--format",
             "json",
         ],
-        cwd=REPO_ROOT,
         check=False,
-        capture_output=True,
-        text=True,
     )
 
     assert completed.returncode == 0, completed.stderr
@@ -198,9 +191,8 @@ def test_cli_fails_closed_on_invalid_observation(tmp_path: Path) -> None:
     observation_path = tmp_path / "invalid.json"
     observation_path.write_text(json.dumps(observation), encoding="utf-8")
 
-    completed = subprocess.run(
+    completed = run_source_cli(
         [
-            str(REPO_ROOT / "scripts/loopx"),
             "benchmark",
             "treatment-continuation-receipt",
             "--observation-json",
@@ -208,10 +200,7 @@ def test_cli_fails_closed_on_invalid_observation(tmp_path: Path) -> None:
             "--format",
             "json",
         ],
-        cwd=REPO_ROOT,
         check=False,
-        capture_output=True,
-        text=True,
     )
 
     assert completed.returncode == 1

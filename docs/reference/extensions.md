@@ -186,8 +186,11 @@ Every registered capability declares three provider-facing fields:
 The built-in catalog remains the default source. Extension manifests declare
 providers and contracts; the extension runtime state is the only source for
 whether each provider is installed, enabled, and doctor-ready. Duplicate
-capability or provider ids fail closed. Internal registrations remain available
-to the registry but are omitted from the public catalog.
+capability or provider ids fail closed: a declaration-only manifest may repeat
+an installed id only when it is the same manifest revision, and a different
+revision for an installed id is rejected rather than silently replaced.
+Internal registrations remain available to the registry but are omitted from
+the public catalog.
 
 Catalog discovery does not scan arbitrary directories or import extension
 Python code. A caller can add a declaration-only manifest to a catalog read:
@@ -775,7 +778,12 @@ to the catalog. `[[implements]]` binds a provider runtime to an existing
 core-owned capability without duplicating that capability id. Do not add either
 table solely to make a runtime installable.
 The v0 runtime exposes integer extension API version `1` and accepts bounded
-integer constraints such as `>=1,<2`; incompatible manifests fail closed.
+integer constraints such as `>=1,<2`; incompatible manifests fail closed. The
+check applies to the installed snapshot as well as to a manifest being loaded:
+when a later LoopX moves the extension API, an installed extension reports
+`ready=false`, activation and binding reads are refused, `enable` is rejected,
+and `doctor` returns `api_incompatible` and revokes the stale readiness proof
+until a compatible revision is upgraded to or rolled back to.
 
 `[[hook_adapters]]` lets an extension contribute provider ports to an existing
 capability-owned hook point without adding provider branches to the capability
@@ -784,36 +792,45 @@ manifest declarations and admits a factory only when the extension is enabled,
 doctor-ready, and authorized for every declared adapter permission. The
 factory must return exactly the declared callable ports. Import, activation,
 and factory failures become content-free optional-adapter failures; they do not
-execute or replace kernel logic.
+execute or replace kernel logic. A matching declaration of a disabled or
+doctor-stale extension is also reported, as `extension_disabled` or
+`extension_doctor_not_ready`, without importing its factory or running its
+doctor.
 
 `phase = "capability_action"` is for an explicit typed action whose semantics
 have already been decided by the Agent or caller. The adapter may bind and
 settle provider evidence, but it must not infer the action from provider text.
 
+The example below is a trimmed copy of the bundled `loopx-lark` manifest and
+loads with `loopx.extensions.manifest.load_extension_manifest`. A hook
+adapter's `required_permissions` must be a subset of the top-level
+`permissions`; a manifest that declares a hook permission it does not grant is
+rejected before install.
+
 ```toml
 schema_version = "loopx_extension_manifest_v0"
 id = "loopx-lark"
-version = "1.0.0"
+version = "1.7.0"
 requires_loopx_api = ">=1,<2"
-permissions = ["read_status", "read_todos", "external_write"]
+permissions = ["lark.inbox.read", "lark.inbox.write", "lark.projection_sink.use"]
 
 [runtime]
-protocol = "lark_kanban_provider_v0"
+protocol = "lark_extension_lifecycle_v0"
 python_module = "loopx.extensions.lark.provider"
 doctor_args = ["--doctor"]
-required_permissions = ["read_status", "read_todos"]
+required_permissions = []
 timeout_seconds = 30
 
 [[provides]]
-id = "lark-kanban"
+id = "lark-kanban-projection"
 kind = "projection_sink"
 title = "Lark Kanban projection"
-status = "active"
+status = "active-preview"
 visibility = "public"
-real_world_anchor = "operator-facing Lark Base projection"
-user_value = "Project public-safe LoopX status and todo rows into Lark."
-entry_command = "loopx lark-kanban sync"
-next_real_step = "Validate one explicitly enabled owner-approved sink."
+real_world_anchor = "LoopX todo and control-plane projections rendered into a configured Lark Base"
+user_value = "Give operators a bounded, lineage-preserving Kanban view without making Lark the control-plane source of truth."
+entry_command = "loopx lark-kanban sync-projection --projection-file <projection.json>"
+next_real_step = "Install or upgrade and explicitly enable the bundled provider before configuring a Lark Kanban sink."
 
 [[hook_adapters]]
 id = "lark-periodic-report-source"

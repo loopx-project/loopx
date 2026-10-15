@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -176,14 +177,15 @@ def request_json(
     *,
     method: str = "GET",
     body: dict | None = None,
-    origin: str = "http://127.0.0.1",
+    origin: str | None = None,
 ) -> tuple[int, dict]:
     data = json.dumps(body).encode("utf-8") if body is not None else None
+    parsed_url = urllib.parse.urlsplit(url)
     request = urllib.request.Request(
         url,
         data=data,
         method=method,
-        headers={"Content-Type": "application/json", "Origin": origin},
+        headers={"Content-Type": "application/json", "Origin": origin if origin is not None else f"{parsed_url.scheme}://{parsed_url.netloc}"},
     )
     try:
         with urllib.request.urlopen(request, timeout=4) as response:
@@ -704,7 +706,7 @@ def main() -> None:
             with urllib.request.urlopen(
                 urllib.request.Request(
                     f"{base_url}{accepted['events_url']}",
-                    headers={"Accept": "text/event-stream", "Origin": "http://127.0.0.1:5173"},
+                    headers={"Accept": "text/event-stream", "Origin": base_url},
                 ),
                 timeout=4,
             ) as response:
@@ -729,7 +731,7 @@ def main() -> None:
                     headers={
                         "Accept": "text/event-stream",
                         "Last-Event-ID": first_event_id,
-                        "Origin": "http://127.0.0.1:5173",
+                        "Origin": base_url,
                     },
                 ),
                 timeout=4,

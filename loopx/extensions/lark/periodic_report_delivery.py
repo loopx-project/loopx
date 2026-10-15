@@ -40,7 +40,7 @@ from .goal_channel_targets import (
     goal_channel_target_for_name,
     read_goal_channel_targets,
 )
-from .presentation.kanban import CommandRunner, default_subprocess_runner
+from .cli_transport import CommandRunner, default_subprocess_runner
 from .presentation.periodic_report import periodic_report_lark_sink_adapter
 from ...presentation.public_safety import redact_public_text
 

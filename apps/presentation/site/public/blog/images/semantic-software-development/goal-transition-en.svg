@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 850" width="1280" height="850" role="img" aria-labelledby="title desc">
+  <title id="title">Semantic development: a bounded goal transition</title>
+  <desc id="desc">An explicitly constructed example: acceptance changes from an isolated microbenchmark to mixed-load p95. Earlier evidence keeps its scope, and feedback does not become broad permission automatically.</desc>
+  <rect width="1280" height="850" fill="#fafafa"/>
+
+  <g font-family="Arial, PingFang SC, Noto Sans CJK SC, sans-serif" fill="#171717">
+    <text x="52" y="36" font-size="18" fill="#4d4d4d" letter-spacing="0.04em">SEMANTIC SOFTWARE DEVELOPMENT / EXPLICIT CONSTRUCTED EXAMPLE</text>
+    <text x="52" y="76" font-size="32" font-weight="600">Semantic development: a bounded goal transition</text>
+    <text x="52" y="110" font-size="18" fill="#4d4d4d">Feedback changes the acceptance meaning; prior evidence keeps its scope, and authority does not expand through chat.</text>
+    <rect x="929" y="16" width="299" height="42" rx="21" fill="#f2f2f2" stroke="#ebebeb" stroke-width="2"/>
+    <text x="1078" y="44" text-anchor="middle" font-size="18" fill="#4d4d4d">Not an actual vLLM PR trajectory</text>
+    <line x1="52" y1="136" x2="1228" y2="136" stroke="#ebebeb" stroke-width="2"/>
+
+    <!-- trajectory spine -->
+    <line x1="144" y1="172" x2="640" y2="172" stroke="#b8b8b8" stroke-width="3"/>
+    <line x1="640" y1="172" x2="1136" y2="172" stroke="#0070f3" stroke-width="4"/>
+    <circle cx="144" cy="172" r="15" fill="#171717"/>
+    <circle cx="640" cy="172" r="19" fill="#ffffff" stroke="#0070f3" stroke-width="4"/>
+    <circle cx="640" cy="172" r="7" fill="#0070f3"/>
+    <circle cx="1136" cy="172" r="15" fill="#ffffff" stroke="#0070f3" stroke-width="3"/>
+    <line x1="144" y1="187" x2="144" y2="208" stroke="#b8b8b8" stroke-width="2"/>
+    <line x1="640" y1="191" x2="640" y2="208" stroke="#0070f3" stroke-width="3"/>
+    <line x1="1136" y1="187" x2="1136" y2="208" stroke="#0070f3" stroke-width="3"/>
+
+    <!-- BEFORE -->
+    <rect x="52" y="208" width="344" height="340" rx="16" fill="#ffffff" stroke="#ebebeb" stroke-width="2"/>
+    <text x="76" y="242" font-size="18" font-weight="600">BEFORE / CURRENT STATE</text>
+    <line x1="76" y1="260" x2="372" y2="260" stroke="#ebebeb" stroke-width="2"/>
+    <text x="76" y="294" font-size="24" font-weight="600">Goal: improve</text>
+    <text x="76" y="322" font-size="24" font-weight="600">inference latency</text>
+    <circle cx="82" cy="350" r="4" fill="#171717"/>
+    <text x="98" y="356" font-size="18">Candidate: rA</text>
+    <circle cx="82" cy="394" r="4" fill="#171717"/>
+    <text x="98" y="390" font-size="18">Evidence: isolated</text>
+    <text x="98" y="414" font-size="18">microbenchmark passes</text>
+    <circle cx="82" cy="454" r="4" fill="#f5a623"/>
+    <text x="98" y="450" font-size="18">Gap: mixed-load p95</text>
+    <text x="98" y="474" font-size="18">not measured</text>
+    <line x1="76" y1="510" x2="372" y2="510" stroke="#ebebeb" stroke-width="2"/>
+    <text x="76" y="534" font-size="18" fill="#4d4d4d">Release gate: gated · pending</text>
+
+    <!-- FEEDBACK / PROPOSAL -->
+    <rect x="428" y="208" width="424" height="340" rx="16" fill="#edf6ff" stroke="#b8dcff" stroke-width="2"/>
+    <line x1="428" y1="208" x2="428" y2="548" stroke="#0070f3" stroke-width="5"/>
+    <text x="456" y="240" font-size="18" font-weight="600" fill="#005bbf">NEW FEEDBACK →</text>
+    <text x="456" y="264" font-size="18" font-weight="600" fill="#005bbf">SCOPED PROPOSAL</text>
+    <line x1="456" y1="280" x2="824" y2="280" stroke="#b8dcff" stroke-width="2"/>
+    <line x1="454" y1="300" x2="454" y2="492" stroke="#0070f3" stroke-width="3"/>
+    <circle cx="454" cy="300" r="10" fill="#0070f3"/>
+    <text x="478" y="306" font-size="18" font-weight="600">Human feedback</text>
+    <text x="478" y="334" font-size="18">“Mixed-load p95 matters;</text>
+    <text x="478" y="358" font-size="18">do not trade correctness for speed.”</text>
+    <circle cx="454" cy="394" r="10" fill="#0070f3"/>
+    <text x="478" y="400" font-size="18" font-weight="600">Model proposal</text>
+    <text x="478" y="428" font-size="18">Revise acceptance to v2</text>
+    <text x="478" y="452" font-size="18">Successor: fixed-workload</text>
+    <text x="478" y="476" font-size="18">serving comparison</text>
+    <circle cx="454" cy="492" r="10" fill="#0070f3"/>
+    <text x="478" y="498" font-size="18" font-weight="600">Domain evaluation</text>
+    <text x="478" y="526" font-size="18">Check proposal and evidence applicability</text>
+    <path d="M824 394h18l-8-7m8 7-8 7" fill="none" stroke="#0070f3" stroke-width="3"/>
+
+    <!-- AFTER -->
+    <rect x="884" y="208" width="344" height="340" rx="16" fill="#ffffff" stroke="#b8dcff" stroke-width="2"/>
+    <text x="908" y="242" font-size="18" font-weight="600" fill="#005bbf">AFTER / ACCEPTED STATE</text>
+    <line x1="908" y1="260" x2="1204" y2="260" stroke="#b8dcff" stroke-width="2"/>
+    <circle cx="914" cy="294" r="4" fill="#171717"/>
+    <text x="930" y="300" font-size="18">Goal: improve latency (unchanged)</text>
+    <circle cx="914" cy="334" r="5" fill="#0070f3"/>
+    <text x="930" y="340" font-size="18" fill="#005bbf">Acceptance version: v2</text>
+    <circle cx="914" cy="374" r="5" fill="#0070f3"/>
+    <text x="930" y="380" font-size="18" fill="#005bbf">Evidence scope: rA → isolate only</text>
+    <circle cx="914" cy="414" r="5" fill="#0070f3"/>
+    <text x="930" y="420" font-size="18" fill="#005bbf">Next: fixed-workload successor</text>
+    <text x="930" y="444" font-size="18" fill="#005bbf">comparison + mixed-load p95</text>
+    <circle cx="914" cy="454" r="4" fill="#f5a623"/>
+    <text x="930" y="484" font-size="18">Release gate: gated (still blocked)</text>
+    <line x1="908" y1="500" x2="1204" y2="500" stroke="#ebebeb" stroke-width="2"/>
+    <text x="908" y="524" font-size="18" fill="#4d4d4d">Owner accepted</text>
+    <text x="908" y="546" font-size="18" fill="#4d4d4d">Kernel checked: scope · identity · revision</text>
+
+    <!-- evidence split -->
+    <line x1="52" y1="580" x2="1228" y2="580" stroke="#ebebeb" stroke-width="2"/>
+    <line x1="72" y1="610" x2="600" y2="610" stroke="#171717" stroke-width="2"/>
+    <circle cx="72" cy="610" r="11" fill="#171717"/>
+    <path d="M67 610l4 4 7-8" fill="none" stroke="#ffffff" stroke-width="2"/>
+    <text x="98" y="606" font-size="18" font-weight="600">UNCHANGED FACT / 不变事实</text>
+    <text x="72" y="640" font-size="18">rA’s isolated microbenchmark result remains valid for rA / isolate.</text>
+    <text x="72" y="666" font-size="18">It does not satisfy v2 end-to-end acceptance.</text>
+
+    <line x1="680" y1="610" x2="1228" y2="610" stroke="#0070f3" stroke-width="3"/>
+    <circle cx="680" cy="610" r="11" fill="#0070f3"/>
+    <path d="M675 610h10m-5-5v10" stroke="#ffffff" stroke-width="2"/>
+    <text x="706" y="606" font-size="18" font-weight="600" fill="#005bbf">NEW OBLIGATION / 新增义务</text>
+    <text x="680" y="640" font-size="18" fill="#005bbf">v2 end to end: mixed-load p95 + correctness /</text>
+    <text x="680" y="666" font-size="18" fill="#005bbf">rollback checks; release stays gated until comparison.</text>
+
+    <!-- authorized execution boundary -->
+    <line x1="52" y1="690" x2="1228" y2="690" stroke="#ebebeb" stroke-width="2"/>
+    <text x="52" y="716" font-size="18" font-weight="600">AUTHORIZED EXECUTION BOUNDARY / 授权执行边界</text>
+    <text x="1228" y="716" text-anchor="end" font-size="18" fill="#005bbf">Feedback ≠ automatic broad permission</text>
+    <line x1="148" y1="764" x2="1132" y2="764" stroke="#0070f3" stroke-width="3"/>
+    <path d="M392 764l-8-6m8 6-8 6M692 764l-8-6m8 6-8 6M992 764l-8-6m8 6-8 6" fill="none" stroke="#0070f3" stroke-width="3"/>
+    <circle cx="148" cy="764" r="13" fill="#171717"/>
+    <circle cx="448" cy="764" r="13" fill="#0070f3"/>
+    <circle cx="748" cy="764" r="13" fill="#0070f3"/>
+    <circle cx="1048" cy="764" r="13" fill="#0070f3"/>
+    <text x="148" y="742" text-anchor="middle" font-size="18" font-weight="600">Owner accepts goal + v2</text>
+    <text x="448" y="742" text-anchor="middle" font-size="18" font-weight="600">Kernel checks scope / identity / revision</text>
+    <text x="748" y="742" text-anchor="middle" font-size="18" font-weight="600">Persist accepted state</text>
+    <text x="1048" y="742" text-anchor="middle" font-size="18" font-weight="600">Runtime tools execute authorized successor</text>
+
+    <!-- continuity -->
+    <line x1="52" y1="804" x2="1228" y2="804" stroke="#b8b8b8" stroke-width="2"/>
+    <text x="52" y="836" font-size="18" fill="#005bbf">Cross-session continuity: the next worker reads accepted state, not only chat.</text>
+    <text x="1228" y="836" text-anchor="end" font-size="18" fill="#4d4d4d">Independent correctness / rollback work may continue.</text>
+  </g>
+</svg>

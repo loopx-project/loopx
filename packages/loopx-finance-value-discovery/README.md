@@ -617,3 +617,107 @@ old arithmetic/research inputs and refuses this new wrapper.
 复用同一发布引用。预测、声明已实现、费用未知及来源版本/时钟分开；不补零、
 不虚构概率，不据展示授予交易或金融准入。卡片只准备，不发送；错引用、
 已关闭或旧 revision 拒绝，恢复后按原 hash 重新读取。
+
+
+### Quantity stocks and signed flows (candidate 0.8.15)
+
+`assess-quantity` compares **opening stock + declared increases − declared
+decreases = closing stock** within one source artifact, instrument/class and
+ownership pool. Its unit is a quantity (`share`, `native_contract` or `item`)
+plus a scale; it never borrows the cash contract's `currency` field.
+
+```bash
+loopx-finance-value-discovery assess-quantity \
+  --input-json packages/loopx-finance-value-discovery/examples/quantity-reconciliation-v1.json
+# Installed extension/provider stdin uses the same schema and owner.
+loopx-finance-value-discovery < quantity-reconciliation-v1.json
+```
+
+The example explicitly declares a single pool, exact producer accuracy, complete
+two-flow coverage and source-row order: opening 100, increase 25, decrease 8,
+closing 117. These are synthetic declarations, not authenticated ownership.
+Each stock/flow carries its evidence reference, source digest/capture clock,
+identity, quantity unit/scale, value/accuracy and source ordinal. Flows also
+carry an explicit `increase` or `decrease`; a transaction code alone never
+selects a sign. The original input is retained in `operands`.
+
+Only compatible, ordered, unique and completely covered operands with
+producer-declared exact accuracy can return `quantity_reconciled=true`. Missing
+opening is retained; it is never inferred by subtracting flows from closing.
+Missing flow/value/direction/coverage yields an incomplete assessment. Unknown
+pool, class, version, unit, source or precision withholds a reconciled result.
+A different class/pool/unit/scale/source digest, repeated flow reference or
+invalid ordinal window also prevents combination. Finite decimals do not become
+exact because an integer was displayed. A mismatching exact closing balance is
+a conflict. Loaded zero and an explicitly covered zero-flow interval are valid.
+
+Candidate lexical arithmetic can be retained when accuracy or other evidence
+remains unproven, but the qualified result stays null. Quantities are at the
+same declared scale; there is no unit/class/rights conversion. Two reporting
+persons do not multiply a transaction: the source consumer must supply unique
+flow refs and establish the actual ownership scope. Source row order and
+capture clocks do not certify event time, earliest publication or PIT.
+
+This is the optional provider's CLI/stdin computation stage. Source adapters
+retain extraction, pool and coverage interpretation. Disable the isolated
+Finance node through `loopx extension disable loopx-finance-value-discovery
+--state-file <isolated-state> --execute`; a disabled native invocation refuses.
+An explicitly called local binary is separate from native activation. Preserve
+the previous revision and use the existing extension rollback/upgrade commands
+for controlled recovery. No default node or account is activated by this API.
+
+The existing numeric-accuracy owner now also supplies bounded Decimal parsing;
+legacy cash/stock commands retain their input and error contracts. This arithmetic stage does not interpret or authenticate sources, derive cash,
+or grant financial or trading permission. The review wrapper below supplies
+the existing App/Lark presentation; source-consumer and financial utility
+qualification remain separate.
+
+份额/合约数与货币分别建模，同类别与同持有池的数量核对不推导现金或交易权限。
+opening、覆盖、付收方向或精度未知时保留未知，不反推、不补零。合成示例通过
+只证明声明下的词法算术；来源认证、PIT、界面/卡片与实际采用另行验收。
+
+
+### Quantity research review (candidate 0.8.16)
+
+`finance_quantity_research_input_v1` wraps the original quantity input and an
+explicit review time, evidence cutoff, publication source/version, supersedes
+and review deadline. It returns the complete `quantity_assessment` plus the
+existing Investment Research view. Opening/closing stocks, every signed flow,
+identity/unit/accuracy, source digest and original capture time remain visible.
+Candidate arithmetic, reconciled closing and all holds remain distinct;
+missing is not zero, and a conflict never becomes a qualified closing.
+
+```sh
+loopx-finance-value-discovery < packages/loopx-finance-value-discovery/examples/quantity-research-v1.json
+loopx extension publish-projection loopx-finance-value-discovery investment-research \
+  --input-json packages/loopx-finance-value-discovery/examples/quantity-research-v1.json \
+  --execute --format json
+loopx-finance-value-discovery render-lark-card \
+  --input-json packages/loopx-finance-value-discovery/examples/quantity-research-v1.json
+```
+
+Open the selected Goal's **Results / 成果** tab, inspect the Quantity review
+and its original source/reference details, and use **Refresh / 刷新** after
+publication changes. The same revision/hash/deadline is used for a published
+Lark draft: pass its receipt to the existing `--published-state-file`, `--goal-id`,
+`--extension-revision` and `--payload-sha256` flags. Stale, wrong-Goal and disabled
+publications refuse; recovery reads the current reference rather than silently
+substituting a result. Card preparation sends nothing and does not renew a
+review deadline or grant source, investment, cash or trading admission.
+
+The complete review view supports at most **8 flows** within its existing
+12-layer and text limits; larger/unsafe views are refused without truncation.
+The arithmetic API still supports 256 flows. Exact long decimal results move
+to the arithmetic detail rather than being rounded into a metric cell. Lark's
+existing complete-card capacity may also refuse a long view; read the complete
+published result in App. Disable using the existing extension lifecycle, and
+retain the pinned 0.8.15 wheel/manifest for rollback: old quantity/cash/funding
+inputs remain valid, while that old release refuses the new review wrapper.
+No private source, account or raw provider response belongs in this public-safe
+view. Source mapping, independent consumer adoption and financial utility
+remain separate from presentation qualification.
+
+数量复核复用既有成果页与 Lark 发布引用；原始 operands、缺证、冲突及来源时钟
+完整保留。长精确数不截断、不四舍五入，超容量明确拒绝。关闭、旧引用与错 Goal
+不返回缓存结果；恢复后重新核对当前引用。展示、来源准入、经验采用与金融效用
+分别验收；卡片只准备不发送。

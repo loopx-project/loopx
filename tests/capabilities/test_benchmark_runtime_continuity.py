@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
-from pathlib import Path
 
 import pytest
 
@@ -10,8 +8,8 @@ from loopx.capabilities.benchmark_toolkit import (
     BENCHMARK_RUNTIME_CONTINUITY_SCHEMA_VERSION,
     build_benchmark_runtime_continuity,
 )
+from tests.source_cli import run_source_cli
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_DIGEST = "a" * 64
 GENERATION_DIGEST = "b" * 64
 
@@ -130,7 +128,6 @@ def test_runtime_continuity_rejects_untyped_evidence(
 
 def test_runtime_continuity_cli_fails_closed_without_echoing_digests() -> None:
     command = [
-        str(REPO_ROOT / "scripts/loopx"),
         "benchmark",
         "runtime-continuity",
         "--launch-runtime-digest",
@@ -147,13 +144,7 @@ def test_runtime_continuity_cli_fails_closed_without_echoing_digests() -> None:
         "--format",
         "json",
     ]
-    completed = subprocess.run(
-        command,
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    completed = run_source_cli(command, check=False)
 
     assert completed.returncode == 1
     receipt = json.loads(completed.stdout)
@@ -165,7 +156,6 @@ def test_runtime_continuity_cli_fails_closed_without_echoing_digests() -> None:
 
 def test_runtime_continuity_cli_reduces_invalid_input_without_echo() -> None:
     command = [
-        str(REPO_ROOT / "scripts/loopx"),
         "benchmark",
         "runtime-continuity",
         "--launch-runtime-digest",
@@ -182,13 +172,7 @@ def test_runtime_continuity_cli_reduces_invalid_input_without_echo() -> None:
         "--format",
         "json",
     ]
-    completed = subprocess.run(
-        command,
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    completed = run_source_cli(command, check=False)
 
     assert completed.returncode == 1
     receipt = json.loads(completed.stdout)

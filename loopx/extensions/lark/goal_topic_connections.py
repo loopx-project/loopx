@@ -95,7 +95,7 @@ from .goal_topic_routing import (
     _connection_routing_modes,
     decide_lark_topic_route_event,
 )
-from .presentation.kanban import (
+from .cli_transport import (
     DEFAULT_CLI_BIN,
     CommandRunner,
     default_subprocess_runner,

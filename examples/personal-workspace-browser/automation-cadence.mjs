@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 
 import { resolveTestPython } from "../../scripts/test-python.mjs";
 import { outputDir, repoRoot } from "./fixture.mjs";
-import { openWorkspacePage } from "./scenario-context.mjs";
+import { fetchWorkspaceBackend, openWorkspacePage } from "./scenario-context.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -114,6 +114,15 @@ export const automationCadenceScenario = {
     }
     let context;
     try {
+      // Forwarding must not make an unrelated browser origin trusted.
+      const refused = await fetchWorkspaceBackend({
+        request: () => ({
+          url: () => new URL(`${path}/preview`, url).href,
+          headers: () => ({ origin: "https://untrusted.example", "content-type": "application/json" }),
+        }),
+        fetch: ({ url: targetUrl, headers }) => fetch(targetUrl, { method: "POST", headers, body: "{}" }),
+      }, authority.url);
+      if (refused.status !== 403) throw new Error("Forwarding admitted a foreign origin");
       context = await openWorkspacePage(browser, url, {
         collectCoverage,
         beforeGoto: async (_api, page) => {
@@ -123,7 +132,7 @@ export const automationCadenceScenario = {
               concurrentChange = false;
               await interleaveGoalChange();
             }
-            const response = await route.fetch({ url: authority.url + parsed.pathname + parsed.search });
+            const response = await fetchWorkspaceBackend(route, authority.url);
             if (parsed.pathname.endsWith("/apply") && response.ok()) {
               applyCount += 1;
               changes.push(route.request().postDataJSON());

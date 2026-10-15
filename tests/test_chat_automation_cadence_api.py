@@ -27,7 +27,7 @@ def _exchange(
         method,
         path,
         body=json.dumps(body).encode() if body is not None else None,
-        headers={"Origin": "http://127.0.0.1:5320", "Content-Type": "application/json"},
+        headers={"Origin": f"http://127.0.0.1:{port}", "Content-Type": "application/json"},
     )
     response = connection.getresponse()
     result = response.status, json.loads(response.read())

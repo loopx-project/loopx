@@ -163,6 +163,14 @@ def test_builtin_catalog_preserves_order_and_marks_provider() -> None:
             "ready": True,
         },
         {
+            "id": "git-hook",
+            "origin": "builtin",
+            "declared": True,
+            "installed": False,
+            "enabled": False,
+            "ready": False,
+        },
+        {
             "id": "dsh-session-events",
             "origin": "extension",
             "declared": True,
@@ -171,6 +179,31 @@ def test_builtin_catalog_preserves_order_and_marks_provider() -> None:
             "ready": False,
         },
     ]
+
+
+def test_builtin_declared_implementation_provider_projects_state() -> None:
+    """A builtin default-off provider must not leak as a raw declaration.
+
+    `git-hook` is installed per repository, never through the extension
+    state file, so the catalog can only project its declared default-off
+    state. Before this guard the builtin declaration bypassed registration,
+    leaving `implementation_providers` without `provider_state` while the
+    provider itself was missing from `providers`.
+    """
+    detail = build_capability_detail_packet("repository-change-window")["capability"]
+    [implementation] = detail["implementation_providers"]
+    assert implementation["provider_id"] == "git-hook"
+    assert implementation["protocol"] == "repository_change_window_git_hook_state_v2"
+    assert implementation["status"] == "available_default_off"
+    assert implementation["provider_state"] == {
+        "declared": True,
+        "installed": False,
+        "enabled": False,
+        "ready": False,
+    }
+    providers = {item["id"]: item for item in build_capability_catalog_packet()["providers"]}
+    assert providers["git-hook"]["origin"] == "builtin"
+    assert providers["git-hook"]["ready"] is False
 
 
 def test_external_evidence_catalog_preserves_receipt_observation_boundary() -> None:

@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 import itertools
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -25,9 +24,7 @@ from loopx.capabilities.catalog import (
     render_capability_detail_markdown,
 )
 from loopx.cli import main
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
+from tests.source_cli import run_source_cli
 
 def _row(
     *,
@@ -866,7 +863,6 @@ def test_cli_previews_then_writes_and_reads_board(tmp_path: Path) -> None:
     row_path = tmp_path / "row.json"
     row_path.write_text(json.dumps(_baseline()), encoding="utf-8")
     command = [
-        str(REPO_ROOT / "scripts/loopx"),
         "benchmark",
         "experiment-board-upsert",
         "--goal-id",
@@ -879,13 +875,7 @@ def test_cli_previews_then_writes_and_reads_board(tmp_path: Path) -> None:
         "json",
     ]
 
-    preview = subprocess.run(
-        command,
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=True,
-    )
+    preview = run_source_cli(command, check=True)
     preview_payload = json.loads(preview.stdout)
     ledger = default_benchmark_experiment_board_path(
         project=tmp_path, goal_id="fixture-goal"
@@ -894,22 +884,15 @@ def test_cli_previews_then_writes_and_reads_board(tmp_path: Path) -> None:
     assert preview_payload["write"]["write_performed"] is False
     assert not ledger.exists()
 
-    executed = subprocess.run(
-        [*command, "--execute"],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=True,
-    )
+    executed = run_source_cli([*command, "--execute"], check=True)
     executed_payload = json.loads(executed.stdout)
     assert executed_payload["write"]["status"] == "inserted"
     assert executed_payload["path_recorded"] is False
     assert str(tmp_path) not in executed.stdout
     assert ledger.exists()
 
-    shown = subprocess.run(
+    shown = run_source_cli(
         [
-            str(REPO_ROOT / "scripts/loopx"),
             "benchmark",
             "experiment-board-show",
             "--goal-id",
@@ -919,9 +902,6 @@ def test_cli_previews_then_writes_and_reads_board(tmp_path: Path) -> None:
             "--format",
             "json",
         ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
         check=True,
     )
     shown_payload = json.loads(shown.stdout)
@@ -942,9 +922,8 @@ def test_cli_show_projects_factorial_contrast_from_explicit_contract(
     contract_path = tmp_path / "four-arm-contract.json"
     contract_path.write_text(json.dumps(_four_arm_contract()), encoding="utf-8")
 
-    shown = subprocess.run(
+    shown = run_source_cli(
         [
-            str(REPO_ROOT / "scripts/loopx"),
             "benchmark",
             "experiment-board-show",
             "--goal-id",
@@ -956,9 +935,6 @@ def test_cli_show_projects_factorial_contrast_from_explicit_contract(
             "--format",
             "json",
         ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
         check=True,
     )
 
@@ -986,7 +962,6 @@ def test_cli_reconciles_provider_ledgers_without_recording_paths(
         _baseline(observed_at="2026-08-18T00:20:00+00:00"),
     )
     command = [
-        str(REPO_ROOT / "scripts/loopx"),
         "benchmark",
         "experiment-board-reconcile",
         "--goal-id",
@@ -1004,26 +979,14 @@ def test_cli_reconciles_provider_ledgers_without_recording_paths(
         project=tmp_path, goal_id="fixture-goal"
     )
 
-    preview = subprocess.run(
-        command,
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=True,
-    )
+    preview = run_source_cli(command, check=True)
     preview_payload = json.loads(preview.stdout)
     assert preview_payload["summary"]["run_count"] == 1
     assert preview_payload["write"]["status"] == "preview_reconciled"
     assert preview_payload["write"]["inserted"] == 1
     assert not ledger.exists()
 
-    executed = subprocess.run(
-        [*command, "--execute"],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=True,
-    )
+    executed = run_source_cli([*command, "--execute"], check=True)
     executed_payload = json.loads(executed.stdout)
     assert executed_payload["write"]["status"] == "reconciled"
     assert executed_payload["write"]["write_performed"] is True

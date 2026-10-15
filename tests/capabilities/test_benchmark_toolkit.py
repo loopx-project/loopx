@@ -28,9 +28,7 @@ from loopx.capabilities.benchmark_toolkit import (
     select_exact_docker_container,
 )
 from loopx.capabilities.catalog import build_capability_detail_packet
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
+from tests.source_cli import run_source_cli
 
 def test_exact_container_binding_uses_job_labels_and_hides_runtime_identity() -> None:
     observed_command: list[str] = []
@@ -787,9 +785,8 @@ def test_cli_final_drain_allows_zero_feedback_but_requires_complete_delivery_evi
         path = tmp_path / f"private-{name}.json"
         path.write_text(json.dumps(value), encoding="utf-8")
         paths.append(path)
-    completed = subprocess.run(
+    completed = run_source_cli(
         [
-            str(REPO_ROOT / "scripts/loopx"),
             "benchmark",
             "integrity-qualification",
             "--trajectory-json",
@@ -802,9 +799,6 @@ def test_cli_final_drain_allows_zero_feedback_but_requires_complete_delivery_evi
             "--format",
             "json",
         ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
         check=False,
     )
     receipt = json.loads(completed.stdout)
@@ -2193,9 +2187,8 @@ def test_cli_emits_only_compact_public_safe_receipt(tmp_path: Path) -> None:
     secret = "fixture-cli-sensitive-value-123456"
     env = {**os.environ, "BENCHMARK_TOOLKIT_TEST_SECRET": secret}
 
-    completed = subprocess.run(
+    completed = run_source_cli(
         [
-            str(REPO_ROOT / "scripts/loopx"),
             "benchmark",
             "integrity-qualification",
             "--trajectory-json",
@@ -2208,10 +2201,7 @@ def test_cli_emits_only_compact_public_safe_receipt(tmp_path: Path) -> None:
             "--format",
             "json",
         ],
-        cwd=REPO_ROOT,
         env=env,
-        text=True,
-        capture_output=True,
         check=True,
     )
     payload = json.loads(completed.stdout)
@@ -2242,9 +2232,8 @@ def test_cli_accepts_compact_post_run_restricted_access_adjudication(
         encoding="utf-8",
     )
 
-    completed = subprocess.run(
+    completed = run_source_cli(
         [
-            str(REPO_ROOT / "scripts/loopx"),
             "benchmark",
             "integrity-qualification",
             "--trajectory-json",
@@ -2257,9 +2246,6 @@ def test_cli_accepts_compact_post_run_restricted_access_adjudication(
             "--format",
             "json",
         ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
         check=True,
     )
 

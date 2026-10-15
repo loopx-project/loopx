@@ -199,6 +199,22 @@ systemd user service when disabling, upgrading, or rolling back the provider.
 
 ## Local-private configuration
 
+Inbox events, acknowledgement and material-review receipts, manager retention
+receipts, and history cursors use the existing private JSON writer. Each write
+uses its own temporary file, flushes it before atomic replacement, and retains
+the existing private directory modes. On POSIX the file is `0600` and the
+directory entry is synced after replacement. A partial write before replacement
+preserves the previous file and removes its temporary file. Domain locks and
+receipt replay still own logical concurrency; atomic replacement alone does not
+merge concurrent updates. The same writer protects local Explore board config,
+including replacement of an older config with a private file. JSON whitespace
+may change; schemas, parsed values, and cursor digests are unchanged.
+
+收件事件、确认与材料处理回执、管家保留回执及历史游标统一复用私有 JSON 写入函数，
+使用独立临时文件、同步和原子替换；替换前部分写入失败会保留原文件并清理临时文件。
+已有目录权限、领域锁和回执重放保持原职责。Explore 看板配置也使用该路径，
+在 POSIX 上将替换文件限制为 `0600`；JSON 排版可能变化，结构、读回值和游标摘要不变。
+
 The inbox is opt-in. Create a local-private generic Lark inbox config:
 
 ```json

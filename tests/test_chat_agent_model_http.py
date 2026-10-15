@@ -56,7 +56,7 @@ def _create_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str)
     try:
         connection.request("POST", "/api/chat/sessions", body=json.dumps({
             "goal_id": "fixture", "agent_id": "fixture-acp", "agent_model_id": value, "mode": "new",
-        }), headers={"Content-Type": "application/json", "Origin": "http://127.0.0.1"})
+        }), headers={"Content-Type": "application/json", "Origin": f"http://127.0.0.1:{server.server_port}"})
         response = connection.getresponse()
         return response.status, json.loads(response.read()), received
     finally:

@@ -15,6 +15,9 @@ from .active_state_editing import (
 
 DEFAULT_MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE = 12
 DEFAULT_COMPLETED_TODO_ARCHIVE_HEADROOM = 2
+ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE = max(
+    0, DEFAULT_MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE - DEFAULT_COMPLETED_TODO_ARCHIVE_HEADROOM
+)
 COMPLETED_TODO_ARCHIVE_COMMAND_TEMPLATE = (
     "loopx todo archive-completed --goal-id <goal-id> "
     "--max-active-done {max_active_done} --execute"

@@ -18,6 +18,7 @@ from loopx.control_plane.scheduler.execution_context import (
 )
 from loopx.control_plane.testing.quota_fixtures import quota_status_payload
 from loopx.control_plane.turn_driver import (
+    build_loopx_turn_host_request,
     build_loopx_turn_plan,
     load_loopx_turn_plan_from_journal,
     run_loopx_turn_once,
@@ -320,23 +321,31 @@ def test_host_action_cannot_enter_the_quota_slot(host_action):
     assert turn.observation.effective_action is None
 
 
-def test_real_executor_uses_verdict_and_replays_persisted_plan(tmp_path):
+def _executor_fixture_todo(*, claimed: bool) -> dict:
+    todo = {
+        "index": 1,
+        "todo_id": "todo_effect_fixture",
+        "text": "[P1] Advance the bounded slice.",
+        "role": "agent",
+        "status": "open",
+        "priority": "P1",
+        "task_class": "advancement_task",
+    }
+    if claimed:
+        # A sole unclaimed candidate requires explicit selection before the
+        # Turn may bind it; only a Todo claimed by this agent reaches the host
+        # directly. These executor tests exercise that direct-delivery path.
+        todo["claimed_by"] = "codex-fixture"
+    return todo
+
+
+def _executor_fixture_plan(*, claimed: bool) -> tuple[dict, dict]:
     status = quota_status_payload(
         goal_id=GOAL_ID,
         status="active",
         recommended_action="Advance the bounded slice.",
         coordination={"agent_model": "peer_v1", "registered_agents": ["codex-fixture"]},
-        agent_todo_items=[
-            {
-                "index": 1,
-                "todo_id": "todo_effect_fixture",
-                "text": "[P1] Advance the bounded slice.",
-                "role": "agent",
-                "status": "open",
-                "priority": "P1",
-                "task_class": "advancement_task",
-            }
-        ],
+        agent_todo_items=[_executor_fixture_todo(claimed=claimed)],
     )
     packet = build_quota_should_run(
         status,
@@ -348,6 +357,25 @@ def test_real_executor_uses_verdict_and_replays_persisted_plan(tmp_path):
         host="generic-cli",
         execution_mode="isolated-headless",
     )
+    return packet, plan
+
+
+def test_unclaimed_sole_candidate_plans_blocked_and_never_builds_a_host_request():
+    packet, plan = _executor_fixture_plan(claimed=False)
+    assert packet["should_run"] is True
+    assert packet["effective_action"] == "normal_run"
+    selected = plan["route"]["selected_todo"]
+    assert selected["selected_by"] == "unclaimed_todo"
+    assert plan["route"]["kind"] == "blocked"
+    assert plan["route"]["would_invoke_host"] is False
+    with pytest.raises(ValueError, match="not host executable"):
+        build_loopx_turn_host_request(plan)
+
+
+def test_real_executor_uses_verdict_and_replays_persisted_plan(tmp_path):
+    packet, plan = _executor_fixture_plan(claimed=True)
+    assert plan["route"]["kind"] == "ready_for_host"
+    assert plan["route"]["selected_todo"]["selected_by"] == "current_agent_claimed_todo"
     result = {
         "schema_version": "loopx_turn_result_v0",
         "turn_key": plan["transaction"]["turn_key"],

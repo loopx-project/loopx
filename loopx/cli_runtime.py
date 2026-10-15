@@ -436,6 +436,18 @@ def _dispatch_common_command(
 			print_payload=print_payload,
 		)
 	if args.command == "todo":
+		if args.todo_command == "list":
+			from .cli_commands.todo_list import handle_todo_list_command
+			from .cli_rollout import append_cli_rollout_event
+
+			return handle_todo_list_command(
+				args,
+				registry_path=registry_path,
+				runtime_root_arg=args.runtime_root,
+				format_name=output_format(args),
+				print_payload=print_payload,
+				append_cli_rollout_event=append_cli_rollout_event,
+			)
 		from .capabilities.periodic_report.post_writeback_hook import (
 			build_periodic_report_post_writeback_projection,
 			periodic_report_post_writeback_hooks_for_goal,

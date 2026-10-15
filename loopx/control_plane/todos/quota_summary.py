@@ -506,7 +506,7 @@ def _compact_agent_lane_status_todo_summary(
                 }
             continue
         if isinstance(value, dict):
-            if key in {"monitor_writeback", "work_counts"}:
+            if key in {"monitor_writeback", "work_counts", "deferred_work_counts"}:
                 compact[key] = _compact_quota_payload_nested_warning(value)
             continue
         compact[key] = value

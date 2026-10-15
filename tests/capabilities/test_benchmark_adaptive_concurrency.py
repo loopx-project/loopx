@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -16,9 +15,7 @@ from loopx.capabilities.benchmark_toolkit import (
     release_benchmark_case,
     tune_benchmark_concurrency_target,
 )
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
+from tests.source_cli import run_source_cli
 
 def _feedback(
     now: datetime,
@@ -380,7 +377,6 @@ def test_cli_tune_preview_then_execute(tmp_path: Path) -> None:
     )
     headroom_path.write_text(json.dumps(_headroom(now)), encoding="utf-8")
     base = [
-        str(REPO_ROOT / "scripts/loopx"),
         "benchmark",
         "concurrency-tune",
         "--goal-id",
@@ -395,21 +391,13 @@ def test_cli_tune_preview_then_execute(tmp_path: Path) -> None:
         "json",
     ]
 
-    preview = subprocess.run(
-        base, cwd=REPO_ROOT, text=True, capture_output=True, check=True
-    )
+    preview = run_source_cli(base, check=True)
     assert json.loads(preview.stdout)["dry_run"] is True
     assert (
         read_benchmark_concurrency_envelope(path)["config"]["target_active_cases"] == 3
     )
 
-    executed = subprocess.run(
-        [*base, "--execute"],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=True,
-    )
+    executed = run_source_cli([*base, "--execute"], check=True)
     payload = json.loads(executed.stdout)
     assert payload["action"] == "increase"
     assert payload["write_performed"] is True

@@ -22,12 +22,14 @@ from ...todos.contract import (
 from ...todos.todo_semantics import (
     todo_advancement_frontier_counts,
     todo_item_is_watch_only_monitor,
+    todo_summary_open_task_counts,
 )
 from ...todos.succession_warning import (
     TODO_SUCCESSION_WARNING_REASON_CODE,
     todo_succession_gap_items,
 )
 from ...todos.user_gate import open_todo_count as _open_todo_count
+from ...todos.resume_planning import read_todo_deferred_work_counts
 from ...work_items.autonomous_replan_ack import (
     autonomous_replan_ack_matches_agent,
     autonomous_replan_ack_matches_frontier,
@@ -612,7 +614,14 @@ def _summary_task_counts(summary: dict[str, Any] | None) -> dict[str, int]:
         # Compatibility-only fallback for summaries produced before the typed
         # TypeScript lane owner exposed convergence_open_count.
         open_count = max(0, open_count - watch_only_count)
+    work_counts = (
+        todo_summary_open_task_counts(summary)
+        if summary.get("work_counts") is not None else None
+    )
     advancement_count = (
+        safe_non_negative_int(work_counts.get("advancement"))
+        if isinstance(work_counts, dict)
+        else
         _count_advancement_items(executable)
         if isinstance(executable, list)
         else safe_non_negative_int(summary.get("claimed_advancement_open_count"))
@@ -625,7 +634,6 @@ def _summary_task_counts(summary: dict[str, Any] | None) -> dict[str, int]:
             ]
         )
     )
-    work_counts = summary.get("work_counts")
     if isinstance(work_counts, dict):
         monitor_count = max(
             0,
@@ -738,39 +746,22 @@ def _deferred_successors(
     *,
     agent_id: str | None,
 ) -> dict[str, Any]:
-    if not isinstance(summary, dict):
-        return {
-            "ready_count": 0,
-            "blocked_count": 0,
-            "current_agent_ready_count": 0,
-            "ready_todo_ids": [],
-        }
-
+    summary = summary if isinstance(summary, dict) else {}
+    counts = read_todo_deferred_work_counts(summary)
     ready_items = [
         item
         for item in (summary.get("deferred_resume_candidates") or [])
         if isinstance(item, dict)
     ]
-    deferred_items = [
-        item for item in (summary.get("deferred_items") or []) if isinstance(item, dict)
-    ]
-    deferred_count = max(
-        safe_non_negative_int(summary.get("deferred_count")),
-        len(deferred_items),
-        len(ready_items),
-    )
-    current_agent_ready_items = [
-        item
-        for item in ready_items
-        if agent_id and agent_scope_item_claimed_by(item) == agent_id
-    ]
     ready_todo_ids = [
         todo_id for todo_id in (_compact_todo_id(item) for item in ready_items[:5]) if todo_id
     ]
     projection = {
-        "ready_count": len(ready_items),
-        "blocked_count": max(0, deferred_count - len(ready_items)),
-        "current_agent_ready_count": len(current_agent_ready_items),
+        "ready_count": counts["ready"],
+        "blocked_count": counts["blocked"],
+        "unknown_count": counts["unknown"],
+        "counts_complete": counts["complete"],
+        "current_agent_ready_count": counts["ready_by_agent"].get(agent_id, 0),
         "ready_todo_ids": ready_todo_ids,
     }
     if ready_todo_ids:
@@ -1476,6 +1467,11 @@ def build_goal_frontier_projection_from_summaries(
         agent_todo_summary=agent_todo_summary,
         projection=projection,
     )
+    work_counts = (agent_todo_summary or {}).get("work_counts")
+    projection["normalized_progress"].update({
+        "agent_counts_complete": isinstance(work_counts, dict) and work_counts.get("complete") is True,
+        "agent_unclassified_open_count": work_counts.get("hidden") if isinstance(work_counts, dict) else None,
+    })
     if terminal_state:
         projection["source_completeness"] = source_completeness
         projection["terminal_state"] = terminal_state

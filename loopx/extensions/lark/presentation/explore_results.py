@@ -20,6 +20,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
+from ..cli_transport import (
+    DEFAULT_CLI_BIN,
+    CommandRunner,
+    command_error,
+    run_command,
+    default_subprocess_runner,
+)
 from ....capabilities.explore.result_log import (
     EXPLORE_RESULT_PROJECTION_VERSION,
     FINDING_STATUS_CONFIRMED,
@@ -41,17 +48,13 @@ from ....presentation.explore_views import (
     explore_source_revision,
     validate_explore_view_freshness,
 )
+from ..private_json import write_private_json_atomic
 from .kanban import (
-    DEFAULT_CLI_BIN,
-    CommandRunner,
-    _command_error,
     _extract_base_token,
     _extract_table_id,
     _extract_created_record_id,
     _public_safe_text,
-    _run_command,
     _select_options,
-    default_subprocess_runner,
     lark_record_rows,
     now_lark_datetime,
     parse_lark_base_url,
@@ -295,14 +298,13 @@ def read_lark_explore_local_config(path: Path) -> dict[str, Any]:
 
 def write_lark_explore_local_config(path: Path, payload: dict[str, Any]) -> None:
     config_path = path.expanduser()
-    config_path.parent.mkdir(parents=True, exist_ok=True)
     to_write = dict(payload)
     to_write.pop("ok", None)
     to_write.pop("exists", None)
     to_write.pop("path", None)
     to_write["schema_version"] = LARK_EXPLORE_LOCAL_CONFIG_VERSION
     to_write["updated_at"] = now_lark_datetime()
-    config_path.write_text(json.dumps(to_write, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_private_json_atomic(config_path, to_write)
 
 
 def lark_explore_config_from_payload(
@@ -629,7 +631,7 @@ def configure_lark_explore_visual_sink(
                     {"block_token": str(stored_canonical["overview_whiteboard_token"])},
                 ]
             elif not document_token:
-                create_command = _run_command(
+                create_command = run_command(
                     [
                         cli_bin,
                         "docs",
@@ -645,7 +647,7 @@ def configure_lark_explore_visual_sink(
                     runner=default_subprocess_runner,
                 )
                 if not create_command.get("ok"):
-                    return _auto_failure(_command_error(create_command))
+                    return _auto_failure(command_error(create_command))
                 document_token = str(
                     (
                         (create_command.get("json") or {})
@@ -661,7 +663,7 @@ def configure_lark_explore_visual_sink(
                     )
                 overview_boards = _created_overview_boards(create_command)
             else:
-                append_command = _run_command(
+                append_command = run_command(
                     [
                         cli_bin,
                         "docs",
@@ -681,7 +683,7 @@ def configure_lark_explore_visual_sink(
                     runner=default_subprocess_runner,
                 )
                 if not append_command.get("ok"):
-                    return _auto_failure(_command_error(append_command))
+                    return _auto_failure(command_error(append_command))
                 overview_boards = _created_overview_boards(append_command)
             if len(overview_boards) < 2:
                 return _auto_failure(
@@ -1017,7 +1019,7 @@ def sync_explore_visual_to_lark(
             if delivery_ok
             else str(readback.get("error") or "")
             if result.get("ok")
-            else _command_error(result)
+            else command_error(result)
         ),
     }
 
@@ -1373,13 +1375,13 @@ def setup_lark_explore_board(
             "warnings": warnings,
             "error": error
             or next(
-                (_command_error(item) for item in commands if not item.get("ok")),
+                (command_error(item) for item in commands if not item.get("ok")),
                 "unknown",
             ),
         }
 
     if not effective_base_token:
-        create = _run_command(
+        create = run_command(
             [cli_bin, "base", "+base-create", "--as", identity, "--name", base_name],
             execute=execute,
             runner=runner,
@@ -1404,7 +1406,7 @@ def setup_lark_explore_board(
     for table_key in EXPLORE_TABLE_KEYS:
         if table_ids.get(table_key):
             continue
-        table_create = _run_command(
+        table_create = run_command(
             [
                 cli_bin,
                 "base",
@@ -1637,7 +1639,7 @@ def sync_explore_results_to_lark(
             for scan_goal_id in scan_goal_ids:
                 offset = 0
                 while True:
-                    list_result = _run_command(
+                    list_result = run_command(
                         _build_record_list_command(
                             config,
                             table_id=config.table_id(table_key),
@@ -1702,7 +1704,7 @@ def sync_explore_results_to_lark(
                 result = _skipped_sync_command()
                 skipped_rows += 1
             else:
-                result = _run_command(
+                result = run_command(
                     _build_upsert_command(
                         config,
                         table_id=config.table_id(table_key),
@@ -1762,7 +1764,7 @@ def sync_explore_results_to_lark(
                 continue
             offset = 0
             while True:
-                list_result = _run_command(
+                list_result = run_command(
                     _build_record_list_command(
                         config,
                         table_id=config.table_id(table_key),
@@ -1868,7 +1870,7 @@ def sync_explore_results_to_lark(
             "row/result-id readback failed"
             if readback.get("performed") and not readback_verified
             else next(
-                (_command_error(item) for item in commands if not item.get("ok")),
+                (command_error(item) for item in commands if not item.get("ok")),
                 "unknown",
             )
         ),

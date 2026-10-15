@@ -1048,9 +1048,12 @@ development-time advisory; it does not close this tracker's source obligations.
 The [current registered-source inventory](ledger/semantic-vocabulary-convergence-v0/2026-10-12-registered-source-treatment.md)
 records all 26 entries, current-main evidence and compatibility boundaries.
 The owner merged both source-meaning dispositions in #6313. Main now includes
-the original Host-ACK fixture repair through #6344, verified on `60d833b13`.
-Source-inventory integration and final single-revision owner acceptance remain
-open; the remaining #6285 enhancements are separate. F1/F2 stays 6/26, with no source-domain inflation or F6-wide claim.
+the original Host-ACK fixture repair through #6344, verified on `60d833b13`,
+the #6285 settlement-chain readback cases (`5ea7497b5`, 2026-10-13) and the
+#6270 source inventory and witnesses (`1c2542df7`, 2026-10-14). Final
+single-revision owner acceptance remains open; the integrated readback at
+`c185e3f0c` in that ledger is a candidate record, not the acceptance. F1/F2
+stays 6/26, with no source-domain inflation or F6-wide claim.
 Milestone obligations and historical measurements retain their original scope/SHA.
 
 | Milestone | Shipped behavior | Entry gate | Exit evidence | Rollback |

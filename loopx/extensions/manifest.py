@@ -666,10 +666,19 @@ def _integration_profile(
     return normalized, digest
 
 
-def _require_compatible_loopx_api(requirement: str, *, context: str) -> None:
+def loopx_api_incompatibility(requirement: object, *, context: str) -> str | None:
+    """Explain why `requirement` does not admit this runtime, or return None.
+
+    Shared by manifest loading and by readers of installed manifest snapshots:
+    the API version the snapshot was validated against can differ from the
+    runtime that later reads it, so compatibility is a property of the pair,
+    not of the file.
+    """
+    if not isinstance(requirement, str) or not requirement.strip():
+        return f"{context} has invalid `requires_loopx_api` `{requirement!r}`"
     clauses = [clause.strip() for clause in requirement.split(",")]
     if not clauses or any(not clause for clause in clauses):
-        raise ValueError(f"{context} has invalid `requires_loopx_api` `{requirement}`")
+        return f"{context} has invalid `requires_loopx_api` `{requirement}`"
     comparisons = {
         ">=": lambda wanted: LOOPX_EXTENSION_API_VERSION >= wanted,
         "<=": lambda wanted: LOOPX_EXTENSION_API_VERSION <= wanted,
@@ -680,17 +689,24 @@ def _require_compatible_loopx_api(requirement: str, *, context: str) -> None:
     for clause in clauses:
         match = _API_CLAUSE.fullmatch(clause)
         if match is None:
-            raise ValueError(
+            return (
                 f"{context} has invalid `requires_loopx_api` clause `{clause}`; "
                 "expected integer constraints such as `>=1,<2`"
             )
         operator = match.group(1) or "=="
         wanted = int(match.group(2))
         if not comparisons[operator](wanted):
-            raise ValueError(
+            return (
                 f"{context} requires LoopX extension API `{requirement}`, "
                 f"but this runtime provides `{LOOPX_EXTENSION_API_VERSION}`"
             )
+    return None
+
+
+def _require_compatible_loopx_api(requirement: str, *, context: str) -> None:
+    reason = loopx_api_incompatibility(requirement, context=context)
+    if reason is not None:
+        raise ValueError(reason)
 
 
 def load_extension_manifest(path: str | Path) -> dict[str, Any]:

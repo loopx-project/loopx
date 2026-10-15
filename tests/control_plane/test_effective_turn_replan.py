@@ -347,6 +347,8 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     obligation = guard["autonomous_replan_obligation"]
     assert "periodic_review_due" in {trigger["kind"] for trigger in obligation["triggers"]}
     assert guard["replan_action_packet"]["stride_control"]["required_on_periodic_review"] is True
+    value_review = guard["replan_action_packet"]["stride_control"]["decision_value_review"]
+    assert set(value_review) == {"work_slice", "route_distance", "validation_scope"}
     successor = call("todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
         "--claimed-by", AGENT_ID, "--text", "Validate a new independent source",
         "--task-class", "advancement_task", "--action-kind", "validate",
@@ -363,6 +365,7 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     assert reread["autonomous_replan_obligation"]["obligation_id"] == obligation["obligation_id"]
     assert reread["autonomous_replan_obligation"].get("resolution_mode") != "receipt_bound_replan_settlement"
     assert reread["replan_action_packet"]["stride_control"]["required_on_periodic_review"] is True
+    assert reread["replan_action_packet"]["stride_control"]["decision_value_review"] == value_review
     rejected = call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--replan-obligation-id", obligation["obligation_id"],
         "--turn-instance-id", "stride-due-review",

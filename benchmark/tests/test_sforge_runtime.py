@@ -826,3 +826,25 @@ def test_install_preserves_mode_owned_submission_access(tmp_path, monkeypatch, p
     worker.install_stop_hook(backend, None, tmp_path, None)
     assert (["rm", "-f", "/usr/local/bin/sforge-submit"] in commands) is (feedback != "native")
     assert json.loads((tmp_path / "worker-profile.json").read_text())["feedback"] == feedback
+
+
+def test_warm_context_receipt_is_separate_from_native_stderr(tmp_path):
+    pytest.importorskip("sforge")
+    from types import SimpleNamespace
+    from benchmark.runtime.sforge import SForgeWorker
+
+    calls = []
+    async def execute(command, **kwargs):
+        calls.append(command)
+        if command.startswith("cat "):
+            return SimpleNamespace(return_code=0, stdout='{"model_calls": 0}')
+        assert " > " in command
+        return SimpleNamespace(return_code=0, stdout="native CLI diagnostic\n")
+    worker = object.__new__(SForgeWorker)
+    worker.runtime = SimpleNamespace(_worker_env=lambda **kwargs: {})
+    worker.environment = SimpleNamespace(exec=execute)
+    worker.cwd = "/task"
+    worker.log_dir = tmp_path
+    worker._warm_command("context")
+    assert json.loads((tmp_path / "checkpoint-context.json").read_text()) == {"model_calls": 0}
+    assert len(calls) == 2

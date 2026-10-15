@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import shlex
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from operator import itemgetter
 from pathlib import Path
 
@@ -62,7 +62,6 @@ from .todo_argument_validation import (
     validate_todo_archive_completed_options,
     validate_todo_claim_options,
     validate_todo_complete_options,
-    validate_todo_list_options,
     validate_todo_receipt_options,
     validate_todo_result_read_options,
     validate_todo_project_markdown_options,
@@ -305,6 +304,14 @@ def handle_todo_command(
     post_writeback_hooks: Sequence[PostWritebackHookRegistration] | None = None,
     post_writeback_projection_builder: PostWritebackProjectionBuilder | None = None,
 ) -> int:
+    if args.todo_command == "list":
+        from .todo_list import handle_todo_list_command
+
+        return handle_todo_list_command(
+            args, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
+            print_payload=print_payload, append_cli_rollout_event=append_cli_rollout_event,
+            format_name=format_name, list_reader=list_goal_todos,
+        )
     renderer = render_todo_markdown
     if args.todo_command == "plan":
         renderer = render_task_planning_packet
@@ -342,20 +349,6 @@ def handle_todo_command(
                 registry_path=registry_path, runtime_root_arg=runtime_root_arg,
                 goal_id=args.goal_id, agent_id=args.agent_id, text=args.text,
                 project=Path(args.project).expanduser() if args.project else None,
-            )
-        elif args.todo_command == "list":
-            validate_todo_list_options(args)
-            payload = list_goal_todos(
-                registry_path=registry_path,
-                goal_id=args.goal_id,
-                role=args.role,
-                status=args.status,
-                todo_id=args.todo_id,
-                agent_id=args.agent_id,
-                limit=args.todo_limit,
-                thin=bool(args.todo_thin),
-                **_todo_path_args(args),
-                runtime_root_arg=runtime_root_arg,
             )
         elif args.todo_command == "receipt":
             validate_todo_receipt_options(args)
@@ -847,19 +840,6 @@ def handle_todo_command(
                     post_writeback_hooks
                 )
     output_format = format_name or str(getattr(args, "format", None) or "markdown")
-    if (args.todo_command == "list" and payload.get("ok")
-            and not args.todo_id and not args.todo_thin and output_format == "json"):
-        try:
-            payload = effect_runtime_result(
-                "todo.context.page", {"list_payload": payload},
-                large_local_snapshot=True,
-            )
-        except Exception as exc:
-            from ..usage_ping import capture_failure
-            capture_failure(exc)
-            payload = todo_error_payload(
-                args, exc, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
-            )
     print_payload(
         payload,
         output_format,

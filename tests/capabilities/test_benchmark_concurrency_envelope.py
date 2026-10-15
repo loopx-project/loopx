@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -20,8 +19,7 @@ from loopx.capabilities.benchmark_toolkit import (
     release_benchmark_case,
 )
 from loopx.cli import main
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from tests.source_cli import run_source_cli
 
 
 def _connected_goal_registries(tmp_path: Path) -> tuple[Path, Path]:
@@ -434,7 +432,6 @@ def test_cli_previews_config_and_requires_admission_before_launch(
     tmp_path: Path,
 ) -> None:
     base = [
-        str(REPO_ROOT / "scripts/loopx"),
         "benchmark",
         "concurrency-configure",
         "--goal-id",
@@ -457,30 +454,17 @@ def test_cli_previews_config_and_requires_admission_before_launch(
     path = default_benchmark_concurrency_envelope_path(
         project=tmp_path, goal_id="fixture-goal"
     )
-    preview = subprocess.run(
-        base,
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=True,
-    )
+    preview = run_source_cli(base, check=True)
     assert json.loads(preview.stdout)["dry_run"] is True
     assert not path.exists()
 
-    configured = subprocess.run(
-        [*base, "--execute"],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=True,
-    )
+    configured = run_source_cli([*base, "--execute"], check=True)
     configured_payload = json.loads(configured.stdout)
     assert configured_payload["write_performed"] is True
     assert str(tmp_path) not in configured.stdout
 
-    admitted = subprocess.run(
+    admitted = run_source_cli(
         [
-            str(REPO_ROOT / "scripts/loopx"),
             "benchmark",
             "concurrency-admit",
             "--goal-id",
@@ -497,16 +481,12 @@ def test_cli_previews_config_and_requires_admission_before_launch(
             "--format",
             "json",
         ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
         check=True,
     )
     assert json.loads(admitted.stdout)["admitted"] is True
 
-    shown = subprocess.run(
+    shown = run_source_cli(
         [
-            str(REPO_ROOT / "scripts/loopx"),
             "benchmark",
             "concurrency-status",
             "--goal-id",
@@ -516,9 +496,6 @@ def test_cli_previews_config_and_requires_admission_before_launch(
             "--format",
             "json",
         ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
         check=True,
     )
     payload = json.loads(shown.stdout)
@@ -531,9 +508,8 @@ def test_cli_previews_config_and_requires_admission_before_launch(
 def test_cli_resource_headroom_gate_requires_fresh_typed_receipt(
     tmp_path: Path,
 ) -> None:
-    configure = subprocess.run(
+    configure = run_source_cli(
         [
-            str(REPO_ROOT / "scripts/loopx"),
             "benchmark",
             "concurrency-configure",
             "--goal-id",
@@ -551,9 +527,6 @@ def test_cli_resource_headroom_gate_requires_fresh_typed_receipt(
             "--format",
             "json",
         ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
         check=True,
     )
     assert (
@@ -563,9 +536,8 @@ def test_cli_resource_headroom_gate_requires_fresh_typed_receipt(
         is True
     )
 
-    missing = subprocess.run(
+    missing = run_source_cli(
         [
-            str(REPO_ROOT / "scripts/loopx"),
             "benchmark",
             "concurrency-admit",
             "--goal-id",
@@ -582,9 +554,6 @@ def test_cli_resource_headroom_gate_requires_fresh_typed_receipt(
             "--format",
             "json",
         ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
         check=False,
     )
     assert missing.returncode == 2
@@ -603,9 +572,8 @@ def test_cli_resource_headroom_gate_requires_fresh_typed_receipt(
         ),
         encoding="utf-8",
     )
-    admitted = subprocess.run(
+    admitted = run_source_cli(
         [
-            str(REPO_ROOT / "scripts/loopx"),
             "benchmark",
             "concurrency-admit",
             "--goal-id",
@@ -624,9 +592,6 @@ def test_cli_resource_headroom_gate_requires_fresh_typed_receipt(
             "--format",
             "json",
         ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
         check=True,
     )
     payload = json.loads(admitted.stdout)

@@ -44,7 +44,7 @@ from .goal_channel_transport import (
     message_readback_verified,
     verified_app_id,
 )
-from .presentation.kanban import (
+from .cli_transport import (
     DEFAULT_CLI_BIN,
     CommandRunner,
     default_subprocess_runner,

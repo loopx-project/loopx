@@ -2,8 +2,6 @@
 
 import copy
 import json
-import subprocess
-from pathlib import Path
 
 import pytest
 
@@ -17,6 +15,7 @@ from loopx.capabilities.benchmark_toolkit.study_projection import (
     read_benchmark_upload_receipt,
     simulate_benchmark_upload,
 )
+from tests.source_cli import run_source_cli
 
 
 def finding():
@@ -232,10 +231,8 @@ def test_revision_requires_explicit_supersession_preserving_finding(tmp_path):
 def test_cli_projects_finding_store(tmp_path):
     store = tmp_path / "records.jsonl"
     simulate_benchmark_upload(store, envelope(), execute=True)
-    repo = Path(__file__).resolve().parents[2]
-    result = subprocess.run(
+    result = run_source_cli(
         [
-            str(repo / "scripts/loopx"),
             "benchmark",
             "behavior-report",
             "--store",
@@ -247,9 +244,6 @@ def test_cli_projects_finding_store(tmp_path):
             "--format",
             "json",
         ],
-        cwd=repo,
-        capture_output=True,
-        text=True,
         check=True,
     )
     assert (
@@ -259,10 +253,8 @@ def test_cli_projects_finding_store(tmp_path):
 
 
 def test_documented_example_upload_envelope_cli():
-    repo = Path(__file__).resolve().parents[2]
-    result = subprocess.run(
+    result = run_source_cli(
         [
-            str(repo / "scripts/loopx"),
             "benchmark",
             "upload-envelope",
             "--payload-json",
@@ -286,9 +278,6 @@ def test_documented_example_upload_envelope_cli():
             "--format",
             "json",
         ],
-        cwd=repo,
-        text=True,
-        capture_output=True,
         check=True,
     )
     assert json.loads(result.stdout) == envelope()

@@ -179,3 +179,19 @@ caption { text-align: left; font-size: 12px; margin-bottom: 12px; color: var(--b
 @media (max-width: 600px) {
   .architecture-viewport a { min-width: 960px; }
 }
+
+/* Reading routes complement the chronological catalog; they do not reorder it. */
+.reading-routes { margin: 40px 0 0; padding-top: 24px; border-top: 1px solid var(--border); }
+.reading-routes h2 { font-size: 20px; font-weight: 600; margin: 0 0 20px; }
+.reading-routes ul { display: grid; grid-template-columns: 1fr 1fr; gap: 24px 40px; list-style: none; margin: 0; padding: 0; }
+.reading-routes li { font-size: 14px; line-height: 1.7; }
+.reading-routes b { display: block; font-weight: 500; }
+.reading-routes span { color: var(--body); }
+.reading-routes p { margin: 4px 0 0; }
+.reading-routes a { display: inline-flex; align-items: center; min-height: 44px; color: var(--blue); }
+.article-route { margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--border); font-size: 14px; line-height: 1.7; color: var(--body); }
+.article-route p { margin: 0; }
+.article-route a { display: inline-flex; align-items: center; min-height: 44px; color: var(--blue); }
+@media (max-width: 600px) { .reading-routes ul { grid-template-columns: 1fr; gap: 16px; } }
+
+.source-figure { display: block; width: 100%; height: auto; border-radius: 12px; }

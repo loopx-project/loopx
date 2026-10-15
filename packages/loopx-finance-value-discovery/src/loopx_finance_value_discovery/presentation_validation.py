@@ -183,3 +183,17 @@ def evidence_reference(value: Any, *, context: str) -> str:
     if any(_is_forbidden_key_name(field) for field in fields):
         raise ValueError(f"{context} contains an unsafe evidence reference")
     return reference
+
+
+def public_reference_tree(value: Any, context: str = "input") -> None:
+    """Keep embedded references under the existing publication URL boundary."""
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            path = f"{context}.{key}"
+            if child is not None and (key == "ref" or key.endswith("_ref")):
+                evidence_reference(child, context=path)
+            else:
+                public_reference_tree(child, path)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            public_reference_tree(child, f"{context}[{index}]")

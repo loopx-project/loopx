@@ -36,7 +36,7 @@ from .goal_channel_message_delivery import (
     resolve_bound_goal_channel,
 )
 from .identity_shapes import require_card_callback_identity
-from .presentation.kanban import CommandRunner, default_subprocess_runner
+from .cli_transport import CommandRunner, default_subprocess_runner
 
 
 OPERATION_CARD_ACTION_SCHEMA_VERSION = "loopx_operation_card_action_v0"

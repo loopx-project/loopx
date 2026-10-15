@@ -1,0 +1,106 @@
+{
+  "schema_version": "finance_quantity_research_input_v1",
+  "goal_id": "quantity-review-demo",
+  "source_id": "synthetic-quantity-v1",
+  "source_version": 1,
+  "supersedes": [],
+  "point_in_time": "2001-01-05T00:00:00Z",
+  "evidence_cutoff": "2001-01-04T00:00:00Z",
+  "review_due_at": "2001-01-06T00:00:00Z",
+  "quantity_input": {
+    "schema_version": "finance_quantity_reconciliation_input_v1",
+    "opening_stock": {
+      "evidence_ref": "synthetic:opening",
+      "source_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "captured_at": "2001-01-04T00:00:00Z",
+      "identity": {
+        "subject_ref": "synthetic:issuer",
+        "instrument_ref": "synthetic:class-a",
+        "ownership_scope_ref": "synthetic:single-pool",
+        "source_version_ref": "synthetic:filing-v1"
+      },
+      "unit": {
+        "measure_ref": "share",
+        "scale": 0
+      },
+      "value": "100",
+      "accuracy": {
+        "decimals": "INF"
+      },
+      "position": 0,
+      "aggregation_kind": "stock"
+    },
+    "closing_stock": {
+      "evidence_ref": "synthetic:closing",
+      "source_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "captured_at": "2001-01-04T00:00:00Z",
+      "identity": {
+        "subject_ref": "synthetic:issuer",
+        "instrument_ref": "synthetic:class-a",
+        "ownership_scope_ref": "synthetic:single-pool",
+        "source_version_ref": "synthetic:filing-v1"
+      },
+      "unit": {
+        "measure_ref": "share",
+        "scale": 0
+      },
+      "value": "117",
+      "accuracy": {
+        "decimals": "INF"
+      },
+      "position": 2,
+      "aggregation_kind": "stock"
+    },
+    "flows": [
+      {
+        "evidence_ref": "synthetic:acquisition",
+        "source_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "captured_at": "2001-01-04T00:00:00Z",
+        "identity": {
+          "subject_ref": "synthetic:issuer",
+          "instrument_ref": "synthetic:class-a",
+          "ownership_scope_ref": "synthetic:single-pool",
+          "source_version_ref": "synthetic:filing-v1"
+        },
+        "unit": {
+          "measure_ref": "share",
+          "scale": 0
+        },
+        "value": "25",
+        "accuracy": {
+          "decimals": "INF"
+        },
+        "position": 1,
+        "aggregation_kind": "flow",
+        "direction": "increase"
+      },
+      {
+        "evidence_ref": "synthetic:disposition",
+        "source_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "captured_at": "2001-01-04T00:00:00Z",
+        "identity": {
+          "subject_ref": "synthetic:issuer",
+          "instrument_ref": "synthetic:class-a",
+          "ownership_scope_ref": "synthetic:single-pool",
+          "source_version_ref": "synthetic:filing-v1"
+        },
+        "unit": {
+          "measure_ref": "share",
+          "scale": 0
+        },
+        "value": "8",
+        "accuracy": {
+          "decimals": "INF"
+        },
+        "position": 2,
+        "aggregation_kind": "flow",
+        "direction": "decrease"
+      }
+    ],
+    "coverage": {
+      "complete": true,
+      "evidence_ref": "synthetic:complete-two-flow-coverage",
+      "ordering_basis": "source_row_order"
+    }
+  }
+}

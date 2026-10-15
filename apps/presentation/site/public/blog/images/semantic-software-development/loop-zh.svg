@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 330" width="960" height="330" role="img">
+<title>语义开发闭环 · 职责示意</title>
+<rect width="960" height="330" fill="#fff"/>
+<g font-family="Arial, PingFang SC, Noto Sans CJK SC, sans-serif" fill="#171717">
+<text x="36" y="40" font-size="16">语义开发闭环 · 职责示意</text>
+<path d="M115 152H835M835 172V245H115V172" fill="none" stroke="#b8b8b8" stroke-width="2"/>
+<circle cx="115" cy="152" r="27" fill="#171717"/>
+<text x="115" y="159" text-anchor="middle" font-size="18" fill="#fff">1</text>
+<text x="115" y="99" text-anchor="middle" font-size="18" font-weight="600">模型与人</text>
+<text x="115" y="204" text-anchor="middle" font-size="14" fill="#4d4d4d">目标 · 反馈 · 假设</text>
+<path d="M228 147l7 5-7 5" fill="none" stroke="#171717" stroke-width="2"/>
+<circle cx="355" cy="152" r="27" fill="#171717"/>
+<text x="355" y="159" text-anchor="middle" font-size="18" fill="#fff">2</text>
+<text x="355" y="99" text-anchor="middle" font-size="18" font-weight="600">有界执行</text>
+<text x="355" y="204" text-anchor="middle" font-size="14" fill="#4d4d4d">工具调用 · 外部回读</text>
+<path d="M468 147l7 5-7 5" fill="none" stroke="#171717" stroke-width="2"/>
+<circle cx="595" cy="152" r="27" fill="#171717"/>
+<text x="595" y="159" text-anchor="middle" font-size="18" fill="#fff">3</text>
+<text x="595" y="99" text-anchor="middle" font-size="18" font-weight="600">验证与授权</text>
+<text x="595" y="204" text-anchor="middle" font-size="14" fill="#4d4d4d">领域检查 · 身份 · 权限</text>
+<path d="M708 147l7 5-7 5" fill="none" stroke="#171717" stroke-width="2"/>
+<circle cx="835" cy="152" r="27" fill="#171717"/>
+<text x="835" y="159" text-anchor="middle" font-size="18" fill="#fff">4</text>
+<text x="835" y="99" text-anchor="middle" font-size="18" font-weight="600">持久状态</text>
+<text x="835" y="204" text-anchor="middle" font-size="14" fill="#4d4d4d">接受的迁移 · 新的缺口</text>
+<path d="M485 240l-7 5 7 5" fill="none" stroke="#171717" stroke-width="2"/>
+<text x="480" y="285" text-anchor="middle" font-size="15" fill="#4d4d4d">读取当前事实，提出下一步</text>
+</g></svg>

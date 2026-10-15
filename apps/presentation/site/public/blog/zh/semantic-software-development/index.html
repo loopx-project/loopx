@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#fafafa">
+<title>Agentic Software：从代码生成到长程自主研发 · LoopX</title><meta name="description" content="以 LoopX 为例，讨论 Agentic Software 的通用基础设施：让目标、证据与人的反馈跨越会话，把探索推进为可验证的交付。">
+<link rel="canonical" href="https://loopx-project.github.io/loopx/blog/zh/semantic-software-development/">
+<link rel="alternate" hreflang="en" href="https://loopx-project.github.io/loopx/blog/semantic-software-development/"><link rel="alternate" hreflang="zh-CN" href="https://loopx-project.github.io/loopx/blog/zh/semantic-software-development/"><link rel="alternate" hreflang="x-default" href="https://loopx-project.github.io/loopx/blog/semantic-software-development/">
+<meta property="og:type" content="article"><meta property="og:site_name" content="LoopX"><meta property="og:locale" content="zh_CN"><meta property="og:title" content="Agentic Software：从代码生成到长程自主研发"><meta property="og:description" content="以 LoopX 为例，讨论 Agentic Software 的通用基础设施：让目标、证据与人的反馈跨越会话，把探索推进为可验证的交付。"><meta property="og:url" content="https://loopx-project.github.io/loopx/blog/zh/semantic-software-development/"><meta name="twitter:card" content="summary"><link rel="icon" href="data:,">
+<link rel="stylesheet" href="../../blog.css">
+</head><body>
+<a class="skip-link" href="#main">跳至正文</a>
+<header class="site-header"><a class="brand" href="../../../?lang=zh"><span class="product-mark" aria-hidden="true"><i></i><i></i></span>LoopX</a><nav aria-label="主导航"><a href="../">Blog</a><a href="../../../docs/book/">文档</a></nav><div class="header-actions"><a class="language" href="../../../blog/semantic-software-development/" lang="en" hreflang="en">EN</a><a class="github" href="https://github.com/loopx-project/loopx">GitHub ↗</a></div></header>
+<main id="main"><div class="article-heading"><a class="back" href="../">← 全部文章</a><p class="eyebrow">Agentic Software · 开发范式</p><h1><span class="keep-together">Agentic Software</span>：<br>从代码生成到<span class="keep-together">长程自主研发</span></h1><p class="lead">以 LoopX 为例，讨论 Agentic Software 的通用基础设施：让目标、证据与人的反馈跨越会话，把探索推进为可验证的交付。</p><div class="byline"><a href="https://github.com/huangruiteng">Ruiteng Huang</a><span>·</span><time datetime="2026-10-14">2026 年 10 月 14 日</time><span>·</span><span>LoopX creator</span></div></div>
+<div class="article-layout"><aside class="toc"><details open><summary>本文目录</summary><nav aria-label="文章目录"><a href="#feedback">把从想法到验证的链路缩短</a><a href="#case">一个公开案例：把性能优化做到上游</a><a href="#semantics">给分布式执行加上语义属性</a><a href="#agentic">Semantic Execution Engine 与 Agentic Software</a><a href="#distributed-systems">分布式系统的提交与恢复</a><a href="#development">让自主开发有持续交付的地基</a><a href="#start">从一个你能验收的目标开始</a><a href="#reading">接下来读什么</a></nav></details></aside><article class="prose">
+<p>用 Agent 开发软件，我越来越在意一件事：<strong>从想法、实现到真实反馈，能否形成一个足够短、又能持续运转的闭环。</strong>代码生成变快以后，目标、验证、交接和人的注意力，开始决定我们到底能交付多少东西。</p>
+<p>我在开发 LoopX 时，逐渐把这个问题理解为：给一个可恢复的执行系统，加上目标、证据、权限与路线演化的语义。本文是面向软件开发者的短分享；完整机制见<a href="../from-one-shot-agents-to-long-horizon-control/">核心架构长文</a>。</p>
+<section id="feedback">
+<h2>把从想法到验证的链路缩短</h2>
+<p>在效果与体验导向的产品里，同一个人能带着 Agent 贯穿设计、实现、试用和调整，有两个很直接的优势：反馈不用穿过多次交接，产品与技术的取舍也能在共享上下文里一起调整。发现一个交互不好用，可以连着改界面、协议和测试，再立即体验。</p>
+<p>这让我更重视高质量的 human reward：人指出什么值得做、哪里仍然不够好，Agent 把判断落实成下一轮可验证的工作。这里的 reward 可以是具体纠正、验收条件或优先级变化，不必是一个数值，也不意味着在训练模型权重。</p>
+<p>这种开发方式也有代价。上下文高度集中，会让独立审查更重要；代码产出上去了，评测资源和人的审阅能力却未必同比增长。多人协作提供的专业分工与独立判断仍然有价值。工程问题是：怎样保留短反馈链，同时让验证、维护和交付承受得住持续迭代。</p>
+</section>
+<section id="case">
+<h2>一个公开案例：把性能优化做到上游</h2>
+<p><a href="https://x.com/zigzagcai/status/2109952174822408443">Zheng Cai（@zigzagcai）的公开分享</a>给了一个具体例子：他使用 LoopX 作为工作流引擎，组织 Agent 做 vLLM 性能优化，产物已经合入 <a href="https://github.com/vllm-project/vllm/pull/54951">vLLM PR #54951</a>。</p>
+<p>优化针对 sparse indexer 的 prefill。原来每个 tensor-parallel rank 都重复做 query rows 的 MQA scoring 与 top-k；改法按计算成本，把独立的 query rows 划成连续分片，各 rank 对完整可用 key history 计算自己的部分，再用 <code>all_gatherv</code> 恢复原顺序的 top-k 索引。减少的是重复计算，attention 没有因此变成近似计算。</p>
+<figure><div class="architecture-viewport" role="region" tabindex="0" aria-label="优化机制示意：切的是 query rows，每个 rank 仍使用完整 key history；图中三个 rank 与八行仅用于解释，实测配置为 TP4。"><a href="../../images/semantic-software-development/prefill-sharding-zh.svg" target="_blank" rel="noopener"><img alt="优化机制示意：切的是 query rows，每个 rank 仍使用完整 key history；图中三个 rank 与八行仅用于解释，实测配置为 TP4。" height="900" loading="lazy" src="../../images/semantic-software-development/prefill-sharding-zh.svg" width="1440"/></a></div><figcaption>优化机制示意：切的是 query rows，每个 rank 仍使用完整 key history；图中三个 rank 与八行仅用于解释，实测配置为 TP4。<span class="architecture-hint">窄屏可横向滚动；点击查看原图。</span></figcaption></figure>
+<p>PR 报告：GLM-5.3-Flash、4×H200、TP4、1M 输入 tokens、C1 顺序请求下，TTFT 从 54.154 秒降到 40.388 秒，<strong>降低 25.42%</strong>；输入与输出合计 token 吞吐从 17,856.28 提高到 23,675.18 tok/s，<strong>提高 32.59%</strong>。</p>
+<p>这组结果使用 65,536-token batch budget、legacy runner 与显式 FA3 backend，来自四对独立进程重启的 A/B 对照。C1 合计吞吐不等于饱和多并发 serving 吞吐；我没有独立复现，也不能据此分离 LoopX 本身的因果增益。它展示了一条可检查的工程交付：优化机制、测量条件、验证范围和上游接受，都有公开产物。</p>
+<figure><div class="architecture-viewport" role="region" tabindex="0" aria-label="作者报告的固定负载 A/B：首 token 延迟与 C1 合计 token 吞吐。两图来自同一组运行，收益不能相乘；不是饱和服务吞吐。来源： vLLM #54951 。"><a href="../../images/semantic-software-development/prefill-results-zh.svg" target="_blank" rel="noopener"><img alt="作者报告的固定负载 A/B：首 token 延迟与 C1 合计 token 吞吐。两图来自同一组运行，收益不能相乘；不是饱和服务吞吐。来源： vLLM #54951 。" height="760" loading="lazy" src="../../images/semantic-software-development/prefill-results-zh.svg" width="1240"/></a></div><figcaption>作者报告的固定负载 A/B：首 token 延迟与 C1 合计 token 吞吐。两图来自同一组运行，收益不能相乘；不是饱和服务吞吐。来源：<a href="https://github.com/vllm-project/vllm/pull/54951">vLLM #54951</a>。<span class="architecture-hint">窄屏可横向滚动；点击查看原图。</span></figcaption></figure>
+<h3>先证明“测到的就是这项改动”</h3>
+<p>这个 PR 还有一个很值得保留的细节：新路径要求当前 batch 中的 prefill query rows 至少达到 <code>16,384 × TP</code>。TP4 下，8,192-token batch budget 即使配上 1M 总上下文，也无法激活它。上下文很长，不意味着这次优化实际参与了计算。</p>
+<p>作者因此用固定的新旧代码修订和相同的 65,536-token batch budget 重做对照，并明确撤回旧表格对当前改动的归因。对 Agent 研发，这给出一个更严格的验收抓手：<strong>产物、激活路径、测量配置和结论必须对得上。</strong>一个漂亮的数字，不能代替这条证据链。</p>
+<p>对长程开发，这比“Agent 运行了多久”更有意义。发现瓶颈、比较假设、修改实现、复验和响应评审，需要连成同一份工作；失败条件和测量口径也要能被下一轮接住。</p>
+</section>
+<section id="semantics">
+<h2>给分布式执行加上语义属性</h2>
+<p>任务队列、租约、事件日志、版本检查和重试，能让执行可追踪、可恢复。它们通常不负责判断：恢复后的路线还值不值得走，测试结果是否适用于当前版本，局部任务结束是否意味着目标达成。Agent 工作使这些问题进入了执行回路。</p>
+<div class="table-scroll"><table><caption>同一份工作，需要同时保留执行事实和行动依据</caption><thead><tr><th>已有执行机制</th><th>需要明确的语义属性</th></tr></thead><tbody>
+<tr><td>持久化与恢复</td><td>目标、验收与负证据跨会话延续；恢复过时计划时能重新判断。</td></tr>
+<tr><td>认领、租约与并发控制</td><td>工作归属、执行占用、修改方向和发布权限分别检查。</td></tr>
+<tr><td>结果记录与版本管理</td><td>证据绑定产物、负载与修订；“执行成功”只支持它实际证明的结论。</td></tr>
+<tr><td>重试、等待与调度</td><td>区分没有新事实、可继续的独立工作、路线失效和需要人判断。</td></tr>
+</tbody></table></div>
+<p>用一个<b>构造的性能研发场景</b>看这种变化：候选 rA 的孤立微基准已经通过，混合负载的 p95 尚未测量。此时人补充：“真正关心混合流量下的延迟，不要用正确性换速度。”这次反馈需要变成验收修订、证据适用范围和下一项工作，而不只是下一轮 prompt 的开头。</p>
+<p>模型提出验收 v2 与固定负载的服务级对照，由对应权威接受；内核检查范围、身份和版本后，持久化这次变化。rA 的旧结果仍然有效，但只证明孤立微基准；它不能证明 v2 已满足。发布继续等待，独立的正确性分析与回滚检查仍可推进。下图解释的是控制契约，<b>不是真实 vLLM PR 的运行轨迹</b>。</p>
+<figure><div class="architecture-viewport" role="region" tabindex="0" aria-label="构造的状态迁移：反馈修改验收，旧证据保留其范围；后继工作明确，发布权限未自动扩大。"><a href="../../images/semantic-software-development/goal-transition-zh.svg" target="_blank" rel="noopener"><img alt="构造的状态迁移：反馈修改验收，旧证据保留其范围；后继工作明确，发布权限未自动扩大。" height="850" loading="lazy" src="../../images/semantic-software-development/goal-transition-zh.svg" width="1280"/></a></div><figcaption>构造的状态迁移：反馈修改验收，旧证据保留其范围；后继工作明确，发布权限未自动扩大。<span class="architecture-hint">窄屏可横向滚动；点击查看原图。</span></figcaption></figure>
+
+<p>LoopX 的 Semantic Control Plane 把目标、工作项、约束和已接受的状态迁移外置。模型读取当前事实，提出下一步；执行前检查范围、权限与预算，工具返回真实观察；领域验证器检查结果；内核核对身份、版本和迁移规则，再提交持久状态。任务列表清空，只说明当前计划耗尽，不能单独证明目标已经达成。</p>
+<figure><div class="architecture-viewport" role="region" tabindex="0" aria-label="语义开发闭环 · 职责示意"><a href="../../images/semantic-software-development/loop-zh.svg" target="_blank" rel="noopener"><img alt="模型提出下一步；执行返回事实；领域验证与权限检查支持持久迁移；下一轮继承当前状态。图为职责示意，不是运行轨迹。" height="330" loading="lazy" src="../../images/semantic-software-development/loop-zh.svg" width="960"/></a></div><figcaption>模型提出下一步；执行返回事实；领域验证与权限检查支持持久迁移；下一轮继承当前状态。图为职责示意，不是运行轨迹。<span class="architecture-hint">窄屏可横向滚动；点击查看原图。</span></figcaption></figure>
+<p>这张图说明分工，不是把语义判断全部变成确定性代码。模型与人负责理解、假设和取舍；确定性规则负责保护可表达的边界。验证器也可能不完整，所以还要保留反证、来源和人工复核入口。更细的执行与恢复契约见<a href="../from-one-shot-agents-to-long-horizon-control/#effects">Effect Program</a>，协作对象见<a href="../agent-facing-kanban/">Agent 原生 Kanban</a>。</p>
+</section>
+<section id="agentic">
+<h2>Semantic Execution Engine 与 Agentic Software</h2>
+<p>Runta 的 Guanlan Dai 在 <a href="https://runta.com/blog/agents-arent-software/">Agents aren’t software</a> 中把容错单位上移到语义执行状态，并强调保留仍有意义的判断。它提示了一个问题：进程恢复后，未完成的工作是否仍能接续？</p>
+<figure><a href="https://runta.com/blog/agents-arent-software/agent-native-stack-dark.png" target="_blank" rel="noopener"><img alt="Runta 原图：传统 SaaS 与 Agent-native stack 的分层比较" class="source-figure" height="1024" loading="lazy" src="https://runta.com/blog/agents-arent-software/agent-native-stack-dark.png" width="1536"/></a><figcaption>Runta 原图，Guanlan Dai，2026-08-05，© Runta。<a href="https://runta.com/blog/agents-arent-software/">原文与解释</a>。图表达作者的架构观点，不是 LoopX 实现图。<span class="architecture-hint">点击查看原图。</span></figcaption></figure>
+<p>这里需要加一个分布式系统视角的校准：传统软件早就有并发、随机算法、动态调度和外部故障。Agent 带来的变化，是求解路径、工具组合和部分评价结论，可以持续由模型在运行中提出。<b>开放的是求解路径，必须明确的是执行、验证与提交边界。</b>这不会让原有系统工程失效，反而提高了对它的要求。</p>
+<p>我的定位是：模型与 harness 承担理解、假设和工具循环；领域能力定义有价值的结果与验证；执行环境约束资源和外部访问；LoopX 在其间保留目标、权责、证据与工作连续性。低延迟、可靠性、成本和扩展性仍然要测，同时还要测换会话、换执行者后有没有丢掉行动依据。</p>
+<p>可以把这个整体看成一种 <b>semantic execution engine</b>：输入不只有参数，也有目标和反馈；输出不只有返回值，还包括被接受的状态变化。这个概念描述系统分工；LoopX 具体承担语义控制面，并不替代模型、harness 或执行环境。</p>
+<p>Local 与云端可以共享工作身份、证据和验收约定，再适配各自环境。迁移时既要检查代码与依赖，也要检查旧执行者是否已失去写权、授权能否继承、结果是否仍适用于当前验收。相同的状态协议提供连续性，云端交付仍要单独验证。</p>
+</section>
+<section id="distributed-systems"><h2>从分布式系统看：把判断放进可提交的状态</h2>
+<p>给系统加上语义，具体改变的是状态模型、提交条件与恢复单位。仅把一段自然语言目标存进数据库，仍然会留下同样的工程缺口。</p>
+<h3>保留权威事实，按需重建读法</h3>
+<p>目标修订、被接受的决定、证据引用、工作归属与提交回执，需要稳定身份。看板、摘要和“下一步建议”是这些事实的读法，可以按使用者重建。无法重新采集的实验结果与负证据仍需归档；“可以重算展示”不等于“可以丢掉依据”。这正是 <a href="https://github.com/loopx-project/loopx/blob/373f2fa12ad5cc525c3960c95685807110dc0c93/docs/reference/protocols/event-sourced-state-contract-v0.md">LoopX 状态与投影契约</a>要区分的责任。</p>
+<h3>版本与因果，保护证据的有效范围</h3>
+<p>“测试通过”应关联候选修订 rA、负载 W1 和验收 v1；人的决定也应绑定其操作范围。rB 或 v2 到来时，系统保留历史事实，再判断哪些结论仍适用。把消息排好序，只能知道先后；要安全行动，还要知道这条证据针对什么、谁有权接受变化。</p>
+<h3>外部效果不确定时，先核对再重试</h3>
+<p>设想 Agent 提交 GPU 实验后断连：远端可能已经启动，客户端却没收到响应。<a href="https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-APIs/">AWS 的幂等 API 设计</a>说明了请求身份对安全重试的价值。这里也要用稳定请求 ID 或 Job ID 回读；如果 provider 无法确定结果，就保留不确定性。控制面只结算一次，不会自动保证远端只启动一次。具体恢复链由<a href="../from-one-shot-agents-to-long-horizon-control/#effects">核心长文的 Effect Program</a>展开。</p>
+<h3>一致性保护提交，不替代技术判断</h3>
+<p>租约、revision check 与旧写入者隔离，能拒绝过期执行者的写入；它们无法判断两个都通过局部测试的方案哪个更值得做。协议保护可执行边界，模型、验证器与人共同比较路线。跨 Agent 的共同状态应让事实一致、分歧可见，再通过明确的权威接受决定，不能把最后一次写入当作最好的判断。</p>
+<p>因此，长程系统要同时看三件事：<b>安全性</b>——是否越过授权与验收边界；<b>活性</b>——有资格的工作能否被接住，等待后能否恢复；<b>价值</b>——新的投入是否补上验收缺口、减少不确定性。系统可以稳定地运行错误路线，第三项必须由结果反馈持续检验。</p></section>
+
+<section id="development">
+<h2>让自主开发有持续交付的地基</h2>
+<p>短反馈链要长期成立，我会优先建设三类基础：</p>
+<ul>
+<li><strong>可组合的原子能力。</strong>让 Agent 用 CLI 完成真实读写，返回有身份的结果与错误，能回读外部事实。先做完整的小闭环，再扩大能力面。</li>
+<li><strong>可演进的工程约束。</strong>在仓库里建立架构边界、RFC、测试、独立评审和发布门禁；让重构持续减少重复权威与代码腐化，而不是只增加补丁。</li>
+<li><strong>跟得上开发的评价。</strong>保存基线、候选修订、负载、预算和反例；将便宜的局部验证与昂贵的完整评测分开，并保留独立验收。多生成几个 diff，不会自动增加有效产出。</li>
+</ul>
+<p>当 Agent 的工作跨越多轮、多个会话和不同执行者，这些约束就需要成为可继承的状态。长程自主开发追求的是：不需要人判断时，持续推进有价值的工作；需要纠偏时，让一次反馈改变后续行动；证据不足或边际收益下降时，能够等待、换路或收口。</p>
+<p>如果这些改进又被用于改进开发系统本身，就出现了系统自迭代的闭环。已有<a href="../long-horizon-rsi/">自举与 RSI 文章</a>专门讨论这段沿革与边界；持续提交和修改自身代码，仍不能单独证明能力提升。</p>
+</section>
+<section id="start">
+<h2>从一个你能验收的目标开始</h2>
+<p>不必先组织一个庞大的 Agent 团队。选择自己的试验仓库，把结果标准、开发范围、预算和发布权限说清楚。例如：</p>
+<blockquote><p>固定当前负载与基线，研究并验证一项性能优化。保留失败实验和反例；每轮记录候选修订、测量条件、剩余缺口与下一步。允许修改试验分支，发布和额外算力花费先由我决定。</p></blockquote>
+<p>从<a href="../../../docs/book/">开发者手册</a>接入，再用 <code>loopx doctor</code> 与 <code>loopx status</code>检查环境和已连接项目。第一次实践，要看完整的“执行—验证—写回—接续”：换一个会话后，还能否找回目标、证据、等待条件和人的纠正。</p>
+<p>对一次会话就能完成的小任务，额外控制面可能并不划算。对反复需要你恢复上下文、催促续行和核对事实的工作，它才有机会把管理开销赚回来。我希望最终增加的是经过验收的交付，减少的是人反复维持工作连续性的注意力。</p>
+</section>
+<section id="reading">
+<h2>接下来读什么</h2>
+<ul>
+<li><a href="../application-scenarios/">应用场景</a>：区分复杂交付、开放探索与持续职责，选择合适的试验。</li>
+<li><a href="../from-one-shot-agents-to-long-horizon-control/">核心架构长文</a>：目标、状态内核、Effect Program、等待与重规划的详细解释。</li>
+<li><a href="../agent-facing-kanban/">Agent 原生 Kanban</a>：工作项、认领、租约、门禁与共享权威状态。</li>
+<li><a href="../edgebench-feedback-and-memory/">阶段性研究</a>与<a href="../five-freshness-incidents/">事故复盘</a>：核查反馈、经验和信息新鲜度究竟在哪些地方有效，哪些仍未证明。</li>
+<li><a href="../long-horizon-rsi/">自举与 RSI</a>：理解“改进进入下一轮”的历史与判断边界。</li>
+</ul>
+<p class="edition">本文由 LoopX creator Ruiteng Huang 撰写。技术说明依据公开实现；案例与性能数据来自贡献者的公开 PR，本文没有新增实验。核心实现参考：<a href="https://github.com/loopx-project/loopx/blob/373f2fa12ad5cc525c3960c95685807110dc0c93/docs/architecture.md">Architecture</a>、<a href="https://github.com/loopx-project/loopx/blob/373f2fa12ad5cc525c3960c95685807110dc0c93/docs/reference/protocols/goal-vision-replan-contract-v0.md">Goal / Vision / Replan</a>与<a href="https://github.com/loopx-project/loopx/blob/373f2fa12ad5cc525c3960c95685807110dc0c93/docs/reference/protocols/decision-scope-v0.md">Decision Scope</a>。历史长文是背景阅读，操作以当前手册为准。</p>
+</section>
+</article></div></main>
+<footer class="site-footer"><a class="brand" href="../../../">LoopX</a><p>让工作持续推进，让判断由人掌握。</p><a href="../">全部文章 ↑</a></footer></body></html>

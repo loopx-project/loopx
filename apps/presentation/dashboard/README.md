@@ -50,8 +50,10 @@ on port 8766 and the Chat APIs from `loopx chat` on port 8767, so without those
 services it opens on a status-load error. Start them locally, or use
 `npm run dev`, which also starts the loopback status and Chat services and
 therefore requires a Python 3.11+ interpreter; see the development section
-below. Do not commit `status.local.json` or live status exports; they can
-contain local registry/runtime paths and private project summaries.
+below. Browser requests to Chat must use the Vite proxy or the packaged
+same-origin `/chat/` workspace; Chat rejects direct requests from another
+local browser origin. Do not commit `status.local.json` or live status exports;
+they can contain local registry/runtime paths and private project summaries.
 
 Personal Workspace owns Goal, Task, Chat, output, and report workflows. Run
 `loopx dashboard` for the installed local workspace; see the

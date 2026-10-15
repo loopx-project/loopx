@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .private_json import write_private_json_atomic
+
 CURSOR_SCHEMA_VERSION = "lark_group_history_cursor_v1"
 LEGACY_CURSOR_SCHEMA_VERSION = "lark_group_history_cursor_v0"
 
@@ -188,14 +190,7 @@ def load_group_history_cursor(
 def write_group_history_cursor(path: Path, state: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(path.parent, 0o700)
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(
-        json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n",
-        encoding="utf-8",
-    )
-    os.chmod(temporary, 0o600)
-    temporary.replace(path)
-    os.chmod(path, 0o600)
+    write_private_json_atomic(path, state)
 
 
 def _new_group_history_cursor(

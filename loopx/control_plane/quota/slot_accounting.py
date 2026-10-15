@@ -565,6 +565,33 @@ def _admits_delivery_completion_spend_state(
     )
 
 
+def _workspace_repair_blocks_spend(
+    before: Mapping[str, Any],
+    *,
+    delivery_workspace_validated: bool,
+    delivery_run: Mapping[str, Any] | None,
+    settlement_identity: SettlementIdentity | None,
+    workspace_requirement: str,
+) -> bool:
+    """Keep the current workspace guard separate from an original settlement.
+
+    The existing typed requirement owner decides whether that settlement needs
+    a workspace. This adapter only applies the recovered result to the guard;
+    an unbound or unwritten settlement cannot waive it.
+    """
+    settlement_does_not_require_workspace = (
+        delivery_run is not None
+        and settlement_identity is not None
+        and workspace_requirement == "not_required"
+    )
+    return (
+        before.get("effective_action") == EffectiveAction.AGENT_WORKSPACE_REPAIR.value
+        and before.get("workspace_repair_allowed") is True
+        and not delivery_workspace_validated
+        and not settlement_does_not_require_workspace
+    )
+
+
 def build_quota_slot_preview_for_decision(
     status_payload: dict[str, Any],
     *,
@@ -798,12 +825,13 @@ def build_quota_slot_preview_for_decision(
             "after": None,
         }
     delivery_workspace_validated = bool(delivery_workspace)
-    workspace_repair_no_spend = (
-        before.get("effective_action") == EffectiveAction.AGENT_WORKSPACE_REPAIR.value
-        and before.get("workspace_repair_allowed") is True
-        and not delivery_workspace_validated
-    )
-    if workspace_repair_no_spend:
+    if _workspace_repair_blocks_spend(
+        before,
+        delivery_workspace_validated=delivery_workspace_validated,
+        delivery_run=delivery_completion_run,
+        settlement_identity=settlement_identity,
+        workspace_requirement=workspace_requirement,
+    ):
         return {
             "ok": False,
             "mode": "spend-slot",

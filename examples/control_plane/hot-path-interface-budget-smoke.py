@@ -79,7 +79,9 @@ SURFACE_BUDGETS = {
         # the original longer root. Full command routes are useful; retain
         # them with 635 chars of headroom, without widening structural guards.
         "max_json_chars": 16_500,
-        "max_nested_keys": 376,
+        # Full-source frontier readiness/coverage adds ten useful keys:
+        # base 368 -> 378, preserving eight keys of structural headroom.
+        "max_nested_keys": 386,
         "max_top_level_keys": 54,
     },
     "dashboard_status_json": {

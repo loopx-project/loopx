@@ -28,6 +28,10 @@ from tests.control_plane.canonical_authority_fixture import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="the POSIX source launcher runs only on POSIX hosts",
+)
 def test_unix_launcher_process_replaces_python_for_exact_native_followup(
     tmp_path: Path,
 ) -> None:
@@ -86,6 +90,10 @@ def test_unix_launcher_process_replaces_python_for_exact_native_followup(
     assert lines[-len(args) :] == args
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="the POSIX source launcher runs only on POSIX hosts",
+)
 def test_unix_launcher_keeps_unbound_calls_on_the_python_compatibility_route(
     tmp_path: Path,
 ) -> None:
@@ -153,6 +161,7 @@ def test_receipt_bound_trae_hint_executes_native_without_python(
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         env=env,
     )
 
@@ -217,6 +226,7 @@ def test_receipt_bound_failure_hint_executes_native_without_python(
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         env=env,
     )
 
@@ -242,6 +252,8 @@ def _launcher(
 ) -> tuple[list[str], dict[str, str]]:
     env = {**os.environ, "LOOPX_PYTHON": python}
     if launcher == "unix":
+        if os.name == "nt":
+            pytest.skip("the POSIX source launcher runs only on POSIX hosts")
         return [str(REPO_ROOT / "scripts/loopx")], env
     pwsh = shutil.which("pwsh")
     if pwsh is None:
@@ -345,7 +357,8 @@ def test_launcher_preserves_outer_controller_write_guard(
          "--runtime-root", str(runtime), "--format", "json", "quota", "should-run",
          "--goal-id", "needs-operator", "--agent-id", SCOPED_AGENT_ID,
          "--codex-app", "--turn-instance-id", "outer-controller-launcher"],
-        cwd=project, env=env, text=True, capture_output=True, timeout=45,
+        cwd=project, env=env, text=True, encoding="utf-8", capture_output=True,
+        timeout=45,
     )
     assert guard_result.returncode == 0, guard_result.stdout + guard_result.stderr
     app = json.loads(guard_result.stdout)["scheduler_hint"]["app_automation"]
@@ -363,7 +376,7 @@ def test_launcher_preserves_outer_controller_write_guard(
              "LOOPX_KUNLUNCODE_OUTER_CONTROLLER": "1",
              "LOOPX_KUNLUNCODE_OUTER_GOAL_ID": "needs-operator",
              "LOOPX_KUNLUNCODE_OUTER_AGENT_ID": SCOPED_AGENT_ID},
-        text=True, capture_output=True, timeout=45,
+        text=True, encoding="utf-8", capture_output=True, timeout=45,
     )
     assert result.returncode == 2, result.stdout + result.stderr
     assert result.stdout == ""
