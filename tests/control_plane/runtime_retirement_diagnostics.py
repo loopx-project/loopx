@@ -12,7 +12,7 @@ PREFIX = "loopx_fixture_retirement:"
 EVENTS = frozenset({"shutdown_requested", "close", "flush_enter", "flush_done", "locator_read_done",
     "locator_read_error", "locator_unlink_enter", "locator_unlink_done", "locator_unlink_error",
     "cleanup_finally", "lock_attempt", "lock_acquired", "lock_acquire_error", "lock_release_error",
-    "lock_release_result", "request_error"})
+    "lock_release_result", "request_error", "kill_enter", "kill_returned"})
 CODES = frozenset({"EACCES", "EPERM", "ENOENT", "EEXIST", "EIO", "EBUSY", "ENOTEMPTY", "EBADF",
     "ENOSPC", "EMFILE", "ENFILE", "ETIMEDOUT", "EINTR", "ENOTDIR", "EROFS", "EDQUOT", "EINVAL",
     "EISDIR", "ENAMETOOLONG", "mutation_lock_timeout"})
@@ -52,6 +52,8 @@ def instrument_copied_runtime(root: Path) -> None:
     text = _replace(cache.read_text(), 'const FLUSHING =', TRACE + '\nconst FLUSHING =')
     for before, after in (
         ('flushCompileCache();', 'fixtureTrace("flush_enter"); flushCompileCache(); fixtureTrace("flush_done");'),
+        ('process.kill(process.pid, "SIGKILL");',
+         'fixtureTrace("kill_enter", {main_thread: isMainThread}); process.kill(process.pid, "SIGKILL"); fixtureTrace("kill_returned");'),
         ('published = JSON.parse(await readFile(locator.infoPath, "utf8"));',
          'published = JSON.parse(await readFile(locator.infoPath, "utf8")); fixtureTrace("locator_read_done");'),
         ('} catch {\n      return;\n    }\n    // Both retirement paths',
@@ -135,6 +137,8 @@ def trace_events(raw: bytes) -> list[dict]:
                 item[key] = number
         if type(value.get("released")) is bool:
             item["released"] = value["released"]
+        if type(value.get("main_thread")) is bool:
+            item["main_thread"] = value["main_thread"]
         if "code" in value:
             item["code"] = value["code"] if isinstance(value["code"], str) and value["code"] in CODES else None
         if "syscall" in value:
