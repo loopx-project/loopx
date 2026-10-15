@@ -80,8 +80,11 @@ Core presents the same basis. A changed criterion or source after start refuses
 the plain resume with `goal_basis_changed`, and an unreadable basis refuses it
 with `goal_basis_unavailable`; the target stays paused and the recorded basis is
 not rewritten. Stop, then start, delivers a fresh objective under the current
-basis. Bindings journaled before the basis existed resume as before and record
-nothing they did not deliver. A matching basis proves current owning
+basis. Bindings journaled before the basis existed remain readable, pausable
+and stoppable, but carry no recorded proof of the basis they were delivered
+under: a plain resume refuses them with `goal_basis_unavailable` and never
+backfills a basis it did not deliver; stop, then start, records the current
+basis with the fresh objective. A matching basis proves current owning
 requirements were available at that boundary, not that the native model
 understood or acted on them. Repeated start cannot replace an executing target. Cold recovery restores that session, pauses an
 active target and never automatically resumes. The managed broker serializes
