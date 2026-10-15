@@ -41,6 +41,15 @@ _GOAL_ID = "benchmark-goal"
 _AGENT_ID = "benchmark-agent"
 
 
+# Non-LoopX workers stage only these paths; keep this list closed over the
+# loopx-internal import closure of native_codex_goal.py (see the import test).
+NATIVE_GOAL_SOURCE_PATHS = (
+    "benchmark/runtime",
+    "loopx/capabilities/benchmark_toolkit/native_codex_goal.py",
+    "loopx/control_plane/turn_driver/codex_stdio.py",
+)
+
+
 class BenchmarkCodex(CodexOffline):
     """One independent LoopX control plane per Harbor trial."""
 
@@ -173,9 +182,7 @@ class BenchmarkCodex(CodexOffline):
         self._runner_commit = runner_head
         with tempfile.TemporaryDirectory(prefix="benchmark-source-") as directory:
             archive = Path(directory) / "source.tar"
-            paths = () if self.execution.uses_loopx else (
-                "benchmark/runtime", "loopx/capabilities/benchmark_toolkit/native_codex_goal.py",
-            )
+            paths = () if self.execution.uses_loopx else NATIVE_GOAL_SOURCE_PATHS
             archive_source(source, head, archive, paths)
             await environment.upload_file(archive, f"{_ROOT}/source.tar")
             await self.exec_as_root(environment, command=(
