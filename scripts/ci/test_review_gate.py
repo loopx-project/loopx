@@ -42,8 +42,14 @@ class GateTests(unittest.TestCase):
             (Path(__file__).resolve().parents[2] / ".github/workflows/python-tests.yml").read_text(),
             Loader=yaml.BaseLoader,
         )
+        maintenance = yaml.load(
+            (Path(__file__).resolve().parents[2] / ".github/workflows/ci-maintenance.yml").read_text(),
+            Loader=yaml.BaseLoader,
+        )
         self.assertIn("closed", workflow["on"]["pull_request"]["types"])
-        self.assertEqual(workflow["on"]["pull_request_target"]["types"], ["closed", "synchronize"])
+        self.assertNotIn("pull_request_target", workflow["on"])
+        self.assertEqual(maintenance["on"], {"pull_request_target": {"types": ["closed", "synchronize"]}})
+        self.assertNotEqual(workflow["name"], maintenance["name"])
         concurrency = workflow["concurrency"]
         jobs = workflow["jobs"]
 
@@ -73,10 +79,11 @@ class GateTests(unittest.TestCase):
             for name in ("changes", "merge-gate"):
                 self.assertTrue(expression(jobs[name]["if"], "", event=event))
         self.assertEqual([name for name, job in jobs.items() if not job.get("needs")],
-                         ["cancel-obsolete-pr", "changes"])
+                         ["changes"])
         for name in ("changes", "merge-gate"):
             self.assertFalse(expression(jobs[name]["if"], "closed", event="pull_request_target"))
-        cleanup = jobs["cancel-obsolete-pr"]
+        self.assertEqual(list(maintenance["jobs"]), ["cancel-obsolete-pr"])
+        cleanup = maintenance["jobs"]["cancel-obsolete-pr"]
         self.assertTrue(expression(cleanup["if"], "closed", event="pull_request_target"))
         self.assertTrue(expression(cleanup["if"], "synchronize", event="pull_request_target"))
         self.assertFalse(expression(cleanup["if"], "closed"))
@@ -84,6 +91,7 @@ class GateTests(unittest.TestCase):
         self.assertNotEqual(lane("closed", event="pull_request_target"),
                             lane("closed", number=18, event="pull_request_target"))
         self.assertEqual(workflow["permissions"], {"contents": "read"})
+        self.assertEqual(maintenance["permissions"], {"contents": "read"})
         self.assertEqual(cleanup["permissions"],
                          {"actions": "write", "contents": "read", "pull-requests": "read"})
         self.assertEqual(len(cleanup["steps"]), 1)
@@ -95,7 +103,7 @@ class GateTests(unittest.TestCase):
 
     def test_trusted_cleanup_retires_obsolete_heads_without_skipping_required_gates(self):
         workflow = yaml.load(
-            (Path(__file__).resolve().parents[2] / ".github/workflows/python-tests.yml").read_text(),
+            (Path(__file__).resolve().parents[2] / ".github/workflows/ci-maintenance.yml").read_text(),
             Loader=yaml.BaseLoader,
         )
         script = workflow["jobs"]["cancel-obsolete-pr"]["steps"][0]["with"]["script"]
@@ -195,6 +203,56 @@ await assert.rejects(run({failure:true}),/provider failure/);
 await assert.rejects(run({first:{...pr,head:{...pr.head,repo:null}}}),/no verifiable source/);
 """
         subprocess.run(["node", "--input-type=module", "-e", harness, json.dumps(script)], check=True)
+
+    def test_summary_runs_the_real_renderer_without_changing_the_gate_verdict(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = yaml.load((root / ".github/workflows/python-tests.yml").read_text(), Loader=yaml.BaseLoader)
+        gate = workflow["jobs"]["merge-gate"]
+        verdict = next(step for step in gate["steps"] if step.get("id") == "verdict")
+        report = gate["steps"][-1]
+        self.assertEqual(gate["permissions"], {"contents": "read", "actions": "read"})
+        self.assertNotIn("continue-on-error", gate)
+        self.assertNotIn("continue-on-error", verdict)
+        self.assertEqual(verdict["run"], "python scripts/ci/review_gate.py verify")
+        self.assertEqual(report["if"], "always()")
+        self.assertEqual(report["continue-on-error"], "true")
+        self.assertEqual(report["timeout-minutes"], "1")
+        self.assertEqual(report["env"]["GATE_RESULT"], "${{ steps.verdict.outcome }}")
+        # Execute the workflow adapter and real TS renderer. Stub only the
+        # GitHub transport, including unavailable evidence, never the verdict.
+        harness = r"""
+import assert from 'node:assert/strict';
+const execute = new (Object.getPrototypeOf(async function(){}).constructor)(
+  'github', 'context', 'core', JSON.parse(process.argv[1]));
+for (const unavailable of [false, true]) {
+  let markdown='', writes=0; const warnings=[];
+  const github={rest:{actions:{listJobsForWorkflowRunAttempt:'attempt-jobs'}},
+    paginate:async(method,params)=>{
+      assert.equal(method,'attempt-jobs');
+      const {request,...identity}=params;
+      assert.ok(request.signal instanceof AbortSignal);
+      assert.deepEqual(identity,{owner:'example',repo:'project',run_id:42,attempt_number:2,per_page:100});
+      if(unavailable) throw new Error('provider detail must not leak');
+      return [{id:10,run_id:42,run_attempt:2,name:'test-shard (1)',status:'completed',conclusion:'failure',
+        steps:[{name:'Run tests',conclusion:'failure'}]}];
+    }};
+  const summary={addRaw:value=>{markdown+=value;return summary;},write:async()=>{writes++;}};
+  await execute(github,{repo:{owner:'example',repo:'project'},runId:42,sha:'merge-sha',
+    payload:{pull_request:{head:{sha:'source-sha'},base:{sha:'base-sha'}}}},
+    {summary,warning:value=>warnings.push(value)});
+  assert.equal(writes,1); assert.equal(warnings.length,unavailable?1:0);
+  assert.match(markdown,/Gate step: failure/);
+  assert.match(markdown,/Source head: source-sha/);
+  assert.match(markdown,/Workflow checkout: merge-sha/);
+  assert.match(markdown,/Event base: base-sha/);
+  assert.match(markdown,unavailable?/Job evidence unavailable/:/Failing jobs[\s\S]*Run tests/);
+  assert.doesNotMatch(markdown,/provider detail|safe to merge/);
+}
+"""
+        subprocess.run(["node", "--input-type=module", "-e", harness, json.dumps(report["with"]["script"])],
+                       cwd=root, check=True, env={**os.environ, "GITHUB_WORKSPACE": str(root),
+                           "GITHUB_SERVER_URL": "https://github.com", "GITHUB_RUN_ATTEMPT": "2",
+                           "GATE_RESULT": "failure", "NEEDS_JSON": json.dumps(needs())})
 
     def test_legal_profiles_and_policy_rehearsal(self):
         for kind in ("docs", "presentation", "full"):

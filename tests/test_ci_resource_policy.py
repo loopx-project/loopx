@@ -84,16 +84,42 @@ def test_main_supersession_does_not_cancel_nightly_or_manual_full_qualification(
     assert [expression(concurrency["cancel-in-progress"], context) for context in contexts] == [True, True, False, False, False]
 
 
-@pytest.mark.parametrize("name", ["pull_request", "pull_request_target"])
-def test_python_pr_supersession_uses_the_payload_number(name: str) -> None:
-    concurrency = workflow("python-tests")["concurrency"]
+@pytest.mark.parametrize("owner,name,prefix", [
+    ("python-tests", "pull_request", "python-tests-pull_request"),
+    ("ci-maintenance", "pull_request_target", "ci-maintenance"),
+])
+def test_python_pr_supersession_uses_the_payload_number(owner: str, name: str, prefix: str) -> None:
+    concurrency = workflow(owner)["concurrency"]
     first, second = event(name, pr=101), event(name, pr=102)
     # pull_request_target uses the base ref, so the payload number must keep
     # distinct PRs apart even when their refs match.
     first["github"].ref = second["github"].ref = "refs/heads/main"
-    assert expression(concurrency["group"], first) == f"python-tests-{name}-pr-101"
-    assert expression(concurrency["group"], second) == f"python-tests-{name}-pr-102"
+    assert expression(concurrency["group"], first) == f"{prefix}-pr-101"
+    assert expression(concurrency["group"], second) == f"{prefix}-pr-102"
     assert expression(concurrency["cancel-in-progress"], first) is True
+
+
+def test_cleanup_concurrency_cannot_replace_current_qualification() -> None:
+    qualification = expression(workflow("python-tests")["concurrency"]["group"], event("pull_request"))
+    cleanup = expression(workflow("ci-maintenance")["concurrency"]["group"], event("pull_request_target"))
+    assert qualification != cleanup
+
+
+def test_dashboard_unit_coverage_runs_once_while_all_browser_shards_remain_required() -> None:
+    job = workflow("python-tests")["jobs"]["dashboard-browser"]
+    shards = job["strategy"]["matrix"]["shard"]
+    assert shards == [1, 2, 3]
+    assert job["strategy"]["fail-fast"] is False
+    unit_steps = [step for step in job["steps"] if "npm run test:dashboard:coverage" in step.get("run", "")]
+    assert len(unit_steps) == 1
+    unit = unit_steps[0]
+    assert [shard for shard in shards if expression(unit["if"], {"matrix": SimpleNamespace(shard=shard)})] == [1]
+    browser = next(step for step in job["steps"] if "personal-workspace-browser-smoke.mjs" in step.get("run", ""))
+    assert "if" not in browser
+    assert browser["env"]["LOOPX_PERSONAL_WORKSPACE_SHARD"] == "${{ matrix.shard }}/3"
+    for step in (unit, browser):
+        assert "continue-on-error" not in step
+    assert "continue-on-error" not in job
 
 
 def test_required_merge_gate_workflow_is_not_suppressed_by_path_filters() -> None:

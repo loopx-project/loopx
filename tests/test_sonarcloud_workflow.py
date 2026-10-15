@@ -63,8 +63,8 @@ def test_each_missing_analysis_guard_is_rejected() -> None:
 
 
 def _assert_analysis_boundary(workflow: dict, caller: dict) -> None:
-    # A trusted metadata-only cleanup trigger belongs to the caller, not to
-    # Sonar. Analysis must still depend on successful coverage in this run.
+    # A trusted metadata-only cleanup event must not qualify Python or Sonar.
+    # Analysis still depends on successful coverage in this run.
     assert set(workflow["on"]) == {"workflow_call"}
     sonar = caller["jobs"]["sonar"]
     assert sonar["needs"] == "pytest"
@@ -120,8 +120,13 @@ def test_reachable_privileged_analysis_or_coverage_bypass_is_rejected(unsafe) ->
         _assert_analysis_boundary(workflow, caller)
 
 
-def test_trusted_cleanup_event_extension_does_not_activate_analysis() -> None:
+def test_separate_trusted_cleanup_does_not_activate_analysis() -> None:
     workflow = yaml.load(WORKFLOW.read_text(), Loader=yaml.BaseLoader)
     caller = yaml.load(WORKFLOW.with_name("python-tests.yml").read_text(), Loader=yaml.BaseLoader)
-    caller["on"]["pull_request_target"]["types"] = ["closed", "synchronize"]
+    maintenance = yaml.load(WORKFLOW.with_name("ci-maintenance.yml").read_text(), Loader=yaml.BaseLoader)
+    assert "pull_request_target" not in caller["on"]
+    assert maintenance["on"]["pull_request_target"]["types"] == ["closed", "synchronize"]
+    for job in maintenance["jobs"].values():
+        assert "uses" not in job and "secrets" not in job
+        assert all(not step.get("uses", "").startswith("actions/checkout@") for step in job["steps"])
     _assert_analysis_boundary(workflow, caller)
