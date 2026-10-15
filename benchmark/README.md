@@ -882,6 +882,12 @@ Fresh credentials come from the ordinary runner credential source. The native
 activation's absolute deadline includes receiver installation and preparation;
 restarting the entry cannot grant another full budget or submission allowance.
 
+Warm verification hashes the complete checkpoint with a read window of up to
+60 seconds, capped by the original execution deadline. It rejects a read that
+finishes after that deadline. The launcher reuses this verified metadata before
+native registration; subsequent participant checks still verify the retained
+bytes. This read window grants no extra execution time.
+
 Both comparison arms first settle actual preparation at cadence one and consume
 the retained decision through a current semantic replan. The existing joint
 continuation gate must accept that replan before the declared normal cadence

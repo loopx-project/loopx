@@ -259,7 +259,7 @@ def test_brief_diagnostics_keep_only_the_selected_prompt_command() -> None:
 
 @pytest.mark.parametrize(
     ("mode", "base_budget"),
-    [("full", 12000), ("compact", 6700), ("brief", 4300), ("thin", 3200)],
+    [("full", 12000), ("compact", 6700), ("brief", 4600), ("thin", 3200)],
 )
 def test_reward_memory_prompt_headroom_is_fixed_and_feature_scoped(
     mode: str, base_budget: int

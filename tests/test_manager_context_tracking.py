@@ -319,14 +319,14 @@ def test_cli_links_generated_core_id_and_reads_live_state(tmp_path, monkeypatch,
         "--agent-id", "agent-a", "--text", "Verified current work")
     row = cli("manager-inbox", "status", *inbox)["rows"][0]
     assert [(t["todo_id"], t["title"], t["status"]) for t in row["linked_todos"]] == [
-        (tid, "Verified current work", "open")
+        (tid, "[P1] Verified current work", "open")
     ]
     assert "Verified current work" not in path.read_text()
     resumed = cli("manager-inbox", "read", "--goal-id", "goal-a", "--agent-id", "agent-a")["items"][0]
     follow = resumed["receiver_followthrough"]
     assert follow["recorded_decision"] == "adopt" and follow["step"] == "review_request_work"
     assert [(t["todo_id"], t["title"], t["status"]) for t in follow["linked_todos"]] == [
-        (tid, "Verified current work", "open")
+        (tid, "[P1] Verified current work", "open")
     ]
     assert follow["answer_owed"] is True
     # Evidence-only linking must survive the next ordinary CLI receiver read.

@@ -83,11 +83,12 @@ class Workspace:
         return {
             "envelope": self.normalize(envelope),
             "exit": self.exit(),
-            "effect": {
+            # Keep the exact effect shape and target; Todo IDs are opaque.
+            "effect": self.normalize({
                 "added": sorted(k for k in after if k not in before),
                 "removed": sorted(k for k in before if k not in after),
                 "changed": sorted(k for k in after if k in before and after[k] != before[k]),
-            },
+            }),
             "outbox_added": sorted(outbox_after - outbox_before),
         }
 

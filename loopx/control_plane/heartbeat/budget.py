@@ -12,7 +12,7 @@ from typing import Any
 INTERFACE_BUDGET_CHARS = {
     "full": 12_000,
     "compact": 6_700,
-    "brief": 4_300,
+    "brief": 4_600,
     "thin": 3_200,
     "visible_goal": 4_000,
 }

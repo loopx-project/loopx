@@ -37,7 +37,7 @@ def test_concurrent_create_refuses_reviewed_intent(tmp_path, monkeypatch, provid
     assert conflict.value.receipt["write_attempted"] is (timing == "after-final-preview")
     assert ("current_preview_id" in conflict.value.receipt) is (timing == "before-confirmation")
     snapshot = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
-    assert [todo["text"] for todo in snapshot["todos"]] == ["Independent accepted request"]
+    assert [todo["text"] for todo in snapshot["todos"]] == ["[P1] Independent accepted request"]
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -51,4 +51,4 @@ def test_current_review_creates_once_and_duplicate_remains_noop(tmp_path, monkey
             text="Reviewed request", preview_id=preview["preview_id"])
         assert result["applied"] is True
     snapshot = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
-    assert [todo["text"] for todo in snapshot["todos"]] == ["Reviewed request"]
+    assert [todo["text"] for todo in snapshot["todos"]] == ["[P1] Reviewed request"]

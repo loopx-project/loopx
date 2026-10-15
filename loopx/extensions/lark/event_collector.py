@@ -139,10 +139,18 @@ def load_lark_event_collector_config(
     raw_operation_callbacks = (
         raw_operation_callbacks if isinstance(raw_operation_callbacks, Mapping) else {}
     )
-    unknown_operation_callback_fields = set(raw_operation_callbacks) - {"enabled", "managed_turn_wake"}
+    unknown_operation_callback_fields = set(raw_operation_callbacks) - {"enabled", "managed_turn_wake", "callbacks_only"}
     if unknown_operation_callback_fields:
         raise ValueError("collector operation_callbacks contains unsupported fields")
     operation_callbacks_enabled = raw_operation_callbacks.get("enabled") is True
+    callbacks_only = raw_operation_callbacks.get("callbacks_only", False)
+    if not isinstance(callbacks_only, bool):
+        raise ValueError("collector operation_callbacks.callbacks_only must be a boolean")
+    collect_messages = not callbacks_only
+    if not collect_messages and not operation_callbacks_enabled:
+        raise ValueError("collector requires message collection or operation callbacks")
+    if not collect_messages and turn_start_sync_enabled:
+        raise ValueError("callback-only collector cannot enable message turn-start sync")
     if operation_callbacks_enabled and schema_version == CONFIG_SCHEMA_VERSION_V0:
         raise ValueError("collector operation_callbacks requires config v1")
     managed_turn_wake = None
@@ -252,9 +260,9 @@ def load_lark_event_collector_config(
             project=root,
             config_path=inbox_config_path,
         )
-        if enabled and not inbox["enabled"]:
+        if enabled and collect_messages and not inbox["enabled"]:
             raise ValueError("enabled collector requires enabled event inboxes")
-        if enabled and not inbox["thread_complete"]:
+        if enabled and collect_messages and not inbox["thread_complete"]:
             raise ValueError(
                 "collector lifecycle currently requires configured_chat_all capture"
             )
@@ -323,6 +331,7 @@ def load_lark_event_collector_config(
     return {
         "schema_version": schema_version,
         "enabled": enabled,
+        "collect_messages": collect_messages,
         "project": root,
         "config_path": path,
         "service_name": service_name,
@@ -487,8 +496,9 @@ def _plan(
             "profile_bound": bool(config.get("profile")),
             "profile_source": config["profile_source"],
             "profile_returned": False,
-            "capture_scope": "configured_chat_all",
-            "thread_complete": all(
+            "collect_messages": config["collect_messages"],
+            "capture_scope": "configured_chat_all" if config["collect_messages"] else "operation_callbacks_only",
+            "thread_complete": config["collect_messages"] and all(
                 route["inbox"]["thread_complete"] for route in config["routes"]
             ),
             "route_count": len(config["routes"]),
@@ -724,6 +734,7 @@ def inspect_lark_event_collector(
         "ok": True,
         "schema_version": STATUS_SCHEMA_VERSION,
         "enabled": config["enabled"],
+        "collect_messages": config["collect_messages"],
         "status": "healthy" if healthy else "attention_required",
         "healthy": healthy,
         "service_name": config["service_name"],
@@ -766,7 +777,7 @@ def inspect_lark_event_collector(
             "last_failure_event_shape"
         ),
         "operation_callback_console_configuration_preflighted": False,
-        "thread_complete": all(
+        "thread_complete": config["collect_messages"] and all(
             route["inbox"]["thread_complete"] for route in config["routes"]
         ),
         "local_paths_returned": False,

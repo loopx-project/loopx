@@ -134,7 +134,14 @@ jobs:
     needs: [changes, chat-bundle]
     if: needs.changes.outputs.core_tests == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The packaged scenario catalog outgrew one 15-minute runner, so the
+    # catalog is partitioned like dashboard-browser and the companion smokes
+    # are spread across the shards. The aggregate needs every shard to pass.
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v7
@@ -155,13 +162,29 @@ jobs:
           cache-dependency-path: apps/presentation/dashboard/package-lock.json
       - name: Qualify the actual compiled UI
         working-directory: apps/presentation/dashboard
+        env:
+          LOOPX_PERSONAL_WORKSPACE_SHARD: "${{ matrix.shard }}/3"
         run: |
           npm ci --ignore-scripts
           ./node_modules/.bin/playwright install --with-deps chromium
-          npm run smoke:personal-workspace-packaged
+          node ../../../examples/personal-workspace-browser/shard.test.mjs
+          npm run smoke:personal-workspace-packaged:catalog
+      - name: Qualify turn acceptance retry and the upgrade window
+        if: matrix.shard == 1
+        working-directory: apps/presentation/dashboard
+        run: |
           npm run smoke:chat-turn-acceptance-retry
           npm run smoke:chat-upgrade
+      - name: Qualify packaged team evidence and feedback recovery
+        if: matrix.shard == 2
+        working-directory: apps/presentation/dashboard
+        run: npm run smoke:personal-workspace-packaged:team
+      - name: Qualify the Goal workspace craft composition
+        if: matrix.shard == 3
+        working-directory: apps/presentation/dashboard
+        run: npm run smoke:personal-workspace-packaged:craft
       - name: Qualify packaged ZCode recovery against its persistent owner
+        if: matrix.shard == 3
         env:
           LOOPX_USAGE_PING: "0"
           DO_NOT_TRACK: "1"

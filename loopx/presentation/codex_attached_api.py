@@ -153,7 +153,7 @@ class CodexAttachedRequestMixin:
                         "No delivery receipt is recorded for this input.", status=404
                     )
                     return
-                receipt = json.loads(receipt_path.read_text())
+                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
                 if receipt.get("binding_ref") != binding["binding_ref"]:
                     raise ValueError("Delivery belongs to an older binding")
                 http._send_json(receipt_readback(receipt))
@@ -300,7 +300,7 @@ class CodexAttachedRequestMixin:
             fingerprint = input_fingerprint(body["binding_ref"], body["text"])
             with exclusive_file_lock(path):
                 if path.exists():
-                    receipt = json.loads(path.read_text())
+                    receipt = json.loads(path.read_text(encoding="utf-8"))
                     if receipt["fingerprint"] != fingerprint:
                         raise ValueError("Operation id belongs to a different input")
                     http._send_json(receipt_readback(receipt))

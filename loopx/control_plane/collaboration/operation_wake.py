@@ -140,7 +140,7 @@ def dispatch_confirmed_operation_wake(
         if parameters["goal_id"] != configuration["goal_id"]:
             return {**base, "state": "out_of_scope"}
         config_path = _configuration_path(Path(configuration["project"]), configuration["execution_config"])
-        raw_config = json.loads(config_path.read_text())
+        raw_config = json.loads(config_path.read_text(encoding="utf-8"))
         if raw_config.get("schema_version") != "loopx_local_delegation_v0":
             raise ValueError("unsupported operation launch configuration")
         bindings = raw_config.get("bindings")

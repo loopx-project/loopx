@@ -245,22 +245,18 @@ def main(argv=None):
     if args.restore_checkpoint is not None:
         from benchmark.runtime.sforge_warm_start import WarmStart
         from benchmark.edgebench.checkpoint_controller import restore
-        from loopx.control_plane.effect_runtime import effect_runtime_result
         # The native API version is a required provider prerequisite. Do not
         # cold-register if an installed provider cannot continue the checkpoint.
         from sforge.harness.restored_registration import RestoredRegistration
-        effect_runtime_result("runtime.checkpoint_artifacts", {
-            "action": "verify", "root": str(args.restore_checkpoint), "expected_sha256": args.restore_sha256})
-        metadata = json.loads((args.restore_checkpoint / "checkpoint.json").read_bytes())["point_metadata"]
-        snapshot = metadata["worker_file_snapshot"]
-        capsule = args.restore_checkpoint / "components" / snapshot["native_capsule_component_id"]
-        clock = attempt / "restored-phase-deadline"
         # Validate session/workspace participants before native registration.
         candidate = WarmStart(args.restore_checkpoint, args.restore_sha256, args.restore_config,
             args.restore_goal, args.restore_agent, args.restore_source_todo,
             int(time.time()) + args.timeout, args.replan_after_turns or 6,
             tuple(args.restore_research_component))
-        candidate.verify(task.cwd)
+        metadata = candidate.verify(task.cwd)
+        snapshot = metadata["worker_file_snapshot"]
+        capsule = args.restore_checkpoint / "components" / snapshot["native_capsule_component_id"]
+        clock = attempt / "restored-phase-deadline"
         warm_start = candidate
     agent = SForgeWorker(config, profile=args.worker, cwd=task.cwd,
                          warm_start=warm_start,

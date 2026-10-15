@@ -37,6 +37,22 @@ _DEFAULT_ROUTE_REFERENCES = (
 _REAL_DEFAULT_ROUTES = (paths.DEFAULT_RUNTIME_ROOT, paths.LEGACY_RUNTIME_ROOT)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _isolated_worker_effect_runtime(tmp_path_factory):
+    # HOME does not namespace the Effect process on POSIX: its locator uses
+    # getuid() and the process temp directory. A restart in one xdist worker
+    # must not retire another worker's real runtime.
+    temporary = tmp_path_factory.mktemp("effect-runtime")
+    with pytest.MonkeyPatch.context() as patch:
+        for variable in ("TMPDIR", "TEMP", "TMP"):
+            patch.setenv(variable, str(temporary))
+        patch.setattr(tempfile, "tempdir", str(temporary))
+        yield
+        from loopx.control_plane.effect_runtime import restart_effect_runtime
+
+        restart_effect_runtime(wait_for_exit=True)
+
+
 @pytest.fixture
 def isolated_effect_runtime(tmp_path, monkeypatch):
     temporary = tmp_path / "temporary"

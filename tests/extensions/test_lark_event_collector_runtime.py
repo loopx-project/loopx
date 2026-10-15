@@ -429,12 +429,25 @@ def test_operation_callback_status_separates_readiness_from_qualification(
 
 
 @pytest.mark.parametrize("wake_revocation", [False, True])
+@pytest.mark.parametrize("collect_messages", [True, False])
+@pytest.mark.parametrize("callback_exit", [0, 7])
 def test_collector_runs_independent_operation_callback_consumer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     wake_revocation: bool,
+    collect_messages: bool,
+    callback_exit: int,
 ) -> None:
     project, collector = _operation_callback_project(tmp_path)
+    config = json.loads(collector.read_text())
+    config["operation_callbacks"]["callbacks_only"] = not collect_messages
+    collector.write_text(json.dumps(config))
+    if not collect_messages:
+        inbox = collector.parent / "inbox.json"
+        data = json.loads(inbox.read_text())
+        data["enabled"] = False
+        inbox.write_text(json.dumps(data))
+    stream_log = tmp_path / "streams.jsonl"
     if wake_revocation:
         config = json.loads(collector.read_text())
         config["operation_callbacks"]["managed_turn_wake"] = {
@@ -451,11 +464,13 @@ def test_collector_runs_independent_operation_callback_consumer(
         "import sys\n"
         "import time\n"
         "event_key = sys.argv[sys.argv.index('consume') + 1]\n"
+        f"with open({str(stream_log)!r}, 'a') as f: f.write(event_key + '\\n')\n"
         "if event_key == 'card.action.trigger':\n"
         "    assert '--quiet' not in sys.argv\n"
         "    print('[event] ready event_key=card.action.trigger', flush=True)\n"
         "    print(json.dumps({'type': event_key, 'chat_id': 'oc_operation_fixture'}), flush=True)\n"
         "    print(json.dumps({'type': event_key, 'chat_id': 'oc_operation_fixture'}), flush=True)\n"
+        f"    sys.exit({callback_exit})\n"
         "else:\n"
         "    time.sleep(0.2)\n",
         encoding="utf-8",
@@ -501,6 +516,13 @@ def test_collector_runs_independent_operation_callback_consumer(
     while not captured and time.monotonic() < deadline:
         time.sleep(0.01)
     assert result["operation_callback_listener_started"] is True
+    assert result["ok"] is (callback_exit == 0)
+    assert result["operation_callback_consumer_succeeded"] is (callback_exit == 0)
+    assert result.get("collect_messages", True) is collect_messages
+    assert sorted(stream_log.read_text().splitlines()) == sorted(
+        ["card.action.trigger", "im.message.receive_v1"] if collect_messages else ["card.action.trigger"]
+    )
+    assert result["captured_count"] == 0
     assert result["operation_callback_listener_ready"] is True
     assert result["operation_callback_received_count"] == 2
     assert result["operation_callback_verified_count"] == 1
@@ -519,6 +541,43 @@ def test_collector_runs_independent_operation_callback_consumer(
     assert status["last_failure_code"] == "result_delivery_unverified"
     assert status["last_failure_stage"] == "handle_callback"
     assert status["listener_active"] is False
+    assert status["consumer_returncode"] == callback_exit
+
+
+@pytest.mark.parametrize("invalid", [None, 0, 1, "false", {}, []])
+def test_collector_callback_only_toggle_rejects_non_boolean(tmp_path, invalid):
+    project, collector = _operation_callback_project(tmp_path)
+    data = json.loads(collector.read_text())
+    data["operation_callbacks"]["callbacks_only"] = invalid
+    collector.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="callbacks_only must be a boolean"):
+        event_collector.load_lark_event_collector_config(project=project, config_path=collector)
+
+
+def test_callback_only_requires_callback_input_and_refuses_message_sync(tmp_path):
+    project, collector = _operation_callback_project(tmp_path)
+    data = json.loads(collector.read_text())
+    data["operation_callbacks"]["callbacks_only"] = True
+    data["operation_callbacks"]["enabled"] = False
+    collector.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="requires message collection or operation callbacks"):
+        event_collector.load_lark_event_collector_config(project=project, config_path=collector)
+    data["operation_callbacks"]["enabled"] = True
+    data["turn_start_sync"] = {"enabled": True}
+    collector.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="cannot enable message turn-start sync"):
+        event_collector.load_lark_event_collector_config(project=project, config_path=collector)
+    data["turn_start_sync"]["enabled"] = False
+    collector.write_text(json.dumps(data))
+    plan = plan_lark_event_collector(project=project, config_path=collector, runtime_root=tmp_path / "runtime")
+    assert plan["collect_messages"] is False
+    assert plan["capture_scope"] == "operation_callbacks_only"
+    assert plan["thread_complete"] is False
+    data["operation_callbacks"].pop("callbacks_only")
+    collector.write_text(json.dumps(data))
+    plan = plan_lark_event_collector(project=project, config_path=collector, runtime_root=tmp_path / "runtime")
+    assert plan["collect_messages"] is True
+    assert plan["capture_scope"] == "configured_chat_all"
 
 
 def test_operation_callback_json_diagnostic_does_not_mark_listener_ready(

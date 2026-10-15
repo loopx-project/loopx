@@ -320,9 +320,9 @@ def assert_risks_payload(payload: dict[str, object]) -> None:
     ], payload
 
     stale_rows = payload["groups"]["stale_runs"]
-    assert stale_rows, payload
-    assert stale_rows[0]["kind"] == "stale_latest_run_projection", stale_rows
-    assert stale_rows[0]["goal_id"] == GOAL_ID, stale_rows
+    # Current Todo reads reconcile this ordinary stale progress projection.
+    # Historical failures and unavailable sources retain their independent risks.
+    assert stale_rows == [], payload
     assert any(
         warning["reason_code"] == "global_registry_unavailable"
         for warning in payload["source_warnings"]

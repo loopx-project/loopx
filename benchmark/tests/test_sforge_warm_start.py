@@ -108,6 +108,57 @@ def test_invalid_participant_rejects_before_workspace_or_authority_changes(point
     assert not workspace.with_name("workspace.before-checkpoint").exists()
 
 
+@pytest.mark.parametrize("remaining, expected_budget", [(600, 60), (7, 7)])
+def test_full_checkpoint_read_budget_is_bounded_by_original_deadline(point, monkeypatch, remaining, expected_budget):
+    start, workspace = point
+    now = time.time()
+    start = replace(start, deadline_epoch=int(now) + remaining)
+    monkeypatch.setattr(warm, "time", SimpleNamespace(time=lambda: float(int(now))))
+    calls = []
+    def verify(method, params, **kwargs):
+        calls.append((method, params, kwargs))
+        return effect_runtime_result(method, params, **kwargs)
+    monkeypatch.setattr(warm, "effect_runtime_result", verify)
+    assert start.verify(str(workspace))
+    assert len(calls) == 1
+    method, params, kwargs = calls[0]
+    assert method == "runtime.checkpoint_artifacts" and params["action"] == "verify"
+    assert kwargs["timeout"] == expected_budget
+    assert not workspace.with_name("workspace.before-checkpoint").exists()
+
+
+def test_verification_cannot_admit_a_checkpoint_after_its_deadline(point, monkeypatch):
+    start, workspace = point
+    clock = [float(int(time.time()))]
+    start = replace(start, deadline_epoch=int(clock[0]) + 7)
+    monkeypatch.setattr(warm, "time", SimpleNamespace(time=lambda: clock[0]))
+    def verify(method, params, **kwargs):
+        value = effect_runtime_result(method, params, **kwargs)
+        clock[0] += 8
+        return value
+    monkeypatch.setattr(warm, "effect_runtime_result", verify)
+    with pytest.raises(ValueError, match="expired during checkpoint verification"):
+        start.verify(str(workspace))
+    assert (workspace / "candidate").read_text() == "retained candidate"
+    assert not workspace.with_name("workspace.before-checkpoint").exists()
+
+
+def test_expiry_during_context_validation_cannot_admit_the_checkpoint(point, monkeypatch):
+    start, workspace = point
+    clock = [float(int(time.time()))]
+    start = replace(start, deadline_epoch=int(clock[0]) + 7)
+    monkeypatch.setattr(warm, "time", SimpleNamespace(time=lambda: clock[0]))
+    context = (start.root / "components/context").read_bytes()
+    def digest(data):
+        result = hashlib.sha256(data)
+        if data == context:
+            clock[0] += 8
+        return result
+    monkeypatch.setattr(warm, "hashlib", SimpleNamespace(sha256=digest))
+    with pytest.raises(ValueError, match="expired during checkpoint verification"):
+        start.verify(str(workspace))
+
+
 def test_restore_replaces_image_files_preserves_modes_and_refuses_second_attempt(point):
     start, workspace = point
     assert start.verify(str(workspace))

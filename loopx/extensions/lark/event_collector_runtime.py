@@ -849,7 +849,7 @@ def run_lark_event_collector(
         stdout=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace",
         bufsize=1,
-    )
+    ) if config["collect_messages"] else None
     callback_process: subprocess.Popen[str] | None = None
     callback_thread: threading.Thread | None = None
     result_recovery_thread: threading.Thread | None = None
@@ -1061,8 +1061,11 @@ def run_lark_event_collector(
     self_message_skipped_count = 0
     routed_chat_ids: set[str] = set()
     try:
-        assert process.stdout is not None
-        for line in process.stdout:
+        # Callback-only collection shares the existing callback/recovery owner;
+        # it must not start or ingest another text-message stream.
+        message_lines = () if process is None else process.stdout
+        assert message_lines is not None
+        for line in message_lines:
             try:
                 payload = json.loads(line)
             except json.JSONDecodeError:
@@ -1149,7 +1152,11 @@ def run_lark_event_collector(
             routed_chat_ids.add(chat_id)
             verified_count += int(enriched.get("reply_context_verified") is True)
             reply_to_bot_count += int(enriched.get("reply_to_bot") is True)
-        returncode = process.wait()
+        if process is not None:
+            returncode = process.wait()
+        else:
+            assert callback_process is not None
+            returncode = callback_process.wait()
     finally:
         result_recovery_stop.set()
         for child in (process, callback_process):
@@ -1213,6 +1220,8 @@ def run_lark_event_collector(
         "local_paths_returned": False,
         "private_content_returned": False,
     }
+    if not config["collect_messages"]:
+        result["collect_messages"] = False
     if callbacks_enabled:
         result.update(
             {

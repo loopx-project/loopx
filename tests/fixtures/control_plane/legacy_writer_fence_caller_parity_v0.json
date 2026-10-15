@@ -1068,7 +1068,7 @@
       },
       "effect": {
         "added": [
-          "runtime/goals/observable/task-leases/todo_f49c7f1b755a.json"
+          "runtime/goals/observable/task-leases/{todo_b}.json"
         ],
         "removed": [],
         "changed": []
