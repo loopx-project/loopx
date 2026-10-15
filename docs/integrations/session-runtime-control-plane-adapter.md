@@ -107,9 +107,20 @@ chat window or successful transport alone does not establish a better experience
 than working in Codex App. Goal progress and acceptance still come from their
 existing owners, never from the transcript or an input acknowledgement.
 
-The Goal **Chat** view can open **Original Codex App conversations**, select a
-registered Agent, read its original saved messages and send a plain-text reply
-when that conversation is observed idle. Closing the dialog stops observation;
+In the Goal overview's **By owner** view, **Work conversation** opens that owner's
+stable working page directly. The owner is already selected; a
+missing binding is shown as unavailable and never selects another Agent instead.
+Read-only workspaces do not expose this control. The Goal **Chat** view also
+offers **Agent work conversations** with the complete registered Agent directory.
+The URL retains the selected Goal and `workAgent` across reload and browser
+Back/Forward. Goal or source changes clear the Agent route. Unbound and unsupported
+hosts remain visible with their specific limitation; discovery never silently
+substitutes a different Agent. The native provider still authorizes each read
+and reply independently. The page hides the ordinary Goal composer and executor
+selector so a reply has one explicit recipient.
+
+Supported entries read the original saved work records and send a plain-text reply
+when that conversation is observed idle. Leaving the Agent page stops observation;
 the original App keeps its executor, conversation, model and approval settings.
 There is no separate Agent process, automatic resume/fork or permission change.
 
@@ -117,11 +128,41 @@ This is an experimental Desktop provider within the existing native Chat
 boundary, not a second generic session authority. Binding selection reuses
 `thread_agent_binding`; activity reuses the existing Codex host observer. The
 provider reads the uniquely matching local Codex home and bounded read-only
-SQLite/JSONL windows. It returns user/assistant text to the local owner UI,
-excluding tool output and reasoning; it does not read authentication files.
-Original message text can contain private content and stays owner-local. Reading older windows
-is explicit. One-second observation of saved messages is **not token streaming**.
-Full history is not loaded into the App or copied into LoopX run history.
+SQLite/JSONL windows. The history view now includes user/assistant visible
+messages, function/custom-tool calls and results, and explicit turn start/end,
+interruption and error records. This intentionally extends the former text-only
+default. System/developer instructions, analysis/reasoning, token counters and
+duplicate message mirrors are excluded; authentication files are never read.
+The provider does not infer a successful task, a retry or current execution from
+a tool result or a recorded turn end. Current activity retains its own observer.
+
+Tool records use a single expandable row; long text continues in the same view
+with explicit content reads. Native text-only output blocks are decoded before
+pagination so Unicode offsets remain lossless. Structured shell output shows its
+output and recorded exit code, with every original field available in a disclosure;
+unknown formats remain verbatim. Neither a rendered exit code nor readable output
+establishes task acceptance. Native record positions order and deduplicate pages, including
+bursts larger than a page between observations and incomplete appends. Older and
+newer pages remain reachable when the visible window reaches 300 records.
+Looking back pauses automatic insertion; new activity is disclosed without
+moving the reader. Source and content fingerprints reject stale detail reads;
+history replacement resets the visible window instead of mixing conversations.
+Pages contain at most 100 records and scan approximately 2 MiB, allowing a whole
+larger record at a boundary. The reader skips up to eight metadata-only windows
+per read gesture or observation; it stops on visible work, the source boundary,
+a changed source or navigation away. Exhausting that bounded burst leaves the
+history controls available; it never scans the full rollout without a bound. Detail responses carry up to 24,000 characters.
+Records above the 8 MiB reader limit, malformed records and unsupported response
+types retain an explicit unavailable position. Non-text attachments are disclosed
+as unavailable. These limits remain coverage gaps, not a claim of complete native
+event parity. Credential-shaped content is withheld through the shared detector;
+that detector is not a guarantee of identifying every possible secret.
+
+Original content remains private to the local owner. One-second observation of
+saved records is **not token streaming**. History is neither copied into LoopX
+run history nor made available to a shared sink. Stable Agent routing is shared
+by the Goal directory; other providers and native approval/stream parity remain
+within the working-session acceptance. The Codex provider does not close those gaps.
 
 Reply uses Codex Desktop's version-sensitive follower IPC, requires its original
 owner to advertise support for external input, and retains the original thread
@@ -136,13 +177,19 @@ acknowledgement, without copying the message body. The same operation cannot be
 sent twice. A confirmed submission clears the draft and leaves the next reply
 composer available, including after reload; it does not require a second human
 acknowledgement. Sending again still requires an explicit new message and a fresh
-idle observation. After an interrupted response or reopening with a pending
+idle observation. If the Agent becomes busy before dispatch, the API returns
+`input_not_submitted: true` with the rejected operation id. The page retains the
+draft and restores the composer directly, including across reload, without an
+original-App check or automatic resend. This proof applies only before a receipt
+or native input exists; a generic conflict, missing receipt or transport failure
+does not establish it. After an interrupted response or reopening with a pending
 submission, the page automatically reads its existing receipt once. A recorded
 acknowledgement restores the composer without another user step; genuinely
 unconfirmed delivery remains pending and never silently retries a native effect.
 Check the original App before discarding an uncertain receipt. Late reads cannot
 restore a discarded operation over a new draft. The UI keeps only its reply recovery
-record in the current browser session. Replies are explicit local owner actions;
+record and unsent draft in the current browser session, scoped to the exact Goal
+and binding; switching Agents never carries text to another recipient. Replies are explicit local owner actions;
 a registered binding or observer does not authorize an Agent to message peers.
 
 The local presentation API is `/api/chat/codex-attached`: GET requires the
@@ -157,7 +204,7 @@ the fixed Codex bundle with that conversation's canonical UUID. It cannot launch
 arbitrary URLs or commands, submit input or bypass the desktop navigation fence.
 The UI reports OS dispatch, not proof that the App displayed the thread; errors
 are visible and retry requires another explicit click. Other hosts report this
-operation unavailable. Close the dialog to stop reads; rolling back the runtime
+operation unavailable. Leave the Agent page to stop reads; rolling back the runtime
 removes this UI/provider without editing native sessions, credentials or App
 startup configuration. Do not expose this owner-only API through a shared sink.
 

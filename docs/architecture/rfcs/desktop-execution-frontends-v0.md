@@ -1025,7 +1025,20 @@ running.
 Bounded provider checkpoint: the local Goal Chat can inspect a registered
 Codex App Agent's original saved conversation and offer an idle-only plain-text
 reply through the existing Desktop owner. It keeps bounded source windows and
-one-second saved-message observations instead of resuming another app-server.
+one-second saved-record observations instead of resuming another app-server.
+The provider view includes visible messages, function/custom-tool input and
+results, and explicit turn lifecycle records. Long text can be continued in
+place; backward/forward paging and append cursors preserve history across
+bursts. Bounded empty-window catch-up avoids repeated clicks through metadata;
+folded tool rows decode native text blocks and expose readable shell output while
+retaining source fields. Reading old records pauses insertion, with a path back to latest.
+Hidden reasoning/configuration are excluded and credential-shaped fields are
+withheld. Unsupported, malformed, non-text and over-limit source records remain
+visible coverage gaps. The target is a stable working conversation for every
+Goal/Agent. The Goal directory now opens a stable Agent route, preserving reload
+and Back/Forward and showing unbound or unsupported hosts explicitly. The
+ordinary Goal composer/executor is absent in this view. This first provider does
+not establish other-provider coverage or complete native activity/stream parity.
 See the [provider boundary and operation](../../integrations/session-runtime-control-plane-adapter.md#experimental-owner-local-codex-app-conversations).
 This is an experimental provider proposal, not full Slice B acceptance:
 token deltas, busy-turn steering/queueing, approval callbacks, native live-send
@@ -1034,7 +1047,10 @@ Its bounded user task is following up with a specific Agent while reviewing
 Goal work. Confirmed input leaves the composer ready without a redundant
 acknowledgement. Interrupted responses recover from existing receipts without
 resubmitting; genuinely uncertain input still requires recovery before another send.
-The separate conversation window remains an interim entry. Evaluate subsequent
+The overview's owner entry opens that exact Agent with one navigation action,
+without repeating Agent selection; an absent binding stays unavailable. The
+stable page reuses the existing native provider and authority. This reduces the
+local overview path; evaluate the remaining working-session acceptance
 integration against selecting the original conversation in Codex App, including
 target discovery, correction and result readback; transport success alone does
 not establish a shorter task path, independent acceptance or G1 completion.
