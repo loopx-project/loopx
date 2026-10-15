@@ -94,4 +94,3 @@ jobs:
                 core.info(`Qualification ${run.id} completed before cancellation.`);
               }
             }
-

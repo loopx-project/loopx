@@ -79,8 +79,9 @@ def _assert_analysis_boundary(workflow: dict, caller: dict) -> None:
         def condition(expression: str) -> bool:
             # These two shipped conditions use string comparisons and Boolean
             # operators only, as in the existing executable CI gate tests.
-            return bool(eval(expression.replace("&&", "and").replace("||", "or"),
-                             {"__builtins__": {}}, context))
+            source = expression.replace("&&", "and").replace("||", "or")
+            source = source.replace("!cancelled()", "not cancelled()")
+            return bool(eval(source, {"__builtins__": {}}, {**context, "cancelled": lambda: False}))
 
         classified = condition(caller["jobs"]["changes"]["if"])
         # If classification were reachable, assume its most permissive output.
