@@ -305,6 +305,26 @@ cd ..
 npm run build
 ```
 
+On macOS, also qualify a released artifact using the opt-in checks below
+(run from `src-tauri`, replacing the paths with downloaded release artifacts).
+Keep the updater archive's `.sig` file beside it:
+
+```bash
+LOOPX_TEST_APP="/path/to/LoopX.app" cargo test --lib \
+  real_release_backup_restores_damage_and_rejects_tampering -- --ignored
+LOOPX_TEST_SIGNED_ARCHIVE="/path/to/LoopX.app.tar.gz" cargo test \
+  --test signed_bundle -- --ignored
+```
+
+The first check copies the signed App into temporary directories, then exercises
+the production restore path after removing its executable, a sealed runtime
+resource, or the entire target bundle. It also rejects a tampered backup before
+journaling or replacement and checks that the source artifact remains intact.
+The second verifies the updater archive with the shipped public key and rejects
+modified bytes. Neither check launches the App or writes to an installed App or
+user data. These qualify the native recovery and signature boundaries; they do
+not replace packaged UI checks of download failure, restart, or runtime handoff.
+
 `npm run build` produces the configured platform bundles under
 `src-tauri/target/release/bundle/`. The release workflow builds macOS `.dmg`
 and `.app.zip` artifacts on macOS, Windows `.msi` and `.exe` artifacts on

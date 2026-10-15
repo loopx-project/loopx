@@ -623,15 +623,71 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     #[ignore = "requires LOOPX_TEST_APP from a signed macOS build"]
-    fn real_backup_copy_retains_signature() {
+    fn real_release_backup_restores_damage_and_rejects_tampering() {
+        use std::os::unix::fs::MetadataExt;
+
         let source = std::env::var("LOOPX_TEST_APP").unwrap();
+        let source = Path::new(&source);
+        let executable_name = declared_bundle_executable(source).unwrap();
+        let resource = "Contents/Resources/runtime/identity.json";
+        let identity = fs::read(source.join(resource)).unwrap();
         let dir = tempfile::tempdir().unwrap();
-        let copied = dir.path().join("LoopX.app");
-        copy(Path::new(&source), &copied).unwrap();
-        assert!(copied
-            .join("Contents/Resources/runtime/identity.json")
-            .is_file());
+        let temporary_root = dir.path().canonicalize().unwrap();
+        let assert_temporary = |path: &Path| {
+            assert!(path.canonicalize().unwrap().starts_with(&temporary_root));
+        };
+        let previous = dir.path().join("previous");
+        let backup = previous.join("LoopX.app");
+        let target = dir.path().join("LoopX.app");
+        let executable = target.join("Contents/MacOS").join(executable_name);
+        let journal = dir.path().join("pending-rollback");
+        copy(source, &backup).unwrap();
+        copy(source, &target).unwrap();
+        assert!(installed_bundle_verifies(&executable));
+
+        // Only disposable copies are damaged. Exercise the same locator,
+        // verified copy and atomic replacement used by the recovery button
+        // with a shipped bundle, including its actual sealed runtime resource.
+        for damaged in [&executable, &target.join(resource), &target] {
+            assert_temporary(damaged);
+            if damaged.is_dir() {
+                fs::remove_dir_all(damaged).unwrap();
+            } else {
+                fs::remove_file(damaged).unwrap();
+            }
+            assert!(!installed_bundle_verifies(&executable));
+            restore_verified_backup(&executable, &previous, || {
+                // The journal callback must precede replacement: the damaged
+                // target must still be observable here.
+                assert!(!installed_bundle_verifies(&executable));
+                fs::write(&journal, "rollback").map_err(|error| error.to_string())
+            })
+            .unwrap();
+            assert_eq!(fs::read_to_string(&journal).unwrap(), "rollback");
+            assert!(installed_bundle_verifies(&executable));
+            assert_eq!(fs::read(target.join(resource)).unwrap(), identity);
+            assert!(signature_verifies(&backup));
+            fs::remove_file(&journal).unwrap();
+        }
+
+        // An invalid release backup must fail before journaling or swapping,
+        // leaving the exact installed directory and its signature intact.
+        let installed_inode = fs::metadata(&target).unwrap().ino();
+        assert_temporary(&backup.join(resource));
+        fs::write(backup.join(resource), "tampered").unwrap();
+        assert_eq!(
+            restore_verified_backup(&executable, &previous, || {
+                panic!("a tampered backup must never reach the commit callback")
+            }),
+            Err("backup_failed".into())
+        );
+        assert_eq!(fs::metadata(&target).unwrap().ino(), installed_inode);
+        assert!(installed_bundle_verifies(&executable));
+        assert!(!journal.exists());
+        assert_eq!(fs::read(source.join(resource)).unwrap(), identity);
+        assert!(signature_verifies(source));
     }
 
     #[test]
