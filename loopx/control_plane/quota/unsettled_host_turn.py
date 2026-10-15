@@ -29,6 +29,7 @@ from .error_codes import (
     HeartbeatReceiptIdentityConflictError,
 )
 from .accounting_admission import quota_accounting_admission
+from .effect_program import ReceiptBoundReplayPhase
 
 UNSETTLED_HOST_TURN_RECOVERY_SCHEMA_VERSION = "unsettled_host_turn_recovery_v0"
 
@@ -101,7 +102,7 @@ def _todo_binding_facts(item: Mapping[str, Any] | None) -> dict[str, Any] | None
 
 def restore_receipt_bound_todo_source(
     payload: dict[str, Any], *, registry_path: Path, runtime_root: Path,
-    goal_id: str, todo_id: str,
+    goal_id: str, todo_id: str | None, replay_phase: ReceiptBoundReplayPhase | None,
 ) -> dict[str, Any]:
     """Complete a display snapshot from the original binding's exact reader.
 
@@ -111,6 +112,8 @@ def restore_receipt_bound_todo_source(
     """
     from ..todos.quota_summary import select_planning_inventory_source_items
 
+    if not todo_id or replay_phase is ReceiptBoundReplayPhase.SETTLED:
+        return payload
     queue = payload.get("attention_queue") or {}
     rows = list(queue.get("items") or [])
     for index, row in enumerate(rows):

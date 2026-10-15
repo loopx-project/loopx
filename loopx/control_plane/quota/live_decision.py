@@ -613,11 +613,11 @@ def build_live_quota_should_run_decision(
                 for item in queue.get("items") or []
             ],
         }
-    if receipt_bound_todo_id and receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED:
-        decision_status_payload = restore_receipt_bound_todo_source(
-            decision_status_payload, registry_path=registry_path, runtime_root=runtime_root,
-            goal_id=goal_id, todo_id=receipt_bound_todo_id,
-        )
+    decision_status_payload = restore_receipt_bound_todo_source(
+        decision_status_payload, registry_path=registry_path, runtime_root=runtime_root,
+        goal_id=goal_id, todo_id=receipt_bound_todo_id,
+        replay_phase=receipt_bound_replay_phase,
+    )
     decision_status_payload = overlay_active_turn_retries(
         decision_status_payload,
         goal_id=goal_id,
