@@ -42,6 +42,8 @@ def _stage_source_configuration(container, native, destination):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--provider-source", type=Path, required=True)
+    parser.add_argument("--provider-revision", default=PROVIDER_REVISION,
+                        help="Exact caller-selected native provider pin; default is the documented compatibility revision")
     parser.add_argument("--native-binary", type=Path, required=True)
     parser.add_argument("--guest-node", type=Path, required=True)
     parser.add_argument("--guest-dependencies", type=Path, required=True)
@@ -59,8 +61,8 @@ def main():
     if subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"], text=True).strip():
         parser.error("Use a clean dedicated source checkout and keep it frozen during qualification")
     provider = args.provider_source.resolve(strict=True)
-    if subprocess.check_output(["git", "-C", str(provider), "rev-parse", "HEAD"], text=True).strip() != PROVIDER_REVISION:
-        parser.error("Provider must be the documented immutable checkpoint revision")
+    if subprocess.check_output(["git", "-C", str(provider), "rev-parse", "HEAD"], text=True).strip() != args.provider_revision:
+        parser.error("Provider must match its exact declared immutable revision")
     if subprocess.check_output(["git", "-C", str(provider), "status", "--porcelain"], text=True).strip():
         parser.error("Provider source must be clean")
     binaries = {"native": args.native_binary.resolve(strict=True),
@@ -253,7 +255,7 @@ def main():
               {"LOOPX_RUNTIME_ROOT": "/results/transport-runtime"}, output / "core.log")
         assert subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip() == source_revision, "Source changed during qualification"
         assert not subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"], text=True).strip(), "Source changed during qualification"
-        receipt = {"passed": True, "controller_uid": os.getuid(), "provider_revision": PROVIDER_REVISION,
+        receipt = {"passed": True, "controller_uid": os.getuid(), "provider_revision": args.provider_revision,
                    "source_revision": source_revision, "source_tree_dirty": False,
                    "qualification_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in
                        [Path(__file__), source / "benchmark/tests/test_native_checkpoint_handoff.py",

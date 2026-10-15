@@ -1001,7 +1001,11 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
             if external:
                 assert boundary["checkpoint"]["captured"], json.dumps(boundary, indent=2)
                 assert not boundary["checkpoint"]["research_point_qualified"]  # Artifact integrity is not scientific qualification.
-                recaptured = Path(os.environ["LOOPX_JOINT_RECAPTURE_ROOT"]) / Path(boundary["checkpoint"]["destination"]).name
+                published = Path(os.environ["LOOPX_JOINT_RECAPTURE_ROOT"])
+                matching = [p for p in published.iterdir() if p.is_dir() and (p / "checkpoint.json").exists()
+                    and json.loads((p / "checkpoint.json").read_bytes())["sha256"] == boundary["checkpoint"]["sha256"]]
+                assert len(matching) == 1, "The sealed reply must select exactly one immutable point"
+                recaptured = matching[0]
                 captured = json.loads((recaptured / "checkpoint.json").read_bytes())
                 cm = captured["point_metadata"]
                 assert cm["held_decision_component_id"] and cm["replan"]["obligation_id"] != obligation["obligation_id"]
@@ -1031,7 +1035,7 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
                 assert next_metadata["replan"]["obligation_id"] != obligation["obligation_id"]
                 assert next_metadata["held_decision_component_id"]
                 assert next_metadata["native_session"]["turn_ids"] == grown["turn_ids"]
-            if fresh_context and not external:
+            if not external:
                 from benchmark.runtime.checkpoint import capture_after_wake
                 manual = wakes.parent / "checkpoints" / "refreshed-continuation"
                 manual_request = tmp_path / "manual-capture-request.json"
@@ -1044,10 +1048,11 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
                 assert completed["checkpoint"]["captured"], completed
                 captured = json.loads((manual / "checkpoint.json").read_text())
                 assert captured["point_metadata"]["native_session"]["turn_ids"] == grown["turn_ids"]
-                provenance = captured["point_metadata"]["session"]["checkpoint_context_refresh"]
-                assert provenance["checkpoint_sha256"] == digest
-                assert provenance["source_session_id"] == admitted["session_id"]
-                assert provenance["session_id"] == active_session_id
+                if fresh_context:
+                    provenance = captured["point_metadata"]["session"]["checkpoint_context_refresh"]
+                    assert provenance["checkpoint_sha256"] == digest
+                    assert provenance["source_session_id"] == admitted["session_id"]
+                    assert provenance["session_id"] == active_session_id
                 assert (manual / "components/code").read_text() == "10"
                 verified_point = effect_runtime_result("runtime.checkpoint_artifacts", {
                     "action": "verify", "root": str(manual), "expected_sha256": captured["sha256"]})
