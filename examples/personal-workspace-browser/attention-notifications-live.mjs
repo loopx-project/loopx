@@ -71,6 +71,10 @@ export const attentionNotificationsLiveScenario = {
       assert.equal((await page.evaluate(() => window.__loopxNotifications.length)), 0, "An optional user action does not interrupt the owner");
 
       // A decision raised in the real Todo owner while the owner is away.
+      // A second optional item first seen in the SAME read as the gate must
+      // remain optional too; remembering an older optional identity alone is insufficient.
+      const simultaneous = JSON.parse((await promisify(execFile)(python, ["-c", "from loopx.entrypoint import main; main()", "--format", "json", "--registry", ready.registry, "todo", "add", "--goal-id", "progress-projection", "--role", "user", "--task-class", "user_action", "--text", "Consider grouping the export notes"], { cwd: repoRoot, env: { ...process.env, PYTHONPATH: repoRoot } })).stdout);
+      assert.equal(simultaneous.ok, true);
       const { stdout } = await promisify(execFile)(python, ["-c", "from loopx.entrypoint import main; main()", "--format", "json", "--registry", ready.registry, "todo", "add", "--goal-id", "progress-projection", "--role", "user", "--task-class", "user_gate", "--text", gateText], { cwd: repoRoot, env: { ...process.env, PYTHONPATH: repoRoot } });
       const added = JSON.parse(stdout);
       assert.equal(added.ok, true);
