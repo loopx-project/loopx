@@ -619,6 +619,16 @@ with invented evidence. The field never qualifies execution, scientific novelty,
 utility, effective-Turn counts or acceptance; these remain independent checks.
 No new scheduler, selection rule, quota debit or per-result settlement is added.
 
+The history reader covers both legacy Todo-bound decisions and autonomous
+replan decisions. For an autonomous decision, the recorded Goal, Agent, Turn,
+obligation, settlement identity and accepted acknowledgement must agree; the
+derived decision reference includes that obligation instead of inventing a
+Todo. The existing settlement owner defines the binding, while the Python
+codec only transports its facts. Enabled reviews therefore receive the prior
+decision through the same `previous_review` requirement. Feature-off context
+and legacy decision references remain unchanged. This repairs feedback
+delivery; execution quality and goal benefit still require separate evidence.
+
 #### An iterative strategy and engineering boundary
 
 The first strategy is **model-guided, evidence-conditioned work planning**.
