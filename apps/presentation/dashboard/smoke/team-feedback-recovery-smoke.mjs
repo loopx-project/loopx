@@ -105,7 +105,7 @@ try {
   assert.equal(await evidence.getByText("已进入协调员收件箱，等待读取", {exact: true}).count(), 1,
     "An inbox receipt is presented as awaiting read, never as applied feedback");
   await page.unroute("**/api/chat/sessions/*/loopx", unavailableEvidence);
-  await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
+  await evidence.getByRole("button", {name: "重新检查交付", exact: true}).click();
   await evidence.getByLabel("证据内容: report.json").waitFor();
   await mkdir(outputDir, {recursive: true});
   await feedback.scrollIntoViewIfNeeded();

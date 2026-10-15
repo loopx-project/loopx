@@ -50,7 +50,7 @@ try {
   const dialog = page.getByRole("dialog", {name: "团队执行情况"});
   await dialog.getByRole("button", {name: "查看证据与反馈", exact: true}).first().click();
   const evidence = dialog.getByRole("region", {name: "执行证据"});
-  const recheck = evidence.getByRole("button", {name: "重新读取证据", exact: true});
+  const recheck = evidence.getByRole("button", {name: "重新检查交付", exact: true});
   await mkdir(outputDir, {recursive: true});
   await page.setViewportSize({width: 390, height: 844});
   const failure = evidence.getByRole("region", {name: "原任务验收失败"});
