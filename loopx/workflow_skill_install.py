@@ -174,7 +174,8 @@ def _install_one_skill(source: Path, target: Path) -> str:
         with tempfile.TemporaryDirectory(prefix="loopx-repair-skill-") as staging:
             bundle = Path(staging) / source.name
             shutil.copytree(source, bundle)
-            shutil.copy2(Path(__file__).with_name("lexical_retrieval.py"),
+            shutil.copy2((Path(__file__).parent / "capabilities" / "context_providers"
+                          / "lexical_retrieval.py"),
                          bundle / "scripts/lexical_retrieval.py")
             return _install_one_skill(bundle, target)
     ignored = (SKILL_VERSION_MARKER_FILENAME,)

@@ -8,6 +8,7 @@ import pytest
 
 from loopx.capabilities.context_providers.openviking import (
     OpenVikingContextProvider,
+    build_openviking_context_provider,
     classify_openviking_scope,
 )
 
@@ -89,6 +90,70 @@ def test_other_namespaces_keep_original_search_contract():
         observed_at="2026-01-01T00:00:00Z",
     )
     assert result.status == "completed" and not result.items
+
+
+def test_opted_in_l2_recall_rejects_overview_noise_without_reading_it():
+    root = "viking://resources/example"
+    reads = []
+
+    def runner(command, **kwargs):
+        if command[1] == "--version":
+            output = "OpenViking 0.4.23"
+        elif command[1] == "search":
+            assert command[command.index("-L") + 1] == "2"
+            assert command[command.index("-n") + 1] == "2"
+            output = json.dumps(
+                {
+                    "resources": [
+                        {"uri": root + "/.overview.md", "level": 1},
+                        {"uri": root + "/.abstract.md"},
+                        {"uri": root + "/body.md", "level": 2},
+                    ]
+                }
+            )
+        elif command[1] == "read":
+            reads.append(command[2])
+            output = json.dumps({"content": "Exact source body"})
+        else:
+            output = "{}"
+        return subprocess.CompletedProcess(command, 0, output)
+
+    provider = OpenVikingContextProvider(result_levels=[2], runner=runner)
+    result = provider.retrieve(
+        namespace="decision_context",
+        scope_ref=root,
+        query="body",
+        query_summary="Source representation",
+        max_results=2,
+        timeout_seconds=30,
+        observed_at="2026-01-01T00:00:00Z",
+    )
+    assert reads == [root + "/body.md"]
+    assert [item.content for item in result.items] == ["Exact source body"]
+
+
+@pytest.mark.parametrize("levels", [[], [True], [3], [-1], [1, 1], "2", [2.0]])
+def test_provider_level_config_rejects_invalid_values_before_io(levels):
+    with pytest.raises(ValueError, match="result_levels"):
+        build_openviking_context_provider({"result_levels": levels})
+
+
+def test_advisory_level_config_cannot_weaken_reward_memory_body_requirement():
+    calls = []
+    provider = OpenVikingContextProvider(
+        result_levels=[1], runner=lambda *args, **kwargs: calls.append(args)
+    )
+    with pytest.raises(ValueError, match="full-body"):
+        provider.retrieve(
+            namespace="reward_memory",
+            scope_ref="viking://resources/example",
+            query="advice",
+            query_summary="Advice",
+            max_results=2,
+            timeout_seconds=30,
+            observed_at="2026-01-01T00:00:00Z",
+        )
+    assert not calls
 
 
 def test_latest_openviking_uri_contract_rejects_legacy_agent_writes():
@@ -186,9 +251,7 @@ def test_private_preview_accepts_typed_missing_parent_for_content_create(
     tmp_path: Path,
 ):
     actor = "goal-one-pilot"
-    target = (
-        f"viking://user/default/peers/{actor}/memories/reward-memory/probe.json"
-    )
+    target = f"viking://user/default/peers/{actor}/memories/reward-memory/probe.json"
     source = tmp_path / "probe.json"
     source.write_text('{"probe":true}\n', encoding="utf-8")
 
@@ -238,9 +301,7 @@ def test_private_preview_does_not_treat_permission_denied_as_missing_parent(
     tmp_path: Path,
 ):
     actor = "goal-one-pilot"
-    target = (
-        f"viking://user/default/peers/{actor}/memories/reward-memory/probe.json"
-    )
+    target = f"viking://user/default/peers/{actor}/memories/reward-memory/probe.json"
     source = tmp_path / "probe.json"
     source.write_text('{"probe":true}\n', encoding="utf-8")
 

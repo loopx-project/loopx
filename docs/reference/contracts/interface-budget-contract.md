@@ -80,6 +80,22 @@ Do not abbreviate admission, continuation, scope, safety or settlement instructi
 solely to fit a historical character count, or copy dynamic quota decisions into
 the static prompt.
 
+The same two-scope Codex App brief fixture measures 4,284 normalized body
+characters on v1.4.1 and 4,447 with the shared stop/readback rule: 163 additional
+characters preserve the exact heartbeat target, one attempt, verified stopping,
+unconfirmed-result handling and prohibition on work/spend/retry fallback. The
+brief presentation allowance becomes 4,600, leaving 153 characters of headroom.
+The two original scope paragraphs and current-Turn settlement instructions stay
+intact. This is a regression-budget adjustment, not a model context limit or an
+execution allowance; all other mode limits, field counts, quota and authority
+remain unchanged. The original 4,300-character failure is retained in validation.
+
+同一 Codex App brief 双范围 fixture 在 v1.4.1 为 4,284 个归一化正文字符，加入共享停止/
+读回规则后为 4,447，增加 163；保留准确停止对象、单次尝试、停止验证、未确认结果处理
+以及禁止 work/spend/retry fallback。brief 展示预算调至 4,600，保留 153 字符余量，
+不删除两段原范围与当前 Turn 结算规则。其余模式、字段数、执行配额和权限不变；
+原 4,300 上限失败保留，不能将新展示预算称为模型上下文或执行额度提升。
+
 The earlier readable-peer qualification raised the thin body ceiling from 2,500
 to 3,000; those historical measurements follow.
 On the same real CLI fixture with a host scope and three runtime capabilities,

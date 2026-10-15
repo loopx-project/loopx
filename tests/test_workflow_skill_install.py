@@ -435,7 +435,8 @@ def test_frozen_bundle_install_lifecycle(
     bundled_skills = bundle / layout
     for skill_id in PACKAGED_HOST_SKILL_IDS:
         shutil.copytree(canonical / skill_id, bundled_skills / skill_id)
-    shutil.copy2(Path(install_module.__file__).with_name("lexical_retrieval.py"),
+    shutil.copy2((Path(install_module.__file__).parent / "capabilities" / "context_providers"
+                  / "lexical_retrieval.py"),
                  bundled_skills / "loopx-self-repair/scripts/lexical_retrieval.py")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     if with_meipass:

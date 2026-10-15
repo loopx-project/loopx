@@ -135,7 +135,7 @@ def test_real_quota_frontier_reads_canonical_claims(tmp_path, monkeypatch, provi
         "current_agent_claimed_advancement_count": 1, "unclaimed_advancement_count": 1,
         "other_agent_claimed_advancement_count": 1,
     }
-    assert packet["selected_todo"]["text"] == "Own direction"
+    assert packet["selected_todo"]["text"] == "[P1] Own direction"
     assert state.exists()
 
 

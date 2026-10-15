@@ -245,6 +245,7 @@ class OpenVikingContextProvider:
         executable: str = "ov",
         minimum_version: str = DEFAULT_MINIMUM_VERSION,
         actor_peer_id: str | None = None,
+        result_levels: Sequence[int] | None = None,
         env: Mapping[str, str] | None = None,
         runner: CommandRunner = subprocess.run,
     ) -> None:
@@ -256,6 +257,24 @@ class OpenVikingContextProvider:
         self.executable = executable
         self.minimum_version = minimum_version
         self.actor_peer_id = normalized_actor_peer_id or None
+        # These are OpenViking's existing L0/L1/L2 transport values, not a
+        # provider-neutral memory vocabulary. Omission preserves native recall.
+        if result_levels is not None:
+            if (
+                not isinstance(result_levels, (list, tuple))
+                or not result_levels
+                or any(
+                    type(level) is not int or not 0 <= level <= 2
+                    for level in result_levels
+                )
+                or len(set(result_levels)) != len(result_levels)
+            ):
+                raise ValueError(
+                    "OpenViking result_levels must be unique levels 0, 1, or 2"
+                )
+            self.result_levels: tuple[int, ...] | None = tuple(sorted(result_levels))
+        else:
+            self.result_levels = None
         self.env = dict(env) if env is not None else dict(os.environ)
         self.runner = runner
 
@@ -399,6 +418,10 @@ class OpenVikingContextProvider:
         if not namespace or not query or not query_summary:
             raise ValueError("namespace, query, and query_summary are required")
         scope = self._validated_scope(scope_ref)
+        reward_records = namespace == "reward_memory"
+        if reward_records and self.result_levels not in (None, (2,)):
+            raise ValueError("Reward Memory requires OpenViking full-body level 2")
+        levels = (2,) if reward_records else self.result_levels
         actor_binding_verified = (
             scope.visibility == "public" or scope.actor_scope_id is not None
         )
@@ -429,7 +452,6 @@ class OpenVikingContextProvider:
         try:
             # Reward records require full structured bodies. Summaries and
             # duplicate chunks must not consume their final result budget.
-            reward_records = namespace == "reward_memory"
             search_result = self._run(
                 [
                     "search",
@@ -442,7 +464,11 @@ class OpenVikingContextProvider:
                         if reward_records
                         else requested_limit
                     ),
-                    *(["-L", "2"] if reward_records else []),
+                    *(
+                        ["-L", ",".join(str(level) for level in levels)]
+                        if levels
+                        else []
+                    ),
                     "-o",
                     "json",
                     "-c",
@@ -500,6 +526,19 @@ class OpenVikingContextProvider:
         read_attempted = False
         for row in rows:
             resource_ref = _resource_ref(row)
+            # The native filter owns selection. Reject a contradictory result
+            # rather than reading an unrequested representation if it drifts.
+            if (
+                self.result_levels
+                and row.get("level") is not None
+                and row["level"] not in self.result_levels
+            ):
+                continue
+            if self.result_levels == (2,) and resource_ref.rsplit("/", 1)[-1] in {
+                ".overview.md",
+                ".abstract.md",
+            }:
+                continue
             if reward_records:
                 resource_ref = resource_ref.split("#", 1)[0]
                 if row.get("level") in (0, 1) or resource_ref.rsplit("/", 1)[-1] in {
@@ -1026,4 +1065,5 @@ def build_openviking_context_provider(
             config.get("minimum_provider_version") or DEFAULT_MINIMUM_VERSION
         ),
         actor_peer_id=str(config.get("actor_peer_id") or "").strip() or None,
+        result_levels=config.get("result_levels"),
     )

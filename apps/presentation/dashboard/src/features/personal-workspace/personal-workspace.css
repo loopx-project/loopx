@@ -2073,3 +2073,5 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 
 .personal-conversation-latest { display: block; margin: 0 auto 10px; padding: 7px 14px; border: 1px solid var(--pw-line); border-radius: 20px; background: var(--pw-bg); color: var(--pw-text); font: inherit; font-size: var(--text-caption); cursor: pointer; }
 .personal-composer-hint { padding-top: 7px; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); text-align: center; }
+
+.personal-lazy-loading { margin: 0; padding: 24px; color: var(--pw-muted); font-size: var(--text-body); line-height: var(--leading-body); }
