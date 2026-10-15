@@ -1022,6 +1022,15 @@ authoritative or require the document provider to become a task database.
 This is the short path for adopting Desktop around work that is already
 running.
 
+Bounded provider checkpoint: the local Goal Chat can inspect a registered
+Codex App Agent's original saved conversation and offer an idle-only plain-text
+reply through the existing Desktop owner. It keeps bounded source windows and
+one-second saved-message observations instead of resuming another app-server.
+See the [provider boundary and operation](../../integrations/session-runtime-control-plane-adapter.md#experimental-owner-local-codex-app-conversations).
+This is an experimental provider proposal, not full Slice B acceptance:
+token deltas, busy-turn steering/queueing, approval callbacks, native live-send
+qualification, Windows transport and installed adoption remain separate gaps.
+
 ### Slice C: managed reference vertical
 
 1. a provider-neutral managed-runtime and managed-provider interface;
