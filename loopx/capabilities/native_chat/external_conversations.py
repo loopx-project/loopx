@@ -371,6 +371,62 @@ class ChatExternalConversations:
                 "canonical_acceptance_attested": False})
         return facts
 
+    def todo_confirmation_reply(self, request_ref: str, response: dict[str, Any]) -> str:
+        """Project an external owner's Todo preview through the existing action owner.
+
+        The original request journal freezes expiry and idempotency before IO.
+        This creates an action preview only; the authenticated /confirm worker
+        remains the sole route to the canonical Todo writer.
+        """
+        message = str(response.get("message") or "")
+        proposals = [p for p in response.get("proposals") or [] if p.get("kind") == "todo"]
+        if not proposals:
+            return message
+        path = self.root / f"{request_ref}.json"
+        with exclusive_file_lock(path, operation="offer_external_todo_confirmation"):
+            row = _read_json(path)
+            selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"])
+            if selected["binding"]["context_kind"] != "steward":
+                return message
+            if self.actions is None:
+                return message + "\n\n待办尚未写入：当前宿主的确认入口不可用。"
+            if row.get("todo_confirmation_reply") is not None:
+                return str(row["todo_confirmation_reply"])
+            context = selected["context"]
+            if "todo_confirmation_created_at" not in row:
+                row["todo_confirmation_created_at"] = datetime.now(timezone.utc).isoformat()
+                _atomic_write_json(path, row)
+            created = row["todo_confirmation_created_at"]
+            expiry = (datetime.fromisoformat(created) + timedelta(minutes=15)).isoformat()
+            audience = {key: context[key] for key in
+                        ["binding_id", "source_ref", "provider_ref", "operator_ref", "project_ref"]}
+            lines = [message]
+            for index, todo in enumerate(proposals):
+                try:
+                    request = {"action_kind": "todo.create", "summary": str(todo["text"]),
+                        "idempotency_key": f"external-todo-{request_ref}-{index}",
+                        "context": {"kind": "manager", "goal_id": "loopx-manager", **audience, "expires_at": expiry},
+                        "normalized_parameters": {"goal_id": todo.get("goal_id"), "text": todo["text"],
+                                                  "priority": todo.get("priority", "P1")}}
+                    self.bindings._core("collaboration.steward.authorize_creation", {
+                        "context": context, "proposal": {**request, "created_at": created},
+                        "now": datetime.now(timezone.utc).isoformat(), "operation": "preview"})
+                except (OSError, ValueError, KeyError, RuntimeError):
+                    lines.append("待办尚未写入：目标 Goal、当前授权或规范预览不可用；请在原对话核对目标后重新准备预览。")
+                    continue
+                # An uncertain preview-store write is safe to recover by this
+                # same idempotency key. Do not cache a failure and strand a
+                # successfully persisted preview without its confirmation route.
+                proposal = self.actions.preview(request)
+                goal = self.actions._goal(str(todo["goal_id"]))
+                title = str(goal.get("title") or todo["goal_id"])
+                lines.append(f"目标：{title}\n待记录：{todo['text']}\n尚未写入，也未启动执行。"
+                    f"请在本私聊于预览生成后 15 分钟内发送 /confirm {proposal['proposal_id']}；"
+                    f"取消：/cancel {proposal['proposal_id']}。")
+            row["todo_confirmation_reply"] = "\n\n".join(lines)
+            _atomic_write_json(path, row)
+            return row["todo_confirmation_reply"]
+
     def _run_steward_action(self, row: dict[str, Any]) -> None:
         """The existing service worker advances a journaled native operation.
 
@@ -447,19 +503,25 @@ class ChatExternalConversations:
                         }, response=f"已受理原委托的恢复，保留原生线程、目标及累计用量。总 token 上限 {row['command_argument']['native_token_budget']}；结果会返回此私聊。\n停止：/stop-commission {argument}")
                     elif row["command"] == "cancel_commission":
                         self.actions.cancel(argument)
-                        row["response"] = "已取消这份新委托预览；没有创建或启动 Goal。"
+                        row["response"] = ("已取消待办预览；没有写入待办或启动执行。"
+                            if proposal["action_kind"] == "todo.create" else
+                            "已取消这份新委托预览；没有创建或启动 Goal。")
                     else:
                         result = self.actions.apply(argument, steward_context=context, steward_confirmed_at=row["created_at"])
                         applied = result["proposal"]
                         if applied.get("status") != "applied":
-                            raise ValueError("the creation preview became stale; prepare a new /delegate request")
+                            raise ValueError("the creation preview became stale; prepare a new preview")
                         resources = applied["receipt"]["resource_ids"]
-                        # Canonical creation has committed. Retain its exact
-                        # receipt before fallible adoption or notification.
-                        row.update(commission_resources=resources, commission_adoption_pending=True,
-                                   commission_gate=bool(result.get("gate")))
-                        _atomic_write_json(path, row)
-                        self._adopt_commission(row, applied)
+                        if applied["action_kind"] == "todo.create":
+                            row.update(todo_receipt=applied["receipt"], response=(
+                                f"已记录待办：{applied['normalized_parameters']['text']}\n"
+                                f"目标：{resources['goal_id']}；规范写入回执已读回。本次没有启动执行。"))
+                        else:
+                            # Persist a committed creation before fallible adoption.
+                            row.update(commission_resources=resources, commission_adoption_pending=True,
+                                       commission_gate=bool(result.get("gate")))
+                            _atomic_write_json(path, row)
+                            self._adopt_commission(row, applied)
                 row["status"] = "command_completed"
             except (OSError, ValueError, KeyError, RuntimeError) as exc:
                 # No automatic wider permission, regenerated preview or new

@@ -760,6 +760,8 @@ class LarkPrivateConversations:
                             "本次执行已停止。" if turn["status"] == "interrupted" else
                             "本次执行超时，原会话已保留；请发送 /status 查看状态后再决定是否重试。" if turn["status"] == "timed_out" else
                             "本次未能完成，原会话已保留。")
+                        if turn["status"] == "completed":
+                            response = self.core.todo_confirmation_reply(record["request_ref"], turn.get("response") or {})
                 else:
                     if record["status"] != "rejected":
                         self._feedback(path, record, inbox=inbox)

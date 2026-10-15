@@ -400,6 +400,13 @@ def _normalize_proposals(
             continue
         if raw.get("kind") != "todo":
             continue
+        goal_id = raw.get("goal_id")
+        if goal_id is not None and (
+            not isinstance(goal_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9._-]{1,160}", goal_id)
+        ):
+            # Never turn an invalid explicit target into an unscoped proposal.
+            continue
         text = _compact_line(redact_local_paths(str(raw.get("text") or ""), protected_paths=protected_paths), limit=400)
         if not text:
             continue
@@ -413,6 +420,7 @@ def _normalize_proposals(
         proposals.append(
             {
                 "kind": "todo",
+                **({"goal_id": goal_id} if goal_id is not None else {}),
                 "text": text,
                 "priority": priority,
                 "rationale": rationale,

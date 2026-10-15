@@ -5,6 +5,12 @@ import { openWorkspacePage } from "./scenario-context.mjs";
 // the owner confirms; without a target Goal it must not create anything.
 const GOAL_PROMPT = "请给出一个下一步任务建议。";
 const MANAGER_PROMPT = "请为全局给出一个任务建议。";
+const SCOPED_MANAGER_PROMPT = "请在 Product Release 记录稍后处理的需求。";
+const SCOPED_MANAGER_TEXT = "稍后完善阅读体验";
+const MANAGER_RECOVERY_PROMPT = "刷新恢复：管家记录另一项需求。";
+const MANAGER_RECOVERY_TEXT = "刷新后恢复管家的需求预览";
+const FOREIGN_GOAL_PROMPT = "给出另一 Goal 的需求。";
+const FOREIGN_GOAL_TEXT = "另一目标的建议不得写入当前目标";
 const PROPOSAL_TEXT = "[P1] 核对发布清单并补齐缺失的验证记录";
 // The fixture keeps a "刷新恢复" Turn running long enough to reload into it.
 const RECOVERY_PROMPT = "刷新恢复：请再给出一个任务建议。";
@@ -38,7 +44,16 @@ export const chatTodoProposalScenario = {
   async run({ browser, collectCoverage, url }) {
     const context = await openWorkspacePage(browser, url, { collectCoverage });
     const { api, page } = context;
-    api.answerForMessage = (message) => (message === GOAL_PROMPT || message === MANAGER_PROMPT ? proposalAnswer
+    api.answerForMessage = (message) => (message === MANAGER_RECOVERY_PROMPT ? {
+      message: "恢复管家的待办建议。",
+      proposals: [{kind: "todo", goal_id: "product-release", priority: "P2", rationale: "刷新不能丢失原建议。", text: MANAGER_RECOVERY_TEXT}],
+    } : message === SCOPED_MANAGER_PROMPT ? {
+      message: "已为 Product Release 准备需求预览，尚未写入。",
+      proposals: [{kind: "todo", goal_id: "product-release", priority: "P2", rationale: "只记录，不启动执行。", text: SCOPED_MANAGER_TEXT}],
+    } : message === FOREIGN_GOAL_PROMPT ? {
+      message: "这份建议属于另一个目标。",
+      proposals: [{kind: "todo", goal_id: "research-monitor", priority: "P2", rationale: "目标不同。", text: FOREIGN_GOAL_TEXT}],
+    } : message === GOAL_PROMPT || message === MANAGER_PROMPT ? proposalAnswer
       : message === DEPARTED_PROMPT ? { message: "离开后给出一个步骤。", proposals: [{ kind: "todo", priority: "P2", rationale: "离开对话不改变建议归属。", text: DEPARTED_TEXT }] }
       : message === COMBINED_PROMPT ? { message: "我识别到一个明确的合并请求，并建议先补齐发布说明。", proposals: [{ kind: "todo", priority: "P1", rationale: "合并前需要可核对的说明。", text: COMBINED_TEXT }] }
       : message === RECOVERY_PROMPT ? { message: "恢复后给出一个步骤。", proposals: [{ kind: "todo", priority: "P2", rationale: "恢复回合同样需要可确认的草稿。", text: RECOVERY_TEXT }] }
@@ -66,7 +81,47 @@ export const chatTodoProposalScenario = {
         await managerChatTab.click();
         if (await managerChatTab.getAttribute("aria-current") !== "page") throw new Error("Manager Chat did not open");
       };
+      // Explicit manager targets reach the existing confirmation card in place;
+      // this is a preview, never an implicit apply or a new execution.
+      await openManagerChat();
+      await composer.fill(SCOPED_MANAGER_PROMPT);
+      await page.getByRole("button", {name: "发送", exact: true}).click();
+      const scopedCard = page.locator(".personal-proposal-row", {hasText: SCOPED_MANAGER_TEXT});
+      await scopedCard.waitFor({state: "visible", timeout: 10_000});
+      await waitFor(() => previewsWithText(SCOPED_MANAGER_TEXT).length === 1, "Scoped manager Todo did not reach its confirmation card");
+      const scoped = previewsWithText(SCOPED_MANAGER_TEXT)[0];
+      if (scoped.normalized_parameters.goal_id !== "product-release" || api.actionApplies.length) {
+        throw new Error("Manager Todo lost its target or applied without confirmation");
+      }
+      await page.reload();
+      await openManagerChat();
+      await scopedCard.waitFor({state: "visible", timeout: 10_000});
+      if (previewsWithText(SCOPED_MANAGER_TEXT).length !== 1 || api.actionApplies.length) {
+        throw new Error("Reload duplicated or applied the pending manager Todo");
+      }
+      await scopedCard.click();
+      await page.getByRole("dialog").getByRole("button", {name: "确认并应用", exact: true}).click();
+      await waitFor(() => api.actionApplies.map(decodeURIComponent).includes(scoped.proposalId), "Manager confirmation did not apply the reviewed Todo");
+      const beforeManagerRecovery = api.turnRequests.length;
+      await composer.fill(MANAGER_RECOVERY_PROMPT);
+      await page.getByRole("button", {name: "发送", exact: true}).click();
+      await waitFor(() => api.turnRequests.length > beforeManagerRecovery, "Manager recovery Turn was not admitted");
+      api.failNextActionPreview = true;
+      await page.reload({waitUntil: "domcontentloaded"});
+      await openManagerChat();
+      await page.locator(".personal-proposal-row", {hasText: MANAGER_RECOVERY_TEXT}).waitFor({state: "visible", timeout: 15_000});
+      if (api.failNextActionPreview || previewsWithText(MANAGER_RECOVERY_TEXT).length !== 1) {
+        throw new Error("Manager recovery lost or duplicated its preview after temporary refusal");
+      }
+      if (api.actionApplies.map(decodeURIComponent).includes(previewsWithText(MANAGER_RECOVERY_TEXT)[0].proposalId)) {
+        throw new Error("Recovering the manager answer implicitly applied its preview");
+      }
       await openGoalChat();
+      await composer.fill(FOREIGN_GOAL_PROMPT);
+      await page.getByRole("button", {name: "发送", exact: true}).click();
+      await page.locator(".personal-channel-timeline").getByText("这份建议属于另一个目标。", {exact: true}).waitFor({state: "visible"});
+      await page.locator(".personal-channel-timeline").getByText("待办目标与当前 Goal 不一致；尚未准备写入预览，请核对目标。", {exact: true}).waitFor({state: "visible"});
+      if (previewsWithText(FOREIGN_GOAL_TEXT).length) throw new Error("Another Goal's proposal became a write preview");
       await composer.fill(GOAL_PROMPT);
       await page.getByRole("button", { name: "发送", exact: true }).click();
       const card = page.locator(".personal-proposal-row", { hasText: PROPOSAL_TEXT });
@@ -216,7 +271,7 @@ export const chatTodoProposalScenario = {
     }
     return {
       coverageEntries: context.coverageEntries,
-      note: "An Agent Todo proposal becomes a persisted typed preview in its Goal conversation, including one from a Turn recovered after a reload; it stays out of Manager Chat and other Goals, and none is created without a target Goal.",
+      note: "Scoped Manager and Goal Todo suggestions reach the existing confirmation card. Unscoped Manager and foreign-Goal proposals cannot become writes; reload/departure recovery preserves exactly one preview and never implicitly applies it.",
     };
   },
 };

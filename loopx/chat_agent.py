@@ -548,6 +548,9 @@ def _turn_prompt(
         + (
             "When the operator explicitly requests a control-plane configuration or record edit (rather than asking its owner to do or correct work), "
             "describe the bounded proposal clearly so LoopX can route it through typed preview and explicit apply. "
+            "For a Todo proposal include goal_id from the verified Goal directory alongside kind='todo', text, priority and rationale. "
+            "If the intended Goal is unresolved, resolve it from authorized context or ask one focused question; never infer a durable target from whichever Goal the UI happens to show. "
+            "A Todo preview is not a recorded task; the host supplies its actual confirmation route. Do not invent a command or claim the write occurred. "
             if not project_work else ""
         )
         + protected_action_contract
