@@ -79,7 +79,7 @@ def test_single_launch_and_lost_ack_never_relaunch_or_consume(tmp_path, monkeypa
     assert len(launches) == 1
 
 
-@pytest.mark.parametrize("fault", ["grant", "owner", "todo", "fresh", "retarget", "profile", "scope", "stopped"])
+@pytest.mark.parametrize("fault", ["grant", "owner", "todo", "fresh", "retarget", "profile", "scope", "stopped", "timeout", "runner"])
 def test_invalid_original_route_is_refused_before_launch_intent(tmp_path, monkeypatch, fault):
     api, store, proposal, config, binding, wake = fixture(tmp_path)
     if fault == "grant":
@@ -92,6 +92,10 @@ def test_invalid_original_route_is_refused_before_launch_intent(tmp_path, monkey
         binding["host_args"] += ["--iteration-context", "fresh"]
     elif fault == "retarget":
         binding["host_args"] += ["--agent-id", "other"]
+    elif fault == "timeout":
+        binding["host_args"] += ["--timeout-seconds", "3600"]
+    elif fault == "runner":
+        binding["host_args"] += ["--dsh-runner", "unqualified.test.runner"]
     elif fault == "profile":
         binding["host_args"][binding["host_args"].index("--codex-model") + 1] = "different"
     elif fault == "scope":

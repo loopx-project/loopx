@@ -67,6 +67,7 @@ def _original_operation_turn(
             or Path(selected.project).resolve() != workspace
             or Path(selected.scan_root).resolve() != workspace or selected.resume_turn_key
             or selected.retry_failed_turn or selected.iteration_context == "fresh"
+            or selected.timeout_seconds != timeout or selected.dsh_runner is not None
             or selected.host != executor.get("host", "codex-cli")):
         raise ValueError("original operation launch cannot retarget or replace its Turn")
     host = selected.host
