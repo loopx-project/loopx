@@ -32,8 +32,7 @@ def _original_operation_turn(
     broader Todo. The native host still authenticates and consumes once.
     """
     from ...collaboration_mcp import _pinned_module_command, _pinned_release_environment
-    from ...cli_runtime import add_subcommand_format, build_cli_parser
-    from ...cli_commands.turn_registration import register_turn_commands
+    from ...cli_runtime import _build_selected_parser
 
     parameters = proposal["normalized_parameters"]
     executor = parameters["executor"]
@@ -56,10 +55,8 @@ def _original_operation_turn(
         # heartbeat. Keep the configured automatic interval unchanged.
         "--manual-interval-bypass-reason", "Authenticated confirmation of this exact canonical operation",
         "--execute"]
-    parser, subparsers = build_cli_parser()
-    register_turn_commands(subparsers, add_subcommand_format)
     try:
-        selected = parser.parse_args(arguments)
+        selected = _build_selected_parser("turn").parse_args(arguments)
     except SystemExit as exc:
         raise ValueError("invalid original operation Turn arguments") from exc
     if ((selected.goal_id, selected.agent_id, selected.todo_id, selected.turn_instance_id)

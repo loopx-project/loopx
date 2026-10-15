@@ -625,14 +625,11 @@ class Delegations:
                      "--turn-instance-id", operation, *self._execution_arguments(binding, operation)]
         # Host arguments are operator-owned, but inspection must stay read-only
         # even when they contain an abbreviated execution flag or a selector.
-        from .cli_runtime import add_subcommand_format, build_cli_parser
-        from .cli_commands.turn_registration import register_turn_commands
+        from .cli_runtime import _build_selected_parser, _SelectedParseRejected
 
-        parser, subparsers = build_cli_parser()
-        register_turn_commands(subparsers, add_subcommand_format)
         try:
-            selected = parser.parse_args(arguments)
-        except SystemExit as exc:
+            selected = _build_selected_parser("turn").parse_args(arguments)
+        except (SystemExit, _SelectedParseRejected) as exc:
             raise ValueError("invalid delegation Turn arguments") from exc
         workspace = workspace_identity[2]
         selected_project = Path(selected.project)
