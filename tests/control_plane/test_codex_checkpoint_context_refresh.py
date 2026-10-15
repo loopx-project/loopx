@@ -52,7 +52,7 @@ def test_explicit_refresh_retains_lineage_but_ordinary_replacement_cannot(tmp_pa
     assert "checkpoint_artifact_sha256" not in replacement and "checkpoint_context_refresh" not in replacement
 
 
-@pytest.mark.parametrize("fault", ["unknown", "foreign_binding", "old_identity", "actor_revoked", "profile_moved"])
+@pytest.mark.parametrize("fault", ["unknown", "foreign_binding", "old_identity", "actor_revoked", "profile_moved", "ambiguous"])
 def test_refresh_failure_never_overwrites_a_different_or_unknown_result(tmp_path, fault):
     subject = session(tmp_path)
     output, attempt = tmp_path / "stdout.jsonl", tmp_path / "attempt.json"
@@ -63,6 +63,9 @@ def test_refresh_failure_never_overwrites_a_different_or_unknown_result(tmp_path
             subject.prepare_checkpoint_refresh(review, attempt, output)
     else:
         observed(output, "original" if fault == "old_identity" else "fresh")
+        if fault == "ambiguous":
+            with output.open("a") as stream:
+                stream.write(json.dumps({"type": "thread.started", "thread_id": "another"}) + "\n")
         if fault in {"foreign_binding", "profile_moved"}:
             path = _session_path(tmp_path, subject.lineage, "agent")
             data = json.loads(path.read_bytes())
@@ -73,7 +76,7 @@ def test_refresh_failure_never_overwrites_a_different_or_unknown_result(tmp_path
                 raise ValueError("current Goal lifetime revoked")
             subject.admission.accept_result = deny
         before = _session_path(tmp_path, subject.lineage, "agent").read_bytes()
-        with pytest.raises(ValueError):
+        with pytest.raises((ValueError, RuntimeError)):
             subject.observe(output)
         assert _session_path(tmp_path, subject.lineage, "agent").read_bytes() == before
 
@@ -88,3 +91,32 @@ def test_original_output_recovers_a_lost_observation_without_another_launch(tmp_
     subject.prepare_checkpoint_refresh(review, attempt, retry)
     assert subject.session_id == "fresh" and not retry.exists()
     assert subject.receipt["session"]["action"] == "resume"
+
+
+def test_unpromoted_source_does_not_invent_a_goal_instance_during_refresh(tmp_path):
+    subject = session(tmp_path)
+    path = _session_path(tmp_path, subject.lineage, "agent")
+    binding = json.loads(path.read_bytes())
+    del binding["goal_ref"]
+    path.write_text(json.dumps(binding))
+    subject.binding = load_codex_cli_session(tmp_path, lineage=subject.lineage, session_scope="agent")
+    output = tmp_path / "original.jsonl"
+    subject.prepare_checkpoint_refresh({"identity": {"effect_id": "current-review"},
+        "decision_sha256": "c" * 64}, tmp_path / "attempt.json", output)
+    observed(output, "fresh")
+    subject.observe(output)
+    current = load_codex_cli_session(tmp_path, lineage=subject.lineage, session_scope="agent")
+    assert current["session_id"] == "fresh" and "goal_ref" not in current
+
+
+def test_redirected_original_output_cannot_recover_an_identity(tmp_path):
+    subject = session(tmp_path)
+    review = {"identity": {"effect_id": "current-review"}, "decision_sha256": "c" * 64}
+    original, attempt = tmp_path / "stdout.jsonl", tmp_path / "attempt.json"
+    subject.prepare_checkpoint_refresh(review, attempt, original)
+    foreign = tmp_path / "foreign.jsonl"
+    observed(foreign, "foreign")
+    original.symlink_to(foreign)
+    with pytest.raises(ValueError, match="physical absolute"):
+        subject.prepare_checkpoint_refresh(review, attempt, original)
+    assert load_codex_cli_session(tmp_path, lineage=subject.lineage, session_scope="agent")["session_id"] == "original"

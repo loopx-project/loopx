@@ -262,7 +262,7 @@ def _replace_checkpoint_codex_session(
         if session_id == current["session_id"]:
             raise ValueError("checkpoint context refresh requires a distinct native conversation")
         _write_codex_cli_session(runtime_root, lineage=lineage, session_scope="agent",
-            session_id=session_id, goal_ref=current["goal_ref"],
+            session_id=session_id, goal_ref=current.get("goal_ref"),
             session_profile_digest=current["session_profile_digest"],
             checkpoint_artifact_sha256=current["checkpoint_artifact_sha256"],
             checkpoint_artifact_root=current["checkpoint_artifact_root"],

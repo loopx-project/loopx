@@ -903,7 +903,8 @@ checkpoint digest, source conversation and completed current decision in the
 existing session binding; the first input includes that decision as evidence.
 Research files, current Todo/Explore state, code, incumbent, cumulative deadline,
 consumed submissions and cooldown retain their owners. This deliberately drops
-earlier native messages and is a separate treatment from ordinary retained-history
+earlier native messages from the new conversation input; archived source bytes
+are retained. This is a separate treatment from ordinary retained-history
 continuation. Omission preserves the default. Disable it on a new attempt;
 do not change a frozen trial. It grants neither new work nor extra evaluation.
 Unknown launches recover only from the original captured native output; missing
@@ -919,7 +920,8 @@ an open acceptance boundary.
 既有会话绑定保留原 checkpoint
 摘要、源会话及本次已完成决策，首次输入把决策作为证据交付；研究文件、当前
 Todo/Explore、代码、incumbent、累计时限、已用评测和冷却仍由原 owner 管理。
-它明确丢弃此前的原生消息，是独立实验因素；省略即保持默认，关闭须使用新 attempt，
+新会话输入不包含此前原生消息，源归档字节仍保留；这是独立实验因素。
+省略即保持默认，关闭须使用新 attempt，
 不热改冻结运行，也不增加执行或评测权限。未知启动只能读取原始原生输出来恢复，
 缺失或歧义身份会阻塞该路径，不能另建会话。联合资格测试覆盖合成接收端的原输出
 恢复、实际双候选工作、结算及后续显式 partial 捕获；这不证明研究收益或自动出现

@@ -140,6 +140,8 @@ class CodexAgentSession:
         from loopx.file_lock import exclusive_file_lock
 
         self.admission.require_current()
+        if any(not path.is_absolute() or path.resolve() != path for path in (attempt, stdout)):
+            raise ValueError("checkpoint context refresh requires physical absolute attempt/output paths")
         if not self.binding or not self.binding.get("checkpoint_artifact_root"):
             raise ValueError("checkpoint context refresh requires a source-bound conversation")
         refresh = {"checkpoint_sha256": self.binding["checkpoint_artifact_sha256"],
@@ -150,9 +152,12 @@ class CodexAgentSession:
                 prior = json.loads(attempt.read_bytes())
                 if prior.get("basis") != basis:
                     raise ValueError("checkpoint context refresh attempt source differs")
+                original_output = Path(prior["stdout"])
+                if not original_output.is_absolute() or original_output.resolve() != original_output:
+                    raise ValueError("checkpoint context refresh original output is redirected")
                 self.checkpoint_refresh = refresh
                 self.session_id = None
-                self.observe(Path(prior["stdout"]))
+                self.observe(original_output)
                 if self.session_id is None:
                     raise ValueError("checkpoint context refresh outcome is unknown; inspect its original native output")
                 self.receipt["session"].update(action="resume", session_id=self.session_id)
