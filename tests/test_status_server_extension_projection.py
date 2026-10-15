@@ -193,7 +193,7 @@ def test_status_server_advertises_and_serves_projection_by_exact_ref(
         assert capabilities["presentation_detail_url"] == DEFAULT_EXTENSION_PROJECTION_PATH
         status, surfaces_payload = _request_json(
             f"{base_url}{DEFAULT_EXTENSION_PRESENTATION_SURFACES_PATH}",
-            origin="http://127.0.0.1:5173",
+            origin=base_url if chat else "http://127.0.0.1:5173",
         )
         assert status == 200
         surfaces = surfaces_payload["presentation_surfaces"]
@@ -202,7 +202,7 @@ def test_status_server_advertises_and_serves_projection_by_exact_ref(
         assert surfaces["items"][0]["state"] == "ready"
         status, status_payload = _request_json(
             f"{base_url}{DEFAULT_STATUS_PATH}",
-            origin="http://127.0.0.1:5173",
+            origin=base_url if chat else "http://127.0.0.1:5173",
         )
         assert status == 200
         assert "presentation_surfaces" not in status_payload
@@ -216,7 +216,7 @@ def test_status_server_advertises_and_serves_projection_by_exact_ref(
         )
         status, payload = _request_json(
             f"{base_url}{DEFAULT_EXTENSION_PROJECTION_PATH}?{query}",
-            origin="http://127.0.0.1:5173",
+            origin=base_url if chat else "http://127.0.0.1:5173",
         )
 
     assert status == 200
@@ -251,7 +251,10 @@ def test_status_server_projection_route_rejects_non_loopback_origin(
     assert status == 403
     assert payload == {
         "ok": False,
-        "error": "extension projection reads only accept loopback browser origins",
+        "error": (
+            "LoopX Chat requires a loopback Host and an allowed browser origin."
+            if chat else "extension projection reads only accept loopback browser origins"
+        ),
     }
 
 
@@ -275,7 +278,7 @@ def test_status_server_projection_route_rejects_owner_only_surface(
         )
         status, payload = _request_json(
             f"{base_url}{DEFAULT_EXTENSION_PROJECTION_PATH}?{query}",
-            origin="http://127.0.0.1:5173",
+            origin=base_url if chat else "http://127.0.0.1:5173",
         )
 
     assert status == 400
@@ -293,7 +296,7 @@ def test_status_server_projection_route_requires_complete_detail_ref(
     with _published_projection_server(tmp_path, chat=chat) as (base_url, _installed, _receipt):
         status, payload = _request_json(
             f"{base_url}{DEFAULT_EXTENSION_PROJECTION_PATH}?extension_id=test-research-extension",
-            origin="http://localhost:5173",
+            origin=base_url if chat else "http://localhost:5173",
         )
 
     assert status == 400
