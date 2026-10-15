@@ -71,6 +71,8 @@ graph TD
 
 ### 首次打开 / First open
 
+![还没有 Goal 时的管家总览](../assets/personal-workspace/first-goal-home-desktop.png)
+
 还没有任何 Goal 时，总览不显示空泳道或健康告警，而是一个「还没有 Goal」状态：一句话说明
 Goal 是什么、一个 **创建 Goal** 按钮（打开与侧边栏 `+` 相同的创建表单），以及三条示例
 请求。点选示例只会填入输入框，按发送前不会发出任何内容。状态来源自身的检查行（例如
