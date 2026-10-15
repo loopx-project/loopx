@@ -152,6 +152,20 @@ per-job execution flags, reason and coverage scope. The merge gate requires
 success for required jobs and an explicit skip for exempt ones; failure,
 cancellation, missing outputs, contradictory flags or unexpected skips fail.
 
+The merge gate also writes a **Qualification evidence** summary: source head,
+workflow checkout, event base, attempt, dependency results and links to failed
+jobs and steps. It separates execution failures, aggregate failures and incomplete
+jobs without attributing a cause from status alone. The read-only job lookup uses
+the current run attempt; an unavailable API or missing evidence is reported as
+such. Advisory checks can appear in the report, but only the existing gate policy
+decides qualification. Summary errors cannot override that verdict. There is no
+inherited-main failure waiver or automatic flaky-test exemption.
+
+merge-gate 的摘要记录源码 head、实际 checkout、事件 base 与本次 attempt，
+分别列出失败作业、聚合失败和未完成作业，并链接到失败步骤所在 job。
+摘要不根据状态猜根因；API 不可用时明确标记证据缺口。它也会列出 advisory
+检查，但是否通过仍由原门禁规则决定，不因摘要失败而放行，不自动豁免历史失败。
+
 Specialized workflows already use GitHub's PR path filters: release artifacts
 follow packaged source/build inputs, desktop artifacts follow native/Desktop
 and shared Dashboard inputs, optional Ark follows its adapter and shared turn
@@ -200,6 +214,25 @@ DCO and optional Ark PR checks cancel only superseded validation for the same PR
 Signed-desktop PRs use separate groups from each other and from channel publication.
 Release publication remains serialized and is never cancelled by a PR update.
 
+Trusted obsolete-PR cleanup runs in the separate **CI Maintenance** workflow on
+`pull_request_target` close/synchronize events. It never checks out PR content
+and retains the same PR/repository/head checks before cancellation. A green
+maintenance run means cleanup completed, not that Python tests passed. Its
+concurrency group is separate from current-head qualification; `Python Tests`
+still receives PR close events to cancel the old qualification lane.
+
+Dashboard browser qualification retains all three shards. The unchanged unit
+coverage command runs only in shard 1, whose `lcov.info` the existing merger
+already consumes; browser coverage and acceptance receipts remain required from
+all three shards. The merger rejects missing unit coverage or incomplete browser
+acceptance. This removes two duplicate unit-coverage invocations per full or
+presentation run; it does not establish a hosted wall-time improvement.
+
+旧 PR 清理独立为 CI Maintenance，保留原有来源与 head 校验，也不执行 PR 代码。
+清理成功不再显示为一次 Python Tests 成功。Dashboard 的单元覆盖率只在第 1 片
+执行一次，三个浏览器分片与验收凭证仍全部必需；缺少单元覆盖率仍拒绝聚合。
+这减少了两次重复命令，实际等待时间与端到端耗时仍需上线后测量。
+
 全量 smoke 改为每天一次与指定 ref 的手动运行，不再随普通主干提交启动。五个完整
 分片共享一次源码绑定的前端构建，同一时刻最多运行两个分片；全量用例仍保留，
 代价是后台 sweep 可能更久。每日完整 Python 验证与 PR／主干提交使用不同并发组，
@@ -219,6 +252,7 @@ only hosted before/after observations can establish latency or capacity gains.
 
 ```bash
 uv run --extra test python -m unittest discover -s scripts/ci -p 'test_*.py'
+node --test scripts/ci/qualification_summary.test.ts scripts/ci/merge-dashboard-coverage.test.mjs
 uv run --extra test python -m pytest tests/test_python_ci_workflow.py tests/test_sonarcloud_workflow.py tests/test_ci_resource_policy.py -q
 uv run --extra test python examples/full-public-smokes-workflow-smoke.py
 uv run --extra test python scripts/ci/review_gate.py classify --base origin/main --head HEAD --plan impact-plan.json
