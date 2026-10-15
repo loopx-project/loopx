@@ -7,6 +7,7 @@ from typing import AbstractSet, Any, Callable, Optional
 from .replan_history_codec import effective_turn_cadence_context
 
 from ..goals.legacy_event_source import RetiredTodoEventSourceError
+from ..effect_runtime import effect_runtime_result
 
 
 AttentionItemBuilder = Callable[..., dict[str, Any]]
@@ -126,6 +127,23 @@ def build_attention_queue_projection(
     return queue
 
 
+def _reconcile_active_state_item(
+    goal: dict[str, Any],
+    current_run: dict[str, Any] | None,
+    item: dict[str, Any],
+    active_state_item: dict[str, Any] | None,
+    context: AttentionQueueContext,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    warning = context.active_state_projection_warning(goal, current_run)
+    if not warning:
+        return item, None
+    reconciled = effect_runtime_result("presentation.goal_attention.reconcile", {
+        "item": item, "active_state_item": active_state_item,
+        "warning": warning, "historical_run": current_run,
+    })
+    return reconciled["item"], reconciled["warning"]
+
+
 def build_attention_queue(
     *,
     contract: dict[str, Any],
@@ -200,6 +218,9 @@ def build_attention_queue(
             if not item:
                 item = active_state_item
         if item:
+            item, projection_warning = _reconcile_active_state_item(
+                goal, current_status_run, item, active_state_item, context,
+            )
             item["activation_state"] = str(
                 goal.get("activation_state") or "active"
             )
@@ -243,7 +264,6 @@ def build_attention_queue(
                 item["agent_lane_recommendation"] = agent_lane_recommendation
             subagent_activity = context.subagent_activity_for_goal(goal)
             interface_budget_cadence = context.interface_budget_cadence_for_runs(goal_latest_runs)
-            projection_warning = context.active_state_projection_warning(goal, context.latest_run(goal))
             context.enrich_project_asset(
                 item,
                 latest_validation=context.project_asset_latest_validation(context.latest_run(goal)),

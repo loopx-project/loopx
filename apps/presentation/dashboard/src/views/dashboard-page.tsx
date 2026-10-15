@@ -12,6 +12,7 @@ import { directoryStatusPayload, fetchWorkspaceDirectory, loadWorkspaceGoalSnaps
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleAlert, Moon, RefreshCw, Sun } from "lucide-react";
 import type { DigestAttentionSummary } from "../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
+import { hasGoalFailureStatus } from "../../../../../loopx/control_plane/presentation/goal_failure_status.js";
 
 import { dashboardRoute } from "../router";
 import {
@@ -797,21 +798,12 @@ function personalGoalRegistryFinding(payload: StatusPayload, row: GoalDirectoryR
   );
 }
 
-function personalGoalHasFailureStatus(row: GoalDirectoryRow) {
-  return [row.status, row.goal.status, row.latestRun?.classification, row.lifecyclePhase]
-    .filter(Boolean)
-    .some((value) =>
-      /(^|[_\s-])(failure|failed|error|broken|unhealthy|blocked[_\s-]?health|health[_\s-]?blocked)([_\s-]|$)/i
-        .test(value ?? ""),
-    );
-}
-
 function personalGoalNeedsRepair(payload: StatusPayload, row: GoalDirectoryRow) {
   const staleWarning = row.queueItem?.stale_latest_run_warning;
   return row.severity === "high"
     || Boolean(personalGoalRegistryFinding(payload, row))
     || Boolean(staleWarning?.requires_refresh_state || staleWarning?.severity === "high")
-    || personalGoalHasFailureStatus(row);
+    || hasGoalFailureStatus([row.status, row.goal.status, row.latestRun?.classification, row.lifecyclePhase]);
 }
 
 function personalRepairText(payload: StatusPayload, row: GoalDirectoryRow) {

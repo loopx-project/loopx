@@ -836,8 +836,14 @@ Item fields:
   compact per-goal policy projection for settings such as self-repair, and
   `stale_latest_run_warning`, a compact warning that the current active-state
   file appears newer or different from the latest run's captured state
-  projection. This warning is a repair hint, not a scheduler gate: consumers
-  should run `refresh-state` before trusting latest-run-derived routing, while
+  projection. Status automatically rebuilds ordinary stale refresh/progress routing after a
+  successful current-state Todo read, using the shared TypeScript attention
+  owner. Reconciled items use `source=active_state` and omit the warning;
+  no historical Run or settlement is rewritten. An unresolved historical
+  failure, outcome gap, unclassified result or owner gate, or an unavailable
+  current source, retains the warning.
+  This warning is a repair hint, not a scheduler gate: consumers must not trust
+  unreconciled latest-run-derived routing, while
   quota eligibility still comes from the quota guard. When orchestration mode
   is `multi_subagent`, project assets may also include `subagent_activity`, a
   compact child-run projection derived from run history. It records child run
@@ -1443,11 +1449,21 @@ that generic lifecycle hint before inventing local automation behavior:
 once, while `mapped_noop_if_unchanged` returns a quiet no-op without another
 dry-run or quota spend if no new instruction, evidence, todo, stale source, or
 safe handoff exists.
-When the payload includes `stale_latest_run_warning`, the current active-state
-projection has moved ahead of the latest run-history snapshot. Executors should
-repair the control-plane projection with a fresh state refresh before relying on
-latest-run status, review packets, or handoff fields, but the warning alone does
-not authorize production actions or override `should_run`.
+Status repairs ordinary snapshot drift on read, without an owner action or a
+new execution record. When `stale_latest_run_warning` remains, current-state
+reconciliation could not safely replace the historical route. Diagnose its
+source or unresolved gate before relying on latest-run routing or handoff.
+Reconciliation never grants permission, overrides `should_run`, fabricates
+progress or clears a historical failure or pending owner decision. The home
+running lane always requires observed execution, including for a Goal whose
+leading state is a repair request.
+Extensible legacy classification labels still use one conservative TypeScript
+presentation matcher, shared by reconciliation and the sidebar. For example,
+`runtime_error` remains a failure signal even alongside `outcome_progress`.
+Labels such as `error_recovery_completed` may also remain flagged; the matcher
+cannot establish success or grant admission. Its replacement belongs to the
+[TS migration's](architecture/rfcs/typescript-control-plane-migration-v0.md)
+normalized runtime-result contract, rather than a second per-consumer heuristic.
 When the payload includes `backlog_hygiene_warning`, the active state has
 multiple public-safe durable follow-up items in `Next Action` or
 `Operating Lessons` while the active `Agent Todo` checklist has no open item.

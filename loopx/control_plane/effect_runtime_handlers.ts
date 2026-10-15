@@ -456,6 +456,7 @@ export function createEffectRuntimeHandlers(
     ["presentation.decision_notice.validate_references", lazyHandler(() => import("./presentation/decision_notice.ts"), ({validateDecisionNoticeReferences}) => validateDecisionNoticeReferences)],
     ["presentation.goal_attention.project", lazyHandler(() => import("./presentation/goal_attention.ts"), ({projectGoalAttention}) => projectGoalAttention)],
     ["presentation.goal_attention.bound", lazyHandler(() => import("./presentation/goal_attention.ts"), ({boundGoalAttention}) => boundGoalAttention)],
+    ["presentation.goal_attention.reconcile", lazyHandler(() => import("./presentation/goal_attention.ts"), ({reconcileGoalAttention}) => reconcileGoalAttention)],
     ["presentation.action_review_plan.compile", lazyHandler(() => import("./presentation/action_review_plan.ts"), ({compileActionReviewPlan}) => (params) =>
       compileActionReviewPlan(params.proposal, params.now_ms === undefined
         ? undefined : requireInteger(params.now_ms, "now_ms")))],

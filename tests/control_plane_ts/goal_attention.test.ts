@@ -1,7 +1,47 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
-import {boundGoalAttention, projectGoalAttention} from "../../loopx/control_plane/presentation/goal_attention.ts";
+import {boundGoalAttention, projectGoalAttention, reconcileGoalAttention} from "../../loopx/control_plane/presentation/goal_attention.ts";
+import {hasGoalFailureStatus} from "../../loopx/control_plane/presentation/goal_failure_status.ts";
+
+test("current state repairs stale routing without rewriting historical execution", () => {
+  const item = {goal_id: "alpha", source: "latest_run", status: "state_refreshed",
+    waiting_on: "codex", severity: "action", recommended_action: "Obsolete step"};
+  const current = {...item, source: "active_state", status: "active_state_agent_todo",
+    recommended_action: "Verify the current deliverable"};
+  const warning = {requires_refresh_state: true, latest_run_generated_at: "2026-01-01T00:00:00Z"};
+  const result = reconcileGoalAttention({item, active_state_item: current, warning});
+  assert.deepEqual(result.item, current);
+  assert.equal(result.warning, null);
+  assert.equal(warning.latest_run_generated_at, "2026-01-01T00:00:00Z");
+  assert.equal(item.recommended_action, "Obsolete step");
+  for (const protectedItem of [
+    {...item, severity: "high"}, {...item, waiting_on: "controller"},
+    {...item, waiting_on: "user_or_controller"}, {...item, status: "runtime_error"},
+    {...item, source: "registry"},
+  ]) {
+    assert.deepEqual(reconcileGoalAttention({item: protectedItem, active_state_item: current, warning}),
+      {item: protectedItem, warning}, "a projection repair cannot remove a failure or an owner gate");
+  }
+  assert.deepEqual(reconcileGoalAttention({item, active_state_item: current, warning,
+    historical_run: {delivery_outcome: "outcome_gap"}}), {item, warning});
+  const mixedFailure = {...item, status: "runtime_error"};
+  assert.equal(hasGoalFailureStatus([mixedFailure.status]), true);
+  assert.equal(hasGoalFailureStatus(["verified_delivery", null]), false);
+  assert.deepEqual(reconcileGoalAttention({item: mixedFailure, active_state_item: current, warning,
+    historical_run: {classification: "runtime_error", delivery_outcome: "outcome_progress"}}),
+  {item: mixedFailure, warning}, "partial progress does not resolve a runtime failure");
+  assert.equal(reconcileGoalAttention({item: {...item, status: "verified_delivery"},
+    active_state_item: current, warning, historical_run: {delivery_outcome: "outcome_progress"}}).warning, null);
+  for (const unavailable of [null, {...current, goal_id: "other"}, {...current, source: "latest_run"}]) {
+    assert.deepEqual(reconcileGoalAttention({item, active_state_item: unavailable, warning}),
+      {item, warning}, "missing or unrelated current facts cannot certify repair");
+  }
+  const currentGate = {...current, status: "active_state_user_gate", waiting_on: "controller"};
+  const repairedGate = reconcileGoalAttention({item, active_state_item: currentGate, warning});
+  assert.deepEqual(repairedGate.item, currentGate);
+  assert.equal(repairedGate.warning, null, "a current owner decision is preserved without a spurious repair request");
+});
 
 const gate = {todo_id: "todo_gate", role: "user", task_class: "user_gate",
   status: "blocked", text: "Choose the release window", note: "Only the reviewed build",

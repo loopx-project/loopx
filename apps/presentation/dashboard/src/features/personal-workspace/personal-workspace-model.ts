@@ -636,7 +636,6 @@ export function workspaceHomeLaneForGoal(goal: WorkspaceGoal): WorkspaceHomeLane
   if (goal.activationState === "stopped" || goal.state === "已停止") return "stopped";
   if (goal.state === "已完成") return "history";
   if (goal.needsYou || goal.state === "等你") return "needs_you";
-  if (goal.state === "需修复") return "running";
   const work = goalWorkKind(goal);
   if (work === "executing") return "running";
   if (work === "claimed") return "claimed";
