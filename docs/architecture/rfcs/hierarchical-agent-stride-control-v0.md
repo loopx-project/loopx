@@ -686,6 +686,25 @@ synthetic improvement needs applicable transfer evidence; repeated identical
 outcomes are not new information. Prefer the smallest coverage that resolves the
 choice to another broad sweep, while preserving relevant failure evidence.
 
+Before a local check vetoes further work, identify its source and the goal it
+protects. Original constraints and frozen study criteria retain their authority.
+An agent-proposed candidate heuristic may be revised prospectively with an
+explicit rationale and retained counterevidence; the previous failed result
+stays failed. Compare incumbent behavior under the same relevant control and
+measure or bound the discrepancy's effect on the goal, reusing applicable
+evidence before spending on a finite diagnosis. Readiness for an authorized
+informative evaluation differs from evidence sufficient to replace the
+incumbent. Both decisions retain budget, feedback and permission limits and
+account for full marginal and opportunity cost.
+
+| Evidence at the decision | Appropriate interpretation |
+|---|---|
+| An output violates the task interface or uses forbidden information | Preserve the constraint and repair or reject; heuristic revision cannot waive it. |
+| A candidate misses an agent-chosen numerical tolerance, with task impact unknown | Compare the incumbent and task impact; declare any prospective replacement criterion. Do not claim either safety or harm from the threshold alone. |
+| A frozen comparison criterion fails | Retain that verdict; a revised experiment is separately declared, not a retroactive pass. |
+| A valid candidate regresses on the authoritative objective | Preserve the incumbent and scoped regression, even if local proxies improve. |
+| A synthetic probe improves | Transfer remains unknown; weigh an eligible informative evaluation against its cost, without automatic submission or adoption. |
+
 These questions guide existing axis plans/reasons and `next_probe`; they add no
 decision field, settlement gate, automatic pivot, family ban or strategy version.
 Missing headroom remains unknown. Transport and proposal validation establish

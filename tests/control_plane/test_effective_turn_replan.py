@@ -349,6 +349,16 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     assert guard["replan_action_packet"]["stride_control"]["required_on_periodic_review"] is True
     value_review = guard["replan_action_packet"]["stride_control"]["decision_value_review"]
     assert set(value_review) == {"work_slice", "route_distance", "validation_scope"}
+    # Exercise the real File/SQLite CLI delivery of both sides of the advice:
+    # a heuristic can be reconsidered prospectively, but failure and authority
+    # cannot be rewritten. The existing decision/writeback contract stays legal.
+    validation_advice = value_review["validation_scope"]
+    assert "original constraint or frozen study criterion" in validation_advice
+    assert "agent-proposed candidate heuristic" in validation_advice
+    assert "compare the incumbent under the same relevant control" in validation_advice
+    assert "cannot turn an earlier failure into a pass" in validation_advice
+    assert "authorized informative evaluation" in validation_advice
+    assert "evidence sufficient to replace the incumbent" in validation_advice
     successor = call("todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
         "--claimed-by", AGENT_ID, "--text", "Validate a new independent source",
         "--task-class", "advancement_task", "--action-kind", "validate",

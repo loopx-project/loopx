@@ -27,6 +27,10 @@ const decisionValueReview = {
   validation_scope: "Use evidence applicable to the limiting outcome and changed mechanism. " +
     "First establish that the intervention actually changes the relevant behavior; unchanged outcomes may require tracing its activation rather than a wider parameter sweep. " +
     "Choose a comparison or negative control that separates the surviving explanations, and state what each possible result would change. " +
+    "Before a check vetoes further work, identify its source and protected goal: an original constraint or frozen study criterion, versus an agent-proposed candidate heuristic. " +
+    "For a heuristic discrepancy, compare the incumbent under the same relevant control and measure or bound the effect on the goal; use a finite diagnosis that can decide grow or switch. " +
+    "A prospective heuristic revision needs an explicit rationale and retained counterevidence; it cannot turn an earlier failure into a pass, relax an original constraint or override a frozen study criterion. " +
+    "Distinguish readiness for an authorized informative evaluation from evidence sufficient to replace the incumbent. Consider its full marginal and opportunity cost under existing budget, feedback and permission limits; preserve the best qualified artifact. " +
     "Distinguish local or synthetic gains from authoritative transfer, and repeated identical outcomes from new information. " +
     "Choose decisive coverage before broadening a sweep; retain uncertainty and relevant negative evidence.",
 };
