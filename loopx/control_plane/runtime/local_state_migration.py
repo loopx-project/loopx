@@ -28,6 +28,7 @@ from ...paths import (
     _is_redirected_path,
 )
 from ...runtime import validate_goal_id_path_segment
+from .file_paths import windows_extended_path
 
 
 LOCAL_STATE_MIGRATION_SCHEMA = "loopx_local_state_migration_v1"
@@ -127,19 +128,20 @@ def _write_project_registry(path: Path, payload: dict[str, Any]) -> None:
 def _digest(path: Path) -> str:
     """Hash source bytes without traversing redirected files or directories."""
 
+    address = windows_extended_path(path)
     digest = hashlib.sha256()
-    if _is_redirected_path(path):
+    if _is_redirected_path(path) or (address != path and _is_redirected_path(address)):
         raise ValueError(f"migration source contains a symlink or junction: {path}")
-    if path.is_file():
+    if address.is_file():
         digest.update(b"file\0")
-        with path.open("rb") as stream:
+        with address.open("rb") as stream:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(chunk)
-    elif path.is_dir():
+    elif address.is_dir():
         digest.update(b"dir\0")
-        for child in sorted(path.iterdir(), key=lambda item: item.name):
+        for child in sorted(address.iterdir(), key=lambda item: item.name):
             digest.update(child.name.encode("utf-8") + b"\0")
-            digest.update(_digest(child).encode("ascii"))
+            digest.update(_digest(path / child.name).encode("ascii"))
     else:
         raise FileNotFoundError(path)
     return digest.hexdigest()
@@ -317,6 +319,14 @@ def _copy(source: Path, target: Path) -> None:
         raise ValueError(f"migration source is a symlink or junction: {source}")
     _require_backup_path(target.parent)
     target.parent.mkdir(parents=True, exist_ok=True)
+    _require_backup_path(target.parent)
+    if target.exists() or _is_redirected_path(target):
+        raise FileExistsError(f"backup snapshot target already exists: {target}")
+    source, target = windows_extended_path(source), windows_extended_path(target)
+    # Check the supported native address too, including long reparse ancestors.
+    _require_unlinked_directory_chain(source.parent, label="migration source")
+    if _is_redirected_path(source):
+        raise ValueError(f"migration source is a symlink or junction: {source}")
     _require_backup_path(target.parent)
     if target.exists() or _is_redirected_path(target):
         raise FileExistsError(f"backup snapshot target already exists: {target}")
