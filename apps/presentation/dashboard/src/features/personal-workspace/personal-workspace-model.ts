@@ -434,10 +434,24 @@ export type WorkspaceGoalNotification = {
 };
 
 export type WorkspaceSystemHealth = {
+  /** Status-source contract lines for a collapsed disclosure; never primary copy. */
+  diagnostics?: string[];
   freshnessWarning?: string | null;
   issues: string[];
   ok: boolean;
   summary: string;
+};
+
+/**
+ * Typed first-Goal classification of the manager home. `no_goals` means the
+ * status source reports zero registered Goals and no execution history, so
+ * the home shows its first-Goal state instead of empty lanes. `diagnostics`
+ * carries the status source's own contract lines for a collapsed disclosure;
+ * it is never primary copy.
+ */
+export type WorkspaceHomeOnboarding = {
+  kind: "no_goals";
+  diagnostics: string[];
 };
 
 export type WorkspaceModel = {
@@ -449,6 +463,7 @@ export type WorkspaceModel = {
     error?: string | null;
     loading: boolean;
   };
+  onboarding?: WorkspaceHomeOnboarding;
   systemHealth?: WorkspaceSystemHealth;
   timeline?: WorkspaceTimelineItem[];
   attentionHistory?: WorkspaceAttention[];
@@ -490,6 +505,7 @@ export type PersonalHomeCompatibleModel = {
   goalNotifications?: WorkspaceGoalNotification[];
   goals: WorkspaceGoal[];
   openUserTodoCount: number;
+  onboarding?: WorkspaceHomeOnboarding;
   systemHealth?: WorkspaceSystemHealth;
   attentionHistory?: WorkspaceAttention[];
   userTodos: WorkspaceAttention[];
@@ -596,6 +612,7 @@ export function normalizePersonalHomeModel(model: PersonalHomeCompatibleModel): 
     goalNotifications: model.goalNotifications,
     goals: model.goals,
     openUserTodoCount: model.openUserTodoCount,
+    onboarding: model.onboarding,
     systemHealth: model.systemHealth,
     attentionHistory: model.attentionHistory,
     userTodos: model.userTodos,

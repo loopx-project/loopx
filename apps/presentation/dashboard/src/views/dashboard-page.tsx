@@ -108,6 +108,7 @@ import {
   type WorkspaceGoalTab,
   type WorkspaceGoalUsage,
   type WorkspaceImageAttachment,
+  type WorkspaceHomeOnboarding,
   type WorkspaceSystemHealth,
   type WorkspaceTimelineItem,
   type WorkspaceWorker,
@@ -504,6 +505,7 @@ type PersonalHomeModel = {
   goalNotifications?: WorkspaceGoalNotification[];
   goals: PersonalGoalItem[];
   openUserTodoCount: number;
+  onboarding?: WorkspaceHomeOnboarding;
   systemHealth?: WorkspaceSystemHealth;
   attentionHistory?: PersonalNeedsYouItem[];
   userTodos: PersonalNeedsYouItem[];
@@ -1105,20 +1107,23 @@ function buildPersonalHomeModel(
     }];
   });
 
+  // Owner language first: each issue is a localized sentence. The status
+  // source's own contract lines stay available to a collapsed disclosure.
   const systemHealthIssues: string[] = [];
   if (!payload.ok) {
-    systemHealthIssues.push("状态载荷未标记为正常 (payload.ok === false)");
+    systemHealthIssues.push(t("home.health.payloadNotOk"));
   }
   if (payload.contract && !payload.contract.ok) {
     const summary = payload.contract.summary;
-    const detail = summary
-      ? `${summary.errors} 项错误 / ${summary.warnings} 项警告`
-      : (payload.contract.errors?.[0] || "请检查控制面契约");
-    systemHealthIssues.push(`契约检查未通过: ${detail}`);
+    systemHealthIssues.push(summary
+      ? t("home.health.contractFailed", { errors: summary.errors, warnings: summary.warnings })
+      : payload.contract.errors?.[0]
+        ? t("home.health.contractFailedDetail", { detail: payload.contract.errors[0] })
+        : t("home.health.contractFailedUnknown"));
   }
   if (payload.global_registry) {
     if (!payload.global_registry.ok) {
-      systemHealthIssues.push(`注册表状态异常: ${payload.global_registry.summary.high} 项高危`);
+      systemHealthIssues.push(t("home.health.registryHigh", { count: payload.global_registry.summary.high }));
     }
     for (const finding of payload.global_registry.findings || []) {
       if (finding.severity === "high") {
@@ -1127,17 +1132,24 @@ function buildPersonalHomeModel(
     }
   }
   const freshnessWarning = payload.decision_freshness_summary?.summary?.stale_count
-    ? `${payload.decision_freshness_summary.summary.stale_count} 项决策状态已过期`
+    ? t("home.health.freshness", { count: payload.decision_freshness_summary.summary.stale_count })
     : null;
   const isHealthy = systemHealthIssues.length === 0 && !freshnessWarning;
   const systemHealth: WorkspaceSystemHealth = {
     ok: isHealthy,
     summary: isHealthy
-      ? "所有控制面契约与注册表检查均正常"
-      : `发现 ${systemHealthIssues.length + (freshnessWarning ? 1 : 0)} 项系统健康关注点`,
+      ? t("home.health.allClear")
+      : t("home.health.concerns", { count: systemHealthIssues.length + (freshnessWarning ? 1 : 0) }),
     issues: systemHealthIssues,
     freshnessWarning,
+    diagnostics: [...(payload.contract?.errors ?? []), ...(payload.contract?.warnings ?? [])],
   };
+  // A healthy source with no registered Goal and no execution history is a
+  // first-Goal workspace, not a failure. Any health issue keeps its banner.
+  const onboarding: WorkspaceHomeOnboarding | undefined = isHealthy
+    && payload.goal_count === 0 && goals.length === 0 && (payload.run_history?.goals ?? []).length === 0
+    ? { kind: "no_goals", diagnostics: [...(payload.contract?.warnings ?? []), ...(payload.contract?.checks ?? [])] }
+    : undefined;
 
   return {
     blockingTodoCount: allUserTodos.filter((todo) => todo.blocking).length,
@@ -1159,6 +1171,7 @@ function buildPersonalHomeModel(
     })),
     goals,
     openUserTodoCount: allUserTodos.length,
+    onboarding,
     systemHealth,
     attentionHistory: [...attentionHistory, ...pendingOperatorGates],
     userTodos: allUserTodos,
@@ -1256,10 +1269,12 @@ function PersonalGoalHome({
       openUserTodoCount: userTodos.length, blockingTodoCount: userTodos.filter((todo) => todo.blocking).length,
       workers: [...new Map(models.flatMap((item) => item.workers ?? []).map((worker) => [worker.agentId, worker])).values()],
       goalNotifications: models.flatMap((item) => item.goalNotifications ?? []),
+      onboarding: incomplete ? undefined : base.onboarding,
       systemHealth: incomplete || models.length === 0 ? undefined : {
         ok: models.every((item) => item.systemHealth?.ok), issues,
-        summary: issues.length ? `发现 ${issues.length} 项系统健康关注点` : "状态检查已完成",
+        summary: issues.length ? t("home.health.concerns", { count: issues.length }) : t("home.health.checked"),
         freshnessWarning: models.map((item) => item.systemHealth?.freshnessWarning).filter(Boolean).join("；") || null,
+        diagnostics: [...new Set(models.flatMap((item) => item.systemHealth?.diagnostics ?? []))],
       },
     };
   }, [payload, rows, progress, goalSubagentConfigurationEnabled, t]);
