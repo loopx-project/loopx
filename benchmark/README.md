@@ -609,6 +609,14 @@ collide with the automatic native capsule name. Neither Docker access nor judge
 administration is passed into the solver. Omit this command to retain ordinary
 capture behavior; there is no automatic activation or retention policy.
 
+The export destination's filesystem also holds each raw Docker archive while
+its members are extracted. Provision space for the raw transfer, extracted
+participants and sealing copies; moving the destination does not reduce those
+bytes or extend the capture deadline. The archive spool uses the private export
+staging directory instead of ambient temporary storage. If that filesystem fills,
+capture still fails and runs its existing reader/barrier cleanup without publishing an
+outer artifact; it does not retry on another volume or substitute a later point.
+
 The container must initially be running and unpaused. Cancellation, failed file
 reads, rejected native capture and a lost pause response attempt to release only
 this operation's barrier. Failure to resume the worker is reported and publishes
@@ -799,6 +807,11 @@ LOOPX_EDGEBENCH_DOCKER_SMOKE=1 python -m pytest -q \
 controller 保管，不能放进 worker；0600 不能证明隔离。原生 owner 保留历史、
 已用轮次和剩余冷却，生成新注册；完整研究接续仍需联合会话、LoopX 新权限、
 原点剩余总预算及 replan 前决策边界。此切片不启动研究、不证明收益，也不改历史源。
+
+Docker 原始归档在显式导出目标的文件系统中暂存，再解包到该私有 staging 目录，
+不再依赖环境默认的临时卷。目标容量仍须覆盖原始传输、已解包参与者及封存副本；
+改变目标位置不会减少这些字节或延长捕获截止时间。目标卷空间不足仍明确失败、
+执行现有 reader/barrier 清理且不发布外层产物，不自动换卷重试或用稍后状态替代原点。
 
 这是研究 checkpoint 的开发前置切片。EdgeBench CLI 的显式
 `--checkpoint-request` 会把 host JSON 原文安全放入 heartbeat worker，并在

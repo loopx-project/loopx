@@ -84,7 +84,9 @@ def _archive(container, remote: str, destination: Path) -> Path:
         if stat.get("linkTarget"):
             raise ValueError("Worker component must not be a symlink")
         destination.mkdir(mode=0o700)
-        with tempfile.TemporaryFile() as raw:
+        # The explicitly provisioned export volume owns both the raw transfer
+        # and extracted files; a full ambient /tmp must not defeat that choice.
+        with tempfile.TemporaryFile(dir=destination) as raw:
             for chunk in api._stream_raw_result(response, 2 * 1024 * 1024, False):
                 raw.write(chunk)
             raw.seek(0)
