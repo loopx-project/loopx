@@ -52,7 +52,7 @@ def write_bytes_atomic(
     untouched; an explicit `mode` is applied with chmod. `preserve_mode` keeps
     an existing destination's mode and wins over both.
     """
-    destination = Path(path).expanduser()
+    destination = windows_extended_path(Path(path).expanduser())
     destination.parent.mkdir(parents=True, exist_ok=True, mode=directory_mode or 0o777)
     if preserve_mode and destination.exists():
         mode = destination.stat().st_mode & 0o777
