@@ -970,7 +970,7 @@ def test_native_lifecycle_relation_keeps_the_live_owner_and_verification_boundar
     smoke = runpy.run_path(str(SMOKE))
     registry = smoke['load_registry']()
     assert registry['coverage_floor']['vocabularies'] == 28
-    assert registry['coverage_floor']['owner_symbols'] == 53
+    assert registry['coverage_floor']['owner_symbols'] == 54
     assert registry['coverage_floor']['relations'] == 9
     relation = next(row for row in registry['relations']['subsets']
                     if row['name'] == 'task_lease_lifecycle_decision_operation')

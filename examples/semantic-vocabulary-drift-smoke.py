@@ -192,7 +192,7 @@ FORMAL_CANDIDATE_DECISIONS = {
 # silently; that is the gap the anchor exists to close.
 COVERAGE_ANCHOR = {
     "vocabularies": 28,
-    "owner_symbols": 53,
+    "owner_symbols": 54,
     "literal_scan_fields": 1,
     "projections": 1,
     "relations": 9,
