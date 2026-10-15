@@ -253,7 +253,7 @@ def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch,
     project, runtime, registry = cli._write_fixture(tmp_path)
     binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID)
     def run(*args):
-        code, result = cli._run_cli(registry, runtime, *args)
+        code, result = cli._run_cli(registry, runtime, *args, cwd=project)
         assert code == 0, result
     run("quota", "should-run", "--goal-id", cli.GOAL_ID, "--codex-app", *binding)
     vision = tmp_path / "vision.json"
@@ -287,6 +287,15 @@ def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch,
             goal_ref=source_wake.goal_ref, session_profile_digest=source_wake.digest))
         receipt = {"ok": True, "stage": "execute", "mode": "heartbeat", "turn_id": cli.TURN_ID,
                    "session": {"session_id": source}}
+        from contextlib import contextmanager
+        from loopx.hosts.codex_checkpoint import native_checkpoint_reader
+        inspections = []
+        @contextmanager
+        def observed_reader(*args, **kwargs):
+            with native_checkpoint_reader(*args, **kwargs) as reader:
+                inspections.append(reader)
+                yield reader
+        monkeypatch.setattr("loopx.hosts.codex_checkpoint.native_checkpoint_reader", observed_reader)
         injected = []
         def between_read_and_probe(method, params, **kwargs):
             if source_moves and params["action"] == mutation_stage and not injected:
@@ -300,6 +309,10 @@ def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch,
             return effect_runtime_result(method, params, **kwargs)
         monkeypatch.setattr("benchmark.runtime.checkpoint.effect_runtime_result", between_read_and_probe)
         capture_after_wake(env, receipt)
+        # Both full observations use one owned reader, also on rejection. The
+        # real later-Turn mutation above must remain visible through that reader.
+        assert len(inspections) == 1
+        assert inspections[0].process.poll() is not None
         assert receipt["ok"] and candidate.read_text() == "source_candidate = 7\n"
         assert len(calls) == (2 if source_moves is True else 1)  # Static local streams only; no implicit new work.
         if source_moves:

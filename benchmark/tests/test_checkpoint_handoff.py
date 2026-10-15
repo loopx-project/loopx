@@ -216,3 +216,69 @@ def test_closeout_does_not_relax_settlement_identity(field, value):
     with pytest.raises(EffectRuntimeRemoteError):
         effect_runtime_result("runtime.checkpoint_artifacts", {"action": "select_replan", "quota": quota,
             "goal_id": "source", "agent_id": "agent", "turn_instance_id": "turn"})
+
+
+@pytest.mark.parametrize("fault", [None, "first_read", "probe", "cursor_moved", "capture"])
+def test_interrupted_capture_keeps_reader_through_publication_and_cleans_up(tmp_path, monkeypatch, fault):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from benchmark.runtime.checkpoint_wake import CheckpointWake
+
+    env = {"LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes"), "LOOPX_CLI": "loopx",
+        "LOOPX_PROJECT": str(tmp_path), "LOOPX_REGISTRY": str(tmp_path / "registry"),
+        "LOOPX_RUNTIME_ROOT": str(tmp_path / "runtime"), "LOOPX_GOAL_ID": "goal",
+        "LOOPX_AGENT_ID": "agent"}
+    hook = CheckpointWake(env, {"turn_id": "turn", "session": {"session_id": "session"}})
+    hook.raw = b"synthetic request"
+    code = tmp_path / "candidate"
+    code.write_text("retained")
+    hook.request = {"components": [{"id": "code", "source_path": str(code)}],
+                    "point_metadata": {}, "native_session": True}
+    held = {"path": tmp_path / "held", "sha256": "guard-digest",
+            "intent": {"obligation_id": "replan-fixture"},
+            "quota": {"heartbeat_receipt": {"turn_instance_id": "turn"}}}
+    held["path"].write_text("original guard")
+    binding = SimpleNamespace(session_id="session", goal_ref="goal", digest="profile")
+    monkeypatch.setattr("benchmark.runtime.checkpoint.native_binding_participant",
+                        lambda env, components, metadata: (components, binding))
+    monkeypatch.setattr("benchmark.runtime.sessions.BenchmarkSessionWake", lambda *a, **k: binding)
+    events = []
+    token = object()
+    @contextmanager
+    def reader(*args, **kwargs):
+        events.append("open")
+        try:
+            yield token
+        finally:
+            events.append("closed")
+    def read(*args, transport, interrupted_guard, **kwargs):
+        assert transport is token and interrupted_guard["decision_sha256"] == held["sha256"]
+        events.append("read")
+        if fault == "first_read":
+            raise ValueError("synthetic read failure")
+        return {"components": [], "metadata": {"store_members": [],
+                "visible_history_sha256": "later" if fault == "cursor_moved" and events.count("read") == 2 else "original"}}
+    monkeypatch.setattr("loopx.hosts.codex_checkpoint.native_checkpoint_reader", reader)
+    monkeypatch.setattr("loopx.hosts.codex_checkpoint.native_session_checkpoint", read)
+    def artifact(method, params, **kwargs):
+        assert params["deadline_epoch_ms"] <= phase_deadline * 1000 + 1
+        events.append(params["action"])
+        if params["action"] == "probe":
+            if fault == "probe":
+                raise ValueError("synthetic probe failure")
+            return {"source_sha256": "witness"}
+        assert "closed" not in events
+        if fault == "capture":
+            raise ValueError("synthetic capture failure")
+        assert params["expected_source_sha256"] == "witness"
+        return {"sha256": "sealed"}
+    monkeypatch.setattr("benchmark.runtime.checkpoint_wake.effect_runtime_result", artifact)
+    phase_deadline = time.time() + 5
+    if fault:
+        with pytest.raises(ValueError, match="failure|cursor moved"):
+            hook._capture(held, time.monotonic() + 5)
+        assert events[-1] == "closed"
+        assert ("capture" in events) is (fault == "capture")
+    else:
+        assert hook._capture(held, time.monotonic() + 5)["sha256"] == "sealed"
+        assert events == ["open", "read", "probe", "read", "capture", "closed"]
