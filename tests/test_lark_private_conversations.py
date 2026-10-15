@@ -169,6 +169,43 @@ def finish_group_turn(runtime, transport, *, message):
     return row
 
 
+def test_completed_group_queue_keeps_a_stopped_host_stopped(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        event = provider.topic("idle-host", "Explain this project")
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        row = transport.core.pending()[0]
+        result = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+        assert result["status"] == "completed"
+        with runtime.lock:
+            worker = runtime.session_queue_threads.get(row["session_id"])
+        if worker:
+            worker.join(3)
+            assert not worker.is_alive()
+        with runtime.lock:
+            adapter = runtime.adapters.pop(row["session_id"])
+        adapter.close_session()
+        assert not adapter.healthcheck()
+        capture = ordinary[4]
+        native_before = capture.read_bytes()
+        # The real recovery pump is also used while a terminal reply is owed.
+        # It must not prepare an idle host or change the completed answer.
+        before = store.load_turn(row["session_id"], row["turn_id"])
+        assert transport.reconcile() == 1
+        with runtime.lock:
+            worker = runtime.session_queue_threads.get(row["session_id"])
+        if worker:
+            worker.join(3)
+            assert not worker.is_alive()
+        assert capture.read_bytes() == native_before
+        assert row["session_id"] not in runtime.adapters
+        assert store.load_turn(row["session_id"], row["turn_id"]) == before
+        assert len(provider.writes) == 1 and provider.writes[0][1] == result["response"]["message"]
+        assert transport.reconcile() == 0
+    finally:
+        runtime.close()
+
+
 def test_group_receipt_reuses_only_the_fresh_bindings_display_observation(ordinary, monkeypatch):  # noqa: F811
     store, runtime, provider, transport = connect_group(ordinary)
     root = provider.topic("receipt-source", "Explain this project")
