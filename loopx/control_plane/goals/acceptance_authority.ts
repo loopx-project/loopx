@@ -19,6 +19,8 @@ import {GOAL_ACCEPTANCE_LIFECYCLE_SCHEMA, parseGoalAcceptanceLifecycleTransition
   readGoalAcceptanceLifecycle, sameExactGoalRef, type GoalAcceptanceLifecycle,
   type GoalAcceptanceLifecycleTransition, type WireExactGoalRef} from "./acceptance_lifecycle.ts";
 
+import {validateOracleResults} from "./acceptance_oracle.ts";
+
 const RESULT_SCHEMA = "loopx_goal_acceptance_result_v0";
 const RECEIPT_SCHEMA = "loopx_goal_acceptance_operation_v0";
 const LIFECYCLE_RECEIPT_SCHEMA = "loopx_goal_acceptance_lifecycle_operation_v0";
@@ -182,8 +184,15 @@ export async function configureGoalAcceptance(store: AuthorityStore, value: Json
         "acceptance binding must reference existing Agent advancement work");
       return {...binding, todo_semantic_digest: goalAcceptanceTodoDigest(todo), revision, confirmed_by: "owner" as const};
     });
+    // Removing the optional oracle withdraws its current receipt. The immutable
+    // operation journal retains that evidence; older readers can then consume
+    // the ordinary contract without understanding the optional result fields.
+    const previousVerification = previous?.verification ?? null;
+    const verification = !document.criteria.some(criterion => criterion.oracle !== undefined)
+      && previousVerification?.results.some(result => result.oracle_evidence !== undefined)
+      ? null : previousVerification;
     const fields = {enabled: true, revision, digest: canonicalAuthoritySha256(document),
-      document, bindings, verification: previous?.verification ?? null};
+      document, bindings, verification};
     const goalRef = requestGoalRef(request);
     state = goalRef === null
       ? {schema_version: GOAL_ACCEPTANCE_SCHEMA, ...fields}
@@ -222,6 +231,7 @@ export async function commitGoalAcceptanceVerification(store: AuthorityStore, va
     criterionIds = task.criterion_ids;
   }
   normalizeAcceptanceResults(results, criterionIds);
+  validateOracleResults(state.document.criteria, results);
   const verification: AcceptanceVerification = {operation_id: String(request.operation_id),
     contract_revision: state.revision, contract_digest: state.digest, todo_id: todoId,
     work_digest: goalAcceptanceWorkDigest(head.head, goalId, state.document.scope), results};

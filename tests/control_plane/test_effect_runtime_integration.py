@@ -637,10 +637,12 @@ def test_identical_release_does_not_reuse_a_retired_lazy_loader(
         effect_runtime.restart_effect_runtime()
 
 
+@pytest.mark.parametrize("cleanup_delay", [0, 0.6], ids=["serving", "idle-retired"])
 def test_runtime_decode_change_rotates_identity_and_starts_replacement(
     tmp_path: Path,
     monkeypatch,
     request,
+    cleanup_delay: float,
 ) -> None:
     staged_root, captures = observe_copied_runtime(tmp_path, monkeypatch, request)
     runtime_dir = tmp_path / "runtime"
@@ -661,9 +663,20 @@ def test_runtime_decode_change_rotates_identity_and_starts_replacement(
     assert original_info != replacement_info
     assert replacement_info.exists()
 
+    replacement_locator = effect_runtime._read_info(
+        replacement_info, fingerprint=replacement_fingerprint,
+    )
+    assert replacement_locator is not None
+    runtime_count = len(captures)
+    time.sleep(cleanup_delay)
     shutdown_started = time.monotonic()
-    effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
+    # Cleanup owns this exact process. Rediscovery can race its 250 ms idle
+    # retirement or start a third runtime merely to shut that new one down.
+    effect_runtime._stop_effect_runtime(
+        replacement_info, replacement_locator, timeout=2, wait_for_process_exit=True,
+    )
     shutdown_acknowledged = time.monotonic()
+    assert len(captures) == runtime_count, "cleanup must not start another runtime"
     deadline = time.monotonic() + 2
     while (
         original_info.exists() or replacement_info.exists()

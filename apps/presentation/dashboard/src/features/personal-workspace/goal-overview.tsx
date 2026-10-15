@@ -9,7 +9,7 @@ import type {GoalWorkspaceDigest} from "../../../../../../loopx/control_plane/pr
 import { GoalAcceptanceObservationCard } from "./goal-acceptance-observation-card";
 import type { WorkspaceActionPreview, WorkspaceActionPreviewRequest, WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceGoalTab, WorkspaceModel, WorkspaceTimelineItem } from "./personal-workspace-model";
 import { useWorkspaceI18n } from "./i18n";
-import {projectGoalAcceptanceCriteria} from "../../data/goal-acceptance-observation";
+import {goalAcceptanceDisplayStatus, projectGoalAcceptanceCriteria} from "../../data/goal-acceptance-observation";
 import "./goal-overview.css";
 
 export const goalOverviewAttentionId = "goal-overview-attention";
@@ -62,7 +62,7 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
       <section className="goal-overview-direction" aria-label={copy.direction}>
         <header className="goal-overview-heading">
           <h2>{contract ? copy.direction : copy.current}</h2>
-          {contract ? <span>{acceptanceCopy.verificationState[contract.status]}</span> : null}
+          {contract ? <span>{acceptanceCopy.verificationState[goalAcceptanceDisplayStatus(contract)]}</span> : null}
           <button onClick={onOpenDetails} type="button"><Info aria-hidden size={14} />{copy.details}</button>
         </header>
         <button className="goal-direction-toggle" type="button" aria-expanded={!narrow || directionExpanded} onClick={() => setDirectionExpanded(value => !value)}>

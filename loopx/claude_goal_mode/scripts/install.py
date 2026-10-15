@@ -31,6 +31,14 @@ from pathlib import Path
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 MCP_VENV = Path.home() / ".local" / "share" / "loopx" / "mcp-venv"
 
+# This script is run by path (`python <release>/loopx/claude_goal_mode/scripts/
+# install.py`), so the package root is not on `sys.path` by default.
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from loopx.file_lock import write_json_atomic  # noqa: E402
+
 
 def _p(*parts) -> str:
     return str(PLUGIN_ROOT.joinpath(*parts)).replace("\\", "/")
@@ -258,12 +266,17 @@ def install_mcp(
     scope: str,
     migrate_goal_harness: bool = False,
     project_dir: Path | None = None,
-):
+) -> bool:
     """Register the loopx MCP server at the chosen scope via `claude mcp add`.
 
     We replace only OUR `loopx` entry. A legacy/user-owned `goal-harness` MCP is
     left untouched by default — we don't delete a server we don't own. If one
-    exists we print a manual cleanup hint; `--migrate-goal-harness` removes it."""
+    exists we print a manual cleanup hint; `--migrate-goal-harness` removes it.
+
+    Returns whether the `loopx` entry is registered afterwards: True only when
+    `claude mcp add` reported success. A missing `claude` CLI and a failed add
+    both leave the server unregistered and print the manual command instead, so
+    a caller that narrates the install must read that receipt, not the attempt."""
     if scope == "project" and project_dir is None:
         raise ValueError("project_dir is required for project-scoped MCP registration")
     cwd_run = str(project_dir) if scope == "project" else None
@@ -272,10 +285,10 @@ def install_mcp(
     add = ["mcp", "add", "--scope", scope, "loopx", "--", py, mcp_path]
     if not claude:
         print("[mcp] claude CLI not on PATH — add the MCP server manually:\n   claude " + " ".join(add))
-        return
+        return False
     print(f"[mcp] claude mcp add --scope {scope} loopx -- {py} <loopx_mcp.py>")
     if dry:
-        return
+        return False
     subprocess.run(
         [claude, "mcp", "remove", "--scope", scope, "loopx"],
         capture_output=True,
@@ -309,6 +322,8 @@ def install_mcp(
     )
     if r.returncode != 0:
         print("  (mcp add failed; add manually:\n   claude " + " ".join(add) + "\n  " + (r.stdout + r.stderr)[:200] + ")")
+        return False
+    return True
 
 
 # ---- /loopx command ----------------------------------------------------------
@@ -351,15 +366,35 @@ def install_command(dry: bool, cmd_dir: Path):
     path.write_text(command_md(), encoding="utf-8")
 
 
+class HardenSettingsUnreadable(RuntimeError):
+    """`--harden` refuses to rewrite a settings file it cannot read as JSON."""
+
+
 def add_hardening(dry: bool, settings_path: Path):
     """Deep-merge the optional hook + statusline into settings_path, preserving
-    existing config. NEVER deletes permission rules."""
+    existing config. NEVER deletes permission rules.
+
+    The merge rewrites the whole file, so a settings file that exists but does
+    not parse is refused instead of replaced: substituting `{}` for it would
+    drop every key the user owns - permission rules, `env`, `model`, other
+    hooks, MCP approvals - leaving only the loopx block, at exit status 0. The
+    file is user-owned (LoopX did not create it), which is why the sibling
+    merge in `loopx/slash_command_install.py` fails closed on the same input.
+    """
     cur = {}
     if settings_path.exists():
         try:
             cur = json.loads(settings_path.read_text(encoding="utf-8"))
-        except Exception:
-            cur = {}
+        except (OSError, ValueError) as exc:
+            raise HardenSettingsUnreadable(
+                f"{settings_path} exists but is not readable as JSON ({exc}); refusing to "
+                "rewrite it. Fix or move that file, then re-run with --harden."
+            ) from exc
+        if not isinstance(cur, dict):
+            raise HardenSettingsUnreadable(
+                f"{settings_path} exists but is not a JSON object; refusing to rewrite it. "
+                "Fix or move that file, then re-run with --harden."
+            )
     # prune prior loopx PreToolUse entries (avoid stacking on reinstall)
     for grp in (cur.get("hooks", {}) or {}).get("PreToolUse", []) or []:
         grp["hooks"] = [h for h in grp.get("hooks", []) if "goal_policy.py" not in str(h.get("command", ""))]
@@ -368,8 +403,11 @@ def add_hardening(dry: bool, settings_path: Path):
     merged = deep_merge(cur, hardening_block())
     print(f"[harden] PreToolUse should_run gate + statusline -> {settings_path}")
     if not dry:
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-        settings_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+        # One replace, not a truncate-in-place: an interrupted install must not
+        # leave the user's settings.json as a partial document. The destination
+        # is resolved first so a dotfiles-managed symlink keeps pointing at its
+        # target instead of being replaced by the rename.
+        write_json_atomic(settings_path.resolve(), merged, preserve_mode=True)
 
 
 def warn_legacy_perms(settings_path: Path):
@@ -417,11 +455,12 @@ def main():
         print("        available in ALL your Claude Code projects." +
               ("  --harden adds USER-LEVEL, matcher-wide hooks too." if a.harden else ""))
 
+    mcp_registered = False
     if a.skip_mcp:
         print("[mcp] skipped (--skip-mcp)")
     else:
         mcp_python = provision_mcp_python(dry, a.allow_system_pip)
-        install_mcp(
+        mcp_registered = install_mcp(
             dry,
             mcp_python,
             a.scope,
@@ -432,7 +471,38 @@ def main():
 
     settings_path = claude_dir / "settings.json"
     if a.harden:
-        add_hardening(dry, settings_path)
+        try:
+            add_hardening(dry, settings_path)
+        except HardenSettingsUnreadable as exc:
+            print(f"[harden] {exc}", file=sys.stderr)
+            outcome = (
+                "nothing was written (dry-run)"
+                if dry
+                else "the settings file is unchanged"
+            )
+            print(
+                f"[harden] the optional should_run gate + statusline were skipped; {outcome}.",
+                file=sys.stderr,
+            )
+            if not dry:
+                # The rest of the install did run, so name only what happened:
+                # the /loopx command was written just above, and the MCP state is
+                # the registration receipt `install_mcp` returned - not the
+                # attempt. A missing CLI or a failed `claude mcp add` leaves the
+                # server unregistered, and reporting that attempt as an install
+                # would let a user skip the manual command printed above.
+                if a.skip_mcp:
+                    mcp_state = "the MCP server was skipped (--skip-mcp)"
+                elif mcp_registered:
+                    mcp_state = "the MCP server was registered"
+                else:
+                    mcp_state = ("the MCP server was not registered — run the "
+                                 "`claude mcp add` command printed above")
+                print(
+                    f"[harden] the /loopx command was installed; {mcp_state}.",
+                    file=sys.stderr,
+                )
+            return 2
     else:
         print("[harden] skipped (default): no hooks/statusline installed. Add later with --harden.")
     warn_legacy_perms(settings_path)
@@ -442,7 +512,8 @@ def main():
     print("Restart any open Claude Code session so the command/MCP load.")
     if dry:
         print("(dry-run: nothing written)")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

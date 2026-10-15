@@ -186,6 +186,12 @@ def validate_public_private_boundary() -> None:
     if hits:
         detail = "\n".join(hits)
         raise AssertionError(f"public/private boundary violations:\n{detail}")
+    # `ok` only reports what the scan read. A directory it could not list is an
+    # unscanned input, so this smoke must not pass on it either.
+    unreadable_directories = list(boundary.get("unreadable_directories") or [])
+    if unreadable_directories:
+        detail = "\n".join(unreadable_directories)
+        raise AssertionError(f"public/private boundary scan could not list:\n{detail}")
     if not boundary.get("ok"):
         raise AssertionError(
             f"public/private boundary scan failed: {boundary.get('ok')}"

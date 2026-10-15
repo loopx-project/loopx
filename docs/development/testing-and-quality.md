@@ -426,6 +426,17 @@ Effect 服务先排空已接纳的 handler，再退出。启用编译缓存时�
 继续普通清理。一秒额度不涵盖定位文件锁、存储等待或操作系统调度；故障注入不能
 代替原生平台资格验证，V8 CPU 样本也不测量内核 IO。
 
+Windows mutation-lock acquisition retries `EPERM` from exclusive creation only
+after observing contention, within the existing lock timeout. This covers a
+[pending-delete pathname](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-deletefilew#remarks).
+Initial permission denial, errors after creation and other platforms retain
+their failure behavior; persistent denial preserves its original error.
+Injected filesystem failures complement actual Windows execution, not replace it.
+
+Windows 文件锁只在已观察到争用后，对独占创建返回的 `EPERM` 使用原锁等待额度重试。
+初次权限拒绝、创建后的错误和其它平台仍直接失败；持续拒绝保留原错误。
+故障注入验证重试边界，原生 Windows 运行仍须单独验收。
+
 Smoke cleanup owns every valid runtime locator in its newly created private
 temporary namespace, including runtimes loaded by temporary base checkouts.
 It uses the existing authenticated shutdown protocol, then observes actual

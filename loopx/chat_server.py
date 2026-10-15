@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .control_plane.goals.acceptance_http import GoalAcceptanceRequestMixin
+
 import json
 import mimetypes
 import re
@@ -481,6 +483,7 @@ class ChatHTTPServer(ThreadingHTTPServer):
 
 
 class ChatRequestHandler(
+    GoalAcceptanceRequestMixin,
     ZCodeGoalRequestMixin,
     PrivateConversationRequestMixin,
     CompletedTodoRequestMixin,
@@ -1533,6 +1536,7 @@ class ChatRequestHandler(
             **self._configuration_get_routes(),
             DEFAULT_CHAT_STATUS_PATH: self._status,
             "/api/chat/delivery-review": self._delivery_review,
+            "/api/chat/goal-acceptance": self._goal_acceptance_inspect,
             SSH_HOST_CATALOG_PATH: self._ssh_hosts,
         }
         if path in get_dispatch:
@@ -1573,6 +1577,7 @@ class ChatRequestHandler(
             CHAT_ATTACH_SESSION_PATH: self._attach_session,
             CHAT_PROJECTION_MESSAGES_PATH: self._record_projection_exchange,
             CHAT_ACTION_PREVIEW_PATH: self._action_preview,
+            "/api/chat/goal-acceptance": self._goal_acceptance_update,
             CHAT_TODO_DRY_RUN_PATH: lambda: self._todo(apply=False),
             CHAT_TODO_APPLY_PATH: lambda: self._todo(apply=True),
             CHAT_GOAL_CHANNEL_SETUP_PATH: self._goal_channel_setup,

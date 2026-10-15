@@ -10,6 +10,8 @@ import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import {parseWireExactGoalRef, readGoalAcceptanceLifecycle, sameExactGoalRef, type GoalAcceptanceLifecycle,
   type WireExactGoalRef} from "./acceptance_lifecycle.ts";
 
+import {normalizeAcceptanceOracle, normalizeOracleEvidence, projectAcceptanceOracle, validateOracleResults, type AcceptanceOracle} from "./acceptance_oracle.ts";
+
 export const GOAL_ACCEPTANCE_SCHEMA = "loopx_goal_acceptance_v0";
 export const GOAL_ACCEPTANCE_OWNED_SCHEMA = "loopx_goal_acceptance_v1";
 export interface AcceptanceCriterion extends JsonObject {
@@ -18,6 +20,7 @@ export interface AcceptanceCriterion extends JsonObject {
   validation_argv: string[];
   validation_timeout_seconds: number;
   validation_files: {path: string; sha256: string}[];
+  oracle?: AcceptanceOracle;
 }
 export type AcceptanceScope =
   | {kind: "all_advancement"}
@@ -97,6 +100,7 @@ export function acceptanceValidationEffects(requirements: AcceptanceCompletionRe
     kind: "caller_validation", validation_command: null, validation_argv: criterion.validation_argv,
     validation_label: criterion.id, validation_timeout_seconds: criterion.validation_timeout_seconds,
     ...(criterion.validation_files == null ? {} : {validation_files: criterion.validation_files}),
+    ...(criterion.oracle === undefined ? {} : {oracle: criterion.oracle}),
     task_repository: todo.task_repository ?? null,
   }}));
 }
@@ -170,7 +174,7 @@ export function normalizeGoalAcceptanceDocument(value: unknown): AcceptanceDocum
   acceptanceRequire(canonicalAuthorityBytes(raw).length <= 262144, "acceptance document exceeds byte limit");
   const criteria = list(raw.criteria, "acceptance criteria", 64, 1).map(value => {
     const item = canonicalAuthorityObject(value, "acceptance criterion");
-    acceptanceKeys(item, ["id", "description", "validation_argv"], ["validation_timeout_seconds", "validation_files"]);
+    acceptanceKeys(item, ["id", "description", "validation_argv"], ["validation_timeout_seconds", "validation_files", "oracle"]);
     const argv = list(item.validation_argv, "validation argv", 128, 1).map(arg => {
       acceptanceRequire(typeof arg === "string" && arg.length > 0 && arg.length <= 8192 && !arg.includes("\0"), "validation argv contains an invalid argument");
       return arg;
@@ -178,9 +182,10 @@ export function normalizeGoalAcceptanceDocument(value: unknown): AcceptanceDocum
     acceptanceRequire(argv[0].trim().length > 0, "validation argv requires an executable");
     const timeout = item.validation_timeout_seconds ?? 5;
     acceptanceRequire(Number.isSafeInteger(timeout) && Number(timeout) >= 1 && Number(timeout) <= 25, "validation timeout must be 1..25 seconds");
-    return {id: id(item.id), description: acceptanceText(item.description, "criterion description"),
+    const criterion = {id: id(item.id), description: acceptanceText(item.description, "criterion description"),
       validation_argv: argv, validation_timeout_seconds: Number(timeout),
       validation_files: validationFiles(item.validation_files === undefined ? [] : item.validation_files)};
+    return {...criterion, ...(item.oracle === undefined ? {} : {oracle: normalizeAcceptanceOracle(item.oracle, criterion)})};
   }).sort((a, b) => authorityUnicodeCompare(a.id, b.id));
   acceptanceRequire(criteria.reduce((total, item) => total + item.validation_timeout_seconds, 0) <= 25,
     "acceptance validation timeouts must total at most 25 seconds (default 5 seconds per criterion); lower the timeouts or run longer evaluations outside the completion wrapper");
@@ -370,6 +375,7 @@ export function readGoalAcceptanceAuthority(head: JsonObject, goalId: string): G
     }
     verification = {...receipt, operation_id: operationId, todo_id: todoId,
       results: normalizeAcceptanceResults(receipt.results, expectedIds)} as AcceptanceVerification;
+    if (receipt.contract_revision === state.revision) validateOracleResults(document.criteria, verification.results);
   }
   if (lifecycle === null) {
     const legacyState: LegacyAcceptanceState = {
@@ -441,14 +447,15 @@ export function normalizeAcceptanceResults(value: unknown, expectedIds?: readonl
     // Existing caller-validation runner metadata is accepted at the host seam
     // but deliberately not persisted or projected (labels can contain context).
     acceptanceKeys(item, ["criterion_id", "passed", "exit_code"], ["schema_version", "command_label", "status", "summary",
-      "stdout_captured", "stderr_captured", "local_path_captured"]);
+      "stdout_captured", "stderr_captured", "local_path_captured", "oracle_evidence"]);
     for (const key of ["stdout_captured", "stderr_captured", "local_path_captured"]) {
       acceptanceRequire(item[key] === undefined || item[key] === false, "validation result must not capture private output or paths");
     }
     acceptanceRequire(typeof item.passed === "boolean" && (item.exit_code === null ||
       (Number.isSafeInteger(item.exit_code) && Number(item.exit_code) >= 0 && Number(item.exit_code) <= 255)), "invalid verification result");
     acceptanceRequire(item.passed === (item.exit_code === 0), "criterion pass/fail must agree with exit code zero");
-    return {criterion_id: id(item.criterion_id), passed: item.passed, exit_code: item.exit_code as number | null};
+    return {criterion_id: id(item.criterion_id), passed: item.passed, exit_code: item.exit_code as number | null,
+      ...(item.oracle_evidence === undefined ? {} : {oracle_evidence: normalizeOracleEvidence(item.oracle_evidence)})};
   }).sort((a, b) => authorityUnicodeCompare(a.criterion_id, b.criterion_id));
   const ids = unique(results.map(item => item.criterion_id), "verification results");
   if (expectedIds) acceptanceRequire(canonicalAuthoritySha256(ids) === canonicalAuthoritySha256([...expectedIds].sort(authorityUnicodeCompare)),
@@ -484,7 +491,8 @@ export function projectGoalAcceptance(head: JsonObject, goalId: string): JsonObj
   if (held.length) status = "held";
   return {...exactProjection, ...(state.document.scope === undefined ? {} : {scope: state.document.scope}),
     enabled: true, revision: state.revision, digest: state.digest, objective: state.document.objective,
-    non_goals: state.document.non_goals, criteria: state.document.criteria.map(({id, description}) => ({id, description})),
+    non_goals: state.document.non_goals, criteria: state.document.criteria.map(criterion => ({id: criterion.id, description: criterion.description,
+      ...(criterion.oracle === undefined ? {} : {oracle: projectAcceptanceOracle(criterion, receipt?.results.find(row => row.criterion_id === criterion.id), status === "stale" || status === "held")})})),
     tasks, held_todo_ids: held.map(task => task.todo_id), status,
     verification: receipt ? {operation_id: receipt.operation_id, contract_revision: receipt.contract_revision,
       contract_digest: receipt.contract_digest, todo_id: receipt.todo_id, results: receipt.results} : null};

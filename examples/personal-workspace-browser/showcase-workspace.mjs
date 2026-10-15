@@ -95,6 +95,13 @@ function deliverySnapshot() {
 
 /** Installs the showcase status, usage and delivery reads. `state` stays live: change it, then refresh. */
 export async function installShowcaseWorkspace(api, page, state) {
+  // The check panel refreshes its owning read independently of the map. This
+  // visual fixture supplies that same synthetic contract; real execution is
+  // qualified by goal-acceptance-oracle.mjs against SQLite/HTTP/CLI.
+  await page.route("**/api/chat/goal-acceptance?*", route => route.fulfill({
+    contentType: "application/json", json: {ok: true, goal_id: goalId,
+      provider_revision: "showcase:3", goal_acceptance_contract: acceptance.goal_acceptance_contract},
+  }));
   await page.route("**/api/chat/delivery-review?*", (route) => state.deliveryFails
     ? route.fulfill({ status: 503, contentType: "application/json", json: { ok: false, error: "temporarily unavailable" } })
     : route.fulfill({ contentType: "application/json", json: deliverySnapshot() }));

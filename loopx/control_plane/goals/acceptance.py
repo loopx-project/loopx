@@ -8,6 +8,7 @@ No caller-supplied pass/fail result is accepted by the public CLI.
 from __future__ import annotations
 
 import hashlib
+from datetime import UTC, datetime
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ from ..todos.completion_validation import (
     run_declared_completion_validation_effect,
 )
 from .goal_ref_validation import exact_goal_ref
+from .acceptance_oracle_io import oracle_versions, run_snapshot_oracle
 
 
 _INSPECT_METHOD = "goal.acceptance.inspect"
@@ -61,11 +63,8 @@ def _result(
     *,
     timeout: float | None = None,
 ) -> dict[str, Any]:
-    value = effect_runtime_result(
-        method,
-        dict(request),
-        **({"timeout": timeout} if timeout is not None else {}),
-    )
+    value = (effect_runtime_result(method, dict(request)) if timeout is None
+        else effect_runtime_result(method, dict(request), timeout=timeout))
     if not isinstance(value, dict):
         raise TypeError("Goal acceptance authority returned an invalid result")
     if value.get("status") not in {
@@ -117,13 +116,35 @@ def inspect_goal_acceptance(
     runtime_root: str | None = None,
     agent_id: str | None = None,
     todo_id: str | None = None,
+    delivery_workspace: Mapping[str, Any] | None = None,
+    validation_workspace_path: Path | None = None,
 ) -> dict[str, Any]:
     """Read one canonical basis; command declarations stay inside the host."""
-    return _result(
+    basis = _result(
         _INSPECT_METHOD,
         {**_routing(registry_path, goal_id, runtime_root, agent_id),
          **({"todo_id": todo_id} if todo_id is not None else {})},
     )
+    observations = []
+    for criterion in (basis.get("contract") or {}).get("criteria", []):
+        oracle = criterion.get("oracle")
+        if oracle is None:
+            continue
+        workspace, failure = _resolve_completion_validation_workspace(
+            registry_path=registry_path, goal_id=goal_id,
+            task_repository=(basis.get("todo") or {}).get("task_repository"),
+            delivery_workspace=delivery_workspace, validation_workspace_path=validation_workspace_path,
+            label=criterion["id"],
+        )
+        versions = None if failure else oracle_versions(workspace, oracle)
+        observations.append({"criterion_id": criterion["id"], "available": versions is not None,
+            "source_current": _acceptance_pins_match(criterion["validation_files"], workspace),
+            **(versions or {})})
+    if observations:
+        basis["goal_acceptance_contract"] = effect_runtime_result("goal.acceptance.oracle.observe", {
+            "contract": basis["goal_acceptance_contract"], "observations": observations,
+        })
+    return basis
 
 
 def _criterion_effects(criteria: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -135,6 +156,7 @@ def _criterion_effects(criteria: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "validation_label": f"Goal acceptance: {row['id']}",
             "validation_timeout_seconds": row.get("validation_timeout_seconds", 29),
             "validation_files": row.get("validation_files", []),
+            **({"oracle": row["oracle"]} if "oracle" in row else {}),
         }
         for row in criteria
     ]
@@ -257,12 +279,13 @@ def run_goal_acceptance_effects(
                 "exit_code": exit_code
                 if isinstance(exit_code, int) and 0 <= exit_code <= 255
                 else None,
+                **({"oracle_evidence": receipt["oracle_evidence"]} if "oracle_evidence" in receipt else {}),
             }
         )
     return results
 
 
-def _acceptance_pins_match(pins: list, workspace: Path | None) -> bool:
+def _acceptance_pins_match(pins: list[dict[str, Any]], workspace: Path | None) -> bool:
     if not pins:
         return True
     if workspace is None:
@@ -309,7 +332,7 @@ def run_goal_acceptance_validation_effect(
         raise TypeError("acceptance validation_files must be an array")
     label = str(effect.get("validation_label") or "Goal acceptance")
     workspace = None
-    if pins:
+    if pins or effect.get("oracle"):
         workspace, failure = _resolve_completion_validation_workspace(
             registry_path=registry_path,
             goal_id=goal_id,
@@ -336,16 +359,36 @@ def run_goal_acceptance_validation_effect(
 
     if not _acceptance_pins_match(pins, workspace):
         return stale_receipt()
-    receipt = run_declared_completion_validation_effect(
-        effect={
-            key: value for key, value in effect.items() if key != "validation_files"
-        },
-        registry_path=registry_path,
-        goal_id=goal_id,
-        delivery_workspace=delivery_workspace,
-        validation_workspace_path=validation_workspace_path,
-    )
-    return receipt if _acceptance_pins_match(pins, workspace) else stale_receipt()
+    oracle = effect.get("oracle")
+    plan = effect_runtime_result("goal.acceptance.oracle.plan", {"criterion": dict(effect)}) if oracle else None
+    before = oracle_versions(workspace, oracle) if oracle else None
+    if oracle and before is None:
+        return stale_receipt()
+    if oracle:
+        if workspace is None or before is None or plan is None:
+            return stale_receipt()
+        try:
+            receipt, stable_snapshot = run_snapshot_oracle(workspace=workspace, criterion=dict(effect), before=before)
+        except OSError:
+            return stale_receipt()
+        if not stable_snapshot:
+            return stale_receipt()
+    else:
+        receipt = run_declared_completion_validation_effect(
+            effect={key: value for key, value in effect.items() if key != "validation_files"},
+            registry_path=registry_path, goal_id=goal_id,
+            delivery_workspace=delivery_workspace, validation_workspace_path=validation_workspace_path,
+        )
+    if not _acceptance_pins_match(pins, workspace):
+        return stale_receipt()
+    if oracle:
+        after = oracle_versions(workspace, oracle)
+        if after is None or after != before:
+            return stale_receipt()
+        if receipt["passed"] and plan is not None:
+            receipt["oracle_evidence"] = {"source_id": plan["source_id"], "source_digest": plan["source_digest"],
+                "checked_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"), **after}
+    return receipt
 
 
 def public_goal_acceptance(value: dict[str, Any]) -> dict[str, Any]:
@@ -371,10 +414,14 @@ def verify_goal_acceptance(
     runtime_root: str | None = None,
     agent_id: str | None = None,
     execute: bool = False,
+    expected_provider_revision: str | None = None,
+    operation_id: str | None = None,
 ) -> dict[str, Any]:
     """Run the configured acceptance checks against a frozen canonical basis."""
     route = _routing(registry_path, goal_id, runtime_root, agent_id)
-    basis = _result(_INSPECT_METHOD, route)
+    basis = inspect_goal_acceptance(registry_path=registry_path, goal_id=goal_id, runtime_root=runtime_root, agent_id=agent_id)
+    if expected_provider_revision is not None and basis["provider_revision"] != expected_provider_revision:
+        raise ValueError("Acceptance changed; reload the current contract before checking.")
     contract = basis.get("contract")
     if contract is None:
         raise ValueError("Goal acceptance is not enabled")
@@ -395,14 +442,19 @@ def verify_goal_acceptance(
             **route,
             "expected_provider_revision": basis["provider_revision"],
             "actor_agent_id": None,
-            "operation_id": f"goal-acceptance-verify:{uuid4().hex}",
+            "operation_id": operation_id or f"goal-acceptance-verify:{uuid4().hex}",
             "contract_digest": basis["goal_acceptance_contract"]["digest"],
             "revision": basis["goal_acceptance_contract"]["revision"],
             "results": receipts,
         },
     )
+    public_result = public_goal_acceptance(result)
+    if any("oracle" in criterion for criterion in criteria):
+        observed = inspect_goal_acceptance(registry_path=registry_path, goal_id=goal_id,
+            runtime_root=runtime_root, agent_id=agent_id)
+        public_result["goal_acceptance_contract"] = observed["goal_acceptance_contract"]
     return {
-        **public_goal_acceptance(result),
+        **public_result,
         "executed": True,
         "checks_passed": all(row.get("passed") is True for row in receipts),
         "acceptance_ready": result.get("goal_acceptance_contract", {}).get("status")

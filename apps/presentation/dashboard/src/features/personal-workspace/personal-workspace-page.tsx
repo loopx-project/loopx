@@ -73,6 +73,7 @@ import type {
   WorkspaceImageAttachment,
   WorkspaceModel,
   WorkspaceRun,
+  WorkspaceHomeOnboarding,
   WorkspaceSystemHealth,
   WorkspaceConversationDirectory,
   WorkspaceTimelineItem,
@@ -120,6 +121,10 @@ function ManagerHomeBoard({
   goals,
   onSelectGoal,
   onRetry,
+  onRetrySource,
+  onboarding,
+  onRequestGoalCreate,
+  onSuggestRequest,
   systemHealth,
   operations,
   onSelectOperation,
@@ -128,6 +133,11 @@ function ManagerHomeBoard({
   goals: WorkspaceGoal[];
   onSelectGoal: (goalId: string) => void;
   onRetry?: () => void;
+  /** Re-read the whole source after its latest read failed. */
+  onRetrySource?: () => void;
+  onboarding?: WorkspaceHomeOnboarding;
+  onRequestGoalCreate?: () => void;
+  onSuggestRequest?: (text: string) => void;
   systemHealth?: WorkspaceSystemHealth;
   operations: WorkspaceActionPreview[];
   onSelectOperation: (proposal: WorkspaceActionPreview) => void;
@@ -176,7 +186,43 @@ function ManagerHomeBoard({
               ))}
             </ul>
           ) : null}
+          {systemHealth.diagnostics?.length ? (
+            <details className="personal-system-health-diagnostics">
+              <summary>{t("home.health.diagnostics")}</summary>
+              <ul>{systemHealth.diagnostics.map((line, idx) => <li key={idx}>{line}</li>)}</ul>
+            </details>
+          ) : null}
+          {systemHealth.retryable && onRetrySource ? (
+            <button className="personal-system-health-retry" data-testid="personal-source-retry" onClick={onRetrySource} type="button">{t("home.health.retry")}</button>
+          ) : null}
         </div>
+      ) : null}
+      {onboarding?.kind === "no_goals" && goals.length === 0 ? (
+        <section aria-labelledby="personal-first-goal-title" className="personal-first-goal" data-testid="personal-first-goal">
+          <h2 id="personal-first-goal-title">{t("home.firstGoal.title")}</h2>
+          <p>{t("home.firstGoal.lead")}</p>
+          {onRequestGoalCreate ? (
+            <div className="personal-first-goal-actions">
+              <button className="personal-first-goal-create" onClick={onRequestGoalCreate} type="button"><Plus size={16} /><span>{t("home.firstGoal.create")}</span></button>
+            </div>
+          ) : null}
+          {onSuggestRequest ? (
+            <ul className="personal-first-goal-examples">
+              <li>{t("home.firstGoal.examplesTitle")}</li>
+              {(["research", "issue", "monitor"] as const).map((example) => (
+                <li key={example}>
+                  <button onClick={() => onSuggestRequest(t(`home.firstGoal.example.${example}`))} type="button">{t(`home.firstGoal.example.${example}`)}</button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {onboarding.diagnostics.length ? (
+            <details className="personal-first-goal-diagnostics">
+              <summary>{t("home.firstGoal.diagnostics")}</summary>
+              <ul>{onboarding.diagnostics.map((line, idx) => <li key={idx}>{line}</li>)}</ul>
+            </details>
+          ) : null}
+        </section>
       ) : null}
       {currentGoals.some((goal) => goal.loadState) ? <section className="personal-home-lane" aria-live="polite">
         <header>{t("startup.progress", { loaded: currentGoals.filter((goal) => !goal.loadState).length, total: currentGoals.length })}</header>
@@ -186,7 +232,7 @@ function ManagerHomeBoard({
       </section> : null}
       {currentGoals.some((goal) => !goal.loadState) ? <ManagerBrief goals={goals} onSelectGoal={onSelectGoal}
         operations={operations} onSelectOperation={onSelectOperation} onViewAllOperations={onViewAllOperations} /> : null}
-      <h2 className="personal-home-section-title">{t("home.allGoals")}</h2>
+      {onboarding?.kind === "no_goals" && goals.length === 0 ? null : <h2 className="personal-home-section-title">{t("home.allGoals")}</h2>}
       <div className="personal-home-lanes">
         {activeHomeLanes.filter((lane) => active[lane.key].length > 0).map((lane) => (
           <section className={`personal-home-lane is-${lane.key}`} data-testid={`personal-home-lane-${lane.key}`} key={lane.key}>
@@ -1296,6 +1342,8 @@ export function PersonalWorkspacePage({
     const stored = actionReadback.data.filter(proposal => selectedGoalId || proposal.context.kind === "manager"
       || (proposal.action_kind === "operation.execute" && knownGoals.has(String(proposal.normalized_parameters.goal_id))));
     const restoreable = stored
+      // Acceptance plans are reviewed beside the delivery they check.
+      .filter((proposal) => proposal.action_kind !== "goal.acceptance.check")
       .filter((proposal) => ["preview_ready", "gated", "deferred", "applying"].includes(proposal.status)
         || compileActionReviewPlan(proposal).retryOriginal === true
         || (proposal.action_kind === "team.plan" && proposal.status === "applied")
@@ -2010,9 +2058,13 @@ export function PersonalWorkspacePage({
     }
     setRefreshState("loading");
     try {
-      await callbacks.onRefresh();
-      setHistoryRefreshRevision((revision) => revision + 1);
-      setRefreshState("done");
+      const result = await callbacks.onRefresh();
+      if (result && result.ok === false) {
+        setRefreshState("error");
+      } else {
+        setHistoryRefreshRevision((revision) => revision + 1);
+        setRefreshState("done");
+      }
     } catch {
       setRefreshState("error");
     }
@@ -2210,7 +2262,7 @@ export function PersonalWorkspacePage({
             {!selectedGoal && !managerChatOpen ? (
               <section className="personal-manager-greeting">
                 <span><Bot size={20} /></span>
-                <div><small className="personal-brief-date">{t("brief.title")} · {new Intl.DateTimeFormat(locale, { month: "long", day: "numeric", weekday: "short" }).format(new Date())}</small><strong>{t("home.greeting")}</strong><p>{model.goals.some((goal) => goal.activationState === "active" && goal.loadState) ? t("startup.partial") : <>{t("home.waitingCount", { count: managerNeedsYouCount })} {managerBlockingCount > 0 ? t("home.blockingSummary", { count: managerBlockingCount }) : null} {!actionReadback.isError && homeOperations.length ? t("home.operationSummary", {count: homeOperations.length}) : null}</>}</p></div>
+                <div><small className="personal-brief-date">{t("brief.title")} · {new Intl.DateTimeFormat(locale, { month: "long", day: "numeric", weekday: "short" }).format(new Date())}</small><strong>{t("home.greeting")}</strong><p>{model.goals.some((goal) => goal.activationState === "active" && goal.loadState) ? t("startup.partial") : model.onboarding?.kind === "no_goals" && model.goals.length === 0 ? t("home.firstGoal.greeting") : <>{t("home.waitingCount", { count: managerNeedsYouCount })} {managerBlockingCount > 0 ? t("home.blockingSummary", { count: managerBlockingCount }) : null} {!actionReadback.isError && homeOperations.length ? t("home.operationSummary", {count: homeOperations.length}) : null}</>}</p></div>
               </section>
             ) : null}
             {selectedGoal && !selectedGoal.loadState && readOnly && routedTodoId
@@ -2253,7 +2305,8 @@ export function PersonalWorkspacePage({
                   </>),
                 }} />
             ) : !managerChatOpen ? (
-              <ManagerHomeBoard goals={workspaceGoals} onRetry={() => void callbacks.onRefresh?.("missing")} onSelectGoal={selectGoal} systemHealth={model.systemHealth}
+              <ManagerHomeBoard goals={workspaceGoals} onRetry={() => void callbacks.onRefresh?.("missing")} onRetrySource={() => void refreshWorkspace()} onSelectGoal={selectGoal} systemHealth={model.systemHealth}
+                onboarding={model.onboarding} onRequestGoalCreate={readOnly ? undefined : requestGoalCreate} onSuggestRequest={readOnly ? undefined : suggestReply}
                 operations={actionReadback.isError ? [] : homeOperations} onSelectOperation={proposal => setSelection({kind: "proposal", item: proposal})}
                 onViewAllOperations={() => setSelectedGoalTab("chat")} />
             ) : (

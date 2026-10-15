@@ -1,3 +1,4 @@
+import type {OracleEvidence} from "./goal-acceptance-observation";
 import { HANDOFF_MODES, EXECUTION_HANDOFF_MODES } from "../../../../../loopx/control_plane/coordination/handoff_mode_vocabulary.js";
 import { normalizeGoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { parseTurnStep, type TurnStep } from "./turn-steps.js";
@@ -410,6 +411,7 @@ export class ChatApiError extends Error {
 }
 
 export const typedActionKindSchema = z.enum([
+  "goal.acceptance.check",
   "goal.create",
   "goal.update",
   "goal.lifecycle",
@@ -1174,7 +1176,7 @@ export type DelegationReadback = {
   artifacts?: Array<{ref: string; sha256: string; text: string}>; error?: string;
   validation?: {source: "goal_acceptance" | "todo_validation"; basis_sha256: string;
     check_count: number; pinned_file_count: number; checked_at?: string;
-    output_versions?: Array<{ref: string; sha256: string}>};
+    output_versions?: Array<{ref: string; sha256: string}>; oracle_checks?: Array<OracleEvidence & {criterion_id: string}>};
   task_failure?: {stage: "task_postcondition"; status: "failed" | "inconclusive" | "unavailable";
     recovery_kind: "repair_required" | "replan_required"; summary: string; validator_kind: string;
     turn_key: string; resume_mode: "revalidate_cached_result"};

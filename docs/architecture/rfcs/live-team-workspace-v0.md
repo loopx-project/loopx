@@ -401,6 +401,33 @@ Implementation checkpoint ([#5587](https://github.com/loopx-project/loopx/pull/5
 
 This remains a presentation/readback slice. `responds_to` does not certify an objection. Current native acceptance validates the canonical task and configured validators, but its readback does not expose an independent verifier identity and exact-version receipt. The revision therefore shows that missing evidence explicitly, even beside a valid requester adoption. The evidence reader separately exposes the current validation source, definition digest and check/file-pin counts from the existing typed validation plan. CLI and HTTP readback carry the same path-free observation after the original checks pass; failed validation or changed pins withdraw it with the report. This rule identity is not a persisted success or independent-verifier receipt. The frontend must consume such evidence from the existing acceptance owner when available; it cannot infer it from the reviewer name, relationship or artifact hash.
 
+The acceptance owner also supports an explicit optional owner-pinned oracle:
+the trusted local host executes its pinned source against copies of declared
+inputs/outputs and records their exact versions. Current Team evidence consumes
+only matching source/contract/work and output observations; stale or absent
+receipts remain unavailable. Existing Goal settings and acceptance details offer
+real save/check/readback/disable operations. This source identity is an
+owner-approved checker, not an authenticated remote verifier; snapshots do not
+attest the interpreter or unpinned imports. Ordinary validators retain their
+previous behavior. This closes the bounded configured-source/version producer
+and local operator-journey gap; it does not qualify independent authorship,
+semantic resolution, the real correction/adoption episode or full L1. See the
+[operation and rollback guide](../../reference/goal-acceptance-observations.md#owner-pinned-oracle-and-exact-versions).
+
+The proposed local journey now lets a registered Agent prepare that exact check
+plan through the existing typed-action store. Preparation changes neither the
+contract nor the outputs. The owner sees its objective, coverage, outputs and
+local command effect beside the delivery, then adopts and checks in one action;
+JSON import and revision diagnostics remain optional. This is one additional
+owner decision after preparation, not proof that every original request takes
+one interaction. Proposal replay and lost responses use existing native receipts;
+an uncertain execution never automatically reruns commands. Fresh readback
+withdraws historical success when source/output evidence changes, and an applied
+new plan does not revive an older draft. File/SQLite execution, isolated
+PostgreSQL acceptance ownership and packaged SQLite/HTTP/CLI recovery validate
+this author proposal. Scripted Agent preparation does not qualify live model
+preparation, installed App adoption, independent authorship or full L1.
+
 The current host-check observation additionally names its UTC completion time and the declared output versions that remained unchanged before and after those checks. A changed output withdraws even the first return; the evidence detail displays matching records and leaves older or mismatched records unavailable. Stability reuses the acceptance owner's task work digest plus current claim/lifecycle and selected rules/pins/workspace: unrelated canonical commits and observation metadata do not revoke a stable check, while changed work, authorization or validators still reject it. This replaces whole-Goal revision comparison only on this read path; mutation CAS remains intact. The delegation TS owner and read-only Chat/CLI projection add no verifier configuration or independent semantic verdict, and do not close Section 9's independent exact-version acceptance gap.
 
 Packaged desktop, 390px, keyboard/reduced-motion and pagination checks cover these returns and recovery. An isolated production SQLite/HTTP/CLI fixture also rejects changed output, withdraws its list acceptance and restores the original version without launching additional work. [Public-safe fixture views](../../reference/local-delegation.md#inspect-accepted-evidence-and-return) make these states reviewable. These checks do not establish a real objection, independent semantic acceptance, installed native behavior or L1 completion. The existing real correction episode must still be exercised through the packaged UI and independently read back with Section 9's missing/lost-observation cases.

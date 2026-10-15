@@ -20,6 +20,77 @@ async function workspace(t: TestContext): Promise<string> {
   return root;
 }
 
+for (const scenario of [
+  {name: "Windows replacement open recovers", platform: "win32", contended: true, persistent: false, writeFault: false, timeout: 500, code: "EPERM", expected: null},
+  {name: "Windows initial permission denial fails", platform: "win32", contended: false, persistent: true, writeFault: false, timeout: 500, code: "EPERM", expected: "EPERM"},
+  {name: "Windows persistent replacement denial keeps its error", platform: "win32", contended: true, persistent: true, writeFault: false, timeout: 250, code: "EPERM", expected: "EPERM"},
+  {name: "non-Windows replacement denial fails", platform: "linux", contended: true, persistent: false, writeFault: false, timeout: 500, code: "EPERM", expected: "EPERM"},
+  {name: "unrelated Windows open failure fails", platform: "win32", contended: true, persistent: false, writeFault: false, timeout: 500, code: "EIO", expected: "EIO"},
+  {name: "Windows failure after creation is not retried", platform: "win32", contended: true, persistent: false, writeFault: true, timeout: 500, code: "EPERM", expected: "EPERM"},
+  {name: "zero-wait live contention does not gain a retry", platform: "win32", contended: true, persistent: false, writeFault: false, timeout: 0, code: "EPERM", expected: "mutation_lock_timeout"},
+]) {
+  test(scenario.name, async t => {
+    const root = await workspace(t), target = join(root, "state");
+    // Only the selected open/write failure and platform predicate are injected.
+    // All lock bytes, handles, identities, live-owner checks and release use
+    // the production filesystem owner in an isolated child.
+    const script = `
+      import assert from "node:assert/strict";
+      import * as fs from "node:fs/promises";
+      import {mock} from "node:test";
+      const [module, target, scenario] = JSON.parse(process.argv[1]);
+      const path = target + ".ts-effect.lock";
+      let attempts = 0;
+      if (scenario.contended) {
+        await fs.writeFile(path, JSON.stringify({pid: process.pid, token: "live-holder"}));
+      }
+      const {default: ignored, ...namedExports} = fs;
+      mock.module("node:fs/promises", {namedExports: {...namedExports,
+        open: async (file, flags, ...args) => {
+          if (file !== path || flags !== "wx") return fs.open(file, flags, ...args);
+          attempts++;
+          if (scenario.contended && attempts === 1) return fs.open(file, flags, ...args);
+          if (scenario.contended && attempts === 2) await fs.rm(path);
+          const fault = Object.assign(new Error("controlled filesystem failure"),
+            {code: scenario.code, syscall: scenario.writeFault ? "write" : "open"});
+          if (!scenario.writeFault && (scenario.persistent || attempts === 2)) throw fault;
+          const handle = await fs.open(file, flags, ...args);
+          if (scenario.writeFault) handle.writeFile = async () => { throw fault; };
+          return handle;
+        },
+      }});
+      const io = await import(module);
+      Object.defineProperty(process, "platform", {value: scenario.platform});
+      let code = null;
+      const started = Date.now(); // Match the acquisition deadline's clock.
+      try {
+        const lock = await io.acquireFileMutationLock(target, process.pid, scenario.timeout);
+        assert.equal((await io.mutationLockOwner(target)).token, lock.token);
+        assert.equal(await io.releaseFileMutationLock(target, lock.token), true);
+        await assert.rejects(fs.stat(path), {code: "ENOENT"});
+      } catch (error) { code = error.code ?? String(error); }
+      if (scenario.writeFault) await assert.rejects(fs.stat(path), {code: "ENOENT"});
+      console.log(JSON.stringify({code, attempts, elapsed: Date.now() - started}));
+    `;
+    const result = spawnSync(process.execPath, [
+      "--no-warnings", "--experimental-test-module-mocks", "--experimental-strip-types",
+      "--input-type=module", "-e", script,
+      JSON.stringify([new URL("../../loopx/control_plane/effect_runtime_io.ts", import.meta.url).href,
+        target, scenario]),
+    ], {encoding: "utf8", timeout: 10_000});
+    assert.equal(result.status, 0, result.stderr);
+    const observed = JSON.parse(result.stdout.trim());
+    assert.equal(observed.code, scenario.expected);
+    if (scenario.expected === null) assert.equal(observed.attempts, 3);
+    else if (!scenario.contended || scenario.timeout === 0) assert.equal(observed.attempts, 1);
+    else if (scenario.persistent) {
+      assert.ok(observed.attempts > 2);
+      assert.ok(observed.elapsed >= scenario.timeout);
+      assert.ok(observed.elapsed < 2_000, "permission denial must keep a bounded wait");
+    } else assert.equal(observed.attempts, 2);
+  });
+}
+
 test("JSONL append starts a new row after an unterminated tail", async t => {
   const root = await workspace(t);
   const path = join(root, "index.jsonl");

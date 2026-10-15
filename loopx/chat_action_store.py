@@ -21,6 +21,7 @@ CHAT_ACTION_STORE_SCHEMA_VERSION = "loopx_chat_action_store_v1"
 CHAT_ACTION_PROPOSAL_SCHEMA_VERSION = "loopx_chat_action_proposal_v1"
 
 ACTION_KINDS = {
+    "goal.acceptance.check",
     "goal.create",
     "goal.update",
     "goal.lifecycle",

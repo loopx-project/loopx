@@ -312,6 +312,26 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-system-health-header { display: flex; align-items: center; gap: 8px; font-size: var(--text-body); line-height: var(--leading-body); font-weight: 600; }
 .personal-system-health-header small { color: #b91c1c; font-size: var(--text-caption); line-height: var(--leading-caption); font-weight: 400; }
 .personal-system-health-issues { margin: 6px 0 0 24px; padding: 0; font-size: var(--text-caption); line-height: var(--leading-caption); color: #b91c1c; }
+.personal-first-goal { display: grid; gap: 16px; max-width: 640px; min-width: 0; padding: 8px 0 24px; border-bottom: 1px solid var(--pw-line); }
+.personal-first-goal h2 { margin: 0; color: var(--pw-text); font-size: var(--text-heading); line-height: var(--leading-heading); letter-spacing: -0.01em; }
+.personal-first-goal > p { margin: 0; color: var(--pw-muted); font-size: var(--text-body); line-height: var(--leading-body); }
+.personal-first-goal-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.personal-first-goal-create { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 16px; border: 0; border-radius: 10px; background: var(--pw-blue); color: var(--pw-card); font-size: var(--text-body); font-weight: 600; cursor: pointer; }
+.personal-first-goal-create:hover { background: var(--pw-blue-ink); }
+.personal-first-goal-create:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
+.personal-first-goal-examples { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.personal-first-goal-examples > li:first-child { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
+.personal-first-goal-examples button { display: block; width: 100%; min-height: 44px; padding: 10px 0; border: 0; border-top: 1px solid var(--pw-line); background: transparent; color: var(--pw-text); font-size: var(--text-body); line-height: var(--leading-body); text-align: left; cursor: pointer; }
+.personal-first-goal-examples button:hover { color: var(--pw-blue-ink); }
+.personal-first-goal-examples button:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: -2px; }
+.personal-first-goal-diagnostics { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
+.personal-first-goal-diagnostics summary { cursor: pointer; }
+.personal-first-goal-diagnostics ul { margin: 6px 0 0 16px; padding: 0; }
+.personal-system-health-retry { margin-top: 10px; min-height: 36px; padding: 0 14px; border: 1px solid var(--pw-red); border-radius: 8px; background: var(--pw-card); color: var(--pw-red); font-size: var(--text-caption); font-weight: 600; cursor: pointer; }
+.personal-system-health-retry:focus-visible { outline: 2px solid var(--pw-red); outline-offset: 2px; }
+.personal-system-health-diagnostics { margin-top: 6px; font-size: var(--text-caption); line-height: var(--leading-caption); }
+.personal-system-health-diagnostics summary { cursor: pointer; }
+.personal-system-health-diagnostics ul { margin: 4px 0 0 16px; padding: 0; }
 .personal-home-lane { display: flex; flex-direction: column; min-width: 0; min-height: 100%; border: 1px solid var(--pw-line); border-radius: 16px; background: #fff; box-shadow: 0 1px 4px rgb(30 28 20 / 4%); }
 .personal-manager-greeting > span { display: grid; flex: none; place-items: center; width: 44px; height: 44px; border-radius: 12px; background: var(--pw-blue-soft); color: var(--pw-blue); }
 .personal-manager-greeting div { display: grid; gap: 4px; min-width: 0; }
@@ -1857,6 +1877,9 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-workspace-shell[data-pw-theme="brutal"] .personal-manager-conversation-messages article.is-user { background: #8fdcff; }
 .personal-workspace-shell[data-pw-theme="brutal"] .personal-quick-prompts button { border: 2px solid #141414; background: #fff; color: #141414; box-shadow: 2px 2px 0 #141414; }
 .personal-workspace-shell[data-pw-theme="brutal"] .personal-quick-prompts button:hover { background: #ffe23f; border-color: #141414; color: #141414; }
+.personal-workspace-shell[data-pw-theme="brutal"] .personal-first-goal-create { border: 2px solid #141414; border-radius: 4px; background: #ffe23f; color: #141414; box-shadow: 3px 3px 0 #141414; }
+.personal-workspace-shell[data-pw-theme="brutal"] .personal-first-goal-create:hover { background: #ffd91a; }
+.personal-workspace-shell[data-pw-theme="brutal"] .personal-first-goal-examples button { border-top: 1.5px solid #141414; }
 .personal-workspace-shell[data-pw-theme="brutal"] .personal-channel-composer { border: 2px solid #141414; border-radius: 6px; box-shadow: 3px 3px 0 #141414; }
 .personal-workspace-shell[data-pw-theme="brutal"] .personal-channel-composer:focus-within { border-color: #141414; box-shadow: 5px 5px 0 #141414; }
 .personal-workspace-shell[data-pw-theme="brutal"] .personal-channel-composer textarea { border-left: 2px solid #141414; }

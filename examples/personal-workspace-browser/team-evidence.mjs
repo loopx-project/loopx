@@ -158,7 +158,7 @@ export const teamEvidenceScenario = {
       await evidence.getByText(/验收不代表协调员已采用/).waitFor();
       await evidence.getByText("尚无请求方采用记录。", {exact: true}).waitFor();
       mode.fixtureAdoptionState = "current";
-      await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
+      await evidence.getByRole("button", {name: "重新检查交付", exact: true}).click();
       await evidence.getByText("已记录采用 · 后续结果验收有效", {exact: true}).waitFor();
       await evidence.getByRole("button", {name: "查看后续结果", exact: true}).click();
       await evidence.getByLabel("证据内容: synthesis.json").waitFor();
@@ -204,20 +204,20 @@ export const teamEvidenceScenario = {
       await evidence.getByRole("button", {name: "accepted-analysis", exact: true}).first().click();
       await content.waitFor();
       mode.fixtureAdoptionState = "unavailable";
-      await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
+      await evidence.getByRole("button", {name: "重新检查交付", exact: true}).click();
       await evidence.getByText("采用证据已失效或无法核验", {exact: true}).waitFor();
       assert.equal(await evidence.getByText("已记录采用 · 后续结果验收有效", {exact: true}).count(), 0);
       mode.fixtureCorrectionEpisode = true;
-      await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
+      await evidence.getByRole("button", {name: "重新检查交付", exact: true}).click();
       const episode = evidence.getByRole("region", {name: "纠偏证据路径"});
       await episode.getByRole("button", {name: "核验关联执行", exact: true}).click();
       await episode.getByText(/采用证据无法核验/).waitFor();
       delete mode.fixtureAdoptionState;
-      await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
+      await evidence.getByRole("button", {name: "重新检查交付", exact: true}).click();
       await episode.getByRole("button", {name: "核验关联执行", exact: true}).click();
       await episode.getByText(/尚无请求方采用/).waitFor();
       mode.fixtureAdoptionState = "current";
-      await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
+      await evidence.getByRole("button", {name: "重新检查交付", exact: true}).click();
       assert.equal(await episode.getByText("independent-reviewer").count(), 0, "The path is not inferred before a deliberate read");
       await episode.getByRole("button", {name: "核验关联执行", exact: true}).click();
       await episode.getByText("independent-reviewer", {exact: true}).waitFor();
@@ -243,7 +243,7 @@ export const teamEvidenceScenario = {
       assert.equal(await evidence.getByText("已记录采用 · 后续结果验收有效", {exact: true}).count(), 0,
         "Rejected core evidence cannot retain accepted adoption details");
       await page.unroute("**/api/chat/sessions/*/loopx", rejectedSource);
-      await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
+      await evidence.getByRole("button", {name: "重新检查交付", exact: true}).click();
       await episode.getByRole("button", {name: "核验关联执行", exact: true}).click();
       await episode.getByText("independent-reviewer", {exact: true}).waitFor();
       let revisionRechecks = 0;
@@ -265,14 +265,14 @@ export const teamEvidenceScenario = {
       assert.equal(await content.count(), 0, "A changed revision withdraws the earlier report");
       assert.equal(await evidence.getByText("newer revision").count(), 0);
       await page.unroute("**/api/chat/sessions/*/loopx", changedRevision);
-      await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
+      await evidence.getByRole("button", {name: "重新检查交付", exact: true}).click();
       await content.waitFor();
       assert.equal(api.turnRequests.length, 0, "Evidence reading must not start a model");
       await page.screenshot({path: resolve(outputDir, "team-evidence-desktop.png"), animations: "disabled"});
       // Reading a consumer is not adoption. Only the explicit owner decision
       // writes; a lost post-commit acknowledgement reconciles without rewriting.
       delete mode.fixtureAdoptionState;
-      await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
+      await evidence.getByRole("button", {name: "重新检查交付", exact: true}).click();
       await content.waitFor();
       await evidence.locator(".goal-team-lineage-detail > summary").click();
       const adoption = evidence.locator(".goal-team-adoption");
@@ -384,7 +384,7 @@ export const teamEvidenceScenario = {
         }
         return route.fallback();
       });
-      await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
+      await evidence.getByRole("button", {name: "重新检查交付", exact: true}).click();
       await evidence.getByRole("alert").filter({hasText: "已清除上次证据"}).waitFor();
       assert.equal(await content.count(), 0);
       assert.equal(await episode.count(), 0, "Lost observation removes the correction path");

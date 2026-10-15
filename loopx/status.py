@@ -1362,10 +1362,12 @@ def collect_status(
     include_zcode_goal_eligibility: bool = False,
     activation_state_filter: str | None = None,
     agent_lane_id: str | None = None,
+    allow_missing_registry: bool = False,
 ) -> dict[str, Any]:
     with effect_runtime_request_scope():
         return _collect_status_read_model(
             registry_path=registry_path,
+            allow_missing_registry=allow_missing_registry,
             runtime_root_override=runtime_root_override,
             scan_roots=scan_roots,
             limit=limit,

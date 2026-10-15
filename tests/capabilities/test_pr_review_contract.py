@@ -677,6 +677,25 @@ def test_motivation_publishes_existing_problem_context_before_implementation():
     assert "not truth or comprehension" in publication["rule"]
 
 
+def test_experience_review_challenges_total_work_without_erasing_consent():
+    # Agent-consumed prose is behavior: preserve both the reduction obligation
+    # and its legitimate-consent/configuration countercases in the shared packet.
+    contract = build_agent_response_contract()["review_execution_contract"]
+    context = next(row for row in contract["evidence_requirements"]
+                   if row["evidence_id"] == "problem_context")
+    impact = context["outcome_impact"]
+    assert impact["applicable_fields"] == ["before_after", "evidence_refs"]
+    rule = impact["rule"]
+    for obligation in ("original request", "entire human job", "smaller lawful alternative",
+                       "zero additional rounds", "off-screen preparation",
+                       "high feature value alone is insufficient", "not a universal click gate",
+                       "Optional technical editing remains valid", "necessary scoped consent"):
+        assert obligation in rule
+    direct = build_review_execution_contract()
+    assert next(row for row in direct["evidence_requirements"]
+                if row["evidence_id"] == "problem_context")["outcome_impact"] == impact
+
+
 def test_review_packet_and_template_share_optional_visual_explanation(capsys):
     fixture = Path(__file__).resolve().parents[2] / "examples/fixtures/pr-review.public.json"
     assert cli_main(["--format", "json", "pr-review", "--fixture", str(fixture)]) == 0

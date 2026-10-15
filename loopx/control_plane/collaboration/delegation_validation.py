@@ -29,6 +29,7 @@ def capture(service, binding: dict) -> dict:
     basis = inspect_goal_acceptance(
         registry_path=service.registry, runtime_root=str(service.root),
         goal_id=service.goal_id, agent_id=binding["agent_id"], todo_id=binding["todo_id"],
+        validation_workspace_path=Path(binding["workspace"]),
     )
     todo = basis.get("todo")
     if not isinstance(todo, dict):

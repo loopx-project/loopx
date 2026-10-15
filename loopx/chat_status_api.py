@@ -5,6 +5,7 @@ from __future__ import annotations
 import errno
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -71,6 +72,21 @@ def _goal_task_map(server: Any, goal_id: str) -> dict[str, Any] | None:
         todo_status_open=TODO_STATUS_OPEN,
         monitor_task_class=TODO_TASK_CLASS_MONITOR,
     )
+
+
+def _discovery_registry(registry_path: Path) -> dict[str, Any]:
+    """Read the registry for the workspace directory; a missing file is an empty workspace.
+
+    A fresh install has no registry until the first Goal is created. Discovery
+    reports that as zero registered Goals rather than a projection failure, so
+    the home page can show its first-Goal state. Unreadable or incompatible
+    registries still raise.
+    """
+
+    try:
+        return load_project_registry(registry_path)
+    except FileNotFoundError:
+        return {}
 
 
 def _status_access_denied(error: BaseException) -> bool:
@@ -158,7 +174,7 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
             if views is not None or requested_goals is not None or delivery_review:
                 # Discovery reads only metadata. Full status/runtime reads keep
                 # their existing lifecycle-only profile refusal.
-                registry = (load_project_registry(self.server.registry_path) if views == ["workspace-directory"]
+                registry = (_discovery_registry(self.server.registry_path) if views == ["workspace-directory"]
                     else load_registry(self.server.registry_path))
                 if goal_id and goal_id not in {
                     str(g.get("id")) for g in registry_goals(registry)
@@ -173,6 +189,10 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
                     return
             projection = collect_status(
                 registry_path=self.server.registry_path,
+                # The Chat service already starts on an absent registry as an
+                # empty workspace (serve_chat); its status reports the same
+                # fact as a warning, so a fresh install is not a failed source.
+                allow_missing_registry=True,
                 runtime_root_override=self.server.runtime_root_override,
                 scan_roots=self.server.scan_roots,
                 limit=self.server.limit,

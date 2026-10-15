@@ -57,7 +57,7 @@ export function DeliveryReview(props: DeliveryReviewProps) {
   return <DeliveryReviewContent {...props} review={review} />;
 }
 
-export function DeliveryReviewContent({ goal, items, userTodos, onSelect, review, hideWorkMap = false }: DeliveryReviewProps & {
+export function DeliveryReviewContent({ goal, items, userTodos, onSelect, review, active, hideWorkMap = false }: DeliveryReviewProps & {
   review: DeliveryReviewRead; hideWorkMap?: boolean;
 }) {
   const { locale } = useWorkspaceI18n();
@@ -154,7 +154,7 @@ export function DeliveryReviewContent({ goal, items, userTodos, onSelect, review
       </> : <p className="delivery-notice">{copy.noGraph}</p>}
 
     </>}
-    <GoalAcceptanceContractSection goalId={goal.goalId} contract={snapshot?.acceptance?.goal_acceptance_contract} copy={copy.contract} current={usable} />
+    <GoalAcceptanceContractSection goalId={goal.goalId} contract={snapshot?.acceptance?.goal_acceptance_contract} copy={copy.contract} current={usable} canManage={active && usable} />
     <GoalAcceptanceObservationCard goal={snapshot ? { ...goal, acceptanceObservation: snapshot.acceptance } : goal} />
   </section>;
 }

@@ -200,22 +200,32 @@ def _public_boundary_changed_files_run(
         else:
             boundary = scan_public_boundary(existing_paths, registry={})
             hits = [str(item) for item in boundary.get("hits") or []]
+            # A directory this scan could not list is an unscanned input, not a
+            # clean one, so the check fails closed like a recorded hit.
+            unreadable_directories = [
+                str(item) for item in boundary.get("unreadable_directories") or []
+            ]
             check.update(
                 {
-                    "status": "passed" if boundary.get("ok") else "failed",
-                    "ok": bool(boundary.get("ok")),
+                    "status": (
+                        "passed"
+                        if boundary.get("ok") and not unreadable_directories
+                        else "failed"
+                    ),
+                    "ok": bool(boundary.get("ok")) and not unreadable_directories,
                     "duration_seconds": round(time.monotonic() - started, 3),
                     "stdout_tail": (
                         f"public boundary scan clean: {boundary.get('scanned_files')} files"
-                        if boundary.get("ok")
+                        if boundary.get("ok") and not unreadable_directories
                         else ""
                     ),
-                    "stderr_tail": "\n".join(hits)[-800:] if hits else "",
+                    "stderr_tail": "\n".join(hits + unreadable_directories)[-800:],
                     "boundary": {
                         "scanned_files": boundary.get("scanned_files"),
                         "skipped_private_state_files": boundary.get("skipped_private_state_files"),
                         "allowed_hits": boundary.get("allowed_hits"),
                         "hit_count": len(hits),
+                        "unreadable_directory_count": len(unreadable_directories),
                     },
                 }
             )
