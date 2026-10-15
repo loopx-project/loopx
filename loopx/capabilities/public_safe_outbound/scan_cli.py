@@ -6,13 +6,15 @@ Usage:
 
 Exit 0 = clean (public-safe); exit 1 = any hit, or any input the scan could
 not read (fail-closed). A configured PUBLIC_SAFE_CONFIG that cannot be read
-also exits 1 rather than downgrading to the generic rules.
+also exits 1 rather than downgrading to the generic rules, and so does a scan
+root that does not exist or a directory under it that cannot be listed.
 """
 from __future__ import annotations
 
 import argparse
+import os
 import sys
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from pathlib import Path
 
 from .scanner import compact_json, scan_paths
@@ -53,6 +55,13 @@ BINARY_SUFFIXES = frozenset({
 })
 
 
+# Content-free reasons for a candidate tree the walk could not fully see. Like
+# the scanner's own unscanned reasons they carry no path: the receipt must not
+# echo the absolute location it exists to keep out of public text.
+SCAN_ROOT_MISSING = "scan_root_missing"
+DIRECTORY_UNREADABLE = "directory_unreadable"
+
+
 def _pruned_directory(name: str) -> bool:
     return name in VCS_METADATA_NAMES or name in TOOL_MANAGED_DIRECTORY_NAMES
 
@@ -65,7 +74,7 @@ def _is_candidate(relative_parts: tuple[str, ...]) -> bool:
     return Path(name).suffix.lower() not in BINARY_SUFFIXES
 
 
-def _iter_text_files(root: Path) -> Iterator[Path]:
+def _iter_text_files(root: Path, *, unscanned: list[str] | None = None) -> Iterator[Path]:
     """Yield every regular file under ``root`` that could carry scannable text.
 
     Selection is a deny-list, not a suffix allow-list. An allow-list silently
@@ -78,20 +87,36 @@ def _iter_text_files(root: Path) -> Iterator[Path]:
 
     A file given as the root is the caller's explicit choice and is scanned
     unless it is binary. Below a directory root, only the relative path counts:
-    where the root itself lives never excludes what is under it.
+    where the root itself lives never excludes what is under it. Pruned
+    directories are never entered, so their contents cannot fail the walk.
+
+    A root that does not exist, or a directory (the root included) that cannot
+    be listed, names content the caller asked to check and the walk did not
+    see. Each is appended to ``unscanned`` as a content-free reason; without a
+    collector the listing error is raised instead of being skipped, because a
+    silently shortened candidate set would read as a clean scan.
     """
+    def unlisted(error: OSError) -> None:
+        if unscanned is None:
+            raise error
+        unscanned.append(DIRECTORY_UNREADABLE)
+
     if not root.is_dir():
-        if root.is_file() and root.suffix.lower() not in BINARY_SUFFIXES:
-            yield root
+        if root.is_file():
+            if root.suffix.lower() not in BINARY_SUFFIXES:
+                yield root
+        elif not root.exists():
+            if unscanned is None:
+                raise FileNotFoundError(SCAN_ROOT_MISSING)
+            unscanned.append(SCAN_ROOT_MISSING)
         return
-    for entry in root.iterdir():
-        if entry.is_dir():
-            if _pruned_directory(entry.name):
-                continue
-            candidates: Iterable[Path] = entry.rglob("*")
-        else:
-            candidates = (entry,)
-        for path in candidates:
+    # Like Path.rglob, os.walk does not follow symlinked directories by
+    # default; unlike rglob, it reports a directory it cannot list.
+    for directory, dirnames, filenames in os.walk(root, onerror=unlisted):
+        dirnames[:] = sorted(name for name in dirnames if not _pruned_directory(name))
+        base = Path(directory)
+        for name in sorted(filenames):
+            path = base / name
             if path.is_file() and _is_candidate(path.relative_to(root).parts):
                 yield path
 
@@ -104,7 +129,11 @@ def main() -> int:
     args = p.parse_args()
 
     if args.scan_root:
-        result = scan_paths(_iter_text_files(args.scan_root), root=args.scan_root)
+        unseen: list[str] = []
+        result = scan_paths(_iter_text_files(args.scan_root, unscanned=unseen), root=args.scan_root)
+        if unseen:
+            result.unscanned.extend(unseen)
+            result.ok = False
     elif args.diff:
         diff = sys.stdin.read()
         from .scanner import scan_texts
