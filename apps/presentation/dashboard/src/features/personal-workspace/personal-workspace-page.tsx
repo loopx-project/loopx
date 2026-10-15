@@ -101,6 +101,7 @@ import {
   type AttentionNotificationSupport,
 } from "./attention-notifications";
 import { compareProposalRecency } from "./proposal-recency";
+import { buildSeenMarker, compareSeenMarker, readSeenMarker, seenMarkerStorage, seenMarkerStorageKey, writeSeenMarker, type SeenMarkerInput, type SinceYouLookedDelta } from "./since-you-looked";
 import { deriveGoalSuggestions, type GoalSuggestion } from "./goal-suggestions";
 import { projectGoalAcceptanceCriteria } from "../../data/goal-acceptance-observation";
 import { WorkspaceShell } from "./workspace-shell";
@@ -1265,6 +1266,89 @@ export function PersonalWorkspacePage({
     && (selectedGoalTab === "overview" || selectedGoalTab === "tasks") && !selectedGoal?.loadState, selectionScope);
   const workspaceDigest = useGoalWorkspaceDigest(selectedGoal, model.userTodos, items,
     workspaceReview.usable ? workspaceReview.snapshot?.goal_map : null);
+  // "Since you looked" (RFC goal-workspace-surface §5.7): compare the current
+  // digest with this browser's last acknowledged look at this Goal on this
+  // source. Nothing here writes to the service or reads cost. Comparing on
+  // open can only under-count while a Goal is still loading (every count is
+  // "present now and not in the marker"); the marker itself advances from
+  // the latest complete look when the owner marks it seen or leaves.
+  const seenStatusSource = statusSourceControl?.activeSource.statusUrl ?? "/status.json";
+  const seenGoalLoaded = Boolean(selectedGoal && !selectedGoal.loadState);
+  const seenMarkerInput = useMemo<SeenMarkerInput | null>(() => {
+    if (!selectedGoal || !seenGoalLoaded) return null;
+    return {
+      observedAt: workspaceDigest.observedAt,
+      counts: {
+        open: workspaceDigest.work.open, blocked: workspaceDigest.work.classes.blocked, done: workspaceDigest.work.done,
+        decisions: workspaceDigest.needsYou.availability === "ok" ? workspaceDigest.needsYou.blocking : null,
+      },
+      // Only an item that waits on the owner is a decision; an optional user action keeps the typed owner's classification.
+      decisionIds: model.userTodos.filter((item) => item.goalId === selectedGoal.goalId && item.blocking).map((item) => item.todoId),
+      doneTodoIds: workspaceDigest.work.rail.done,
+      blockedTodoIds: workspaceDigest.work.rail.blocked,
+      resultIds: items.flatMap((item) => item.kind === "output" && item.output.goalId === selectedGoal.goalId ? [item.output.outputId] : []),
+    };
+  }, [selectedGoal, seenGoalLoaded, workspaceDigest, model.userTodos, items]);
+  const latestSeenInputsRef = useRef(new Map<string, SeenMarkerInput>());
+  const seenScopeKey = (source: string, goalId: string) => JSON.stringify([source, goalId]);
+  useEffect(() => {
+    if (selectedGoal && seenMarkerInput) latestSeenInputsRef.current.set(seenScopeKey(seenStatusSource, selectedGoal.goalId), seenMarkerInput);
+  }, [selectedGoal, seenMarkerInput, seenStatusSource]);
+  const [sinceYouLooked, setSinceYouLooked] = useState<{ goalId: string; source: string; delta: SinceYouLookedDelta } | null>(null);
+  const seenComparedRef = useRef<string | null>(null);
+  const comparedSeenInputsRef = useRef(new Map<string, SeenMarkerInput>());
+  const seenVisitRef = useRef<{ source: string; goalId: string } | null>(null);
+  // "Mark seen" acknowledges what is on screen now and becomes the look this
+  // visit stands on; leaving acknowledges only the compared look (shown when
+  // material), so a change that arrived during the visit without being
+  // presented is still reported next time. No write moves the marker back
+  // behind a newer acknowledgment.
+  function advanceSeenMarker(goalId: string, source: string, look: "latest" | "compared") {
+    const scope = seenScopeKey(source, goalId);
+    const input = look === "latest" ? latestSeenInputsRef.current.get(scope) : comparedSeenInputsRef.current.get(scope);
+    if (!input) return;
+    const storage = seenMarkerStorage();
+    const key = seenMarkerStorageKey(source, goalId);
+    const stored = readSeenMarker(storage, key);
+    if (stored && stored.observedAt > input.observedAt) return;
+    writeSeenMarker(storage, key, buildSeenMarker(input));
+    if (look === "latest") comparedSeenInputsRef.current.set(scope, input);
+  }
+  useEffect(() => {
+    if (!selectedGoal || !seenGoalLoaded || !seenMarkerInput) return;
+    // An owner refresh still in flight when the Goal opens belongs to this
+    // look: against a real service it lands after the open, so compare once
+    // it has, not against the snapshot it is about to replace.
+    if (refreshState === "loading") return;
+    const scope = seenScopeKey(seenStatusSource, selectedGoal.goalId);
+    if (seenComparedRef.current === scope) return;
+    seenComparedRef.current = scope;
+    comparedSeenInputsRef.current.set(scope, seenMarkerInput);
+    const storage = seenMarkerStorage();
+    const key = seenMarkerStorageKey(seenStatusSource, selectedGoal.goalId);
+    const previous = readSeenMarker(storage, key);
+    if (!previous) { writeSeenMarker(storage, key, buildSeenMarker(seenMarkerInput)); return; }
+    const delta = compareSeenMarker(previous, seenMarkerInput);
+    if (delta.material) setSinceYouLooked({ goalId: selectedGoal.goalId, source: seenStatusSource, delta });
+  }, [selectedGoal, seenGoalLoaded, seenMarkerInput, seenStatusSource, refreshState]);
+  // Leaving a Goal records the look that was compared on this visit; if the
+  // line was shown, that look acknowledges it.
+  useEffect(() => {
+    const current = selectedGoal && seenGoalLoaded ? { source: seenStatusSource, goalId: selectedGoal.goalId } : null;
+    const previous = seenVisitRef.current;
+    if (previous && (!current || current.goalId !== previous.goalId || current.source !== previous.source)) {
+      advanceSeenMarker(previous.goalId, previous.source, "compared");
+      seenComparedRef.current = null;
+      setSinceYouLooked((shown) => shown && shown.goalId === previous.goalId && shown.source === previous.source ? null : shown);
+    }
+    if (current) seenVisitRef.current = current;
+    else if (!selectedGoal) seenVisitRef.current = null;
+  }, [selectedGoal, seenGoalLoaded, seenStatusSource]);
+  function markSeen() {
+    if (!sinceYouLooked) return;
+    advanceSeenMarker(sinceYouLooked.goalId, sinceYouLooked.source, "latest");
+    setSinceYouLooked(null);
+  }
   const goalSuggestions = useMemo<GoalSuggestion[]>(() => {
     if (!selectedGoal) return [];
     const contract = selectedGoal.acceptanceObservation?.goal_acceptance_contract;
@@ -2466,7 +2550,7 @@ export function PersonalWorkspacePage({
             ) : selectedGoal ? (
               <GoalWorkspacePanels key={`${statusSourceControl?.activeSource.statusUrl ?? "/status.json"}:${selectedGoal.goalId}`}
                 activeTab={selectedGoalTab} scrollRef={channelScrollRef} panels={{
-                  overview: <GoalOverview onOpenAgentConversation={callbacks.onSelectWorkAgent} railOpen={railScope === selectionScope} onCloseRail={() => setRailScope(null)} digest={workspaceDigest} review={workspaceReview} active={!settingsOpen && selectedGoalTab === "overview"} goal={selectedGoal} items={items} userTodos={model.userTodos} readOnly={readOnly}
+                  overview: <GoalOverview sinceYouLooked={sinceYouLooked?.goalId === selectedGoal.goalId ? sinceYouLooked.delta : null} onMarkSeen={markSeen} onOpenAgentConversation={callbacks.onSelectWorkAgent} railOpen={railScope === selectionScope} onCloseRail={() => setRailScope(null)} digest={workspaceDigest} review={workspaceReview} active={!settingsOpen && selectedGoalTab === "overview"} goal={selectedGoal} items={items} userTodos={model.userTodos} readOnly={readOnly}
                     onOpenDetails={() => setSelection({ kind: "goal", item: selectedGoal })} onSelect={setSelection} onView={setSelectedGoalTab}
                     selectedTodoId={drawerSelection?.kind === "todo" ? drawerSelection.item.todoId : null}
                     board={taskBoard(!settingsOpen && selectedGoalTab === "overview")} results={goalResults(!settingsOpen && selectedGoalTab === "overview")}

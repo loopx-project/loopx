@@ -6,6 +6,7 @@ It does not capture process memory or qualify a native conversation cursor.
 """
 from __future__ import annotations
 
+from contextlib import closing
 import hashlib
 import json
 import math
@@ -69,33 +70,43 @@ def _archive(container, remote: str, destination: Path) -> Path:
     Docker's archive reader works while paused, unlike exec-based file readers.
     Keep only the declared object, not parent filesystem or process credentials.
     """
-    stream, stat = container.get_archive(remote)
-    if stat.get("linkTarget"):
-        raise ValueError("Worker component must not be a symlink")
-    destination.mkdir(mode=0o700)
-    with tempfile.TemporaryFile() as raw:
-        for chunk in stream:
-            raw.write(chunk)
-        raw.seek(0)
-        with tarfile.open(fileobj=raw) as archive:
-            members = archive.getmembers()
-            root = PurePosixPath(remote).name
-            names = set()
-            for member in members:
-                path = PurePosixPath(member.name)
-                if (path.is_absolute() or ".." in path.parts or not path.parts or
-                        path.parts[0] != root or str(path) in names or
-                        not (member.isfile() or member.isdir())):
-                    raise ValueError("Worker archive contains undeclared, linked or special members")
-                names.add(str(path))
-            archive.extractall(destination, members=members, filter="data")
-            # The data filter intentionally drops directory modes. This is a
-            # private raw transport witness, so restore only ordinary permission
-            # bits after safe extraction; never restore owners or special bits.
-            # Otherwise a private 0700 authority directory becomes 0755 and a
-            # matching frozen source is falsely rejected as having changed.
-            for member in sorted(members, key=lambda entry: len(PurePosixPath(entry.name).parts), reverse=True):
-                (destination / member.name).chmod(member.mode & 0o777)
+    from docker.utils import decode_json_header
+
+    # The SDK's get_archive hides its Response behind a lazy generator. Closing
+    # that generator alone need not close an unread HTTP body. Own the response
+    # so every early exit releases the daemon reader before writer cleanup.
+    api = container.client.api
+    response = api._get(api._url("/containers/{0}/archive", container.id),
+        params={"path": remote}, stream=True, headers={"Accept-Encoding": "identity"})
+    with closing(response):
+        api._raise_for_status(response)
+        stat = decode_json_header(response.headers["x-docker-container-path-stat"])
+        if stat.get("linkTarget"):
+            raise ValueError("Worker component must not be a symlink")
+        destination.mkdir(mode=0o700)
+        with tempfile.TemporaryFile() as raw:
+            for chunk in api._stream_raw_result(response, 2 * 1024 * 1024, False):
+                raw.write(chunk)
+            raw.seek(0)
+            with tarfile.open(fileobj=raw) as archive:
+                members = archive.getmembers()
+                root = PurePosixPath(remote).name
+                names = set()
+                for member in members:
+                    path = PurePosixPath(member.name)
+                    if (path.is_absolute() or ".." in path.parts or not path.parts or
+                            path.parts[0] != root or str(path) in names or
+                            not (member.isfile() or member.isdir())):
+                        raise ValueError("Worker archive contains undeclared, linked or special members")
+                    names.add(str(path))
+                archive.extractall(destination, members=members, filter="data")
+                # The data filter intentionally drops directory modes. This is a
+                # private raw transport witness, so restore only ordinary permission
+                # bits after safe extraction; never restore owners or special bits.
+                # Otherwise a private 0700 authority directory becomes 0755 and a
+                # matching frozen source is falsely rejected as having changed.
+                for member in sorted(members, key=lambda entry: len(PurePosixPath(entry.name).parts), reverse=True):
+                    (destination / member.name).chmod(member.mode & 0o777)
     return _physical(destination / root)
 
 

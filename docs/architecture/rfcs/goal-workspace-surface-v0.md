@@ -2,7 +2,7 @@
 
 - **RFC status:** Accepted
 - **Supersedes / closes:** none
-- **Delivery maturity:** M1 merged in [#6191](https://github.com/loopx-project/loopx/pull/6191). M2 Now, rail, shared selection, task links, inline creation and Results are proposed in [#6255](https://github.com/loopx-project/loopx/pull/6255), pending maintainer review and merge. M3–M4 remain unimplemented; installed and live-team qualification is separate.
+- **Delivery maturity:** M1 merged in [#6191](https://github.com/loopx-project/loopx/pull/6191). M2 merged in [#6255](https://github.com/loopx-project/loopx/pull/6255). M3's since-you-looked delta is proposed (see the 2026-10-15 checkpoint); target declaration and M4 remain unimplemented; installed and live-team qualification is separate.
 - **Owners:** existing workspace presentation owner. Data and action owners named in Section 5 keep their authority.
 - **Created / normative revision:** 2026-10-11.
 - **Implementation baseline:** `5c62c5c03`.
@@ -455,6 +455,33 @@ second upgrade.
 | M2 Work lenses and rail | Now by owner with Board/Map lenses; All-work rail and Activity; shared selection and `todo` deep link; inline Add task; Results region | M1 | V2, V3, V6, V7, V9, V10 | Revert to M1 |
 | M3 Direction and return | Since-you-looked delta; target declaration through the acceptance owner | M2; D3 decided by its owner | V5, V8 | Hide declaration; delete marker |
 | M4 Live and expressive | W2 live state on rows and map from the execution observation owner; event motion; keyboard map and palette; dark inverse | M2; W2 observation available | V6 (motion, dark); live-team W2 acceptance | Disable motion/theme |
+
+**Checkpoint 2026-10-15 (M3 since-you-looked, proposed).**
+Section 5.7 is implemented in the packaged page: a browser-local marker per (status source, Goal)
+holding typed counts, decision ids, bounded done Todo and result ids and the observation time;
+no titles, content or cost, no server write. On open the page compares the current digest with the
+marker and shows one line only for a material delta (newly done, new decisions, newly blocked,
+results returned), dismissable with "Mark seen". A decision is an item the typed attention lane
+classifies as waiting on the owner; an optional user action is listed but never counted. The
+comparison waits for an owner refresh still in flight when the Goal opens, so against a real
+service it compares the look that lands, not the snapshot it replaces. One refinement of 5.7 is
+recorded: "Mark seen" acknowledges what is on screen, while leaving a Goal records only the look
+that was compared on that visit, so a visit with nothing new still advances the observation time
+and a change that arrived during the visit without being presented is reported next time. A
+browser that denies local storage loses only this memory; the Goal stays readable. "Mark seen"
+becomes the look the visit stands on and no write moves the marker back behind a newer
+acknowledgment. Stored ids are evidence only while they cover the owner's whole set: past the
+200-id cap, or for a partially listed set, only growth of the owner's count reports a new decision,
+result or completion, and with no done total a capped done history reports nothing, so an unchanged
+set never reports a change.
+V5 is covered by a node test (no-change pair, trimmed marker, unavailable done count, denied
+storage, 201 unchanged decisions past the cap, 201 unchanged completions with no done total,
+resolved-and-raised within it), a fixture browser
+scenario (first visit silent, no-change return silent, work and decision changes shown and
+dismissed, leave-acknowledge, refresh then Mark seen then leave keeps the acknowledgment, 201
+unchanged decisions silent, reload, no service write, denied storage getter) and a real-service scenario against a disposable Todo owner (optional user action silent,
+CLI completion and gate counted as the lane counts them, Mark seen). Cost stays omitted per D7.
+Target declaration (the other half of M3) remains undelivered.
 
 **Checkpoint 2026-10-12 (M2 candidate, #6255).**
 The existing TypeScript digest classifies responsibility, unassigned work and recorded decision dependencies;

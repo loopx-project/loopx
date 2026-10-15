@@ -25,6 +25,11 @@
 .goal-overview .goal-overview-heading button:hover { border-color: transparent; background: var(--pw-hover); color: var(--pw-text); }
 
 .goal-overview-objective { max-width: 44em; color: var(--pw-text); font-size: var(--text-heading); font-weight: 600; letter-spacing: -0.015em; line-height: var(--leading-heading); text-wrap: pretty; }
+/* One quiet line above the hero: what changed since the owner's last look. Idle content stays still. */
+.goal-overview-since { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: 0 0 16px; padding-bottom: 12px; border-bottom: 1px solid var(--pw-line); color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); font-variant-numeric: tabular-nums; }
+.goal-overview-since button { min-height: 28px; padding: 0 10px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: transparent; color: var(--pw-text); font-size: var(--text-caption); cursor: pointer; }
+.goal-overview-since button:hover { border-color: var(--pw-blue); color: var(--pw-blue-ink); }
+.goal-overview-since button:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
 .goal-overview-note { max-width: 56em; color: var(--pw-muted); font-size: var(--text-body); line-height: var(--leading-body); }
 .goal-overview-note small { color: var(--pw-faint); }
 

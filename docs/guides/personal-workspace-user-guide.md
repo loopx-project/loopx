@@ -285,6 +285,32 @@ when the work list is complete and the owner's open count is known to be zero; a
 never read as finished. A stopped Goal gets no
 suggestion and unknown execution is never read as idle. The collapsed summary line shows the first
 suggestion.
+### 4.1.2 自你上次查看 / Since you looked
+
+![回到 Goal 概览时的「自你上次查看」一行](../assets/personal-workspace/since-you-looked-line.png)
+
+回到一个 Goal 的概览时，如果自你上次查看以来有实质变化，概览顶部会出现一行安静的摘要：
+「自你上次查看（3 小时前）：新完成 2 项、新增 1 项等你决定、新受阻 1 项、新成果 1 项」，以及
+「标记已读」。它来自这个浏览器本地保存的上次查看标记（只有计数和编号，不含标题、内容或费用），
+不写回服务，也不是通知。「等你决定」只计需要你介入的事项，可选提醒会列出但不计入。没有实质变化时
+不显示；点「标记已读」以当前画面为基线，离开这个 Goal 则以这次进入时看到的那一眼为基线，期间到达但
+没有呈现的变化下次回来仍会算入；已点过的「标记已读」不会被离开撤回。标记只保留每类最近 200 个编号，
+超出后只按数量增长判断新增，没有总数时就不再报告，不会把没保留的旧项当成新项。浏览器不允许本地存储时只是失去这份记忆，
+Goal 照常可读。费用变化暂不纳入：用量投影还不能可靠地界定两次查看之间的区间。
+
+When you return to a Goal's overview after a material change, one quiet line at the top says what
+changed since your last look ("Since you looked (3 hours ago): 2 newly done, 1 new decision for
+you, 1 newly blocked, 1 result returned") with **Mark seen**. It comes from a marker this browser
+keeps locally (counts and ids only, never titles, content or cost), writes nothing to the service
+and is not a notification. "Decisions for you" counts only items that wait on you; an optional
+reminder is listed but not counted. Nothing shows when nothing material changed. **Mark seen** makes
+what is on screen the new baseline; leaving the Goal keeps the look you arrived to, so a change that
+landed during the visit without being shown is still reported next time, and leaving never undoes a
+**Mark seen**. The marker keeps the latest 200 ids of each kind; beyond that only growth of the
+count reports something new (nothing at all when there is no total), never an older item the marker
+did not retain. A browser that denies
+local storage only loses this memory; the Goal stays readable. Spend is left out until the usage
+projection can qualify the exact interval between two looks.
 
 ### 4.2 Goal 概览与交付依据 / Goal overview
 

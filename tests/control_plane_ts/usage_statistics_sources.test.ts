@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, writeFile, appendFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import type { CycleObservation } from "../../loopx/control_plane/runtime/usage_s
 import { readCodexTiming } from "../../loopx/control_plane/runtime/usage_statistics_codex.ts";
 import { recordGoalUsage, goalPreview } from "../../loopx/control_plane/runtime/usage_statistics_goals.ts";
 import { configure, inspect, observe } from "../../loopx/control_plane/runtime/usage_statistics.ts";
+import { acquireFileMutationLock, releaseFileMutationLock } from "../../loopx/control_plane/effect_runtime_io.ts";
 const at = Date.parse("2026-09-01T10:00:00Z");
 const key = "a".repeat(64), lane = "b".repeat(64), turn = "c".repeat(64);
 const cycle = (phase: "start" | "spend", time: number, extra = {}): CycleObservation => ({ key, lane, turn, phase, at: time, host: "codex-app", ...extra });
@@ -16,6 +18,69 @@ async function fixture(t: test.TestContext) {
   t.after(()=>rm(root,{recursive:true,force:true})); return root;
 }
 const event = (type: string, time: number, fields = {}) => JSON.stringify({ type: "event_msg", timestamp: new Date(time).toISOString(), payload: { type, ...fields } }) + "\n";
+
+test("cycle observations survive a short local statistics lock without inventing another cycle", async t => {
+  const path = join(await fixture(t), "usage.json");
+  const ctx = { env: { LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:1/v1/ping" }, version: "1.4.2", python: "3.11", channel: "source", now: new Date(at + 2000) };
+  await configure(path, ctx, "enable");
+  const generation = JSON.parse(await readFile(path, "utf8")).generation;
+  for (const input of [cycle("start", at), cycle("spend", at + 1000)]) {
+    const lock = await acquireFileMutationLock(path);
+    const released = new Promise<void>((resolve, reject) => {
+      setTimeout(() => { releaseFileMutationLock(lock.targetPath, lock.token, null, true).then(() => resolve(), reject); }, 500);
+    });
+    try {
+      await observe(path, ctx, generation, null, async () => 204, undefined, input);
+    } finally {
+      await released;
+    }
+  }
+  const state = JSON.parse(await readFile(path + ".cycles", "utf8"));
+  assert.equal(state.cycles.length, 1);
+  assert.equal(state.cycles[0].start, at);
+  assert.equal(state.cycles[0].end, at + 1000);
+  assert.equal(state.cycles[0].exact, true);
+});
+
+test("cycle observations retain a bounded contention failure and recover only after release", { timeout: 10000 }, async t => {
+  const path = join(await fixture(t), "usage.json");
+  const ctx = { env: { LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:1/v1/ping" }, version: "1.4.2", python: "3.11", channel: "source", now: new Date(at) };
+  await configure(path, ctx, "enable");
+  const generation = JSON.parse(await readFile(path, "utf8")).generation;
+  const lock = await acquireFileMutationLock(path);
+  try {
+    await assert.rejects(observe(path, ctx, generation, null, async () => 204, undefined, cycle("start", at)));
+    await assert.rejects(readFile(path + ".cycles"), /ENOENT/);
+  } finally {
+    await releaseFileMutationLock(lock.targetPath, lock.token, null, true);
+  }
+  await observe(path, ctx, generation, null, async () => 204, undefined, cycle("start", at));
+  const state = JSON.parse(await readFile(path + ".cycles", "utf8"));
+  assert.equal(state.cycles.length, 1);
+  assert.equal(state.cycles[0].start, at);
+  assert.equal(state.cycles[0].end, undefined);
+});
+
+test("queued cycle observations recheck withdrawal and consent generation under the lock", async t => {
+  for (const revoked of [{ consent: "disabled" }, { generation: randomUUID() }]) {
+    const path = join(await fixture(t), "usage.json");
+    const ctx = { env: { LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:1/v1/ping" }, version: "1.4.2", python: "3.11", channel: "source", now: new Date(at) };
+    await configure(path, ctx, "enable");
+    const state = JSON.parse(await readFile(path, "utf8"));
+    const lock = await acquireFileMutationLock(path);
+    let sends = 0;
+    const pending = observe(path, ctx, state.generation, null, async () => { sends++; return 204; }, undefined, cycle("start", at));
+    try {
+      // Simulate the already-authorized settings owner while it holds this lock.
+      await writeFile(path, JSON.stringify({ ...state, ...revoked }));
+    } finally {
+      await releaseFileMutationLock(lock.targetPath, lock.token, null, true);
+    }
+    assert.deepEqual(await pending, { sent: false, reason: "blocked" });
+    assert.equal(sends, 0);
+    await assert.rejects(readFile(path + ".cycles"), /ENOENT/);
+  }
+});
 
 test("numeric provider seconds measure the Turn, not a delayed recorder timestamp", async t => {
   const path=join(await fixture(t),"numeric.jsonl");
