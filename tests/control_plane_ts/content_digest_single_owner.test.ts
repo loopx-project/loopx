@@ -123,6 +123,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/effect_runtime_snapshot.ts",
   "control_plane/goals/acceptance_authority.ts",
   "control_plane/goals/acceptance_contract.ts",
+  "control_plane/goals/direction_authority.ts",
   "control_plane/goals/goal_amendment_authority.ts",
   "control_plane/goals/goal_amendment_proposal.ts",
   "control_plane/goals/operator_actions.ts",

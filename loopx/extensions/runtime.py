@@ -239,6 +239,10 @@ def install_extension(
         previous_revision = (
             str(existing.get("active_revision")) if isinstance(existing, dict) else None
         )
+        # A fresh install activates the provider. An upgrade changes only the
+        # active revision; the operator's enable/disable decision is separate
+        # state and survives the revision change.
+        enabled = bool(existing.get("enabled")) if isinstance(existing, dict) else True
         if execute:
             revisions = (
                 list(existing.get("revisions") or [])
@@ -257,7 +261,7 @@ def install_extension(
             )
             extensions[extension_id] = {
                 "id": extension_id,
-                "enabled": True,
+                "enabled": enabled,
                 "active_revision": revision,
                 "rollback_revision": previous_revision,
                 "revisions": revisions,
@@ -275,7 +279,7 @@ def install_extension(
         "version": provider["version"],
         "revision": revision,
         "previous_revision": previous_revision,
-        "enabled": True if execute else None,
+        "enabled": enabled if execute else None,
         "doctor": doctor,
         "rollback_available": previous_revision is not None,
     }
@@ -420,6 +424,9 @@ def rollback_extension(
             f"extension `{extension_id}` rollback doctor is not ready: {doctor['status']}"
         )
     previous_revision = str(entry.get("active_revision") or "")
+    # Dry-run previews the enablement read before the probe; the execute path
+    # replaces it with the value committed under the lock below.
+    enabled = bool(entry.get("enabled"))
     if execute:
         with exclusive_file_lock(path):
             current_state = _read_state(path)
@@ -438,7 +445,11 @@ def rollback_extension(
             current_entry["active_revision"] = target_revision
             current_entry["rollback_revision"] = previous_revision
             _record_doctor(current_entry, target_revision, doctor)
-            current_entry["enabled"] = True
+            # Rollback switches the active revision only; it does not undo an
+            # operator's enable/disable decision, including one that completed
+            # while the probe ran. The result must report what was committed
+            # here, not the pre-probe snapshot.
+            enabled = bool(current_entry.get("enabled"))
             _write_state(path, current_state)
     return {
         "ok": True,
@@ -450,7 +461,7 @@ def rollback_extension(
         "version": target.get("version"),
         "revision": target_revision,
         "previous_revision": previous_revision,
-        "enabled": True if execute else bool(entry.get("enabled")),
+        "enabled": enabled,
         "doctor": doctor,
     }
 

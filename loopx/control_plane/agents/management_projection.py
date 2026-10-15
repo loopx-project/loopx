@@ -236,6 +236,20 @@ def projected_agent_goals(
     return goals
 
 
+def registered_agent_ids(status_payload: dict[str, Any]) -> set[str]:
+    """Return the registered Agent ids, ignoring the display cap.
+
+    ``MAX_AGENT_ROWS`` bounds the published ``agents`` list; a scope question
+    such as "is this caller a registered Agent of the Goal?" must not inherit
+    that cap, so it reads this full set instead of the truncated rows. Only
+    ``coordination.registered_agents`` proves registration here: a Todo claim
+    is a work relationship that can outlive the registration, so claimant ids
+    the diagnostic rows carry are not members of this set.
+    """
+
+    return set(_registered_agents(status_payload))
+
+
 def _agent_material_frontiers(
     status_payload: dict[str, Any],
 ) -> dict[tuple[str, str], dict[str, Any]]:
@@ -712,6 +726,7 @@ def build_agent_management_projection(
     *,
     available_capabilities: Any = None,
     execution_facts: Any = None,
+    after_agent_id: str | None = None,
 ) -> dict[str, Any]:
     """Build a read-only agent management view from a status payload.
 
@@ -723,9 +738,25 @@ def build_agent_management_projection(
     reads (Turn lane liveness, delegation worker lock, task lease). Without them
     no row can be `executing` or `unknown`: the projection then says what the
     durable state proves and nothing more.
+
+    ``after_agent_id`` selects one page of the projection's stable agent-id
+    ordering: only Agents sorting strictly after it become the source set, so a
+    caller whose rows are capped at ``MAX_AGENT_ROWS`` can continue past row 24.
+    The cursor is a position, not a membership claim. Without a cursor the
+    projection covers the whole registry exactly as before.
+
+    ``source_summary`` separates the two kinds of row: ``registered_agent_count``
+    counts the Goal's registrations, and ``diagnostic_agent_count`` (published
+    only when it is non-zero) counts the rows this view carries for a work
+    relationship alone. A Todo claimant is evidence, never a member, so it can
+    never grow the registered total.
     """
 
     rows_by_agent = _registered_agents(status_payload)
+    # Registration facts, remembered before Todo claims add their own rows: a
+    # claim is a work relationship that can outlive a registration, so the
+    # members of this Goal stay the ids the registry proves.
+    registered_ids = set(rows_by_agent)
     material_projection_enabled = MATERIAL_LIFECYCLE_CAPABILITY in set(
         normalize_required_capabilities(available_capabilities)
     )
@@ -762,8 +793,20 @@ def build_agent_management_projection(
             row["_goal_ids"].append(goal_id)
         row["_todos"].append(todo)
 
+    page_cursor = str(after_agent_id).strip() if after_agent_id else None
+
     agents: list[dict[str, Any]] = []
+    selected_agent_count = 0
     for agent_id, raw_row in sorted(rows_by_agent.items()):
+        if page_cursor is not None and agent_id <= page_cursor:
+            continue
+        selected_agent_count += 1
+        if len(agents) >= MAX_AGENT_ROWS:
+            # Without a cursor this page stops at the cap; with one, keep
+            # counting so a paging caller can tell whether more rows follow.
+            if page_cursor is None:
+                break
+            continue
         all_todos = _as_list(raw_row.get("_todos"))
         current = _select_current_todo(all_todos)
         blocked = _select_blocked_todo(all_todos)
@@ -847,17 +890,25 @@ def build_agent_management_projection(
                 if value not in (None, "", [], {})
             }
         )
-        if len(agents) >= MAX_AGENT_ROWS:
-            break
 
     source_summary: dict[str, Any] = {
-        "registered_agent_count": len(rows_by_agent),
+        "registered_agent_count": len(registered_ids),
         "projected_agent_count": len(agents),
         "todo_source": (
             "status.attention_queue + authoritative status.todo_index rows; "
             "event-only rollout receipts are evidence, not runtime work"
         ),
     }
+    diagnostic_agent_count = len(rows_by_agent) - len(registered_ids)
+    if diagnostic_agent_count:
+        # Rows carried only for a work relationship: visible evidence, never
+        # members, so a retained claim cannot grow the Goal's Agent total.
+        source_summary["diagnostic_agent_count"] = diagnostic_agent_count
+    if page_cursor is not None:
+        # The span this page reads, not the whole Goal: `registered_agent_count`
+        # still counts every registered Agent, so a paging caller can separate
+        # rows before the cursor from rows this page could not carry.
+        source_summary["selected_agent_count"] = selected_agent_count
     if material_frontiers:
         source_summary["material_frontier_count"] = len(material_frontiers)
     if isinstance(execution_facts, dict):
