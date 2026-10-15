@@ -16,6 +16,10 @@ from xml.etree import ElementTree
 
 
 PROVIDER_REVISION = "071a884012754127f28f5b84be10f533a42db527"
+SYNTHETIC_PHASE_SECONDS = 7200
+# Parent transport waits cover the fixture's original phase and cleanup. They
+# never replace its phase file, individual capture window or native opportunity.
+CONTROLLER_WAIT_SECONDS = SYNTHETIC_PHASE_SECONDS + 60
 
 
 def require_one_pass(report):
@@ -109,7 +113,7 @@ def main():
             container.start()
             if capture_supervisor:
                 capture_supervisor.start(container)
-            status = container.wait(timeout=300)
+            status = container.wait(timeout=CONTROLLER_WAIT_SECONDS)
             log.write_bytes(container.logs())
             assert status["StatusCode"] == 0, f"Qualification failed; inspect {log}"
             require_one_pass(log.parent / log.stem / "junit.xml")
@@ -148,7 +152,7 @@ def main():
             assert submit(url, token, 7).status_code == 200
             script = ("from pathlib import Path; import time,pytest; "
                       "p=Path('/opt/loopx-benchmark/control'); p.mkdir(parents=True); "
-                      "(p/'phase-deadline').write_text(str(int(time.time())+7200)); "
+                      f"(p/'phase-deadline').write_text(str(int(time.time())+{SYNTHETIC_PHASE_SECONDS})); "
                       "raise SystemExit(pytest.main(["
                       "'/source/benchmark/tests/test_native_checkpoint_handoff.py::"
                       "test_actual_worker_captures_pending_replan_before_native_model[planning]',"
@@ -163,7 +167,7 @@ def main():
             supervisor.bind({"SFORGE_TOKEN": token})
             container.start()
             supervisor.start(container)
-            status = container.wait(timeout=300)
+            status = container.wait(timeout=CONTROLLER_WAIT_SECONDS)
             (output / "source.log").write_bytes(container.logs())
             supervisor.close()
             assert status["StatusCode"] == 0, f"Inspect {output / 'source.log'}"

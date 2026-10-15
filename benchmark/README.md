@@ -757,7 +757,12 @@ are verified; the original source test is explicitly not counted as passed.
 This avoids replaying the six source work wakes. For an independently selected
 compatible integration, also pass `--provider-revision EXACT_COMMIT` with its
 `--provider-source` checkout; the declared pin must match the clean source.
-The default remains the documented compatibility revision. All receiver work still runs;
+The default remains the documented compatibility revision. A capsule remains
+bound to the captured native provider's complete source fingerprint: selecting
+a different provider revision can correctly refuse restore. Generate and qualify
+a new source at that revision; never rewrite an older capsule or relax its fence.
+The parent wait covers the synthetic fixture's original phase plus cleanup;
+capture deadlines and worker phase checks remain unchanged. All receiver work still runs;
 this option neither admits a real study cell nor turns an earlier source failure
 into a pass. Output must remain fresh, physical and outside every source checkout.
 
