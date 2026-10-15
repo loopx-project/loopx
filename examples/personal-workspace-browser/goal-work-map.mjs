@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { createInterface } from "node:readline";
 import { resolveTestPython } from "../../scripts/test-python.mjs";
 import { outputDir, repoRoot } from "./fixture.mjs";
-import { openWorkspacePage } from "./scenario-context.mjs";
+import { fetchWorkspaceBackend, openWorkspacePage } from "./scenario-context.mjs";
 
 async function requestAuthority(text) {
   const root = await mkdtemp(resolve(tmpdir(), "loopx-map-request-"));
@@ -118,7 +118,7 @@ export const goalWorkMapScenario = {
       const routeRequest = (api, page) => page.route("**/api/chat/todo/detail?*", async route => {
         const url = new URL(route.request().url());
         api.todoRequestReads.push({ goalId: url.searchParams.get("goal_id"), todoId: url.searchParams.get("todo_id") });
-        await route.fulfill({ response: await route.fetch({ url: authority.url + url.pathname + url.search }) });
+        await route.fulfill({ response: await fetchWorkspaceBackend(route, authority.url) });
       });
       const routeReview = (api, page) => page.route("**/api/chat/delivery-review?*", route => {
         const goalId = new URL(route.request().url()).searchParams.get("goal_id");

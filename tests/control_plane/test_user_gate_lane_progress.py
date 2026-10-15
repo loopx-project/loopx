@@ -59,7 +59,12 @@ def test_user_gate_fallback_preserves_repair_and_replan_precedence():
     ) is original
 
 
-def _status_payload(*, gate_action_kind: str, blocks_deferred: bool = False) -> dict:
+def _status_payload(
+    *,
+    gate_action_kind: str,
+    blocks_deferred: bool = False,
+    include_gated_agent: bool = False,
+) -> dict:
     completed = quota_todo_item(
         todo_id="todo_prerequisite",
         status="done",
@@ -75,8 +80,16 @@ def _status_payload(*, gate_action_kind: str, blocks_deferred: bool = False) -> 
         resume_when="todo_done:todo_prerequisite",
         done=True,
     )
+    gated_agent = quota_todo_item(
+        todo_id="todo_first_screen",
+        status="open",
+        text="[P0] Publish the gated product first screen.",
+        claimed_by=AGENT_ID,
+        action_kind="publish_product_first_screen",
+        required_write_scopes=["docs/**"],
+    )
     agent_todos = quota_todo_summary(
-        [completed, deferred],
+        [completed, deferred, *([gated_agent] if include_gated_agent else [])],
         role="agent",
         claim_scope_agent_id=AGENT_ID,
     )
@@ -139,7 +152,10 @@ def _quality_vision_run() -> dict:
 
 def test_unrelated_user_gate_allows_ready_deferred_successor_replan() -> None:
     payload = build_quota_should_run(
-        _status_payload(gate_action_kind="approve_product_first_screen"),
+        _status_payload(
+            gate_action_kind="approve_product_first_screen",
+            include_gated_agent=True,
+        ),
         goal_id=GOAL_ID,
         agent_id=AGENT_ID,
         scheduler_execution_context=APP_CONTEXT,
@@ -149,6 +165,9 @@ def test_unrelated_user_gate_allows_ready_deferred_successor_replan() -> None:
     selected = fallback["selected_executable"]
     assert selected["todo_id"] == "todo_ready_deferred"
     assert selected["fallback_kind"] == "deferred_successor_replan"
+    assert payload["decision"] == "successor_replan_required"
+    assert payload["effective_action"] == "successor_replan_required"
+    assert payload["selected_todo"]["todo_id"] == "todo_ready_deferred"
     assert payload["interaction_contract"]["mode"] == "scoped_user_gate_fallback"
     assert payload["interaction_contract"]["agent_channel"]["must_attempt"] is True
     assert payload["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
@@ -173,6 +192,45 @@ def test_unrelated_user_gate_allows_ready_deferred_successor_replan() -> None:
             ],
         },
     }
+
+
+def test_ready_deferred_successor_replan_preempts_workspace_guard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guarded_todo_ids: list[str | None] = []
+
+    def _record_workspace_guard_selection(
+        *args: object,
+        selected_todo: dict | None = None,
+        **kwargs: object,
+    ) -> dict:
+        guarded_todo_ids.append((selected_todo or {}).get("todo_id"))
+        return {
+            "schema_version": "agent_workspace_guard_v1",
+            "reason": "delivery would require another workspace",
+            "required_action": "move to the delivery workspace",
+        }
+
+    monkeypatch.setattr(
+        "loopx.control_plane.quota.should_run.build_agent_workspace_guard",
+        _record_workspace_guard_selection,
+    )
+
+    payload = build_quota_should_run(
+        _status_payload(
+            gate_action_kind="approve_product_first_screen",
+            include_gated_agent=True,
+        ),
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        scheduler_execution_context=APP_CONTEXT,
+    )
+
+    assert payload["decision"] == "successor_replan_required"
+    assert payload["effective_action"] == "successor_replan_required"
+    assert payload["selected_todo"]["todo_id"] == "todo_ready_deferred"
+    assert "workspace_guard" not in payload
+    assert guarded_todo_ids == []
 
 
 def test_consumed_review_gate_exposes_quality_vision_replan() -> None:

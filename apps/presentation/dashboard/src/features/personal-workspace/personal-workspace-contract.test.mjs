@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { goalCreateRequest } from "./goal-create-request.ts";
 import { localizedCapabilityFieldCopy } from "./capability-localization.ts";
+import { taskSessionStatus } from "./goal-activity.ts";
 import "./monitor-readback.test.mjs";
 
 const source = (name) => readFileSync(new URL(name, import.meta.url), "utf8");
@@ -131,7 +132,8 @@ for (const legacyClassifier of ["hasHeartbeatIntent", "hasMonitorIntent", "hasTo
   assert.doesNotMatch(page, new RegExp(`function ${legacyClassifier}`), `${legacyClassifier} no longer bypasses the Router contract`);
 }
 assert.match(dashboard, /Agent 已返回结果/, "A completed task Session advertises its result instead of looking stalled");
-assert.match(dashboard, /sessionStatus: hasResult \? "completed"/, "A returned answer outranks a stale transport label in the visible Session status");
+assert.equal(taskSessionStatus({ active_turn_id: null, status: "stale" }, { done: false, hasResult: true }),
+  "completed", "A returned answer outranks a stale transport label in the visible Session status");
 assert.match(answerText, /function visibleAgentMessage[\s\S]*GOAL_\(STATUS\|PROGRESS\)/, "Internal Session protocol markers stay out of the user-facing result");
 assert.match(answerText, /GOAL_EVIDENCE[\s\S]*验证依据：/, "Session evidence uses a readable heading instead of an internal protocol marker");
 assert.match(answerText, /NEXT_ACTION[\s\S]*下一步：/, "Session next actions use a readable heading instead of an internal protocol marker");

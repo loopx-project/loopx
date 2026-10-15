@@ -8,10 +8,12 @@ import json
 from pathlib import Path
 import sys
 
+from ...entrypoint import pin_utf8_stdio
 from ...file_lock import try_exclusive_file_lock
 
 
 def main() -> None:
+    pin_utf8_stdio()
     for line in sys.stdin:
         paths = json.loads(line)
         if not isinstance(paths, list) or not paths or any(

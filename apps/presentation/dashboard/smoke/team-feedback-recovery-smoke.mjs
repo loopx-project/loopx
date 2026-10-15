@@ -10,7 +10,7 @@ import {launchBrowser, loadPlaywright, waitForHttp} from "../../../../examples/d
 
 process.env.LOOPX_PERSONAL_WORKSPACE_PACKAGED = "1";
 const {repoRoot, outputDir, port, startServer} = await import("../../../../examples/personal-workspace-browser/fixture.mjs");
-const {openWorkspacePage} = await import("../../../../examples/personal-workspace-browser/scenario-context.mjs");
+const {fetchWorkspaceBackend, openWorkspacePage} = await import("../../../../examples/personal-workspace-browser/scenario-context.mjs");
 const fixture = spawn(resolveTestPython({repoRoot}), ["-u", "apps/presentation/dashboard/smoke/team-feedback-http-fixture.py"],
   {cwd: repoRoot, stdio: ["pipe", "pipe", "pipe"]});
 const exited = once(fixture, "exit");
@@ -50,7 +50,7 @@ try {
     const body = route.request().method() === "POST" ? route.request().postDataJSON() : {};
     if (body.operation !== "message") return route.fallback();
     posts.push(body);
-    const response = await route.fetch({url: `${origin}/api/chat/sessions/feedback/loopx`});
+    const response = await fetchWorkspaceBackend(route, origin, { pathname: "/api/chat/sessions/feedback/loopx" });
     if (loseAcknowledgement) {
       assert.equal(response.status(), 200, await response.text());
       loseAcknowledgement = false;

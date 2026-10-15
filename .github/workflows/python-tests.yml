@@ -838,6 +838,11 @@ jobs:
       - name: Verify native Windows test Python discovery
         run: node --no-warnings --experimental-strip-types --test tests/control_plane_ts/test_python_runtime.test.ts
 
+      - name: Qualify the canary plan's repository path rendering
+        run: >-
+          python -m pytest -q
+          tests/canary/test_repository_root.py::test_plan_renders_repository_paths_in_canonical_posix_form
+
       - name: Run native Windows lifecycle tests
         run: >-
           python -m pytest -q

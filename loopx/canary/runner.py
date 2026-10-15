@@ -152,7 +152,7 @@ def normalize_canary_command(command: str, repo_root: Path | None = None) -> dic
         "argv": argv,
         "display_argv": _display_argv(argv, repo_root=repo_root),
         "injected_args": injected_args,
-        "script": str(script.relative_to(repo_root)),
+        "script": script.relative_to(repo_root).as_posix(),
     }
 
 
@@ -164,7 +164,7 @@ def _display_argv(argv: list[str], repo_root: Path | None = None) -> list[str]:
     for index, value in enumerate(displayed[1:], start=1):
         path = Path(value)
         if path.is_absolute() and _is_relative_to(path.resolve(), repo_root.resolve()):
-            displayed[index] = str(path.resolve().relative_to(repo_root.resolve()))
+            displayed[index] = path.resolve().relative_to(repo_root.resolve()).as_posix()
     return displayed
 
 

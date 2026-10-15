@@ -9,12 +9,14 @@ import json
 from pathlib import Path
 import sys
 
+from ...entrypoint import pin_utf8_stdio
 from ...file_lock import exclusive_file_lock
 from .research_frontier import build_research_composition_frontier
 from .result_log import build_explore_result_projection, explore_result_log_path, load_explore_result_events_strict
 
 
 def main() -> None:
+    pin_utf8_stdio()
     request = json.loads(sys.stdin.readline())
     root, goal = Path(request["runtime_root"]), request["goal_id"]
     if not root.is_absolute():
