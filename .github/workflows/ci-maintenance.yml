@@ -39,6 +39,13 @@ jobs:
             if (!pr.head.repo?.id || !pr.head.ref || !pr.head.sha || (closed && !Number.isFinite(cutoff))) {
               throw new Error('PR has no verifiable source repository, branch, head or close time.');
             }
+            // Synchronize supplies the exact replaced head, including for fork
+            // runs whose Actions response omits pull_requests. Bind both ends
+            // and the source identity before using this fallback.
+            const previousHead = !closed && context.payload.after === pr.head.sha &&
+              context.payload.pull_request?.head.ref === pr.head.ref &&
+              context.payload.pull_request?.head.repo?.id === pr.head.repo.id
+              ? context.payload.before : null;
             const unchanged = current => current.state === pr.state && current.head.sha === pr.head.sha &&
               current.head.ref === pr.head.ref && current.head.repo?.id === pr.head.repo.id &&
               (!closed || current.closed_at === pr.closed_at);
@@ -63,11 +70,11 @@ jobs:
               if (run.status === 'completed' || run.head_repository?.id !== pr.head.repo.id ||
                   run.head_branch !== pr.head.ref || !run.head_sha || !Number.isFinite(created) ||
                   (closed ? created > cutoff && run.head_sha !== pr.head.sha : run.head_sha === pr.head.sha)) continue;
-              // GitHub can omit PR associations after merge. Only the exact closed head
-              // is safe in that case; superseded heads remain in their concurrency lane.
+              // Missing associations require either the exact closed head or
+              // the replaced head bound to this verified synchronize event.
               if (run.pull_requests?.length
                   ? !run.pull_requests.some(p => p.number === pull_number)
-                  : !closed || run.head_sha !== pr.head.sha) continue;
+                  : run.head_sha !== (closed ? pr.head.sha : previousHead)) continue;
               if (!(await cancellationScopeUnchanged())) return core.info('PR or source branch changed; stop cleanup.');
               const params = {...repo, run_id: run.id};
               try {

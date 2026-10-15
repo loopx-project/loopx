@@ -121,7 +121,8 @@ const old = {id:1, status:'queued', head_repository:{id:7}, head_branch:'fix',
   head_sha:'head', created_at:'2026-01-01T00:00:00Z', pull_requests:[]};
 async function run({first=pr, current=first, open=[], runs=[old], ordinaryDone=false,
                     conflict=false, stuck=false, failure=false, action='closed',
-                    eventHead=first.head.sha, beforeForce=current,
+                    eventHead=first.head.sha, eventBefore, eventAfter=eventHead,
+                    eventSource=first.head, beforeForce=current,
                     beforeCancelOpen=open, beforeForceOpen=beforeCancelOpen,
                     refreshFailure=false}={}) {
   const cancelled=[], forced=[], queries=[]; let reads=0;
@@ -141,7 +142,8 @@ async function run({first=pr, current=first, open=[], runs=[old], ordinaryDone=f
       branchScope=beforeCancelOpen; return runs;},
     request:async (route,p)=>{assert.equal(route,
       'POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel'); forced.push(p.run_id);}};
-  await execute(github, {repo:{owner:'owner',repo:'repo'},payload:{number:17,action,pull_request:{head:{sha:eventHead}}}},
+  await execute(github, {repo:{owner:'owner',repo:'repo'},payload:{number:17,action,
+    before:eventBefore,after:eventAfter,pull_request:{head:{...eventSource,sha:eventHead}}}},
     {info:()=>{}}, fn=>fn());
   return {cancelled,forced,queries};
 }
@@ -171,6 +173,17 @@ const updated = await run({action:'synchronize',first:active,open:[{number:17}],
     {...associatedOld,id:5,head_repository:{id:8}}, {...associatedOld,id:6,head_branch:'another'},
     {...associatedOld,id:7,head_sha:''}, {...associatedOld,id:8,status:'completed'}]});
 assert.deepEqual(updated.cancelled,[1]); assert.deepEqual(updated.forced,[1]);
+const unassociatedOld = {...associatedOld,pull_requests:[]};
+const previous = await run({action:'synchronize',first:active,eventBefore:'previous',
+  runs:[unassociatedOld,{...unassociatedOld,id:2,head_sha:'unrelated'},
+    {...unassociatedOld,id:3,pull_requests:[{number:18}]}]});
+assert.deepEqual(previous.cancelled,[1]); assert.deepEqual(previous.forced,[1]);
+for (const fixture of [{eventBefore:undefined}, {eventAfter:'stale'},
+  {eventSource:{...active.head,ref:'another'}}, {eventSource:{...active.head,repo:{id:8}}},
+  {open:[{number:18}]}]) {
+  assert.deepEqual((await run({action:'synchronize',first:active,eventBefore:'previous',
+    runs:[unassociatedOld],...fixture})).cancelled,[]);
+}
 for (const fixture of [{eventHead:'stale'}, {current:pr},
   {current:{...active,head:{...active.head,sha:'new'}}}, {open:[{number:18}]},
   {current:{...active,head:{...active.head,repo:{id:8}}}},

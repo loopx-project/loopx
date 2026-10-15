@@ -758,10 +758,11 @@ to retain up to 100 pending jobs instead of replacing another current
 candidate. Workflow-level cancellation requests retirement of the same PR's
 obsolete head. Trusted base-branch cleanup on `synchronize` also retires its
 remaining obsolete runs, including `always()` aggregates that survive ordinary
-cancellation. It requires the event's current head, exact PR association, source
-repository and branch, and rechecks the current head before ordinary and force
+cancellation. It requires the event's current head, source repository and branch,
+plus either an exact PR association or the exact webhook `before` head with
+`after` and event source identity matching the current PR. It rechecks the current head before ordinary and force
 cancellation. It preserves another open PR sharing that branch. Current-head
-runs, unassociated open-PR runs and ordinary required gate predicates remain
+runs, other unassociated open-PR runs and ordinary required gate predicates remain
 unchanged: cancelled, skipped or incomplete dependencies cannot become a green
 aggregate. This adds one short trusted cleanup job per update without checkout,
 PR-code execution or new permissions on qualification jobs. Older workflow
@@ -783,8 +784,9 @@ retaining workflow-level cancellation and the required gate. See GitHub's
 用 `queue: max` 保留至多 100 个等待 job，不替换其他有效候选。workflow 级取消
 请求清退同 PR 的旧 head；可信 base 分支的 `synchronize` 清理还会取消遗留
 旧 run，包括普通取消后仍继续的 `always()` 汇总。清理要求事件中的当前 head、
-精确 PR 关联、源仓库和分支，在普通及强制取消前重新读取 head；同分支另一 open
-PR、当前 head 和无关联 run 均被保护。必过汇总条件不变，取消、跳过或缺失依赖
+源仓库和分支，以及精确 PR 关联，或 `after` 和事件来源均匹配当前 PR 时的确切
+webhook `before` head；普通及强制取消前重新读取 head。同分支另一 open PR、
+当前 head 和其他无关联 run 均被保护。必过汇总条件不变，取消、跳过或缺失依赖
 不能变绿。每次更新增加一个短清理 job，不 checkout 或执行 PR 代码，不增加普通
 验证 job 的权限；base 分支旧版 workflow 仍只清理 closed 事件。队列溢出、取消
 和缺失 coverage 仍不能通过必需检查。

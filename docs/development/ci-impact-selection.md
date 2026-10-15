@@ -249,6 +249,10 @@ untouched, even with an association to the closed PR; reopening or source change
 stop cancellation. This extends the earlier close-time cutoff for exact-head
 residue only. Cleanup can still wait for a runner or miss a run created after its
 snapshot; it is not a continuous admission service.
+For synchronize events, an omitted run-to-PR association may use the webhook's
+exact `before` head only when `after`, source repository and branch match the
+current PR. Other unassociated old heads remain protected; the same lifecycle
+and sibling-PR checks still run before both cancellation stages.
 
 Dashboard browser qualification retains all three shards. The unchanged unit
 coverage command runs only in shard 1, whose `lcov.info` the existing merger
@@ -265,6 +269,9 @@ presentation run; it does not establish a hosted wall-time improvement.
 分支和 head 完全一致的残留；其他 head 的晚到运行仍保留，重开或来源变化会中止
 取消，同分支其他开放 PR 的保护不变。清理本身仍可能等待 runner，也可能遗漏其
 快照之后才创建的运行，不能代替持续的准入控制。
+同步事件若缺少运行到 PR 的关联，仅在 webhook 的 `after`、源仓库和分支与当前
+PR 一致时，允许用其确切 `before` head 识别被替换运行；其他无关联旧 head 仍保留，
+普通及强制取消前的状态和同分支 PR 检查不变。
 
 全量 smoke 改为每天一次与指定 ref 的手动运行，不再随普通主干提交启动。五个完整
 分片共享一次源码绑定的前端构建，同一时刻最多运行两个分片；全量用例仍保留，
