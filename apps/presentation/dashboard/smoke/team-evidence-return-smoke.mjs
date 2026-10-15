@@ -63,7 +63,7 @@ try {
       : route.fulfill({json: {...legacyReadback, validation}});
   };
   await page.route("**/api/chat/sessions/*/loopx", checkedRead);
-  const recheck = evidence.getByRole("button", {name: "重新读取证据", exact: true});
+  const recheck = evidence.getByRole("button", {name: "重新检查交付", exact: true});
   await recheck.click();
   await original().waitFor();
   await evidence.getByText("本次验收依据", {exact: true}).click();
@@ -229,7 +229,7 @@ try {
   await adoptionGap.waitFor({timeout: 3000});
   assert.equal(await evidence.getByRole("button", {name: "阅读后续结果", exact: true}).count(), 0);
   assert.equal(await evidence.getByText("已记录采用 · 后续结果验收有效", {exact: true}).count(), 0);
-  await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
+  await evidence.getByRole("button", {name: "重新检查交付", exact: true}).click();
   await original().waitFor();
   await evidence.getByRole("button", {name: "核验关联执行", exact: true}).click();
   await adoptionGap.waitFor({timeout: 3000});
@@ -249,7 +249,7 @@ try {
   assert.equal(await original().count(), 0, "Core loss clears the surrounding report, not only its trace");
   assert.equal(await evidence.getByText("本次验收依据", {exact: true}).count(), 0);
   await page.unroute("**/api/chat/sessions/*/loopx", unavailableCore);
-  await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
+  await evidence.getByRole("button", {name: "重新检查交付", exact: true}).click();
   await original().waitFor();
   await evidence.getByRole("button", {name: "核验关联执行", exact: true}).click();
   await evidence.getByRole("button", {name: "阅读回应与证据", exact: true}).click();
