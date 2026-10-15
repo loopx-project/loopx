@@ -97,20 +97,32 @@ def heading_level(line: str) -> int | None:
 
 def section(text: str, heading: str) -> str:
     lines = text.splitlines()
-    try:
-        start = lines.index(heading)
-    except ValueError as exc:
-        raise AssertionError(f"release notes missing heading {heading!r}") from exc
-
     level = heading_level(heading)
     assert level is not None
-    end = len(lines)
-    for index in range(start + 1, len(lines)):
-        candidate_level = heading_level(lines[index])
+    start: int | None = None
+    fence: tuple[str, int] | None = None
+    for index, line in enumerate(lines):
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if marker:
+            delimiter, suffix = marker.groups()
+            if fence is None:
+                if delimiter[0] != "`" or "`" not in suffix:
+                    fence = (delimiter[0], len(delimiter))
+            elif delimiter[0] == fence[0] and len(delimiter) >= fence[1] and not suffix.strip():
+                fence = None
+            continue
+        if fence is not None:
+            continue
+        if start is None:
+            if line == heading:
+                start = index
+            continue
+        candidate_level = heading_level(line)
         if candidate_level is not None and candidate_level <= level:
-            end = index
-            break
-    return "\n".join(lines[start + 1 : end])
+            return "\n".join(lines[start + 1 : index])
+    if start is None:
+        raise AssertionError(f"release notes missing heading {heading!r}")
+    return "\n".join(lines[start + 1 :])
 
 
 def validate_surface_entry(
@@ -310,6 +322,24 @@ loopx example --check
             valid_path,
             surfaces=["Example Surface"],
             expect_no_optional_capability_changes=False,
+        )
+        code_comments_path = tmp_path / "code-comments.md"
+        code_comments_path.write_text(
+            valid.replace(
+                "loopx example --check",
+                "# Prepare the readback\n## Validation\nloopx example --check",
+            ),
+            encoding="utf-8",
+        )
+        validate_release_notes(
+            code_comments_path,
+            surfaces=["Example Surface"],
+            expect_no_optional_capability_changes=False,
+        )
+        assert_rejected(
+            tmp_path / "code-only-surface.md",
+            valid.replace("### Example Surface", "```bash\n### Example Surface\n```", 1),
+            "release-note gate accepted a surface heading inside a code fence",
         )
         validate_release_notes(
             no_changes_path,
