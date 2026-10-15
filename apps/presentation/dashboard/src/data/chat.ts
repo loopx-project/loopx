@@ -205,6 +205,10 @@ export const chatCapabilitiesSchema = z.object({
     source: z.string().optional(),
     tool_calls: z.boolean().optional(),
     trust_scope: z.string().optional(),
+    // Readiness: why an unavailable built-in runtime is unavailable and what it needs.
+    unavailable_reason: z.string().nullable().optional(),
+    executable: z.string().nullable().optional(),
+    environment_variable: z.string().nullable().optional(),
   })).optional(),
   lark_cli: z.object({
     available: z.boolean(),

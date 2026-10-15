@@ -483,6 +483,10 @@ export type WorkspaceAgentOption = {
   agentId: string;
   available: boolean;
   capability?: string;
+  /** Service-reported readiness for an unavailable runtime; see runtime-readiness.ts. */
+  unavailableReason?: string | null;
+  executable?: string | null;
+  environmentVariable?: string | null;
   interrupt?: boolean;
   label: string;
   location?: string;
@@ -569,6 +573,8 @@ export type PersonalWorkspaceCallbacks = {
   onReconcileStatus?: (options?: { invalidateGoalIds?: string[] }) => void | Promise<void>;
   /** Full refresh by default; error recovery can explicitly read missing Goals only. */
   onRefresh?: (scope?: WorkspaceReadScope) => void | WorkspaceRefreshResult | Promise<void | WorkspaceRefreshResult>;
+  /** Re-read the Chat service's runtime catalog after the owner repaired something. */
+  onRecheckRuntimes?: () => void;
   onRetryGoalArchive?: () => void | Promise<void>;
   onPreviewAction?: (request: WorkspaceActionPreviewRequest) => WorkspaceActionPreview | Promise<WorkspaceActionPreview>;
   onRequestGoalCreate?: () => WorkspaceActionPreview | Promise<WorkspaceActionPreview | void> | void;

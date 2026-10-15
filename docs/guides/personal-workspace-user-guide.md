@@ -44,6 +44,24 @@ curl -fsS http://127.0.0.1:8767/status.json
 
 ---
 
+### 1.1 Agent 运行环境未就绪 / When no Agent runtime is ready
+
+![没有可用 Agent 运行环境时的管家总览](../assets/personal-workspace/runtime-readiness-none.png)
+
+LoopX 通过本机已安装的命令行工具驱动 Agent（Codex、Claude Code、Kiro CLI），或通过 API 密钥。
+如果这台机器上一个都没有就绪，管家总览会在顶部说明原因，逐项列出缺什么（未在 PATH 中找到的命令、
+未设置的环境变量），并提供「重新检查」和「安装指引」。安装并登录后点「重新检查」，页面重新读取
+服务的运行环境目录并回读结果；本页不会安装任何东西，也不授予任何权限。打开 Goal 对话时，如果选中的
+运行环境在本机不可用，输入框上方会给出同样的说明和重新检查。
+
+LoopX drives Agents through a command-line tool installed on this machine (Codex, Claude Code,
+Kiro CLI) or through an API key. When none is ready, the manager overview says so at the top,
+lists what each runtime needs (a command not found on PATH, an environment variable not set), and
+offers **Check again** and a **Setup guide** link. After installing and signing in, **Check again**
+re-reads the service's runtime catalog and reads the result back; the page installs nothing and
+grants nothing. In a Goal conversation, the same notice and re-check appear above the composer when
+the selected runtime is unavailable here.
+
 ## 🧭 2. 控制台核心架构
 
 ```mermaid
