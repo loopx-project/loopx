@@ -570,7 +570,7 @@ jobs:
     needs: [changes, chat-bundle]
     if: needs.changes.outputs.python_tests == 'true'
     runs-on: ubuntu-latest
-    # Share four long-test lanes across current PRs and other workflow runs.
+    # Share six long-test lanes across current PRs and other workflow runs.
     # Do not replace another candidate's pending shard or cancel its active head.
     # Workflow-level concurrency still retires obsolete heads of the same PR.
     concurrency:
@@ -628,9 +628,11 @@ jobs:
         # Split the whole collection, not a hand-maintained list of directories.
         # Without timing history least_duration alternates equal-weight tests.
         # Each runner retains the measured two-worker pool.
+        # Cooperative per-test Python stacks diagnose stalls without terminating tests.
         run: >-
           python -m pytest -v -n 2 -m "not stage2c_e2e"
           -p scripts.ci.pytest_timing
+          --ci-stall-after 120
           --splits 6 --group ${{ matrix.shard }}
           --splitting-algorithm least_duration
           --durations=25 --durations-min=1
@@ -837,6 +839,11 @@ jobs:
 
       - name: Verify native Windows test Python discovery
         run: node --no-warnings --experimental-strip-types --test tests/control_plane_ts/test_python_runtime.test.ts
+
+      - name: Qualify the canary plan's repository path rendering
+        run: >-
+          python -m pytest -q
+          tests/canary/test_repository_root.py::test_plan_renders_repository_paths_in_canonical_posix_form
 
       - name: Run native Windows lifecycle tests
         run: >-

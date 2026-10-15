@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { resolveTestPython } from "../../scripts/test-python.mjs";
 import { outputDir, repoRoot } from "./fixture.mjs";
-import { openWorkspacePage } from "./scenario-context.mjs";
+import { fetchWorkspaceBackend, openWorkspacePage } from "./scenario-context.mjs";
 
 const GOAL = "research-monitor";
 const AGENT = "research-agent";
@@ -133,7 +133,7 @@ export const exploreCompositionOwnerScenario = {
           await page.route("**/api/chat/goal-configuration**", async (route) => {
             const target = new URL(route.request().url());
             if (!target.pathname.startsWith("/api/chat/goal-configuration")) { await route.fallback(); return; }
-            const response = await route.fetch({ url: `${owner.url}${target.pathname}${target.search}` });
+            const response = await fetchWorkspaceBackend(route, owner.url);
             ownerResponses.push({ method: route.request().method(), path: target.pathname, status: response.status() });
             await route.fulfill({ response });
           });

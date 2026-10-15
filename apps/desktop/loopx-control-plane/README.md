@@ -114,6 +114,33 @@ the bundled runtime and then reconnects the same window automatically; it no
 longer requires a second App restart. Reloading the WebView cannot terminate
 the native startup supervisor.
 
+On macOS, loss of the workspace's WebContent process re-arms that same native
+navigation owner. It retains the current same-origin page, including SPA
+history, and retries every two seconds until WebKit commits the document.
+Recovery does not restart services or submit a task. Slow committed documents
+are allowed to finish; boot pages retain the framework's reload behavior.
+This changes post-crash navigation only; other platforms keep their existing
+handoff policy.
+
+The opt-in macOS regression uses a hidden incognito window, a synthetic local
+server and a separate App identifier. It terminates only that window's own
+WebContent process, simulates a temporary backend failure and a slow response,
+and requires automatic return to the original route without write requests:
+
+```sh
+uv run --extra test python scripts/desktop_runtime_bundle.py
+cd apps/desktop/loopx-control-plane/src-tauri
+cargo run --example webcontent_recovery
+# Negative control: framework-only reload is expected to exit 1.
+cargo run --example webcontent_recovery -- --baseline
+```
+
+It reads no Goals or accounts and never targets an installed LoopX process.
+The fault injector uses a private WebKit process-id getter only in this example;
+production recovery uses the public Tauri termination hook.
+This controlled regression does not establish long-duration reliability or
+identify the cause of a past uninstrumented incident.
+
 Legacy update/rollback journals are resolved against the running App before
 startup. An incomplete App installation retains its recovery state; runtime
 freshness must prevent a journal from silently downgrading a newer CLI.

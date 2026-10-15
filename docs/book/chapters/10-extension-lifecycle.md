@@ -101,6 +101,7 @@ entrypoint_missing          -> identity 无法解析
 doctor_not_configured       -> doctor_args 为空
 probe_required              -> 可解析，但没有 --execute
 provider_unavailable        -> probe 非零退出
+api_incompatible            -> 已安装快照的 requires_loopx_api 不接受当前运行时
 entrypoint_changed_during_probe -> probe 前后 identity 不一致
 ready                       -> 可用
 ```
@@ -280,6 +281,7 @@ scope 变宽、request 改变或 revision 不匹配都必须 fail closed。
 | 症状 | 优先检查 |
 | --- | --- |
 | `entrypoint_missing` | package 是否安装在运行 `loopx` 的同一 environment |
+| `api_incompatible` | 已安装快照的 `requires_loopx_api` 是否接受当前 LoopX；先 upgrade 到兼容 manifest 或 rollback，再重跑 doctor |
 | install preview 成功但 list 没变化 | 是否遗漏 `--execute` |
 | "already installed" | 该 id 是否已经安装过；install 不做幂等合并 |
 | doctor stale | executable、interpreter、module source 或 view validator 是否变化 |

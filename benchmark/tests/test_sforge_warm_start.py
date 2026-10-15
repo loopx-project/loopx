@@ -13,6 +13,19 @@ from benchmark.runtime import sforge_warm_start as warm
 from loopx.control_plane.effect_runtime import effect_runtime_result
 
 
+@pytest.mark.parametrize("extension", ["-1", "64800", str(2 ** 53)])
+def test_extension_without_a_warm_entry_refuses_before_attempt_or_registration(tmp_path, extension):
+    pytest.importorskip("harbor")
+    from benchmark.edgebench import run as entry
+    argv = ["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
+        "--run-id", "unadmitted", "--worker", "heartbeat-explore", "--model", "fixture",
+        "--effort", "high", "--judge-url", "http://localhost:1",
+        "--restore-phase-extension-seconds", extension]
+    with pytest.raises(SystemExit) as rejected:
+        entry.main(argv)
+    assert rejected.value.code == 2 and not list(tmp_path.iterdir())
+
+
 @pytest.mark.parametrize("existing", ["empty", "nonempty", "foreign-link", "installed-link"])
 def test_native_fork_skills_rejoin_ordinary_installer_without_erasing_contents(tmp_path, existing):
     from benchmark.runtime.codex import Execution, prepare_codex_home

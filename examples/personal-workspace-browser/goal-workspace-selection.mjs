@@ -6,7 +6,7 @@ import {basename, dirname, resolve} from "node:path";
 import {createInterface} from "node:readline";
 import {testPythonCommand} from "../../scripts/test-python.mjs";
 import {outputDir, repoRoot} from "./fixture.mjs";
-import {openWorkspacePage} from "./scenario-context.mjs";
+import {fetchWorkspaceBackend, openWorkspacePage} from "./scenario-context.mjs";
 
 export const goalWorkspaceSelectionScenario = {
   id: "goal-workspace-selection",
@@ -34,7 +34,7 @@ runpy.run_path(sys.argv[0], run_name="__main__")
       let rejectPreview = true;
       context = await openWorkspacePage(browser, url, {collectCoverage, beforeGoto: async (_api, page) => {
         await page.route("**/api/chat/projects", async route => {
-          await route.fulfill({response: await route.fetch({url: `http://127.0.0.1:${backend.port}/api/chat/projects`})});
+          await route.fulfill({response: await fetchWorkspaceBackend(route, `http://127.0.0.1:${backend.port}`)});
         });
         await page.route("**/api/actions{,/**,?*}", async route => {
           const request = route.request(), path = new URL(request.url());
@@ -45,7 +45,7 @@ runpy.run_path(sys.argv[0], run_name="__main__")
               return;
             }
           }
-          const response = await route.fetch({url: `http://127.0.0.1:${backend.port}${path.pathname}${path.search}`});
+          const response = await fetchWorkspaceBackend(route, `http://127.0.0.1:${backend.port}`);
           if (path.pathname.endsWith("/apply")) applied.push(await response.json());
           await route.fulfill({response});
         });

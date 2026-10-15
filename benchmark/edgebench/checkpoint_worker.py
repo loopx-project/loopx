@@ -20,7 +20,7 @@ from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.file_lock import exclusive_file_lock
 from benchmark.runtime.checkpoint import _participant_id
 
-from .checkpoint_controller import _controller, _physical, capture
+from .checkpoint_controller import _controller, _physical, _remaining, _phase_budget, capture
 
 
 def _request(path: Path) -> dict:
@@ -147,18 +147,25 @@ def _worker_lock(client, container_id: str) -> Path:
 
 
 def capture_worker(controller_file: Path, *, token: str, capture_id: str,
-                   destination: Path, request_file: Path, timeout: float = 30) -> dict:
+                   destination: Path, request_file: Path, timeout: float = 30,
+                   seal_within_phase: bool = False) -> dict:
     """Freeze one explicitly owned worker and seal its files with native state.
 
     A fresh identity is required. Failed or uncertain attempts never recapture a
     later worker into an earlier evaluator point. The original worker is resumed
     before publishing the sealed result; an unsuccessful unpause is an error.
+    The supervisor can explicitly seal the private exported files after release
+    within their original Host phase. The prepared deadline still bounds every
+    live-source/native capture step; ordinary callers retain the total timeout.
     """
     import docker
 
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("Worker capture timeout must be finite and positive")
+    deadline = time.monotonic() + timeout
     request = _request(request_file)
+    if seal_within_phase and "handoff" not in request:
+        raise ValueError("Post-release sealing requires an exact prepared handoff")
     controller = _controller(controller_file)
     destination = Path(destination)
     _physical(destination.parent)
@@ -171,9 +178,9 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
     attempts.mkdir(exist_ok=True, mode=0o700)
     _physical(attempts)
     (attempts / capture_id).mkdir(mode=0o700)  # First attempt, including failures, wins.
-    client = docker.from_env(timeout=timeout)
+    client = docker.from_env(timeout=_remaining(deadline))
     try:
-        with exclusive_file_lock(_worker_lock(client, request["container_id"]), timeout_seconds=timeout,
+        with exclusive_file_lock(_worker_lock(client, request["container_id"]), timeout_seconds=_remaining(deadline),
                                  operation="checkpoint_worker_capture"):
             container = client.containers.get(request["container_id"])
             container.reload()
@@ -210,13 +217,16 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                                 type(prepared["deadline_epoch"]) not in (int, float) or
                                 not math.isfinite(prepared["deadline_epoch"]) or time.time() >= prepared["deadline_epoch"]):
                             raise ValueError("Worker handoff is expired or differs from the original capture")
+                    if prepared is not None:
+                        deadline = min(deadline, time.monotonic() + prepared["deadline_epoch"] - time.time())
                     for entry in request["components"]:
+                        client.api.timeout = _remaining(deadline)
                         copied = _archive_component(container, entry["source_path"], stage / "workers" / entry["id"])
                         components.append({"id": entry["id"], "source_path": str(copied)})
                     if prepared is not None:
                         observed = effect_runtime_result("runtime.checkpoint_artifacts", {
                             "action": "probe", "components": components,
-                        }, retry_safe=False)
+                        }, timeout=_remaining(deadline), retry_safe=False)
                         if observed["source_sha256"] != prepared["source_sha256"]:
                             changed = []
                             for key, rows in observed["source_witness"].items():
@@ -229,20 +239,33 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                             raise TimeoutError("Worker handoff expired before evaluator capture")
                     phase = _archive(container, request["phase_deadline_path"], stage / "phase")
                     native = capture(controller_file, token=token, capture_id=capture_id,
-                        destination=stage / "native", timeout=timeout, phase_deadline_file=phase)
+                        destination=stage / "native", timeout=_remaining(deadline), phase_deadline_file=phase)
                     container.reload()
                     if not container.attrs["State"]["Running"] or not container.attrs["State"]["Paused"]:
                         raise RuntimeError("Worker writer barrier changed during capture")
+                    _remaining(deadline)  # Late native/barrier completion cannot gain sealing time.
                 finally:
                     # An uncertain/lost reply keeps this original attempt's
                     # cleanup obligation. Its identity cannot be retried later.
                     if pause_may_have_committed:
+                        # Cleanup retains a bounded transport allowance even if
+                        # the capture window is exhausted; never strand our writer.
+                        client.api.timeout = timeout
                         container.reload()
                         if container.attrs["State"]["Paused"]:
                             container.unpause()
                             container.reload()
                         if container.attrs["State"]["Paused"] or not container.attrs["State"]["Running"]:
                             raise RuntimeError("Worker was not restored to running; inspect the original container before retry")
+                if seal_within_phase:
+                    # Only immutable controller-owned exports remain. Do not
+                    # spend the held-decision window hashing them after source
+                    # release, or grant a new trial budget/cooldown. Reuse the
+                    # original phase owner and its captured physical clock.
+                    remaining_phase = _phase_budget(phase.read_bytes(), {
+                        "captured_at_epoch": time.time()})["remaining_seconds"]
+                    deadline = time.monotonic() + remaining_phase
+                sealing_epoch_ms = (time.time() + _remaining(deadline)) * 1000
                 native_component = _participant_id(components, "native_capsule")
                 components.append({"id": native_component, "source_path": str(stage / "native")})
                 metadata = {**(prepared["point_metadata"] if prepared is not None else {}), "worker_file_snapshot": {
@@ -257,10 +280,13 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                 }}
                 if prepared is not None:
                     metadata["writer_barrier"] = "docker_pause"
-                probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
+                probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components,
+                    "deadline_epoch_ms": sealing_epoch_ms},
+                                              timeout=_remaining(deadline), retry_safe=False)
                 return effect_runtime_result("runtime.checkpoint_artifacts", {
                     "action": "capture", "components": components, "destination": str(destination),
                     "expected_source_sha256": probe["source_sha256"], "point_metadata": metadata,
-                }, retry_safe=False)
+                    "deadline_epoch_ms": sealing_epoch_ms,
+                }, timeout=_remaining(deadline), retry_safe=False)
     finally:
         client.close()

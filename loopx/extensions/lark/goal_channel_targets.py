@@ -11,7 +11,7 @@ from ...control_plane.runtime.public_safety import public_safe_compact_text
 from ...file_lock import exclusive_file_lock
 from .goal_channel_contracts import operation_packet
 from .goal_channel_transport import APP_ID_PATTERN, CHAT_ID_PATTERN, OPEN_ID_PATTERN
-from .presentation.kanban import DEFAULT_CLI_BIN
+from .cli_transport import DEFAULT_CLI_BIN
 from .private_json import write_private_json_atomic
 
 GOAL_CHANNEL_TARGETS_SCHEMA_VERSION = "loopx_goal_channel_provider_targets_v0"

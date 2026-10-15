@@ -46,7 +46,7 @@ from .support_control_backup import (
     handle_backup_state_command,
     register_backup_state_command,
 )
-from .support_control_chat import register_chat_and_dashboard_commands
+from .support_control_chat import chat_server_options, register_chat_and_dashboard_commands
 from .support_control_chat_endpoint import (
     handle_chat_endpoint_command,
 )
@@ -618,47 +618,10 @@ def handle_support_control_command(
 
     if args.command == "chat":
         try:
-            chat_registry_path = (
-                explicit_global_registry(args.runtime_root, registry_path=registry_path)
-                if args.global_registry
-                else registry_path
-            )
-            scan_roots = [Path(item).expanduser() for item in args.scan_path]
-            if not scan_roots:
-                scan_roots = [Path(args.scan_root).expanduser()]
+            options = chat_server_options(args, registry_path=registry_path)
             if bool(getattr(args, "replace_existing_loopx_chat", False)):
                 replace_existing_loopx_chat(args.host, args.port)
-            serve_chat(
-                project_workspace_grant=args.project_workspace_grant,
-                project_filesystem_scope=args.project_filesystem_scope,
-                private_reactions=not getattr(args, "no_private_reactions", False),
-                registry_path=chat_registry_path,
-                runtime_root_override=args.runtime_root,
-                scan_roots=scan_roots,
-                limit=max(0, args.limit),
-                host=args.host,
-                port=args.port,
-                goal_id=args.goal_id,
-                codex_bin=args.codex_bin,
-                claude_bin=args.claude_bin,
-                kiro_cli_bin=getattr(args, "kiro_cli_bin", KIRO_CLI_BIN),
-                lark_cli_bin=args.lark_cli_bin,
-                startup_timeout_sec=(
-                    max(0.1, float(args.startup_timeout_seconds))
-                    if args.startup_timeout_seconds is not None
-                    else None
-                ),
-                idle_timeout_sec=max(0.1, float(args.idle_timeout_seconds)),
-                hard_timeout_sec=max(0.1, float(args.hard_timeout_seconds)),
-                assets_dir=Path(args.assets_dir).expanduser()
-                if args.assets_dir
-                else None,
-                open_browser=not bool(args.no_open),
-                verbose=bool(args.verbose),
-                enable_goal_subagent_configuration=bool(
-                    args.enable_goal_subagent_configuration
-                ),
-            )
+            serve_chat(**options)
         except Exception as exc:
             payload = {
                 "ok": False,

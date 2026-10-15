@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
@@ -14,6 +13,7 @@ from typing import Any
 from ...boundary_authority import normalize_checkpointed_boundary_authority_entries
 from ...file_lock import exclusive_file_lock
 from ...runtime import validate_goal_id_path_segment
+from ..content_digest import BARE_SHA256_PATTERN
 from ..projects.registry_codec import (
     load_project_registry,
     require_runtime_compatible_project_registry,
@@ -179,7 +179,7 @@ def _store_codex_cli_session(
     checkpoint_artifact_sha256: str | None = None,
     checkpoint_artifact_root: str | None = None,
 ) -> None:
-    if checkpoint_artifact_sha256 is not None and not re.fullmatch(r"[0-9a-f]{64}", checkpoint_artifact_sha256):
+    if checkpoint_artifact_sha256 is not None and not BARE_SHA256_PATTERN.fullmatch(checkpoint_artifact_sha256):
         raise ValueError("checkpoint session source digest is invalid")
     if checkpoint_artifact_root is not None and (
             checkpoint_artifact_sha256 is None or not Path(checkpoint_artifact_root).is_absolute() or
@@ -200,7 +200,7 @@ def _store_codex_cli_session(
             retained_source = prior.get("checkpoint_artifact_sha256")
             retained_root = prior.get("checkpoint_artifact_root")
         if retained_source is not None:
-            if not isinstance(retained_source, str) or not re.fullmatch(r"[0-9a-f]{64}", retained_source):
+            if not isinstance(retained_source, str) or not BARE_SHA256_PATTERN.fullmatch(retained_source):
                 raise ValueError("stored checkpoint session source digest is invalid")
             if checkpoint_artifact_sha256 not in (None, retained_source):
                 raise ValueError("checkpoint session source digest cannot change")

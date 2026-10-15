@@ -149,6 +149,49 @@ def test_process_failure_is_not_reported_as_success(tmp_path):
     assert receipt["return_code"] == 7
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX worker resource inheritance")
+@pytest.mark.parametrize("mode,checkpoint,expected", [
+    ("heartbeat", True, 0), ("heartbeat", False, 4 * 1024 * 1024),
+    ("plain", True, 4 * 1024 * 1024),
+])
+def test_checkpoint_cli_worker_bounds_crash_dumps_without_changing_parent_or_files(
+    tmp_path, mode, checkpoint, expected,
+):
+    import resource
+
+    parent_limits = resource.getrlimit(resource.RLIMIT_CORE)
+    retained = tmp_path / "core"
+    retained.write_bytes(b"existing participant must remain exact")
+    script = r'''
+import json, os, resource, subprocess, sys
+from benchmark.runtime import worker
+_, hard = resource.getrlimit(resource.RLIMIT_CORE)
+resource.setrlimit(resource.RLIMIT_CORE, (4194304 if hard < 0 else min(4194304, hard), hard))
+def probe(env):
+    command = [sys.executable, "-c", "import json, resource; print(json.dumps(list(resource.getrlimit(resource.RLIMIT_CORE))))"]
+    with worker.child_process(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+        out, err = child.communicate()
+        assert child.returncode == 0, err
+    print(out.strip())
+    assert resource.getrlimit(resource.RLIMIT_CORE)[1] == hard
+    return {"ok": True, "timed_out": False, "mode": env["LOOPX_EXECUTION_MODE"]}
+worker.run_once = probe
+raise SystemExit(worker.main())
+'''
+    env = dict(os.environ, LOOPX_EXECUTION_MODE=mode, LOOPX_PROJECT=str(tmp_path))
+    env.pop("LOOPX_CHECKPOINT_REQUEST", None)
+    if checkpoint:
+        env["LOOPX_CHECKPOINT_REQUEST"] = "/control/explicit-request.json"
+    result = subprocess.run([sys.executable, "-c", script], env=env,
+                            text=True, capture_output=True, check=True)
+    inherited, receipt = map(json.loads, result.stdout.splitlines())
+    assert inherited[0] == (expected if parent_limits[1] < 0 else min(expected, parent_limits[1]))
+    assert inherited[1] == parent_limits[1]
+    assert receipt["ok"]
+    assert resource.getrlimit(resource.RLIMIT_CORE) == parent_limits
+    assert retained.read_bytes() == b"existing participant must remain exact"
+
+
 def test_timeout_keeps_receipt_and_reaps_child(tmp_path):
     env = worker_env(tmp_path)
     env["LOOPX_CODEX_TURN_TIMEOUT_SEC"] = "1"

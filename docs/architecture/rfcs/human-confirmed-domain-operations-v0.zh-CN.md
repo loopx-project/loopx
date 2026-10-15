@@ -277,7 +277,13 @@ Goal instance，不改变 provider 权威，也不把旧操作移植到另一运
 相同选项可用于 `turn run-once`。复用既有 delegation inspect/preflight、start、
 准入、租约、session 续接、结果验证和验收。原 host owner 读回 profile；
 不新增前端配置存储或隐藏默认。不固定或不受支持的配置在预检中标为 unavailable；
-有效 argv 仍是 runtime-unverified，不能证明宿主或操作已运行。仅在现有工作授权
+有效 argv 仍是 runtime-unverified，不能证明宿主或操作已运行。
+typed operation transport 读回列出 `supported_hosts` 和 `supported_sandboxes`。
+不支持的宿主返回 `select_supported_operation_host`，不支持的 sandbox 返回
+`select_supported_operation_sandbox`，缺失模型/effort 返回
+`correct_execution_profile`。传输拒绝不再建议配置模型凭据环境变量。
+这些是显式恢复选项，不自动选择宿主或授予执行权限。普通宿主可用性独立保持：
+DSH 模型可启动不能证明它拥有当前仅支持 Codex 的操作连接。仅在现有工作授权
 确需时使用 `workspace-write`；此传输不接受 `danger-full-access`。
 
 已准入宿主复用 `CodexChatAgentSession` app-server adapter，将不透明线程保存于

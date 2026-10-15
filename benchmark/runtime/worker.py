@@ -463,6 +463,15 @@ def main() -> int:
         raise KeyboardInterrupt("worker cancelled")
 
     signal.signal(signal.SIGTERM, cancelled)
+    if (os.name == "posix" and os.environ.get("LOOPX_CHECKPOINT_REQUEST")
+            and os.environ.get("LOOPX_EXECUTION_MODE", "heartbeat") == "heartbeat"):
+        # This entrypoint owns one disposable worker process. Its native Host
+        # and tools inherit the soft limit; the parent launcher and hard limit
+        # stay unchanged. Crash memory is not a resumable file participant.
+        import resource
+
+        _, hard = resource.getrlimit(resource.RLIMIT_CORE)
+        resource.setrlimit(resource.RLIMIT_CORE, (0, hard))
     receipt = run_once(dict(os.environ))
     print(json.dumps(receipt))
     if receipt.get("budget_exhausted") and receipt["mode"] in {"heartbeat", "turn"}:

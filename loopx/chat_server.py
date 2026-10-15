@@ -88,7 +88,7 @@ from .extensions.lark.goal_channel import (
 from .extensions.lark.goal_topic_connections import list_lark_apps
 from .extensions.lark.goal_topic_runtime import LarkGoalTopicRuntimeService
 from .extensions.lark.manager_routing import authorized_manager_goal_ids
-from .extensions.lark.presentation.kanban import CommandRunner
+from .extensions.lark.cli_transport import CommandRunner
 from .extensions.runtime import (
     default_extension_state_file,
     resolve_extension_activation,

@@ -186,8 +186,11 @@ Every registered capability declares three provider-facing fields:
 The built-in catalog remains the default source. Extension manifests declare
 providers and contracts; the extension runtime state is the only source for
 whether each provider is installed, enabled, and doctor-ready. Duplicate
-capability or provider ids fail closed. Internal registrations remain available
-to the registry but are omitted from the public catalog.
+capability or provider ids fail closed: a declaration-only manifest may repeat
+an installed id only when it is the same manifest revision, and a different
+revision for an installed id is rejected rather than silently replaced.
+Internal registrations remain available to the registry but are omitted from
+the public catalog.
 
 Catalog discovery does not scan arbitrary directories or import extension
 Python code. A caller can add a declaration-only manifest to a catalog read:
@@ -775,7 +778,12 @@ to the catalog. `[[implements]]` binds a provider runtime to an existing
 core-owned capability without duplicating that capability id. Do not add either
 table solely to make a runtime installable.
 The v0 runtime exposes integer extension API version `1` and accepts bounded
-integer constraints such as `>=1,<2`; incompatible manifests fail closed.
+integer constraints such as `>=1,<2`; incompatible manifests fail closed. The
+check applies to the installed snapshot as well as to a manifest being loaded:
+when a later LoopX moves the extension API, an installed extension reports
+`ready=false`, activation and binding reads are refused, `enable` is rejected,
+and `doctor` returns `api_incompatible` and revokes the stale readiness proof
+until a compatible revision is upgraded to or rolled back to.
 
 `[[hook_adapters]]` lets an extension contribute provider ports to an existing
 capability-owned hook point without adding provider branches to the capability
@@ -784,7 +792,10 @@ manifest declarations and admits a factory only when the extension is enabled,
 doctor-ready, and authorized for every declared adapter permission. The
 factory must return exactly the declared callable ports. Import, activation,
 and factory failures become content-free optional-adapter failures; they do not
-execute or replace kernel logic.
+execute or replace kernel logic. A matching declaration of a disabled or
+doctor-stale extension is also reported, as `extension_disabled` or
+`extension_doctor_not_ready`, without importing its factory or running its
+doctor.
 
 `phase = "capability_action"` is for an explicit typed action whose semantics
 have already been decided by the Agent or caller. The adapter may bind and

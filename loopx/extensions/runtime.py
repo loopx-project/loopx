@@ -13,7 +13,7 @@ from typing import Any
 
 from ..file_lock import exclusive_file_lock
 from ..paths import select_default_runtime_root
-from .manifest import load_extension_manifest
+from .manifest import load_extension_manifest, loopx_api_incompatibility
 from .process_runtime import run_capped_process
 from .runtime_location import located_runtime, probe_runtime_location, record_runtime_location
 from .readiness import (
@@ -32,6 +32,11 @@ EXTENSION_PROVIDER_READINESS_SCHEMA_VERSION = "loopx_extension_provider_readines
 EXTENSION_ACTIVATION_SCHEMA_VERSION = "loopx_extension_activation_v0"
 EXTENSION_RUN_SCHEMA_VERSION = "loopx_extension_run_receipt_v0"
 EXTENSION_DOCTOR_BATCH_SCHEMA_VERSION = "loopx_extension_doctor_batch_v0"
+# Content-free lifecycle non-admission codes. Optional capability resolution
+# reports them as `ExtensionCapabilityResolution.status`; hook-adapter discovery
+# reuses them for declared adapters whose extension it does not activate.
+EXTENSION_DISABLED_STATUS = "extension_disabled"
+EXTENSION_DOCTOR_NOT_READY_STATUS = "extension_doctor_not_ready"
 MAX_REVISIONS = 5
 # Requalification is required on eviction; unprobed artifacts never activate.
 MAX_VERIFIED_ENTRYPOINTS = 32
@@ -293,6 +298,11 @@ def enable_extension(
     if not isinstance(manifest, Mapping):
         raise ValueError("extension active manifest is invalid")
     already_enabled = bool(entry.get("enabled"))
+    incompatibility = _active_manifest_incompatibility(entry)
+    if incompatibility is not None:
+        raise ValueError(
+            f"{incompatibility}; upgrade to a compatible manifest or roll back"
+        )
     doctor, location = probe_runtime_location(
         manifest, location=snapshot.get("entrypoint_path"), execute=execute,
     )
@@ -392,6 +402,16 @@ def rollback_extension(
     manifest = target.get("manifest")
     if not isinstance(manifest, dict):
         raise ValueError("extension rollback manifest is invalid")
+    target_provider = manifest.get("provider")
+    incompatibility = loopx_api_incompatibility(
+        target_provider.get("requires_loopx_api") if isinstance(target_provider, Mapping) else None,
+        context=f"extension `{extension_id}` rollback revision `{target_revision}`",
+    )
+    if incompatibility is not None:
+        # Probing the entrypoint cannot admit a snapshot this runtime rejects;
+        # refuse before switching rather than leaving an active revision that
+        # every reader then fails closed on.
+        raise ValueError(f"{incompatibility}; roll forward with a compatible manifest instead")
     doctor, location = probe_runtime_location(
         manifest, location=target.get("entrypoint_path"), execute=execute,
     )
@@ -458,8 +478,12 @@ def extension_status(
                 "enabled": bool(entry.get("enabled")),
                 "active_revision": entry.get("active_revision"),
                 "rollback_available": bool(entry.get("rollback_revision")),
+                # Missing legacy metadata is readable but unverified. Resolve
+                # its proof before parsing the active manifest; a valid proof
+                # must still match this runtime's extension API.
                 "doctor_verified": bool(entry.get("enabled"))
-                and _verified_entrypoint(entry) is not None,
+                and _verified_entrypoint(entry) is not None
+                and _active_manifest_incompatibility(entry) is None,
                 "revision_count": len(entry.get("revisions") or []),
             }
             for entry in visible
@@ -495,9 +519,30 @@ def doctor_installed_extension(
     manifest = snapshot.get("manifest")
     if not isinstance(manifest, Mapping):
         raise ValueError("extension active manifest is invalid")
-    doctor, location = probe_runtime_location(
-        manifest, location=snapshot.get("entrypoint_path"), execute=execute,
-    )
+    incompatibility = _active_manifest_incompatibility(entry)
+    if incompatibility is not None:
+        # The snapshot was valid for the runtime that installed it; this
+        # runtime's extension API moved. No probe can repair that, so the
+        # doctor fails closed and, when executed, revokes the stale proof.
+        doctor = {
+            "ok": True,
+            "schema_version": EXTENSION_DOCTOR_SCHEMA_VERSION,
+            "extension_id": extension_id,
+            "version": manifest.get("provider", {}).get("version"),
+            "status": "api_incompatible",
+            "available": False,
+            "verified": False,
+            "entrypoint_identity": None,
+            "probed_entrypoint_identity": None,
+            "failure_kind": "api_incompatible",
+            "reason": incompatibility,
+            "external_writes_performed": False,
+        }
+        location = None
+    else:
+        doctor, location = probe_runtime_location(
+            manifest, location=snapshot.get("entrypoint_path"), execute=execute,
+        )
     if execute:
         with exclusive_file_lock(path):
             current_state = _read_state(path)
@@ -508,6 +553,10 @@ def doctor_installed_extension(
                 or not current_entry.get("enabled")
             ):
                 raise ValueError("extension state changed during doctor; retry")
+            if incompatibility is not None:
+                current_entry.pop("doctor_verified_revision", None)
+                current_entry.pop("doctor_verified_entrypoint_identities", None)
+                current_entry.pop("doctor_verified_entrypoint_identity", None)
             if doctor["verified"]:
                 record_runtime_location(
                     _entry_for_revision(current_entry, active_revision),
@@ -603,6 +652,24 @@ def _active_manifest(entry: Mapping[str, Any]) -> Mapping[str, Any]:
     return manifest
 
 
+def _active_manifest_incompatibility(entry: Mapping[str, Any]) -> str | None:
+    """Re-check the installed snapshot against the runtime reading it.
+
+    `install`/`upgrade` validate `requires_loopx_api` when they load the
+    manifest, but the saved copy outlives that runtime. A later LoopX whose
+    extension API moved must treat the snapshot as incompatible, not ready.
+    """
+    manifest = _active_manifest(entry)
+    provider = manifest.get("provider")
+    if not isinstance(provider, Mapping):
+        return "extension active manifest is incomplete"
+    extension_id = str(provider.get("id") or entry.get("id") or "")
+    return loopx_api_incompatibility(
+        provider.get("requires_loopx_api"),
+        context=f"extension `{extension_id}` active manifest",
+    )
+
+
 def extension_catalog_entries(
     extension_manifest_paths: Iterable[str | Path] = (),
     *,
@@ -637,14 +704,25 @@ def extension_catalog_entries(
                 raise ValueError(
                     f"extension `{extension_id}` active manifest is invalid"
                 )
+            active_revision = str(entry.get("active_revision") or "")
+            declared = manifests.get(extension_id)
+            if declared is not None and _revision(declared) != active_revision:
+                # Two different manifests for one id: the installed state is
+                # the lifecycle source, so a declaration may only repeat it.
+                raise ValueError(
+                    f"duplicate capability provider `{extension_id}`: declared "
+                    f"manifest revision `{_revision(declared)}` differs from the "
+                    f"installed active revision `{active_revision}`"
+                )
             manifests[extension_id] = manifest
             enabled = bool(entry.get("enabled"))
+            compatible = _active_manifest_incompatibility(entry) is None
             lifecycle[extension_id] = {
                 "declared": True,
                 "installed": True,
                 "enabled": enabled,
-                "ready": enabled and _verified_entrypoint(entry) is not None,
-                "active_revision": str(entry.get("active_revision") or ""),
+                "ready": enabled and compatible and _verified_entrypoint(entry) is not None,
+                "active_revision": active_revision,
             }
 
     entries: list[dict[str, Any]] = []
@@ -698,6 +776,11 @@ def _resolved_active_extension(
         raise ValueError(f"extension `{extension_id}` is not installed")
     if not entry.get("enabled"):
         raise ValueError(f"extension `{extension_id}` is disabled")
+    incompatibility = _active_manifest_incompatibility(entry)
+    if incompatibility is not None:
+        raise ValueError(
+            f"{incompatibility}; upgrade to a compatible manifest or roll back"
+        )
     active_revision = str(entry.get("active_revision") or "")
     verified_entrypoint = _verified_entrypoint(entry)
     if verified_entrypoint is None:
@@ -782,6 +865,11 @@ def _capability_binding_from_entry(
 ) -> dict[str, Any]:
     if not entry.get("enabled"):
         raise ValueError(f"extension `{extension_id}` is disabled")
+    incompatibility = _active_manifest_incompatibility(entry)
+    if incompatibility is not None:
+        raise ValueError(
+            f"{incompatibility}; upgrade to a compatible manifest or roll back"
+        )
     active_revision = str(entry.get("active_revision") or "")
     verified_entrypoint = verified_entrypoint or _verified_entrypoint(entry)
     if verified_entrypoint is None:
@@ -881,6 +969,7 @@ def _optional_binding_for_entry(
     verified_entrypoint = _verified_entrypoint(entry)
     if (
         not isinstance(provider, Mapping)
+        or _active_manifest_incompatibility(entry) is not None
         or not _matching_capability_implementations(
             manifest, capability_id=capability_id, protocol=protocol
         )
@@ -895,7 +984,7 @@ def _optional_binding_for_entry(
         )
     if not entry.get("enabled"):
         return _optional_binding_resolution(
-            status="extension_disabled",
+            status=EXTENSION_DISABLED_STATUS,
             extension_id=extension_id,
             installed=True,
             enabled=False,
@@ -904,7 +993,7 @@ def _optional_binding_for_entry(
         )
     if verified_entrypoint is None:
         return _optional_binding_resolution(
-            status="extension_doctor_not_ready",
+            status=EXTENSION_DOCTOR_NOT_READY_STATUS,
             extension_id=extension_id,
             installed=True,
             enabled=True,

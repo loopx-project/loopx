@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from . import workspace_preferences_api as preferences_api
 from . import configuration_backup_api as backup_api
 from . import goal_ownership_api as ownership_api
 from . import goal_amendment_api as amendment_api
@@ -15,6 +16,7 @@ from .. import chat_automation_cadence_api as cadence_api
 
 
 class ChatConfigurationRequestMixin(
+    preferences_api.WorkspacePreferencesRequestMixin,
     amendment_api.GoalAmendmentRequestMixin,
     storage_api.GoalStorageRequestMixin,
     ownership_api.GoalOwnershipRequestMixin,
@@ -30,6 +32,7 @@ class ChatConfigurationRequestMixin(
 
     def _configuration_get_routes(self) -> dict[str, Callable[[], None]]:
         return {
+            preferences_api.SIDEBAR_GOAL_ORDER_PATH: self._sidebar_order_read,
             amendment_api.CHAT_GOAL_AMENDMENT_PATH: self._amendment_inspect,
             storage_api.CHAT_GOAL_STORAGE_PATH: self._storage_inspect,
             ownership_api.CHAT_GOAL_OWNERSHIP_PATH: self._ownership_inspect,
@@ -43,6 +46,7 @@ class ChatConfigurationRequestMixin(
 
     def _configuration_post_routes(self) -> dict[str, Callable[[], None]]:
         return {
+            preferences_api.SIDEBAR_GOAL_ORDER_PATH: self._sidebar_order_save,
             amendment_api.CHAT_GOAL_AMENDMENT_PATH: self._amendment_configure,
             f"{storage_api.CHAT_GOAL_STORAGE_PATH}/preview": lambda: self._storage_update(action="plan-migration"),
             f"{storage_api.CHAT_GOAL_STORAGE_PATH}/apply": lambda: self._storage_update(action="migrate"),

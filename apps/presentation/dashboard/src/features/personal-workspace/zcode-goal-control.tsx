@@ -5,8 +5,14 @@ import { useWorkspaceI18n, type WorkspaceTranslate } from "./i18n";
 import type { WorkspaceGoal } from "./personal-workspace-model";
 import "./zcode-goal-control.css";
 
+const ZCODE_REASON_KEYS: Partial<Record<string, Parameters<WorkspaceTranslate>[0]>> = {
+  zcode_native_execution_failed: "zcode.executionFailed",
+  goal_basis_changed: "zcode.goalBasisChanged",
+  goal_basis_unavailable: "zcode.goalBasisUnavailable",
+};
 function zcodeReason(reason: string | undefined, t: WorkspaceTranslate) {
-  return reason === "zcode_native_execution_failed" ? t("zcode.executionFailed") : reason;
+  const key = reason ? ZCODE_REASON_KEYS[reason] : undefined;
+  return key ? t(key) : reason;
 }
 
 export function ZCodeGoalControl({goal, readOnly}: {goal: WorkspaceGoal; readOnly: boolean}) {

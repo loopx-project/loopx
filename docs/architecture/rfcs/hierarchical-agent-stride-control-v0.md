@@ -873,6 +873,14 @@ reauthentication remains with the existing owner. Full research state means the
 declared participants needed to resume useful work, not a copy of every file or
 the model's unobservable internal state.
 
+The optional POSIX heartbeat CLI entry now disables only its worker process's
+soft core-dump limit before launching the native Host and tools. It preserves
+the hard limit, parent launcher and feature-off behavior. Existing declared
+files are still captured exactly; diagnostic retention or relocation is an
+explicit operator action, never a filename filter in the artifact owner.
+This prevents one source of later snapshot growth, but neither qualifies the
+capture deadline for arbitrary inputs nor provides process-memory recovery.
+
 Historical conversation truncation cannot reconstruct earlier code, research
 state or feedback consumption from their terminal versions. Without a qualified
 contemporaneous capture of those participants, such a probe establishes Host
@@ -951,6 +959,22 @@ resume prevents publication. This closes the manual provider's file-writer
 barrier gap only. No process memory, native cursor eligibility, external writers,
 automatic pre-decision handoff or isolated continuation are qualified by it.
 
+The automatic supervisor keeps the prepared deadline for the live-source
+barrier and native capture. After successful source release it seals only its
+private exported files under the captured original Host phase deadline, which
+also bounds typed artifact publication. Later source work cannot enter that
+point. This separates source hold time from final sealing; it grants no trial
+time, cooldown or opportunities. Direct callers retain their total timeout.
+
+Warm continuation preserves its captured remaining phase by default. An
+explicit operator-authorized phase extension defines a new study condition,
+bound to its first destination activation and included in recovery identity.
+Recovery cannot change that grant or restart its clock. The extension changes
+neither native cooldown nor accepted round limits, history or scoring. A matched
+strategy comparison declares the same extension on both arms and reports the
+shared prefix separately; it is not a matched-total-budget comparison with the
+original source. See the warm-entry options below for activation and rollback.
+
 The ordinary SForge worker's explicit warm entry composes these
 owners. It uses a fresh current preparation Todo with full retained evidence,
 then requires an accepted current replan before restoring the normal cadence.
@@ -959,6 +983,16 @@ current preparation/replan, candidate work and released native feedback using
 real native processes and deterministic local inference. Scientific utility,
 actual task/profile admission and the frontend journey remain unqualified.
 See the [warm entry contract](../../../benchmark/README.md#explicit-warm-worker-composition-qualification-in-progress).
+
+Retaining historical research files is not yet equivalent to delivering that
+research in the current typed review. Remaining continuation acceptance must
+show source-bound findings, counterevidence and prior decision followthrough at
+the first current replan, with distinct current authority. An empty destination
+projection cannot establish that the retained research is absent. The strategy's
+existing three-axis guidance now asks for a discriminating observation, checks
+that an intervention actually changes relevant behavior, and distinguishes
+non-execution from failed transfer or limited route potential. These questions
+guide judgment; they neither force a route switch nor certify research benefit.
 
 A native fresh registration is not restored admission. In the controlled native
 Docker qualification, one of twelve source submissions was consumed and its
@@ -1076,6 +1110,21 @@ obligation itself remains ineligible; a subsequent genuinely new node can be
 captured. Retry, restart and a lost admission response preserve the original
 source-root/digest binding. This is a machine-enforced capture barrier, not
 additional execution or budget authority.
+
+A replayed guard can expose the next replan while the current Turn still owes
+its original Todo closeout. The checkpoint selector validates that original
+settlement identity and releases the response without capture or interruption;
+it must not treat the visible next obligation as this Turn's admitted capture
+boundary. The later properly bound replan remains eligible. The Unix transport
+and typed-owner regression cover this distinction; successful restoration alone
+still does not qualify an end-to-end research continuation.
+
+The same boundary covers the replan owner's `settlement_only` follow-through:
+recording a successor, writing its required vision or spending the original
+receipt does not admit another capture. Selection verifies the original
+settlement identity and semantic obligation, then releases the exact response
+without native interruption. The existing settlement owner still decides the
+remaining step; capture neither performs it nor grants a fresh work budget.
 
 Completed pre-model points now retain the original pending guard as a sealed
 participant, as interrupted points already do. The pending packet is read as

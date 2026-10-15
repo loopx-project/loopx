@@ -27,10 +27,7 @@ from .extensions.lark.goal_topic_connections import (
     rebind_lark_manager_session,
 )
 from .extensions.lark.goal_topic_batch import connect_lark_goal_topics
-from .extensions.lark.presentation.kanban import (
-    CommandRunner,
-    default_subprocess_runner,
-)
+from .extensions.lark.cli_transport import CommandRunner, default_subprocess_runner
 from .chat_agent import CodexChatAgentError
 from .chat_manager import (
     controller_runtime_root,

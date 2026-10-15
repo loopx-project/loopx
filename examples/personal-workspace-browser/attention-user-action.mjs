@@ -8,7 +8,7 @@ import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 import { repoRoot, outputDir } from "./fixture.mjs";
 import { resolveTestPython } from "../../scripts/test-python.mjs";
-import { openWorkspacePage } from "./scenario-context.mjs";
+import { fetchWorkspaceBackend, openWorkspacePage } from "./scenario-context.mjs";
 
 const actionText = "在桌面 App 中手动创建剩余的 3 个角色会话";
 const idlessText = "核对本机备份目录是否可写";
@@ -73,7 +73,7 @@ print(json.dumps({'port':s.server_port,'ids':ids}),flush=True); s.serve_forever(
           if (pattern === "**/status.json*" && parsed.pathname !== "/status.json") { await route.fallback(); return; }
           if (parsed.pathname === "/api/actions/preview") previews.push(request.postDataJSON());
           if (parsed.pathname.endsWith("/apply")) applications++;
-          const response = await route.fetch({ url: `${backend}${parsed.pathname}${parsed.search}` });
+          const response = await fetchWorkspaceBackend(route, backend);
           await route.fulfill({ response });
         });
       }

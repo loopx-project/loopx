@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .cli_transport import CommandRunner
+
 
 _SEMVER_DIRECTORY = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
 _VERSION_TEXT = re.compile(r"(?:lark-cli\s+)?v?(\d+(?:\.\d+){1,3}(?:[-+][A-Za-z0-9._-]+)?)")
@@ -250,7 +252,7 @@ def build_lark_command_runner(
     *,
     environ: Mapping[str, str] | None = None,
     subprocess_run: Callable[..., Any] = subprocess.run,
-) -> Callable[[list[str], Path | None, float | None], dict[str, Any]]:
+) -> CommandRunner:
     """Build the dashboard runner with the resolved Node wrapper environment."""
 
     def run(

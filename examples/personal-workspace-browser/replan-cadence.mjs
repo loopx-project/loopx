@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import { outputDir, waitForInputValue } from "./fixture.mjs";
-import { openWorkspacePage } from "./scenario-context.mjs";
+import { fetchWorkspaceBackend, openWorkspacePage } from "./scenario-context.mjs";
 import { startCadenceAuthority } from "./automation-cadence.mjs";
 
 // Configuration traffic uses the real revision-checked handlers and disposable
@@ -43,7 +43,7 @@ export const replanCadenceScenario = {
             await page.route(`**/api/chat/${endpoint}**`, async (route) => {
               const parsed = new URL(route.request().url());
               if (parsed.pathname.endsWith("/goal-configuration/apply")) goalApplyCount++;
-              const response = await route.fetch({ url: authority.url + parsed.pathname + parsed.search });
+              const response = await fetchWorkspaceBackend(route, authority.url);
               if (heldReadback && parsed.pathname === "/api/chat/goal-configuration" && route.request().method() === "GET") {
                 const pending = heldReadback;
                 pending.start();

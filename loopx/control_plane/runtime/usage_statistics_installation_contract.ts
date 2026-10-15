@@ -1,5 +1,5 @@
 /** Installation-linked daily observations. Never uptime, billing or work authority. */
-import { object, validId, MAX_COUNT } from "./usage_statistics_contract.ts";
+import { object, validId, validUsageVersion, MAX_COUNT } from "./usage_statistics_contract.ts";
 import { CONTEXTS, DIAGNOSTIC_FEATURES, diagnosticFeature } from "./usage_statistics_diagnostics.ts";
 import { MEASUREMENTS } from "./usage_statistics_goal_contract.ts";
 
@@ -20,7 +20,7 @@ export function validInstallationDay(value: unknown): value is InstallationDay {
   if (!object(value) || !exact(value, "activity_day,cli,context,revision,runtime,truncated,version")
     || typeof value.activity_day !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value.activity_day)
     || !Number.isFinite(Date.parse(value.activity_day)) || new Date(value.activity_day).toISOString().slice(0, 10) !== value.activity_day
-    || typeof value.version !== "string" || !/^\d{1,3}\.\d{1,3}\.\d{1,4}$/.test(value.version)
+    || !validUsageVersion(value.version)
     || !(CONTEXTS as readonly unknown[]).includes(value.context) || typeof value.truncated !== "boolean"
     || !Number.isSafeInteger(value.revision) || Number(value.revision) < 1
     || !Array.isArray(value.cli) || value.cli.length > PROFILE_FEATURES.length

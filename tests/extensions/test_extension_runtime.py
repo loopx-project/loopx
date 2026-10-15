@@ -281,9 +281,132 @@ ports = ["sample_report.request.bind_source"]
     )
 
     assert discovery.ports == ()
+    assert discovery.state_error_code is None
     assert len(discovery.failures) == 1
     assert discovery.failures[0].adapter_id == "sample-report-source"
     assert discovery.failures[0].error_code == "extension_hook_adapter_unavailable"
+
+    # An unreadable state file is a typed discovery-level condition, not an
+    # empty catalog: callers can tell "no provider installed" from "state broken".
+    state_file.write_text("{not json", encoding="utf-8")
+    broken = discover_extension_hook_adapters(
+        state_file=state_file,
+        phase="capability_action",
+        capability_id="sample-report",
+        target_hook_id="sample_report.request",
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+        goal_id="sample-goal",
+        agent_id="sample-agent",
+    )
+    assert broken.ports == ()
+    assert broken.failures == ()
+    assert broken.state_error_code == "extension_state_unavailable"
+
+
+def test_capability_action_lifecycle_non_admission_is_named_without_factory_import(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.extensions import hook_adapters
+
+    provider = _provider(tmp_path / "provider")
+    manifest_path = _standalone_manifest(
+        tmp_path / "extension.toml",
+        entrypoint=provider,
+        permission="semantic_preference.read",
+    )
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8")
+        + """
+
+[[hook_adapters]]
+id = "sample-report-source"
+capability_id = "sample-report"
+target_hook_id = "sample_report.request"
+phase = "capability_action"
+factory = "sample_extension.hooks:build_adapter"
+required_permissions = ["semantic_preference.read"]
+ports = ["sample_report.request.bind_source"]
+
+[[hook_adapters]]
+id = "other-hook-source"
+capability_id = "sample-report"
+target_hook_id = "sample_report.other"
+phase = "capability_action"
+factory = "sample_extension.hooks:build_adapter"
+required_permissions = ["semantic_preference.read"]
+ports = ["sample_report.other.bind_source"]
+""",
+        encoding="utf-8",
+    )
+    state_file = tmp_path / "runtime" / "extensions" / "state.json"
+    install_extension(manifest_path, state_file=state_file, execute=True)
+    factory_loads: list[str] = []
+
+    def record_factory_load(reference: str) -> object:
+        factory_loads.append(reference)
+        raise ValueError("synthetic factory is not importable")
+
+    monkeypatch.setattr(hook_adapters, "_load_factory", record_factory_load)
+
+    def discover() -> object:
+        return discover_extension_hook_adapters(
+            state_file=state_file,
+            phase="capability_action",
+            capability_id="sample-report",
+            target_hook_id="sample_report.request",
+            registry_path=tmp_path / "registry.json",
+            runtime_root=tmp_path / "runtime",
+            goal_id="sample-goal",
+            agent_id="sample-agent",
+        )
+
+    def named_failures(discovery: object) -> list[tuple[str, str, str]]:
+        return [
+            (failure.extension_id, failure.adapter_id, failure.error_code)
+            for failure in discovery.failures
+        ]
+
+    # Positive control: a ready extension reaches the factory loader.
+    ready = discover()
+    assert named_failures(ready) == [
+        (
+            "test-standalone-extension",
+            "sample-report-source",
+            "extension_hook_adapter_unavailable",
+        )
+    ]
+    assert factory_loads == ["sample_extension.hooks:build_adapter"]
+    factory_loads.clear()
+
+    disable_extension("test-standalone-extension", state_file=state_file, execute=True)
+    disabled_state = state_file.read_bytes()
+    disabled = discover()
+    assert disabled.ports == ()
+    assert disabled.state_error_code is None
+    assert named_failures(disabled) == [
+        ("test-standalone-extension", "sample-report-source", "extension_disabled")
+    ]
+    assert factory_loads == []
+    assert state_file.read_bytes() == disabled_state
+
+    enable_extension("test-standalone-extension", state_file=state_file, execute=True)
+    # Changing the doctor-verified executable invalidates its runtime identity.
+    _provider(provider, doctor_exit=2)
+    stale_state = state_file.read_bytes()
+    stale = discover()
+    assert stale.ports == ()
+    assert stale.state_error_code is None
+    assert named_failures(stale) == [
+        (
+            "test-standalone-extension",
+            "sample-report-source",
+            "extension_doctor_not_ready",
+        )
+    ]
+    assert factory_loads == []
+    assert state_file.read_bytes() == stale_state
 
 
 @pytest.mark.parametrize(
@@ -1362,6 +1485,181 @@ def test_install_disable_upgrade_and_rollback_preserve_verified_binding(
             "revision_count": 2,
         }
     ]
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize(
+    "damage",
+    ["legacy", "invalid_history", "missing_revision", "invalid_manifest", "no_proof", "forged_proof"],
+)
+def test_status_reads_unverified_records_without_affecting_healthy_extensions(
+    tmp_path: Path, damage: str, enabled: bool,
+) -> None:
+    provider = _provider(tmp_path / "provider")
+    state_file = tmp_path / "extensions.json"
+    for extension_id in ("test-semantic-extension", "healthy-extension"):
+        manifest = _manifest(
+            tmp_path / f"{extension_id}.toml", entrypoint=provider,
+            version="1.0.0", extension_id=extension_id,
+        )
+        install_extension(manifest, state_file=state_file, execute=True)
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    entry = state["extensions"]["test-semantic-extension"]
+    if damage == "legacy":
+        entry.clear()
+        entry["id"] = "test-semantic-extension"
+    elif damage == "invalid_history":
+        entry["revisions"] = {}
+    elif damage == "missing_revision":
+        entry["revisions"] = []
+    elif damage == "invalid_manifest":
+        entry["revisions"][0]["manifest"] = None
+    elif damage == "no_proof":
+        entry.pop("doctor_verified_revision")
+    else:
+        entry["doctor_verified_entrypoint_identities"] = ["unprobed-entrypoint"]
+    entry["enabled"] = enabled
+    state_file.write_text(json.dumps(state), encoding="utf-8")
+    original = state_file.read_bytes()
+
+    statuses = extension_status(state_file=state_file)["extensions"]
+    by_id = {status["id"]: status for status in statuses}
+    assert by_id["healthy-extension"]["doctor_verified"] is True
+    assert by_id["test-semantic-extension"]["enabled"] is enabled
+    assert by_id["test-semantic-extension"]["doctor_verified"] is False
+    assert extension_status(
+        state_file=state_file, extension_id="test-semantic-extension",
+    )["extensions"] == [by_id["test-semantic-extension"]]
+    with pytest.raises(ValueError):
+        resolve_extension_activation("test-semantic-extension", state_file=state_file)
+    with pytest.raises(ValueError):
+        resolve_extension_binding(
+            "test-semantic-extension", state_file=state_file,
+            capability_id="semantic-preference", protocol="semantic_preference_provider_v0",
+            permission="semantic_preference.read",
+        )
+    if damage in {"legacy", "invalid_history", "missing_revision", "invalid_manifest"}:
+        with pytest.raises(ValueError):
+            enable_extension("test-semantic-extension", state_file=state_file, execute=True)
+    assert state_file.read_bytes() == original
+
+
+def test_installed_snapshot_fails_closed_when_the_runtime_api_moves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A snapshot validated by an older runtime is not ready on a newer one.
+
+    `install` checks `requires_loopx_api` when it loads the manifest; the
+    saved copy must be re-checked by every runtime that reads it, otherwise
+    an extension written for API 1 keeps dispatching after LoopX moves to 2.
+    """
+    from loopx.extensions import manifest as manifest_module
+
+    provider = _provider(tmp_path / "provider")
+    v1 = _manifest(tmp_path / "v1.toml", entrypoint=provider, version="1.0.0")
+    state_file = tmp_path / "runtime" / "extensions.json"
+    install_extension(v1, state_file=state_file, execute=True)
+    assert extension_catalog_entries(state_file=state_file)[0]["provider"]["ready"] is True
+
+    monkeypatch.setattr(manifest_module, "LOOPX_EXTENSION_API_VERSION", 2)
+
+    [entry] = extension_catalog_entries(state_file=state_file)
+    assert entry["provider"]["installed"] is True
+    assert entry["provider"]["enabled"] is True
+    assert entry["provider"]["ready"] is False
+    [status] = extension_status(state_file=state_file)["extensions"]
+    assert status["enabled"] is True
+    assert status["doctor_verified"] is False
+
+    with pytest.raises(ValueError, match="requires LoopX extension API `>=1,<2`, but this runtime provides `2`"):
+        resolve_extension_activation("test-semantic-extension", state_file=state_file)
+    with pytest.raises(ValueError, match="requires LoopX extension API"):
+        resolve_extension_binding(
+            "test-semantic-extension",
+            state_file=state_file,
+            capability_id="semantic-preference",
+            protocol="semantic_preference_provider_v0",
+            permission="semantic_preference.read",
+        )
+    optional = resolve_optional_capability_binding(
+        state_file=state_file,
+        capability_id="semantic-preference",
+        protocol="semantic_preference_provider_v0",
+        permission="semantic_preference.read",
+    )
+    assert optional.status == "extension_incompatible"
+    assert optional.next_action == "install_compatible_extension"
+    assert optional.binding is None
+
+    with pytest.raises(ValueError, match="requires LoopX extension API"):
+        enable_extension("test-semantic-extension", state_file=state_file, execute=True)
+
+    doctor = doctor_installed_extension(
+        "test-semantic-extension", state_file=state_file, execute=True
+    )
+    assert doctor["status"] == "api_incompatible"
+    assert doctor["verified"] is False
+    assert doctor["failure_kind"] == "api_incompatible"
+    assert doctor["external_writes_performed"] is False
+    entry = json.loads(state_file.read_text(encoding="utf-8"))["extensions"][
+        "test-semantic-extension"
+    ]
+    assert "doctor_verified_revision" not in entry
+    batch = doctor_enabled_extensions(state_file=state_file, execute=True)
+    assert batch["ok"] is False
+    assert batch["blocked_count"] == 1
+
+    # Rolling back *to* a revision this runtime cannot admit is refused up
+    # front, instead of activating a revision every reader then rejects.
+    v2 = _manifest(tmp_path / "v2.toml", entrypoint=provider, version="2.0.0")
+    monkeypatch.setattr(manifest_module, "LOOPX_EXTENSION_API_VERSION", 1)
+    install_extension(v2, state_file=state_file, operation="upgrade", execute=True)
+    monkeypatch.setattr(manifest_module, "LOOPX_EXTENSION_API_VERSION", 2)
+    with pytest.raises(ValueError, match="rollback revision .* requires LoopX extension API"):
+        rollback_extension("test-semantic-extension", state_file=state_file, execute=True)
+    entry = json.loads(state_file.read_text(encoding="utf-8"))["extensions"][
+        "test-semantic-extension"
+    ]
+    assert entry["rollback_revision"] is not None  # still available once compatible
+
+    # The refused rollback left the API-2 doctor revocation in place, but the
+    # API-1 upgrade above probed v2 and recorded its own passing doctor, so on
+    # a compatible runtime the active revision is ready again.
+    monkeypatch.setattr(manifest_module, "LOOPX_EXTENSION_API_VERSION", 1)
+    assert extension_catalog_entries(state_file=state_file)[0]["provider"]["ready"] is True
+
+    # A revision whose proof was revoked is not ready until the operator
+    # re-runs the doctor: revoke v2's proof and confirm the catalog says so.
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    state["extensions"]["test-semantic-extension"].pop("doctor_verified_revision", None)
+    state["extensions"]["test-semantic-extension"].pop(
+        "doctor_verified_entrypoint_identities", None
+    )
+    state_file.write_text(json.dumps(state), encoding="utf-8")
+    assert extension_catalog_entries(state_file=state_file)[0]["provider"]["ready"] is False
+    repaired = doctor_installed_extension(
+        "test-semantic-extension", state_file=state_file, execute=True
+    )
+    assert repaired["verified"] is True
+    assert extension_catalog_entries(state_file=state_file)[0]["provider"]["ready"] is True
+
+
+def test_declared_manifest_for_an_installed_id_must_repeat_the_active_revision(
+    tmp_path: Path,
+) -> None:
+    """Two different manifests for one id fail closed; the same one is idempotent."""
+    provider = _provider(tmp_path / "provider")
+    v1 = _manifest(tmp_path / "v1.toml", entrypoint=provider, version="1.0.0")
+    v2 = _manifest(tmp_path / "v2.toml", entrypoint=provider, version="2.0.0")
+    state_file = tmp_path / "runtime" / "extensions.json"
+    installed = install_extension(v1, state_file=state_file, execute=True)
+
+    [entry] = extension_catalog_entries([v1], state_file=state_file)
+    assert entry["provider"]["installed"] is True
+    assert entry["provider"]["active_revision"] == installed["revision"]
+
+    with pytest.raises(ValueError, match="duplicate capability provider `test-semantic-extension`"):
+        extension_catalog_entries([v2], state_file=state_file)
 
 
 def test_failed_upgrade_keeps_the_active_revision(tmp_path: Path) -> None:

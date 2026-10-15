@@ -33,7 +33,11 @@ from loopx.control_plane.turn_driver import (
     reward_memory_reflection_digest,
     run_loopx_turn_once,
 )
-from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
+from loopx.control_plane.turn_driver.codex_sessions import (
+    _session_path,
+    _store_codex_cli_session,
+    load_codex_cli_session,
+)
 from loopx.control_plane.turn_driver.subagent_execution_topology import (
     CHILD_FALLBACK_ACTIONS,
 )
@@ -801,6 +805,67 @@ def test_codex_session_store_falls_back_when_fchmod_is_unavailable(
         "schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
         **lineage,
     }
+
+
+@pytest.mark.parametrize(
+    "digest", ["A" * 64, "a" * 63, "a" * 65, "sha256:" + "a" * 64,
+               " " + "a" * 64, "a" * 64 + "\n", "é" * 64],
+)
+@pytest.mark.parametrize("retained", [False, True])
+def test_checkpoint_session_digest_rejection_preserves_the_original_record(
+    tmp_path: Path, digest: str, retained: bool,
+) -> None:
+    lineage = {"goal_id": "fixture-goal", "agent_id": "codex-fixture", "todo_id": "todo_fixture0001"}
+    _store_codex_cli_session(tmp_path, lineage=lineage, session_id="original",
+                            checkpoint_artifact_sha256="a" * 64)
+    path = _session_path(tmp_path, lineage)
+    if retained:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["checkpoint_artifact_sha256"] = digest
+        path.write_text(json.dumps(document), encoding="utf-8")
+    before = path.read_bytes()
+    message = "stored checkpoint session source digest is invalid" if retained else "checkpoint session source digest is invalid"
+    with pytest.raises(ValueError) as failure:
+        _store_codex_cli_session(tmp_path, lineage=lineage, session_id="original",
+                                checkpoint_artifact_sha256=None if retained else digest)
+    assert str(failure.value) == message
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("digest", [42, False, [], {}])
+@pytest.mark.parametrize("retained", [False, True])
+def test_checkpoint_session_digest_type_rejection_has_no_partial_write(
+    tmp_path: Path, digest: Any, retained: bool,
+) -> None:
+    lineage = {"goal_id": "fixture-goal", "agent_id": "codex-fixture", "todo_id": "todo_fixture0001"}
+    path = _session_path(tmp_path, lineage)
+    if retained:
+        _store_codex_cli_session(tmp_path, lineage=lineage, session_id="original",
+                                checkpoint_artifact_sha256="a" * 64)
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["checkpoint_artifact_sha256"] = digest
+        path.write_text(json.dumps(document), encoding="utf-8")
+    before = path.read_bytes() if retained else None
+    with pytest.raises(ValueError if retained else TypeError):
+        _store_codex_cli_session(tmp_path, lineage=lineage, session_id="original",
+                                checkpoint_artifact_sha256=None if retained else digest)
+    assert (path.read_bytes() if path.exists() else None) == before
+
+
+def test_checkpoint_session_observation_retains_provenance_and_refuses_replacement(tmp_path: Path) -> None:
+    lineage = {"goal_id": "fixture-goal", "agent_id": "codex-fixture", "todo_id": "todo_fixture0001"}
+    root = str(tmp_path.resolve())
+    _store_codex_cli_session(tmp_path, lineage=lineage, session_id="original",
+                            checkpoint_artifact_sha256="a" * 64, checkpoint_artifact_root=root)
+    path = _session_path(tmp_path, lineage)
+    before = path.read_bytes()
+    _store_codex_cli_session(tmp_path, lineage=lineage, session_id="original")
+    assert path.read_bytes() == before
+    assert load_codex_cli_session(tmp_path, lineage=lineage)["checkpoint_artifact_root"] == root
+    with pytest.raises(ValueError, match="checkpoint session source digest cannot change"):
+        _store_codex_cli_session(tmp_path, lineage=lineage, session_id="original",
+                                checkpoint_artifact_sha256="b" * 64)
+    assert path.read_bytes() == before
 
 
 def test_generic_host_does_not_project_unqualified_child_operations() -> None:
