@@ -237,6 +237,9 @@ def test_merge_gate_runs_on_all_prs_and_checks_every_core_aggregate() -> None:
                 "dashboard-acceptance, chat-bundle-browser]"
             ) in job
             assert "if: always() && needs.changes.outputs.core_tests == 'true'" in job
+        elif name == "test-shard":
+            assert "needs: [changes, chat-bundle, checks]" in job
+            assert f"needs.changes.outputs.{output} == 'true'" in job
         else:
             assert "needs: [changes, chat-bundle]" in job
             assert f"if: needs.changes.outputs.{output} == 'true'" in job
@@ -466,7 +469,8 @@ def test_backend_and_mixed_prs_require_the_browser_qualified_artifact() -> None:
     assert "chat-bundle-browser" in aggregate
     for name in ("chat-bundle-browser", "kernel-static-checks", "typescript-core", "dashboard-browser", "test-shard", "stage2c-suite", "windows-powershell", "presentation"):
         job = WORKFLOW.split(f"  {name}:\n", 1)[1].split("      - uses: actions/setup-", 1)[0]
-        assert "needs: [changes, chat-bundle]" in job
+        dependencies = "[changes, chat-bundle, checks]" if name == "test-shard" else "[changes, chat-bundle]"
+        assert f"needs: {dependencies}" in job
         assert "name: chat-bundle-${{ github.sha }}" in job
 
 

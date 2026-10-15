@@ -61,6 +61,28 @@ No tests are removed. Without timing history the splitter uses equal weights;
 six shards do not establish perfect duration balancing. Each numbered shard
 shares its queue across workflow runs without replacing another current head.
 
+Long Python shards now wait for the existing `checks` aggregate. An ordinary
+PR enters those queues only after core qualification succeeds, so a known-red
+candidate does not occupy the long-test lanes. This changes scheduling, not
+qualification: skipped shards after a failed prerequisite still fail `pytest`
+and `merge-gate`; a passing full candidate still requires every shard and the
+same coverage floor. Main, scheduled, manual and merge-queue runs retain full
+Python diagnostics after `checks` finishes, even if it failed, provided the
+classification and source bundle succeeded and the workflow was not cancelled.
+The tradeoff is extra serial latency for a healthy run in an idle queue, in
+exchange for less work behind known failures under contention. `ci:full` still
+forces the full profile; use a manual run for complete diagnostics of a failing
+PR revision. This does not cancel previously queued runs of older workflows.
+
+长 Python 分片现在先等待现有 `checks` 汇总；普通 PR 仅在核心资格检查成功后
+进入长队列，避免已知失败的候选继续占用分片。前置失败导致的跳过仍使 `pytest`
+和 `merge-gate` 失败，完整候选仍须通过全部分片与原覆盖率门槛。主干、定时、
+手动和 merge queue 在汇总结束后仍执行完整 Python 诊断，即使该汇总失败；
+分类和源码构建必须成功，取消的 workflow 不再启动分片。代价是空闲队列中健康
+候选的串行等待增加；收益是拥塞时不再给已知失败的 PR 排长测试。`ci:full` 仍强制
+完整 profile；需要失败候选的全部诊断时可手动运行其分支。旧 workflow 已排队的
+任务不会因此自动取消。
+
 The shard command explicitly loads `scripts.ci.pytest_timing`. Its controller
 streams pytest's setup/call/teardown durations to Actions logs as each report
 arrives, before final JUnit or duration summaries exist. To inspect a downloaded

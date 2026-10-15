@@ -730,7 +730,13 @@ PR 使用前述豁免，Sonar 配置变更仍全量运行，包括没有 token �
 
 Full Python shards share six repository-wide job concurrency groups, one per
 `matrix.shard`, across PR, main, merge-queue and manual runs carrying this
-workflow version. Each group admits one running job and uses `queue: max`
+workflow version. Shards wait for `checks`; ordinary PRs enter only after it
+succeeds. Non-PR runs still collect Python diagnostics after failed checks when
+classification and the source bundle succeeded and the workflow is not cancelled.
+Skipped required shards remain a qualification failure. This avoids long-test
+work for known-red PRs but adds serial latency when capacity is idle; see the
+[admission tradeoff](ci-impact-selection.md#six-complete-python-shards).
+Each group admits one running job and uses `queue: max`
 to retain up to 100 pending jobs instead of replacing another current
 candidate. Workflow-level cancellation requests retirement of the same PR's
 obsolete head. Trusted base-branch cleanup on `synchronize` also retires its
@@ -753,7 +759,10 @@ retaining workflow-level cancellation and the required gate. See GitHub's
 [concurrency queue contract](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
 
 全量 Python 分片按 `matrix.shard` 共用六个仓库级 job concurrency 组，适用于
-携带本版 workflow 的 PR、main、merge queue 和手动运行。每组允许一个运行中 job，
+携带本版 workflow 的 PR、main、merge queue 和手动运行。分片先等待 `checks`，
+普通 PR 仅在其成功后进入队列；非 PR 在分类、源码构建成功且未取消时仍保留失败后
+的完整 Python 诊断。必需分片跳过仍判失败。此规则减少已知失败 PR 的长测试占用，
+但会增加空闲队列中的串行延迟。每组允许一个运行中 job，
 用 `queue: max` 保留至多 100 个等待 job，不替换其他有效候选。workflow 级取消
 请求清退同 PR 的旧 head；可信 base 分支的 `synchronize` 清理还会取消遗留
 旧 run，包括普通取消后仍继续的 `always()` 汇总。清理要求事件中的当前 head、

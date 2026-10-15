@@ -490,8 +490,14 @@ jobs:
           npm run test:control-plane
 
   test-shard:
-    needs: [changes, chat-bundle]
-    if: needs.changes.outputs.python_tests == 'true'
+    # Keep known-red PRs out of the long-test queue. Non-PR runs still collect
+    # complete Python diagnostics after checks finish, even when checks fail.
+    needs: [changes, chat-bundle, checks]
+    if: >-
+      ${{ !cancelled() && needs.changes.result == 'success' &&
+          needs.changes.outputs.python_tests == 'true' &&
+          needs.chat-bundle.result == 'success' &&
+          (github.event_name != 'pull_request' || needs.checks.result == 'success') }}
     runs-on: ubuntu-latest
     # Share six long-test lanes across current PRs and other workflow runs.
     # Do not replace another candidate's pending shard or cancel its active head.

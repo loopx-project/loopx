@@ -331,6 +331,48 @@ class PythonShardAdmissionTests(unittest.TestCase):
         return next(row["run"] for row in self.workflow["jobs"][job]["steps"]
                     if row.get("name") == step)
 
+    def test_pr_shards_wait_for_core_qualification_without_waiving_failures(self):
+        job = self.workflow["jobs"]["test-shard"]
+        self.assertEqual(job["needs"], ["changes", "chat-bundle", "checks"])
+        # Evaluate the shipped expression over independent admission cases.
+        # The explicit status predicate is required to retain non-PR diagnostic
+        # traversal after failed checks; GitHub otherwise adds success().
+        source = job["if"].strip().removeprefix("${{").removesuffix("}}")
+        self.assertIn("!cancelled()", source)
+        source = source.replace("!cancelled()", "not cancelled()")
+        source = source.replace("&&", " and ").replace("||", " or ")
+        source = source.replace("needs.chat-bundle", "needs.chat_bundle")
+        source = " ".join(source.split())
+        for event in ("pull_request", "push", "schedule", "workflow_dispatch", "merge_group"):
+            for checks in ("success", "failure", "cancelled", "skipped", ""):
+                for ready in (True, False):
+                    for cancelled in (True, False):
+                        context = {
+                            "github": SimpleNamespace(event_name=event),
+                            "needs": SimpleNamespace(
+                                changes=SimpleNamespace(result="success", outputs=SimpleNamespace(python_tests="true")),
+                                chat_bundle=SimpleNamespace(result="success" if ready else "failure"),
+                                checks=SimpleNamespace(result=checks),
+                            ),
+                            "cancelled": lambda: cancelled,
+                        }
+                        expected = ready and not cancelled and (event != "pull_request" or checks == "success")
+                        with self.subTest(event=event, checks=checks, ready=ready, cancelled=cancelled):
+                            self.assertEqual(eval(source, {"__builtins__": {}}, context), expected)  # noqa: S307
+                        # Failed classification and exempt lanes never acquire
+                        # a long-test slot, even if other prerequisites passed.
+                        for changes_result, selected in (("failure", "true"), ("skipped", "true"), ("success", "false"), ("success", "")):
+                            context["needs"].changes = SimpleNamespace(
+                                result=changes_result, outputs=SimpleNamespace(python_tests=selected))
+                            self.assertFalse(eval(source, {"__builtins__": {}}, context))  # noqa: S307
+        # No cycle may make the prerequisite aggregate wait for its consumer.
+        def ancestors(name):
+            dependencies = self.workflow["jobs"][name].get("needs", [])
+            if isinstance(dependencies, str):
+                dependencies = [dependencies]
+            return set(dependencies).union(*(ancestors(dep) for dep in dependencies))
+        self.assertNotIn("test-shard", ancestors("checks"))
+
     def test_required_python_gate_rejects_cancelled_overflow_and_missing_shards(self):
         script = self.script("pytest", "Require every upstream check")
         for checks in ("success", "failure", "cancelled", "skipped", ""):
