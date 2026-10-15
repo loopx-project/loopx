@@ -934,6 +934,19 @@ def test_replay_after_process_loss_fails_an_unowned_started_turn(
     assert restored is not None
     assert restored["status"] == "ready"
     assert restored["active_turn_id"] is None
+    # Reopening must explain the interruption to the live SSE observer
+    # and repeated event replay, without replaying a possibly effectful request.
+    failures = [event for event in store.events_after(session_id, str(turn["turn_id"]), None)
+                if event["kind"] == "turn.failed"]
+    assert len(failures) == 1
+    assert failures[0]["payload"]["message"] == replay["error"]
+    assert "restarted" in replay["error"]
+    assert "follow-up" in replay["error"]
+    runtime.submit_turn(session_id=session_id, client_turn_id="lost-running-worker",
+                        message="do not leave this running", work_dir=tmp_path,
+                        objective="sample objective")
+    assert [event for event in store.events_after(session_id, str(turn["turn_id"]), None)
+            if event["kind"] == "turn.failed"] == failures
 
 
 def test_completed_turn_cannot_release_a_newer_active_turn(tmp_path: Path) -> None:
