@@ -90,7 +90,19 @@ and check** once. A configured contract needs only **Check delivery**. The
 advanced JSON import remains available for technical migration; it is not a
 prerequisite for this path.
 
-Agent preparation uses the existing typed action preview store:
+In an explicitly enabled Goal LoopX conversation whose native tool advertises
+`prepare_check`, the Agent can call `loopx_collaboration` with
+`action=prepare_check`, a stable `operation_id` and the existing acceptance
+`document`. The host binds the Goal, registered preparing Agent and runtime;
+the model cannot replace those identities or roots. Paused, stopped, obsolete
+Turns and revoked execution configuration cannot prepare a plan. A conflicting
+retry retains the original proposal and requires reconciliation.
+
+This reuses the existing typed action preview store. It does not add a second
+configuration owner or enable LoopX mode automatically. Native thread tool
+schemas are fixed when created: an older thread may not advertise this action,
+and an unfinished native Goal is never replaced just to add tools. The existing
+registered-Agent CLI preparation remains available independently:
 
 ```bash
 loopx --format json goal-acceptance prepare --goal-id example-goal \
@@ -122,6 +134,10 @@ No-plan/default-off behavior remains unchanged, and no Lark action is introduced
 `prepare --execute` 只保存可审阅方案，不修改 Goal 规则、不执行检查。丢失回执先对账，
 不能自动重跑；历史通过不能认证变化后的版本。交互次数从原始意图算起，前置缺失的意图或
 授权不能从计数中省略。此入口沿用可信本机所有者边界，不证明远程身份、独立复核或实际采用。
+显式启用的 Goal LoopX 会话在原生工具声明 `prepare_check` 时，可直接准备相同方案；
+Goal、Agent 与运行目录由宿主固定，暂停、过期 Turn 或撤销配置后不能继续准备。
+旧原生线程的工具声明不会自动升级，也不会为新增工具替换未完成线程；未声明时保留 CLI
+准备路径。该入口不自动启用 LoopX、不配置或运行检查。
 
 For advanced CLI configuration, inspect the current provider revision:
 
