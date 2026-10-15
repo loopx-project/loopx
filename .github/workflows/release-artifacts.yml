@@ -43,13 +43,6 @@ jobs:
     if: github.repository == 'loopx-project/loopx'
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      # One fixture-only allowlist owns both extraction and restoration.
-      RELEASE_BROWSER_FIXTURE_PATHS: |-
-        examples/personal-workspace-browser/fixture.mjs
-        examples/personal-workspace-browser/typed-actions.mjs
-        examples/personal-workspace-browser/goal-work-map.mjs
-        examples/personal-workspace-browser/goal-workspace-m2.mjs
     permissions:
       contents: read
       id-token: write
@@ -245,7 +238,12 @@ jobs:
               raise SystemExit("browser fixture correction requires a full commit SHA")
           if git("rev-parse", fixture + "^{commit}") != fixture:
               raise SystemExit("browser fixture correction must name a commit")
-          allowed = set(os.environ["RELEASE_BROWSER_FIXTURE_PATHS"].splitlines())
+          allowed = {
+              "examples/personal-workspace-browser/fixture.mjs",
+              "examples/personal-workspace-browser/typed-actions.mjs",
+              "examples/personal-workspace-browser/goal-work-map.mjs",
+              "examples/personal-workspace-browser/goal-workspace-m2.mjs",
+          }
           changed = set(git("diff", "--name-only", product, fixture, "--", *sorted(allowed)).splitlines())
           if fixture != product and not changed:
               raise SystemExit("browser fixture commit contains no correction in the fixture owners")
@@ -370,12 +368,7 @@ jobs:
 
       - name: Restore browser fixtures and bind verified package checksums
         run: |
-          set -euo pipefail
-          browser_fixture_paths=()
-          while IFS= read -r path; do
-            browser_fixture_paths+=("${path}")
-          done <<< "${RELEASE_BROWSER_FIXTURE_PATHS}"
-          git restore -- "${browser_fixture_paths[@]}"
+          git restore -- examples/personal-workspace-browser
           python scripts/release_artifacts.py verify-checksums --dist-dir dist/packages --checksum-file dist/SHA256SUMS
           python - <<'PY'
           import hashlib

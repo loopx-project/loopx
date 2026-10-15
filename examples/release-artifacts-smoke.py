@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import gzip
 import hashlib
 import io
@@ -71,11 +72,13 @@ def fixture_recovery_contract(workflow: str, identity: release_artifacts.Release
         "examples/personal-workspace-browser/goal-work-map.mjs",
         "examples/personal-workspace-browser/goal-workspace-m2.mjs",
     )
-    declared = workflow.split("      RELEASE_BROWSER_FIXTURE_PATHS: |-\n", 1)[1]
-    declared = declared.split("    permissions:", 1)[0]
-    assert tuple(textwrap.dedent(declared).splitlines()) == paths
     recover = workflow_run(workflow, "Resolve browser fixture correction without rebuilding product bytes")
     restore = workflow_run(workflow, "Restore browser fixtures and bind verified package checksums")
+    source = recover.split("python - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+    allowed = next(node.value for node in ast.walk(ast.parse(source))
+                   if isinstance(node, ast.Assign)
+                   and any(isinstance(target, ast.Name) and target.id == "allowed" for target in node.targets))
+    assert ast.literal_eval(allowed) == set(paths)
     assert workflow.index("Build wheel and source distribution") < workflow.index("Resolve browser fixture correction")
     assert workflow.index("Restore browser fixtures") < workflow.index("Attest release packages")
     with tempfile.TemporaryDirectory(prefix="loopx-release-recovery-") as temporary:
@@ -115,8 +118,7 @@ def fixture_recovery_contract(workflow: str, identity: release_artifacts.Release
         shutil.copyfile(ROOT / "loopx/__init__.py", root / "loopx/__init__.py")
         artifacts = [*packages.iterdir(), root / "dist/SHA256SUMS"]
         before = {path.name: digest(path) for path in artifacts}
-        env = {**os.environ, "RELEASE_BROWSER_FIXTURE_PATHS": "\n".join(paths),
-               "RELEASE_TAG": identity.tag, "GITHUB_SHA": correction,
+        env = {**os.environ, "RELEASE_TAG": identity.tag, "GITHUB_SHA": correction,
                "GITHUB_WORKFLOW_REF": "fixture/release-artifacts.yml@reviewed"}
 
         def execute(block: str, fixture: str = "") -> subprocess.CompletedProcess[str]:
