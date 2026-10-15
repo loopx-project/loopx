@@ -1,5 +1,5 @@
 /** Versioned, content-free diagnostics. This is observation, never work authority. */
-import { counterKey, CONTEXTS, DURATIONS, FEATURES, MAX_COUNT, MAX_ROWS, object } from "./usage_statistics_contract.ts";
+import { counterKey, CONTEXTS, DURATIONS, FEATURES, MAX_COUNT, MAX_ROWS, object, validUsageVersion } from "./usage_statistics_contract.ts";
 import type { Counter } from "./usage_statistics_contract.ts";
 
 export const DIAGNOSTIC_SCHEMA = "loopx_usage_diagnostics_v1";
@@ -49,7 +49,7 @@ export function validDiagnostic(value: unknown): value is Diagnostic {
   if (!(DIAGNOSTIC_FEATURES as readonly unknown[]).includes(value.feature) || !(DURATIONS as readonly unknown[]).includes(value.duration)
     || !(DIAGNOSTIC_OPERATIONS as readonly unknown[]).includes(value.operation) || !(SIGNALS as readonly unknown[]).includes(value.signal)
     || !(CONTEXTS as readonly unknown[]).includes(value.context) || !(REASONS as readonly unknown[]).includes(value.error)
-    || typeof value.version !== "string" || !/^\d{1,3}\.\d{1,3}\.\d{1,4}$/.test(value.version)
+    || !validUsageVersion(value.version)
     || typeof value.activity_day !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value.activity_day)
     || !Number.isFinite(Date.parse(value.activity_day)) || new Date(value.activity_day).toISOString().slice(0, 10) !== value.activity_day
     || !Number.isInteger(value.count) || Number(value.count) < 1 || Number(value.count) > MAX_COUNT) return false;

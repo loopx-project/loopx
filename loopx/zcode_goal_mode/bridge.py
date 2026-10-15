@@ -11,7 +11,9 @@ import subprocess
 import sys
 from typing import Any
 
-from ..agent_registry import agent_profile_for_goal, registered_agent_ids_for_goal, require_registered_agent_id
+from ..agent_registry import agent_profile_for_goal, load_goal_from_registry, registered_agent_ids_for_goal, require_registered_agent_id
+from ..control_plane.coordination.local_authority import local_authority_is_promoted
+from ..control_plane.goals.acceptance import inspect_goal_acceptance
 from ..control_plane.goals.activation import goal_is_stopped
 from ..control_plane.goals.goal_ref_validation import exact_goal_ref, require_goal_id
 from ..control_plane.runtime.goal_project_route import resolve_goal_project_route
@@ -166,6 +168,46 @@ def _heartbeat_task(binding: dict[str, Any], loopx_command: list[str]) -> str:
     return body
 
 
+def _goal_basis(binding: dict[str, Any]) -> dict[str, Any]:
+    """Read the current criterion/source revisions the native objective must be consumed under.
+
+    This is the Session RFC basis: existing acceptance-contract and explicit
+    authority-source revisions, not a whole-prompt hash. An unpromoted Goal has
+    no acceptance owner and reports ``None``; an unreadable owner fails closed so
+    a stale basis is never presented as current.
+    """
+    registry_path = Path(binding["registry"])
+    goal = load_goal_from_registry(registry_path, binding["goal_id"])
+    if goal is None:
+        raise ZCodeGoalBridgeError("Goal must be registered exactly once.", code="zcode_goal_authority_changed", status=409)
+    sources: list[dict[str, Any]] = []
+    for item in goal.get("authority_sources") or []:
+        if not isinstance(item, dict):
+            continue
+        source_id = str(item.get("id") or item.get("source_id") or "")
+        if not source_id:
+            continue
+        revision = item.get("revision")
+        sources.append({"id": source_id, "revision": revision if isinstance(revision, (int, str)) and not isinstance(revision, bool) else None})
+    sources.sort(key=lambda row: row["id"])
+    acceptance: dict[str, Any] | None = None
+    if local_authority_is_promoted(runtime_root=Path(binding["runtime_root"]), goal_id=binding["goal_id"]):
+        try:
+            observed = inspect_goal_acceptance(registry_path=registry_path, goal_id=binding["goal_id"], runtime_root=binding["runtime_root"])
+        except (ValueError, TypeError, OSError, RuntimeError) as exc:
+            raise ZCodeGoalBridgeError(
+                "Current Goal acceptance basis is unavailable. Read status and repair the Goal authority before starting or resuming ZCode.",
+                code="zcode_goal_basis_unavailable", status=503,
+            ) from exc
+        revision = observed.get("revision")
+        digest = observed.get("contract_digest")
+        acceptance = {
+            "revision": revision if isinstance(revision, int) and not isinstance(revision, bool) else None,
+            "contract_digest": digest if isinstance(digest, str) else None,
+        }
+    return {"acceptance": acceptance, "authority_sources": sources}
+
+
 def zcode_goal_operation(
     *, action: str, registry_path: Path, goal_id: str, agent_id: str,
     project: str | Path | None = None, cli_path: str | None = None,
@@ -230,6 +272,8 @@ def zcode_goal_operation(
         request["cli_path"] = request["cli_command"][-2]
     if action in {"bind", "start"}:
         request["task_body"] = _heartbeat_task(binding, loopx_command)
+    if action in {"bind", "start", "resume"}:
+        request["goal_basis"] = _goal_basis(binding)
     payload = _run_json([node, "--experimental-strip-types", str(Path(__file__).with_name("cli.ts"))], project=binding["project"], request=request)
     for key in ("goal_id", "goal_ref", "goal_creation_operation_id", "agent_id"):
         if key not in payload or payload[key] != binding[key]:

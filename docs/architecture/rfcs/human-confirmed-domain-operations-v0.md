@@ -347,6 +347,14 @@ validation and acceptance are reused. The profile is read back by the existing
 host owner; no new frontend configuration store or hidden default is added.
 Preflight reports an unpinned/unsupported configuration as unavailable. A valid
 argv is still runtime-unverified, not proof that a host or an operation ran.
+The typed operation transport readback lists `supported_hosts` and
+`supported_sandboxes`. An unsupported host returns
+`select_supported_operation_host`; an unsupported sandbox returns
+`select_supported_operation_sandbox`; missing model/effort returns
+`correct_execution_profile`. Transport refusals do not suggest model-credential
+environment variables. These are explicit recovery choices, not automatic host
+selection or an execution grant. Ordinary host availability remains independent:
+a launchable DSH model does not qualify the Codex-only operation connection.
 Use `workspace-write` only when the existing work grant requires it;
 `danger-full-access` is not accepted by this transport.
 
@@ -534,18 +542,22 @@ required acceptance condition using the existing scheduling/session owner.
 The backend slice's focused native/normalization tests do not certify that the
 companion UI ships in its commit or that source delivery is connected.
 
-### Automatic continuation and original-audience return: remaining work
+### Automatic continuation and original-audience return: qualification frontier
 
-An authenticated confirmation callback currently records the claim and projects
-the managed handoff; it does not launch the original host. Native `report`
+The default-off callback continuation described above can request the original
+managed Codex host through an operator-granted delegation. Its synthetic
+File/SQLite qualification does not establish a genuine confirmation, installed
+host acceptance or financial execution. Without that grant, confirmation only
+records the claim and projects the managed handoff. Native `report`
 commits an outcome and returns on the tool connection, while delivery recovery
 updates the original Lark card. Neither is delivery to a selected source
 conversation. An `outcome_observed` operation is absent from the pending-work
 Inbox, so exhausting that Inbox cannot certify original-audience return.
 
-The same implementation Todo and capability owner retain both gaps. The next
-bounded deliveries must prove the following in order; these are planned work,
-not qualified features of the preparation/readback slice:
+The existing implementation Todo and capability owner retain the live
+continuation and source-return acceptance gaps. The next bounded deliveries
+must prove the following in order; the synthetic continuation slice above
+does not satisfy these live acceptance conditions:
 
 | Delivery | Reused owner and required boundary | Exit evidence |
 | --- | --- | --- |
@@ -568,3 +580,39 @@ Any new automatic launch configuration must reuse the existing configuration
 owner and expose its effective state in the affected product entry points.
 Keep the original consumer Todo open until these receipts are observed; do not
 convert a cancelled test card or synthetic receipt into genuine approval.
+
+### DSH model availability and operation transport are separate
+
+The current [`projectManagedOperationTransport`](../../../loopx/control_plane/work_items/operation_agent_handoff.ts)
+accepts only `codex-cli`. A configured `dsh` executor can pass the existing
+runtime, credential and model-profile checks while a request for operation
+tools returns `operation_transport_host_unsupported`. The
+[`DSH Turn adapter`](../../../loopx/dsh_goal_mode/turn_host_adapter.py) runs the
+model through the SDK; it does not install the owned `loopx_operation`
+connection described above. SDK built-in tools, a successful model response,
+`unrestricted` permission mode, or a registered source thread cannot replace
+that identity producer. Enabling more shell tools does not supply it.
+
+The current binding's generic `correct_execution_profile` remediation for this
+transport refusal is insufficient: changing a supported model or configuring
+the same credential again cannot make an unsupported host transport supported.
+The shared typed transport owner must expose that distinction; the requested
+host remains selected and must not silently fall back to Codex.
+
+The DSH transport delivery must reuse the existing operation and Turn owners:
+
+1. Read back transport support independently of ordinary DSH launchability.
+   Keep operation tools opt-in and public CLI consumption fail-closed.
+2. Qualify an owned DSH connection's real session/Turn metadata and effective
+   profile, including source audience selection and revocation. A caller's
+   session string or injected actor is not native identity evidence.
+3. Carry prepare, confirmation, first consumption and outcome on that bound
+   connection, retaining the canonical action store and existing locks. Prove
+   duplicate, profile/session drift, disabled transport and lost-response cases.
+4. Qualify genuine non-financial confirmation and native consumer adoption
+   before a financial probe. Original-card recovery and source-audience return
+   need their own authenticated readbacks; a tool response proves neither.
+
+This is a required adapter frontier, not a shipped DSH execution grant. Finance
+continues to own financial preflight and venue evidence; its read-only checkers
+do not authenticate an operation actor, reserve funds or submit an order.

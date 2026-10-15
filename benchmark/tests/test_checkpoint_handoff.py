@@ -60,9 +60,11 @@ def test_surviving_request_is_not_overwritten(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Qualifies the Linux writer process group")
-@pytest.mark.parametrize("use_selector", [False, True])
-def test_failed_guard_returns_to_original_writer_without_interrupt(tmp_path, use_selector):
-    """Optional capture must not abort the caller's quota failure recovery."""
+@pytest.mark.parametrize("use_selector,closeout,settlement_only", [
+    (False, False, False), (True, False, False), (True, True, False), (True, False, True),
+])
+def test_non_capture_guard_returns_to_original_writer_without_interrupt(tmp_path, use_selector, closeout, settlement_only):
+    """Optional capture preserves quota recovery and pending Turn closeout."""
     from pathlib import Path
     import socket
     import sys
@@ -84,6 +86,10 @@ def test_failed_guard_returns_to_original_writer_without_interrupt(tmp_path, use
             failed = {"ok": False, "mode": "should-run", "goal_id": "failed-source",
                       "decision": "skip", "should_run": False,
                       "error_code": "quota_unexpected_collection_error"}
+            if closeout:
+                failed = closeout_guard("failed-source", "failed-agent", "failed-guard")
+            elif settlement_only:
+                failed = replan_settlement_guard("failed-source", "failed-agent", "failed-guard")
             packet = capture_root / "original"
             packet.mkdir()
             decision = packet / "decision.json"
@@ -108,7 +114,7 @@ def test_failed_guard_returns_to_original_writer_without_interrupt(tmp_path, use
                         agent_id="failed-agent", turn_instance_id="failed-guard",
                         native_process=process,
                         interrupt_when=(lambda _: False) if use_selector else None) as held:
-                    assert held["quota"]["ok"] is False
+                    assert held["quota"]["ok"] is (closeout or settlement_only)
                     assert held["intent"]["capture"] is False
                     assert held["intent"]["execution_authority_granted"] is False
                     assert "native_process_return_code" not in held
@@ -160,3 +166,53 @@ def test_failure_dispatch_does_not_relax_foreign_or_malformed_readback(tmp_path,
                 thread.join(5)
             assert not thread.is_alive() and responses == [b""]
     assert decision.read_bytes() == raw
+
+
+def closeout_guard(goal="source", agent="agent", turn="turn"):
+    """A completed Todo still owns this Turn while the next replan is visible."""
+    todo = "todo_0123456789ab"
+    return {"ok": True, "goal_id": goal, "effective_action": "autonomous_replan_required",
+        "replan_action_packet": {"schema_version": "replan_action_packet_v0",
+            "decision": "replan_required", "obligation_id": "replan-0123456789abcdef"},
+        "heartbeat_receipt": {"status": "replayed", "turn_instance_id": turn,
+            "closeout_required": True, "settlement_identity": {
+                "goal_id": goal, "agent_id": agent, "turn_instance_id": turn, "todo_id": todo,
+                "effect_id": f"{goal}:{agent}:{todo}:{turn}"}}}
+
+
+def replan_settlement_guard(goal="source", agent="agent", turn="turn"):
+    """The semantic work is committed; its original replan Turn still owes settlement."""
+    replan = "replan-0123456789abcdef"
+    return {"ok": True, "goal_id": goal, "effective_action": "autonomous_replan_required",
+        "replan_action_packet": {"schema_version": "replan_action_packet_v0",
+            "decision": "settlement_pending", "obligation_id": replan, "settlement_only": True},
+        "heartbeat_receipt": {"status": "replayed", "turn_instance_id": turn,
+            "semantic_replan_obligation_id": replan, "settlement_identity": {
+                "goal_id": goal, "agent_id": agent, "turn_instance_id": turn,
+                "replan_obligation_id": replan, "binding_kind": "autonomous_replan", "binding_id": replan,
+                "effect_id": f"{goal}:{agent}:autonomous_replan:{replan}:{turn}"}}}
+
+
+def test_closeout_is_not_a_fresh_capture_but_next_bound_replan_is():
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+    quota = closeout_guard()
+    request = {"action": "select_replan", "quota": quota,
+               "goal_id": "source", "agent_id": "agent", "turn_instance_id": "turn"}
+    result = effect_runtime_result("runtime.checkpoint_artifacts", request)
+    assert result == {"capture": False, "reason": "turn_closeout_pending", "execution_authority_granted": False}
+    receipt = quota["heartbeat_receipt"]
+    receipt.pop("closeout_required")
+    receipt["semantic_replan_obligation_id"] = "replan-0123456789abcdef"
+    result = effect_runtime_result("runtime.checkpoint_artifacts", request)
+    assert result["capture"] is True and result["execution_authority_granted"] is False
+
+
+@pytest.mark.parametrize("field,value", [("goal_id", "foreign"), ("agent_id", "foreign"),
+    ("turn_instance_id", "foreign"), ("effect_id", "foreign")])
+def test_closeout_does_not_relax_settlement_identity(field, value):
+    from loopx.control_plane.effect_runtime import effect_runtime_result, EffectRuntimeRemoteError
+    quota = closeout_guard()
+    quota["heartbeat_receipt"]["settlement_identity"][field] = value
+    with pytest.raises(EffectRuntimeRemoteError):
+        effect_runtime_result("runtime.checkpoint_artifacts", {"action": "select_replan", "quota": quota,
+            "goal_id": "source", "agent_id": "agent", "turn_instance_id": "turn"})

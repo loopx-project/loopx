@@ -130,6 +130,8 @@ def main(argv=None):
     parser.add_argument("--restore-goal")
     parser.add_argument("--restore-agent")
     parser.add_argument("--restore-source-todo")
+    parser.add_argument("--restore-phase-extension-seconds", type=int, default=0,
+                        help="Explicit authorized extra continuation time; omitted preserves the checkpoint's remaining phase")
     parser.add_argument("--eval-interval", type=int,
                         help="Native default: 0 (no periodic evaluation); other modes use task defaults; explicit 0 disables")
     parser.add_argument("--submission-cooldown", type=int,
@@ -166,6 +168,9 @@ def main(argv=None):
                       args.restore_agent, args.restore_source_todo)
     if bool(args.restore_checkpoint) != all(restore_values) or (not args.restore_checkpoint and any(restore_values)):
         parser.error("Warm continuation requires checkpoint, digest, config, fresh Goal/Agent and source Todo together")
+    if (not 0 <= args.restore_phase_extension_seconds < 2 ** 53 or
+            (args.restore_phase_extension_seconds and not args.restore_checkpoint)):
+        parser.error("A non-negative phase extension requires an explicit warm checkpoint continuation")
     if args.restore_checkpoint and (not handoff or args.eval_interval != 0 or args.replan_after_todos is not None):
         parser.error("Warm continuation requires full native checkpoint capture, no periodic evaluation and effective-Turn cadence")
     # One directory is one attempt: never reuse native registration or overwrite
@@ -290,7 +295,7 @@ def main(argv=None):
     if warm_start is not None:
         activated = restore(args.checkpoint_controller_file, root=capsule,
             expected_sha256=snapshot["native_capsule_sha256"], run_id=args.run_id,
-            phase_deadline_file=clock)
+            phase_deadline_file=clock, phase_extension_seconds=args.restore_phase_extension_seconds)
         epoch = int(clock.read_text())
         warm_start = WarmStart(candidate.root, candidate.sha256, candidate.config,
             candidate.goal_id, candidate.agent_id, candidate.source_todo_id, epoch, candidate.normal_cadence)
@@ -314,6 +319,8 @@ def main(argv=None):
         "feedback": args.feedback, "internet": task.internet,
         "eval_interval": args.eval_interval, "submission_cooldown": args.submission_cooldown,
         "status": "starting", "score_countable": False,
+        **({"restore_phase_extension_seconds": args.restore_phase_extension_seconds}
+           if args.restore_phase_extension_seconds else {}),
         **({"restored_checkpoint_sha256": warm_start.sha256,
             "original_deadline_epoch": warm_start.deadline_epoch,
             "receiver_preparation_cadence": 1, "normal_replan_cadence": warm_start.normal_cadence}

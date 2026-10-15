@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import venv
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +80,19 @@ def _restore_windows_user_path(pwsh: str, encoded_path: str) -> None:
         env=env,
         timeout=30,
     )
+
+
+@pytest.mark.parametrize("directory", ["python 中文", "python 中文 🚀"])
+def test_resolve_python_preserves_unicode_interpreter_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, directory: str
+) -> None:
+    runtime = tmp_path / directory
+    venv.EnvBuilder(with_pip=False).create(runtime)
+    interpreter = runtime / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    monkeypatch.setenv("PYTHONIOENCODING", "gbk")
+    monkeypatch.setenv("PYTHONUTF8", "0")
+
+    assert windows_install._resolve_python(str(interpreter)) == interpreter.resolve()
 
 
 def test_windows_candidate_failure_reports_required_doctor_checks(
@@ -406,11 +420,21 @@ def test_windows_installer_promotes_release_and_runs_doctor(tmp_path: Path) -> N
             "windows-probe",
             "--objective",
             "Verify the native Windows PowerShell lifecycle",
-            "--no-global-sync",
         ],
         env=launch_env,
     )
     assert bootstrap.returncode == 0, bootstrap.stderr
+
+    registered = _run_loopx(
+        pwsh=pwsh,
+        launcher=launcher,
+        args=[
+            *common, "register-agent", "--goal-id", "windows-probe",
+            "--agent-id", "windows-worker", "--require-new", "--execute",
+        ],
+        env=launch_env,
+    )
+    assert registered.returncode == 0, registered.stderr or registered.stdout
 
     todo = _run_loopx(
         pwsh=pwsh,
@@ -427,6 +451,19 @@ def test_windows_installer_promotes_release_and_runs_doctor(tmp_path: Path) -> N
             "[P0] Validate Windows PowerShell state writeback",
             "--task-class",
             "advancement_task",
+            "--claimed-by",
+            "windows-worker",
+            "--validation-command-json",
+            json.dumps(
+                [
+                    sys.executable,
+                    "-c",
+                    "from pathlib import Path; "
+                    "assert Path('result.txt').read_text(encoding='utf-8') == '验证完成 🚀'",
+                ]
+            ),
+            "--validation-label",
+            "Windows artifact contents",
         ],
         env=launch_env,
     )
@@ -446,6 +483,8 @@ def test_windows_installer_promotes_release_and_runs_doctor(tmp_path: Path) -> N
             "should-run",
             "--goal-id",
             "windows-probe",
+            "--agent-id",
+            "windows-worker",
             "--verbose",
         ],
         env=launch_env,
@@ -453,6 +492,66 @@ def test_windows_installer_promotes_release_and_runs_doctor(tmp_path: Path) -> N
     assert quota.returncode == 0, quota.stderr or quota.stdout
     quota_payload = json.loads(quota.stdout)
     assert quota_payload["should_run"] is True
+
+    todo_id = json.loads(todo.stdout)["todo_id"]
+
+    acquired = _run_loopx(
+        pwsh=pwsh,
+        launcher=launcher,
+        args=[
+            *common, "task-lease", "acquire", "--goal-id", "windows-probe",
+            "--todo-id", todo_id, "--owner", "windows-worker",
+            "--idempotency-key", "windows-writeback",
+        ],
+        env=launch_env,
+    )
+    assert acquired.returncode == 0, acquired.stderr or acquired.stdout
+
+    def todo_command(action: str, *args: str) -> subprocess.CompletedProcess[str]:
+        # Each invocation starts a fresh PowerShell process through the installed
+        # launcher, without the installer's release-pointer override.
+        return _run_loopx(
+            pwsh=pwsh,
+            launcher=launcher,
+            args=[*common, "todo", action, "--goal-id", "windows-probe", *args],
+            env=launch_env,
+        )
+
+    completion_args = [
+        "--todo-id", todo_id,
+        "--agent-id", "windows-worker",
+        "--task-lease-idempotency-key", "windows-writeback",
+        "--task-lease-expected-version", str(json.loads(acquired.stdout)["lease"]["version"]),
+        "--evidence", "Synthetic Unicode artifact validated on Windows.",
+        "--no-follow-up",
+    ]
+    rejected = todo_command("complete", *completion_args)
+    assert rejected.returncode == 1, rejected.stderr or rejected.stdout
+    assert json.loads(rejected.stdout)["validation_blocked_completion"] is True
+
+    pending = todo_command("list", "--todo-id", todo_id)
+    assert pending.returncode == 0, pending.stderr or pending.stdout
+    assert json.loads(pending.stdout)["todo"]["status"] == "open"
+
+    (project / "result.txt").write_text("验证完成 🚀", encoding="utf-8")
+    completed = todo_command("complete", *completion_args)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    completion = json.loads(completed.stdout)
+    assert completion["completed"] is True
+    receipt_id = completion["completion_receipt_id"]
+    assert receipt_id
+
+    recovered = todo_command("list", "--todo-id", todo_id)
+    assert recovered.returncode == 0, recovered.stderr or recovered.stdout
+    recovered_todo = json.loads(recovered.stdout)["todo"]
+    assert recovered_todo["status"] == "done"
+    assert recovered_todo["completion_receipt_id"] == receipt_id
+
+    replayed = todo_command("complete", *completion_args)
+    assert replayed.returncode == 0, replayed.stderr or replayed.stdout
+    replay = json.loads(replayed.stdout)
+    assert replay["completion_receipt_id"] == receipt_id
+    assert replay["changed"] is False
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native Windows installer regression")

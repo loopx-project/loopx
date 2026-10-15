@@ -143,6 +143,33 @@ test("JSON-lines transport starts once and reuses the helper process", async (t)
   }
 });
 
+test("JSON-lines transport decodes a UTF-8 request with a non-ASCII path on a byte codec", async (t) => {
+  // The helper pins its own streams to UTF-8. A two-byte host codec such as
+  // `gbk` pairs this request's trailing name with the closing quote into an
+  // invalid sequence, so an unpinned child dies before the open handshake.
+  const transport = await NoKVJsonLinesTransport.open({
+    argv: [PYTHON, SDK_HELPER],
+    config: {
+      root_id: "0".repeat(32),
+      workbench_root: "/tmp/Users-黄江南",
+      routing: ETCD_ROUTING,
+      object_store: { kind: "memory" },
+    },
+    env: {
+      ...process.env,
+      PYTHONPATH: FAKE_SDK_ROOT,
+      PYTHONIOENCODING: "gbk",
+      PYTHONUTF8: "0",
+    },
+  });
+  t.after(async () => await transport.close());
+
+  assert.deepEqual(await transport.storeIdentity("authority-workbench"), {
+    status: "available",
+    store_identity: `nokv:authority-workbench:${"a".repeat(32)}`,
+  });
+});
+
 test("JSON-lines helper refuses a stale incarnation fence typed and leaves the generation unchanged", async (t) => {
   const transport = await openSdkHelper();
   t.after(async () => await transport.close());

@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, lstatSync, mkdtempSync, mkdirSync, readdirSync, readFileSync,
   rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { pathToFileURL } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 
 const preloadSource = new URL(
   "../../loopx/control_plane/effect_runtime_compile_cache.ts", import.meta.url,
@@ -136,5 +137,96 @@ for (const targetMode of [0o755, 0o700, undefined]) {
       assert.deepEqual(readdirSync(target), []);
       assert.equal(lstatSync(target).mode & 0o777, targetMode);
     }
+  });
+}
+
+function retirementFixture(t: TestContext, fault: string, disabled = false) {
+  const { root } = fixture(t);
+  const infoPath = join(root, "runtime.json");
+  const script = join(root, "retire.ts");
+  writeFileSync(script, `
+    import module from 'node:module';
+    import threads from 'node:worker_threads';
+    import { writeFileSync } from 'node:fs';
+    const input = JSON.parse(process.argv[2]);
+    if (!input.disabled) module.enableCompileCache(input.cache);
+    if ((module.getCompileCacheDir() !== undefined) !== !input.disabled) throw new Error('fixture cache state');
+    if (input.fault === 'blocked' || input.fault === 'late') {
+      module.flushCompileCache = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0,
+        input.fault === 'late' ? 1_100 : 60_000);
+    } else if (input.fault === 'throws' || input.disabled) {
+      module.flushCompileCache = () => { throw new Error('fixture cache failure'); };
+    }
+    if (input.fault === 'worker' || input.disabled) {
+      threads.Worker = class { constructor() { throw new Error('fixture worker unavailable'); } };
+    }
+    module.syncBuiltinESMExports();
+    const { retireRuntime } = await import(input.preload);
+    const locator = { infoPath: input.infoPath, token: 'original', pid: process.pid, fingerprint: 'fixture' };
+    writeFileSync(input.infoPath, JSON.stringify(locator));
+    await retireRuntime(locator);
+    process.exit(0);
+  `);
+  function start() {
+    const env: NodeJS.ProcessEnv = { ...process.env, NODE_V8_COVERAGE: "" };
+    delete env.NODE_COMPILE_CACHE;
+    delete env.NODE_DISABLE_COMPILE_CACHE;
+    if (disabled) env.NODE_DISABLE_COMPILE_CACHE = "1";
+    const child = spawn(process.execPath, ["--no-warnings", "--experimental-strip-types", script,
+      JSON.stringify({ preload: preloadSource.href, infoPath, cache: join(root, "compile-cache"), fault, disabled })], {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); });
+    let output = "";
+    child.stdout.on("data", chunk => { output += chunk; });
+    child.stderr.on("data", chunk => { output += chunk; });
+    const exited = new Promise<{ code: number | null; signal: string | null }>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    });
+    return { child, exited, output: () => output };
+  }
+  return { root, infoPath, start };
+}
+
+for (const fault of ["healthy", "blocked", "throws", "worker", "disabled"]) {
+  test(`settled retirement remains available with ${fault} cache persistence`, { timeout: 10_000 }, async t => {
+    const { root, infoPath, start } = retirementFixture(t, fault, fault === "disabled");
+    const run = start();
+    const result = await run.exited;
+    assert.equal(run.output(), "");
+    assert.throws(() => lstatSync(infoPath), { code: "ENOENT" });
+    if (fault === "healthy" || fault === "disabled") {
+      assert.equal(result.code, 0);
+      if (fault === "healthy") assert.ok(cacheFiles(join(root, "compile-cache")).length > 0);
+      else assert.ok(!readdirSync(root).includes("compile-cache"));
+    } else {
+      // Windows reports TerminateProcess as a numeric exit; POSIX names SIGKILL.
+      assert.ok(result.signal === "SIGKILL" || (process.platform === "win32" && result.code !== 0));
+    }
+  });
+}
+
+for (const fault of ["blocked", "late"]) {
+  test(`cache watchdog respects the locator fence and replacement after ${fault} flush`, { timeout: 10_000 }, async t => {
+    const { infoPath, start } = retirementFixture(t, fault);
+    const lock = infoPath + ".ts-effect.lock";
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, token: "fixture-locator-holder" }));
+    const run = start();
+    const deadline = Date.now() + 3_000;
+    while (Date.now() < deadline) {
+      try { JSON.parse(readFileSync(infoPath, "utf8")); break; } catch { await delay(10); }
+    }
+    assert.equal(JSON.parse(readFileSync(infoPath, "utf8")).pid, run.child.pid);
+    await delay(2_000); // Both the watchdog deadline and late native return pass.
+    assert.equal(run.child.exitCode, null, "retirement must wait for the existing locator fence");
+    assert.equal(run.child.signalCode, null);
+    const replacement = { token: "replacement", pid: process.pid, fingerprint: "fixture" };
+    writeFileSync(infoPath, JSON.stringify(replacement));
+    rmSync(lock);
+    await run.exited;
+    assert.equal(run.output(), "");
+    assert.deepEqual(JSON.parse(readFileSync(infoPath, "utf8")), replacement);
   });
 }

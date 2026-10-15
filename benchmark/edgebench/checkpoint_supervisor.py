@@ -114,7 +114,8 @@ class CheckpointSupervisor:
                         if remaining <= 0:
                             raise TimeoutError("Checkpoint handoff deadline expired")
                         captured = capture_worker(self.controller_file, token=self.token, capture_id=nonce,
-                            destination=self.destination / nonce, request_file=request, timeout=remaining)
+                            destination=self.destination / nonce, request_file=request, timeout=remaining,
+                            seal_within_phase=True)
                         response.update(ok=True, capture=captured)
                     except Exception as error:
                         # Optional capture failure resumes the original source;

@@ -61,6 +61,11 @@ WORK_LANE_TODO_MONITOR_DUE_KIND = "todo_monitor_due"
 WORK_LANE_TODO_ITEM_FIELDS = (
     "index",
     "text",
+    # Preserve the source identity across lane rewrites. The selected-work
+    # readback compares this revision with the canonical Todo before granting
+    # delivery; dropping it makes an otherwise readable due Monitor fail
+    # closed as context_source_unavailable.
+    "content_revision",
     "todo_id",
     "status",
     "priority",

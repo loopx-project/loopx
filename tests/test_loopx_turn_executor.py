@@ -3713,6 +3713,69 @@ def test_permission_denial_during_spend_preserves_writeback_and_resumes(
     assert calls == {"host": 1, "writeback": 1, "spend": 2}
 
 
+def test_quota_run_index_conflict_is_audited_and_retry_keeps_completed_work(
+    tmp_path: Path,
+) -> None:
+    from loopx.control_plane.quota.spend_commit import QuotaRunIndexConflict
+
+    plan = _plan()
+    calls = {"host": 0, "writeback": 0, "spend": 0}
+
+    def host(_request: dict[str, object]) -> dict[str, object]:
+        calls["host"] += 1
+        return _host_result(plan)
+
+    def writeback(_result: dict[str, object]) -> dict[str, object]:
+        calls["writeback"] += 1
+        return {"ok": True, "appended": True}
+
+    def conflicting_spend() -> dict[str, object]:
+        calls["spend"] += 1
+        raise QuotaRunIndexConflict(
+            "quota run index compare-and-swap precondition failed"
+        )
+
+    common = {
+        "host_runner": host,
+        "project": tmp_path,
+        "runtime_root": tmp_path / "runtime",
+        "goal_id": "fixture-goal",
+        "timeout_seconds": 5,
+        "execute": True,
+        "task_validator": _passing_validator,
+        "writeback": writeback,
+        "scheduler": lambda _spend: {"completed": True, "acknowledged": True},
+    }
+    failed = run_loopx_turn_once(plan, spend=conflicting_spend, **common)
+
+    assert failed["result_kind"] == "quota_spend_failed"
+    assert failed["receipt"]["failed_phase"] == "quota_spend"
+    assert failed["settlement_result"]["failure"]["kind"] == "quota_spend_rejected"
+    assert [
+        receipt["step_kind"] for receipt in failed["settlement_result"]["receipts"]
+    ] == ["validation", "durable_writeback"]
+    assert _journal(tmp_path / "runtime")["status"] == "failed"
+
+    replayed = run_loopx_turn_once(
+        plan,
+        spend=lambda: pytest.fail("failed replay must not call the provider"),
+        **common,
+    )
+    assert replayed["settlement_result"] == failed["settlement_result"]
+
+    recovered = run_loopx_turn_once(
+        plan,
+        spend=lambda: (
+            calls.__setitem__("spend", calls["spend"] + 1)
+            or {"ok": True, "appended": True}
+        ),
+        retry_failed=True,
+        **common,
+    )
+    assert recovered["status"] == "committed"
+    assert calls == {"host": 1, "writeback": 1, "spend": 2}
+
+
 def test_quota_admission_rejection_is_typed_and_retry_does_not_repeat_writeback(
     tmp_path: Path,
 ) -> None:

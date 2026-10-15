@@ -10,6 +10,8 @@ import { configure, inspect, observe, endpoint } from "../../loopx/control_plane
 import type { Context, Post } from "../../loopx/control_plane/runtime/usage_statistics.ts";
 import { validAggregate, validPing, AGGREGATE_SCHEMA, durationBucket } from "../../loopx/control_plane/runtime/usage_statistics_contract.ts";
 import type { Counter } from "../../loopx/control_plane/runtime/usage_statistics_contract.ts";
+import { validDiagnostic } from "../../loopx/control_plane/runtime/usage_statistics_diagnostics.ts";
+import { validInstallationDay } from "../../loopx/control_plane/runtime/usage_statistics_installation_contract.ts";
 import { acquireFileMutationLock, releaseFileMutationLock } from "../../loopx/control_plane/effect_runtime_io.ts";
 import type { FileMutationLock } from "../../loopx/control_plane/effect_runtime_io.ts";
 
@@ -23,6 +25,26 @@ async function fixture(t: test.TestContext) {
   return { path, state };
 }
 const noPost: Post = async () => { assert.fail("must not send"); };
+
+test("current payloads share bounded release and canonical prerelease versions", () => {
+  const accepted = ["1.4.0", "2.0.0a1", "2.0.0b2", "2.0.0rc3", "999.999.9999rc9999"];
+  const rejected: unknown[] = [null, 200, {}, "2.0", "2.0.0a", "2.0.0alpha1", "2.0.0A1",
+    "2.0.0-rc.1", "2.0.0+private", "2.0.0a10000", "1000.0.0", "1.1000.0", "1.0.10000",
+    "2.0.0a1/private", " 2.0.0a1", "2.0.0a1\n", "1.4.0\n", "2.0.0a1" + "x".repeat(4096)];
+  for (const [versions, expected] of [[accepted, true], [rejected, false]] as const) {
+    for (const version of versions) {
+      const ping = { schema: "loopx_usage_ping_v1", install_id: "00000000-0000-4000-8000-000000000001",
+        version, os: "linux", arch: "x64", python: "3.11", channel: "source" };
+      const diagnostic = { ...row, operation: "default", signal: "none", version,
+        activity_day: "2026-10-14", context: "unknown" };
+      const profile = { activity_day: "2026-10-14", version, context: "unknown", revision: 1,
+        cli: [], runtime: [], truncated: false };
+      assert.equal(validPing(ping), expected, `heartbeat version ${String(version)}`);
+      assert.equal(validDiagnostic(diagnostic), expected, `diagnostic version ${String(version)}`);
+      assert.equal(validInstallationDay(profile), expected, `installation version ${String(version)}`);
+    }
+  }
+});
 
 test("fresh default requires notice; status is read-only; acknowledgment enables both channels", async t => {
   const { path, state } = await fixture(t); const ctx = context();

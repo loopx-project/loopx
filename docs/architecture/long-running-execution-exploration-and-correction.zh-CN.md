@@ -612,7 +612,7 @@ Grok 的[第三方声明](https://github.com/xai-org/grok-build/blob/2bdd1d6a636
 
 | 注入或变体 | 应观察到的结果 | 已有接缝与剩余验证 |
 | --- | --- | --- |
-| 暂停后保持 Goal instance，更新标准/来源范围再 resume；restore 期间再加入 amendment | 保留原生身份和原回执；第一项新受保护动作消费当前适用标准/来源，不支持的边界保持待处理 | [原生控制器测试](../../tests/control_plane_ts/zcode_native_goal.test.ts) 覆盖身份/恢复；跨 owner 恢复到真实模型行为仍待验 |
+| 暂停后保持 Goal instance，更新标准/来源范围再 resume；restore 期间再加入 amendment | 保留原生身份和原回执；第一项新受保护动作消费当前适用标准/来源，不支持的边界保持待处理 | [原生控制器测试](../../tests/control_plane_ts/zcode_native_goal.test.ts) 覆盖身份/恢复以及依据门：acceptance/source revision 依据变化、不可读或 journal 从未记录依据时，拒绝直接 resume 并保持目标暂停，直到 stop/start 记录当前依据；跨 owner 恢复到真实模型行为仍待验 |
 | 显式 A → B → C 的祖先失效，但 C 自身 validator 仍通过 | 保留历史 accepted/done；祖先不合格时拒绝当前使用，不重新派发原任务 | [Result-use 集成测试](../../tests/test_delegation_result_use.py) 已由受控 worker 覆盖；再接所选 Host 入口 |
 | Native completed 而验收失败；selected-work 合同通过但仍有必要 Goal 工作 | 保留 provider 完成与局部 accepted，不升级为整个 Goal achieved；完成应做结算；仅可选研究未完成不必阻塞收口 | [验收 authority 测试](../../tests/control_plane_ts/goal_acceptance_authority.test.ts) 和原生完成测试覆盖独立 owner；最终组合回读仍待验 |
 | 最后 drain 与 idle 之间提交结果；重复通知、停止后旧 wake，再加入新获准输入 | 持久工作可发现；旧 wake 不复活已停执行；新输入由原接续 owner 按当前准入处理 | 复用[已验收结果 wake](../../loopx/chat_loopx_mode.py) 和 Host 接续路径；同时验证不重复启动与不丢工作，不能只验证锁 |

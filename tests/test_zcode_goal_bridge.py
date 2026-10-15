@@ -686,3 +686,210 @@ def test_provider_must_echo_creation_witness_even_when_null(authority, monkeypat
     monkeypatch.setattr(bridge, "_run_json", lambda *args, **kwargs: {"ok": True, "goal_id": "delivery", "goal_ref": {"goal_id": "delivery", "goal_instance_id": INSTANCE_A}, "agent_id": "zcode-worker"})
     with pytest.raises(bridge.ZCodeGoalBridgeError, match="did not match"):
         bridge.zcode_goal_operation(action="status", registry_path=registry, goal_id="delivery", agent_id="zcode-worker")
+
+
+def test_bind_start_and_resume_carry_the_current_goal_basis(authority, monkeypatch, tmp_path):
+    registry, project, payload = authority
+    payload["goals"][0]["authority_sources"] = [
+        {"id": "src-b", "revision": 2}, {"source_id": "src-a", "revision": "r7"}, {"id": "src-c"}, "not-a-source"]
+    registry.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(bridge, "inspect_goal_acceptance", lambda **kwargs: pytest.fail("an unpromoted Goal has no acceptance owner to read"))
+    requests = _stub_operation(monkeypatch)
+    cli = tmp_path / "zcode.mjs"
+    cli.write_text("", encoding="utf-8")
+    bridge.zcode_goal_operation(action="bind", registry_path=registry, goal_id="delivery", agent_id="zcode-worker", project=project, cli_path=str(cli))
+    bridge.zcode_goal_operation(action="start", registry_path=registry, goal_id="delivery", agent_id="zcode-worker")
+    bridge.zcode_goal_operation(action="resume", registry_path=registry, goal_id="delivery", agent_id="zcode-worker")
+    expected = {"acceptance": None, "authority_sources": [
+        {"id": "src-a", "revision": "r7"}, {"id": "src-b", "revision": 2}, {"id": "src-c", "revision": None}]}
+    native = [request for _, request in requests if request is not None]
+    assert [request["action"] for request in native] == ["bind", "start", "resume"]
+    assert all(request["goal_basis"] == expected for request in native)
+    assert "task_body" not in native[2], "resume re-reads the basis, not a whole prompt"
+
+
+def test_promoted_acceptance_revision_is_part_of_the_basis(authority, monkeypatch):
+    registry, _, _ = authority
+    seen = []
+    monkeypatch.setattr(bridge, "local_authority_is_promoted", lambda **kwargs: True)
+    monkeypatch.setattr(bridge, "inspect_goal_acceptance", lambda **kwargs: seen.append(kwargs) or {
+        "ok": True, "status": "loaded", "revision": 5, "contract_digest": "c" * 64, "provider_revision": "p9"})
+    requests = _stub_operation(monkeypatch)
+    bridge.zcode_goal_operation(action="resume", registry_path=registry, goal_id="delivery", agent_id="zcode-worker")
+    assert seen[0]["goal_id"] == "delivery" and "agent_id" not in seen[0]
+    _, native = requests[0]
+    assert native["goal_basis"] == {"acceptance": {"revision": 5, "contract_digest": "c" * 64}, "authority_sources": []}
+
+
+def test_unreadable_acceptance_basis_fails_closed_before_the_provider(authority, monkeypatch):
+    registry, _, _ = authority
+    monkeypatch.setattr(bridge, "local_authority_is_promoted", lambda **kwargs: True)
+    monkeypatch.setattr(bridge, "inspect_goal_acceptance", lambda **kwargs: (_ for _ in ()).throw(ValueError("authority unavailable")))
+    requests = _stub_operation(monkeypatch)
+    with pytest.raises(bridge.ZCodeGoalBridgeError, match="acceptance basis is unavailable") as failure:
+        bridge.zcode_goal_operation(action="resume", registry_path=registry, goal_id="delivery", agent_id="zcode-worker")
+    assert failure.value.code == "zcode_goal_basis_unavailable" and failure.value.status == 503
+    assert requests == [], "no provider effect is issued under an unknown basis"
+
+
+def test_status_pause_and_stop_do_not_read_the_basis(authority, monkeypatch):
+    registry, _, _ = authority
+    monkeypatch.setattr(bridge, "local_authority_is_promoted", lambda **kwargs: pytest.fail("read-only and stop operations need no basis"))
+    requests = _stub_operation(monkeypatch)
+    for action in ("status", "pause", "stop"):
+        bridge.zcode_goal_operation(action=action, registry_path=registry, goal_id="delivery", agent_id="zcode-worker")
+    assert all("goal_basis" not in request for _, request in requests)
+
+
+# A stateful NDJSON stand-in for the external ZCode host. It persists its one session in the
+# isolated ZCODE_STORAGE_DIR so a rebuilt broker restores the same paused target. Nothing else in
+# the path below is simulated: the Python bridge, the TS broker, binding validation, quota admission,
+# the heartbeat task and the file-backed acceptance owner are the real ones.
+_NATIVE_HOST_STUB = r"""
+const fs = require("node:fs"); const path = require("node:path"); const readline = require("node:readline");
+if (process.argv[2] !== "app-server") process.exit(2);
+const file = path.join(process.env.ZCODE_STORAGE_DIR, "fixture-state.json");
+let s = {target: null, revision: 0, running: false, selectedModel: {providerId: "synthetic", modelId: "synthetic"}};
+try { s = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
+const save = () => fs.writeFileSync(file, JSON.stringify(s));
+const snapshot = () => ({protocol: {name: "ZCode Protocol", version: 1}, session: {sessionId: "sess_fixture"},
+  settings: {model: {current: s.selectedModel, available: [{ref: {providerId: "synthetic", modelId: "synthetic"}, label: "Synthetic",
+    reasoning: {levels: [{value: "disabled", label: "disabled"}], defaultLevel: "disabled"}}]}},
+  projection: {sessionId: "sess_fixture", status: s.running ? "running" : "idle",
+    target: s.target && {sessionId: "sess_fixture", targetId: s.target.id, objective: s.target.objective, status: s.target.status}},
+  runtime: {stateRevision: s.revision}});
+const send = value => process.stdout.write(JSON.stringify(value) + "\n");
+readline.createInterface({input: process.stdin}).on("line", line => {
+  const r = JSON.parse(line);
+  if (r.result !== undefined || r.error !== undefined) return;
+  if (r.method === "runtime/capabilities") return send({id: r.id, result: {independentPlanState: true}});
+  if (["session/create", "session/resume", "session/read"].includes(r.method)) return send({id: r.id, result: snapshot()});
+  if (r.method !== "session/goal") return send({id: r.id, error: {code: -32601, message: "unsupported"}});
+  if (r.params.expectedRevision !== s.revision) return send({id: r.id, error: {code: -32009, message: "CAS rejected"}});
+  const a = r.params.action;
+  if (a === "set") { s.target = {id: "goal-" + (s.revision + 1), objective: r.params.objective.trim(), status: "active"}; s.running = true; }
+  if (a === "resume") { s.target.status = "active"; s.running = true; }
+  if (a === "pause") { if (s.target) s.target.status = "paused"; s.running = false; }
+  if (a === "clear") { s.target = null; s.running = false; }
+  s.revision++; save();
+  send({id: r.id, result: {response: "", snapshot: snapshot(), startedTurn: a === "set" || a === "resume"}});
+});
+"""
+
+
+def _acceptance_document(objective: str) -> dict:
+    return {"scope": {"kind": "all_advancement"}, "objective": objective, "non_goals": [], "bindings": [],
+            "criteria": [{"id": "proof", "description": "The independent check passes", "validation_argv": ["true"],
+                          "validation_timeout_seconds": 5, "validation_files": []}]}
+
+
+@pytest.fixture
+def promoted_native_goal(authority, tmp_path, monkeypatch):
+    """A quota-admitted Goal whose acceptance contract lives in a real promoted file authority."""
+    import hashlib
+    monkeypatch.syspath_prepend(str(Path(__file__).parent / "control_plane"))
+    from canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.local_authority_shadow_projection import canonical_bytes
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
+    registry, project, payload = authority
+    state_file = project / "state.md"
+    state_file.write_text("# Goal\n\n## Current State\n\n- active\n", encoding="utf-8")
+    payload["goals"][0].update({
+        "state_file": str(state_file), "domain": "delivery", "adapter": {"kind": "generic_project_goal_v0", "status": "connected"},
+        "quota": {"compute": 1.0, "window_hours": 24, "slot_minutes": 1, "allowed_slots": 10},
+    })
+    registry.write_text(json.dumps(payload), encoding="utf-8")
+    projection = build_todo_runtime_shadow_projection(goal_id="delivery", todos=[])
+    document = _acceptance_document("Original objective")
+    projection["goal_acceptance"] = {"schema_version": "loopx_goal_acceptance_v0", "enabled": True, "revision": 1, "bindings": [],
+                                     "digest": hashlib.sha256(canonical_bytes(document)).hexdigest(), "document": document, "verification": None}
+    runtime_root = Path(payload["common_runtime_root"])
+    initialize_canonical_authority(runtime_root, "delivery", projection, state_path=state_file, provider="file")
+    stub = tmp_path / "zcode-stub.cjs"
+    stub.write_text(_NATIVE_HOST_STUB, encoding="utf-8")
+    journal_dir = runtime_root / "zcode-goal"
+    yield registry, project, stub, journal_dir
+    for endpoint in journal_dir.glob("*.endpoint"):
+        _terminate_broker(endpoint)
+
+
+def _terminate_broker(endpoint: Path) -> None:
+    import os
+    import signal
+    try:
+        pid = json.loads(endpoint.read_text(encoding="utf-8"))["pid"]
+    except (OSError, ValueError, KeyError):
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    import time
+    for _ in range(100):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.1)
+
+
+def _revise_acceptance(registry: Path, objective: str) -> dict:
+    from loopx.control_plane.goals.acceptance import configure_goal_acceptance, inspect_goal_acceptance
+    before = inspect_goal_acceptance(registry_path=registry, goal_id="delivery")
+    applied = configure_goal_acceptance(registry_path=registry, goal_id="delivery", expected_provider_revision=str(before["provider_revision"]),
+                                        document=_acceptance_document(objective), operation_id=f"revise-{objective}", execute=True)
+    assert applied["status"] == "applied"
+    return bridge._goal_basis(bridge.validate_zcode_binding(registry_path=registry, goal_id="delivery", agent_id="zcode-worker"))
+
+
+def test_journal_without_recorded_basis_refuses_resume_until_stop_start_records_it(promoted_native_goal):
+    registry, project, stub, journal_dir = promoted_native_goal
+
+    def operate(action, **extra):
+        return bridge.zcode_goal_operation(action=action, registry_path=registry, goal_id="delivery", agent_id="zcode-worker", **extra)
+
+    assert operate("bind", project=project, cli_path=str(stub))["ok"] is True
+    started = operate("start")
+    assert started["ok"] is True and started["native"]["running"] is True
+    (journal,) = journal_dir.glob("*.json")
+    recorded = json.loads(journal.read_text(encoding="utf-8"))
+    assert recorded["goal_basis"]["acceptance"]["revision"] == 1
+    assert operate("pause")["native"]["status"] == "paused"
+    # The previous provider release journaled the same session and target without any basis.
+    # Rebuild the broker on that journal exactly as an upgraded install would recover it.
+    _terminate_broker(journal.with_name(journal.name + ".endpoint"))
+    legacy = {key: value for key, value in recorded.items() if key != "goal_basis"}
+    legacy_bytes = (json.dumps(legacy, indent=1, ensure_ascii=False) + "\n").encode("utf-8")
+    journal.write_bytes(legacy_bytes)
+    current = _revise_acceptance(registry, "Revised objective")
+    assert current["acceptance"]["revision"] == 2
+
+    refused = operate("resume")
+    assert refused["ok"] is False
+    assert refused["reason"] == "goal_basis_unavailable", "an unrecorded basis is never compared as if it were the current one"
+    assert refused["native"]["target_id"] == recorded["target_id"]
+    assert refused["native"]["status"] == "paused" and refused["native"]["running"] is False
+    assert journal.read_bytes() == legacy_bytes, "recovery and a refused resume rewrite nothing"
+    status = operate("status")
+    assert status["ok"] is True and status["native"]["status"] == "paused"
+    assert status["actions"] == ["status", "select_model", "stop", "resume"]
+    assert operate("pause")["reason"] == "user_paused"
+    stopped = operate("stop")
+    assert stopped["ok"] is True and stopped["native"]["target_id"] is None
+    assert "goal_basis" not in json.loads(journal.read_text(encoding="utf-8"))
+
+    restarted = operate("start")
+    assert restarted["ok"] is True and restarted["native"]["running"] is True
+    assert json.loads(journal.read_text(encoding="utf-8"))["goal_basis"] == current
+    assert operate("pause")["native"]["status"] == "paused"
+    resumed = operate("resume")
+    assert resumed["ok"] is True and resumed["native"]["running"] is True
+    assert resumed["native"]["target_id"] == restarted["native"]["target_id"]
+    assert operate("pause")["native"]["status"] == "paused"
+    assert _revise_acceptance(registry, "Revised again")["acceptance"]["revision"] == 3
+    changed = operate("resume")
+    assert changed["ok"] is False and changed["reason"] == "goal_basis_changed"
+    assert changed["native"]["status"] == "paused"
+    assert json.loads(journal.read_text(encoding="utf-8"))["goal_basis"] == current, "the recorded basis never follows new intent"
+    assert operate("stop")["ok"] is True

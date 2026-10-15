@@ -177,43 +177,50 @@ test("installation migration is additive and preserves the existing ping history
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM installation_usage").get().n, 0);
 });
 
-test("real client HTTP to SQLite preserves interval union and fixed operator query semantics", async t => {
-  const db = d1(), now = at("2026-10-01");
-  const server = createServer(async (request, response) => {
-    const chunks = [];
-    for await (const chunk of request) chunks.push(chunk);
-    const result = await handle(new Request("http://collector.example" + request.url, {
-      method: request.method, headers: request.headers, body: Buffer.concat(chunks),
-    }), db, now);
-    response.writeHead(result.status); response.end(await result.text());
+for (const version of ["1.2.4", "2.0.0a1", "2.0.0b2", "2.0.0rc3"]) {
+  test(`real client HTTP to SQLite preserves versions, intervals and operator queries (${version})`, async t => {
+    const db = d1(), now = at("2026-10-01");
+    const server = createServer(async (request, response) => {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const result = await handle(new Request("http://collector.example" + request.url, {
+        method: request.method, headers: request.headers, body: Buffer.concat(chunks),
+      }), db, now);
+      response.writeHead(result.status); response.end(await result.text());
+    });
+    await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+    const root = await mkdtemp(join(tmpdir(), "loopx-real-collector-")), path = join(root, "usage.json");
+    t.after(async () => { server.closeAllConnections(); server.close(); await rm(root, { recursive: true, force: true }); });
+    const ctx = { env: { LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:" + server.address().port + "/v1/ping" },
+      version, python: "3.13", channel: "source", now };
+    await configureContext(path, ctx, "personal"); await configure(path, ctx, "enable");
+    const generation = JSON.parse(await readFile(path, "utf8")).generation;
+    const interval = { key: "a".repeat(64), measurement: "codex_turn", host: "codex_app",
+      start: now.getTime() - 60 * 60000, end: now.getTime() };
+    await observe(path, ctx, generation, { feature: "turn", count: 1, outcome: "ok", error: "none", duration: "lt_1s" }, undefined, interval, undefined, {
+      feature: "turn", operation: "default", outcome: "ok", error: "none", duration: "lt_1s", count: 1,
+      version, activity_day: "2026-10-01", context: "personal", signal: "none",
+    });
+    const row = db.raw.get("SELECT * FROM installation_usage");
+    assert.equal(row.context, "personal");
+    assert.equal(row.version, version);
+    assert.equal(db.raw.get("SELECT version FROM pings").version, version);
+    assert.equal(db.raw.get("SELECT version FROM diagnostic_counts").version, version);
+    assert.deepEqual(JSON.parse(row.runtime), [{ measurement: "codex_turn", observed_minutes: 60 }]);
+    // Real SQL consumer: independent mathematical oracle is one 60-minute interval, not Goal span.
+    const source = readFileSync(new URL("../queries/installation-usage.sql", import.meta.url), "utf8");
+    const queries = source.replace(/--[^\n]*/g, "").split(";").filter(sql => sql.trim());
+    const bindings = { from_day: "2026-10-01", through_day: "2026-10-02" };
+    for (const sql of queries) {
+      // Query uses named bind parameters; qualify against real SQLite.
+      assert.equal(db.raw.query(sql, bindings).length, 1);
+    }
+    const runtime = db.raw.all(
+      "SELECT SUM(json_extract(j.value, '$.observed_minutes')) AS minutes FROM installation_usage i, json_each(i.runtime) j",
+    );
+    assert.equal(runtime[0].minutes, 60);
   });
-  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  const root = await mkdtemp(join(tmpdir(), "loopx-real-collector-")), path = join(root, "usage.json");
-  t.after(async () => { server.closeAllConnections(); server.close(); await rm(root, { recursive: true, force: true }); });
-  const ctx = { env: { LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:" + server.address().port + "/v1/ping" },
-    version: "1.2.4", python: "3.13", channel: "source", now };
-  await configureContext(path, ctx, "personal"); await configure(path, ctx, "enable");
-  const generation = JSON.parse(await readFile(path, "utf8")).generation;
-  const interval = { key: "a".repeat(64), measurement: "codex_turn", host: "codex_app",
-    start: now.getTime() - 60 * 60000, end: now.getTime() };
-  await observe(path, ctx, generation, { feature: "turn", count: 1, outcome: "ok", error: "none", duration: "lt_1s" }, undefined, interval);
-  const row = db.raw.get("SELECT * FROM installation_usage");
-  assert.equal(row.context, "personal");
-  assert.deepEqual(JSON.parse(row.runtime), [{ measurement: "codex_turn", observed_minutes: 60 }]);
-  // Real SQL consumer: independent mathematical oracle is one 60-minute interval, not Goal span.
-  const source = readFileSync(new URL("../queries/installation-usage.sql", import.meta.url), "utf8");
-  const queries = source.replace(/--[^\n]*/g, "").split(";").filter(sql => sql.trim());
-  const bindings = { from_day: "2026-10-01", through_day: "2026-10-02" };
-  for (const sql of queries) {
-    // Query uses named bind parameters; qualify against real SQLite.
-    assert.equal(db.raw.query(sql, bindings).length, 1);
-  }
-  const runtime = db.raw.all(
-    "SELECT SUM(json_extract(j.value, '$.observed_minutes')) AS minutes FROM installation_usage i, json_each(i.runtime) j",
-  );
-  assert.equal(runtime[0].minutes, 60);
-});
-
+}
 
 test("v1 heartbeat has architecture; aggregates reject identifiers and store only counters", async () => {
   const db = d1();
@@ -222,6 +229,9 @@ test("v1 heartbeat has architecture; aggregates reject identifiers and store onl
   });
   const heartbeat = { ...ping(1), schema: "loopx_usage_ping_v1", arch: "arm64" };
   assert.equal((await handle(request("/v1/ping", heartbeat), db)).status, 204);
+  for (const version of ["2.0.0a1/private", "2.0.0+private", "2.0.0a1\n"]) {
+    assert.equal((await handle(request("/v1/ping", { ...heartbeat, version }), db)).status, 400);
+  }
   const row = { feature: "todo", outcome: "ok", duration: "lt_1s", error: "none", count: 6 };
   const aggregate = { schema: "loopx_usage_aggregate_v1", counters: [row] };
   assert.equal((await handle(request("/v1/aggregate", { ...aggregate, install_id: id(1) }), db)).status, 400);

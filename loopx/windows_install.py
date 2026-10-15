@@ -34,8 +34,14 @@ REQUIRED_DEEP_CHECKS = {
 
 
 def _resolve_python(requested: str) -> Path:
+    # This fresh interpreter does not inherit the CLI's UTF-8 stream settings.
     result = subprocess.run(
-        [requested, "-c", "import sys; print(sys.executable); raise SystemExit(sys.version_info < (3, 11))"],
+        [
+            requested,
+            "-c",
+            "import sys; sys.stdout.reconfigure(encoding='utf-8'); "
+            "print(sys.executable); raise SystemExit(sys.version_info < (3, 11))",
+        ],
         check=False,
         capture_output=True,
         text=True, encoding="utf-8", errors="replace",

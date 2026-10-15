@@ -81,7 +81,7 @@ TURN_SETTLEMENT_TRANSACTION_SCHEMA_VERSION = "loopx_turn_settlement_transaction_
 TURN_SETTLEMENT_REDUCTION_SCHEMA_VERSION = "loopx_turn_settlement_reduction_v1"
 
 
-def _invoke_turn_effect(effect: TurnEffect, effect_ref: str) -> Mapping[str, Any]:
+def invoke_turn_effect(effect: TurnEffect, effect_ref: str) -> Mapping[str, Any]:
     """Invoke a provider with a stable ref while retaining zero-arg callbacks."""
 
     try:
@@ -571,7 +571,7 @@ def execute_turn_driver_settlement(
                     raise ValueError("terminal closeout requires an effect provider")
                 returned_attempt = {
                     "step_kind": step_kind.value,
-                    "payload": dict(_invoke_turn_effect(provider, effect_ref)),
+                    "payload": dict(invoke_turn_effect(provider, effect_ref)),
                 }
                 observations.pop(step_kind.value, None)
                 continue
