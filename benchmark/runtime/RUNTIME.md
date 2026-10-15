@@ -177,9 +177,15 @@ validates actual Todo readback. With `fresh`, each planning/execution invocation
 starts a new conversation. LoopX Goal planning uses a separate exec conversation
 because native Goal execution owns its app-server thread lifecycle. The runner
 does not claim exact equivalence to interactive `$loopx` startup.
-Harbor's default `planning_timeout_sec` is 300; `null` removes that independent
-cap while retaining the total phase budget. SForge selects `null`: its planner
-and execution share one absolute trial deadline, including native resumes.
+Harbor and SForge have no independent planning timeout. Planning and execution
+share the absolute phase deadline, including native resumes. The shared worker
+uses `LOOPX_PHASE_DEADLINE_EPOCH`; Harbor derives it from the remaining
+`scheduler_timeout_sec` budget using the task environment's clock. Remove old
+non-null `planning_timeout_sec` settings, `--planning-timeout` arguments and
+`LOOPX_PLANNING_TIMEOUT_SEC` environment values: they are rejected instead of
+silently changing their meaning. A legacy `planning_timeout_sec: null` remains
+accepted. SForge still strips inherited stage-limit environment values and
+preserves its existing null receipt field for compatibility.
 Planning and preparation consume the same `scheduler_timeout_sec` phase budget
 as execution. Planning sessions are
 included in native session/token aggregation. No planning checkpoint is counted
@@ -206,7 +212,6 @@ effort, tools, feedback and total budget fixed, and use separate trials:
 kwargs:
   execution_mode: heartbeat
   task_entry: loopx-planned
-  planning_timeout_sec: 300
   iteration_context: fresh
   turn_timeout_sec: null
   scheduler_timeout_sec: 5080
