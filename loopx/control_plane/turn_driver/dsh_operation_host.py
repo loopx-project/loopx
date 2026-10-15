@@ -37,6 +37,7 @@ from ..collaboration.operation_handoff import (
 )
 from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
 from .codex_operation_host import operation_tool_handler
+from .operation_requests import operation_request_source, request_reference_instruction
 from .codex_sessions import (
     _lineage,
     _read_codex_cli_session_document,
@@ -138,6 +139,8 @@ def _run_dsh_operation_host(
     source_route: Mapping[str, str] | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
     confirmed_operation_id: str | None = None,
+    operation_request_file: Path | None = None,
+    operation_request_sha256: str | None = None,
     on_notification: Any = None,
     runtime_bin: Path | None = None,
     env: Mapping[str, str] | None = None,
@@ -163,6 +166,7 @@ def _run_dsh_operation_host(
     lineage = _lineage(request)
     module = operation_module.resolve(strict=True)
     patch = cordis.resolve(strict=True) if cordis else None
+    request_source = operation_request_source(operation_request_file, operation_request_sha256)
     profile = {
         "transport": DSH_OPERATION_TRANSPORT,
         "provider": provider,
@@ -189,6 +193,8 @@ def _run_dsh_operation_host(
         profile["provider_endpoint_sha256"] = hashlib.sha256(
             env.get("DEEPSEEK_BASE_URL", "").encode()
         ).hexdigest()
+    if request_source is not None:
+        profile["operation_request"] = request_source.profile(source_route)
     profile_digest = hashlib.sha256(
         json.dumps(profile, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -350,6 +356,9 @@ def _run_dsh_operation_host(
         source_route=source_route,
         goal_admission=goal_admission,
         host="dsh",
+        frozen_request=(request_source.bind(request, lineage=lineage,
+            session_id=session_id, profile_digest=profile_digest)
+            if request_source is not None else None),
     )
 
     def store_binding() -> None:
@@ -420,6 +429,7 @@ def _run_dsh_operation_host(
         "Final prose is not an operation outcome. Do not invent missing terms.\n"
         "Canonical locators for this binding: "
         + json.dumps(continuations, sort_keys=True)
+        + request_reference_instruction(request_source is not None)
     )
     timer = threading.Timer(timeout_seconds, owner.close)
     timer.daemon = True
