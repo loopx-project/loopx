@@ -668,7 +668,7 @@ provider、捕获一致性、身份接纳或 M2/M3 重新启用。同条评论�
 | 既有 transport：仅两项清单检查用 64 MiB private snapshot；普通 RPC 和 worker 输入 2 MiB；owner stdout 2 Mi 字符；历史 audit 输入 16 MiB | 限制传输和历史报告解码，不扩大普通 transport | 大清单 transport 与 audit 完整性测试覆盖路径。独立上限不能相加，也不保证任意最大 audit 均可发布。 |
 | 复制前目标剩余空间至少为普通文件复制字节数加 16 MiB | 发布前拒绝已知空间不足 | 有源码检查和失败清理测试；不保证抵御并发磁盘消耗，也不证明最坏空间预留成功。 |
 
-源码 owner 为 [`state_recovery.py`](../../../loopx/state_recovery.py)、
+源码 owner 为 [`state_recovery_io.py`](../../../loopx/control_plane/state_recovery_io.py)、
 [`state_recovery.ts`](../../../loopx/control_plane/state_recovery.ts) 和
 [`state_recovery_worker.ts`](../../../loopx/control_plane/state_recovery_worker.ts)。
 既有 [Python 恢复用例](../../../tests/test_state_recovery.py)及

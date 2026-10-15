@@ -847,3 +847,108 @@ def test_warm_context_receipt_is_separate_from_native_stderr(tmp_path):
     worker._warm_command("context")
     assert json.loads((tmp_path / "checkpoint-context.json").read_text()) == {"model_calls": 0}
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize('profile', ['official', 'single', 'native-goal', 'heartbeat-resume'])
+def test_custom_provider_uses_environment_credential_without_copying_login(tmp_path, monkeypatch, profile):
+    pytest.importorskip('sforge')
+    pytest.importorskip('harbor')
+    import tomllib
+    from types import SimpleNamespace
+    from sforge.harness.agent.codex import CodexAgent
+    from sforge.harness.config import SForgeConfig
+    from sforge.harness.run_agent import _build_agent_env
+    from benchmark.runtime.sforge import SForgeWorker, CodexOffline, BenchmarkCodex
+
+    # An ambient, unusable login must neither be needed nor staged on this route.
+    monkeypatch.setenv('CODEX_AUTH_JSON_PATH', str(tmp_path / 'must-not-read-auth.json'))
+    monkeypatch.setenv('OPENAI_API_KEY', 'wrong-ambient-key')
+    monkeypatch.setenv('OPENAI_BASE_URL', 'https://wrong.example/v1')
+    async def installed(self, environment):
+        pass
+    monkeypatch.setattr(CodexOffline, 'install', installed)
+    monkeypatch.setattr(BenchmarkCodex, 'install', installed)
+    monkeypatch.setattr(CodexAgent, 'install_stop_hook', lambda *args: None)
+    copied = {}
+    def copy(handle, source, target):
+        copied[str(target)] = source.read_text()
+    backend = SimpleNamespace(exec_run=lambda *a, **k: SimpleNamespace(exit_code=0),
+                              copy_to_container=copy)
+    config = SForgeConfig(agent_model='fixture', agent_effort='xhigh',
+                         agent_api_base_url='http://127.0.0.1:9876/v1',
+                         agent_api_key='synthetic-provider-secret')
+    worker = SForgeWorker(config, profile=profile, cwd='/task')
+    worker.install_stop_hook(backend, None, tmp_path, None)
+    native_env = _build_agent_env(worker)
+    assert native_env['OPENAI_API_KEY'] == config.agent_api_key
+    assert native_env['OPENAI_BASE_URL'] == config.agent_api_base_url
+    assert not any(name.endswith('/auth.json') for name in copied)
+    if profile in {'official', 'single'}:
+        settings = tomllib.loads(copied['/home/agent/.codex/config.toml'])
+        assert settings['model_provider'] == 'harbor'
+        assert settings['model_providers']['harbor']['env_key'] == 'OPENAI_API_KEY'
+        assert settings['model_providers']['harbor']['base_url'] == config.agent_api_base_url
+    else:
+        assert worker.runtime._get_env('CODEX_AUTH_JSON_PATH') == ''
+        env = worker.runtime._worker_env(cwd='/task')
+        assert env['OPENAI_API_KEY'] == config.agent_api_key
+        assert env['OPENAI_BASE_URL'] == config.agent_api_base_url
+        worker.prepared = True
+    command = worker.format_run_cmd('/task/prompt.md')
+    assert config.agent_api_key not in command
+    assert all(config.agent_api_key not in contents for contents in copied.values())
+    config.agent_api_key = None
+    with pytest.raises(ValueError, match='API credential'):
+        SForgeWorker(config, profile=profile, cwd='/task')
+
+
+def test_custom_provider_without_key_fails_before_creating_attempt(tmp_path, monkeypatch):
+    pytest.importorskip('sforge')
+    pytest.importorskip('harbor')
+    from benchmark.edgebench.run import main
+    monkeypatch.setenv('OPENAI_BASE_URL', 'http://127.0.0.1:9876/v1')
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    with pytest.raises(SystemExit, match='2'):
+        main(['--task', 'fixture', '--tasks-dir', str(tmp_path), '--log-dir', str(tmp_path),
+              '--run-id', 'missing-key', '--worker', 'official', '--model', 'fixture',
+              '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999'])
+    assert not (tmp_path / 'runs').exists()
+
+
+@pytest.mark.parametrize('custom', [False, True])
+def test_edgebench_cli_forwards_only_explicit_provider_pair(tmp_path, monkeypatch, custom):
+    pytest.importorskip('sforge')
+    pytest.importorskip('harbor')
+    from types import SimpleNamespace
+    from benchmark.edgebench import run
+    monkeypatch.setenv('LOOPX_SRC_DIR', str(tmp_path))
+    monkeypatch.setenv('LOOPX_EXPECTED_COMMIT', 'fixture')
+    monkeypatch.setenv('CODEX_AUTH_JSON_PATH', '/synthetic-login')
+    monkeypatch.setenv('OPENAI_API_KEY', 'synthetic-provider-secret')
+    if custom:
+        monkeypatch.setenv('OPENAI_BASE_URL', 'http://127.0.0.1:9876/v1')
+    else:
+        monkeypatch.delenv('OPENAI_BASE_URL', raising=False)
+    (tmp_path / 'fixture.json').write_text('{}')
+    monkeypatch.setattr(run, 'source_pins', lambda *a: ('fixture', 'fixture'))
+    monkeypatch.setattr(run, 'load_benchmark', lambda *a: None)
+    monkeypatch.setattr(run, 'make_task_spec', lambda *a: SimpleNamespace(
+        cwd='/task', work_image_key='work', judge_image_key='judge', internet=False,
+        game_mode=False, submit_paths=['solver.py'], work=SimpleNamespace(agent_query='fixture task'),
+        judge=SimpleNamespace(selection='score_first', score_direction='maximize')))
+    def backend(**kwargs):
+        assert kwargs['oauth_proxy'] is custom
+        return SimpleNamespace(image_exists=lambda image: True)
+    monkeypatch.setattr(run, 'RecordingDockerBackend', backend)
+    def stop_before_solver(**kwargs):
+        config = kwargs['config']
+        assert config.agent_api_base_url == ('http://127.0.0.1:9876/v1' if custom else None)
+        assert config.agent_api_key == ('synthetic-provider-secret' if custom else None)
+        raise RuntimeError('synthetic launch boundary')
+    monkeypatch.setattr(run, 'run_agent', stop_before_solver)
+    with pytest.raises(RuntimeError, match='synthetic launch boundary'):
+        run.main(['--task', 'fixture', '--tasks-dir', str(tmp_path), '--log-dir', str(tmp_path),
+                  '--run-id', 'route', '--worker', 'official', '--model', 'fixture',
+                  '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999'])
+    receipt = (tmp_path / 'runs/route/fixture/runtime-receipt.json').read_text()
+    assert 'synthetic-provider-secret' not in receipt

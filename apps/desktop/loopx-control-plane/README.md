@@ -50,6 +50,13 @@ previous runtime. Core's installation-only doctor qualifies non-editable wheel
 fingerprints: a local reuse fence, not publisher or source attestation. Older
 CLIs without that readback can use the automatic App-owned fallback.
 
+Wheel qualification has a separate ten-second subprocess deadline because it
+starts Core, checks the TypeScript runtime and hashes package contents. The
+one-second environment/version probes remain unchanged. A slow valid wheel can
+therefore qualify without asking the user to repair it; invalid or timed-out
+qualification still fails closed, and timed-out process groups are terminated
+and reaped. This does not speed up doctor or certify every cold-start workload.
+
 A launch-time `LOOPX_BIN` remains the developer's explicit pin. Development mode
 also accepts a source runtime without promoting an installation. A previously
 saved path is a discovery candidate, not a permanent version pin. Corrupt
@@ -304,6 +311,43 @@ cd ..
 ./scripts/dashboard.sh build
 npm run build
 ```
+
+On macOS, also qualify a released artifact using the opt-in checks below
+(run from `src-tauri`, replacing the paths with downloaded release artifacts).
+Keep the updater archive's `.sig` file beside it:
+
+```bash
+LOOPX_TEST_APP="/path/to/LoopX.app" cargo test --lib \
+  real_release_backup_restores_damage_and_rejects_tampering -- --ignored
+LOOPX_TEST_SIGNED_ARCHIVE="/path/to/LoopX.app.tar.gz" cargo test \
+  --test signed_bundle -- --ignored
+```
+
+The first check copies the signed App into temporary directories, then exercises
+the production restore path after removing its executable, a sealed runtime
+resource, or the entire target bundle. It also rejects a tampered backup before
+journaling or replacement and checks that the source artifact remains intact.
+The second verifies the updater archive with the shipped public key and rejects
+modified bytes. Neither check launches the App or writes to an installed App or
+user data. These qualify the native recovery and signature boundaries; they do
+not replace packaged UI checks of download failure, restart, or runtime handoff.
+
+### Recover An Interrupted App Update
+
+If replacement leaves the App incomplete and a backup is available, the update
+panel exposes **Restore previous version** directly. Restore it, then choose
+**Restart to finish**. This removes two navigation disclosures from the failure
+path; choosing a healthy installation's rollback remains under Advanced options.
+The native updater still verifies the backup before replacement. An unavailable
+or invalid backup reports its cause without recommending an unavailable runtime
+repair. Restoring the App does not overwrite a separately managed CLI.
+
+| Previous recovery panel | Direct recovery action |
+| --- | --- |
+| ![Recovery hidden in Advanced options](docs/recovery-before.png) | ![Restore action beside the incomplete-installation message](docs/recovery-after.png) |
+
+These packaged-panel captures use synthetic native status for presentation
+comparison; they do not certify an installed update or an executing task's recovery.
 
 `npm run build` produces the configured platform bundles under
 `src-tauri/target/release/bundle/`. The release workflow builds macOS `.dmg`

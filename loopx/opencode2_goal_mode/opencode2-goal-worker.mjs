@@ -331,8 +331,8 @@ export function parseExecFailure(error) {
   // stderr payload. Normalize the most useful part.
   const stderr = String(error?.stderr || "")
   let status = null
-  const statusMatch = /status[ =:]+(\d{3})/i.exec(stderr)
-  if (statusMatch) status = Number(statusMatch[1])
+  const statusMatch = /(?:status[ =:]+(\d{3})|HTTP(?:\/[\d.]+)?\s+(\d{3}))/i.exec(stderr)
+  if (statusMatch) status = Number(statusMatch[1] || statusMatch[2])
   const messageMatch = /(?:error|message)[ =:]+"?([^"\n]{0,180})/i.exec(stderr)
   return {
     code: error?.code || null,
@@ -344,6 +344,11 @@ export function parseExecFailure(error) {
 
 
 export function createApiTransport({ bin = process.env.OPENCODE2_BIN || "opencode2", execFileImpl = execFile } = {}) {
+  const waitPaths = [
+    (sessionID) => `/api/session/${sessionID}/wait`,
+    (sessionID) => `/api/experimental/session/${sessionID}/wait`,
+  ]
+  let waitPathIndex = 0
   const call = async (method, apiPath, body = null, timeoutMs = 60_000) => {
     const args = ["api", method, apiPath]
     if (body !== null) args.push("-d", JSON.stringify(body))
@@ -387,15 +392,21 @@ export function createApiTransport({ bin = process.env.OPENCODE2_BIN || "opencod
       return response?.data || null
     },
     async waitForSession(sessionID, { timeoutMs = 60_000 } = {}) {
-      try {
-        await call("post", `/api/session/${sessionID}/wait`, null, timeoutMs)
-        return true
-      } catch (error) {
-        // A chunk timeout means the turn is still running; the caller
-        // verifies the message tail and re-issues the wait.
-        if (error?.killed === true || error?.code === "ETIMEDOUT") return false
-        throw error
+      let lastNotFound = null
+      for (let index = waitPathIndex; index < waitPaths.length; index += 1) {
+        try {
+          await call("post", waitPaths[index](sessionID), null, timeoutMs)
+          waitPathIndex = index
+          return true
+        } catch (error) {
+          // A chunk timeout means the turn is still running; the caller
+          // verifies the message tail and re-issues the wait.
+          if (error?.killed === true || error?.code === "ETIMEDOUT") return false
+          if (parseExecFailure(error).status !== 404) throw error
+          lastNotFound = error
+        }
       }
+      throw lastNotFound
     },
     async sendPrompt(sessionID, text) {
       const response = await call("post", `/api/session/${sessionID}/prompt`, {

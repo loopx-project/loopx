@@ -114,6 +114,25 @@ preserved for inspection; the companion notice governs their current evidence
 status. Neither archive category is the architecture for new work or grants
 runner, verifier, submission, or publication authority.
 
+## Matched model provider routing
+
+For a custom Responses-compatible model endpoint, set `OPENAI_BASE_URL` and
+`OPENAI_API_KEY` in the private runner environment before invoking
+`python -m benchmark.edgebench.run` for either arm. The native SForge config,
+official Codex home and LoopX worker use the same endpoint and environment-key
+credential contract. A base URL without a key fails before creating the attempt;
+the custom route does not copy or fall back to `CODEX_AUTH_JSON_PATH`. Credentials
+are not embedded in Codex settings or the logged scheduler command. The operator
+still owns endpoint access, actual model/tool qualification and private evidence.
+
+With `OPENAI_BASE_URL` unset, login-file behavior is unchanged, including the
+required `CODEX_AUTH_JSON_PATH`; an ambient API key alone does not select the
+custom route. Change routes only between fresh attempts. Checkpoint continuation
+must retain the captured endpoint/configuration and supply fresh credentials
+externally. This routing repair enables matched experiments under the
+[long-horizon research contract](../docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md);
+it establishes neither sustained operation nor a solver-quality improvement.
+
 ## Inert checkpoint capture
 
 This is a developer prerequisite for the [research checkpoint contract](../docs/architecture/rfcs/hierarchical-agent-stride-control-v0.md#77-research-state-branching-and-matched-continuation),
@@ -869,6 +888,34 @@ continuation gate must accept that replan before the declared normal cadence
 returns. Preparation and context-reading cost belong in the comparison. Omit all
 restore flags for the unchanged cold entry; never reuse an ambiguous trial
 folder as a new attempt.
+
+Research files outside the task workspace need explicit capture **and** explicit
+receiver selection. Add each required directory or file to the source checkpoint
+request's existing `components` array before capture, for example
+`{"id": "research_trials", "source_path": "/tmp/research-trials"}`. Create that
+owned directory before the first capture and keep durable experiment inputs,
+candidates and reports there (or inside the task workspace). Do not capture all
+of `/tmp`, credentials, or unrelated files. The archive cannot discover a missing
+dependency from a conversation reference.
+
+At continuation, inspect the sealed `worker_file_snapshot.components` paths and
+pass `--restore-research-component research_trials`; repeat the option for each
+selected component. Only recorded files below `/tmp/` or `/home/workspace/`,
+separate from the full task workspace, are eligible. The receiver restores the
+original guest path, requires an absent target and an existing physical parent,
+and verifies copied bytes/modes through the artifact owner before model work.
+Unknown/duplicate IDs, overlapping roots, occupied targets and symlink parents
+reject. Selection does not grant control-plane authority; caller-declared files
+are private artifacts and are not automatically filtered for credentials.
+
+Omitting the option preserves workspace-only restoration; unselected components
+remain inert in the archive. A point that never captured a dependency cannot be
+repaired by adding a later copy. Qualify the actual experiment's required files
+in a receiver before describing its research state as complete. An interrupted
+copy leaves a failed attempt to inspect; do not reuse that receiver or overwrite
+its workspace backup. Disable this opt-in by omitting the selection on a new
+attempt; preserve previous evidence. This provider CLI transport does not close
+the generic checkpoint frontend or automatic dependency-discovery gaps.
 
 The default continuation retains the captured remaining time. For a separately
 authorized longer study, explicitly add `--restore-phase-extension-seconds N`

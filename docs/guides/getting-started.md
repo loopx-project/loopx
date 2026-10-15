@@ -1055,9 +1055,12 @@ See [heartbeat automation prompt](../heartbeat-automation-prompt.md) and
 
 ## Dashboard
 
-Dashboard status is an experimental operator preview. The CLI and
-`loopx status` remain the canonical daily workflow; the React dashboard
-is useful for demos, public-safe fixtures, and local inspection.
+The Personal Workspace started by `loopx dashboard` is the supported
+browser/PWA entry for everyday use, as the README states: one local service
+serves the packaged UI, the status projection and Agent Chat. `loopx status`
+and the other CLI commands read the same state and remain the readback path
+for every claimed journey, for scripting and for remote hosts; neither surface
+is a preview of the other.
 
 Start the installed Personal Workspace with one command:
 

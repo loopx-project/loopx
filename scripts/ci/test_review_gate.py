@@ -58,7 +58,7 @@ class GateTests(unittest.TestCase):
         def expression(value, action, *, number=17, event="pull_request"):
             ref = "refs/heads/main" if action == "closed" or event != "pull_request" else f"refs/pull/{number}/merge"
             github = SimpleNamespace(event_name=event, ref=ref, event=SimpleNamespace(
-                action=action, number=number, pull_request=None))
+                action=action, number=number, pull_request=SimpleNamespace(number=number)))
             return eval(value.strip().removeprefix("${{").removesuffix("}}").strip()
                         .replace("&&", "and").replace("||", "or").replace("!cancelled()", "not cancelled()"),
                         {"__builtins__": {}}, {"github": github, "always": lambda: True,

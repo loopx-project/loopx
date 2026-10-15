@@ -19,6 +19,15 @@ _AUTHORITY_PRINCIPAL = re.compile(r"^[a-z][a-z0-9._-]{0,30}:[A-Za-z0-9._:-]{1,20
 class ChatActionNormalizationMixin:
     """Normalize typed action inputs without owning effects or persistence."""
 
+    def _goal(self, goal_id: str) -> dict[str, Any]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _allowed_parameters(
+        parameters: Mapping[str, Any], *, allowed: set[str],
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
     def _normalize(
         self, action_kind: str, parameters: Mapping[str, Any]
     ) -> dict[str, Any]:
@@ -32,6 +41,18 @@ class ChatActionNormalizationMixin:
             _text,
         )
 
+        if action_kind == "goal.acceptance.check":
+            values = self._allowed_parameters(parameters, allowed={"goal_id", "document", "prepared_by"})
+            goal_id = _opaque(values.get("goal_id"), field="goal_id")
+            goal = self._goal(goal_id)
+            document = values.get("document")
+            if not isinstance(document, Mapping):
+                raise ValueError("a prepared check requires an acceptance document")
+            prepared_by = values.get("prepared_by")
+            if prepared_by is not None:
+                if prepared_by not in registered_agent_ids_for_goal(goal):
+                    raise ValueError("the preparing Agent must be registered for this Goal")
+            return {"goal_id": goal_id, "document": dict(document), "prepared_by": prepared_by}
         if action_kind == "operation.execute":
             values = self._allowed_parameters(
                 parameters,

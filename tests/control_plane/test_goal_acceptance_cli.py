@@ -128,6 +128,8 @@ def test_owner_configure_validation_failure_success_and_disable(acceptance_goal)
     (project / "artifact.txt").write_text("accepted")
     code, passed = cli("verify", "--agent-id", "agent-a", "--execute")
     assert code == 0 and passed["checks_passed"] is True, passed
+    assert passed["status"] == "applied" and passed["goal_id"] == "goal-acceptance"
+    assert all("oracle" not in row for row in passed["goal_acceptance_contract"]["criteria"])
     observed = cli("inspect")[1]
     assert observed["goal_acceptance_contract"]["status"] == "accepted"
     assert "validation_argv" not in json.dumps(observed)

@@ -51,6 +51,7 @@ import { MessageActivity } from "./message-activity";
 import { ChannelTimeline } from "./channel-timeline";
 import { ContextDrawer } from "./context-drawer";
 import { monitorScheduleReadback } from "./monitor-readback";
+import { AttachedAgentConversations } from "./attached-agent-conversations";
 import { GoalSidebar } from "./goal-sidebar";
 import { GoalTasksView } from "./goal-tasks-view";
 import { GoalOverview, goalOverviewAttentionId } from "./goal-overview";
@@ -1295,6 +1296,8 @@ export function PersonalWorkspacePage({
     const stored = actionReadback.data.filter(proposal => selectedGoalId || proposal.context.kind === "manager"
       || (proposal.action_kind === "operation.execute" && knownGoals.has(String(proposal.normalized_parameters.goal_id))));
     const restoreable = stored
+      // Acceptance plans are reviewed beside the delivery they check.
+      .filter((proposal) => proposal.action_kind !== "goal.acceptance.check")
       .filter((proposal) => ["preview_ready", "gated", "deferred", "applying"].includes(proposal.status)
         || compileActionReviewPlan(proposal).retryOriginal === true
         || (proposal.action_kind === "team.plan" && proposal.status === "applied")
@@ -2191,6 +2194,7 @@ export function PersonalWorkspacePage({
               followConversationRef.current = nearBottom;
               setShowLatestMessage(!nearBottom);
             }}>
+            {selectedGoalId && selectedGoalTab === "chat" && !readOnly ? <AttachedAgentConversations key={selectedGoalId} goalId={selectedGoalId} zh={locale === "zh-CN"}/> : null}
             {selectedGoalId && selectedGoalTab === "chat" && !readOnly && selectedAgentId === "codex" && conversationSessionId && loopxMode?.settings.execution_config && loopxMode.settings.agent_id ? <GoalTeamResults
               key={`${conversationSessionId}:${loopxMode.settings.agent_id}:${loopxMode.settings.execution_config}`}
               sessionId={conversationSessionId} zh={locale === "zh-CN"}

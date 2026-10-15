@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import hashlib
 import json
 import logging
@@ -130,6 +131,8 @@ def main(argv=None):
     parser.add_argument("--restore-goal")
     parser.add_argument("--restore-agent")
     parser.add_argument("--restore-source-todo")
+    parser.add_argument("--restore-research-component", action="append", default=[],
+                        help="Opt-in captured file component ID to restore at its original research path; repeat per component")
     parser.add_argument("--restore-phase-extension-seconds", type=int, default=0,
                         help="Explicit authorized extra continuation time; omitted preserves the checkpoint's remaining phase")
     parser.add_argument("--eval-interval", type=int,
@@ -139,6 +142,10 @@ def main(argv=None):
     parser.add_argument("--judge-url", required=True)
     parser.add_argument("--api-proxy-url", help="Operator-owned, OpenAI-only CONNECT proxy")
     args = parser.parse_args(argv)
+    api_base_url = os.environ.get("OPENAI_BASE_URL") or None
+    api_key = os.environ.get("OPENAI_API_KEY") if api_base_url else None
+    if api_base_url and not api_key:
+        parser.error("OPENAI_BASE_URL requires OPENAI_API_KEY; no login fallback")
     args.timeout = _task_default(args.task, "timeout_seconds", args.timeout, DEFAULT_TIMEOUT_SECONDS)
     args.eval_interval = (0 if args.feedback == "native" and args.eval_interval is None else
                          _task_default(args.task, "eval_interval_seconds", args.eval_interval, 300))
@@ -171,6 +178,8 @@ def main(argv=None):
     if (not 0 <= args.restore_phase_extension_seconds < 2 ** 53 or
             (args.restore_phase_extension_seconds and not args.restore_checkpoint)):
         parser.error("A non-negative phase extension requires an explicit warm checkpoint continuation")
+    if args.restore_research_component and not args.restore_checkpoint:
+        parser.error("Research component restoration requires an explicit warm checkpoint continuation")
     if args.restore_checkpoint and (not handoff or args.eval_interval != 0 or args.replan_after_todos is not None):
         parser.error("Warm continuation requires full native checkpoint capture, no periodic evaluation and effective-Turn cadence")
     # One directory is one attempt: never reuse native registration or overwrite
@@ -217,6 +226,7 @@ def main(argv=None):
         workspace_instructions = native_task_instructions(task.submit_paths, **native_policy)
         task_objective = native_task_objective()
     config = SForgeConfig(
+        agent_api_base_url=api_base_url, agent_api_key=api_key,
         agent_model=args.model, agent_effort=args.effort,
         agent_timeout=args.timeout, log_dir=args.log_dir, tasks_dir=args.tasks_dir,
         work_cpu_limit=4, work_mem_limit="16g",
@@ -248,7 +258,8 @@ def main(argv=None):
         # Validate session/workspace participants before native registration.
         candidate = WarmStart(args.restore_checkpoint, args.restore_sha256, args.restore_config,
             args.restore_goal, args.restore_agent, args.restore_source_todo,
-            int(time.time()) + args.timeout, args.replan_after_turns or 6)
+            int(time.time()) + args.timeout, args.replan_after_turns or 6,
+            tuple(args.restore_research_component))
         candidate.verify(task.cwd)
         warm_start = candidate
     agent = SForgeWorker(config, profile=args.worker, cwd=task.cwd,
@@ -286,7 +297,7 @@ def main(argv=None):
         from benchmark.edgebench.checkpoint_supervisor import CheckpointSupervisor
         checkpoint = CheckpointSupervisor(args.checkpoint_controller_file, trial / "checkpoints")
     backend = RecordingDockerBackend(log_dir=trial / "collected", logger=logger,
-                                     oauth_proxy=bool(args.api_proxy_url),
+                                     oauth_proxy=bool(args.api_proxy_url or api_base_url),
                                      blind_api_endpoint=blind_endpoint, feedback=feedback,
                                      **({"checkpoint": checkpoint} if checkpoint is not None else {}))
     for image in (task.work_image_key, task.judge_image_key):
@@ -297,8 +308,7 @@ def main(argv=None):
             expected_sha256=snapshot["native_capsule_sha256"], run_id=args.run_id,
             phase_deadline_file=clock, phase_extension_seconds=args.restore_phase_extension_seconds)
         epoch = int(clock.read_text())
-        warm_start = WarmStart(candidate.root, candidate.sha256, candidate.config,
-            candidate.goal_id, candidate.agent_id, candidate.source_todo_id, epoch, candidate.normal_cadence)
+        warm_start = replace(candidate, deadline_epoch=epoch)
         reference = json.loads((capsule / "checkpoint.json").read_bytes())["point_metadata"]["native_reference"]
         restored_registration = RestoredRegistration(reference["checkpoint_id"],
             reference["manifest_sha256"], epoch, capsule / "components/native_judge/manifest.json")

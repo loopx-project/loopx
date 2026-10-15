@@ -1,5 +1,69 @@
 use super::*;
 
+#[cfg(unix)]
+fn installation_probe_fixture(body: &str) -> (tempfile::TempDir, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().expect("fixture directory");
+    let bin = root.path().join("bin");
+    fs::create_dir(&bin).expect("fixture bin");
+    let executable = bin.join("loopx");
+    fs::write(
+        &executable,
+        format!("#!/bin/sh\n[ \"$*\" = \"--format json doctor --installation-only\" ] || exit 2\n{body}\n"),
+    )
+    .expect("fixture executable");
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+    (root, executable)
+}
+
+#[test]
+#[cfg(unix)]
+fn installation_probe_allows_cold_qualification_beyond_version_budget() {
+    let expected = serde_json::json!({
+        "schema_version": "loopx_runtime_identity_v1",
+        "package_version": "1.4.1", "release_id": null, "source_revision": null,
+        "package_fingerprint": format!("sha256:{}", "a".repeat(64)),
+    });
+    let payload = serde_json::json!({
+        "ok": true, "scope": "installation_only", "service_runtime_identity": expected,
+    });
+    let (_root, executable) =
+        installation_probe_fixture(&format!("sleep 1.2\nprintf '%s\\n' '{payload}'"));
+    assert_eq!(
+        runtime_identity_for_executable(executable.to_str().unwrap()),
+        Some(expected),
+        "slow, fully qualified wheels must not be treated as missing runtimes"
+    );
+    let mut banner = Command::new("sh");
+    banner.args(["-c", "sleep 2; printf 'Python 3.12.0\\n'"]);
+    assert!(
+        timed_output(banner).is_none(),
+        "version probes keep their short bound"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn installation_probe_still_bounds_and_reaps_hung_qualification() {
+    let (root, executable) = installation_probe_fixture("echo $$ > \"$0.pid\"\nexec sleep 30");
+    let started = Instant::now();
+    assert!(runtime_identity_for_executable(executable.to_str().unwrap()).is_none());
+    assert!(
+        started.elapsed() < Duration::from_secs(13),
+        "qualification must remain bounded"
+    );
+    let pid = fs::read_to_string(root.path().join("bin/loopx.pid")).unwrap();
+    assert!(
+        !Command::new("kill")
+            .args(["-0", pid.trim()])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success(),
+        "timed out probe must be reaped"
+    );
+}
+
 #[test]
 fn status_readiness_is_explicit_and_fails_closed() {
     assert_eq!(ServiceKind::Status.probe_path(), "/?readiness=1");

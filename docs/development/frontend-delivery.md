@@ -32,11 +32,25 @@ frontend-only decisions or a setting for a capability with no persistent policy.
 Carry the same task through these steps:
 
 1. **Compare the journey.** Write the current and proposed user steps in the
-   existing before/after evidence. Count required navigation, information the
-   user must repeat, questions, confirmations and recovery effort. Explain the
-   information, authority or unavoidable prerequisite supplied by each required
-   step; remove a step that supplies none. This is a comparison, not a universal
-   click limit. Keep necessary scoped consent and explicit effect confirmation;
+   existing before/after evidence, anchored to the original request rather than
+   a configuration task invented from the proposed implementation. Compare
+   no change and a smaller lawful route, including preparation the Agent can
+   already perform. Separate missing intent or owner-only authorization from
+   lookup, identifiers, formatting and other preparation. Count total navigation,
+   repeated information, questions, confirmations and recovery effort. Justifying
+   each control individually cannot establish that this whole human workflow is
+   necessary. Default to one required interaction from the original intent to a usable
+   result, or zero additional interactions when the intent and authority already
+   exist. Account for every required statement, choice or confirmation, including
+   preparation outside the UI; one final button does not make a multi-round task
+   one-round. Justify each additional round by a missing fact, consequential
+   choice or authority boundary, not feature value alone. Record navigation,
+   copying, waiting and recovery separately; voluntary refinement does not raise
+   the ordinary-path budget. These are design defaults, not a click-count gate.
+   Remove work the Agent can prepare under existing authority and
+   reuse prior scoped authorization. This is a comparison, not a universal click
+   limit or a ban on legitimate technical configuration. Keep necessary scoped
+   consent and explicit effect confirmation;
    make optional refinement optional. A complete conversational draft should not
    require a second form just to repeat the same facts.
 2. **Choose the owner and composition.** Reuse the existing typed state and
@@ -61,7 +75,9 @@ Carry the same task through these steps:
    browser, installed App and real model each prove different things.
 5. **Review the task before the diff narrative.** The review capability's
    `problem_context.outcome_impact.user_experience` references the same journey
-   and validation, then asks what remains wrong even if every test passes.
+   and validation. Independently check that the author's task matches the original
+   request and challenge the full human workload against the smaller lawful
+   route, then ask what remains wrong even if every test passes.
    Reused evidence needs its revision and unchanged assumptions. A material
    unsupported claim remains unproven. A necessary confirmation can be accepted
    with its authority basis; green CI cannot justify redundant confirmation.

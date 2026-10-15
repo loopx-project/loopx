@@ -591,6 +591,16 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
   if (proposal.status !== "preview_ready" && proposal.status !== "deferred") return held("inactive", "inactive_proposal");
   const reviewed = (reason: ActionReviewReason, canApply = true): ActionReviewPlan =>
     finish({ interaction: "review", reason, canApply });
+  if (proposal.action_kind === "goal.acceptance.check") {
+    const context = objectValue(proposal.context);
+    const goalId = textValue(parameters?.goal_id);
+    if (!goalId || context?.kind !== "goal" || context.goal_id !== goalId
+        || !objectValue(parameters?.document) || !identity.proposalId || !identity.sourceFingerprint) {
+      return held("refresh", "incomplete_proposal");
+    }
+    return reviewed(proposal.permission_classification === "local_command_execution"
+      ? "action_review" : "unknown_permission", proposal.permission_classification === "local_command_execution");
+  }
   if (proposal.action_kind !== "goal.lifecycle") {
     return reviewed(proposal.permission_classification === "protected" ? "protected_action" : "action_review");
   }

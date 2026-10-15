@@ -1,3 +1,4 @@
+import { runCodexAttached } from "./codex-attached.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
 
 // An attached_host Session queues a follow-up while its host runs a Turn
@@ -21,6 +22,7 @@ function runningSession(goalId, mode) {
 export const attachedHostFollowUpScenario = {
   id: "attached-host-follow-up",
   async run({ browser, collectCoverage, url }) {
+    await runCodexAttached(browser);
     const heldStreams = [];
     const posts = [];
     const context = await openWorkspacePage(browser, url, {

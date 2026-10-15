@@ -1776,7 +1776,10 @@ function PersonalGoalHome({
             pending: false,
             reconnect: error instanceof ChatApiError && error.payload.reconnectable === true,
             sourceLabel: "LoopX Chat 本地后端",
-            text: interrupted ? [streamedText.trim(), "已中断。你可以在当前会话继续发送消息。"].filter(Boolean).join("\n\n") : error instanceof Error ? error.message : "无法恢复进行中的 Agent 回合。",
+            text: interrupted ? [streamedText.trim(), "已中断。你可以在当前会话继续发送消息。"].filter(Boolean).join("\n\n")
+              : error instanceof ChatApiError && error.payload.error_code === "server_restarted"
+                ? t("feedback.turnRestarted")
+                : error instanceof Error ? error.message : "无法恢复进行中的 Agent 回合。",
           });
         } finally {
           releaseObservation();
@@ -2368,7 +2371,9 @@ function PersonalGoalHome({
         pending: false,
         reconnect: payloadError?.reconnectable === true,
         sourceLabel: "LoopX Chat 本地后端",
-        text: payloadError?.error_code === "resume_failed"
+        text: payloadError?.error_code === "server_restarted"
+          ? t("feedback.turnRestarted")
+          : payloadError?.error_code === "resume_failed"
           ? `原 ${answerIdentityLabel(targetContextId, selectedRoute.label)} 会话无法恢复。本地历史已经保留，请在运行详情里选择“重试恢复”或“开始新 Session”。`
           : payloadError?.delivery_state === "not_delivered" && payloadError.turn_replay_safe === true && !submittedTurnId
             ? `${locale === "zh-CN" ? "请求未提交；草稿和图片已保留，可以修改后重新发送。" : "Request not submitted. Draft and images retained; edit and send again."}\n\n${error instanceof Error ? error.message : ""}`

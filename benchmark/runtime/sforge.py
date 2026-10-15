@@ -109,7 +109,9 @@ class SForgeWorker(CodexAgent):
             raise ValueError("Worker budget must exceed the 160s startup/settlement reserve")
         if not config.agent_model or not config.agent_effort:
             raise ValueError("Explicit model and reasoning effort are required")
-        if not os.environ.get("CODEX_AUTH_JSON_PATH"):
+        if config.agent_api_base_url and not config.agent_api_key:
+            raise ValueError("Custom model provider requires an API credential")
+        if not config.agent_api_base_url and not os.environ.get("CODEX_AUTH_JSON_PATH"):
             raise ValueError("Set CODEX_AUTH_JSON_PATH to the trial credential source")
         if task_entry == "loopx-planned" and not profile.startswith("heartbeat-"):
             raise ValueError("loopx-planned requires a heartbeat profile")
@@ -208,6 +210,12 @@ class SForgeWorker(CodexAgent):
         effort = {"max": "xhigh"}.get(self._config.agent_effort, self._config.agent_effort)
         common = dict(logs_dir=log_dir / "worker", model_name=self._config.agent_model,
                       reasoning_effort=effort)
+        if self._config.agent_api_base_url:
+            common["extra_env"] = {
+                "OPENAI_BASE_URL": self._config.agent_api_base_url,
+                "OPENAI_API_KEY": self._config.agent_api_key,
+                "CODEX_AUTH_JSON_PATH": "",
+            }
         if self.profile in {"official", "single"}:
             asyncio.run(CodexOffline(**common).install(self.environment))
             result = backend.exec_run(handle, "mkdir -p /home/agent/.codex", user="agent")
@@ -215,18 +223,23 @@ class SForgeWorker(CodexAgent):
                 raise RuntimeError("Could not create isolated Codex home")
             with tempfile.TemporaryDirectory(prefix="benchmark-auth-") as directory:
                 home = Path(directory)
-                shutil.copyfile(os.environ["CODEX_AUTH_JSON_PATH"], home / "auth.json")
-                (home / "auth.json").chmod(0o600)
+                if not self._config.agent_api_base_url:
+                    shutil.copyfile(os.environ["CODEX_AUTH_JSON_PATH"], home / "auth.json")
+                    (home / "auth.json").chmod(0o600)
                 prepare_codex_home(
                     home, execution=Execution(mode="plain"), workspace=Path(self.cwd),
                     model=self._config.agent_model, effort=effort,
-                    base_url="", api_key="", wire_api="responses", skills=None,
+                    base_url=self._config.agent_api_base_url or "",
+                    api_key=self._config.agent_api_key or "", wire_api="responses", skills=None,
                 )
                 for name in ("auth.json", "config.toml"):
+                    if not (home / name).exists():
+                        continue
                     backend.copy_to_container(handle, home / name,
                                               PurePosixPath(f"/home/agent/.codex/{name}"))
             result = backend.exec_run(handle, ["/bin/bash", "-c",
-                "chown -R agent:agent /home/agent/.codex && chmod 0600 /home/agent/.codex/auth.json"],
+                "chown -R agent:agent /home/agent/.codex && "
+                "{ test ! -f /home/agent/.codex/auth.json || chmod 0600 /home/agent/.codex/auth.json; }"],
                 user="root")
             if result.exit_code:
                 raise RuntimeError("Could not protect trial credentials")
@@ -352,6 +365,7 @@ class SForgeWorker(CodexAgent):
                 asyncio.run(self.runtime._write_task_document(self.environment, result.stdout))
             if self.warm_start is not None:
                 self._warm_command("context")
+            if self.warm_start is not None and not self._config.agent_api_base_url:
                 auth = Path(os.environ["CODEX_AUTH_JSON_PATH"]).resolve()
                 asyncio.run(self.environment.upload_file(auth, f"{_CODEX_HOME}/auth.json"))
                 protected = self.backend.exec_run(self.handle, ["/bin/bash", "-c",
@@ -377,6 +391,10 @@ class SForgeWorker(CodexAgent):
             clock = (f"test ! -e {deadline}; printf '%s\\n' {self.warm_start.deadline_epoch} > {deadline}; ")
         else:
             clock = f"test -f {deadline} || echo $(( $(date +%s) + {self.timeout_seconds} )) > {deadline}; "
+        if self._config.agent_api_base_url:
+            # SForge injects the credential through the container execution
+            # environment. Do not duplicate it in the logged shell command.
+            env.pop("OPENAI_API_KEY", None)
         exports = " ".join(f"{key}={shlex.quote(value)}" for key, value in env.items())
         return self._execution_command(
             f"set -eu; {clock}"

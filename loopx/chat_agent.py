@@ -753,6 +753,14 @@ class CodexChatAgentSession:
         owner_git_write = (project_context is not None and not permissions_profile
             and selected_sandbox == "workspace-write"
             and (root / ".git").is_dir() and not (root / ".git").is_symlink())
+        owner_git_write_roots = [str(root / ".git")] if owner_git_write else []
+        # Repository skills are project content, but Codex protects all of
+        # .codex recursively by default. Map only the physical skills subtree
+        # for ordinary project writes; never open project config or follow a
+        # linked instruction directory into another workspace/account.
+        if owner_git_write and all(path.is_dir() and not path.is_symlink()
+                                   for path in (root / ".codex", root / ".codex" / "skills")):
+            owner_git_write_roots.append(str(root / ".codex" / "skills"))
         # Pin the host store explicitly, including compatibility retries. Never
         # redirect an existing thread by inheriting a different launch context.
         base_home = (
@@ -888,10 +896,8 @@ class CodexChatAgentSession:
                     writable = settings.get("writable_roots", [])
                     if not isinstance(writable, list) or any(not isinstance(path, str) for path in writable):
                         raise session._runtime_error("Invalid native workspace write roots.")
-                    # Only physical, in-workspace metadata gains a write root.
-                    # Do not follow .git links or a linked worktree's gitdir.
                     host_config = {**(host_config or {}), "sandbox_workspace_write": {
-                        **settings, "writable_roots": list(dict.fromkeys([*writable, str(root / ".git")]))}}
+                        **settings, "writable_roots": list(dict.fromkeys([*writable, *owner_git_write_roots]))}}
                 if permissions_profile:
                     host_config = codex_context.disable_mcp_servers(effective, host_config or {})
                     try:
@@ -982,8 +988,9 @@ class CodexChatAgentSession:
                 applied = thread_result.get("sandbox")
                 applied_roots = applied.get("writableRoots") if isinstance(applied, dict) else None
                 if (not isinstance(applied, dict) or applied.get("type") != "workspaceWrite"
-                        or not isinstance(applied_roots, list) or str(root / ".git") not in applied_roots):
-                    raise session._runtime_error("Codex did not apply the project Git write root.")
+                        or not isinstance(applied_roots, list)
+                        or any(path not in applied_roots for path in owner_git_write_roots)):
+                    raise session._runtime_error("Codex did not apply the project Git write roots.")
             if not session.thread_id:
                 raise session._runtime_error(
                     "Codex app-server did not return a thread id."

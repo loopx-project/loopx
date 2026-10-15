@@ -933,7 +933,9 @@ class ChatRuntimeController:
                     expected_statuses={"queued", "starting", "running", "interrupting"},
                     status="failed",
                     error_code="server_restarted",
-                    error="LoopX Chat restarted before this turn completed.",
+                    error=("LoopX Chat restarted before this turn finished. "
+                           "Your conversation is saved; this turn was not retried automatically. "
+                           "You can continue with a follow-up in this session."),
                     completed_at=utc_now(),
                 )
                 if failed is not None:
@@ -941,7 +943,7 @@ class ChatRuntimeController:
                         session_id,
                         str(active_turn_id),
                         kind="turn.failed",
-                        payload={"error_code": "server_restarted"},
+                        payload={"error_code": "server_restarted", "message": failed["error"]},
                     )
         try:
             stored_messages = self.store.messages(session_id)

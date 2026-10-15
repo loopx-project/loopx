@@ -663,12 +663,13 @@ def test_project_git_configuration_preserves_local_config_without_account_inheri
 
 
 @pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("skills", ["absent", "directory", "symlink", "parent-symlink"])
 @pytest.mark.parametrize("metadata,grant", [
     ("directory", "workspace_write"), ("directory", "workspace_read"),
     ("symlink", "workspace_write"), ("worktree", "workspace_write"),
 ])
 def test_owner_project_git_writes_use_native_permissions_without_isolated_account(
-        monkeypatch, tmp_path, resume, metadata, grant):
+        monkeypatch, tmp_path, resume, metadata, grant, skills):
     from loopx.capabilities.native_chat.project_context import ChatProjectContexts
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -681,12 +682,24 @@ def test_owner_project_git_writes_use_native_permissions_without_isolated_accoun
         git.symlink_to(foreign, target_is_directory=True)
     else:
         git.write_text(f"gitdir: {foreign}\n")
+    if skills == "parent-symlink":
+        (foreign / "skills").mkdir()
+        (workspace / ".codex").symlink_to(foreign, target_is_directory=True)
+    elif skills != "absent":
+        (workspace / ".codex").mkdir()
+        if skills == "directory":
+            (workspace / ".codex" / "skills").mkdir()
+        else:
+            (workspace / ".codex" / "skills").symlink_to(foreign, target_is_directory=True)
     enabled = metadata == "directory" and grant == "workspace_write"
+    expected_roots = [str(git)] if enabled else []
+    if enabled and skills == "directory":
+        expected_roots.append(str(workspace / ".codex" / "skills"))
     approved = str(workspace / "existing")
     settings = {"writable_roots": [approved], "network_access": True, "exclude_slash_tmp": True}
     process = _FakeAppServerProcess(config_response={"config": {"sandbox_workspace_write": settings}}, thread_response={
         "thread": {"id": "thread-loopx-chat"},
-        "sandbox": {"type": "workspaceWrite", "writableRoots": [approved, str(git)]},
+        "sandbox": {"type": "workspaceWrite", "writableRoots": [approved, *expected_roots]},
     })
     monkeypatch.setenv("SYNTHETIC_OWNER_ENV", "retained")
     monkeypatch.setattr(chat_agent.shutil, "which", lambda _: "codex")
@@ -710,7 +723,7 @@ def test_owner_project_git_writes_use_native_permissions_without_isolated_accoun
         assert start["sandbox"] == ("workspace-write" if grant == "workspace_write" else "read-only")
         if enabled:
             assert start["config"]["sandbox_workspace_write"] == {
-                **settings, "writable_roots": [approved, str(git)]}
+                **settings, "writable_roots": [approved, *expected_roots]}
         else:
             assert "sandbox_workspace_write" not in start["config"]
         assert host_config == original_config
@@ -731,16 +744,19 @@ def test_owner_project_git_writes_use_native_permissions_without_isolated_accoun
         session.close()
 
 
-@pytest.mark.parametrize("fault", ["invalid-roots", "missing-root", "foreign-root", "wrong-policy", "invalid-native-roots"])
+@pytest.mark.parametrize("fault", ["invalid-roots", "missing-root", "foreign-root", "wrong-policy", "invalid-native-roots", "missing-skills-root"])
 def test_owner_git_permissions_require_valid_configuration_and_native_readback(monkeypatch, tmp_path, fault):
     from loopx.capabilities.native_chat.project_context import ChatProjectContexts
     (tmp_path / ".git").mkdir()
+    if fault == "missing-skills-root":
+        (tmp_path / ".codex" / "skills").mkdir(parents=True)
     process = _FakeAppServerProcess(
         config_response={"config": {"sandbox_workspace_write": {"writable_roots": "invalid"}}
                          if fault == "invalid-roots" else {"sandbox_workspace_write": None}},
         thread_response={"thread": {"id": "thread-loopx-chat"},
                          "sandbox": {"type": "readOnly" if fault == "wrong-policy" else "workspaceWrite",
                                      "writableRoots": (str(tmp_path / ".git") if fault == "invalid-native-roots"
+                                                       else [str(tmp_path / ".git")] if fault == "missing-skills-root"
                                                        else ["/other"] if fault == "foreign-root" else [])}})
     monkeypatch.setattr(chat_agent.shutil, "which", lambda _: "codex")
     monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda *a, **kw: process)

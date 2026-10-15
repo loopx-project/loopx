@@ -48,6 +48,23 @@ Judge the whole viewport, including information repeated across components.
 Before implementation, inventory the visible elements and their value. Keep
 conversation, results, and decisions prominent; consolidate routine activity;
 offer one-step access to relevant controls and details without a chain of pages.
+Start from the owner's original task and minimize the whole job they must do.
+Agent preparation should absorb discovery, identifiers, formatting and execution
+detail within existing authority. The owner supplies missing intent and real
+decisions. Compare a smaller lawful route before justifying individual controls:
+a sequence of locally useful fields can still assign the wrong work to the user.
+Reuse prior scoped authorization; explain any remaining command effect at its
+decision point. Advanced configuration must remain optional for an ordinary task
+when an Agent can prepare the same reviewable plan.
+Count mandatory interaction rounds from the original intent to a usable result,
+including preparation outside the visible page. One round is one user statement,
+choice or confirmation required to continue; merging buttons does not merge
+decisions. Most ordinary capabilities should complete in one round. With intent
+and scoped authorization already present, aim for zero additional rounds.
+Two or more rounds need a concrete missing fact, consequential choice or authority
+boundary for each extra round. High value may justify deeper collaboration, but
+does not itself justify mandatory friction. Keep voluntary exploration separate,
+and record navigation, copying, waiting and recovery effort alongside round count.
 Do not collapse failures, missing authority, uncertain observations, or actions
 requiring judgment into a reassuring success summary. Read models select facts;
 they must not invent execution, acceptance, or completion from prose or counts.

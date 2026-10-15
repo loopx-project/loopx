@@ -271,15 +271,25 @@ def _navigation(config: ReaderConfig, url: str, *, image: bool = False) -> str:
     )
 
 
+def _url_fence(current: str, requested: str) -> str:
+    # Report location metadata only for the original origin. Never read DOM or
+    # disclose a cross-origin destination (which may contain login credentials).
+    return (
+        f"if({current}.href!=={requested})return {{error:'source_url_changed',"
+        f"...({current}.origin===new URL({requested}).origin?"
+        f"{{observed_url:{current}.href}}:{{}})}};"
+    )
+
+
 def _script(config: ReaderConfig, url: str) -> str:
     # No caller-selected code, executable, browser, Page or CLI arguments.
     return (
         _navigation(config, url) +
         "const r=await p.evaluate((request)=>{"
-        "const current=new URL(location.href);"
+        "const current=new URL(location.href);" +
         # Fence before reading DOM, atomically with extraction. A raced Page or
         # redirect returns no content, even within another authorized origin.
-        "if(current.href!==request.url)return {error:'source_url_changed'};"
+        _url_fence("current", "request.url") +
         "if(!request.ready)return {error:'source_content_not_ready'};"
         "const text=document.body?.innerText||'';"
         "return {url:current.href,title:document.title,"
@@ -306,6 +316,22 @@ def _result_url(value: dict[str, object], requested: str) -> str:
     return final
 
 
+def _changed_url_result(value: dict[str, object], requested: str) -> dict[str, object]:
+    result: dict[str, object] = {"ok": False, "error": "source_url_changed"}
+    if "observed_url" not in value:
+        return result
+    observed = value["observed_url"]
+    if not isinstance(observed, str):
+        raise ValueError("URL string required")
+    final, origin = _url(observed)
+    # Reuse the fixed-script provenance contract: WHATWG, not Python, owns
+    # target normalization (dot segments and query escaping included).
+    target = _result_url({**value, "url": value["canonical_url"]}, requested)
+    if final != observed or final == target or origin != _url(target)[1]:
+        raise ValueError("invalid changed URL provenance")
+    return {**result, "observed_url": final}
+
+
 def _result(stdout: str, stderr: str, url: str) -> dict[str, object]:
     values = [line[len(MARKER):] for line in (stdout + "\n" + stderr).splitlines()
               if line.startswith(MARKER)]
@@ -315,7 +341,9 @@ def _result(stdout: str, stderr: str, url: str) -> dict[str, object]:
         value = json.loads(values[0])
         if not isinstance(value, dict):
             raise ValueError("object required")
-        if value.get("error") in {"source_url_changed", "source_content_not_ready", "source_reader_not_agent_owned"}:
+        if value.get("error") == "source_url_changed":
+            return _changed_url_result(value, url)
+        if value.get("error") in {"source_content_not_ready", "source_reader_not_agent_owned"}:
             return {"ok": False, "error": value["error"]}
         final = _result_url(value, url)
         text, title = value["text"], value["title"]
@@ -362,24 +390,26 @@ def _image_script(config: ReaderConfig, url: str, index: int, path: str) -> str:
         _navigation(config, url, image=True) +
         f"const request={request};"
         "const initial=await p.evaluate((r)=>{"
-        "const u=new URL(location.href);"
-        "if(u.href!==r.url)return {error:'source_url_changed'};"
+        "const u=new URL(location.href);" +
+        _url_fence("u", "r.url") +
         "if(!r.ready)return {error:'source_content_not_ready'};"
         "const im=document.images[r.index];if(!im)return {error:'source_image_unavailable'};"
         "im.scrollIntoView({block:'center'});return {ok:true};},request);"
-        "if(initial.error){console.log('LOOPX_PUBLIC_SOURCE:'+JSON.stringify(initial));}else{"
+        "if(initial.error){console.log('LOOPX_PUBLIC_SOURCE:'+JSON.stringify({...initial,"
+        "requested_url:requestedUrl,canonical_url:target.href}));}else{"
         "await p.waitForFunction((r)=>{const u=new URL(location.href);"
         "if(u.href!==r.url)return true;const im=document.images[r.index];"
         "return im&&im.complete&&im.naturalWidth>1&&im.naturalHeight>1;},"
         "request,{timeout:10000});"
-        "const before=await p.evaluate((r)=>{const u=new URL(location.href);"
-        "if(u.href!==r.url)return {error:'source_url_changed'};"
+        "const before=await p.evaluate((r)=>{const u=new URL(location.href);" +
+        _url_fence("u", "r.url") +
         "const im=document.images[r.index];const b=im.getBoundingClientRect();"
         "if(b.width<2||b.height<2||b.width>r.edge||b.height>r.edge)"
         "return {error:'source_image_bounds_unsupported'};"
         "return {url:u.href,index:r.index,alt:im.alt.slice(0,512),src:im.currentSrc,"
         "clip:{x:b.left+scrollX,y:b.top+scrollY,width:b.width,height:b.height}};},request);"
-        "if(before.error){console.log('LOOPX_PUBLIC_SOURCE:'+JSON.stringify(before));}else{"
+        "if(before.error){console.log('LOOPX_PUBLIC_SOURCE:'+JSON.stringify({...before,"
+        "requested_url:requestedUrl,canonical_url:target.href}));}else{"
         f"await p.screenshot({{path:{json.dumps(path)},fullPage:true,clip:before.clip}});"
         "const stable=await p.evaluate((r)=>{const u=new URL(location.href);"
         "if(u.href!==r.url)return false;"
@@ -402,7 +432,9 @@ def _image_result(stdout: str, stderr: str, url: str, index: int, path: str) -> 
         value = json.loads(values[0])
         if not isinstance(value, dict):
             raise ValueError("object required")
-        if value.get("error") in {"source_url_changed", "source_content_not_ready", "source_reader_not_agent_owned", "source_image_unavailable",
+        if value.get("error") == "source_url_changed":
+            return _changed_url_result(value, url)
+        if value.get("error") in {"source_content_not_ready", "source_reader_not_agent_owned", "source_image_unavailable",
                                    "source_image_bounds_unsupported"}:
             return {"ok": False, "error": value["error"]}
         final = _result_url(value, url)
@@ -480,6 +512,10 @@ def read_public_url(url: str) -> dict[str, object]:
 
     Images are metadata only here. Use read_public_image for actual pixels.
     A verification wall or truncation is not a complete source read.
+    source_url_changed means navigation reached another URL, not that Ego is
+    disconnected. An observed_url is same-origin location metadata, not content
+    or permission: verify it is the intended source before a separate read.
+    Do not retry an access denial through another browser or broader permissions.
     If source_reader_not_agent_owned, preserve the Page and resume this tool
     once browser control returns. No extra chat confirmation is required.
     """

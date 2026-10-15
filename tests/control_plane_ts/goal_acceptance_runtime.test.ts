@@ -1,3 +1,4 @@
+import {compileActionReviewPlan} from "../../loopx/control_plane/presentation/action_review_plan.ts";
 import assert from "node:assert/strict";
 import {randomUUID} from "node:crypto";
 import {mkdtemp, rm} from "node:fs/promises";
@@ -392,4 +393,19 @@ test("a competing commit cannot separate acceptance evidence from Todo completio
   assert.equal(result.status, "conflict");
   assert.equal(((await loaded(store)).head.todos as JsonObject[])[0]!.done, false);
   assert.equal((await store.readReceipt("complete")).status, "missing");
+});
+
+
+test("prepared check review requires its exact Goal and local command effect", () => {
+  const proposal = {schema_version: "loopx_chat_action_proposal_v1", action_kind: "goal.acceptance.check",
+    status: "preview_ready", proposal_id: "proposal", expected_state_fingerprint: "current-basis",
+    permission_classification: "local_command_execution", normalized_parameters: {goal_id: "goal", document: {}},
+    context: {kind: "goal", goal_id: "goal"}, available_transitions: ["apply", "cancel"]};
+  assert.equal(compileActionReviewPlan(proposal).canApply, true);
+  for (const changed of [{permission_classification: "durable_write"},
+      {context: {kind: "goal", goal_id: "other"}}, {normalized_parameters: {goal_id: "goal"}},
+      {gate: {kind: "authority"}, status: "gated"}, {status: "stale"}]) {
+    assert.equal(compileActionReviewPlan({...proposal, ...changed}).canApply, false);
+  }
+  assert.equal(compileActionReviewPlan({...proposal, status: "applied", receipt: {projection_verified: true}}).canApply, false);
 });

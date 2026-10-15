@@ -815,6 +815,11 @@ pub(crate) fn python3_environment() -> (bool, Option<String>) {
 }
 
 const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+// Installation qualification boots Core, checks the TypeScript runtime and
+// hashes the installed package. It is not a version-banner query: a valid cold
+// wheel can exceed one second. Keep that work bounded without weakening Core's
+// qualification or extending the lightweight environment probes.
+const INSTALLATION_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) fn timed_output(command: Command) -> Option<std::process::Output> {
     timed_output_with_timeout(command, VERSION_PROBE_TIMEOUT)
@@ -986,7 +991,7 @@ fn runtime_identity_for_executable_with_path(
     let mut command = Command::new(canonical);
     configure_runtime_environment(&mut command);
     command.args(["--format", "json", "doctor", "--installation-only"]);
-    let output = timed_output(command)?;
+    let output = timed_output_with_timeout(command, INSTALLATION_PROBE_TIMEOUT)?;
     if !output.status.success() {
         return None;
     }

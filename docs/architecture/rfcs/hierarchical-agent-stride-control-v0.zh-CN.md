@@ -532,6 +532,13 @@ replan 复查这个向量，不成为新的权限 owner。在授权目标内改�
 替代证据。此字段不资格化执行、科学创新、收益、有效 Turn 计数或验收，后者仍
 独立验证；不增加 scheduler、选择规则、quota 消耗或逐结果结算。
 
+历史读取同时覆盖旧 Todo 绑定决策和自主 replan 决策。自主决策的 Goal、Agent、
+Turn、义务、settlement identity 与已接受的回执必须一致；派生决策引用包含该
+义务，不虚构 Todo。绑定由现有 settlement owner 定义，Python codec 只传输
+事实。启用策略后，上一决策进入同一个 `previous_review` 要求；关闭策略的
+context 和历史决策引用保持兼容。这里修复的是反馈送达，执行质量和目标收益
+仍需独立证据。
+
 #### 可迭代策略与工程边界
 
 第一版策略是**模型依据证据规划完整工作**：显式选择 grow（扩大有支持的路线）、
@@ -755,7 +762,14 @@ quota guard，在模型调用前捕获 wake 开始已投影的准入 replan，�
 Codex 读取完整历史、核对会话真实工作区及当前 source binding/profile，并在字节 probe 后复查。读取
 到 probe 之间出现的后续 source Turn 会拒绝；之后的写入由产物 witness 校验
 拦截。它封存 rollout/索引/分页库并验证固定 guest 路径下的原生分叉；来源基准
-校验不等于研究收益。显式 source-checkout controller 现可通过既有 registry/
+校验不等于研究收益。已结算 wake 与中途 replan 的 benchmark 捕获共用既有
+native 读取进程，执行两次完整读取，并保持到产物封存或 controller handoff
+完成；native 退出可能 checkpoint SQLite，不能在字节 probe 与封存之间退出，
+使自身校验基准失效。这只调整读取进程的生命周期，保持分页历史、cursor/profile
+新鲜度、字节 witness、显式开启及原捕获/phase deadline。预检成本下降尚不证明
+增长历史下的持续捕获可靠性，也不等于后继点 receiver 验收。
+
+显式 source-checkout controller 现可通过既有 registry/
 session owner 准备已验证 fork，要求不同且已注册的 Goal/Agent 身份与匹配的
 捕获 session profile。Registry fence 保护配置复查到绑定写入，保持原有 profile
 的 lifetime 语义；lifecycle-only source-session profile 不能运行 governed 工作，
@@ -830,6 +844,14 @@ worker 后再发布惰性联合产物。真实持续写入容器与 native HTTP 
 组合既有 artifact、session 与 Todo/Explore owner。Codex 存储与分叉 IO 归 Host
 provider；benchmark adapter 向内调用，并添加 evaluator/budget 参与者。捕获与
 采用是分别显式授权的操作。此 CLI/Host 阶段不代表打包前端或灾难替换验收完成。
+
+文件覆盖与知识采用是两个独立验收维度。通过完整性校验的归档只能证明其声明根，
+不能证明原生历史提及的每个候选、数据文件和报告都可用。SForge 接收端现支持显式
+选择已捕获的工作区外研究组件，要求全新数据目标，并在复制后校验字节与模式。
+源捕获仍需声明根；路径推断或后续抢救都不能补全旧时点。应在接收端执行依赖这些
+文件的保留实验，再声称研究状态可用地接续。旧点、活跃运行、默认只恢复工作区、
+预算及反馈保持不变。本阶段补齐 provider 文件传输遗漏；自动依赖覆盖与通用前端
+仍未完成。
 
 仅保存历史研究文件不等价于交付给当前类型化复盘。显式 warm 上下文采用现将
 已验证来源的 Explore 知识写入新 Goal 的普通知识日志，保留 findings 的适用

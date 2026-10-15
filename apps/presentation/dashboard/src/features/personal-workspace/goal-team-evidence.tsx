@@ -1,3 +1,4 @@
+import {GoalOracleEvidence} from "./goal-oracle-evidence";
 import {GoalTeamLineage} from "./goal-team-lineage";
 import {GoalTeamEpisode} from "./goal-team-episode";
 import {GoalTeamComparison} from "./goal-team-comparison";
@@ -111,12 +112,12 @@ export function GoalTeamEvidence({sessionId, operationId, zh, canMessage, ingres
   }
   return <section className="goal-team-evidence" aria-label={zh ? "执行证据" : "Execution evidence"} aria-busy={busy}>
     <div className="goal-team-work-actions"><h3>{zh ? "执行证据" : "Execution evidence"}</h3>
-      <button type="button" disabled={busy} onClick={() => void read()}>{zh ? "重新读取证据" : "Recheck evidence"}</button></div>
-    {busy ? <p role="status">{zh ? "正在核验绑定、验收与文件…" : "Checking bindings, acceptance and files…"}</p> : null}
+      <button type="button" disabled={busy} onClick={() => void read()}>{zh ? "重新检查交付" : "Check delivery again"}</button></div>
+    {busy ? <p role="status">{zh ? "正在运行已配置的检查并核对产物版本…" : "Running configured checks and observing artifact versions…"}</p> : null}
     {error ? <p role="alert">{zh ? "无法核验，已清除上次证据。" : "Cannot verify; previous evidence cleared."} {error}</p> : null}
     {result ? <>
       <p role="status"><strong>{result.agent_id} · {delegationStateLabel(result, zh)}</strong>{" · "}{observedAt}</p>
-      <p>{zh ? "按需读取的当前观察，不是持续在线状态；验收不代表协调员已采用。" : "An on-demand observation, not continuous liveness; acceptance does not establish coordinator adoption."}</p>
+      <p>{zh ? "本次观察会运行已配置的检查，不代表持续在线；验收不代表协调员已采用。" : "This observation runs the configured checks, not continuous liveness; acceptance does not establish coordinator adoption."}</p>
       <GoalTeamEpisode sessionId={sessionId} result={result} zh={zh} onInspect={onInspect} onObservation={observe}/>
       <GoalTeamComparison sessionId={sessionId} result={result} zh={zh}/>
       {hasCorrectionPath ? <details className="goal-team-lineage-detail"><summary>{zh ? "版本与采用关系详情" : "Version and adoption details"}</summary>
@@ -148,6 +149,7 @@ export function GoalTeamEvidence({sessionId, operationId, zh, canMessage, ingres
             <p>{zh ? "检查前后保持一致的产物版本" : "Output versions unchanged across these checks"}</p>
             {checkedOutputs!.map(row => <p key={row.ref}>{row.ref}{" · "}<code>{row.sha256}</code></p>)}
           </> : <p>{zh ? "未提供与当前产物匹配的检查时间及版本记录。" : "Check time and version records matching this report are unavailable."}</p>}
+          {result.validation.oracle_checks?.map(check => <GoalOracleEvidence key={check.criterion_id} evidence={check} zh={zh}/>)}
           <code>{result.validation.basis_sha256}</code>
         </> : <p>{zh ? "此运行时未提供验收依据标识。" : "This runtime did not provide the validation basis identity."}</p>}
       </details> : null}

@@ -12,6 +12,7 @@ import {
   createStateStore,
   isTerminalNoFollowup,
   leaseIsLive,
+  parseExecFailure,
   parseWorkerArgs,
   retryPlan,
   runWorker,
@@ -621,6 +622,64 @@ test("worker stops after the duration budget and posts the duration notice", asy
 test("createApiTransport probes the opencode2 api CLI shape", () => {
   assert.equal(typeof createApiTransport().sendPrompt, "function")
   assert.equal(typeof createApiTransport().sendSynthetic, "function")
+})
+
+
+test("parseExecFailure reads the HTTP status the opencode2 api CLI reports", () => {
+  const error = new Error("Command failed: opencode2 api post /api/session/x/wait")
+  error.stderr = "HTTP 404 Not Found"
+  assert.equal(parseExecFailure(error).status, 404)
+  assert.equal(parseExecFailure({ stderr: "status: 500 server error" }).status, 500)
+})
+
+
+test("createApiTransport falls back to the experimental wait route when the stable route is missing", async () => {
+  const paths = []
+  const execFileImpl = async (_bin, args) => {
+    paths.push(args[2])
+    if (args[2] === "/api/session/ses_test/wait") {
+      const error = new Error("Command failed")
+      error.stderr = "HTTP 404 Not Found"
+      throw error
+    }
+    return { stdout: "{}" }
+  }
+  const transport = createApiTransport({ execFileImpl })
+
+  assert.equal(await transport.waitForSession("ses_test"), true)
+  assert.deepEqual(paths, [
+    "/api/session/ses_test/wait",
+    "/api/experimental/session/ses_test/wait",
+  ])
+
+  paths.length = 0
+  assert.equal(await transport.waitForSession("ses_test"), true)
+  assert.deepEqual(paths, ["/api/experimental/session/ses_test/wait"])
+})
+
+
+test("createApiTransport keeps the stable wait route when the server serves it", async () => {
+  const paths = []
+  const execFileImpl = async (_bin, args) => {
+    paths.push(args[2])
+    return { stdout: "{}" }
+  }
+  const transport = createApiTransport({ execFileImpl })
+
+  assert.equal(await transport.waitForSession("ses_test"), true)
+  assert.deepEqual(paths, ["/api/session/ses_test/wait"])
+})
+
+
+test("createApiTransport surfaces a wait failure that is not a missing route", async () => {
+  const execFileImpl = async () => {
+    const error = new Error("Command failed")
+    error.stderr = "HTTP 500 Internal Server Error"
+    throw error
+  }
+  const transport = createApiTransport({ execFileImpl })
+
+  await assert.rejects(() => transport.waitForSession("ses_test"), /Command failed/)
 })
 
 

@@ -21,16 +21,16 @@ def register_goal_acceptance_command(subparsers: Any, add_format: Any) -> None:
         help="Configure, inspect or verify a versioned Goal acceptance basis.",
     )
     add_format(parser)
-    parser.add_argument("action", choices=("inspect", "configure", "verify", "disable"))
+    parser.add_argument("action", choices=("inspect", "prepare", "configure", "verify", "disable"))
     parser.add_argument("--goal-id", required=True)
     parser.add_argument(
         "--agent-id",
-        help="Registered caller; Agent callers may inspect/verify but cannot change the owner's contract.",
+        help="Registered caller; Agents may inspect, prepare or verify, but preparation never approves or executes a plan.",
     )
     parser.add_argument(
         "--document",
         type=Path,
-        help="Owner-approved JSON with explicit scope: selected_work plus todo_ids, or all_advancement. Used only by configure.",
+        help="Prepared check plan with explicit scope; prepare validates it without approval/execution, configure requires the owner.",
     )
     parser.add_argument(
         "--expected-provider-revision",
@@ -42,7 +42,7 @@ def register_goal_acceptance_command(subparsers: Any, add_format: Any) -> None:
     parser.add_argument(
         "--execute",
         action="store_true",
-        help="Apply configuration or execute validation; otherwise preview only.",
+        help="With prepare, save a reviewable plan only; with configure/disable/verify, apply the named operation. Otherwise preview only.",
     )
 
 
@@ -89,7 +89,18 @@ def handle_goal_acceptance_command(
             "runtime_root": runtime_root_arg,
             "agent_id": args.agent_id,
         }
-        if args.action in {"configure", "disable"}:
+        if args.action == "prepare":
+            from ..control_plane.goals.acceptance_actions import prepare_acceptance_check
+            if args.document is None or not args.operation_id:
+                raise ValueError("prepare requires --document and a stable --operation-id")
+            if args.expected_provider_revision:
+                raise ValueError("prepare reads the current basis itself")
+            document = json.loads(args.document.read_text(encoding="utf-8"))
+            if not isinstance(document, dict):
+                raise ValueError("acceptance document must be a JSON object")
+            payload = prepare_acceptance_check(**common, document=document,
+                operation_id=args.operation_id, execute=args.execute)
+        elif args.action in {"configure", "disable"}:
             if not args.expected_provider_revision:
                 raise ValueError(
                     "configure/disable requires --expected-provider-revision from inspect"

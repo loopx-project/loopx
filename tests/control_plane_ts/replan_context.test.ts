@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {createHash} from "node:crypto";
 import {projectReplanContext, validateReplanContext} from "../../loopx/control_plane/work_items/replan_context.ts";
-import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
+import {settlementIdentityPayload, type JsonObject} from "../../loopx/control_plane/effect_program.ts";
 
 const progress = {schema_version: "typed_progress_observation_v0", result_class: "unchanged",
   surface_id: "surface-a", work_item_id: "todo-a", fingerprint: "same-work"};
@@ -129,6 +129,62 @@ function subsequent(position: number): JsonObject {
 }
 
 const strideRequest = {...request, stride_strategy: "evidence_conditioned_v1"};
+
+function autonomousReviewed(position = 0, obligation = "replan-first"): JsonObject {
+  const legacy = reviewed(position);
+  const source = legacy._source_facts as JsonObject;
+  const ack = source.autonomous_replan_ack as JsonObject;
+  const identity = settlementIdentityPayload({goal_id: "goal-a", agent_id: "agent-a",
+    turn_instance_id: String(source.turn_instance_id), replan_obligation_id: obligation});
+  return {...legacy, todo_id: undefined, _source_facts: {...source, todo_id: null,
+    replan_obligation_id: obligation, settlement_identity: identity,
+    autonomous_replan_ack: {...ack, semantic_delta: {...ack.semantic_delta, obligation_id: obligation}}}};
+}
+
+test("autonomous decisions return through their own binding and resolve without a fabricated Todo", () => {
+  const latest = autonomousReviewed(2);
+  const rows = [reviewed(), latest, subsequent(3)];
+  const context = projectReplanContext({...strideRequest, rows});
+  const follow = context.decision_followthrough as JsonObject;
+  assert.equal(follow.previous_decision.turn_instance_id, "turn-3");
+  assert.equal(follow.previous_decision.replan_obligation_id, "replan-first");
+  assert.equal(follow.previous_decision.todo_id, null);
+  assert.equal(follow.recorded_progress_count, 1);
+  assert.equal(follow.execution_and_goal_gain, "unknown");
+  assert.deepEqual(validateReplanContext(context), context);
+  const resolve = {...request, operation: "resolve", evidence_ref: follow.previous_decision.evidence_ref, rows};
+  assert.deepEqual(projectReplanContext(resolve).evidence, follow.previous_decision);
+  assert.throws(() => projectReplanContext({...resolve, rows: [autonomousReviewed(2, "replan-other")]}), /unavailable/);
+  const ordinary = projectReplanContext({...request, rows});
+  assert.deepEqual(projectReplanContext({...request, rows, stride_strategy: "off"}), ordinary);
+  assert.equal(ordinary.decision_followthrough, undefined);
+});
+
+test("autonomous followthrough rejects conflicting identities, bindings and acknowledgements", () => {
+  const valid = autonomousReviewed();
+  const source = valid._source_facts as JsonObject;
+  const identity = source.settlement_identity as JsonObject;
+  const ack = source.autonomous_replan_ack as JsonObject;
+  const corruptions = [
+    ...["schema_version", "goal_id", "agent_id", "turn_instance_id", "effect_id", "binding_kind",
+      "binding_id", "replan_obligation_id"].map(key => ({settlement_identity: {...identity, [key]: "wrong"}})),
+    {settlement_identity: {...identity, todo_id: "todo-conflict"}},
+    {todo_id: "todo-conflict"}, {goal_id: "wrong"}, {agent_id: "wrong"}, {turn_instance_id: "wrong"},
+    {replan_obligation_id: null}, {replan_obligation_id: "wrong"},
+    {autonomous_replan_ack: {...ack, recorded: false}},
+    {autonomous_replan_ack: {...ack, semantic_delta: {...ack.semantic_delta, obligation_id: "wrong"}}},
+    {autonomous_replan_ack: {...ack, semantic_delta: {...ack.semantic_delta, accepted: false}}},
+    {quota_spend_commit: {schema_version: "quota_spend_commit_receipt_v0", effect_id: identity.effect_id + "#quota_spend"}},
+  ];
+  for (const patch of corruptions) {
+    assert.equal(projectReplanContext({...strideRequest,
+      rows: [{...valid, _source_facts: {...source, ...patch}}]}).decision_followthrough, undefined, JSON.stringify(patch));
+  }
+  assert.equal(projectReplanContext({...strideRequest, rows: [{...valid, todo_id: "todo-conflict"}]}).decision_followthrough, undefined);
+  const corruptPath = autonomousReviewed(2);
+  corruptPath._source_facts.agent_vision.path_delta = {outcome: "replan"};
+  assert.equal(projectReplanContext({...strideRequest, rows: [reviewed(), corruptPath]}).decision_followthrough, undefined);
+});
 
 test("a prior accepted path returns with attributable later observations, never a utility verdict", () => {
   const decision = reviewed();

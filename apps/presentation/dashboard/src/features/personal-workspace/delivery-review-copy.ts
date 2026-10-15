@@ -2,7 +2,7 @@ import type { ReviewExportLabels } from "../../data/delivery-review.js";
 
 export const goalAcceptanceContractCopy = {
   en: {
-    title: "Goal acceptance contract", boundary: "Read-only owner contract. Task association and artifact checks are separate; neither automatically approves or completes the Goal.",
+    title: "Delivery check", boundary: "Artifact checks do not establish independent review, adoption or Goal completion.",
     scope: "Contract coverage", allWork: "All advancement work (including future tasks)", selectedWork: "Only explicitly selected tasks",
     source: "Goal source", revision: "Contract revision", digest: "Contract digest", objective: "Objective", criteria: "Acceptance criteria", nonGoals: "Outside scope",
     tasks: "Task associations", verification: "Artifact verification", unknown: "Unknown", noTasks: "No task associations reported. Coverage is unknown.",
@@ -11,10 +11,10 @@ export const goalAcceptanceContractCopy = {
     verificationState: { unverified: "Artifact checks not verified", accepted: "Artifact checks passed", failed: "Artifact checks failed", stale: "Artifact checks stale", partial: "Task checks passed; Goal-wide verification unknown", held: "Task associations require confirmation" },
     notApplicable: "Outside the current task gate", heldTasks: "Tasks held", receipt: "Recorded artifact checks", receiptNote: "Recorded results use the revision below. The current contract status above accounts for stale checks and task holds.",
     operation: "Verification reference", verificationScope: "Verification scope", allCriteria: "All contract criteria", passed: "Passed", failed: "Failed", exitCode: "Exit code",
-    help: "Setup and readback", guide: "Owner setup guide (v0)", guidance: "The local Goal owner configures this contract through the CLI using configure --document and the inspected --expected-provider-revision. Changes and verification require --execute. Inspect before changing the contract; refresh this snapshot afterward. Disable with the current provider revision to hide this section.",
+    help: "Setup and readback", guide: "Check setup guide (v0)", guidance: "The Agent can prepare a plan for review without running it. Existing technical contracts can also be imported here or managed through CLI configure/verify/disable. Saving does not run commands. Disabling retains historical evidence.",
   },
   "zh-CN": {
-    title: "Goal 验收合同", boundary: "只读的所有者合同。任务关联与产物检查是独立事实，均不会自动批准或完成 Goal。",
+    title: "交付检查", boundary: "产物检查不等于独立复核、实际采用或 Goal 完成。",
     scope: "合同覆盖范围", allWork: "全部推进任务（包括后续新增任务）", selectedWork: "仅明确选定的任务",
     source: "Goal 来源", revision: "合同版本", digest: "合同摘要", objective: "目标", criteria: "验收条件", nonGoals: "范围之外",
     tasks: "任务关联", verification: "产物验证", unknown: "未知", noTasks: "未提供任务关联，覆盖范围未知。",
@@ -23,7 +23,7 @@ export const goalAcceptanceContractCopy = {
     verificationState: { unverified: "产物检查未验证", accepted: "产物检查通过", failed: "产物检查失败", stale: "产物检查已过期", partial: "任务检查通过；Goal 整体验证未知", held: "任务关联需要确认" },
     notApplicable: "不属于当前任务门禁范围", heldTasks: "受阻任务", receipt: "已记录的产物检查", receiptNote: "记录对应下方版本。上方当前合同状态已考虑检查过期和任务阻塞。",
     operation: "验证引用", verificationScope: "验证范围", allCriteria: "全部合同条件", passed: "通过", failed: "失败", exitCode: "退出码",
-    help: "配置与读回", guide: "所有者配置指南（v0）", guidance: "本地 Goal 所有者通过 CLI 的 configure --document 配置合同，并提供 inspect 读到的 --expected-provider-revision。变更和验证都需要 --execute。变更前先检查合同，操作后刷新此快照；使用当前 provider revision 执行 disable 可隐藏本区块。",
+    help: "配置与读回", guide: "检查配置指南（v0）", guidance: "Agent 可先准备方案供你核对，准备不会运行检查。已有技术合同也可在这里导入，或通过 CLI configure/verify/disable 管理。保存不执行命令，停用保留历史依据。",
   },
 };
 export type GoalAcceptanceContractCopy = typeof goalAcceptanceContractCopy.en;

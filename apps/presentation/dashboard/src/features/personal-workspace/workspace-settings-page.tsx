@@ -1,3 +1,5 @@
+import {GoalAcceptanceContractSection} from "./goal-acceptance-contract";
+import {goalAcceptanceContractCopy} from "./delivery-review-copy";
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Bot, Check, Clock3, KeyRound, Languages, Palette, ServerCog, Settings2 } from "lucide-react";
 
@@ -233,6 +235,7 @@ export function WorkspaceSettingsPage({
               }} />
               <GoalAmendmentSettings goalId={selectedGoal.goalId} />
               <GoalDirectionSettings goalId={selectedGoal.goalId} />
+              <GoalAcceptanceContractSection goalId={selectedGoal.goalId} current canManage management copy={goalAcceptanceContractCopy[locale]} />
         </div> : null}
         {tab === "capabilities" && (capabilityScope === "machine" || capabilityGoalId) ? <ConfigurationBackupSettings key={`${capabilityScope}:${capabilityGoalId}`} goalId={capabilityScope === "goal" ? capabilityGoalId : null} /> : null}
         {tab === "cadence" && selectedGoal ? <AutomationCadenceSettings key={selectedGoal.goalId} goal={selectedGoal} /> : null}

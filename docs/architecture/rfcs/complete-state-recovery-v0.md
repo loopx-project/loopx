@@ -778,7 +778,7 @@ Those measurements are historical evidence, not measurements of a later merge.
 | Existing transport limits: 64 MiB private snapshot only for the two manifest checks; normal RPC and worker input 2 MiB; owner stdout 2 Mi characters; saved-audit input 16 MiB | Bound exchanges and historical report decoding without widening ordinary transport | Large-manifest transport and audit-integrity tests cover the path. These independent limits are not additive capacity or proof that every maximum-size audit is publishable. |
 | Free destination space at least copied regular-file bytes plus 16 MiB before copying | Refuse a known-insufficient destination before publication | Source check plus failure-cleanup tests; concurrent disk consumption and a successful worst-case space reservation are not guaranteed. |
 
-Source owners: [`state_recovery.py`](../../../loopx/state_recovery.py),
+Source owners: [`state_recovery_io.py`](../../../loopx/control_plane/state_recovery_io.py),
 [`state_recovery.ts`](../../../loopx/control_plane/state_recovery.ts), and
 [`state_recovery_worker.ts`](../../../loopx/control_plane/state_recovery_worker.ts).
 Existing [Python recovery cases](../../../tests/test_state_recovery.py) and

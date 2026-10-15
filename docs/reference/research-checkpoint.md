@@ -44,6 +44,17 @@ history and qualified native stores. The native inventory excludes credential
 files; arbitrary caller-declared artifacts remain private and are not privacy
 certified. A new destination is required; capture never overwrites a point.
 
+The inventory covers only declared file roots plus the automatically owned
+session and LoopX state participants. A conversation mentioning an external
+candidate or report does not capture that file. Declare every needed research
+directory before capture, keep its source quiescent, and verify its bytes at the
+receiver. Never broaden capture to an entire temporary or credential directory
+just to obtain apparent coverage. Missing historical bytes cannot be supplied
+from a later state under the original point identity. Domain receivers must
+explicitly materialize their selected research components; the
+[SForge warm transport](../../benchmark/README.md#explicit-warm-worker-composition-qualification-in-progress)
+provides that selection for its data paths.
+
 Verify the returned digest before preparing a receiver:
 
 ```sh

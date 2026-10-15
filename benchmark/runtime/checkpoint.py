@@ -11,7 +11,7 @@ import json
 import math
 import subprocess
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -323,68 +323,73 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
             # caller IDs intact and bind the witness to the allocated archive.
             metadata["evaluation_opportunity"] = {"component_id": opportunity_id,
                                                    "incumbent_component_id": incumbent_id}
-        if request.get("native_session"):
-            from loopx.hosts.codex_checkpoint import native_session_checkpoint
-            from .codex import Execution
-            from .sessions import BenchmarkSessionWake
+        # Share the inspection process, not its observations: reread the full
+        # native history after the byte probe. Closing can checkpoint native SQLite,
+        # so keep the reader alive through sealing/the controller writer barrier.
+        with ExitStack() as readers:
+            if request.get("native_session"):
+                from loopx.hosts.codex_checkpoint import native_checkpoint_reader, native_session_checkpoint
+                from .codex import Execution
+                from .sessions import BenchmarkSessionWake
 
-            session = receipt.get("session") or {}
-            components, source_wake = native_binding_participant(env, components, metadata)
-            native = native_session_checkpoint(env, session.get("session_id", ""),
-                                               timeout=max(.1, deadline - time.time()))
-            # Native names identify provider files, not reserved artifact IDs.
-            # Allocate in the same namespace as caller and other participants;
-            # retain the provider observation unchanged for the stability reread.
-            native_ids = {}
-            for entry in native["components"]:
-                component_id = _participant_id(components, entry["id"])
-                native_ids[entry["id"]] = component_id
-                components = [*components, {**entry, "id": component_id}]
-            metadata["native_session"] = {**native["metadata"], "store_members": [
-                {**member, "id": native_ids[member["id"]]}
-                for member in native["metadata"]["store_members"]]}
-        probe = effect_runtime_result("runtime.checkpoint_artifacts", {
-            "action": "probe", "components": components,
-            "deadline_epoch_ms": deadline * 1000,
-        }, timeout=max(.1, deadline - time.time()), retry_safe=False)
-        if request.get("native_session"):
-            # Native readback precedes the byte witness. A completed later Turn
-            # in that gap must not be sealed under the earlier cursor. Re-read
-            # after the probe; capture's existing witness comparison then guards
-            # source writes during this recheck and through atomic publication.
-            confirmed = native_session_checkpoint(env, session.get("session_id", ""),
-                                                  timeout=max(.1, deadline - time.time()))
-            if confirmed != native:
-                raise ValueError("native checkpoint cursor or participant basis moved before sealing")
-            confirmed_wake = BenchmarkSessionWake(env, Execution(context="resume",
-                sandbox=env.get("LOOPX_CODEX_SANDBOX", "danger-full-access")), {})
-            if ((confirmed_wake.session_id, confirmed_wake.goal_ref, confirmed_wake.digest) !=
-                    (source_wake.session_id, source_wake.goal_ref, source_wake.digest)):
-                raise ValueError("native checkpoint source session binding moved before sealing")
-        if request.get("loopx_state"):
-            verify_research_participants(env, components, metadata, research, probe["source_witness"], deadline)
-        if opportunity is not None and opportunity["native_incumbent"] is not None:
-            selected = opportunity["native_incumbent"]
-            witness = probe["source_witness"].get(metadata["evaluation_opportunity"]["incumbent_component_id"], [])
-            if (len(witness) != 1 or witness[0].get("path") != "" or witness[0].get("kind") != "file" or
-                    witness[0].get("sha256") != selected["archive_sha256"] or
-                    witness[0].get("size") != selected["archive_bytes"]):
-                raise ValueError("native incumbent participant differs from its captured result")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        if request.get("controller_handoff"):
-            if research is None:
-                raise ValueError("controller checkpoint requires complete canonical research context")
-            from .checkpoint_handoff import await_controller_capture
-            captured = await_controller_capture(root, components, metadata, probe, deadline)
-            receipt["checkpoint"] = {"captured": True, **captured}
-            return
-        captured = effect_runtime_result("runtime.checkpoint_artifacts", {
-            "action": "capture", "destination": str(destination),
-            "components": components, "point_metadata": metadata,
-            "expected_source_sha256": probe["source_sha256"],
-            "deadline_epoch_ms": deadline * 1000,
-        }, timeout=max(.1, deadline - time.time()), retry_safe=False)
-        receipt["checkpoint"] = {"captured": True, "destination": str(destination), **captured}
+                session = receipt.get("session") or {}
+                components, source_wake = native_binding_participant(env, components, metadata)
+                reader = readers.enter_context(native_checkpoint_reader(env, timeout=max(.1, deadline - time.time())))
+                native = native_session_checkpoint(env, session.get("session_id", ""),
+                                                   timeout=max(.1, deadline - time.time()), transport=reader)
+                # Native names identify provider files, not reserved artifact IDs.
+                # Allocate in the same namespace as caller and other participants;
+                # retain the provider observation unchanged for the stability reread.
+                native_ids = {}
+                for entry in native["components"]:
+                    component_id = _participant_id(components, entry["id"])
+                    native_ids[entry["id"]] = component_id
+                    components = [*components, {**entry, "id": component_id}]
+                metadata["native_session"] = {**native["metadata"], "store_members": [
+                    {**member, "id": native_ids[member["id"]]}
+                    for member in native["metadata"]["store_members"]]}
+            probe = effect_runtime_result("runtime.checkpoint_artifacts", {
+                "action": "probe", "components": components,
+                "deadline_epoch_ms": deadline * 1000,
+            }, timeout=max(.1, deadline - time.time()), retry_safe=False)
+            if request.get("native_session"):
+                # Native readback precedes the byte witness. A completed later Turn
+                # in that gap must not be sealed under the earlier cursor. Re-read
+                # after the probe; capture's existing witness comparison then guards
+                # source writes during this recheck and through atomic publication.
+                confirmed = native_session_checkpoint(env, session.get("session_id", ""),
+                                                      timeout=max(.1, deadline - time.time()), transport=reader)
+                if confirmed != native:
+                    raise ValueError("native checkpoint cursor or participant basis moved before sealing")
+                confirmed_wake = BenchmarkSessionWake(env, Execution(context="resume",
+                    sandbox=env.get("LOOPX_CODEX_SANDBOX", "danger-full-access")), {})
+                if ((confirmed_wake.session_id, confirmed_wake.goal_ref, confirmed_wake.digest) !=
+                        (source_wake.session_id, source_wake.goal_ref, source_wake.digest)):
+                    raise ValueError("native checkpoint source session binding moved before sealing")
+            if request.get("loopx_state"):
+                verify_research_participants(env, components, metadata, research, probe["source_witness"], deadline)
+            if opportunity is not None and opportunity["native_incumbent"] is not None:
+                selected = opportunity["native_incumbent"]
+                witness = probe["source_witness"].get(metadata["evaluation_opportunity"]["incumbent_component_id"], [])
+                if (len(witness) != 1 or witness[0].get("path") != "" or witness[0].get("kind") != "file" or
+                        witness[0].get("sha256") != selected["archive_sha256"] or
+                        witness[0].get("size") != selected["archive_bytes"]):
+                    raise ValueError("native incumbent participant differs from its captured result")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if request.get("controller_handoff"):
+                if research is None:
+                    raise ValueError("controller checkpoint requires complete canonical research context")
+                from .checkpoint_handoff import await_controller_capture
+                captured = await_controller_capture(root, components, metadata, probe, deadline)
+                receipt["checkpoint"] = {"captured": True, **captured}
+                return
+            captured = effect_runtime_result("runtime.checkpoint_artifacts", {
+                "action": "capture", "destination": str(destination),
+                "components": components, "point_metadata": metadata,
+                "expected_source_sha256": probe["source_sha256"],
+                "deadline_epoch_ms": deadline * 1000,
+            }, timeout=max(.1, deadline - time.time()), retry_safe=False)
+            receipt["checkpoint"] = {"captured": True, "destination": str(destination), **captured}
     except Exception as error:
         # Capture failure is explicit but cannot rewrite an already settled work
         # outcome or replay its model/evaluation. Keep the source trial running.

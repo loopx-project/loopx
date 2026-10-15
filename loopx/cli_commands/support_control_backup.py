@@ -88,7 +88,7 @@ def handle_backup_state_command(
     output_format: FormatSelector,
 ) -> int:
     if getattr(args, "backup_action", None) == "verify":
-        from ..state_recovery import StateRecoveryError, render_state_recovery_markdown, verify_state_backup
+        from ..control_plane.state_recovery_io import StateRecoveryError, render_state_recovery_markdown, verify_state_backup
 
         try:
             if not all(getattr(args, key, None) for key in ("archive", "manifest", "destination")):

@@ -321,6 +321,7 @@ export type WorkspaceActionPreview = {
     | "goal.create"
     | "goal.update"
     | "goal.lifecycle"
+    | "goal.acceptance.check"
     | "todo.create"
     | "todo.update"
     | "agent.bind"

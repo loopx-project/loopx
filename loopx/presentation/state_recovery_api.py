@@ -10,7 +10,7 @@ import tempfile
 import time
 from uuid import uuid4
 
-from ..state_recovery import (
+from ..control_plane.state_recovery_io import (
     MAX_ARCHIVE_BYTES, MAX_MANIFEST_BYTES, StateRecoveryError,
     read_state_recovery_audit, verify_state_backup,
 )

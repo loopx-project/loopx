@@ -118,8 +118,24 @@ The tool accepts an HTTPS URL, checks the configured origin policy before naviga
 and uses WHATWG URL normalization for the target before checking the exact
 resulting URL before DOM extraction. Equivalent dot segments and query escaping
 do not count as redirects. The fixed operator-owned script supplies the canonical
-target; results retain both requested and observed URLs. Redirects and Page
-races fail closed. Input cannot select code, executables, Page labels or browser
+target; successful results retain both requested and observed URLs. Redirects and Page
+races still fail closed before source text, title, image metadata or pixels are read.
+For a same-origin mismatch, `source_url_changed` now includes `observed_url`,
+validated against the original request and canonical target. Cross-origin
+destinations are omitted, even in all-origin mode. Legacy error receipts without
+location metadata remain supported. No redirected content or automatic second
+read is returned. Check whether the observed location is the intended source
+before making a separate authorized read; a login or verification page is not
+the requested article. This diagnosis does not override an access denial or
+authorize a different browser, login, takeover or wider host permissions.
+
+`source_url_changed` proves that this call reached the browser's URL check;
+it is not a disconnected-bootstrap error. A separate model-shell bootstrap
+failure does not invalidate a working configured MCP reader. Keep those paths
+distinct, and do not infer that opening the app or enabling Full Access is
+required. Original host and site permission stops still apply.
+
+Input cannot select code, executables, Page labels or browser
 commands. Calls within one process reject concurrent reads. Execution times out
 after 30 seconds; returned text is limited to 100,000 characters. Errors omit
 raw browser diagnostics; use local provider logs for diagnosis.

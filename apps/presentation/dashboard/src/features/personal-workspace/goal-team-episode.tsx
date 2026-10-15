@@ -1,3 +1,4 @@
+import {GoalOracleEvidence} from "./goal-oracle-evidence";
 import {useEffect, useRef, useState} from "react";
 import {readLoopXTeamWork, type DelegationAdoption, type DelegationDependency, type DelegationReadback} from "../../data/chat";
 
@@ -101,6 +102,8 @@ export function GoalTeamEpisode({sessionId, result, zh, onInspect, onObservation
         <button type="button" onClick={() => onInspect(episode.response.link.operation_id)}>{zh ? "阅读回应与证据" : "Read response and evidence"}</button></li>
       <li><span>03 · {zh ? "修订产物 · 当前验收有效" : "Revised output · currently accepted"}</span><strong>{result.agent_id}</strong>
         <span>{zh ? "与原始版本的正文对照见下方" : "Compare with the original below"}</span>
+        {result.validation?.oracle_checks?.map(check =>
+          <GoalOracleEvidence key={check.criterion_id} evidence={check} zh={zh}/>)}
         <span>{zh ? "独立验收 · 证据未提供" : "Independent verification · evidence not provided"}</span>
         <span>{zh ? "当前读回未提供独立验收者与指定版本回执。" : "This readback does not provide an independent verifier and an exact-version receipt."}</span></li>
       <li><span>04 · {episode.downstream ? (zh ? "后续结果 · 当前验收与采用记录有效" : "Downstream result · acceptance and adoption current")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from . import codex_attached_api as attached_api
 from . import workspace_preferences_api as preferences_api
 from . import configuration_backup_api as backup_api
 from . import state_recovery_api as recovery_api
@@ -18,6 +19,7 @@ from .. import chat_automation_cadence_api as cadence_api
 
 
 class ChatConfigurationRequestMixin(
+    attached_api.CodexAttachedRequestMixin,
     request_api.RequestControlMixin,
     preferences_api.WorkspacePreferencesRequestMixin,
     amendment_api.GoalAmendmentRequestMixin,
@@ -36,6 +38,7 @@ class ChatConfigurationRequestMixin(
 
     def _configuration_get_routes(self) -> dict[str, Callable[[], None]]:
         return {
+            attached_api.CODEX_ATTACHED_PATH: self._codex_attached_read,
             request_api.REQUEST_CONTROL_PATH: self._request_control_read,
             preferences_api.SIDEBAR_GOAL_ORDER_PATH: self._sidebar_order_read,
             amendment_api.CHAT_GOAL_AMENDMENT_PATH: self._amendment_inspect,
@@ -53,6 +56,8 @@ class ChatConfigurationRequestMixin(
 
     def _configuration_post_routes(self) -> dict[str, Callable[[], None]]:
         return {
+            attached_api.CODEX_ATTACHED_PATH: self._codex_attached_send,
+            attached_api.CODEX_ATTACHED_OPEN_PATH: self._codex_attached_open,
             request_api.REQUEST_CONTROL_PATH: self._request_control_write,
             preferences_api.SIDEBAR_GOAL_ORDER_PATH: self._sidebar_order_save,
             amendment_api.CHAT_GOAL_AMENDMENT_PATH: self._amendment_configure,

@@ -311,7 +311,7 @@ def test_due_stride_review_survives_successor_transition_until_decision(
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     data = json.loads(registry.read_text())
-    data["goals"][0]["quota"]["allowed_slots"] = 4
+    data["goals"][0]["quota"]["allowed_slots"] = 8
     registry.write_text(json.dumps(data))
     rc, listed = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
     assert rc == 0, listed
@@ -321,7 +321,7 @@ def test_due_stride_review_survives_successor_transition_until_decision(
 
     def call(*args: str, expected_code: int = 0) -> dict:
         code, result = _run_cli(registry, runtime, *args, cwd=project)
-        assert code == expected_code, result
+        assert code == expected_code, json.dumps(result, indent=2)
         return result
 
     call("configure-goal", "--goal-id", GOAL_ID, "--execution-replan-after-turns", "2",
@@ -438,6 +438,70 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     assert accepted["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True
     persisted = json.loads(Path(accepted["json_path"]).read_text())
     assert persisted["agent_vision"]["stride_decision"] == decision
+    assert persisted["settlement_identity"]["schema_version"] == "quota_settlement_identity_v1"
+    assert persisted["replan_obligation_id"] == obligation["obligation_id"]
+    call("quota", "spend-slot", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+         "--replan-obligation-id", obligation["obligation_id"], "--turn-instance-id", "stride-due-review",
+         "--slots", "1", "--source", "heartbeat", "--execute")
+
+    # Continue through real authority/history, rather than injecting a crafted
+    # context. The next periodic review must see the accepted autonomous decision.
+    for index in range(2):
+        turn = f"stride-followthrough-{index}"
+        call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+             "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", turn,
+             "--scan-path", str(project))
+        call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+             "--todo-id", TODO_ID, "--turn-instance-id", turn,
+             "--classification", "validated_progress", "--delivery-batch-scale", "implementation",
+             "--delivery-outcome", "outcome_progress", "--delivery-boundary", "in_flight_continuation",
+             "--no-global-sync", "--suppress-external-sinks")
+        call("quota", "spend-slot", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+             "--todo-id", TODO_ID, "--turn-instance-id", turn,
+             "--slots", "1", "--source", "heartbeat", "--execute")
+    next_guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID,
+        "--turn-instance-id", "stride-next-review", "--scan-path", str(project))
+    next_obligation = next_guard["autonomous_replan_obligation"]
+    next_successor = call("todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
+        "--claimed-by", AGENT_ID, "--text", "Resolve the remaining source uncertainty",
+        "--task-class", "advancement_task", "--action-kind", "validate",
+        "--target-key", "source-uncertainty", "--replan-obligation-id", next_obligation["obligation_id"])
+    next_guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", next_successor["todo_id"],
+        "--turn-instance-id", "stride-next-review", "--scan-path", str(project))
+    next_obligation = next_guard["autonomous_replan_obligation"]
+    next_control = next_guard["replan_action_packet"]["stride_control"]
+    follow = next_obligation["replan_context"]["decision_followthrough"]
+    previous = follow["previous_decision"]
+    assert previous["todo_id"] is None
+    assert previous["replan_obligation_id"] == obligation["obligation_id"]
+    assert previous["stride_decision"] == decision
+    assert follow["execution_and_goal_gain"] == "unknown"
+    assert next_control["previous_decision_ref"] == previous["evidence_ref"]
+    resolved = call("history", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                    "--evidence-ref", previous["evidence_ref"])
+    assert resolved["evidence"]["stride_decision"] == decision
+    next_decision = {**decision, "reference_context_id": next_control["reference_context_id"],
+                     "reference_obligation_id": next_obligation["obligation_id"]}
+    refresh_args = ("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--replan-obligation-id", next_obligation["obligation_id"], "--turn-instance-id", "stride-next-review",
+        "--agent-vision-json", str(decision_path), "--classification", "bounded_replan_progress",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--no-global-sync", "--suppress-external-sinks")
+    decision_path.write_text(json.dumps({**vision_packet, "stride_decision": next_decision}))
+    missing_review = call(*refresh_args, expected_code=1)
+    assert missing_review.get("appended") is not True
+    assert "previous" in missing_review["error"].lower()
+    next_decision["previous_review"] = {"reference_decision_ref": previous["evidence_ref"],
+        "adoption": "unknown", "information_gain": "unknown", "goal_gain": "unknown",
+        "evidence_refs": [previous["history_evidence_ref"]],
+        "lesson": "The decision is recorded; subsequent work does not yet prove target gain."}
+    decision_path.write_text(json.dumps({**vision_packet, "stride_decision": next_decision}))
+    next_accepted = call(*refresh_args)
+    assert next_accepted["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True
+    replay = call(*refresh_args)
+    assert replay.get("appended") is not True
 
 
 @pytest.mark.parametrize("invalid", [0, 7, True, 2.5, "2"])

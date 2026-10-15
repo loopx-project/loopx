@@ -29,6 +29,7 @@ from .error_codes import (
     HeartbeatReceiptIdentityConflictError,
 )
 from .accounting_admission import quota_accounting_admission
+from .effect_program import ReceiptBoundReplayPhase
 
 UNSETTLED_HOST_TURN_RECOVERY_SCHEMA_VERSION = "unsettled_host_turn_recovery_v0"
 
@@ -97,6 +98,45 @@ def _todo_binding_facts(item: Mapping[str, Any] | None) -> dict[str, Any] | None
         "target_key": str(item.get("target_key") or "").strip() or None,
         "cadence": str(item.get("cadence") or "").strip() or None,
     }
+
+
+def restore_receipt_bound_todo_source(
+    payload: dict[str, Any], *, registry_path: Path, runtime_root: Path,
+    goal_id: str, todo_id: str | None, replay_phase: ReceiptBoundReplayPhase | None,
+) -> dict[str, Any]:
+    """Complete a display snapshot from the original binding's exact reader.
+
+    Display lane caps cannot decide whether a committed Todo still exists.
+    This only transports provider facts to the existing decision owner; it
+    neither changes lifecycle nor substitutes a new settlement binding.
+    """
+    from ..todos.quota_summary import select_planning_inventory_source_items
+
+    if not todo_id or replay_phase is ReceiptBoundReplayPhase.SETTLED:
+        return payload
+    queue = payload.get("attention_queue") or {}
+    rows = list(queue.get("items") or [])
+    for index, row in enumerate(rows):
+        if row.get("goal_id") != goal_id:
+            continue
+        asset = row.get("project_asset") or {}
+        source = select_planning_inventory_source_items(
+            row.get("agent_todos"), asset.get("agent_todos"), include_terminal=True,
+        )
+        if any(item.get("todo_id") == todo_id for item in source):
+            return payload
+        bound = _bound_todo_item(registry_path=registry_path, runtime_root=runtime_root,
+            goal_id=goal_id, todo_id=todo_id)
+        if bound is None:
+            raise ValueError("The original receipt-bound Todo cannot be read; recover its lifecycle before selecting or settling work")
+        def restored(summary: Mapping[str, Any] | None) -> dict[str, Any]:
+            current = dict(summary or {})
+            current["items"] = [*(current.get("items") or []), bound]
+            return current
+        rows[index] = {**row, "agent_todos": restored(row.get("agent_todos")),
+            "project_asset": {**asset, "agent_todos": restored(asset.get("agent_todos"))}}
+        return {**payload, "attention_queue": {**queue, "items": rows}}
+    return payload
 
 
 def _prior_closeout_preflight(

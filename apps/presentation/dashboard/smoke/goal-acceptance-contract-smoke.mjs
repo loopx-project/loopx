@@ -47,7 +47,15 @@ assert.notEqual(next.acceptance.goal_acceptance_contract.digest, contract.digest
 assert.deepEqual(contract, before, "Rendering must not mutate the supplied contract");
 console.log("Goal acceptance contract API/export: off parity, association/verification distinction, source/revision and negative cases passed");
 
-const {projectGoalAcceptanceCriteria} = await import("../node_modules/.cache/delivery-review/data/goal-acceptance-observation.js");
+const {goalAcceptanceDisplayStatus, projectGoalAcceptanceCriteria} = await import("../node_modules/.cache/delivery-review/data/goal-acceptance-observation.js");
+for (const [observation, expected] of Object.entries({current: "accepted", stale: "stale", failed: "failed", recorded: "unverified", unavailable: "unverified"})) {
+  const value = structuredClone(verifiedContract("accepted"));
+  value.criteria[0].oracle = {state: observation};
+  const before = structuredClone(value);
+  assert.equal(goalAcceptanceDisplayStatus(value), expected, "Historical success cannot override current file observations");
+  assert.equal(projectGoalAcceptanceCriteria(value)[0].state, expected);
+  assert.deepEqual(value, before, "Display freshness cannot mutate canonical acceptance");
+}
 for (const status of ["stale", "held", "partial"]) {
   const value = verifiedContract(status);
   value.verification.contract_revision = value.revision;
