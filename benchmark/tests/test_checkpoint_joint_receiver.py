@@ -996,7 +996,8 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
             (wakes / boundary_turn).mkdir()
             boundary = {"turn_id": boundary_turn, "mode": "heartbeat", "stage": "execute", "ok": False}
             capture_before_replan(env, boundary, "Current new decision contract.")
-            assert boundary["checkpoint_restore"]["native_continuation_cursor"] == grown["completed_turn_id"]
+            (tmp_path / "automatic-capture.json").write_text(json.dumps(boundary))
+            assert boundary["checkpoint_restore"].get("native_continuation_cursor") == grown["completed_turn_id"], boundary
             if external:
                 assert boundary["checkpoint"]["captured"], json.dumps(boundary, indent=2)
                 assert not boundary["checkpoint"]["research_point_qualified"]  # Artifact integrity is not scientific qualification.

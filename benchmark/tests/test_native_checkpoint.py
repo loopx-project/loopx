@@ -110,6 +110,33 @@ def test_preflight_reads_only_the_new_completed_cursor(tmp_path, monkeypatch, ta
     assert calls == ["initialize", "initialized", "thread/read", "thread/turns/list"]
 
 
+@pytest.mark.parametrize("tail,accepted", [
+    ({"id": "first", "status": "completed"}, True),
+    ({"id": "first", "status": "inProgress"}, False),
+    (None, False),
+])
+def test_empty_reset_prefix_still_needs_an_actual_completed_cursor(tmp_path, monkeypatch, tail, accepted):
+    from loopx.hosts.codex_checkpoint import native_completed_cursor
+    env, calls = fixture(tmp_path, monkeypatch, [{"data": [tail] if tail else []}],
+        expected_history_query={"threadId": "fixture-session", "sortDirection": "desc",
+                                "itemsView": "notLoaded", "limit": 1})
+    if accepted:
+        assert native_completed_cursor(env, "fixture-session", retained_turn_ids=[], timeout=10) == "first"
+    else:
+        with pytest.raises(ValueError, match="cursor"):
+            native_completed_cursor(env, "fixture-session", retained_turn_ids=[], timeout=10)
+    assert calls[-1] == "thread/turns/list"
+
+
+@pytest.mark.parametrize("retained", [None, "source", [None], [""]])
+def test_missing_or_malformed_prefix_is_not_an_explicit_empty_reset(tmp_path, monkeypatch, retained):
+    from loopx.hosts.codex_checkpoint import native_completed_cursor
+    env, calls = fixture(tmp_path, monkeypatch, [])
+    with pytest.raises(ValueError, match="retained source"):
+        native_completed_cursor(env, "fixture-session", retained_turn_ids=retained, timeout=10)
+    assert calls == []
+
+
 @pytest.mark.parametrize("fault", [None, "missing", "source_cursor", "failed_cursor", "changed_prefix"])
 def test_full_capture_rechecks_prefix_and_provisional_cursor(tmp_path, monkeypatch, fault):
     original = [{"id": "source", "status": "completed", "items": [{"type": "compaction"}]}]

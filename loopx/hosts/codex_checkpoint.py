@@ -159,10 +159,13 @@ def native_completed_cursor(env: dict[str, str], session_id: str, *,
     """Read a provisional completed continuation, not a history certificate.
 
     Actual capture must independently verify the retained full prefix and this
-    cursor. Ordinary preflight does not need every historical tool output.
+    cursor. An explicit context reset has an empty prefix; its caller must still
+    bind that reset's checkpoint/review/session provenance. An empty prefix does
+    not accept an empty or unfinished current conversation. Ordinary preflight
+    does not need every historical tool output.
     """
     if (not session_id or not math.isfinite(timeout) or timeout <= 0 or
-            not retained_turn_ids or any(not isinstance(x, str) or not x for x in retained_turn_ids)):
+            not isinstance(retained_turn_ids, list) or any(not isinstance(x, str) or not x for x in retained_turn_ids)):
         raise ValueError("native continuation cursor requires its retained source and an open window")
     deadline = time.monotonic() + timeout
     with native_checkpoint_reader(env, timeout=timeout) as transport:
