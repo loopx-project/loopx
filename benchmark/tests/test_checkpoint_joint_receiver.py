@@ -109,7 +109,9 @@ def test_captured_point_continues_with_fresh_authority(
     assert retained_object.read_text() == "Readonly source evidence"
     assert retained_object.stat().st_mode & 0o777 == 0o444
     registry, runtime = tmp_path / "registry.json", tmp_path / "runtime"
-    goal, agent, turn = os.environ.get("LOOPX_JOINT_RECEIVER_GOAL", "joint-receiver"), "joint-researcher", "joint-work"
+    goal = os.environ.get("LOOPX_JOINT_RECEIVER_GOAL", "joint-receiver")
+    agent = os.environ.get("LOOPX_JOINT_RECEIVER_AGENT", "joint-researcher")
+    turn = "joint-work"
     prefix = [
         "--format",
         "json",

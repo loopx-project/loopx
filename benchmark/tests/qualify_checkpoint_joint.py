@@ -244,7 +244,8 @@ def main():
                      str(third_workspace): {"bind": "/qualification", "mode": "rw"},
                      str(third): {"bind": "/results", "mode": "rw"}},
                     {"LOOPX_JOINT_RECEIVER_POINT": "/point", "LOOPX_JOINT_RECEIVER_CONFIG": "/captured-config.toml",
-                     "LOOPX_JOINT_RECEIVER_GOAL": "joint-grandreceiver", "LOOPX_RUNTIME_ROOT": "/results/transport-runtime"},
+                     "LOOPX_JOINT_RECEIVER_GOAL": "joint-grandreceiver", "LOOPX_JOINT_RECEIVER_AGENT": "joint-grandresearcher",
+                     "LOOPX_RUNTIME_ROOT": "/results/transport-runtime"},
                     output / "grandreceiver.log")
                 assert not grades if args.reuse_point else len(grades) == 1
         # The same native provider must also complete the public Core journey
