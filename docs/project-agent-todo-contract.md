@@ -29,8 +29,11 @@ sync catch up.
 
 ## Priority intent
 
-Priority is an explicit scheduling field, with `P0` highest and `P4` lowest.
-Create or edit it independently of the task description:
+Priority is scheduling intent, with `P0` highest and `P4` lowest. New Todos
+default to **P1** when neither a priority parameter nor a legacy prefix is
+supplied. Reserve P0 for explicitly urgent work; routine creation must not
+compete with it just because the author omitted a field. Create or edit
+priority independently of the task description:
 
 ```bash
 loopx todo add --goal-id <goal-id> --role agent --priority P1 --text '<agent action>'
@@ -42,10 +45,9 @@ Pass the registered `--agent-id` on updates when the Goal has multiple Agents.
 The existing authoring, ownership, lease and review requirements still apply.
 Chat `todo.create` accepts `priority`; reviewed `todo.update` edits accept
 `priority` or `clear_priority`. The task management panel uses that reviewed
-update path for its priority selector. Priority never grants eligibility,
-capabilities, a claim or quota; missing priority is allowed and sorts after P4.
-The generated agent authoring hint shows an explicit P1 example, not a global
-default or a prerequisite for same-turn binding.
+update path for its priority selector. CLI, Chat and canonical creation use the
+same typed default. Priority never grants eligibility, capabilities, a claim,
+quota, or permission to bypass a gate.
 
 Omitting priority from an ordinary text edit preserves the current priority.
 Use `--clear-priority` to remove it. Legacy `--text '[P2] Task'` remains supported;
@@ -54,9 +56,24 @@ conflicting prefix are rejected before writing, as are simultaneous set/clear
 instructions. Words such as `P0` inside ordinary prose have no scheduling meaning.
 Historical decorated prefixes such as `[P2-review]` read as P2; an edit renders
 the normalized `[P2]` prefix. P3/P4 participate in ordering and repair suggestions
-without being silently promoted to P1. Existing repair-suggestion and historical
-event-replay defaults retain their own contracts; they do not impose a default
-on new unprioritized Todos.
+without being silently promoted to P1.
+
+Direct `complete`/`supersede` continuations retain the predecessor's declared
+priority unless the successor explicitly supplies a different legacy prefix.
+Monitor discoveries are independent work: `quota monitor-poll` accepts
+`--next-agent-priority` and `--next-user-priority`, each tied to its corresponding
+successor. Omission uses the new-Todo default, not the monitor's priority. A P0
+watch therefore creates an ordinary P1 follow-up unless the caller declares
+urgency. The successor record and receipt expose the resulting priority.
+
+**Default change and compatibility:** previously omitted creation priority was
+unranked; new CLI, Chat, canonical and monitor-created Todos now receive P1.
+Existing unranked Todos and explicit clears remain unranked and sort after P4.
+Ordinary edits preserve them. Creation defaults apply after original receipt
+lookup, so upgrading and retrying an old operation does not reprioritize its
+result. Historical event replay and repair-suggestion policies retain their own
+contracts. To choose another priority, pass it explicitly; to make an existing
+Todo unranked, use the reviewed edit or `--clear-priority`.
 
 `todos/priority.ts` owns authoring intent and ordering. The generated coordination
 contract supplies its vocabulary and legacy grammar to Python read adapters.

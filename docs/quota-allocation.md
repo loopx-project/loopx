@@ -943,7 +943,11 @@ follow-up instead of staying as an opaque watch. A user follow-up must declare
 a blocking owner decision and `user_action` for a visible reminder that must
 not block the bound agent lane. Omitting the task class fails before writeback.
 The monitor remains an observe-only `continuous_monitor`; `--next-agent-todo`
-creates a separate runnable `advancement_task`. For the corresponding
+creates a separate runnable `advancement_task`. New successors default to P1
+independently of the monitor. Use `--next-agent-priority` and
+`--next-user-priority` to declare urgency for each successor; each option
+requires its corresponding Todo. Conflicting priority and legacy text prefix
+are rejected before observation writeback. For the corresponding
 generation-fenced waiting-Todo recipe, see
 [Project Agent Todo Contract](project-agent-todo-contract.md#machine-readable-resume-conditions):
 
@@ -952,7 +956,8 @@ loopx quota monitor-poll --goal-id <GOAL_ID> \
   --target-key <TARGET_KEY> --result-hash <HASH> --material-change \
   --next-user-todo "<PUBLIC_SAFE_REVIEW_REMINDER>" \
   --next-user-task-class user_action \
-  --next-agent-todo "<PUBLIC_SAFE_FOLLOW_UP>" --execute
+  --next-agent-todo "<PUBLIC_SAFE_FOLLOW_UP>" --next-action-kind validate \
+  --next-agent-priority P1 --next-user-priority P2 --execute
 ```
 
 The command appends a `quota_monitor_poll` run record, does not mutate the
