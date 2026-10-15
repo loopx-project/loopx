@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -290,6 +291,7 @@ def test_native_codex_resume_keeps_planning_history(tmp_path, monkeypatch):
             "MODEL_NAME": "gpt-5.4",
             "OPENAI_BASE_URL": f"http://127.0.0.1:{server.server_port}/v1",
             "LOOPX_CODEX_TURN_TIMEOUT_SEC": "30",
+            "LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 600),
         }
         first = run_once(plan_stage(env, monkeypatch))
         second = run_once(env)
@@ -298,6 +300,9 @@ def test_native_codex_resume_keeps_planning_history(tmp_path, monkeypatch):
         assert len(requests) == 2
         history = json.dumps(requests[1]["input"])
         assert "planning-input" in history and "planning-ack" in history
+        assert "Host execution window" in history
+        assert "Existing execution reserve: 160 seconds" in history
+        assert env["LOOPX_PHASE_DEADLINE_EPOCH"] in history
         assert "Current Todo input." in history
         assert len(list((tmp_path / "logs/sessions").rglob("*.jsonl"))) == 1
     finally:

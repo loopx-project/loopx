@@ -175,6 +175,62 @@ def test_prose_or_fabricated_todo_does_not_qualify_planning(planning_env):
     )
 
 
+def test_planner_receives_existing_phase_clock_without_changing_task_identity(planning_env):
+    from benchmark.runtime.planning import task_plan_packet
+    from benchmark.runtime.worker import loopx_command
+
+    deadline = str(time.time() + 600)
+    env = planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": deadline}
+    env.pop("LOOPX_PLANNING_TIMEOUT_SEC")  # SForge has one shared phase clock.
+    before = task_plan_packet(env, loopx_command(env))
+    receipt = run_once(env)
+    assert receipt["ok"] and receipt["planning"]["state_readback_verified"]
+    body = next(Path(env["LOOPX_WAKE_LOG_DIR"]).glob("*/planning-input.json")).read_text()
+    assert deadline in body
+    assert "Host execution window" in body
+    assert "Existing execution reserve: 160 seconds" in body
+    packet = json.loads(body.split("Host-supplied planning checkpoint:\n", 1)[1])
+    assert packet == before
+    assert receipt["planning"]["input_digest"] == before["input_digest"]
+    assert env["LOOPX_PHASE_DEADLINE_EPOCH"] == deadline
+    assert not list(Path(env["LOOPX_PROJECT"]).iterdir())
+
+
+def test_planning_window_distinguishes_phase_and_stage_limits_and_preserves_packet(monkeypatch):
+    from benchmark.runtime import planning
+
+    monkeypatch.setattr(planning, "time", SimpleNamespace(time=lambda: 1000.0))
+    packet = {"input_digest": "unchanged", "text": "保留原始任务"}
+    legacy = "$loopx\n\nHost-supplied planning checkpoint:\n" + json.dumps(packet, ensure_ascii=False)
+    assert planning.render_planning_prompt(packet, {}, execution_reserve_seconds=160) == legacy
+    stage = planning.render_planning_prompt(packet, {"LOOPX_PLANNING_TIMEOUT_SEC": "30"},
+                                           execution_reserve_seconds=160)
+    assert "Planning invocation limit: 30 seconds" in stage
+    assert "not the total task budget" in stage
+    assert "Absolute phase deadline:" not in stage
+    assert "Remaining phase time" not in stage
+    env = {"LOOPX_PHASE_DEADLINE_EPOCH": "1600", "LOOPX_PLANNING_TIMEOUT_SEC": "30"}
+    both = planning.render_planning_prompt(packet, env, execution_reserve_seconds=160)
+    assert "Absolute phase deadline: 1600.0 Unix UTC seconds" in both
+    assert "Remaining phase time at observation 1000.0: 600.0 seconds" in both
+    assert "Observed work window before that reserve: 440.0 seconds" in both
+    assert "Planning invocation limit: 30 seconds" in both
+    assert json.loads(both.split("Host-supplied planning checkpoint:\n", 1)[1]) == packet
+    monkeypatch.setattr(planning, "time", SimpleNamespace(time=lambda: 1700.0))
+    expired = planning.render_planning_prompt(packet, env, execution_reserve_seconds=160)
+    assert "Remaining phase time at observation 1700.0: 0.0 seconds" in expired
+    assert env == {"LOOPX_PHASE_DEADLINE_EPOCH": "1600", "LOOPX_PLANNING_TIMEOUT_SEC": "30"}
+
+
+@pytest.mark.parametrize("key", ["LOOPX_PHASE_DEADLINE_EPOCH", "LOOPX_PLANNING_TIMEOUT_SEC"])
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf", "0", "-1", "not-a-clock"])
+def test_planning_window_rejects_invalid_host_clock(key, value):
+    from benchmark.runtime.planning import render_planning_prompt
+
+    with pytest.raises(ValueError):
+        render_planning_prompt({"input_digest": "unchanged"}, {key: value}, execution_reserve_seconds=160)
+
+
 def test_plan_readback_rejects_stale_input_unclaimed_work_and_false_blockers():
     packet = {
         "input_digest": "input-a",
@@ -415,9 +471,8 @@ def test_seeded_task_acceptance_survives_phase_update_without_reviving_terminal_
     from benchmark.runtime import harbor
     from loopx.cli import main
 
-    monkeypatch.setattr(harbor, "_GOAL_ID", "planning-goal")
-    monkeypatch.setattr(harbor, "_AGENT_ID", "planner")
-    agent = harbor.BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture")
+    agent = harbor.BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture",
+                                 goal_id="planning-goal", agent_id="planner")
 
     async def cli(environment, args, **kwargs):
         output = io.StringIO()
@@ -582,8 +637,8 @@ def test_runner_cadence_persists_through_real_configure_goal(
     from benchmark.runtime import harbor
     from loopx.cli import main
 
-    monkeypatch.setattr(harbor, "_GOAL_ID", "planning-goal")
-    agent = harbor.BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", **settings)
+    agent = harbor.BenchmarkCodex(logs_dir=tmp_path, model_name="fixture",
+                                 goal_id="planning-goal", agent_id="planner", **settings)
 
     async def cli(environment, args, **kwargs):
         output = io.StringIO()
