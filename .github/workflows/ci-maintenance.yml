@@ -58,9 +58,11 @@ jobs:
                 branch: pr.head.ref, per_page: 100});
             for (const run of runs) {
               const created = Date.parse(run.created_at);
+              // A queued PR event may materialize after close. Only the exact
+              // closed head can cross that cutoff; recheck its lifecycle below.
               if (run.status === 'completed' || run.head_repository?.id !== pr.head.repo.id ||
                   run.head_branch !== pr.head.ref || !run.head_sha || !Number.isFinite(created) ||
-                  (closed ? created > cutoff : run.head_sha === pr.head.sha)) continue;
+                  (closed ? created > cutoff && run.head_sha !== pr.head.sha : run.head_sha === pr.head.sha)) continue;
               // GitHub can omit PR associations after merge. Only the exact closed head
               // is safe in that case; superseded heads remain in their concurrency lane.
               if (run.pull_requests?.length

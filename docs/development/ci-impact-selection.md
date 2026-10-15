@@ -220,6 +220,13 @@ and retains the same PR/repository/head checks before cancellation. A green
 maintenance run means cleanup completed, not that Python tests passed. Its
 concurrency group is separate from current-head qualification; `Python Tests`
 still receives PR close events to cancel the old qualification lane.
+Delayed PR events can create runs after the close timestamp. Cleanup also retires
+those runs when their source repository, branch and exact head match the still
+closed PR and no open PR shares that branch. Later runs at a different head stay
+untouched, even with an association to the closed PR; reopening or source changes
+stop cancellation. This extends the earlier close-time cutoff for exact-head
+residue only. Cleanup can still wait for a runner or miss a run created after its
+snapshot; it is not a continuous admission service.
 
 Dashboard browser qualification retains all three shards. The unchanged unit
 coverage command runs only in shard 1, whose `lcov.info` the existing merger
@@ -232,6 +239,10 @@ presentation run; it does not establish a hosted wall-time improvement.
 清理成功不再显示为一次 Python Tests 成功。Dashboard 的单元覆盖率只在第 1 片
 执行一次，三个浏览器分片与验收凭证仍全部必需；缺少单元覆盖率仍拒绝聚合。
 这减少了两次重复命令，实际等待时间与端到端耗时仍需上线后测量。
+延迟处理的 PR 事件可能在关闭后才创建运行。清理现在也覆盖与仍关闭 PR 的仓库、
+分支和 head 完全一致的残留；其他 head 的晚到运行仍保留，重开或来源变化会中止
+取消，同分支其他开放 PR 的保护不变。清理本身仍可能等待 runner，也可能遗漏其
+快照之后才创建的运行，不能代替持续的准入控制。
 
 全量 smoke 改为每天一次与指定 ref 的手动运行，不再随普通主干提交启动。五个完整
 分片共享一次源码绑定的前端构建，同一时刻最多运行两个分片；全量用例仍保留，

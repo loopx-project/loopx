@@ -149,8 +149,11 @@ const selected = await run({runs:[old,
   {...old,id:3,status:'completed'}, {...old,id:4,head_repository:{id:8}},
   {...old,id:5,created_at:'2026-01-03T00:00:00Z'},
   {...old,id:6,pull_requests:[{number:18}]}, {...old,id:7,head_sha:'unknown'},
-  {...old,id:8,head_branch:'another'}, {...old,id:9,created_at:'invalid'}]});
-assert.deepEqual(selected.cancelled,[1,2]); assert.deepEqual(selected.forced,[1,2]);
+  {...old,id:8,head_branch:'another'}, {...old,id:9,created_at:'invalid'},
+  {...old,id:10,head_sha:'previous',created_at:'2026-01-03T00:00:00Z',pull_requests:[{number:17}]}]});
+// A delayed webhook can create qualification after the PR has closed. Only
+// its exact closed head may cross the close-time cutoff, never an older head.
+assert.deepEqual(selected.cancelled,[1,2,5]); assert.deepEqual(selected.forced,[1,2,5]);
 assert.equal(selected.queries[1][1].workflow_id,'python-tests.yml');
 assert.equal(selected.queries[1][1].event,'pull_request');
 assert.equal(selected.queries[1][1].branch,'fix');

@@ -175,13 +175,14 @@ number keeps the same concurrency lane when the merged close event changes
 `github.ref` to the base branch. Closed events skip classification and the final
 gate; open PRs retain the same required jobs and cancellation failures.
 
-A trusted `pull_request_target` cleanup handles closed and synchronize events.
-Closed events cancel remaining runs
-of this workflow, using job-local `actions: write` without checking out PR code.
+A trusted `pull_request_target` cleanup in **CI Maintenance** handles closed and
+synchronize events. Closed events cancel remaining runs of Python Tests, using
+job-local `actions: write` without checking out PR code.
 It verifies the current closed PR, source repository/branch and close time;
-it preserves reopened PRs, another open PR on that branch, newer runs and
-foreign repositories. A missing run-to-PR association requires the exact closed
-head. After ordinary cancellation, it uses GitHub's force-cancel endpoint for
+it preserves reopened PRs, another open PR on that branch, newer runs at a
+different head and foreign repositories. Delayed runs at the exact closed head
+can be retired even when created after close. A missing run-to-PR association
+requires the exact closed head. After ordinary cancellation, it uses GitHub's force-cancel endpoint for
 nonterminal `always()` aggregates. Before either cancellation stage it rereads
 both the target PR and open PRs sharing its source branch; a new sibling or
 unavailable lookup prevents the effect. A fresh retry can resume after the
@@ -191,9 +192,11 @@ providing a GitHub shared-pool priority guarantee.
 
 PR 关闭或合并后，以 PR 编号维持原并发 lane，关闭事件跳过分类与最终门；开放
 PR 的必需检查及取消失败规则不变。来自目标分支的可信 `pull_request_target`
-清理任务处理 closed 与 synchronize 事件（更新规则见下方共享分片说明），仅自身持有 `actions: write`，不检出 PR 代码。它核验当前关闭
-状态、源仓库/分支与关闭时间，保留重开的 PR、同源分支上的其他开放 PR、更新
-运行及其他仓库；缺少 PR 关联时只处理确切关闭 head。普通取消后仍未结束的
+CI Maintenance 清理任务处理 closed 与 synchronize 事件（更新规则见下方共享分片说明），
+仅自身持有 `actions: write`，不检出 PR 代码。它核验当前关闭
+状态、源仓库/分支与关闭时间，保留重开的 PR、同源分支上的其他开放 PR、不同 head 的更新
+运行及其他仓库；确切关闭 head 的延迟运行即使在关闭后创建也可清理，缺少 PR 关联时
+同样只处理确切关闭 head。普通取消后仍未结束的
 `always()` 汇总使用强制取消 API。普通及强制取消前都重读目标 PR 和同源分支的
 开放 PR；新出现的共享分支 PR 或读取失败会阻止副作用，分支不再共享后可重新
 触发清理。清理需要一个短 runner 任务；这会释放过期
