@@ -556,8 +556,11 @@ continuation. With `"native_session": true`, preflight reads only the latest
 Turn's identity/status (`itemsView: "notLoaded"`), after checking the bound native
 session and workspace. This provisional cursor admits a capture attempt; it does
 not certify the retained history. Both full native observations during capture
-must verify the original history prefix and this completed continuation before
-sealing. A changed checkpoint/session, missing cursor or altered prefix fails
+must verify the retained history prefix and this completed continuation before
+sealing. After the explicitly bound initial context reset, that prefix is empty;
+the checkpoint/review/new-session binding remains required, and a new completed
+native Turn is still mandatory. Neither an absent prefix declaration nor a
+semantic-only review can replace those checks. A changed checkpoint/session, missing cursor or altered prefix fails
 capture. Preparation and declarations without native capture keep full-history
 preflight. Canonical review, first-boundary deduplication, current authority and
 the default-off path keep their existing rules.
@@ -738,6 +741,23 @@ files remain historical: current authority uses a fresh external registry/runtim
 and the old Goal cannot be admitted through it. Only the model
 response stream and grading/backend fixtures are synthetic; the native CLI,
 canonical SQLite authority, worker, supervisor and capsule transport are real.
+The fresh-context variant now keeps the controller and its bank outside every
+guest mount. It performs and settles actual candidate work, reaches a genuinely
+new due replan, and captures research, new native history, code, incumbent,
+opportunity and the original phase through the real controller barrier. Another
+isolated receiver restores that newly sealed point and performs actual work.
+`fresh.log` and `grandreceiver.log` retain those assertions. The synthetic service
+uses host networking only for this controller-backed variant; its public worker
+registration enters the guest, while the controller configuration and bank do not.
+
+To reuse an already sealed **synthetic qualification** point, append
+`--reuse-point /private/sealed-point --captured-config /private/captured-config.toml`
+to the command above. The matching configuration digest and every source member
+are verified; the original source test is explicitly not counted as passed.
+This avoids replaying the six source work wakes. All receiver work still runs;
+this option neither admits a real study cell nor turns an earlier source failure
+into a pass. Output must remain fresh, physical and outside every source checkout.
+
 Check `result.json`, `source.log`, `ordinary.log` and `stride.log` in the private
 output directory; failure is an error, including missing prerequisites, and a
 skipped test cannot produce a passed receipt. A second attempt needs a new output
@@ -947,6 +967,15 @@ output recovery, actual two-candidate work, settlement and a later explicit
 partial capture. It does not certify research benefit or a new automatic replan.
 This is a benchmark operator transport; the generic packaged restore UI remains
 an open acceptance boundary.
+
+资格脚本的 fresh 分支还要求：当前真实工作结算后产生新的 due replan，经 controller
+完整封存研究、新原生历史、代码、incumbent、机会与原 phase，再由另一隔离 receiver
+实际接续。controller 配置/bank 不进入 guest 挂载。可向上述资格命令同时增加
+`--reuse-point /private/sealed-point --captured-config /private/captured-config.toml`
+复用合成源点，逐项核验原字节和配置摘要；原 source 测试不计通过，所有 receiver
+仍真实执行。显式上下文重置使用空原生前缀时，仍须绑定原点/已完成复盘/新会话，
+并观察新完成 Turn；空前缀不等于缺声明，更不授予捕获或执行权。科研效用、持续容量
+及真实新 cell 的版本/准入验收仍独立保留。
 
 独立获授权的上下文消融可增加 `--restore-fresh-after-replan`：当前目标的 replan
 首次受理并结算后，下一工作唤醒才新建一次原生会话，后续唤醒恢复该会话。

@@ -1270,6 +1270,19 @@ declared information loss, never exact retained-history continuation. Synthetic
 receiver/capture qualification and actual model evidence use or research benefit
 remain separate; the treatment authorizes no new study cells or hot updates.
 
+The joined qualification must distinguish a manual partial artifact from a
+new automatic full point after useful destination work. The fresh-context
+receiver now retains the cadence long enough to reach that new periodic review,
+uses the actual controller/native opportunity barrier, and sends its newly
+sealed code/research/native/phase state into another isolated receiver for real
+work. Source-prefix verification uses the explicitly bound reset baseline rather
+than demanding native messages that this treatment discarded. The completed
+cursor and both full history/source observations remain mandatory. Reusing a
+verified synthetic source point skips only source generation, never counts a
+prior source test as passed, and still exercises every receiver. This closes a
+mechanical composition seam when qualification passes; sustained large-point
+capacity, packaged restoration and scientific evidence use remain separate.
+
 An inert verification unit grants no execution authority. The destination uses
 fresh experiment/Host identities and the existing Goal/session/state admission
 paths. Historical leases, quota, timers, pending effects and submission tokens
