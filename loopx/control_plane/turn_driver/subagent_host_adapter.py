@@ -7,12 +7,12 @@ _HOST_CHILD_CONTEXT_ADAPTERS: dict[str, dict[str, dict[str, Any]]] = {
     "codex-cli": {
         "fresh": {
             "native_operation": "spawn_agent",
-            "arguments": {"fork_context": False},
+            "arguments": {"fork_turns": "none"},
             "requires_session": False,
         },
         "forked_snapshot": {
             "native_operation": "spawn_agent",
-            "arguments": {"fork_context": True},
+            "arguments": {"fork_turns": "all"},
             "requires_session": False,
         },
     },

@@ -242,6 +242,7 @@ jobs:
               "examples/personal-workspace-browser/fixture.mjs",
               "examples/personal-workspace-browser/typed-actions.mjs",
               "examples/personal-workspace-browser/goal-work-map.mjs",
+              "examples/personal-workspace-browser/goal-workspace-m2.mjs",
           }
           changed = set(git("diff", "--name-only", product, fixture, "--", *sorted(allowed)).splitlines())
           if fixture != product and not changed:
@@ -363,7 +364,7 @@ jobs:
 
       - name: Restore browser fixtures and bind verified package checksums
         run: |
-          git restore -- examples/personal-workspace-browser/fixture.mjs examples/personal-workspace-browser/typed-actions.mjs examples/personal-workspace-browser/goal-work-map.mjs
+          git restore -- examples/personal-workspace-browser
           python scripts/release_artifacts.py verify-checksums --dist-dir dist/packages --checksum-file dist/SHA256SUMS
           python - <<'PY'
           import hashlib

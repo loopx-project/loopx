@@ -504,7 +504,8 @@ jobs:
 
   checks:
     # Preserve the required check name while exposing independent failure lanes.
-    if: always() && needs.changes.outputs.core_tests == 'true'
+    # Cancelled main pushes must not retain runner-backed aggregate work.
+    if: always() && needs.changes.outputs.core_tests == 'true' && (github.event_name != 'push' || !cancelled())
     needs: [changes, kernel-static-checks, typescript-coverage, dashboard-acceptance, chat-bundle-browser]
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -658,7 +659,7 @@ jobs:
 
   pytest:
     # Keep the required check name; a skipped/failed shard must not turn it green.
-    if: always() && needs.changes.outputs.python_tests == 'true'
+    if: always() && needs.changes.outputs.python_tests == 'true' && (github.event_name != 'push' || !cancelled())
     needs: [changes, checks, test-shard]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -795,7 +796,7 @@ jobs:
 
   stage2c-correctness-e2e:
     # Preserve the public check name and reject failed, cancelled or skipped lanes.
-    if: always() && needs.changes.outputs.stage2c_tests == 'true'
+    if: always() && needs.changes.outputs.stage2c_tests == 'true' && (github.event_name != 'push' || !cancelled())
     needs: [changes, stage2c-suite]
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -943,7 +944,7 @@ jobs:
 
   merge-gate:
     # Open PRs always receive an outcome; closed PRs only cancel their old lane.
-    if: always() && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.action != 'closed')
+    if: always() && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.action != 'closed') && (github.event_name != 'push' || !cancelled())
     needs: [changes, checks, pytest, node-minimum-compatibility, stage2c-correctness-e2e, windows-powershell, presentation]
     runs-on: ubuntu-latest
     timeout-minutes: 3

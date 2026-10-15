@@ -170,6 +170,23 @@ Changes to the classifier or workflow need both code-path and documentation-only
 qualification. Keep required check names stable and never require a
 workflow-level path-filtered check that cannot report on every PR.
 
+Cancelled `main` push workflows skip the runner-backed `checks`, `pytest`,
+`stage2c-correctness-e2e` and `merge-gate` aggregates. Previously their job-level
+`always()` conditions kept requesting runners after cancellation. The guard
+uses GitHub's [`cancelled()` status](https://docs.github.com/en/actions/reference/workflows-and-actions/expressions#status-check-functions)
+only for push events: an uncancelled main run still aggregates failed upstream
+work, and PR, nightly, manual and merge-group gate conditions retain their
+existing behavior. Evidence-upload steps keep `always()`. A cancelled main
+cohort is incomplete qualification, never a successful full run; this change
+does not reserve capacity or establish a release-priority guarantee.
+
+已取消的 `main` push 工作流跳过需申请 runner 的 `checks`、`pytest`、
+`stage2c-correctness-e2e` 和 `merge-gate` 汇总；此前 job 级 `always()` 在取消后
+仍会申请 runner。新条件仅对 push 事件检查 `cancelled()`：未取消的主干运行仍汇总
+上游失败，PR、夜间、手动和合并队列的门禁条件保留原行为。证据上传步骤继续使用
+`always()`。已取消主干候选仍是未完成资格，不能报告全量成功；本改动不预留容量，
+也不保证发布优先级。
+
 Closing or merging a PR retires its outstanding Python qualification. A PR
 number keeps the same concurrency lane when the merged close event changes
 `github.ref` to the base branch. Closed events skip classification and the final

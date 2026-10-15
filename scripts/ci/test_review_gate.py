@@ -54,8 +54,9 @@ class GateTests(unittest.TestCase):
             github = SimpleNamespace(event_name=event, ref=ref, event=SimpleNamespace(
                 action=action, number=number, pull_request=None))
             return eval(value.strip().removeprefix("${{").removesuffix("}}").strip()
-                        .replace("&&", "and").replace("||", "or"),
+                        .replace("&&", "and").replace("||", "or").replace("!cancelled()", "not cancelled()"),
                         {"__builtins__": {}}, {"github": github, "always": lambda: True,
+                            "cancelled": lambda: False,
                             "format": lambda template, number: template.format(number)})
 
         def lane(action, **kwargs):
@@ -283,7 +284,8 @@ class PythonShardAdmissionTests(unittest.TestCase):
                     self.assertEqual(result.returncode == 0,
                                      checks == shards == "success")
         gate = self.workflow["jobs"]["pytest"]
-        self.assertEqual(gate["if"], "always() && needs.changes.outputs.python_tests == 'true'")
+        self.assertEqual(gate["if"], "always() && needs.changes.outputs.python_tests == 'true' "
+                         "&& (github.event_name != 'push' || !cancelled())")
         self.assertEqual(gate["needs"], ["changes", "checks", "test-shard"])
 
     def test_required_python_gate_reads_every_nonempty_coverage_partition(self):
