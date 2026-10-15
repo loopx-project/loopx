@@ -535,11 +535,17 @@ async fn perform(
     // A JoinError (task panic/cancellation) is an unknown-state failure just
     // like an install error: both must clear the same verification below, so
     // neither returns ahead of the recovery decision.
-    let installed: Result<(), String> =
-        tauri::async_runtime::spawn_blocking(move || update.install(bytes))
-            .await
-            .map_err(|_| "app_install_failed".to_string())
-            .and_then(|result| result.map_err(|_| "app_install_failed".to_string()));
+    let installed: Result<(), String> = tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "macos")]
+        return crate::macos_update::install(&update, &bytes);
+        #[cfg(not(target_os = "macos"))]
+        update
+            .install(bytes)
+            .map_err(|_| "app_install_failed".into())
+    })
+    .await
+    .map_err(|_| "app_install_failed".to_string())
+    .and_then(|result| result);
     if installed.is_err() {
         // The pinned macOS installer renames the old App away before moving
         // the new one in, so a failed install does not by itself prove the
