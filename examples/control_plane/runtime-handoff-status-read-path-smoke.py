@@ -206,9 +206,11 @@ def assert_status_read_path(
         runtime_root=runtime_root,
     )
     item = status_item(payload)
-    assert item["status"] == POST_HANDOFF_CLASSIFICATION, item
+    assert item["status"] == "active_state_agent_todo", item
+    assert item["source"] == "active_state", item
+    assert item.get("stale_latest_run_warning") is None, item
     assert item["waiting_on"] == "codex", item
-    assert item["recommended_action"] == POST_HANDOFF_ACTION, item
+    assert item["recommended_action"] == f"[P1] {TODO_TITLE}", item
     assert item["project_asset"]["active_state_next_action"] == GOAL_NEXT_ACTION, item
     assert item["project_asset"]["latest_validation"]["classification"] == POST_HANDOFF_CLASSIFICATION, item
     assert item["project_asset"]["latest_validation"]["summary"] == POST_HANDOFF_ACTION, item

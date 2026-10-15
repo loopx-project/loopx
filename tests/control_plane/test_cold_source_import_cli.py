@@ -389,7 +389,8 @@ def test_cold_import_recovery_preserves_later_canonical_writes(
     assert records["todo_current"]["text"] == body
     assert records["todo_current"]["note"] == "Work retained after migration"
     assert records["todo_archived"]["evidence"] == "original"
-    assert records[created["todo_id"]]["text"] == "New work after migration"
+    later = records[created["todo_id"]]
+    assert (later["text"], later["priority"]) == ("[P1] New work after migration", "P1")
     assert len(complete_after["leases"]) == 1
     assert complete_after["leases"][0]["todo_id"] == "todo_current"
     assert complete_after["leases"][0]["owner"] == "agent-a"

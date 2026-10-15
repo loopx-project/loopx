@@ -197,7 +197,7 @@ def test_empty_promoted_edits_reject_without_the_source_writer(update_workspace,
     first = json.loads(result.stdout)
     current = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
     assert current["todos"][0]["note"] == "Keep the original note"
-    assert current["todos"][0]["text"] == "Updated authoritative record"
+    assert current["todos"][0]["text"] == "[P1] Updated authoritative record"
 
     later = cli_update("--note", "Newer note", "--update-operation-id", "later-update")
     assert later.returncode == 0, later.stdout + later.stderr

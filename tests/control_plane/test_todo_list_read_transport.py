@@ -112,7 +112,11 @@ def test_read_filters_errors_and_fresh_provider(read_cli):
         assert added.returncode == 0, added.stdout + added.stderr
     fresh = run()
     assert fresh["todo_count"] == 4
-    assert any(item["text"].startswith("Fresh ") for item in fresh["todos"])
+    if provider == "legacy":
+        assert any(item["text"] == "Fresh legacy requirement" for item in fresh["todos"])
+    else:
+        current = next(item for item in fresh["todos"] if item["todo_id"] == json.loads(added.stdout)["todo_id"])
+        assert (current["text"], current["priority"]) == ("[P1] Fresh canonical requirement", "P1")
     if provider != "legacy":
         assert fresh["authority_read"]["provider_revision"] != full["authority_read"]["provider_revision"]
         assert fresh["authority_read"]["decision_read_from_provider"]

@@ -20,9 +20,9 @@ from loopx.status import parse_active_state_todos  # noqa: E402
 
 
 GOAL_ID = "todo-concurrent-write-lock-goal"
-CHILD_ADD_TODO = "Child add should preserve the parent todo written under lock."
+CHILD_ADD_TODO = "[P1] Child add should preserve the parent todo written under lock."
 PARENT_ADD_TODO = "Parent todo written while child add waits on the lock."
-UPDATE_TARGET_TODO = "Update target todo should keep unrelated concurrent additions."
+UPDATE_TARGET_TODO = "[P1] Update target todo should keep unrelated concurrent additions."
 PARENT_UPDATE_TODO = "Parent todo written while child update waits on the lock."
 
 

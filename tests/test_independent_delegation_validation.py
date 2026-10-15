@@ -121,7 +121,7 @@ def test_current_task_observation_isolated_but_work_and_claim_changes_reject(ser
             runner._validate(binding)
     current = demo.canonical_tasks(root)[todo_id]
     field = {"note": "note", "text": "text", "claim": "claimed_by"}[change]
-    assert current[field] == {"note": "Current progress observation", "text": "Validate a different requested result",
+    assert current[field] == {"note": "Current progress observation", "text": "[P1] Validate a different requested result",
                               "claim": "reviewer"}[change]
     assert not current["done"]
     assert not (root / "analyst/initial/host-invocations").exists()
