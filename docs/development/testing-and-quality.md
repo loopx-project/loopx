@@ -386,6 +386,26 @@ Effect 后台进程；相同源码指纹可能让源码环境与已安装版本�
 回执、作废受污染耗时并重新采样；超时不能当作服务端已停止，也不能因此重复恢复。
 恢复成功不证明并发管理操作公平性或自然时间 soak 已合格。
 
+The Effect server drains admitted handlers before retiring. With compilation
+caching enabled, its final synchronous cache flush has a one-second allowance,
+supervised by a worker in the same process. Healthy completion still persists
+the real Node cache before removing the locator. A blocked/failed flush or
+unavailable supervisor instead performs the same fenced, identity-checked
+locator cleanup and forcefully exits the already settled process, bypassing
+Node's automatic cache flush at exit. This may discard optional cache entries;
+it never authorizes abandoning an admitted effect. Cache-disabled execution
+uses ordinary cleanup without a worker. The allowance does not bound locator
+lock/storage waits or OS scheduling. Native platform qualification remains
+separate from injected-failure coverage; V8 CPU samples do not measure kernel IO.
+
+Effect 服务先排空已接纳的 handler，再退出。启用编译缓存时，同进程 worker
+监督最终同步写盘，给缓存一秒处理时间；正常完成仍先持久化真实 Node 缓存，
+再清理定位文件。写盘阻塞、失败或监督 worker 不可用时，复用同一锁和精确身份
+校验清理定位文件，然后强制终止已结算的进程，绕过 Node 退出时的自动缓存写盘。
+这可能丢弃可选缓存条目，不允许放弃已接纳的业务操作。关闭缓存时无需 worker，
+继续普通清理。一秒额度不涵盖定位文件锁、存储等待或操作系统调度；故障注入不能
+代替原生平台资格验证，V8 CPU 样本也不测量内核 IO。
+
 Keep a deterministic, public-safe production-scale fixture beside the focused
 cases. Its envelope should cover realistic role/status distributions,
 multi-agent claims, user gates and standing decisions, current and retired

@@ -30,13 +30,14 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *,
     marker = tmp_path / "validation-count"
     command = shlex.join([sys.executable, "-c", "from pathlib import Path; "
         f"p=Path({str(marker)!r}); p.write_text(p.read_text()+'x' if p.exists() else 'x')"])
+    # These transport tests start with canonical authority; fixture creation
+    # must not depend on an unpromoted Markdown writer before the first lease.
+    initialize_canonical_authority(runtime, "goal-a",
+        build_todo_runtime_shadow_projection(goal_id="goal-a", todos=[], handoff_mode="hard_lease"),
+        state_path=state, provider=provider)
     todo_id = add_goal_todo(registry_path=registry, goal_id="goal-a", role="agent",
         text="Complete independently validated work", claimed_by="agent-a",
         validation_command=command if validation else None)["todo_id"]
-    rows = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
-    initialize_canonical_authority(runtime, "goal-a",
-        build_todo_runtime_shadow_projection(goal_id="goal-a", todos=rows, handoff_mode="hard_lease"),
-        state_path=state, provider=provider)
     lease = acquire_task_lease(registry_path=registry, runtime_root=runtime, goal_id="goal-a",
         todo_id=todo_id, owner="agent-a", idempotency_key="original-execution",
         ttl_seconds=ttl_seconds, expected_version=0)["lease"]

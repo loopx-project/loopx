@@ -18,7 +18,22 @@ import json
 import re
 import sys
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any, TextIO
+
+# Both real callers execute this file rather than importing it: the TS
+# transport spawns `[python, <this file>]` and the live qualification probe
+# spawns `[python, "-I", <this file>]`. Neither has a package context, and `-I`
+# also drops the script directory from `sys.path`. The probe's documented
+# contract makes its interpreter responsible only for resolving the qualified
+# NoKV SDK, so this helper must not require LoopX to be importable from it
+# either. Bootstrap this checkout - as the other file-launched hosts do - and
+# keep the shared codec owner as the single definition of the stdio pin.
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from loopx.entrypoint import pin_utf8_stdio  # noqa: E402
 
 _HEX_128 = re.compile(r"^[0-9a-f]{32}$")
 _CLIENT_AVAILABILITY_ERRORS = (RuntimeError, OSError)
@@ -655,6 +670,7 @@ def _sdk_protocol_schema() -> str | None:
 
 
 def main() -> int:
+    pin_utf8_stdio()
     first = sys.stdin.readline()
     try:
         value = json.loads(first)

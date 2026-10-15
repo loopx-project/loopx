@@ -31,6 +31,15 @@ export type GoalSessionFact = {
   updated_at?: string | null;
 };
 
+export function taskSessionStatus(
+  session: Pick<GoalSessionFact, "active_turn_id" | "status">,
+  outcome: { done: boolean; hasResult: boolean },
+) {
+  if (session.active_turn_id) return "running";
+  if (session.status === "resume_failed") return "failed";
+  return outcome.done || outcome.hasResult ? "completed" : "waiting";
+}
+
 /** One bound host thread as observed by the host adapter (`host_thread_activity`). */
 export type GoalHostThread = {
   hostSurface: string;
