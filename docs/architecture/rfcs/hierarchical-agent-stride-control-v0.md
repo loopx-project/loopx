@@ -1190,7 +1190,14 @@ not merely a new Goal/Agent or a locally unseen replan ID. Both pre-model and
 mid-wake hooks refuse capture until the canonical current-Goal settlement
 contains an accepted semantic replan whose Vision evidence references
 `checkpoint:<artifact-sha256>`, and the destination native history has completed
-a continuation with the original full history prefix intact. The consumed
+a continuation with the original full history prefix intact. For declarations
+that include the native participant, preflight checks the bound workspace/session
+and reads only the latest Turn without its items. This provisional cursor must
+be completed and absent from the retained source; it is not proof of full history.
+Both actual capture observations must verify the original full prefix and that
+completed cursor before sealing. A changed source/session, missing cursor or
+changed prefix rejects capture. Preparation and declarations without a native
+participant retain full-history preflight. The consumed
 obligation itself remains ineligible; a subsequent genuinely new node can be
 captured. Retry, restart and a lost admission response preserve the original
 source-root/digest binding. This is a machine-enforced capture barrier, not

@@ -100,7 +100,7 @@ def test_captured_point_continues_with_fresh_authority(
     assert retained_object.read_text() == "Readonly source evidence"
     assert retained_object.stat().st_mode & 0o777 == 0o444
     registry, runtime = tmp_path / "registry.json", tmp_path / "runtime"
-    goal, agent, turn = "joint-receiver", "joint-researcher", "joint-work"
+    goal, agent, turn = os.environ.get("LOOPX_JOINT_RECEIVER_GOAL", "joint-receiver"), "joint-researcher", "joint-work"
     prefix = [
         "--format",
         "json",
@@ -288,7 +288,15 @@ def test_captured_point_continues_with_fresh_authority(
     ]
     guard = cli("quota", "should-run", "--runtime-profile", "generic_cli", *binding)
     assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"]
-    _, branch, _, url, controller_files, grades = request.getfixturevalue("controllers")
+    external_path = os.environ.get("LOOPX_JOINT_RECEIVER_NATIVE")
+    external = json.loads(Path(external_path).read_bytes()) if external_path else None
+    if external:
+        # Operator credentials and the native bank stay outside the guest.
+        # Only this destination's public worker registration enters it.
+        assert fresh_context
+        url, fresh, grades = external["url"], external["activation"], []
+    else:
+        _, branch, _, url, controller_files, grades = request.getfixturevalue("controllers")
     capsule = unit / "components" / snapshot["native_capsule_component_id"]
     opportunity = json.loads((capsule / "checkpoint.json").read_bytes())[
         "point_metadata"
@@ -304,42 +312,50 @@ def test_captured_point_continues_with_fresh_authority(
             "Stride receiver qualification requires a captured pending cooldown"
         )
     phase = tmp_path / "phase-deadline"
-    fresh = restore(
-        controller_files[1],
-        root=capsule,
-        expected_sha256=snapshot["native_capsule_sha256"],
-        run_id="isolated-receiver",
-        phase_deadline_file=phase,
-    )
-    original_phase = phase.read_bytes()
-    replay_activation = restore(
-        controller_files[1],
-        root=capsule,
-        expected_sha256=snapshot["native_capsule_sha256"],
-        run_id="isolated-receiver",
-        phase_deadline_file=phase,
-        recover=True,
-    )
-    assert (
-        replay_activation == fresh
-        and not grades
-        and phase.read_bytes() == original_phase
-    )
+    if external:
+        phase.write_text(external["phase_deadline"])
+        original_phase = phase.read_bytes()
+        actual_phase = Path("/opt/loopx-benchmark/control/phase-deadline")
+        actual_phase.parent.mkdir(parents=True, exist_ok=True)
+        actual_phase.write_bytes(original_phase)
+    else:
+        fresh = restore(
+            controller_files[1],
+            root=capsule,
+            expected_sha256=snapshot["native_capsule_sha256"],
+            run_id="isolated-receiver",
+            phase_deadline_file=phase,
+        )
+        original_phase = phase.read_bytes()
+        replay_activation = restore(
+            controller_files[1],
+            root=capsule,
+            expected_sha256=snapshot["native_capsule_sha256"],
+            run_id="isolated-receiver",
+            phase_deadline_file=phase,
+            recover=True,
+        )
+        assert (
+            replay_activation == fresh
+            and not grades
+            and phase.read_bytes() == original_phase
+        )
     from benchmark.tests.test_checkpoint_controller import host_phase_command
 
     phase_shell = host_phase_command(tmp_path, monkeypatch).replace(
         "/opt/loopx-benchmark/control", str(tmp_path)
     )
-    (workspace / "judge.json").write_text(
+    judge = tmp_path / "judge.json"
+    judge.write_text(
         json.dumps({"url": url, "token": fresh["token"]})
     )
-    (workspace / "judge.json").chmod(0o600)
+    judge.chmod(0o600)
     script = workspace / "continue.py"
     if stride_continuation:
         script.write_text(
             """import json,requests
 from pathlib import Path
-b=json.loads(Path('judge.json').read_text()); url,submission_token=b['url'],b['token']
+b=json.loads(Path(JUDGE).read_text()); url,submission_token=b['url'],b['token']
 h=requests.get(url+'/api/v1/history',params={'token':submission_token},timeout=5).json()
 assert h['best_score']==7 and h['agent_submissions']==1
 assert Path('candidate.txt').read_text()==CAPTURED_CANDIDATE
@@ -347,7 +363,7 @@ source=json.loads(Path(CONTEXT).read_text())
 assert source
 Path('restoration-evidence.json').write_text(json.dumps({'code_unchanged':True,'public_incumbent':7,'consumed_submissions':1,'source_context_read':True}))
 print('Restored state verified; source code unchanged, incumbent and consumed opportunities retained.')
-""".replace("CAPTURED_CANDIDATE", repr(captured_candidate)).replace(
+""".replace("JUDGE", repr(str(judge))).replace("CAPTURED_CANDIDATE", repr(captured_candidate)).replace(
                 "CONTEXT", repr(adopted["artifact"])
             )
         )
@@ -355,7 +371,7 @@ print('Restored state verified; source code unchanged, incumbent and consumed op
         script.write_text(
             """import json,time,requests
 from pathlib import Path
-b=json.loads(Path('judge.json').read_text()); url,submission_token=b['url'],b['token']
+b=json.loads(Path(JUDGE).read_text()); url,submission_token=b['url'],b['token']
 h=requests.get(url+'/api/v1/history',params={'token':submission_token},timeout=5).json()
 assert h['best_score']==7 and h['agent_submissions']==1
 assert Path('candidate.txt').read_text()==CAPTURED_CANDIDATE
@@ -374,7 +390,7 @@ else:
   time.sleep(.01)
  assert result['status']=='completed'
  print('Retained candidate and public best 7 used; candidate 8 graded.')
-""".replace("EXPECTED_COOLDOWN_PENDING", repr(cooldown_pending)).replace(
+""".replace("JUDGE", repr(str(judge))).replace("EXPECTED_COOLDOWN_PENDING", repr(cooldown_pending)).replace(
                 "CAPTURED_CANDIDATE", repr(captured_candidate)
             )
         )
@@ -590,7 +606,7 @@ else:
             from benchmark.runtime.checkpoint_continuation import restored_capture_gate
             from benchmark.runtime.checkpoint_wake import CheckpointWake
 
-            wakes = tmp_path / "capture-logs" / "wakes"
+            wakes = Path("/logs/agent/wakes") if external else tmp_path / "capture-logs" / "wakes"
             (wakes / review_turn).mkdir(parents=True)
             executable = tmp_path / "loopx-cli"
             executable.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + ' -m loopx.cli "$@"\n')
@@ -772,12 +788,12 @@ else:
                 "--goal-id",
                 goal,
                 "--execution-replan-after-turns",
-                "6",
+                "1" if external else "6",
                 "--execute",
             )
             assert (
                 configured["after"]["execution_profile"]["replan_after_effective_turns"]
-                == 6
+                == (1 if external else 6)
             )
             larger = todo
             revision = cli("todo", "list", "--goal-id", goal, "--todo-id", todo)[
@@ -835,7 +851,7 @@ else:
                 """import json,requests
 from pathlib import Path
 assert Path('candidate.txt').read_text()==CAPTURED_CANDIDATE
-b=json.loads(Path('judge.json').read_text()); url,submission_token=b['url'],b['token']
+b=json.loads(Path(JUDGE).read_text()); url,submission_token=b['url'],b['token']
 for value in (9,10):
  Path('candidate.txt').write_text(str(value))
  assert int(Path('candidate.txt').read_text())==value
@@ -845,7 +861,7 @@ assert r.status_code==429
 h=requests.get(url+'/api/v1/history',params={'token':submission_token},timeout=5).json()
 assert h['agent_submissions']==1 and h['best_score']==7
 print('Current grow adopted: two complete candidates 9 and 10 validated; original cooldown and incumbent preserved.')
-    """.replace("CAPTURED_CANDIDATE", repr(captured_candidate))
+    """.replace("JUDGE", repr(str(judge))).replace("CAPTURED_CANDIDATE", repr(captured_candidate))
             )
             assert cooldown_pending, (
                 "This qualification specifically requires the captured pending cooldown."
@@ -946,21 +962,22 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
                 "heartbeat",
                 "--execute",
             )
-            final = cli(
-                "quota",
-                "should-run",
-                "--goal-id",
-                goal,
-                "--agent-id",
-                agent,
-                "--turn-instance-id",
-                "joint-next-audit",
-                "--runtime-profile",
-                "generic_cli",
-                "--available-capability",
-                "shell",
-            )
-            assert final["interaction_contract"]["mode"] == "bounded_delivery"
+            if not external:
+                final = cli(
+                    "quota",
+                    "should-run",
+                    "--goal-id",
+                    goal,
+                    "--agent-id",
+                    agent,
+                    "--turn-instance-id",
+                    "joint-next-audit",
+                    "--runtime-profile",
+                    "generic_cli",
+                    "--available-capability",
+                    "shell",
+                )
+                assert final["interaction_contract"]["mode"] == "bounded_delivery"
             # The next genuinely new decision boundary can capture changed
             # research/code/native history, after actual useful continuation.
             # This partial point deliberately makes no evaluator qualification.
@@ -969,12 +986,39 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
             (prior_wake / "receipt.json").write_text(json.dumps({"turn_id": next_turn,
                 "mode": "heartbeat", "stage": "execute", "ok": True,
                 "session": {"binding_scope": "agent", "action": "resume", "session_id": active_session_id}}))
-            cli("configure-goal", "--goal-id", goal, "--execution-replan-after-turns", "1", "--execute")
+            if not external:
+                cli("configure-goal", "--goal-id", goal, "--execution-replan-after-turns", "1", "--execute")
+            else:
+                declaration.write_text(json.dumps({"trigger": "fresh_replan", "destination": str(wakes.parent / "checkpoints"),
+                    "native_session": True, "loopx_state": True, "evaluation_opportunity": True, "controller_handoff": True,
+                    "components": [{"id": "task_workspace", "source_path": str(workspace)}], "point_metadata": {}}))
             boundary_turn = "joint-next-capture"
             (wakes / boundary_turn).mkdir()
             boundary = {"turn_id": boundary_turn, "mode": "heartbeat", "stage": "execute", "ok": False}
             capture_before_replan(env, boundary, "Current new decision contract.")
-            if boundary["checkpoint"].get("reason") == "no_fresh_replan":
+            assert boundary["checkpoint_restore"]["native_continuation_cursor"] == grown["completed_turn_id"]
+            if external:
+                assert boundary["checkpoint"]["captured"], json.dumps(boundary, indent=2)
+                assert not boundary["checkpoint"]["research_point_qualified"]  # Artifact integrity is not scientific qualification.
+                recaptured = Path(os.environ["LOOPX_JOINT_RECAPTURE_ROOT"]) / Path(boundary["checkpoint"]["destination"]).name
+                captured = json.loads((recaptured / "checkpoint.json").read_bytes())
+                cm = captured["point_metadata"]
+                assert cm["held_decision_component_id"] and cm["replan"]["obligation_id"] != obligation["obligation_id"]
+                assert cm["native_session"]["turn_ids"] == grown["turn_ids"]
+                assert (recaptured / "components/task_workspace/candidate.txt").read_text() == "10"
+                assert cm["session"]["checkpoint_context_refresh"]["checkpoint_sha256"] == digest
+                nested = recaptured / "components" / cm["worker_file_snapshot"]["native_capsule_component_id"]
+                native_point = json.loads((nested / "checkpoint.json").read_bytes())["point_metadata"]
+                assert (nested / "components/native_judge/incumbent.tar.gz").read_bytes() == b"7"
+                opportunity_after = native_point["native_reference"]["opportunity"]
+                assert {k: v for k, v in opportunity_after.items() if k != "remaining_cooldown_seconds"} == {k: v for k, v in opportunity.items() if k != "remaining_cooldown_seconds"}
+                assert opportunity_after["remaining_cooldown_seconds"] <= opportunity["remaining_cooldown_seconds"]
+                assert actual_phase.read_bytes() == original_phase
+                check = effect_runtime_result("runtime.checkpoint_artifacts", {
+                    "action": "verify", "root": str(recaptured), "expected_sha256": captured["sha256"]})
+                assert check["integrity_verified"] and not check["research_point_qualified"]
+                (tmp_path / "full-recapture.json").write_text(json.dumps(boundary["checkpoint"]))
+            elif boundary["checkpoint"].get("reason") == "no_fresh_replan":
                 # Capture eligibility does not manufacture a quota obligation.
                 # This source may not have another due review yet.
                 assert boundary["checkpoint_restore"]["capture_allowed"]
@@ -986,7 +1030,7 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
                 assert next_metadata["replan"]["obligation_id"] != obligation["obligation_id"]
                 assert next_metadata["held_decision_component_id"]
                 assert next_metadata["native_session"]["turn_ids"] == grown["turn_ids"]
-            if fresh_context:
+            if fresh_context and not external:
                 from benchmark.runtime.checkpoint import capture_after_wake
                 manual = wakes.parent / "checkpoints" / "refreshed-continuation"
                 manual_request = tmp_path / "manual-capture-request.json"

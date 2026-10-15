@@ -13,7 +13,7 @@ from loopx.hosts.codex_checkpoint import native_session_checkpoint
 from benchmark.tests.test_checkpoint_controller import controllers  # noqa: F401 -- shared real HTTP fixture
 
 
-def fixture(tmp_path, monkeypatch, pages):
+def fixture(tmp_path, monkeypatch, pages, *, expected_history_query=None):
     home = tmp_path / "native"
     home.mkdir()
     for name in ("state_5.sqlite", "thread_history_1.sqlite", "config.toml", "auth.json", "logs_1.sqlite"):
@@ -41,6 +41,8 @@ def fixture(tmp_path, monkeypatch, pages):
             if method == "thread/read":
                 return {"thread": {"id": "fixture-session", "cwd": str(tmp_path)}}
             assert method == "thread/turns/list"  # No model or fork is requested.
+            if expected_history_query is not None:
+                assert params == expected_history_query
             return pages.pop(0)
 
     monkeypatch.setattr("loopx.hosts.codex_checkpoint.StdioNativeGoalTransport.spawn", lambda *a, **k: Native())
@@ -85,6 +87,74 @@ def test_foreign_native_session_is_rejected_before_history(tmp_path, monkeypatch
     assert "thread/turns/list" not in calls
 
 
+@pytest.mark.parametrize("tail,valid", [
+    ({"id": "continued", "status": "completed", "items": []}, True),
+    ({"id": "source", "status": "completed", "items": []}, False),
+    ({"id": "continued", "status": "inProgress", "items": []}, False),
+    ({"id": "continued", "status": "interrupted", "items": []}, False),
+    ({"id": "continued", "status": "failed", "items": []}, False),
+    ({"status": "completed", "items": []}, False),
+    (None, False),
+])
+def test_preflight_reads_only_the_new_completed_cursor(tmp_path, monkeypatch, tail, valid):
+    from loopx.hosts.codex_checkpoint import native_completed_cursor
+    env, calls = fixture(tmp_path, monkeypatch,
+        [{"data": [tail] if tail else [], "nextCursor": "older-history-not-requested"}],
+        expected_history_query={"threadId": "fixture-session", "sortDirection": "desc",
+                                "itemsView": "notLoaded", "limit": 1})
+    if valid:
+        assert native_completed_cursor(env, "fixture-session", retained_turn_ids=["source"], timeout=10) == "continued"
+    else:
+        with pytest.raises(ValueError, match="cursor"):
+            native_completed_cursor(env, "fixture-session", retained_turn_ids=["source"], timeout=10)
+    assert calls == ["initialize", "initialized", "thread/read", "thread/turns/list"]
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "source_cursor", "failed_cursor", "changed_prefix"])
+def test_full_capture_rechecks_prefix_and_provisional_cursor(tmp_path, monkeypatch, fault):
+    original = [{"id": "source", "status": "completed", "items": [{"type": "compaction"}]}]
+    retained = {"turn_ids": ["source"], "visible_history_sha256": hashlib.sha256(
+        json.dumps(original, sort_keys=True, separators=(",", ":")).encode()).hexdigest()}
+    turns = json.loads(json.dumps(original)) + [
+        {"id": "continued", "status": "failed" if fault == "failed_cursor" else "completed", "items": []},
+        {"id": "final", "status": "completed", "items": []}]
+    if fault == "changed_prefix":
+        turns[0]["items"] = []
+    required = "absent" if fault == "missing" else "source" if fault == "source_cursor" else "continued"
+    env, _ = fixture(tmp_path, monkeypatch, [{"data": turns, "nextCursor": None}])
+    if fault:
+        with pytest.raises(ValueError, match="retained checkpoint history|continuation cursor"):
+            native_session_checkpoint(env, "fixture-session", timeout=10,
+                retained_history=retained, required_completed_turn_id=required)
+    else:
+        result = native_session_checkpoint(env, "fixture-session", timeout=10,
+            retained_history=retained, required_completed_turn_id=required)
+        assert result["metadata"]["completed_turn_id"] == "final"
+
+
+@pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
+                    reason="Requires an explicit real native Host; only local static responses are used")
+def test_real_cursor_preflight_still_requires_full_retained_capture_history(tmp_path):
+    from loopx.hosts.codex_checkpoint import native_completed_cursor
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    with real_native_source(tmp_path / "native", os.environ["LOOPX_NATIVE_CHECKPOINT_BIN"], workspace) as (
+            env, session, complete, calls):
+        retained = native_session_checkpoint(env, session, timeout=20)["metadata"]
+        with pytest.raises(ValueError, match="new completed final cursor"):
+            native_completed_cursor(env, session, retained_turn_ids=retained["turn_ids"], timeout=20)
+        complete()
+        cursor = native_completed_cursor(env, session, retained_turn_ids=retained["turn_ids"], timeout=20)
+        captured = native_session_checkpoint(env, session, timeout=20, retained_history=retained,
+            required_completed_turn_id=cursor)["metadata"]
+        assert captured["turn_ids"] == [*retained["turn_ids"], cursor]
+        for original, required, reason in (
+                ({**retained, "visible_history_sha256": "0" * 64}, cursor, "retained checkpoint history"),
+                (retained, "missing-cursor", "continuation cursor")):
+            with pytest.raises(ValueError, match=reason):
+                native_session_checkpoint(env, session, timeout=20, retained_history=original,
+                    required_completed_turn_id=required)
+        assert calls == ["/v1/responses"] * 2  # Readback never starts extra model work.
 
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),

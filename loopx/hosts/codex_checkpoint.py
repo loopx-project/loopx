@@ -144,13 +144,59 @@ def native_checkpoint_reader(env: dict[str, str], *, timeout: float):
         yield transport
 
 
+def _native_thread_readback(request, env: dict[str, str], session_id: str) -> None:
+    readback = request("thread/read", {"threadId": session_id, "includeTurns": False})
+    if readback.get("thread", {}).get("id") != session_id:
+        raise ValueError("native checkpoint session identity mismatch")
+    workspace = Path(env["LOOPX_PROJECT"])
+    if (not workspace.is_absolute() or workspace.resolve(strict=True) != workspace or
+            readback["thread"].get("cwd") != str(workspace)):
+        raise ValueError("native checkpoint session workspace differs from the declared code basis")
+
+
+def native_completed_cursor(env: dict[str, str], session_id: str, *,
+                            retained_turn_ids: list[str], timeout: float) -> str:
+    """Read a provisional completed continuation, not a history certificate.
+
+    Actual capture must independently verify the retained full prefix and this
+    cursor. Ordinary preflight does not need every historical tool output.
+    """
+    if (not session_id or not math.isfinite(timeout) or timeout <= 0 or
+            not retained_turn_ids or any(not isinstance(x, str) or not x for x in retained_turn_ids)):
+        raise ValueError("native continuation cursor requires its retained source and an open window")
+    deadline = time.monotonic() + timeout
+    with native_checkpoint_reader(env, timeout=timeout) as transport:
+        def request(method, params):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("native continuation cursor window closed")
+            transport.response_timeout_sec = remaining
+            return transport.request(method, params)
+        _native_thread_readback(request, env, session_id)
+        page = request("thread/turns/list", {"threadId": session_id,
+            "sortDirection": "desc", "itemsView": "notLoaded", "limit": 1})
+        turns = page.get("data")
+        if not isinstance(turns, list) or len(turns) != 1:
+            raise ValueError("native continuation cursor is unavailable")
+        cursor = turns[0].get("id")
+        if (not isinstance(cursor, str) or not cursor or cursor in retained_turn_ids or
+                turns[0].get("status") != "completed"):
+            raise ValueError("native continuation requires a new completed final cursor")
+        return cursor
+
+
 def native_session_checkpoint(env: dict[str, str], session_id: str, *, timeout: float,
                               interrupted_guard: dict | None = None,
                               retained_history: dict | None = None,
+                              required_completed_turn_id: str | None = None,
                               transport: StdioNativeGoalTransport | None = None) -> dict[str, Any]:
     home = Path(env["CODEX_HOME"])
     if not session_id or timeout <= 0:
         raise ValueError("native checkpoint requires a session and an open capture window")
+    if required_completed_turn_id is not None and (
+            not isinstance(required_completed_turn_id, str) or not required_completed_turn_id or
+            retained_history is None):
+        raise ValueError("native capture cursor requires its retained history basis")
     deadline = time.monotonic() + timeout
     version = subprocess.check_output([env["CODEX_BIN"], "--version"], env=env, text=True, encoding="utf-8",
                                       timeout=timeout).strip()
@@ -164,13 +210,7 @@ def native_session_checkpoint(env: dict[str, str], session_id: str, *, timeout: 
                 raise TimeoutError("native checkpoint window closed")
             transport.response_timeout_sec = remaining
             return transport.request(method, params)
-        readback = request("thread/read", {"threadId": session_id, "includeTurns": False})
-        if readback.get("thread", {}).get("id") != session_id:
-            raise ValueError("native checkpoint session identity mismatch")
-        workspace = Path(env["LOOPX_PROJECT"])
-        if (not workspace.is_absolute() or workspace.resolve(strict=True) != workspace or
-                readback["thread"].get("cwd") != str(workspace)):
-            raise ValueError("native checkpoint session workspace differs from the declared code basis")
+        _native_thread_readback(request, env, session_id)
         turns = _complete_history(request, session_id, interrupted_guard=interrupted_guard)
         ids = [t["id"] for t in turns]
         if retained_history is not None:
@@ -179,6 +219,10 @@ def native_session_checkpoint(env: dict[str, str], session_id: str, *, timeout: 
             if (len(ids) <= len(original) or ids[:len(original)] != original or
                     hashlib.sha256(prefix).hexdigest() != retained_history["visible_history_sha256"]):
                 raise ValueError("native continuation lost or changed retained checkpoint history")
+            if required_completed_turn_id is not None and not any(
+                    turn["id"] == required_completed_turn_id and turn["status"] == "completed"
+                    for turn in turns[len(original):]):
+                raise ValueError("native capture lost its completed continuation cursor")
     members = []
     for entry in sorted(home.iterdir()):
         if entry.name in {"sessions", "archived_sessions", "session_index.jsonl"} or re.fullmatch(

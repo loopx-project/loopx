@@ -945,7 +945,12 @@ periodic 策略复盘。匹配分支须声明相同的准备/频率迁移，并�
 恢复会话重新开启捕获须完成目标侧决策，换一个 Goal/Agent 或本地尚未见过的
 replan ID 都不够。模型前与 wake 中两处 hook 共用门槛：当前 Goal 的 canonical
 结算须接受一个语义 replan，其 Vision 证据引用 `checkpoint:<artifact-sha256>`，
-且目标原生历史已完成接续、保留原完整历史前缀。刚消费的义务本身仍不可捕获；
+且目标原生历史已完成接续、保留原完整历史前缀。声明含 native 参与方时，预检
+核对绑定的 workspace/session，只读最新 Turn、不加载 items；这个临时 cursor
+必须已完成且不属于保留的源 Turn，不能单凭它证明完整历史。实际捕获的两次
+观测都须在封存前核验原完整前缀及该已完成 cursor；source/session 变化、cursor
+缺失或前缀变化均拒绝捕获。准备验收及不含 native 参与方的声明保留完整历史
+预检。刚消费的义务本身仍不可捕获；
 后续真正的新节点才可捕获。重试、重启或准入回复丢失保留原 source-root/digest
 绑定。这是机器执行的捕获门槛，不增加执行或预算权限。
 

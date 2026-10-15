@@ -550,6 +550,18 @@ point. Full-state capture additionally requires the controller writer barrier
 below. Capturing that point does not admit a destination session or prove useful
 continued research.
 
+On a restored conversation, both hooks still require an accepted current-Goal
+semantic replan citing the source checkpoint and a new completed native
+continuation. With `"native_session": true`, preflight reads only the latest
+Turn's identity/status (`itemsView: "notLoaded"`), after checking the bound native
+session and workspace. This provisional cursor admits a capture attempt; it does
+not certify the retained history. Both full native observations during capture
+must verify the original history prefix and this completed continuation before
+sealing. A changed checkpoint/session, missing cursor or altered prefix fails
+capture. Preparation and declarations without native capture keep full-history
+preflight. Canonical review, first-boundary deduplication, current authority and
+the default-off path keep their existing rules.
+
 ### Controller-only native capsule transport
 
 The read-only participant above does **not** implement the newer native capsule
@@ -840,6 +852,14 @@ Host 预检已提交 fresh replan，但尚待 Agent 选择工作时，仍可在�
 类型化 owner 核对原 Goal、已注册 Agent、Turn 和语义义务；不会伪造尚未形成的
 settlement identity，也不授予选择前的交付权限。源边界仍须来自上轮已结算的成功工作；
 已选 guard 的原结算身份检查保持。
+
+恢复会话的两处 hook 仍须先有引用源 checkpoint 的当前 Goal 已接受语义 replan，
+以及新的已完成原生接续。显式 `"native_session": true` 时，预检核对绑定的
+session/workspace，并仅读取最新 Turn 的身份/状态、不加载 items。此临时 cursor
+只准入一次捕获尝试，不证明完整历史；实际捕获的两次完整原生观测均须在封存前
+核验原历史前缀及该已完成接续。checkpoint/session 变化、cursor 缺失或前缀变化
+都拒绝捕获。准备验收及不捕获 native 的声明保持完整历史预检；canonical review、
+首边界去重、当前权限和默认关闭路径保持原规则。
 
 运行中出现的 fresh replan 可通过显式交接捕获。完整捕获需同时声明
 `controller_handoff`、`native_session`、`loopx_state`、`evaluation_opportunity`

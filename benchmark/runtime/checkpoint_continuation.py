@@ -26,9 +26,9 @@ def retained_native_history(binding, metadata):
     return {"turn_ids": [], "visible_history_sha256": hashlib.sha256(b"[]").hexdigest()}
 
 
-def restored_capture_gate(env, current_obligation_id=None, *, include_review_basis=False):
+def restored_capture_gate(env, current_obligation_id=None, *, full_history=True, include_review_basis=False):
     return _restored_context(env, current_obligation_id, verify_native=True,
-        include_review_basis=include_review_basis)
+        include_review_basis=include_review_basis, full_history=full_history)
 
 
 def restored_checkpoint_review(env):
@@ -39,7 +39,7 @@ def restored_checkpoint_review(env):
     return result
 
 
-def _restored_context(env, current_obligation_id=None, *, verify_native, include_review_basis):
+def _restored_context(env, current_obligation_id=None, *, verify_native, include_review_basis, full_history=True):
     root = Path(env["LOOPX_RUNTIME_ROOT"])
     lineage = {"goal_id": env["LOOPX_GOAL_ID"], "agent_id": env["LOOPX_AGENT_ID"]}
     binding = load_codex_cli_session(root, lineage=lineage, session_scope="agent")
@@ -47,7 +47,7 @@ def _restored_context(env, current_obligation_id=None, *, verify_native, include
         return {"capture_allowed": True}
     from .codex import Execution
     from .sessions import BenchmarkSessionWake
-    from loopx.hosts.codex_checkpoint import native_session_checkpoint
+    from loopx.hosts.codex_checkpoint import native_completed_cursor, native_session_checkpoint
 
     wake = BenchmarkSessionWake(env, Execution(context="resume",
         sandbox=env.get("LOOPX_CODEX_SANDBOX", "danger-full-access")), {})
@@ -112,8 +112,14 @@ def _restored_context(env, current_obligation_id=None, *, verify_native, include
             # Qualification happens before launching this wake's model. A
             # current receipt alone cannot stand in for native continuation.
             if verify_native:
-                native_session_checkpoint(env, wake.session_id, timeout=30,
-                    retained_history=retained_native_history(binding, metadata))
+                native = retained_native_history(binding, metadata)
+                if full_history:
+                    observed = native_session_checkpoint(env, wake.session_id, timeout=30, retained_history=native)
+                    cursor = observed["metadata"]["completed_turn_id"]
+                else:
+                    cursor = native_completed_cursor(env, wake.session_id,
+                        retained_turn_ids=native["turn_ids"], timeout=30)
+                result["native_continuation_cursor"] = cursor
             result["review_turn_id"] = guard_path.parent.name
             break
     result["checkpoint_sha256"] = sha
@@ -129,3 +135,28 @@ def _restored_context(env, current_obligation_id=None, *, verify_native, include
            if packet is not None else "This source has no retained pending replan packet.\n\n")
     )
     return result
+
+
+def restored_capture_history(env, preflight, *, session_id):
+    """Rebind full capture to the source and completed cursor seen before work.
+
+    This never treats an absent/new session binding as a non-restored shortcut.
+    The existing typed owner still decides canonical review acceptance.
+    """
+    binding = load_codex_cli_session(Path(env["LOOPX_RUNTIME_ROOT"]), lineage={
+        "goal_id": env["LOOPX_GOAL_ID"], "agent_id": env["LOOPX_AGENT_ID"]}, session_scope="agent")
+    sha = binding.get("checkpoint_artifact_sha256") if binding else None
+    expected = (preflight or {}).get("checkpoint_sha256")
+    if sha != expected:
+        raise ValueError("restored capture source changed after preflight")
+    if sha is None:
+        return {}
+    cursor = preflight.get("native_continuation_cursor")
+    if (preflight.get("capture_allowed") is not True or binding.get("session_id") != session_id or
+            not isinstance(cursor, str) or not cursor or not binding.get("checkpoint_artifact_root")):
+        raise ValueError("restored capture requires its admitted session and completed cursor")
+    manifest = effect_runtime_result("runtime.checkpoint_artifacts", {
+        "action": "read_basis", "root": binding["checkpoint_artifact_root"], "expected_sha256": sha,
+    })
+    return {"retained_history": retained_native_history(binding, manifest["point_metadata"]),
+            "required_completed_turn_id": cursor}
