@@ -1032,7 +1032,8 @@ token deltas, busy-turn steering/queueing, approval callbacks, native live-send
 qualification, Windows transport and installed adoption remain separate gaps.
 Its bounded user task is following up with a specific Agent while reviewing
 Goal work. Confirmed input leaves the composer ready without a redundant
-acknowledgement; uncertain input still requires recovery before another send.
+acknowledgement. Interrupted responses recover from existing receipts without
+resubmitting; genuinely uncertain input still requires recovery before another send.
 The separate conversation window remains an interim entry. Evaluate subsequent
 integration against selecting the original conversation in Codex App, including
 target discovery, correction and result readback; transport success alone does

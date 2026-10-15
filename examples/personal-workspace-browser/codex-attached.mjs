@@ -39,7 +39,7 @@ async function runConversation(browser, uncertain) {
     await panel.getByText('Original result',{exact:true}).waitFor();
     await panel.getByText('原会话可回复',{exact:true}).waitFor();
     const inputCount = async () => (await (await page.request.get(new URL('/fixture/inputs',url).href)).json()).count;
-    const composer = panel.getByLabel('回复 worker', {exact:true});
+    const composer = panel.getByRole('textbox', {name:'回复 worker',exact:true});
     const send = panel.getByRole('button', {name:'发送到原会话',exact:true});
     const sentOperations = [];
     page.on('request', request => {
@@ -60,6 +60,26 @@ async function runConversation(browser, uncertain) {
       assert.equal(sentOperations.length,1);
       await panel.getByRole('button',{name:'已核对，写下一条',exact:true}).waitFor();
       await page.screenshot({path:resolve(outputDir,'attached-codex-pending-desktop.png'),animations:'disabled'});
+      let releaseReceipt;
+      const holdReceipt = new Promise(resolve => {releaseReceipt = resolve;});
+      let receiptStarted;
+      const readingReceipt = new Promise(resolve => {receiptStarted = resolve;});
+      await page.route('**/api/chat/codex-attached?*operation_id=*', async route => {
+        const response = await route.fetch();
+        receiptStarted();
+        await holdReceipt;
+        await route.fulfill({response});
+      });
+      await panel.getByRole('button',{name:'重读投递回执',exact:true}).click();
+      await readingReceipt;
+      await panel.getByRole('button',{name:'已核对，写下一条',exact:true}).click();
+      await composer.fill('这是核对后新写的草稿。');
+      const lateReceipt = page.waitForResponse(response => new URL(response.url()).searchParams.has('operation_id'));
+      releaseReceipt();
+      await lateReceipt;
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.equal(await composer.inputValue({timeout:2000}),'这是核对后新写的草稿。', 'Late receipt reads must not revive a discarded operation');
+      assert.equal(await inputCount(),1);
       return;
     }
     assert.equal((await (await page.request.get(new URL('/fixture/opened',url).href)).json()).count,0);
@@ -114,6 +134,36 @@ async function runConversation(browser, uncertain) {
     assert.equal(sentOperations.length,2);
     assert.equal(new Set(sentOperations).size,2, 'Each explicit new reply needs its own operation');
     assert.equal(await composer.inputValue(),'');
+    let receiptReadUnavailable = true;
+    await page.route('**/api/chat/codex-attached**', async route => {
+      if (new URL(route.request().url()).pathname !== '/api/chat/codex-attached') return route.continue();
+      if (receiptReadUnavailable && new URL(route.request().url()).searchParams.has('operation_id')) return route.abort('failed');
+      if (route.request().method() !== 'POST') return route.continue();
+      const response = await route.fetch();
+      assert.equal((await response.json()).status, 'delivered');
+      // The original owner and receipt store accepted the input, but the
+      // browser lost the HTTP acknowledgement. Recovery must only read it.
+      await route.abort('failed');
+    });
+    await composer.fill('响应丢失后沿用原回执恢复。');
+    const lostResponse = page.waitForEvent('requestfailed', request => request.method() === 'POST');
+    await send.click();
+    await lostResponse;
+    assert.equal(await inputCount(),3);
+    assert.equal(await page.evaluate(() => JSON.parse(Object.entries(sessionStorage).find(([key]) => key.startsWith('loopx-attached-input:'))[1]).status),'pending');
+    receiptReadUnavailable = false;
+    await page.reload();
+    await page.getByRole('button',{name:'与 Codex App 原会话对话',exact:true}).click();
+    await panel.getByText('已由原 App 接纳；等待 Agent 结果。',{exact:false}).waitFor({timeout:5000});
+    assert.equal(await composer.inputValue(),'');
+    assert.equal(await inputCount(),3, 'Automatic recovery must not submit another input');
+    assert.equal(sentOperations.length,3);
+    await composer.fill('本页也自动读取成功回执。');
+    await send.click();
+    await panel.getByText('已由原 App 接纳；等待 Agent 结果。',{exact:false}).waitFor();
+    assert.equal(await composer.inputValue(),'');
+    assert.equal(await inputCount(),4, 'In-page recovery must only read the receipt');
+    assert.equal(new Set(sentOperations).size,4);
     await page.setViewportSize({width:1512,height:982});
     await page.request.post(new URL('/fixture/rebind',url).href);
     await panel.getByRole('alert').waitFor();

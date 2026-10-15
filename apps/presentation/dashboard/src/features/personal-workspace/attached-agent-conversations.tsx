@@ -33,6 +33,7 @@ export function AttachedAgentConversations({goalId, zh}: {goalId: string; zh: bo
   const [openError, setOpenError] = useState("");
   const [refresh, setRefresh] = useState(0);
   const generation = useRef(0);
+  const receiptGeneration = useRef(0);
   const revision = useRef("");
   const history = useRef<{source: string; size: number} | null>(null);
   const transcript = useRef<HTMLDivElement>(null);
@@ -68,6 +69,7 @@ export function AttachedAgentConversations({goalId, zh}: {goalId: string; zh: bo
         const pending = JSON.parse(stored) as Submission;
         if (!pending || typeof pending.operation_id !== "string" || typeof pending.text !== "string" || !["pending", "delivered"].includes(pending.status ?? "")) throw new Error("Invalid recovery record");
         setDraft(pending.status === "delivered" ? "" : pending.text); setSubmission(pending);
+        if (pending.status === "pending") void readReceipt(pending, current);
       }
     } catch {setRecoveryError(zh ? "浏览器回复恢复记录不可读，暂不能安全发送。请先在原 App 核对。" : "Reply recovery is unreadable; check the original App before clearing it.");}
     let timer: ReturnType<typeof setTimeout>;
@@ -127,6 +129,7 @@ export function AttachedAgentConversations({goalId, zh}: {goalId: string; zh: bo
     const pending = {operation_id: crypto.randomUUID(), text: draft, status: "pending"};
     try {sessionStorage.setItem(cacheKey, JSON.stringify(pending));}
     catch {setError(zh ? "无法保存回复回执，未发送。" : "Cannot save reply recovery; nothing was sent."); return;}
+    receiptGeneration.current++;
     setSubmission(pending); setSending(true);
     try {
       const result = await request<{status: string}>("/api/chat/codex-attached", {method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({operation_id: pending.operation_id, text: pending.text, goal_id: goalId, agent_id: binding.agent_id, binding_ref: binding.binding_ref})});
@@ -134,26 +137,29 @@ export function AttachedAgentConversations({goalId, zh}: {goalId: string; zh: bo
         const delivered = {...pending, status: result.status};
         sessionStorage.setItem(cacheKey, JSON.stringify(delivered)); setSubmission(delivered);
         if (result.status === "delivered") setDraft("");
+        else void readReceipt(pending, current);
         revision.current = "";
       }
-    } catch (failure) {if (current === generation.current) setError(String(failure));}
+    } catch (failure) {if (current === generation.current) {setError(String(failure)); void readReceipt(pending, current);}}
     finally {if (current === generation.current) setSending(false);}
   }
-  async function readReceipt() {
-    if (!query || !submission) return;
-    const current = generation.current;
-    const params = new URLSearchParams(query); params.set("operation_id", submission.operation_id);
+  async function readReceipt(pending = submission, current = generation.current) {
+    // Recover from existing evidence only. Never retry the native effect.
+    if (!query || !pending || current !== generation.current) return;
+    const receiptVersion = receiptGeneration.current;
+    const params = new URLSearchParams(query); params.set("operation_id", pending.operation_id);
     try {
       const receipt = await request<{status: string}>(`/api/chat/codex-attached?${params}`);
-      if (current === generation.current) {
-        const next = {...submission, status: receipt.status};
+      if (current === generation.current && receiptVersion === receiptGeneration.current) {
+        const next = {...pending, status: receipt.status};
         sessionStorage.setItem(cacheKey, JSON.stringify(next)); setSubmission(next);
-        if (receipt.status === "delivered") {setDraft(""); setRecoveryError("");}
+        setRecoveryError("");
+        if (receipt.status === "delivered") {receiptGeneration.current++; setDraft("");}
       }
-    } catch (failure) {if (current === generation.current) setRecoveryError(String(failure));}
+    } catch (failure) {if (current === generation.current && receiptVersion === receiptGeneration.current) setRecoveryError(String(failure));}
   }
   function nextReply() {
-    try {sessionStorage.removeItem(cacheKey); setSubmission(null); setDraft(""); setError(""); setRecoveryError("");}
+    try {sessionStorage.removeItem(cacheKey); receiptGeneration.current++; setSubmission(null); setDraft(""); setError(""); setRecoveryError("");}
     catch {setError(zh ? "无法清理回复回执。" : "Reply recovery could not be cleared.");}
   }
   return <section className="attached-agent-conversations">

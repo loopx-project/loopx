@@ -136,9 +136,12 @@ acknowledgement, without copying the message body. The same operation cannot be
 sent twice. A confirmed submission clears the draft and leaves the next reply
 composer available, including after reload; it does not require a second human
 acknowledgement. Sending again still requires an explicit new message and a fresh
-idle observation. An unacknowledged submission remains pending: reopening can read its
-receipt, but never silently retries a native effect. Check the original App
-before discarding an uncertain receipt. The UI keeps only its reply recovery
+idle observation. After an interrupted response or reopening with a pending
+submission, the page automatically reads its existing receipt once. A recorded
+acknowledgement restores the composer without another user step; genuinely
+unconfirmed delivery remains pending and never silently retries a native effect.
+Check the original App before discarding an uncertain receipt. Late reads cannot
+restore a discarded operation over a new draft. The UI keeps only its reply recovery
 record in the current browser session. Replies are explicit local owner actions;
 a registered binding or observer does not authorize an Agent to message peers.
 
