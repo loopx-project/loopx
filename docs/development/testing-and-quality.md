@@ -122,7 +122,7 @@ shell；不能因为过滤了 `CI` 就恢复采集。不能按系统、安装渠
 
 `python-tests.yml` publishes `merge-gate` for every open pull request. Code,
 workflow, policy and unknown paths require the existing `pytest` aggregate
-(including TypeScript checks and all four Python shards), Stage 2C correctness
+(including TypeScript checks and all six Python shards), Stage 2C correctness
 aggregate, and Windows tests to succeed. Failed, cancelled, missing or
 unexpectedly skipped results cannot pass the gate. The client-only exception
 below retains common checks and substitutes packaged Dashboard qualification
@@ -223,8 +223,8 @@ The [job exemption policy](ci-impact-selection.md) additionally permits pure
 Dashboard-client changes to skip backend Python/Windows and Stage2c, while
 requiring frontend type-check/build, scoped coverage and real packaged Dashboard
 browser smoke. Backend-only TS/lint/minimum-Node jobs are also exempt.
-Mixed, prompt, dependency and unknown changes stay full. Full Python runs four
-complete shards and combines all four coverage files. The `ci:full` label forces
+Mixed, prompt, dependency and unknown changes stay full. Full Python runs six
+complete shards and combines all six coverage files. The `ci:full` label forces
 full qualification; main stays full. No selected-only report impersonates full
 coverage. 新的前端豁免由目标分支已审阅的策略控制；CI 自身变更仍全量验证。
 
@@ -425,6 +425,17 @@ Effect 服务先排空已接纳的 handler，再退出。启用编译缓存时�
 这可能丢弃可选缓存条目，不允许放弃已接纳的业务操作。关闭缓存时无需 worker，
 继续普通清理。一秒额度不涵盖定位文件锁、存储等待或操作系统调度；故障注入不能
 代替原生平台资格验证，V8 CPU 样本也不测量内核 IO。
+
+Windows mutation-lock acquisition retries `EPERM` from exclusive creation only
+after observing contention, within the existing lock timeout. This covers a
+[pending-delete pathname](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-deletefilew#remarks).
+Initial permission denial, errors after creation and other platforms retain
+their failure behavior; persistent denial preserves its original error.
+Injected filesystem failures complement actual Windows execution, not replace it.
+
+Windows 文件锁只在已观察到争用后，对独占创建返回的 `EPERM` 使用原锁等待额度重试。
+初次权限拒绝、创建后的错误和其它平台仍直接失败；持续拒绝保留原错误。
+故障注入验证重试边界，原生 Windows 运行仍须单独验收。
 
 Smoke cleanup owns every valid runtime locator in its newly created private
 temporary namespace, including runtimes loaded by temporary base checkouts.
@@ -699,7 +710,7 @@ An explicitly loaded CI observer also streams pytest-owned phase durations from
 the xdist controller. Read the downloaded log with
 `node scripts/ci/pytest_timing.ts JOB_LOG`; incomplete evidence remains incomplete
 and does not replace JUnit, coverage or the required gate. See the
-[timing observation boundary](ci-impact-selection.md#four-complete-python-shards).
+[timing observation boundary](ci-impact-selection.md#six-complete-python-shards).
 Full Python shards also opt into `--ci-stall-after 120` on the existing pytest
 observer: a long-running test attempts to print its executing thread's Python stack without
 terminating it or changing its result. This cooperative diagnostic needs the
@@ -730,7 +741,7 @@ Linux 全套测试分到六台 hosted runner，每台保留两个 xdist worker�
 CI 同时在 xdist controller 流式记录 pytest 原生 phase 耗时。下载日志后用
 `node scripts/ci/pytest_timing.ts JOB_LOG` 回读；不完整证据保持不完整，不能替代
 JUnit、coverage 或必过门禁。归属与测量边界见
-[分片耗时记录](ci-impact-selection.md#four-complete-python-shards)。
+[分片耗时记录](ci-impact-selection.md#six-complete-python-shards)。
 全量 Python 分片在既有 pytest observer 上显式启用 `--ci-stall-after 120`：测试
 超过该时长就尝试输出其执行线程的 Python 栈，不终止测试或改变结果。此协作式诊断
 需要解释器调度观察线程，无法诊断始终占有 GIL 的原生代码。栈用于诊断，不能只凭

@@ -18,6 +18,7 @@ from .chat_goal_lifecycle_actions import ChatGoalLifecycleActionMixin
 from .chat_monitor_actions import ChatMonitorActionMixin
 from .chat_store import ChatSessionStore
 from .chat_todo_actions import ChatTodoActionMixin
+from .control_plane.goals.acceptance_actions import GoalAcceptanceActionMixin
 from .configure_goal import configure_goal
 from .control_plane.goals.configure_goal_service import (
     bind_goal_agent_with_global_sync,
@@ -39,6 +40,7 @@ from .control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
 
 CHAT_ACTION_RESPONSE_SCHEMA_VERSION = "loopx_chat_action_response_v1"
 SUPPORTED_ACTION_KINDS = {
+    "goal.acceptance.check",
     "todo.create",
     "todo.update",
     "run.correct",
@@ -214,6 +216,7 @@ def _monitor_text(parameters: Mapping[str, Any]) -> str | None:
 
 
 class ChatActionService(
+    GoalAcceptanceActionMixin,
     ChatActionNormalizationMixin,
     ChatGoalLifecycleActionMixin,
     ChatMonitorActionMixin,
@@ -1194,7 +1197,13 @@ class ChatActionService(
             normalized["workspace_ref"] = workspace_binding["workspace_ref"]
         else:
             eligibility = None
-        if action_kind == "operation.execute":
+        if action_kind == "goal.acceptance.check":
+            if context.get("kind") != "goal" or context.get("goal_id") != normalized["goal_id"]:
+                raise ValueError("check plan context must match its target Goal")
+            fingerprint, _ = self._acceptance_preview(normalized)
+            evidence = ["The existing typed acceptance owner validated this plan without changing configuration or executing commands."]
+            permission = "local_command_execution"
+        elif action_kind == "operation.execute":
             fingerprint = _digest(normalized)
             evidence = [
                 "The provider-neutral operation envelope and immutable digests validated.",
@@ -1449,6 +1458,8 @@ class ChatActionService(
         parameters = proposal.get("normalized_parameters")
         if not isinstance(parameters, dict):
             raise ValueError("typed Chat action proposal is malformed")
+        if action_kind == "goal.acceptance.check":
+            return self._apply_acceptance_check(proposal_id)
         if action_kind == "goal.create":
             return self._apply_goal_create(proposal_id, proposal, parameters)
         if action_kind == "goal.lifecycle":

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { goalAcceptanceObservationSchema, type GoalAcceptanceContract } from "./goal-acceptance-observation.js";
+import { goalAcceptanceDisplayStatus, goalAcceptanceObservationSchema, type GoalAcceptanceContract } from "./goal-acceptance-observation.js";
 
 const refsSchema = z.record(z.string(), z.array(z.string()));
 const nodeSchema = z.object({
@@ -211,7 +211,7 @@ export function deliveryReviewMarkdown(snapshot: DeliveryReviewSnapshot, labels:
       if (task.reason) rows.push(`  ${line(task.reason)}`);
       if (task.applicable === false) rows.push(`  ${copy.notApplicable}`);
     }
-    rows.push("", `### ${copy.verification}`, copy.verificationState[contract.status]);
+    rows.push("", `### ${copy.verification}`, copy.verificationState[goalAcceptanceDisplayStatus(contract)]);
     if (contract.held_todo_ids.length) rows.push(`${copy.heldTasks}: ${line(contract.held_todo_ids.join(", "))}`);
     rows.push("", `### ${copy.receipt}`);
     const receipt = contract.verification;

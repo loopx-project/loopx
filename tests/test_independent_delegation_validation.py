@@ -317,3 +317,46 @@ def test_selected_unbound_work_cannot_fall_back_to_its_own_validator(service, mo
     runner.execute("selected-unbound")
     assert runner.read("selected-unbound")["status"] == "rejected"
     assert not (root / "analyst" / "initial" / "host-invocations").exists()
+
+
+def test_team_consumes_only_current_exact_owner_oracle_receipt(service, monkeypatch):
+    from pathlib import Path
+    from loopx.control_plane.goals.acceptance import verify_goal_acceptance
+
+    root, runner = service
+    monkeypatch.setattr(runner, "_spawn", lambda _: None)
+    runner.start("analysis", "oracle-1", brief())
+    runner.execute("oracle-1")
+    assert wait(runner, "oracle-1")["status"] == "accepted"
+    binding = runner.binding("analysis", require_active=True)
+    workspace = Path(binding["workspace"])
+    # An owner explicitly selects this real project workspace. The public API
+    # cannot nominate an arbitrary path or manufacture a checker result.
+    registry = json.loads(runner.registry.read_text())
+    next(row for row in registry["goals"] if row["id"] == runner.goal_id)["repo"] = str(workspace)
+    runner.registry.write_text(json.dumps(registry))
+    (workspace / "expected.json").write_bytes((workspace / "output.json").read_bytes())
+    checker = workspace / "check.py"
+    checker.write_text("from pathlib import Path\nassert Path('output.json').read_bytes() == Path('expected.json').read_bytes()\n")
+    basis = inspect_goal_acceptance(registry_path=runner.registry, runtime_root=str(runner.root), goal_id=runner.goal_id)
+    document = {"scope": {"kind": "selected_work", "todo_ids": [binding["todo_id"]]}, "objective": "Check this execution's exact result",
+        "non_goals": [], "bindings": [{"todo_id": binding["todo_id"], "criterion_ids": ["oracle"]}], "criteria": [{
+            "id": "oracle", "description": "Owner-approved expected result", "validation_argv": [sys.executable, "check.py"],
+            "validation_timeout_seconds": 5, "validation_files": [{"path": "check.py", "sha256": sha256(checker.read_bytes()).hexdigest()}],
+            "oracle": {"kind": "owner_pinned_oracle", "source_id": "expected-result", "input_refs": ["expected.json"], "output_refs": ["output.json"]}}]}
+    configure_goal_acceptance(registry_path=runner.registry, runtime_root=str(runner.root), goal_id=runner.goal_id,
+        document=document, expected_provider_revision=basis["provider_revision"], execute=True)
+    before = runner.read("oracle-1")
+    assert before["validation"].get("oracle_checks") == []
+    checked = verify_goal_acceptance(registry_path=runner.registry, runtime_root=str(runner.root), goal_id=runner.goal_id, execute=True)
+    assert checked["checks_passed"] is True
+    current = runner.read("oracle-1")
+    evidence = current["validation"]["oracle_checks"][0]
+    assert evidence["source_id"] == "expected-result"
+    assert evidence["output_versions"] == [{"ref": "output.json", "sha256": current["artifacts"][0]["sha256"]}]
+    code, cli_read = cli(runner, "read", "--operation-id", "oracle-1")
+    assert code == 0 and cli_read["validation"]["oracle_checks"] == current["validation"]["oracle_checks"]
+    (workspace / "expected.json").write_text("unverified source input")
+    with pytest.raises(ValueError, match="acceptance rejected"):
+        runner.read("oracle-1")
+    assert (workspace / "host-invocations").read_text() == "1"

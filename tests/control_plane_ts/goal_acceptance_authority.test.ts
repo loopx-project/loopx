@@ -26,6 +26,8 @@ import {commitGoalAcceptanceVerification, commitLocalGoalAcceptance, commitLocal
 import {decodeCompletionValidationRevision, planCompletionValidationRevision}
   from "../../loopx/control_plane/todos/completion_validation_revision.ts";
 
+import {acceptanceOracleBasis} from "../../loopx/control_plane/goals/acceptance_oracle.ts";
+
 const goal = "goal-acceptance-test";
 const goalA = {goal_id: goal, goal_instance_id: "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"};
 const goalB = {goal_id: goal, goal_instance_id: "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"};
@@ -231,6 +233,35 @@ async function fixture(t: TestContext, provider: typeof providers[number]): Prom
 for (const provider of providers) {
   const options = {skip: (provider === "postgresql" && !process.env.LOOPX_TEST_POSTGRES_URL) ||
     (provider === "sqlite" && !sqliteQualified)};
+  test(`${provider}: optional oracle source and exact versions survive canonical commit and revoke on changed work`, options, async t => {
+    const store = await fixture(t, provider); await seed(store);
+    const doc = normalizeGoalAcceptanceDocument({scope: {kind: "selected_work", todo_ids: ["todo_first"]}, objective: "Check exact output", non_goals: [],
+      bindings: [{todo_id: "todo_first", criterion_ids: ["oracle"]}], criteria: [{id: "oracle", description: "Owner-approved checker",
+        validation_argv: ["python3", "check.py"], validation_files: [{path: "check.py", sha256: "a".repeat(64)}],
+        oracle: {kind: "owner_pinned_oracle", source_id: "owner-checker", input_refs: [], output_refs: ["output.txt"]}}]});
+    assert.equal((await configureGoalAcceptance(store, await configureRequest(store, {document: doc}))).status, "applied");
+    const beforeInvalidInvocation = await head(store);
+    await assert.rejects(configureGoalAcceptance(store, await configureRequest(store, {document: {
+      ...doc, criteria: [{...doc.criteria[0], validation_argv: ["/usr/bin/true", "check.py"]}],
+    }})), /oracle requires/);
+    assert.deepEqual(await head(store), beforeInvalidInvocation, "rejected source invocation must not write canonical state");
+    const evidence = {source_id: "owner-checker", source_digest: acceptanceOracleBasis(doc.criteria[0]), checked_at: "2026-01-01T00:00:00Z",
+      input_versions: [], output_versions: [{ref: "output.txt", sha256: "b".repeat(64)}]};
+    const results = [{criterion_id: "oracle", passed: true, exit_code: 0, oracle_evidence: evidence}];
+    await assert.rejects(commitGoalAcceptanceVerification(store, await verifyRequest(store, {actor_agent_id: "worker", results})));
+    assert.equal((await commitGoalAcceptanceVerification(store, await verifyRequest(store, {results}))).status, "applied");
+    const view = (await inspectGoalAcceptance(store, goal)).goal_acceptance_contract as JsonObject;
+    assert.deepEqual(((view.verification as JsonObject).results as JsonObject[])[0].oracle_evidence, evidence);
+    assert.equal((((view.criteria as JsonObject[])[0]).oracle as JsonObject).state, "recorded", "canonical rows alone do not attest current filesystem bytes");
+    await update(store, "todo_first", {text: "Changed output requirement"});
+    const stale = (await inspectGoalAcceptance(store, goal)).goal_acceptance_contract as JsonObject;
+    assert.equal((((stale.criteria as JsonObject[])[0]).oracle as JsonObject).state, "stale");
+    const ordinary = {...doc, criteria: doc.criteria.map(({oracle: _oracle, ...criterion}) => criterion)};
+    assert.equal((await configureGoalAcceptance(store, await configureRequest(store, {document: ordinary}))).status, "applied");
+    const rolledBack = (await inspectGoalAcceptance(store, goal)).goal_acceptance_contract as JsonObject;
+    assert.equal(rolledBack.verification, null, "ordinary rollback cannot reuse an oracle success");
+    assert.equal(Object.hasOwn((rolledBack.criteria as JsonObject[])[0], "oracle"), false);
+  });
   test(`${provider}: first exact acceptance mutation binds the current instance atomically`, options, async t => {
     const store = await fixture(t, provider); await seed(store);
     const request = await configureRequest(store, {goal_ref: goalA});

@@ -585,4 +585,19 @@ assert.match(
   "The Goal header prefers the current projected Todo over stale recommended_action strings",
 );
 
+// First-Goal home: a healthy source with no registered Goal is a designed
+// state, not empty lanes, and health issues are owner-language sentences.
+assert.match(model, /kind: "no_goals"/, "The home carries a typed first-Goal classification");
+assert.match(dashboard, /const onboarding: WorkspaceHomeOnboarding \| undefined = isHealthy/, "Only a healthy source classifies as a first-Goal workspace");
+assert.match(dashboard, /if \(!sourceError\) return loadedModel;[\s\S]*?onboarding: undefined,[\s\S]*?retryable: true,/, "A failed current read withdraws the first-Goal state and shows a retryable failure");
+assert.match(dashboard, /onRefresh=\{async \(readScope = "all"\) => \{[\s\S]*?rejectOnError: true[\s\S]*?return \{ ok: false, error: formatStatusError\(error\) \}/, "A refresh reports its failure to the page instead of swallowing it");
+assert.match(page, /if \(result && result\.ok === false\) \{\n\s*setRefreshState\("error"\);/, "The header reports a failed refresh and never an update");
+assert.doesNotMatch(dashboard, /payload\.ok === false|契约检查未通过|系统健康关注点/, "Health issues are localized owner language, not protocol fragments");
+assert.match(page, /data-testid="personal-first-goal"/, "The home renders the first-Goal state");
+assert.match(page, /onSuggestRequest\(t\(`home\.firstGoal\.example\./, "Example requests only fill the composer");
+assert.match(page, /personal-first-goal-diagnostics/, "Status source details stay in a collapsed disclosure");
+for (const key of ["home.firstGoal.title", "home.firstGoal.lead", "home.firstGoal.create", "home.health.contractFailed", "home.health.concerns"]) {
+  assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);
+}
+
 console.log("personal workspace drawer contract smoke passed");

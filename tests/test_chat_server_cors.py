@@ -487,6 +487,43 @@ def test_chat_status_rejects_invalid_goal_activation_scope(monkeypatch) -> None:
         server.server_close()
 
 
+def test_workspace_directory_reports_a_missing_registry_as_an_empty_workspace(tmp_path) -> None:
+    # A fresh install has no registry until the first Goal is created. The
+    # discovery read must answer with zero registered Goals, not a 500, so the
+    # home page can render its first-Goal state instead of a service failure.
+    server, thread = _start_server()
+    server.registry_path = tmp_path / ".loopx" / "registry.json"
+    try:
+        response = _request(server.server_address[1], method="GET", origin=None, path="/status.json?view=workspace-directory")
+        payload = json.loads(response.read().decode("utf-8"))
+        assert response.status == 200
+        assert payload["ok"] is True
+        assert payload["schema_version"] == "loopx_workspace_directory_v1"
+        assert payload["goals"] == []
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_workspace_directory_still_fails_on_an_unreadable_registry(tmp_path) -> None:
+    # Only absence is an empty workspace; a corrupt registry stays a failure.
+    server, thread = _start_server()
+    registry_path = tmp_path / ".loopx" / "registry.json"
+    registry_path.parent.mkdir(parents=True)
+    registry_path.write_text("{not json", encoding="utf-8")
+    server.registry_path = registry_path
+    try:
+        response = _request(server.server_address[1], method="GET", origin=None, path="/status.json?view=workspace-directory")
+        payload = json.loads(response.read().decode("utf-8"))
+        assert response.status == 500
+        assert payload["ok"] is False
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_workspace_directory_skips_expensive_projection_and_respects_scope(monkeypatch) -> None:
     registry = {"goals": [{"id": "alpha", "display_name": "Alpha"}, {"id": "beta"}]}
     monkeypatch.setattr("loopx.chat_status_api.load_project_registry", lambda _: registry)
@@ -631,6 +668,7 @@ def test_workspace_access_code_does_not_change_other_status_routes(monkeypatch, 
         raise PermissionError("synthetic confidential diagnostic")
 
     monkeypatch.setattr("loopx.chat_status_api.load_registry", fail)
+    monkeypatch.setattr("loopx.chat_status_api.load_project_registry", fail)
     monkeypatch.setattr("loopx.chat_status_api.collect_status", fail)
     server, thread = _start_server()
     try:

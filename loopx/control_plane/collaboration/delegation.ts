@@ -62,7 +62,8 @@ export function delegationValidationPlan(params: JsonObject): JsonObject {
     basis_sha256: canonicalAuthoritySha256({todo_id: todo.todo_id, requirements, effects}),
     check_count: effects.length,
     pinned_file_count: effects.reduce((count, effect) => count
-      + (Array.isArray(effect.validation_files) ? effect.validation_files.length : 0), 0)};
+      + (Array.isArray(effect.validation_files) ? effect.validation_files.length : 0), 0),
+    ...currentOracleChecks(basis, effects)};
   // Reuse the acceptance owner's work classification. Scheduling/progress
   // metadata and unrelated provider commits are not a new task declaration;
   // current claim/lifecycle still fence this particular validation attempt.
@@ -71,6 +72,20 @@ export function delegationValidationPlan(params: JsonObject): JsonObject {
     status: todo.status, done: todo.done, archive_state: todo.archive_state ?? null});
   return {todo_id: todo.todo_id, state: "ready", source, observation, task_basis_sha256,
     effects, canonical_done: todo.done === true && todo.status === "done"};
+}
+
+/** Consume only the acceptance owner's current exact-source observation. */
+function currentOracleChecks(basis: JsonObject, effects: JsonObject[]): JsonObject {
+  const contract = basis.goal_acceptance_contract as JsonObject | undefined;
+  if (!contract || !Array.isArray(contract.criteria) || !contract.criteria.some(raw => (raw as JsonObject).oracle)) return {};
+  const receipt = contract.verification as JsonObject | null;
+  const checks = (contract.criteria as JsonObject[]).flatMap(criterion => {
+    const oracle = criterion.oracle as JsonObject | undefined;
+    const result = (receipt?.results as JsonObject[] | undefined)?.find(row => row.criterion_id === criterion.id);
+    return oracle?.state === "current" && effects.some(effect => effect.criterion_id === criterion.id)
+      && result?.oracle_evidence ? [{criterion_id: criterion.id, ...result.oracle_evidence as JsonObject}] : [];
+  });
+  return {oracle_checks: checks};
 }
 
 /** Fresh host check observation, not an independent-verifier or persisted receipt.
@@ -113,7 +128,12 @@ export function delegationCheckedArtifacts(params: JsonObject): JsonObject {
     "delegation output changed during validation; recheck the original output");
   return {source: observation.source, basis_sha256: observation.basis_sha256,
     check_count: observation.check_count, pinned_file_count: observation.pinned_file_count,
-    checked_at: params.checked_at, output_versions: after};
+    checked_at: params.checked_at, output_versions: after,
+    ...(Array.isArray(observation.oracle_checks) ? {oracle_checks: observation.oracle_checks.filter(raw => {
+      const check = requireJsonObject(raw, "oracle execution evidence");
+      return Array.isArray(check.output_versions) && after.every(output => (check.output_versions as JsonObject[])
+        .some(row => row.ref === output.ref && row.sha256 === output.sha256));
+    })} : {})};
 }
 export function selectDelegationBinding(params: JsonObject): JsonObject {
   const config = requireJsonObject(params.config, "delegation configuration");

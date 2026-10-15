@@ -81,9 +81,49 @@ promote a provider or fall back to legacy Markdown when canonical reads fail.
 The owner makes three explicit decisions: the objective and its acceptance
 criteria, which existing advancement tasks serve those criteria, and whether to
 enable this governance. The existing Goal authority owns the contract; the
-Dashboard only reads it. No new capability editor or provider is introduced.
+Dashboard presents its checked result and uses the same owner for authorized changes. No new capability editor or provider is introduced.
 
-From the Goal's delivery workspace, inspect the current provider revision:
+For an ordinary delivery, the Agent prepares the technical plan from the stated
+outcome and existing task/file context. The local owner sees its objective,
+criteria, coverage and command effect beside the delivery, then uses **Use plan
+and check** once. A configured contract needs only **Check delivery**. The
+advanced JSON import remains available for technical migration; it is not a
+prerequisite for this path.
+
+Agent preparation uses the existing typed action preview store:
+
+```bash
+loopx --format json goal-acceptance prepare --goal-id example-goal \
+  --agent-id example-agent --document acceptance.json \
+  --operation-id prepare-delivery-check --execute
+```
+
+Here `--execute` persists only the reviewable proposal. Omit it for a read-only
+validation preview. Neither form configures the Goal, approves governance or runs
+commands. The local owner's action applies the described configuration and
+executes its bounded checks; this is the existing trusted local owner surface,
+not an authenticated remote owner decision. Use runtime command names and safe
+relative file references in proposals, rather than machine-specific paths.
+The original operation identity and native receipts recover a lost response.
+Concurrent or repeated apply does not rerun a consumed intent; if a started check
+has no matching native receipt, the result stays uncertain until explicitly
+reconciled. Readback never runs checks. A stored successful receipt cannot
+certify changed files, independent reviewer identity, adoption or Goal completion.
+A later finished/cancelled plan does not resurrect an older draft.
+
+Count the complete task: with an Agent-prepared plan already delivered, the owner
+has one required decision. If the original request still lacks acceptance intent
+or authority, that missing decision is an additional round; preparing a proposal
+alone does not establish a one-round cold-start or live-model experience.
+No-plan/default-off behavior remains unchanged, and no Lark action is introduced.
+
+中文：普通路径由 Agent 根据目标与既有上下文准备方案，负责人在交付处核对要求、覆盖范围和
+执行影响，一次“采用并检查”；已有配置直接“检查交付”。JSON 导入仅保留为高级迁移入口。
+`prepare --execute` 只保存可审阅方案，不修改 Goal 规则、不执行检查。丢失回执先对账，
+不能自动重跑；历史通过不能认证变化后的版本。交互次数从原始意图算起，前置缺失的意图或
+授权不能从计数中省略。此入口沿用可信本机所有者边界，不证明远程身份、独立复核或实际采用。
+
+For advanced CLI configuration, inspect the current provider revision:
 
 ```bash
 loopx --format json goal-acceptance inspect --goal-id example-goal
@@ -126,8 +166,8 @@ owner-approved scope change.
 Unselected work retains its ordinary validation, claims, leases, permissions and
 continuation checks. Selected work cannot edit role/class/status to escape its
 contract. Changes to unrelated work do not stale a selected-work verification;
-changes to selected work do. The dashboard's existing read-only acceptance detail,
-Markdown export and CLI expose coverage without granting new configuration power.
+changes to selected work do. The dashboard's acceptance detail, Markdown export and CLI expose coverage.
+Configuration continues through the same owner-authorized CAS transition.
 No Lark configuration operation is introduced.
 
 **恢复与范围 / Recovery and coverage.** Missing/stale associations trigger scoped
@@ -450,3 +490,117 @@ TS 校验整个候选工作声明的摘要必须等于 owner 当初确认的摘�
 必须提供真实的原文本/等待条件。若不知道原声明、改动涉及其他字段，或后续兼容修订
 使完整摘要无法精确匹配，应请 owner 审核并显式重新绑定。不能猜测旧值、伪造完成，
 也不能先取得 stale 工作的租约来绕过这条边界。
+
+
+## Owner-pinned oracle and exact versions
+
+In **Goal settings → Task ownership → Goal acceptance contract**, the local owner
+can import a complete approved JSON document, review its scope and command,
+save it, run the configured checks, read back the result, or disable the contract.
+Existing configured contracts offer the same operations in **Delivery & evidence**.
+Saving does not run a command. Reading does not run checks. Failed or uncertain
+operations retain a readback/retry path; an uncertain check is never replayed
+automatically. These actions use the existing acceptance owner and provider CAS.
+Agent callers still cannot configure the owner's contract or submit a verdict.
+
+An optional criterion `oracle` declares an **owner-pinned checker**, rather than
+inferring independent acceptance from a worker's name, report or artifact hash:
+
+```json
+{
+  "kind": "owner_pinned_oracle",
+  "source_id": "export-checker",
+  "input_refs": ["expected.txt"],
+  "output_refs": ["result.txt"]
+}
+```
+
+Add this object to a criterion in the existing document format. That criterion
+must explicitly pin the invoked checker in `validation_files`, with its actual
+SHA-256, and invoke that file directly or as Python's immediate script argument.
+The supported interpreter names are `python`, `python3`, and versioned
+`python3.<digits>`, optionally ending in `.exe`; absolute host paths to those
+interpreters are allowed. Relative interpreter wrappers must themselves be
+pinned and directly invoked; they cannot borrow Python's script-argument rule.
+For example, use
+`validation_argv: ["python3", "checks/export.py"]` with a pin for
+`checks/export.py`. Interpreter options before the script (including `-c`, `-m`
+and `--`) are unsupported. Arbitrary commands such as `true checks/export.py`
+or `cat checks/export.py` cannot attest execution of that pinned source and are
+rejected before configuration is written. Script arguments after the file are
+allowed. Other runtimes can use a directly executed pinned entry point with a
+relative path containing `/` (for example `checks/export`), not a bare name
+resolved through `PATH`. This grammar does not authenticate the local interpreter
+binary, which remains part of the trusted host environment.
+Declare every input/output file whose version the receipt is meant to cover;
+there must be at least one output. Source, input and output roles are distinct.
+All refs are bounded repository-relative files; symlinks and unavailable files
+fail closed. Ordinary criteria without `oracle` retain their previous execution,
+canonical document bytes and result shape.
+
+The host copies the pinned source and declared inputs/outputs into a temporary
+workspace, verifies their bytes, executes the approved command there, and checks
+those copies and the original workspace again before returning evidence. The
+successful criterion result contains `oracle_evidence`: source identity and
+digest, UTC check time, and exact input/output SHA-256 versions. A changed or
+missing source/output, failed check or timeout does not produce a success
+receipt. Completion still has its existing fresh checks and transaction; an
+ordinary completion receipt is not substituted for this explicit oracle record.
+
+This is file-snapshot isolation, **not an OS sandbox**. The local interpreter,
+environment, external services and unpinned imports remain trusted host inputs.
+The owner must approve the checker's meaning, provenance and any effects before
+running it. The source label is not an authenticated remote reviewer's identity;
+file hashes do not prove independent authorship. The checker record does not
+resolve an objection, establish requester adoption, or complete a Goal.
+
+`goal-acceptance inspect` observes current files without executing checks. It
+shows `current` only when the current contract/work, pinned source and declared
+versions match the stored receipt. Changed bytes show `stale`; unavailable files
+or missing receipts cannot become current success. Raw canonical/status snapshots
+without host file observations show `recorded`, which does not certify current
+bytes. Delegation evidence includes the checker only when the acceptance owner
+observed it current and its tested outputs cover that execution's exact outputs.
+Requester adoption remains a separate record.
+
+The same local-owner journey is available through the existing CLI:
+
+```sh
+loopx --format json goal-acceptance inspect --goal-id GOAL
+loopx --format json goal-acceptance configure --goal-id GOAL --document owner-contract.json --expected-provider-revision REVISION --execute
+loopx --format json goal-acceptance verify --goal-id GOAL --execute
+loopx --format json goal-acceptance inspect --goal-id GOAL
+loopx --format json goal-acceptance disable --goal-id GOAL --expected-provider-revision CURRENT_REVISION --execute
+```
+
+Use revision tokens from fresh inspect results. Disable withdraws the current
+contract and current oracle projection while retaining historical evidence;
+removing every `oracle` through an explicit owner reconfiguration restores
+ordinary criterion behavior and withdraws the current oracle receipt. The immutable
+operation journal retains its historical evidence; ordinary checks must run again.
+Before downgrading to a runtime that predates this optional field, use the newer
+runtime to configure that ordinary document with a fresh revision, inspect the
+result, then optionally disable. Disable alone retains the newer document and is
+not a backward-format migration. This enables no worker, model, transport, budget
+or permission.
+Local HTTP operations share the same owner through `/api/chat/goal-acceptance`;
+remote/missing authority and stale revisions remain explicit failures.
+
+The packaged regression runs Agent preparation and the in-place owner decision
+against a disposable real SQLite/HTTP/CLI source, including changed output,
+failure/recovery, optional configuration, disable, 390px and keyboard/reduced-motion:
+
+```sh
+uv run --extra test python scripts/chat_bundle.py build --install
+LOOPX_PERSONAL_WORKSPACE_PACKAGED=1 LOOPX_PLAYWRIGHT_PACKAGE="$PWD/apps/presentation/dashboard/node_modules/playwright" uv run --extra test node examples/personal-workspace-browser/goal-acceptance-oracle.mjs
+```
+
+Workspace discovery in this regression is synthetic; it does not establish
+installed-App adoption or the live L1 correction episode.
+
+
+Synthetic packaged views of the actual local-owner interaction (not an installed
+App or live team): prepared plan on [desktop](../../examples/personal-workspace-browser/oracle-controls-desktop.png)
+and [390px](../../examples/personal-workspace-browser/oracle-controls-mobile.png);
+current result on [desktop](../../examples/personal-workspace-browser/oracle-current-desktop.png)
+and [390px](../../examples/personal-workspace-browser/oracle-current-mobile.png).

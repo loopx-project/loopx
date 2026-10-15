@@ -69,6 +69,23 @@ graph TD
 
 ![LoopX 管家总览与 4 泳道流](../assets/personal-workspace/guide_manager_overview.png)
 
+### 首次打开 / First open
+
+![还没有 Goal 时的管家总览](../assets/personal-workspace/first-goal-home-desktop.png)
+
+还没有任何 Goal 时，总览不显示空泳道或健康告警，而是一个「还没有 Goal」状态：一句话说明
+Goal 是什么、一个 **创建 Goal** 按钮（打开与侧边栏 `+` 相同的创建表单），以及三条示例
+请求。点选示例只会填入输入框，按发送前不会发出任何内容。状态来源自身的检查行（例如
+本机尚未建立注册表）折叠在「状态来源详情」里。只有状态来源真的不健康（例如注册表损坏）
+时才显示健康告警，并以可读句子描述问题，原始检查行同样折叠在「诊断信息」里。
+
+When no Goal exists yet, the overview shows a first-Goal state instead of empty lanes or a
+health banner: what a Goal is, a **Create a Goal** button (the same form as the sidebar `+`),
+and three example requests that only fill the composer. The status source's own check
+lines (such as "no registry yet on this machine") stay collapsed under "Status source
+details". A health banner appears only when the source is actually unhealthy, in plain
+sentences, with the raw check lines collapsed under "Diagnostics".
+
 ### 核心功能区
 1. **「你不在的时候」离线概览**：
    - 聚合展示你离开期间所有 Agent 的运行结果：`已完成` 数量、`异常/失败` 数量以及当前 **`等你确认`** 的阻塞项。

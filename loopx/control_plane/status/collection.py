@@ -85,6 +85,7 @@ def collect_status(
     include_zcode_goal_eligibility: bool = False,
     activation_state_filter: GoalActivationState | str | None = None,
     agent_lane_id: str | None = None,
+    allow_missing_registry: bool = False,
 ) -> dict[str, Any]:
     display_limit = max(0, limit)
     control_plane_limit = max(
@@ -134,6 +135,7 @@ def collect_status(
         runtime_root_override=str(runtime_root),
         scan_roots=scan_roots,
         limit=limit,
+        allow_missing_registry=allow_missing_registry,
         goal_id_filter=goal_filter,
         include_public_boundary_scan=include_public_boundary_scan,
         activation_state_filter=activation_filter,

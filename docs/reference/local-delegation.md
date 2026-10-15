@@ -1377,3 +1377,16 @@ plan/inspect 的 `operation_callback_managed_wake_configured` 仅证明配置，
 移除启动配置或原 requester grant 在下一 callback 生效，已开始工作须走原停止/
 对账流程；丢失 ACK 不自动重启。Dashboard 沿用共享 frame 展示状态，但尚不能编辑
 此 grant；前端配置与真实原来源结果送达仍为部分交付，不能据合成测试称交易闭环。
+
+
+### Owner-pinned checker evidence
+
+Delegation evidence can include the acceptance owner's optional
+[owner-pinned oracle record](goal-acceptance-observations.md#owner-pinned-oracle-and-exact-versions).
+It names the source, check time and tested input/output versions only when the
+current owner contract and files still match and every returned output is covered
+at its exact version. Unconfigured, missing, changed or failed evidence stays
+unavailable; a current worker check or requester adoption cannot manufacture it.
+The Team evidence detail and correction trace show the same CLI/HTTP observation.
+This record attests a configured checker on declared snapshots; it does not
+identify a remote human/Agent verifier or prove that an objection was resolved.

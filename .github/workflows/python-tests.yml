@@ -507,7 +507,7 @@ jobs:
       group: loopx-python-test-shard-${{ matrix.shard }}
       queue: max
       cancel-in-progress: false
-    # All four shards were still progressing at 83-94% when the 45m job
+    # All shards were still progressing at 83-94% when the 45m job
     # deadline cancelled run 37916979857. Reserve setup/reporting headroom
     # without changing test-level deadlines, collection or worker count.
     timeout-minutes: 60
