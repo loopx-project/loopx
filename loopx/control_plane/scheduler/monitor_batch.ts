@@ -47,7 +47,8 @@ export function normalizeMonitorPollFields(observation: unknown, intent: unknown
   const observationFields = new Set(["todo_id", "target_key", "generated_at", "result_hash", "material_change", "cadence", "next_due_at", "reason_summary"]);
   for (const key of Object.keys(fields.observation)) if (!observationFields.has(key)) throw new EffectRuntimeRequestError(`unsupported Monitor observation field: ${key}`);
   const intentFields = new Set(["next_agent_todo", "next_action_kind", "next_task_repository", "next_required_capabilities",
-    "next_continuation_policy", "next_target_key", "next_claimed_by", "next_user_todo", "next_user_task_class"]);
+    "next_continuation_policy", "next_target_key", "next_claimed_by", "next_user_todo", "next_user_task_class",
+    "next_agent_priority", "next_user_priority"]);
   for (const key of Object.keys(fields.intent)) if (!intentFields.has(key)) throw new EffectRuntimeRequestError(`unsupported Monitor successor field: ${key}`);
   return fields;
 }
@@ -103,6 +104,8 @@ function planWriteback(input: MonitorBatchInput,
     const todo: JsonObject = {schema_version: TODO_DOMAIN_ITEM_SCHEMA, todo_id: id, role, text,
       status: "open", done: false, archive_state: "active",
       task_class: role === "agent" ? "advancement_task" : intent.next_user_task_class};
+    const priorityKey = `next_${role}_priority`;
+    if (Object.hasOwn(intent, priorityKey)) todo.priority = intent[priorityKey];
     if (role === "agent") {
       Object.assign(todo, Object.fromEntries(Object.entries(route).filter(([, value]) => value !== null)),
         {unblocks_todo_id: monitor.todo_id});
@@ -127,7 +130,7 @@ function planWriteback(input: MonitorBatchInput,
     if (created.status === "planned") mutations.push({kind: "todo_upsert", todo: record});
     plannedTodos.set(String(record.todo_id), record);
   }
-  const receiptFields = ["todo_id", "role", "task_class", "action_kind", "task_repository",
+  const receiptFields = ["todo_id", "role", "priority", "task_class", "action_kind", "task_repository",
     "continuation_policy", "required_capabilities", "claimed_by", "unblocks_todo_id", "target_key"];
   const writeback: JsonObject = {schema_version: "monitor_poll_todo_writeback_v0", dry_run: input.dry_run,
     goal_id: input.goal_id, todo_id: monitor.todo_id, monitor_effect_id: input.operation_id,

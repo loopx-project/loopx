@@ -6,6 +6,7 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { optionalNonEmptyString, requireBoolean, requireJsonObject } from "../runtime_decode.ts";
 import { normalizeTodoAgent, stripPythonWhitespace } from "../coordination/todo_agents.ts";
 import { normalizeTodoRepository, normalizeTodoCapabilities } from "../todos/work_requirements.ts";
+import {planTodoCreationPriority} from "../todos/priority.ts";
 
 export const MONITOR_SUCCESSOR_REQUEST_SCHEMA = "loopx_monitor_successor_plan_request_v0";
 export const MONITOR_SUCCESSOR_RESULT_SCHEMA = "loopx_monitor_successor_plan_result_v0";
@@ -62,6 +63,20 @@ export interface MonitorSuccessorIntent extends JsonObject {
   next_user_task_class: "user_action" | "user_gate" | null;
 }
 
+/** Optional authoring fields stay absent in historical observation identities. */
+export function monitorSuccessorPriorities(input: JsonObject, defaultOmitted = false): JsonObject {
+  const priorities: JsonObject = {};
+  for (const [role, todo] of [["agent", text(input.next_agent_todo, "next_agent_todo")], ["user", text(input.next_user_todo, "next_user_todo")]] as const) {
+    const key = `next_${role}_priority`;
+    const supplied = Object.hasOwn(input, key);
+    if (!supplied && (!defaultOmitted || !todo)) continue;
+    if (!todo) throw new EffectRuntimeRequestError(`--next-${role}-priority requires --next-${role}-todo`);
+    // The Todo owner validates values and conflicting legacy prefixes.
+    priorities[key] = planTodoCreationPriority({text: todo, ...(supplied ? {priority: input[key]} : {})}).priority;
+  }
+  return priorities;
+}
+
 export function monitorSuccessorIntent(value: unknown): MonitorSuccessorIntent {
   const input = requireJsonObject(value, "monitor successor intent");
   const material = requireBoolean(input.material_change, "material_change");
@@ -99,7 +114,8 @@ export function monitorSuccessorIntent(value: unknown): MonitorSuccessorIntent {
     try { owner = normalizeTodoAgent(claim, "next_claimed_by"); }
     catch { throw new EffectRuntimeRequestError("--next-claimed-by must be a public-safe agent id"); }
   }
-  return {next_agent_todo: agentTodo, next_action_kind: action,
+  const priorities = monitorSuccessorPriorities(input);
+  return {...priorities, next_agent_todo: agentTodo, next_action_kind: action,
     next_task_repository: repo, next_required_capabilities: capabilities,
     next_continuation_policy: policy, next_target_key: target, next_claimed_by: owner,
     next_user_todo: userTodo, next_user_task_class: userClass};

@@ -67,6 +67,8 @@ def write_monitor_poll_todo_state(
     next_user_todo: str | None = None,
     next_user_task_class: str | None = None,
     next_claimed_by: str | None = None,
+    next_agent_priority: str | None = None,
+    next_user_priority: str | None = None,
     agent_id: str | None = None,
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
@@ -94,6 +96,11 @@ def write_monitor_poll_todo_state(
         "next_continuation_policy": next_continuation_policy,
         "next_target_key": next_target_key, "next_claimed_by": next_claimed_by,
         "next_user_todo": next_user_todo, "next_user_task_class": next_user_task_class}
+    # Omitted additive fields must retain old request hashes during replay.
+    if next_agent_priority is not None:
+        intent["next_agent_priority"] = next_agent_priority
+    if next_user_priority is not None:
+        intent["next_user_priority"] = next_user_priority
     request = {"schema_version": "loopx_monitor_batch_plan_request_v0",
         "goal_id": goal_id, "operation_id": monitor_effect_id or f"monitor-poll:{goal_id}:{uuid4().hex}",
         "actor_agent_id": agent_id, "dry_run": not execute,

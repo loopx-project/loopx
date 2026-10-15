@@ -78,6 +78,8 @@ def record_quota_monitor_poll_for_cli(
         cadence=args.cadence,
         next_due_at=args.next_due_at,
         next_agent_todo=args.next_agent_todo,
+        next_agent_priority=getattr(args, "next_agent_priority", None),
+        next_user_priority=getattr(args, "next_user_priority", None),
         next_action_kind=args.next_action_kind,
         next_task_repository=args.next_task_repository,
         next_required_capabilities=args.next_required_capabilities,

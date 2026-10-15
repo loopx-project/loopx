@@ -105,10 +105,19 @@ def register_quota_monitor_poll_request_arguments(
         help=("For an executing, turn-scoped monitor-poll with --todo-id, resolve the canonical "
               "lease proof or replay the exact prior transaction proof. Does not acquire or renew a lease."))
     quota_parser.add_argument("--next-claimed-by", help="Registered agent id to claim the `--next-agent-todo` follow-up.")
+    for role in ("agent", "user"):
+        quota_parser.add_argument(
+            f"--next-{role}-priority", choices=["P0", "P1", "P2", "P3", "P4"],
+            help=f"Priority of --next-{role}-todo; defaults to P1, independently of the monitor.",
+        )
 
 
 def validate_quota_command_request(args: argparse.Namespace) -> None:
     command = args.quota_command
+    if command != "monitor-poll" and any(
+        getattr(args, f"next_{role}_priority", None) is not None for role in ("agent", "user")
+    ):
+        raise QuotaCommandValidationError("successor priority requires quota monitor-poll")
     lease_key = getattr(args, "task_lease_idempotency_key", None)
     lease_version = getattr(args, "task_lease_expected_version", None)
     use_current_lease = bool(getattr(args, "use_current_task_lease", False))

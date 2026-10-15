@@ -9,6 +9,7 @@ import {compactPythonWhitespace} from "../coordination/todo_agents.ts";
 const contract = COORDINATION_STATE_CONTRACT.todo_priority;
 export const TODO_PRIORITIES = contract.values;
 export type TodoPriority = typeof TODO_PRIORITIES[number];
+export const DEFAULT_TODO_PRIORITY: TodoPriority = "P1";
 const LEGACY_PREFIX = new RegExp(contract.legacy_prefix_pattern, "iu");
 const LEGACY_LABEL = new RegExp(contract.legacy_label_pattern, "iu");
 
@@ -68,8 +69,19 @@ export function planTodoPriority(todo: JsonObject, intent: JsonObject): JsonObje
     title: parsed.title, priority};
 }
 
+/** Default only a fresh creation, after receipt lookup. Reads, edits and
+ * deliberate predecessor inheritance retain their original priority. */
+export function planTodoCreationPriority(intent: JsonObject): JsonObject {
+  return planTodoPriority({priority: DEFAULT_TODO_PRIORITY}, intent);
+}
+
 export function evaluateTodoPriority(value: unknown): JsonObject {
   const request = requireJsonObject(value, "Todo priority request");
   if (request.schema_version !== "todo_priority_request_v0") throw new EffectRuntimeRequestError("Todo priority schema mismatch");
-  return planTodoPriority(requireJsonObject(request.todo, "Todo"), requireJsonObject(request.intent, "priority intent"));
+  if (request.create !== undefined && typeof request.create !== "boolean") {
+    throw new EffectRuntimeRequestError("create must be a boolean");
+  }
+  const todo = requireJsonObject(request.todo, "Todo");
+  const intent = requireJsonObject(request.intent, "priority intent");
+  return request.create === true ? planTodoCreationPriority(intent) : planTodoPriority(todo, intent);
 }

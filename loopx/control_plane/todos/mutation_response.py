@@ -19,6 +19,7 @@ from .contract import (
 from .completion_state import (
     normalize_todo_completion_continuation, normalize_todo_completion_recovery,
 )
+from .todo_semantics import todo_priority_label
 
 def serialize_added_todo_payload(
     *, add_result: Mapping[str, Any], goal_id: str, role: str, todo_text: str,
@@ -41,6 +42,8 @@ def serialize_added_todo_payload(
         "role": role,
         "section": add_result.get("section"),
         "todo": todo_text,
+        "priority": todo_priority_label({"text": todo_text,
+            **({"priority": add_result["priority"]} if "priority" in add_result else {})}),
         "todo_id": add_result.get("todo_id"),
         "status": add_result.get("status"),
         "task_class": add_result.get("task_class"),

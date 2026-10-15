@@ -207,6 +207,11 @@ def add_goal_todo(
         raise ValueError("todo add --operation-id requires promoted canonical authority")
     from .legacy_mutation import _add_goal_todo_legacy
 
+    # Canonical create applies the default only after checking its original
+    # receipt. Keep its transport intent stable across upgrades; legacy add has
+    # no operation receipt and uses the same typed creation policy here.
+    todo_text = str(plan_todo_priority({}, {"text": text,
+        **({"priority": priority} if priority is not None else {})}, create=True)["text"])
     return _add_goal_todo_legacy(**call, _prepared={
         "effective_agent_id": effective_agent_id,
         "effective_blocks_agent": effective_blocks_agent,

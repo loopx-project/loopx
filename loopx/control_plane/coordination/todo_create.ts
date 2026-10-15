@@ -1,4 +1,4 @@
-import {planTodoPriority} from "../todos/priority.ts";
+import {planTodoCreationPriority} from "../todos/priority.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
 import type { JsonObject } from "../effect_program.ts";
 import {CoordinationCommandReceipt} from "./command_receipt.ts";
@@ -142,8 +142,8 @@ function createCandidate(
   input: CoordinationTodoCreateInput,
   readModelSchema: unknown,
 ): JsonObject {
-  const priority = Object.hasOwn(input.todo, "priority")
-    ? planTodoPriority({}, {text: input.todo.text, priority: input.todo.priority}) : {};
+  const priority = planTodoCreationPriority({text: input.todo.text,
+    ...(Object.hasOwn(input.todo, "priority") ? {priority: input.todo.priority} : {})});
   const candidate: JsonObject = {
     ...input.todo,
     ...priority,

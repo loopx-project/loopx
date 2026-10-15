@@ -89,6 +89,7 @@ def _legacy_writeback(
             "section": next((match[2] for match in [section_bounds(original_lines, role)] if match),
                             "User Todo / Owner Review Reading Queue" if role == "user" else "Agent Todo"),
             "status": record["status"], "task_class": record.get("task_class"),
+            "priority": record.get("priority"),
             "action_kind": record.get("action_kind"),
             "required_write_scopes": record.get("required_write_scopes") or [],
             "required_capabilities": record.get("required_capabilities") or [],
@@ -109,7 +110,7 @@ def _legacy_writeback(
     result["next_todos"] = successors
     result["successor_receipts"] = [
         {key: todo[key] for key in (
-            "todo_id", "role", "task_class", "action_kind", "task_repository",
+            "todo_id", "role", "priority", "task_class", "action_kind", "task_repository",
             "continuation_policy", "required_capabilities", "claimed_by",
             "unblocks_todo_id", "target_key") if todo.get(key) not in (None, "", [])}
         for todo in successors

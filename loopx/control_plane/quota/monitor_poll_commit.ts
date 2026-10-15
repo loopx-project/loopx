@@ -5,7 +5,8 @@ import { AgentScopeFrontierAction } from "../agents/agent_scope_frontier.generat
 import { createHash } from "node:crypto";
 import { access, readFile, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
-import { monitorSuccessorIntent, monitorSuccessorRoute } from "../scheduler/monitor_successor.ts";
+import {planTodoCreationPriority, readTodoPriority} from "../todos/priority.ts";
+import { monitorSuccessorIntent, monitorSuccessorRoute, monitorSuccessorPriorities } from "../scheduler/monitor_successor.ts";
 import { normalizeTodoCapabilities } from "../todos/work_requirements.ts";
 import { parseProjectionDelivery } from "../todos/projection_delivery.ts";
 import { isMonitorUnavailableWait } from "./blocked_wait.ts";
@@ -366,6 +367,7 @@ function observationObject(value: unknown): MonitorObservation {
       observation.next_due_at,
       "observation.next_due_at",
     )?.trim() ?? null,
+    ...monitorSuccessorPriorities(observation),
     next_agent_todo: optionalString(
       observation.next_agent_todo,
       "observation.next_agent_todo",
@@ -961,6 +963,7 @@ function providerPlanFor(request: MonitorRequest, gateGuard = Boolean(
     cadence: request.observation.cadence,
     next_due_at: request.observation.next_due_at,
     reason_summary: request.observation.reason_summary,
+    ...monitorSuccessorPriorities(request.observation, true),
     next_agent_todo: request.observation.next_agent_todo,
     next_action_kind: request.observation.next_action_kind,
     next_task_repository: request.observation.next_task_repository,
@@ -1017,6 +1020,7 @@ function providerPlanObject(value: unknown): MonitorProviderPlan {
     cadence: optionalString(plan.cadence, "provider_plan.cadence")?.trim() ?? null,
     next_due_at: optionalString(plan.next_due_at, "provider_plan.next_due_at")?.trim() ?? null,
     reason_summary: optionalString(plan.reason_summary, "provider_plan.reason_summary"),
+    ...monitorSuccessorPriorities(plan),
     next_agent_todo: optionalString(plan.next_agent_todo, "provider_plan.next_agent_todo"),
     next_action_kind: optionalString(plan.next_action_kind, "provider_plan.next_action_kind")
       ?.trim() ?? null,
@@ -1090,6 +1094,19 @@ function requireProviderTodoText(
   const actual = requiredString(value, label).trim().replace(/\s+/g, " ");
   const compactExpected = expected.trim().replace(/\s+/g, " ");
   requireProviderMatch(actual, compactExpected, label);
+}
+
+function requireProviderSuccessorPriority(
+  receipt: JsonObject, nextTodo: JsonObject, plan: MonitorProviderPlan, role: "agent" | "user",
+): void {
+  const text = String(plan[`next_${role}_todo`]);
+  const key = `next_${role}_priority`;
+  const explicit = Object.hasOwn(plan, key);
+  const expected = planTodoCreationPriority({text, ...(explicit ? {priority: plan[key]} : {})});
+  if (!explicit && nextTodo.todo === text) return; // Historical provider plan and original receipt.
+  requireProviderTodoText(nextTodo.todo, String(expected.text), `${role} next_todo text`);
+  requireProviderMatch(readTodoPriority(receipt), expected.priority, `${role} successor priority`);
+  requireProviderMatch(readTodoPriority(nextTodo), expected.priority, `${role} next_todo priority`);
 }
 
 function requireCanonicalSuccessorRoute(
@@ -1180,11 +1197,7 @@ function validateSuccessorReceipts(
       todoId,
       "agent next_todo unblocks_todo_id",
     );
-    requireProviderTodoText(
-      nextTodo.todo,
-      plan.next_agent_todo,
-      "agent next_todo text",
-    );
+    requireProviderSuccessorPriority(receipt, nextTodo, plan, "agent");
     requireProviderMatch(
       requiredProviderTodoId(receipt.todo_id, "agent successor todo_id"),
       requiredProviderTodoId(nextTodo.todo_id, "agent next_todo todo_id"),
@@ -1208,11 +1221,7 @@ function validateSuccessorReceipts(
       plan.next_user_task_class,
       "user next_todo task_class",
     );
-    requireProviderTodoText(
-      nextTodo.todo,
-      plan.next_user_todo,
-      "user next_todo text",
-    );
+    requireProviderSuccessorPriority(receipt, nextTodo, plan, "user");
     requireProviderMatch(
       requiredProviderTodoId(receipt.todo_id, "user successor todo_id"),
       requiredProviderTodoId(nextTodo.todo_id, "user next_todo todo_id"),
@@ -2109,6 +2118,7 @@ function validateNoEffect(receipt: JsonObject | null, plan: MonitorProviderPlan)
     "next_agent_todo", "next_action_kind", "next_task_repository", "next_required_capabilities",
     "next_continuation_policy", "next_target_key", "next_claimed_by", "next_user_todo", "next_user_task_class",
   ].map(key => [key, plan[key]]));
+  Object.assign(intent, monitorSuccessorPriorities(plan));
   const hash = monitorPollRequestHash({goal_id: plan.goal_id, actor_agent_id: plan.agent_id,
     dry_run: !plan.execute, observation, intent, lease_proof: plan.lease_proof});
   if (receipt?.schema_version !== "loopx_coordination_monitor_poll_result_v0" ||

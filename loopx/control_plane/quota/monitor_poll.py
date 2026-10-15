@@ -266,6 +266,8 @@ def _observation_packet(
     next_user_todo: str | None,
     next_user_task_class: str | None,
     next_claimed_by: str | None,
+    next_agent_priority: str | None = None,
+    next_user_priority: str | None = None,
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
 ) -> dict[str, Any]:
@@ -293,6 +295,8 @@ def _observation_packet(
         "next_user_todo": next_user_todo,
         "next_user_task_class": next_user_task_class,
         "next_claimed_by": next_claimed_by,
+        **({"next_agent_priority": next_agent_priority} if next_agent_priority is not None else {}),
+        **({"next_user_priority": next_user_priority} if next_user_priority is not None else {}),
     }
 
 
@@ -730,6 +734,8 @@ def _provider_writeback(
         next_user_todo=plan.get("next_user_todo"),
         next_user_task_class=plan.get("next_user_task_class"),
         next_claimed_by=plan.get("next_claimed_by"),
+        next_agent_priority=plan.get("next_agent_priority"),
+        next_user_priority=plan.get("next_user_priority"),
         agent_id=plan.get("agent_id"),
         task_lease_idempotency_key=(plan.get("lease_proof") or {}).get("idempotency_key"),
         task_lease_expected_version=(plan.get("lease_proof") or {}).get("expected_version"),
@@ -769,6 +775,8 @@ def record_quota_monitor_poll_for_decision(
     next_user_todo: str | None = None,
     next_user_task_class: str | None = None,
     next_claimed_by: str | None = None,
+    next_agent_priority: str | None = None,
+    next_user_priority: str | None = None,
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
     use_current_task_lease: bool = False,
@@ -859,6 +867,8 @@ def record_quota_monitor_poll_for_decision(
         next_user_todo=next_user_todo,
         next_user_task_class=next_user_task_class,
         next_claimed_by=next_claimed_by,
+        next_agent_priority=next_agent_priority,
+        next_user_priority=next_user_priority,
         task_lease_idempotency_key=task_lease_idempotency_key,
         task_lease_expected_version=task_lease_expected_version,
     )
