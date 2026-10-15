@@ -50,6 +50,13 @@ previous runtime. Core's installation-only doctor qualifies non-editable wheel
 fingerprints: a local reuse fence, not publisher or source attestation. Older
 CLIs without that readback can use the automatic App-owned fallback.
 
+Wheel qualification has a separate ten-second subprocess deadline because it
+starts Core, checks the TypeScript runtime and hashes package contents. The
+one-second environment/version probes remain unchanged. A slow valid wheel can
+therefore qualify without asking the user to repair it; invalid or timed-out
+qualification still fails closed, and timed-out process groups are terminated
+and reaped. This does not speed up doctor or certify every cold-start workload.
+
 A launch-time `LOOPX_BIN` remains the developer's explicit pin. Development mode
 also accepts a source runtime without promoting an installation. A previously
 saved path is a discovery candidate, not a permanent version pin. Corrupt
