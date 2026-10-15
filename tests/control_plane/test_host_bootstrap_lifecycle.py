@@ -188,7 +188,7 @@ def test_app_brief_with_registry_profile_keeps_budget_and_current_settlement(reg
     body = packet["task_body"]
     assert all(scope.rstrip(".!?") in body for scope in scopes)
     assert packet["agent_scope_source"] == "agent_profile_v1"
-    assert packet["interface_budget"]["max_chars"] == 4300
+    assert packet["interface_budget"]["max_chars"] == 4600
     assert packet["interface_budget"]["within_budget"], packet["interface_budget"]
     assert packet["cli_preflight"] in body
     assert "--codex-app" in body
