@@ -171,7 +171,7 @@ def test_pending_source_outbox_survives_producer_retirement(
         assert transactions[-1]["receipts"][0]["write_class"] == "todo_add"
         assert transactions[-1]["receipts"][0]["seq"] == 2
         assert {todo["text"] for todo in recovered["head"]["todos"]} == {
-            "Already delivered source work", "Pending source work"}
+            "[P1] Already delivered source work", "[P1] Pending source work"}
         assert json.loads((directory / "drain-cursor.json").read_text())["last_seq"] == 2
         assert sorted(f.name for f in directory.iterdir()) == ["drain-cursor.json"]
         assert w.drain()["outcome"] == "nothing_pending"

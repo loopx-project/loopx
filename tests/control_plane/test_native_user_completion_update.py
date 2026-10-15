@@ -53,7 +53,7 @@ def test_public_user_update_done_uses_canonical_transaction(tmp_path: Path, prov
     assert result["source_authority"] == f"{provider}_v0"
     assert result["legacy_fallback_used"] is False
     todo = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"][0]
-    assert (todo["status"], todo["text"], todo["note"]) == ("done", "Observed outcome", "Reviewed")
+    assert (todo["status"], todo["text"], todo["note"]) == ("done", "[P1] Observed outcome", "Reviewed")
     assert state.is_file()
 
 

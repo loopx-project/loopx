@@ -87,7 +87,7 @@ def test_promoted_archive_scope_and_later_write_recovery(tmp_path, monkeypatch, 
     recovered = ws.cli("coordination-shadow", "recover-promotion", "--reviewed-plan", str(reviewed), "--execute")
     assert recovered["promotion"]["status"] == "replayed"
     current = ws.cli("todo", "list", "--todo-id", later["todo_id"])
-    assert current["todo"]["text"] == "Later canonical work"
+    assert current["todo"]["text"] == "[P1] Later canonical work"
     assert current["authority_read"]["legacy_fallback_used"] is False
     assert not ws.state.exists()
 

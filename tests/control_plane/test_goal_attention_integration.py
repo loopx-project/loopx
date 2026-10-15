@@ -104,7 +104,7 @@ def test_status_automatically_rebuilds_stale_run_routing(tmp_path, monkeypatch, 
         else:
             assert item["source"] == "active_state"
             assert item["status"] == "active_state_agent_todo"
-            assert item["recommended_action"] == "Verify the current deliverable"
+            assert item["recommended_action"] == "[P1] Verify the current deliverable"
             assert item.get("stale_latest_run_warning") is None
         historical = status["run_history"]["goals"][0]["latest_status_run"]
         assert historical["generated_at"] == record["generated_at"]

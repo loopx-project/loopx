@@ -613,4 +613,18 @@ for (const key of ["readiness.noneTitle", "readiness.missingExecutable", "readin
   assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);
 }
 
+// Load boundaries: settings are a separate chunk that arrives on demand and
+// the secondary routes are not part of the workspace's first load. Each lazy
+// site keeps a visible loading state. Team results stay eager: their list
+// must load exactly once when a configured team appears, and a lazy mount
+// shifted that timing (see the loopx-mode scenario).
+const router = source("../../router.tsx");
+assert.match(page, /const WorkspaceSettingsPage = lazy\(\(\) => import\("\.\/workspace-settings-page"\)/, "Settings load on demand");
+assert.doesNotMatch(page, /^import \{ WorkspaceSettingsPage \}/m, "No eager import undoes the boundary");
+assert.match(page, /^import \{ GoalTeamResults \} from "\.\/goal-team-results";/m, "Team results load eagerly so their single list request keeps its timing");
+for (const route of ["./views/frontstage-developer-page", "./views/benchmark-study-page", "./features/personal-workspace/answer-report-page"]) {
+  assert.match(router, new RegExp(`lazy\\(\\(\\) => import\\("${route.replace(/[./]/g, (ch) => `\\${ch}`)}"\\)`), `${route} loads on demand`);
+}
+assert.equal((page.match(/<Suspense fallback=\{<p className="personal-lazy-loading" role="status">/g) ?? []).length, 1, "The lazy settings site shows a loading status");
+
 console.log("personal workspace drawer contract smoke passed");

@@ -107,7 +107,7 @@ def test_runtime_shadow_todo_writer_captures_full_records_and_reuses_one_store(
     )
     head = view["head"]
     assert head["schema_version"] == "loopx_coordination_runtime_shadow_projection_v0"
-    assert head["todos"][0]["text"] == "Retain complete canonical Todo fields."
+    assert head["todos"][0]["text"] == "[P1] Retain complete canonical Todo fields."
     assert head["todos"][0]["note"] == "transaction-bound"
     assert head["todo_read_model"]["todo_count"] == 1
     assert view["cursor"] == "3"
