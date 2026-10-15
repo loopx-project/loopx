@@ -424,6 +424,9 @@ def rollback_extension(
             f"extension `{extension_id}` rollback doctor is not ready: {doctor['status']}"
         )
     previous_revision = str(entry.get("active_revision") or "")
+    # Dry-run previews the enablement read before the probe; the execute path
+    # replaces it with the value committed under the lock below.
+    enabled = bool(entry.get("enabled"))
     if execute:
         with exclusive_file_lock(path):
             current_state = _read_state(path)
@@ -443,7 +446,10 @@ def rollback_extension(
             current_entry["rollback_revision"] = previous_revision
             _record_doctor(current_entry, target_revision, doctor)
             # Rollback switches the active revision only; it does not undo an
-            # operator's disable decision.
+            # operator's enable/disable decision, including one that completed
+            # while the probe ran. The result must report what was committed
+            # here, not the pre-probe snapshot.
+            enabled = bool(current_entry.get("enabled"))
             _write_state(path, current_state)
     return {
         "ok": True,
@@ -455,7 +461,7 @@ def rollback_extension(
         "version": target.get("version"),
         "revision": target_revision,
         "previous_revision": previous_revision,
-        "enabled": bool(entry.get("enabled")),
+        "enabled": enabled,
         "doctor": doctor,
     }
 

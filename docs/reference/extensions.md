@@ -304,7 +304,9 @@ For a separately distributed provider, pass `--manifest <extension.toml>`.
 revision. `rollback` probes the previous revision before switching back. A
 failed probe leaves the current revision untouched. Neither operation changes
 the enablement decision: a disabled extension stays disabled across an upgrade
-or rollback until an explicit `enable`. Activation state contains
+or rollback until an explicit `enable`. The operation result reports the
+enablement state it committed, so an `enable` or `disable` that completes while
+the probe runs shows in the result as well as in `list`. Activation state contains
 validated manifest snapshots and revision ids in the private LoopX runtime
 root; it does not contain provider output or credentials.
 
