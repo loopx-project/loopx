@@ -973,6 +973,14 @@ pending 包与原生历史，不在每个工作 wake 重算大型代码/incumben
 捕获 `0444` 参与方此前失败，修复后通过；Git object store 是这类成员的常见来源。
 仅在 root 容器中验证不足以覆盖此 Host 边界。源权限和字节保持不变。
 
+显式暖 worker 的 `--restore-fresh-after-replan` 处理在替换原生上下文前复用同一
+当前语义复盘 owner，将原 checkpoint、前驱会话及本目标已完成决策绑定，并在新
+会话首次输入交付该决策，保持当前研究、代码和评测机会的 owner。普通替换仍不能
+继承来源。provider 在派发前记录原输出位置和源依据；未确认身份不能允许第二次
+启动。后续捕获必须观察新会话已完成的原生工作，并封存刷新链路。丢弃旧原生前缀
+是明确的信息损失，不是完整保留历史的接续。合成 receiver/捕获资格与真实模型
+证据使用、研究收益分开验收；此处理不授权新实验 cell 或热更新。
+
 inert verification unit 不授予执行权。目标侧使用新的实验/Host 身份，通过既有
 Goal/session/state admission 进入。历史租约、quota、timer、pending effect 和
 submission token 不能变成目标侧权限；未知效果先按原身份 reconcile，再决定

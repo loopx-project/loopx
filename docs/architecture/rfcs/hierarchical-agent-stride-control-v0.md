@@ -1250,6 +1250,19 @@ a deterministic local provider; absent/multiple outcomes and foreign destination
 attempts reject. The controller participant recovery above does not yet qualify
 automatic joint session/research/evaluator/Host activation recovery.
 
+The explicit warm-worker `--restore-fresh-after-replan` treatment uses the same
+current semantic-review owner before replacing native context. It binds the
+original checkpoint and predecessor conversation to the completed destination
+decision, delivers that decision in the new conversation's first input, and
+preserves the current research/code/opportunity owners. Ordinary replacement
+still cannot inherit provenance. The provider records the original output
+location and source basis before dispatch; an unobserved identity cannot permit
+a second launch. Later capture must observe completed native work in that new
+conversation and seal its refresh lineage. Dropping the old native prefix is
+declared information loss, never exact retained-history continuation. Synthetic
+receiver/capture qualification and actual model evidence use or research benefit
+remain separate; the treatment authorizes no new study cells or hot updates.
+
 An inert verification unit grants no execution authority. The destination uses
 fresh experiment/Host identities and the existing Goal/session/state admission
 paths. Historical leases, quota, timers, pending effects and submission tokens

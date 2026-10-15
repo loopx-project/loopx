@@ -895,6 +895,36 @@ returns. Preparation and context-reading cost belong in the comparison. Omit all
 restore flags for the unchanged cold entry; never reuse an ambiguous trial
 folder as a new attempt.
 
+An independently authorized context ablation can add
+`--restore-fresh-after-replan`. After the initial accepted, settled destination
+replan, the next work wake starts one new native conversation; later wakes resume
+that conversation. It retains the original
+checkpoint digest, source conversation and completed current decision in the
+existing session binding; the first input includes that decision as evidence.
+Research files, current Todo/Explore state, code, incumbent, cumulative deadline,
+consumed submissions and cooldown retain their owners. This deliberately drops
+earlier native messages and is a separate treatment from ordinary retained-history
+continuation. Omission preserves the default. Disable it on a new attempt;
+do not change a frozen trial. It grants neither new work nor extra evaluation.
+Unknown launches recover only from the original captured native output; missing
+or ambiguous identities stop that route instead of creating another conversation.
+The joined qualification adds a synthetic fresh-context receiver, with original
+output recovery, actual two-candidate work, settlement and a later explicit
+partial capture. It does not certify research benefit or a new automatic replan.
+This is a benchmark operator transport; the generic packaged restore UI remains
+an open acceptance boundary.
+
+独立获授权的上下文消融可增加 `--restore-fresh-after-replan`：当前目标的 replan
+首次受理并结算后，下一工作唤醒才新建一次原生会话，后续唤醒恢复该会话。
+既有会话绑定保留原 checkpoint
+摘要、源会话及本次已完成决策，首次输入把决策作为证据交付；研究文件、当前
+Todo/Explore、代码、incumbent、累计时限、已用评测和冷却仍由原 owner 管理。
+它明确丢弃此前的原生消息，是独立实验因素；省略即保持默认，关闭须使用新 attempt，
+不热改冻结运行，也不增加执行或评测权限。未知启动只能读取原始原生输出来恢复，
+缺失或歧义身份会阻塞该路径，不能另建会话。联合资格测试覆盖合成接收端的原输出
+恢复、实际双候选工作、结算及后续显式 partial 捕获；这不证明研究收益或自动出现
+新 replan。该入口属于 benchmark 操作者传输，通用打包 restore UI 仍须另验收。
+
 Research files outside the task workspace need explicit capture **and** explicit
 receiver selection. Add each required directory or file to the source checkpoint
 request's existing `components` array before capture, for example
