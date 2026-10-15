@@ -113,7 +113,8 @@ class ChatExternalConversations:
             selected = self.bindings.resolve(binding_id=binding_id, **source)
             expected = {"binding_id": binding_id, "source": source, "message": message, "command": command,
                         "attachments": normalize_chat_image_attachments(attachments) or None, "origin": origin}
-            if path.exists():
+            recovering_request = path.exists()
+            if recovering_request:
                 row = _read_json(path)
                 # Existing Lark journals predate persisted transport origin.
                 if any((row.get(key, "lark") if key == "origin" else row.get(key)) != value
@@ -127,7 +128,7 @@ class ChatExternalConversations:
                        "created_at": datetime.now(timezone.utc).isoformat()}
                 _atomic_write_json(path, row)
             try:
-                return self._admit_prepared(path, row, selected)
+                return self._admit_prepared(path, row, selected, recovering_request=recovering_request)
             except ValueError:
                 # Invalid commands and definitive grant denials are terminal
                 # admission outcomes; recovery must not retry them forever.
@@ -135,7 +136,8 @@ class ChatExternalConversations:
                 _atomic_write_json(path, row)
                 raise
 
-    def _admit_prepared(self, path: Path, row: dict[str, Any], selected: dict[str, Any]) -> dict[str, Any]:
+    def _admit_prepared(self, path: Path, row: dict[str, Any], selected: dict[str, Any],
+                        *, recovering_request: bool = False) -> dict[str, Any]:
         controller = self.controller
         self.bindings.ensure_delivery_scope(selected)
         if not row.get("routing_recorded"):
@@ -187,9 +189,10 @@ class ChatExternalConversations:
         observations = {}
         if (row["command"] == "stop" and current and not current.get("active_turn_id")
                 and not row.get("target_recorded") and not target):
-            # Historical inventory must not gate the existing active-Turn stop.
-            from .codex_background_control import completed_background_turns
-            observations["background_turn_ids"] = completed_background_turns(controller, current["session_id"])
+            # Freeze canonical candidates before any fallible native inventory
+            # or transport resume. Historical IO must not gate active stopping.
+            from .codex_background_control import completed_turn_ids
+            observations["background_turn_ids"] = completed_turn_ids(controller, current["session_id"])
         if row["command"] in {"status", "help"}:
             active_id = current.get("active_turn_id") if current else None
             observations = {"context": selected["context"],
@@ -204,6 +207,7 @@ class ChatExternalConversations:
         plan = effect_runtime_result("collaboration.conversation.request", {
             "request": {key: value for key, value in row.items() if key != "attachments"},
             "attachment_count": len(row.get("attachments") or []),
+            "recovering_request": recovering_request,
             "current_session": current, "binding": selected["binding"],
             "agent_target": target, **observations})
         operation = plan["operation"]
@@ -260,8 +264,17 @@ class ChatExternalConversations:
                 row["background_turn_ids"] = plan.get("background_turn_ids", [])
             _atomic_write_json(path, row)
             if operation == "stop" and row["background_turn_ids"]:
-                from .codex_background_control import interrupt_completed_background_turns
-                interrupt_completed_background_turns(controller, row["session_id"], row["background_turn_ids"])
+                from .codex_background_control import completed_background_turns, interrupt_completed_background_turns
+                row["background_turn_ids"] = completed_background_turns(
+                    controller, row["session_id"], row["background_turn_ids"])
+                _atomic_write_json(path, row)
+                # Reuse Core's response projection after narrowing. No live
+                # terminals is idle; failed inventory never reaches this point.
+                plan = effect_runtime_result("collaboration.conversation.request", {
+                    "request": {key: value for key, value in row.items() if key != "attachments"},
+                    "current_session": current, "binding": selected["binding"], "agent_target": target})
+                if row["background_turn_ids"]:
+                    interrupt_completed_background_turns(controller, row["session_id"], row["background_turn_ids"])
             if operation == "stop" and row["session_id"] and row["turn_id"]:
                 controller.interrupt_turn(session_id=row["session_id"], turn_id=row["turn_id"])
             elif operation == "new" and row["session_id"]:

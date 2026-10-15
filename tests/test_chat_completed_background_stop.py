@@ -160,7 +160,9 @@ def test_failed_background_stop_preserves_frozen_targets_and_never_confirms_deli
         if failure.endswith("/terminate"):
             assert row["target_recorded"] and row["background_turn_ids"] == [first["turn_id"]]
         else:
-            assert not row.get("target_recorded")  # unavailable observation is not an empty inventory
+            assert row["target_recorded"] and row["session_id"] == first["session_id"]
+            assert first["turn_id"] in row["background_turn_ids"]
+            # Unknown inventory preserves canonical candidates, never idle.
         assert row["status"] != "command_completed" and wire.children["owned"].poll() is None
         assert not any("停止" in text for _, _, text in provider.topic_writes)
         wire.failure = None
@@ -217,3 +219,131 @@ def test_core_replay_keeps_original_background_targets_instead_of_new_observatio
         "background_turn_ids": ["new-background"]})
     assert result == {"operation": "stop", "session_id": "original", "turn_id": None,
                       "background_turn_ids": ["old"], "response_code": "stop_requested"}
+
+
+@pytest.mark.parametrize("failure", ["thread/items/list", "thread/backgroundTerminals/list"])
+@pytest.mark.parametrize("later", ["active", "completed", "new_session", "resume"])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_first_inventory_failure_cannot_expand_retried_stop(ordinary, monkeypatch, failure, later, legacy):  # noqa: F811
+    store, runtime, provider, transport, root, first, wire = _completed_with_later_answer(ordinary, monkeypatch)
+    sid, tid = first["session_id"], first["turn_id"]
+    completed_before = {m["turn_id"]: store.load_turn(sid, m["turn_id"])
+                        for m in store.messages(sid) if m.get("turn_id")}
+    native = completed_before[tid]["upstream_turn_id"]
+    stop = provider.topic("stop-before-inventory-fault", "/stop", root=root["message_id"])
+    original_start = runtime._start_adapter
+    resumed = []
+    interrupted_native = set()
+
+    def install_history(session):
+        original = session._write
+
+        def write(packet):
+            method, params = packet["method"], packet["params"]
+            if method == "thread/turns/list":
+                # Include ALL original and later native Turns, not a fixture
+                # that could hide a wrongly selected newer active target.
+                turns = {store.load_turn(sid, m["turn_id"])["upstream_turn_id"]:
+                         store.load_turn(sid, m["turn_id"])
+                         for m in store.messages(sid) if m.get("turn_id")}
+                result = {"data": [{"id": key, "status": "interrupted" if key in interrupted_native
+                                   else "inProgress" if value["status"] in {"running", "interrupting"}
+                                   else value["status"]} for key, value in turns.items()]}
+            elif method == "thread/items/list" and params["turnId"] == newer_native:
+                result = {"data": [{"turnId": newer_native, "item": {
+                    "type": "commandExecution", "id": "future-command", "status": "completed"}}]}
+            else:
+                if method == "turn/interrupt":
+                    interrupted_native.add(params["turnId"])
+                return original(packet)
+            session.messages.put({"id": packet["id"], "result": result})
+
+        monkeypatch.setattr(session, "_write", write)
+
+    def start(**kwargs):
+        adapter = original_start(**kwargs)
+        if kwargs.get("resume_thread_id") == store.load_session(sid)["upstream_thread_id"]:
+            resumed.append(BackgroundWire(adapter.session, native, monkeypatch, children=wire.children))
+            install_history(adapter.session)
+        return adapter
+
+    try:
+        wire.failure = failure
+        with pytest.raises(CodexChatAgentError):
+            transport.admit("notes-app", stop)
+        prepared = next(r for r in transport.core.pending() if r["command"] == "stop")
+        assert prepared["status"] == "prepared" and wire.children["owned"].poll() is None
+        if legacy:
+            from loopx.chat_store import _atomic_write_json
+            # Persist the exact old schema's pre-inventory failure shape. An
+            # upgrade has no original targets to recover from this journal.
+            prepared.update(session_id=None, turn_id=None)
+            prepared.pop("target_recorded", None)
+            prepared.pop("background_turn_ids", None)
+            _atomic_write_json(transport.core.root / f"{prepared['request_ref']}.json", prepared)
+        if later == "new_session":
+            transport.admit("notes-app", provider.topic("new-after-stop-fault", "/new", root=root["message_id"]))
+        message = provider.topic("later-work-after-stop-fault",
+                                 "wait for interrupt" if later in {"active", "new_session"} else "Another answer",
+                                 root=root["message_id"])
+        transport.admit("notes-app", message)
+        newer = next(r for r in transport.core.pending() if r["message"] == message["content"])
+        newer_sid, newer_tid = newer["session_id"], newer["turn_id"]
+        if later in {"completed", "resume"}:
+            # Keep the failed control request pending until the explicit retry
+            # below; normal delivery reconciliation also retries such requests.
+            assert runtime.wait_for_turn(session_id=newer_sid, turn_id=newer_tid, timeout_sec=10)["status"] == "completed"
+        deadline = time.monotonic() + 10
+        while not ((newer_turn := store.load_turn(newer_sid, newer_tid)).get("upstream_turn_id")
+                   and newer_turn["status"] in {"running", "completed"}):
+            assert time.monotonic() < deadline
+            time.sleep(.01)
+        newer_native = newer_turn["upstream_turn_id"]
+        wire.children["future"] = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        if sid in runtime.adapters:
+            install_history(runtime.adapters[sid].session)
+        if later == "resume":
+            runtime.adapters.pop(sid).close_session()
+        monkeypatch.setattr(runtime, "_start_adapter", start)
+        wire.failure = None
+        if legacy:
+            with pytest.raises(EffectRuntimeRejected, match="original stop scope was not recorded"):
+                transport.admit("notes-app", stop)
+            row = next(r for r in transport.core.pending() if r["request_ref"] == prepared["request_ref"])
+            assert row["status"] == "prepared" and not row.get("target_recorded")
+            assert row["session_id"] is None and row["turn_id"] is None
+            assert all(child.poll() is None for child in wire.children.values())
+            assert store.load_turn(newer_sid, newer_tid) == newer_turn
+            assert not any("停止" in text for _, _, text in provider.topic_writes)
+            return
+        if later == "new_session":
+            # /new deliberately closed the original Session. Its pending stop
+            # remains unconfirmed; cancellation cannot reopen it or move to the
+            # newer Session just to turn this failure into a successful reply.
+            with pytest.raises(KeyError, match="chat session was not found"):
+                transport.admit("notes-app", stop)
+            row = next(r for r in transport.core.pending() if r["request_ref"] == prepared["request_ref"])
+            assert row["status"] == "prepared" and row["session_id"] == sid and row["turn_id"] is None
+            assert row["background_turn_ids"] == prepared["background_turn_ids"]
+            assert wire.children["owned"].poll() is None
+            assert wire.children["future"].poll() is None and wire.children["unowned"].poll() is None
+            assert store.load_turn(newer_sid, newer_tid) == newer_turn
+            assert not any("停止" in text for _, _, text in provider.topic_writes)
+            return
+        assert transport.admit("notes-app", stop)["status"] == "command_recorded"
+        row = next(r for r in transport.core.pending() if r["request_ref"] == prepared["request_ref"])
+        assert row["session_id"] == sid and row["turn_id"] is None
+        assert row["background_turn_ids"] == [tid]
+        assert wire.children["owned"].poll() is not None
+        assert wire.children["future"].poll() is None and wire.children["unowned"].poll() is None
+        assert store.load_turn(newer_sid, newer_tid) == newer_turn
+        assert all(store.load_turn(sid, key) == value for key, value in completed_before.items())
+        assert prepared["target_recorded"] and prepared["session_id"] == sid
+        assert set(prepared["background_turn_ids"]) == set(completed_before)
+        if later == "resume":
+            assert len(resumed) == 1
+        transport.reconcile()
+        assert any(topic == root["message_id"] and "停止" in text for _, topic, text in provider.topic_writes)
+    finally:
+        wire.close()
+        runtime.close()
