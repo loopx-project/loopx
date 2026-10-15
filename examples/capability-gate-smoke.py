@@ -13,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from loopx.quota import build_quota_should_run, build_quota_slot_preview  # noqa: E402
+from loopx.control_plane.testing.quota_fixtures import quota_todo_summary  # noqa: E402
 from loopx.control_plane.scheduler.execution_context import (  # noqa: E402
     GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
 )
@@ -57,18 +58,8 @@ def status_payload(
     available_capabilities: list[str] | None = None,
     registered_agent: str | None = None,
 ) -> dict[str, Any]:
-    summary = {
-        "schema_version": "todo_summary_v0",
-        "source_section": "Agent Todo",
-        "total_count": len(items),
-        "open_count": len(items),
-        "done_count": 0,
-        "first_open_items": items[:3],
-        "first_executable_items": items[:3],
-        "backlog_items": items[:8],
-        "executable_backlog_items": items[:8],
-        "monitor_open_items": [],
-    }
+    summary = quota_todo_summary(items)
+
     quota = {
         "compute": 1.0,
         "window_hours": 24,
@@ -376,15 +367,29 @@ def main() -> int:
         "provide or authorize the missing owner-held capability: credentials "
         "for todo_capability_9"
     ], owner_with_fallback
+    unselected = owner_with_fallback["interaction_contract"]["cli_channel"]
+    assert unselected["selection_required"] is True, owner_with_fallback
+    assert unselected["next_cli_actions"] == [], owner_with_fallback
+    assert "{todo_id}" in unselected["selection_command"]["command_args_template"], unselected
+    selected_fallback = build_quota_should_run(
+        status_payload([credentials_todo, p1_docs], registered_agent=AGENT_ID),
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        available_capabilities=["shell", "filesystem_write"],
+        scheduler_execution_context=SCHEDULER_CONTEXT,
+        requested_action_todo_id=p1_docs["todo_id"],
+    )
+    assert selected_fallback["ok"] is True, selected_fallback
+    assert selected_fallback["selected_todo"]["todo_id"] == p1_docs["todo_id"], selected_fallback
+    assert selected_fallback["action_selection_qualification"]["state"] == "qualified", selected_fallback
+    assert selected_fallback["interaction_contract"]["cli_channel"].get("selection_required") is not True, selected_fallback
     assert any(
         "--task-class user_gate" in action
         and "--target-capability credentials" in action
         and f"--blocks-agent {AGENT_ID}" in action
         and "--unblocks-todo-id todo_capability_9" in action
-        for action in owner_with_fallback["interaction_contract"]["cli_channel"][
-            "next_cli_actions"
-        ]
-    ), owner_with_fallback
+        for action in selected_fallback["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    ), selected_fallback
 
     mixed_capability_todo = todo(
         8,
