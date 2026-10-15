@@ -265,6 +265,12 @@ backups of authority providers, or public projections. Normal
 CLI invocation reads only a small local hint; a detached Node process owns
 measurement, locks and network I/O. A first-use/settings operation may wait for
 local Node execution, never for a collector connection.
+Quota-cycle start/spend observations may wait up to two seconds for this local
+statistics lock in the detached worker; ordinary observers retain 250 ms.
+Contention beyond that bound remains unobserved. This does not delay business
+commands, retry network delivery or change quota settlement. Consent and its
+generation are rechecked after acquiring the lock, so queued observations cannot
+restore withdrawn collection.
 Offline `migrate-local-state` commands do not schedule these observations,
 because their previews and rollback receipts bind the machine-state bytes.
 

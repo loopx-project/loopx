@@ -148,6 +148,18 @@ can require a rebuild. Text inputs normalize CRLF so a CI-built bundle remains
 valid on Windows; delivered bytes are always hashed exactly. This is integrity
 and freshness metadata, not a signature or a replacement for release attestations.
 
+### Load boundaries
+
+The workspace route is what every visit opens, so it loads eagerly. Settings
+and its editors, the contributor projection page, the benchmark study page and
+the answer report page are dynamic imports: each is its own chunk fetched the
+first time it is shown, behind a visible loading status. Keep new secondary
+surfaces behind the same kind of boundary rather than adding them to the entry
+chunk, and keep a surface eager when a scenario pins the timing of its first
+read (team results must list exactly once when a configured team appears). The bundle manifest records every chunk,
+and the one-upgrade asset retention already covers an old tab importing a
+deferred chunk after a delivery.
+
 ### Goal sidebar order
 
 Goal dragging and keyboard move controls save presentation order through
@@ -177,9 +189,11 @@ crash recovery or an already-installed App's adoption of a proposed PR.
 
 PR CI builds and verifies a clean bundle once, then uploads
 `chat-bundle-<checkout SHA>`. Consumers download that one artifact, and
-`chat-bundle-browser` exercises its actual pages in a browser in parallel. The
-`checks` aggregate requires that browser lane, so `merge-gate` cannot pass on
-an artifact that failed browser qualification. Both frontend-only and
+`chat-bundle-browser` exercises its actual pages in a browser across three
+parallel shards of the scenario catalog (`LOOPX_PERSONAL_WORKSPACE_SHARD`), with
+the companion team, craft, upgrade and ZCode smokes spread over the shards. The
+`checks` aggregate requires every shard, so `merge-gate` cannot pass on an
+artifact that failed browser qualification. Both frontend-only and
 mixed/backend PRs pass through this producer. On pull requests the checkout SHA is GitHub's tested merge commit, which
 may differ from the branch head. Generated-file Git cleanliness is no longer a
 qualification gate. Browser, integrity and workflow gates remain required.

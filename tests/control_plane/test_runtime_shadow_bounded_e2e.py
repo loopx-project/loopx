@@ -450,7 +450,8 @@ def test_public_handoff_todo_and_atomic_monitor_batch_capture_each_primary_mutat
     assert len(transactions) == 5  # Baseline, handoff, todo add, monitor add, atomic Monitor batch.
     batch_todos = {todo["todo_id"]: todo for todo in transactions[-1]["projection"]["todos"]}
     assert batch_todos[monitor["todo_id"]]["result_hash"] == "release-v1"
-    assert batch_todos[result["successor_todo_ids"][0]]["text"] == "Validate the released head"
+    successor = batch_todos[result["successor_todo_ids"][0]]
+    assert (successor["text"], successor["priority"]) == ("[P1] Validate the released head", "P1")
     receipts = [transaction["receipts"][0] for transaction in transactions[1:]]
     assert len({receipt["entry_id"] for receipt in receipts}) == 4
     assert [receipt["seq"] for receipt in receipts] == [1, 2, 3, 4]
@@ -499,6 +500,9 @@ def test_native_lease_writer_cannot_reuse_a_sequence_when_its_cursor_is_missing(
     assert json.loads(pending[0].read_text())["seq"] == 2
     assert not cursor.exists()  # The writer recovers a sequence, never a cursor.
     cli(registry, runtime, "todo", "add", "--goal-id", "goal-a", "--role", "agent", "--text", "Trigger bounded drain")
+    # Inline capture may leave receipt-proven cleanup for explicit recovery.
+    drained = cli(registry, runtime, "authority-shadow", "drain", "--goal-id", "goal-a")
+    assert drained["pending_after"] == drained["prepared_only_after"] == 0, drained
     transactions = history(tmp_path, runtime)
     lease_receipts = [row["receipts"][0] for row in transactions[1:] if row["receipts"][0]["partition"] == "leases"]
     assert [receipt["seq"] for receipt in lease_receipts] == [1, 2]

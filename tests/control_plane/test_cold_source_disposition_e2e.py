@@ -238,7 +238,8 @@ def test_original_lease_disposition_requires_release_before_cold_import(
     fixture.cli("todo", "add", "--role", "agent", "--text", "Later lease-import write",
         "--operation-id", "later-lease-import", "--claimed-by", "agent-a")
     current = provider_todos(receiver, fixture)
-    assert {row["text"] for row in current["todos"]} == {"Original leased task", "Later lease-import write"}
+    assert {row["text"] for row in current["todos"]} == {"[P1] Original leased task", "[P1] Later lease-import write"}
+    assert {row["priority"] for row in current["todos"]} == {"P1"}
     fixture.state.unlink()
     replay = cold_cli(fixture, receiver_package, "recover-import", "--operation-id", "lease-import",
         "--plan-sha256", plan["plan_sha256"], "--execute")
@@ -305,7 +306,8 @@ def test_unproved_original_archival_then_cold_import_keeps_history_inert(
     assert applied["status"] == "applied" and applied["execution_authority_granted"] is False
     imported = provider_todos(receiver, fixture)
     assert imported["source_authority"] == f"{provider}_v0"
-    assert [(row["todo_id"], row["text"]) for row in imported["todos"]] == [(source_todo, "Later source requirement")]
+    assert [(row["todo_id"], row["text"], row["priority"]) for row in imported["todos"]] == [
+        (source_todo, "[P1] Later source requirement", "P1")]
     # The later current source, not the candidate or ambiguous queue, is the
     # import basis. Unproved entries remain archived and never become receipts.
     assert Path(rolled["candidate_archive_path"]).read_bytes() == candidate
@@ -313,7 +315,8 @@ def test_unproved_original_archival_then_cold_import_keeps_history_inert(
     fixture.cli("todo", "add", "--role", "agent", "--text", "Later canonical write",
         "--operation-id", "after-ambiguous-import", "--claimed-by", "agent-a")
     current = provider_todos(receiver, fixture)
-    assert {row["text"] for row in current["todos"]} == {"Later source requirement", "Later canonical write"}
+    assert {row["text"] for row in current["todos"]} == {"[P1] Later source requirement", "[P1] Later canonical write"}
+    assert {row["priority"] for row in current["todos"]} == {"P1"}
     fixture.state.unlink()
     recovered = cold_cli(fixture, receiver_package, "recover-import", "--operation-id", "ambiguous-import",
         "--plan-sha256", plan["plan_sha256"], "--execute")
@@ -415,7 +418,8 @@ def test_original_outbox_disposition_then_cold_import_preserves_receipts_and_lat
     current = provider_todos(receiver, fixture)
     assert current["source_authority"] == f"{provider}_v0"
     assert {row["text"] for row in current["todos"]} == (
-        {"Interrupted original", "Later canonical write"} if committed else {"Later canonical write"})
+        {"[P1] Interrupted original", "[P1] Later canonical write"} if committed else {"[P1] Later canonical write"})
+    assert {row["priority"] for row in current["todos"]} == {"P1"}
     assert len(current["todos"]) == (2 if committed else 1)
     assert later["todo_id"] in {row["todo_id"] for row in current["todos"]}
     fixture.state.unlink()

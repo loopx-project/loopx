@@ -1176,6 +1176,12 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-manager-conversation-bubble p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .personal-manager-conversation-bubble .personal-md { font-size: var(--text-body); line-height: var(--leading-prose); }
 .personal-manager-conversation-bubble small { display: inline-block; margin-top: 4px; color: var(--pw-blue); font-size: var(--text-caption); line-height: var(--leading-caption); }
+.personal-goal-suggestions { display: flex; gap: 8px; margin-bottom: 9px; flex-wrap: wrap; }
+.personal-goal-suggestions button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 5px 12px; border: 1px solid var(--pw-blue-soft); border-radius: 99px; background: var(--pw-blue-soft); color: var(--pw-blue-ink); font-size: var(--text-body); line-height: var(--leading-body); cursor: pointer; transition: all .14s ease; }
+.personal-goal-suggestions button:hover { border-color: var(--pw-blue); }
+.personal-goal-suggestions button:disabled { opacity: .45; cursor: default; }
+.personal-goal-suggestions button:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
+.personal-composer-tools > summary small { color: var(--pw-blue-ink); font-size: inherit; }
 .personal-quick-prompts { display: flex; gap: 8px; margin-bottom: 9px; flex-wrap: wrap; }
 .personal-quick-prompts button { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 5px 12px; border: 1px solid var(--pw-line-strong); border-radius: 99px; background: #fff; color: var(--pw-muted); font-size: var(--text-body); line-height: var(--leading-body); cursor: pointer; transition: all .14s ease; }
 .personal-quick-prompts button:hover { border-color: var(--pw-blue); color: var(--pw-blue-ink); }
@@ -2073,3 +2079,5 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 
 .personal-conversation-latest { display: block; margin: 0 auto 10px; padding: 7px 14px; border: 1px solid var(--pw-line); border-radius: 20px; background: var(--pw-bg); color: var(--pw-text); font: inherit; font-size: var(--text-caption); cursor: pointer; }
 .personal-composer-hint { padding-top: 7px; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); text-align: center; }
+
+.personal-lazy-loading { margin: 0; padding: 24px; color: var(--pw-muted); font-size: var(--text-body); line-height: var(--leading-body); }

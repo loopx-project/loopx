@@ -118,7 +118,7 @@ def main() -> int:
         )
         assert quota.get("status") != "quota_collection_failed", quota
         assert quota["should_run"] is True, quota
-        assert quota["recommended_action"] == "Solve the no-git quota fixture.", quota
+        assert quota["recommended_action"] == "[P1] Solve the no-git quota fixture.", quota
     return 0
 
 

@@ -14,7 +14,7 @@ import json
 import re
 from typing import Any
 
-from ...lexical_retrieval import score_bm25
+from ..context_providers.lexical_retrieval import score_bm25
 from ..context_providers.base import ContextProviderItem, ContextProviderRetrieval
 from ..reward_memory.application import build_active_reward_memory_record
 from ..reward_memory.candidate_review import (

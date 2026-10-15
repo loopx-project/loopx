@@ -286,11 +286,11 @@ def assert_nonblocking_review_continuation() -> None:
             "--evidence",
             "feature PR is validated and ready for review",
             "--next-user-todo",
-            "Review the validated experiment feature PR.",
+            "[P1] Review the validated experiment feature PR.",
             "--next-user-task-class",
             "user_action",
             "--next-agent-todo",
-            "Continue the next independent experiment feature.",
+            "[P1] Continue the next independent experiment feature.",
             "--next-claimed-by",
             "codex-main-control",
             "--next-action-kind",
@@ -301,7 +301,7 @@ def assert_nonblocking_review_continuation() -> None:
         review = next(
             item
             for item in fields["user_todos"]["items"]
-            if item["text"] == "Review the validated experiment feature PR."
+            if item["text"] == "[P1] Review the validated experiment feature PR."
         )
         assert review["task_class"] == "user_action", review
         assert review["bound_agent"] == "codex-main-control", review
@@ -311,7 +311,7 @@ def assert_nonblocking_review_continuation() -> None:
         continuation = next(
             item
             for item in fields["agent_todos"]["items"]
-            if item["text"] == "Continue the next independent experiment feature."
+            if item["text"] == "[P1] Continue the next independent experiment feature."
         )
         assert continuation["status"] == "open", continuation
         assert continuation["claimed_by"] == "codex-main-control", continuation

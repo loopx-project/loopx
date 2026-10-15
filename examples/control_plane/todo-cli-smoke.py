@@ -22,13 +22,13 @@ from loopx.quota import build_quota_should_run  # noqa: E402
 
 
 GOAL_ID = "todo-cli-goal"
-USER_TODO = "Review the owner decision checklist before approving delivery."
-SCOPED_USER_GATE = "Choose the side-agent publishing channel before posting externally."
-AGENT_TODO = "Summarize the read-only evidence after the user checklist is done."
+USER_TODO = "[P1] Review the owner decision checklist before approving delivery."
+SCOPED_USER_GATE = "[P1] Choose the side-agent publishing channel before posting externally."
+AGENT_TODO = "[P1] Summarize the read-only evidence after the user checklist is done."
 AGENT_TODO_NOTE = "Start from the public-safe evidence summary."
 UPDATED_AGENT_TODO_NOTE = "Preserve the validated summary as the handoff context."
-UPDATED_AGENT_TODO = "Publish the compact evidence summary after validation passes."
-MONITOR_TODO = "Monitor the release-note draft PR until the next scheduled check."
+UPDATED_AGENT_TODO = "[P1] Publish the compact evidence summary after validation passes."
+MONITOR_TODO = "[P1] Monitor the release-note draft PR until the next scheduled check."
 MONITOR_DUE_AT = "2026-01-02T00:00:00+00:00"
 MONITOR_NEXT_DUE_AT = "2026-01-03T00:00:00+00:00"
 MONITOR_EXPIRES_AT = "2026-01-04T00:00:00+00:00"
@@ -299,7 +299,7 @@ def main() -> int:
         assert "has no coordination.registered_agents" in legacy_claim["error"], legacy_claim
         assert "Register this peer identity first" in legacy_claim["error"], legacy_claim
         assert "--registered-agent codex-main-control" in legacy_claim["error"], legacy_claim
-        wrapped_agent_todo = "- [ ] Summarize the read-only evidence after the user\n  checklist is done."
+        wrapped_agent_todo = "- [ ] [P1] Summarize the read-only evidence after the user\n  checklist is done."
         state_file.write_text(
             state_file.read_text(encoding="utf-8").replace(f"- [ ] {AGENT_TODO}", wrapped_agent_todo),
             encoding="utf-8",
@@ -351,8 +351,8 @@ def main() -> int:
             }
         ], metadata_payload
         after_metadata = state_file.read_text(encoding="utf-8")
-        assert after_metadata.count("- [ ] Summarize the read-only evidence after the user") == 1, after_metadata
-        agent_block_start = after_metadata.index("- [ ] Summarize the read-only evidence after the user")
+        assert after_metadata.count("- [ ] [P1] Summarize the read-only evidence after the user") == 1, after_metadata
+        agent_block_start = after_metadata.index("- [ ] [P1] Summarize the read-only evidence after the user")
         agent_metadata_start = after_metadata.index("<!-- loopx:todo", agent_block_start)
         assert after_metadata.index("checklist is done.", agent_block_start) < agent_metadata_start, after_metadata
         assert "status=open task_class=advancement_task action_kind=run_eval" in after_metadata

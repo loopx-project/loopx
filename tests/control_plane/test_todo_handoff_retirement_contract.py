@@ -126,7 +126,7 @@ def test_canonical_handoff_readback_without_legacy_writers(
         "--update-expected-provider-revision", first["authority_read"]["provider_revision"])
     readback = cli("todo", "list", "--goal-id", "goal-a", "--todo-id", original)
     row = readback["todo"]
-    assert row["text"] == "Original complete requirement"
+    assert (row["text"], row["priority"]) == ("[P1] Original complete requirement", "P1")
     assert row["status"] == "open" and row["successor_todo_ids"] == [successor]
     # Exact canonical reads return the source record. Derived handoff context
     # belongs to status consumers and must never become a second stored source.

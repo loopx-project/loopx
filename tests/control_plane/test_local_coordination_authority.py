@@ -2398,7 +2398,7 @@ def test_real_canonical_provider_preserves_complete_complex_todo_semantics(
     created_item = next(
         item for item in after_create["todos"] if item["todo_id"] == created["todo_id"]
     )
-    assert created_item["text"] == "Create directly against promoted provider"
+    assert created_item["text"] == "[P1] Create directly against promoted provider"
     assert created_item["claimed_by"] == "agent-a"
     assert after_create["authority_read"]["todo_read_model"]["todo_count"] == 4
     assert claimed_item["note"] == "Correction context"

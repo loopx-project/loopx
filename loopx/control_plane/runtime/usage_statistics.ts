@@ -271,7 +271,9 @@ export async function observe(path: string, ctx: Context, generation: string, co
       catch { diagnosticRequest = Promise.resolve(0); }
     }
     return true;
-  }, 250); // Detached workers may briefly contend with startup; never block the host command.
+  // Fresh cycle markers cannot be recovered by replaying a settled command.
+  // Wait through brief observer contention only in this detached worker.
+  }, cycle ? 2000 : 250);
   if (!allowed) return { sent: false, reason: "blocked" };
   let sent = false;
   const outgoing: Array<readonly [string, Parameters<Post>[1] | null]> = [

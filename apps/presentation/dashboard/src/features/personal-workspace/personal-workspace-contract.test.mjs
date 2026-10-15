@@ -600,4 +600,62 @@ for (const key of ["home.firstGoal.title", "home.firstGoal.lead", "home.firstGoa
   assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);
 }
 
+// Since you looked (RFC goal-workspace-surface §5.7): a browser-local marker
+// per source and Goal, typed counts and ids only, no cost, no service write;
+// the line appears only for a material delta. Mark seen acknowledges what is
+// on screen; leaving acknowledges the look that was compared on that visit.
+// Decisions reuse the typed attention classification, the comparison waits
+// for an owner refresh still in flight, and denied storage only loses memory.
+const sinceYouLooked = source("./since-you-looked.ts");
+const seenMarkerType = sinceYouLooked.slice(sinceYouLooked.indexOf("export type SeenMarker = {"), sinceYouLooked.indexOf("};", sinceYouLooked.indexOf("export type SeenMarker = {")));
+assert.doesNotMatch(seenMarkerType, /cost|title|text|usd/i, "The marker carries no titles, text or cost");
+assert.match(sinceYouLooked, /export const seenMarkerIdLimit = 200;/, "Done and result ids are bounded");
+assert.match(page, /seenMarkerStorageKey\(seenStatusSource, selectedGoal\.goalId\)/, "Markers are scoped per status source and Goal");
+assert.match(page, /if \(delta\.material\) setSinceYouLooked\(/, "Only a material delta shows the line");
+assert.match(page, /advanceSeenMarker\(previous\.goalId, previous\.source, "compared"\);[\s\S]*?setSinceYouLooked\(\(shown\) => shown && shown\.goalId === previous\.goalId/, "Leaving the Goal records the compared look and acknowledges a shown line");
+assert.match(page, /advanceSeenMarker\(sinceYouLooked\.goalId, sinceYouLooked\.source, "latest"\)/, "Mark seen acknowledges the current look");
+assert.match(page, /if \(stored && stored\.observedAt > input\.observedAt\) return;/, "No write moves the marker back behind a newer acknowledgment");
+assert.match(page, /if \(look === "latest"\) comparedSeenInputsRef\.current\.set\(scope, input\);/, "Mark seen becomes the look the visit stands on, so leaving cannot undo it");
+assert.match(sinceYouLooked, /function coversWholeSet\(/, "Capped or partial id sets report count growth, never unretained ids as new");
+assert.match(sinceYouLooked, /newlyDone = coversWholeSet\(previous\.doneTodoIds, null\) \? doneById : 0;/, "With no done total a capped done history proves no completion");
+assert.match(page, /decisionIds: model\.userTodos\.filter\(\(item\) => item\.goalId === selectedGoal\.goalId && item\.blocking\)/, "Only items that wait on the owner are decisions; optional user actions keep the typed classification");
+assert.match(page, /if \(refreshState === "loading"\) return;[\s\S]*?seenComparedRef\.current = scope;/, "The comparison waits for an owner refresh still in flight instead of latching on the snapshot it replaces");
+const seenBlock = page.slice(page.indexOf("const seenStatusSource"), page.indexOf("function markSeen"));
+assert.doesNotMatch(seenBlock, /window\.localStorage/, "Storage is acquired through the guarded helper, never read as a bare property");
+assert.match(sinceYouLooked, /export function seenMarkerStorage\([\s\S]*?try \{[\s\S]*?scope\.localStorage/, "Acquiring storage sits inside the failure boundary");
+assert.doesNotMatch(sinceYouLooked + page.slice(page.indexOf("const seenStatusSource"), page.indexOf("function markSeen")), /fetch\(|requestJson|\/api\//, "No service write or read belongs to the marker");
+for (const key of ["since.lead", "since.newlyDone", "since.newDecisions", "since.newlyBlocked", "since.resultsReturned", "since.markSeen"]) {
+  assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);
+}
+
+// State-aware suggestions cite digest, Todo, execution and acceptance facts;
+// they never replace the shipped steward prompt row, and a stopped Goal or an
+// unknown execution state produces none.
+const goalSuggestions = source("./goal-suggestions.ts");
+assert.match(goalSuggestions, /if \(digest\.lifecycle\.activation === "stopped"\) return \[\];/, "A stopped Goal invites nothing");
+assert.match(goalSuggestions, /input\.execution\?\.kind === "idle"/, "Idle needs an observed idle executor, never unknown");
+assert.match(goalSuggestions, /const waiting = needsYou\?\.blocking \?\? null;/, "Decisions are the attention owner's blocking count; optional items and unknown counts are never decisions");
+assert.doesNotMatch(goalSuggestions, /needsYou\.listed/, "The listed attention count is never read as the decision count");
+assert.match(goalSuggestions, /digest\.work\.coverage === "complete" && digest\.work\.projectedOpen === 0 && digest\.work\.open === 0/, "All done needs complete work coverage with a known zero open count");
+assert.match(page, /deriveGoalSuggestions\(\{\s*digest: workspaceDigest,/, "The page derives suggestions from the shared digest");
+assert.match(page, /className="personal-goal-suggestions"/, "Derived suggestions render in their own row");
+assert.match(page, /<div className="personal-quick-prompts">\n\s*<button aria-label=\{t\("composer\.nextAction"\)\}/, "The steward prompt row stays as shipped");
+for (const key of ["suggestions.openDecisions", "suggestions.explainBlocked", "suggestions.explainBlockedPrompt", "suggestions.explainFailedCriterion", "suggestions.continueIdle", "suggestions.reviewResults"]) {
+  assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);
+}
+
+// Load boundaries: settings are a separate chunk that arrives on demand and
+// the secondary routes are not part of the workspace's first load. Each lazy
+// site keeps a visible loading state. Team results stay eager: their list
+// must load exactly once when a configured team appears, and a lazy mount
+// shifted that timing (see the loopx-mode scenario).
+const router = source("../../router.tsx");
+assert.match(page, /const WorkspaceSettingsPage = lazy\(\(\) => import\("\.\/workspace-settings-page"\)/, "Settings load on demand");
+assert.doesNotMatch(page, /^import \{ WorkspaceSettingsPage \}/m, "No eager import undoes the boundary");
+assert.match(page, /^import \{ GoalTeamResults \} from "\.\/goal-team-results";/m, "Team results load eagerly so their single list request keeps its timing");
+for (const route of ["./views/frontstage-developer-page", "./views/benchmark-study-page", "./features/personal-workspace/answer-report-page"]) {
+  assert.match(router, new RegExp(`lazy\\(\\(\\) => import\\("${route.replace(/[./]/g, (ch) => `\\${ch}`)}"\\)`), `${route} loads on demand`);
+}
+assert.equal((page.match(/<Suspense fallback=\{<p className="personal-lazy-loading" role="status">/g) ?? []).length, 1, "The lazy settings site shows a loading status");
+
 console.log("personal workspace drawer contract smoke passed");

@@ -93,14 +93,16 @@ def test_todo_argument_intent_and_rejections(caller: Caller) -> None:
     preview = w.call('todo', 'add', '--role', 'agent', '--text', 'Retain operator intent', '--dry-run')
     assert preview['ok'] is True and w.primary() == before
     todo = w.add('Retain operator intent', '--claimed-by', 'agent-a', '--note', 'Initial context')
-    assert w.read(todo)['claimed_by'] == 'agent-a'
+    created = w.read(todo)
+    assert created['claimed_by'] == 'agent-a'
+    assert (created['text'], created['priority']) == ('[P1] Retain operator intent', 'P1')
     for args, expected_note in [(('--note', 'Updated context'), 'Updated context'),
                                 (('--text', 'Corrected operator intent'), 'Updated context')]:
         result = w.call('todo', 'update', '--todo-id', todo, '--agent-id', 'agent-a', *args)
         assert result['ok'] is True, result
         current = w.read(todo)
         assert current['note'] == expected_note and current['claimed_by'] == 'agent-a'
-    assert w.read(todo)['text'] == 'Corrected operator intent'
+    assert (current['text'], current['priority']) == ('[P1] Corrected operator intent', 'P1')
     # CLI mutable-field validation treats an empty note as absent, not a clear.
     before = w.primary()
     empty = w.call('todo', 'update', '--todo-id', todo, '--agent-id', 'agent-a', '--note', '')
@@ -308,7 +310,8 @@ def test_monitor_successor_retains_caller_routing(caller: Caller) -> None:
         '--next-claimed-by', 'agent-a', '--execute')
     assert result['ok'] is True and len(result['successor_todo_ids']) == 1, result
     successor = w.read(result['successor_todo_ids'][0])
-    assert successor['text'] == 'Validate released head' and successor['claimed_by'] == 'agent-a'
+    assert successor['text'] == '[P1] Validate released head' and successor['claimed_by'] == 'agent-a'
+    assert successor['priority'] == 'P1'
     assert successor['action_kind'] == 'validate_release_head' and successor['required_capabilities'] == ['network']
 
 
@@ -321,7 +324,8 @@ def test_retired_observation_request_preserves_runtime_capture(caller: Caller) -
         assert w.primary() == before
     assert not (w.root / 'authority-shadow' / 'file' / 'observable').exists()
     todo = w.add('Independent observation contract')
-    assert w.read(todo)['text'] == 'Independent observation contract'
+    created = w.read(todo)
+    assert (created['text'], created['priority']) == ('[P1] Independent observation contract', 'P1')
 
 
 def test_turn_input_rejection_has_no_host_or_primary_effect(caller: Caller) -> None:
@@ -344,7 +348,8 @@ def test_registry_relative_root_does_not_depend_on_callers_cwd(caller: Caller) -
         'todo', 'add', '--goal-id', 'observable', '--role', 'agent', '--text', 'Registry relative root']
     added = w.invoke(command, command[3:], cwd=cwd)
     assert added['ok'] is True, added
-    assert w.read(added['todo_id'])['text'] == 'Registry relative root'
+    created = w.read(added['todo_id'])
+    assert (created['text'], created['priority']) == ('[P1] Registry relative root', 'P1')
     assert (w.root / 'goals' / 'observable' / 'rollout-event-log.jsonl').exists()
     assert not (cwd / 'runtime').exists()
     assert w.call('handoff-mode', 'set', '--mode', 'hard_lease')['ok'] is True

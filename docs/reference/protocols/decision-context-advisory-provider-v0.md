@@ -99,6 +99,46 @@ The protocol defines no sync or write operation. A provider used through the
 no permission, workspace access, claim, lease, lifecycle authority, execution
 authority, amendment authority, or write scope.
 
+## Provider substitution and comparisons
+
+The port exchanges bounded candidates and exact text, not a memory engine's
+extraction, update, forgetting or ranking-utility contract. Providers may have
+different native scores and parser granularity. Scores must not be compared
+across providers or interpreted as confidence that an answer exists. A successful
+empty retrieval differs from an unavailable provider. Recalled text remains
+untrusted advisory input in both cases.
+
+The built-in [`bm25` adapter](../../development/lexical-retrieval.md#local-context-provider)
+wraps the existing shared lexical scorer through `ContextProvider`, alongside
+OpenViking. It adds no second ranking engine or memory store. Optional external
+providers continue to use this unchanged extension protocol. Provider selection,
+Decision Context activation, privacy and fail-open behavior retain their owners.
+
+The native OpenViking adapter optionally accepts `result_levels` in its private
+provider config, for example `"result_levels": [2]` when a caller needs source
+bodies rather than L0/L1 summaries. Omission retains the existing native search
+and result budget. The adapter sends OpenViking's native `-L` filter and rejects
+contradictory level metadata or summary sidecars in L2-only mode. This setting
+belongs to OpenViking, not the common retrieval protocol. Reward Memory always
+requires L2 structured records and rejects a weaker explicit setting. Remove
+`result_levels` to roll back this opt-in. It adds no write, identity, or host-hook
+authority; a profile edit alone does not upgrade an older installed adapter.
+
+[`context-provider-comparison.py`](../../../examples/context-provider-comparison.py)
+compares explicit profiles through the real native recall command. Freeze
+document bytes/granularity, queries, qrels and result limits. Match returned
+content to the frozen source, retain unmatched parser output and unavailable
+queries, and distinguish provider latency from full caller wall time. Include
+an unanswerable query; irrelevant candidates cannot establish answer correctness.
+The local experiment report does not measure outcome utility or grant activation.
+
+Hook placement remains capability-owned: `agent-turn-recall` uses the admitted
+Todo situation and qualified Reward Memory corpus; Semantic Preference delivers
+explicit corrections; Decision Context rebases current materials. Verified
+post-outcome writeback remains separate. Implementing this retrieval protocol
+does not automatically enable a provider on a host or qualify it as a writable
+Reward Memory provider.
+
 ## Obelisk implementation
 
 The optional `packages/loopx-obelisk` distribution implements this protocol for
