@@ -247,11 +247,10 @@ def test_offline_needs_terminal_solver_final_capture_and_exclusive_capacity(tmp_
 def test_solver_completion_pauses_feedback_without_breaking_official_resume(tmp_path, monkeypatch):
     from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
     calls = []
-    backend = object.__new__(RecordingDockerBackend)
-    backend.blind_api_endpoint = None
+    backend = RecordingDockerBackend(log_dir=tmp_path / "collected", logger=None,
+                                    oauth_proxy=True, client=SimpleNamespace(),
+                                    feedback=SimpleNamespace(pause=lambda: calls.append("pause")))
     backend.execution_command = "solver invocation"
-    backend.log_dir = tmp_path / "collected"
-    backend.feedback = SimpleNamespace(pause=lambda: calls.append("pause"))
     result = SimpleNamespace(exit_code=0, timed_out=False, elapsed_seconds=10, output="result")
     monkeypatch.setattr(DockerBackend, "exec_run_with_timeout", lambda *a, **k: result)
     assert backend.exec_run_with_timeout(None, ["/bin/bash", "-c", "setup"]) is result
@@ -261,13 +260,14 @@ def test_solver_completion_pauses_feedback_without_breaking_official_resume(tmp_
 
 
 @pytest.mark.parametrize("worker_present", [False, True])
-def test_cleanup_returns_registration_only_after_verified_worker_removal(monkeypatch, worker_present):
+def test_cleanup_returns_registration_only_after_verified_worker_removal(tmp_path, monkeypatch, worker_present):
     from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
     calls = []
-    backend = object.__new__(RecordingDockerBackend)
-    backend.feedback = SimpleNamespace(run_id="run", task_id="fixture",
+    feedback = SimpleNamespace(run_id="run", task_id="fixture",
         close=lambda: calls.append("capture-stopped"),
         release_registration=lambda: calls.append("registration-release"))
+    backend = RecordingDockerBackend(log_dir=tmp_path / "collected", logger=None,
+                                    oauth_proxy=True, client=SimpleNamespace(), feedback=feedback)
     monkeypatch.setattr(DockerBackend, "cleanup_container", lambda *a, **k: calls.append("native-cleanup"))
     def exists(name):
         assert name == "sforge.run.fixture.run"
