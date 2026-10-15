@@ -321,6 +321,19 @@ ordinary scheduler's quota, claim, blocker or settlement checks. Retain receipts
 and native sessions when comparing planning cost; no active attempt is changed
 by selecting this option for a new run.
 
+New planned-entry prompts expose the Host's existing time limits alongside the
+unchanged product planning packet. SForge supplies the absolute phase deadline
+and observed remaining time, shared by planning and execution, including the
+worker's existing startup/settlement reserve and the work window before it. Harbor's separate
+planning invocation limit is labeled as a stage cap; it must not be mistaken for
+the whole task budget. The observation ages as planning proceeds and does not
+refill time, change startup/settlement reserves, or grant execution authority.
+This changes planning context for new planned-entry runs. Task identity, Todo
+readback and runtime timeout enforcement retain their existing owners; seeded
+entry and execution wakes are unchanged. Record the runner revision when comparing
+plans. Delivery of the time information does not prove that a model uses it or
+improves task outcomes.
+
 
 ### Default effective-Turn cadence
 
