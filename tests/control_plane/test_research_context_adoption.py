@@ -17,8 +17,11 @@ from canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
 
 
-@pytest.mark.parametrize("lost_response", [None, "prepare", "adopt", "projection"])
-def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path, monkeypatch, capsys, lost_response):
+@pytest.mark.parametrize("lost_response,with_knowledge", [
+    (lost, history) for history in (False, True)
+    for lost in (None, "prepare", "adopt", "projection", "knowledge") if history or lost != "knowledge"
+])
+def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path, monkeypatch, capsys, lost_response, with_knowledge):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     workspace = tmp_path / 'branch'
     workspace.mkdir()
@@ -32,7 +35,8 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
             return json.loads(output)
         run('bootstrap','--project',str(workspace),'--goal-id',name,'--objective','Investigate synthetic candidates.',
             '--adapter-kind','read_only_project_map_v0','--adapter-status','connected-read-only','--write-scope','**','--no-global-sync')
-        run('configure-goal','--goal-id',name,'--registered-agent',agent,'--agent-work-mode',agent+'=active','--execute')
+        run('configure-goal','--goal-id',name,'--registered-agent',agent,'--agent-work-mode',agent+'=active',
+            '--explore-mode','planning' if with_knowledge else 'off','--execute')
         todo = run('todo','add','--goal-id',name,'--role','agent','--claimed-by',agent,
             '--task-class','advancement_task','--required-capability','shell','--text','Investigate the retained synthetic candidates.')['todo_id']
         return registry,root,todo,run
@@ -47,7 +51,17 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
         '--note','Candidate 3 failed the synthetic check; preserve candidate 7.',
         '--update-operation-id','source-evidence','--update-expected-provider-revision',source_current,
         '--task-lease-idempotency-key','source-lease','--task-lease-expected-version','1')
-    source_context=canonical_context(source_env,deadline=time.time()+30)
+    if with_knowledge:
+        from loopx.capabilities.explore.result_log import (
+            append_explore_result_events, build_explore_node_event, build_explore_finding_event, explore_result_log_path,
+        )
+        source_events = [build_explore_node_event(goal_id='source', node_id='candidate-3',
+                title='Rejected candidate', status='dead_end'),
+            build_explore_finding_event(goal_id='source', node_id='candidate-3', finding_id='negative-3',
+                title='Candidate 3 failed', status='refuted', tags=['writeback-result'],
+                summary='The captured test rejected candidate 3; candidate 7 remains untested.', evidence_refs=['validation:candidate-3'])]
+        append_explore_result_events(explore_result_log_path(source_root, 'source'), source_events, expected_goal_id='source')
+    source_context=(research_context if with_knowledge else canonical_context)(source_env,deadline=time.time()+30)
     assert source_context['snapshot']['provider_revision'] != source_revision
     assert 'leases' not in source_context['snapshot']
     raw=_encoded(source_context)
@@ -103,6 +117,13 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
                 def lost_projection(*args, **kwargs):
                     raise OSError("synthetic projection response lost")
                 interrupted.setattr("loopx.control_plane.todos.provider_projection.project_current_canonical_todos", lost_projection)
+            elif lost_response == "knowledge":
+                from loopx.capabilities.explore import result_log
+                original_append = result_log.append_explore_result_events
+                def lost_append(*args, **kwargs):
+                    original_append(*args, **kwargs)
+                    raise OSError("synthetic committed knowledge response lost")
+                interrupted.setattr(result_log, "append_explore_result_events", lost_append)
             else:
                 from benchmark.runtime import research_checkpoint
                 original_handoff = research_checkpoint._handoff
@@ -124,6 +145,18 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
         assert run('todo','list','--goal-id','branch','--todo-id',destination_todo)['todo']==interrupted_todo['todo']
     result=adopt_todo_context(env,unit,digest,**args)
     assert result['context_adopted'] and result['model_calls']==0 and not result['research_point_qualified']
+    if with_knowledge:
+        log = explore_result_log_path(destination_root, 'branch')
+        imported_bytes = log.read_bytes()
+        assert result['explore_knowledge']['requested_event_count'] == 2
+        delivered = run('explore', 'turn-context', '--goal-id', 'branch', '--agent-id', 'branch-actor')
+        finding = delivered['graph']['writeback_results'][0]
+        assert finding['finding_id'] == 'negative-3' and finding['status'] == 'refuted'
+        assert finding['summary'] == source_events[-1]['summary']
+        assert 'checkpoint:' + digest in imported_bytes.decode()
+    else:
+        assert 'explore_knowledge' not in result
+        assert not (destination_root/'goals/branch/explore-result-log.jsonl').exists()
     assert Path(result['artifact']).read_bytes()==raw
     after=run('todo','list','--goal-id','branch','--todo-id',destination_todo)
     assert after['todo']['claimed_by']=='branch-actor' and after['todo']['status']=='open'
@@ -145,6 +178,9 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
     replay=adopt_todo_context(env,unit,digest,**args)
     assert replay['continuation']['adoption']['status']=='replayed'
     assert replay['continuation']['provider_revision']==result['continuation']['provider_revision']
+    if with_knowledge:
+        assert replay['explore_knowledge']['appended_event_count'] == 0
+        assert log.read_bytes() == imported_bytes
     assert run('todo','list','--goal-id','branch','--todo-id',destination_todo)==after
     with pytest.raises(ValueError,match='execution authority changed'):
         adopt_todo_context(env,unit,digest,**{**args,'lease_version':999})

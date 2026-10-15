@@ -253,12 +253,26 @@ def test_captured_point_continues_with_fresh_authority(
         lease_version=lease["lease"]["version"],
     )
     adopted = adopt_todo_context(env, unit, digest, **context_args)
+    from loopx.capabilities.explore.result_log import explore_result_log_path, load_explore_result_events_strict
+    source_events = carrier["research_evidence"]["explore_events"]
+    assert len(source_events) == 2 and adopted["explore_knowledge"]["appended_event_count"] == 2
+    imported_log = explore_result_log_path(runtime, goal)
+    imported_bytes = imported_log.read_bytes()
+    imported = load_explore_result_events_strict(imported_log, goal_id=goal)
+    assert all(row["run_id"].startswith("checkpoint:" + digest + ":") for row in imported)
+    assert all("research_observation" not in row for row in imported)
     assert (
         adopt_todo_context(env, unit, digest, **context_args)["continuation"][
             "adoption"
         ]["status"]
         == "replayed"
     )
+    assert imported_log.read_bytes() == imported_bytes
+    if stride_continuation:
+        knowledge_read = cli("explore", "turn-context", "--goal-id", goal, "--agent-id", agent)
+        inherited = knowledge_read["graph"]["writeback_results"][0]
+        assert inherited["finding_id"] == "restart-counterexample" and inherited["status"] == "refuted"
+        assert inherited["summary"] == source_events[-1]["summary"]
     binding = [
         "--goal-id",
         goal,
@@ -650,10 +664,11 @@ else:
                 },
             )
             if "explore_review" in decision:
+                assert any(row["finding_id"] == "restart-counterexample" for row in control["explore_basis"]["finding_refs"])
                 decision["explore_review"].update(
-                    disposition="no_applicable_evidence",
-                    considered_refs=[],
-                    reason="The fresh graph contains no findings; retained source context is inert evidence, not reactivated graph authority.",
+                    disposition="used",
+                    considered_refs=["restart-counterexample"],
+                    reason="The inherited scoped counterexample rules out restarting at one in this synthetic fixture; retain six and continue.",
                 )
             identity = reviewed["heartbeat_receipt"]["settlement_identity"]
             review_binding = (

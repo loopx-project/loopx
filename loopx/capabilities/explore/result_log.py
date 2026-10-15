@@ -526,15 +526,55 @@ def append_explore_result_event(path: Path, event: Mapping[str, Any]) -> dict[st
     }
 
 
+def rebase_explore_knowledge_events(
+    events: Sequence[Mapping[str, Any]], *, source_goal_id: str,
+    destination_goal_id: str, source_ref: str,
+) -> list[dict[str, Any]]:
+    """Transport verified knowledge to a distinct Goal without execution grants.
+
+    The caller owns source verification and current destination authorization.
+    Keep stable knowledge identities, full scope, attribution and timestamps;
+    bind each new event to its source event in the existing opaque run reference.
+    Operational research observations stay in the source archive: rebasing their
+    Todo/commit lineage would manufacture current research execution evidence.
+    """
+    source, destination = _safe_goal_id(source_goal_id), _safe_goal_id(destination_goal_id)
+    if source == destination:
+        raise ValueError("knowledge replay requires distinct source and destination Goals")
+    result: dict[str, dict[str, Any]] = {}
+    for raw in events:
+        event = validate_explore_result_event(raw, expected_goal_id=source)
+        event = {**event, "goal_id": destination, "run_id": source_ref + ":" + event["event_id"]}
+        event.pop("research_observation", None)
+        if event["event_kind"] == EVENT_KIND_EDGE:
+            event["result_id"] = _derived_result_id("edge", destination, event["from_node"],
+                                                    event["edge_type"], event["to_node"])
+        event["event_id"] = _event_id(event)
+        event = validate_explore_result_event(event, expected_goal_id=destination)
+        result[event["event_id"]] = event
+    return list(result.values())
+
+
 def append_explore_result_events(
     path: Path,
     events: Sequence[Mapping[str, Any]],
     *,
     expected_goal_id: str,
     create_only_node_ids: Sequence[str] = (),
+    require_ordered_prefix: bool = False,
 ) -> dict[str, Any]:
-    """Append a validated batch once by event id under the result-log lock."""
+    """Append a validated batch once by event id under the result-log lock.
 
+    A historical replay can require this exact batch as the initial prefix.
+    Recovery may finish that prefix or reuse it before newer current evidence;
+    it cannot weave old revisions into a different or incomplete current graph.
+    Ordinary callers retain their existing append semantics.
+    """
+
+    if type(require_ordered_prefix) is not bool:
+        raise ValueError("require_ordered_prefix must be an explicit boolean")
+    if require_ordered_prefix and create_only_node_ids:
+        raise ValueError("ordered prefix replay cannot skip existing node revisions")
     validated = [validate_explore_result_event(event, expected_goal_id=expected_goal_id) for event in events]
     requested_ids = [str(event["event_id"]) for event in validated]
     if len(requested_ids) != len(set(requested_ids)):
@@ -546,7 +586,15 @@ def append_explore_result_events(
     reused = 0
     with exclusive_file_lock(log_path):
         existing_by_id: dict[str, dict[str, Any]] = {}
-        if log_path.exists():
+        if require_ordered_prefix:
+            raw = log_path.read_bytes() if log_path.exists() else b""
+            if raw and not raw.endswith(b"\n"):
+                raise ValueError("Explore result prefix has an incomplete tail")
+            current_events = load_explore_result_events_strict(log_path, goal_id=expected_goal_id)
+            if current_events[:len(validated)] != validated[:len(current_events)]:
+                raise ValueError("Explore result history differs from the required initial prefix")
+            existing_by_id = {str(row["event_id"]): row for row in current_events}
+        elif log_path.exists():
             for line in log_path.read_text(encoding="utf-8").split("\n"):
                 try:
                     current = json.loads(line)

@@ -2,7 +2,8 @@
 
 Captured records are historical input, never a replacement authority store.
 Only the existing explicit continuation owner can adopt a note on an already
-claimed destination Todo. Graph/effect/vision reactivation is outside this seam.
+claimed destination Todo. Verified Explore knowledge may seed a fresh graph;
+historical execution observations, effects and vision authority are not revived.
 """
 from __future__ import annotations
 
@@ -159,7 +160,8 @@ def adopt_todo_context(env: dict[str, str], unit: Path, digest: str, *, source_t
     """Adopt retained context using the destination's current claim and lease.
 
     No Todo is created, completed or transferred, and no historical authority,
-    effect, strategy or graph is installed. Prepare/adopt each use stable original
+    effect or strategy is installed. Explore facts retain their source identity
+    without operational observation grants. Prepare/adopt each use stable original
     operation identities. A failed/uncertain call must be read back through that
     same owner; this adapter never guesses a new identity or starts model work.
     """
@@ -197,6 +199,17 @@ def adopt_todo_context(env: dict[str, str], unit: Path, digest: str, *, source_t
     retained = next((row for row in context["todos"] if row["todo_id"] == source_todo_id), None)
     if retained is None:
         raise ValueError("source Todo is absent from the captured context")
+    from loopx.capabilities.explore.result_log import (
+        append_explore_result_events, explore_result_log_path, rebase_explore_knowledge_events,
+    )
+    # Validate the entire sealed knowledge source before any destination write.
+    # Legacy context-only points keep their original continuation request bytes.
+    evidence = carrier.get("research_evidence", {})
+    if not isinstance(evidence, dict) or not isinstance(evidence.get("explore_events", []), list):
+        raise ValueError("retained Explore knowledge must be a complete event array")
+    knowledge = rebase_explore_knowledge_events(evidence.get("explore_events", []),
+        source_goal_id=source["goal_id"], destination_goal_id=env["LOOPX_GOAL_ID"],
+        source_ref="checkpoint:" + digest)
     session_id = _context_session(env, metadata)
     bound = select_codex_cli_session(Path(env["LOOPX_RUNTIME_ROOT"]), lineage={
         "goal_id": env["LOOPX_GOAL_ID"], "agent_id": env["LOOPX_AGENT_ID"]}, session_scope="agent")
@@ -279,8 +292,21 @@ def adopt_todo_context(env: dict[str, str], unit: Path, digest: str, *, source_t
         runtime_root=Path(env["LOOPX_RUNTIME_ROOT"]), goal_id=env["LOOPX_GOAL_ID"])
     if result.get("ok") is not True or not projection_delivery_requires_ack(result["projection_delivery"]):
         raise ValueError("continuation committed; reconcile its original projection receipt")
+    knowledge_result = None
+    if knowledge:
+        # Recheck fresh current ownership after continuation/projection recovery.
+        # An exact immutable prefix makes a lost append response recoverable,
+        # without reverting evidence recorded by subsequent destination work.
+        current_owner = _handoff(env, {**common, "action": "inspect"})
+        if (current_owner["claimed_by"] != env["LOOPX_AGENT_ID"] or
+                current_owner.get("execution_authority", {}).get("allowed") is not True):
+            raise ValueError("destination knowledge adoption lost current execution authority")
+        knowledge_result = append_explore_result_events(
+            explore_result_log_path(Path(env["LOOPX_RUNTIME_ROOT"]), env["LOOPX_GOAL_ID"]),
+            knowledge, expected_goal_id=env["LOOPX_GOAL_ID"], require_ordered_prefix=True)
     return {"context_adopted": True, "session_id": bound["session_id"], "todo_id": todo_id,
         "artifact": str(target), "context_sha256": declared["sha256"],
+        **({"explore_knowledge": knowledge_result} if knowledge_result is not None else {}),
         "continuation": result, "model_calls": 0, "research_point_qualified": False}
 
 
