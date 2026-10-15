@@ -343,10 +343,11 @@ def run_once(env: dict[str, str]) -> dict:
         checkpoint_wake = checkpoint_context.enter_context(CheckpointWake(env, receipt))
         body = "Finish the task."
         if stage == "plan":
-            from benchmark.runtime.planning import task_plan_packet
+            from benchmark.runtime.planning import render_planning_prompt, task_plan_packet
 
             planning_before = task_plan_packet(env, loopx_command(env))
-            body = "$loopx\n\nHost-supplied planning checkpoint:\n" + json.dumps(planning_before, ensure_ascii=False)
+            body = render_planning_prompt(planning_before, env,
+                                          execution_reserve_seconds=PHASE_WORK_RESERVE_SECONDS)
             (wake / "planning-input.json").write_text(body, encoding="utf-8")
             (wake / "planning-schema.json").write_text(json.dumps(planning_before["result_schema"]))
         elif execution.mode in {"heartbeat", "loopx-goal"}:
