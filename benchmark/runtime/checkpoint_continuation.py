@@ -26,7 +26,20 @@ def retained_native_history(binding, metadata):
     return {"turn_ids": [], "visible_history_sha256": hashlib.sha256(b"[]").hexdigest()}
 
 
-def restored_capture_gate(env, current_obligation_id=None, *, verify_native=True, include_review_basis=False):
+def restored_capture_gate(env, current_obligation_id=None, *, include_review_basis=False):
+    return _restored_context(env, current_obligation_id, verify_native=True,
+        include_review_basis=include_review_basis)
+
+
+def restored_checkpoint_review(env):
+    """Current semantic evidence alone is never a native capture permission."""
+    result = _restored_context(env, verify_native=False, include_review_basis=True)
+    allowed = result.pop("capture_allowed")
+    result["semantic_review_accepted"] = allowed and "review_basis" in result
+    return result
+
+
+def _restored_context(env, current_obligation_id=None, *, verify_native, include_review_basis):
     root = Path(env["LOOPX_RUNTIME_ROOT"])
     lineage = {"goal_id": env["LOOPX_GOAL_ID"], "agent_id": env["LOOPX_AGENT_ID"]}
     binding = load_codex_cli_session(root, lineage=lineage, session_scope="agent")

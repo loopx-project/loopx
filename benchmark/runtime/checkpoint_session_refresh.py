@@ -10,7 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from .checkpoint_continuation import restored_capture_gate, retained_native_history
+from .checkpoint_continuation import restored_capture_gate, restored_checkpoint_review, retained_native_history
 
 
 def prepare_session_refresh(env, session, wake):
@@ -30,8 +30,8 @@ def prepare_session_refresh(env, session, wake):
     if current is not None:
         retained_native_history(session.binding, {})
         return ""  # This receiver's initial reset is already committed.
-    gate = restored_capture_gate(env, verify_native=False, include_review_basis=True)
-    if not gate.get("capture_allowed"):
+    gate = restored_checkpoint_review(env)
+    if not gate.get("semantic_review_accepted"):
         return ""
     review = gate["review_basis"]
     # The initial reset requires completed actual native work at the source.

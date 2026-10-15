@@ -760,6 +760,11 @@ else:
             )
             reopened = restored_capture_gate(env)
             assert reopened["capture_allowed"], reopened
+            if fresh_context:
+                from benchmark.runtime.checkpoint_continuation import restored_checkpoint_review
+                review_only = restored_checkpoint_review(env)
+                assert review_only["semantic_review_accepted"] and "capture_allowed" not in review_only
+                assert review_only["review_basis"]["identity"]["turn_instance_id"] == review_turn
             assert not reopened["instructions"]  # Do not repeat the historical packet after consumption.
             assert not restored_capture_gate(env, obligation["obligation_id"])["capture_allowed"]
             configured = cli(
