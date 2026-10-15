@@ -1,22 +1,57 @@
 import {useEffect, useRef, useState} from "react";
-import {MarkdownText} from "./markdown";
+import {AttachedConversationRecord, type ConversationRecord, type ContentPage} from "./attached-conversation-record";
 import "./attached-agent-conversations.css";
 
 type Binding = {agent_id: string; thread_id: string; binding_ref: string};
-type Message = {id: string; role: "user" | "assistant"; text: string; truncated: boolean; timestamp: string | null};
-type Snapshot = {messages?: Message[]; before?: number | null; source_ref?: string; history_size?: number; revision: string; unchanged?: boolean; connected?: boolean; can_reply?: boolean; activity: {state: string}};
+type Message = ConversationRecord;
+type Snapshot = {messages?: Message[]; before?: number | null; after?: number; has_more?: boolean; reset?: boolean; source_ref?: string; history_size?: number; revision: string; unchanged?: boolean; connected?: boolean; can_reply?: boolean; activity: {state: string}};
 type Submission = {operation_id: string; text: string; status?: string};
+
+class ConversationRequestError extends Error {
+  constructor(message: string, readonly unsubmittedOperation?: string) {super(message);}
+}
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, {...options, signal: AbortSignal.timeout(6_000)});
   const value = await response.json();
-  if (!response.ok || value.ok !== true) throw new Error(value.error || "Conversation unavailable");
+  if (!response.ok || value.ok !== true) throw new ConversationRequestError(
+    value.error || "Conversation unavailable",
+    response.status === 409 && value.input_not_submitted === true && typeof value.operation_id === "string" ? value.operation_id : undefined,
+  );
   return value as T;
 }
 
+// A bounded file window may contain only metadata. Advance without making the
+// reader click through empty pages; keep each request and the whole burst bounded.
+async function readVisiblePage(params: URLSearchParams, current: () => boolean): Promise<Snapshot> {
+  const forward = params.has("after");
+  let page = await request<Snapshot>(`/api/chat/codex-attached?${params}`);
+  const newestBoundary = page.after;
+  const newerAvailable = page.has_more;
+  for (let windows = 1; windows < 8 && current() && !page.unchanged && !page.reset && !page.messages?.length; windows++) {
+    const cursor = forward ? (page.has_more ? page.after : null) : page.before;
+    const previous = params.get(forward ? "after" : "before");
+    if (cursor == null) break;
+    if (previous !== null && (forward ? cursor <= Number(previous) : cursor >= Number(previous))) {
+      throw new Error("History position did not advance; reconnect to read it.");
+    }
+    params.set(forward ? "after" : "before", String(cursor));
+    params.set("source_ref", page.source_ref ?? "");
+    params.delete("revision");
+    const next = await request<Snapshot>(`/api/chat/codex-attached?${params}`);
+    if (next.reset || next.source_ref !== page.source_ref) return next;
+    page = next;
+  }
+  // Backward skipping must not move the tail cursor backwards: those bytes
+  // contained no visible records, and polling should resume at the original tail.
+  return forward ? page : {...page, after: newestBoundary, has_more: newerAvailable};
+}
+
 /** Owner-only original conversation. It never changes the selected executor. */
-export function AttachedAgentConversations({goalId, zh}: {goalId: string; zh: boolean}) {
-  const [open, setOpen] = useState(false);
+export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
+  goalId: string; zh: boolean; targetAgentId: string;
+}) {
+  const [discovering, setDiscovering] = useState(true);
   const [agents, setAgents] = useState<Binding[]>([]);
   const [selected, setSelected] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -24,6 +59,7 @@ export function AttachedAgentConversations({goalId, zh}: {goalId: string; zh: bo
   const [before, setBefore] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [recoveryError, setRecoveryError] = useState("");
+  const [sendNotice, setSendNotice] = useState("");
   const [draft, setDraft] = useState("");
   const [submission, setSubmission] = useState<Submission | null>(null);
   const [sending, setSending] = useState(false);
@@ -32,16 +68,16 @@ export function AttachedAgentConversations({goalId, zh}: {goalId: string; zh: bo
   const [openRequested, setOpenRequested] = useState(false);
   const [openError, setOpenError] = useState("");
   const [refresh, setRefresh] = useState(0);
+  const [readingHistory, setReadingHistory] = useState(false);
+  const [unread, setUnread] = useState(false);
+  const following = useRef(true);
+  const after = useRef<number | null>(null);
+  const historyEpoch = useRef(0);
   const generation = useRef(0);
   const receiptGeneration = useRef(0);
   const revision = useRef("");
   const history = useRef<{source: string; size: number} | null>(null);
   const transcript = useRef<HTMLDivElement>(null);
-  const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    if (open && !dialog.current?.open) dialog.current?.showModal();
-    else if (!open && dialog.current?.open) dialog.current.close();
-  }, [open]);
   const binding = agents.find(agent => agent.agent_id === selected);
   const awaitingReceipt = Boolean(submission?.status && submission.status !== "delivered");
   const cacheKey = binding ? `loopx-attached-input:${goalId}:${binding.binding_ref}` : "";
@@ -50,51 +86,68 @@ export function AttachedAgentConversations({goalId, zh}: {goalId: string; zh: bo
   useEffect(() => {
     let active = true;
     setAgents([]); setSelected(""); setMessages([]); setSnapshot(null); setError("");
-    if (open) void request<{agents: Binding[]}>(`/api/chat/codex-attached?${new URLSearchParams({goal_id: goalId})}`)
-      .then(value => {if (active) {setAgents(value.agents); setSelected(value.agents[0]?.agent_id ?? "");}})
-      .catch(failure => {if (active) setError(String(failure));});
+    setDiscovering(true);
+    void request<{agents: Binding[]}>(`/api/chat/codex-attached?${new URLSearchParams({goal_id: goalId})}`)
+      .then(value => {if (active) {setAgents(value.agents); setSelected(targetAgentId);}})
+      .catch(failure => {if (active) setError(String(failure));})
+      .finally(() => {if (active) setDiscovering(false);});
     return () => {active = false;};
-  }, [goalId, open, refresh]);
+  }, [goalId, refresh, targetAgentId]);
 
   useEffect(() => {
     const current = ++generation.current;
     revision.current = "";
     history.current = null;
+    after.current = null; following.current = true; historyEpoch.current++;
+    setReadingHistory(false); setUnread(false);
     setOpening(false); setOpenRequested(false); setOpenError("");
+    setSendNotice("");
     setMessages([]); setSnapshot(null); setBefore(null); setDraft(""); setSubmission(null); setSending(false); setLoadingOlder(false); setError(""); setRecoveryError("");
-    if (!binding || !open) return;
+    if (!binding) return;
     try {
+      setDraft(sessionStorage.getItem(`${cacheKey}:draft`) ?? "");
       const stored = sessionStorage.getItem(cacheKey);
       if (stored) {
         const pending = JSON.parse(stored) as Submission;
         if (!pending || typeof pending.operation_id !== "string" || typeof pending.text !== "string" || !["pending", "delivered"].includes(pending.status ?? "")) throw new Error("Invalid recovery record");
-        setDraft(pending.status === "delivered" ? "" : pending.text); setSubmission(pending);
+        if (pending.status === "pending") setDraft(pending.text);
+        setSubmission(pending);
         if (pending.status === "pending") void readReceipt(pending, current);
       }
     } catch {setRecoveryError(zh ? "浏览器回复恢复记录不可读，暂不能安全发送。请先在原 App 核对。" : "Reply recovery is unreadable; check the original App before clearing it.");}
     let timer: ReturnType<typeof setTimeout>;
     async function read() {
+      const epoch = historyEpoch.current;
       const params = new URLSearchParams(query!);
+      if (following.current && after.current !== null) params.set("after", String(after.current));
+      if (history.current) params.set("source_ref", history.current.source);
       if (revision.current) params.set("revision", revision.current);
       try {
-        const next = await request<Snapshot>(`/api/chat/codex-attached?${params}`);
-        if (current !== generation.current) return;
+        const next = await readVisiblePage(params, () => current === generation.current && epoch === historyEpoch.current);
+        if (current !== generation.current || epoch !== historyEpoch.current) return;
         const follow = !transcript.current || transcript.current.scrollHeight - transcript.current.scrollTop - transcript.current.clientHeight < 64;
         revision.current = next.revision;
         if (!next.unchanged) {
-          const reset = !history.current || history.current.source !== next.source_ref || (next.history_size ?? 0) < history.current.size;
+          const reset = next.reset || !history.current || history.current.source !== next.source_ref || (next.history_size ?? 0) < history.current.size;
           history.current = {source: next.source_ref ?? "", size: next.history_size ?? 0};
-          setMessages(previous => [...new Map([...(reset ? [] : previous), ...next.messages ?? []].map(message => [message.id, message])).values()].sort((a,b) => Number(a.id) - Number(b.id)).slice(-1000));
-          if (reset) setBefore(next.before ?? null);
+          if (following.current || reset) {
+            after.current = next.after ?? null;
+            setMessages(previous => {
+              const combined = [...new Map([...(reset ? [] : previous), ...next.messages ?? []].map(message => [message.id, message])).values()].sort((a,b) => Number(a.id) - Number(b.id));
+              if (combined.length > 300) setBefore(Number(combined[combined.length - 300].id));
+              return combined.slice(-300);
+            });
+            if (reset) {setBefore(next.before ?? null); following.current = true; setReadingHistory(false); setUnread(false);}
+          } else setUnread(true);
         }
         setSnapshot(previous => ({...previous, ...next})); setError("");
-        if (follow) requestAnimationFrame(() => transcript.current?.scrollTo({top: transcript.current.scrollHeight}));
+        if (follow && following.current) requestAnimationFrame(() => transcript.current?.scrollTo({top: transcript.current.scrollHeight}));
       } catch (failure) {if (current === generation.current) {setError(String(failure)); setSnapshot(null);}}
       finally {if (current === generation.current) timer = setTimeout(read, 1000);}
     }
     void read();
     return () => {generation.current++; clearTimeout(timer);};
-  }, [goalId, binding?.binding_ref, open]);
+  }, [goalId, binding?.binding_ref]);
 
   async function openOriginal() {
     if (!binding || opening) return;
@@ -107,20 +160,45 @@ export function AttachedAgentConversations({goalId, zh}: {goalId: string; zh: bo
     finally {if (current === generation.current) setOpening(false);}
   }
 
-  async function older() {
-    if (before === null || !query || loadingOlder) return;
+  async function older(newer = false) {
+    if ((!newer && before === null) || !query || loadingOlder) return;
     const current = generation.current;
+    const epoch = ++historyEpoch.current;
+    following.current = false; setReadingHistory(true);
     setLoadingOlder(true);
-    const params = new URLSearchParams(query); params.set("before", String(before));
+    const params = new URLSearchParams(query);
+    params.set(newer ? "after" : "before", String(newer ? after.current ?? 0 : before));
+    if (history.current) params.set("source_ref", history.current.source);
     try {
-      const next = await request<Snapshot>(`/api/chat/codex-attached?${params}`);
-      if (current === generation.current) {
-        if (!history.current || history.current.source !== next.source_ref || (next.history_size ?? 0) < history.current.size) throw new Error(zh ? "原会话历史已更新，请重新连接。" : "Original history changed; reconnect to read it.");
-        setMessages(previous => [...new Map([...(next.messages ?? []), ...previous].map(row => [row.id, row])).values()].sort((a,b) => Number(a.id) - Number(b.id)).slice(0,1000));
-        setBefore(next.before ?? null);
+      const next = await readVisiblePage(params, () => current === generation.current && epoch === historyEpoch.current);
+      if (current === generation.current && epoch === historyEpoch.current) {
+        if (next.reset || !history.current || history.current.source !== next.source_ref || (next.history_size ?? 0) < history.current.size) throw new Error(zh ? "原会话历史已更新，请重新连接。" : "Original history changed; reconnect to read it.");
+        const previousHeight = transcript.current?.scrollHeight ?? 0;
+        setMessages(previous => {
+          const combined = [...new Map([...(next.messages ?? []), ...previous].map(row => [row.id, row])).values()].sort((a,b) => Number(a.id) - Number(b.id));
+          const retained = newer ? combined.slice(-300) : combined.slice(0,300);
+          after.current = newer ? next.after ?? after.current : retained.at(-1)?.end ?? next.after ?? null;
+          setBefore(newer ? Number(retained[0]?.id) || null : next.before ?? null);
+          return retained;
+        });
+        if (!newer) requestAnimationFrame(() => {if (transcript.current) transcript.current.scrollTop += transcript.current.scrollHeight - previousHeight;});
+        if (newer && !next.has_more) {following.current = true; setReadingHistory(false); setUnread(false);}
+        setError("");
       }
     } catch (failure) {if (current === generation.current) setError(String(failure));}
     finally {if (current === generation.current) setLoadingOlder(false);}
+  }
+
+  function pauseHistory() {following.current = false; setReadingHistory(true);}
+  function latest() {
+    historyEpoch.current++; after.current = null; history.current = null; revision.current = "";
+    following.current = true; setReadingHistory(false); setUnread(false); setMessages([]); setBefore(null);
+  }
+  async function loadContent(record: Message, offset: number): Promise<ContentPage> {
+    const params = new URLSearchParams(query!);
+    params.set("entry_id", record.id); params.set("content_offset", String(offset));
+    params.set("source_ref", history.current?.source ?? ""); params.set("content_ref", record.content_ref ?? "");
+    return request<ContentPage>(`/api/chat/codex-attached?${params}`);
   }
 
   async function send() {
@@ -130,17 +208,31 @@ export function AttachedAgentConversations({goalId, zh}: {goalId: string; zh: bo
     try {sessionStorage.setItem(cacheKey, JSON.stringify(pending));}
     catch {setError(zh ? "无法保存回复回执，未发送。" : "Cannot save reply recovery; nothing was sent."); return;}
     receiptGeneration.current++;
-    setSubmission(pending); setSending(true);
+    setSubmission(pending); setSending(true); setSendNotice("");
     try {
       const result = await request<{status: string}>("/api/chat/codex-attached", {method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({operation_id: pending.operation_id, text: pending.text, goal_id: goalId, agent_id: binding.agent_id, binding_ref: binding.binding_ref})});
       if (current === generation.current) {
         const delivered = {...pending, status: result.status};
         sessionStorage.setItem(cacheKey, JSON.stringify(delivered)); setSubmission(delivered);
-        if (result.status === "delivered") setDraft("");
+        if (result.status === "delivered") {sessionStorage.removeItem(`${cacheKey}:draft`); setDraft("");}
         else void readReceipt(pending, current);
         revision.current = "";
       }
-    } catch (failure) {if (current === generation.current) {setError(String(failure)); void readReceipt(pending, current);}}
+    } catch (failure) {
+      if (current === generation.current) {
+        if (failure instanceof ConversationRequestError && failure.unsubmittedOperation === pending.operation_id) {
+          // Only the owning server can prove no native effect. Keep the draft,
+          // discard this attempt, and require a fresh explicit send when idle.
+          try {
+            sessionStorage.removeItem(cacheKey);
+            receiptGeneration.current++;
+            setSubmission(null); setRecoveryError("");
+            setSnapshot(previous => previous ? {...previous, can_reply: false} : null);
+            setSendNotice(zh ? "Agent 正在忙碌或状态尚未确认；消息未发送，草稿已保留。" : "The Agent is busy or its state is unconfirmed; nothing was sent. Your draft is retained.");
+          } catch {setRecoveryError(zh ? "消息未发送，但浏览器回复恢复记录无法清理。" : "Nothing was sent, but the browser recovery record could not be cleared.");}
+        } else {setError(String(failure)); void readReceipt(pending, current);}
+      }
+    }
     finally {if (current === generation.current) setSending(false);}
   }
   async function readReceipt(pending = submission, current = generation.current) {
@@ -154,37 +246,39 @@ export function AttachedAgentConversations({goalId, zh}: {goalId: string; zh: bo
         const next = {...pending, status: receipt.status};
         sessionStorage.setItem(cacheKey, JSON.stringify(next)); setSubmission(next);
         setRecoveryError("");
-        if (receipt.status === "delivered") {receiptGeneration.current++; setDraft("");}
+        if (receipt.status === "delivered") {sessionStorage.removeItem(`${cacheKey}:draft`); receiptGeneration.current++; setDraft("");}
       }
     } catch (failure) {if (current === generation.current && receiptVersion === receiptGeneration.current) setRecoveryError(String(failure));}
   }
+  function editDraft(text: string) {
+    setDraft(text); setSubmission(null); setSendNotice("");
+    try {sessionStorage.setItem(`${cacheKey}:draft`, text);}
+    catch {setRecoveryError(zh ? "草稿无法保存在此浏览器，请复制保留后重试。" : "This browser cannot retain the draft; copy it before retrying.");}
+  }
   function nextReply() {
-    try {sessionStorage.removeItem(cacheKey); receiptGeneration.current++; setSubmission(null); setDraft(""); setError(""); setRecoveryError("");}
+    try {sessionStorage.removeItem(cacheKey); sessionStorage.removeItem(`${cacheKey}:draft`); receiptGeneration.current++; setSubmission(null); setDraft(""); setError(""); setRecoveryError("");}
     catch {setError(zh ? "无法清理回复回执。" : "Reply recovery could not be cleared.");}
   }
-  return <section className="attached-agent-conversations">
-    <button type="button" className="attached-conversation-entry" onClick={() => setOpen(true)}>{zh ? "与 Codex App 原会话对话" : "Talk to original Codex App conversations"}</button>
-    <dialog ref={dialog} className="attached-conversation-dialog" aria-label={zh ? "Codex App 原会话" : "Original Codex App conversations"} onClose={() => setOpen(false)}>
-    <header className="attached-conversation-heading"><h2>{zh ? "Codex App 原会话" : "Original Codex App conversations"}</h2><button type="button" onClick={() => setOpen(false)}>{zh ? "返回工作台" : "Return to workspace"}</button></header>
-    <div className="attached-conversation-content">
-      <p>{zh ? "每秒同步原会话已保存的消息；逐字流和审批仍在 Codex App。" : "Saved messages sync every second; token streaming and approvals remain in Codex App."}</p>
-      {agents.length ? <label>{zh ? "Agent" : "Agent"}<select aria-label={zh ? "选择原会话 Agent" : "Original conversation Agent"} value={selected} disabled={sending} onChange={event => setSelected(event.target.value)}>{agents.map(agent => <option key={agent.binding_ref} value={agent.agent_id}>{agent.agent_id}</option>)}</select></label> : !error ? <p>{zh ? "此 Goal 暂无已绑定的本机 Codex App 会话。" : "This Goal has no bound local Codex App conversation."}</p> : null}
+  return <div className="attached-conversation-content">
+
+      {discovering ? <p role="status">{zh ? "正在连接原会话…" : "Connecting to the original conversation…"}</p> : !binding && !error ? <p role="status">{zh ? "此 Agent 暂无已绑定的本机 Codex App 原会话。" : "This Agent has no bound local Codex App conversation."}</p> : null}
       {recoveryError ? <p role="alert">{recoveryError} <button type="button" disabled={sending} onClick={nextReply}>{zh ? "已在原 App 核对，清理本页回执" : "Checked in original App; clear this receipt"}</button></p> : null}
       {error ? <p role="alert">{error} <button type="button" onClick={() => setRefresh(value => value + 1)}>{zh ? "重新连接" : "Reconnect"}</button></p> : null}
+      {sendNotice ? <p role="status">{sendNotice}</p> : null}
       {binding ? <>
-        <p role="status">{!snapshot ? (zh ? "正在连接或连接不可用" : "Connecting or unavailable") : snapshot.can_reply ? (zh ? "原会话可回复" : "Original conversation accepts replies") : snapshot.activity.state === "turn_open" ? (zh ? "原会话有未结束执行；可在原 App 中追加输入" : "The original conversation has an unfinished turn; add input in the original App") : (zh ? "历史可读；回复连接或执行状态尚未确认" : "History available; reply connection or execution state unconfirmed")}</p>
-        <button type="button" className="attached-conversation-open" aria-disabled={opening} aria-busy={opening} onClick={() => void openOriginal()}>{zh ? "在 Codex App 中打开" : "Open in Codex App"}</button>
+        <div className="attached-connection-status"><div><p className="attached-conversation-source">{zh ? "Codex App · 已保存消息与工具记录自动更新" : "Codex App · saved messages and tools update automatically"}</p><p role="status">{!snapshot ? (zh ? "正在连接或连接不可用" : "Connecting or unavailable") : snapshot.can_reply ? (zh ? "原会话可回复" : "Original conversation accepts replies") : snapshot.activity.state === "turn_open" ? (zh ? "原会话有未结束执行；可在原 App 中追加输入" : "The original conversation has an unfinished turn; add input in the original App") : (zh ? "历史可读；回复连接或执行状态尚未确认" : "History available; reply connection or execution state unconfirmed")}</p></div>
+        <button type="button" className="attached-conversation-open" aria-disabled={opening} aria-busy={opening} onClick={() => void openOriginal()}>{zh ? "在 Codex App 中打开" : "Open in Codex App"}</button></div>
         {openRequested ? <p role="status">{zh ? "已请求打开原会话，请在 Codex App 中查看。" : "Requested opening the original conversation; check Codex App."}</p> : null}
         {openError ? <p role="alert">{openError}</p> : null}
-        {before !== null ? <button type="button" disabled={loadingOlder || messages.length >= 1000} onClick={() => void older()}>{zh ? "读取更早的消息" : "Read earlier messages"}</button> : null}
-        <div className="attached-conversation-messages" ref={transcript} aria-label={zh ? "原会话消息" : "Original conversation messages"}>
-          {messages.map(message => <article key={message.id} data-role={message.role}><header><strong>{message.role === "user" ? (zh ? "你" : "You") : binding.agent_id}</strong> {message.timestamp ? <time>{new Date(message.timestamp).toLocaleString()}</time> : null}</header><MarkdownText text={message.text}/>{message.truncated ? <p>{zh ? "此消息已截短；完整内容见原 App。" : "Message shortened; open the original App for full content."}</p> : null}</article>)}
+        {before !== null ? <button type="button" disabled={loadingOlder} onClick={() => void older()}>{zh ? "读取更早的消息" : "Read earlier messages"}</button> : null}
+        {readingHistory ? <div className="attached-history-navigation"><span>{zh ? "正在回看历史" : "Reading history"}{unread ? (zh ? " · 有新活动" : " · new activity") : ""}</span><button type="button" disabled={loadingOlder} onClick={() => void older(true)}>{zh ? "较新记录" : "Newer records"}</button><button type="button" onClick={latest}>{zh ? "回到最新" : "Back to latest"}</button></div> : null}
+        <div className="attached-conversation-messages" ref={transcript} onWheel={event => {if (event.deltaY < 0) pauseHistory();}} onTouchMove={pauseHistory} onClick={pauseHistory} onKeyDown={event => {if (["ArrowUp", "PageUp", "Home"].includes(event.key)) pauseHistory();}} aria-label={zh ? "原会话消息" : "Original conversation messages"}>
+          {messages.map(message => <AttachedConversationRecord key={`${history.current?.source}:${message.id}:${message.content_ref ?? ""}`} record={message} agent={binding.agent_id} zh={zh} load={loadContent}/>)}
           {!messages.length && snapshot ? <p>{zh ? "当前有界历史窗口内没有可显示的消息，可读取更早记录。" : "No displayable messages in this bounded window; read earlier records."}</p> : null}
         </div>
         {submission?.status ? <p role="status">{submission.status === "delivered" ? (zh ? "已由原 App 接纳；等待 Agent 结果。" : "Accepted by the original App; awaiting the Agent result.") : (zh ? "投递尚未确认，请先在原 App 核对，不会自动重发。" : "Delivery unconfirmed; check the original App. No automatic resend.")} {submission.status === "pending" ? <button type="button" disabled={sending} onClick={() => void readReceipt()}>{zh ? "重读投递回执" : "Recheck delivery receipt"}</button> : null}{awaitingReceipt ? <button type="button" disabled={sending} onClick={nextReply}>{zh ? "已核对，写下一条" : "Checked; write another"}</button> : null}</p> : null}
-        {!awaitingReceipt ? <form onSubmit={event => {event.preventDefault(); void send();}}><label>{zh ? `回复 ${binding.agent_id}` : `Reply to ${binding.agent_id}`}<textarea value={draft} maxLength={24000} disabled={sending} onChange={event => {setDraft(event.target.value); setSubmission(null);}}/></label><button type="submit" disabled={sending || Boolean(error || recoveryError) || !snapshot?.can_reply || !draft.trim()}>{sending ? (zh ? "正在交给原 App…" : "Sending to original App…") : (zh ? "发送到原会话" : "Send to original conversation")}</button></form> : null}
+        {!awaitingReceipt ? <form onSubmit={event => {event.preventDefault(); void send();}}><label>{zh ? `回复 ${binding.agent_id}` : `Reply to ${binding.agent_id}`}<textarea value={draft} maxLength={24000} disabled={sending} onChange={event => editDraft(event.target.value)}/></label><button type="submit" disabled={sending || Boolean(error || recoveryError) || !snapshot?.can_reply || !draft.trim()}>{sending ? (zh ? "正在交给原 App…" : "Sending to original App…") : (zh ? "发送到原会话" : "Send to original conversation")}</button></form> : null}
       </> : null}
     </div>
-    </dialog>
-  </section>;
+  ;
 }

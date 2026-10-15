@@ -51,7 +51,7 @@ import { MessageActivity } from "./message-activity";
 import { ChannelTimeline } from "./channel-timeline";
 import { ContextDrawer } from "./context-drawer";
 import { monitorScheduleReadback } from "./monitor-readback";
-import { AttachedAgentConversations } from "./attached-agent-conversations";
+import {GoalAgentWorkPage} from "./goal-agent-work-page";
 import { GoalSidebar } from "./goal-sidebar";
 import { GoalTasksView } from "./goal-tasks-view";
 import { GoalOverview, goalOverviewAttentionId } from "./goal-overview";
@@ -814,6 +814,7 @@ export function PersonalWorkspacePage({
   goalArchiveLoadState = { error: null, phase: "ready" },
   selectedView: controlledView,
   selectedTodoId: routedTodoId,
+  selectedWorkAgentId,
   managerChannelBinding,
   managerRuntime,
   model,
@@ -839,6 +840,7 @@ export function PersonalWorkspacePage({
   goalArchiveLoadState?: WorkspaceGoalArchiveLoadState;
   selectedView?: WorkspaceGoalTab;
   selectedTodoId?: string | null;
+  selectedWorkAgentId?: string | null;
   managerChannelBinding?: ManagerChannelBinding | null;
   managerRuntime?: ManagerRuntimeSessionReadback | null;
   model: WorkspaceModel;
@@ -878,6 +880,20 @@ export function PersonalWorkspacePage({
   const [proposals, setProposals] = useState<Record<string, WorkspaceActionPreview>>({});
   const [localView, setLocalView] = useState<WorkspaceGoalTab>(controlledGoalId ? "chat" : "overview");
   const selectedGoalTab = controlledView ?? localView;
+  const agentWorkActive = Boolean(controlledGoalId === undefined ? localGoalId : controlledGoalId) && selectedGoalTab === "chat" && selectedWorkAgentId != null;
+  const workReturn = useRef<{scope: string; agentId: string} | null>(null);
+  useEffect(() => {
+    if (agentWorkActive) {workReturn.current = {scope: selectionScope, agentId: selectedWorkAgentId!}; return;}
+    const previous = workReturn.current;
+    workReturn.current = null;
+    if (!previous || previous.scope !== selectionScope || selectedGoalTab !== "overview") return;
+    const frame = requestAnimationFrame(() => {
+      const entry = document.querySelector<HTMLButtonElement>(`.goal-owner-conversation[data-agent-id="${CSS.escape(previous.agentId)}"]`)
+        ?? document.querySelector<HTMLButtonElement>('.personal-goal-tabs button[aria-current="page"]');
+      entry?.focus({preventScroll: true});
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [agentWorkActive, selectionScope, selectedWorkAgentId, selectedGoalTab]);
   const selectedWorkspaceRef = workspaceConversations?.selectedRef ?? null;
   const selectedWorkspaceProject = workspaceConversations?.projects?.find((project) => project.project_ref === selectedWorkspaceRef) ?? null;
   // A workspace scope exists only inside the steward conversation tab.
@@ -1139,7 +1155,7 @@ export function PersonalWorkspacePage({
         || managerChannelProposalIds.includes(item.proposal.previewId)))),
     [items, managerSessionProposalIds, managerChannelProposalIds],
   );
-  const conversationOpen = selectedGoal ? selectedGoalTab === "chat" : managerChatOpen;
+  const conversationOpen = !agentWorkActive && (selectedGoal ? selectedGoalTab === "chat" : managerChatOpen);
   const conversationMessages = selectedGoal ? goalMessages : managerMessages;
   const latestMessage = conversationMessages.at(-1);
   const latestMessageTextLength = latestMessage?.text.length ?? 0;
@@ -2121,6 +2137,7 @@ export function PersonalWorkspacePage({
           <div>
           <ChannelHeader
             agents={agents}
+            agentWorkActive={agentWorkActive}
             conversationScope={workspaceConversations && (workspaceConversations.projects?.length || workspaceConversations.readFailed || selectedWorkspaceRef) ? {
               onChange: (value) => {
                 setActiveSessionRun(null);
@@ -2175,16 +2192,16 @@ export function PersonalWorkspacePage({
               : undefined}
             resumeReviewed={!callbacks.onExecuteGoalLifecycle}
           />
-          {selectedGoal && !selectedGoal.loadState ? <GoalVitals digest={workspaceDigest} goal={selectedGoal} items={items} userTodos={model.userTodos} onFocusRegion={focusGoalRegion} />
+          {selectedGoal && !selectedGoal.loadState && !agentWorkActive ? <GoalVitals digest={workspaceDigest} goal={selectedGoal} items={items} userTodos={model.userTodos} onFocusRegion={focusGoalRegion} />
             : selectedGoal?.loadState === "loading" ? <GoalVitalsSkeleton /> : null}
           {!readOnly ? <UsageStatisticsNotice onDetails={() => openSettings({ kind: "settings", tab: "machine" })} /> : null}
           </div>
-            {selectedGoalId && selectedGoalTab === "chat" && !readOnly && selectedAgentId === "codex" && callbacks.onStartLoopX ? <GoalLoopXMode
+            {selectedGoalId && selectedGoalTab === "chat" && !agentWorkActive && !readOnly && selectedAgentId === "codex" && callbacks.onStartLoopX ? <GoalLoopXMode
               onPrepare={() => callbacks.onPrepareLoopX!(selectedAgentId, selectedGoalId)}
               key={`${selectedGoalId}:${selectedAgentId}`} sessionId={conversationSessionId} onChange={setLoopxMode}
               onExecute={(operation, settings) => callbacks.onStartLoopX?.(operation, selectedAgentId, selectedGoalId, settings)}
             /> : null}
-          <div className="personal-channel-scroll" data-active-goal-view={selectedGoal ? selectedGoalTab : undefined} ref={channelScrollRef}
+          <div className="personal-channel-scroll" data-agent-work={agentWorkActive || undefined} data-active-goal-view={selectedGoal ? selectedGoalTab : undefined} ref={channelScrollRef}
             onScroll={(event) => {
               if (!conversationOpen) return;
               const { scrollHeight, scrollTop, clientHeight } = event.currentTarget;
@@ -2192,8 +2209,8 @@ export function PersonalWorkspacePage({
               followConversationRef.current = nearBottom;
               setShowLatestMessage(!nearBottom);
             }}>
-            {selectedGoalId && selectedGoalTab === "chat" && !readOnly ? <AttachedAgentConversations key={selectedGoalId} goalId={selectedGoalId} zh={locale === "zh-CN"}/> : null}
-            {selectedGoalId && selectedGoalTab === "chat" && !readOnly && selectedAgentId === "codex" && conversationSessionId && loopxMode?.settings.execution_config && loopxMode.settings.agent_id ? <GoalTeamResults
+            {selectedGoalId && selectedGoalTab === "chat" && !agentWorkActive && callbacks.onSelectWorkAgent ? <section className="attached-agent-conversations"><button type="button" className="attached-conversation-entry" onClick={() => callbacks.onSelectWorkAgent?.("")}>{locale === "zh-CN" ? "Agent 工作记录" : "Agent work conversations"}</button></section> : null}
+            {selectedGoalId && selectedGoalTab === "chat" && !agentWorkActive && !readOnly && selectedAgentId === "codex" && conversationSessionId && loopxMode?.settings.execution_config && loopxMode.settings.agent_id ? <GoalTeamResults
               key={`${conversationSessionId}:${loopxMode.settings.agent_id}:${loopxMode.settings.execution_config}`}
               sessionId={conversationSessionId} zh={locale === "zh-CN"}
               refreshKey={JSON.stringify(loopxMode.deliveries)}/>
@@ -2226,14 +2243,15 @@ export function PersonalWorkspacePage({
             ) : selectedGoal ? (
               <GoalWorkspacePanels key={`${statusSourceControl?.activeSource.statusUrl ?? "/status.json"}:${selectedGoal.goalId}`}
                 activeTab={selectedGoalTab} scrollRef={channelScrollRef} panels={{
-                  overview: <GoalOverview railOpen={railScope === selectionScope} onCloseRail={() => setRailScope(null)} digest={workspaceDigest} review={workspaceReview} active={!settingsOpen && selectedGoalTab === "overview"} goal={selectedGoal} items={items} userTodos={model.userTodos} readOnly={readOnly}
+                  overview: <GoalOverview onOpenAgentConversation={callbacks.onSelectWorkAgent} railOpen={railScope === selectionScope} onCloseRail={() => setRailScope(null)} digest={workspaceDigest} review={workspaceReview} active={!settingsOpen && selectedGoalTab === "overview"} goal={selectedGoal} items={items} userTodos={model.userTodos} readOnly={readOnly}
                     onOpenDetails={() => setSelection({ kind: "goal", item: selectedGoal })} onSelect={setSelection} onView={setSelectedGoalTab}
                     selectedTodoId={drawerSelection?.kind === "todo" ? drawerSelection.item.todoId : null}
                     board={taskBoard(!settingsOpen && selectedGoalTab === "overview")} results={goalResults(!settingsOpen && selectedGoalTab === "overview")}
                     historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={createPreview} />,
                   tasks: taskBoard(!settingsOpen && selectedGoalTab === "tasks"),
                   files: goalResults(selectedGoalTab === "files" && !settingsOpen),
-                  chat: (<>
+                  chat: agentWorkActive ? <GoalAgentWorkPage key={`${selectionScope}:${selectedWorkAgentId}`} goal={selectedGoal} agentId={selectedWorkAgentId!} readOnly={readOnly}
+                    onSelect={id => callbacks.onSelectWorkAgent?.(id)} onClose={() => callbacks.onSelectWorkAgent?.(null)}/> : (<>
                     {selectedGoal && activeSessionRun?.goalId === selectedGoal.goalId ? (
                       <SessionRecordHeader
                         onClose={() => setActiveSessionRun(null)}
@@ -2271,7 +2289,7 @@ export function PersonalWorkspacePage({
                 onOpenGoalEvidence={(goalId) => { selectGoal(goalId, "chat"); }} />
             )}
           </div>
-          <div className="personal-composer-wrap">
+          <div className="personal-composer-wrap" hidden={agentWorkActive}>
             {!readOnly && actionReadback.isError ? <div className="personal-history-notice" role="status" data-testid="personal-action-readback-error">
               <span>{t("proposal.readbackUnavailable")}</span><button type="button" disabled={actionReadback.isFetching}
                 onClick={() => void actionReadback.refetch()}>{t("proposal.readbackRetry")}</button>

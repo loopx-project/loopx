@@ -167,6 +167,7 @@ export type WorkspaceGoal = {
     label: string;
     lastActivityAt?: string | null;
     state?: string | null;
+    hostSurfaces?: string[];
   }>;
   /** Canonical registered identities; discovered task claimants do not grant binding authority. */
   registeredAgentIds?: string[];
@@ -568,6 +569,7 @@ export type PersonalWorkspaceCallbacks = {
   onSelectGoal?: (goalId: string | null, view: WorkspaceGoalTab) => void;
   onSelectTodo?: (todoId: string | null) => void;
   onSelectView?: (view: WorkspaceGoalTab) => void;
+  onSelectWorkAgent?: (agentId: string | null) => void;
   onOpenNotificationSettings?: (goalId?: string) => void;
   onFetchNotificationTargets?: () => Promise<Array<{ enabled: boolean; provider: string; target_name: string }>>;
   onSetupGoalChannel?: (options: { execute: boolean; goalId: string; target: string }) => Promise<{ ok: boolean; blocker?: string; public_summary?: string; status?: string }>;

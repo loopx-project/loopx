@@ -8,7 +8,7 @@
 .goal-work-lenses button[aria-pressed="true"], .goal-work-filters button[aria-pressed="true"], .goal-all-work > [role="group"] button[aria-pressed="true"] { color: var(--pw-text); background: var(--pw-hover); border-color: var(--pw-line); }
 .goal-owner-group { margin-top: 20px; }
 .goal-owner-group:first-child { margin-top: 0; }
-.goal-owner-group > header { display: flex; gap: 12px; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--pw-line-strong); }
+.goal-owner-group > header { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--pw-line-strong); }
 .goal-owner-group h3 { font-size: var(--text-body); line-height: var(--leading-body); font-weight: 600; }
 .goal-owner-group > header > span { color: var(--pw-muted); font-size: var(--text-caption); }
 .goal-overview .goal-work-row { width: 100%; display: grid; grid-template-columns: 16px minmax(0, 1fr) auto 36px; gap: 10px; border: 0; border-bottom: 1px solid var(--pw-line); border-radius: 0; background: transparent; padding: 12px 0; }
@@ -75,3 +75,5 @@
 @media (max-width: 640px) {
   .goal-overview .goal-direction-toggle { display: inline-flex; justify-self: start; min-height: 32px; border: 0; padding: 4px 0; background: transparent; color: var(--pw-muted); font-size: var(--text-caption); }
 }
+
+.goal-owner-group > header .goal-owner-conversation { margin-left: auto; padding: 6px 8px; min-height: 44px; border: 0; background: transparent; color: var(--pw-text); font: inherit; font-size: var(--text-caption); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }

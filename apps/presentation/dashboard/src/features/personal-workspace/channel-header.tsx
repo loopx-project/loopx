@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 
 export function ChannelHeader({
   agents,
+  agentWorkActive = false,
   conversationScope,
   goalLifecycleBusy,
   managerChannelBinding,
@@ -40,6 +41,7 @@ export function ChannelHeader({
   workspaceGrantLabel,
 }: {
   agents: WorkspaceAgentOption[];
+  agentWorkActive?: boolean;
   /** Steward conversation scope; absent when the host grants no workspace. */
   conversationScope?: { options: { disabled?: boolean; label: string; value: string }[]; value: string; onChange: (value: string) => void } | null;
   goalLifecycleBusy?: boolean;
@@ -77,7 +79,7 @@ export function ChannelHeader({
   const [modelDiscovery, setModelDiscovery] = useState<AgentModelDiscovery | null>(null);
   const [modelDiscoveryState, setModelDiscoveryState] = useState<"idle" | "loading" | "error">("idle");
   useEffect(() => {
-    if (readOnlySourceLabel) return;
+    if (readOnlySourceLabel || agentWorkActive) return;
     const controller = new AbortController();
     setModelDiscovery(null);
     setModelDiscoveryState("loading");
@@ -85,7 +87,7 @@ export function ChannelHeader({
       .then((result) => { if (!controller.signal.aborted) { setModelDiscovery(result); setModelDiscoveryState("idle"); } })
       .catch(() => { if (!controller.signal.aborted) setModelDiscoveryState("error"); });
     return () => controller.abort();
-  }, [readOnlySourceLabel, selectedAgentId]);
+  }, [readOnlySourceLabel, selectedAgentId, agentWorkActive]);
   const model = modelDiscovery?.model;
   const selectedModel = selectedAgentModelId === undefined ? model?.selected || model?.options[0]?.value || "" : selectedAgentModelId;
   const modelControl = model && model.options.length ? (
@@ -174,7 +176,7 @@ export function ChannelHeader({
                   : "header.managerAllocationConfigured")
     : null;
 
-  const runtimeControl = readOnlySourceLabel ? (
+  const runtimeControl = agentWorkActive ? null : readOnlySourceLabel ? (
     <span className="personal-read-only-source" title={t("header.readOnlySourceDescription", { source: readOnlySourceLabel })}><Eye size={15} />{readOnlySourceLabel}<small>{t("common.readOnly")}</small></span>
   ) : <>
     <WorkspaceSelect

@@ -1,8 +1,5 @@
 .attached-agent-conversations {margin: 12px 24px;}
 .attached-conversation-entry {font: inherit; padding: 8px 12px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); cursor: pointer;}
-.attached-conversation-dialog {position: fixed; inset: 0; margin: auto; width: min(960px, calc(100vw - 24px)); max-height: calc(100dvh - 48px); padding: 0; border: 1px solid var(--pw-line); border-radius: 12px; background: var(--pw-card); color: var(--pw-text); font: inherit;}
-.attached-conversation-dialog[open] {display: flex; flex-direction: column;}
-.attached-conversation-dialog::backdrop {background: rgb(0 0 0 / 32%);}
 .attached-conversation-heading {display: flex; align-items: center; justify-content: space-between; padding: 16px; gap: 16px; border-bottom: 1px solid var(--pw-line);}
 .attached-conversation-heading h2 {margin: 0; font-size: var(--text-heading);}
 .attached-conversation-heading button {font: inherit; padding: 8px 12px; color: inherit; background: var(--pw-card); border: 1px solid var(--pw-line); border-radius: 6px;}
@@ -20,3 +17,45 @@
 .attached-conversation-messages time {font-size: var(--text-caption); color: var(--pw-muted);}
 .attached-conversation-messages [data-role="user"] {padding-inline: 12px; background: var(--pw-hover); border-radius: 6px;}
 @media (max-width: 640px) {.attached-agent-conversations {margin: 12px;} .attached-conversation-messages {max-height: 48vh;}}
+
+.attached-conversation-messages [data-role="tool"], .attached-conversation-messages [data-role="activity"] {padding-block: 0; color: var(--pw-muted);}
+.attached-conversation-messages details {margin-block: 0;}
+.attached-conversation-messages summary {cursor: pointer; min-height: 44px; align-content: center; color: var(--pw-text);}
+.attached-conversation-messages pre {font: var(--text-body) / var(--leading-prose) var(--font-mono); color: var(--pw-text); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; overflow: auto;}
+.attached-history-navigation {display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: var(--text-caption);}
+.personal-composer-wrap[hidden] {display: none;}
+.personal-channel-scroll[data-agent-work="true"] {padding-block: 0; overflow: hidden;}
+.personal-channel-scroll[data-agent-work="true"] > .personal-goal-view-panel:not([hidden]) {height: 100%;}
+.goal-agent-work-page {height: 100%; display: flex; flex-direction: column; min-width: 0;}
+.goal-agent-work-page .attached-conversation-heading {padding: 16px 0; flex-wrap: wrap; gap: 12px;}
+.goal-agent-work-page .attached-conversation-heading h2 {overflow-wrap: anywhere;}
+.agent-work-navigation {display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0;}
+.agent-work-navigation select, .agent-work-directory button {font: inherit; border: 1px solid var(--pw-line); background: var(--pw-card); color: var(--pw-text); border-radius: 6px; padding: 8px 12px; min-height: 44px; max-width: 100%;}
+.agent-work-directory {display: grid; gap: 12px; padding-block: 24px;}
+.agent-work-directory button {text-align: left; cursor: pointer;}
+.agent-work-unavailable {padding-block: 24px; color: var(--pw-muted); line-height: var(--leading-prose);}
+.goal-agent-work-page .attached-conversation-content {flex: 1; display: flex; flex-direction: column; padding: 0 0 16px; overflow: auto;}
+.goal-agent-work-page .attached-conversation-content > p {margin-block: 8px;}
+.goal-agent-work-page .attached-conversation-source {font-size: var(--text-caption); color: var(--pw-muted);}
+.goal-agent-work-page .attached-conversation-messages {flex: 1; min-height: 160px; max-height: none; margin-block: 12px;}
+.goal-agent-work-page .attached-conversation-content > button {align-self: flex-start; min-height: 44px;}
+.goal-agent-work-page form {flex-shrink: 0; display: flex; gap: 12px; align-items: flex-end; border-top: 1px solid var(--pw-line); padding-top: 8px;}
+.goal-agent-work-page form label {margin: 0; flex: 1; min-width: 0;}
+.goal-agent-work-page form textarea {min-height: 64px; max-height: 160px;}
+.goal-agent-work-page form button[type="submit"] {background: var(--pw-text); color: var(--pw-card); min-height: 44px;}
+@media (max-width: 640px) {.agent-work-navigation {width: 100%;} .agent-work-navigation select {flex: 1; min-width: 0;} .goal-agent-work-page .attached-conversation-messages {min-height: 120px;}}
+
+.attached-connection-status {display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; padding-block: 8px;}
+.attached-connection-status p {margin: 0;}
+.attached-connection-status .attached-conversation-open {min-height: 44px; flex-shrink: 0;}
+@media (max-width: 640px) {.goal-agent-work-page .attached-conversation-heading h2 {font-size: var(--text-lead);} .agent-work-navigation {width: auto; flex: 1;} .agent-work-navigation select {max-width: 140px;} .attached-conversation-heading button {padding-inline: 8px;}}
+
+.attached-conversation-messages summary > strong {font-weight: 500;}
+.attached-conversation-messages summary > time {margin-left: 8px;}
+.attached-tool-metadata {font-size: var(--text-caption); margin-top: 8px;}
+.attached-conversation-messages .attached-tool-source {font-size: var(--text-caption);}
+@media (max-width: 640px) {
+  .goal-agent-work-page form {flex-wrap: wrap;}
+  .goal-agent-work-page form label {flex-basis: 100%;}
+  .goal-agent-work-page form button[type="submit"] {margin-left: auto;}
+}

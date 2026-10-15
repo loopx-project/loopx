@@ -22,6 +22,7 @@ from ..capabilities.native_chat.codex_attached import (
     open_conversation,
     read_messages,
 )
+from ..capabilities.native_chat.codex_history import read_content
 from ..file_lock import exclusive_file_lock
 from ..registry import atomic_write_json, find_registry_goal
 from ..thread_agent_binding import collect_accepted_bindings
@@ -129,6 +130,11 @@ class CodexAttachedRequestMixin:
                 "before",
                 "revision",
                 "operation_id",
+                "after",
+                "source_ref",
+                "entry_id",
+                "content_offset",
+                "content_ref",
             } or any(len(v) != 1 for v in query.values()):
                 raise ValueError("Conversation query is invalid")
             goal = self._codex_goal(query.get("goal_id", [""])[0])
@@ -153,7 +159,23 @@ class CodexAttachedRequestMixin:
                 http._send_json(receipt_readback(receipt))
                 return
             home, path = locate_thread(binding["thread_id"])
+            if "entry_id" in query:
+                content = read_content(
+                    path,
+                    entry_id=int(query["entry_id"][0]),
+                    offset=int(query.get("content_offset", ["0"])[0]),
+                    expected_source=query.get("source_ref", [""])[0],
+                    content_ref=query.get("content_ref", [""])[0],
+                )
+                current_binding(
+                    self._codex_goal(query["goal_id"][0]),
+                    query["agent_id"][0],
+                    binding["binding_ref"],
+                )
+                http._send_json({"ok": True, **content})
+                return
             before = int(query["before"][0]) if "before" in query else None
+            after = int(query["after"][0]) if "after" in query else None
             stamp = path.stat()
             revision = history_revision(stamp)
             state = activity(home, binding["thread_id"])
@@ -165,7 +187,16 @@ class CodexAttachedRequestMixin:
                 pass  # Persisted history remains readable when Desktop closes.
             can_reply = connected and state["state"] == "idle"
             # Do not repeatedly reparse megabytes when no host append changed.
-            if before is None and query.get("revision", [""])[0] == revision:
+            if (
+                before is None
+                and query.get("revision", [""])[0] == revision
+                and (after is None or after >= stamp.st_size)
+            ):
+                current_binding(
+                    self._codex_goal(query["goal_id"][0]),
+                    query["agent_id"][0],
+                    binding["binding_ref"],
+                )
                 http._send_json(
                     {
                         "ok": True,
@@ -177,7 +208,17 @@ class CodexAttachedRequestMixin:
                     }
                 )
                 return
-            view = read_messages(path, before=before)
+            view = read_messages(
+                path,
+                before=before,
+                after=after,
+                expected_source=query.get("source_ref", [None])[0],
+            )
+            current_binding(
+                self._codex_goal(query["goal_id"][0]),
+                query["agent_id"][0],
+                binding["binding_ref"],
+            )
             http._send_json(
                 {
                     "ok": True,
@@ -265,8 +306,15 @@ class CodexAttachedRequestMixin:
                     http._send_json(receipt_readback(receipt))
                     return
                 if activity(home, binding["thread_id"])["state"] != "idle":
-                    http._send_error(
-                        "The Agent is busy or its state is unknown. Continue in the original App; this surface does not interrupt it.",
+                    # No receipt or native input exists for this operation. Do not
+                    # extend this proof to generic conflicts or transport errors.
+                    http._send_json(
+                        {
+                            "ok": False,
+                            "error": "The Agent is busy or its state is unknown. Nothing was sent; your draft is retained.",
+                            "input_not_submitted": True,
+                            "operation_id": body["operation_id"],
+                        },
                         status=409,
                     )
                     return

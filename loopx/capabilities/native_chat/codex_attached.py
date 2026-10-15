@@ -23,8 +23,11 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from ...codex_app_thread_activity import codex_homes, observe_codex_threads
+from .codex_history import (
+    history_revision as history_revision,
+    read_messages as read_messages,
+)
 
-WINDOW_BYTES = 2 * 1024 * 1024
 MAX_FRAME_BYTES = 8 * 1024 * 1024
 
 
@@ -254,73 +257,6 @@ def locate_thread(thread_id: str, homes: list[Path] | None = None) -> tuple[Path
             "The bound conversation is missing or ambiguous on this host"
         )
     return matches[0]
-
-
-def history_revision(stamp: os.stat_result) -> str:
-    # Replacing a rollout must invalidate offset-based message identities.
-    return f"{stamp.st_dev}:{stamp.st_ino}:{stamp.st_size}:{stamp.st_mtime_ns}"
-
-
-def read_messages(path: Path, *, before: int | None = None) -> dict[str, Any]:
-    with path.open("rb") as stream:
-        stamp = os.fstat(stream.fileno())
-        size = stamp.st_size
-        end = min(size, before) if before is not None else size
-        if end < 0:
-            raise ValueError("History position must be nonnegative")
-        start = max(0, end - WINDOW_BYTES)
-        stream.seek(start)
-        if start:
-            stream.readline(WINDOW_BYTES)  # Never parse a partial first record.
-        older_cursor = min(stream.tell(), end) if start else 0
-        if older_cursor >= end and start:
-            older_cursor = start
-        messages = []
-        while stream.tell() < end:
-            offset = stream.tell()
-            raw = stream.readline(min(WINDOW_BYTES, end - offset))
-            if not raw.endswith(b"\n"):
-                continue  # A partial append is retried on the next observation.
-            try:
-                record = json.loads(raw)
-                item = record.get("payload", {})
-                if (
-                    record.get("type") != "response_item"
-                    or item.get("type") != "message"
-                    or item.get("role") not in ["user", "assistant"]
-                ):
-                    continue
-                text = "\n".join(
-                    part["text"]
-                    for part in item.get("content", [])
-                    if isinstance(part, dict)
-                    and part.get("type") in ["input_text", "output_text"]
-                    and isinstance(part.get("text"), str)
-                )
-                if text:
-                    messages.append(
-                        {
-                            "id": str(offset),
-                            "role": item["role"],
-                            "text": text[:24000],
-                            "truncated": len(text) > 24000,
-                            "timestamp": record.get("timestamp"),
-                        }
-                    )
-            except (ValueError, TypeError, AttributeError):
-                continue
-    if len(messages) > 100:
-        older_cursor = int(messages[-100]["id"])
-    return {
-        "messages": messages[-100:],
-        "before": older_cursor if older_cursor else None,
-        "revision": history_revision(stamp),
-        "source_ref": hashlib.sha256(
-            f"{stamp.st_dev}:{stamp.st_ino}".encode()
-        ).hexdigest(),
-        "history_size": size,
-        "bounded": bool(start) or len(messages) > 100,
-    }
 
 
 def activity(home: Path, thread_id: str) -> dict[str, Any]:

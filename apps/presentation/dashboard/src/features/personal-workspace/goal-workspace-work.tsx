@@ -62,7 +62,8 @@ function AddTask({goal, proposals, onPreview, onSelect}: {
 }
 
 export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoId, onSelect, board, map, results,
-  readOnly, active, historyRefreshRevision, proposals, onPreview, railOpen, onCloseRail}: {
+  readOnly, active, historyRefreshRevision, proposals, onPreview, railOpen, onCloseRail, onOpenAgentConversation}: {
+  onOpenAgentConversation?: (agentId: string) => void;
   railOpen: boolean; onCloseRail: () => void;
   goal: WorkspaceGoal; digest: GoalWorkspaceDigest; items: WorkspaceTimelineItem[]; userTodos: WorkspaceModel["userTodos"];
   selectedTodoId: string | null; onSelect: (selection: WorkspaceDrawerSelection) => void;
@@ -143,7 +144,7 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
       </button>)}{!activity.length ? <p>{zh ? "当前时间线尚无已完成或返回的记录。" : "No completed work or returned results in this timeline."}</p> : null}</div>}
       <footer className="goal-work-scope">{zh ? "统计仅覆盖此 Goal；任务与历史可能分批载入。" : "Counts cover this Goal; tasks and history may be loaded in bounded pages."}<time dateTime={digest.observedAt}>{new Date(digest.observedAt).toLocaleTimeString(locale)}</time></footer>
     </aside>;
-  return <div className="goal-workspace-composition">
+  return <><div className="goal-workspace-composition">
     <div className="goal-workspace-document">
       <section className="goal-now" aria-label={zh ? "当前工作" : "Now"}>
         <header className="goal-now-header"><h2>{zh ? "当前工作" : "Now"}</h2>
@@ -156,7 +157,9 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
         </header>
         {digest.work.coverage !== "complete" ? <p className="goal-work-scope" role="status">{zh ? `当前列出 ${digest.work.listedOpen} 项；总数或覆盖范围不完整。` : `${digest.work.listedOpen} items listed; total or coverage is incomplete.`}</p> : null}
         <div className="goal-owner-groups" hidden={lens !== "owner"}>{digest.work.groups.map(group => <section className="goal-owner-group" key={group.ownerId ?? ""} data-owner-id={group.ownerId ?? ""}>
-          <header><h3>{ownerName(group.ownerId)}</h3><span>{group.todoIds.length} {zh ? "项任务" : "tasks"} · {group.todoIds.filter(id => rows.get(id)?.displayClass === group.displayClass).length} {goalWorkClassLabel(group.displayClass, zh)}</span></header>
+          <header><h3>{ownerName(group.ownerId)}</h3><span>{group.todoIds.length} {zh ? "项任务" : "tasks"} · {group.todoIds.filter(id => rows.get(id)?.displayClass === group.displayClass).length} {goalWorkClassLabel(group.displayClass, zh)}</span>
+            {!readOnly && group.ownerId && onOpenAgentConversation ? <button type="button" className="goal-owner-conversation" data-agent-id={group.ownerId} aria-label={zh ? `与 ${ownerName(group.ownerId)} 对话` : `Talk to ${ownerName(group.ownerId)}`} onClick={() => onOpenAgentConversation(group.ownerId!)}>{zh ? "工作记录" : "Work conversation"}</button> : null}
+          </header>
           {group.todoIds.map(id => task(id))}
         </section>)}
           {!digest.work.groups.length ? <p className="goal-work-scope">{digest.work.coverage === "complete" ? (zh ? "当前没有可列出的进行中任务。延后与完成记录在全部工作中。" : "No current work to list. Deferred and completed work remain in All work.") : (zh ? "当前快照没有可列出的任务。" : "No work is listed in this snapshot.")}</p> : null}
@@ -170,5 +173,6 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
       <button type="button" className="goal-work-rail-close" onClick={onCloseRail}>{zh ? "关闭全部工作" : "Close all work"}</button>
       {rail}
     </dialog> : rail}
-  </div>;
+  </div>
+  </>;
 }
