@@ -10,6 +10,7 @@ from typing import Any
 from ...registry import read_json
 from ...file_lock import exclusive_cross_runtime_file_lock
 from ..runtime.document_io import atomic_write_private_json as atomic_write_json, fsync_state_directory
+from ..runtime.file_paths import windows_extended_path
 from ..runtime.private_permissions import protect_private_path
 from .completion_validation_projection import (
     completion_validation_declaration,
@@ -31,7 +32,7 @@ def _require_public_id(value: str, label: str) -> str:
 def completion_validation_declaration_path(
     *, runtime_root: Path, goal_id: str, todo_id: str
 ) -> Path:
-    return (
+    return windows_extended_path(
         runtime_root.expanduser().resolve(strict=False)
         / "goals"
         / _require_public_id(goal_id, "goal_id")

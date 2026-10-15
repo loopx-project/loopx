@@ -10,6 +10,7 @@ import os
 import json
 from typing import Any
 
+from .file_paths import windows_extended_path
 from .private_permissions import protect_private_path
 import stat
 import tempfile
@@ -21,6 +22,7 @@ def atomic_write_state_text(
 ) -> None:
     """Persist complete UTF-8 state while the caller holds its sibling lock."""
 
+    path = windows_extended_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     if private:
         protect_private_path(path.parent, directory=True)
@@ -62,6 +64,7 @@ def verify_state_text_durable(path: Path, text: str) -> None:
     Equality of visible bytes alone does not prove the directory entry persisted.
     The caller holds the same document lock as the state writer.
     """
+    path = windows_extended_path(path)
     with path.open("r+" if os.name == "nt" else "r", encoding="utf-8", newline="") as handle:
         if handle.read() != text:
             raise RuntimeError("Todo Markdown projection readback mismatch")

@@ -63,6 +63,33 @@ def test_durable_readback_never_repairs_mismatched_bytes(tmp_path):
     assert path.read_bytes() == b"original\r\n"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows ordinary MAX_PATH boundary")
+@pytest.mark.parametrize("private", [False, True])
+def test_ordinary_windows_long_path_publish_preserves_bytes_and_create_only(tmp_path, private):
+    # Include the real .json extension and eight random mkstemp characters.
+    name = "a" * 64 + ".json"
+    temporary_name = "." + name + ".12345678.tmp"
+    padding = 293 - len(str(tmp_path / temporary_name)) - 1
+    assert 1 <= padding <= 200
+    path = tmp_path / ("g" * padding) / name
+    assert len(str(path.parent / temporary_name)) == 293
+    assert not str(path).startswith(chr(92) * 2 + "?" + chr(92))
+    # Inspect the same physical file through Win32's supported long address;
+    # the writer and durability reader still receive the ordinary caller path.
+    address = Path(chr(92) * 2 + "?" + chr(92) + str(path))
+    original = "私有\r\nfirst\n"
+    io.atomic_write_state_text(path, original, create_only=True, private=private)
+    assert address.read_bytes() == original.encode("utf-8")
+    with pytest.raises(FileExistsError):
+        io.atomic_write_state_text(path, "loser", create_only=True, private=private)
+    assert address.read_bytes() == original.encode("utf-8")
+    updated = original + "tail\r\n"
+    io.atomic_write_state_text(path, updated, private=private)
+    io.verify_state_text_durable(path, updated)
+    assert address.read_bytes() == updated.encode("utf-8")
+    assert list(address.parent.iterdir()) == [address]
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX directory fsync boundary")
 def test_directory_sync_closes_descriptor_on_failure(tmp_path, monkeypatch):
     closed = []
