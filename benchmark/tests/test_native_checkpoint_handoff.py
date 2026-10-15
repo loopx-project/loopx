@@ -528,6 +528,9 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
         phase.update(kind="review", tool_sent=False)
         result = run_once({**env, "LOOPX_CHECKPOINT_REQUEST": str(request)})
         assert result["ok"] and result["checkpoint"]["captured"], result
+        assert "turn_envelope" not in prior and "turn_envelope_source" not in prior
+        assert result["turn_envelope"] is True
+        assert result["turn_envelope_source"] == "checkpoint_handoff"
         assert result["checkpoint"]["phase"] == "before_replan"
         assert result["checkpoint"]["source_turn_id"] == prior["turn_id"]
         assert result["session"]["session_id"] == prior["session"]["session_id"]

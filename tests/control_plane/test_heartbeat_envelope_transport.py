@@ -26,6 +26,12 @@ def test_renderer_disabled_parity_and_opt_in_scope(tmp_path):
     assert '--turn-envelope --decision-output-root' in payload['quota_guard_command']
     assert 'writeback.settlement_plan.ordered_steps' in payload['task_body']
     assert '--decision-output-root' in payload['thin_prompt_command']
+    # Guard re-entry is owed after Todo claim/settlement/state writeback, not
+    # after every workspace edit; the old blanket obligation must not return.
+    body = payload['task_body']
+    assert 'Re-enter the guard after a Todo claim, settlement or state writeback' in body
+    assert 'continue under the current admission' in body
+    assert 'After a workspace or state change, re-enter the guard' not in body
     for overrides in (dict(turn_instance_id=None), dict(thin=False, full=True),
                       dict(runtime_profile='codex_app_ssh_goal')):
         with pytest.raises(ValueError):

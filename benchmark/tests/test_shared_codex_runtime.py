@@ -630,8 +630,10 @@ def test_wake_receipt_preserves_opt_out(tmp_path, monkeypatch, enabled):
     receipt = run_once(env)
     assert receipt["ok"], receipt
     assert ("turn_envelope" in receipt) is enabled
+    assert ("turn_envelope_source" in receipt) is enabled
     if enabled:
         assert receipt["turn_envelope"] is True
+        assert receipt["turn_envelope_source"] == "explicit"
 
 
 @pytest.mark.parametrize("observed", [
