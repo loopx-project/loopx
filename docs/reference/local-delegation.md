@@ -1264,6 +1264,20 @@ home, binary, sandbox or effective MCP configuration, or retarget the Todo.
 Prepare the operation in this same managed session/profile. Existing delegation
 inspection and ordinary Turn admission still determine whether it can run.
 
+If text messages already have an owner, set `"callbacks_only": true` inside
+the v1 collector's `operation_callbacks` object and retain `enabled: true`.
+The collector then starts only `card.action.trigger`, using the same callback,
+wake and result-recovery owners. It does not start an IM listener, ingest text,
+or change the existing text consumer. `callbacks_only` defaults to `false`,
+preserving message collection. Older releases reject this nested option before
+starting a consumer instead of silently starting another IM stream. Disabling
+both inputs or enabling message turn-start sync in callback-only mode is
+rejected. Keep the configured routes as the result-delivery chat allowlist;
+their inboxes need not be enabled when text collection is disabled. Plans and
+status expose `collect_messages: false` and do not claim complete text capture.
+Listener readiness, a real authenticated callback, native continuation and
+original-card result delivery remain separate evidence.
+
 For the candidate DSH transport, prepare through the normal CLI with
 `--host dsh --dsh-operation-module /absolute/native-operation.js` and retain
 those exact options in the original delegation binding. Also pin the original
