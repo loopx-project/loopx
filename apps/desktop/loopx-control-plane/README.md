@@ -321,7 +321,7 @@ LOOPX_TEST_APP="/path/to/LoopX.app" cargo test --lib \
   real_release_backup_restores_damage_and_rejects_tampering -- --ignored
 LOOPX_TEST_SIGNED_ARCHIVE="/path/to/LoopX.app.tar.gz" cargo test \
   --test signed_bundle -- --ignored
-LOOPX_TEST_APP="/path/to/LoopX.app" \
+LOOPX_TEST_APP="/path/to/older/LoopX.app" \
 LOOPX_TEST_SIGNED_ARCHIVE="/path/to/LoopX.app.tar.gz" \
 LOOPX_TEST_INSTALL_PARENT="/Volumes/disposable-apfs-test-volume" cargo test --lib \
   real_release_installs_on_another_volume_and_keeps_the_old_app -- --ignored
@@ -338,8 +338,11 @@ journaling or replacement and checks that the source artifact remains intact.
 The second verifies the updater archive with the shipped public key and rejects
 modified bytes. The third requires a writable disposable APFS volume separate
 from the system temporary directory. It copies the source App into a temporary
-directory there, installs the archive through the production filesystem adapter,
-and verifies both the replacement and retained previous App. The fourth requires
+directory there, installs a distinct update through the production filesystem
+adapter, and verifies both the replacement and retained previous App. It then
+restores the pre-install backup through the production recovery adapter on that
+same target, checking the old identity, executable and signature, and that the
+rollback journal callback ran before replacement. The fourth requires
 a writable disposable HFS+ volume and a source App distinct from the update
 archive. It first confirms that the filesystem rejects atomic directory exchange,
 then verifies that the production installer fails while the original App's

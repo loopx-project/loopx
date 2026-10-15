@@ -235,7 +235,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires LOOPX_TEST_APP, LOOPX_TEST_SIGNED_ARCHIVE and a separate APFS LOOPX_TEST_INSTALL_PARENT"]
+    #[ignore = "requires distinct LOOPX_TEST_APP and LOOPX_TEST_SIGNED_ARCHIVE, plus a separate APFS LOOPX_TEST_INSTALL_PARENT"]
     fn real_release_installs_on_another_volume_and_keeps_the_old_app() {
         use std::os::unix::fs::MetadataExt;
         let parent = std::env::var("LOOPX_TEST_INSTALL_PARENT").unwrap();
@@ -253,8 +253,22 @@ mod tests {
             .status()
             .unwrap()
             .success());
+        let original_info = fs::read(target.join("Contents/Info.plist")).unwrap();
+        let original_executable = fs::read(synthetic_executable(&target)).unwrap();
+        let backup = tempfile::tempdir_in(root.path()).unwrap();
+        assert!(std::process::Command::new("ditto")
+            .arg(&target)
+            .arg(backup.path().join("LoopX.app"))
+            .status()
+            .unwrap()
+            .success());
         let bytes = fs::read(std::env::var("LOOPX_TEST_SIGNED_ARCHIVE").unwrap()).unwrap();
         install_verified_archive(&synthetic_executable(&target), &bytes).unwrap();
+        let installed_info = fs::read(target.join("Contents/Info.plist")).unwrap();
+        assert_ne!(
+            installed_info, original_info,
+            "identical source and update cannot qualify replacement or rollback"
+        );
         assert!(crate::update_backup::installed_bundle_verifies(
             &synthetic_executable(&target)
         ));
@@ -276,6 +290,35 @@ mod tests {
         );
         assert!(crate::update_backup::installed_bundle_verifies(
             &synthetic_executable(&preserved)
+        ));
+
+        // Compose the real install and recovery adapters on the same target.
+        // The pre-install backup must restore the old version, and recording
+        // the rollback must precede replacement of the newly installed App.
+        let journal = root.path().join("rollback-recorded");
+        crate::update_backup::restore_verified_backup(
+            &synthetic_executable(&target),
+            backup.path(),
+            || {
+                assert_eq!(
+                    fs::read(target.join("Contents/Info.plist")).unwrap(),
+                    installed_info
+                );
+                fs::write(&journal, "rollback").map_err(|error| error.to_string())
+            },
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(journal).unwrap(), "rollback");
+        assert_eq!(
+            fs::read(target.join("Contents/Info.plist")).unwrap(),
+            original_info
+        );
+        assert_eq!(
+            fs::read(synthetic_executable(&target)).unwrap(),
+            original_executable
+        );
+        assert!(crate::update_backup::installed_bundle_verifies(
+            &synthetic_executable(&target)
         ));
         assert!(crate::update_backup::installed_bundle_verifies(
             &synthetic_executable(Path::new(&source))
