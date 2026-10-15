@@ -159,17 +159,21 @@ function semanticProtectedActionPreview(
 // derived from the Turn, so observing the same completion twice reuses the
 // stored preview instead of offering a duplicate.
 function todoProposalPreviewRequests(
-  goalId: string,
+  goalId: string | undefined,
   turnId: string,
   proposals: AgentResponse["proposals"],
 ): WorkspaceActionPreviewRequest[] {
-  return proposals.filter(isTodoProposal).map((proposal, index) => ({
-    actionKind: "todo.create",
-    context: { goal_id: goalId, kind: "goal" },
-    idempotencyKey: `chat-todo-proposal:${turnId}:${index}`,
-    normalizedParameters: { goal_id: goalId, priority: proposal.priority, text: proposal.text },
-    summary: proposal.text,
-  }));
+  return proposals.filter(isTodoProposal).flatMap((proposal, index) => {
+    const target = goalId ?? proposal.goal_id;
+    if (!target || (goalId && proposal.goal_id && proposal.goal_id !== goalId)) return [];
+    return [{
+      actionKind: "todo.create",
+      context: goalId ? { goal_id: goalId, kind: "goal" } : { goal_id: "loopx-manager", kind: "manager" },
+      idempotencyKey: `chat-todo-proposal:${turnId}:${index}`,
+      normalizedParameters: { goal_id: target, priority: proposal.priority, text: proposal.text },
+      summary: proposal.text,
+    }];
+  });
 }
 import type { StatusSourceControl } from "../features/personal-workspace/status-source-switcher";
 import { applyRemoteGoalLifecycle, ensureSshSource } from "../data/ssh-host-catalog";
@@ -1898,17 +1902,20 @@ function PersonalGoalHome({
     proposals: AgentResponse["proposals"],
     streamingMessageId: number | null,
   ) {
-    const requests = goalId && model.goals.some((goal) => goal.goalId === goalId)
-      ? todoProposalPreviewRequests(goalId, turnId, proposals)
+    const manager = targetContextId === "manager";
+    const requests = (manager || model.goals.some((goal) => goal.goalId === goalId))
+      ? todoProposalPreviewRequests(manager ? undefined : goalId, turnId, proposals)
+          .filter((request) => model.goals.some((goal) => goal.goalId === request.normalizedParameters.goal_id))
       : [];
     if (!requests.length) return true;
     // Existing previews own their lifecycle, including applied/rejected states.
     // Recomputing a preview after Goal state changes can conflict with its stored
     // fingerprint; use the persisted Turn key before attempting any new preview.
-    const stored = await listTypedActions({ contextKind: "goal", goalId }).catch(() => null);
+    const contextGoalId = manager ? "loopx-manager" : goalId;
+    const stored = await listTypedActions({ contextKind: manager ? "manager" : "goal", goalId: contextGoalId }).catch(() => null);
     if (!stored) return false;
     const known = new Set(stored.filter((proposal) => proposal.action_kind === "todo.create"
-      && proposal.context.goal_id === goalId).map((proposal) => proposal.idempotency_key));
+      && proposal.context.goal_id === contextGoalId).map((proposal) => proposal.idempotency_key));
     const missing = requests.filter((request) => !known.has(request.idempotencyKey));
     const results = await Promise.allSettled(missing.map((request) => previewTypedAction(request)));
     if (results.some((result) => result.status === "fulfilled")) setTypedActionsRevision((current) => current + 1);
@@ -1931,7 +1938,8 @@ function PersonalGoalHome({
   useEffect(() => {
     const history = conversationHistory.history;
     const goalId = selectedGoal?.goalId;
-    if (readOnly || !goalId || !history) return;
+    const manager = contextId === "manager";
+    if (readOnly || (!goalId && !manager) || !history) return;
     const controller = new AbortController();
     const projected = new Set<string>(); // Optimization only; never a durable claim.
     let timer: number | undefined;
@@ -1940,7 +1948,8 @@ function PersonalGoalHome({
       let retry = false;
       for (const snapshot of history.snapshots) {
         const session = snapshot.session;
-        if (session.goal_id !== goalId || session.channel_id !== `goal.${goalId}`) continue;
+        if (manager ? session.goal_id !== "loopx-manager" || session.channel_id !== "manager"
+          : session.goal_id !== goalId || session.channel_id !== `goal.${goalId}`) continue;
         const turnIds = new Set(snapshot.messages
           .map((message) => message.turn_id)
           .filter((turnId): turnId is string => Boolean(turnId) && turnId !== session.active_turn_id));
@@ -1951,7 +1960,7 @@ function PersonalGoalHome({
           try {
             const completed = await readCompletedChatTurn(session.session_id, turnId, controller.signal);
             if (controller.signal.aborted) return;
-            const persisted = !completed || await projectRecoveredTurnProposals(goalId, session.goal_id, turnId, completed.proposals, null);
+            const persisted = !completed || await projectRecoveredTurnProposals(manager ? "manager" : goalId!, session.goal_id ?? undefined, turnId, completed.proposals, null);
             if (persisted) projected.add(key);
             else retry = true;
           } catch {
@@ -1970,7 +1979,7 @@ function PersonalGoalHome({
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [conversationHistory.history, selectedGoal?.goalId, readOnly]);
+  }, [conversationHistory.history, contextId, selectedGoal?.goalId, readOnly]);
 
   useEffect(() => {
     if (readOnly) return;
@@ -2313,20 +2322,22 @@ function PersonalGoalHome({
         }
       }).catch(() => { /* The original conversation remains readable. */ });
       const todoProposals = response.proposals.filter(isTodoProposal);
-      // The channel already states where a team plan is confirmed: its answer
-      // names the Goal whose workspace holds the card, so a manager-channel
-      // proposal here is only ever a Todo the owner has to be sent to.
-      if (todoProposals.length > 0 && !targetGoal) {
+      // A scoped manager Todo can use the existing typed action card. Legacy
+      // unscoped proposals still require a Goal; never guess from UI selection.
+      if (todoProposals.some((proposal) => !proposal.goal_id) && !targetGoal) {
         updateConversationMessage(targetContextId, streamingMessageId, {
-          lines: ["请进入要修改的 Goal，预览并确认具体变更。"],
+          text: [visibleAgentMessage(response.message || streamedText.trim()), "请进入要修改的 Goal，预览并确认具体变更。"].filter(Boolean).join("\n\n"),
+        });
+      }
+      if (targetGoal && todoProposals.some((proposal) => proposal.goal_id && proposal.goal_id !== targetGoal.goalId)) {
+        updateConversationMessage(targetContextId, streamingMessageId, {
+          text: [visibleAgentMessage(response.message || streamedText.trim()), locale === "zh-CN" ? "待办目标与当前 Goal 不一致；尚未准备写入预览，请核对目标。" : "The task targets another Goal; no write preview was prepared. Check the intended Goal."].filter(Boolean).join("\n\n"),
         });
       }
       const decision = targetContext.kind === "goal" && response.protected_action
         ? semanticProtectedActionPreview(targetContextId, question, response.protected_action) ?? undefined
         : undefined;
-      const candidates = targetGoal
-        ? todoProposalPreviewRequests(targetGoal.goalId, streamed.turnId, response.proposals)
-        : [];
+      const candidates = todoProposalPreviewRequests(targetGoal?.goalId, streamed.turnId, response.proposals);
       if (decision || candidates.length > 0) return { candidates, decision };
     } catch (error) {
       if (preparationController.signal.aborted && !submittedTurnId) {

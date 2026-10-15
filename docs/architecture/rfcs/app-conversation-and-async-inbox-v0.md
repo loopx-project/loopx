@@ -987,7 +987,26 @@ and the written execution boundary must both be respected downstream.
 The explicit status-only profile returns a labelled snapshot, not a keyword-built
 answer. Converting a reply into a task opens the complete editable text rather
 than guessing its next-action sentence. Structured ID/date/resume-condition
-validation remains. Lark routing is unchanged.
+validation remains. Lark admission retains its existing conversation owner.
+
+Todo proposals may carry an explicit `goal_id` resolved from the permitted
+directory. A manager answer with that target reaches the existing typed Todo
+confirmation card; an unscoped manager proposal and a proposal naming a different
+Goal from the selected Goal never silently inherit a UI target. Legacy unscoped
+Goal replies keep their current Goal behavior. This adds no automatic write.
+
+In a bound steward private conversation, the same scoped proposal is prepared
+by the canonical `todo.create` action owner and returned with the existing
+`/confirm` and `/cancel` commands. The request journal retains its expiry and
+idempotency before preview IO. Confirmation requires the same current App,
+owner, private source and granted Goal, within fifteen minutes; read scope or a
+model proposal alone authorizes no Todo mutation. The existing canonical writer
+supplies the verified receipt, and the result returns to that original private
+conversation. It neither creates a Goal nor starts or assigns an execution.
+Stale, revoked or expired previews fail closed. Lost preview replies recover
+the same preview; an already committed Todo recovers its existing receipt.
+No callback consumer, executor or independent work queue is introduced. These
+source/fixture contracts do not certify an installed Bot or model recognition.
 
 ### Conversational goal preparation: integrating the team-workspace proposal
 

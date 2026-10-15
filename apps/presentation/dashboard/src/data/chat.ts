@@ -216,6 +216,7 @@ export const chatCapabilitiesSchema = z.object({
 
 export const todoProposalSchema = z.object({
   kind: z.literal("todo"),
+  goal_id: z.string().min(1).optional(),
   text: z.string(),
   priority: z.enum(["P0", "P1", "P2"]),
   rationale: z.string(),

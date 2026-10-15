@@ -209,6 +209,28 @@ test("one App has one binding owner, and a context change cannot move an existin
     binding: {...row, project_ref: other.project_ref}, available_projects: [other]}), /new binding identity/);
 });
 
+test("Todo confirmation names a current Goal, preserves its owner and cannot start work", () => {
+  const context = {...project, kind: "bound_steward", audience: "bound_owner", grant: "portfolio_read",
+    goal_ids: ["maintenance"], binding_id: row.binding_id, source_ref: "e".repeat(24),
+    provider_ref: row.provider_ref, operator_ref: row.operator_ref};
+  const proposal = {action_kind: "todo.create", created_at: "2026-01-01T10:00:00Z",
+    context: {...context, kind: "manager", goal_id: "loopx-manager", expires_at: "2026-01-01T10:15:00Z"},
+    normalized_parameters: {goal_id: "maintenance", text: "Remember a feature", priority: "P2"}};
+  const request = {context, proposal, now: "2026-01-01T10:01:00Z", operation: "confirm"};
+  assert.equal(authorizeStewardCreation(request).authorized, true);
+  for (const change of [{goal_id: "foreign"}, {goal_id: undefined}, {start_execution: true}, {agent_id: "worker"}]) {
+    assert.throws(() => authorizeStewardCreation({...request,
+      proposal: {...proposal, normalized_parameters: {...proposal.normalized_parameters, ...change}}}), /Todo confirmation/);
+  }
+  for (const field of ["binding_id", "source_ref", "provider_ref", "operator_ref", "project_ref"]) {
+    assert.throws(() => authorizeStewardCreation({...request, context: {...context, [field]: "f".repeat(24)}}), /audience/);
+  }
+  for (const operation of ["stop", "resume"]) {
+    assert.throws(() => authorizeStewardCreation({...request, operation}), /cannot start/);
+  }
+  assert.throws(() => authorizeStewardCreation({...request, now: "2026-01-01T10:16:00Z"}), /expired/);
+});
+
 test("external project audience has its own Session identity without portfolio or peer scope", () => {
   const next = planConversationBinding(request).state;
   const use = {current: next, binding_id: row.binding_id, source_ref: "e".repeat(24),
