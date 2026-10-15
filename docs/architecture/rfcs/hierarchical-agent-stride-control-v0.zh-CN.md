@@ -800,6 +800,11 @@ worker 后再发布惰性联合产物。真实持续写入容器与 native HTTP 
 完成当前准备/replan、候选工作与原生反馈释放。科研收益、真实题目/profile
 准入和前端操作旅程仍未资格化。参见 [warm 入口契约](../../../benchmark/README.md#explicit-warm-worker-composition-qualification-in-progress)。
 
+通用 [research checkpoint 入口](../../reference/research-checkpoint.md)现为普通 Goal
+组合既有 artifact、session 与 Todo/Explore owner。Codex 存储与分叉 IO 归 Host
+provider；benchmark adapter 向内调用，并添加 evaluator/budget 参与者。捕获与
+采用是分别显式授权的操作。此 CLI/Host 阶段不代表打包前端或灾难替换验收完成。
+
 仅保存历史研究文件不等价于交付给当前类型化复盘。显式 warm 上下文采用现将
 已验证来源的 Explore 知识写入新 Goal 的普通知识日志，保留 findings 的适用
 范围、反证、拓扑及 checkpoint/event 来源。既有日志 owner 约束原序前缀恢复，

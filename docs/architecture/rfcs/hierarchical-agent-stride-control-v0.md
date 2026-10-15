@@ -984,6 +984,13 @@ real native processes and deterministic local inference. Scientific utility,
 actual task/profile admission and the frontend journey remain unqualified.
 See the [warm entry contract](../../../benchmark/README.md#explicit-warm-worker-composition-qualification-in-progress).
 
+The [generic research checkpoint entry](../../reference/research-checkpoint.md)
+now composes the existing artifact, session and Todo/Explore owners for ordinary
+Goals. Codex storage and fork IO live in its Host provider; benchmark adapters
+call inward and add evaluator/budget participants. Capture and adoption are
+separate explicit operations. This CLI/Host stage does not complete the packaged
+frontend or disaster-replacement acceptance.
+
 Retaining historical research files alone does not deliver them to a current
 typed review. Explicit warm-context adoption now seeds the fresh Goal's Explore
 knowledge log from the verified source, preserving scoped findings, counterevidence
