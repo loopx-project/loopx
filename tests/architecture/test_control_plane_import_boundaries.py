@@ -74,7 +74,7 @@ def _module_name(path: Path) -> str:
 def _resolved_imports(path: Path) -> set[str]:
     module_name = _module_name(path)
     package_name = module_name if path.name == "__init__.py" else module_name.rpartition(".")[0]
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    tree = ast.parse(path.read_bytes(), filename=str(path))
     imports: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -92,7 +92,7 @@ def _resolved_from_imports(path: Path) -> dict[str, set[str]]:
     if path.is_relative_to(PACKAGE_ROOT):
         module_name = _module_name(path)
         package_name = module_name if path.name == "__init__.py" else module_name.rpartition(".")[0]
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    tree = ast.parse(path.read_bytes(), filename=str(path))
     imports: dict[str, set[str]] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom):
@@ -107,7 +107,7 @@ def _resolved_from_imports(path: Path) -> dict[str, set[str]]:
 
 
 def _top_level_imported_names(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    tree = ast.parse(path.read_bytes(), filename=str(path))
     return {
         alias.asname or alias.name
         for node in tree.body
@@ -117,7 +117,7 @@ def _top_level_imported_names(path: Path) -> set[str]:
 
 
 def _top_level_function_names(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    tree = ast.parse(path.read_bytes(), filename=str(path))
     return {
         node.name
         for node in tree.body
@@ -128,7 +128,7 @@ def _top_level_function_names(path: Path) -> set[str]:
 def _top_level_import_bindings(path: Path) -> dict[str, str]:
     module_name = _module_name(path)
     package_name = module_name.rpartition(".")[0]
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    tree = ast.parse(path.read_bytes(), filename=str(path))
     bindings: dict[str, str] = {}
     for node in tree.body:
         if isinstance(node, ast.Import):
@@ -144,7 +144,7 @@ def _top_level_import_bindings(path: Path) -> dict[str, str]:
 
 
 def _public_import_only_bindings(path: Path) -> dict[str, str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    tree = ast.parse(path.read_bytes(), filename=str(path))
     loaded_names = {
         node.id
         for node in ast.walk(tree)
@@ -161,7 +161,7 @@ def _public_contract_evidence() -> dict[tuple[str, str], set[str]]:
     evidence: dict[tuple[str, str], set[str]] = {}
     for root in PUBLIC_CONTRACT_ROOTS:
         for path in root.rglob("*.py"):
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            tree = ast.parse(path.read_bytes(), filename=str(path))
             # Aliases such as ``from loopx import status as status_module`` are a
             # real consumer of a facade export, reached by attribute access
             # rather than a from-import. Without this map the audit would report

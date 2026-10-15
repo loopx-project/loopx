@@ -14,7 +14,7 @@ import {
 } from "../../../../../../loopx/control_plane/presentation/action_review_plan.js";
 import { refreshAttention } from "./attention-details";
 import { teamPlanAssignments, teamPlanAppliedLine, teamPlanAppliedOutcome, teamPlanFields, teamPlanGoalId, teamPlanLaneCount, teamPlanReceiptGapLanes, teamPlanTodoIds } from "./team-plan-preview";
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type ReactNode } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type ReactNode } from "react";
 import { AlertCircle, Bot, CalendarClock, FileText, ListPlus, MessageCircleQuestion, Paperclip, Plus, RefreshCw, Send, X } from "lucide-react";
 
 import {
@@ -84,7 +84,9 @@ import { goalWorkKind } from "./goal-activity";
 import { WorkspaceActionForm, type WorkspaceActionDraft } from "./workspace-action-form";
 import { GoalActivityChip, GoalIdentityMark } from "./goal-activity-view";
 import { ManagerBrief } from "./manager-brief";
-import { WorkspaceSettingsPage } from "./workspace-settings-page";
+// Loaded on demand: settings and their editors are a separate chunk that
+// arrives when the owner first opens Settings, not on every workspace visit.
+const WorkspaceSettingsPage = lazy(() => import("./workspace-settings-page").then((module) => ({ default: module.WorkspaceSettingsPage })));
 import { UsageStatisticsNotice } from "./usage-statistics-notice";
 import { readWorkspaceTheme, writeWorkspaceTheme, type WorkspaceTheme } from "./workspace-theme";
 import {
@@ -2152,6 +2154,7 @@ export function PersonalWorkspacePage({
   }
 
   const settingsPage = settingsOpen ? (
+    <Suspense fallback={<p className="personal-lazy-loading" role="status">{t("common.loading")}</p>}>
       <WorkspaceSettingsPage
         callbacks={effectiveDrawerCallbacks}
         focusGoalConnection={Boolean(selection?.kind === "settings" && selection.goalId)}
@@ -2166,6 +2169,7 @@ export function PersonalWorkspacePage({
         attentionNotifications={readOnly ? undefined : { enabled: attentionNotificationsEnabled, support: attentionNotificationSupportState }}
         onAttentionNotificationsChange={readOnly ? undefined : updateAttentionNotifications}
       />
+    </Suspense>
   ) : null;
 
   const attentionNotificationsActive = attentionNotificationsEnabled && attentionNotificationSupportState === "granted" && !readOnly;

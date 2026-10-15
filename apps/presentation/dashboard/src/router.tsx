@@ -8,11 +8,19 @@ import {
 import { z } from "zod";
 
 import { DashboardPage } from "./views/dashboard-page";
-import { FrontstageDeveloperPage } from "./views/frontstage-developer-page";
-import { useEffect } from "react";
+import { Suspense, lazy, useEffect } from "react";
 import { resolveLocalStatusUrl } from "./data/local-status-query";
-import { BenchmarkStudyPage } from "./views/benchmark-study-page";
-import { AnswerReportPage } from "./features/personal-workspace/answer-report-page";
+
+// Secondary routes load on demand. The workspace is what every visit opens;
+// contributor projections, benchmark studies and answer reports arrive as
+// their own chunks only when such a route is entered.
+const FrontstageDeveloperPage = lazy(() => import("./views/frontstage-developer-page").then((module) => ({ default: module.FrontstageDeveloperPage })));
+const BenchmarkStudyPage = lazy(() => import("./views/benchmark-study-page").then((module) => ({ default: module.BenchmarkStudyPage })));
+const AnswerReportPage = lazy(() => import("./features/personal-workspace/answer-report-page").then((module) => ({ default: module.AnswerReportPage })));
+
+function RouteLoading() {
+  return <main className="p-8" role="status">加载中… / Loading…</main>;
+}
 
 const searchSchema = z.object({
   goalId: z.string().optional().default(""),
@@ -84,7 +92,7 @@ export const dashboardRoute = createRoute({
   component: () => {
     const search = dashboardRoute.useSearch();
     return search.reportSessionId && search.reportMessageId
-      ? <AnswerReportPage sessionId={search.reportSessionId} messageId={search.reportMessageId} statusUrl={search.statusUrl}/>
+      ? <Suspense fallback={<RouteLoading />}><AnswerReportPage sessionId={search.reportSessionId} messageId={search.reportMessageId} statusUrl={search.statusUrl}/></Suspense>
       : <DashboardPage/>;
   },
 });
@@ -112,14 +120,14 @@ export const frontstageDeveloperRoute = createRoute({
 export const projectionDeveloperRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/developers/projections",
-  component: FrontstageDeveloperPage,
+  component: () => <Suspense fallback={<RouteLoading />}><FrontstageDeveloperPage /></Suspense>,
 });
 
 export const benchmarkStudyRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/benchmarks/study",
   validateSearch: (search) => benchmarkStudySearchSchema.parse(search),
-  component: BenchmarkStudyPage,
+  component: () => <Suspense fallback={<RouteLoading />}><BenchmarkStudyPage /></Suspense>,
 });
 
 const routeTree = rootRoute.addChildren([

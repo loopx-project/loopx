@@ -16,7 +16,8 @@ FIELDS = ("pattern", "symptoms", "evidence", "likely_root", "durable_repair")
 # script. Source checkout execution reads that same file from the package.
 _scorer_path = Path(__file__).with_name("lexical_retrieval.py")
 if not _scorer_path.is_file():
-    _scorer_path = Path(__file__).resolve().parents[3] / "loopx" / "lexical_retrieval.py"
+    _scorer_path = (Path(__file__).resolve().parents[3] / "loopx" / "capabilities"
+                    / "context_providers" / "lexical_retrieval.py")
 _spec = importlib.util.spec_from_file_location("repair_lexical_retrieval", _scorer_path)
 assert _spec is not None and _spec.loader is not None
 _scorer = importlib.util.module_from_spec(_spec)

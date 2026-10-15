@@ -188,7 +188,7 @@ def test_stdio_receiver_links_existing_work_and_returns_without_duplicate_tasks(
             assert resumed["recorded_decision"] == "adopt" and resumed["answer_owed"]
             assert resumed["step"] == "review_request_work"
             assert [(t["todo_id"], t["title"], t["status"]) for t in resumed["linked_todos"]] == [
-                (own, "Current accepted work", "open")
+                (own, "[P1] Current accepted work", "open")
             ]
             await call("return_result", {"request_id": rid, "text": conclusion})
             assert (await call("read_context", {}))["items"] == []

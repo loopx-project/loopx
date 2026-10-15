@@ -864,6 +864,24 @@ path, and canary route rather than as a user-facing release baseline.
   SQLite qualification remain unqualified. No paired-version benchmark uplift
   or isolated Astra causal effect is claimed.
 
+- `v1.4.1` on 2026-10-15: workspace visibility, semantic replan and recovery
+  hardening at frozen commit `4f27801c4e26fd51246d352eada72c98f8e7e657`.
+  The [published release](https://github.com/loopx-project/loopx/releases/tag/v1.4.1)
+  records nineteen bilingual operating entries and concrete community credits.
+  GitHub/PyPI packages, four desktop installers, the signed macOS update feed,
+  `desktop-stable`, source `stable`, the website download path and the personal
+  illustrated guide were independently read back. An actual PyPI
+  1.4.0-to-1.4.1 upgrade preserved existing work; package hashes and source bytes
+  matched the immutable product tag. Reviewed publication-fixture recovery did
+  not move that tag. At the final source, 515 public smokes and 2,213 affected
+  Python checks passed, with five explicit native-environment skips; this was
+  not a fresh full-tree Python sweep. Doubao Evolving/high completed the fixed
+  22-scenario, two-repeat portfolio and six contrasts with zero failures or
+  skips. Mac artifacts retain ad-hoc signing without Apple notarization;
+  Windows artifacts were verified without native client execution. No paired
+  benchmark, sustained scientific continuation or isolated model causal uplift
+  is claimed.
+
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.
 

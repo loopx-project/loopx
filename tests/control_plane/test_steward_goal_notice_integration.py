@@ -90,7 +90,7 @@ def test_notice_freshness_tracks_selected_facts_not_independent_work(tmp_path, m
     todo("update", "--todo-id", next(row["todo_id"] for row in read() if row["role"] == "user"), "--role", "user", "--status", "blocked",
          "--reason", "Publication needs an owner decision", "--update-operation-id", "gate-blocked", "--agent-id", "agent-a")
     source_before = read()
-    records = {row["text"]: row for row in list_goal_todos(
+    records = {row["title"]: row for row in list_goal_todos(
         registry_path=registry, runtime_root_arg=str(runtime), goal_id="goal-a")["todos"]}
     selected = records["Review publication evidence"]
     fallback = records["Continue independent verification"]

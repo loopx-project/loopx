@@ -184,6 +184,7 @@ touch, mention it in the PR instead of fixing it there.
 | --- | --- | --- | --- |
 | `python-tests.yml` | every PR | yes (`merge-gate`) | lint, mypy, sharded pytest, TypeScript core and coverage, minimum Node.js, Windows PowerShell, dashboard presentation |
 | `dco.yml` | every PR | yes (`Sign-off`) | `Signed-off-by` on contribution commits; verified GitHub-generated two-parent merges are exempt |
+| `ci-maintenance.yml` | closed or updated PR (`pull_request_target`, trusted base code only) | no | cancels obsolete Python qualification runs after rechecking the PR and source branch |
 | `dependency-review.yml` | every PR | no | dependency changes introduced by the PR |
 | `postgresql-integration.yml` | control-plane or npm lockfile paths | no | PostgreSQL authority store and service on a temporary instance |
 | `package-smoke.yml` | extension package paths | no | extension packages install, entrypoints, and example schemas |

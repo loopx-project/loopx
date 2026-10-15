@@ -58,7 +58,7 @@ def _sdk_runtime_pin(runtime_bin: Path | None = None) -> dict[str, Any]:
     if runtime_bin is not None:
         entry = runtime_bin.resolve(strict=True)
         package = entry.parent.parent
-        manifest = json.loads((package / "package.json").read_text())
+        manifest = json.loads((package / "package.json").read_text(encoding="utf-8"))
         modules = package.parent.parent
         if (
             sdk.version != "0.2.1a3"

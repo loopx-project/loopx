@@ -703,7 +703,7 @@ def test_app_creation_retries_storage_before_reporting_success(environment, app,
             source = read_canonical_todos_if_promoted(runtime_root=project.parent / "runtime", goal_id="recovery", include_leases=True)
             assert source["handoff_mode"] == mode
             assert len(source["todos"]) == 1
-            assert source["todos"][0]["text"] == "Verify recovery"
+            assert (source["todos"][0]["text"], source["todos"][0]["priority"]) == ("[P1] Verify recovery", "P1")
             assert source["source_authority"] == f"{provider}_v0"
             assert selections[-1]["authority_initialized"] is True
         if provider == "sqlite":
