@@ -33,6 +33,18 @@ with (
         registry,
         _home,
     ):
+        # The directory includes Agents without this provider or without a binding.
+        value = json.loads(registry.read_text())
+        coordination = value["goals"][0]["coordination"]
+        coordination["registered_agents"] += ["other-worker", "remote-worker"]
+        coordination["thread_agent_bindings"].append(
+            {
+                "agent_id": "remote-worker",
+                "host_surface": "cursor",
+                "thread_id": "synthetic-cursor-thread",
+            }
+        )
+        registry.write_text(json.dumps(value))
         launches = []
         patches.enter_context(
             patch.object(provider, "sys", SimpleNamespace(platform="darwin"))
@@ -67,7 +79,85 @@ with (
 
             def do_POST(self):
                 global fail_next_open
-                if self.path == "/fixture/append":
+                if self.path == "/fixture/work-records":
+                    records = [
+                        {
+                            "type": "function_call",
+                            "name": "validate",
+                            "call_id": "work-1",
+                            "arguments": "Check the release artifact",
+                        },
+                        {
+                            "type": "function_call_output",
+                            "call_id": "work-1",
+                            "output": [
+                                {
+                                    "type": "text",
+                                    "text": "Validation output\n"
+                                    + "🧭验证结果\n" * 6000
+                                    + "COMPLETE TOOL RESULT",
+                                }
+                            ],
+                        },
+                    ]
+                    with rollout.open("a") as stream:
+                        for item in records:
+                            stream.write(
+                                json.dumps({"type": "response_item", "payload": item})
+                                + "\n"
+                            )
+                    append_message(rollout, "assistant", "工作结果已返回。")
+                    self._send_json({"ok": True})
+                elif self.path == "/fixture/metadata-gap":
+                    # A real rollout page with no displayable rows, between two
+                    # visible records. Boundaries belong to the production reader.
+                    with rollout.open("a") as stream:
+                        for _ in range(5):
+                            stream.write(
+                                json.dumps(
+                                    {
+                                        "type": "response_item",
+                                        "payload": {
+                                            "type": "reasoning",
+                                            "encrypted_content": "x" * (1024 * 1024),
+                                        },
+                                    }
+                                )
+                                + "\n"
+                            )
+                    self._send_json({"ok": True})
+                elif self.path == "/fixture/tool-envelope":
+                    with rollout.open("a") as stream:
+                        stream.write(
+                            json.dumps(
+                                {
+                                    "type": "response_item",
+                                    "payload": {
+                                        "type": "custom_tool_call_output",
+                                        "output": [
+                                            {
+                                                "type": "text",
+                                                "text": json.dumps(
+                                                    {
+                                                        "output": "Readable shell result\nSecond line",
+                                                        "exit_code": 1,
+                                                        "wall_time_seconds": 0.25,
+                                                        "chunk_id": "synthetic",
+                                                    }
+                                                ),
+                                            }
+                                        ],
+                                    },
+                                }
+                            )
+                            + "\n"
+                        )
+                    self._send_json({"ok": True})
+                elif self.path == "/fixture/burst":
+                    for index in range(330):
+                        append_message(rollout, "assistant", f"Activity {index}")
+                    self._send_json({"ok": True})
+                elif self.path == "/fixture/append":
                     append_message(
                         rollout, "assistant", "原 Agent 的新结果：已保留原会话。"
                     )

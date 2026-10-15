@@ -171,7 +171,7 @@ async function verifyRemoteSelection(browser, url) {
     await page.route("http://127.0.0.1:8978/status.json*", route => route.fulfill({json:snapshot}));
     page.on("request",request => {
       const parsed = new URL(request.url());
-      if (parsed.port === new URL(url).port && /\/api\/chat\/(todo\/detail|completed-todos|delivery-review|goal-results)/.test(parsed.pathname)) localOwnerReads.push(parsed.pathname);
+      if (parsed.port === new URL(url).port && /\/api\/chat\/(todo\/detail|completed-todos|delivery-review|goal-results|codex-attached)/.test(parsed.pathname)) localOwnerReads.push(parsed.pathname);
     });
   }});
   try {
@@ -180,8 +180,14 @@ async function verifyRemoteSelection(browser, url) {
     assert.equal(await page.locator(".personal-context-drawer").count(),0,"An unknown remote Todo must not acquire a local request reader");
     await page.getByRole("status").filter({hasText:"链接中的任务未出现在此来源的当前快照中"}).waitFor();
     assert.equal(await page.getByRole("button",{name:"添加任务",exact:true}).count(),0);
+    assert.equal(await page.locator('.goal-owner-conversation').count(),0,"A remote snapshot cannot open a local Agent conversation");
     await page.getByRole("region",{name:"当前工作",exact:true}).getByRole("button",{name:"关系图",exact:true}).click();
     assert.equal(await page.locator(".work-map").count(),0,"Remote selection cannot reuse a local map");
+    target.searchParams.set("view", "conversation");
+    target.searchParams.set("workAgent", "worker");
+    await page.goto(target.href);
+    await page.getByRole("status").filter({hasText:"此来源仅提供状态快照，无法在这里读取或回复原会话。"}).waitFor();
+    assert.equal(await page.getByRole("region", {name:"Agent 工作会话",exact:true}).getByRole("textbox").count(),0);
     assert.deepEqual(localOwnerReads,[],"Remote deep link caused local owner reads");
   } finally {await session.close();}
 }

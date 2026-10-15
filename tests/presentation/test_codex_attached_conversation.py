@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from loopx.capabilities.native_chat import codex_attached as provider
+from loopx.capabilities.native_chat import codex_history as history
 
 _spec = importlib.util.spec_from_file_location(
     "codex_attached_peer",
@@ -230,7 +231,11 @@ def test_original_history_incremental_append_and_idempotent_owner_input(
         binding, query = target(request)
         status, initial = request(query=query)
         assert status == 200 and initial["can_reply"]
-        assert [message["text"] for message in initial["messages"]] == [
+        assert [
+            message["text"]
+            for message in initial["messages"]
+            if message["role"] != "activity"
+        ] == [
             "Original request",
             "Original result",
         ]
@@ -260,7 +265,11 @@ def test_original_history_incremental_append_and_idempotent_owner_input(
             "thread-owner-discovery",
             "thread-follower-start-turn",
         }
-        assert request("POST", body(binding, "Changed content"))[0] == 409
+        status, rejected = request("POST", body(binding, "Changed content"))
+        assert status == 409
+        assert (
+            "input_not_submitted" not in rejected
+        )  # This id already caused an effect.
 
 
 def test_uncertain_delivery_never_replays_the_effect(tmp_path, monkeypatch):
@@ -280,6 +289,25 @@ def test_uncertain_delivery_never_replays_the_effect(tmp_path, monkeypatch):
             == "pending"
         )
         assert len(inputs) == 1
+
+
+@pytest.mark.parametrize("busy", [True, False], ids=["busy", "unknown"])
+def test_pre_dispatch_rejection_proves_no_input_and_creates_no_receipt(tmp_path, busy):
+    with fixture(tmp_path) as (request, rollout, methods, inputs, _, _):
+        binding, query = target(request)
+        rollout.write_text(
+            json.dumps({"type": "event_msg", "payload": {"type": "task_started"}})
+            + "\n"
+            if busy
+            else ""
+        )
+        status, rejected = request("POST", body(binding))
+        assert status == 409
+        assert rejected["ok"] is False
+        assert rejected["input_not_submitted"] is True
+        assert rejected["operation_id"] == "same-operation"
+        assert request(query=query + "&operation_id=same-operation")[0] == 404
+        assert inputs == [] and "thread-follower-start-turn" not in methods
 
 
 def test_busy_stale_binding_foreign_origin_and_unbound_agent_create_no_input(
@@ -321,7 +349,7 @@ def test_busy_stale_binding_foreign_origin_and_unbound_agent_create_no_input(
         assert not inputs
 
 
-def test_history_is_bounded_ignores_tools_and_private_paths_do_not_escape(
+def test_owner_history_includes_tools_with_bounded_pages_and_offline_reading(
     tmp_path, monkeypatch
 ):
     with fixture(tmp_path) as (request, rollout, _, _, _, home):
@@ -334,7 +362,7 @@ def test_history_is_bounded_ignores_tools_and_private_paths_do_not_escape(
                             "type": "response_item",
                             "payload": {
                                 "type": "function_call_output",
-                                "output": "private-tool-output" * 512,
+                                "output": "tool-result" * 512,
                             },
                         }
                     )
@@ -343,8 +371,9 @@ def test_history_is_bounded_ignores_tools_and_private_paths_do_not_escape(
         append_message(rollout, "assistant", "Visible recent result")
         status, result = request(query=query)
         assert status == 200 and result["bounded"] and result["before"] is not None
-        assert [row["text"] for row in result["messages"]] == ["Visible recent result"]
-        assert "private-tool-output" not in json.dumps(result)
+        assert result["messages"][-1]["text"] == "Visible recent result"
+        assert result["messages"][0]["role"] == "tool"
+        assert len(result["messages"]) == 100
         assert str(home) not in json.dumps(result)
         (home / "ipc" / "ipc.sock").chmod(0o666)
         status, readonly = request(query=query)
@@ -385,3 +414,256 @@ def test_unbound_goal_does_not_probe_native_conversations(tmp_path, monkeypatch)
         registry.write_text(json.dumps(saved))
         assert request()[1] == {"ok": True, "agents": []}
         assert not methods and not inputs
+
+
+def append_record(path, kind, payload):
+    with path.open("a") as stream:
+        stream.write(json.dumps({"type": kind, "payload": payload}) + "\n")
+
+
+def test_work_records_cover_tools_and_lifecycle_without_hidden_context(tmp_path):
+    path = tmp_path / "history.jsonl"
+    for role in ("system", "developer"):
+        append_message(path, role, "hidden instruction")
+    append_record(
+        path,
+        "response_item",
+        {
+            "type": "message",
+            "role": "assistant",
+            "channel": "analysis",
+            "content": [{"type": "output_text", "text": "hidden reasoning"}],
+        },
+    )
+    append_record(
+        path, "response_item", {"type": "reasoning", "summary": "hidden reasoning"}
+    )
+    append_record(path, "event_msg", {"type": "task_started"})
+    append_record(
+        path,
+        "response_item",
+        {
+            "type": "function_call",
+            "name": "exec",
+            "call_id": "call-1",
+            "arguments": "run validation",
+        },
+    )
+    append_record(
+        path,
+        "response_item",
+        {
+            "type": "function_call_output",
+            "call_id": "call-1",
+            "output": "exit 1: test failed",
+        },
+    )
+    append_record(
+        path,
+        "response_item",
+        {"type": "custom_tool_call", "name": "patch", "input": "repair input"},
+    )
+    append_record(
+        path,
+        "response_item",
+        {"type": "custom_tool_call_output", "output": "repair saved"},
+    )
+    append_record(path, "event_msg", {"type": "turn_aborted"})
+    rows = history.read_messages(path)["messages"]
+    assert [row["kind"] for row in rows] == [
+        "task_started",
+        "function_call",
+        "function_call_output",
+        "custom_tool_call",
+        "custom_tool_call_output",
+        "turn_aborted",
+    ]
+    assert rows[1]["call_id"] == rows[2]["call_id"] == "call-1"
+    assert rows[2]["text"] == "exit 1: test failed"
+    assert "hidden" not in json.dumps(rows)
+
+
+def test_full_unicode_content_is_available_in_bounded_http_pages(tmp_path):
+    with fixture(tmp_path) as (request, rollout, methods, inputs, _, _):
+        _, query = target(request)
+        # Larger than the history window, including astral Unicode characters.
+        text = "🧭验证\n" * 120000 + "END OF COMPLETE RESULT"
+        append_message(rollout, "assistant", text)
+        _, view = request(query=query)
+        row = view["messages"][-1]
+        assert row["truncated"] and len(row["text"]) == history.CONTENT_CHARS
+        offset, parts = len(row["text"]), [row["text"]]
+        detail = f"&entry_id={row['id']}&source_ref={view['source_ref']}&content_ref={row['content_ref']}"
+        while True:
+            status, page = request(query=query + detail + f"&content_offset={offset}")
+            assert status == 200
+            parts.append(page["text"])
+            offset = page["next_offset"]
+            if not page["has_more"]:
+                break
+        assert "".join(parts) == text
+        assert (
+            request(query=query + detail.replace(view["source_ref"], "stale"))[0] == 409
+        )
+        assert (
+            request(query=query + detail.replace(row["content_ref"], "stale"))[0] == 409
+        )
+        assert (
+            request(
+                query=query.replace("agent_id=worker", "agent_id=foreign") + detail
+            )[0]
+            == 409
+        )
+        assert not inputs and "thread-follower-start-turn" not in methods
+
+
+def test_forward_catchup_has_no_burst_gap_and_retries_partial_append(tmp_path):
+    path = tmp_path / "history.jsonl"
+    append_message(path, "assistant", "initial")
+    first = history.read_messages(path)
+    for index in range(235):
+        append_message(path, "assistant", f"new {index}")
+    raw = json.dumps(
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "partial complete"}],
+            },
+        }
+    ).encode()
+    with path.open("ab") as stream:
+        stream.write(raw[:40])
+    cursor, rows = first["after"], []
+    while True:
+        page = history.read_messages(
+            path, after=cursor, expected_source=first["source_ref"]
+        )
+        rows.extend(page["messages"])
+        cursor = page["after"]
+        if not page["has_more"]:
+            break
+    assert [row["text"] for row in rows] == [f"new {i}" for i in range(235)]
+    assert len({row["id"] for row in rows}) == 235
+    with path.open("ab") as stream:
+        stream.write(raw[40:] + b"\n")
+    assert [
+        row["text"] for row in history.read_messages(path, after=cursor)["messages"]
+    ] == ["partial complete"]
+    replacement = tmp_path / "new.jsonl"
+    append_message(replacement, "assistant", "replacement")
+    replacement.replace(path)
+    page = history.read_messages(
+        path, after=cursor, expected_source=first["source_ref"]
+    )
+    assert page["reset"] and [row["text"] for row in page["messages"]] == [
+        "replacement"
+    ]
+
+
+@pytest.mark.parametrize("read_mode", ["history", "content", "unchanged"])
+def test_reads_recheck_binding_after_native_lookup(tmp_path, monkeypatch, read_mode):
+    from loopx.presentation import codex_attached_api as api
+
+    with fixture(tmp_path) as (request, _, _, inputs, registry, _):
+        _, query = target(request)
+        _, view = request(query=query)
+        if read_mode == "content":
+            row = view["messages"][-1]
+            query += f"&entry_id={row['id']}&source_ref={view['source_ref']}&content_ref={row['content_ref']}"
+        elif read_mode == "unchanged":
+            query += "&revision=" + view["revision"]
+        locate = api.locate_thread
+
+        def changed_during_lookup(thread_id):
+            result = locate(thread_id)
+            saved = json.loads(registry.read_text())
+            saved["goals"][0]["coordination"]["thread_agent_bindings"] = []
+            registry.write_text(json.dumps(saved))
+            return result
+
+        monkeypatch.setattr(api, "locate_thread", changed_during_lookup)
+        status, result = request(query=query)
+        assert status == 409 and result["ok"] is False
+        assert "Original result" not in json.dumps(result)
+        assert not inputs
+
+
+def test_credential_fields_withheld_and_oversize_gap_is_not_silent(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "history.jsonl"
+    append_record(
+        path,
+        "response_item",
+        {"type": "function_call_output", "output": 'api_key="synthetic-value"'},
+    )
+    page = history.read_messages(path)
+    row = page["messages"][0]
+    assert row["redacted"] and "synthetic-value" not in json.dumps(row)
+    detail = history.read_content(
+        path,
+        entry_id=int(row["id"]),
+        offset=0,
+        expected_source=page["source_ref"],
+        content_ref=row["content_ref"],
+    )
+    assert detail["redacted"] and "synthetic-value" not in detail["text"]
+    monkeypatch.setattr(history, "RECORD_BYTES", 100)
+    page = history.read_messages(path)
+    assert page["messages"][0]["unavailable"] == "record_exceeds_read_limit"
+    assert page["after"] == path.stat().st_size
+    with pytest.raises(ValueError, match="unavailable"):
+        history.read_content(
+            path,
+            entry_id=int(row["id"]),
+            offset=0,
+            expected_source=page["source_ref"],
+            content_ref=row["content_ref"],
+        )
+
+
+def test_native_tool_text_blocks_are_readable_and_content_pages_are_lossless(tmp_path):
+    path = tmp_path / "history.jsonl"
+    text = "🧭验证\n" * 7000
+    append_record(
+        path,
+        "response_item",
+        {
+            "type": "custom_tool_call_output",
+            "output": [
+                {"type": "text", "text": text},
+                {"type": "text", "text": "Complete result"},
+            ],
+        },
+    )
+    page = history.read_messages(path)
+    row = page["messages"][0]
+    assert row["text"] == text[: history.CONTENT_CHARS]
+    remaining = history.read_content(
+        path,
+        entry_id=int(row["id"]),
+        offset=len(row["text"]),
+        expected_source=page["source_ref"],
+        content_ref=row["content_ref"],
+    )
+    assert row["text"] + remaining["text"] == text + "\nComplete result"
+    # Unknown blocks or extra metadata must not disappear in text normalization.
+    output = [
+        {"type": "text", "text": "visible", "annotations": ["source"]},
+        {"type": "image", "description": "unrendered"},
+    ]
+    append_record(
+        path, "response_item", {"type": "custom_tool_call_output", "output": output}
+    )
+    assert json.loads(history.read_messages(path)["messages"][-1]["text"]) == output
+    append_record(
+        path,
+        "response_item",
+        {
+            "type": "custom_tool_call_output",
+            "output": [{"type": "text", "text": "api_key=sk-" + "a" * 40}],
+        },
+    )
+    assert history.read_messages(path)["messages"][-1]["redacted"] is True
