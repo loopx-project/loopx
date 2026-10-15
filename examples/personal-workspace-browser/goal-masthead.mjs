@@ -269,7 +269,13 @@ export const goalMastheadScenario = {
             previous(fixture);
             const queue = fixture.attention_queue.items.find(item => item.goal_id === goalId);
             Object.assign(queue, structuredClone(native));
-            if (mode === "optional") queue.waiting_on = "agent";
+            if (mode === "optional") {
+              // Nothing waits on the owner: the Goal waits on its Agent and every
+              // listed row is an optional user action by its own class, since an
+              // explicit class owns its row regardless of the queue's answer.
+              queue.waiting_on = "agent";
+              for (const todo of [...queue.user_todos.items, ...queue.project_asset.user_todos.items]) todo.task_class = "user_action";
+            }
             if (mode === "empty") {
               queue.user_todos.items = [];
               queue.project_asset.user_todos.items = [];

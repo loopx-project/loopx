@@ -962,12 +962,17 @@ function buildPersonalHomeModel(
         todoOrder,
         updatedAt: todo.updated_at ?? null,
       }; });
-    const blockingCount = projected.filter((todo) => !todo.projectedDone && todo.blocking).length;
-    const complete = count !== null && count === listedOpen;
+    // Listed rows carry their own class; the rows the owner counts but does
+    // not list carry none, so they take the queue's own answer, exactly as a
+    // listed legacy row does. A partial listing therefore still reports the
+    // owner's count instead of forgetting it.
+    const blockingListed = projected.filter((todo) => !todo.projectedDone && todo.blocking).length;
+    const unlisted = count === null ? 0 : Math.max(0, count - listedOpen);
+    const blockingCount = count === null ? null : blockingListed + (blocking ? unlisted : 0);
     attentionSummaries.set(item.goal_id, {
-      blocking: complete ? blockingCount : null,
-      optional: complete ? count - blockingCount : null,
-      coverage: count === null ? "unknown" : complete ? "complete" : "partial",
+      blocking: blockingCount,
+      optional: count === null || blockingCount === null ? null : count - blockingCount,
+      coverage: count === null ? "unknown" : count > listedOpen ? "partial" : "complete",
     });
     return projected;
   });
