@@ -674,8 +674,13 @@ class LarkPrivateConversations:
         # and the shared Session queue/fence; transport workers never run models.
         row = _read_json(path)
         if row["status"] == "captured":
-            self.admit(row["profile"], row["event"])
-            row = _read_json(path)
+            # Intake may still own this capture. Wait on its existing fence and
+            # read its result before retrying admission from a stale snapshot.
+            with exclusive_file_lock(path, operation="capture_private_chat_request"):
+                row = _read_json(path)
+            if row["status"] == "captured":
+                self.admit(row["profile"], row["event"])
+                row = _read_json(path)
         native_path = self.core.root / f"{row['request_ref']}.json"
         if native_path.exists():
             if (self.reaction_feedback and row["status"] == "accepted"
@@ -744,7 +749,12 @@ class LarkPrivateConversations:
                         self._deliver(path, record, "admission", admission, inbox=inbox)
                     if turn and turn["status"] in {"starting", "running"}:
                         self._feedback(path, record, inbox=inbox, processing=True)
-                        self._progress(path, record, inbox=inbox)
+                        # Provider feedback may outlast the native answer. Use
+                        # the current Turn before starting a provisional draft
+                        # or deferring a final that is already available.
+                        turn = self.core.controller.store.load_turn(record["session_id"], record["turn_id"])
+                        if turn and turn["status"] in {"starting", "running"}:
+                            self._progress(path, record, inbox=inbox)
                     if not turn or turn["status"] not in TERMINAL_TURN_STATES:
                         return 0
                     if turn["status"] == "failed":

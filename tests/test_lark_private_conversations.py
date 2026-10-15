@@ -3,6 +3,7 @@ import json
 import time
 import http.client
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
@@ -167,6 +168,154 @@ def finish_group_turn(runtime, transport, *, message):
     assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)["status"] == "completed"
     transport.reconcile()
     return row
+
+
+@pytest.mark.parametrize("group", [False, True])
+def test_recovery_waits_for_inflight_capture_without_readmitting(ordinary, monkeypatch, group):  # noqa: F811
+    import loopx.extensions.lark.private_conversations as private
+
+    store, runtime, provider, transport = (connect_group if group else connect)(ordinary)
+    event = provider.topic("inflight", "Explain this project") if group else provider.event(
+        "notes-app", "inflight", "Explain this project")
+    reached_core, release_core, captured_seen = threading.Event(), threading.Event(), threading.Event()
+    core_admit, read = transport.core.admit, private._read_json
+    admissions = []
+
+    def admit(**kwargs):
+        admissions.append(kwargs["request_ref"])
+        reached_core.set()
+        assert release_core.wait(5)
+        return core_admit(**kwargs)
+
+    def observed(path):
+        row = read(path)
+        if (threading.current_thread().name.startswith("capture-recovery")
+                and path.parent == transport.root and row.get("status") == "captured"):
+            captured_seen.set()
+        return row
+
+    monkeypatch.setattr(transport.core, "admit", admit)
+    monkeypatch.setattr(private, "_read_json", observed)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as intake, ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="capture-recovery") as recovery:
+            original = intake.submit(transport.admit, "notes-app", event)
+            try:
+                assert reached_core.wait(5)
+                path = next(transport.root.glob("*.json"))
+                assert read(path)["status"] == "captured"
+                returned = recovery.submit(transport.reconcile_request, path)
+                assert captured_seen.wait(5)  # The reader really saw the in-flight row.
+            finally:
+                release_core.set()
+            assert original.result(timeout=10)["status"] == "durably_accepted"
+            returned.result(timeout=10)
+        assert len(admissions) == 1
+        row = transport.core.pending()[0]
+        result = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+        assert result["status"] == "completed"
+        transport.reconcile()
+        assert len(store.list_sessions()) == 1
+        assert [m["text"] for m in store.messages(row["session_id"]) if m["role"] == "user"] == [event["content"]]
+        final = ("notes-app", result["response"]["message"])
+        assert provider.writes[-1] == final and provider.writes.count(final) == 1
+        assert all(profile == "notes-app" for profile, _ in provider.writes)
+        packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(packet["method"] == "turn/start" for packet in packets) == 1
+        if group:
+            assert provider.topic_writes[0][:2] == (event["chat_id"], event["message_id"])
+        assert transport.reconcile() == 0
+    finally:
+        release_core.set()
+        runtime.close()
+
+
+@pytest.mark.parametrize("group", [False, True])
+@pytest.mark.parametrize("revoked", [False, True])
+def test_abandoned_capture_recovers_only_with_current_binding(ordinary, monkeypatch, group, revoked):  # noqa: F811
+    store, runtime, provider, transport = (connect_group if group else connect)(ordinary)
+    event = provider.topic("abandoned", "Explain this project") if group else provider.event(
+        "notes-app", "abandoned", "Explain this project")
+    core_admit = transport.core.admit
+
+    def unavailable(**kwargs):
+        raise OSError("owned failure before any Core admission")
+
+    try:
+        monkeypatch.setattr(transport.core, "admit", unavailable)
+        with pytest.raises(OSError, match="before any Core admission"):
+            transport.admit("notes-app", event)
+        path = next(transport.root.glob("*.json"))
+        captured = json.loads(path.read_text())
+        assert captured["status"] == "captured" and store.list_sessions() == []
+        monkeypatch.setattr(transport.core, "admit", core_admit)
+        if revoked:
+            transport.bindings.disconnect(captured["binding_id"], expected_revision=transport.bindings.read()["revision"])
+            assert transport.reconcile_request(path) == 0
+            assert store.list_sessions() == [] and transport.core.pending() == []
+            assert provider.writes == [] and provider.reaction_creates == []
+            assert json.loads(path.read_text())["status"] == "captured"
+        else:
+            transport.reconcile_request(path)
+            row = transport.core.pending()[0]
+            result = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+            assert result["status"] == "completed"
+            transport.reconcile()
+            assert len(store.list_sessions()) == 1
+            final = ("notes-app", result["response"]["message"])
+            assert provider.writes[-1] == final and provider.writes.count(final) == 1
+            assert all(profile == "notes-app" for profile, _ in provider.writes)
+            assert [m["text"] for m in store.messages(row["session_id"]) if m["role"] == "user"] == [event["content"]]
+            packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+            assert sum(packet["method"] == "turn/start" for packet in packets) == 1
+            assert transport.reconcile() == 0
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("group", [False, True])
+def test_completion_during_processing_receipt_returns_final_without_stale_draft(ordinary, monkeypatch, tmp_path, group):  # noqa: F811
+    store, runtime, provider, transport = (connect_group if group else connect)(ordinary)
+    gate, ready = tmp_path / "complete", tmp_path / "native-waiting"
+    fake = ordinary[-2]
+    marker = '        if "typed terminal failure" in json.dumps(request.get("params") or {}):'
+    source = fake.read_text()
+    assert marker in source
+    fake.write_text(source.replace(marker,
+        '        from pathlib import Path\n'
+        f'        Path({str(ready)!r}).touch()\n'
+        f'        while not Path({str(gate)!r}).exists():\n'
+        '            time.sleep(.01)\n' + marker))
+    event = provider.topic("receipt-completion", "Explain this project") if group else provider.event(
+        "notes-app", "receipt-completion", "Explain this project")
+    provider_call = provider.__call__
+    completed = []
+
+    def receipt(args, cwd=None, timeout=None):
+        if "reactions" in args and "create" in args:
+            emoji = json.loads(args[args.index("--data") + 1])["reaction_type"]["emoji_type"]
+            if emoji == "OnIt":
+                gate.touch()
+                completed.append(runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=5))
+                assert completed[-1]["status"] == "completed"
+        return provider_call(args, cwd, timeout)
+
+    monkeypatch.setattr(transport, "runner", receipt)
+    try:
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        row = transport.core.pending()[0]
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert ready.exists() and store.load_turn(row["session_id"], row["turn_id"])["status"] == "running"
+        path = transport.root / f"{row['request_ref']}.json"
+        assert transport.reconcile_request(path) == 1
+        assert completed and provider.writes == [("notes-app", completed[-1]["response"]["message"])]
+        assert "progress" not in json.loads(path.read_text())["deliveries"]
+        assert transport.reconcile() == 0
+    finally:
+        gate.touch()
+        runtime.close()
 
 
 def test_completed_group_queue_keeps_a_stopped_host_stopped(ordinary):  # noqa: F811
