@@ -10,6 +10,17 @@ from loopx.chat import (
 )
 
 
+@pytest.mark.parametrize("goal_id", ["release-work", "legacy.goal_1", "", "../foreign", "/private/work", 123])
+def test_todo_target_is_preserved_or_rejected_without_becoming_unscoped(goal_id):
+    payload = {"message": "Preview only", "proposals": [{"kind": "todo", "goal_id": goal_id,
+        "text": "Record the future feature", "priority": "P2"}]}
+    response = parse_agent_response(CHAT_REVIEW_OPEN_TAG + json.dumps(payload) + CHAT_REVIEW_CLOSE_TAG)
+    if goal_id in {"release-work", "legacy.goal_1"}:
+        assert response["proposals"][0]["goal_id"] == goal_id
+    else:
+        assert response["proposals"] == []
+
+
 def test_compact_envelope_reuses_redacted_visible_answer_and_typed_metadata() -> None:
     visible = "已核对 [报告](/custom-volume/project/report.md)。[来源](https://example.org/doc)"
     payload = {

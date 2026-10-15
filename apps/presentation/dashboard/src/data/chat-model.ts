@@ -127,6 +127,7 @@ export function selectAvailableChatAgent<T extends ChatRouteCandidate>(
 
 export type TodoProposal = {
   kind: "todo";
+  goal_id?: string;
   text: string;
   priority: "P0" | "P1" | "P2";
   rationale: string;

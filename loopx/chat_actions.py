@@ -1438,8 +1438,8 @@ class ChatActionService(
             }
         if (proposal.get("context") or {}).get("binding_id"):
             if steward_context is None:
-                raise ProtectedActionGate("goal.create", gate={"kind": "authenticated_steward_confirmation_required",
-                    "summary": "Confirm this commission from its original owner private conversation.",
+                raise ProtectedActionGate(str(proposal["action_kind"]), gate={"kind": "authenticated_steward_confirmation_required",
+                    "summary": "Confirm this proposal from its original owner private conversation.",
                     "next_action": "Use the exact /confirm command in the originating Bot before it expires."})
             from .control_plane.effect_runtime import effect_runtime_result
             effect_runtime_result("collaboration.steward.authorize_creation", {

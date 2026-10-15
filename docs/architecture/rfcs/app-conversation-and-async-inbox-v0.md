@@ -111,13 +111,21 @@ binding or unreadable source prevents later result delivery.
 
 When an ordinary Codex topic has no active Turn, `/stop` also covers background
 commands left by completed Turns in that same canonical Session, even after a
-later answer. Core freezes those completed Turn identities before cancellation.
+later answer. Core freezes the original Session and canonical candidate Turn
+identities in the existing request journal **before** native inventory or
+transport resume can fail. Native observation may only narrow that frozen set;
+a retry cannot add later completed/active Turns or switch to a newer Session.
+A recovered legacy request without a recorded target has unknown original scope;
+Core rejects retargeting and preserves it unconfirmed. A fresh stop is a separate
+user request, never an automatic replacement for the unknown one.
 An active Turn keeps its existing exact stop path; unavailable historical item
 inventory cannot prevent that interruption or widen its target to earlier work.
 Native command-item and terminal readback scopes the effects; unknown terminals,
 other Topics and completed answer receipts remain intact. Replaying the stop
-does not select newer work. Unavailable control or incomplete readback keeps the
-original stop unconfirmed rather than reporting an idle topic. This extends the
+does not select newer work. If `/new` has deliberately closed the original
+Session, its pending stop stays unconfirmed; recovery does not reopen it or
+borrow control of the replacement Session. Unavailable control or incomplete
+readback keeps the original stop unconfirmed rather than reporting an idle topic. This extends the
 existing Lark command; active-Turn HTTP/frontend control and attached or native
 Goal hosts retain their separate contracts. Synthetic provider/Core and real
 child-process regressions qualify this source slice; installed host adoption,
@@ -987,7 +995,26 @@ and the written execution boundary must both be respected downstream.
 The explicit status-only profile returns a labelled snapshot, not a keyword-built
 answer. Converting a reply into a task opens the complete editable text rather
 than guessing its next-action sentence. Structured ID/date/resume-condition
-validation remains. Lark routing is unchanged.
+validation remains. Lark admission retains its existing conversation owner.
+
+Todo proposals may carry an explicit `goal_id` resolved from the permitted
+directory. A manager answer with that target reaches the existing typed Todo
+confirmation card; an unscoped manager proposal and a proposal naming a different
+Goal from the selected Goal never silently inherit a UI target. Legacy unscoped
+Goal replies keep their current Goal behavior. This adds no automatic write.
+
+In a bound steward private conversation, the same scoped proposal is prepared
+by the canonical `todo.create` action owner and returned with the existing
+`/confirm` and `/cancel` commands. The request journal retains its expiry and
+idempotency before preview IO. Confirmation requires the same current App,
+owner, private source and granted Goal, within fifteen minutes; read scope or a
+model proposal alone authorizes no Todo mutation. The existing canonical writer
+supplies the verified receipt, and the result returns to that original private
+conversation. It neither creates a Goal nor starts or assigns an execution.
+Stale, revoked or expired previews fail closed. Lost preview replies recover
+the same preview; an already committed Todo recovers its existing receipt.
+No callback consumer, executor or independent work queue is introduced. These
+source/fixture contracts do not certify an installed Bot or model recognition.
 
 ### Conversational goal preparation: integrating the team-workspace proposal
 
