@@ -99,7 +99,7 @@ pathlib.Path(os.environ["CODEX_HOME"], "seen-argv.json").write_text(json.dumps(s
         "LOOPX_EXECUTION_MODE": "heartbeat",
         "LOOPX_TASK_ENTRY": "loopx-planned",
         "LOOPX_TASK_STAGE": "plan",
-        "LOOPX_PLANNING_TIMEOUT_SEC": "30",
+        "LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 600),
         "LOOPX_PLANNING_RESULT": str(tmp_path / "planning.json"),
         "LOOPX_GOAL_ID": "planning-goal",
         "LOOPX_AGENT_ID": "planner",
@@ -181,7 +181,6 @@ def test_planner_receives_existing_phase_clock_without_changing_task_identity(pl
 
     deadline = str(time.time() + 600)
     env = planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": deadline}
-    env.pop("LOOPX_PLANNING_TIMEOUT_SEC")  # SForge has one shared phase clock.
     before = task_plan_packet(env, loopx_command(env))
     receipt = run_once(env)
     assert receipt["ok"] and receipt["planning"]["state_readback_verified"]
@@ -196,39 +195,40 @@ def test_planner_receives_existing_phase_clock_without_changing_task_identity(pl
     assert not list(Path(env["LOOPX_PROJECT"]).iterdir())
 
 
-def test_planning_window_distinguishes_phase_and_stage_limits_and_preserves_packet(monkeypatch):
+def test_planning_window_uses_one_phase_deadline_and_preserves_packet(monkeypatch):
     from benchmark.runtime import planning
 
     monkeypatch.setattr(planning, "time", SimpleNamespace(time=lambda: 1000.0))
     packet = {"input_digest": "unchanged", "text": "保留原始任务"}
     legacy = "$loopx\n\nHost-supplied planning checkpoint:\n" + json.dumps(packet, ensure_ascii=False)
     assert planning.render_planning_prompt(packet, {}, execution_reserve_seconds=160) == legacy
-    stage = planning.render_planning_prompt(packet, {"LOOPX_PLANNING_TIMEOUT_SEC": "30"},
-                                           execution_reserve_seconds=160)
-    assert "Planning invocation limit: 30 seconds" in stage
-    assert "not the total task budget" in stage
-    assert "Absolute phase deadline:" not in stage
-    assert "Remaining phase time" not in stage
-    env = {"LOOPX_PHASE_DEADLINE_EPOCH": "1600", "LOOPX_PLANNING_TIMEOUT_SEC": "30"}
-    both = planning.render_planning_prompt(packet, env, execution_reserve_seconds=160)
-    assert "Absolute phase deadline: 1600.0 Unix UTC seconds" in both
-    assert "Remaining phase time at observation 1000.0: 600.0 seconds" in both
-    assert "Observed work window before that reserve: 440.0 seconds" in both
-    assert "Planning invocation limit: 30 seconds" in both
-    assert json.loads(both.split("Host-supplied planning checkpoint:\n", 1)[1]) == packet
+    env = {"LOOPX_PHASE_DEADLINE_EPOCH": "1600"}
+    body = planning.render_planning_prompt(packet, env, execution_reserve_seconds=160)
+    assert "Absolute phase deadline: 1600.0 Unix UTC seconds" in body
+    assert "Remaining phase time at observation 1000.0: 600.0 seconds" in body
+    assert "Observed work window before that reserve: 440.0 seconds" in body
+    assert "Planning invocation limit" not in body
+    assert json.loads(body.split("Host-supplied planning checkpoint:\n", 1)[1]) == packet
     monkeypatch.setattr(planning, "time", SimpleNamespace(time=lambda: 1700.0))
     expired = planning.render_planning_prompt(packet, env, execution_reserve_seconds=160)
     assert "Remaining phase time at observation 1700.0: 0.0 seconds" in expired
-    assert env == {"LOOPX_PHASE_DEADLINE_EPOCH": "1600", "LOOPX_PLANNING_TIMEOUT_SEC": "30"}
+    assert env == {"LOOPX_PHASE_DEADLINE_EPOCH": "1600"}
 
 
-@pytest.mark.parametrize("key", ["LOOPX_PHASE_DEADLINE_EPOCH", "LOOPX_PLANNING_TIMEOUT_SEC"])
 @pytest.mark.parametrize("value", ["nan", "inf", "-inf", "0", "-1", "not-a-clock"])
-def test_planning_window_rejects_invalid_host_clock(key, value):
+def test_planning_window_rejects_invalid_host_clock(value):
     from benchmark.runtime.planning import render_planning_prompt
 
     with pytest.raises(ValueError):
-        render_planning_prompt({"input_digest": "unchanged"}, {key: value}, execution_reserve_seconds=160)
+        render_planning_prompt({"input_digest": "unchanged"},
+                               {"LOOPX_PHASE_DEADLINE_EPOCH": value}, execution_reserve_seconds=160)
+
+
+def test_retired_planning_limit_fails_before_host_invocation(planning_env):
+    with pytest.raises(ValueError, match="Remove LOOPX_PLANNING_TIMEOUT_SEC"):
+        run_once(planning_env | {"LOOPX_PLANNING_TIMEOUT_SEC": "30"})
+    assert not Path(planning_env["LOOPX_PLANNING_RESULT"]).exists()
+    assert not Path(planning_env["LOOPX_CODEX_HOME"], "seen-argv.json").exists()
 
 
 def test_plan_readback_rejects_stale_input_unclaimed_work_and_false_blockers():
@@ -572,18 +572,71 @@ def test_sforge_planner_uses_trial_deadline_instead_of_a_stage_cap(planning_env,
 
     monkeypatch.setattr(subprocess.Popen, "communicate", capture)
     # Even an inherited shared-worker cap cannot shorten native SForge planning.
-    env = planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 1200)}
+    env = planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 1200),
+                          "LOOPX_PLANNING_TIMEOUT_SEC": "30"}
     assert prepare_entry(env)
     assert len(observed) == 1 and 1100 < observed[0] <= 1200
     assert Path(env["LOOPX_PLANNING_RESULT"]).exists()
 
 
-def test_shared_harbor_planning_default_remains_bounded(tmp_path):
+@pytest.mark.parametrize("legacy_limit", [0, 30, 300, float("inf")])
+def test_shared_harbor_rejects_retired_planning_limit(tmp_path, legacy_limit):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex
 
-    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture")
-    assert agent.planning_timeout == 300
+    with pytest.raises(ValueError, match="Remove planning_timeout_sec"):
+        BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture",
+                       planning_timeout_sec=legacy_limit)
+    BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture", planning_timeout_sec=None)
+
+
+@pytest.mark.parametrize("planning_elapsed", [400, 850])
+def test_harbor_planning_uses_the_phase_deadline_without_a_stage_cap(tmp_path, monkeypatch, planning_elapsed):
+    pytest.importorskip("harbor")
+    from benchmark.runtime import harbor
+
+    agent = harbor.BenchmarkCodex(logs_dir=tmp_path, model_name="fixture",
+                                 turn_timeout_sec=500, scheduler_timeout_sec=1000)
+    clock = [0.0]
+    planning = []
+    execution = []
+
+    async def prepare(*args, **kwargs):
+        pass
+
+    async def execute(environment, *, command, env=None, **kwargs):
+        if command == "pwd":
+            return SimpleNamespace(stdout="/workspace", return_code=0)
+        if env.get("LOOPX_TASK_STAGE") == "plan":
+            planning.append((command, env, kwargs))
+            # A valid plan may exceed the removed 300-second stage cap.
+            clock[0] = float(planning_elapsed)
+        else:
+            execution.append((command, env, kwargs))
+        return SimpleNamespace(stdout="", return_code=0)
+
+    async def result(**kwargs):
+        return SimpleNamespace(stdout=json.dumps({"status": "ready", "state_readback_verified": True}))
+
+    monkeypatch.setattr(harbor.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(agent, "_prepare_phase", prepare)
+    monkeypatch.setattr(agent, "exec_as_agent", execute)
+    monkeypatch.setattr(agent, "_populate_context", lambda *args: None)
+    invocation = agent.run("Synthetic task", SimpleNamespace(exec=result, is_mounted=True), SimpleNamespace())
+    if planning_elapsed == 850:
+        with pytest.raises(TimeoutError, match="before execution handoff"):
+            asyncio.run(invocation)
+        assert len(planning) == 1 and not execution
+        return
+    asyncio.run(invocation)
+
+    assert len(planning) == len(execution) == 1
+    command, env, options = planning[0]
+    assert "LOOPX_PLANNING_TIMEOUT_SEC" not in env
+    assert "LOOPX_PHASE_DEADLINE_EPOCH=$(( $(date +%s) + 1000 ))" in command
+    assert options["timeout_sec"] >= 1000
+    assert "--kill-after=30 600s" in execution[0][0]
+    assert float(execution[0][1]["LOOPX_CODEX_TURN_TIMEOUT_SEC"]) == 440
 
 
 def test_sforge_post_plan_deadline_never_marks_execution_started(tmp_path, monkeypatch):

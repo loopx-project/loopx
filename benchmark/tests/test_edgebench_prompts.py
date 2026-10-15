@@ -115,9 +115,10 @@ def test_each_worker_receives_and_records_selected_prompt(tmp_path, monkeypatch,
 
     worker.environment = Environment()
     worker.runtime = SimpleNamespace(
+        goal_id="fixture-goal",
         execution=SimpleNamespace(uses_loopx=profile.startswith("heartbeat-")),
         _prepare_phase=prepare, _write_task_document=prepare, _loopx=configure,
-        _worker_env=lambda **kwargs: {}, planning_timeout=90,
+        _worker_env=lambda **kwargs: {},
     )
     monkeypatch.setattr("benchmark.runtime.sforge.worker_command", lambda *a, **kw: ["worker"])
     worker.format_run_cmd(str(remote), internet=False)

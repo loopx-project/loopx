@@ -757,7 +757,6 @@ def test_sforge_planning_has_no_independent_cap_or_extra_trial_budget(tmp_path, 
     worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
         profile=profile, cwd="/task", timeout_seconds=1800)
     worker.install_stop_hook(None, None, tmp_path, None)
-    assert worker.runtime.planning_timeout is None
     assert worker.runtime.scheduler_timeout == 1800
     assert worker.turn_timeout == 1640
     receipt = json.loads((tmp_path / "worker-profile.json").read_text())

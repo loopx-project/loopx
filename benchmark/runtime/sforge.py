@@ -239,7 +239,6 @@ class SForgeWorker(CodexAgent):
                 iteration_context="resume" if mode == "heartbeat" else "fresh",
                 turn_timeout_sec=self.turn_timeout,
                 scheduler_timeout_sec=self.timeout_seconds,
-                planning_timeout_sec=None,
                 task_entry=self.task_entry,
                 turn_envelope=self.turn_envelope,
                 replan_after_turns=self.replan_after_turns,

@@ -134,7 +134,7 @@ def plan_stage(env, monkeypatch):
     return env | {
         "LOOPX_TASK_ENTRY": "loopx-planned",
         "LOOPX_TASK_STAGE": "plan",
-        "LOOPX_PLANNING_TIMEOUT_SEC": "30",
+        "LOOPX_PHASE_DEADLINE_EPOCH": env.get("LOOPX_PHASE_DEADLINE_EPOCH", str(time.time() + 600)),
         "LOOPX_PLANNING_RESULT": str(Path(env["LOOPX_PROJECT"]) / "planning.json"),
     }
 

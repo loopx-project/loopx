@@ -27,7 +27,6 @@ def main() -> int:
     parser.add_argument("--iteration-context", choices=CONTEXTS, default="fresh")
     parser.add_argument("--task-entry", choices=TASK_ENTRIES,
                         help="LoopX modes default to loopx-planned; explicit seeded-todo retains legacy entry")
-    parser.add_argument("--planning-timeout", type=float, default=300)
     parser.add_argument("--validation-command-json", default="[]")
     parser.add_argument("--turn-timeout", type=float, default=None)
     parser.add_argument("--scheduler-timeout", type=int, default=5080)
@@ -71,8 +70,10 @@ def main() -> int:
         turn_timeout_sec=execution.timeout_seconds,
         scheduler_timeout_sec=args.scheduler_timeout,
         task_entry=execution.task_entry,
-        planning_timeout_sec=args.planning_timeout,
     )
+    if agent["kwargs"].get("planning_timeout_sec") is not None:
+        parser.error("remove planning_timeout_sec from the template; planning shares scheduler-timeout")
+    agent["kwargs"].pop("planning_timeout_sec", None)
     agent["kwargs"]["goals"] = str(execution.native_goal).lower()
     agent["kwargs"]["web_search"] = "disabled"
 
