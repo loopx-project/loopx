@@ -831,14 +831,29 @@ def test_group_outbound_source_verification_reads_fresh_envelopes_without_displa
         runtime.close()
 
 
-def test_group_admission_source_reads_overlap_but_keep_rendered_model_input(ordinary):  # noqa: F811
+def test_group_admission_source_reads_overlap_but_keep_rendered_model_input(ordinary, monkeypatch):  # noqa: F811
     _, runtime, provider, transport = connect_group(ordinary)
     try:
         root = provider.topic("overlap-root", "Explain the project")
         event = provider.topic("overlap-follow", "@notes-app Explain config", root=root["message_id"])
         provider.messages[event["message_id"]]["body"] = {
             "content": json.dumps({"text": "@_user_1 Explain config"})}
-        started = threading.Barrier(2)
+        started = threading.Barrier(3)
+        source_reading = threading.Event()
+        original_source = transport._source_message
+        original_observe = transport.bindings.observe
+
+        def source(*args, **kwargs):
+            source_reading.set()
+            try:
+                return original_source(*args, **kwargs)
+            finally:
+                source_reading.clear()
+
+        def observe(*args, **kwargs):
+            if source_reading.is_set():
+                started.wait(timeout=2)
+            return original_observe(*args, **kwargs)
 
         def overlap(args, cwd=None, timeout=None):
             if ("+messages-mget" in args or
@@ -847,12 +862,44 @@ def test_group_admission_source_reads_overlap_but_keep_rendered_model_input(ordi
             return provider(args, cwd, timeout)
 
         transport.runner = overlap
+        monkeypatch.setattr(transport, "_source_message", source)
+        monkeypatch.setattr(transport.bindings, "observe", observe)
         assert transport.admit("notes-app", event)["status"] == "durably_accepted"
         row = transport.core.pending()[0]
         assert row["message"] == event["content"]
         assert row["source"]["topic_ref"] == lark_private_source(
             provider_ref=identity_ref("cli_notes_app"), event=event)["topic_ref"]
         assert not provider.writes
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("change", ["bot_unavailable", "app_replaced", "binding_revoked"])
+def test_group_admission_joins_fresh_identity_and_core_rechecks_source_changes(ordinary, change):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        event = provider.topic("admission-change", "Explain the project")
+        binding = next(row for row in transport.bindings.read()["bindings"]
+                       if row["transport_ref"] == "notes-app")
+        original_source = transport._group_source_message
+
+        def changed(profile, message_id):
+            message = original_source(profile, message_id)
+            if change == "bot_unavailable":
+                provider.bot_ready = False
+            elif change == "app_replaced":
+                provider.profile_apps[profile] = "cli_replacement"
+            else:
+                transport.bindings.disconnect(binding["binding_id"],
+                    expected_revision=transport.bindings.read()["revision"])
+            return message
+
+        transport._group_source_message = changed
+        assert transport.admit("notes-app", event)["status"] in {
+            "source_verification_failed", "command_rejected"}
+        assert transport.core.pending() == []
+        assert store.list_sessions() == []
+        assert not provider.writes and not provider.reaction_creates
     finally:
         runtime.close()
 

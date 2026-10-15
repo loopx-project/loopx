@@ -119,16 +119,21 @@ class LarkPrivateConversations:
                           "--as", "bot", "--no-reactions", "--format", "json"]))
 
             group = selected["binding"].get("audience") == "group"
+            observation = None
             if group:
                 # Both projections read this exact message under the same App.
                 # The root is read only after canonical ancestry checks below.
                 # Outbound provenance needs no display rendering. Admission
                 # retains that projection unchanged for text and media inputs.
                 if render_content:
-                    with ThreadPoolExecutor(max_workers=2) as reads:
+                    # The fresh Bot identity and exact message projections
+                    # are independent reads. Join all three before checking
+                    # the root mention; Core still rechecks under its fences.
+                    with ThreadPoolExecutor(max_workers=3) as reads:
                         current = reads.submit(self._group_source_message, record["profile"], event["message_id"])
                         display = reads.submit(rendered)
-                        canonical, result = current.result(), display.result()
+                        identity = reads.submit(self.bindings.observe, record["profile"])
+                        canonical, result, observation = current.result(), display.result(), identity.result()
                     message = _message(json_payload(result), event["message_id"])
                 else:
                     canonical = self._group_source_message(record["profile"], event["message_id"])
@@ -171,7 +176,8 @@ class LarkPrivateConversations:
                     original = (message if root == event["message_id"] else
                                 self._group_source_message(record["profile"], root))
                     from .event_inbox import lark_event_mentions_bot
-                    observation = self.bindings.observe(record["profile"])
+                    if observation is None:
+                        observation = self.bindings.observe(record["profile"])
                     if (not original or original.get("chat_id") != event["chat_id"]
                             or original.get("sender", {}).get("sender_type") != "user"
                             or original.get("parent_id") or original.get("root_id") not in (None, "", root)
