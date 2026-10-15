@@ -5,11 +5,13 @@ import {resolve} from 'node:path';
 import {createInterface} from 'node:readline';
 import {repoRoot, outputDir} from './fixture.mjs';
 import {openWorkspacePage} from './scenario-context.mjs';
-import {resolveTestPython} from '../../scripts/test-python.mjs';
+import {testPythonCommand} from '../../scripts/test-python.mjs';
 
 export async function runCodexAttached(browser) {
   if (process.platform === "win32") return; // Windows has no qualified Desktop follower transport.
-  const child = spawn(resolveTestPython({repoRoot}), ['-u', 'examples/personal-workspace-browser/codex_attached_fixture.py'], {cwd: repoRoot, env: {...process.env, PYTHONPATH: repoRoot}, stdio: ['ignore','pipe','pipe']});
+  const fixturePath = resolve(repoRoot, 'examples/personal-workspace-browser/codex_attached_fixture.py');
+  const python = testPythonCommand(`import runpy\nrunpy.run_path(${JSON.stringify(fixturePath)}, run_name="__main__")`, {repoRoot});
+  const child = spawn(python.command, python.args, {cwd: repoRoot, env: process.env, stdio: ['ignore','pipe','pipe']});
   let stderr = '';
   child.stderr.on('data', value => {stderr += value;});
   const lines = createInterface({input: child.stdout});

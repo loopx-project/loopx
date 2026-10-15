@@ -1,224 +1,27 @@
 """Real HTTP + SQLite/JSONL + a disposable Desktop-owner Unix protocol peer."""
 
-from contextlib import contextmanager
-import http.client
+import importlib.util
 import json
-import os
 from pathlib import Path
-import tempfile
-import socket
 import sqlite3
-import struct
 import subprocess
-import threading
 from types import SimpleNamespace
 
 import pytest
 
-
-from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.capabilities.native_chat import codex_attached as provider
 
-THREAD = "11111111-1111-4111-8111-111111111111"
-
-
-def frame(connection):
-    def take(size):
-        value = b""
-        while len(value) < size:
-            data = connection.recv(size - len(value))
-            if not data:
-                raise EOFError
-            value += data
-        return value
-
-    size = struct.unpack("<I", take(4))[0]
-    return json.loads(take(size))
-
-
-def emit(connection, value):
-    raw = json.dumps(value).encode()
-    connection.sendall(struct.pack("<I", len(raw)) + raw)
-
-
-def append_message(path, role, text):
-    with path.open("a") as stream:
-        stream.write(
-            json.dumps(
-                {
-                    "type": "response_item",
-                    "timestamp": "2026-01-01T00:00:00Z",
-                    "payload": {
-                        "type": "message",
-                        "role": role,
-                        "content": [
-                            {
-                                "type": "input_text"
-                                if role == "user"
-                                else "output_text",
-                                "text": text,
-                            }
-                        ],
-                    },
-                }
-            )
-            + "\n"
-        )
-
-
-@contextmanager
-def fixture(tmp_path, monkeypatch, *, uncertain=False, goal_id="sample-goal"):
-    if os.name != "posix":
-        pytest.skip("The native Desktop peer requires a Unix owner socket")
-    short_home = tempfile.TemporaryDirectory(prefix="lxca-", dir="/tmp")
-    home = Path(short_home.name)
-    (home / "sessions").mkdir(parents=True)
-    (home / "ipc").mkdir(mode=0o700)
-    rollout = home / "sessions" / "bound.jsonl"
-    append_message(rollout, "user", "Original request")
-    append_message(rollout, "assistant", "Original result")
-    with rollout.open("a") as stream:
-        stream.write(
-            json.dumps(
-                {
-                    "type": "event_msg",
-                    "timestamp": "2026-01-01T00:00:01Z",
-                    "payload": {"type": "task_complete"},
-                }
-            )
-            + "\n"
-        )
-    connection = sqlite3.connect(home / "state_5.sqlite")
-    connection.execute(
-        "CREATE TABLE threads(id TEXT, rollout_path TEXT, archived INTEGER)"
-    )
-    connection.execute("INSERT INTO threads VALUES(?,?,0)", (THREAD, str(rollout)))
-    connection.commit()
-    connection.close()
-    monkeypatch.setattr(provider, "codex_homes", lambda: [home])
-    registry = tmp_path / "registry.json"
-    registry.write_text(
-        json.dumps(
-            {
-                "goals": [
-                    {
-                        "id": goal_id,
-                        "repo": str(tmp_path),
-                        "coordination": {
-                            "registered_agents": ["worker"],
-                            "thread_agent_bindings": [
-                                {
-                                    "agent_id": "worker",
-                                    "host_surface": "codex-app",
-                                    "thread_id": THREAD,
-                                }
-                            ],
-                        },
-                    }
-                ]
-            }
-        )
-    )
-    listener = socket.socket(socket.AF_UNIX)
-    listener.bind(str(home / "ipc" / "ipc.sock"))
-    (home / "ipc" / "ipc.sock").chmod(0o600)
-    listener.listen()
-    listener.settimeout(0.1)
-    methods = []
-    inputs = []
-    stop = threading.Event()
-
-    def host():
-        while not stop.is_set():
-            try:
-                client, _ = listener.accept()
-            except TimeoutError:
-                continue
-            except OSError:
-                return
-            with client:
-                client.settimeout(2)
-                try:
-                    while True:
-                        message = frame(client)
-                        methods.append(message["method"])
-                        if message["method"] == "initialize":
-                            result = {"clientId": "loopx-client"}
-                        elif message["method"] == "thread-owner-discovery":
-                            result = {"supportsUntrustedAppInput": True}
-                        elif message["method"] == "thread-follower-start-turn":
-                            inputs.append(message["params"])
-                            assert message["targetClientId"] == "original-owner"
-                            if uncertain:
-                                break
-                            append_message(
-                                rollout,
-                                "user",
-                                message["params"]["turnStart"]["request"]["input"][0][
-                                    "text"
-                                ],
-                            )
-                            result = {
-                                "result": {"turn": {"id": "original-native-turn"}}
-                            }
-                        else:
-                            raise AssertionError("Unexpected host operation")
-                        emit(
-                            client,
-                            {
-                                "type": "response",
-                                "requestId": message["requestId"],
-                                "resultType": "success",
-                                "handledByClientId": "original-owner",
-                                "result": result,
-                            },
-                        )
-                except (EOFError, TimeoutError, OSError):
-                    pass
-
-    host_thread = threading.Thread(target=host, daemon=True)
-    host_thread.start()
-    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
-    server.registry_path = registry
-    server.runtime_root = tmp_path / "runtime"
-    server.verbose = False
-    http_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    http_thread.start()
-
-    def request(
-        method="GET",
-        body=None,
-        query="?goal_id=sample-goal",
-        origin=None,
-        path="/api/chat/codex-attached",
-    ):
-        client = http.client.HTTPConnection(*server.server_address, timeout=8)
-        headers = {"Content-Type": "application/json"}
-        if origin:
-            headers["Origin"] = origin
-        client.request(
-            method,
-            path + query,
-            json.dumps(body) if body else None,
-            headers,
-        )
-        response = client.getresponse()
-        status = response.status
-        value = json.loads(response.read())
-        client.close()
-        return status, value
-
-    request.server = server
-    try:
-        yield request, rollout, methods, inputs, registry, home
-    finally:
-        server.shutdown()
-        server.server_close()
-        http_thread.join()
-        stop.set()
-        listener.close()
-        host_thread.join(timeout=3)
-        short_home.cleanup()
+_spec = importlib.util.spec_from_file_location(
+    "codex_attached_peer",
+    Path(__file__).resolve().parents[2]
+    / "examples/personal-workspace-browser/codex_attached_peer.py",
+)
+assert _spec and _spec.loader
+_peer = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_peer)
+THREAD = _peer.THREAD
+append_message = _peer.append_message
+fixture = _peer.fixture
 
 
 def target(request):
@@ -267,7 +70,7 @@ def open_body(binding):
 
 def test_explicit_open_uses_bound_local_thread_without_executing(tmp_path, monkeypatch):
     calls = opener_spy(monkeypatch)
-    with fixture(tmp_path, monkeypatch) as (request, _, methods, inputs, _, _):
+    with fixture(tmp_path) as (request, _, methods, inputs, _, _):
         binding, query = target(request)
         assert request(query=query)[0] == 200
         assert calls == []  # Reading never opens another application.
@@ -293,7 +96,7 @@ def test_explicit_open_uses_bound_local_thread_without_executing(tmp_path, monke
 
 
 def test_reply_character_limit_accepts_full_unicode_input(tmp_path, monkeypatch):
-    with fixture(tmp_path, monkeypatch) as (request, _, _, inputs, _, _):
+    with fixture(tmp_path) as (request, _, _, inputs, _, _):
         binding, _ = target(request)
         text = "验" * 24000
         status, _ = request("POST", body(binding, text), query="")
@@ -305,7 +108,7 @@ def test_reply_character_limit_accepts_full_unicode_input(tmp_path, monkeypatch)
 
 def test_open_rejects_forged_stale_archived_and_cross_origin(tmp_path, monkeypatch):
     calls = opener_spy(monkeypatch)
-    with fixture(tmp_path, monkeypatch) as (request, _, _, _, registry, home):
+    with fixture(tmp_path) as (request, _, _, _, registry, home):
         binding, _ = target(request)
         payload = open_body(binding)
         for extra in ("url", "thread_id", "path", "command"):
@@ -369,7 +172,7 @@ def test_open_rejects_forged_stale_archived_and_cross_origin(tmp_path, monkeypat
 )
 def test_open_host_failure_is_explicit(tmp_path, monkeypatch, platform, failure):
     calls = opener_spy(monkeypatch, platform=platform, failure=failure)
-    with fixture(tmp_path, monkeypatch) as (request, _, _, inputs, _, _):
+    with fixture(tmp_path) as (request, _, _, inputs, _, _):
         binding, _ = target(request)
         status, result = request(
             "POST", open_body(binding), query="", path="/api/chat/codex-attached/open"
@@ -387,7 +190,7 @@ def test_open_validates_uuid_and_rechecks_binding_before_dispatch(
     for value in ("--args", "11111111111141118111111111111111", THREAD + "/other"):
         with pytest.raises((ValueError, provider.DesktopUnavailable)):
             provider.open_conversation(value)
-    with fixture(tmp_path, monkeypatch) as (request, _, _, _, registry, _):
+    with fixture(tmp_path) as (request, _, _, _, registry, _):
         binding, _ = target(request)
         from loopx.presentation import codex_attached_api as api
 
@@ -416,7 +219,7 @@ def test_open_validates_uuid_and_rechecks_binding_before_dispatch(
 def test_original_history_incremental_append_and_idempotent_owner_input(
     tmp_path, monkeypatch
 ):
-    with fixture(tmp_path, monkeypatch) as (
+    with fixture(tmp_path) as (
         request,
         rollout,
         methods,
@@ -461,7 +264,7 @@ def test_original_history_incremental_append_and_idempotent_owner_input(
 
 
 def test_uncertain_delivery_never_replays_the_effect(tmp_path, monkeypatch):
-    with fixture(tmp_path, monkeypatch, uncertain=True) as (
+    with fixture(tmp_path, uncertain=True) as (
         request,
         _,
         _,
@@ -482,7 +285,7 @@ def test_uncertain_delivery_never_replays_the_effect(tmp_path, monkeypatch):
 def test_busy_stale_binding_foreign_origin_and_unbound_agent_create_no_input(
     tmp_path, monkeypatch
 ):
-    with fixture(tmp_path, monkeypatch) as (
+    with fixture(tmp_path) as (
         request,
         rollout,
         _,
@@ -521,7 +324,7 @@ def test_busy_stale_binding_foreign_origin_and_unbound_agent_create_no_input(
 def test_history_is_bounded_ignores_tools_and_private_paths_do_not_escape(
     tmp_path, monkeypatch
 ):
-    with fixture(tmp_path, monkeypatch) as (request, rollout, _, _, _, home):
+    with fixture(tmp_path) as (request, rollout, _, _, _, home):
         binding, query = target(request)
         with rollout.open("a") as stream:
             for _ in range(400):
@@ -576,7 +379,7 @@ def test_replaced_rollout_invalidates_revision_and_offset_identities(tmp_path):
 
 
 def test_unbound_goal_does_not_probe_native_conversations(tmp_path, monkeypatch):
-    with fixture(tmp_path, monkeypatch) as (request, _, methods, inputs, registry, _):
+    with fixture(tmp_path) as (request, _, methods, inputs, registry, _):
         saved = json.loads(registry.read_text())
         saved["goals"][0]["coordination"]["thread_agent_bindings"] = []
         registry.write_text(json.dumps(saved))

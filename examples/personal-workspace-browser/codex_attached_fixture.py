@@ -2,26 +2,28 @@
 
 import json
 from pathlib import Path
-import runpy
+import sys
 import signal
+import subprocess
 import tempfile
 import threading
 
-import pytest
+from contextlib import ExitStack
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from loopx.chat_server import ChatRequestHandler, default_chat_assets_dir
 
-root = Path(__file__).resolve().parents[2]
-fixture = runpy.run_path(
-    str(root / "tests/presentation/test_codex_attached_conversation.py")
-)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from codex_attached_peer import append_message, fixture, provider
+
 stop = threading.Event()
 signal.signal(signal.SIGTERM, lambda *_: stop.set())
 with (
     tempfile.TemporaryDirectory(prefix="lx-ui-", dir="/tmp") as directory,
-    pytest.MonkeyPatch.context() as patches,
+    ExitStack() as patches,
 ):
-    with fixture["fixture"](Path(directory), patches, goal_id="product-release") as (
+    with fixture(Path(directory), goal_id="product-release") as (
         request,
         rollout,
         _methods,
@@ -29,8 +31,10 @@ with (
         registry,
         _home,
     ):
-        launches = fixture["opener_spy"](patches)
-        launch = fixture["provider"].subprocess.run
+        launches = []
+        patches.enter_context(
+            patch.object(provider, "sys", SimpleNamespace(platform="darwin"))
+        )
         fail_next_open = False
 
         def open_spy(argv, **options):
@@ -38,9 +42,17 @@ with (
             if fail_next_open:
                 fail_next_open = False
                 raise OSError("synthetic unavailable App")
-            return launch(argv, **options)
+            launches.append((argv, options))
 
-        patches.setattr(fixture["provider"].subprocess, "run", open_spy)
+        patches.enter_context(
+            patch.object(
+                provider,
+                "subprocess",
+                SimpleNamespace(
+                    run=open_spy, SubprocessError=subprocess.SubprocessError
+                ),
+            )
+        )
 
         class Handler(ChatRequestHandler):
             def do_GET(self):
@@ -52,7 +64,7 @@ with (
             def do_POST(self):
                 global fail_next_open
                 if self.path == "/fixture/append":
-                    fixture["append_message"](
+                    append_message(
                         rollout, "assistant", "原 Agent 的新结果：已保留原会话。"
                     )
                     self._send_json({"ok": True})
