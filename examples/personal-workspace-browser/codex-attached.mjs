@@ -37,6 +37,7 @@ export async function runCodexAttached(browser) {
     await openOriginal.focus();
     await page.keyboard.press('Enter');
     await panel.getByRole('alert').filter({hasText:'Codex App could not be opened'}).waitFor();
+    await page.screenshot({path:resolve(outputDir,'attached-codex-open-error-desktop.png'),animations:'disabled'});
     assert.equal((await (await page.request.get(new URL('/fixture/opened',url).href)).json()).count,0);
     await openOriginal.click();
     await panel.getByText('已请求打开原会话，请在 Codex App 中查看。',{exact:true}).waitFor();
