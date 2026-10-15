@@ -147,8 +147,8 @@ def main():
         git_object = point / "components/task_workspace/.git/objects/ab/retained-object"
         assert git_object.read_text() == "Readonly source evidence" and git_object.stat().st_mode & 0o777 == 0o444
         config = _stage_source_configuration(container, metadata["native_session"], output / "native-config")
-        for stride in (False, True):
-            name = "stride" if stride else "ordinary"
+        for name in ("ordinary", "stride", "fresh"):
+            stride = name != "ordinary"
             results = output / name
             results.mkdir()
             guest_workspace = results / "workspace-root"
@@ -162,7 +162,8 @@ def main():
                    str(results): {"bind": "/results", "mode": "rw"}},
                   {"LOOPX_JOINT_RECEIVER_POINT": "/point", "LOOPX_JOINT_RECEIVER_CONFIG": "/captured-config.toml",
                    "LOOPX_RUNTIME_ROOT": "/results/transport-runtime",
-                   **({"LOOPX_JOINT_RECEIVER_STRIDE": "1"} if stride else {})}, output / f"{name}.log")
+                   **({"LOOPX_JOINT_RECEIVER_STRIDE": "1"} if stride else {}),
+                   **({"LOOPX_JOINT_RECEIVER_FRESH": "1"} if name == "fresh" else {})}, output / f"{name}.log")
         # The same native provider must also complete the public Core journey
         # with every benchmark import forbidden by its test fixture.
         results = output / "core"
@@ -184,7 +185,7 @@ def main():
                         source / "tests/control_plane/codex_checkpoint_fixture.py"]},
                    "image_id": image, "point_sha256": packet["sha256"],
                    "binary_sha256": {k: hashlib.sha256(p.read_bytes()).hexdigest() for k, p in binaries.items()},
-                   "ordinary_and_stride": True, "core_goal_without_benchmark": True,
+                   "ordinary_and_stride": True, "post_replan_fresh_context": True, "core_goal_without_benchmark": True,
                    "research_point_qualified": False}
         (output / "result.json").write_text(json.dumps(receipt, indent=2))
         print(json.dumps(receipt))

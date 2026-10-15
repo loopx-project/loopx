@@ -170,7 +170,9 @@ async function verify(root: string, expected: unknown): Promise<JsonObject> {
 export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
   const request = requireJsonObject(value, "checkpoint artifacts request");
   if (request.action === "restore_capture") {
-    if (!hasExactAuthorityKeys(request, ["action", "checkpoint_sha256", "goal_id", "agent_id", "current_obligation_id", "review"])) {
+    if (!hasExactAuthorityKeys(request, ["action", "checkpoint_sha256", "goal_id", "agent_id", "current_obligation_id", "review",
+        ...(request.include_review_basis === undefined ? [] : ["include_review_basis"])]) ||
+        (request.include_review_basis !== undefined && typeof request.include_review_basis !== "boolean")) {
       throw new Error("checkpoint restored capture fields are invalid");
     }
     const sha = requireNonEmptyString(request.checkpoint_sha256, "restored checkpoint digest");
@@ -203,6 +205,11 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
       Array.isArray(path?.evidence_refs) && path.evidence_refs.includes(`checkpoint:${sha}`);
     return {capture_allowed: accepted, reason: accepted ? "restored_replan_completed" : "restored_replan_pending",
       ...(accepted ? {review_obligation_id: id} : {}),
+      ...(accepted && request.include_review_basis === true ? {review_basis: {
+        identity, obligation_id: id,
+        completed_decision: {agent_vision: run!.agent_vision, autonomous_replan_ack: ack},
+        decision_sha256: canonicalAuthoritySha256({agent_vision: run!.agent_vision, autonomous_replan_ack: ack}),
+      }} : {}),
       execution_authority_granted: false};
   }
   if (request.action === "select_replan") {

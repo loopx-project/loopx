@@ -210,11 +210,13 @@ def _store_codex_cli_session(
         prior = load_codex_cli_session(runtime_root, lineage=lineage, session_scope=session_scope, host=host)
         retained_source = None
         retained_root = None
+        retained_refresh = None
         if prior and (prior.get("session_id"), prior.get("goal_ref"), prior.get("session_profile_digest")) == (
             session_id, dict(goal_ref) if goal_ref is not None else None, session_profile_digest
         ):
             retained_source = prior.get("checkpoint_artifact_sha256")
             retained_root = prior.get("checkpoint_artifact_root")
+            retained_refresh = prior.get("checkpoint_context_refresh")
         if retained_source is not None:
             if not isinstance(retained_source, str) or not BARE_SHA256_PATTERN.fullmatch(retained_source):
                 raise ValueError("stored checkpoint session source digest is invalid")
@@ -238,7 +240,33 @@ def _store_codex_cli_session(
             operation_reasoning_effort=operation_reasoning_effort,
             checkpoint_artifact_sha256=checkpoint_artifact_sha256 or retained_source,
             checkpoint_artifact_root=checkpoint_artifact_root or retained_root,
+            checkpoint_context_refresh=retained_refresh,
         )
+
+
+def _replace_checkpoint_codex_session(
+    runtime_root: Path, *, lineage: Mapping[str, str], expected: dict[str, Any],
+    session_id: str, refresh: dict[str, Any],
+) -> None:
+    """CAS one provider conversation after explicit controller qualification.
+
+    The caller holds current Goal lifetime admission. The typed checkpoint
+    continuation owner qualifies the completed decision; this is transport IO.
+    Ordinary replacement observations still never transfer provenance.
+    """
+    path = _session_path(runtime_root, lineage, "agent")
+    with exclusive_file_lock(path):
+        current = load_codex_cli_session(runtime_root, lineage=lineage, session_scope="agent")
+        if current != expected or not current.get("checkpoint_artifact_sha256"):
+            raise ValueError("checkpoint context source binding moved before replacement")
+        if session_id == current["session_id"]:
+            raise ValueError("checkpoint context refresh requires a distinct native conversation")
+        _write_codex_cli_session(runtime_root, lineage=lineage, session_scope="agent",
+            session_id=session_id, goal_ref=current["goal_ref"],
+            session_profile_digest=current["session_profile_digest"],
+            checkpoint_artifact_sha256=current["checkpoint_artifact_sha256"],
+            checkpoint_artifact_root=current["checkpoint_artifact_root"],
+            checkpoint_context_refresh={**refresh, "session_id": session_id})
 
 
 def _write_codex_cli_session(
@@ -255,6 +283,7 @@ def _write_codex_cli_session(
     operation_reasoning_effort: str | None = None,
     checkpoint_artifact_sha256: str | None = None,
     checkpoint_artifact_root: str | None = None,
+    checkpoint_context_refresh: dict[str, Any] | None = None,
 ) -> None:
     schema = _host_session_schema(host)
     normalized_session_id = _valid_session_id(session_id)
@@ -288,6 +317,8 @@ def _write_codex_cli_session(
                 payload["checkpoint_artifact_sha256"] = checkpoint_artifact_sha256
             if checkpoint_artifact_root is not None:
                 payload["checkpoint_artifact_root"] = checkpoint_artifact_root
+            if checkpoint_context_refresh is not None:
+                payload["checkpoint_context_refresh"] = checkpoint_context_refresh
             if operation_profile_digest is not None:
                 payload["operation_transport"] = (
                     "dsh-native-operation-tools-v0" if host == "dsh"

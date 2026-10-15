@@ -14,7 +14,19 @@ from loopx.control_plane.quota.settlement import read_heartbeat_settlement
 from loopx.control_plane.turn_driver.codex_sessions import load_codex_cli_session
 
 
-def restored_capture_gate(env, current_obligation_id=None):
+def retained_native_history(binding, metadata):
+    """An explicit reset retains source lineage, not the discarded native prefix."""
+    refresh = binding.get("checkpoint_context_refresh")
+    if refresh is None:
+        return metadata["native_session"]
+    if (refresh.get("checkpoint_sha256") != binding.get("checkpoint_artifact_sha256")
+            or refresh.get("session_id") != binding.get("session_id")
+            or not refresh.get("review_basis", {}).get("decision_sha256")):
+        raise ValueError("checkpoint context refresh provenance differs")
+    return {"turn_ids": [], "visible_history_sha256": hashlib.sha256(b"[]").hexdigest()}
+
+
+def restored_capture_gate(env, current_obligation_id=None, *, verify_native=True, include_review_basis=False):
     root = Path(env["LOOPX_RUNTIME_ROOT"])
     lineage = {"goal_id": env["LOOPX_GOAL_ID"], "agent_id": env["LOOPX_AGENT_ID"]}
     binding = load_codex_cli_session(root, lineage=lineage, session_scope="agent")
@@ -81,12 +93,14 @@ def restored_capture_gate(env, current_obligation_id=None):
                 "writeback_run": observed.writeback_run,
                 "semantic_replan_guard": observed.semantic_replan_guard,
             },
+            **({"include_review_basis": True} if include_review_basis else {}),
         })
         if result["capture_allowed"]:
             # Qualification happens before launching this wake's model. A
             # current receipt alone cannot stand in for native continuation.
-            native = metadata["native_session"]
-            native_session_checkpoint(env, wake.session_id, timeout=30, retained_history=native)
+            if verify_native:
+                native_session_checkpoint(env, wake.session_id, timeout=30,
+                    retained_history=retained_native_history(binding, metadata))
             result["review_turn_id"] = guard_path.parent.name
             break
     result["checkpoint_sha256"] = sha

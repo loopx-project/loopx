@@ -39,6 +39,12 @@ def test_restored_capture_requires_current_consumption_not_local_dedup(fault):
     result = effect_runtime_result("runtime.checkpoint_artifacts", request)
     assert result["capture_allowed"] is (fault is None)
     assert result["execution_authority_granted"] is False
+    assert "review_basis" not in result
+    detailed = effect_runtime_result("runtime.checkpoint_artifacts", {**request, "include_review_basis": True})
+    assert ("review_basis" in detailed) is (fault is None)
+    if fault is None:
+        assert detailed["review_basis"]["identity"] == identity
+        assert detailed["review_basis"]["completed_decision"]["agent_vision"] == review["writeback_run"]["agent_vision"]
     # A fresh Goal/Agent cannot inherit even a valid destination review. This
     # is the outer restore-every-point counterexample to local-ID dedup.
     another = copy.deepcopy(request)

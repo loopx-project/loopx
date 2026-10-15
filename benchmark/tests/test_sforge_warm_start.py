@@ -98,6 +98,7 @@ def point(tmp_path):
 @pytest.mark.parametrize("change", [
     {"goal_id": "source-goal"}, {"agent_id": "source-agent"}, {"source_todo_id": "missing"},
     {"deadline_epoch": 1}, {"deadline_epoch": True}, {"normal_cadence": 0}, {"normal_cadence": True},
+    {"fresh_after_replan": "false"},
 ])
 def test_invalid_participant_rejects_before_workspace_or_authority_changes(point, change):
     start, workspace = point
