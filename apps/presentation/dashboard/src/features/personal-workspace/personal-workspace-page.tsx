@@ -92,7 +92,7 @@ import { readWorkspaceTheme, writeWorkspaceTheme, type WorkspaceTheme } from "./
 import {
   attentionNotificationContents,
   attentionNotificationKey,
-  attentionNotificationSupport,
+  attentionNotificationSupport, notifiableAttention,
   attentionPollIntervalMs,
   newAttentionItems,
   readAttentionNotificationPreference,
@@ -2298,6 +2298,30 @@ export function PersonalWorkspacePage({
     </Suspense>
   ) : null;
 
+  // The browser's answer can change outside this page (site settings). Read
+  // it back whenever the owner returns or opens settings, and when the
+  // permission owner reports a change, so a grant can be turned on from here
+  // and a revocation shows as what it is. Nothing here asks for permission.
+  useEffect(() => {
+    const readBack = () => setAttentionNotificationSupportState((current) => {
+      const support = attentionNotificationSupport();
+      return support === current ? current : support;
+    });
+    readBack();
+    window.addEventListener("focus", readBack);
+    document.addEventListener("visibilitychange", readBack);
+    let status: PermissionStatus | null = null;
+    try {
+      void navigator.permissions?.query({ name: "notifications" }).then((result) => { status = result; result.onchange = readBack; }).catch(() => {});
+    } catch {
+      // No permission owner to subscribe to; focus and settings still read back.
+    }
+    return () => {
+      window.removeEventListener("focus", readBack);
+      document.removeEventListener("visibilitychange", readBack);
+      if (status) status.onchange = null;
+    };
+  }, [settingsOpen]);
   const attentionNotificationsActive = attentionNotificationsEnabled && attentionNotificationSupportState === "granted" && !readOnly;
   const backgroundRefreshRef = useRef(callbacks.onBackgroundRefresh);
   backgroundRefreshRef.current = callbacks.onBackgroundRefresh;
@@ -2332,7 +2356,10 @@ export function PersonalWorkspacePage({
     const seen = seenAttentionKeysRef.current;
     seenAttentionKeysRef.current = keys;
     if (!seen) return;
-    const fresh = newAttentionItems(seen, items);
+    // Every listed item is remembered, so an optional action that later turns
+    // blocking is not a new item; only an item first seen while it waits on
+    // the owner interrupts.
+    const fresh = notifiableAttention(newAttentionItems(seen, items));
     if (!fresh.length || !shouldNotifyAttention({
       enabled: true, support: attentionNotificationSupportState,
       visible: document.visibilityState === "visible", focused: document.hasFocus(),

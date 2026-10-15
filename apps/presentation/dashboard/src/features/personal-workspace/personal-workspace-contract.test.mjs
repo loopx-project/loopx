@@ -608,7 +608,11 @@ assert.match(page, /const attentionNotificationsActive = attentionNotificationsE
 assert.match(page, /if \(!attentionNotificationsActive \|\| !backgroundRefreshRef\.current\) return;/, "No background re-read unless notifications are active");
 assert.match(page, /Notification\.requestPermission\(\)/, "Permission is requested from the owner's toggle, not on load");
 assert.doesNotMatch(page.replace(/async function updateAttentionNotifications[\s\S]*?\n  }\n/, ""), /requestPermission/, "Only the toggle handler asks for permission");
-assert.match(page, /seenAttentionKeysRef\.current = new Set\(model\.userTodos\.map\(attentionNotificationKey\)\)/, "Enabling seeds the current lane so nothing already waiting is replayed");
+assert.match(page, /seenAttentionKeysRef\.current = new Set\(model\.userTodos\.map\(attentionNotificationKey\)\)/, "Enabling seeds every listed item so nothing already listed is replayed");
+assert.match(page, /const fresh = notifiableAttention\(newAttentionItems\(seen, items\)\);/, "Only an item first seen while it waits on the owner notifies; optional actions never do");
+assert.match(attentionNotifications, /export function notifiableAttention[\s\S]*?items\.filter\(\(item\) => item\.blocking\)/, "Notifiable means the attention owner's blocking classification, never the whole list");
+assert.match(page, /window\.addEventListener\("focus", readBack\);[\s\S]*?document\.addEventListener\("visibilitychange", readBack\);[\s\S]*?navigator\.permissions\?\.query\(\{ name: "notifications" \}\)/, "The browser's permission answer is read back on return, on settings and on change");
+assert.doesNotMatch(page.slice(page.indexOf("const readBack = () =>"), page.indexOf("const attentionNotificationsActive")), /requestPermission|setAttentionNotificationsEnabled\(true\)/, "Reading the answer back never asks for permission or enables on its own");
 assert.match(dashboard, /onBackgroundRefresh=\{\(\) => loadFromUrl\([^\n]*\{ background: true, readScope: "all"/, "The background re-read keeps snapshots on screen and re-reads every Goal");
 for (const key of ["settings.attentionNotifications", "settings.attentionNotificationsToggle", "settings.attentionNotificationsDenied", "settings.attentionNotificationsUnsupported", "notifications.attentionMore"]) {
   assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);

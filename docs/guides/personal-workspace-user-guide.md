@@ -566,8 +566,10 @@ Goal 的 Topic 路由，不删除 Goal、Agent Session、历史 Todo 或其他 G
 只有允许后开关才会保持开启；页面会回读浏览器的答复（已允许、已拒绝、不支持）。开启后，页面
 每 30 秒在后台重新读取一次工作区（标签页隐藏时每 60 秒），当出现一条**新的、等你决定**的事项且你
 没有正看着这个页面时，发出一条桌面通知；点击通知会回到该 Goal 并打开这条事项。进展、运行和数量
-变化不会通知；开启当下已经在等你的事项也不会重复提醒。关闭开关后立即停止后台读取。这只在本页面
-保持打开时生效，不是服务端推送，也不替代飞书等渠道通知。
+变化不会通知；开启当下已经在等你的事项也不会重复提醒；可选提醒（不阻塞 Agent 的用户操作）会列在
+工作区里，但不会打扰你。关闭开关后立即停止后台读取。如果浏览器曾拒绝通知，之后在站点设置里允许，
+回到本页面或打开设置时会重新读到允许，开关即可再次开启；反过来在站点设置里撤销，页面也会如实显示
+并停止后台读取。这只在本页面保持打开时生效，不是服务端推送，也不替代飞书等渠道通知。
 
 "Settings → Appearance → Desktop notifications" is a per-browser switch, off by default. Turning it
 on asks the browser for permission once and keeps the switch on only when granted; the page reads
@@ -577,7 +579,7 @@ notification for each **new item that waits on you** while you are not looking a
 Clicking the notification returns to that Goal and opens the item. Progress, runs and counts never
 notify, and items already waiting when you turn it on are not replayed. Turning it off stops the
 background reads. This works only while this page stays open; it is not a server push and does not
-replace channel notifications such as Lark.
+replace channel notifications such as Lark. An optional reminder (a user action that does not block the Agent) is listed in the workspace but never interrupts you. If this browser once blocked notifications and you allow them in its site settings later, returning to this page or opening Settings reads the answer back and the switch can be turned on again; a permission revoked in the site settings shows as blocked and stops the background re-read.
 
 ## 🛡️ 8. 安全与不可逆操作保护
 

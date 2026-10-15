@@ -11,12 +11,12 @@ import { openWorkspacePage } from "./scenario-context.mjs";
 
 const gateText = "Approve the restated FY2023 operating cash flow";
 
-function installNotificationStub(page) {
-  return page.addInitScript(() => {
+function installNotificationStub(page, { permission = "default" } = {}) {
+  return page.addInitScript((initial) => {
     window.__loopxNotifications = [];
     window.__loopxPermissionRequests = 0;
     class FakeNotification {
-      static permission = "default";
+      static permission = initial;
       static async requestPermission() { window.__loopxPermissionRequests += 1; FakeNotification.permission = "granted"; return "granted"; }
       constructor(title, options) { this.title = title; this.body = options?.body ?? ""; this.tag = options?.tag ?? ""; this.closed = false; window.__loopxNotifications.push(this); }
       close() { this.closed = true; }
@@ -24,7 +24,7 @@ function installNotificationStub(page) {
     window.Notification = FakeNotification;
     // The owner is elsewhere: the page is visible in a window that lost focus.
     document.hasFocus = () => false;
-  });
+  }, permission);
 }
 
 function addGate(fixture, todoId, text) {
@@ -111,7 +111,54 @@ export const attentionNotificationsScenario = {
       await page.getByTestId("personal-goal-home").waitFor({ state: "visible", timeout: 15_000 });
       await page.waitForTimeout(1_000);
       assert.equal((await notifications()).length, 0, "A reload with items already waiting notifies nothing");
-      return { coverageEntries: await session.close() };
+      const coverageEntries = await session.close();
+
+      // A browser that blocked notifications can be allowed again in its site
+      // settings without reloading: returning to the page reads the answer
+      // back, the switch is usable, and turning it on asks nothing more. A
+      // revocation while on reads back the same way and stops the re-read.
+      const denied = await openWorkspacePage(browser, url, { collectCoverage, viewport: { width: 1440, height: 900 }, beforeGoto: (_api, page) => installNotificationStub(page, { permission: "denied" }) });
+      try {
+        const { api: deniedApi, page } = denied;
+        await page.getByRole("button", { name: "设置", exact: true }).click();
+        await page.locator(".personal-settings-tabs").getByRole("button", { name: "外观", exact: true }).click();
+        const settings = page.getByTestId("attention-notification-settings");
+        const toggle = settings.getByRole("checkbox");
+        const permission = page.getByTestId("attention-notification-permission");
+        await settings.waitFor({ state: "visible" });
+        assert.equal(await toggle.isDisabled(), true, "Blocked: the switch is not offered");
+        assert.match(await permission.innerText(), /已拒绝/);
+        await page.evaluate(() => { window.Notification.permission = "granted"; window.dispatchEvent(new Event("focus")); });
+        await page.waitForFunction(() => document.querySelector('[data-testid="attention-notification-permission"]')?.textContent?.includes("已允许"), null, { timeout: 10_000 });
+        assert.equal(await toggle.isDisabled(), false, "A grant made elsewhere makes the switch usable again");
+        assert.equal(await toggle.isChecked(), false, "Nothing turns on by itself");
+        await page.clock.install();
+        await toggle.click();
+        await page.waitForFunction(() => document.querySelector('[data-testid="attention-notification-permission"] ~ *') !== undefined);
+        assert.equal(await toggle.isChecked(), true);
+        assert.equal(await page.evaluate(() => window.__loopxPermissionRequests), 0, "An already granted browser is not asked again");
+        await page.getByRole("button", { name: "返回工作区", exact: true }).click();
+        const readsBefore = deniedApi.statusRequestCount;
+        await page.clock.runFor(31_000);
+        await page.waitForTimeout(1_000);
+        assert.ok(deniedApi.statusRequestCount > readsBefore, "Enabled after recovery, the page re-reads in the background");
+        // Revoked in the site settings while on: read back on return, stop quietly.
+        await page.evaluate(() => { window.Notification.permission = "denied"; window.dispatchEvent(new Event("focus")); });
+        await page.waitForTimeout(500);
+        const readsAfterRevoke = deniedApi.statusRequestCount;
+        await page.clock.runFor(70_000);
+        await page.waitForTimeout(1_000);
+        assert.equal(deniedApi.statusRequestCount, readsAfterRevoke, "A revoked permission stops the background re-read");
+        await page.getByRole("button", { name: "设置", exact: true }).click();
+        await page.locator(".personal-settings-tabs").getByRole("button", { name: "外观", exact: true }).click();
+        await settings.waitFor({ state: "visible" });
+        assert.match(await permission.innerText(), /已拒绝/, "The revocation shows as what it is");
+        assert.equal(await toggle.isDisabled(), true);
+        return { coverageEntries: [...coverageEntries, ...await denied.close()] };
+      } catch (error) {
+        await denied.close().catch(() => {});
+        throw error;
+      }
     } catch (error) {
       await session.close().catch(() => {});
       throw error;

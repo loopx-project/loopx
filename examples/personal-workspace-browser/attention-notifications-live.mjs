@@ -62,6 +62,14 @@ export const attentionNotificationsLiveScenario = {
       await page.getByRole("button", { name: "返回工作区", exact: true }).click();
       assert.equal((await page.evaluate(() => window.__loopxNotifications.length)), 0);
 
+      // An optional user action raised in the real Todo owner is listed but is
+      // not a decision: the background re-read sees it and nothing notifies.
+      const optional = JSON.parse((await promisify(execFile)(python, ["-c", "from loopx.entrypoint import main; main()", "--format", "json", "--registry", ready.registry, "todo", "add", "--goal-id", "progress-projection", "--role", "user", "--task-class", "user_action", "--text", "Consider renaming the export folder"], { cwd: repoRoot, env: { ...process.env, PYTHONPATH: repoRoot } })).stdout);
+      assert.equal(optional.ok, true);
+      await page.clock.runFor(31_000);
+      await page.waitForTimeout(1_500);
+      assert.equal((await page.evaluate(() => window.__loopxNotifications.length)), 0, "An optional user action does not interrupt the owner");
+
       // A decision raised in the real Todo owner while the owner is away.
       const { stdout } = await promisify(execFile)(python, ["-c", "from loopx.entrypoint import main; main()", "--format", "json", "--registry", ready.registry, "todo", "add", "--goal-id", "progress-projection", "--role", "user", "--task-class", "user_gate", "--text", gateText], { cwd: repoRoot, env: { ...process.env, PYTHONPATH: repoRoot } });
       const added = JSON.parse(stdout);
@@ -70,6 +78,7 @@ export const attentionNotificationsLiveScenario = {
       await page.waitForFunction(() => window.__loopxNotifications.length > 0, null, { timeout: 20_000 });
       const [first] = await page.evaluate(() => window.__loopxNotifications.map((row) => ({ title: row.title, body: row.body })));
       assert.equal(first.body, gateText, "The notification carries the real gate's text");
+      assert.equal((await page.evaluate(() => window.__loopxNotifications.length)), 1, "Only the gate notified, never the optional action");
       await page.evaluate(() => window.__loopxNotifications[0].onclick());
       const drawer = page.locator(".personal-context-drawer");
       await drawer.waitFor({ state: "visible", timeout: 15_000 });

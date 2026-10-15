@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   attentionNotificationContents,
+  notifiableAttention,
   attentionNotificationKey,
   attentionNotificationSupport,
   attentionPollIntervalMs,
@@ -59,4 +60,12 @@ test("content is owner language, bounded, and summarizes a burst", () => {
   assert.deepEqual(contents[3], { body: "2 more decisions are waiting", tag: "loopx-attention-more", title: "LoopX" });
   assert.equal(new Set(contents.map((row) => row.tag)).size, 4, "tags dedupe per item");
   assert.equal(attentionNotificationContents([], copy).length, 0);
+});
+
+test("only items that wait on the owner may notify; optional actions never do", () => {
+  const gate = { ...item("g1", "gate"), blocking: true };
+  const optional = { ...item("g1", "optional", "Consider renaming the export folder"), blocking: false };
+  assert.deepEqual(notifiableAttention([optional, gate, optional]).map((row) => row.todoId), ["gate"]);
+  assert.deepEqual(notifiableAttention([optional]), []);
+  assert.deepEqual(newAttentionItems(new Set(), notifiableAttention([optional])), [], "an optional item is not a new decision");
 });

@@ -38,6 +38,15 @@ export function attentionNotificationSupport(scope: { Notification?: { permissio
   return api.permission === "granted" ? "granted" : api.permission === "denied" ? "denied" : "default";
 }
 
+/**
+ * What may notify: the items the attention owner classifies as waiting on
+ * the owner. An optional user action is listed in the workspace but is not a
+ * decision, so it never interrupts; seed, diff and content all read this set.
+ */
+export function notifiableAttention<T extends Pick<WorkspaceAttention, "blocking">>(items: readonly T[]): T[] {
+  return items.filter((item) => item.blocking);
+}
+
 /** Identity of a needs-you item across reads: one Goal, one Todo or gate. */
 export function attentionNotificationKey(item: Pick<WorkspaceAttention, "goalId" | "todoId">): string {
   return `${item.goalId}\u0000${item.todoId}`;
