@@ -41,6 +41,8 @@ import {
   createEphemeralSessionIdentity,
   createGoalLoop,
   hasAbortedAssistantMessage,
+  piThreadId,
+  soleThreadBindingCandidate,
   sessionKey,
 } from "./pi-goal-loop-runtime.mjs";
 
@@ -312,26 +314,64 @@ export default function (pi: ExtensionAPI) {
     store: ReturnType<typeof createBindingStore>,
     ctx: ExtensionContext,
   ) => {
+    const threadId = piThreadId(ctx.sessionManager.getSessionFile());
     try {
-      const stdout = await runLoopxCli(
-        [
-          "--format",
-          "json",
-          "start-goal",
-          "--guided",
-          "--project",
-          ".",
-          "--goal-text",
-          trimmed,
-          "--host-surface",
-          "pi",
-          "--available-capability",
-          TASK_LEASE_CAPABILITY,
-        ],
-        ctx.cwd,
-      );
-      const packet = parseJsonObject(stdout);
+      const startGoalArgs = (): string[] => [
+        "--format",
+        "json",
+        "start-goal",
+        "--guided",
+        "--project",
+        ".",
+        "--goal-text",
+        trimmed,
+        "--host-surface",
+        "pi",
+        // Pi is the only host surface LoopX cannot identify on its own: the CLI
+        // has no "pi" entry in HOST_THREAD_ID_ENV and does not read PI_SESSION_ID.
+        // Forward the stable per-session thread id so the identity gate resolves
+        // this lane instead of always asking for a selection.
+        ...(threadId ? ["--thread-id", threadId] : []),
+        "--available-capability",
+        TASK_LEASE_CAPABILITY,
+      ];
+      let packet = parseJsonObject(await runLoopxCli(startGoalArgs(), ctx.cwd));
       if (!packet) throw new Error("LoopX start-goal returned a non-JSON packet");
+      // A resolvable thread id is necessary but not sufficient: the gate also
+      // requires that thread to own a lane. When the gate offers exactly one
+      // candidate, bind it through the documented CLI and re-read once; anything
+      // else keeps the original selection packet for the user to resolve.
+      if (threadId && packetNeedsHostSelection(packet)) {
+        const candidate = soleThreadBindingCandidate(packet);
+        if (candidate) {
+          try {
+            await runLoopxCli(
+              [
+                "--format",
+                "json",
+                "bind-agent-thread",
+                "--goal-id",
+                candidate.goalId,
+                "--thread-id",
+                threadId,
+                "--host-surface",
+                "pi",
+                "--agent-id",
+                candidate.agentId,
+                "--execute",
+              ],
+              ctx.cwd,
+            );
+            const rebound = parseJsonObject(await runLoopxCli(startGoalArgs(), ctx.cwd));
+            if (rebound) packet = rebound;
+          } catch (error) {
+            ctx.ui.notify(
+              `LoopX thread binding failed: ${(error as Error)?.message || String(error)}`,
+              "warning",
+            );
+          }
+        }
+      }
       let authority: PiSessionAuthority | null = null;
       if (!packetNeedsHostSelection(packet)) {
         authority = establishSessionAuthority(key, packet);
