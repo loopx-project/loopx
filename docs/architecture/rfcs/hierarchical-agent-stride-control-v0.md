@@ -413,6 +413,13 @@ Todo owns the bounded postcondition. Replan owns direction change. A stride
 controller may recommend split, merge, continue, settle, or escalate, but it
 must not close a Todo, fabricate evidence, or clear a replan obligation.
 
+The [wake/context/correction chain](agent-session-execution-modes-v0.md#wake-current-context-and-correction-form-one-chain)
+keeps prompt prose subordinate to these owners. Local correction preserves
+unaffected work; widening requires relevant current evidence. A due review may
+retain the path, and later work/outcome readback qualifies correction benefit.
+Heartbeat templates no longer add independent two-stall replan/self-pause rules.
+This does not remove Core stall triggers or change configured review cadence.
+
 Research goals may also consume the typed frontier defined by the Research
 Exploration RFC. A composition experiment can be one delivery slice; the
 stride model does not create another research graph.
@@ -425,6 +432,13 @@ dashboards, and scheduler projections may recommend intervention but cannot
 silently convert a proposal into authority.
 
 ### 7.5 Long-running work and decision checkpoints (proposed refinement)
+
+Pause and wake eligibility precede this observation loop. Follow the
+[session pause/resume boundary](agent-session-execution-modes-v0.md#pause-resume-and-automatic-dispatch-boundaries):
+explicit stops disarm continuation; dependency waits retain bounded observation;
+validated no-follow-up ends polling. A result event or scheduler timer cannot
+clear a stop, and a pre-pause admission cannot survive resume. Qualify actual
+request/timer readback separately from prompt guidance and in-flight settlement.
 
 This 2026-10-04 refinement is a proposal for M3/M5, not shipped adaptive
 scheduling. It separates an **experiment boundary**, a **model decision

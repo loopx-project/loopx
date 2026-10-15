@@ -15,6 +15,17 @@ from loopx.heartbeat_prompt import (
 
 
 @pytest.mark.parametrize("mode", ["full", "compact", "brief", "thin"])
+def test_heartbeat_correction_consumes_core_without_inventing_stall_or_stop_thresholds(mode):
+    body = build_heartbeat_prompt(goal_id="correction-boundary", agent_id="agent-a",
+        runtime_profile="codex_app_heartbeat", **{mode: True})["task_body"]
+    assert "obey projected replan/stop, never wake counts" in body
+    assert "agent_channel.work_context" in body
+    assert "host_action=pause_or_delete_current_heartbeat" in body
+    for obsolete in ("2 consecutive eligible", "2 more", "Two stalls ->", "2 stalls->", "list at least three"):
+        assert obsolete not in body
+
+
+@pytest.mark.parametrize("mode", ["full", "compact", "brief", "thin"])
 @pytest.mark.parametrize("agents", [["agent-a"], ["agent-a", "agent-b"]])
 def test_peer_prompt_defers_workspace_and_lease_requirements_to_current_contract(mode, agents):
     # Registration count alone cannot describe repository or task admission.
@@ -54,7 +65,7 @@ def test_thin_cli_preserves_readable_admission_and_authority_with_host_scope(tmp
     packet = json.loads(subprocess.check_output(command, text=True))
     assert packet["ok"] is True
     budget = packet["interface_budget"]
-    assert budget["max_chars"] == 3000
+    assert budget["max_chars"] == 3200
     assert budget["budget_char_count"] <= budget["max_chars"]
     assert budget["within_budget"] is True
     body = packet["task_body"]

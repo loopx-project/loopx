@@ -49,7 +49,11 @@ const REPLAN_PLANNING_GUIDANCE = [
     "Before widening repeated validation, check that the changed intervention reaches the " +
     "executed path and current artifact. Prefer a probe that distinguishes remaining explanations; " +
     "scope negative results to tested conditions and local proxies to their coverage. " +
-    "Reuse still-applicable evidence instead of repeating checks without a new uncertainty.",
+    "Reuse still-applicable evidence instead of repeating checks without a new uncertainty. " +
+    "Correct within the affected work first; widen replanning only when current goal, path, dependency " +
+    "or acceptance evidence warrants it. A due review can retain the path; it does not force a pivot. " +
+    "At the next review, check whether the correction reached subsequent work and authoritative outcomes; " +
+    "a recorded decision alone proves neither adoption nor improvement.",
 ];
 
 function object(value: unknown): JsonObject {

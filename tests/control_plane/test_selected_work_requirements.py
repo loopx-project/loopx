@@ -175,6 +175,9 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert "required_reads" not in full["interaction_contract"]["cli_channel"]
     context = channel["work_context"]
     assert context["complete"] and not context.get("failures", [])
+    assert "progress/change, current blockers, next work, acceptance and stops" in context["instruction"]
+    assert "unknown, not unchanged" in context["instruction"]
+    assert "summaries cannot replace full requirements" in context["instruction"]
     reads = context["sources"]
     assert [read["source"] for read in reads] == ["selected_todo"]
     assert not any(read["source"] == "goal_state" for read in reads)
@@ -233,6 +236,14 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert fresh["selected_todo"]["todo_id"] == "todo_cursor_work"
     fresh_reads = fresh["interaction_contract"]["agent_channel"]["work_context"]["sources"]
     assert fresh_reads[-1]["content"]["todo"]["text"] == replacement
+    fresh_envelope = guard("--turn-envelope")
+    fresh_plan = build_loopx_turn_plan(fresh_envelope, host="codex-cli", execution_mode="isolated-headless",
+        turn_instance_id="requirements-next-turn")
+    fresh_prompt = _prompt(build_loopx_turn_host_request(fresh_plan))
+    assert replacement in fresh_prompt
+    assert "unknown, not unchanged" in fresh_prompt
+    # The old observation remains an observation, not a rewritten current brief.
+    assert reads[-1]["content"]["todo"]["text"] == expected
     missing_tokens = ["todo_missing" if token == "todo_cursor_work" else token for token in tokens]
     missing = subprocess.run([sys.executable, "-m", "loopx.cli", *missing_tokens[1:]],
         capture_output=True, text=True, check=True)

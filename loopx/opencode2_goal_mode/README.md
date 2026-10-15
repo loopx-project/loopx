@@ -42,20 +42,33 @@ loopx opencode2-goal-worker \
 The loop is:
 
 ```text
-prompt session -> wait for the assistant turn to complete
-  -> loopx quota should-run (generic_cli profile, host poll receipt)
-  -> run_now: continue with a quota-gated continuation prompt
+loopx quota should-run (generic_cli profile, host poll receipt)
+  -> admitted run_now: initial task or continuation -> await turn completion
   -> wait: backoff ladder, no model calls during quiet waits
-  -> terminal_no_followup: visible closure notice, then standby polling
-     (the worker stays attached and resumes automatically when new work
-     appears instead of pausing after one task)
+  -> hard stop / validated terminal_no_followup: persist pause, worker exits
   -> unchanged-poll limit: visible synthetic pause notice, worker exits
-  -> goal_not_found: the worker exits; the goal is no longer registered
+  -> goal_not_found: worker exits
 ```
 
-User messages never pause the loop. The model answers the message and the
-worker keeps gating continuation through quota as usual. A stalled session,
-turn wait budget, turn budget, or duration budget still pauses visibly.
+The first task now requires admission too. Validated terminal closure ends
+polling instead of entering the previous five-minute standby loop. Ordinary
+external waits retain backoff; they do not grant execution. An unstarted task
+body is retained privately across restart so resume does not replace the original
+objective with a generic continuation.
+
+Stop the Goal through its existing Goal lifecycle controls (or set compute to
+zero) to prevent the next dispatch. Resume the Core owner, then rerun the same
+worker command with `--force-resume`; this only re-arms the worker and still
+requires fresh Core admission. Read back `loopx quota should-run --goal-id
+<goal_id> --agent-id <agent_id>` and the worker result (`paused_state` when still
+stopped). Preserve the original `--task-body` for legacy unstarted bindings.
+
+Ordinary messages do not grant resume. The worker does not infer user intent
+from message text. Its inactivity hold observes an outstanding host turn and
+is not confirmation of explicit user pause. Core stop is checked before new
+dispatch; it does not cancel an already-submitted host turn. Use the host's own
+interrupt control for that, and reconcile the original effects/settlement.
+Stall, turn wait, turn and duration budgets retain their existing limits.
 
 ## State
 

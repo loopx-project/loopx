@@ -53,12 +53,6 @@ export function continuationPrompt(directory) {
 
 export const CONTINUATION_PROMPT = continuationPrompt()
 
-export const STANDBY_MINUTES = 5
-
-const TERMINAL_NOTICE = [
-  "LoopX validated terminal closure for the current work.",
-  "The worker stays attached and will resume automatically when new work appears.",
-].join(" ")
 const LIMIT_NOTICE = [
   "LoopX stopped this goal after the unchanged-poll limit.",
   "No new work was scheduled; review LoopX todos and resume explicitly when ready.",
@@ -225,10 +219,9 @@ export function isTerminalNoFollowup(decision) {
 
 
 export function shouldRunNow(decision) {
-  // The scheduler hint is authoritative: a should_run=true decision that the
-  // scheduler classifies as a backoff (for example waiting for the user)
-  // must not prompt the model.
-  return decision?.scheduler_hint?.action === "run_now"
+  // Scheduling never grants execution when Core denies admission.
+  return decision?.ok !== false && decision?.should_run === true &&
+    decision?.scheduler_hint?.action === "run_now"
 }
 
 
@@ -619,6 +612,7 @@ async function runWithLease({
         ? availableCapabilities.map(String)
         : [],
       sessionID: sessionId ? String(sessionId) : "",
+      taskBody: taskBody || "",
       autoResume: true,
       phase: "starting",
       schedulerToken: "",
@@ -671,18 +665,6 @@ async function runWithLease({
     return { kind: "session_deleted", sessionID }
   }
 
-  if (state.turnCount === 0 && taskBody) {
-    await transport.sendPrompt(sessionID, taskBody)
-    state = await stateStore.write(goalId, {
-      ...state,
-      turnCount: 1,
-      pendingTurn: true,
-      lastPromptAt: Date.now(),
-      pendingTurnActivityAt: Date.now(),
-      phase: "working",
-    })
-    await log("info", "prompted the session with the task body", { goalId, sessionID })
-  }
 
   while (true) {
     if (Date.now() - startedAt > maxDurationMs) {
@@ -782,12 +764,18 @@ async function runWithLease({
     let decision
     try {
       decision = await quotaProbe(state, { directory: directoryNow })
+      const current = await stateStore.read(goalId)
+      if (!current || current.autoResume === false) return { kind: "paused_state" }
+      state = current
       state = await stateStore.write(goalId, {
         ...state,
         probeRetryCount: 0,
         lastPollAt: new Date().toISOString(),
       })
     } catch (error) {
+      const current = await stateStore.read(goalId)
+      if (!current || current.autoResume === false) return { kind: "paused_state" }
+      state = current
       const plan = retryPlan(decision, state)
       state = await stateStore.write(goalId, {
         ...state,
@@ -815,32 +803,19 @@ async function runWithLease({
       return { kind: "goal_gone" }
     }
 
-    if (isTerminalNoFollowup(decision)) {
-      // Validated closure means the CURRENT work is done, not that the loop
-      // should end. Stand by and keep polling so new work resumes the
-      // session automatically instead of pausing after one task.
-      const standbyPolls = Number(state.standbyPolls || 0) + 1
+    const stopped = decision?.scheduler_hint?.action === "stop_until_explicit_resume"
+    if (stopped || isTerminalNoFollowup(decision)) {
       state = await stateStore.write(goalId, {
         ...state,
-        phase: "standby",
-        schedulerToken: "",
-        unchangedPolls: 0,
-        standbyPolls,
+        autoResume: false,
+        phase: "paused",
+        pausedReason: stopped ? "stop_until_explicit_resume" : "terminal_no_followup",
       })
-      if (standbyPolls === 1) {
-        await transport.sendSynthetic(sessionID, TERMINAL_NOTICE)
-      }
-      await log("info", "LoopX validated terminal closure; standing by for new work", {
-        goalId,
-        sessionID,
-        standbyPolls,
-      })
-      await sleepImpl(STANDBY_MINUTES * 60_000)
-      continue
+      await log("info", "Core stopped automatic continuation; explicit resume requires fresh admission", { goalId, sessionID })
+      return { kind: "paused_state" }
     }
 
     if (shouldRunNow(decision)) {
-      const wasStandby = state.phase === "standby"
       state = await stateStore.write(goalId, {
         ...state,
         phase: "working",
@@ -848,10 +823,13 @@ async function runWithLease({
         unchangedPolls: 0,
         standbyPolls: 0,
       })
-      if (wasStandby) {
-        await log("info", "new work appeared; resuming from standby", { goalId, sessionID })
+      const initialBody = state.taskBody || taskBody
+      // A paused initial dispatch must retain its original objective across restart.
+      // Legacy bindings may supply it explicitly; never substitute a generic continue.
+      if (state.turnCount === 0 && !initialBody && !sessionId) {
+        throw new Error("unstarted worker requires its original --task-body or an existing --session-id")
       }
-      await transport.sendPrompt(sessionID, continuationPrompt(directoryNow))
+      await transport.sendPrompt(sessionID, state.turnCount === 0 && initialBody ? initialBody : continuationPrompt(directoryNow))
       state = await stateStore.write(goalId, {
         ...state,
         pendingTurn: true,

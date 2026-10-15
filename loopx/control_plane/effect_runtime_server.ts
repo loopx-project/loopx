@@ -35,6 +35,8 @@ const LOCAL_SNAPSHOT_METHODS = new Set([
   "goal.checkpoint_read_context.commit",
   "goal.checkpoint_read_context.inspect_replay",
   "performance_diagnosis.inspect",
+  "state.recovery.archive.verify",
+  "state.recovery.manifest.verify",
 ]);
 const DEFAULT_IDLE_MS = 5 * 60 * 1_000;
 // Bounds for LOOPX_EFFECT_RUNTIME_IDLE_MS. The upper bound is the largest

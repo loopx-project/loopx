@@ -159,6 +159,40 @@ def _args(
     )
 
 
+@pytest.mark.parametrize("admission", ["false", "true", 1, 0, None, [], {"allowed": True}, "missing"])
+def test_malformed_admission_never_launches_wake(tmp_path, admission):
+    payload = _hint_payload(should_run=True)
+    payload["should_run"] = admission
+    if admission == "missing":
+        payload.pop("should_run")
+    cli = tmp_path / "quota"
+    _write_executable(cli, f"#!{sys.executable}\nprint({json.dumps(payload)!r})\n")
+    marker = tmp_path / "model-called"
+    args = _args(fake_cli=cli, state_file=tmp_path / "state.json",
+        wake_cmd=shlex.join([sys.executable, "-c",
+            f"from pathlib import Path; Path({str(marker)!r}).touch()"]),
+        wake_timeout_seconds=5)
+    assert worker.run_worker(args) == 2
+    assert not marker.exists()
+
+
+def test_failed_decision_cannot_authorize_wake(tmp_path, monkeypatch):
+    payload = _hint_payload(should_run=True) | {"ok": False}
+    monkeypatch.setattr(worker, "run_quota_should_run", lambda *a, **kw: payload)
+    monkeypatch.setattr(worker, "_run_wake", lambda *a, **kw: pytest.fail("failed decision woke"))
+    args = _args(fake_cli=tmp_path / "unused", state_file=tmp_path / "state.json", wake_cmd="unused")
+    assert worker.run_worker(args) == 2
+
+
+def test_explicit_stop_precedes_even_malformed_admission(tmp_path, monkeypatch):
+    payload = _hint_payload(should_run=True, local_scheduler_directive="stop")
+    payload["should_run"] = "false"
+    monkeypatch.setattr(worker, "run_quota_should_run", lambda *a, **kw: payload)
+    monkeypatch.setattr(worker, "_run_wake", lambda *a, **kw: pytest.fail("stopped worker woke"))
+    args = _args(fake_cli=tmp_path / "unused", state_file=tmp_path / "state.json", wake_cmd="unused")
+    assert worker.run_worker(args) == 0
+
+
 @pytest.mark.parametrize("stop_code,expected", [(None, 75), (75, 0), (76, 75)])
 def test_wake_terminal_code_requires_explicit_matching_opt_in(tmp_path, stop_code, expected):
     cli = tmp_path / "quota"

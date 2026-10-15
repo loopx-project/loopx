@@ -2,7 +2,7 @@
 
 - **RFC 状态：** 已接受
 - **替代 / 关闭：** 无
-- **交付成熟度：** 提案；备份创建和仅配置的隔离恢复已存在，完整状态验证与重新激活尚不存在
+- **交付成熟度：** 部分实现：M1 完整归档验证与 File/SQLite 隔离检查已实现；受控重新启用仍开放
 - **作者 / 负责人：** 控制面状态、可靠性及受影响领域的维护者
 - **创建：** 2026-10-08
 - **最近规范修订：** 2026-10-08
@@ -19,6 +19,19 @@
 RFC 只授权有界实现切片，不授权真实恢复、provider 晋升、凭据转移或默认值变更。
 
 ## 1. 决策摘要
+
+### 当前实现检查点
+
+M1 的有界路径已包含增量 `backup-state verify`、loopback HTTP 上传及不可变报告读回，
+以及打包设置/能力中心交互。真实生产归档在原来源不可达后，通过既有配置与选定的
+File/SQLite Todo/history owner 检查。v0 缺少完整捕获/owner 元数据，因此所有审计仍为
+held，未知状态不改称可恢复，执行权限始终为 false。限制与回退见[备份指南](../../reference/configuration-backup.md#inspect-a-complete-backup-without-activating-it)。
+报告保留实际归档/普通文件字节数及归档处理、owner 读取耗时；历史读回不重新计时。
+备份指南记录了独立的真实容量案例，包括精确成员/历史边界及 128 个 File/SQLite Goal；
+历史超限在发布前拒绝。M1 的运行资格仍不完整：第 12 节容量决定已记录，多个上限组合的
+最坏情形及更广的平台/provider 资格继续开放。
+本检查点不证明 M2/M3、live adoption、远端 provider 或 G1 团队验收，不重写原身份或回执。
+
 
 ### 首个支持的用户结果
 
@@ -152,10 +165,41 @@ reconciliation 和 readback。任何单独 owner 都不能安全推断其他 own
 | [Effect Interpreter](agent-loop-effect-interpreter-v0.zh-CN.md) | 拥有 effect identity、settlement、未知结果 readback 和 replay 决策。恢复流程只向其路由原始证据。 |
 | [配置备份](../../reference/configuration-backup.md) | 保持配置处于隔离 checkpoint。Adoption 继续通过 machine 与 Goal configuration owner 完成。 |
 
-[研究 checkpoint CLI](../../reference/research-checkpoint.md)通过这些既有 owner
-显式分支历史，在不同的当前 Goal/Agent 下接纳会话，并通过当前 Todo 权限采用
-保留知识。它不恢复源 writer、timer 或 effect，也不满足本 RFC 的排他灾难替换
-或前端里程碑。
+### 完整备份检查与研究 checkpoint 的复用
+
+已合入的[研究 checkpoint 契约](../../reference/research-checkpoint.md)面向独立
+准入的 Goal／会话研究分支；完整备份检查面向原来源可能已不可用的操作者。
+当前两种格式不能互相交给对方 verifier。两者均保留原 owner 权威；研究分支允许
+来源继续存在，灾难替换则必须在准入新工作前排除旧 writer。
+
+| 边界 | 既有 owner 与复用 | 保留的分工 |
+| --- | --- | --- |
+| 状态清单 | `state_backup.build_state_backup_plan`；checkpoint `_loopx_state_components` 已为单 Goal 调用它 | 完整归档可含多 Goal；checkpoint 拒绝不完整或捕获期间移动的 scoped 清单 |
+| SQLite 捕获 | 两种创建路径共用既有 `snapshotSqliteDatabase` owner | M1 离线读已捕获库，不能将不可信恢复库快照为当前 authority |
+| 摘要 | 两个 typed owner 共用 `canonicalAuthoritySha256` 表达结构身份，文件以字节摘要绑定 | 归档／外部／内嵌清单与 checkpoint witness schema 不同；摘要相等不代表格式互通 |
+| 隔离与发布 | 归档 adapter 加 typed recovery owner；checkpoint `checkpoint_artifacts.ts` 管私有 staging 和清单验证 | 不可信 tar 的链接、header、展开需专用检查；目录捕获拒绝符号链接并检查来源移动。相似文件操作不等于重复决策 |
+| 历史回读 | M1 共用 canonical configuration/File/SQLite/Todo/history reader 和不可变 audit | Checkpoint 使用版本绑定的 Todo context、Explore event codec、native 会话历史；M1 可读报告不是可采用会话 |
+| 会话、知识与工作采用 | 既有 Goal lifetime、Codex session、Todo continuation、Explore、effect owner | Checkpoint 显式准入／采用；M1 不调用它们。Lease、quota、timer、credential、effect 保持历史状态 |
+
+有界重构审视结论：共用的清单、快照及摘要规则已经复用，M1 无需新增统一恢复服务
+或格式转换器；强并提取路径会掩盖输入检查差异。Python 保留 archive／Host adapter
+职责，共享决策留在 typed owner。这是源码契约审视，不是新执行的联合恢复验收。
+
+**M2 检查点：**在原 component/profile 验收内明确格式／版本、完整组件清单、已捕获
+owner revision 与捕获边界、provider 资格。未来衔接先隔离核验这些事实；v0 缺失事实
+仍为 unknown，不能从文件时间或 SQLite 可读性推断。保留 v0 历史 reader。
+
+**M3 检查点：**仅合格 profile 能从隔离核验进入当前 Goal／会话准入、知识采用及
+当前工作准入。复用上述 owner，重试保留来源摘要、目标身份与 operation 身份。
+中断采用需原 owner 回读／补偿；外部结果未知须按原身份对账。研究分支不证明排他
+替换。M1 不交付格式桥接或自动激活。
+
+原 M3 演练即联合验收：普通 Goal 先完成部分工作并留下未完成 Todo，来源不可用后，
+经 packaged journey 预览找回／历史／未知工作、取得 owner 准入、继续未完成工作，
+并独立检查结果。覆盖缺失／损坏组件、版本／provider 拒绝、捕获移动、过期身份、
+重试及采用中断，证明不复活旧权限、不泄露私有数据。这属于 M2/M3 证据，不新增为
+M1 全恢复前置条件。M1 原 Settings 入口展示可读任务／历史及 hold；后续阶段合格前
+不能提供看似可用的继续执行动作。
 
 ## 4. 当前系统契约
 
@@ -169,10 +213,10 @@ digest 和大小，并排除 WAL/SHM sidecar。其他文件和目录可能在来
 因此，该命令只具备组件本地 SQLite snapshot 语义和 best-effort 文件捕获，不具备
 跨 owner point-in-time 保证。
 
-`loopx backup-state` 支持 plan 和 create。它不能验证已有归档、安全物化归档、
-分类状态 owner、reconcile reference 或重新激活 runtime。当前测试用 Python tar
-API 提取，验证 SQLite integrity 与内容，并检查发布／权限行为；它们没有建立
-restore 契约。
+设计基线中的 `loopx backup-state` 只有 plan/create，测试通过 Python tar API 手工解包。
+第 1 节记录的当前有界 M1 路径已通过 CLI 和打包 UI 提供验证后的隔离解包及既有 owner
+读回。它不采用身份、不处置 pending effect、不重新激活 runtime；这些后续 owner 边界
+仍保持开放。
 
 配置备份另行支持 export、verify 和 isolated restore。其 checkpoint 是惰性的：
 它不会创建 live registry、provider selection、writer fence、lease、Host session、
@@ -585,6 +629,7 @@ retention 与运行资格。后二者都不会推迟基本的 M1/M3 产品旅程
 1. **M1 capacity 默认值。** Backup/reliability maintainer 必须在 M1 合并前冻结
    archive、expansion、entry、graph 与 verification-time 默认值。建议从当前
    backup-size telemetry 推导，并以显式 override fail closed。这不阻塞 RFC。
+   [下述决定](#m1-容量默认值决定)仅冻结现有本地惰性检查 profile；更广资格仍未完成。
 2. **精确 replacement continuity。** Goal lifecycle 与 provider owner 必须在 M3
    前决定是否允许任一本地 disaster-recovery profile 保留来源
    `goal_instance_id`。建议铸造新 lifetime，除非旧 authority 可证明已不可逆 fence，
@@ -596,6 +641,43 @@ retention 与运行资格。后二者都不会推迟基本的 M1/M3 产品旅程
 4. **Windows 与非 POSIX filesystem。** Platform owner 必须在声明 M3/M5 支持前
    验证 ACL、link、case、Unicode、sparse-file 和 atomic-publication 行为。M1 可以
    报告 platform unqualified，并在提取前停止。
+
+<a id="待决m1-容量默认值"></a>
+### M1 容量默认值决定
+
+**状态：已批准现有本地 POSIX File/SQLite 惰性检查 profile。** 2026-10-15，
+维护者 @huangruiteng [同意容量提案](https://github.com/loopx-project/loopx/pull/6279#issuecomment-6186241464)，
+所审提案版本为 `5751b050f616f156fa591aac5aa82627d8396fe0`；下表默认值在
+`7f62b602019429c05a03254ab2f30a3fafa32c6e` 保持不变。该决定只关闭第 12 节
+第 1 项，不授予合并权限，不批准多个上限组合的最坏负载、生产 SLO、其它平台／
+provider、捕获一致性、身份接纳或 M2/M3 重新启用。同条评论要求的 checkpoint
+复用审视记录于第 3 节，与容量同意是独立事项。
+
+当前上限由归档 adapter、typed audit owner 与隔离 worker 实施；
+[备份指南](../../reference/configuration-backup.md#measured-local-capacity-cases)
+保留原始源码版本、环境、测量值和复现命令。这些是历史证据，不是后续合并版本的实测。
+
+| 已批准的当前 profile 值 | 保护目标 | 已有证据及边界 |
+| --- | --- | --- |
+| 归档 128 MiB；展开 tar 流和普通文件总量 512 MiB；展开比例 2,000 | 发布前限制压缩输入、复制和解压放大 | 指南有接近上限的原生输入及超限拒绝。比例有源码限制，但未记录独立的精确比例边界测量。 |
+| 外部及内嵌清单各 16 MiB；扩展 tar header 每项 128 KiB、累计 16 MiB；JSON 深度 64 | 限制 metadata 解码与遍历 | 指南有外部清单 16 MiB／超一字节；恢复测试在解码前拒绝超大 PAX 变体及 sparse。最大结构化 metadata、累计 header 与深度组合未资格化。 |
+| 20,000 个 member；路径最多 64 段／1,024 字符／每段 255 UTF-8 字节；链接解析最多 40 跳 | 限制清单与路径处理，拒绝歧义或越界提取 | 指南有精确 20,000／20,001；测试覆盖路径、链接、碰撞与占用目标拒绝。并未测量所有路径形状的精确上限和最长链接链。 |
+| 128 个 Goal；128 个 SQLite 文件；每 Goal 20,000 个已提交事务 | 限制 owner 清单与完整历史读取，不截断历史 | 指南有原生 128／129 清单；`test_real_sqlite_history_limit_is_complete_and_overflow_refuses_publication` 覆盖 20,000／20,001。不保证 128 个满历史 Goal 同时符合其它上限与时限。 |
+| 当前 audit 结构最多 258 个 component、128 个 dependency link | 通过上述清单上限约束本 profile 的图 | 来自 1 个配置、最多 128 个数据库、最多 128 个各自依赖配置的 Goal，以及 1 个 unknown 余项。这不是通用 graph 上限或完整 mutable-owner 清单，通用 graph profile 不在本提案内。 |
+| 隔离 owner verifier：90 秒；V8 old-space 512 MiB；SQLite 进程级 heap 至多 64 MiB | 将数据库／owner 检查限制在共享 daemon 之外 | Timeout 清理和 SQLite view 拒绝测试覆盖隔离。Heap 有源码限制；整个进程树峰值内存、最坏耗时未资格化。该超时不是归档全流程 deadline 或 RTO。 |
+| 既有 transport：仅两项清单检查用 64 MiB private snapshot；普通 RPC 和 worker 输入 2 MiB；owner stdout 2 Mi 字符；历史 audit 输入 16 MiB | 限制传输和历史报告解码，不扩大普通 transport | 大清单 transport 与 audit 完整性测试覆盖路径。独立上限不能相加，也不保证任意最大 audit 均可发布。 |
+| 复制前目标剩余空间至少为普通文件复制字节数加 16 MiB | 发布前拒绝已知空间不足 | 有源码检查和失败清理测试；不保证抵御并发磁盘消耗，也不证明最坏空间预留成功。 |
+
+源码 owner 为 [`state_recovery.py`](../../../loopx/state_recovery.py)、
+[`state_recovery.ts`](../../../loopx/control_plane/state_recovery.ts) 和
+[`state_recovery_worker.ts`](../../../loopx/control_plane/state_recovery_worker.ts)。
+既有 [Python 恢复用例](../../../tests/test_state_recovery.py)及
+[typed audit 用例](../../../tests/control_plane_ts/state_recovery.test.ts)
+分别验证可读性、拒绝、清理和历史回读。测试数量不能代替维护者决定；合成指南没有
+提供实际生产 backup-size telemetry 或多个最大负载组合的资格证据。
+
+批准的值仍保留上述证据限制。可读副本仍是历史数据：容量同意不启用 Goal、
+不授予当前 Goal 依据的 writer、不恢复 lease，也不授权重放未决 effect。
 
 ---
 
@@ -610,9 +692,9 @@ retention 与运行资格。后二者都不会推迟基本的 M1/M3 产品旅程
 | 日期 | 决策 | Owner／批准 | 替代方案 | 变更的规范章节 |
 | --- | --- | --- | --- | --- |
 | 2026-10-08 | 提议以惰性优先、由既有 owner 组合的完整状态恢复 | 通过 issue #5940 评审 RFC | 原始提取、单体事务、仅人工 runbook | 初始文档 |
+| 2026-10-15 | 冻结不变的 M1 本地 POSIX File/SQLite 惰性检查容量；提案 `5751b050f`，`7f62b6020` 未改值 | [@huangruiteng 容量同意](https://github.com/loopx-project/loopx/pull/6279#issuecomment-6186241464) | 提高上限、新增 override 或推迟本地 profile | §12.1；不含更广资格或合并授权 |
 
-只有 RFC 拉取请求合并后，设计才被接受。上表记录提案历史，不表示先前已有
-maintainer approval。
+初始行记录提案历史。下列容量决定仅覆盖指定范围，不证明其它恢复阶段完成。
 
 ## 附录 C：证据注册表
 

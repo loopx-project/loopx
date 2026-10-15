@@ -1,10 +1,12 @@
 """Native state drives presentation; provider receipts never own admission."""
 import json
+import threading
 import time
 
 import pytest
 from test_chat_ordinary_project import ordinary  # noqa: F401
-from test_lark_private_conversations import connect
+from test_lark_private_conversations import connect, connect_group
+from test_native_steward_private import steward  # noqa: F401
 
 from loopx.extensions.lark.private_conversations import LarkPrivateConversations
 
@@ -14,6 +16,238 @@ def active(store, row):
     while store.load_session(row['session_id']).get('active_turn_id') != row['turn_id']:
         assert time.monotonic() < deadline
         time.sleep(.01)
+
+
+@pytest.mark.parametrize('group', [False, True])
+def test_durable_admission_feedback_precedes_blocked_execution_recovery(ordinary, monkeypatch, group):  # noqa: F811
+    store, runtime, provider, transport = (connect_group if group else connect)(ordinary)
+    entered, received, release = threading.Event(), threading.Event(), threading.Event()
+    failures = []
+    recover = transport.core.recover
+    feedback = transport._feedback
+
+    def acknowledged(*args, **kwargs):
+        feedback(*args, **kwargs)
+        received.set()
+
+    def blocked_recovery(**kwargs):
+        entered.set()
+        assert release.wait(10), 'test did not release execution recovery'
+        recover(**kwargs)
+
+    def reconcile():
+        try:
+            transport.reconcile_request(path)
+        except BaseException as exc:
+            failures.append(exc)
+
+    worker = None
+    try:
+        event = (provider.topic('receipt_before_recovery', 'ordinary work') if group else
+                 provider.event('notes-app', 'receipt_before_recovery', 'ordinary work'))
+        assert transport.admit('notes-app', event)['status'] == 'durably_accepted'
+        row = transport.core.pending()[0]
+        runtime.wait_for_turn(session_id=row['session_id'], turn_id=row['turn_id'], timeout_sec=10)
+        path = transport.root / f"{row['request_ref']}.json"
+        monkeypatch.setattr(transport.core, 'recover', blocked_recovery)
+        monkeypatch.setattr(transport, '_feedback', acknowledged)
+        worker = threading.Thread(target=reconcile)
+        worker.start()
+        assert entered.wait(10), 'reconciliation did not reach execution recovery'
+        assert received.wait(10), 'execution recovery blocked admission feedback'
+        # The native request and Turn already exist; recovery may block on a
+        # host/fence, but receipt presentation must not wait for it.
+        assert provider.reaction_creates == [('notes-app', event['message_id'], 'Get')]
+        assert json.loads(path.read_text())['feedback']['received']['ok'] is True
+        assert provider.writes == []
+    finally:
+        release.set()
+        if worker:
+            worker.join(10)
+        runtime.close()
+    assert not worker.is_alive() and not failures
+    assert transport.core.read_request(row['request_ref'])['delivery_verified'] is True
+    assert provider.writes == [('notes-app', 'Runtime response.')]
+    if group:
+        assert provider.topic_writes == [(event['chat_id'], event['message_id'], 'Runtime response.')]
+    before = list(provider.reaction_creates), list(provider.writes)
+    transport.reconcile_request(path)
+    assert (provider.reaction_creates, provider.writes) == before
+    assert len(store.list_sessions()) == 1
+
+
+@pytest.mark.parametrize('drift', [
+    'disabled', 'already_received', 'prepared', 'agent_target', 'native_source',
+    'native_session', 'native_turn', 'message', 'turn_client', 'turn_session',
+    'missing_turn', 'closed_session', 'session_goal', 'saved_context', 'profile', 'app', 'revoke',
+])
+def test_early_receipt_requires_exact_durable_admission_and_current_grant(ordinary, monkeypatch, drift):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    try:
+        event = provider.event('notes-app', 'receipt_guard', 'ordinary work')
+        assert transport.admit('notes-app', event)['status'] == 'durably_accepted'
+        row = transport.core.pending()[0]
+        runtime.wait_for_turn(session_id=row['session_id'], turn_id=row['turn_id'], timeout_sec=10)
+        path = transport.root / f"{row['request_ref']}.json"
+        record = json.loads(path.read_text())
+        native_path = transport.core.root / path.name
+        native = json.loads(native_path.read_text())
+        if drift == 'disabled':
+            transport.reaction_feedback = False
+        elif drift == 'already_received':
+            record['feedback'] = {'received': {'ok': True}}
+        elif drift == 'prepared':
+            native['status'] = 'prepared'
+        elif drift == 'agent_target':
+            native['agent_target'] = {'session_id': 'selected-original-host'}
+        elif drift == 'native_source':
+            native['source'] = {**native['source'], 'sender_ref': 'other'}
+        elif drift in {'native_session', 'native_turn'}:
+            native['session_id' if drift == 'native_session' else 'turn_id'] = 'other'
+        elif drift == 'message':
+            record['event']['message_id'] = 'om_other_message_same_chat'
+        elif drift in {'turn_client', 'turn_session', 'missing_turn'}:
+            turn = store.load_turn(row['session_id'], row['turn_id'])
+            if drift != 'missing_turn':
+                turn['client_turn_id' if drift == 'turn_client' else 'session_id'] = 'other'
+            monkeypatch.setattr(store, 'load_turn', lambda *args: None if drift == 'missing_turn' else turn)
+        elif drift in {'closed_session', 'session_goal', 'saved_context'}:
+            session = store.load_session(row['session_id'])
+            if drift == 'closed_session':
+                session['status'] = 'closed'
+            elif drift == 'session_goal':
+                session['goal_id'] = 'another-goal'
+            else:
+                session['project_context']['workspace_path'] += '-changed'
+            monkeypatch.setattr(store, 'load_session', lambda *args: session)
+        elif drift == 'profile':
+            record['profile'] = 'steward-app'
+        elif drift == 'app':
+            provider.profile_apps['notes-app'] = 'cli_other'
+        elif drift == 'revoke':
+            transport.bindings.disconnect(record['binding_id'], expected_revision=transport.bindings.read()['revision'])
+        path.write_text(json.dumps(record))
+        native_path.write_text(json.dumps(native))
+
+        def recovery_boundary(**kwargs):
+            assert kwargs == {'request_ref': row['request_ref']}
+            assert provider.reaction_creates == []
+            # Stop at the existing recovery boundary: this test establishes
+            # that early feedback cannot acknowledge an unverified admission.
+            raise RuntimeError('existing recovery still reached')
+
+        monkeypatch.setattr(transport.core, 'recover', recovery_boundary)
+        with pytest.raises(RuntimeError, match='existing recovery still reached'):
+            transport.reconcile_request(path)
+        # The bounded feedback job has joined even when recovery raised.
+        assert provider.reaction_creates == []
+        assert not provider.writes
+    finally:
+        runtime.close()
+
+
+def test_failed_early_receipt_does_not_suppress_recovery_or_duplicate_uncertain_write(ordinary, monkeypatch):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    original = transport.runner
+    recover = transport.core.recover
+    recovery_calls = []
+
+    def uncertain_receipt(args, cwd=None, timeout=None):
+        result = original(args, cwd, timeout)
+        if 'reactions' in args and 'create' in args:
+            # The provider committed, but its response was lost. Recovery must
+            # use the existing Inbox reaction journal instead of sending twice.
+            return {'returncode': 1, 'stdout': '', 'stderr': 'response lost'}
+        return result
+
+    def recovered(**kwargs):
+        recovery_calls.append(kwargs)
+        recover(**kwargs)
+
+    try:
+        event = provider.event('notes-app', 'uncertain_receipt', 'ordinary work')
+        transport.admit('notes-app', event)
+        row = transport.core.pending()[0]
+        runtime.wait_for_turn(session_id=row['session_id'], turn_id=row['turn_id'], timeout_sec=10)
+        transport.runner = uncertain_receipt
+        monkeypatch.setattr(transport.core, 'recover', recovered)
+        transport.reconcile()
+        transport.reconcile()
+        assert recovery_calls
+        assert provider.reaction_creates == [('notes-app', event['message_id'], 'Get')]
+        assert provider.writes.count(('notes-app', 'Runtime response.')) == 1
+        assert transport.core.read_request(row['request_ref'])['delivery_verified'] is True
+    finally:
+        runtime.close()
+
+
+def test_steward_receipt_uses_its_saved_audience_before_existing_recovery(steward, monkeypatch):  # noqa: F811
+    store, runtime, provider, transport, _, _, _ = steward
+    event = provider.event('steward-app', 'steward_receipt', 'ordinary conversation')
+    assert transport.admit('steward-app', event)['status'] == 'durably_accepted'
+    row = transport.core.pending()[0]
+    runtime.wait_for_turn(session_id=row['session_id'], turn_id=row['turn_id'], timeout_sec=10)
+    assert store.load_session(row['session_id'])['goal_id'] == 'loopx-manager'
+    received = threading.Event()
+    feedback = transport._feedback
+
+    def acknowledged(*args, **kwargs):
+        feedback(*args, **kwargs)
+        received.set()
+
+    def recovery_boundary(**kwargs):
+        assert received.wait(10), 'execution recovery blocked steward receipt'
+        assert provider.reaction_creates == [('steward-app', event['message_id'], 'Get')]
+        raise RuntimeError('existing steward recovery reached')
+
+    monkeypatch.setattr(transport.core, 'recover', recovery_boundary)
+    monkeypatch.setattr(transport, '_feedback', acknowledged)
+    with pytest.raises(RuntimeError, match='existing steward recovery reached'):
+        transport.reconcile_request(transport.root / f"{row['request_ref']}.json")
+
+
+def test_slow_receipt_provider_does_not_delay_existing_execution_recovery(ordinary, monkeypatch):  # noqa: F811
+    _, runtime, provider, transport = connect(ordinary)
+    receipt_entered, recovered, release = threading.Event(), threading.Event(), threading.Event()
+    feedback, recover = transport._feedback, transport.core.recover
+    failures = []
+
+    def slow_feedback(*args, **kwargs):
+        receipt_entered.set()
+        assert release.wait(30), 'test did not release provider feedback'
+        feedback(*args, **kwargs)
+
+    def recovery(**kwargs):
+        recovered.set()
+        recover(**kwargs)
+
+    def reconcile():
+        try:
+            transport.reconcile_request(path)
+        except BaseException as exc:
+            failures.append(exc)
+
+    worker = None
+    try:
+        event = provider.event('notes-app', 'slow_receipt_provider', 'ordinary work')
+        transport.admit('notes-app', event)
+        row = transport.core.pending()[0]
+        runtime.wait_for_turn(session_id=row['session_id'], turn_id=row['turn_id'], timeout_sec=10)
+        path = transport.root / f"{row['request_ref']}.json"
+        monkeypatch.setattr(transport, '_feedback', slow_feedback)
+        monkeypatch.setattr(transport.core, 'recover', recovery)
+        worker = threading.Thread(target=reconcile)
+        worker.start()
+        assert receipt_entered.wait(10)
+        assert recovered.wait(10), 'receipt provider blocked native execution recovery'
+    finally:
+        release.set()
+        if worker:
+            worker.join(10)
+        runtime.close()
+    assert not worker.is_alive() and not failures
+    assert provider.reaction_creates == [('notes-app', event['message_id'], 'Get')]
+    assert transport.core.read_request(row['request_ref'])['delivery_verified'] is True
 
 
 def test_default_feedback_tracks_queue_execution_stop_and_app_isolation(ordinary):  # noqa: F811

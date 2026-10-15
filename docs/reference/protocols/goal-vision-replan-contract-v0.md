@@ -329,6 +329,11 @@ instructions and an optional sixth stride instruction through full/compact quota
   Prefer a discriminating probe, keep negative evidence scoped to tested
   conditions and proxies scoped to their coverage, and reuse still-applicable
   evidence when no new uncertainty warrants repetition.
+  Correct within the affected work first; widen replanning only when current
+  Goal, path, dependency or acceptance evidence warrants it. A due review may
+  retain the path rather than force a pivot. At the next review check actual
+  subsequent work and authoritative outcomes; recording the decision alone
+  proves neither adoption nor improvement.
 - **Only with `evidence_conditioned_v1`:** Review the previous path decision against subsequent work and authoritative
   outcomes. When local tuning or repeated validation leaves the goal gap
   unexplained, compare a bounded alternative mechanism with continuation or
@@ -343,8 +348,20 @@ TypeScript strategy component adds the sixth and the followthrough read model;
 identity, evidence selection and guidance. Unknown versions fail before mutation.
 This is Agent judgment advice, not a new machine-enforced acceptance gate,
 permission, adaptive scheduler or automatic route actuator. Typed semantic
-outcomes and non-replan Turns are unchanged. Tests prove delivery and isolation;
+outcomes and non-replan admission/settlement rules are unchanged. Tests prove delivery and isolation;
 model adoption and utility require matched experiments.
+
+Heartbeat templates consume this owner; they must not invent a separate
+two-stall replan or self-pause policy. Operation-local recovery first reconciles
+ambiguous effects. Local work correction preserves unaffected Todos and the
+original accountable Turn; a material scope/direction change still uses the
+existing Vision/ACK/successor contracts. The prompt and skill now remove those
+legacy count rules; Core stall detection and configured periodic reviews remain.
+
+心跳模板不再另设“两次停滞就重规划、再两次就暂停”的规则。操作恢复先核对不明
+副作用；局部纠偏保留无关工作和原 Turn 结算，扩大范围仍走 Vision/ACK/successor。
+到期复核可以维持原路线。纠偏写入、后续工作采纳、结果改善分别验证；Core 原有的
+停滞识别和周期复核不变。
 
 共享 replan action packet 保留五条默认指引，可选策略增加第六条，并在完整/精简 quota 与
 Turn envelope 中保留：

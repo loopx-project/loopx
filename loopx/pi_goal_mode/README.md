@@ -155,3 +155,15 @@ is atomically disposed: every timer is cancelled and an in-flight quota probe
 that returns afterwards stops at the disposed guard, so the old session can
 never inject a follow-up or reschedule past the reload / session-replacement
 boundary.
+
+## Pause and resume boundaries
+
+An explicit host abort or Core `stop_until_explicit_resume` disarms automatic
+continuation and cancels its timer. Idle events and ordinary prompts do not
+re-arm it. Resolve the Core Goal/quota stop, then use `/loopx resume`; the next
+idle evaluation must obtain fresh admission. Pause/resume advances the existing
+binding generation, so a late pre-pause result cannot send a task afterward.
+Use `/loopx status` and `loopx quota should-run --goal-id <goal_id> --agent-id
+<agent_id>` to distinguish host binding from Core permission. Validated
+no-follow-up stops; dependency waits retain bounded checks without model calls.
+Already-started tools and original settlement are not cancelled by this gate.

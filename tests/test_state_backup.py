@@ -8,25 +8,15 @@ import sqlite3
 import subprocess
 import sys
 import tarfile
-import tempfile
 from pathlib import Path
 
 import pytest
 
 import loopx.state_backup as state_backup
-from loopx.control_plane import effect_runtime
 from loopx.state_backup import build_state_backup_plan, execute_state_backup_plan
 
 
-@pytest.fixture(autouse=True)
-def isolated_runtime(tmp_path, monkeypatch):
-    temporary = tmp_path / "temporary"
-    temporary.mkdir()
-    monkeypatch.setenv("TMPDIR", str(temporary))
-    monkeypatch.setattr(tempfile, "tempdir", str(temporary))
-    yield
-    # Stop only the real runtime launched in this test's private directory.
-    effect_runtime.restart_effect_runtime()
+pytestmark = pytest.mark.usefixtures("isolated_effect_runtime")
 
 
 def backup_plan(root: Path, backup_id: str = "fixture"):

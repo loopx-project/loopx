@@ -1,6 +1,6 @@
 import {assertActionSelectionConsistency} from "./work_items/action_selection_admission.ts";
 import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
-import { isStringLiteral } from "./runtime_decode.ts";
+import { isStringLiteral, type JsonObject } from "./runtime_decode.ts";
 import { decodeInteractionContract } from "./work_items/interaction_contract.ts";
 import { EffectiveAction } from "./quota/effective_action.generated.ts";
 
@@ -27,7 +27,7 @@ export const SETTLEMENT_PLAN_SCHEMA_VERSION = "quota_settlement_plan_v1";
 export const SETTLEMENT_RECEIPT_SCHEMA_VERSION =
   "quota_settlement_receipt_v1";
 
-export type JsonObject = Record<string, unknown>;
+export type {JsonObject} from "./runtime_decode.ts";
 
 export interface EffectRequest<Context> {
   kind: string;

@@ -49,6 +49,8 @@ LOCAL_SNAPSHOT_METHODS = frozenset({
     "goal.checkpoint_read_context.commit",
     "goal.checkpoint_read_context.inspect_replay",
     "performance_diagnosis.inspect",
+    "state.recovery.archive.verify",
+    "state.recovery.manifest.verify",
 })
 MAX_STARTUP_DIAGNOSTIC_BYTES = 8 * 1024
 STARTUP_LOCK_TIMEOUT_SECONDS = 15.0

@@ -97,6 +97,7 @@ try {
   await page.screenshot({ path: resolve(outputDir, "conversation-return-revisions-mobile.png"), animations: "disabled" });
   console.log("conversation-return-browser: passed (packaged UI, real HTTP/store, quiet reads, background revision, read recovery, no duplicate or model Turn)");
 } finally {
+  await workspace?.page.unrouteAll({ behavior: "wait" });
   await workspace?.close();
   await browser?.close();
   server?.kill("SIGTERM");

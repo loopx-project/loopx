@@ -1,7 +1,10 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { promises as fs } from "node:fs"
+import os from "node:os"
+import path from "node:path"
 
-import { createLoopxGoalPlugin } from "../loopx/opencode_goal_mode/goal-bridge-runtime.mjs"
+import { createLoopxGoalPlugin, createFileBindingStore } from "../loopx/opencode_goal_mode/goal-bridge-runtime.mjs"
 
 
 function fakeTool(spec) {
@@ -74,14 +77,13 @@ function terminalDecision() {
 }
 
 
-function harness(initialDecision, { lockStore = memoryLockStore() } = {}) {
-  const store = memoryBindingStore()
+function harness(initialDecision, { lockStore = memoryLockStore(), store = memoryBindingStore(), resumeResult = null, beforeHostStop = async () => {} } = {}) {
   const calls = { chat: 0, event: 0, complete: 0, dispose: 0, quota: 0, resume: 0, pause: 0 }
   const scheduled = []
   let decision = initialDecision
   const GoalPlugin = async (_context, options) => ({
     config: async () => {},
-    "command.execute.before": async () => {},
+    "command.execute.before": beforeHostStop,
     "chat.message": async () => {
       calls.chat += 1
     },
@@ -97,6 +99,7 @@ function harness(initialDecision, { lockStore = memoryLockStore() } = {}) {
         args: {},
         execute: async () => {
           calls.resume += 1
+          if (resumeResult) return resumeResult
           return JSON.stringify({ version: 1, operation: "resume", ok: true })
         },
       }),
@@ -104,12 +107,13 @@ function harness(initialDecision, { lockStore = memoryLockStore() } = {}) {
         args: {},
         execute: async () => {
           calls.pause += 1
+          await beforeHostStop()
           return JSON.stringify({ version: 1, operation: "pause", ok: true })
         },
       }),
       goal_block: fakeTool({
         args: {},
-        execute: async () => JSON.stringify({ version: 1, operation: "block", ok: true }),
+        execute: async () => { await beforeHostStop(); return JSON.stringify({ version: 1, operation: "block", ok: true }) },
       }),
       goal_complete: fakeTool({
         args: {},
@@ -131,6 +135,7 @@ function harness(initialDecision, { lockStore = memoryLockStore() } = {}) {
       update_goal: fakeTool({
         args: {},
         execute: async (args) => {
+          if (["paused", "blocked"].includes(args.status)) await beforeHostStop()
           if (args.status === "blocked") return "Goal marked blocked."
           if (args.status === "paused") return "Goal paused."
           if (args.status === "resumed") return "Goal resumed with fresh limits."
@@ -562,29 +567,24 @@ test("continues after the user intervenes during a quota probe", async () => {
 })
 
 
-test("stands by after terminal closure and resumes when new work appears", async () => {
+test("validated closure stops timers and subsequent idle events cannot restart it", async () => {
   const fixture = harness(terminalDecision())
   const hooks = await fixture.plugin({ directory: "/workspace", client: {} })
   await hooks.tool.loopx_goal_activate.execute(
     { goalId: "goal-terminal", objective: "LoopX task body" },
     { sessionID: "session-terminal" },
   )
-  await hooks.event({
-    event: { type: "session.idle", properties: { sessionID: "session-terminal" } },
-  })
+  const idle = { event: { type: "session.idle", properties: { sessionID: "session-terminal" } } }
+  await hooks.event(idle)
   assert.equal(fixture.calls.complete, 0)
   assert.equal(fixture.calls.event, 0)
-  const standby = await fixture.store.read("session-terminal")
-  assert.equal(standby.phase, "standby")
-  assert.equal(standby.autoResume, true)
-  assert.equal(fixture.scheduled.at(-1).delay, 300_000)
-
+  assert.equal(fixture.calls.pause, 1)
+  assert.equal((await fixture.store.read("session-terminal")).autoResume, false)
+  assert.equal(fixture.scheduled.length, 0)
   fixture.setDecision({ should_run: true, scheduler_hint: { action: "run_now" } })
-  await fixture.scheduled.at(-1).callback()
-  assert.equal(fixture.calls.event, 1)
-  const working = await fixture.store.read("session-terminal")
-  assert.equal(working.phase, "working")
-  assert.equal(working.standbyPolls, 0)
+  await hooks.event(idle)
+  assert.equal(fixture.calls.event, 0)
+  assert.equal(fixture.calls.quota, 1)
 })
 
 
@@ -733,4 +733,128 @@ test("probeLoopxQuota fails closed when a non-zero exit carries no payload", asy
     ),
     /Command failed/,
   )
+})
+
+test("ordinary user input cannot resume a host before Core admission", async () => {
+  const fixture = harness({ should_run: false, scheduler_hint: { action: "stop_until_explicit_resume" } })
+  const hooks = await fixture.plugin({ directory: "/workspace", client: {} })
+  await hooks.tool.loopx_goal_activate.execute({ goalId: "goal-paused", objective: "Task" }, { sessionID: "paused" })
+  await hooks["chat.message"]({ sessionID: "paused" }, { parts: [{ type: "text", text: "How is it going?" }] })
+  const before = fixture.calls.resume
+  await hooks.event({ event: { type: "session.idle", properties: { sessionID: "paused" } } })
+  assert.equal(fixture.calls.resume, before)
+  assert.equal((await fixture.store.read("paused")).autoResume, false)
+  fixture.setDecision({ should_run: true, scheduler_hint: { action: "run_now" } })
+  await hooks.event({ event: { type: "session.idle", properties: { sessionID: "paused" } } })
+  assert.equal(fixture.calls.quota, 1)
+})
+
+test("explicit pause and resume discard the earlier in-flight admission", async () => {
+  let release
+  const decision = new Promise(resolve => { release = resolve })
+  // The injected probe receives the same asynchronous result as the real CLI.
+  const fixture = harness(decision)
+  const hooks = await fixture.plugin({ directory: "/workspace", client: {} })
+  await hooks.tool.loopx_goal_activate.execute({ goalId: "race", objective: "Task" }, { sessionID: "race" })
+  const idle = { event: { type: "session.idle", properties: { sessionID: "race" } } }
+  const pending = hooks.event(idle)
+  while (!fixture.calls.quota) await new Promise(resolve => setImmediate(resolve))
+  await hooks.tool.goal_pause.execute({}, { sessionID: "race" })
+  await hooks.tool.goal_resume.execute({}, { sessionID: "race" })
+  release({ should_run: true, scheduler_hint: { action: "run_now" } })
+  await pending
+  assert.equal(fixture.calls.event, 0)
+  fixture.setDecision({ should_run: true, scheduler_hint: { action: "run_now" } })
+  await hooks.event(idle)
+  assert.equal(fixture.calls.event, 1)
+})
+
+test("permission denial stays paused through ordinary chat and idle events", async () => {
+  const fixture = harness({ should_run: true, scheduler_hint: { action: "run_now" } })
+  const hooks = await fixture.plugin({ directory: "/workspace", client: {} })
+  await hooks.tool.loopx_goal_activate.execute({ goalId: "deny", objective: "Task" }, { sessionID: "deny" })
+  await hooks.event({ event: { type: "permission.replied", properties: { sessionID: "deny", reply: "reject" } } })
+  await hooks["chat.message"]({ sessionID: "deny" }, { parts: [{ type: "text", text: "Status?" }] })
+  const resumed = fixture.calls.resume
+  await hooks.event({ event: { type: "session.idle", properties: { sessionID: "deny" } } })
+  assert.equal(fixture.calls.quota, 0)
+  assert.equal(fixture.calls.resume, resumed)
+  assert.equal((await fixture.store.read("deny")).autoResume, false)
+})
+
+
+test("unconfirmed native resume does not forward the continuation event", async () => {
+  const fixture = harness({ should_run: true, scheduler_hint: { action: "run_now" } },
+    { resumeResult: JSON.stringify({ ok: false, error: "host_unavailable" }) })
+  const hooks = await fixture.plugin({ directory: "/workspace", client: {} })
+  await hooks.tool.loopx_goal_activate.execute({ goalId: "resume-failed", objective: "Task" }, { sessionID: "failed" })
+  await hooks["chat.message"]({ sessionID: "failed" }, { parts: [{ type: "text", text: "Status?" }] })
+  await hooks.event({ event: { type: "session.idle", properties: { sessionID: "failed" } } })
+  assert.equal(fixture.calls.event, 0)
+  assert.equal((await fixture.store.read("failed")).autoResume, false)
+})
+
+for (const operation of ["goal_pause", "goal_block", "legacy_pause", "command_pause"]) {
+  test(`${operation} fences admission before awaiting the native stop`, async () => {
+    let releaseProbe, releaseStop, stopEntered
+    const probe = new Promise(resolve => { releaseProbe = resolve })
+    const entered = new Promise(resolve => { stopEntered = resolve })
+    const heldStop = new Promise(resolve => { releaseStop = resolve })
+    const fixture = harness(probe, { beforeHostStop: async () => { stopEntered(); await heldStop } })
+    const hooks = await fixture.plugin({ directory: "/workspace", client: {} })
+    await hooks.tool.loopx_goal_activate.execute({ goalId: "slow-stop", objective: "Task" }, { sessionID: "slow" })
+    const idle = hooks.event({ event: { type: "session.idle", properties: { sessionID: "slow" } } })
+    while (!fixture.calls.quota) await new Promise(resolve => setImmediate(resolve))
+    const stopping = operation === "command_pause"
+      ? hooks["command.execute.before"]({ command: "goal", sessionID: "slow", arguments: "pause" }, {})
+      : hooks.tool[operation === "legacy_pause" ? "update_goal" : operation].execute(
+          operation === "legacy_pause" ? { status: "paused" } : {}, { sessionID: "slow" })
+    await entered
+    releaseProbe({ should_run: true, scheduler_hint: { action: "run_now" } })
+    await idle
+    try {
+      assert.equal(fixture.calls.event, 0)
+      assert.equal((await fixture.store.read("slow")).autoResume, false)
+    } finally {
+      releaseStop()
+      await stopping
+      await hooks.dispose()
+    }
+  })
+}
+
+test("native pause failure keeps local continuation disarmed without claiming host success", async () => {
+  const fixture = harness({ should_run: true, scheduler_hint: { action: "run_now" } },
+    { beforeHostStop: async () => { throw new Error("native pause unavailable") } })
+  const hooks = await fixture.plugin({ directory: "/workspace", client: {} })
+  await hooks.tool.loopx_goal_activate.execute({ goalId: "failed-stop", objective: "Task" }, { sessionID: "failed-stop" })
+  await assert.rejects(hooks.tool.goal_pause.execute({}, { sessionID: "failed-stop" }), /native pause unavailable/)
+  assert.equal((await fixture.store.read("failed-stop")).autoResume, false)
+  await hooks.event({ event: { type: "session.idle", properties: { sessionID: "failed-stop" } } })
+  assert.equal(fixture.calls.quota, 0)
+  assert.equal(fixture.calls.event, 0)
+  await hooks.dispose()
+})
+
+test("filesystem binding preserves pause across bridge recreation", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-pause-"))
+  try {
+    const first = harness({ should_run: false, scheduler_hint: { action: "stop_until_explicit_resume" } },
+      { store: createFileBindingStore({ root }) })
+    const hooks = await first.plugin({ directory: "/workspace", client: {} })
+    await hooks.tool.loopx_goal_activate.execute({ goalId: "durable", objective: "Task" }, { sessionID: "durable" })
+    const idle = { event: { type: "session.idle", properties: { sessionID: "durable" } } }
+    await hooks.event(idle)
+    await hooks.dispose()
+    const second = harness({ should_run: true, scheduler_hint: { action: "run_now" } },
+      { store: createFileBindingStore({ root }) })
+    const restored = await second.plugin({ directory: "/workspace", client: {} })
+    await restored.event(idle)
+    assert.equal(second.calls.quota, 0)
+    await restored.tool.goal_resume.execute({}, { sessionID: "durable" })
+    await restored.event(idle)
+    assert.equal(second.calls.quota, 1)
+    assert.equal(second.calls.event, 1)
+    await restored.dispose()
+  } finally { await fs.rm(root, { recursive: true, force: true }) }
 })

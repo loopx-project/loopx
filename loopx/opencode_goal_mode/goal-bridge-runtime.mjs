@@ -12,7 +12,6 @@ const TERMINAL_STATE_SCHEMA_VERSION = "goal_terminal_state_v0"
 const SOURCE_COMPLETENESS_SCHEMA_VERSION = "goal_terminal_source_completeness_v0"
 const DEFAULT_RETRY_MINUTES = 3
 const MAX_RETRY_MINUTES = 30
-const STANDBY_MINUTES = 5
 const BINDING_LOCK_STALE_MS = 90_000
 const LOOPX_GOAL_LIMITS = {
   maxTurns: 10000,
@@ -282,7 +281,8 @@ export function isTerminalNoFollowup(decision) {
 
 
 function shouldRunNow(decision) {
-  return decision?.scheduler_hint?.action === "run_now" || decision?.should_run === true
+  return decision?.ok !== false && decision?.should_run === true &&
+    decision?.scheduler_hint?.action !== "stop_until_explicit_resume"
 }
 
 
@@ -356,6 +356,20 @@ export function createLoopxGoalPlugin({
     const timers = new Map()
     const evaluations = new Map()
     const pendingGoalCommands = new Map()
+    // Fence in-flight probes across pause/resume, including an ABA transition.
+    // Writes share one queue so an older snapshot cannot overwrite a pause.
+    const revisions = new Map()
+    const bindingWrites = new Map()
+    const revision = id => revisions.get(id) || 0
+    const invalidate = id => revisions.set(id, revision(id) + 1)
+    const serializeBinding = (id, operation) => {
+      const previous = bindingWrites.get(id) || Promise.resolve()
+      const next = previous.catch(() => {}).then(operation)
+      bindingWrites.set(id, next)
+      return next.finally(() => {
+        if (bindingWrites.get(id) === next) bindingWrites.delete(id)
+      })
+    }
     // Tracks sessions whose persisted base goal is already active in this process.
     const initializedSessions = new Set()
     let disposed = false
@@ -377,16 +391,21 @@ export function createLoopxGoalPlugin({
     }
 
     const detachBinding = async (sessionID) => {
-      await bindingStore.remove(sessionID)
+      invalidate(sessionID)
+      await serializeBinding(sessionID, () => bindingStore.remove(sessionID))
       cancelScheduled(sessionID)
       initializedSessions.delete(sessionID)
     }
 
     const readBinding = async (sessionID) => bindingStore.read(sessionID)
-    const updateBinding = async (sessionID, changes) => {
-      const current = await readBinding(sessionID)
-      if (!current) return null
-      return bindingStore.write(sessionID, { ...current, ...changes })
+    const updateBinding = (sessionID, changes, expectedRevision) => {
+      if (Object.hasOwn(changes, "autoResume") && expectedRevision === undefined) invalidate(sessionID)
+      return serializeBinding(sessionID, async () => {
+        if (expectedRevision !== undefined && revision(sessionID) !== expectedRevision) return null
+        const current = await readBinding(sessionID)
+        if (!current || (expectedRevision !== undefined && revision(sessionID) !== expectedRevision)) return null
+        return bindingStore.write(sessionID, { ...current, ...changes })
+      })
     }
 
     const auditor = async ({ sessionID }) => {
@@ -421,6 +440,7 @@ export function createLoopxGoalPlugin({
       if (disposed) return
       cancelScheduled(sessionID)
       const timer = setTimer(async () => {
+        if (timers.get(sessionID) !== timer) return
         timers.delete(sessionID)
         if (disposed) return
         try {
@@ -440,6 +460,7 @@ export function createLoopxGoalPlugin({
 
     const evaluateIdleOnce = async (sessionID, input) => {
       if (disposed) return
+      const expectedRevision = revision(sessionID)
       let binding
       try {
         binding = await readBinding(sessionID)
@@ -471,55 +492,41 @@ export function createLoopxGoalPlugin({
         return
       }
       try {
-        await evaluateIdleLocked(sessionID, input, binding)
+        await evaluateIdleLocked(sessionID, input, binding, expectedRevision)
       } finally {
         await lock.release()
       }
     }
 
-    const evaluateIdleLocked = async (sessionID, input, initialBinding) => {
+    const evaluateIdleLocked = async (sessionID, input, initialBinding, expectedRevision) => {
+      const current = () => !disposed && revision(sessionID) === expectedRevision
+      if (!current()) return
       let binding = initialBinding
-      if (binding.userMessagePending) {
-        await bindingStore.write(sessionID, { ...binding, userMessagePending: false })
-        if (typeof baseGoalResume?.execute === "function") {
-          try {
-            await executeTool(baseGoalResume, {}, toolContext(context, sessionID))
-            await log("info", "resumed the OpenCode goal after user input", {
-              goalId: binding.goalId,
-              sessionID,
-            })
-          } catch (error) {
-            await log("warn", "OpenCode goal resume probe failed after user input", {
-              goalId: binding.goalId,
-              sessionID,
-              error: error?.message || String(error),
-            })
-          }
-        }
-      }
       let decision
       try {
         decision = await quotaProbe(binding, { directory: context.directory })
+        if (!current()) return
         if (Number(binding.probeRetryCount || 0) > 0) {
-          await updateBinding(sessionID, { probeRetryCount: 0 })
+          await updateBinding(sessionID, { probeRetryCount: 0 }, expectedRevision)
         }
       } catch (error) {
+        if (!current()) return
         const plan = probeRetryPlan(binding)
-        await updateBinding(sessionID, { probeRetryCount: plan.probeRetryCount })
+        await updateBinding(sessionID, { probeRetryCount: plan.probeRetryCount }, expectedRevision)
         await log("warn", "LoopX quota probe failed closed; scheduling a bounded retry", {
           goalId: binding.goalId,
           sessionID,
           error: error?.message || String(error),
           retryMinutes: plan.minutes,
         })
-        scheduleEvaluation(sessionID, plan.minutes)
+        if (current()) scheduleEvaluation(sessionID, plan.minutes)
         return
       }
-      if (disposed) return
+      if (!current()) return
 
       const currentBinding = await readBinding(sessionID)
       if (
-        !currentBinding ||
+        !current() || !currentBinding ||
         currentBinding.autoResume === false ||
         currentBinding.goalId !== binding.goalId
       ) {
@@ -528,53 +535,51 @@ export function createLoopxGoalPlugin({
       }
       binding = currentBinding
 
-      if (isTerminalNoFollowup(decision)) {
-        // Validated closure means the current work is done, not that the loop
-        // should end. Stand by and keep the goal active so new work resumes
-        // automatically instead of pausing after one task.
+      const stopped = decision?.scheduler_hint?.action === "stop_until_explicit_resume"
+      if (stopped || isTerminalNoFollowup(decision)) {
         cancelScheduled(sessionID)
-        const standbyPolls = Number(binding.standbyPolls || 0) + 1
-        await bindingStore.write(sessionID, {
-          ...binding,
-          phase: "standby",
-          standbyPolls,
-          schedulerToken: "",
-          unchangedPolls: 0,
-        })
-        await log("info", "LoopX validated terminal closure; standing by for new work", {
-          goalId: binding.goalId,
-          sessionID,
-          standbyPolls,
-        })
-        scheduleEvaluation(sessionID, STANDBY_MINUTES)
+        await updateBinding(sessionID, {
+          autoResume: false,
+          userMessagePending: false,
+          lastPausedReason: stopped ? "stop_until_explicit_resume" : "terminal_no_followup",
+        }, expectedRevision)
+        if (!current()) return
+        if (typeof baseGoalPause?.execute === "function") {
+          await executeTool(baseGoalPause, {}, toolContext(context, sessionID))
+        }
         return
       }
 
       if (shouldRunNow(decision)) {
         cancelScheduled(sessionID)
         let pendingResume = Boolean(binding.userMessagePending)
-        await bindingStore.write(sessionID, {
-          ...binding,
+        const committed = await updateBinding(sessionID, {
           phase: "working",
           standbyPolls: 0,
           schedulerToken: "",
           unchangedPolls: 0,
           probeRetryCount: 0,
           userMessagePending: false,
-        })
+        }, expectedRevision)
+        if (!committed || !current()) return
         if (pendingResume || !initializedSessions.has(sessionID)) {
-          initializedSessions.add(sessionID)
           try {
-            await executeTool(baseGoalResume, {}, toolContext(context, sessionID))
+            const resumed = await executeTool(baseGoalResume, {}, toolContext(context, sessionID))
+            if (!toolResultSucceeded(resumed)) throw new Error("native Goal resume was not confirmed")
+            if (!current()) return
+            initializedSessions.add(sessionID)
           } catch (error) {
+            if (!current()) return
+            await updateBinding(sessionID, { autoResume: false, lastPausedReason: "goal_resume_unconfirmed" }, expectedRevision)
             await log("warn", "OpenCode goal resume probe failed before continuation", {
               goalId: binding.goalId,
               sessionID,
               error: error?.message || String(error),
             })
+            return
           }
         }
-        if (disposed) return
+        if (!current()) return
         await baseEvent?.(input)
         return
       }
@@ -585,7 +590,8 @@ export function createLoopxGoalPlugin({
         await updateBinding(sessionID, {
           autoResume: false,
           lastPausedReason: "unchanged_poll_limit",
-        })
+        }, expectedRevision)
+        if (!current()) return
         if (typeof baseGoalPause?.execute === "function") {
           try {
             await executeTool(baseGoalPause, {}, toolContext(context, sessionID))
@@ -608,11 +614,11 @@ export function createLoopxGoalPlugin({
         }
         return
       }
-      await bindingStore.write(sessionID, {
-        ...binding,
+      const committed = await updateBinding(sessionID, {
         schedulerToken: wait.schedulerToken,
         unchangedPolls: wait.unchangedPolls,
-      })
+      }, expectedRevision)
+      if (!committed || !current()) return
       scheduleEvaluation(sessionID, wait.minutes)
     }
 
@@ -661,7 +667,8 @@ export function createLoopxGoalPlugin({
           toolCtx,
         )
         if (!toolResultSucceeded(result)) return result
-        const binding = await bindingStore.write(sessionID, {
+        invalidate(sessionID)
+        const binding = await serializeBinding(sessionID, () => bindingStore.write(sessionID, {
           directory: context.directory,
           goalId: String(args.goalId),
           agentId: args.agentId ? String(args.agentId) : "",
@@ -672,7 +679,7 @@ export function createLoopxGoalPlugin({
           autoResume: true,
           schedulerToken: "",
           unchangedPolls: 0,
-        })
+        }))
         initializedSessions.add(sessionID)
         cancelScheduled(sessionID)
         return JSON.stringify({
@@ -687,15 +694,22 @@ export function createLoopxGoalPlugin({
 
     const tools = { ...baseTools, loopx_goal_activate: activateTool }
 
-    const wrapTool = (name, after) => {
+    const pauseBinding = async (sessionID, reason) => {
+      cancelScheduled(sessionID)
+      await updateBinding(sessionID, { autoResume: false, lastPausedReason: reason })
+    }
+    const wrapTool = (name, after, before) => {
       const original = tools[name]
       if (!original || typeof original.execute !== "function") return
       tools[name] = {
         ...original,
         execute: async (args, toolCtx) => {
-          const result = await original.execute(args, toolCtx)
           const sessionID = toolCtx?.sessionID || toolCtx?.session_id || toolCtx?.session?.id
-          if (sessionID) await after(sessionID, args || {}, result)
+          // Local stop intent fences pending admission before waiting for host IO.
+          // Host failure remains a failure; it must not re-arm our own driver.
+          if (sessionID) await before?.(sessionID, args || {})
+          const result = await original.execute(args, toolCtx)
+          if (sessionID) await after?.(sessionID, args || {}, result)
           return result
         },
       }
@@ -720,15 +734,7 @@ export function createLoopxGoalPlugin({
       }
     })
     for (const name of ["goal_pause", "goal_block"]) {
-      wrapTool(name, async (sessionID, _args, result) => {
-        if (toolResultSucceeded(result)) {
-          await updateBinding(sessionID, {
-            autoResume: false,
-            lastPausedReason: name === "goal_pause" ? "goal_pause" : "goal_block",
-          })
-          cancelScheduled(sessionID)
-        }
-      })
+      wrapTool(name, null, sessionID => pauseBinding(sessionID, name))
     }
     wrapTool("update_goal", async (sessionID, args, result) => {
       if (
@@ -747,15 +753,14 @@ export function createLoopxGoalPlugin({
       const status = String(args.status || "").trim().toLowerCase()
       if (status === "complete") {
         await detachBinding(sessionID)
-      } else if (status === "paused" || status === "blocked") {
-        await updateBinding(sessionID, {
-          autoResume: false,
-          lastPausedReason: status === "paused" ? "goal_status_paused" : "goal_status_blocked",
-        })
-        cancelScheduled(sessionID)
       } else if (status === "resumed") {
         await updateBinding(sessionID, { autoResume: true, lastPausedReason: "" })
         initializedSessions.add(sessionID)
+      }
+    }, async (sessionID, args) => {
+      const status = String(args.status || "").trim().toLowerCase()
+      if (status === "paused" || status === "blocked") {
+        await pauseBinding(sessionID, status === "paused" ? "goal_status_paused" : "goal_status_blocked")
       }
     })
 
@@ -774,6 +779,9 @@ export function createLoopxGoalPlugin({
         await base.config?.(config)
       },
       "command.execute.before": async (input, output) => {
+        if (input?.command === "goal" && input?.sessionID && commandKind(String(input.arguments || "").trim()) === "pause") {
+          await pauseBinding(input.sessionID, "goal_pause")
+        }
         await baseCommand?.(input, output)
         if (input?.command !== "goal" || !input?.sessionID) return
         const sessionID = input.sessionID
@@ -785,12 +793,6 @@ export function createLoopxGoalPlugin({
         } else if (kind === "resume") {
           await updateBinding(sessionID, { autoResume: true, lastPausedReason: "" })
           initializedSessions.add(sessionID)
-        } else if (kind === "pause") {
-          await updateBinding(sessionID, {
-            autoResume: false,
-            lastPausedReason: "goal_pause",
-          })
-          cancelScheduled(sessionID)
         }
       },
       "chat.message": async (input, output) => {
@@ -818,10 +820,7 @@ export function createLoopxGoalPlugin({
           // so it cannot fire mid-answer, and remember that the goal needs a
           // resume probe on the next idle event (the wrapped goal plugin may
           // pause its goal when the user chats).
-          await bindingStore.write(sessionID, {
-            ...binding,
-            userMessagePending: true,
-          })
+          await updateBinding(sessionID, { userMessagePending: true })
           cancelScheduled(sessionID)
         }
         await baseChatMessage?.(input, output)
@@ -835,7 +834,9 @@ export function createLoopxGoalPlugin({
             pendingGoalCommands.delete(sessionID)
           } else if (sessionID && shouldPauseForHostEvent(event)) {
             await updateBinding(sessionID, {
-              userMessagePending: true,
+              autoResume: false,
+              lastPausedReason: event.type,
+              userMessagePending: false,
             })
             cancelScheduled(sessionID)
           }

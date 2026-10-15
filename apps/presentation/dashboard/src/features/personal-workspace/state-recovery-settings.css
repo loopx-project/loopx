@@ -1,0 +1,33 @@
+.personal-recovery-kind {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+  padding: 0;
+  border: 0;
+}
+.personal-recovery-kind legend { margin-bottom: 0.5rem; }
+.personal-recovery-kind label { display: inline-flex; align-items: center; gap: 0.375rem; min-height: 2.75rem; }
+.personal-recovery { display: grid; gap: 0.75rem; min-width: 0; }
+.personal-detail-card .personal-recovery p,
+.personal-detail-card .personal-recovery label,
+.personal-detail-card .personal-recovery button { font-size: var(--text-body); line-height: var(--leading-body); }
+.personal-detail-card .personal-recovery p { margin: 0.375rem 0; color: var(--pw-text); }
+.personal-recovery-files { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.personal-recovery-files label { display: grid; gap: 0.5rem; min-width: 0; }
+.personal-recovery-files input { width: 100%; max-width: 100%; min-width: 0; font: inherit; }
+.personal-recovery-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.personal-recovery-actions > button { width: auto; min-height: 2.75rem; padding: 0.5rem 0.75rem; }
+.personal-recovery-result { display: grid; gap: 0.5rem; }
+.personal-detail-card .personal-recovery-counts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; margin: 0.5rem 0; max-width: 28rem; }
+.personal-detail-card .personal-recovery-counts > div { display: block; }
+.personal-detail-card .personal-recovery-counts dt { color: var(--pw-muted); font-size: var(--text-caption); }
+.personal-detail-card .personal-recovery-counts dd { margin: 0.25rem 0 0; font-size: var(--text-heading); font-weight: 600; }
+.personal-recovery-components { list-style: none; margin: 0; padding: 0; }
+.personal-recovery-components > li { padding: 0.75rem 0; border-top: 1px solid var(--pw-line); }
+.personal-recovery code { overflow-wrap: anywhere; font-size: var(--text-caption); }
+@media (max-width: 640px) {
+  .personal-recovery-files { grid-template-columns: minmax(0, 1fr); }
+  .personal-recovery-actions { display: grid; }
+  .personal-recovery-actions > button { width: 100%; }
+}

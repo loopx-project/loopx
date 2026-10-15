@@ -22,21 +22,23 @@ def event(name: str, *, pr: int = 101, tag: str = "", backend: bool = True) -> d
             ref=f"refs/pull/{pr}/merge" if name == "pull_request" else "refs/heads/main",
             # Pull-request webhooks expose number at the payload root as well
             # as inside pull_request; the shared concurrency owner uses both.
-            event=SimpleNamespace(number=pr, pull_request=SimpleNamespace(number=pr), release=SimpleNamespace(tag_name=tag)),
+            event=SimpleNamespace(action="opened", number=pr, pull_request=SimpleNamespace(number=pr), release=SimpleNamespace(tag_name=tag)),
         ),
         "inputs": SimpleNamespace(tag=tag),
-        "needs": SimpleNamespace(changes=SimpleNamespace(outputs=SimpleNamespace(backend_tests=str(backend).lower()))),
+        "needs": SimpleNamespace(changes=SimpleNamespace(outputs=SimpleNamespace(**{
+            key: str(backend).lower() for key in ("backend_tests", "core_tests", "python_tests", "stage2c_tests")
+        }))),
     }
 
 
 def expression(value: str | bool, context: dict) -> str | bool:
-    """Evaluate the boolean/string subset used by these concurrency conditions."""
+    """Evaluate the boolean/string subset used by these CI admission conditions."""
     if isinstance(value, bool):
         return value
 
     def evaluate(source: str):
         return eval(  # noqa: S307 - repository-owned expressions, no builtins.
-            source.strip().replace("&&", " and ").replace("||", " or "),
+            re.sub(r"!(?!=)", " not ", source.strip()).replace("&&", " and ").replace("||", " or "),
             {"__builtins__": {}, "format": lambda template, *args: template.format(*args)},
             context,
         )
@@ -82,6 +84,23 @@ def test_main_supersession_does_not_cancel_nightly_or_manual_full_qualification(
             del context["github"].event.number
     assert len({expression(concurrency["group"], context) for context in contexts}) == 5
     assert [expression(concurrency["cancel-in-progress"], context) for context in contexts] == [True, True, False, False, False]
+
+
+@pytest.mark.parametrize("job_id", ["checks", "pytest", "stage2c-correctness-e2e", "merge-gate"])
+@pytest.mark.parametrize("name", ["push", "pull_request", "pull_request_target", "schedule", "workflow_dispatch", "merge_group"])
+@pytest.mark.parametrize("cancelled", [False, True])
+@pytest.mark.parametrize("planned", [False, True])
+def test_cancelled_main_aggregates_stop_while_other_event_gates_remain_required(
+    job_id: str, name: str, cancelled: bool, planned: bool,
+) -> None:
+    context = event(name, backend=planned)
+    # always() also models failed upstream work: these jobs must still run
+    # their real rejection commands unless the main push itself is cancelled.
+    context.update(always=lambda: True, cancelled=lambda: cancelled)
+    expected = planned if job_id != "merge-gate" else name != "pull_request_target"
+    if name == "push" and cancelled:
+        expected = False
+    assert expression(workflow("python-tests")["jobs"][job_id]["if"], context) is expected
 
 
 @pytest.mark.parametrize("owner,name,prefix", [

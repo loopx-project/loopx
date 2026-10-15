@@ -30,7 +30,9 @@ class Host:
         monkeypatch.setattr(self.session, "_request", self.request)
         monkeypatch.setattr(self.session, "_next_event", self.next_event)
         monkeypatch.setattr(
-            self.session, "interrupt", lambda *a: self.calls.append(("interrupt", {}))
+            self.session, "interrupt", lambda *a: self.calls.append(
+                ("interrupt", {"turn_id": self.session.current_turn_id})
+            )
         )
         monkeypatch.setattr(
             self.session, "close", lambda: setattr(self, "closed", True)
@@ -239,6 +241,84 @@ def test_failed_pause_stops_owned_transport(tmp_path, monkeypatch):
             lambda *a: None,
         )
     assert host.closed
+
+
+@pytest.mark.parametrize("readback", ["active", "absent", "offline"])
+def test_stop_requires_pause_readback_or_closes_owned_transport(
+    tmp_path, monkeypatch, readback
+):
+    host = Host(tmp_path, monkeypatch, goal=native_goal("active"))
+    pause_requested = False
+
+    def unconfirmed_pause(method, params):
+        nonlocal pause_requested
+        if method == "thread/goal/set":
+            host.calls.append((method, params.copy()))
+            pause_requested = True
+            # Even a paused ACK is not proof that a later read is non-active.
+            return {"goal": native_goal("paused")}
+        if pause_requested and readback == "offline":
+            raise host.session._runtime_error("Readback unavailable")
+        if pause_requested and readback == "absent":
+            return {"goal": None}
+        return host.request(method, params)
+
+    monkeypatch.setattr(host.session, "_request", unconfirmed_pause)
+    adapter = CodexAppServerAdapter(host.session, goal_driver=host.driver)
+    with pytest.raises(CodexChatAgentError):
+        adapter.interrupt_turn()
+    assert host.closed and host.driver.stopped.is_set()
+    assert host.goal["objective"] == "Original objective"
+    assert host.goal["tokensUsed"] == 500
+    assert [p["status"] for m, p in host.calls if m == "thread/goal/set"] == ["paused"]
+
+
+def test_stop_during_event_wait_does_not_deliver_late_turn_or_resume_context(
+    tmp_path, monkeypatch
+):
+    def stop_before_late_start(host):
+        host.driver.pause()
+        return begin("late")
+
+    host = Host(tmp_path, monkeypatch, goal=native_goal("paused"),
+                events=[stop_before_late_start])
+    received = []
+    monkeypatch.setattr(host.session, "steer", lambda *a, **kw: received.append("steer"))
+    host.driver.turn_start_handler = lambda _: received.append("handler")
+    response = host.driver.run(
+        parse_native_goal_command("/goal resume --tokens 2000"),
+        lambda k, p: received.append(k), execution_context="Fresh context",
+    )
+    assert "turn.started" not in received and "steer" not in received and "handler" not in received
+    assert "Codex Goal: paused" in response["message"]
+    assert "Codex Goal: active" not in response["message"]
+    assert ("interrupt", {"turn_id": "late"}) in host.calls
+    assert not host.closed
+
+
+def test_cold_recovery_rejects_ack_without_pause_effect(tmp_path, monkeypatch):
+    host = Host(tmp_path, monkeypatch, goal=native_goal("active"))
+    request = host.request
+
+    def ack_only(method, params):
+        if method == "thread/goal/set":
+            return {"goal": native_goal("paused")}
+        return request(method, params)
+
+    monkeypatch.setattr(host.session, "_request", ack_only)
+    store = ChatSessionStore(tmp_path / "runtime")
+    controller = ChatRuntimeController(store=store, codex_bin="codex")
+    session = store.create_session(
+        goal_id="fixture", agent_id="codex", adapter_kind="codex_app_server",
+        upstream_thread_id=host.session.thread_id, upstream_mode="chat_native_goal",
+        channel_id="goal.fixture",
+    )
+    monkeypatch.setattr(controller, "_start_adapter", lambda **kw: CodexAppServerAdapter(host.session))
+    with pytest.raises(CodexChatAgentError, match="could not be restored"):
+        controller.resume_session(session_id=session["session_id"], work_dir=tmp_path, objective="Research")
+    assert host.closed and session["session_id"] not in controller.adapters
+    assert store.load_session(session["session_id"])["status"] == "resume_failed"
+    controller.close()
 
 
 def test_native_response_cannot_supply_action_or_completion_authority(

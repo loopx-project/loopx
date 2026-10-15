@@ -3,6 +3,66 @@ import { resolve } from "node:path";
 import { outputDir } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
 
+async function overlappingHistoryRefresh(browser, url) {
+  const currentId = "session-manager-loopx-manager-codex", oldId = "older-overlap-session", turnId = "overlap-recovered-turn";
+  const staleRead = Promise.withResolvers(), staleStarted = Promise.withResolvers(), stream = Promise.withResolvers();
+  let oldReads = 0, freshReads = false;
+  const context = await openWorkspacePage(browser, url, {
+    gotoWaitUntil: "domcontentloaded",
+    async beforeGoto(api, page) {
+      const runtime = page.__loopxRuntime;
+      for (const [id, date] of [[currentId, "2026-08-13T01:00:00Z"], [oldId, "2026-08-12T01:00:00Z"]]) {
+        runtime.sessions.set(id, { session_id: id, goal_id: "loopx-manager", agent_id: "codex", adapter_kind: "codex_app_server",
+          channel_id: "manager", status: id === currentId ? "busy" : "ready", active_turn_id: id === currentId ? turnId : null,
+          resumable: true, created_at: date, updated_at: date, last_activity_at: date, last_error_code: null });
+        runtime.messages.set(id, [{ message_id: `message-${id}`, turn_id: id === currentId ? turnId : null,
+          role: id === currentId ? "user" : "agent", text: id === currentId ? "核对公开资料并返回结论。" : "上一轮公开资料已保留。", created_at: date }]);
+      }
+      runtime.turnMessages.set(turnId, "只读资料核对");
+      api.answerForMessage = () => ({ message: "新的资料核对结论已返回。", proposals: [] });
+      await page.route("**/events/**", async route => { await stream.promise; await route.fallback(); });
+      await page.route("**/api/chat/sessions/*", async route => {
+        if (route.request().method() !== "GET" || new URL(route.request().url()).pathname !== `/api/chat/sessions/${oldId}`) return route.fallback();
+        oldReads += 1;
+        if (oldReads === 1) return route.fulfill({ status: 503, json: { error: "Synthetic missing history" } });
+        if (!freshReads) {
+          staleStarted.resolve(); await staleRead.promise;
+          return route.fulfill({ status: 503, json: { error: "Older request failed after recovery" } }).catch(() => {});
+        }
+        return route.fallback();
+      });
+    },
+  });
+  const { page, api } = context;
+  try {
+    await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+    const notice = page.getByRole("status").filter({ hasText: "部分历史暂时无法读取" });
+    await notice.getByRole("button", { name: "重试读取", exact: true }).click();
+    await notice.getByRole("button", { name: "正在读取…", exact: true }).waitFor({ state: "visible" });
+    await Promise.race([staleStarted.promise, new Promise((_, reject) => setTimeout(() => reject(new Error("Missing-history retry was not observed")), 5000))]);
+    freshReads = true; stream.resolve();
+    await page.getByText("新的资料核对结论已返回。", { exact: true }).waitFor({ state: "visible" });
+    await page.getByText("上一轮公开资料已保留。", { exact: true }).waitFor({ state: "visible" });
+    await notice.waitFor({ state: "hidden" });
+    const composer = page.getByLabel("向 LoopX 发送消息");
+    await composer.fill("保留这条草稿，稍后继续。");
+    const lateResponse = page.waitForResponse(response => new URL(response.url()).pathname === `/api/chat/sessions/${oldId}` && response.status() === 503);
+    staleRead.resolve(); await (await lateResponse).finished();
+    await page.evaluate(() => new Promise(resolveFrame => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
+    await page.screenshot({ path: resolve(outputDir, "conversation-history-read-order-desktop.png"), animations: "disabled" });
+    assert.equal(await notice.isVisible(), false, "An older read failure cannot reopen a recovered history warning");
+    assert.equal(await composer.inputValue(), "保留这条草稿，稍后继续。");
+    assert.equal(await page.getByRole("button", { name: "发送", exact: true }).isEnabled(), true);
+    assert.equal(await page.getByText("新的资料核对结论已返回。", { exact: true }).count(), 1);
+    assert.equal(api.turnRequests.length, 0, "Read recovery must not replay work");
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.ok(await page.locator("body").evaluate(body => body.scrollWidth <= innerWidth + 1));
+    await page.screenshot({ path: resolve(outputDir, "conversation-history-read-order-mobile.png"), animations: "disabled" });
+  } finally {
+    freshReads = true; staleRead.resolve(); stream.resolve(); await context.close();
+  }
+}
+
 async function retiredHistoryRead(browser, url) {
   const sessionId = "session-goal-product-release-codex";
   const turnId = "recovered-survey-summary";
@@ -151,6 +211,7 @@ async function recoveryObserverHandover(browser, url) {
 export const conversationHistoryRecoveryScenario = {
   id: "conversation-history-recovery",
   async run({ browser, collectCoverage, url }) {
+    await overlappingHistoryRefresh(browser, url);
     const currentId = "session-manager-loopx-manager-codex";
     const oldId = "previous-worker-session";
     let unavailable = oldId;

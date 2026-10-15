@@ -191,7 +191,7 @@ FORMAL_CANDIDATE_DECISIONS = {
 # anchor. A `<=` comparison would let every tightening below the anchor be undone
 # silently; that is the gap the anchor exists to close.
 COVERAGE_ANCHOR = {
-    "vocabularies": 27,
+    "vocabularies": 28,
     "owner_symbols": 53,
     "literal_scan_fields": 1,
     "projections": 1,

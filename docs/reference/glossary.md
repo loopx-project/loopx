@@ -194,6 +194,14 @@ Effect-program settlement step executed for one Turn.
 - typescript: [`SETTLEMENT_STEP_KINDS`](../../loopx/control_plane/effect_program.ts).
 - Values / 值: `validation`, `durable_writeback`, `quota_spend`, `terminal_closeout`.
 
+## state_recovery_component_state
+
+Offline owner-local readability of a component in an inert recovery audit; never execution or adoption authority.
+
+- Tier / 层级: `cross_runtime`; status / 状态: `canonical`.
+- typescript: [`RECOVERY_COMPONENT_STATES`](../../loopx/control_plane/state_recovery_contract.ts).
+- Values / 值: `readable`, `historical_only`, `unknown`.
+
 ## task_lease_lifecycle_operation
 
 Operation accepted by the shipped native lease lifecycle request decoder; acquisition has its own transaction.

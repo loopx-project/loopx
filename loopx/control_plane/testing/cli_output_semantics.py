@@ -75,6 +75,78 @@ def heartbeat_user_language_prompt_revision(text: str) -> str | None:
     return "heartbeat_user_language_v1" if any(rule in text for rule in rules) else None
 
 
+def continuation_instruction_observations(text: str) -> dict[str, bool]:
+    """Observe complete reviewed clauses for output migration, never admission.
+
+    Keep historical text independent of production constants: a later wording
+    change must not silently inherit this one-time size qualification.
+    """
+    context_prefix = (
+        "Read current sources and pending required_reads before work. "
+        "Do not repeat this guard's fulfilled pre-work reads. "
+    )
+    context_suffix = (
+        "Recheck freshness before later actions; unavailable or changed sources need "
+        "recovery and a fresh guard. Context grants no authority."
+    )
+    brief = (
+        "Use a bounded working brief of evidenced progress/change, current blockers, next work, acceptance and stops. "
+        "Missing comparison evidence is unknown, not unchanged; summaries cannot replace full requirements. "
+    )
+    correction = (
+        "Correct within the affected work first; widen replanning only when current goal, path, dependency "
+        "or acceptance evidence warrants it. A due review can retain the path; it does not force a pivot. "
+        "At the next review, check whether the correction reached subsequent work and authoritative outcomes; "
+        "a recorded decision alone proves neither adoption nor improvement."
+    )
+    replan = (
+        "Compare expected goal/information gain with full marginal cost. "
+        "Before widening repeated validation, check that the changed intervention reaches the "
+        "executed path and current artifact. Prefer a probe that distinguishes remaining explanations; "
+        "scope negative results to tested conditions and local proxies to their coverage. "
+        "Reuse still-applicable evidence instead of repeating checks without a new uncertainty."
+    )
+    stop = (
+        "host_action=pause_or_delete_current_heartbeat: automation_update pause current "
+        "heartbeat once; verify stopped; unconfirmed/unavailable: never claim stopped; "
+        "end; no work/spend/retry/RRULE fallback."
+    )
+    old_stops = (
+        "host_action=pause_or_delete_current_heartbeat: automation_update stop; ",
+        "host_action=pause_or_delete_current_heartbeat->automation_update stop(no-spend); ",
+    )
+    # Decode JSON string escaping before observing exact clauses. For Markdown
+    # the emitted instruction is already readable. No runtime state is inferred.
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        strings = [text]
+    else:
+        strings = []
+
+        def collect(value: Any) -> None:
+            if isinstance(value, str):
+                strings.append(value)
+            elif isinstance(value, dict):
+                for child in value.values():
+                    collect(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect(child)
+
+        collect(payload)
+    def contains(clause: str) -> bool:
+        return any(clause in value for value in strings)
+    return {
+        "context_before": contains(context_prefix + context_suffix),
+        "context_after": contains(context_prefix + brief + context_suffix),
+        "replan_before": contains(replan) and not contains(replan + " " + correction),
+        "replan_after": contains(replan + " " + correction),
+        "stop_before": any(contains(clause) for clause in old_stops),
+        "stop_after": contains(stop),
+    }
+
+
 def heartbeat_peer_admission_prompt_revision(text: str) -> str | None:
     """Attribute readable peer guidance for a one-time CLI budget transition.
 

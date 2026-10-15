@@ -188,6 +188,179 @@ cross-owner capture consistency, recover volatile work, or reactivate a Goal.
 命令不会自动删除部分输出，也不会因文件存在就宣称成功。这不证明跨 owner 一致性
 或恢复后的执行权限。
 
+## Inspect a complete backup without activating it
+
+In **Settings → Capability Center → device defaults → Configuration backup and
+recovery**, choose **Full archive inspection**. Select the original `.tar.gz`
+and matching external `.manifest.json`, then choose **Verify and create isolated
+copy**. The existing configuration-snapshot option remains separate. Full-archive
+inspection is a machine-level operation; it is not shown in single-Goal scope.
+Unsupported services/platforms keep the operation unavailable.
+
+The local server streams the two uploads into private temporary inputs. It checks
+the archive digest before decoding tar data, then checks embedded/external
+manifest agreement, paths, links, member hashes and extraction capacity. Only a
+new inert checkpoint can be published. It reads configuration and selected
+File/SQLite authority through their existing owners, including the complete Todo
+read model and committed history. Original registry paths are never followed.
+
+The result separates **readable**, **historical only** and **unknown** components,
+with an owner and one next action. SQLite bytes alone do not prove a readable Goal
+work model. Remaining v0 state has no complete owner inventory, so it stays
+unknown; every v0 audit carries `legacy_manifest_incomplete`, stays `held`, and
+reports `execution_authority_granted=false` and `activation_eligible=false`.
+No Goal is registered, no provider is selected, and no Host, lease, timer or
+pending external operation is resumed. This is the M1 inspection path in the
+[complete recovery RFC](../architecture/rfcs/complete-state-recovery-v0.md),
+not controlled reactivation.
+
+The following public synthetic scene uses a built wheel and the real File
+backend. Before this change, the entry only restored configuration snapshots.
+The new path reads the saved Goal work after its original source was removed;
+it does not register that Goal. The phone view is explicitly a historical report.
+
+| Before: configuration only | Inert full-archive inspection | Phone historical readback |
+| --- | --- | --- |
+| ![Configuration-only entry](images/state-recovery/before-configuration.png) | ![Inert backup audit](images/state-recovery/inert-audit-desktop.png) | ![Historical audit on phone](images/state-recovery/historical-audit-phone.png) |
+
+Use **Previous inspections** after reloading to read the saved, digest-checked
+report. A historical report describes its recorded observation time; reading it
+again does not reverify copied data. A damaged new input clears the prior success
+view and leaves existing checkpoints intact. If a response was lost, **Check for
+an existing result** reads the original checkpoint; a repeated write to that
+occupied target is refused.
+
+**Verification details** retain the archive byte size, copied regular-file
+bytes (including the embedded manifest), and two measured phases. Archive
+processing covers input checks, both scans and copying; owner reads cover the
+isolated configuration/storage audit. Durations use monotonic clocks and exclude
+HTTP upload, verifier process startup, the final source rehash/report publication,
+and historical readback. They describe processing cost, not end-to-end recovery
+time or a deadline guarantee. Earlier reports without measurements show that
+absence instead of zero. Reading history preserves the original measurements.
+
+The additive CLI route preserves existing backup creation syntax:
+
+```bash
+uv run --extra test loopx --format json backup-state verify \
+  --archive BACKUP.tar.gz --manifest BACKUP.manifest.json \
+  --destination NEW_PHYSICAL_DIRECTORY
+
+# Explicitly create and inspect that new inert copy.
+uv run --extra test loopx --format json backup-state verify \
+  --archive BACKUP.tar.gz --manifest BACKUP.manifest.json \
+  --destination NEW_PHYSICAL_DIRECTORY --execute
+```
+
+Preview checks archive/manifest bytes and capacity; owner records are not yet
+read and no zero-readability result is invented. Execution writes `data/` and
+`recovery-audit.json` below the new destination. Source archive and manifest must
+be private regular files; the destination must not exist and its ancestors must
+be physical directories. Existing targets are never replaced. Browser callers
+use opaque upload/checkpoint refs and cannot supply filesystem destinations.
+Uploads expire after an hour and are cleaned by a later upload; completed audits
+are retained. Removing these inert copies cannot undo or authorize live state.
+
+The first profile is POSIX with local File/SQLite state. Bounds are 128 MiB
+compressed archive, 512 MiB expanded tar stream, 16 MiB external/embedded
+manifest, 20,000 entries, expansion ratio 2,000, 128 KiB per extended tar header
+and 16 MiB total extended metadata. Paths have at most 64 components, 1,024
+characters and 255 UTF-8 bytes per component; JSON nesting is bounded at 64.
+Owner inspection permits 128 Goals, 128 SQLite files and 20,000 committed
+transactions per Goal. Overflow refuses publication rather than truncating a
+required inventory. Internal symlinks remain inert; escaping/cyclic links,
+hard links, sparse or special files and normalized name collisions reject.
+
+Archive parsing never loads restored code. Database/domain inspection runs in a
+disposable verifier with a 90-second deadline and a 512 MiB V8 heap ceiling.
+SQLite gets a 64 MiB process-local [hard heap limit](https://www.sqlite.org/pragma.html#pragma_hard_heap_limit);
+this is why that verifier is not dispatched in the shared Effect daemon. Views
+and virtual tables cannot masquerade as authority tables. WAL-mode copies and
+unsupported/service-owned providers remain unknown and need their existing
+owner; PostgreSQL is never contacted. The normal 2 MiB RPC wire is unchanged;
+only the two complete-manifest checks opt into the existing 64 MiB private-file
+transport. These unchanged bounds are approved for local POSIX File/SQLite
+inert inspection by the [recorded maintainer decision](../architecture/rfcs/complete-state-recovery-v0.md#m1-capacity-default-decision).
+Compound worst cases and broader platforms/providers remain unqualified; no
+production SLO or merge authority follows from capacity consent.
+
+### Choosing backup inspection or a research checkpoint
+
+Use this Settings entry or `backup-state verify` to read a complete archive when
+the original source is unavailable. Its tasks/history are historical evidence;
+unknown components remain unknown, and the report does not resume work.
+[Research checkpoints](research-checkpoint.md) instead capture a settled research
+boundary and explicitly admit a distinct Goal/session before adopting context.
+They already reuse backup inventory and SQLite snapshot owners, but their
+component format is not accepted by `backup-state verify`, and a full archive
+is not a research checkpoint input.
+
+The [shared-owner and staged recovery contract](../architecture/rfcs/complete-state-recovery-v0.md#backup-inspection-and-research-checkpoint-reuse)
+keeps format/capture qualification in M2 and guided continuation in M3. No manual
+format conversion can establish missing authority or consistency. Keep the
+original archive and read the existing report's component states and holds;
+automatic activation and the joint recovery journey are not available in M1.
+
+中文：完整备份检查用于原来源不可用时找回可读任务和历史；报告不恢复执行。
+研究 checkpoint 用于已稳定的研究边界，在独立 Goal／会话准入后显式采用上下文。
+两者已共用备份清单和 SQLite 快照，但格式不互换。缺失组件或捕获事实仍为未知，
+不能手工改格式来取得权限；M2 负责资格，M3 才交付引导式继续工作，M1 保留原报告
+的状态和 hold 供读取。
+
+### Measured local capacity cases
+
+At source `884eae425c77ae6db9d8042bd98ee19663e7bdd4`, disposable native backups
+were inspected through the real `backup-state verify --execute` CLI after hiding
+their original project/runtime/registry. Measurements used macOS arm64, Python
+3.11.7 and Node 22.22.3. Times below include the verifier command, not backup
+creation; peak RSS is the macOS `time -l` command metric, not a simultaneous
+process-tree total. These are individual synthetic observations under local
+development load, not latency targets or proof that all maxima combine.
+
+| Native input / boundary | Result | Wall seconds | Peak RSS MiB |
+| --- | --- | ---: | ---: |
+| 511 MiB zero-filled regular file | Held audit; captured configuration readable | 4.941 | 97.8 |
+| 512 MiB regular file plus archive metadata | Refused: expanded capacity | 1.931 | 88.2 |
+| 127 MiB seeded incompressible file; 133,212,049 archive bytes | Held audit | 1.284 | 100.6 |
+| Archive input 134,217,729 bytes | Refused before decoding: archive capacity | 0.521 | 81.5 |
+| External manifest padded with JSON whitespace to 16 MiB | Held audit; bounds input bytes, not maximum structured metadata | 0.945 | 113.8 |
+| External manifest 16 MiB + 1 byte | Refused: manifest capacity | 0.520 | 81.4 |
+| Exactly 20,000 archive members | Complete inventory and held audit | 8.698 | 225.8 |
+| Exactly 20,001 archive members | Refused: member capacity | 1.888 | 143.8 |
+| 128 native File Goals, one retained task/commit each | All 128 Goal records readable | 0.843 | 103.5 |
+| 128 native SQLite Goals/databases, one retained task/commit each | All 128 Goal records readable; database bytes historical-only | 1.041 | 107.1 |
+| 129 File Goals | Refused: Goal inventory capacity | 0.738 | 96.8 |
+| 129 SQLite databases | Refused: SQLite inventory capacity | 0.534 | 83.7 |
+
+All refusal cases left no destination or staging directory. The real SQLite
+history regression additionally proves that **20,000 committed transactions
+are fully read**, while **20,001 refuse publication**. An earlier implementation
+incorrectly turned that overflow into an unknown component and published the
+copy. The owner now checks the canonical cursor before scanning and propagates
+the capacity error instead of treating it as unreadable source state:
+
+```bash
+uv run --extra test python -m pytest tests/test_state_recovery.py \
+  -k real_sqlite_history_limit -q
+```
+
+Keep an over-limit backup complete and use the owning storage recovery process;
+do not trim historical transactions to force inspection through this profile.
+The optional browser capacity case accepts a native over-limit archive pair via
+`LOOPX_RECOVERY_HISTORY_OVERFLOW_ARCHIVE` and
+`LOOPX_RECOVERY_HISTORY_OVERFLOW_MANIFEST`, alongside the existing
+`configuration-backup` scenario. It must show refusal and retain the earlier
+historical report. Installed-wheel checks on Python 3.12.13 and 3.13.12 also
+passed normal source-loss inspection and early GNU/PAX sparse/metadata refusal;
+they do not expand the capacity observations or qualify other platforms.
+
+中文：在设置的能力中心选择设备范围，打开既有备份入口并切到“完整归档检查”，
+选择同一份备份的归档与清单，一次明确操作建立隔离副本。可读、仅历史和未知分别
+显示；旧格式始终保留一致性/owner 缺口，不能据此启动 Goal。重载后可读历史报告，
+但历史读回不等于重新验证副本。CLI 不带 `--execute` 只做计划，不虚构 owner 读取结果。
+当前支持本地 POSIX File/SQLite 检查；Windows、服务端 PostgreSQL、身份接纳和实际
+重新启用仍未取得此路径的资格。备份内可能包含私有数据和凭据，副本及上传始终私有。
+
 ## Privacy, consistency and limits
 
 Backups are **private by default**. Full Goal rows can contain private paths,

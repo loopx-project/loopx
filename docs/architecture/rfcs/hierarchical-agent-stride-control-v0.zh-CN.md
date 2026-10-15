@@ -364,6 +364,11 @@ host 先采用新的 execution path。
 
 ### 7.3 与 Todo 和 replan 集成
 
+[唤醒／上下文／纠偏链](agent-session-execution-modes-v0.zh-CN.md#唤醒当前上下文与纠偏构成同一条链)
+使提示文案遵循现有 owner：局部纠偏保留无关工作，扩大范围需要当前相关证据；到期复核
+可以维持路线，纠偏收益需后续工作／结果读回验证。心跳模板不再自设“两次停滞就重规划／
+暂停”，Core 停滞触发及配置的复核节奏不变。
+
 Todo 拥有 bounded postcondition，replan 拥有 direction change。Stride controller
 可以建议 split、merge、continue、settle 或 escalate，但不能关闭 Todo、伪造
 evidence 或清除 replan obligation。
@@ -378,6 +383,12 @@ policy 继续拥有 permission 权限。Supervisor、dashboard 与 scheduler pro
 可以建议干预，但不能静默把 proposal 变成 authority。
 
 ### 7.5 长作业与决策 checkpoint（修订提案）
+
+暂停与唤醒资格判断先于本节观察循环。遵循
+[会话暂停／恢复边界](agent-session-execution-modes-v0.zh-CN.md#暂停恢复与自动下发边界)：
+显式停止解除续跑，依赖等待保留有界观察，已验证 no-follow-up 结束轮询。
+结果事件或计时器不能解除停止，暂停前准入不能沿用到恢复后。实际请求／timer 读回、
+prompt 指导和原在途结算分别资格化。
 
 这项 2026-10-04 修订属于 M3/M5 提案，不代表 adaptive scheduling 已交付。
 需要分开**实验边界**、**模型决策 checkpoint**和**可记账 Turn 边界**。

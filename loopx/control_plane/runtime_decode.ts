@@ -1,5 +1,6 @@
-import type { JsonObject } from "./effect_program.ts";
 import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
+
+export type JsonObject = Record<string, unknown>;
 
 export function jsonObject(value: unknown): JsonObject | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)

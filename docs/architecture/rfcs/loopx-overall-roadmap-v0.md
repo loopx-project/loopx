@@ -136,6 +136,19 @@ qualifies that bounded recovery path; per-call hard budgets, live billing, Deskt
 Automations and multi-Agent acceptance remain separate. This closes no G1 or
 fleet qualification gate.
 
+Automatic dispatch now has a concrete provider checkpoint in the
+[session pause/resume boundary](agent-session-execution-modes-v0.md#pause-resume-and-automatic-dispatch-boundaries):
+Pi and OpenCode fence pre-pause checks; OpenCode 2 gates initial dispatch;
+Core stop and validated closure disarm provider continuation. Codex Goal Chat
+verifies pause readback and rejects late input delivery; Codex App prompt modes
+preserve one-attempt stop/verification and unresolved-stop handling. Controlled adapter,
+filesystem and CLI qualification remain separate from installed host stop latency
+and App-owned heartbeat shutdown. Existing dependency waits retain their owner.
+The same chain now rejects malformed external-worker admission, delivers current
+source context, and routes correction through the existing typed replan owner;
+prompt wake counts no longer authorize replan or self-pause. Source delivery and
+recorded decisions still do not establish model adoption or correction benefit.
+
 ## 3. Portfolio Milestones, Resource Ordering and Completion
 
 S streams describe ongoing ownership, G milestones qualify a product combination, and R cards specify the current core implementation slices. These are cross-references, not a runtime state machine. Progress is evidence-gated rather than date-promised. Changes in capacity or business priority update canonical Todos rather than assuming every stream starts simultaneously.
@@ -1076,9 +1089,16 @@ bytes. Readback runs with the original project/runtime unreachable; missing
 selected-provider storage fails without replacement or File fallback. The
 pre-import backup separately retains original Markdown before later projection.
 This qualifies independent data/history recovery, not identity adoption, pending
-effect disposition or live Host reactivation. Continue those boundaries and the
-packaged App recovery journey through the existing owners. Do not retire the last
-normal Markdown writer or claim the released SQLite default from this checkpoint.
+effect disposition or live Host reactivation. The bounded complete-recovery M1
+inspection now adds `backup-state verify` and a packaged Settings journey: a new
+inert copy, existing File/SQLite Todo/history readers, and explicit readable,
+historical and unknown components. Corrupt inputs, occupied targets and unsafe
+archive paths refuse; a bounded offline worker isolates database verification.
+Source and installed-wheel journeys retain old Goal bytes and never register or
+activate the copy. Legacy capture/owner gaps keep every v0 audit held. Continue
+identity, pending-effect disposition and authorized adoption through the existing
+owners; do not retire the last normal Markdown writer or claim the released
+SQLite default from this inspection checkpoint.
 
 The qualified shadow→canonical archive→isolated File/SQLite restore path retains
 committed dependency archives, terminal lease facts and later canonical writes.

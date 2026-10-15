@@ -101,14 +101,14 @@ def parse_tick(payload: dict[str, Any]) -> TickDecision:
     action = str(hint.get("action") or "").strip()
     cadence_class = str(hint.get("cadence_class") or "").strip()
     reason = str(hint.get("reason") or payload.get("state") or "").strip()
-    should_run = bool(payload.get("should_run"))
+    should_run = payload.get("should_run")
     if _local_scheduler_directive(hint) == LOCAL_SCHEDULER_STOP_DIRECTIVE:
         # Terminal packets intentionally omit cold-path cadence detail: no
         # further wake is legal, so an interval cannot affect the decision.
         # The producer-owned directive covers every stop action without a
         # second consumer-side action vocabulary.
         return TickDecision(
-            should_run=should_run,
+            should_run=False,
             action=action,
             cadence_class=cadence_class,
             reason=reason,
@@ -121,6 +121,12 @@ def parse_tick(payload: dict[str, Any]) -> TickDecision:
             reset_token=_extract_reset_token(payload),
             terminal=True,
         )
+    # Consume the Core boolean, never Python truthiness (e.g. "false" or 1).
+    # The terminal directive above wins even over a malformed admission value.
+    if payload.get("ok") is False:
+        raise ValueError("quota decision failed; refusing model wake")
+    if not isinstance(should_run, bool):
+        raise ValueError("quota should_run must be a boolean; refusing model wake")
     local = _extract_local_scheduler(payload)
 
     progression_values = local.get("example_progression_minutes")

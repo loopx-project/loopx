@@ -139,6 +139,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/runtime/usage_statistics_cycles.ts",
   "control_plane/runtime/usage_statistics_goal_contract.ts",
   "control_plane/runtime/usage_statistics_goals.ts",
+  "control_plane/state_recovery_contract.ts",
   "control_plane/todos/completion_transaction.ts",
   "control_plane/todos/completion_validation_revision.ts",
   "control_plane/turn_driver/chat_turn_acceptance.ts",

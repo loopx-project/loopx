@@ -112,6 +112,8 @@ If that preflight still fails: no work/spend; quiet `DONT_NOTIFY`.
 
 {USER_TODO_FINAL_MESSAGE_RULE}
 {HEARTBEAT_VISION_WRITEBACK_RULE_SHORT}
+{SCHEDULER_HINT_APPLICATION_RULE} App automation cadence changes are host
+scheduling updates only; they never consume quota or authorize delivery work.
 
 If the result says `should_run=false`:
 
@@ -149,8 +151,6 @@ If the result says `should_run=false`:
 - Otherwise, do not do implementation work, adapter work, file edits, research,
   or project exploration in this turn. Return a quiet heartbeat `DONT_NOTIFY`
   response with the skip reason.
-  {SCHEDULER_HINT_APPLICATION_RULE} App automation cadence changes are host
-  scheduling updates only; they never consume quota or authorize delivery work.
 
 If the result says `should_run=true`:
 
@@ -201,9 +201,9 @@ If the result says `should_run=true`:
    Check `delivery_batch_scale`, `delivery_outcome`,
    `post_handoff_outcome_gap_streak`, and `handoff_delivery_contract`; for
    repeated-small or surface-only loops, obey the contract.
-2. Run a short steering audit before choosing work: list at least three
-   plausible next-action candidates across different P0/P1/P2 lanes when
-   useful; if the same topic has consumed several recent delivery slices, apply
+2. Run a short steering audit when new evidence or a projected review warrants
+   changing the selected work; compare relevant alternatives without a fixed
+   candidate count. If the same topic has consumed several recent delivery slices, apply
    a continuation check and state why continuing still wins; keep compute quota
    separate from focus quota; record any losing high-value candidate that should
    not be forgotten. Include a product bottleneck lens: ask whether the core
@@ -211,15 +211,11 @@ If the result says `should_run=true`:
    evidence quality, adapter readiness, or priority-rule gaps, and promote one
    concrete bottleneck candidate when it should outrank the nearest local TODO.
    Plan/top todo/route changes need todo/Next Action writeback or no-writeback rationale.
-3. Run the no-progress self-repair check before choosing delivery work. Obey
-   any machine-readable `autonomous_replan_obligation` or
-   `execution_obligation.must_attempt_work=true` from `quota should-run`; that
-   hard contract overrides a quiet no-op. Count a turn as no-progress only when
-   it produced no substantive artifact, adapter/implementation progress,
-   gate/user decision, or validation signal. If 2 consecutive eligible
-   heartbeats are no-progress loops, run one bounded self-repair/replan segment
-   before another quiet no-op. Delete/pause only when that repair path is stuck
-   for 2 more eligible turns; no spend for the self-cancel turn.
+3. Run the no-progress self-repair check against current evidence. Obey
+   `autonomous_replan_obligation`, `replan_action_packet` and
+   `execution_obligation.must_attempt_work` from the guard. Preserve valid work;
+   reconcile ambiguous effects before retry. Wake counts do not authorize replan
+   or self-pause; obey explicit/Core/host stops, with original settlement still owed.
 4. {SCOPE_BOUNDED_WORK_RULE}
    Related work can form a coherent effort; a focused correction may suffice.
 5. Execute that scoped work. Stay inside `goal_boundary` when present.
@@ -318,11 +314,11 @@ Fail:quiet.
 {HEARTBEAT_NOTIFICATION_RULE_SHORT}
 {SCOPE_BOUNDED_WORK_RULE}
 {HEARTBEAT_VISION_WRITEBACK_RULE_SHORT}
+{SCHEDULER_HINT_THIN_RULE}
 
 `should_run=false`: follow user channel; `monitor_quiet_skip` records
 receipt/stall. Wait: one read-only poll; only new evidence permits
 writeback/spend; retry the same id.
-{SCHEDULER_HINT_THIN_RULE}
 `agent_read_required`: drain/read/triage before work; settle/ACK.
 
 `should_run=true`: read compact, `status --limit 3`, and
@@ -430,12 +426,12 @@ If `should_run=true`:
    Check `delivery_batch_scale`, `delivery_outcome`,
    `post_handoff_outcome_gap_streak`, `handoff_delivery_contract`; obey
    repeated-small/surface-loop contracts.
-5. Run steering audit: compare P0/P1/P2, continuation checks,
+5. Run steering audit on new evidence/projected review: relevant P0/P1/P2 alternatives, continuation checks,
    compute/focus quota, bottleneck lens.
-6. no-progress self-repair: obey `autonomous_replan_obligation` or
-   `execution_obligation.must_attempt_work=true`; after 2 eligible stall
-   heartbeats with only status/brief checks, replan before quiet no-op.
-   Pause/delete only if repair stays stuck 2 more turns.
+6. no-progress self-repair: follow `autonomous_replan_obligation` and
+   `replan_action_packet`; preserve valid work; reconcile ambiguous effects before
+   retry. No wake-count replan or self-pause; explicit/Core/host stops and original
+   settlement still apply.
 7. {SCOPE_BOUNDED_WORK_RULE}
    {HOST_LOOP_SAFETY_RULE}
 8. Validate; write files/validation/critic/next action to active state;
@@ -696,7 +692,7 @@ their exact identity. Do not guess commands from abbreviated previews.
 Writeback needs outcome and vision; unchanged reason requires an existing
 current evidence-linked vision. Missing vision after writeback -> same-Turn
 checkpoint-context then evidence; stale -> reread. Done -> complete Todo; waiting -> monitor and
-successor. Two stalls -> replan. P0 blocked -> safe P1/P2; quiet polls do not spend.
+successor. P0 blocked -> safe P1/P2; quiet polls do not spend.
 `agent_read_required`: read/triage before work, settle/ACK.
 {reward_memory_rule}
 {policy_tail}"""
@@ -717,7 +713,7 @@ LOOPX_TURN=<current_time_iso>
 {RUNTIME_CAPABILITY_PROJECTION_THIN_RULE}
 {SCHEDULER_HINT_THIN_RULE}
 {HEARTBEAT_VISION_WRITEBACK_RULE_SHORT}
-Done->todo/rationale; wait->monitor+successor/work; guard; 2 stalls->replan.
+Done->todo/rationale; wait->monitor+successor/work; re-enter guard.
 `agent_read_required`: drain/read/triage before work; settle/ACK.
 
 P0 blocked: safe P1/P2; monitor quiet/no-spend.
