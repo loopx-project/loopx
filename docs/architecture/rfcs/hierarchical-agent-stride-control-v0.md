@@ -932,8 +932,19 @@ checks the session's actual workspace and current source binding/profile, and re
 probe. A later source Turn in the read-to-probe gap is rejected; the artifact
 owner's witness checks cover subsequent writes. It seals rollout/index/paged
 stores and verifies native forks at fixed guest paths. These source-basis checks
-are qualified separately from research utility. An explicit source-checkout
-controller now prepares a verified fork through the existing registry/session
+are qualified separately from research utility.
+
+Both completed-wake and interrupted-replan benchmark capture reuse the existing
+native inspection process across the two full reads and keep it open through
+artifact sealing or controller handoff. Native shutdown can checkpoint SQLite;
+closing it between the byte probe and sealing can invalidate the source witness.
+This changes inspection lifetime only: history pagination, cursor/profile
+freshness, byte witnesses, optional activation and the original capture/phase
+deadlines remain unchanged. Reduced preflight cost does not establish sustained
+capture reliability for growing histories or qualify a later receiver point.
+
+An explicit source-checkout controller now prepares a verified fork through the
+existing registry/session
 owners, with distinct registered Goal/Agent identities and a matching captured
 session profile. The registry fence guards configuration through the binding write;
 existing lifetime semantics remain. The lifecycle-only source-session profile

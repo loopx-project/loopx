@@ -755,7 +755,14 @@ quota guard，在模型调用前捕获 wake 开始已投影的准入 replan，�
 Codex 读取完整历史、核对会话真实工作区及当前 source binding/profile，并在字节 probe 后复查。读取
 到 probe 之间出现的后续 source Turn 会拒绝；之后的写入由产物 witness 校验
 拦截。它封存 rollout/索引/分页库并验证固定 guest 路径下的原生分叉；来源基准
-校验不等于研究收益。显式 source-checkout controller 现可通过既有 registry/
+校验不等于研究收益。已结算 wake 与中途 replan 的 benchmark 捕获共用既有
+native 读取进程，执行两次完整读取，并保持到产物封存或 controller handoff
+完成；native 退出可能 checkpoint SQLite，不能在字节 probe 与封存之间退出，
+使自身校验基准失效。这只调整读取进程的生命周期，保持分页历史、cursor/profile
+新鲜度、字节 witness、显式开启及原捕获/phase deadline。预检成本下降尚不证明
+增长历史下的持续捕获可靠性，也不等于后继点 receiver 验收。
+
+显式 source-checkout controller 现可通过既有 registry/
 session owner 准备已验证 fork，要求不同且已注册的 Goal/Agent 身份与匹配的
 捕获 session profile。Registry fence 保护配置复查到绑定写入，保持原有 profile
 的 lifetime 语义；lifecycle-only source-session profile 不能运行 governed 工作，
