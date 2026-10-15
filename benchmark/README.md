@@ -845,6 +845,15 @@ native-judge owners. It preserves the captured workspace and effective Codex
 configuration, admits a distinct native session and fresh Goal/Agent, and adopts
 retained research as evidence on a current preparation Todo. Historical registry,
 claims, leases and settlement records are not installed as current authority.
+If the sealed context contains Explore events, adoption also seeds the fresh
+Goal's ordinary Explore log. Nodes, findings, scoped counterexamples, topology,
+original attribution and timestamps survive, with each event bound to the
+checkpoint digest and source event through its opaque run reference. Operational
+research-observation lineage stays in the archive; it is not destination
+execution proof. Recovery accepts only the same immutable initial prefix, may
+finish a partial prefix, and never reapplies old statuses after newer evidence.
+Malformed, foreign or interleaved destination history rejects before model work.
+Legacy context-only points keep their original continuation behavior.
 Fresh credentials come from the ordinary runner credential source. The native
 activation's absolute deadline includes receiver installation and preparation;
 restarting the entry cannot grant another full budget or submission allowance.

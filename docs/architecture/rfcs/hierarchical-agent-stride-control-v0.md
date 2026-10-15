@@ -984,11 +984,17 @@ real native processes and deterministic local inference. Scientific utility,
 actual task/profile admission and the frontend journey remain unqualified.
 See the [warm entry contract](../../../benchmark/README.md#explicit-warm-worker-composition-qualification-in-progress).
 
-Retaining historical research files is not yet equivalent to delivering that
-research in the current typed review. Remaining continuation acceptance must
-show source-bound findings, counterevidence and prior decision followthrough at
-the first current replan, with distinct current authority. An empty destination
-projection cannot establish that the retained research is absent. The strategy's
+Retaining historical research files alone does not deliver them to a current
+typed review. Explicit warm-context adoption now seeds the fresh Goal's Explore
+knowledge log from the verified source, preserving scoped findings, counterevidence
+and topology with checkpoint/event provenance. The existing result-log owner
+guards ordered-prefix recovery; newer destination evidence is never overwritten.
+Historical research-observation execution lineage remains inert in the archive.
+The synthetic joined receiver exercises a current review citing a retained
+counterexample. Scientific continuation still needs actual first/next review
+readback and prior-decision followthrough; importing facts cannot certify model
+judgment or revive source decision authority. An empty destination projection
+cannot establish that retained research is absent. The strategy's
 existing three-axis guidance now asks for a discriminating observation, checks
 that an intervention actually changes relevant behavior, and distinguishes
 non-execution from failed transfer or limited route potential. These questions
