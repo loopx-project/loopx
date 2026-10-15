@@ -111,13 +111,21 @@ binding or unreadable source prevents later result delivery.
 
 When an ordinary Codex topic has no active Turn, `/stop` also covers background
 commands left by completed Turns in that same canonical Session, even after a
-later answer. Core freezes those completed Turn identities before cancellation.
+later answer. Core freezes the original Session and canonical candidate Turn
+identities in the existing request journal **before** native inventory or
+transport resume can fail. Native observation may only narrow that frozen set;
+a retry cannot add later completed/active Turns or switch to a newer Session.
+A recovered legacy request without a recorded target has unknown original scope;
+Core rejects retargeting and preserves it unconfirmed. A fresh stop is a separate
+user request, never an automatic replacement for the unknown one.
 An active Turn keeps its existing exact stop path; unavailable historical item
 inventory cannot prevent that interruption or widen its target to earlier work.
 Native command-item and terminal readback scopes the effects; unknown terminals,
 other Topics and completed answer receipts remain intact. Replaying the stop
-does not select newer work. Unavailable control or incomplete readback keeps the
-original stop unconfirmed rather than reporting an idle topic. This extends the
+does not select newer work. If `/new` has deliberately closed the original
+Session, its pending stop stays unconfirmed; recovery does not reopen it or
+borrow control of the replacement Session. Unavailable control or incomplete
+readback keeps the original stop unconfirmed rather than reporting an idle topic. This extends the
 existing Lark command; active-Turn HTTP/frontend control and attached or native
 Goal hosts retain their separate contracts. Synthetic provider/Core and real
 child-process regressions qualify this source slice; installed host adoption,

@@ -16,6 +16,20 @@ const current = {schema_version: "loopx_chat_conversation_bindings_v0", revision
 const request = {current, expected_revision: 0, operation: "configure", binding: row, observation,
   available_projects: [project]};
 
+test("an unfrozen recovered stop cannot borrow current cancellation scope", () => {
+  const request = {request_ref: "e".repeat(24), command: "stop"};
+  const current = {session_id: "new-session", active_turn_id: "new-active"};
+  assert.throws(() => planBoundConversationRequest({request, current_session: current,
+    recovering_request: true, background_turn_ids: ["new-background"]}), /original stop scope was not recorded/);
+  assert.equal(planBoundConversationRequest({request, current_session: current,
+    recovering_request: false}).turn_id, "new-active");
+  assert.deepEqual(planBoundConversationRequest({request: {...request, target_recorded: true,
+    session_id: "original", turn_id: null, background_turn_ids: ["old"]},
+    current_session: current, recovering_request: true, background_turn_ids: ["new-background"]}), {
+    operation: "stop", session_id: "original", turn_id: null,
+    background_turn_ids: ["old"], response_code: "stop_requested"});
+});
+
 test("group topics require an observed App membership and cannot inherit private recipients or portfolio", () => {
   const group = "1".repeat(24), topic = "2".repeat(24);
   const configure = {...request, binding: {...row, audience: "group", group_refs: [group]},

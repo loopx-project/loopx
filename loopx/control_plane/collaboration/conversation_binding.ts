@@ -386,6 +386,11 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
       response_code: "unsupported_attachment"};
   }
   if (command === "stop" || command === "new") {
+    if (command === "stop" && params.recovering_request === true && row.target_recorded !== true) {
+      // Older prepared journals may predate freezing before inventory. Their
+      // original scope is unknown; current work cannot reconstruct that intent.
+      throw new EffectRuntimeRequestError("the original stop scope was not recorded");
+    }
     const rawBackground = command === "stop"
       ? (row.target_recorded === true ? row.background_turn_ids : params.background_turn_ids) ?? [] : [];
     if (!Array.isArray(rawBackground)) throw new EffectRuntimeRequestError("invalid background Turn observation");
