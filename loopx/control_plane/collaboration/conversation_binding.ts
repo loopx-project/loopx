@@ -386,8 +386,16 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
       response_code: "unsupported_attachment"};
   }
   if (command === "stop" || command === "new") {
+    const rawBackground = command === "stop"
+      ? (row.target_recorded === true ? row.background_turn_ids : params.background_turn_ids) ?? [] : [];
+    if (!Array.isArray(rawBackground)) throw new EffectRuntimeRequestError("invalid background Turn observation");
+    const background = rawBackground.map(value => sessionIdentity(value, "completed background Turn"));
+    if (new Set(background).size !== background.length || (background.length && (!session || params.agent_target))) {
+      throw new EffectRuntimeRequestError("background Turns require the original ordinary Session");
+    }
     return {operation: command, session_id: session, turn_id: turn,
-      response_code: command === "new" ? "new_session" : turn ? "stop_requested" : "no_active_turn"};
+      ...(background.length ? {background_turn_ids: background} : {}),
+      response_code: command === "new" ? "new_session" : turn || background.length ? "stop_requested" : "no_active_turn"};
   }
   return {operation: "admit_turn", client_turn_id: `external-${request}`, session_id: session, turn_id: null};
 }

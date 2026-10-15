@@ -346,7 +346,8 @@ def test_probe_reclaims_persistent_descendants_before_return(tmp_path, monkeypat
     # startup are not constrained by a deadline for deliberately blocked probes.
     if mode not in {"timeout_default", "exit_closed"}:
         monkeypatch.setattr(diagnostics, "PROBE_TIMEOUT_SECONDS", .5)
-    child_script = f"import time; time.sleep({child_startup_delay!r})\nimport pathlib, sys, os; p=pathlib.Path(sys.argv[1]); p.write_text(str(os.getpid())); n=0\nwhile True:\n n+=1; p.with_suffix('.pulse').write_text(str(n)); time.sleep(.01)"
+    # Publishing the ready PID must imply that the first pulse already exists.
+    child_script = f"import time; time.sleep({child_startup_delay!r})\nimport pathlib, sys, os; p=pathlib.Path(sys.argv[1]); p.with_suffix('.pulse').write_text('0'); p.write_text(str(os.getpid())); n=0\nwhile True:\n n+=1; p.with_suffix('.pulse').write_text(str(n)); time.sleep(.01)"
     path = tmp_path / "child.pid"
     parent = "import subprocess,sys,time,pathlib,os; p=pathlib.Path(sys.argv[1]); c=subprocess.Popen([sys.executable,'-c',sys.argv[2],str(p)],stdout=subprocess.DEVNULL if sys.argv[3]=='exit_closed' else None,stderr=subprocess.DEVNULL if sys.argv[3]=='exit_closed' else None)\nwhile not p.exists(): time.sleep(.01)\nif sys.argv[3]=='output_limit': print('x'*70000,flush=True)\nif sys.argv[3].startswith('exit'): sys.exit(0)\ntime.sleep(30)"
     for _ in range(2):

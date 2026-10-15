@@ -5,6 +5,8 @@ import {goalWorkspaceCreateScenario} from "./personal-workspace-browser/goal-wor
 import {agentModelSelectionScenario} from "./personal-workspace-browser/agent-model-selection.mjs";
 import {goalWorkspaceM2Scenario} from "./personal-workspace-browser/goal-workspace-m2.mjs";
 import {goalWorkspaceSelectionScenario} from "./personal-workspace-browser/goal-workspace-selection.mjs";
+import {sinceYouLookedScenario} from "./personal-workspace-browser/since-you-looked.mjs";
+import {sinceYouLookedLiveScenario} from "./personal-workspace-browser/since-you-looked-live.mjs";
 import {firstGoalHomeScenario} from "./personal-workspace-browser/first-goal-home.mjs";
 import {runtimeReadinessScenario} from "./personal-workspace-browser/runtime-readiness.mjs";
 import {runtimeReadinessLiveScenario} from "./personal-workspace-browser/runtime-readiness-live.mjs";
@@ -114,6 +116,8 @@ scenarioCatalog.push(zcodeGoalScenario);
 scenarioCatalog.push(goalWorkspaceM2Scenario);
 scenarioCatalog.push(goalWorkspaceCreateScenario);
 scenarioCatalog.push(goalWorkspaceSelectionScenario);
+scenarioCatalog.push(sinceYouLookedScenario);
+scenarioCatalog.push(sinceYouLookedLiveScenario);
 scenarioCatalog.push(firstGoalHomeScenario);
 scenarioCatalog.push(runtimeReadinessScenario);
 scenarioCatalog.push(runtimeReadinessLiveScenario);
