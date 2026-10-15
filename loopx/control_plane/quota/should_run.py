@@ -14,6 +14,7 @@ from ...quota import (
 from ..agents.agent_scope import (
     _attach_agent_identity_contracts,
 )
+from ..agents.agent_scope_frontier import AgentScopeFrontierAction
 from ..agents.identity import (
     build_quota_agent_identity,
 )
@@ -82,7 +83,11 @@ def _apply_selected_todo_guards(
 
     # Replan owns this Turn without selecting a delivery Todo. Both guard
     # helpers can fall back to a recommendation when given no selection.
-    if route.replan_decision_allowed:
+    if (
+        route.replan_decision_allowed
+        or route.effective_action
+        == AgentScopeFrontierAction.SUCCESSOR_REPLAN_REQUIRED.value
+    ):
         return route
 
     selected_todo = selected_todo_projection(

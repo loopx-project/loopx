@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { goalExecution, goalWorkKind, presentGoalActivity } from "../../../node_modules/.cache/loopx-goal-activity/goal-activity.js";
+import { goalExecution, goalWorkKind, presentGoalActivity, taskSessionStatus } from "../../../node_modules/.cache/loopx-goal-activity/goal-activity.js";
 
 // One Goal's session facts, mixed by mode. `updated_at` stands for the time the
 // owner last recorded anything for that session.
@@ -134,4 +134,18 @@ assert.equal(presentGoalActivity({activationState: "stopped", execution: unknown
 const observed = executionOf([session("unknown", "future_mode", recent)], hostObservation(recent));
 assert.equal(goalWorkKind({execution: observed}), "executing", "Independent host observation still establishes execution");
 
-console.log("Goal execution read-model invariants passed");
+// Historical answers and Todo completion cannot close a later active or failed Session.
+for (const [scenario, activeTurnId, status, done, hasResult, expected] of [
+  ["active follow-up with an earlier answer", "turn-new", "busy", false, true, "running"],
+  ["active follow-up on a completed Todo", "turn-new", "busy", true, true, "running"],
+  ["failed resume with an earlier answer", null, "resume_failed", false, true, "failed"],
+  ["failed resume on a completed Todo", null, "resume_failed", true, true, "failed"],
+  ["fresh active execution", "turn-new", "busy", false, false, "running"],
+  ["finished execution retaining its answer", null, "ready", false, true, "completed"],
+  ["completed Todo without a Session answer", null, "ready", true, false, "completed"],
+  ["open work without a result", null, "ready", false, false, "waiting"],
+]) {
+  assert.equal(taskSessionStatus({ active_turn_id: activeTurnId, status }, { done, hasResult }), expected, scenario);
+}
+
+console.log("Goal and task execution read-model invariants passed");

@@ -4,7 +4,10 @@
     "sk-abcdefghijklmnop0123",
     "ghp_abcdefghijklmnopqrstuvwx",
     "eyJabcdefghijk.abcdefghijk.abcdefghijk",
-    "C:/Users/alice/private.txt"
+    "C:/Users/alice/private.txt",
+    "path:/Users/alice/private.txt",
+    "file:///Users/alice/private.txt",
+    "file:/Users/alice/private.txt"
   ],
   "unsafe_identity_tokens": [
     "sk-abcdefghijklmnop0123",

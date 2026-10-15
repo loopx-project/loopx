@@ -1332,11 +1332,27 @@ def test_managed_runtime_releases_memory_after_idle_timeout(
 
 @pytest.mark.parametrize("shutdown", [False, True], ids=["idle", "shutdown"])
 @pytest.mark.parametrize("disconnect", [False, True], ids=["connected", "timed-out"])
+@pytest.mark.parametrize("cache_fault", [None, "blocked", "throws"], ids=["cache", "blocked-cache", "failed-cache"])
 def test_runtime_drains_admitted_write_before_exit(
     tmp_path: Path, monkeypatch, request, capsys, shutdown: bool, disconnect: bool,
+    cache_fault: str | None,
 ) -> None:
     """Socket lifetime must not define the lifetime of an accepted effect."""
-    _, captures = observe_copied_runtime(tmp_path, monkeypatch, request)
+    root, captures = observe_copied_runtime(tmp_path, monkeypatch, request)
+    if cache_fault:
+        # Exercise cache failure even under an outer coverage/disabled-cache run,
+        # using only this fixture's private cache rather than an inherited one.
+        monkeypatch.delenv("NODE_DISABLE_COMPILE_CACHE", raising=False)
+        monkeypatch.delenv("NODE_COMPILE_CACHE", raising=False)
+        monkeypatch.setenv("NODE_V8_COVERAGE", "")
+        # Fault only the optional cache call in this disposable real server.
+        # The accepted write, result transport and locator locks stay real.
+        cache = root / "effect_runtime_compile_cache.ts"
+        source = cache.read_text()
+        assert source.count("flushCompileCache();") == 1
+        fault = ('Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60_000);'
+                 if cache_fault == "blocked" else 'throw new Error("fixture cache failure");')
+        cache.write_text(source.replace("flushCompileCache();", fault, 1))
     runtime_dir = tmp_path / "runtime"
     monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
     monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "250")
@@ -1406,6 +1422,12 @@ def test_runtime_drains_admitted_write_before_exit(
             while info_path.exists() and time.monotonic() < deadline:
                 time.sleep(0.025)
             assert not info_path.exists(), "settled runtime must still retire when idle or stopped"
+            while time.monotonic() < deadline:
+                effect_runtime._reap_exited_runtime_child(info)
+                if not effect_runtime._pid_is_alive(original["pid"]):
+                    break
+                time.sleep(0.025)
+            assert not effect_runtime._pid_is_alive(original["pid"]), "retirement must release the runtime process"
             assert json.loads(journal_path.read_text(encoding="utf-8")) == journal
             assert capsys.readouterr().out == "", "healthy drains must stay quiet"
     except Exception as error:
@@ -1459,6 +1481,7 @@ def test_runtime_drain_io_failure_reports_cause_without_suppressing_error(
     with pytest.raises(effect_runtime.EffectRuntimePermanentIOError):
         test_runtime_drains_admitted_write_before_exit(
             tmp_path, monkeypatch, request, capsys, shutdown=True, disconnect=False,
+            cache_fault=None,
         )
     output = capsys.readouterr().out
     prefix = "runtime drain diagnostic: "

@@ -1487,6 +1487,63 @@ def test_install_disable_upgrade_and_rollback_preserve_verified_binding(
     ]
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize(
+    "damage",
+    ["legacy", "invalid_history", "missing_revision", "invalid_manifest", "no_proof", "forged_proof"],
+)
+def test_status_reads_unverified_records_without_affecting_healthy_extensions(
+    tmp_path: Path, damage: str, enabled: bool,
+) -> None:
+    provider = _provider(tmp_path / "provider")
+    state_file = tmp_path / "extensions.json"
+    for extension_id in ("test-semantic-extension", "healthy-extension"):
+        manifest = _manifest(
+            tmp_path / f"{extension_id}.toml", entrypoint=provider,
+            version="1.0.0", extension_id=extension_id,
+        )
+        install_extension(manifest, state_file=state_file, execute=True)
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    entry = state["extensions"]["test-semantic-extension"]
+    if damage == "legacy":
+        entry.clear()
+        entry["id"] = "test-semantic-extension"
+    elif damage == "invalid_history":
+        entry["revisions"] = {}
+    elif damage == "missing_revision":
+        entry["revisions"] = []
+    elif damage == "invalid_manifest":
+        entry["revisions"][0]["manifest"] = None
+    elif damage == "no_proof":
+        entry.pop("doctor_verified_revision")
+    else:
+        entry["doctor_verified_entrypoint_identities"] = ["unprobed-entrypoint"]
+    entry["enabled"] = enabled
+    state_file.write_text(json.dumps(state), encoding="utf-8")
+    original = state_file.read_bytes()
+
+    statuses = extension_status(state_file=state_file)["extensions"]
+    by_id = {status["id"]: status for status in statuses}
+    assert by_id["healthy-extension"]["doctor_verified"] is True
+    assert by_id["test-semantic-extension"]["enabled"] is enabled
+    assert by_id["test-semantic-extension"]["doctor_verified"] is False
+    assert extension_status(
+        state_file=state_file, extension_id="test-semantic-extension",
+    )["extensions"] == [by_id["test-semantic-extension"]]
+    with pytest.raises(ValueError):
+        resolve_extension_activation("test-semantic-extension", state_file=state_file)
+    with pytest.raises(ValueError):
+        resolve_extension_binding(
+            "test-semantic-extension", state_file=state_file,
+            capability_id="semantic-preference", protocol="semantic_preference_provider_v0",
+            permission="semantic_preference.read",
+        )
+    if damage in {"legacy", "invalid_history", "missing_revision", "invalid_manifest"}:
+        with pytest.raises(ValueError):
+            enable_extension("test-semantic-extension", state_file=state_file, execute=True)
+    assert state_file.read_bytes() == original
+
+
 def test_installed_snapshot_fails_closed_when_the_runtime_api_moves(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
