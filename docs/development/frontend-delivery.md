@@ -177,9 +177,11 @@ crash recovery or an already-installed App's adoption of a proposed PR.
 
 PR CI builds and verifies a clean bundle once, then uploads
 `chat-bundle-<checkout SHA>`. Consumers download that one artifact, and
-`chat-bundle-browser` exercises its actual pages in a browser in parallel. The
-`checks` aggregate requires that browser lane, so `merge-gate` cannot pass on
-an artifact that failed browser qualification. Both frontend-only and
+`chat-bundle-browser` exercises its actual pages in a browser across three
+parallel shards of the scenario catalog (`LOOPX_PERSONAL_WORKSPACE_SHARD`), with
+the companion team, craft, upgrade and ZCode smokes spread over the shards. The
+`checks` aggregate requires every shard, so `merge-gate` cannot pass on an
+artifact that failed browser qualification. Both frontend-only and
 mixed/backend PRs pass through this producer. On pull requests the checkout SHA is GitHub's tested merge commit, which
 may differ from the branch head. Generated-file Git cleanliness is no longer a
 qualification gate. Browser, integrity and workflow gates remain required.
