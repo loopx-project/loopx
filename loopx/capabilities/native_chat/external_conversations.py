@@ -185,7 +185,9 @@ class ChatExternalConversations:
                 return row
         from ...control_plane.effect_runtime import effect_runtime_result
         observations = {}
-        if row["command"] == "stop" and current and not row.get("target_recorded") and not target:
+        if (row["command"] == "stop" and current and not current.get("active_turn_id")
+                and not row.get("target_recorded") and not target):
+            # Historical inventory must not gate the existing active-Turn stop.
             from .codex_background_control import completed_background_turns
             observations["background_turn_ids"] = completed_background_turns(controller, current["session_id"])
         if row["command"] in {"status", "help"}:

@@ -109,9 +109,11 @@ target that topic. Admission feedback, streamed posts, terminal edits and receip
 recovery use the existing delivery path with `source_thread` placement. A revoked
 binding or unreadable source prevents later result delivery.
 
-Ordinary Codex topic `/stop` also covers background commands left by completed
-Turns in that same canonical Session, even after a later answer. Core freezes
-those completed Turn identities with the active target before cancellation.
+When an ordinary Codex topic has no active Turn, `/stop` also covers background
+commands left by completed Turns in that same canonical Session, even after a
+later answer. Core freezes those completed Turn identities before cancellation.
+An active Turn keeps its existing exact stop path; unavailable historical item
+inventory cannot prevent that interruption or widen its target to earlier work.
 Native command-item and terminal readback scopes the effects; unknown terminals,
 other Topics and completed answer receipts remain intact. Replaying the stop
 does not select newer work. Unavailable control or incomplete readback keeps the

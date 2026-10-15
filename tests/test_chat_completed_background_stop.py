@@ -1,6 +1,7 @@
 """Original-topic stop after a final answer; synthetic wire, real child processes."""
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -95,6 +96,55 @@ def test_idle_topic_stop_finds_earlier_completed_commands_and_keeps_receipts_and
     finally:
         wire.close()
         runtime.close()
+
+
+def test_active_topic_stop_is_not_gated_by_unrelated_completed_history(ordinary, monkeypatch):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    root = provider.topic("completed-history", "First completed answer")
+    transport.admit("notes-app", root)
+    first = finish_group_turn(runtime, transport, message=root["content"])
+    sid = first["session_id"]
+    completed = store.load_turn(sid, first["turn_id"])
+    old_native = completed["upstream_turn_id"]
+    foreign = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    session = runtime.adapters[sid].session
+    original, calls = session._write, []
+
+    def write(packet):
+        method, params = packet["method"], packet["params"]
+        calls.append((method, params))
+        if method == "thread/backgroundTerminals/list":
+            result = {"data": [{"itemId": "foreign-command", "processId": str(foreign.pid)}]}
+        elif method == "thread/items/list" and params.get("turnId") == old_native:
+            session.messages.put({"id": packet["id"], "error": {"message": "old history unavailable"}})
+            return
+        else:
+            return original(packet)
+        session.messages.put({"id": packet["id"], "result": result})
+
+    monkeypatch.setattr(session, "_write", write)
+    try:
+        active = provider.topic("active-after-history", "wait for interrupt", root=root["message_id"])
+        transport.admit("notes-app", active)
+        row = next(r for r in transport.core.pending() if r["message"] == active["content"])
+        deadline = time.monotonic() + 10
+        while not (store.load_turn(sid, row["turn_id"])["status"] == "running"
+                   and store.load_turn(sid, row["turn_id"]).get("upstream_turn_id")):
+            assert time.monotonic() < deadline
+            time.sleep(.01)
+        native = store.load_turn(sid, row["turn_id"])["upstream_turn_id"]
+        stop = provider.topic("stop-active-with-history", "/stop", root=root["message_id"])
+        assert transport.admit("notes-app", stop)["status"] == "command_recorded"
+        assert runtime.wait_for_turn(session_id=sid, turn_id=row["turn_id"], timeout_sec=10)["status"] == "interrupted"
+        assert any(m == "turn/interrupt" and p["turnId"] == native for m, p in calls)
+        assert not any(m == "thread/items/list" and p["turnId"] == old_native for m, p in calls)
+        assert foreign.poll() is None and store.load_turn(sid, first["turn_id"]) == completed
+    finally:
+        monkeypatch.setattr(session, "_write", original)
+        runtime.close()
+        if foreign.poll() is None:
+            foreign.terminate()
+        foreign.wait(timeout=5)
 
 
 @pytest.mark.parametrize("failure", ["thread/backgroundTerminals/list", "thread/items/list",
