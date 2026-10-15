@@ -38,7 +38,7 @@ export const firstGoalHomeScenario = {
     const coverageEntries = [];
     const session = await openWorkspacePage(browser, url, { collectCoverage, viewport: { width: 1440, height: 900 },
       beforeGoto: (api) => { api.transformStatus = (fixture) => emptyWorkspace(fixture); } });
-    const { page } = session;
+    const { api, page } = session;
     // "Sends nothing" means no Turn is created. Session admission on focus is
     // not a send, so only turn creation and steering count.
     const turnRequests = [];
@@ -74,6 +74,30 @@ export const firstGoalHomeScenario = {
       await page.screenshot({ path: resolve(outputDir, "first-goal-home-create.png"), animations: "disabled" });
       await page.keyboard.press("Escape");
       await form.waitFor({ state: "hidden", timeout: 10_000 });
+
+      // A warm refresh that fails is not an empty workspace: both status reads
+      // answer HTTP 500, the invitation is withdrawn, the failure is shown with
+      // a retry, and the header never reports an update. Repairing the source
+      // and retrying restores the first-Goal state.
+      api.statusFailure = 500;
+      const refresh = page.getByRole("button", { name: "刷新状态", exact: true });
+      await refresh.click();
+      const sourceRetry = page.getByTestId("personal-source-retry");
+      await sourceRetry.waitFor({ state: "visible", timeout: 15_000 });
+      assert.equal(await firstGoal.count(), 0, "A failed read withdraws the first-Goal invitation");
+      const failedBanner = page.locator(".personal-system-health-banner");
+      assert.match(await failedBanner.innerText(), /状态来源读取失败/, "The failure is shown in owner language");
+      assert.match(await failedBanner.innerText(), /最近一次读取失败：/);
+      const headerStatus = page.locator(".personal-channel-title, header").first();
+      await page.locator("small", { hasText: "刷新失败" }).first().waitFor({ state: "visible", timeout: 10_000 });
+      assert.equal(await page.locator("small", { hasText: "刚刚更新" }).count(), 0, "A failed refresh never reports an update");
+      void headerStatus;
+      await page.screenshot({ path: resolve(outputDir, "first-goal-home-source-failed.png"), animations: "disabled" });
+      api.statusFailure = null;
+      await sourceRetry.click();
+      await firstGoal.waitFor({ state: "visible", timeout: 15_000 });
+      assert.equal(await page.locator(".personal-system-health-banner").count(), 0, "A repaired source clears the failure");
+      await page.locator("small", { hasText: "刚刚更新" }).first().waitFor({ state: "visible", timeout: 10_000 });
 
       // English copy and the phone composition.
       await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "en"));

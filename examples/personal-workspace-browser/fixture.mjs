@@ -446,6 +446,8 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
     failNextLifecyclePreview: false,
     failNextActionPreview: false,
     failNextStatusRequest: false,
+    /** When set, every status read answers this HTTP status until cleared: a source that cannot be projected. */
+    statusFailure: null,
     freezeGoalSubagentStatusProjection: false,
     goalSubagentConfigurationEnabled,
     goalActivationStates: new Map([
@@ -503,6 +505,10 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
   };
   await page.route(`http://127.0.0.1:${fixturePort}/status.json*`, async (route) => {
     state.statusRequestCount += 1;
+    if (state.statusFailure) {
+      await route.fulfill({ contentType: "application/json", json: { ok: false, error: "LoopX status could not be projected for the workspace." }, status: state.statusFailure });
+      return;
+    }
     const requestUrl = new URL(route.request().url());
     const requestedGoalId = requestUrl.searchParams.get("goal_id");
     if (progressiveWorkspace && requestUrl.searchParams.get("view") === "workspace-directory") {

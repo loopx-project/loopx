@@ -439,8 +439,13 @@ export type WorkspaceSystemHealth = {
   freshnessWarning?: string | null;
   issues: string[];
   ok: boolean;
+  /** The current read of the source failed; a retry can clear it. */
+  retryable?: boolean;
   summary: string;
 };
+
+/** Outcome of a workspace refresh; a failed read never rejects, it reports. */
+export type WorkspaceRefreshResult = { ok: true } | { ok: false; error: string };
 
 /**
  * Typed first-Goal classification of the manager home. `no_goals` means the
@@ -561,7 +566,7 @@ export type PersonalWorkspaceCallbacks = {
    * names the Goals the action touched, so a peer's snapshot is not re-read for it. */
   onReconcileStatus?: (options?: { invalidateGoalIds?: string[] }) => void | Promise<void>;
   /** Full refresh by default; error recovery can explicitly read missing Goals only. */
-  onRefresh?: (scope?: WorkspaceReadScope) => void | Promise<void>;
+  onRefresh?: (scope?: WorkspaceReadScope) => void | WorkspaceRefreshResult | Promise<void | WorkspaceRefreshResult>;
   onRetryGoalArchive?: () => void | Promise<void>;
   onPreviewAction?: (request: WorkspaceActionPreviewRequest) => WorkspaceActionPreview | Promise<WorkspaceActionPreview>;
   onRequestGoalCreate?: () => WorkspaceActionPreview | Promise<WorkspaceActionPreview | void> | void;

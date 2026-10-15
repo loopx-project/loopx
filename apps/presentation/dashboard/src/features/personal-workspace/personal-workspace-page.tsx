@@ -121,6 +121,7 @@ function ManagerHomeBoard({
   goals,
   onSelectGoal,
   onRetry,
+  onRetrySource,
   onboarding,
   onRequestGoalCreate,
   onSuggestRequest,
@@ -132,6 +133,8 @@ function ManagerHomeBoard({
   goals: WorkspaceGoal[];
   onSelectGoal: (goalId: string) => void;
   onRetry?: () => void;
+  /** Re-read the whole source after its latest read failed. */
+  onRetrySource?: () => void;
   onboarding?: WorkspaceHomeOnboarding;
   onRequestGoalCreate?: () => void;
   onSuggestRequest?: (text: string) => void;
@@ -188,6 +191,9 @@ function ManagerHomeBoard({
               <summary>{t("home.health.diagnostics")}</summary>
               <ul>{systemHealth.diagnostics.map((line, idx) => <li key={idx}>{line}</li>)}</ul>
             </details>
+          ) : null}
+          {systemHealth.retryable && onRetrySource ? (
+            <button className="personal-system-health-retry" data-testid="personal-source-retry" onClick={onRetrySource} type="button">{t("home.health.retry")}</button>
           ) : null}
         </div>
       ) : null}
@@ -2050,9 +2056,13 @@ export function PersonalWorkspacePage({
     }
     setRefreshState("loading");
     try {
-      await callbacks.onRefresh();
-      setHistoryRefreshRevision((revision) => revision + 1);
-      setRefreshState("done");
+      const result = await callbacks.onRefresh();
+      if (result && result.ok === false) {
+        setRefreshState("error");
+      } else {
+        setHistoryRefreshRevision((revision) => revision + 1);
+        setRefreshState("done");
+      }
     } catch {
       setRefreshState("error");
     }
@@ -2293,7 +2303,7 @@ export function PersonalWorkspacePage({
                   </>),
                 }} />
             ) : !managerChatOpen ? (
-              <ManagerHomeBoard goals={workspaceGoals} onRetry={() => void callbacks.onRefresh?.("missing")} onSelectGoal={selectGoal} systemHealth={model.systemHealth}
+              <ManagerHomeBoard goals={workspaceGoals} onRetry={() => void callbacks.onRefresh?.("missing")} onRetrySource={() => void refreshWorkspace()} onSelectGoal={selectGoal} systemHealth={model.systemHealth}
                 onboarding={model.onboarding} onRequestGoalCreate={readOnly ? undefined : requestGoalCreate} onSuggestRequest={readOnly ? undefined : suggestReply}
                 operations={actionReadback.isError ? [] : homeOperations} onSelectOperation={proposal => setSelection({kind: "proposal", item: proposal})}
                 onViewAllOperations={() => setSelectedGoalTab("chat")} />

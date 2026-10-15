@@ -109,6 +109,7 @@ import {
   type WorkspaceGoalUsage,
   type WorkspaceImageAttachment,
   type WorkspaceHomeOnboarding,
+  type WorkspaceRefreshResult,
   type WorkspaceSystemHealth,
   type WorkspaceTimelineItem,
   type WorkspaceWorker,
@@ -1187,6 +1188,7 @@ function buildPersonalHomeModel(
 }
 function PersonalGoalHome({
   goalArchiveLoadState,
+  sourceError,
   selectedView,
   selectedTodoId,
   onSelectTodo,
@@ -1207,6 +1209,8 @@ function PersonalGoalHome({
   theme,
 }: {
   goalArchiveLoadState: WorkspaceGoalArchiveLoadState;
+  /** The current source's latest read failed; the retained payload is stale. */
+  sourceError: string | null;
   selectedView?: WorkspaceGoalTab;
   selectedTodoId?: string | null;
   onSelectTodo: (todoId: string | null) => void;
@@ -1217,7 +1221,7 @@ function PersonalGoalHome({
   onSelectWorkspace: (projectRef: string | null) => void;
   selectedWorkspaceRef: string | null;
   onReconcileStatus: (options?: { invalidateGoalIds?: string[] }) => void | Promise<void>;
-  onRefresh: (scope?: WorkspaceReadScope) => void | Promise<void>;
+  onRefresh: (scope?: WorkspaceReadScope) => Promise<WorkspaceRefreshResult>;
   onRetryGoalArchive: () => void | Promise<void>;
   payload: StatusPayload;
   progress: WorkspaceProgress | null;
@@ -1248,7 +1252,7 @@ function PersonalGoalHome({
   const [managerRuntime, setManagerRuntime] = useState<ManagerRuntimeSessionReadback | null>(null);
   const [managerChannelBinding, setManagerChannelBinding] = useState<ManagerChannelBinding | null>(null);
   const [capabilityRevision, setCapabilityRevision] = useState(0);
-  const model = useMemo(() => {
+  const loadedModel = useMemo<PersonalHomeModel>(() => {
     const base = buildPersonalHomeModel(payload, rows, t, goalSubagentConfigurationEnabled);
     if (!progress) return base;
     const models = Object.values(progress.snapshots).map((snapshot) => buildPersonalHomeModel(
@@ -1278,6 +1282,23 @@ function PersonalGoalHome({
       },
     };
   }, [payload, rows, progress, goalSubagentConfigurationEnabled, t]);
+  // A retained payload is not a current fact once the source's latest read
+  // failed: the first-Goal invitation is withdrawn and the failure is shown
+  // with a retry, instead of an empty workspace that claims to be updated.
+  const model = useMemo<PersonalHomeModel>(() => {
+    if (!sourceError) return loadedModel;
+    return {
+      ...loadedModel,
+      onboarding: undefined,
+      systemHealth: {
+        ok: false, retryable: true,
+        summary: t("home.health.sourceUnreadable"),
+        issues: [t("home.health.sourceUnreadableDetail", { error: sourceError })],
+        freshnessWarning: null,
+        diagnostics: loadedModel.systemHealth?.diagnostics ?? [],
+      },
+    };
+  }, [sourceError, loadedModel, t]);
   // A workspace conversation has no Goal, so no Goal projection may apply to it.
   const selectedGoal = selectedWorkspaceRef ? null : model.goals.find((goal) => goal.goalId === selectedGoalId) ?? null;
   const workspaceProjects = useChatProjects(readOnly);
@@ -2945,8 +2966,9 @@ function PersonalGoalHome({
             URL.revokeObjectURL(url);
           },
           onRefresh: async (scope) => {
-            await onRefresh(scope);
+            const result = await onRefresh(scope);
             setCapabilityRevision((revision) => revision + 1);
+            return result;
           },
           onRetryResumeRun: retryManagerSession,
           onSelectAgent: chooseAgent,
@@ -3463,6 +3485,7 @@ export function DashboardPage() {
   return (
     <PersonalGoalHome
       goalArchiveLoadState={goalArchiveLoadState}
+      sourceError={loadError}
       selectedTodoId={search.todo ?? null}
       onSelectTodo={(todoId) => {
         const goalId = search.goalId, statusUrl = search.statusUrl;
@@ -3494,7 +3517,14 @@ export function DashboardPage() {
         { rejectOnError: true, background: true, invalidateGoalIds: options?.invalidateGoalIds, readScope: "missing" },
       )}
       onRetryGoalArchive={retryGoalArchive}
-      onRefresh={(readScope = "all") => loadFromUrl(source.kind === "url" ? source.label : (statusUrl || defaultGlobalStatusUrl), { readScope })}
+      onRefresh={async (readScope = "all") => {
+        try {
+          await loadFromUrl(source.kind === "url" ? source.label : (statusUrl || defaultGlobalStatusUrl), { readScope, rejectOnError: true });
+          return { ok: true } as const;
+        } catch (error) {
+          return { ok: false, error: formatStatusError(error) } as const;
+        }
+      }}
       payload={payload}
       progress={progress}
       rows={goalRows}
