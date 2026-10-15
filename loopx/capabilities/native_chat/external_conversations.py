@@ -185,6 +185,9 @@ class ChatExternalConversations:
                 return row
         from ...control_plane.effect_runtime import effect_runtime_result
         observations = {}
+        if row["command"] == "stop" and current and not row.get("target_recorded") and not target:
+            from .codex_background_control import completed_background_turns
+            observations["background_turn_ids"] = completed_background_turns(controller, current["session_id"])
         if row["command"] in {"status", "help"}:
             active_id = current.get("active_turn_id") if current else None
             observations = {"context": selected["context"],
@@ -251,7 +254,12 @@ class ChatExternalConversations:
                 row["status_snapshot"] = plan["status_snapshot"]
         elif operation in {"new", "stop"}:
             row.update(target_recorded=True, session_id=plan["session_id"], turn_id=plan["turn_id"])
+            if operation == "stop":
+                row["background_turn_ids"] = plan.get("background_turn_ids", [])
             _atomic_write_json(path, row)
+            if operation == "stop" and row["background_turn_ids"]:
+                from .codex_background_control import interrupt_completed_background_turns
+                interrupt_completed_background_turns(controller, row["session_id"], row["background_turn_ids"])
             if operation == "stop" and row["session_id"] and row["turn_id"]:
                 controller.interrupt_turn(session_id=row["session_id"], turn_id=row["turn_id"])
             elif operation == "new" and row["session_id"]:
