@@ -23,6 +23,7 @@ export const taskInspectorReturnScenario = {
         const menu = page.locator(".personal-mobile-menu");
         if (await menu.isVisible()) await menu.click();
         await page.locator(".personal-goal-link", { hasText: "Progress Projection" }).click();
+        await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Tasks|任务)$/ }).click();
         const card = page.locator(".personal-task-card", { hasText: "Current Todo" });
         const opener = card.locator(":scope > button");
         await opener.waitFor();

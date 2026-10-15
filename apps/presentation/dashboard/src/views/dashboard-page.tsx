@@ -3509,7 +3509,7 @@ export function DashboardPage() {
         void navigate({search: current => "goalId" in current && current.goalId === goalId && current.statusUrl === statusUrl
           ? {...current, todo: todoId ?? undefined} : current});
       }}
-      selectedView={search.view === "conversation" ? "chat" : search.goalId ? search.view ?? "chat" : "overview"}
+      selectedView={search.view === "conversation" ? "chat" : search.goalId ? search.view ?? "overview" : "overview"}
       onSelectView={(view) => {
         void navigate({ search: current => ({ ...current, workAgent: undefined, view: view === "chat" ? "conversation" : view }) });
       }}

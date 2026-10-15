@@ -184,6 +184,9 @@ screen.*
 | 8 | **All-work rail**: tabs All work / Activity, filter chips, sections | ≥1200px; drawer below | Complete inventory without leaving the brief |
 | 9 | Existing **Delivery and evidence** section | As today | Stage 4 contract unchanged, below Results |
 
+Opening a Goal from the sidebar, workspace home or a Goal URL without a view
+starts on Overview. Explicit Tasks, Chat and Results links keep their destination.
+
 Chat remains a direct destination. "Discuss" on a decision or row opens Goal
 Chat with that subject attached through the existing composer; it does not
 create a second conversation store.

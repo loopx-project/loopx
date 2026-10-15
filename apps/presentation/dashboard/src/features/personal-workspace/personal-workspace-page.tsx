@@ -924,7 +924,7 @@ export function PersonalWorkspacePage({
   const [taskInspectorExpanded, setTaskInspectorExpanded] = useState(false);
   const [activeSessionRun, setActiveSessionRun] = useState<WorkspaceRun | null>(null);
   const [proposals, setProposals] = useState<Record<string, WorkspaceActionPreview>>({});
-  const [localView, setLocalView] = useState<WorkspaceGoalTab>(controlledGoalId ? "chat" : "overview");
+  const [localView, setLocalView] = useState<WorkspaceGoalTab>("overview");
   const selectedGoalTab = controlledView ?? localView;
   const agentWorkActive = Boolean(controlledGoalId === undefined ? localGoalId : controlledGoalId) && selectedGoalTab === "chat" && selectedWorkAgentId != null;
   const workReturn = useRef<{scope: string; agentId: string} | null>(null);
@@ -1904,7 +1904,7 @@ export function PersonalWorkspacePage({
     onOpenOutput: drawerCallbacks.onOpenOutput,
   } : drawerCallbacks;
 
-  function selectGoal(goalId: string | null, view: WorkspaceGoalTab = goalId ? "tasks" : "overview") {
+  function selectGoal(goalId: string | null, view: WorkspaceGoalTab = "overview") {
     setLocalGoalId(goalId);
     setManagerConversationReceiptVisible(false);
     setGoalConversationReceiptVisible(false);
