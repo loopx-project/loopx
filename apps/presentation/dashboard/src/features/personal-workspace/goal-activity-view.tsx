@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { goalHostSurfaces, goalIdentity, hostSurfaceLabel, presentGoalActivity, type GoalActivity, type WorkspaceGoalExecution } from "./goal-activity";
+import { goalHostDeliveryWindows, goalHostSurfaces, goalIdentity, hostSurfaceLabel, presentGoalActivity, type GoalActivity, type WorkspaceGoalExecution } from "./goal-activity";
 import { useWorkspaceI18n, type WorkspaceMessageKey } from "./i18n";
 import type { WorkspaceGoal } from "./personal-workspace-model";
 
@@ -42,14 +42,35 @@ export function useExecutionDetail(execution: WorkspaceGoalExecution | undefined
   return parts;
 }
 
-export function useGoalActivity(goal: GoalActivitySubject): GoalActivity & { text: string } {
+export function useGoalActivity(goal: GoalActivitySubject): GoalActivity & {
+  text: string;
+  windowBadge: { state: "stale" | "missing"; labelKey: "activity.hostWindowStaleShort" | "activity.hostWindowMissingShort" } | null;
+} {
   const { t } = useWorkspaceI18n();
   const activity = presentGoalActivity(goal);
   const detail = useExecutionDetail(goal.execution);
+  const hostWindows = goalHostDeliveryWindows(goal);
   const parts = [t(activity.labelKey as WorkspaceMessageKey)];
   if (activity.alsoKey) parts.push(t(activity.alsoKey as WorkspaceMessageKey, { host: hostNames(goalHostSurfaces(goal)) }));
   if (activity.labelKey === "activity.running" || activity.labelKey === "activity.hostClaimed") parts.push(...detail);
-  return { ...activity, text: parts.join(" · ") };
+  for (const hostWindow of hostWindows) {
+    const host = hostSurfaceLabel(hostWindow.hostSurface);
+    const agent = hostWindow.agentId || "Agent";
+    if (hostWindow.state === "stale") {
+      parts.push(t("activity.hostWindowStale", { host, agent, hours: Math.round((hostWindow.ageHours ?? 0) * 10) / 10 }));
+    } else if (hostWindow.state === "missing") {
+      parts.push(t("activity.hostWindowMissing", { host, agent }));
+    } else {
+      parts.push(t("activity.hostWindowFresh", { host, agent }));
+    }
+  }
+  const missedWindow = hostWindows.find((window) => window.state === "stale" || window.state === "missing");
+  const windowBadge = missedWindow?.state === "stale"
+    ? { state: "stale" as const, labelKey: "activity.hostWindowStaleShort" as const }
+    : missedWindow?.state === "missing"
+      ? { state: "missing" as const, labelKey: "activity.hostWindowMissingShort" as const }
+      : null;
+  return { ...activity, text: parts.join(" · "), windowBadge };
 }
 
 export function GoalIdentityMark({ goal, size = "md" }: { goal: GoalActivitySubject; size?: "md" | "lg" }) {
@@ -67,10 +88,12 @@ export function GoalIdentityMark({ goal, size = "md" }: { goal: GoalActivitySubj
 }
 
 export function GoalActivityChip({ goal }: { goal: GoalActivitySubject }) {
+  const { t } = useWorkspaceI18n();
   const activity = useGoalActivity(goal);
   return (
     <span className={`personal-goal-activity-chip is-${activity.tone}${activity.live ? " is-live" : ""}`} title={activity.text}>
       <span aria-hidden="true" className="personal-goal-activity-dot" />
+      {activity.windowBadge ? <span className={`personal-goal-window-badge is-${activity.windowBadge.state}`}>{t(activity.windowBadge.labelKey)}</span> : null}
       <span>{activity.text}</span>
     </span>
   );

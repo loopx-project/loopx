@@ -234,6 +234,43 @@ function clockRequest(items: JsonObject[], fields: JsonObject = {}): JsonObject 
     item_limit: 8, has_deferred_count: false, has_visible_deferred_count: false}};
 }
 
+test("quota v4 references shared lane records while preserving the v3 decision", () => {
+  const first = {todo_id: "same-id", text: "First fact", nested: {value: null}};
+  const second = {todo_id: "same-id", text: "Different fact"};
+  const items = [first, second, first].map(payload => row(String(payload.todo_id), {
+    payload, required: [], targets: [], due_at: null, expires_at: null,
+  }));
+  const input = clockRequest(items);
+  const legacy = projectTodoQuotaPlanning(input);
+  const wire = projectTodoQuotaPlanning({...input, schema_version: "todo_quota_planning_request_v4"});
+  assert.equal(wire.schema_version, "todo_quota_planning_wire_v1");
+  const records = wire.records as JsonObject[];
+  assert.equal(records.length, 2);
+  const restored = structuredClone(wire.planning) as JsonObject;
+  const lanes = restored.lanes as JsonObject;
+  for (const name of wire.record_lanes as string[]) {
+    lanes[name] = (lanes[name] as number[]).map(index => structuredClone(records[index]!));
+  }
+  assert.deepEqual(restored, legacy);
+});
+
+test("quota v4 keeps a large complete read model below the inline response limit", () => {
+  const items = Array.from({length: 1000}, (_, index) => row(`todo-${index}`, {
+    payload: {todo_id: `todo-${index}`, text: `Artifact ${index}: ` + "bounded work ".repeat(32)},
+    index, claim: "agent-a", raw_claimed: true,
+    required: [], targets: [], due_at: null, expires_at: null,
+  }));
+  const input = clockRequest(items);
+  const legacy = projectTodoQuotaPlanning(input);
+  const wire = projectTodoQuotaPlanning({...input, schema_version: "todo_quota_planning_request_v4"});
+  assert.ok(Buffer.byteLength(JSON.stringify(legacy)) > 2 * 1024 * 1024);
+  assert.ok(Buffer.byteLength(JSON.stringify(wire)) < 2 * 1024 * 1024);
+  assert.equal((wire.records as JsonObject[]).length, 1000);
+  const lanes = (wire.planning as JsonObject).lanes as JsonObject;
+  assert.equal((lanes.all_open_items as number[]).length, 1000);
+  assert.deepEqual(lanes.all_open_items, lanes.executable_items);
+});
+
 test("quota v3 derives due and gap from one clock, selecting older due work before display order", () => {
   const monitor = (id: string, fields: JsonObject = {}) => row(id, {task_class: "continuous_monitor",
     due_at: null, expires_at: null, required: [], targets: [], ...fields});

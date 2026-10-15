@@ -22,21 +22,23 @@ def event(name: str, *, pr: int = 101, tag: str = "", backend: bool = True) -> d
             ref=f"refs/pull/{pr}/merge" if name == "pull_request" else "refs/heads/main",
             # Pull-request webhooks expose number at the payload root as well
             # as inside pull_request; the shared concurrency owner uses both.
-            event=SimpleNamespace(number=pr, pull_request=SimpleNamespace(number=pr), release=SimpleNamespace(tag_name=tag)),
+            event=SimpleNamespace(action="opened", number=pr, pull_request=SimpleNamespace(number=pr), release=SimpleNamespace(tag_name=tag)),
         ),
         "inputs": SimpleNamespace(tag=tag),
-        "needs": SimpleNamespace(changes=SimpleNamespace(outputs=SimpleNamespace(backend_tests=str(backend).lower()))),
+        "needs": SimpleNamespace(changes=SimpleNamespace(outputs=SimpleNamespace(**{
+            key: str(backend).lower() for key in ("backend_tests", "core_tests", "python_tests", "stage2c_tests")
+        }))),
     }
 
 
 def expression(value: str | bool, context: dict) -> str | bool:
-    """Evaluate the boolean/string subset used by these concurrency conditions."""
+    """Evaluate the boolean/string subset used by these CI admission conditions."""
     if isinstance(value, bool):
         return value
 
     def evaluate(source: str):
         return eval(  # noqa: S307 - repository-owned expressions, no builtins.
-            source.strip().replace("&&", " and ").replace("||", " or "),
+            re.sub(r"!(?!=)", " not ", source.strip()).replace("&&", " and ").replace("||", " or "),
             {"__builtins__": {}, "format": lambda template, *args: template.format(*args)},
             context,
         )
@@ -84,16 +86,59 @@ def test_main_supersession_does_not_cancel_nightly_or_manual_full_qualification(
     assert [expression(concurrency["cancel-in-progress"], context) for context in contexts] == [True, True, False, False, False]
 
 
-@pytest.mark.parametrize("name", ["pull_request", "pull_request_target"])
-def test_python_pr_supersession_uses_the_payload_number(name: str) -> None:
-    concurrency = workflow("python-tests")["concurrency"]
+@pytest.mark.parametrize("job_id", ["checks", "pytest", "stage2c-correctness-e2e", "merge-gate"])
+@pytest.mark.parametrize("name", ["push", "pull_request", "pull_request_target", "schedule", "workflow_dispatch", "merge_group"])
+@pytest.mark.parametrize("cancelled", [False, True])
+@pytest.mark.parametrize("planned", [False, True])
+def test_cancelled_main_aggregates_stop_while_other_event_gates_remain_required(
+    job_id: str, name: str, cancelled: bool, planned: bool,
+) -> None:
+    context = event(name, backend=planned)
+    # always() also models failed upstream work: these jobs must still run
+    # their real rejection commands unless the main push itself is cancelled.
+    context.update(always=lambda: True, cancelled=lambda: cancelled)
+    expected = planned if job_id != "merge-gate" else name != "pull_request_target"
+    if name == "push" and cancelled:
+        expected = False
+    assert expression(workflow("python-tests")["jobs"][job_id]["if"], context) is expected
+
+
+@pytest.mark.parametrize("owner,name,prefix", [
+    ("python-tests", "pull_request", "python-tests-pull_request"),
+    ("ci-maintenance", "pull_request_target", "ci-maintenance"),
+])
+def test_python_pr_supersession_uses_the_payload_number(owner: str, name: str, prefix: str) -> None:
+    concurrency = workflow(owner)["concurrency"]
     first, second = event(name, pr=101), event(name, pr=102)
     # pull_request_target uses the base ref, so the payload number must keep
     # distinct PRs apart even when their refs match.
     first["github"].ref = second["github"].ref = "refs/heads/main"
-    assert expression(concurrency["group"], first) == f"python-tests-{name}-pr-101"
-    assert expression(concurrency["group"], second) == f"python-tests-{name}-pr-102"
+    assert expression(concurrency["group"], first) == f"{prefix}-pr-101"
+    assert expression(concurrency["group"], second) == f"{prefix}-pr-102"
     assert expression(concurrency["cancel-in-progress"], first) is True
+
+
+def test_cleanup_concurrency_cannot_replace_current_qualification() -> None:
+    qualification = expression(workflow("python-tests")["concurrency"]["group"], event("pull_request"))
+    cleanup = expression(workflow("ci-maintenance")["concurrency"]["group"], event("pull_request_target"))
+    assert qualification != cleanup
+
+
+def test_dashboard_unit_coverage_runs_once_while_all_browser_shards_remain_required() -> None:
+    job = workflow("python-tests")["jobs"]["dashboard-browser"]
+    shards = job["strategy"]["matrix"]["shard"]
+    assert shards == [1, 2, 3]
+    assert job["strategy"]["fail-fast"] is False
+    unit_steps = [step for step in job["steps"] if "npm run test:dashboard:coverage" in step.get("run", "")]
+    assert len(unit_steps) == 1
+    unit = unit_steps[0]
+    assert [shard for shard in shards if expression(unit["if"], {"matrix": SimpleNamespace(shard=shard)})] == [1]
+    browser = next(step for step in job["steps"] if "personal-workspace-browser-smoke.mjs" in step.get("run", ""))
+    assert "if" not in browser
+    assert browser["env"]["LOOPX_PERSONAL_WORKSPACE_SHARD"] == "${{ matrix.shard }}/3"
+    for step in (unit, browser):
+        assert "continue-on-error" not in step
+    assert "continue-on-error" not in job
 
 
 def test_required_merge_gate_workflow_is_not_suppressed_by_path_filters() -> None:

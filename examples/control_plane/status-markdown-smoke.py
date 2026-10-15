@@ -1016,31 +1016,26 @@ def assert_explicit_delivery_refresh(payload: dict, markdown: str) -> None:
     assert quota_payload["handoff_readiness"]["post_handoff_latest_run"]["delivery_outcome"] == "outcome_progress", quota_payload
 
 
-def assert_stale_latest_run_projection_warning(payload: dict, markdown: str) -> None:
-    items = payload["attention_queue"]["items"]
-    item = items[0]
-    warning = item["stale_latest_run_warning"]
-    assert warning["kind"] == "stale_latest_run_projection", warning
-    assert warning["requires_refresh_state"] is True, warning
-    assert warning["active_state_updated_at"] == "2026-01-01T00:03:00+00:00", warning
-    assert warning["latest_run_generated_at"] == "2026-01-01T00:02:00+00:00", warning
-    assert "active_state_updated_after_latest_run" in warning["reason"], warning
-    assert "active_state_digest_differs_from_latest_run_snapshot" in warning["reason"], warning
-    assert item["project_asset"]["stale_latest_run_warning"] == warning, item
-    assert "stale_latest_run_warning: requires_refresh_state=True" in markdown, markdown
-    assert "active_state_updated_at=2026-01-01T00:03:00+00:00" in markdown, markdown
+def assert_stale_latest_run_automatically_reconciled(payload: dict, markdown: str) -> None:
+    item = payload["attention_queue"]["items"][0]
+    assert item["source"] == "active_state", item
+    assert item["status"] == "active_state_user_gate", item
+    assert item["waiting_on"] == "controller", item
+    assert item["recommended_action"] == USER_TODO_TEXT, item
+    assert "stale_latest_run_warning" not in item, item
+    assert "stale_latest_run_warning" not in item["project_asset"], item
+    assert "stale_latest_run_warning:" not in markdown, markdown
+    historical = payload["run_history"]["goals"][0]["latest_status_run"]
+    assert historical["generated_at"] == "2026-01-01T00:02:00+00:00", historical
+    assert historical["classification"] == "state_refreshed", historical
 
     quota_payload = build_quota_should_run(payload, goal_id="planned-main-control")
-    quota_warning = quota_payload["stale_latest_run_warning"]
-    assert quota_warning["requires_refresh_state"] is True, quota_payload
+    assert not quota_payload.get("stale_latest_run_warning"), quota_payload
     quota_markdown = render_quota_should_run_markdown(quota_payload)
-    assert "stale_latest_run_warning: requires_refresh_state=True" in quota_markdown, quota_markdown
-    assert "stale_latest_run_action: run refresh-state before trusting latest_run-derived routing" in quota_markdown, quota_markdown
-
+    assert "stale_latest_run_action:" not in quota_markdown, quota_markdown
     packet = build_review_packet(payload, goal_id="planned-main-control", action_kind="codex")
-    assert packet["stale_latest_run_warning"]["requires_refresh_state"] is True, packet
-    assert "【状态投影警告】" in packet["packet"], packet
-    assert "先 refresh-state，再信任基于 latest_run 的路由/交接" in packet["packet"], packet
+    assert not packet.get("stale_latest_run_warning"), packet
+    assert "【状态投影警告】" not in packet["packet"], packet
 
 
 def assert_handoff_waiting_for_post_run(item: dict, markdown: str) -> None:
@@ -1327,7 +1322,7 @@ def main() -> int:
     assert_connected_delivery_custom_run_stays_runnable(delivery_payload, delivery_markdown)
     assert_source_registry_shadow_collapses_into_live_queue_item(shadow_payload)
     assert_explicit_delivery_refresh(explicit_payload, explicit_markdown)
-    assert_stale_latest_run_projection_warning(stale_projection_payload, stale_projection_markdown)
+    assert_stale_latest_run_automatically_reconciled(stale_projection_payload, stale_projection_markdown)
     assert_connected_readonly_progress_run_stays_runnable(readonly_payload, readonly_markdown)
     assert_dependency_blockers_stay_separate(dependency_payload, dependency_markdown)
     assert_connected_delivery_no_baseline_small_streak(small_streak_payload, small_streak_markdown)

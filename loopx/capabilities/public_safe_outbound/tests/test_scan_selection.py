@@ -6,7 +6,10 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
+
+import pytest
 
 from loopx.capabilities.public_safe_outbound.scan_cli import (
     BINARY_SUFFIXES,
@@ -196,6 +199,7 @@ def test_scan_root_cli_reports_a_hit_without_content_or_absolute_paths(tmp_path:
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=False,
         # Only the generic rules: a marker file from the caller's shell must
         # not change what this test observes.
@@ -208,3 +212,110 @@ def test_scan_root_cli_reports_a_hit_without_content_or_absolute_paths(tmp_path:
     assert SECRET not in completed.stdout
     assert "SERVICE_KEY" not in completed.stdout
     assert str(tmp_path) not in completed.stdout
+
+
+def _scan_root_cli(root: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "loopx.capabilities.public_safe_outbound.scan_cli",
+            "--scan-root",
+            str(root),
+            "--format",
+            "json",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+        env={key: value for key, value in os.environ.items() if key != "PUBLIC_SAFE_CONFIG"},
+    )
+
+
+requires_posix_permissions = pytest.mark.skipif(
+    os.name != "posix" or os.geteuid() == 0,
+    reason="needs POSIX directory permissions that the current user cannot bypass",
+)
+
+
+@pytest.fixture
+def locked() -> Iterator[list[Path]]:
+    """Directories a test makes unlistable; their modes are restored afterwards."""
+    paths: list[Path] = []
+    yield paths
+    for path in reversed(paths):
+        path.chmod(0o755)
+
+
+def _lock(locked: list[Path], directory: Path) -> None:
+    directory.chmod(0o000)
+    locked.append(directory)
+
+
+def test_a_missing_scan_root_fails_closed_without_echoing_it(tmp_path: Path) -> None:
+    """A mistyped root names content the caller wanted checked; it is not clean."""
+    missing = tmp_path / "not-created"
+    completed = _scan_root_cli(missing)
+    assert completed.returncode == 1, completed.stderr
+    receipt = json.loads(completed.stdout)
+    assert receipt["ok"] is False
+    assert receipt["unscanned_reasons"] == ["scan_root_missing"]
+    assert str(tmp_path) not in completed.stdout + completed.stderr
+
+
+def test_an_empty_existing_root_is_clean(tmp_path: Path) -> None:
+    """An existing directory with nothing in it hides nothing: there is no content to miss."""
+    completed = _scan_root_cli(tmp_path)
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout)["ok"] is True
+
+
+@requires_posix_permissions
+def test_an_unlistable_directory_fails_closed(tmp_path: Path, locked: list[Path]) -> None:
+    """The walk must not shorten the candidate set: the hidden file would have failed."""
+    _write(tmp_path, "open/readme.md", "nothing sensitive here")
+    _write(tmp_path, "sealed/notes.md", ASSIGNMENT)
+    _lock(locked, tmp_path / "sealed")
+    completed = _scan_root_cli(tmp_path)
+    assert completed.returncode == 1, completed.stderr
+    receipt = json.loads(completed.stdout)
+    assert receipt["ok"] is False
+    assert receipt["hits"] == []
+    assert receipt["unscanned_reasons"] == ["directory_unreadable"]
+    assert str(tmp_path) not in completed.stdout + completed.stderr
+
+
+@requires_posix_permissions
+def test_an_unlistable_scan_root_fails_closed_with_a_receipt(tmp_path: Path, locked: list[Path]) -> None:
+    root = tmp_path / "root"
+    _write(root, "notes.md", ASSIGNMENT)
+    _lock(locked, root)
+    completed = _scan_root_cli(root)
+    assert completed.returncode == 1, completed.stderr
+    receipt = json.loads(completed.stdout)
+    assert receipt["ok"] is False
+    assert receipt["unscanned_reasons"] == ["directory_unreadable"]
+    assert "Traceback" not in completed.stderr
+    assert str(tmp_path) not in completed.stdout + completed.stderr
+
+
+@requires_posix_permissions
+def test_an_unlistable_pruned_directory_is_never_entered(tmp_path: Path, locked: list[Path]) -> None:
+    """Exclusion is policy, not a read failure: a sealed vendored tree cannot fail the scan."""
+    _write(tmp_path, "readme.md", "nothing sensitive here")
+    _write(tmp_path, "node_modules/pkg/index.js", ASSIGNMENT)
+    _lock(locked, tmp_path / "node_modules")
+    completed = _scan_root_cli(tmp_path)
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout)["ok"] is True
+
+
+@requires_posix_permissions
+def test_selection_without_a_collector_raises_instead_of_skipping(tmp_path: Path, locked: list[Path]) -> None:
+    _write(tmp_path, "sealed/notes.md", ASSIGNMENT)
+    _lock(locked, tmp_path / "sealed")
+    with pytest.raises(PermissionError):
+        list(_iter_text_files(tmp_path))
+    with pytest.raises(FileNotFoundError):
+        list(_iter_text_files(tmp_path / "not-created"))

@@ -4,6 +4,7 @@ import runpy
 import subprocess
 import os
 import signal
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -169,7 +170,8 @@ def test_grouped_canary_preserves_explicit_path_priority(monkeypatch):
     assert environment["PATH"].split(os.pathsep)[0] == "/qualified/toolchain/bin"
 
 
-def test_runtime_started_by_smoke_is_stopped_before_fixture_cleanup(tmp_path, monkeypatch):
+@pytest.mark.parametrize("delayed_exit", [False, True])
+def test_runtime_started_by_smoke_is_stopped_before_fixture_cleanup(tmp_path, monkeypatch, delayed_exit):
     import os
     import sys
     import tempfile
@@ -188,7 +190,36 @@ def test_runtime_started_by_smoke_is_stopped_before_fixture_cleanup(tmp_path, mo
             "r=collect_effect_runtime_readiness(deep=True); assert r['ready'], r"],
             env=env,check=True,capture_output=True,text=True)
         try:
-            result = runner._run_check({"command": "python examples/runtime.py"}, timeout_seconds=30)
+            if delayed_exit:
+                from concurrent.futures import ThreadPoolExecutor, TimeoutError
+                ready, release, exited = (tmp_path / name for name in ("retired", "release", "exited"))
+                preload = tmp_path / "delayed-exit.mjs"
+                preload.write_text(
+                    "import { existsSync, writeFileSync } from 'node:fs';\n"
+                    "const exit = process.exit.bind(process);\n"
+                    f"process.exit = code => {{ writeFileSync({json.dumps(str(ready))}, process.env.TMPDIR);\n"
+                    f"const poll = setInterval(() => {{ if (existsSync({json.dumps(str(release))})) {{\n"
+                    f"clearInterval(poll); writeFileSync({json.dumps(str(exited))}, 'exit'); exit(code); }} }}, 10); }};\n",
+                    encoding="utf-8",
+                )
+                monkeypatch.setenv("NODE_OPTIONS", "--import=" + preload.as_uri())
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(runner._run_check,
+                        {"command": "python examples/runtime.py"}, timeout_seconds=30)
+                    try:
+                        deadline = time.monotonic() + 10
+                        while not ready.exists() and time.monotonic() < deadline:
+                            time.sleep(.01)
+                        assert ready.exists(), "owned runtime did not reach its exit barrier"
+                        with pytest.raises(TimeoutError):
+                            future.result(timeout=.2)
+                        assert Path(ready.read_text()).exists(), "cleanup preceded actual exit"
+                    finally:
+                        release.touch()
+                    result = future.result(timeout=10)
+                assert exited.exists(), "runner returned before its runtime's exit hook"
+            else:
+                result = runner._run_check({"command": "python examples/runtime.py"}, timeout_seconds=30)
             assert result['ok'], result
             isolated_temp = Path(json.loads(result['stdout_tail'])['temp'])
             assert str(isolated_temp) != owner and not isolated_temp.exists()
@@ -203,3 +234,120 @@ def test_runtime_started_by_smoke_is_stopped_before_fixture_cleanup(tmp_path, mo
                 "from loopx.control_plane.effect_runtime import restart_effect_runtime; "
                 "r=restart_effect_runtime(); assert r['status'] != 'shutdown_pending', r"],
                 env=env,check=True,capture_output=True,text=True)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process exit observation")
+@pytest.mark.parametrize("outcome", ["passed", "failed", "timed_out"])
+def test_smoke_retires_every_owned_runtime_revision(tmp_path, monkeypatch, outcome):
+    from loopx.control_plane import effect_runtime
+
+    marker = tmp_path / "owned-runtimes.json"
+    examples = tmp_path / "examples"
+    examples.mkdir()
+    script = examples / "revisions.py"
+    script.write_text(
+        "import json,os,time\nfrom pathlib import Path\n"
+        "from loopx.control_plane import effect_runtime as r\n"
+        "infos=[]\n"
+        "for fingerprint in (r._runtime_fingerprint(), 'f'*64):\n"
+        " infos.append(r._start_runtime(fingerprint=fingerprint, info_path=r._runtime_info_path(fingerprint)))\n"
+        f"Path({str(marker)!r}).write_text(json.dumps({{'root':os.environ['TMPDIR'],'infos':infos}}))\n"
+        + ("time.sleep(60)\n" if outcome == "timed_out" else "")
+        + f"raise SystemExit({3 if outcome == 'failed' else 0})\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runner, "REPO_ROOT", tmp_path)
+    real_popen = subprocess.Popen
+
+    def spawn(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        if str(script) in args[0] and outcome == "timed_out":
+            deadline = time.monotonic() + 20
+            while not marker.exists() and time.monotonic() < deadline:
+                time.sleep(.01)
+            assert marker.exists(), "both owned runtimes must be ready before the deadline"
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", spawn)
+    try:
+        result = runner._run_check(
+            {"command": "python examples/revisions.py"},
+            timeout_seconds=.1 if outcome == "timed_out" else 30,
+        )
+        assert result["status"] == outcome, result
+        recorded = json.loads(marker.read_text())
+        assert not Path(recorded["root"]).exists()
+        for info in recorded["infos"]:
+            status = subprocess.run(
+                ["ps", "-p", str(info["pid"]), "-o", "stat="],
+                capture_output=True, text=True, check=False,
+            ).stdout.strip()
+            assert not status or status.startswith("Z"), "runtime survived its fixture"
+    finally:
+        # Baseline failures must not leave the regression's own daemons alive.
+        if marker.exists():
+            recorded = json.loads(marker.read_text())
+            for info in recorded["infos"]:
+                try:
+                    effect_runtime._request_with_info(
+                        info, request_id="fixture-cleanup", method="runtime.shutdown",
+                        params={}, timeout=1,
+                    )
+                except (effect_runtime.EffectRuntimeRemoteError,
+                        effect_runtime.EffectRuntimeResponseAmbiguous, OSError):
+                    pass
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                states = [subprocess.run(
+                    ["ps", "-p", str(info["pid"]), "-o", "stat="],
+                    capture_output=True, text=True, check=False,
+                ).stdout.strip() for info in recorded["infos"]]
+                if all(not state or state.startswith("Z") for state in states):
+                    break
+                time.sleep(.05)
+            else:
+                pytest.fail("owned regression runtime did not exit")
+            if Path(recorded["root"]).exists():
+                shutil.rmtree(recorded["root"])
+
+
+def test_smoke_reports_cleanup_failure_and_retains_the_owned_fixture(tmp_path, monkeypatch):
+    examples = tmp_path / "examples"
+    examples.mkdir()
+    (examples / "output.py").write_text("print('original check output')\n")
+    monkeypatch.setattr(runner, "REPO_ROOT", tmp_path)
+    retained = []
+
+    def pending(root):
+        retained.append(root)
+        raise RuntimeError("runtime shutdown remains pending")
+
+    monkeypatch.setattr(runner, "_retire_fixture_runtimes", pending)
+    try:
+        result = runner._run_check({"command": "python examples/output.py"}, timeout_seconds=5)
+        assert not result["ok"] and result["status"] == "failed"
+        assert result["returncode"] == 0 and "original check output" in result["stdout_tail"]
+        assert "runtime shutdown remains pending" in result["reason"]
+        assert len(retained) == 1 and retained[0].is_dir()
+    finally:
+        for root in retained:
+            shutil.rmtree(root)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX symlink fixture")
+def test_fixture_retirement_does_not_follow_runtime_namespace_links(tmp_path, monkeypatch):
+    from loopx.control_plane import effect_runtime
+
+    external = tmp_path / "outside"
+    external.mkdir()
+    locator = external / ("runtime-" + "f" * 16 + ".json")
+    locator.write_text("external runtime metadata")
+    root = tmp_path / "fixture"
+    root.mkdir()
+    (root / "loopx-effect-runtime-linked").symlink_to(external, target_is_directory=True)
+    namespace = root / "loopx-effect-runtime-local"
+    namespace.mkdir()
+    (namespace / locator.name).symlink_to(locator)
+    monkeypatch.setattr(effect_runtime, "_read_info", lambda *a, **kw: pytest.fail("followed external locator"))
+    runner._retire_fixture_runtimes(root)
+    assert locator.read_text() == "external runtime metadata"

@@ -318,6 +318,75 @@ root，都不同于注册身份数和展示上限。不要只为展示这些观�
 假设、创建响应不确定、卸载与身份不存在的区别，以及恢复时授权撤销。用真实本地和
 云端 adapter 读回验收；名单长度和角色文案不是验收证据。
 
+### 暂停、恢复与自动下发边界
+
+唤醒只提供观察机会，不授予执行或恢复权限。复用现有 Goal activation、quota、Todo
+依赖和 host binding owner，不另建暂停账本。新模型请求或宿主续跑前按以下边界判断：
+
+| 当前事实 | 允许的处理 | 恢复边界 |
+|---|---|---|
+| 显式 Goal 停止、compute 为零或显式宿主暂停 | 解除自动续跑并取消自有计时器。重复 idle/结果事件不得调用模型、修复或重规划绕过停止。 | 明确恢复被停止的 owner，再取得新 Core 准入。普通聊天或单独增加配额不解除另一层宿主暂停。 |
+| 所选工作存在用户／权限门槛 | 阻塞该路径；独立且已获准工作仍可推进，通知遵循现有提醒策略。 | 所属 gate 实际解除，重新选择并核验受影响工作；通知不等于解除。 |
+| 外部依赖或临时额度耗尽 | 沿现有有界事件／等待／退避契约，无变化检查不调用模型。 | 当前来源验证的证据或预算窗口允许新准入；都不能覆盖显式停止。 |
+| 效果未知或工作中断 | 沿原操作核对，保留应做结算；权限未知时停止新效果。 | 原身份／回执恢复成功，并通过当前权限检查。 |
+| 已验证 terminal no-follow-up | 结束周期轮询；完成一个 Todo 不等于此终态。 | 明确的新／恢复操作，或单独资格化的新工作事件，获得当前准入；不无条件待机轮询。 |
+
+`should_run=false` 不能被 `scheduler_hint.action=run_now` 覆盖；
+`stop_until_explicit_resume` 优先于矛盾的可运行提示。检查时捕获当前 binding generation；
+即使 Goal/session id 未变，暂停→恢复也必须使暂停前结果失效。被取消的 timer callback
+不能消费替代计时器或在恢复后下发。复用 provider 的序列化／generation fence，不增加调度器。
+
+暂停范围必须可读回：host pause 停止绑定执行者；Goal stop 阻止该 Goal 新工作；依赖 gate
+只阻塞受影响路径。在所属边界停止新下发，不声称已提交工具已被取消，也不丢弃原 writeback／
+debit 义务。在途停止延迟与 idle 下发抑制分开测量。
+
+**实现检查点。** Pi 消费 Core stop hint 后持久解除自动续跑，宿主暂停／恢复递增既有
+generation。OpenCode bridge 在 Core 准入后才自动恢复原生 Goal，串行更新本地 binding，
+隔离暂停／恢复之间的旧检查结果，权限拒绝后保持暂停。等待原生 pause／block IO 之前先
+阻断本地续跑；宿主停止失败仍报错，本地保持解除状态，不冒充在途请求已取消。
+OpenCode 2 的首次正文与续跑均经过
+准入，未下发正文保留在私有 worker state，Core stop／已验证终态让 worker 退出；
+`--force-resume` 仅重新启用宿主，不能绕过 Core。这里是消费既有决策的 provider 适配修改，
+不是新的共享策略 owner。OpenCode 2 的无活动 hold 不能证明用户明确暂停。
+
+Codex 分为宿主传输与调度两个边界。managed Goal Chat 的 Stop 与冷恢复，在请求暂停后
+重新读取 `thread/goal/get`；ACK 后未读到非 active 状态就关闭自有连接并保留失败。
+Stop 期间迟到的原生 turn-start 事件只用于中断对应回合，不再投递排队消息或恢复上下文。
+显式恢复沿用目标和累计原生用量；LoopX 模式重新构建当前上下文。Codex App 的
+full／compact／brief／thin 心跳正文共用一次暂停与结果核验条款；宿主停止不可用或
+未确认时结束本轮，不声称成功、不重试、不退回 RRULE 修改，也不做新工作／扣费。
+既有外部 CLI scheduler 则在启动所配置的 wake 命令前消费 Core local stop 指令。
+这些路径都不从另一次 wake 推断恢复授权。
+
+资格化使用生产适配器及受控 host/probe、文件 binding／CLI、Codex Goal Chat controller／
+store 恢复及生成 Agent 输入测试，不证明已安装厂商／模型
+采用或取消延迟。App 心跳仍由宿主拥有：Core 返回既有的一次停止指令并要求结果读回；
+宿主没有下发前 hook 时，第一次 wake 可能已经调用模型，不能称为零模型唤醒或已确认停调度。
+
+Codex 另覆盖暂停 ACK 无效果、读回不可用／目标消失、迟到 start 事件、冷恢复拒绝，以及
+各 prompt 模式是否保留停止义务。
+
+决定性场景：硬暂停后重复 idle／事件；成功和失败检查过程中暂停；旧结果返回前暂停→恢复；
+恢复后迟到的取消 callback；拒绝准入与可运行提示矛盾；首次下发前重启；正常外部等待；
+host resume 后 Core 仍停止；已验证终态不待机轮询。读回 binding、实际请求与剩余 timer，
+原在途工作结算另外验证。
+
+### 唤醒、当前上下文与纠偏构成同一条链
+
+这三步对齐路线图 S4/S7，消费已有 Goal Vision 与 Stride owner，不新增调度器或 Goal 权威。
+
+| 环节 | 实际 owner 与交接 | 必须验证的反例 |
+|---|---|---|
+| 下发前 | `external_scheduler_worker` 先消费 Core 本地停止指令，再严格检查布尔型 `should_run`。现有 monitor／reset-token／退避规则保留等待，变化信号仍需当前准入。 | 字符串 `"false"`、数字、缺失或其他错误准入值不能启动 wake 命令，`run_now` 也不能覆盖；停止直接退出，不轮询或做最后修复探测。 |
+| 当前指令 | 稳定心跳入口读取新 guard；类型化 `interaction_contract` 投影当前工作来源、范围内阻塞与尚需完整读取的 Goal／验收，`turn_envelope` 和 Codex Host 消费同一次观察。形成有界工作摘要：有证据的变化、阻塞、下一步、验收与停止条件。 | 同一 Todo 身份的要求变化必须带入新条件；来源缺失禁止依赖工作，缺少对照证据是 unknown，不能当作无变化。展示摘要不替代完整要求或来源版本。 |
+| 纠偏与复核 | 复用操作恢复、所选工作纠偏及 `replan_action_packet.planning_guidance`。仅在 Goal／路线／依赖／验收证据支持时扩大重规划；Core 到期复核可以保留原路线。 | 安静 monitor 回执不能触发模板自设的“两次停滞重规划／暂停”；决定回执不证明后续工作已采纳或结果已改善。 |
+
+当前补丁移除了心跳／技能里的旧计数规则与固定候选数审查，保留 Core 停滞／周期复核策略，
+在既有类型化 owner 补充局部纠偏及后续效果核验。工作摘要由 Agent 基于来源整理，不新增
+持久摘要、自动模型总结器或权威记录；完整 Goal 仍按渐进读取交付，有界传输不能截断停止条件。
+App 自有心跳的模型唤醒抑制仍需要宿主下发前钩子。通用 provider 结果事件和真实纠偏收益
+仍归 Stride §7.5／§7.6 资格化，不能由模拟调度／上下文测试推定完成。
+
 ### 状态模型与 schema
 
 绑定是模式归属的单元。其规范字段：
@@ -489,7 +558,7 @@ root，都不同于注册身份数和展示上限。不要只为展示这些观�
 | 重启与崩溃下的接入 | 在已绑定会话期间杀掉宿主 | 无孤儿执行器；替换绑定只有一个属主且模式正确 | 对新宿主未验证 |
 | 关闭态一致性 | 在没有任何挂接绑定、也没有预览宿主的情况下运行 | 既有托管行为、路由与默认值不变 | 对新宿主未验证 |
 | 已声明输入边界 | 工具批次、压缩和终结期间交付纠正 | 保留确切目标/来源；进入下一合格 Host 输入或真实 pending/拒绝；不隐式取消工具或改投 | 按 adapter 验证；协议 fixture 不证明模型采用 |
-| Native 身份不变但依据变化 | 暂停后在同 Goal instance 改适用 criterion/source 再恢复，另测 restore 中 amendment | 原 target/effect 保留；第一项新受保护动作消费当前依据或保持 pending/paused；不改旧回执 | 既有 native 身份/恢复测试之外，仍需组合资格验证 |
+| Native 身份不变但依据变化 | 暂停后在同 Goal instance 改适用 criterion/source 再恢复，另测 restore 中 amendment | 原 target/effect 保留；第一项新受保护动作消费当前依据或保持 pending/paused；不改旧回执 | 托管 ZCode provider 在 start 时记录 acceptance/source revision 依据；依据变化时拒绝直接 resume（`goal_basis_changed`）；没有可证明的依据时同样拒绝，无论是当前不可读，还是依据存在之前写入的 journal 从未记录（`goal_basis_unavailable`），目标保持暂停，直到 stop/start 重新交付 objective 并记录其依据；含依据前 journal 的升级路径，由 [`zcode_native_goal.test.ts`](../../../tests/control_plane_ts/zcode_native_goal.test.ts) 与 [`test_zcode_goal_bridge.py`](../../../tests/test_zcode_goal_bridge.py) 覆盖。resume 后模型实际消费、restore 中 amendment 及其他 Host 仍待资格验证 |
 
 确定性的包测试不足以支撑接入。新宿主至少需要一条真实宿主行：一个真实进程、一次真实
 绑定、一次真实重启。

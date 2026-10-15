@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {normalizeExploreResultAttachment} from "../../loopx/control_plane/capabilities/explore_result_writeback.ts";
+import {normalizeExploreResultAttachment, planExploreQuestionEvolution} from "../../loopx/control_plane/capabilities/explore_result_writeback.ts";
 
 const attachment = {
   schema_version: "explore_result_attachment_v0", node_id: "tail-bound",
@@ -10,6 +10,54 @@ const attachment = {
   interpretation: "Require a uniform estimate.", status: "refuted",
   evidence_refs: ["validation:prefix", "validation:tail"],
 };
+
+test("question lifecycle is explicit, independent of finding status, and available on path capture", () => {
+  const update = {status: "resolved"};
+  const relations = [{to_node: "uniform-estimate", edge_type: "depends_on", summary: "Required before transfer."}];
+  const input = {...attachment, question_update: update, relations};
+  assert.equal(normalizeExploreResultAttachment({attachment: input}).status, "refuted");
+  assert.deepEqual(normalizeExploreResultAttachment({attachment: input}).question_update, update);
+  assert.equal(Object.hasOwn(normalizeExploreResultAttachment({attachment}), "question_update"), false);
+  const result = normalizeExploreResultAttachment({attachment: {...scope, question_update: update, relations},
+    vision_packet: {path_delta: delta}});
+  assert.deepEqual(result.question_update, update);
+  assert.deepEqual(result.relations, relations);
+  assert.deepEqual(normalizeExploreResultAttachment({attachment: {...input,
+    relations: [...relations, {to_node: "counterexample", edge_type: "supports", summary: "A separate bound."}]},
+  other_attachment: {...input,
+    relations: [{to_node: "counterexample", edge_type: "supports", summary: "A separate bound."}, ...relations]}}).question_update, update);
+});
+
+test("question updates reject malformed statuses, invented fields and unsupported relation intent", () => {
+  for (const update of [null, {}, {status: "confirmed"}, {status: "blocked"},
+    {status: "blocked", blocked_reason: ""}, {status: "open", blocked_reason: "Not blocked"},
+    {status: "resolved", title: "Rewrite scope"}]) {
+    assert.throws(() => normalizeExploreResultAttachment({attachment: {...attachment, question_update: update}}));
+  }
+  assert.deepEqual(normalizeExploreResultAttachment({attachment: {...attachment,
+    question_update: {status: "blocked", blocked_reason: "Need the uniform bound to continue."}}}).question_update,
+  {status: "blocked", blocked_reason: "Need the uniform bound to continue."});
+  const relation = {to_node: "bound", edge_type: "depends_on", summary: "Required prerequisite."};
+  for (const relations of [null, [], [relation, relation], [{...relation, to_node: attachment.node_id}],
+    [{...relation, edge_type: "happened_after"}], [{...relation, summary: ""}],
+    [{...relation, from_node: "foreign"}]]) {
+    assert.throws(() => normalizeExploreResultAttachment({attachment: {...attachment, relations}}));
+  }
+});
+
+test("stateful question evolution uses its current owner, existing targets and acyclic prerequisites", () => {
+  const node = {node_id: attachment.node_id, agent_id: "worker", node_kind: "question",
+    title: attachment.question, summary: attachment.applicability};
+  const relation = {to_node: "bound", edge_type: "depends_on", summary: "Required before transfer."};
+  const request = {attachment: {...attachment, question_update: {status: "resolved"}, relations: [relation]},
+    agent_id: "worker", nodes: [node, {node_id: "bound"}], edges: []};
+  assert.deepEqual(planExploreQuestionEvolution(request), {existing_node: node});
+  assert.throws(() => planExploreQuestionEvolution({...request, agent_id: "other"}), /owner/);
+  assert.throws(() => planExploreQuestionEvolution({...request, nodes: [{...node, summary: "Changed scope"}, {node_id: "bound"}]}), /scope/);
+  assert.throws(() => planExploreQuestionEvolution({...request, nodes: [node]}), /target/);
+  assert.throws(() => planExploreQuestionEvolution({...request, edges: [{from_node: "bound", to_node: node.node_id,
+    edge_type: "depends_on"}]}), /cycle/);
+});
 
 test("two explicit sources normalize and coalesce equivalent scoped evidence", () => {
   const other = {...attachment, observation: ` ${attachment.observation} `,

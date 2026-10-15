@@ -695,7 +695,8 @@ export function isTerminalNoFollowup(decision) {
 
 export function shouldRunNow(decision) {
   const hint = decision?.scheduler_hint
-  return hint?.action === "run_now" || decision?.should_run === true
+  return decision?.ok !== false && decision?.should_run === true &&
+    hint?.action !== "stop_until_explicit_resume"
 }
 
 export function waitPlan(decision, binding) {
@@ -810,6 +811,7 @@ export function createGoalLoop(options) {
     cancelScheduled(key)
     const scheduledEpoch = epoch
     const timer = setTimer(async () => {
+      if (timers.get(key) !== timer) return
       timers.delete(key)
       if (disposed || epoch !== scheduledEpoch) return
       try {
@@ -885,6 +887,13 @@ export function createGoalLoop(options) {
     }
 
     const applyDecision = async (nextDecision, allowFinalCheck = true) => {
+      if (nextDecision?.scheduler_hint?.action === "stop_until_explicit_resume" && !isTerminalNoFollowup(nextDecision)) {
+        const committed = await store.write(key, { autoResume: false }, expected)
+        if (!committed || disposed || epoch !== instanceEpoch) return
+        cancelScheduled(key)
+        services.notify(`LoopX goal ${current.goalId} paused; resolve its Core stop condition, then run /loopx resume.`, "info")
+        return
+      }
       if (isTerminalNoFollowup(nextDecision)) {
         // Commit through the store's compare-and-swap: if the same session
         // activated a new goal while this write was in-flight, the commit is
@@ -1088,7 +1097,7 @@ export function createGoalLoop(options) {
       if (!binding || binding.terminal) return
       if (String(prompt || "") !== binding.lastInjectedPrompt) {
         const expected = { generation: binding.generation || 0, goalId: binding.goalId }
-        const committed = await services.store.write(key, { autoResume: false }, expected)
+        const committed = await services.store.write(key, { autoResume: false, generation: (binding.generation || 0) + 1 }, expected)
         if (!committed) return
         if (disposed || epoch !== instanceEpoch) return
         cancelScheduled(key)
@@ -1108,7 +1117,7 @@ export function createGoalLoop(options) {
       if (disposed || epoch !== instanceEpoch) return null
       if (!binding || binding.terminal) return binding
       const expected = { generation: binding.generation || 0, goalId: binding.goalId }
-      const committed = await services.store.write(key, { autoResume: false }, expected)
+      const committed = await services.store.write(key, { autoResume: false, generation: (binding.generation || 0) + 1 }, expected)
       if (!committed || disposed || epoch !== instanceEpoch) return committed
       cancelScheduled(key)
       services.notify(
@@ -1121,7 +1130,12 @@ export function createGoalLoop(options) {
       if (disposed) return null
       const services = contexts.get(key)
       if (!services) return null
-      const binding = await services.store.write(key, { autoResume: true, terminal: false })
+      const current = await services.store.read(key)
+      if (!current || disposed) return null
+      const binding = await services.store.write(key,
+        { autoResume: true, terminal: false, generation: (current.generation || 0) + 1 },
+        { generation: current.generation || 0, goalId: current.goalId })
+      if (!binding) return null
       if (disposed) return null
       cancelScheduled(key)
       services.notify(`LoopX goal ${binding.goalId} auto-continuation resumed.`, "info")

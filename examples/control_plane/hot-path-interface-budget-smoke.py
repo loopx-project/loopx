@@ -49,8 +49,8 @@ SURFACE_BUDGETS = {
         "owner": "heartbeat automation",
         "consumer": "wake and route one bounded turn",
         "cold_path": "quota should-run, status, or review-packet --handoff-only",
-        # Includes generator metadata and scoped commands, not just task_body.
-        # The independent 3,000-character thin body cap is checked separately.
+        # The shipped Agent projection, excluding generator-only diagnostics.
+        # The independent 3,200-character thin body cap is checked separately.
         "max_json_chars": 5_400,
         "max_nested_keys": 40,
         "max_top_level_keys": 30,
@@ -430,18 +430,18 @@ def main() -> int:
                 runtime_profile="codex_app_heartbeat",
             )
         )
-        # Real automations normally bind an agent; the unbound fixture alone
-        # misses repeated identity/scope arguments in the generator envelope.
+        # Real automations normally bind an agent. Measure the same shipped
+        # projection for every fixture, including its identity/scope guidance.
         for binding in (
             {"agent_id": "worker-a"},
             {"agent_id": "worker-a", "agent_scopes": ["implementation", "review"]},
         ):
-            assert_surface("heartbeat_prompt_json", build_heartbeat_prompt(
+            assert_surface("heartbeat_prompt_json", project_heartbeat_agent_input(build_heartbeat_prompt(
                 goal_id=GOAL_ID,
                 thin=True,
                 runtime_profile="codex_app_heartbeat",
                 **binding,
-            ))
+            )))
 
         assert quota_payload["should_run"] is True, quota_payload
         reset_policy = quota_payload["scheduler_hint"]["reset_policy"]

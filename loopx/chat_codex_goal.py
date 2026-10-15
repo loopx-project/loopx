@@ -113,19 +113,30 @@ class CodexGoalDriver:
         return raw
 
     def pause(self) -> None:
-        """Fence activation before pausing; stop the in-flight native turn too."""
+        """Fence activation, confirm host pause, and stop the native turn."""
         self.stopped.set()
         with self.mutation_lock:
-            current = self.read()
-            if current and current["status"] == NativeGoalStatus.ACTIVE:
-                self.session._request(
-                    "thread/goal/set",
-                    {
-                        "threadId": self.session.thread_id,
-                        "status": "paused",
-                    },
-                )
-            self.session.interrupt()
+            try:
+                current = self.read()
+                if current and current["status"] == NativeGoalStatus.ACTIVE:
+                    self.session._request(
+                        "thread/goal/set",
+                        {
+                            "threadId": self.session.thread_id,
+                            "status": "paused",
+                        },
+                    )
+                    current = self.read()
+                    if current is None or current["status"] == NativeGoalStatus.ACTIVE:
+                        raise self.session._runtime_error(
+                            "Codex native Goal pause could not be confirmed."
+                        )
+                self.session.interrupt()
+            except Exception:
+                # Stop and cold recovery also call pause directly. A successful
+                # set ACK alone must not leave this owned transport running.
+                self.session.close()
+                raise
 
     @staticmethod
     def compact(goal: dict[str, Any] | None) -> dict[str, Any]:
@@ -258,6 +269,11 @@ class CodexGoalDriver:
         goal = self.read()
         last_facts = None
         while True:
+            if self.stopped.is_set():
+                # Join a concurrent Stop before reporting its outcome. The
+                # cached pre-Stop status is not an authoritative pause receipt.
+                self.pause()
+                goal = self.read()
             if goal is None:
                 raise self.session._runtime_error("The active native Goal disappeared.")
             facts = self.compact(goal)
@@ -285,6 +301,13 @@ class CodexGoalDriver:
             event = self.session._next_event(
                 deadline=deadline if deadline is not None else time.monotonic() + self.session.idle_timeout_sec
             )
+            if self.stopped.is_set():
+                # A start already submitted by the host may arrive after Stop.
+                # Retain its exact id for interrupt, never for input delivery.
+                if (event.get("method") == "turn/started"
+                        and _event_thread_id(event) == self.session.thread_id):
+                    self.session.current_turn_id = _event_turn_id(event)
+                continue
             if self.session._check_server_gate(event):
                 continue
             if _event_thread_id(event) not in {"", self.session.thread_id}:
@@ -297,14 +320,18 @@ class CodexGoalDriver:
                 continue
             turn_id = _event_turn_id(event)
             if method == "turn/started" and turn_id:
-                current_turn = self.session.current_turn_id = turn_id
-                delta_items.clear()
-                emit("turn.started", {"upstream_turn_id": turn_id})
-                if self.resume_context:
-                    context, self.resume_context = self.resume_context, None
-                    self.session.steer(context, expected_turn_id=turn_id)
-                if self.turn_start_handler:
-                    self.turn_start_handler(turn_id)
+                with self.mutation_lock:
+                    if self.stopped.is_set():
+                        self.session.current_turn_id = turn_id
+                        continue
+                    current_turn = self.session.current_turn_id = turn_id
+                    delta_items.clear()
+                    emit("turn.started", {"upstream_turn_id": turn_id})
+                    if self.resume_context:
+                        context, self.resume_context = self.resume_context, None
+                        self.session.steer(context, expected_turn_id=turn_id)
+                    if self.turn_start_handler:
+                        self.turn_start_handler(turn_id)
             if turn_id and turn_id != current_turn:
                 continue
             if method == "item/agentMessage/delta":

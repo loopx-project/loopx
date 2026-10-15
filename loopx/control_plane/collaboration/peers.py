@@ -263,12 +263,13 @@ def _collect_returns(root, goal_id, agent_id, *, scope=None):
             "source_id"
         ) != operation.get("source_id"):
             raise ValueError("peer return scope mismatch")
-        from .inbox import result_paths, result_identity_matches
+        from .inbox import result_paths, inspect_result_identity
 
         for path in result_paths(_root(root) / "replies" / row["request_id"]):
             if path.stem == "decision":
                 continue
             reply = _read(path)
+            inspected = inspect_result_identity(reply, row, path)
             if (
                 any(
                     reply.get(k) != row.get(k)
@@ -282,7 +283,7 @@ def _collect_returns(root, goal_id, agent_id, *, scope=None):
                     if k in row
                 )
                 or reply.get("phase") != "conclusion"
-                or not result_identity_matches(reply, row, path)
+                or inspected is None
             ):
                 raise ValueError("peer reply identity conflict")
             route = _read(_root(root) / "roundtrips" / (row["request_id"] + ".json"))
@@ -320,7 +321,8 @@ def _collect_returns(root, goal_id, agent_id, *, scope=None):
                     **({"result_key": path.stem} if path.stem != "conclusion" else {}),
                     "agent_id": row["agent_id"],
                     "parent_request_id": row.get("parent_request_id"),
-                    "brief": row["brief"],
+                    "brief": inspected.get("request_brief", row["brief"]),
+                    **({key: inspected[key] for key in ("request_revision", "current_request_revision")} if "request_revision" in inspected else {}),
                     "text": reply["text"],
                     "decision": reply["decision"],
                     "created_at": reply["created_at"],
@@ -698,6 +700,7 @@ def return_result(
     caller_goal_ref=None,
     scope=None,
     update_id=None,
+    request_revision=None,
 ):
     """Route by the saved recipient, never by an Agent's coordinator role."""
     if scope is None and registry is not None:
@@ -715,6 +718,7 @@ def return_result(
                 text,
                 scope=goal_scope,
                 update_id=update_id,
+                request_revision=request_revision,
             )
     row = _entry(root, goal_id, agent_id, request_id, scope=scope)
     if row.get("source_kind") != "peer":
@@ -744,6 +748,7 @@ def return_result(
             scope=scope,
             route=route,
             update_id=update_id,
+            request_revision=request_revision,
         ),
         "status": "queued_for_requester",
     }

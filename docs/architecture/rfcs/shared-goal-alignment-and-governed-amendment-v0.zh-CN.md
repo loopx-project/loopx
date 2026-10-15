@@ -837,6 +837,80 @@ Root/proposal/adoption/commit 历史用 `--governed receipt`，JSON 请求包含
 amendment 和真实模型协作仍单独待验。禁用入口只停止新操作；保留历史 reader/fence，
 使用既有生命周期 owner 前向退休，不能删除 intent 来恢复旧 writer。
 
+### 9.4 本地来源请求变更与取消恢复
+
+本地候选已将 §5.1 接到既有请求与 Goal owner。首个 profile 要求精确的
+`source_session_v1` Goal、配置的本地 runtime、既有 canonical File/SQLite、已固定的
+目标意图和策略，以及交给注册接收者的本地私有请求。独立绑定的 Host 执行和外部
+来源尚未获此 profile 资格；这些入口不激活 Goal、不启动模型，也不扩展工作权限。
+
+原请求条目保留最初的消息、brief 和身份，其 `collaboration_request_control_v0`
+字段保存有序修正、各修订的读取/判断、唯一未决 effect 预留和操作回执。
+`request_control_contract.ts` 统一 Goal owner 与前端的有界 wire 值；它们属于请求
+领域契约，不扩张原 26 项词表验收，也不新增其形式证明声明。
+
+`goal_request_work_graph_amendment_v0` 提案携带 `source_request` 的
+`request_id`、`request_revision`、`request_digest`。提交前，请求 owner 将原操作、
+接收者、提案、Goal/work/intent basis 和实际 authority source 身份固定为预留；
+Goal 仍复用既有工作规划规则。提交和来源授权的条件中止竞争同一持久终态回执。
+丢响应、缺回执或换一个操作 ID 都不能释放预留；必须读取并关联原终态。明确过期
+的 Goal basis 写入 `rejected` 终态但不修改工作。当前请求状态与历史 Goal 结果分开。
+
+预留后仍可修正请求。记录修正后，来源入口对旧预留尝试条件中止；旧绑定保持不变，终态关联前不能开始第二个 effect。预留前
+取消关闭准入；预留后取消保持待核对。若提交先赢，显示已发生的目标变更并保留
+新增工作，不声称回滚、取消独立 Goal 工作或完成其执行/验收。来源或 provider
+身份变化会保留恢复缺口，不在另一个 store 中伪造中止。
+
+**用户路径：** 打开原私有对话中的交办详情，就地修改 brief 或取消；无需重填
+Goal、接收者或来源标识。保存以一次用户操作完成校验和写入。读取失败清除当前
+控制视图。派发前读回完整保留请求，包括来源路由、操作、依据与内容；保留失败则
+留下可编辑的页面草稿，不发送变更，不能仅凭内存值声称可跨刷新恢复。未知写入结果
+跨刷新保留该原请求，重试仍用同一操作。类型化 basis 过期
+拒绝会重新读取当前版本供编辑。取消待核对与已提交/已中止/已拒绝分别展示。
+历史 Goal 实例在此只读，不授予恢复后的运行权。
+
+**接收者路径：** `manager-inbox read` 提供当前 brief、修订、摘要和
+`source_request`。判断使用 `--request-revision N --request-digest DIGEST`，结果
+回传使用 `--request-revision N`；MCP `assess_request`、`return_result` 支持同一
+修订字段。省略修订仍指原始版本 1，迟到证据不会被重绑到新版本；新修订的首次
+结论自动使用既有不可变结果更新链。原对话回传的 `--phase decision` 按修订
+保留一条不可变中途进展；旧结论不能压掉新修订的进展，同一修订已有结论时才
+收起尚未发送的进展。原始判断与结果记录保持不变。同伴和原对话回读都标识来源修订。
+
+为此请求提出固定模板变更时，在既有 governed proposal 字段中保留
+`source_request`。提交使用原 `proposal_id`、`proposal_digest`、`source_request`
+及稳定 `--operation-id`；适配器贯通真实预留与回执关联。删除提案来源上下文不能
+把来源请求变更伪装成独立提交。
+
+原发起者通过以下命令查询、修正、取消或恢复：
+
+```sh
+loopx --registry REGISTRY --runtime-root RUNTIME --format json manager-inbox control \
+  --goal-id GOAL --goal-instance-id INSTANCE --agent-id REQUESTER \
+  --peer-agent-id RECEIVER --request-id REQUEST --control-operation inspect
+```
+
+`revise`/`cancel` 携带 `--operation-id` 和 `--control-file`，JSON 包含
+`expected_revision`、`expected_digest`、`reason`，修正另含完整 `brief`；写入需要
+`--execute`。只有原本地对话的已验证 owner 可省略 `--agent-id`。`recover --execute`
+读取原终态，可条件中止已取消或已被修正取代的预留，不能重派未知 effect。绑定同伴的 MCP
+`control_peer_request` 复用同一 owner；浏览器不能模拟接收者或同伴。
+
+容量为八个修订、十六个 effect 预留、六十四个请求操作回执，并保留既有
+128,000 字节条目读取边界。新工作准入按合法取消说明的最大 JSON 编码成本和
+终态关联预留空间，超限在落盘前拒绝；重放不新增容量占用。来源正文/产物沿用
+原 owner 和边界，没有新的私有 locator 自动发现服务。
+
+验收覆盖真实来源注册、请求 IO、File/SQLite Goal 事务、独立 CLI/MCP 消费者、
+原对话 HTTP 和打包界面；共享 Goal 事务还须经过隔离真实 PostgreSQL。合成进度
+不是模型行为。通用重派、任意 Host effect、真实飞书/模型、恢复后 writer 激活和
+完整 M2/G1 仍未获资格。飞书 tracking 复用相同修订/控制事实和受众过滤，不能把
+回读测试当成真实发送证据。
+
+使用前可回退代码；产生新控制/提案记录后，应停止新准入并保留 reader、原请求与
+Goal 回执及 fence。不能删除 control 字段或只回滚其中一个 owner 来恢复可执行性。
+恢复与更广 runtime/profile 的推广仍遵循原 owner 和资格门限。
+
 ## 10. 分阶段交付
 
 1. **Stage 0 — characterization 与 RFC。** 记录 own-lane、unclaimed、

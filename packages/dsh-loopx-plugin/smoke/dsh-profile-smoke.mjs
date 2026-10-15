@@ -26,6 +26,8 @@ const packedStaticEntries = new Set([
   'package/lib/driver.js',
   'package/lib/index.js',
   'package/lib/init-command.js',
+  'package/lib/native-operation-context.js',
+  'package/lib/native-operation.js',
   'package/lib/observer.js',
   'package/lib/types/cli.d.ts',
   'package/lib/types/client/LoopXGoalBar.d.ts',
@@ -43,6 +45,8 @@ const packedStaticEntries = new Set([
   'package/lib/types/index.d.ts',
   'package/lib/types/init-command.d.ts',
   'package/lib/types/managed-runtime.d.ts',
+  'package/lib/types/native-operation-context.d.ts',
+  'package/lib/types/native-operation.d.ts',
   'package/lib/types/observer.d.ts',
   'package/package.json',
 ])

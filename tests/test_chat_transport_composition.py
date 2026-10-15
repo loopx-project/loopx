@@ -171,6 +171,8 @@ def test_return_rechecks_actual_typed_binding_after_owner_disconnect(ordinary): 
 @pytest.mark.parametrize("installed", [False, True])
 def test_real_chat_entrypoint_composes_one_store_controller_and_return_service(tmp_path, monkeypatch, installed):
     import loopx.chat_server as chat
+    from loopx.cli import build_parser
+    from loopx.cli_commands.support_control_chat import chat_server_options
     from loopx.extensions.lark.cli_resolution import LarkCliResolution
     home = tmp_path / "home"
     registry = home / ".loopx" / "registry.json"
@@ -202,16 +204,21 @@ def test_real_chat_entrypoint_composes_one_store_controller_and_return_service(t
             captured.append(self)
             entered.set()
     monkeypatch.setattr(chat, "ChatHTTPServer", Server)
-    worker = threading.Thread(target=chat.serve_chat, kwargs={"registry_path": registry, "port": 0,
-        "runtime_root_override": tmp_path / "runtime", "assets_dir": assets,
-        "external_conversation_factories": (lambda server: external,) if installed else (),
-        "codex_bin": "unavailable-fixture"}, daemon=True)
+    args = build_parser().parse_args(["--runtime-root", str(tmp_path / "runtime"),
+        "chat", "--port", "0", "--assets-dir", str(assets), "--no-open",
+        "--codex-bin", "unavailable-fixture"])
+    options = chat_server_options(args, registry_path=registry)
+    assert options["startup_timeout_sec"] is None
+    worker = threading.Thread(target=chat.serve_chat, kwargs={**options,
+        "external_conversation_factories": (lambda server: external,) if installed else ()}, daemon=True)
     worker.start()
     try:
         assert entered.wait(8)
         server = captured[0]
         with urlopen(f"http://127.0.0.1:{server.server_port}/healthz", timeout=8) as response:
             assert json.load(response)["ok"] is True
+        assert server.runtime_controller.startup_timeout_sec == 30.0
+        assert server.runtime_controller.acp_startup_timeout_sec is None
         assert server.manager_return_service.args[2] is server.chat_store
         if installed:
             assert server.manager_return_service.args[3] is server.conversation_transports

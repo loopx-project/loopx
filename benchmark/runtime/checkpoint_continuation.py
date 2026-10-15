@@ -22,7 +22,7 @@ def restored_capture_gate(env, current_obligation_id=None):
         return {"capture_allowed": True}
     from .codex import Execution
     from .sessions import BenchmarkSessionWake
-    from .native_checkpoint import native_session_checkpoint
+    from loopx.hosts.codex_checkpoint import native_session_checkpoint
 
     wake = BenchmarkSessionWake(env, Execution(context="resume",
         sandbox=env.get("LOOPX_CODEX_SANDBOX", "danger-full-access")), {})

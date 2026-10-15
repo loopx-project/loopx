@@ -859,6 +859,14 @@ User action 按 `bound_agent` 路由（兼容旧 claim 回退），不是执行�
 本批不替换 source adapter、不新增 inventory，也不宣称整个 T3 完成；继续按下文
 审计剩余消费者。独立 Todo summary 的展示 codec 保留至其真实调用者迁移。
 
+Quota 批次的协同发布 v4 carrier 将同一个 producer record 只存一次，各 lane
+保留有序引用。Python 在原消费者读取前恢复相互独立的可变记录；完整决策、元数据、
+null／缺省与来源完整性保持。v0–v3 仍返回原格式。此修复处理有效规划请求的多份
+lane 正文超过 2 MiB 响应边界、从而阻断启动及 Goal 增长后的原 Turn 重放的问题。
+全局 frame 上限及未知效果策略不变；解码在复制记录前沿用既有本地 snapshot 的
+64 MiB 展开边界。这是内部传输，不新增 capability、设置、授权源，也不代表安装态
+已采用此修改。
+
 当前有边界交付：shared-goal alignment 与 amendment admission 每次决策共用一份
 `shared_goal_work_source.py` 快照，promotion 后复用 canonical Todo summary；同一次
 provider 读取可返回同 revision 的 lease。缺失／空／陈旧展示及旧 lease 文件不再是

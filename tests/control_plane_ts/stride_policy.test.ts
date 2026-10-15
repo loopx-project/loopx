@@ -57,6 +57,18 @@ test("goal-value questions are enabled review input, not persisted decisions or 
   const contract = strideControlContract({stride_strategy: "evidence_conditioned_v1"}, proposal.reference_obligation_id)!;
   assert.deepEqual(Object.keys(contract.decision_value_review as object),
     ["work_slice", "route_distance", "validation_scope"]);
+  const validation = (contract.decision_value_review as Record<string, string>).validation_scope;
+  // These clauses are Agent-consumed behavior, not machine classification of
+  // a failed check. Keep both decision value and the authority boundary visible.
+  assert.match(validation, /identify its source and protected goal/);
+  assert.match(validation, /compare the incumbent under the same relevant control/);
+  assert.match(validation, /measure or bound the effect on the goal/);
+  assert.match(validation, /finite diagnosis that can decide grow or switch/);
+  assert.match(validation, /explicit rationale and retained counterevidence/);
+  assert.match(validation, /cannot turn an earlier failure into a pass, relax an original constraint or override a frozen study criterion/);
+  assert.match(validation, /readiness for an authorized informative evaluation/);
+  assert.match(validation, /evidence sufficient to replace the incumbent/);
+  assert.match(validation, /budget, feedback and permission limits/);
   // All existing legal choices remain valid without answering a new field.
   for (const action of ["grow", "switch", "verify"]) {
     const decision = normalizeStrideDecision({...proposal, action})[0]!;

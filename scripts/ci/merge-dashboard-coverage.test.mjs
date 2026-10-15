@@ -17,12 +17,15 @@ test("coverage merge preserves disjoint hits and rejects missing or duplicate ac
       await mkdir(shard);
       await writeReceipt(index,`scenario-${index}`);
       await writeFile(resolve(shard,"browser-coverage.json"),JSON.stringify({[source]:file(index===2?1:0)}));
-      await writeFile(resolve(shard,"lcov.info"),"unit-coverage-preserved");
+      if (index === 1) await writeFile(resolve(shard,"lcov.info"),"unit-coverage-preserved");
     }
     let result = run();
     assert.equal(result.status,0,result.stderr);
     assert.match(await readFile(resolve(root,"merged/browser-lcov.info"),"utf8"),/DA:1,1/);
     assert.equal(await readFile(resolve(root,"merged/lcov.info"),"utf8"),"unit-coverage-preserved");
+    await rm(resolve(root,"dashboard-coverage-1/lcov.info"));
+    assert.notEqual(run().status,0,"unit coverage is still required");
+    await writeFile(resolve(root,"dashboard-coverage-1/lcov.info"),"unit-coverage-preserved");
     await writeReceipt(3,"scenario-2");
     result=run();assert.notEqual(result.status,0);assert.match(result.stderr,/overlapping/);
     await rm(resolve(root,"dashboard-coverage-3"),{recursive:true});

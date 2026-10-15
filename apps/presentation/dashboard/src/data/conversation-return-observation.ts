@@ -7,15 +7,16 @@ function conversationReadRevision(session: ChatSessionSummary): string | null {
 }
 
 /** One read-only observation across known conversations; never discovers work or starts a Turn. */
-export async function readConversationReturns({ sessionIds, pendingSessionIds, revisions, receive, signal }: {
+export async function readConversationReturns({ sessionIds, pendingSessionIds, revisions, receive, signal, sessions }: {
   sessionIds: string[];
   pendingSessionIds: Set<string>;
   revisions: Map<string, string>;
   receive: (snapshot: ChatSessionSnapshot) => void;
   signal: AbortSignal;
+  sessions?: ChatSessionSummary[];
 }): Promise<string[]> {
-  const index = await fetchChatSessions({ signal });
-  const listed = new Map(index.sessions.map((session) => [session.session_id, session]));
+  const listedSessions = sessions ?? (await fetchChatSessions({ signal })).sessions;
+  const listed = new Map(listedSessions.map((session) => [session.session_id, session]));
   const changed = sessionIds.filter((id) => {
     const session = listed.get(id);
     const revision = session && conversationReadRevision(session);
@@ -37,4 +38,27 @@ export async function readConversationReturns({ sessionIds, pendingSessionIds, r
     results.forEach((result, index) => { if (result.status === "rejected") unavailable.push(batch[index]); });
   }
   return unavailable;
+}
+
+export async function readTaskSessions(goalId: string, previous: Record<string, ChatSessionSnapshot>, signal: AbortSignal) {
+  const listed = await fetchChatSessions({ goalId, signal });
+  const sessions = listed.sessions.filter((session) => session.channel_id?.startsWith("task."));
+  const snapshots: Record<string, ChatSessionSnapshot> = {};
+  const revisions = new Map<string, string>();
+  for (const session of sessions) {
+    const snapshot = previous[session.session_id];
+    if (!snapshot) continue;
+    snapshots[session.session_id] = snapshot;
+    const revision = conversationReadRevision(snapshot.session);
+    if (revision) revisions.set(session.session_id, revision);
+  }
+  const unavailableSessionIds = await readConversationReturns({
+    sessions,
+    sessionIds: sessions.map((session) => session.session_id),
+    pendingSessionIds: new Set(sessions.filter((session) => session.active_turn_id).map((session) => session.session_id)),
+    revisions,
+    receive(snapshot) { snapshots[snapshot.session.session_id] = snapshot; },
+    signal,
+  });
+  return { sessions, snapshots, unavailableSessionIds };
 }

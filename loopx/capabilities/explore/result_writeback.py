@@ -19,6 +19,7 @@ from .result_log import (
     append_explore_result_events,
     build_explore_node_event,
     build_explore_finding_event,
+    build_explore_edge_event,
     explore_result_log_path,
     load_explore_result_events_strict,
     build_explore_result_projection,
@@ -86,7 +87,20 @@ def _linked_scope_context(
                       if node.get("node_id") in node_ids]}
 
 
-def _events(attachment, *, goal_id, agent_id, source_id, recorded_at):
+def _evolves_question(attachment):
+    return "question_update" in attachment or "relations" in attachment
+
+
+def _evolution_plan(attachment, projection, *, agent_id):
+    return effect_runtime_result("explore.result.evolution", {
+        "attachment": attachment, "agent_id": agent_id,
+        "nodes": projection["nodes"], "edges": projection["edges"],
+    })
+
+
+def _events(attachment, *, goal_id, agent_id, source_id, recorded_at, existing_node=None):
+    previous = existing_node or {}
+    update = attachment.get("question_update") or {}
     node = build_explore_node_event(
         goal_id=goal_id,
         agent_id=agent_id,
@@ -94,7 +108,14 @@ def _events(attachment, *, goal_id, agent_id, source_id, recorded_at):
         node_kind="question",
         title=attachment["question"],
         summary=attachment["applicability"],
-        status="open",
+        status=update.get("status", previous.get("status", "open")),
+        blocked_reason=(update.get("blocked_reason") if update else previous.get("blocked_reason")),
+        parent_id=previous.get("parent_id"),
+        evidence_refs=previous.get("evidence_refs"),
+        tags=previous.get("tags"),
+        supersedes=previous.get("supersedes"),
+        run_id=source_id if _evolves_question(attachment) else None,
+        research_observation=previous.get("research_observation"),
         recorded_at=recorded_at,
     )
     finding = build_explore_finding_event(
@@ -114,7 +135,12 @@ def _events(attachment, *, goal_id, agent_id, source_id, recorded_at):
         tags=["writeback-result"],
         recorded_at=recorded_at,
     )
-    return [node, finding]
+    relations = [build_explore_edge_event(
+        goal_id=goal_id, agent_id=agent_id, from_node=attachment["node_id"],
+        to_node=relation["to_node"], edge_type=relation["edge_type"],
+        summary=relation["summary"], run_id=source_id, recorded_at=recorded_at,
+    ) for relation in attachment.get("relations", [])]
+    return [node, finding, *relations]
 
 
 def _link_arguments(
@@ -192,12 +218,12 @@ def prepare_result_attachment(
         source_id="validation",
         recorded_at="2000-01-01T00:00:00Z",
     )
-    existing = build_explore_result_projection(
-        load_explore_result_events_strict(
-            explore_result_log_path(runtime_root, goal_id), goal_id=goal_id
-        ),
-        goal_id=goal_id,
+    current_events = load_explore_result_events_strict(
+        explore_result_log_path(runtime_root, goal_id), goal_id=goal_id
     )
+    existing = build_explore_result_projection(current_events, goal_id=goal_id)
+    if _evolves_question(result):
+        _evolution_plan(result, existing, agent_id=agent_id)
     for node in existing.get("nodes", []):
         if node.get("node_id") != result["node_id"]:
             continue
@@ -310,28 +336,41 @@ def deliver_result_attachment(
                 "finding_id": expected[1]["result_id"],
                 "todo_id": todo_id,
             }
-        attachment = prepare_result_attachment(
-            intent["payload"]["attachment"],
-            registry_path=registry_path,
-            runtime_root=runtime_root,
-            goal_id=goal_id,
-            agent_id=agent_id,
-            todo_id=todo_id,
-            turn_instance_id=turn_instance_id,
-        )
-        events = _events(
-            attachment,
-            goal_id=goal_id,
-            agent_id=agent_id,
-            source_id=intent["idempotency_key"],
-            recorded_at=committed_at,
-        )
-        result["graph"] = append_explore_result_events(
-            explore_result_log_path(runtime_root, goal_id),
-            events,
-            expected_goal_id=goal_id,
-            create_only_node_ids=[attachment["node_id"]],
-        )
+        if expected[1] in existing_events:
+            # The graph batch committed atomically; only its Todo link is missing.
+            # A later owner update must survive recovery of this old receipt.
+            events = expected
+            result["graph"] = {"ok": True, "appended_event_count": 0,
+                               "idempotent_replay": True}
+        else:
+            attachment = prepare_result_attachment(
+                intent["payload"]["attachment"],
+                registry_path=registry_path,
+                runtime_root=runtime_root,
+                goal_id=goal_id,
+                agent_id=agent_id,
+                todo_id=todo_id,
+                turn_instance_id=turn_instance_id,
+            )
+            current_events = load_explore_result_events_strict(
+                explore_result_log_path(runtime_root, goal_id), goal_id=goal_id
+            )
+            evolves = _evolves_question(attachment)
+            plan = (_evolution_plan(attachment,
+                                   build_explore_result_projection(current_events, goal_id=goal_id),
+                                   agent_id=agent_id)
+                    if evolves else {})
+            events = _events(
+                attachment, goal_id=goal_id, agent_id=agent_id,
+                source_id=intent["idempotency_key"], recorded_at=committed_at,
+                existing_node=plan.get("existing_node"),
+            )
+            result["graph"] = append_explore_result_events(
+                explore_result_log_path(runtime_root, goal_id), events,
+                expected_goal_id=goal_id,
+                create_only_node_ids=[] if evolves else [attachment["node_id"]],
+                expected_event_ids=([row["event_id"] for row in current_events] if evolves else None),
+            )
         linked = update_goal_todo(
             **_link_arguments(
                 registry_path=registry_path,

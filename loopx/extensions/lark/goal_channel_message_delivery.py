@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 from collections.abc import Callable, Mapping
 from contextlib import ExitStack
@@ -242,13 +243,29 @@ def _card_v2_element_lines(value: object) -> list[str] | None:
     tag = value.get("tag")
     if tag == "markdown":
         content = value.get("content")
-        return [content] if isinstance(content, str) and content else None
+        # The provider's userDSL describes rendered Markdown, including entity
+        # decoding. Plain-text elements below retain their literal content.
+        return (
+            [html.unescape(content)] if isinstance(content, str) and content else None
+        )
     if tag in {"plain_text", "text"}:
         content = value.get("content") or value.get("text")
         return [content] if isinstance(content, str) and content else None
     if tag == "button":
         label = _text_content(value.get("text"))
-        return [f"[{label}]"] if label else None
+        if not label:
+            return None
+        text = f"[{label}]"
+        if "confirm" in value:
+            confirm = value["confirm"]
+            if not isinstance(confirm, Mapping):
+                return None
+            title = _text_content(confirm.get("title"))
+            body = _text_content(confirm.get("text"))
+            if not title or not body:
+                return None
+            text += f"(confirm:{json.dumps(f'{title}: {body}', ensure_ascii=False)})"
+        return [text]
     children: object = None
     if tag == "column_set":
         children = value.get("columns")
@@ -265,7 +282,11 @@ def _card_v2_element_lines(value: object) -> list[str] | None:
         if (
             isinstance(child, Mapping)
             and child.get("tag") == "column"
-            and all(line.startswith("[") and line.endswith("]") for line in child_lines)
+            and isinstance(child.get("elements"), list)
+            and all(
+                isinstance(item, Mapping) and item.get("tag") == "button"
+                for item in child["elements"]
+            )
         ):
             button_labels.extend(child_lines)
         else:

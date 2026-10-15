@@ -37,6 +37,9 @@ for line in sys.stdin:
         result = {"serverInfo": {"name": "fake-runtime-codex"}}
     elif method in {"thread/start", "thread/resume"}:
         result = {"thread": {"id": "durable-thread"}}
+        settings = (request.get("params", {}).get("config") or {}).get("sandbox_workspace_write")
+        if settings is not None:
+            result["sandbox"] = {"type": "workspaceWrite", "writableRoots": settings["writable_roots"]}
     elif method in {"thread/goal/set", "thread/goal/get"}:
         print(json.dumps({
             "id": request_id,

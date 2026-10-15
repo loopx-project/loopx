@@ -27,6 +27,28 @@ before ordinary chat, then hands off to the same CLI-backed lifecycle.
 | Loopback server adapter | Provide compact status and controlled write endpoints for local dashboards or host runtimes. | Bind remotely by default, publish private state, or make browser/frontstage/server writes authoritative without CLI-equivalent dry-run. |
 | CLI fallback | Preserve a deterministic path for every read and write when the hook/MCP/server layer is absent or unhealthy. | Become a hidden headless execution path for TUI-first bootstrap unless the user explicitly opted in. |
 
+## Codex Ordinary Project Git Writes
+
+An ordinary project with the Core `workspace_write` grant adds its physical
+`.git` directory to the native workspace policy's explicit write roots. When
+both `.codex` and `.codex/skills` are physical directories, it also adds only
+the project skills subtree, so an authorized checkout or merge can update
+repository skills. Codex otherwise protects `.codex` recursively even inside
+a writable workspace. Project configuration, other protected directories and
+the account's native store gain no write root.
+
+Start and resume require native readback of every added root; subsequent Turns
+retain the same thread policy. Existing host network, temporary-directory
+settings and approved write roots are preserved. This changes the ordinary
+project default for project skills; it does not select full access.
+
+Read-only projects and workspace-only community isolation keep their existing
+policies. A symlinked `.git` or a linked worktree's external Git directory gains
+no extra write root. Symlinked `.codex` or `skills` directories also gain no
+additional root. The ordinary project's account, tools and network policy
+remain under their existing owners; this is filesystem execution support,
+not authorization to publish or perform destructive Git operations.
+
 ## Thin Hook Activation
 
 A host hook may only activate the current LoopX lifecycle. It should:
@@ -353,6 +375,44 @@ If the host adapter is unavailable, the user or automation can run those
 commands and preserve the same state transitions. If a host offers an operation
 without a CLI fallback, that operation is experimental and must not be used as
 the default project control path.
+
+## Native Chat startup from a trusted launcher
+
+The native CLI and locally reviewed Chat launchers share
+`loopx.cli_commands.support_control_chat.chat_server_options`. Use the parser
+and builder from the same installed LoopX release instead of copying option
+conversion into a launcher:
+
+```python
+from pathlib import Path
+import sys
+
+from loopx.cli import build_parser
+from loopx.cli_commands.support_control_chat import chat_server_options
+from loopx.chat_server import serve_chat
+
+args = build_parser().parse_args(sys.argv[1:])
+options = chat_server_options(args, registry_path=Path(args.registry).expanduser())
+serve_chat(**options)
+```
+
+Invoke the launcher with the ordinary `chat` arguments, including `--no-open`
+when it runs under a supervisor. A trusted launcher can pass its locally
+reviewed `external_conversation_factories` tuple separately to `serve_chat`;
+HTTP requests and IM messages cannot select factory code.
+
+The builder accepts only the `chat` command and has no server-start, replacement,
+listener or grant effects. The CLI retains ownership of its explicit
+replacement operation. It preserves workspace grants, filesystem restrictions,
+reaction settings, registry selection and scan paths. An omitted startup timeout
+remains `None` for the native adapter defaults; an explicit timeout retains its
+existing lower clamp and upper-bound meaning.
+
+After an upgrade, check the supervised process and `/healthz`, then verify the
+configured transport's listener, original Session and actual message return.
+HTTP health alone does not establish message delivery. This startup helper
+does not admit missed messages or replay existing Turns; outage catch-up retains
+the original source, audience and idempotency requirements of its owning transport.
 
 ## Public/Private Boundary
 

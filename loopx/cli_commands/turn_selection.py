@@ -126,5 +126,6 @@ def managed_executor_cli_binding(
             else None
         ),
         codex_operation_tools=bool(getattr(args, "codex_operation_tools", False)),
+        dsh_operation_module_configured=bool(getattr(args, "dsh_operation_module", None)),
         codex_sandbox=getattr(args, "codex_sandbox", "read-only"),
     )

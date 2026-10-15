@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import { outputDir } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
+import { reconcileGoalAttention } from "../../loopx/control_plane/presentation/goal_attention.ts";
 
 // Execution is shown only from session-owner facts; open Todos, quota eligibility and bound host threads stay "queued".
 function taskSession(goalId, sessionId, activeTurnId, lastActivityAt, host = null, mode = host ? "attached_host" : "managed_runtime") {
@@ -237,6 +238,47 @@ export const goalActivityScenario = {
         await partial.close();
         throw error;
       }
+    }
+
+    // Pair the packaged presentation with the same typed reconciliation rule
+    // exercised through real File/SQLite status reads in the integration suite.
+    const repair = await openWorkspacePage(browser, url, {
+      collectCoverage,
+      beforeGoto: (api) => {
+        api.transformStatus = (payload) => {
+          const failed = payload.attention_queue.items.find(item => item.goal_id === "product-release");
+          const failure = {goal_id: "product-release", status: "runtime_error", severity: "action",
+            waiting_on: "codex", source: "latest_run", recommended_action: "Retry the failed worker"};
+          if (failed) Object.assign(failed, failure);
+          else payload.attention_queue.items.push(failure);
+          const current = payload.attention_queue.items.find(item => item.goal_id === "progress-projection");
+          if (current) {
+            const rebuilt = reconcileGoalAttention({
+              item: {...current, source: "latest_run", recommended_action: "Obsolete routing"},
+              active_state_item: {...current, source: "active_state", status: "active_state_agent_todo", waiting_on: "codex"},
+              warning: {requires_refresh_state: true},
+              historical_run: {delivery_outcome: "outcome_progress"},
+            });
+            Object.assign(current, rebuilt.item);
+            delete current.stale_latest_run_warning;
+          }
+          return payload;
+        };
+      },
+    });
+    try {
+      const { page } = repair;
+      const failed = await goalRow(page, "Product Release");
+      await failed.locator("small", {hasText: "需修复"}).waitFor();
+      assert.equal(await page.getByTestId("personal-home-lane-running")
+        .locator(".personal-home-goal-card").filter({hasText: "Product Release"}).count(), 0,
+      "A repair request without observed execution never counts as running");
+      assert.match((await lane(page, "scheduled")).text, /Product Release/);
+      assert.doesNotMatch(await (await goalRow(page, "Progress Projection")).innerText(), /需修复|refresh-state/,
+        "A rebuilt projection asks the user for no technical repair");
+      await page.screenshot({path: resolve(outputDir, "goal-activity-auto-repair.png"), animations: "disabled"});
+    } finally {
+      coverageEntries.push(...await repair.close());
     }
 
     // The same rule must hold for the English copy: the title, count and rows

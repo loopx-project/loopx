@@ -1288,6 +1288,17 @@ This slice does not replace source adapters, add a second inventory, or claim
 full T3 completion. Continue auditing the remaining consumers below; independent
 standalone Todo summary display codecs remain until their callers migrate.
 
+The quota batch's co-deployed v4 carrier stores each shared producer record once
+and references it from ordered lanes. Python restores independent mutable
+records before the existing consumer sees them; the full decision, metadata,
+null/absent fields and source completeness remain unchanged. Versions v0–v3 keep
+their original response shape. This repairs a valid planning request whose
+repeated lane bodies exceed the 2 MiB inline response limit, blocking dispatch
+and exact committed-Turn replay after Goal growth. The global frame limit and
+unknown-effect policy are unchanged; decoded expansion uses the existing
+64 MiB local-snapshot bound before copying records. This is internal transport,
+not a new capability, setting, authority source or installed-runtime claim.
+
 Current bounded delivery: shared-goal alignment and amendment admission use one
 `shared_goal_work_source.py` snapshot per decision, reusing the canonical Todo
 summary after promotion. The same provider read optionally supplies leases at

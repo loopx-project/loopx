@@ -7,6 +7,7 @@
   "scripts": {
     "build": "tsc --noEmit && node scripts/build.mjs",
     "smoke:seo": "node scripts/seo-smoke.mjs",
+    "smoke:seo:bases": "node --test scripts/seo-smoke.test.mjs",
     "dev": "vite --host 127.0.0.1",
     "preview": "vite preview --host 127.0.0.1"
   },

@@ -31,11 +31,26 @@ export type GoalSessionFact = {
   updated_at?: string | null;
 };
 
+export function taskSessionStatus(
+  session: Pick<GoalSessionFact, "active_turn_id" | "status">,
+  outcome: { done: boolean; hasResult: boolean },
+) {
+  if (session.active_turn_id) return "running";
+  if (session.status === "resume_failed") return "failed";
+  return outcome.done || outcome.hasResult ? "completed" : "waiting";
+}
+
 /** One bound host thread as observed by the host adapter (`host_thread_activity`). */
 export type GoalHostThread = {
+  agentId?: string | null;
   hostSurface: string;
   state: "turn_open" | "idle" | "archived" | "unknown";
   lastEventAt: string | null;
+  deliveryWindow?: {
+    state: "fresh" | "stale" | "missing" | "unknown";
+    reason?: string | null;
+    ageHours?: number | null;
+  } | null;
 };
 
 /** Coverage stays with the rows so a bounded sample cannot prove all hosts idle. */
@@ -132,6 +147,20 @@ export function hostSurfaceLabel(surface: string) {
 export function goalHostSurfaces(goal: Pick<GoalActivityInput, "boundHostSurfaces" | "execution">): string[] {
   const attached = goal.execution && goal.execution.kind !== "unknown" ? goal.execution.hostSurfaces : [];
   return Array.from(new Set([...(goal.boundHostSurfaces ?? []), ...attached]));
+}
+
+/** Cadence evidence shown separately from execution; unknown/no-expectation is not an alert. */
+export function goalHostDeliveryWindows(goal: Pick<GoalActivityInput, "hostThreadActivity">) {
+  const windows = (goal.hostThreadActivity?.threads ?? [])
+    .filter((thread) => thread.deliveryWindow?.state === "stale" || thread.deliveryWindow?.state === "missing" || thread.deliveryWindow?.state === "fresh")
+    .map((thread) => ({
+      agentId: thread.agentId ?? null,
+      hostSurface: thread.hostSurface,
+      state: thread.deliveryWindow!.state as "fresh" | "stale" | "missing",
+      ageHours: thread.deliveryWindow?.ageHours ?? null,
+    }));
+  const rank = { stale: 0, missing: 1, fresh: 2 } as const;
+  return windows.sort((a, b) => rank[a.state] - rank[b.state]);
 }
 
 export type GoalActivityTone = "running" | "attention" | "danger" | "waiting" | "queued" | "quiet" | "stopped";

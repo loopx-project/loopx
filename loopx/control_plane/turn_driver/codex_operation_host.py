@@ -83,12 +83,16 @@ def operation_tool_handler(
     reasoning_effort: str,
     source_route: Mapping[str, str] | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
+    host: str = "codex-cli",
 ):
     """Private closure installed only on a process owned by the Turn driver.
 
     The caller must already have checked native thread/Turn metadata. This is
     not an MCP endpoint or a public actor/proof deserializer.
     """
+    if host not in {"codex-cli", "dsh"}:
+        raise ValueError("unsupported owned operation host")
+    surface = "loopx-managed-dsh" if host == "dsh" else "loopx-managed-codex"
     executor = {
         "kind": "managed_turn",
         "todo_id": lineage["todo_id"],
@@ -97,10 +101,11 @@ def operation_tool_handler(
         "revision": REVISION,
         "model": model,
         "reasoning_effort": reasoning_effort,
+        **({"host": "dsh"} if host == "dsh" else {}),
     }
     executor_route = {
         **lineage,
-        "host_surface": "loopx-managed-codex",
+        "host_surface": surface,
         "thread_id": session_id,
         "profile_digest": profile_digest,
     }
@@ -194,7 +199,7 @@ def operation_tool_handler(
                 }
             actor = {
                 **lineage,
-                "host_surface": "loopx-managed-codex",
+                "host_surface": surface,
                 "thread_id": session_id,
                 "profile_digest": profile_digest,
                 "model": model,
@@ -217,7 +222,11 @@ def operation_tool_handler(
             if exc.diagnostic_code == "operation_source_route_ambiguous":
                 return {"ok": False, "error": "operation_source_route_ambiguous",
                         "execution_allowed": False,
-                        "next_action": "Select a registered return audience with --codex-operation-source-route-json in the host invocation; source routing is not executor authority."}
+                        "next_action": (
+                            "Select a registered return audience in the owned DSH host source_route; source routing is not executor authority."
+                            if host == "dsh" else
+                            "Select a registered return audience with --codex-operation-source-route-json in the host invocation; source routing is not executor authority."
+                        )}
             return {"ok": False, "error": "operation_admission_rejected", "execution_allowed": False}
         except (ValueError, KeyError, TypeError, RuntimeError):
             # Private payloads, paths and adapter error text never enter the model tool error.

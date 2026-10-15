@@ -185,6 +185,7 @@ def _with_operation_transport(
     sandbox: str,
     model: str | None,
     reasoning_effort: str | None,
+    dsh_operation_module_configured: bool = False,
 ) -> dict[str, Any]:
     if enabled:
         from ..effect_runtime import effect_runtime_result
@@ -192,13 +193,14 @@ def _with_operation_transport(
         observed = effect_runtime_result(
             "operation.managed_transport.project",
             {"host": host, "sandbox": sandbox,
+             "dsh_operation_module_configured": dsh_operation_module_configured,
              "model": model, "reasoning_effort": reasoning_effort},
         )
         binding["operation_transport"] = observed["transport"]
         if observed["reason"]:
             binding["available"] = False
             binding["unavailable_reason"] = observed["reason"]
-            binding["unavailable_remediation"] = [REMEDY_CORRECT_EXECUTION_PROFILE]
+            binding["unavailable_remediation"] = observed["remediation"]
     return binding
 
 
@@ -213,6 +215,7 @@ def managed_executor_binding(
     reasoning_effort: str | None = None,
     max_tokens: int | None = None,
     codex_operation_tools: bool = False,
+    dsh_operation_module_configured: bool = False,
     codex_sandbox: str = "read-only",
 ) -> dict[str, Any]:
     """Project the executor one planned Turn would run on.
@@ -280,8 +283,9 @@ def managed_executor_binding(
             },
         }
         return _with_operation_transport(
-            binding, enabled=codex_operation_tools, host=host,
-            sandbox=codex_sandbox, model=model, reasoning_effort=reasoning_effort,
+            binding, enabled=codex_operation_tools or dsh_operation_module_configured, host=host,
+            sandbox=codex_sandbox, model=profile["model"], reasoning_effort=profile["reasoning_effort"],
+            dsh_operation_module_configured=dsh_operation_module_configured,
         )
     individual_profile: str | None = None
     if host == INDIVIDUAL_TURN_HOST and (model or reasoning_effort):
@@ -308,8 +312,9 @@ def managed_executor_binding(
         "runtime_probe": None,
     }
     return _with_operation_transport(
-        binding, enabled=codex_operation_tools, host=host,
+        binding, enabled=codex_operation_tools or dsh_operation_module_configured, host=host,
         sandbox=codex_sandbox, model=model, reasoning_effort=reasoning_effort,
+        dsh_operation_module_configured=dsh_operation_module_configured,
     )
 
 
@@ -374,6 +379,7 @@ def managed_executor_binding_from_host_args(
             else None
         ),
         codex_operation_tools="--codex-operation-tools" in host_args,
+        dsh_operation_module_configured=bool(turn_host_arg_option(host_args, "--dsh-operation-module")),
         codex_sandbox=turn_host_arg_option(host_args, "--codex-sandbox") or "read-only",
     )
 
@@ -422,7 +428,13 @@ def managed_executor_unavailable_payload(
             if str(code)
         ],
         "remediation_host": INDIVIDUAL_TURN_HOST,
-        "remediation_env_vars": list(OPERATOR_CREDENTIAL_ENV_VARS),
+        # An operation transport refusal is not an instruction to configure
+        # model credentials. The existing typed transport owner supplies its
+        # remedies and supported hosts/sandboxes independently of launchability.
+        "remediation_env_vars": (
+            [] if "operation_transport" in binding
+            else list(OPERATOR_CREDENTIAL_ENV_VARS)
+        ),
     }
 
 

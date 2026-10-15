@@ -175,8 +175,10 @@ export const goalWorkMapScenario = {
         "A graph-only Task cannot present snapshot metadata as current or enable mutations");
       await page.screenshot({ path: resolve(outputDir, "goal-map-request-only-desktop.png"), animations: "disabled" });
       await page.getByRole("button", { name: /关闭详情/ }).click();
-      assert.equal(await canvas.locator('.work-map-node[aria-pressed="true"] strong').innerText(), "Reserve the hall", "Closing details returns to the same shared selection");
-      assert.equal(new URL(page.url()).searchParams.get("todo"), "todo_map_reserve");
+      assert.equal(await drawer.count(), 0, "Closing details removes the task inspector");
+      assert.equal(await canvas.locator('.work-map-node[aria-pressed="true"]').count(), 0,
+        "Closing details clears the shared task selection");
+      assert.equal(new URL(page.url()).searchParams.get("todo"), null, "Closing details clears the task route");
 
       const hiddenRegistry = `${authority.registry}.hidden`;
       const errorsBeforeLoss = desktop.errors.length;
@@ -223,6 +225,10 @@ export const goalWorkMapScenario = {
       assert.deepEqual(await phoneDrawer.locator(".personal-task-request .personal-md > p").allTextContents(), requestParagraphs);
       assert.equal(await phoneDrawer.locator(".personal-task-inspector-actions").count(), 0);
       await phone.page.screenshot({ path: resolve(outputDir, "goal-map-request-only-mobile.png"), animations: "disabled" });
+      await phone.page.getByRole("button", { name: /关闭详情/ }).click();
+      assert.equal(await phoneDrawer.count(), 0);
+      assert.equal(await list.locator('.work-map-node[aria-pressed="true"]').count(), 0);
+      assert.equal(new URL(phone.page.url()).searchParams.get("todo"), null);
       coverageEntries.push(...await phone.close());
       return { coverageEntries, note: "Work map opens canonical requests outside the status summary, withdraws lost sources, retries without mutation, and retains typed links and mobile navigation." };
     } finally { await authority.close(); }

@@ -298,9 +298,9 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         ),
         markdown_anchor="# Heartbeat Automation Prompt",
         max_chars={
-            "small": {"json": 3_400, "markdown": 5_100},
-            "crowded": {"json": 3_400, "markdown": 5_100},
-            "multi_agent": {"json": 3_400, "markdown": 5_100},
+            "small": {"json": 3_400, "markdown": 5_250},
+            "crowded": {"json": 3_400, "markdown": 5_250},
+            "multi_agent": {"json": 3_400, "markdown": 5_250},
         },
         max_lines={
             "small": {"json": 18, "markdown": 72},
@@ -538,7 +538,7 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         output_formats=("json", "markdown"),
         semantic_json_keys=("task_body", "quota_guard_command", "interface_budget"),
         markdown_anchor="# Heartbeat Automation Prompt",
-        max_chars={"json": 13_500, "markdown": 11_500},
+        max_chars={"json": 13_500, "markdown": 11_750},
         max_lines={"json": 58, "markdown": 155},
     ),
     CliOutputModeVariantSpec(

@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
 from benchmark.runtime.worker import PHASE_WORK_RESERVE_SECONDS
@@ -61,7 +61,9 @@ def _post(controller: dict, route: str, body: dict, timeout: float) -> dict:
         data=json.dumps({**body, "admin_secret": controller["admin_secret"]}).encode(),
         headers={"Content-Type": "application/json"}, method="POST")
     try:
-        with build_opener(_NoRedirect).open(request, timeout=timeout) as response:
+        # Controller authority belongs to this explicit origin. Environment
+        # proxies must not redirect private native traffic or its credentials.
+        with build_opener(ProxyHandler({}), _NoRedirect).open(request, timeout=timeout) as response:
             result = json.load(response)
     except HTTPError as error:
         # A remote body can echo submitted credentials. Keep only the status.
@@ -237,13 +239,21 @@ def capture(controller_file: Path, *, token: str, capture_id: str, destination: 
 
 
 def restore(controller_file: Path, *, root: Path, expected_sha256: str, run_id: str,
-            timeout: float = 30, phase_deadline_file: Path | None = None, recover: bool = False) -> dict:
+            timeout: float = 30, phase_deadline_file: Path | None = None, recover: bool = False,
+            phase_extension_seconds: int = 0) -> dict:
     """Import verified inert bytes, then ask fresh native authority to admit them.
 
     An explicitly captured Host clock preserves its remaining phase duration.
+    An operator can explicitly grant additional continuation time for a new
+    study. The grant is bound to the first activation, never to recovery time;
+    it changes no native cooldown, round limit, history or scoring rule.
     Does not restore a model, LoopX Goal or effect authority.
     An uncertain response is not replayed under a different run or capture id.
     """
+    if type(phase_extension_seconds) is not int or not 0 <= phase_extension_seconds < 2 ** 53:
+        raise ValueError("Continuation phase extension must be a non-negative integer number of seconds")
+    if phase_extension_seconds and phase_deadline_file is None:
+        raise ValueError("Continuation phase extension requires the captured Host phase clock")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", run_id):
         raise ValueError("Continuation requires one explicit native run component")
     controller = _controller(controller_file)
@@ -268,7 +278,7 @@ def restore(controller_file: Path, *, root: Path, expected_sha256: str, run_id: 
         phase = _phase_budget((root / "components/host_phase_deadline").read_bytes(), native)
         if manifest["point_metadata"].get("host_phase_budget") != phase:
             raise ValueError("Host phase metadata differs from sealed deadline/native clock")
-        if phase["remaining_seconds"] <= PHASE_WORK_RESERVE_SECONDS:
+        if phase["remaining_seconds"] + phase_extension_seconds <= PHASE_WORK_RESERVE_SECONDS:
             raise ValueError("Captured Host phase has no work allowance beyond its existing reserve")
         phase_path = _phase_destination(phase_deadline_file, root=root, bank=bank, recover=recover)
     target = bank / reference["checkpoint_id"]
@@ -320,7 +330,9 @@ def restore(controller_file: Path, *, root: Path, expected_sha256: str, run_id: 
             phase_epoch = _activation_epoch(phase_path, {
                 **body, "artifact_sha256": expected_sha256, "controller_url": controller["url"],
                 "bank_root": str(bank), "phase_path": str(phase_path),
-            }, phase["remaining_seconds"], recover)
+                # Keep pre-existing zero-extension receipt bytes recoverable.
+                **({"phase_extension_seconds": phase_extension_seconds} if phase_extension_seconds else {}),
+            }, phase["remaining_seconds"] + phase_extension_seconds, recover)
             if original_phase not in (b"", f"{phase_epoch}\n".encode()):
                 raise ValueError("Host phase bytes differ from original activation")
         native_attempted = True
@@ -380,6 +392,8 @@ def main(argv=None) -> None:
                                 help="Fresh physical Host phase file, required for a capsule containing that participant")
     restore_parser.add_argument("--recover", action="store_true",
                                 help="Read the exact original native result and retain its original Host deadline")
+    restore_parser.add_argument("--phase-extension-seconds", type=int, default=0,
+                                help="Explicit operator-authorized extra time for a new continuation study; recovery never refills it")
     args = parser.parse_args(argv)
     if args.command in {"capture", "capture-worker"}:
         source_token = _physical(args.token_file).read_text().strip()
@@ -409,7 +423,8 @@ def main(argv=None) -> None:
             prior_result = json.loads(prior_raw) if prior_raw else None
             result = restore(args.controller_file, root=args.root,
                 expected_sha256=args.expected_sha256, run_id=args.run_id,
-                phase_deadline_file=args.phase_deadline_file, recover=args.recover)
+                phase_deadline_file=args.phase_deadline_file, recover=args.recover,
+                phase_extension_seconds=args.phase_extension_seconds)
             if prior_result is not None and prior_result != result:
                 raise ValueError("Existing private result differs from original native activation")
             result_file.seek(0)

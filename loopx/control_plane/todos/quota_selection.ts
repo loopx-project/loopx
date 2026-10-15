@@ -385,29 +385,54 @@ function projectTodoFrontier(summary: JsonObject, now: bigint, agent: string | n
   return {frontier_deadline: deadline, ...(retryWait ? {blocked_retry_wait: retryWait} : {})};
 }
 
+function quotaPlanningWire(planning: JsonObject): JsonObject {
+  const records: JsonObject[] = [];
+  const references = new Map<JsonObject, number>();
+  const recordLanes: string[] = [];
+  const lanes = Object.fromEntries(Object.entries(requireJsonObject(planning.lanes, "planning lanes"))
+    .map(([name, entries]) => {
+      if (!Array.isArray(entries)) return [name, entries];
+      recordLanes.push(name);
+      return [name, entries.map(entry => {
+        const record = requireJsonObject(entry, "planning record");
+        // Share only the same producer object; equal IDs can carry different facts.
+        let reference = references.get(record);
+        if (reference === undefined) {
+          reference = records.length;
+          records.push(record);
+          references.set(record, reference);
+        }
+        return reference;
+      })];
+    }));
+  return {schema_version: "todo_quota_planning_wire_v1",
+    planning: {...planning, lanes}, records, record_lanes: recordLanes};
+}
+
 /** One quota read boundary composes scope/claim selection, resume, hint
  * visibility and the typed source closure rules. */
 export function projectTodoQuotaPlanning(value: unknown): JsonObject {
   const request = requireJsonObject(value, "quota planning");
   if (!["todo_quota_planning_request_v0", "todo_quota_planning_request_v1", "todo_quota_planning_request_v2",
-      "todo_quota_planning_request_v3"].includes(String(request.schema_version))) {
+      "todo_quota_planning_request_v3", "todo_quota_planning_request_v4"].includes(String(request.schema_version))) {
     throw new EffectRuntimeRequestError("quota planning schema mismatch");
   }
   const selection = requireJsonObject(request.selection, "selection");
   if (request.schema_version !== "todo_quota_planning_request_v0") {
     requireStringArray(selection.available, "available");
   }
-  // v2 already owns route/handoff visibility and closure. Only v3 requires
-  // the shared monitor clock; older callers retain their exact input contract.
-  const observedAt = request.schema_version === "todo_quota_planning_request_v3" ? selection.observed_at : null;
+  // v4 changes transport only; v3's shared clock and older contracts stay intact.
+  const referenced = request.schema_version === "todo_quota_planning_request_v4";
+  const clocked = referenced || request.schema_version === "todo_quota_planning_request_v3";
+  const observedAt = clocked ? selection.observed_at : null;
   if (observedAt !== null && (typeof observedAt !== "number" || !Number.isFinite(observedAt))) {
     throw new EffectRuntimeRequestError("quota monitor observed_at must be finite");
   }
-  if (request.schema_version === "todo_quota_planning_request_v3" && observedAt === null) {
+  if (clocked && observedAt === null) {
     throw new EffectRuntimeRequestError("quota monitor observed_at is required");
   }
   const hasSourceContract = request.schema_version === "todo_quota_planning_request_v2" ||
-    request.schema_version === "todo_quota_planning_request_v3";
+    clocked;
   const closure = hasSourceContract ? validateTodoClosureSource(request.source_contract) : {};
   const now = request.current_time === undefined ? null :
     typeof request.current_time === "string" ? parseTodoTimestampMicros(request.current_time) : null;
@@ -451,7 +476,8 @@ export function projectTodoQuotaPlanning(value: unknown): JsonObject {
   // The full gate lane stays inside this batch. Transport only the original
   // three-row display after deadline selection, rather than duplicating bodies.
   if (now !== null) lanes.gate_items = (lanes.gate_items as JsonObject[]).slice(0, 3);
-  return {schema_version: "todo_quota_planning_v0", resume_planning: resume, ...selected, ...closure,
+  const planning = {schema_version: "todo_quota_planning_v0", resume_planning: resume, ...selected, ...closure,
     ...(hasSourceContract ? {handoff_lanes: handoff, route_lanes: route} : {}),
     ...(now === null ? {} : frontier)};
+  return referenced ? quotaPlanningWire(planning) : planning;
 }

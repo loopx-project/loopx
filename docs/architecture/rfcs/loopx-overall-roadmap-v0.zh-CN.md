@@ -102,6 +102,16 @@ Direction M1 仍为纯 candidate builder。恢复当前依据后的真实采用�
 
 S6/S8 的有界来源读取切片提供[现有 Ego Page 的只读 MCP adapter](../../integrations/ego-source-reader.md)。它返回受限 origin 与确切 URL 下的渲染文本、图片索引，以及按序号读取的单张渲染图片区域；不创建会话、材料 authority 或浏览器服务。原生 Bot 已验证单图内容消费；原渠道回复须独立验收。单图不证明全部图片、完整原文或引用原帖已读。来源捕获、验证墙、截断、未加载图片与可选 provider 设置入口仍保留各自的验收边界，不以文本或单图提取关闭整个材料工作流。
 
+自动下发现有具体 provider 检查点，见
+[会话暂停／恢复边界](agent-session-execution-modes-v0.zh-CN.md#暂停恢复与自动下发边界)：
+Pi 与 OpenCode 隔离暂停前检查，OpenCode 2 首次下发也经过准入，Core stop 与已验证终态
+解除 provider 自动续跑。Codex Goal Chat 核验暂停读回并拒绝迟到输入投递；Codex App
+各 prompt 模式保留一次停止、核验及未确认结果的处理。受控适配器、文件与 CLI 资格化不等于安装态停止延迟或 App 心跳
+已关闭；既有依赖等待仍由原 owner 处理。
+同一链路拒绝外部 worker 的错误准入值、交付当前来源上下文，并沿既有类型化 replan owner
+处理纠偏；提示中的唤醒计数不再授权重规划或自行暂停。来源交付与决定记录仍不证明模型
+实际采纳或纠偏收益。
+
 ## 3. 组合里程碑、资源次序与完成定义
 
 S 工作流表示长期责任，G 里程碑表示一次可验收的产品组合，R 卡表示当前主线实现切片。三者互相引用，不新增运行状态机。未列日期表示按证据晋级；可用资源和业务优先级改变时更新 canonical Todo，而不是假定全部同期开工。
@@ -677,7 +687,11 @@ File/SQLite 完整 head、全部 committed journal、未引用的归档要求、
 capture/rollback/已释放 lease 字节。回读前让原项目与 runtime 不可访问；选定 provider
 存储缺失时明确失败，不新建替代库或回退 File。导入前备份另行保留投影前的原始
 Markdown。这资格化独立数据与历史回读，不代表身份采用、pending effect 处置或
-Host 重新激活。继续既有 R5/T4 的这些边界和 packaged App 恢复旅程，通过后才退役
+Host 重新激活。有界的完整恢复 M1 检查现增加 `backup-state verify` 与打包设置旅程：
+建立新隔离副本，复用 File/SQLite Todo/history reader，区分可读、仅历史与未知。
+损坏输入、已有目标及危险路径被拒绝，数据库验证在有时间/内存边界的独立进程内进行。
+源码与隔离 wheel 旅程保留原 Goal 字节，不注册或启用副本；v0 的 capture/owner 缺口使
+审计保持 held。继续既有 R5/T4 的身份、pending effect 与授权采用边界，通过后才退役
 受影响旧 writer；D2 与发布默认值继续开放。详见
 [全量状态恢复边界](../../reference/configuration-backup.md#full-state-recovery-after-cold-import)。
 

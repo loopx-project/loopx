@@ -1,6 +1,7 @@
 import {useEffect, useState} from "react";
 import {exportConfigurationBackup, restoreConfigurationCheckpoint, type ConfigurationBackupResult} from "../../data/chat";
 import {useWorkspaceI18n} from "./i18n";
+import {StateRecoverySettings} from "./state-recovery-settings";
 
 export function ConfigurationBackupSettings({goalId}: {goalId: string | null}) {
   const {locale} = useWorkspaceI18n();
@@ -9,7 +10,8 @@ export function ConfigurationBackupSettings({goalId}: {goalId: string | null}) {
   const [result, setResult] = useState<ConfigurationBackupResult | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  useEffect(() => {setBackup(null); setResult(null); setError("");}, [goalId]);
+  const [kind, setKind] = useState<"configuration" | "state">("configuration");
+  useEffect(() => {setBackup(null); setResult(null); setError(""); setKind("configuration");}, [goalId]);
   async function perform(action: () => Promise<void>) {
     setBusy(true); setError("");
     try {await action();} catch (failure) {setError(String(failure));}
@@ -17,6 +19,12 @@ export function ConfigurationBackupSettings({goalId}: {goalId: string | null}) {
   }
   return <details className="personal-detail-card">
     <summary>{zh ? "配置备份与恢复" : "Configuration backup and recovery"}</summary>
+    {goalId === null ? <fieldset className="personal-recovery-kind">
+      <legend>{zh ? "备份类型" : "Backup type"}</legend>
+      <label><input type="radio" name="backup-kind" checked={kind === "configuration"} onChange={() => setKind("configuration")} />{zh ? "配置快照" : "Configuration snapshot"}</label>
+      <label><input type="radio" name="backup-kind" checked={kind === "state"} onChange={() => setKind("state")} />{zh ? "完整归档检查" : "Full archive inspection"}</label>
+    </fieldset> : null}
+    {kind === "configuration" || goalId !== null ? <>
     <p>{zh ? "备份包含私有路径、Goal 设置及设备默认值，需自行保管和审查。凭据文件不包含在此组件中。恢复只建立隔离检查点；启用仍在原配置页面办理。" : "Keep and review this private backup: it includes Goal settings, paths and device defaults. Credential files are outside this component. Recovery creates an isolated checkpoint; activate settings through their existing editors."}</p>
     <button className="personal-secondary-action" disabled={busy} type="button" onClick={() => void perform(async () => {
       const exported = await exportConfigurationBackup(goalId ? [goalId] : undefined);
@@ -42,5 +50,6 @@ export function ConfigurationBackupSettings({goalId}: {goalId: string | null}) {
       : (zh ? "配置备份已核对" : "Configuration backup verified")}: {result.goal_count} Goal · {result.machine_configuration_present ? (zh ? "包含设备配置" : "includes device configuration") : (zh ? "设备配置缺省" : "device configuration absent")}
       {result.checkpoint_ref ? <code>{result.checkpoint_ref}</code> : null}</p> : null}
     {error ? <p role="alert">{error}</p> : null}
+    </> : <StateRecoverySettings />}
   </details>;
 }

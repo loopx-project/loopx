@@ -207,14 +207,23 @@ behaviour. `serves_acceptance` and `evidence_increment` are asked about the
 **change between the checkpoints**, not the after state as a whole: whether it
 implements, verifies or is a prerequisite for a criterion the before checkpoint
 did not already satisfy, and whether it adds verifiable evidence about a listed
-criterion. The drift booleans are derived by rule `progress_review_signal_rule_v1`
+criterion. The drift booleans are derived by rule `progress_review_signal_rule_v2`
 with the label threshold `t`; the core recomputes them from the typed judgments
-and rejects a receipt whose booleans disagree:
+and rejects a receipt whose booleans disagree. If both `noul` classification
+conditions below hold, the signal is null:
 
 | Signal | Drift when | Not drift when | Otherwise |
 | --- | --- | --- | --- |
 | `noul` | `P(serves_acceptance) ≤ 1−t` and `P(evidence_increment) ≤ 1−t` | either probability `≥ t` | null |
 | `choice` | `relation = off_goal` and `increment = no_new_evidence` | `on_goal`, `necessary_prerequisite` or `new_evidence` | null |
+
+At `t=0.5`, the conditions overlap when both probabilities are at most 0.5
+and at least one equals 0.5. Rule v2 returns null, so those receipts cannot
+form a new `noul` replan obligation. The default 0.6 classification and `choice`
+rule are unchanged. Historical `progress_review_signal_rule_v1` receipts retain
+their original drift-first rule on read; files and existing policy effects are
+not migrated automatically. Older cores that only support v1 reject v2 receipts;
+upgrade readers of a shared runtime before producing v2 receipts.
 
 `behavior_change` is recorded but not gating: an unrelated behaviour change that
 serves nothing is still drift, and documentation or a negative finding that adds

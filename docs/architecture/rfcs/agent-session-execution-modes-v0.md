@@ -314,6 +314,97 @@ This is a delivery priority, not a default migration. The
 Reuse the existing profile editor and session projections; do not add a
 manager-only creation service, task ledger or scheduling loop.
 
+### Pause, resume and automatic dispatch boundaries
+
+A wakeup is an observation opportunity, not execution or resume authority. Use
+existing Goal activation, quota, Todo dependency and host binding owners; do not
+add a parallel pause ledger. Apply the following precedence before a new model
+request or host continuation:
+
+| Current fact | Permitted handling | Resume boundary |
+|---|---|---|
+| Explicit Goal stop, zero compute, or explicit host pause | Disarm automatic continuation and cancel owned timers. Repeated idle/results must not poll the model or repair/replan around the stop. | Resume the stopped owner explicitly, then obtain fresh Core admission. A new chat message or increased quota alone does not clear a separate host pause. |
+| User/permission gate on selected work | Block that path. Keep independently admitted work available; notifications follow the existing reminder policy. | The owning gate is resolved; reselect and recheck affected work. A notification is not gate clearance. |
+| External dependency or temporary quota exhaustion | Use the existing bounded event/wait/backoff contract without model calls on unchanged checks. | Current source-qualified evidence or the budget window permits fresh admission; neither overrides an explicit stop. |
+| Unknown effect or interrupted work | Reconcile the original operation and preserve owed settlement. Stop new effects while authority is unknown. | Original identity/receipt recovery and current authority checks succeed. |
+| Validated terminal no-follow-up | End recurring polling. Completing one Todo is not this terminal fact. | An explicit new/resumed operation, or a separately qualified new-work event, obtains current admission. No unconditional standby polling. |
+
+`should_run=false` cannot be overridden by `scheduler_hint.action=run_now`.
+`stop_until_explicit_resume` takes precedence over a contradictory runnable hint.
+Capture the current binding generation when probing; pause/resume must invalidate
+pre-pause results even when the Goal/session id is unchanged. Cancelled timer
+callbacks must not consume a replacement timer or dispatch after resume. Reuse
+existing provider serialization/generation fences rather than another scheduler.
+
+Pause scope must be visible: a host pause stops that bound executor, a Goal stop
+blocks that Goal's new work, and a dependency gate blocks only affected paths.
+Stop new dispatch at the owning boundary; do not claim already-submitted tools
+were cancelled or abandon original writeback/debit obligations. Measure in-flight
+stop latency separately from idle dispatch suppression.
+
+**Implementation checkpoint.** The Pi adapter now latches Core stop hints and
+advances its existing persisted generation on host pause/resume. The OpenCode
+bridge gates automatic native resume on Core admission, serializes local binding
+updates, fences in-flight results across pause/resume, and latches permission
+rejection. Local stop intent is fenced before awaiting native pause/block IO;
+an unavailable host stop stays an error while local continuation remains disarmed.
+OpenCode 2 gates the initial task as well as continuation, retains an
+unstarted objective in its private worker state, and exits on Core stop/validated
+closure; `--force-resume` only re-arms the host and cannot bypass Core. These are
+provider adapter changes consuming existing decisions, not a new shared policy
+owner. OpenCode 2's inactivity hold is not proof of explicit user pause.
+
+Codex has separate transport and scheduler boundaries. In managed Goal Chat,
+Stop and cold recovery re-read `thread/goal/get` after requesting pause; an ACK
+without a non-active readback closes the owned transport and remains a failure.
+A native turn-start event arriving during Stop is retained only for interrupt,
+not queued-input delivery or resume-context steering. Explicit resume retains
+the objective and cumulative native usage; LoopX mode rebuilds current context.
+For Codex App, full/compact/brief/thin generated heartbeat bodies share the same
+one-attempt pause and result-verification clause. An unavailable or unconfirmed
+host stop ends the turn without claiming success, retrying, applying an RRULE
+fallback or doing new work/spend. The existing external CLI scheduler separately
+consumes Core's local stop directive before launching its configured wake command.
+None of these paths grants automatic resume from another wake.
+
+Qualification uses the production adapters with controlled host/probe seams and
+filesystem binding/CLI tests, Codex Goal Chat controller/store recovery, and
+generated Agent-input checks. It does not establish installed vendor/model
+adoption or cancellation latency. App-owned heartbeats remain host-owned: Core
+emits the existing one-attempt stop instruction and requires host result readback;
+without a host pre-dispatch hook, the first wake may already invoke a model. Do
+not report this as zero model wakeups or confirmed scheduler shutdown.
+
+Decisive cases: hard pause plus repeated idle/events; pause during successful and
+failed probes; pause→resume before an old result returns; cancelled callback after
+resume; denied admission with a runnable hint; restart before initial dispatch;
+continued external wait; unresolved Core stop after host resume; validated closure
+without standby. Read back binding, dispatched requests and remaining timers,
+then independently verify any original in-flight settlement.
+Codex cases also cover pause ACK without effect, unavailable/disappeared readback,
+late start events, cold recovery refusal, and stop obligations across prompt modes.
+
+### Wake, current context and correction form one chain
+
+These stages implement roadmap S4/S7 and consume the existing Goal Vision and
+Stride owners; none is another scheduler or Goal authority.
+
+| Stage | Actual owner and handoff | Required counterexample |
+|---|---|---|
+| Before dispatch | `external_scheduler_worker` consumes the Core local stop directive first, then a strict boolean `should_run`. Existing monitor/reset-token/backoff rules retain waits; a changed signal requires current admission. | A string `"false"`, integer, missing or otherwise malformed admission cannot launch the configured wake command, even with `run_now`. Stop still exits without polling or a final repair probe. |
+| Current instruction | The stable heartbeat entry reads a fresh guard. Typed `interaction_contract` projects current work sources, scoped blockers and pending full Goal/acceptance reads; `turn_envelope` and the Codex Host consume that same observation. Compose a bounded working brief of evidenced change, blocker, next work, acceptance and stops. | Same Todo identity with changed requirements must deliver the new condition. Missing sources deny dependent work; absent comparison evidence means unknown, not unchanged. A display summary cannot replace a full requirement or source revision. |
+| Correction and review | Use local operation recovery, selected-work correction and existing `replan_action_packet.planning_guidance`. Widen only for relevant Goal/path/dependency/acceptance evidence. Core may require a due review; retaining the path is a valid qualified outcome. | Quiet monitor receipts alone cannot trigger a prompt-owned two-stall replan or self-pause. A decision receipt alone cannot prove that later work adopted it or improved the outcome. |
+
+The current patch removes legacy heartbeat/skill count rules and the fixed
+candidate-count audit, preserves Core stall/periodic-review policies, and adds
+the correction/followthrough guidance to the existing typed owner. Agent-authored
+working briefs are source-grounded instructions, not a new persisted summary,
+automatic language-model summarizer or authority record. The full Goal document
+remains a progressive read; bounded transport does not permit truncating stops.
+App-owned wake suppression still depends on a qualified host pre-dispatch hook.
+Arbitrary provider-result events and live correction benefit remain the Stride
+§7.5/§7.6 qualification, not inferred from synthetic dispatch/context tests.
+
 ### Model selection within Agent creation and attachment
 
 This is a proposed refinement of the reusable Agent operations above, not a
@@ -614,7 +705,7 @@ future evidence and must not be reported as green.
 | Admission under restart and crash | Kill the host during execution with a bound session | No orphan executor; replacement binding has one owner and correct mode | Unverified for new hosts |
 | Feature-off parity | Run without any attached binding and without the preview host | Existing managed behavior, routes, and defaults unchanged | Unverified for new hosts |
 | Declared input boundary | Deliver a correction during a tool batch, compaction and finalization | Exact target/source retained; next eligible Host input or truthful pending/refusal; no implicit tool cancellation or retargeting | Per-adapter qualification; protocol fixtures do not prove model adoption |
-| Same native identity, changed basis | Pause, change an applicable criterion/source within the same Goal instance, then resume; also amend during restore | Original target/effect retained; first new protected action consumes current basis or remains pending/paused; no receipt rewriting | Combined qualification remains required beyond existing native identity/recovery tests |
+| Same native identity, changed basis | Pause, change an applicable criterion/source within the same Goal instance, then resume; also amend during restore | Original target/effect retained; first new protected action consumes current basis or remains pending/paused; no receipt rewriting | The managed ZCode provider journals the acceptance/source revision basis at start and refuses a plain resume under a changed basis (`goal_basis_changed`) or without a proven basis, whether unreadable now or never recorded by a journal written before the basis existed (`goal_basis_unavailable`), keeping the target paused until stop/start re-delivers the objective and records its basis; covered, including the pre-basis journal upgrade path, by [`zcode_native_goal.test.ts`](../../../tests/control_plane_ts/zcode_native_goal.test.ts) and [`test_zcode_goal_bridge.py`](../../../tests/test_zcode_goal_bridge.py). Resume-to-model consumption, amendment during restore and other Hosts remain to qualify |
 
 Deterministic package tests are not sufficient for admission. A new host needs
 at least one real-host row: a live process, a real bind, and a real restart.

@@ -30,7 +30,10 @@ from ..runtime.time import now_utc_iso
 from ...thread_agent_binding import summarize_agent_binding_routes
 from ..runtime.public_safety import validate_public_safe_value
 from ..todos.contract import normalize_todo_id
-from .management_projection import build_agent_management_projection
+from .management_projection import (
+    build_agent_management_projection,
+    registered_agent_ids,
+)
 
 
 PEER_AGENT_DIRECTORY_SCHEMA_VERSION = "peer_agent_directory_v0"
@@ -201,6 +204,7 @@ def build_peer_agent_directory(
     caller_agent_id: str | None = None,
     available_capabilities: Any = None,
     execution_facts: Any = None,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
     """Return a bounded `peer_agent_directory_v0` packet for one Goal.
 
@@ -213,34 +217,56 @@ def build_peer_agent_directory(
     `execution_facts` defaults to the facts the payload's management projection
     already carries on its rows, so this re-projection reads the same lane,
     worker and lease facts status collection did instead of reading them again.
+
+    `cursor` continues a previous page: rows follow the projection's agent-id
+    ordering and the cursor is the last id already read, so only Agents sorting
+    strictly after it are returned and `next_cursor` names the following page.
+    The default starts a fresh scan. Membership is proven by the Goal's
+    registration facts, never by the page and never by a Todo claim: paging
+    cannot deny a registered caller their scope, and a claim that outlived its
+    registration cannot admit a caller the Goal never registered.
+
+    The packet's totals keep those two apart: `registered_agent_count` counts
+    the Goal's registrations and never a claimant, while `row_count` covers
+    every row published, including the diagnostic claimant rows a work
+    relationship adds (`registered: false`). `omitted_row_count` counts the rows
+    of that same agent-id order this packet did not carry, so a capped page
+    cannot read as the whole directory.
     """
 
     payload = status_payload if isinstance(status_payload, Mapping) else {}
     resolved_goal = _compact(goal_id or payload.get("goal_filter"), limit=120)
     caller = _compact(caller_agent_id, limit=120)
+    cursor_value = _compact(cursor, limit=120)
+    if cursor and not cursor_value:
+        raise ValueError("cursor is not a publishable agent id")
     if execution_facts is None:
         execution_facts = _projected_execution_facts(payload)
     facts = execution_facts if isinstance(execution_facts, Mapping) else None
+    status = dict(payload)
     projection = build_agent_management_projection(
-        dict(payload),
+        status,
         available_capabilities=available_capabilities,
         execution_facts=dict(facts) if facts is not None else None,
+        after_agent_id=cursor_value,
     )
     agent_rows = [row for row in _as_list(projection.get("agents")) if isinstance(row, Mapping)]
-    registered_agent_ids = [
-        agent_id
-        for agent_id in (_compact(row.get("agent_id"), limit=120) for row in agent_rows)
-        if agent_id
-    ]
+    registered_ids = registered_agent_ids(status)
 
     limitations = [
         LIMITATION_PRESENCE_PROVIDER_UNAVAILABLE,
         LIMITATION_PRESENCE_IS_ADVISORY,
     ]
-    if facts is None:
+    # The payload's published projection is itself bounded, so a page can hold
+    # Agents whose lane and lease evidence was never published. Declare that
+    # instead of letting those rows read as "no lease evidence".
+    facts_missing_for_page = facts is not None and any(
+        str(row.get("agent_id") or "").strip() not in facts for row in agent_rows
+    )
+    if facts is None or facts_missing_for_page:
         limitations.append(LIMITATION_LEASE_STATE_NOT_PROJECTED)
     gaps: list[dict[str, Any]] = []
-    if caller and caller not in registered_agent_ids:
+    if caller and caller not in registered_ids:
         # An unregistered caller gets a scope gap, never a listing it has no
         # scope over, and never a silent empty directory either.
         gaps.append(
@@ -275,7 +301,7 @@ def build_peer_agent_directory(
         withheld_route_candidates += withheld_candidates
         directory_row: dict[str, Any] = {
             "agent_id": agent_id,
-            "registered": True,
+            "registered": agent_id in registered_ids,
             "agent_model": _compact(row.get("agent_model"), limit=60),
             "work": work,
             "observation_refs": _compact_refs(
@@ -293,20 +319,35 @@ def build_peer_agent_directory(
                 if key in {"agent_id", "registered", "work"} or value not in (None, [], {})
             }
         )
-    # The projection publishes how many Agents the Goal registers, so a cap
-    # applied upstream is reported as omitted rows rather than vanishing: a
-    # reader must not read a truncated directory as "these are all the Agents".
+    # Registration facts are the membership total here too: this is the same
+    # set that decided the caller's scope and every row's `registered` flag, so
+    # a diagnostic claimant row can never inflate the Goal's registered count.
+    registered_count = len(registered_ids)
+    # The rows this scan reads are the Goal's whole directory: its registered
+    # Agents plus the diagnostic rows a work relationship adds. A cap applied
+    # upstream is reported as omitted rows rather than vanishing, so a reader
+    # cannot read a truncated page as "these are all the rows".
     source_summary = _as_mapping(projection.get("source_summary"))
-    registered_count = source_summary.get("registered_agent_count")
-    omitted = (
-        max(0, int(registered_count) - len(rows))
-        if isinstance(registered_count, int) and not gaps
-        else dropped_at_cap
-    )
+    diagnostic_count = source_summary.get("diagnostic_agent_count")
+    diagnostic_count = diagnostic_count if isinstance(diagnostic_count, int) else 0
+    source_count = registered_count + diagnostic_count
+    omitted = max(0, source_count - len(rows)) if not gaps else dropped_at_cap
     if omitted:
         limitations.append(LIMITATION_ROWS_TRUNCATED)
     if withheld_route_candidates:
         limitations.append(LIMITATION_ROUTE_CANDIDATE_WITHHELD)
+
+    # A page can end before the registry does. `next_cursor` is the last id
+    # read, so the same agent-id ordering continues from exactly there instead
+    # of the 25th and later Agents becoming unreachable.
+    selected_count = source_summary.get("selected_agent_count")
+    more_rows_follow = False
+    if rows and not gaps:
+        if isinstance(selected_count, int):
+            more_rows_follow = selected_count > len(rows)
+        elif cursor_value is None:
+            more_rows_follow = source_count > len(rows)
+    next_cursor = str(rows[-1]["agent_id"]) if more_rows_follow else None
 
     packet: dict[str, Any] = {
         "ok": True,
@@ -318,7 +359,7 @@ def build_peer_agent_directory(
             "caller_agent_id": caller,
             "caller_membership": (
                 "registered_agent"
-                if caller and caller in registered_agent_ids
+                if caller and caller in registered_ids
                 else "unregistered_agent"
                 if caller
                 else "local_surface"
@@ -329,9 +370,9 @@ def build_peer_agent_directory(
         "rows": rows,
         "row_count": len(rows),
         "omitted_row_count": omitted,
-        "registered_agent_count": (
-            int(registered_count) if isinstance(registered_count, int) else len(rows)
-        ),
+        "registered_agent_count": registered_count,
+        "cursor": cursor_value,
+        "next_cursor": next_cursor,
         "presence_coverage": {
             "provider": None,
             "state": "unavailable",
@@ -349,6 +390,8 @@ def build_peer_agent_directory(
         },
         "limitations": limitations,
     }
+    if diagnostic_count:
+        packet["diagnostic_agent_count"] = diagnostic_count
     if rows:
         packet["rollup"] = _rollup(rows)
     return packet

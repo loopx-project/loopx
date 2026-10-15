@@ -343,10 +343,11 @@ def run_once(env: dict[str, str]) -> dict:
         checkpoint_wake = checkpoint_context.enter_context(CheckpointWake(env, receipt))
         body = "Finish the task."
         if stage == "plan":
-            from benchmark.runtime.planning import task_plan_packet
+            from benchmark.runtime.planning import render_planning_prompt, task_plan_packet
 
             planning_before = task_plan_packet(env, loopx_command(env))
-            body = "$loopx\n\nHost-supplied planning checkpoint:\n" + json.dumps(planning_before, ensure_ascii=False)
+            body = render_planning_prompt(planning_before, env,
+                                          execution_reserve_seconds=PHASE_WORK_RESERVE_SECONDS)
             (wake / "planning-input.json").write_text(body, encoding="utf-8")
             (wake / "planning-schema.json").write_text(json.dumps(planning_before["result_schema"]))
         elif execution.mode in {"heartbeat", "loopx-goal"}:
@@ -388,11 +389,8 @@ def run_once(env: dict[str, str]) -> dict:
                 with (wake / "stdout.jsonl").open("w") as stdout:
                     allowance = 150 if execution.mode == "turn" and stage == "execute" else 0
                     if stage == "plan":
-                        limit = env.get("LOOPX_PLANNING_TIMEOUT_SEC")
-                        # SForge planning has no stage cap: the same absolute
-                        # trial deadline bounds this subprocess and its handoff.
-                        timeout = (float(limit) if limit is not None else
-                                   max(0, float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time()))
+                        # Planning and execution consume the same phase budget.
+                        timeout = max(0, float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time())
                     else:
                         timeout = (None if execution.timeout_seconds is None
                                    else execution.timeout_seconds + allowance)
@@ -463,6 +461,15 @@ def main() -> int:
         raise KeyboardInterrupt("worker cancelled")
 
     signal.signal(signal.SIGTERM, cancelled)
+    if (os.name == "posix" and os.environ.get("LOOPX_CHECKPOINT_REQUEST")
+            and os.environ.get("LOOPX_EXECUTION_MODE", "heartbeat") == "heartbeat"):
+        # This entrypoint owns one disposable worker process. Its native Host
+        # and tools inherit the soft limit; the parent launcher and hard limit
+        # stay unchanged. Crash memory is not a resumable file participant.
+        import resource
+
+        _, hard = resource.getrlimit(resource.RLIMIT_CORE)
+        resource.setrlimit(resource.RLIMIT_CORE, (0, hard))
     receipt = run_once(dict(os.environ))
     print(json.dumps(receipt))
     if receipt.get("budget_exhausted") and receipt["mode"] in {"heartbeat", "turn"}:

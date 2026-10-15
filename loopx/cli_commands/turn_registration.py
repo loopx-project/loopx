@@ -241,11 +241,15 @@ def register_turn_commands(
         help="Opt in to the owned app-server operation transport for this admitted codex-cli Turn. Reuses the original Todo/session; does not authenticate an attached Desktop or grant domain effects.",
     )
     run_once.add_argument(
+        "--confirmed-operation-id",
         "--codex-confirmed-operation-id",
+        dest="codex_confirmed_operation_id",
         help="Internal exact-operation resume fence for an operator-granted callback continuation. Requires operation tools; does not authenticate a caller or permit a domain effect.",
     )
     run_once.add_argument(
+        "--operation-source-route-json",
         "--codex-operation-source-route-json",
+        dest="codex_operation_source_route_json",
         type=json.loads,
         help="Registered return audience {host_surface,thread_id} for operation proposals. Required when this Agent has several source routes; not executor authentication or execution permission.",
     )
@@ -318,6 +322,10 @@ def register_turn_commands(
         help="cordis.yml used by the built-in dsh host runtime.",
     )
     run_once.add_argument("--dsh-runtime-bin")
+    run_once.add_argument(
+        "--dsh-operation-module",
+        help="Opt in to the owned DSH operation transport with this absolute compiled native-operation module. Requires the real SDK, not --dsh-runner; installation grants no execution permission.",
+    )
     run_once.add_argument(
         "--dsh-runner",
         help=(

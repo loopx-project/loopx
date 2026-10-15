@@ -244,7 +244,7 @@ def test_real_cli_settlement_capture_verification_and_inert_materialization(
 def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch, source_moves, mutation_stage,
                                                        caller_id="code"):
     """Actual CLI settlement, native completed Turns and TS SQLite artifacts."""
-    from benchmark.tests.test_native_checkpoint import real_native_source
+    from tests.control_plane.codex_checkpoint_fixture import real_native_source
     from benchmark.runtime.codex import Execution
     from benchmark.runtime.sessions import BenchmarkSessionWake
     from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
@@ -253,7 +253,7 @@ def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch,
     project, runtime, registry = cli._write_fixture(tmp_path)
     binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID)
     def run(*args):
-        code, result = cli._run_cli(registry, runtime, *args)
+        code, result = cli._run_cli(registry, runtime, *args, cwd=project)
         assert code == 0, result
     run("quota", "should-run", "--goal-id", cli.GOAL_ID, "--codex-app", *binding)
     vision = tmp_path / "vision.json"
@@ -287,6 +287,15 @@ def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch,
             goal_ref=source_wake.goal_ref, session_profile_digest=source_wake.digest))
         receipt = {"ok": True, "stage": "execute", "mode": "heartbeat", "turn_id": cli.TURN_ID,
                    "session": {"session_id": source}}
+        from contextlib import contextmanager
+        from loopx.hosts.codex_checkpoint import native_checkpoint_reader
+        inspections = []
+        @contextmanager
+        def observed_reader(*args, **kwargs):
+            with native_checkpoint_reader(*args, **kwargs) as reader:
+                inspections.append(reader)
+                yield reader
+        monkeypatch.setattr("loopx.hosts.codex_checkpoint.native_checkpoint_reader", observed_reader)
         injected = []
         def between_read_and_probe(method, params, **kwargs):
             if source_moves and params["action"] == mutation_stage and not injected:
@@ -300,6 +309,10 @@ def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch,
             return effect_runtime_result(method, params, **kwargs)
         monkeypatch.setattr("benchmark.runtime.checkpoint.effect_runtime_result", between_read_and_probe)
         capture_after_wake(env, receipt)
+        # Both full observations use one owned reader, also on rejection. The
+        # real later-Turn mutation above must remain visible through that reader.
+        assert len(inspections) == 1
+        assert inspections[0].process.poll() is not None
         assert receipt["ok"] and candidate.read_text() == "source_candidate = 7\n"
         assert len(calls) == (2 if source_moves is True else 1)  # Static local streams only; no implicit new work.
         if source_moves:
@@ -320,7 +333,7 @@ def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch,
         # provider fork entry, retaining the original home for byte comparison.
         # Fixed paths are swapped in this fixture; this is not guest isolation.
         import shutil
-        from benchmark.runtime.native_checkpoint import fork_native_checkpoint
+        from loopx.hosts.codex_checkpoint import fork_native_checkpoint
 
         native = manifest["point_metadata"]["native_session"]
         assert all(member["id"] != caller_id for member in native["store_members"])
@@ -636,7 +649,7 @@ def test_research_participants_preserve_legal_caller_ids(tmp_path, monkeypatch, 
 
 @pytest.mark.parametrize('gap', ['shared_registry','wrong_actor','wrong_runtime','missing_state','symlink_state','overlap'])
 def test_loopx_participant_rejects_wrong_or_ambiguous_routes(tmp_path, gap):
-    from benchmark.runtime.checkpoint import _loopx_state_components
+    from loopx.hosts.research_checkpoint import _loopx_state_components
     project, runtime, registry = cli._write_fixture(tmp_path)
     runtime.mkdir()
     (project/'solver.py').write_text('candidate = 7\n')
@@ -667,7 +680,8 @@ def test_loopx_participant_rejects_wrong_or_ambiguous_routes(tmp_path, gap):
 
 
 def test_loopx_participant_preserves_legacy_and_current_owned_goal_directories(tmp_path):
-    from benchmark.runtime.checkpoint import _loopx_state_components, parse_checkpoint_request
+    from loopx.hosts.research_checkpoint import _loopx_state_components
+    from benchmark.runtime.checkpoint import parse_checkpoint_request
     project, runtime, registry = cli._write_fixture(tmp_path)
     # These are legitimate controller partitions, not two Goal registrations.
     # Inventory follows the backup owner, not a basename-based Goal classifier.

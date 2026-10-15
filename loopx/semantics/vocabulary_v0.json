@@ -13,7 +13,7 @@
   "formal_model": {
     "schema_version": "loopx_semantic_formal_model_v0",
     "universes": {
-      "vocabularies": "V: registered vocabulary identifiers; Producers(V) ⊆ V is exactly the subset declaring a producers key (including compatibility-only entries with an empty list). Kernel(V) ⊆ Producers(V). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 21 cross_runtime vocabularies outside Producers(V) are unverified.",
+      "vocabularies": "V: registered vocabulary identifiers; Producers(V) ⊆ V is exactly the subset declaring a producers key (including compatibility-only entries with an empty list). Kernel(V) ⊆ Producers(V). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 22 cross_runtime vocabularies outside Producers(V) are unverified.",
       "values": "U(v): ambient runtime values; S(v): registered admitted values",
       "sites": "L: source locations that define, produce, consume, interpret, pass through, project, or persist values",
       "scopes": "Scope: global or bounded_context(context_id); ScopeDeclarations are the forked names the registry declares as bounded contexts",
@@ -73,25 +73,25 @@
     "invariants": [
       {
         "id": "F1_producer_closedness",
-        "statement": "∀v ∈ Producers(V): Produced_scan(v) ⊆ S(v) ⊆ U(v), where Produced_scan(v) is the production the fixed forms observe inside the code-owned scan reach. Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 21 cross_runtime vocabularies outside Producers(V) are unverified. Production outside the scan reach is unverified rather than proven closed.",
+        "statement": "∀v ∈ Producers(V): Produced_scan(v) ⊆ S(v) ⊆ U(v), where Produced_scan(v) is the production the fixed forms observe inside the code-owned scan reach. Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 22 cross_runtime vocabularies outside Producers(V) are unverified. Production outside the scan reach is unverified rather than proven closed.",
         "enforcement": "m0_5",
         "evidence": "bounded production-form AST scan over the PRODUCER_ROOTS/PRODUCER_FILES reach in loopx/semantics/production.py; check_producers visits only vocabularies that declare producers, and validate_production claims no whole-program closedness; unresolved dynamic sites are reported, not treated as proven safe",
         "domain": {
           "quantifies_over": "vocabularies[producers].producers",
           "verified": 6,
-          "registered": 27,
+          "registered": 28,
           "evidence_bound": "producer_scan_reach"
         }
       },
       {
         "id": "F2_canonical_value_liveness",
-        "statement": "∀v ∈ Producers(V): Canonical(v) ⊆ Produced_scan(v) ∪ CompatibilityOnly(v). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 21 cross_runtime vocabularies outside Producers(V) are unverified. Liveness outside the walked set is not proven.",
+        "statement": "∀v ∈ Producers(V): Canonical(v) ⊆ Produced_scan(v) ∪ CompatibilityOnly(v). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 22 cross_runtime vocabularies outside Producers(V) are unverified. Liveness outside the walked set is not proven.",
         "enforcement": "m0_5",
         "evidence": "every value of a vocabulary in Producers(V) has a producer recognised inside the scan reach, an executable input witness, or an explicit compatibility-only reason; a value whose only producer lies outside the reach would be reported as dead, not silently accepted",
         "domain": {
           "quantifies_over": "vocabularies[producers].producers",
           "verified": 6,
-          "registered": 27,
+          "registered": 28,
           "evidence_bound": "producer_scan_reach"
         }
       },
@@ -103,7 +103,7 @@
         "domain": {
           "quantifies_over": "vocabularies[*]",
           "verified": 0,
-          "registered": 27,
+          "registered": 28,
           "evidence_bound": "inventory_only"
         }
       },
@@ -170,8 +170,8 @@
     }
   },
   "coverage_floor": {
-    "vocabularies": 27,
-    "owner_symbols": 53,
+    "vocabularies": 28,
+    "owner_symbols": 54,
     "literal_scan_fields": 1,
     "projections": 1,
     "relations": 9,
@@ -362,7 +362,8 @@
         "loopx/control_plane/agents/agent_scope.py::_monitor_blocked_resume_frontier",
         "loopx/control_plane/agents/agent_scope.py::_other_agent_or_exhausted_frontier",
         "loopx/control_plane/agents/agent_scope.py::_route_continuation_frontier",
-        "loopx/control_plane/agents/agent_scope.py::_selected_candidate_priority_frontier"
+        "loopx/control_plane/agents/agent_scope.py::_selected_candidate_priority_frontier",
+        "loopx/control_plane/quota/should_run_packet.py::_scoped_gate_deferred_replan_frontier"
       ],
       "call_producers": {
         "loopx/control_plane/agents/agent_scope_frontier.py::build_agent_scope_frontier_payload": [
@@ -971,6 +972,25 @@
         "autonomous_replan": "Appended when the replan decision is allowed, meaning no inbox priority is due and the replan obligation passes plan health, workspace guard, automation-prompt and registered-agent checks. The same branch clears normal delivery and sets the effective action to autonomous_replan_required, so the replan owns the whole turn.",
         "control_repair": "Appended when the turn is routed to a control-plane repair instead of delivery: stall self-repair, a capability gate asking to repair the bridge, a workspace guard being present, or a required automation-prompt upgrade. The repair is control-plane work, so it displaces the delivery it would otherwise run alongside.",
         "delivery_not_allowed": "The catch-all appended last when normal delivery is off for a reason none of the four specific causes names, such as a monitor-only work mode, a settled receipt-bound monitor, a monitor-quiet skip or an external-evidence wait. Because it is appended last it only surfaces as the chosen reason when no more specific cause applies."
+      }
+    },
+    "state_recovery_component_state": {
+      "meaning": "Offline owner-local readability of a component in an inert recovery audit; never execution or adoption authority.",
+      "tier": "cross_runtime",
+      "status": "canonical",
+      "owners": {
+        "python": null,
+        "typescript": "loopx/control_plane/state_recovery_contract.ts::RECOVERY_COMPONENT_STATES"
+      },
+      "values": [
+        "readable",
+        "historical_only",
+        "unknown"
+      ],
+      "value_notes": {
+        "readable": "An existing configuration verifier or the selected File/SQLite authority and full Todo/history readers accepted the captured component. This is historical readability, not a current Goal identity, permission or execution grant.",
+        "historical_only": "A standalone SQLite copy passed its bounded offline structural integrity check, but its bytes have not been adopted by a current domain owner. Restored provider identities and leases remain historical data.",
+        "unknown": "No supported owner inventory exists for remaining v0 state, or a component failed format, availability, qualified-runtime or owner-read validation. Unknown never becomes readable merely because archive or file hashes matched."
       }
     }
   },

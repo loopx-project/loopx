@@ -9,6 +9,7 @@ _PRESENTATION_MODULE = "loopx.extensions.presentation"
 _PRESENTATION_ATTRIBUTES = (
     "load_presentation_view_validator",
 )
+_PUBLIC_PATH_ATTRIBUTE = "find_public_safe_local_path"
 
 
 def presentation_api_error() -> str | None:
@@ -28,6 +29,11 @@ def presentation_api_error() -> str | None:
         return (
             "the installed loopx version has an incomplete extension presentation "
             f"API (missing {', '.join(missing)})"
+        )
+    if not callable(getattr(module, _PUBLIC_PATH_ATTRIBUTE, None)):
+        return (
+            "the installed loopx version does not provide the shared "
+            "public-safe local-path classifier required for Finance research dashboards"
         )
     return None
 

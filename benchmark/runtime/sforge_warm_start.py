@@ -31,6 +31,7 @@ class WarmStart:
     source_todo_id: str
     deadline_epoch: int
     normal_cadence: int = 6
+    research_component_ids: tuple[str, ...] = ()
 
     def verify(self, workspace: str) -> dict:
         if (type(self.normal_cadence) is not int or not 1 <= self.normal_cadence <= 6
@@ -54,6 +55,7 @@ class WarmStart:
                  if c["source_path"] == workspace]
         if len(roots) != 1 or not (self.root / "components" / roots[0]["id"]).is_dir():
             raise ValueError("Warm start requires one complete captured workspace")
+        _research_components(self.root, metadata, Path(workspace), self.research_component_ids)
         context = metadata["research_context"]
         context_path = self.root / "components" / context["component_id"] / context["member_path"]
         if not context_path.resolve(strict=True).is_relative_to(self.root / "components"):
@@ -77,6 +79,8 @@ class WarmStart:
                        goal_id=self.goal_id, agent_id=self.agent_id,
                        source_todo_id=self.source_todo_id, deadline_epoch=self.deadline_epoch,
                        normal_cadence=self.normal_cadence)
+        if self.research_component_ids:
+            payload["research_component_ids"] = list(self.research_component_ids)
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "input.json"
             path.write_text(json.dumps(payload))
@@ -91,12 +95,61 @@ class WarmStart:
             raise RuntimeError("Could not stage the verified checkpoint participants")
 
 
+# Provider-owned data locations; selecting a component never grants permission
+# to restore a home, executable installation, registry or runtime authority.
+_RESEARCH_ROOTS = (Path("/tmp"), Path("/home/workspace"))
+
+
+def _research_components(unit: Path, metadata: dict, workspace: Path, selected) -> list[tuple[str, Path, Path]]:
+    """Bind explicit receiver selection to sealed worker files, not prose refs.
+
+    Capture already accepts multiple components. This transport never discovers
+    dependencies or assumes that all captured files are research data.
+    """
+    if (not isinstance(selected, (tuple, list)) or
+            any(not isinstance(key, str) for key in selected) or len(set(selected)) != len(selected)):
+        raise ValueError("Research component selection must contain distinct captured IDs")
+    result = []
+    files = metadata["worker_file_snapshot"]["components"]
+    for key in selected:
+        matches = [entry for entry in files if entry["id"] == key]
+        if len(matches) != 1 or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", key):
+            raise ValueError("Selected research component is absent from the captured worker files")
+        target = Path(matches[0]["source_path"])
+        if (not target.is_absolute() or ".." in target.parts or str(target) != matches[0]["source_path"] or
+                not any(target != root and target.is_relative_to(root) for root in _RESEARCH_ROOTS) or
+                target.is_relative_to(workspace) or workspace.is_relative_to(target) or
+                target.is_relative_to(unit) or unit.is_relative_to(target) or
+                target == workspace.with_name(workspace.name + ".before-checkpoint")):
+            raise ValueError("Research component must be separate data below a provider research root")
+        if any(target.is_relative_to(old) or old.is_relative_to(target) for _, _, old in result):
+            raise ValueError("Selected research components overlap")
+        source = unit / "components" / key
+        if not source.exists() or source.is_symlink():
+            raise ValueError("Selected research component has no verified artifact bytes")
+        result.append((key, source, target))
+    return result
+
+
+def _check_research_destinations(entries):
+    # Check every destination before touching the workspace. Receiver admission
+    # owns this fresh, quiescent environment; concurrent writers are unsupported.
+    for _, _, target in entries:
+        if target.exists() or target.is_symlink():
+            raise ValueError("Research destination already exists; preserve it and use a fresh receiver")
+        if not target.parent.is_dir() or target.resolve() != target:
+            raise ValueError("Research destination requires an existing physical parent")
+
+
 def restore_workspace(declaration: dict, workspace: Path):
     """Materialize one isolated receiver workspace; never import its registry."""
     unit = Path(declaration["root"])
     effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "verify", "root": str(unit), "expected_sha256": declaration["sha256"]})
-    metadata = json.loads((unit / "checkpoint.json").read_bytes())["point_metadata"]
+    manifest = json.loads((unit / "checkpoint.json").read_bytes())
+    metadata = manifest["point_metadata"]
+    research = _research_components(unit, metadata, workspace, declaration.get("research_component_ids", ()))
+    _check_research_destinations(research)
     if str(workspace) != metadata["native_session"]["guest_workspace"]:
         raise ValueError("Captured and destination workspace paths differ")
     if (workspace.resolve() != workspace or workspace == Path("/")
@@ -118,6 +171,20 @@ def restore_workspace(declaration: dict, workspace: Path):
     # tree; a partial attempt still cannot be reused.
     shutil.move(str(workspace), str(original))
     shutil.copytree(source, workspace, symlinks=True)
+    for _, captured, target in research:
+        if captured.is_dir():
+            shutil.copytree(captured, target)
+        else:
+            # Exclusive creation refuses a late collision; leave partial output
+            # for diagnosis. The workspace backup fences the entire attempt.
+            with target.open("xb") as output, captured.open("rb") as input_file:
+                shutil.copyfileobj(input_file, output)
+            shutil.copystat(captured, target)
+    if research:
+        copied = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe",
+            "components": [{"id": key, "source_path": str(target)} for key, _, target in research]})
+        if any(copied["source_witness"][key] != manifest["artifact_witness"][key] for key, _, _ in research):
+            raise ValueError("Restored research files differ from the sealed artifacts; preserve this failed receiver")
 
 
 def _prepare_native_skills(home: Path, installed: Path) -> None:
@@ -145,8 +212,8 @@ def _prepare_native_skills(home: Path, installed: Path) -> None:
 def prepare_context(env: dict[str, str], declaration: dict) -> dict:
     """Join actual session + research owners on one freshly bootstrapped Goal."""
     from benchmark.runtime.codex import Execution
-    from benchmark.runtime.native_checkpoint import admit_native_checkpoint_session
-    from benchmark.runtime.research_checkpoint import adopt_todo_context
+    from loopx.hosts.codex_checkpoint import admit_native_checkpoint_session
+    from loopx.hosts.research_checkpoint import adopt_todo_context
     from benchmark.runtime.worker import loopx_command
     import subprocess
 
@@ -158,7 +225,7 @@ def prepare_context(env: dict[str, str], declaration: dict) -> dict:
         raise ValueError("Original warm start allowance expired during installation")
     execution = Execution(context="resume", sandbox=env["LOOPX_CODEX_SANDBOX"])
     native = admit_native_checkpoint_session(env, unit, digest, Path(declaration["config"]),
-                                            execution=execution, timeout=30)
+                                            sandbox=execution.sandbox, timeout=30)
     _prepare_native_skills(Path(env["CODEX_HOME"]), Path(env["LOOPX_SHARED_SKILLS"]))
     def cli(*args):
         result = subprocess.run([*loopx_command(env), *args], env=env,

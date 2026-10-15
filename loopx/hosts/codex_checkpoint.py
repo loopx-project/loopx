@@ -19,11 +19,10 @@ import subprocess
 import time
 import tomllib
 from pathlib import Path
-from contextlib import redirect_stdout, redirect_stderr
+from contextlib import contextmanager, nullcontext, redirect_stdout, redirect_stderr
 from typing import Any
 
-from loopx.capabilities.benchmark_toolkit.native_codex_goal import StdioNativeGoalTransport
-from .codex import Execution
+from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport
 
 
 def _complete_history(request, session_id: str, *, interrupted_guard: dict | None = None) -> list[dict[str, Any]]:
@@ -131,31 +130,40 @@ def _verify_interrupted_guard(turns: list[dict], guard: dict) -> None:
         raise ValueError("native pending guard call identity differs")
 
 
-def native_session_checkpoint(env: dict[str, str], session_id: str, *, timeout: float,
-                              interrupted_guard: dict | None = None,
-                              retained_history: dict | None = None) -> dict[str, Any]:
-    home = Path(env["CODEX_HOME"])
-    if not session_id or timeout <= 0:
-        raise ValueError("native checkpoint requires a session and an open capture window")
-    deadline = time.monotonic() + timeout
-    version = subprocess.check_output([env["CODEX_BIN"], "--version"], env=env, text=True,
-                                      timeout=timeout).strip()
-    # Native storage is opaque. Retain both rollout and paginated/index stores;
-    # auth, logs, memories and the symlinked skill installation are not members.
+@contextmanager
+def native_checkpoint_reader(env: dict[str, str], *, timeout: float):
+    """Keep one native inspection process open across a sealed capture window."""
     with StdioNativeGoalTransport.spawn(
         [env["CODEX_BIN"], "-c", "features.goals=false", "app-server", "--listen", "stdio://"],
         cwd=env["LOOPX_PROJECT"], env=env, stderr=subprocess.DEVNULL,
         response_timeout_sec=timeout,
     ) as transport:
+        transport.request("initialize", {"clientInfo": {"name": "loopx_checkpoint", "version": "0.1.0"},
+                                          "capabilities": {"experimentalApi": True}})
+        transport.notify("initialized", {})
+        yield transport
+
+
+def native_session_checkpoint(env: dict[str, str], session_id: str, *, timeout: float,
+                              interrupted_guard: dict | None = None,
+                              retained_history: dict | None = None,
+                              transport: StdioNativeGoalTransport | None = None) -> dict[str, Any]:
+    home = Path(env["CODEX_HOME"])
+    if not session_id or timeout <= 0:
+        raise ValueError("native checkpoint requires a session and an open capture window")
+    deadline = time.monotonic() + timeout
+    version = subprocess.check_output([env["CODEX_BIN"], "--version"], env=env, text=True, encoding="utf-8",
+                                      timeout=timeout).strip()
+    # Native storage is opaque. Retain both rollout and paginated/index stores;
+    # auth, logs, memories and the symlinked skill installation are not members.
+    reader = nullcontext(transport) if transport is not None else native_checkpoint_reader(env, timeout=timeout)
+    with reader as transport:
         def request(method, params):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("native checkpoint window closed")
             transport.response_timeout_sec = remaining
             return transport.request(method, params)
-        request("initialize", {"clientInfo": {"name": "loopx_checkpoint", "version": "0.1.0"},
-                                          "capabilities": {"experimentalApi": True}})
-        transport.notify("initialized", {})
         readback = request("thread/read", {"threadId": session_id, "includeTurns": False})
         if readback.get("thread", {}).get("id") != session_id:
             raise ValueError("native checkpoint session identity mismatch")
@@ -246,7 +254,7 @@ def _fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: st
     effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "verify", "root": str(unit), "expected_sha256": expected_sha256,
     }, timeout=timeout)
-    manifest = json.loads((unit / "checkpoint.json").read_text())
+    manifest = json.loads((unit / "checkpoint.json").read_text(encoding="utf-8"))
     native = manifest["point_metadata"]["native_session"]
     if native.get("interrupted_guard") is not None:
         component_id = manifest["point_metadata"].get("held_decision_component_id")
@@ -272,7 +280,7 @@ def _fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: st
     config = config_path.read_bytes()
     if hashlib.sha256(config).hexdigest() != native["config_sha256"]:
         raise ValueError("native checkpoint effective configuration differs")
-    version = subprocess.check_output([env["CODEX_BIN"], "--version"], env=env, text=True,
+    version = subprocess.check_output([env["CODEX_BIN"], "--version"], env=env, text=True, encoding="utf-8",
                                       timeout=max(.1, deadline - time.monotonic())).strip()
     if version != native["host_version"]:
         raise ValueError("native checkpoint Host version differs")
@@ -383,11 +391,11 @@ def _fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: st
 
 
 def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sha256: str,
-                                    config_path: Path, *, execution: Execution, timeout: float) -> dict[str, Any]:
+                                    config_path: Path, *, sandbox: str, timeout: float) -> dict[str, Any]:
     """Explicit controller admission of a verified fork into a destination Goal.
 
     Existing native fork, Goal lifetime and session owners retain their rules.
-    Historical research/effects and evaluator/whole-trial budget are not adopted
+    Historical execution effects and domain-provider budget grants are not adopted
     by this participant. Admission alone never launches work or a model.
     An interrupted cursor is retained as history, not as an executable source
     guard. The destination must obtain its own current work/replan admission.
@@ -398,10 +406,8 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
         project_registry_transaction,
     )
     from loopx.control_plane.turn_driver.codex_sessions import select_codex_cli_session
-    from .sessions import BenchmarkSessionWake
+    from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
 
-    if execution.context != "resume" or execution.mode != "heartbeat":
-        raise ValueError("checkpoint session admission requires explicit heartbeat resume")
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("checkpoint session admission timeout must be finite and positive")
     deadline = time.monotonic() + timeout
@@ -410,9 +416,11 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
     }, timeout=timeout)
     metadata = json.loads((unit / "checkpoint.json").read_bytes())["point_metadata"]
     source_profile = (metadata.get("session") or {}).get("session_profile_digest")
-    if not isinstance(source_profile, str) or not re.fullmatch(r"[0-9a-f]{64}", source_profile):
+    from loopx.control_plane.content_digest import BARE_SHA256_PATTERN
+
+    if not isinstance(source_profile, str) or not BARE_SHA256_PATTERN.fullmatch(source_profile):
         raise ValueError("checkpoint session admission requires its captured source session profile")
-    if tomllib.loads(config_path.read_text()).get("features", {}).get("goals") is not False:
+    if tomllib.loads(config_path.read_text(encoding="utf-8")).get("features", {}).get("goals") is not False:
         raise ValueError("checkpoint session admission requires native automatic Goals explicitly disabled")
     if hashlib.sha256(config_path.read_bytes()).hexdigest() != metadata["native_session"]["config_sha256"]:
         raise ValueError("native checkpoint effective configuration differs")
@@ -422,7 +430,7 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
             any(source[key] == lineage[key] for key in lineage)):
         raise ValueError("checkpoint session admission requires distinct destination Goal and Agent identities")
     registry = Path(env["LOOPX_REGISTRY"])
-    # Use the current governed benchmark path. The lifecycle-only source-session
+    # Use the current governed Goal path. The lifecycle-only source-session
     # profile cannot run governed Turns and is rejected by the registry owner.
     goal = load_goal_from_registry(registry, lineage["goal_id"])
     require_registered_agent_id(registry_path=registry, goal_id=lineage["goal_id"], agent_id=lineage["agent_id"])
@@ -436,7 +444,7 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
             require_registered_agent_id(registry_path=registry, goal_id=lineage["goal_id"], agent_id=lineage["agent_id"])
             if current != goal:
                 raise ValueError("destination Goal configuration changed during native checkpoint readback")
-            wake = BenchmarkSessionWake(env, execution, {})
+            wake = CodexAgentSession(env, context="resume", sandbox=sandbox, receipt={})
             binding = select_codex_cli_session(wake.root, lineage=lineage, session_scope="agent",
                                               goal_admission=wake.admission)
             if not binding or binding.get("checkpoint_artifact_sha256") != expected_sha256:
@@ -469,7 +477,7 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
         if current != goal:
             raise ValueError("destination Goal configuration changed during native checkpoint reconstruction")
         receipt: dict[str, Any] = {}
-        wake = BenchmarkSessionWake(env, execution, receipt)
+        wake = CodexAgentSession(env, context="resume", sandbox=sandbox, receipt=receipt)
         wake._bind_verified_fork(result["session_id"], source_profile, expected_sha256, str(unit))
     return {**result, "destination_goal_ref": wake.goal_ref, "destination_agent_id": lineage["agent_id"],
             "session_binding_admitted": True, "session_profile_digest": wake.digest}
@@ -478,13 +486,13 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
 def main(argv=None) -> None:
     """Controller entrypoint inside an explicitly prepared isolated guest."""
     import os
-    from .codex import SANDBOXES
+    from loopx.control_plane.turn_driver.codex_cli import CODEX_CLI_SANDBOXES
 
     parser = argparse.ArgumentParser(description="Admit a checkpoint's native session participant; no model starts.")
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--expected-sha256", required=True)
     parser.add_argument("--config-path", type=Path, required=True)
-    parser.add_argument("--sandbox", choices=SANDBOXES, required=True)
+    parser.add_argument("--sandbox", choices=CODEX_CLI_SANDBOXES, required=True)
     parser.add_argument("--timeout-seconds", type=float, default=30)
     args = parser.parse_args(argv)
     required = ("CODEX_BIN", "CODEX_HOME", "LOOPX_PROJECT", "LOOPX_REGISTRY", "LOOPX_RUNTIME_ROOT",
@@ -493,7 +501,7 @@ def main(argv=None) -> None:
     if missing:
         parser.error("Explicit destination controller environment is missing: " + ", ".join(missing))
     result = admit_native_checkpoint_session(dict(os.environ), args.root, args.expected_sha256,
-        args.config_path, execution=Execution(context="resume", sandbox=args.sandbox), timeout=args.timeout_seconds)
+        args.config_path, sandbox=args.sandbox, timeout=args.timeout_seconds)
     print(json.dumps(result))
 
 

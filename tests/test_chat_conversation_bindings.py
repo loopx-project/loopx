@@ -19,6 +19,42 @@ def _wait_for_native_turn(store, session_id, turn_id):
         time.sleep(.01)
 
 
+def test_binding_observation_is_opt_in_fresh_and_never_part_of_the_context(ordinary):  # noqa: F811
+    store, runtime, contexts, _, _, _, _ = ordinary
+    observation = {"transport_ref": "notes-app", "provider_ref": "c" * 24,
+                   "operator_ref": "d" * 24, "verified": True, "bot_display_name": "First name"}
+    calls = []
+    def observe(profile):
+        calls.append(profile)
+        return observation
+    bindings = ChatConversationBindings(root=store.root, project_contexts=contexts, observe=observe)
+    binding = bindings.configure(transport_ref="notes-app", project_ref=contexts.available()[0]["project_ref"],
+                                 executor_endpoint_id="codex")
+    before = bindings.path.read_bytes()
+    source = dict(binding_id=binding["binding_id"], source_ref="a" * 24,
+                  sender_ref=observation["operator_ref"], private_human_message=True)
+    calls.clear()
+    original = bindings.resolve(**source)
+    assert "observation" not in original and calls == ["notes-app"]
+    selected = bindings.resolve(**source, include_observation=True)
+    assert calls == ["notes-app", "notes-app"]
+    assert selected["context"] == original["context"] and "observation" not in selected["context"]
+    assert selected["observation"]["bot_display_name"] == "First name"
+    observation["bot_display_name"] = "New name"
+    changed = bindings.resolve(**source, include_observation=True)
+    assert changed["observation"]["bot_display_name"] == "New name"
+    assert selected["observation"]["bot_display_name"] == "First name"
+    observation["verified"] = False
+    with pytest.raises(ValueError, match="identity"):
+        bindings.resolve(**source, include_observation=True)
+    observation["verified"] = True
+    observation["provider_ref"] = "e" * 24
+    with pytest.raises(ValueError, match="identity"):
+        bindings.resolve(**source, include_observation=True)
+    assert bindings.path.read_bytes() == before and not store.list_sessions()
+    runtime.close()
+
+
 @pytest.mark.parametrize("resumed", [False, True])
 def test_group_disconnect_stops_running_and_queued_turns_without_stopping_other_session(ordinary, resumed):  # noqa: F811
     from test_lark_private_conversations import connect_group

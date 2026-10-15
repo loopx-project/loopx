@@ -16,6 +16,8 @@ from ..control_plane.runtime.public_safety import SECRET_LIKE_SURFACE_PATTERN
 from urllib.parse import parse_qsl, urlparse
 
 from ..file_lock import exclusive_file_lock
+# Public extension presentation utility; keep path classification single-owned.
+from ..public_safe_text import find_public_safe_local_path as find_public_safe_local_path
 from .runtime import (
     MAX_EXTENSION_RESPONSE_BYTES,
     _resolved_active_extension,

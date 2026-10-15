@@ -131,6 +131,7 @@ def _receipt_row(
         ),
         "next_action_basis_count": semantics.next_action_basis_count(payload),
         "authoring_inputs": semantics.authoring_input_observations(text),
+        "continuation_instructions": semantics.continuation_instruction_observations(text),
     }
 
 

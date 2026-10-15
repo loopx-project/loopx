@@ -33,7 +33,7 @@ def managed_operation_binding_current(
 ) -> bool:
     """Read the original Turn session owner; the shared TS owner judges it."""
     from ..effect_runtime import effect_runtime_result
-    from ..turn_driver.codex_cli import load_codex_cli_session
+    from ..turn_driver.codex_sessions import load_codex_cli_session
 
     executor = parameters["executor"]
     lineage = {
@@ -46,7 +46,8 @@ def managed_operation_binding_current(
             "operation.managed_binding.current",
             {
                 "parameters": dict(parameters),
-                "session": load_codex_cli_session(runtime_root, lineage=lineage),
+                "session": load_codex_cli_session(runtime_root, lineage=lineage,
+                    host=executor.get("host", "codex-cli")),
             },
         )["current"]
         is True
@@ -234,7 +235,7 @@ def agent_operation_action(
                     },
                 )
             )
-        if actor.get("host_surface") == "loopx-managed-codex":
+        if actor.get("host_surface") in {"loopx-managed-codex", "loopx-managed-dsh"}:
             session_paths.add(
                 _session_path(
                     runtime_root,
@@ -288,8 +289,9 @@ def _commit_agent_operation(
             "revision": "managed-turn-handoff-v0",
             "model": actor.get("model"),
             "reasoning_effort": actor.get("reasoning_effort"),
+            **({"host": "dsh"} if actor.get("host_surface") == "loopx-managed-dsh" else {}),
         }
-        if actor.get("host_surface") == "loopx-managed-codex"
+        if actor.get("host_surface") in {"loopx-managed-codex", "loopx-managed-dsh"}
         else actor
     )
     actor_current = (

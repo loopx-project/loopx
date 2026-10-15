@@ -512,6 +512,52 @@ def test_redirect_fence_returns_no_text(configured, monkeypatch):
     assert reader.read_public_url(URL) == {"ok": False, "error": "source_url_changed"}
 
 
+@pytest.mark.parametrize("image", [False, True])
+def test_same_origin_location_is_diagnostic_not_source_content(configured, monkeypatch, image):
+    calls = []
+    destination = "https://example.com/canonical-article?edition=2#section"
+    value = {"error": "source_url_changed", "observed_url": destination,
+             "requested_url": URL, "canonical_url": URL,
+             "text": "must not escape", "title": "unread", "image_data": "unread"}
+
+    def run(*args, **kwargs):
+        calls.append(args)
+        return response(value)
+
+    monkeypatch.setattr(reader.subprocess, "run", run)
+    if image:
+        content = reader.read_public_image(URL, 0)
+        assert len(content) == 1 and content[0].type == "text"
+        result = json.loads(content[0].text)
+    else:
+        result = reader.read_public_url(URL)
+    assert result == {"ok": False, "error": "source_url_changed", "observed_url": destination}
+    assert len(calls) == 1  # No automatic read of the reported destination.
+
+
+@pytest.mark.parametrize("image", [False, True])
+@pytest.mark.parametrize("changes", [
+    {"observed_url": "https://other.test/private?edition=2"},
+    {"observed_url": "https://user:secret@example.com/private"},
+    {"observed_url": "http://example.com/private"},
+    {"observed_url": True}, {"observed_url": URL},
+    {"requested_url": "https://example.com/another-request"},
+    {"canonical_url": "https://other.test/another-request"},
+    {"canonical_url": None},
+])
+def test_changed_location_requires_original_request_provenance(configured, monkeypatch, image, changes):
+    value = {"error": "source_url_changed", "observed_url": "https://example.com/canonical",
+             "requested_url": URL, "canonical_url": URL, **changes}
+    monkeypatch.setattr(reader.subprocess, "run", lambda *_a, **_k: response(value))
+    if image:
+        result = json.loads(reader.read_public_image(URL, 0)[0].text)
+        expected = "browser_image_result_invalid"
+    else:
+        result = reader.read_public_url(URL)
+        expected = "browser_read_result_invalid"
+    assert result == {"ok": False, "error": expected}
+
+
 def test_browser_failures_are_sanitized(configured, monkeypatch):
     monkeypatch.setattr(reader.subprocess, "run", lambda *a, **k:
                         subprocess.CompletedProcess([], 4, "", "private bootstrap output"))
@@ -903,10 +949,26 @@ def test_browser_equivalent_urls_keep_exact_resource_fence(configured, tmp_path,
 
 @pytest.mark.parametrize("image", [False, True])
 @pytest.mark.parametrize("redirect", ["https://example.com/different", "https://other.test/private"])
-def test_generated_scripts_reject_real_redirect_before_dom(configured, tmp_path, image, redirect):
+def test_generated_scripts_report_only_same_origin_redirect_location_before_dom(configured, tmp_path, image, redirect):
     result, observation = run_generated_script(reader.ReaderConfig.from_environment(), URL,
                                                image, tmp_path / "image.png", redirect=redirect)
-    assert result == {"ok": False, "error": "source_url_changed"}
+    expected = {"ok": False, "error": "source_url_changed"}
+    if redirect == "https://example.com/different":
+        expected["observed_url"] = redirect
+    assert result == expected
+    assert observation == {"domReads": 0, "captures": 0}
+
+
+@pytest.mark.parametrize("image", [False, True])
+@pytest.mark.parametrize("url", [
+    "https://example.com/a/../article",
+    'https://example.com/article?q="edition"',
+])
+def test_redirect_diagnostic_accepts_browser_normalized_target(configured, tmp_path, image, url):
+    destination = "https://example.com/canonical-article"
+    result, observation = run_generated_script(reader.ReaderConfig.from_environment(), url,
+        image, tmp_path / "image.png", redirect=destination)
+    assert result == {"ok": False, "error": "source_url_changed", "observed_url": destination}
     assert observation == {"domReads": 0, "captures": 0}
 
 
@@ -918,7 +980,7 @@ def test_fragment_routes_are_fenced_before_text_or_pixels(configured, tmp_path, 
     url = "https://example.com/#/blog/article"
     result, observation = run_generated_script(reader.ReaderConfig.from_environment(), url,
                                                image, tmp_path / "image.png", redirect=redirect)
-    assert result == {"ok": False, "error": "source_url_changed"}
+    assert result == {"ok": False, "error": "source_url_changed", "observed_url": redirect}
     assert observation == {"domReads": 0, "captures": 0}
 
 

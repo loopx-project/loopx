@@ -30,6 +30,11 @@ def register_backup_state_command(
         help="Preview or create a private local archive of LoopX state.",
     )
     add_subcommand_format(parser)
+    parser.add_argument("backup_action", nargs="?", choices=["verify"],
+                        help="Verify a full archive and inspect an inert copy; never reactivate it.")
+    parser.add_argument("--archive", help="For verify, the private full-state tar.gz archive.")
+    parser.add_argument("--manifest", help="For verify, the matching private external manifest.")
+    parser.add_argument("--destination", help="For verify, a new inert directory below a physical parent.")
     parser.add_argument(
         "--project",
         default=".",
@@ -82,6 +87,27 @@ def handle_backup_state_command(
     print_payload: PrintPayload,
     output_format: FormatSelector,
 ) -> int:
+    if getattr(args, "backup_action", None) == "verify":
+        from ..control_plane.state_recovery_io import StateRecoveryError, render_state_recovery_markdown, verify_state_backup
+
+        try:
+            if not all(getattr(args, key, None) for key in ("archive", "manifest", "destination")):
+                raise StateRecoveryError("recovery_inputs_required")
+            if args.output_dir or args.backup_id or args.no_automations or args.no_skills or args.current_project_only or args.project != ".":
+                raise StateRecoveryError("recovery_creation_options_invalid")
+            payload = verify_state_backup(archive=Path(args.archive).expanduser(),
+                manifest=Path(args.manifest).expanduser(), destination=Path(args.destination).expanduser().absolute(),
+                execute=bool(args.execute))
+        except StateRecoveryError as exc:
+            payload = {"ok": False, "error_code": exc.code, "execution_authority_granted": False}
+        except OSError:
+            payload = {"ok": False, "error_code": "recovery_io_unavailable", "execution_authority_granted": False}
+        print_payload(payload, output_format(args), render_state_recovery_markdown)
+        return 0 if payload.get("ok") else 1
+    if any(getattr(args, key, None) for key in ("archive", "manifest", "destination")):
+        payload = {"ok": False, "error": "archive, manifest and destination require backup-state verify"}
+        print_payload(payload, output_format(args), render_state_backup_markdown)
+        return 1
     try:
         runtime_root = (
             Path(args.runtime_root).expanduser() if args.runtime_root else None

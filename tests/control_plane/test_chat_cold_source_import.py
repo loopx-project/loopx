@@ -48,7 +48,9 @@ from pathlib import Path
 from loopx.chat_server import serve_chat
 registry, runtime, ready = map(Path, sys.argv[1:4])
 port = int(sys.argv[4])
-ready.write_text(json.dumps({'port': port, 'package': loopx.__file__}))
+staged_ready = ready.with_suffix('.tmp')
+staged_ready.write_text(json.dumps({'port': port, 'package': loopx.__file__}), encoding='utf-8')
+staged_ready.replace(ready)
 serve_chat(registry_path=registry, runtime_root_override=runtime,
     scan_roots=[Path(json.loads(registry.read_text())['goals'][0]['repo'])], host='127.0.0.1', port=port,
     goal_id='cold', open_browser=False, verbose=False)

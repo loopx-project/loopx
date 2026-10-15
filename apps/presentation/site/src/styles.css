@@ -1561,6 +1561,7 @@ body[data-language="zh"] .hero h1 {
 
 .site-footer nav {
   display: flex;
+  flex-wrap: wrap;
   justify-self: end;
   gap: 22px;
 }

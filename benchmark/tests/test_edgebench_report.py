@@ -322,6 +322,155 @@ def test_native_tie_choice_and_missing_sample_times_are_preserved(trial):
     assert verify(out)["verified"] is True
 
 
+def native_trial(trial, policy="score_first", direction="minimize"):
+    """Synthetic native receipts: selected round has score 0, another has 2."""
+    trial[1][0]["settings"]["native_ranking"] = {
+        "selection": policy, "score_direction": direction,
+    }
+    for name in ("runtime-receipt", "final_result", "run_history"):
+        path = trial[3] / (name + ".json")
+        data = json.loads(path.read_text())
+        data["best_score"] = 0
+        if name != "runtime-receipt":
+            data.update(best_round="auto-2", best_pass_rate=1.0)
+        if name == "run_history":
+            data["entries"][0].update(
+                pass_rate=0.5, valid=policy != "valid_then_score",
+                private_future_field="must-not-be-exported",
+            )
+            data["entries"][1].update(pass_rate=1.0, valid=True)
+        write(path, data)
+
+
+@pytest.mark.parametrize("policy,direction", [
+    ("score_first", "minimize"),
+    ("valid_then_score", "maximize"),
+    ("pass_rate_first", "maximize"),
+])
+def test_native_ranking_preserves_selected_lower_score(trial, policy, direction):
+    native_trial(trial, policy, direction)
+    out = build(trial)
+    row = json.loads((out / "run-rows.json").read_text())[0]
+    assert row["metrics"]["best_score"] == {
+        "value": 0, "unit": "raw_score", "higher_is_better": direction == "maximize",
+    }
+    assert row["metrics"]["best_pass_rate"]["value"] == 1.0
+    assert row["countability"]["score_countable"] is False
+    with (out / "scores.csv").open() as stream:
+        assert next(csv.DictReader(stream))["best_round"] == "auto-2"
+    assert all("must-not-be-exported" not in p.read_text()
+               for p in out.rglob("*") if p.is_file())
+    assert verify(out)["verified"] is True
+
+
+@pytest.mark.parametrize("metadata", [
+    None, {}, {"selection": "score_first"},
+    {"selection": "other", "score_direction": "minimize"},
+    {"selection": "score_first", "score_direction": "down"},
+    {"selection": "score_first", "score_direction": False},
+    {"selection": "score_first", "score_direction": "minimize", "private": "extra"},
+])
+def test_invalid_native_ranking_metadata_fails_before_output(trial, metadata):
+    trial[1][0]["settings"]["native_ranking"] = metadata
+    with pytest.raises(ValueError, match="native ranking"):
+        build(trial)
+    assert not trial[2].exists()
+
+
+@pytest.mark.parametrize("field,value", [
+    ("best_round", "absent"), ("best_round", "auto-1"),
+    ("best_score", 2), ("best_pass_rate", 0.5),
+])
+def test_native_history_winner_must_bind_final_result(trial, field, value):
+    native_trial(trial)
+    path = trial[3] / "run_history.json"
+    data = json.loads(path.read_text())
+    data[field] = value
+    write(path, data)
+    with pytest.raises(ValueError, match="Native history"):
+        build(trial)
+    assert not trial[2].exists()
+
+
+def test_supplied_metric_direction_cannot_be_silently_overwritten(trial):
+    native_trial(trial)
+    trial[1][0]["row"]["metrics"]["best_score"] = {
+        "value": 0, "higher_is_better": True,
+    }
+    with pytest.raises(ValueError, match="direction"):
+        build(trial)
+    assert not trial[2].exists()
+
+
+@pytest.mark.parametrize("fault", ["direction", "missing_direction", "pass_rate", "winner"])
+def test_rehashed_native_report_contradictions_fail(trial, fault):
+    native_trial(trial, "pass_rate_first", "maximize")
+    out = build(trial)
+    if fault == "winner":
+        replace_csv(out, "scores.csv", "best_round", "auto-1")
+    else:
+        path = out / "run-rows.json"
+        rows = json.loads(path.read_text())
+        if fault == "direction":
+            rows[0]["metrics"]["best_score"]["higher_is_better"] = False
+        elif fault == "missing_direction":
+            del rows[0]["metrics"]["best_score"]["higher_is_better"]
+        else:
+            rows[0]["metrics"]["best_pass_rate"]["value"] = 0.5
+        write(path, rows)
+        reseal(out, "run-rows.json")
+    with pytest.raises(ValueError, match="direction|pass rate|Best round"):
+        verify(out)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_cli_exports_mixed_legacy_and_native_without_sforge(trial, reverse):
+    runs, selection, out, source = trial
+    other = runs / "other" / "case"
+    shutil.copytree(source, other)
+    for name in ("runtime-receipt", "final_result", "run_history"):
+        path = other / (name + ".json")
+        data = json.loads(path.read_text())
+        data["run_id"] = "other"
+        write(path, data)
+    legacy = copy.deepcopy(selection[0])
+    legacy["row"]["run_id"] = "other"
+    native_trial(trial)
+    selection.append(legacy)
+    if reverse:
+        selection.reverse()
+    selection_file = runs.parent / "selection.json"
+    write(selection_file, selection)
+    result = subprocess.run([
+        sys.executable, "-c",
+        "import sys, runpy; sys.modules['sforge'] = None; "
+        "runpy.run_module('benchmark.edgebench.export_report', run_name='__main__')",
+        "--runs-root", str(runs), "--selection", str(selection_file),
+        "--output", str(out), "--observed-at", "2026-01-02T00:00:00+00:00",
+    ], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["runs"] == 2
+    with (out / "samples.csv").open() as stream:
+        samples = list(csv.DictReader(stream))
+    assert [p["pass_rate"] for p in samples if p["run_id"] == "run"] == ["0.5", "1.0"]
+    assert all(p["pass_rate"] == "" for p in samples if p["run_id"] == "other")
+    assert verify(out)["verified"] is True
+
+
+def test_archived_report_cli_verifies_unchanged_without_sforge():
+    data = ROOT / PUBLISHED_DATA
+    before = {p: digest(p) for p in data.rglob("*") if p.is_file()}
+    result = subprocess.run([
+        sys.executable, "-c",
+        "import sys, runpy; sys.modules['sforge'] = None; "
+        "runpy.run_module('benchmark.edgebench.export_report', run_name='__main__')",
+        "--verify", str(data),
+    ], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"runs": 10, "files": 13, "verified": True}
+    assert {p: digest(p) for p in before} == before
+
+
 @pytest.mark.parametrize(
     "key,value,message",
     [

@@ -13,6 +13,19 @@ from benchmark.runtime import sforge_warm_start as warm
 from loopx.control_plane.effect_runtime import effect_runtime_result
 
 
+@pytest.mark.parametrize("extension", ["-1", "64800", str(2 ** 53)])
+def test_extension_without_a_warm_entry_refuses_before_attempt_or_registration(tmp_path, extension):
+    pytest.importorskip("harbor")
+    from benchmark.edgebench import run as entry
+    argv = ["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
+        "--run-id", "unadmitted", "--worker", "heartbeat-explore", "--model", "fixture",
+        "--effort", "high", "--judge-url", "http://localhost:1",
+        "--restore-phase-extension-seconds", extension]
+    with pytest.raises(SystemExit) as rejected:
+        entry.main(argv)
+    assert rejected.value.code == 2 and not list(tmp_path.iterdir())
+
+
 @pytest.mark.parametrize("existing", ["empty", "nonempty", "foreign-link", "installed-link"])
 def test_native_fork_skills_rejoin_ordinary_installer_without_erasing_contents(tmp_path, existing):
     from benchmark.runtime.codex import Execution, prepare_codex_home
@@ -224,3 +237,166 @@ def test_warm_launcher_reserves_host_attempt_without_preempting_native_run(tmp_p
         with pytest.raises(FileExistsError):
             entry.main(argv)
         assert not native_run.exists()
+
+
+@pytest.fixture
+def research_point(point, tmp_path, monkeypatch, request):
+    start, workspace = point
+    research = tmp_path / "retained-experiments"
+    if getattr(request, "param", "directory") == "file":
+        research.write_text("retained observations")
+        research.chmod(0o600)
+    else:
+        research.mkdir()
+        (research / "candidate.py").write_text("def predict(x): return x * 7\n")
+        (research / "observations.json").write_text('[2, 3, 5]')
+        (research / "candidate.py").chmod(0o600)
+    manifest = json.loads((start.root / "checkpoint.json").read_bytes())
+    components = manifest["components"] + [{"id": "experiments", "source_path": str(research)}]
+    metadata = manifest["point_metadata"]
+    metadata["worker_file_snapshot"]["components"].append(components[-1])
+    probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
+    unit = tmp_path / "research-point"
+    result = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "capture", "components": components,
+        "point_metadata": metadata, "expected_source_sha256": probe["source_sha256"], "destination": str(unit)})
+    # Only the fixture source; the receiver must use sealed bytes.
+    if research.is_dir():
+        shutil.rmtree(research)
+    else:
+        research.unlink()
+    monkeypatch.setattr(warm, "_RESEARCH_ROOTS", (tmp_path,))
+    return replace(start, root=unit, sha256=result["sha256"], research_component_ids=("experiments",)), workspace, research
+
+
+def test_explicit_research_files_reproduce_the_retained_experiment(research_point):
+    start, workspace, research = research_point
+    assert start.verify(str(workspace))
+    warm.restore_workspace({"root": str(start.root), "sha256": start.sha256,
+                            "research_component_ids": ["experiments"]}, workspace)
+    scope = {}
+    exec((research / "candidate.py").read_text(), scope)
+    assert [scope["predict"](x) for x in json.loads((research / "observations.json").read_text())] == [14, 21, 35]
+    assert (research / "candidate.py").stat().st_mode & 0o777 == 0o600
+    # The original unit is still valid and replay cannot overwrite receiver work.
+    effect_runtime_result("runtime.checkpoint_artifacts", {"action": "verify", "root": str(start.root),
+                                                          "expected_sha256": start.sha256})
+    with pytest.raises(ValueError, match="already exists"):
+        warm.restore_workspace({"root": str(start.root), "sha256": start.sha256,
+                                "research_component_ids": ["experiments"]}, workspace)
+
+
+def test_unselected_research_files_remain_inert(research_point):
+    start, workspace, research = research_point
+    warm.restore_workspace({"root": str(start.root), "sha256": start.sha256}, workspace)
+    assert not research.exists()
+
+
+@pytest.mark.parametrize("selected", [("absent",), ("workspace",), ("context",),
+                                       ("experiments", "experiments"), (None,), "experiments"])
+def test_invalid_research_selection_rejects_before_workspace_changes(research_point, selected):
+    start, workspace, research = research_point
+    with pytest.raises(ValueError):
+        replace(start, research_component_ids=selected).verify(str(workspace))
+    with pytest.raises(ValueError):
+        warm.restore_workspace({"root": str(start.root), "sha256": start.sha256,
+                                "research_component_ids": selected}, workspace)
+    assert (workspace / "candidate").read_text() == "retained candidate"
+    assert not workspace.with_name("workspace.before-checkpoint").exists() and not research.exists()
+
+
+@pytest.mark.parametrize("collision", ["file", "directory", "symlink", "missing-parent", "parent-symlink"])
+def test_research_destination_conflicts_preserve_receiver(research_point, collision, tmp_path):
+    start, workspace, research = research_point
+    if collision == "file":
+        research.write_text("unrelated")
+    elif collision == "directory":
+        research.mkdir()
+    elif collision == "symlink":
+        research.symlink_to(tmp_path / "missing")
+    else:
+        # Exercise destination validation directly: the sealed source path must
+        # never be remapped just to make a receiver pass.
+        parent = tmp_path / "new-parent"
+        if collision == "parent-symlink":
+            parent.symlink_to(tmp_path, target_is_directory=True)
+        with pytest.raises(ValueError, match="physical parent"):
+            warm._check_research_destinations([("experiments", start.root, parent / "new-file")])
+        return
+    with pytest.raises(ValueError, match="already exists"):
+        warm.restore_workspace({"root": str(start.root), "sha256": start.sha256,
+                                "research_component_ids": ["experiments"]}, workspace)
+    assert not workspace.with_name("workspace.before-checkpoint").exists()
+    if collision == "file":
+        assert research.read_text() == "unrelated"
+
+
+def test_research_data_cannot_target_provider_control_or_unqualified_roots(research_point, monkeypatch):
+    start, workspace, _ = research_point
+    metadata = json.loads((start.root / "checkpoint.json").read_bytes())["point_metadata"]
+    monkeypatch.setattr(warm, "_RESEARCH_ROOTS", (warm.Path("/tmp"), warm.Path("/home/workspace")))
+    entry = metadata["worker_file_snapshot"]["components"][-1]
+    for path in ("/", "/tmp", "/home/workspace", "/etc/config", warm._CONTROL + "/registry.json",
+                 warm._CODEX_HOME, "/logs/agent", "/tmp/a/../b"):
+        entry["source_path"] = path
+        with pytest.raises(ValueError, match="separate data"):
+            warm._research_components(start.root, metadata, workspace, ("experiments",))
+
+
+def test_research_copy_mismatch_is_an_unusable_attempt(research_point, monkeypatch):
+    start, workspace, research = research_point
+    copy = shutil.copytree
+    def corrupt(source, destination, *args, **kwargs):
+        result = copy(source, destination, *args, **kwargs)
+        if destination == research:
+            (research / "observations.json").write_text('[999]')
+        return result
+    monkeypatch.setattr(shutil, "copytree", corrupt)
+    with pytest.raises(ValueError, match="differ from the sealed"):
+        warm.restore_workspace({"root": str(start.root), "sha256": start.sha256,
+                                "research_component_ids": ["experiments"]}, workspace)
+    assert workspace.with_name("workspace.before-checkpoint").is_dir()
+
+
+def test_research_selection_survives_staging(research_point, monkeypatch, tmp_path):
+    start, workspace, _ = research_point
+    control = tmp_path / "control"
+    control.mkdir()
+    monkeypatch.setattr(warm, "_CONTROL", str(control))
+    class Environment:
+        async def upload_dir(self, source, target):
+            shutil.copytree(source, target)
+        async def upload_file(self, source, target):
+            shutil.copyfile(source, target)
+        async def exec(self, command, **kwargs):
+            return SimpleNamespace(return_code=0)
+    asyncio.run(start.stage(Environment(), str(workspace)))
+    declaration = json.loads((control / "warm-start.json").read_bytes())
+    assert declaration["research_component_ids"] == ["experiments"]
+
+
+def test_research_option_without_warm_entry_rejects_before_registration(tmp_path):
+    pytest.importorskip("harbor")
+    from benchmark.edgebench import run as entry
+    with pytest.raises(SystemExit) as rejected:
+        entry.main(["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
+            "--run-id", "unadmitted", "--worker", "heartbeat-explore", "--model", "fixture",
+            "--effort", "high", "--judge-url", "http://localhost:1",
+            "--restore-research-component", "experiments"])
+    assert rejected.value.code == 2 and not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("research_point", ["file"], indirect=True)
+def test_standalone_research_file_keeps_bytes_and_mode(research_point):
+    start, workspace, research = research_point
+    warm.restore_workspace({"root": str(start.root), "sha256": start.sha256,
+                            "research_component_ids": ["experiments"]}, workspace)
+    assert research.read_text() == "retained observations"
+    assert research.stat().st_mode & 0o777 == 0o600
+
+
+def test_workspace_backup_cannot_be_a_research_destination(research_point):
+    start, workspace, _ = research_point
+    metadata = json.loads((start.root / "checkpoint.json").read_bytes())["point_metadata"]
+    metadata["worker_file_snapshot"]["components"][-1]["source_path"] = str(workspace.with_name("workspace.before-checkpoint"))
+    with pytest.raises(ValueError, match="separate data"):
+        warm._research_components(start.root, metadata, workspace, ("experiments",))

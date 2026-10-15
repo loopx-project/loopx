@@ -114,6 +114,25 @@ preserved for inspection; the companion notice governs their current evidence
 status. Neither archive category is the architecture for new work or grants
 runner, verifier, submission, or publication authority.
 
+## Matched model provider routing
+
+For a custom Responses-compatible model endpoint, set `OPENAI_BASE_URL` and
+`OPENAI_API_KEY` in the private runner environment before invoking
+`python -m benchmark.edgebench.run` for either arm. The native SForge config,
+official Codex home and LoopX worker use the same endpoint and environment-key
+credential contract. A base URL without a key fails before creating the attempt;
+the custom route does not copy or fall back to `CODEX_AUTH_JSON_PATH`. Credentials
+are not embedded in Codex settings or the logged scheduler command. The operator
+still owns endpoint access, actual model/tool qualification and private evidence.
+
+With `OPENAI_BASE_URL` unset, login-file behavior is unchanged, including the
+required `CODEX_AUTH_JSON_PATH`; an ambient API key alone does not select the
+custom route. Change routes only between fresh attempts. Checkpoint continuation
+must retain the captured endpoint/configuration and supply fresh credentials
+externally. This routing repair enables matched experiments under the
+[long-horizon research contract](../docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md);
+it establishes neither sustained operation nor a solver-quality improvement.
+
 ## Inert checkpoint capture
 
 This is a developer prerequisite for the [research checkpoint contract](../docs/architecture/rfcs/hierarchical-agent-stride-control-v0.md#77-research-state-branching-and-matched-continuation),
@@ -165,6 +184,16 @@ remain false. Integrity checks cover the declared members and observed stable
 source boundary, not adversarial filesystem mutation or a cross-owner transaction.
 Native session reconstruction, effect reconciliation, fresh authority admission
 and evaluator cooldown/opportunity inheritance must pass before matched continuation.
+
+An explicitly checkpoint-enabled POSIX heartbeat CLI worker sets its own soft
+core-dump limit to zero before starting the native Host and its tools. This
+prevents crash memory dumps from growing a later workspace snapshot. The hard
+limit and parent launcher stay unchanged; workers without this opt-in retain
+their inherited limits. Existing files are never removed or silently excluded:
+retain any existing crash diagnostic outside the declared participants before
+requesting a new point. Omit the checkpoint declaration on a new worker to
+retain ordinary launch behavior. This is file/session reconstruction, not
+process-memory recovery or permission to inspect crash memory.
 
 For pre-decision capture at a **fresh replan projected at the start of a heartbeat
 wake**, add `"trigger": "fresh_replan"` and set `destination` to the trial's
@@ -275,7 +304,7 @@ effective configuration digest and Host version; tools/skills and credentials ne
 their existing installation/authentication owners. Native state is opaque and its
 storage layout remains a pinned provider qualification.
 
-`benchmark.runtime.native_checkpoint.fork_native_checkpoint` verifies a unit and
+`loopx.hosts.codex_checkpoint.fork_native_checkpoint` verifies a unit and
 reconstructs a distinct native session in a **new isolated environment preserving
 the captured guest paths**, with matching configuration and Host version. It checks
 the full history digest and cursor, starts no model and registers no LoopX binding.
@@ -293,7 +322,7 @@ it does not remove historical authority. The controller environment and explicit
 configuration are not exported as authority or credentials.
 
 ```sh
-python -m benchmark.runtime.native_checkpoint \
+python -m loopx.hosts.codex_checkpoint \
   --root /private/captured-point --expected-sha256 CAPTURE_DIGEST \
   --config-path /private/qualified-config.toml --sandbox read-only
 ```
@@ -444,12 +473,17 @@ this context-adoption path. Leases are excluded from the read, while historical
 claim/status fields remain evidence. Declarations without `loopx_state` keep
 their previous path.
 
+The generic [research-checkpoint CLI](../docs/reference/research-checkpoint.md)
+owns ordinary Goal capture, native-session admission and research-context adoption.
+The benchmark adapter adds task workspace, evaluator and budget participants;
+Core does not import the benchmark package.
+
 After separately admitting the checkpoint's native session, an operator can
 adopt this retained context on an **already claimed and leased destination Todo**
 whose note is empty:
 
 ```sh
-python -m benchmark.runtime.research_checkpoint \
+python -m loopx.hosts.research_checkpoint \
   --root /private/checkpoints/point --expected-sha256 CHECKPOINT_SHA256 \
   --source-todo-id SOURCE_TODO --todo-id DESTINATION_TODO \
   --operation-id CONTEXT_OPERATION --expected-revision CURRENT_REVISION \
@@ -551,6 +585,9 @@ Restore writes its new token only to the explicit
 private result file; stdout contains its path. Wrong authority, corrupt bytes,
 aliases, foreign bank entries, source-run reuse and duplicate native admission
 fail without a fresh evaluation. Redirects cannot forward the admin secret.
+Controller HTTP requests connect directly to the configured origin, ignoring
+environment proxy settings. This applies only to the explicitly invoked native
+capsule adapter; it does not change model API or installation proxy behavior.
 After an uncertain restore response, repeat the same controller `restore` command
 with `--recover`, preserving the same capsule digest, run identity, result-file
 and optional phase-deadline-file. Recovery reads the original native activation
@@ -799,6 +836,11 @@ worker 保留原 guard，controller 暂停全部容器写入者，核对仍有�
 文件 witness，再封存原生评测机会、incumbent 及剩余预算。源变化、过期或失去
 交接会拒绝；可恢复的捕获失败不取消原研究，也不得改用稍后的状态。解除暂停后，
 源会话继续使用原 packet 和 deadline。
+自动 supervisor 的准备截止时间仍约束暂停、文件导出及原生捕获。成功解除暂停后，
+controller 只对自己持有的静态导出副本继续校验、封存，使用已捕获的原 Host phase
+截止时间；该截止时间同时传给类型化产物 owner，过期不能发布。源可以继续工作，
+稍后产生的文件不会进入旧点；不会增加预算、冷却或评测机会。直接调用 controller
+默认仍以显式 timeout 约束整项操作。关闭 handoff/controller 配置即停止自动路径。
 上文的公开复现命令使用固定 provider `071a884`、Python 3.12、显式 Linux amd64
 Codex/Node 及调用者准备的 Docker 镜像。非 root controller 从六个真实工作 wake
 形成模型决策前捕获，保留完整声明的目录及只读 Git 对象；普通与 stride receiver
@@ -827,6 +869,15 @@ native-judge owners. It preserves the captured workspace and effective Codex
 configuration, admits a distinct native session and fresh Goal/Agent, and adopts
 retained research as evidence on a current preparation Todo. Historical registry,
 claims, leases and settlement records are not installed as current authority.
+If the sealed context contains Explore events, adoption also seeds the fresh
+Goal's ordinary Explore log. Nodes, findings, scoped counterexamples, topology,
+original attribution and timestamps survive, with each event bound to the
+checkpoint digest and source event through its opaque run reference. Operational
+research-observation lineage stays in the archive; it is not destination
+execution proof. Recovery accepts only the same immutable initial prefix, may
+finish a partial prefix, and never reapplies old statuses after newer evidence.
+Malformed, foreign or interleaved destination history rejects before model work.
+Legacy context-only points keep their original continuation behavior.
 Fresh credentials come from the ordinary runner credential source. The native
 activation's absolute deadline includes receiver installation and preparation;
 restarting the entry cannot grant another full budget or submission allowance.
@@ -837,6 +888,48 @@ continuation gate must accept that replan before the declared normal cadence
 returns. Preparation and context-reading cost belong in the comparison. Omit all
 restore flags for the unchanged cold entry; never reuse an ambiguous trial
 folder as a new attempt.
+
+Research files outside the task workspace need explicit capture **and** explicit
+receiver selection. Add each required directory or file to the source checkpoint
+request's existing `components` array before capture, for example
+`{"id": "research_trials", "source_path": "/tmp/research-trials"}`. Create that
+owned directory before the first capture and keep durable experiment inputs,
+candidates and reports there (or inside the task workspace). Do not capture all
+of `/tmp`, credentials, or unrelated files. The archive cannot discover a missing
+dependency from a conversation reference.
+
+At continuation, inspect the sealed `worker_file_snapshot.components` paths and
+pass `--restore-research-component research_trials`; repeat the option for each
+selected component. Only recorded files below `/tmp/` or `/home/workspace/`,
+separate from the full task workspace, are eligible. The receiver restores the
+original guest path, requires an absent target and an existing physical parent,
+and verifies copied bytes/modes through the artifact owner before model work.
+Unknown/duplicate IDs, overlapping roots, occupied targets and symlink parents
+reject. Selection does not grant control-plane authority; caller-declared files
+are private artifacts and are not automatically filtered for credentials.
+
+Omitting the option preserves workspace-only restoration; unselected components
+remain inert in the archive. A point that never captured a dependency cannot be
+repaired by adding a later copy. Qualify the actual experiment's required files
+in a receiver before describing its research state as complete. An interrupted
+copy leaves a failed attempt to inspect; do not reuse that receiver or overwrite
+its workspace backup. Disable this opt-in by omitting the selection on a new
+attempt; preserve previous evidence. This provider CLI transport does not close
+the generic checkpoint frontend or automatic dependency-discovery gaps.
+
+The default continuation retains the captured remaining time. For a separately
+authorized longer study, explicitly add `--restore-phase-extension-seconds N`
+and set `--timeout` large enough for the extended continuation. For example,
+changing a source's total budget from 18h to 36h adds `64800` seconds; it does
+not grant 36 fresh hours after the checkpoint. Both arms need the same declared
+extension. The controller-only `restore` command exposes the corresponding
+`--phase-extension-seconds N` option. This is an operator-supplied budget, not
+permission to spend: record the authorization and new study conditions before
+admission. The first activation binds the extension and absolute deadline;
+recovery requires the same value and never refills elapsed time. Native history,
+accepted round counts, cooldown and scoring remain unchanged. Omit the option
+for the original-budget behavior; a changed budget requires a fresh destination,
+not a rewrite of a running study or its original results.
 
 The ordinary installed worker has passed a synthetic joined qualification:
 native session continuation, current preparation and accepted replan, restored

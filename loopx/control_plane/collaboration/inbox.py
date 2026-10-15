@@ -207,6 +207,13 @@ def pending(
                 if lifecycle.get("kind") == "omit":
                     continue
             item = {**row, "inbox_state": state["kind"]}
+            item.pop("request_control", None)
+            if state.get("request_control_view") is not None:
+                view = state["request_control_view"]
+                item.update(original_brief=row["brief"], brief=view["brief"], request_control_view=view,
+                    request_revision=view["revision"], request_revision_digest=view["revision_digest"])
+                item["source_request"] = {"request_id": row["request_id"], "request_revision": view["revision"],
+                    "request_digest": view["revision_digest"]}
             item["recorded_decision"] = state["recorded_decision"]
             if state["recorded_decision"] is not None:
                 item["receiver_decision_recorded"] = True
@@ -214,6 +221,8 @@ def pending(
             if state["warnings"]:
                 item["warnings"] = state["warnings"]
                 item["next_action"] = "Receiver receipt readback is unavailable or conflicting; recover the original receipt before continuing this request. Do not repeat the decision, result or execution. Other requests can continue."
+            elif state.get("request_control_view") is not None:
+                item["next_action"] = state["request_control_view"]["receiver_instruction"]
             items.append(item)
             if len(items) == 21:
                 break
@@ -311,6 +320,16 @@ def _pending_receipt_states(runtime_root, rows):
             "decision": _observe_receipt(root / "decisions" / (request_id + ".json")),
             "conclusion": _observe_receipt(root / "replies" / request_id / "conclusion.json"),
         }
+        if "request_control" in row:
+            observation["request"] = row
+            observation["read"] = _observe_receipt(root / "reads" / (request_id + ".json"))
+            results = []
+            for path in result_paths(root / "replies" / request_id):
+                try:
+                    results.append(_result_observation(path.stem, _read(path)))
+                except (OSError, ValueError, TypeError):
+                    results.append({"unavailable": True})
+            observation["results"] = results
         size = len(json.dumps(observation, separators=(",", ":")).encode())
         # The existing bridge serializes ASCII-escaped JSON and admits 2 MiB.
         # Leave room for its envelope; legal Unicode replies must not turn
@@ -329,6 +348,13 @@ def _pending_receipt_states(runtime_root, rows):
     return states
 
 
+def controlled_request_readback(root: Path, row: dict[str, Any]) -> dict[str, Any] | None:
+    """Reuse the actual inbox/result owners for every current request surface."""
+    if "request_control" not in row:
+        return None
+    return _pending_receipt_states(root, [row])[0]
+
+
 def acknowledge(
     runtime_root: Path,
     goal_id: str,
@@ -340,6 +366,8 @@ def acknowledge(
     registry: Path | None = None,
     caller_goal_ref: dict[str, str] | None = None,
     scope: CollaborationGoalScope | None = None,
+    request_revision: int | None = None,
+    request_revision_digest: str | None = None,
 ) -> dict:
     if scope is None and registry is not None:
         from .goal_instance_scope import collaboration_goal_scope
@@ -358,6 +386,8 @@ def acknowledge(
                 decision,
                 reason,
                 scope=goal_scope,
+                request_revision=request_revision,
+                request_revision_digest=request_revision_digest,
             )
     if not BARE_SHA256_PATTERN.fullmatch(request_id):
         raise ValueError("invalid context request id")
@@ -386,6 +416,29 @@ def acknowledge(
     value = {"request_id": request_id, **target, "decision": decision, "reason": reason}
     path = _root(runtime_root) / "decisions" / (request_id + ".json")
     with _request_lock(runtime_root, request_id, scope, path.with_suffix(".lock")):
+        current = _entry(runtime_root, goal_id, agent_id, request_id, scope=scope)
+        if "request_control" in current:
+            from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+            from .goal_instance_scope import goal_accepts_collaboration
+
+            prior, prior_error = _receipt(runtime_root, "decisions", current)
+            read, read_error = _receipt(runtime_root, "reads", current)
+            try:
+                plan = effect_runtime_result("collaboration.request.assess", {
+                    "entry": current, "actor_agent_id": agent_id, "observed_at": _now(),
+                    "goal_active": scope is not None and goal_accepts_collaboration(scope.goal),
+                    "revision": request_revision, "revision_digest": request_revision_digest,
+                    "decision": decision, "reason": reason, "legacy_assessment": prior or None,
+                    "legacy_assessment_unavailable": bool(prior_error), "legacy_read": read or None, "legacy_read_unavailable": bool(read_error)})
+            except EffectRuntimeRejected as exc:
+                raise ValueError(str(exc)) from exc
+            if plan["changed"]:
+                entry_path = _root(runtime_root) / "entries" / _hash(_target(goal_id, agent_id, scope)) / (request_id + ".json")
+                _write(entry_path, plan["entry"])
+            return {"ok": True, **value, "request_revision": plan["result"]["revision"],
+                "current_request_revision": plan["view"]["revision"], "request_control": plan["view"]}
+        if request_revision is not None or request_revision_digest is not None:
+            raise ValueError("explicit revision assessment requires a controlled request")
         if path.exists():
             if {k: v for k, v in _read(path).items() if k != "decided_at"} != value:
                 raise ValueError("context decision already recorded")
@@ -394,11 +447,12 @@ def acknowledge(
     return {"ok": True, **value}
 
 
-def _now():
+def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _entry(root, goal_id, agent_id, request_id, *, scope=None):
+def _entry(root: Path, goal_id: str, agent_id: str, request_id: str, *,
+           scope: CollaborationGoalScope | None = None) -> dict[str, Any]:
     if not isinstance(request_id, str) or not BARE_SHA256_PATTERN.fullmatch(request_id):
         raise ValueError("invalid context request id")
     target = _target(goal_id, agent_id, scope)
@@ -442,6 +496,20 @@ def record_read(
             scope,
             path.with_suffix(".lock"),
         ):
+            stored = _entry(root, row["goal_id"], row["agent_id"], row["request_id"], scope=scope)
+            if "request_control" in stored:
+                from ..effect_runtime import effect_runtime_result
+
+                decision, error = _receipt(root, "decisions", stored)
+                plan = effect_runtime_result("collaboration.request.record_read", {
+                    "entry": stored, "actor_agent_id": row["agent_id"], "observed_at": _now(),
+                    "revision": row.get("request_revision"), "revision_digest": row.get("request_revision_digest"),
+                    "legacy_assessment": decision or None, "legacy_assessment_unavailable": bool(error)})
+                if plan["changed"]:
+                    entry_path = _root(root) / "entries" / _hash(_target(row["goal_id"], row["agent_id"], scope)) / (row["request_id"] + ".json")
+                    _write(entry_path, plan["entry"])
+                row["request_read_receipt"] = plan["readback"]
+                continue
             if not path.exists():
                 _write(
                     path,
@@ -457,7 +525,7 @@ def record_read(
                 )
 
 
-def _receipt(root, lane, row):
+def _receipt(root: Path, lane: str, row: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
     path = _root(root) / lane / (row["request_id"] + ".json")
     if not path.exists():
         return {}, None
@@ -524,12 +592,10 @@ def record_result(
     route: dict[str, Any] | None = None,
     update_id: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
+    request_revision: int | None = None,
 ):
     """Persist a receiver conclusion; the transport adapter validates its audience."""
     request_id = row["request_id"]
-    decision, error = _receipt(root, "decisions", row)
-    if error or not decision:
-        raise ValueError("record the receiver decision before returning a reply")
     if scope is not None:
         from .goal_instance_scope import decide_collaboration_lifecycle
 
@@ -543,11 +609,16 @@ def record_result(
 
     folder = _root(root) / "replies" / request_id
     with _request_lock(root, request_id, scope, folder / "report.lock"):
+        row = _entry(root, row["goal_id"], row["agent_id"], request_id, scope=scope)
+        decision, error = _receipt(root, "decisions", row)
+        if "request_control" not in row and (error or not decision):
+            raise ValueError("record the receiver decision before returning a reply")
         observations = [_result_observation(path.stem, _read(path)) for path in result_paths(folder)]
         try:
             plan = effect_runtime_result("collaboration.result.plan_publication", {
                 "request": row, "phase": phase, "text": text,
-                "decision": decision["decision"], "update_id": update_id,
+                "decision": decision.get("decision"), "update_id": update_id,
+                "request_revision": request_revision, "legacy_assessment": decision or None,
                 "attachments": attachments,
                 "results": observations,
             })
@@ -558,7 +629,8 @@ def record_result(
             _write(path, plan["value"] | {"created_at": _now()})
     return {
         "ok": True, "request_id": request_id, "phase": phase, "delivered": False,
-        **({"result_key": plan["result_key"]} if update_id is not None else {}),
+        **({"result_key": plan["result_key"]} if update_id is not None or "request_revision" in plan else {}),
+        **({key: plan[key] for key in ("request_revision", "current_request_revision")} if "request_revision" in plan else {}),
     }
 
 
@@ -566,28 +638,35 @@ def result_paths(folder: Path):
     """Enumerate the result-store layout, excluding delivery and lock sidecars."""
     paths = [path for path in folder.glob("*.json")
              if path.stem in {"decision", "conclusion"}
-             or re.fullmatch(r"conclusion-[0-9]{8}", path.stem)]
+             or re.fullmatch(r"(?:conclusion|decision)-[0-9]{8}", path.stem)]
     return sorted(paths, key=lambda path: (path.stem not in {"decision", "conclusion"},
                                           path.stem != "decision", path.stem))
 
 
-def result_identity_matches(reply, row, path):
+def inspect_result_identity(reply, row, path):
     from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 
     try:
         observations = [_result_observation(path.stem, reply)]
-        if reply.get("update_id") is not None:
+        if reply.get("update_id") is not None or reply.get("phase") == "decision":
             observations = [_result_observation(candidate.stem, _read(candidate))
                             for candidate in result_paths(path.parent)]
-        effect_runtime_result("collaboration.result.plan_publication", {
+        legacy = _observe_receipt(path.parent.parent.parent / "decisions" / (row["request_id"] + ".json")) if (
+            "request_control" in row or "request_revision" in reply) else {}
+        inspected = effect_runtime_result("collaboration.result.plan_publication", {
             "request": row, "phase": reply.get("phase"), "text": reply.get("text"),
             "decision": reply.get("decision"), "update_id": reply.get("update_id"),
             "attachments": reply.get("attachments"),
+            "request_revision": reply.get("request_revision"), "legacy_assessment": legacy.get("value"),
             "results": observations,
         })
     except (EffectRuntimeRejected, OSError, ValueError):
-        return False
-    return reply.get("result_key", reply.get("phase")) == path.stem
+        return None
+    return inspected if reply.get("result_key", reply.get("phase")) == path.stem else None
+
+
+def result_identity_matches(reply, row, path):
+    return inspect_result_identity(reply, row, path) is not None
 
 
 def _result_observation(key, value):
@@ -600,6 +679,7 @@ def _result_observation(key, value):
         "value": {field: value[field] for field in (
             "request_id", "goal_id", "agent_id", "source_id", "goal_ref", "phase",
             "decision", "result_key", "previous_result_key", "update_id", "attachments",
+            "request_revision", "request_revision_digest",
         ) if field in value},
         "text_chars": len(text),
         "text_sha256": hashlib.sha256(text.encode()).hexdigest(),

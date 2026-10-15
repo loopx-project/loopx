@@ -169,6 +169,77 @@ def finish_group_turn(runtime, transport, *, message):
     return row
 
 
+def test_group_receipt_reuses_only_the_fresh_bindings_display_observation(ordinary, monkeypatch):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    root = provider.topic("receipt-source", "Explain this project")
+    observe = transport.bindings.observe
+    calls = []
+    def observed(profile, **kwargs):
+        import sys
+        calls.append(sys._getframe(1).f_code.co_name)
+        return observe(profile, **kwargs)
+    monkeypatch.setattr(transport.bindings, "observe", observed)
+    try:
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        row = next(row for row in transport.core.pending() if row["message"] == root["content"])
+        runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+        calls.clear()
+        transport.reconcile()
+        assert any(emoji == "Get" for _, _, emoji in provider.reaction_creates)
+        assert "resolve" in calls and "_source_message" in calls
+        # Naming the Inbox adds no authentication request after the fresh
+        # binding resolution. Actual outbound source validation still observes.
+        assert "_inbox" not in calls
+        assert all(topic == root["message_id"] for _, topic, _ in provider.topic_writes)
+        assert len(store.list_sessions()) == 1
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("command", ["/status", "/stop", "/help"])
+def test_completed_command_recovery_leaves_provenance_to_delivery(ordinary, command):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    root = provider.topic("command-root", "/help")
+    event = provider.topic("completed-command", command, root=root["message_id"])
+    try:
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        path = next(path for path in transport.root.glob("*.json")
+                    if json.loads(path.read_text())["event"]["message_id"] == event["message_id"])
+        record = json.loads(path.read_text())
+        native_path = transport.core.root / f"{record['request_ref']}.json"
+        before = native_path.read_bytes()
+        assert json.loads(before)["status"] == "command_completed"
+
+        # There is no command execution to recover. Provider availability must
+        # not add an identity round-trip to this already committed Core state.
+        provider.calls.clear()
+        transport.core.recover(request_ref=record["request_ref"])
+        assert provider.calls == []
+        assert native_path.read_bytes() == before
+
+        pending = json.loads(before) | {"commission_adoption_pending": True}
+        native_path.write_text(json.dumps(pending))
+        transport.core.recover(request_ref=record["request_ref"])
+        assert any("auth" in call for call in provider.calls)
+        assert json.loads(native_path.read_text()) == pending
+        native_path.write_bytes(before)
+
+        # Skipping idle recovery does not skip the delivery owner's fresh check.
+        provider.bot_ready = False
+        assert transport.reconcile_request(path) == 0
+        assert provider.writes == []
+        assert json.loads(path.read_text())["status"] != "delivered"
+
+        provider.bot_ready = True
+        assert transport.reconcile_request(path) == 1
+        assert json.loads(path.read_text())["status"] == "delivered"
+        assert json.loads(native_path.read_text())["delivery_verified"] is True
+        assert len(provider.writes) == 1
+        assert provider.topic_writes[0][:2] == (event["chat_id"], root["message_id"])
+    finally:
+        runtime.close()
+
+
 def test_lark_transport_recovery_returns_on_original_admission_without_model_replay(ordinary, monkeypatch):  # noqa: F811
     from test_chat_turn_steering import install_transport_failure
 
@@ -760,14 +831,29 @@ def test_group_outbound_source_verification_reads_fresh_envelopes_without_displa
         runtime.close()
 
 
-def test_group_admission_source_reads_overlap_but_keep_rendered_model_input(ordinary):  # noqa: F811
+def test_group_admission_source_reads_overlap_but_keep_rendered_model_input(ordinary, monkeypatch):  # noqa: F811
     _, runtime, provider, transport = connect_group(ordinary)
     try:
         root = provider.topic("overlap-root", "Explain the project")
         event = provider.topic("overlap-follow", "@notes-app Explain config", root=root["message_id"])
         provider.messages[event["message_id"]]["body"] = {
             "content": json.dumps({"text": "@_user_1 Explain config"})}
-        started = threading.Barrier(2)
+        started = threading.Barrier(3)
+        source_reading = threading.Event()
+        original_source = transport._source_message
+        original_observe = transport.bindings.observe
+
+        def source(*args, **kwargs):
+            source_reading.set()
+            try:
+                return original_source(*args, **kwargs)
+            finally:
+                source_reading.clear()
+
+        def observe(*args, **kwargs):
+            if source_reading.is_set():
+                started.wait(timeout=2)
+            return original_observe(*args, **kwargs)
 
         def overlap(args, cwd=None, timeout=None):
             if ("+messages-mget" in args or
@@ -776,12 +862,44 @@ def test_group_admission_source_reads_overlap_but_keep_rendered_model_input(ordi
             return provider(args, cwd, timeout)
 
         transport.runner = overlap
+        monkeypatch.setattr(transport, "_source_message", source)
+        monkeypatch.setattr(transport.bindings, "observe", observe)
         assert transport.admit("notes-app", event)["status"] == "durably_accepted"
         row = transport.core.pending()[0]
         assert row["message"] == event["content"]
         assert row["source"]["topic_ref"] == lark_private_source(
             provider_ref=identity_ref("cli_notes_app"), event=event)["topic_ref"]
         assert not provider.writes
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("change", ["bot_unavailable", "app_replaced", "binding_revoked"])
+def test_group_admission_joins_fresh_identity_and_core_rechecks_source_changes(ordinary, change):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        event = provider.topic("admission-change", "Explain the project")
+        binding = next(row for row in transport.bindings.read()["bindings"]
+                       if row["transport_ref"] == "notes-app")
+        original_source = transport._group_source_message
+
+        def changed(profile, message_id):
+            message = original_source(profile, message_id)
+            if change == "bot_unavailable":
+                provider.bot_ready = False
+            elif change == "app_replaced":
+                provider.profile_apps[profile] = "cli_replacement"
+            else:
+                transport.bindings.disconnect(binding["binding_id"],
+                    expected_revision=transport.bindings.read()["revision"])
+            return message
+
+        transport._group_source_message = changed
+        assert transport.admit("notes-app", event)["status"] in {
+            "source_verification_failed", "command_rejected"}
+        assert transport.core.pending() == []
+        assert store.list_sessions() == []
+        assert not provider.writes and not provider.reaction_creates
     finally:
         runtime.close()
 
@@ -1576,7 +1694,7 @@ def test_private_reply_workers_have_no_executor_backlog_and_stop_scheduling(tmp_
 
 
 
-def test_scoped_recovery_does_not_probe_unrelated_app_and_revocation_blocks_reply(ordinary):  # noqa: F811
+def test_completed_command_recovery_defers_app_probe_and_revocation_blocks_reply(ordinary):  # noqa: F811
     store, runtime, provider, transport = connect(ordinary)
     try:
         for profile in ["notes-app", "steward-app"]:
@@ -1587,7 +1705,7 @@ def test_scoped_recovery_does_not_probe_unrelated_app_and_revocation_blocks_repl
         original = transport.bindings.observe
         transport.bindings.observe = lambda profile: (observed.append(profile), original(profile))[1]
         transport.core.recover(request_ref=first["request_ref"])
-        assert observed == ["notes-app"]
+        assert observed == []  # A completed command has no Core work to recover.
         binding = transport.bindings.read()
         transport.bindings.disconnect(first["binding_id"], expected_revision=binding["revision"])
         assert transport.reconcile_request(transport.root / f"{first['request_ref']}.json") == 0

@@ -177,9 +177,15 @@ validates actual Todo readback. With `fresh`, each planning/execution invocation
 starts a new conversation. LoopX Goal planning uses a separate exec conversation
 because native Goal execution owns its app-server thread lifecycle. The runner
 does not claim exact equivalence to interactive `$loopx` startup.
-Harbor's default `planning_timeout_sec` is 300; `null` removes that independent
-cap while retaining the total phase budget. SForge selects `null`: its planner
-and execution share one absolute trial deadline, including native resumes.
+Harbor and SForge have no independent planning timeout. Planning and execution
+share the absolute phase deadline, including native resumes. The shared worker
+uses `LOOPX_PHASE_DEADLINE_EPOCH`; Harbor derives it from the remaining
+`scheduler_timeout_sec` budget using the task environment's clock. Remove old
+non-null `planning_timeout_sec` settings, `--planning-timeout` arguments and
+`LOOPX_PLANNING_TIMEOUT_SEC` environment values: they are rejected instead of
+silently changing their meaning. A legacy `planning_timeout_sec: null` remains
+accepted. SForge still strips inherited stage-limit environment values and
+preserves its existing null receipt field for compatibility.
 Planning and preparation consume the same `scheduler_timeout_sec` phase budget
 as execution. Planning sessions are
 included in native session/token aggregation. No planning checkpoint is counted
@@ -206,7 +212,6 @@ effort, tools, feedback and total budget fixed, and use separate trials:
 kwargs:
   execution_mode: heartbeat
   task_entry: loopx-planned
-  planning_timeout_sec: 300
   iteration_context: fresh
   turn_timeout_sec: null
   scheduler_timeout_sec: 5080
@@ -320,6 +325,19 @@ or blocked plan cannot start execution. Reusing the receipt does not bypass the
 ordinary scheduler's quota, claim, blocker or settlement checks. Retain receipts
 and native sessions when comparing planning cost; no active attempt is changed
 by selecting this option for a new run.
+
+New planned-entry prompts expose the Host's existing time limits alongside the
+unchanged product planning packet. SForge supplies the absolute phase deadline
+and observed remaining time, shared by planning and execution, including the
+worker's existing startup/settlement reserve and the work window before it. Harbor's separate
+planning invocation limit is labeled as a stage cap; it must not be mistaken for
+the whole task budget. The observation ages as planning proceeds and does not
+refill time, change startup/settlement reserves, or grant execution authority.
+This changes planning context for new planned-entry runs. Task identity, Todo
+readback and runtime timeout enforcement retain their existing owners; seeded
+entry and execution wakes are unchanged. Record the runner revision when comparing
+plans. Delivery of the time information does not prove that a model uses it or
+improves task outcomes.
 
 
 ### Default effective-Turn cadence

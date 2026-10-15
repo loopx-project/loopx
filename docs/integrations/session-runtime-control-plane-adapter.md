@@ -96,6 +96,80 @@ LoopX says a goal is still blocked, the projection must explain the
 reconcile rule: missing gate, missing validation, failed outcome, stale
 artifact, or human decision not yet recorded.
 
+## Experimental owner-local Codex App conversations
+
+This is a follow-up path for an owner already reviewing a Goal: read a specific
+Agent's result, give it a correction and keep the original conversation. It is
+not the general Goal entrypoint or a replacement for the native App. The useful
+product comparison is the complete task, including finding the right Agent,
+understanding its result and recovering an interrupted reply. An additional
+chat window or successful transport alone does not establish a better experience
+than working in Codex App. Goal progress and acceptance still come from their
+existing owners, never from the transcript or an input acknowledgement.
+
+The Goal **Chat** view can open **Original Codex App conversations**, select a
+registered Agent, read its original saved messages and send a plain-text reply
+when that conversation is observed idle. Closing the dialog stops observation;
+the original App keeps its executor, conversation, model and approval settings.
+There is no separate Agent process, automatic resume/fork or permission change.
+
+This is an experimental Desktop provider within the existing native Chat
+boundary, not a second generic session authority. Binding selection reuses
+`thread_agent_binding`; activity reuses the existing Codex host observer. The
+provider reads the uniquely matching local Codex home and bounded read-only
+SQLite/JSONL windows. It returns user/assistant text to the local owner UI,
+excluding tool output and reasoning; it does not read authentication files.
+Original message text can contain private content and stays owner-local. Reading older windows
+is explicit. One-second observation of saved messages is **not token streaming**.
+Full history is not loaded into the App or copied into LoopX run history.
+
+Reply uses Codex Desktop's version-sensitive follower IPC, requires its original
+owner to advertise support for external input, and retains the original thread
+settings. It does not use the app-tools pipe or impersonate a model tool caller.
+Busy, unknown, ambiguous, rebound and disconnected conversations cannot send
+through this surface. Continue such work in the original App. Tool approvals,
+questions and active-turn steering remain there; this stage does not claim the
+complete attached-session acceptance or Lark parity.
+
+Input receipts contain an operation id, binding, content fingerprint and native
+acknowledgement, without copying the message body. The same operation cannot be
+sent twice. A confirmed submission clears the draft and leaves the next reply
+composer available, including after reload; it does not require a second human
+acknowledgement. Sending again still requires an explicit new message and a fresh
+idle observation. After an interrupted response or reopening with a pending
+submission, the page automatically reads its existing receipt once. A recorded
+acknowledgement restores the composer without another user step; genuinely
+unconfirmed delivery remains pending and never silently retries a native effect.
+Check the original App before discarding an uncertain receipt. Late reads cannot
+restore a discarded operation over a new draft. The UI keeps only its reply recovery
+record in the current browser session. Replies are explicit local owner actions;
+a registered binding or observer does not authorize an Agent to message peers.
+
+The local presentation API is `/api/chat/codex-attached`: GET requires the
+registered Goal, then the exact Agent/binding for history or a receipt; POST
+requires that same binding, one operation id and text. It cannot select arbitrary
+host threads, paths, RPC methods, approvals, models or permissions. Existing
+loopback Origin checks still protect effects. Native send is unavailable on
+Windows in this stage. **Open in Codex App** uses an explicit same-origin POST to
+`/api/chat/codex-attached/open` with only Goal, Agent and binding. The provider
+rechecks the accepted binding and local conversation, then requests macOS open
+the fixed Codex bundle with that conversation's canonical UUID. It cannot launch
+arbitrary URLs or commands, submit input or bypass the desktop navigation fence.
+The UI reports OS dispatch, not proof that the App displayed the thread; errors
+are visible and retry requires another explicit click. Other hosts report this
+operation unavailable. Close the dialog to stop reads; rolling back the runtime
+removes this UI/provider without editing native sessions, credentials or App
+startup configuration. Do not expose this owner-only API through a shared sink.
+
+Source research: official [app-server transports and history](https://learn.chatgpt.com/docs/app-server),
+[codex-monitor](https://github.com/lucianlamp/codex-monitor) (loaded owner selection),
+[CodexMonitor](https://github.com/Dimillian/CodexMonitor) (a separately owned
+app-server UI), [codex-bridge](https://github.com/hitsmaxft/codex-bridge) (writer
+ownership and explicit Desktop interposition), and
+[codex-web's follower IPC](https://github.com/i-am-BT/codex-web/blob/c401ea7f33cbfff227e154b8d817b150d39256fc/desktop-ipc-client.mjs).
+The provider is independently implemented; none of these projects is installed,
+vendored or allowed to replace the owner's App/runtime automatically.
+
 ## Adapter Phases
 
 ### Phase 1: Read-Only Projection

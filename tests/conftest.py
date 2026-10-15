@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -34,6 +35,19 @@ _DEFAULT_ROUTE_REFERENCES = (
     ("loopx.control_plane.runtime.local_state_migration", "LEGACY_RUNTIME_ROOT", (".codex", "loopx")),
 )
 _REAL_DEFAULT_ROUTES = (paths.DEFAULT_RUNTIME_ROOT, paths.LEGACY_RUNTIME_ROOT)
+
+
+@pytest.fixture
+def isolated_effect_runtime(tmp_path, monkeypatch):
+    temporary = tmp_path / "temporary"
+    temporary.mkdir()
+    monkeypatch.setenv("TMPDIR", str(temporary))
+    monkeypatch.setattr(tempfile, "tempdir", str(temporary))
+    from loopx.control_plane import effect_runtime
+
+    yield
+    # Stop only the real runtime launched in this test's private directory.
+    effect_runtime.restart_effect_runtime()
 
 
 @pytest.fixture(autouse=True)

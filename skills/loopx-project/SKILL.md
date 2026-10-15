@@ -642,8 +642,9 @@ refresh state if needed. Already mapped goals should follow
 owner evidence, agent todo, stale source, or safe handoff, return a quiet no-op
 without another dry-run, file edit, or quota spend.
 
-The generated task body also carries a no-progress self-repair guard. More
-importantly, `quota should-run` may expose a hard
+The generated task body also carries a no-progress self-repair guard. Its
+thresholds and obligations come from Core, not counts invented by the prompt.
+`quota should-run` may expose a hard
 `autonomous_replan_obligation` / `execution_obligation.must_attempt_work=true`
 contract when active state or public run history shows repeated typed no-progress
 turns. Quiet future-monitor heartbeat receipts are liveness evidence only;
@@ -652,10 +653,15 @@ concrete Todo or target identity at its declared threshold. Obey that machine
 contract before another quiet no-op: run one
 bounded self-repair/replan batch through implementation, validation, and
 writeback when that boundary is clear, then spend once. Do not stop at the first
-tiny substep when the repair has an obvious validation boundary. Cancel or
-pause the heartbeat automation only after 2 consecutive stalled turns (the same
-repair path stuck for 2 more eligible turns); explain the no-progress loop with
-`NOTIFY`, and skip quota spend for that self-cancel turn.
+tiny substep when the repair has an obvious validation boundary. Correct the
+affected work first; broader replanning needs current goal, path, dependency or
+acceptance evidence. A due review can retain the path. Check subsequent work
+and authoritative outcomes before claiming that a correction helped. Wake
+counts alone never authorize replan or self-pause. Follow explicit stops and
+current Core/host stop boundaries, preserve owed settlement, and use the current
+notification policy. Form a bounded working brief from current sources:
+evidenced progress/change, blockers, next work, acceptance and stops. Missing
+comparison evidence is unknown; a summary cannot replace full requirements.
 The same generated task body also makes routine public commit, push, and PR
 creation autonomous after validation plus a clean public/private boundary scan.
 Do not reintroduce a user gate for public-safe publication itself.

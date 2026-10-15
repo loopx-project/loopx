@@ -23,6 +23,7 @@
     "tests/control_plane_ts/usage_statistics_sources.test.ts",
     "tests/control_plane_ts/content_digest_single_owner.test.ts",
     "tests/control_plane_ts/goal_amendment_authority.test.ts",
+    "tests/control_plane_ts/request_control.test.ts",
     "examples/nokv-authority-store/live-qualification.ts",
     "examples/coordination/sqlite-capacity.ts",
     "examples/coordination/local-provider-comparison.ts",

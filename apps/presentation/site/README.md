@@ -142,6 +142,10 @@ the dashboard Playwright dependency). The Pages workflow also runs it on
 the complete artifact with `--with-docs`. It checks static content, route-specific
 metadata, sitemap targets and public asset paths. Preview with `npm run preview`.
 
+Run `npm run smoke:seo:bases` to build and check both the default root preview
+and `/loopx/` publication, including rejection of a guide link under the wrong
+base or a missing guide file.
+
 ## Google Analytics 4
 
 Set the GitHub repository variable `LOOPX_GA_MEASUREMENT_ID` to the website's

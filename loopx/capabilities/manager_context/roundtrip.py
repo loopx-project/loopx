@@ -35,10 +35,11 @@ from ...control_plane.collaboration.inbox import (
     _request_lock,
     iter_result_paths,
     result_paths,
-    result_identity_matches,
+    inspect_result_identity,
     prior_result_delivered,
 )
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
+from ...control_plane.collaboration.source_chat_observation import original_delivery_facts
 from ...chat import ChatMessagePayloadConflictError
 
 DELIVERY_STATUSES = {
@@ -232,6 +233,7 @@ def report(
     update_id=None,
     attachment_refs=None,
     workspace=None,
+    request_revision=None,
 ):
     """Chat audience adapter; the shared Inbox owns result validation/persistence."""
     if scope is None and registry is not None:
@@ -256,6 +258,7 @@ def report(
                 update_id=update_id,
                 attachment_refs=attachment_refs,
                 workspace=workspace,
+                request_revision=request_revision,
             )
     row = _entry(root, goal_id, agent_id, request_id, scope=scope)
     route = _route(root, row, scope=scope)
@@ -285,6 +288,7 @@ def report(
             route=route,
             update_id=update_id,
             attachments=attachments,
+            request_revision=request_revision,
         ),
         "status": (
             "queued_for_requester"
@@ -297,7 +301,7 @@ def report(
 def reply_status(root, row):
     result = []
     for path in result_paths(_root(root) / "replies" / row["request_id"]):
-        phase = "decision" if path.stem == "decision" else "conclusion"
+        phase = "decision" if path.stem == "decision" or path.stem.startswith("decision-") else "conclusion"
         state_path = path.with_name(path.stem + ".delivery.json")
         try:
             reply = _read(path)
@@ -390,21 +394,6 @@ def project_chat_session_snapshot(root, store, session_id, *, registry):
     return snapshot
 
 
-def _original_delivery_facts(row, route, turn, *, source_id):
-    # Adapt trusted store/authority facts only. The common typed owner decides
-    # whether a committed handoff survived a lost caller response.
-    identity = {key: row[key] for key in ("request_id", "goal_id", "agent_id", "source_id", "goal_ref") if key in row}
-    return {
-        "request": identity,
-        "route": route,
-        "authorized_source_id": source_id,
-        "turn": {
-            "client_turn_id": turn.get("client_turn_id"),
-            "status": turn.get("status"),
-            "context_handoff_receipt": (turn.get("response") or {}).get("context_handoff_receipt"),
-        },
-    }
-
 
 def _exact_return_scope(registry, reply):
     return collaboration_goal_scope(
@@ -427,9 +416,10 @@ def _exact_return_context(root, registry, store, path, state_path, now):
             reply["request_id"],
             scope=scope,
         )
+        inspected = inspect_result_identity(reply, row, path)
         if (
             path.parent.name != row["request_id"]
-            or not result_identity_matches(reply, row, path)
+            or inspected is None
             or any(
                 reply.get(key) != row.get(key)
                 for key in ("source_id", "goal_ref")
@@ -465,7 +455,7 @@ def _exact_return_context(root, registry, store, path, state_path, now):
             operation="original_return_admit",
             record=row,
             route=route,
-            initial_delivery=_original_delivery_facts(row, route, turn, source_id=grant.get("source_id")),
+            initial_delivery=original_delivery_facts(row, route, turn, source_id=grant.get("source_id")),
         )
         with _request_lock(
             root,
@@ -509,9 +499,7 @@ def _exact_return_context(root, registry, store, path, state_path, now):
                 and now.isoformat() < state["retry_at"]
             ):
                 return None
-            if path.stem == "decision" and (
-                path.parent / "conclusion.json"
-            ).exists():
+            if inspected["interim_superseded"]:
                 _write(
                     state_path,
                     {
@@ -584,7 +572,7 @@ def _write_exact_return_state(
             record=row,
             route=route,
             initial_delivery=(
-                _original_delivery_facts(row, route, turn, source_id=context["source_id"])
+                original_delivery_facts(row, route, turn, source_id=context["source_id"])
                 if isinstance(turn, dict) else None
             ),
         )
@@ -1029,9 +1017,10 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                 row = _entry(
                     root, reply["goal_id"], reply["agent_id"], reply["request_id"]
                 )
+                inspected = inspect_result_identity(reply, row, path)
                 if (
                     path.parent.name != row["request_id"]
-                    or not result_identity_matches(reply, row, path)
+                    or inspected is None
                     or reply.get("source_id") != row["source_id"]
                 ):
                     raise ValueError("return_reply_identity_mismatch")
@@ -1059,12 +1048,9 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                 with collaboration_goal_scope(registry, goal_id=row["goal_id"], agents=()) as scope:
                     decide_collaboration_lifecycle(
                         scope, operation="original_return_admit", record=row, route=route,
-                        initial_delivery=_original_delivery_facts(row, route, turn, source_id=grant.get("source_id")),
+                        initial_delivery=original_delivery_facts(row, route, turn, source_id=grant.get("source_id")),
                     )
-                if (
-                    path.stem == "decision"
-                    and (path.parent / "conclusion.json").exists()
-                ):
+                if inspected["interim_superseded"]:
                     _write(
                         state_path,
                         {"status": "superseded", "reason": "conclusion_ready"},
@@ -1414,7 +1400,7 @@ def recover_source_chat_provenance(root, registry, store, *, cancelled=lambda: F
                     continue
                 decide_collaboration_lifecycle(
                     scope, operation="original_return_admit", record=row, route=route,
-                    initial_delivery=_original_delivery_facts(row, route, turn,
+                    initial_delivery=original_delivery_facts(row, route, turn,
                                                                source_id=grant.get("source_id")),
                 )
                 if cancelled():

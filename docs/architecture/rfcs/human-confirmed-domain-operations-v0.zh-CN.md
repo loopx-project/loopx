@@ -277,7 +277,13 @@ Goal instance，不改变 provider 权威，也不把旧操作移植到另一运
 相同选项可用于 `turn run-once`。复用既有 delegation inspect/preflight、start、
 准入、租约、session 续接、结果验证和验收。原 host owner 读回 profile；
 不新增前端配置存储或隐藏默认。不固定或不受支持的配置在预检中标为 unavailable；
-有效 argv 仍是 runtime-unverified，不能证明宿主或操作已运行。仅在现有工作授权
+有效 argv 仍是 runtime-unverified，不能证明宿主或操作已运行。
+typed operation transport 读回列出 `supported_hosts` 和 `supported_sandboxes`。
+不支持的宿主返回 `select_supported_operation_host`，不支持的 sandbox 返回
+`select_supported_operation_sandbox`，缺失模型/effort 返回
+`correct_execution_profile`。传输拒绝不再建议配置模型凭据环境变量。
+这些是显式恢复选项，不自动选择宿主或授予执行权限。普通宿主可用性独立保持：
+DSH 模型可启动不能证明它拥有当前仅支持 Codex 的操作连接。仅在现有工作授权
 确需时使用 `workspace-write`；此传输不接受 `danger-full-access`。
 
 已准入宿主复用 `CodexChatAgentSession` app-server adapter，将不透明线程保存于
@@ -348,6 +354,46 @@ context 调用，结果均由既有 typed result validator 接受）、规范
 真实 context 探针只在当前拥有的 home 创建新的受管 GPT session，不建提案、
 不造群确认、不执行金融副作用；合成批准夹具不是真实用户批准。
 
+可选的 [DSH 原生上下文模块](../../../packages/dsh-loopx-plugin/README.md#optional-native-operation-context-sdk-prerequisite)
+交付独立加载的只读 SDK 前置组件。真实 SDK/内置 runtime `0.1.5rc1` 的工具调用
+已返回当前调用 session、开放的原生 Turn 和白名单 agent options；该观察不是 Core
+actor，也不证明 HTTP wire 实际配置；该只读模块始终返回 `execution_allowed: false`。
+
+独立可选的 `native-operation` 模块和内部 `OwnedDshOperationHost` 现将真实
+SDK/内置 runtime `0.1.5rc1` 接到既有 Core handler。同一活 SDK 连接的两个独立
+已准入 Turn 覆盖原生 session/Turn/call 配对、实际观察的 profile、规范准备、
+确认前拒绝、夹具确认、首次消费、重复拒绝与规范 `not_executed` 结果。
+File/SQLite Goal authority 消费者继续使用原 action-store owner。内核 peer PID
+及精确原生工具参数必须匹配私有有界 Unix 连接；不新增 bearer、调用者 actor、
+批准账本或副作用重试，旧 Codex executor 编码和默认关闭行为保持兼容。
+
+该阶段是使用本地合成响应源的后端集成，不是真实用户批准、原卡送达或金融效用。
+SDK `0.1.5rc1` 的跨进程恢复仍在启动前拒绝，原 `session already exists` 失败保留。
+隔离候选使用上游 `2fbf4359` 官方脚本构建的 Python SDK `0.2.1a3` wheel，配合
+显式 npm runtime `@deepseek-ai/dsh@0.2.1-alpha.3`，通过公开 `resume_session`
+恢复原身份。SDK 文件、Node/入口原字节及完整 npm closure 纳入冻结 profile。
+File/SQLite 重启用例恢复同一操作；历史丢失/不可读时拒绝，不向模型发送输入，
+不替换绑定，失败 client 不可复用。这只是候选源码资格，不能当作已发布 Python
+runtime 或整个插件的兼容性证明。
+
+显式 `turn run-once --host dsh --dsh-operation-module /absolute/native-operation.js`
+入口现复用该 owner、原 Todo session planner 和 operator 授权的 delegation
+callback。模块开关默认关闭，不能与 `--dsh-runner` 或其它 host 混用。配置读回
+标明 `owned_native_sdk`，仍保持 `runtime_qualified: false`。File/SQLite 使用
+真实 CLI、SDK 和独立 callback 进程恢复原持久 session/profile，首次消费、重复
+拒绝并记录 `not_executed`；typed wait 仍是 rejected delegation，不是业务完成。
+endpoint 原字节的哈希纳入不可变 profile，不序列化凭据。通用
+`--confirmed-operation-id`、`--operation-source-route-json` 保留旧 Codex 别名。
+CLI 夹具不证明原卡送达或真实用户批准。
+
+后续有界真实验收使用实际模型、真实 Lark 卡片及经过认证的人类确认。正常原生
+CLI 续接恢复原 DSH session/profile，首次消费一次，登记规范 `not_executed`，
+并更新同一原卡；独立 provider 读回验证结果，金融动作是零。此续接由角色在
+callback 后手动调用：无人值守唤醒尚未配置，实际确认至宿主启动约 246 秒，
+不满足下文健康自动路径 60 秒目标。其它 runtime、全局安装、账户副作用和金融
+效用仍未验。本机较旧 Core 在 inbox 投影时拒绝新的 DSH executor，候选源码
+入口可读；回滚须保留这些 pin，不能假定旧 reader 兼容。
+
 公开 `goal-channel inspect-operation/consume-operation/report-operation` 仍在
 私有读写前拒绝，即使 `CODEX_THREAD_ID`、路由、自签 proof 完全匹配或旧运行时
 意外返回 actor 成功，也没有 proof-import 捷径。
@@ -410,15 +456,17 @@ action list，按范围隔离查询并取消旧请求，限制
 和 session owner。
 后台切片的聚焦原生/规范化测试不证明其提交包含配套 UI，也不证明源投递已经接通。
 
-### 自动续接与原受众返回：剩余交付
+### 自动续接与原受众返回：待验收前沿
 
-当前经过认证的确认回调会登记 claim 并投影受管交接，但不会启动原宿主。
+上文默认关闭的 callback 续接已可通过 operator 授予的 delegation 请求原受管
+Codex 宿主。其合成 File/SQLite 验证不证明真实确认、本机宿主接受或金融执行。
+没有该启动 grant 时，确认只登记 claim 并投影受管交接。
 原生 `report` 将结果写回规范存储并在工具连接上返回；投递恢复更新原 Lark 卡片。
 两者都不等于已向选定的源会话投递。`outcome_observed` 操作不在待办 Inbox 中，
 因此读完 Inbox 也不能证明已返回原受众。
 
-这两个缺口继续由同一个实现 Todo 和 capability owner 负责。后续有界交付按以下
-顺序验收；这是规划，不是准备/读回切片已经具备或验证的功能：
+真实续接与源返回的验收缺口继续由既有实现 Todo 和 capability owner 负责。
+后续有界交付按以下顺序验收；上文合成续接切片不满足这些真实调用验收条件：
 
 | 交付 | 复用的权威与必需边界 | 退出证据 |
 | --- | --- | --- |
@@ -436,3 +484,33 @@ action list，按范围隔离查询并取消旧请求，限制
 已合格；无关的 BotMux 绑定或附着 Desktop 身份不能替代。新增自动启动配置必须
 复用既有配置 owner，并在受影响的产品入口展示生效状态。看到上述回执前保留原
 消费者 Todo 为开放状态，不把已取消测试卡或合成回执当成真实批准。
+
+### DSH 模型可用与操作传输分别验收
+
+当前 [`projectManagedOperationTransport`](../../../loopx/control_plane/work_items/operation_agent_handoff.ts)
+只接受 `codex-cli`。已配置的 `dsh` 执行器可以通过既有 runtime、凭据和模型
+profile 检查，同时在请求 operation tools 时返回
+`operation_transport_host_unsupported`。
+[`DSH Turn adapter`](../../../loopx/dsh_goal_mode/turn_host_adapter.py) 通过 SDK
+运行模型，没有安装上述受管 `loopx_operation` 连接。SDK 内置工具、模型回复
+成功、`unrestricted` 权限模式或已登记源线程不能代替原生身份 producer；开放
+更多 shell 工具也不会提供它。
+
+当前 binding 对这类传输拒绝给出的通用 `correct_execution_profile` 修复建议
+不足以指导恢复：更换已支持的模型或重复配置同一凭据，不能使尚未支持的宿主
+传输可用。共享 typed transport owner 须明确读回这一区别；保持用户选定的
+宿主，不静默回退到 Codex。
+
+DSH 传输交付须复用既有 operation 和 Turn owner：
+
+1. 独立于普通 DSH 可启动性，读回操作传输支持范围。保持 operation tools
+   显式启用和公共 CLI 消费入口关闭。
+2. 验证受管 DSH 连接的真实 session/Turn 元数据和生效 profile，包含源受众
+   选择与撤销。caller 提供的 session 字符串或注入 actor 不是原生身份证据。
+3. 在该绑定连接上完成准备、确认、首次消费及结果，保留规范 action store 和
+   既有锁。验证重复、profile/session 漂移、传输关闭及响应丢失。
+4. 金融探针之前先验收真实非金融确认与原生 consumer 采用。原卡恢复和源受众
+   返回各需认证读回；工具响应不能证明这两种投递。
+
+这是必需的 adapter 前沿，不是已交付的 DSH 执行 grant。金融预检和场所证据
+继续由 Finance 拥有；其只读 checker 不认证操作 actor、不预留资金或提交订单。

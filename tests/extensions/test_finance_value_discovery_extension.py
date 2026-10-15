@@ -1227,7 +1227,7 @@ def test_declared_minimum_core_without_presentation_api_can_import_and_doctor(
     )
 
 
-def test_dashboard_requires_only_public_presentation_validator_api(
+def test_dashboard_requires_only_public_presentation_api(
     tmp_path: Path,
 ) -> None:
     """A Core with the public resolver need not preserve Core-private helpers."""
@@ -1238,6 +1238,7 @@ def test_dashboard_requires_only_public_presentation_validator_api(
     (core_package / "__init__.py").write_text("")
     (core_package / "presentation.py").write_text(
         "def load_presentation_view_validator(_surface):\n    return lambda value: value\n"
+        "def find_public_safe_local_path(_text):\n    return None\n"
     )
     environment = dict(os.environ)
     environment["PYTHONPATH"] = os.pathsep.join(

@@ -51,7 +51,7 @@ from ..state_refresh import refresh_state_run
 from ..control_plane.todos.path_resolution import resolve_todo_state_path
 from .turn_cadence import managed_cadence_start
 from .turn_decision import collect_turn_status_payload
-from .turn_dsh_host import build_dsh_host_runner
+from .turn_dsh_host import build_dsh_host_runner, build_dsh_operation_host_runner
 from .turn_rendering import build_turn_error_payload
 from .turn_post_writeback import drain_committed_turn_post_writeback_hooks
 from .turn_todo_writeback import (
@@ -824,11 +824,23 @@ def execute_turn_run_once(
 
             session_binding_resolver = resolve_built_in_session_binding
         elif args.host == "dsh":
-            host_runner = build_dsh_host_runner(
-                args,
-                workspace=project,
-                environ=operator_environ,
-            )
+            if getattr(args, "dsh_operation_module", None):
+                host_runner = build_dsh_operation_host_runner(
+                    args, runtime_root=runtime_root, registry_path=registry_path,
+                    workspace=project, environ=operator_environ,
+                    goal_admission=goal_admission,
+                )
+
+                def resolve_dsh_operation_session(envelope: Mapping[str, Any]) -> dict[str, str] | None:
+                    return codex_cli_session_binding(
+                        runtime_root, envelope, goal_admission=goal_admission, host="dsh"
+                    )
+
+                session_binding_resolver = resolve_dsh_operation_session
+            else:
+                host_runner = build_dsh_host_runner(
+                    args, workspace=project, environ=operator_environ,
+                )
 
         def post_settlement_reward_memory(
             plan: Mapping[str, Any],

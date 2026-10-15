@@ -277,12 +277,16 @@ def assert_agent_scope_frontier_routing_parity() -> None:
         "deferred_resume_candidates": [
             {
                 "todo_id": "todo_deferred_current",
+                "status": "deferred",
+                "resume_ready": True,
                 "text": "[P1] Current agent deferred successor.",
                 "task_class": TODO_TASK_CLASS_ADVANCEMENT,
                 "claimed_by": " agent-a ",
             },
             {
                 "todo_id": "todo_deferred_other",
+                "status": "deferred",
+                "resume_ready": True,
                 "text": "[P1] Other agent deferred successor.",
                 "task_class": TODO_TASK_CLASS_ADVANCEMENT,
                 "claimed_by": "agent-b",

@@ -8,7 +8,8 @@ OPERATOR_LANGUAGE_RULE_THIN = "Lang=user; default=en; mix=asked/scoped."
 SCOPE_BOUNDED_WORK_RULE = (
     "Read agent_channel.work_context and required_reads (or envelope) before work. "
     "Size by task/evidence/risk within authority/budget, not ops/files/wakes; "
-    "calls/writeback ≠ completion; obey stop/replan."
+    "calls/writeback ≠ completion. Correct locally; obey projected replan/stop, "
+    "never wake counts."
 )
 
 USER_TODO_FINAL_MESSAGE_RULE = (
@@ -51,25 +52,27 @@ REWARD_MEMORY_OUTCOME_COMPACT_RULE = (
     "digest/evidence attestation + refresh/spend readback. Else awaiting/zero "
     "provider calls; no raw/private content."
 )
+SCHEDULER_STOP_RULE = (
+    "host_action=pause_or_delete_current_heartbeat: automation_update pause current "
+    "heartbeat once; verify stopped; unconfirmed/unavailable: never claim stopped; "
+    "end; no work/spend/retry/RRULE fallback. "
+)
 SCHEDULER_HINT_APPLICATION_RULE = (
     "Bootstrap/min interval is a floor; follow current backoff. "
-    "`scheduler_hint` no-spend. host_action=pause_or_delete_current_heartbeat -> "
-    "automation_update stop once, verify, end; else apply_needed -> RRULE via "
+    + SCHEDULER_STOP_RULE + "Else apply_needed -> RRULE via "
     "automation_update; unavailable -> use fallback_hint.cli_args only when projected "
     "(SQLite/app API "
     "bypass - fallback only), then ack; further failure -> failure_hint; "
-    "ack_needed -> ack."
+    "ack_needed -> ack. No spend."
 )
 SCHEDULER_HINT_COMPACT_RULE = (
     "Bootstrap/min interval is a floor; follow current backoff. "
-    "host_action=pause_or_delete_current_heartbeat: automation_update stop; "
-    "else RRULE apply via automation_update, projected fallback_hint when unavailable, "
+    + SCHEDULER_STOP_RULE + "Else RRULE apply via automation_update, projected fallback_hint when unavailable, "
     "then ack/fail. No spend."
 )
 SCHEDULER_HINT_THIN_RULE = (
     "Bootstrap/min=floor; backoff. "
-    "host_action=pause_or_delete_current_heartbeat->automation_update stop(no-spend); "
-    "else RRULE/projected-fallback_hint/ack/fail."
+    + SCHEDULER_STOP_RULE + "Else RRULE/projected-fallback_hint/ack/fail."
 )
 RUNTIME_CAPABILITY_PROJECTION_THIN_RULE = (
     "Observed capabilities -> `--available-capability`; never user gates."

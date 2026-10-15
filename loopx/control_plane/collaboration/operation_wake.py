@@ -13,6 +13,8 @@ from typing import Any
 from ...chat_action_store import ChatActionStore
 from ..turn_driver.codex_cli import load_codex_cli_session
 from ..turn_driver.host_binding import turn_host_arg_option
+from ..turn_driver.execution_profile import managed_execution_profile
+from ..operator_provider import operator_provider_environ
 from .operation_handoff import managed_operation_binding_current
 from .goal_instance_scope import collaboration_goal_scope, decide_collaboration_lifecycle
 
@@ -75,23 +77,34 @@ def dispatch_confirmed_operation_wake(
         projection = ChatActionStore._agent_operation_plan(proposal, action="project")
         if projection["status"] != "authorized_pending" or projection["host_start"] is not None:
             return {**base, "state": "no_new_launch"}
+        argv = binding["host_args"]
+        host = turn_host_arg_option(argv, "--host")
+        dsh = host == "dsh"
         session = load_codex_cli_session(runtime_root, lineage={
             "goal_id": service.goal_id, "agent_id": binding["agent_id"],
             "todo_id": binding["todo_id"],
-        }) or {}
-        argv = binding["host_args"]
+        }, host=host) or {}
+        profile = managed_execution_profile(
+            operator_provider_environ(),
+            provider=turn_host_arg_option(argv, "--dsh-provider"),
+            model=turn_host_arg_option(argv, "--dsh-model"),
+            reasoning_effort=turn_host_arg_option(argv, "--dsh-reasoning-effort"),
+        ) if dsh else {
+            "model": turn_host_arg_option(argv, "--codex-model"),
+            "reasoning_effort": turn_host_arg_option(argv, "--codex-reasoning-effort"),
+        }
         ChatActionStore._agent_operation_plan(
             proposal, action="wake",
             binding_current=managed_operation_binding_current(runtime_root, parameters),
-            launch_context={"host": turn_host_arg_option(argv, "--host"),
-                            "operation_tools": "--codex-operation-tools" in argv,
+            launch_context={"host": host,
+                            "operation_tools": bool(turn_host_arg_option(argv, "--dsh-operation-module")) if dsh else "--codex-operation-tools" in argv,
                             "iteration_context": turn_host_arg_option(argv, "--iteration-context")},
             executor_route={"goal_id": service.goal_id, "agent_id": binding["agent_id"],
-                            "todo_id": binding["todo_id"], "host_surface": "loopx-managed-codex",
+                            "todo_id": binding["todo_id"], "host_surface": "loopx-managed-dsh" if dsh else "loopx-managed-codex",
                             "thread_id": session.get("session_id"),
                             "profile_digest": session.get("operation_profile_digest"),
-                            "model": turn_host_arg_option(argv, "--codex-model"),
-                            "reasoning_effort": turn_host_arg_option(argv, "--codex-reasoning-effort")},
+                            "model": profile["model"],
+                            "reasoning_effort": profile["reasoning_effort"]},
         )
         brief = {
             "schema_version": "collaboration_brief_v0",

@@ -1,0 +1,103 @@
+name: CI Maintenance
+
+# Trusted base-branch code only; never checks out or executes PR content.
+on:
+  pull_request_target:
+    types: [closed, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-maintenance-pr-${{ github.event.number }}
+  cancel-in-progress: true
+
+jobs:
+  cancel-obsolete-pr:
+    if: github.event_name == 'pull_request_target' && (github.event.action == 'closed' || github.event.action == 'synchronize')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const repo = context.repo;
+            const pull_number = context.payload.number;
+            const readPR = async () => (await github.rest.pulls.get({...repo, pull_number})).data;
+            const pr = await readPR();
+            const closed = context.payload.action === 'closed';
+            if (!closed && context.payload.action !== 'synchronize') return core.info('No obsolete-run cleanup event.');
+            if (pr.state !== (closed ? 'closed' : 'open')) return core.info('PR state changed; retain qualification.');
+            if (!closed && context.payload.pull_request?.head.sha !== pr.head.sha) {
+              return core.info('Synchronize head changed; stop cleanup.');
+            }
+            const cutoff = Date.parse(pr.closed_at);
+            if (!pr.head.repo?.id || !pr.head.ref || !pr.head.sha || (closed && !Number.isFinite(cutoff))) {
+              throw new Error('PR has no verifiable source repository, branch, head or close time.');
+            }
+            // Synchronize supplies the exact replaced head, including for fork
+            // runs whose Actions response omits pull_requests. Bind both ends
+            // and the source identity before using this fallback.
+            const previousHead = !closed && context.payload.after === pr.head.sha &&
+              context.payload.pull_request?.head.ref === pr.head.ref &&
+              context.payload.pull_request?.head.repo?.id === pr.head.repo.id
+              ? context.payload.before : null;
+            const unchanged = current => current.state === pr.state && current.head.sha === pr.head.sha &&
+              current.head.ref === pr.head.ref && current.head.repo?.id === pr.head.repo.id &&
+              (!closed || current.closed_at === pr.closed_at);
+            // Another open PR may use the same source branch against a different base.
+            const hasOtherOpenPR = async (head = pr.head.label) => (await github.paginate(github.rest.pulls.list,
+              {...repo, state: 'open', head, per_page: 100}))
+              .some(p => closed || p.number !== pull_number);
+            const cancellationScopeUnchanged = async () => {
+              const current = await readPR();
+              return unchanged(current) && !(await hasOtherOpenPR(current.head.label));
+            };
+            if (await hasOtherOpenPR()) {
+              return core.info('Source branch has another open PR; retain its qualification.');
+            }
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns,
+              {...repo, workflow_id: 'python-tests.yml', event: 'pull_request',
+                branch: pr.head.ref, per_page: 100});
+            for (const run of runs) {
+              const created = Date.parse(run.created_at);
+              // A queued PR event may materialize after close. Only the exact
+              // closed head can cross that cutoff; recheck its lifecycle below.
+              if (run.status === 'completed' || run.head_repository?.id !== pr.head.repo.id ||
+                  run.head_branch !== pr.head.ref || !run.head_sha || !Number.isFinite(created) ||
+                  (closed ? created > cutoff && run.head_sha !== pr.head.sha : run.head_sha === pr.head.sha)) continue;
+              // Missing associations require either the exact closed head or
+              // the replaced head bound to this verified synchronize event.
+              if (run.pull_requests?.length
+                  ? !run.pull_requests.some(p => p.number === pull_number)
+                  : run.head_sha !== (closed ? pr.head.sha : previousHead)) continue;
+              if (!(await cancellationScopeUnchanged())) return core.info('PR or source branch changed; stop cleanup.');
+              const params = {...repo, run_id: run.id};
+              try {
+                await github.rest.actions.cancelWorkflowRun(params);
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                const {data: remaining} = await github.rest.actions.getWorkflowRun(params);
+                if (remaining.status !== 'completed') {
+                  if (!(await cancellationScopeUnchanged())) return core.info('PR or source branch changed; stop force cancellation.');
+                  await github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel', params);
+                  let terminal = false;
+                  for (let attempt = 0; attempt < 10; attempt++) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    if ((await github.rest.actions.getWorkflowRun(params)).data.status === 'completed') {
+                      terminal = true;
+                      break;
+                    }
+                  }
+                  if (!terminal) throw new Error(`Cancellation ${run.id} has not completed; inspect its run.`);
+                }
+                core.info(`Retired obsolete Python qualification ${run.id}.`);
+              } catch (error) {
+                if (error.status !== 409 ||
+                    (await github.rest.actions.getWorkflowRun(params)).data.status !== 'completed') throw error;
+                core.info(`Qualification ${run.id} completed before cancellation.`);
+              }
+            }

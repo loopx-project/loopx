@@ -47,7 +47,7 @@ def cli(registry, runtime, flags, output_format="json"):
 
 def test_projection_failure_returns_the_standard_cli_error_without_source_changes(tmp_path, monkeypatch, capsys):
     from loopx.cli import main
-    from loopx.cli_commands import todo as todo_command
+    from loopx.cli_commands import todo_list as todo_command
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, state = _write_fixture(tmp_path)

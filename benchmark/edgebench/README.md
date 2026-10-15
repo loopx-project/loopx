@@ -480,3 +480,29 @@ hash bindings. The adapter does not launch jobs, qualify integrity, read session
 or upload to a network service. Supplemental settings need publication review;
 missing provenance must remain explicit. Canonical experiment-board rows continue
 to use benchmark-toolkit's upload-envelope and readback contracts.
+
+For a new export using native ranking, add `"native_ranking"` to each selected
+run's reviewed `settings`, with exactly these two fields:
+
+```json
+{"native_ranking": {"selection": "pass_rate_first", "score_direction": "maximize"}}
+```
+
+Copy the effective values from the pinned native task's judge configuration:
+`selection` is `score_first`, `valid_then_score`, or `pass_rate_first`;
+`score_direction` is `maximize` or `minimize`. Task names never select a policy.
+Unknown/incomplete metadata and a contradictory `best_score.higher_is_better`
+fail export. The adapter binds native history and final `best_round`,
+`best_score`, and `best_pass_rate`, then checks the selected sample's score and
+pass rate. It exports numeric sample pass rates and the selected pass-rate metric;
+it does not rerank submissions or call a scorer. A selected score may therefore
+be below another sample even when scores are maximized.
+
+Without this metadata, the historical scalar-maximum verification path remains;
+immutable Portfolio snapshots need no migration. Neither path requires SForge
+for export or standalone offline verification. `--verify` checks file bindings,
+direction consistency, and selected-sample witnesses, not ranking optimality or
+the truth of supplied policy metadata. The recorded task/source hashes do not
+prove that metadata matches the private task configuration; that provenance
+still needs operator review. This is an S11/E2 terminal-report repair, with no
+change to native scoring, integrity qualification, or study promotion.

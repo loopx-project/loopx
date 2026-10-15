@@ -114,55 +114,60 @@ class CheckpointWake:
             components, research = research_participants(self.env, components, metadata, destination, evidence, window)
             if research is None:
                 raise ValueError("controller checkpoint requires complete canonical research context")
-        if self.request.get("native_session"):
-            from .native_checkpoint import native_session_checkpoint
-            from .checkpoint import native_binding_participant
-            components, source_wake = native_binding_participant(self.env, components, metadata)
-            guard = {"cli": self.env["LOOPX_CLI"], "workspace": self.env["LOOPX_PROJECT"],
-                     "registry": self.env["LOOPX_REGISTRY"], "runtime_root": self.env["LOOPX_RUNTIME_ROOT"],
-                     "goal_id": self.env["LOOPX_GOAL_ID"], "agent_id": self.env["LOOPX_AGENT_ID"],
-                     "turn_instance_id": held["quota"]["heartbeat_receipt"]["turn_instance_id"],
-                     "capture_root": str(self.capture_root), "socket_path": self.socket_path,
-                     "decision_sha256": held["sha256"]}
-            native = native_session_checkpoint(self.env, self.receipt["session"]["session_id"],
-                timeout=max(.1, window - time.time()), interrupted_guard=guard)
-            allocated = {}
-            for entry in native["components"]:
-                component_id = _participant_id(components, entry["id"])
-                allocated[entry["id"]] = component_id
-                components.append({**entry, "id": component_id})
-            decision_id = _participant_id(components, "held_decision")
-            components.append({"id": decision_id, "source_path": str(held["path"])})
-            metadata["native_session"] = {**native["metadata"], "store_members": [
-                {**member, "id": allocated[member["id"]]} for member in native["metadata"]["store_members"]]}
-            metadata["held_decision_component_id"] = decision_id
-        probe = effect_runtime_result("runtime.checkpoint_artifacts", {
-            "action": "probe", "components": components, "deadline_epoch_ms": window * 1000,
-        }, timeout=max(.1, window - time.time()), retry_safe=False)
-        if native is not None:
-            confirmed = native_session_checkpoint(self.env, self.receipt["session"]["session_id"],
-                timeout=max(.1, window - time.time()), interrupted_guard=guard)
-            from .sessions import BenchmarkSessionWake
-            from .codex import Execution
-            confirmed_wake = BenchmarkSessionWake(self.env, Execution(context="resume",
-                sandbox=self.env.get("LOOPX_CODEX_SANDBOX", "danger-full-access")), {})
-            if ((confirmed_wake.session_id, confirmed_wake.goal_ref, confirmed_wake.digest) !=
-                    (source_wake.session_id, source_wake.goal_ref, source_wake.digest)):
-                raise ValueError("interrupted source session binding moved before sealing")
-            if confirmed != native:
-                raise ValueError("interrupted native cursor moved before sealing")
-        if self.request.get("loopx_state"):
-            from .checkpoint import verify_research_participants
-            verify_research_participants(self.env, components, metadata, research, probe["source_witness"], window)
-        if self.request.get("controller_handoff"):
-            from .checkpoint_handoff import await_controller_capture
-            return await_controller_capture(self.root, components, metadata, probe, window)
-        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        return effect_runtime_result("runtime.checkpoint_artifacts", {
-            "action": "capture", "components": components, "destination": str(destination),
-            "expected_source_sha256": probe["source_sha256"], "point_metadata": metadata,
-            "deadline_epoch_ms": window * 1000,
-        }, timeout=max(.1, window - time.time()), retry_safe=False)
+        # Reuse the native reader across both full observations, including
+        # interrupted-guard validation. Close after sealing/the writer barrier:
+        # native shutdown can otherwise change the probed SQLite files.
+        with ExitStack() as readers:
+            if self.request.get("native_session"):
+                from loopx.hosts.codex_checkpoint import native_checkpoint_reader, native_session_checkpoint
+                from .checkpoint import native_binding_participant
+                components, source_wake = native_binding_participant(self.env, components, metadata)
+                guard = {"cli": self.env["LOOPX_CLI"], "workspace": self.env["LOOPX_PROJECT"],
+                         "registry": self.env["LOOPX_REGISTRY"], "runtime_root": self.env["LOOPX_RUNTIME_ROOT"],
+                         "goal_id": self.env["LOOPX_GOAL_ID"], "agent_id": self.env["LOOPX_AGENT_ID"],
+                         "turn_instance_id": held["quota"]["heartbeat_receipt"]["turn_instance_id"],
+                         "capture_root": str(self.capture_root), "socket_path": self.socket_path,
+                         "decision_sha256": held["sha256"]}
+                reader = readers.enter_context(native_checkpoint_reader(self.env, timeout=max(.1, window - time.time())))
+                native = native_session_checkpoint(self.env, self.receipt["session"]["session_id"],
+                    timeout=max(.1, window - time.time()), interrupted_guard=guard, transport=reader)
+                allocated = {}
+                for entry in native["components"]:
+                    component_id = _participant_id(components, entry["id"])
+                    allocated[entry["id"]] = component_id
+                    components.append({**entry, "id": component_id})
+                decision_id = _participant_id(components, "held_decision")
+                components.append({"id": decision_id, "source_path": str(held["path"])})
+                metadata["native_session"] = {**native["metadata"], "store_members": [
+                    {**member, "id": allocated[member["id"]]} for member in native["metadata"]["store_members"]]}
+                metadata["held_decision_component_id"] = decision_id
+            probe = effect_runtime_result("runtime.checkpoint_artifacts", {
+                "action": "probe", "components": components, "deadline_epoch_ms": window * 1000,
+            }, timeout=max(.1, window - time.time()), retry_safe=False)
+            if native is not None:
+                confirmed = native_session_checkpoint(self.env, self.receipt["session"]["session_id"],
+                    timeout=max(.1, window - time.time()), interrupted_guard=guard, transport=reader)
+                from .sessions import BenchmarkSessionWake
+                from .codex import Execution
+                confirmed_wake = BenchmarkSessionWake(self.env, Execution(context="resume",
+                    sandbox=self.env.get("LOOPX_CODEX_SANDBOX", "danger-full-access")), {})
+                if ((confirmed_wake.session_id, confirmed_wake.goal_ref, confirmed_wake.digest) !=
+                        (source_wake.session_id, source_wake.goal_ref, source_wake.digest)):
+                    raise ValueError("interrupted source session binding moved before sealing")
+                if confirmed != native:
+                    raise ValueError("interrupted native cursor moved before sealing")
+            if self.request.get("loopx_state"):
+                from .checkpoint import verify_research_participants
+                verify_research_participants(self.env, components, metadata, research, probe["source_witness"], window)
+            if self.request.get("controller_handoff"):
+                from .checkpoint_handoff import await_controller_capture
+                return await_controller_capture(self.root, components, metadata, probe, window)
+            self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            return effect_runtime_result("runtime.checkpoint_artifacts", {
+                "action": "capture", "components": components, "destination": str(destination),
+                "expected_source_sha256": probe["source_sha256"], "point_metadata": metadata,
+                "deadline_epoch_ms": window * 1000,
+            }, timeout=max(.1, window - time.time()), retry_safe=False)
 
     def run(self, execution, body, wake, session_wake, stdout, stderr, timeout):
         from .worker import child_process, native_command

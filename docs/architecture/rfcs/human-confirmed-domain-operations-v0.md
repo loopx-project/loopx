@@ -347,6 +347,14 @@ validation and acceptance are reused. The profile is read back by the existing
 host owner; no new frontend configuration store or hidden default is added.
 Preflight reports an unpinned/unsupported configuration as unavailable. A valid
 argv is still runtime-unverified, not proof that a host or an operation ran.
+The typed operation transport readback lists `supported_hosts` and
+`supported_sandboxes`. An unsupported host returns
+`select_supported_operation_host`; an unsupported sandbox returns
+`select_supported_operation_sandbox`; missing model/effort returns
+`correct_execution_profile`. Transport refusals do not suggest model-credential
+environment variables. These are explicit recovery choices, not automatic host
+selection or an execution grant. Ordinary host availability remains independent:
+a launchable DSH model does not qualify the Codex-only operation connection.
 Use `workspace-write` only when the existing work grant requires it;
 `danger-full-access` is not accepted by this transport.
 
@@ -445,6 +453,61 @@ and packaged presentation. The live context probe creates a new managed GPT
 session in its owning home; it performs no proposals, group clicks or financial
 effects. Synthetic approval fixtures are not genuine user approval.
 
+The optional [DSH native context module](../../../packages/dsh-loopx-plugin/README.md#optional-native-operation-context-sdk-prerequisite)
+adds a separately loaded, read-only SDK prerequisite. A real SDK/bundled runtime
+`0.1.5rc1` tool call returned its calling session, open native Turn and whitelisted
+agent options. This observation is neither a Core actor nor effective wire-profile
+attestation; the read-only module always reports `execution_allowed: false`.
+
+The separate optional `native-operation` module and internal
+`OwnedDshOperationHost` now connect the real SDK/bundled runtime `0.1.5rc1`
+to the existing Core handler. Two separately admitted Turns on one retained
+SDK connection qualify native session/Turn/call pairing, observed profile,
+canonical preparation, refusal before confirmation, fixture confirmation,
+one-shot consumption, rejected repetition and canonical `not_executed` outcome.
+File/SQLite Goal authority consumers retain the original action-store owner.
+Kernel peer PID and exact SDK-native tool arguments must match the private
+bounded Unix connection; there is no bearer, caller actor, second approval store
+or effect retry. Legacy Codex executor encoding and default/off behavior remain.
+
+This stage is a backend integration with a scripted loopback provider, not
+genuine user approval, original-card delivery or financial utility. SDK
+`0.1.5rc1` still refuses cross-process resume before launch; its observed
+`session already exists` failure is retained. An isolated Python SDK `0.2.1a3`
+wheel built from upstream `2fbf4359`, with explicit npm runtime
+`@deepseek-ai/dsh@0.2.1-alpha.3`, uses public `resume_session` instead of
+replacing identity. SDK files, Node/entry bytes and the entire npm closure join
+the frozen profile. File/SQLite restart cases recover the original operation;
+missing/unreadable history refuses without provider input or a reusable failed
+client. This is candidate-source qualification, not a published Python runtime
+or whole-plugin compatibility claim.
+
+The explicit `turn run-once --host dsh --dsh-operation-module /absolute/native-operation.js`
+entry now shares this owner, the existing Todo session planner and the
+operator-granted delegation callback. The module flag is default-off and
+cannot be combined with `--dsh-runner` or another host. Configuration readback
+identifies `owned_native_sdk` but retains `runtime_qualified: false`.
+File/SQLite qualification uses the actual CLI, SDK and detached callback to
+resume the original persisted session/profile, consume once, reject repetition
+and record `not_executed`; the typed wait remains a rejected delegation rather
+than validated domain completion. Provider endpoint bytes join the immutable
+profile without serializing credentials. The generic `--confirmed-operation-id`
+and `--operation-source-route-json` flags retain their Codex aliases.
+The CLI fixture does not certify original-card delivery or genuine approval.
+
+A subsequent bounded live qualification used the real model, an actual Lark
+card and authenticated human confirmation. Normal native CLI continuation
+restored the original DSH session/profile, consumed once, recorded canonical
+`not_executed` and patched the same original card; independent provider
+readback verified the result. This involved zero financial action. The
+continuation was manually invoked after the callback: unattended wakeup was
+not configured, and the approximately 246-second confirmation-to-host-start
+observation does not meet the 60-second healthy automatic-path target below.
+Other runtimes, global installation, account effects and financial utility
+remain unqualified. An older globally installed Core rejects the new DSH
+executor during inbox projection; the candidate-source entry reads it, so
+rollback must retain those pins rather than assume old-reader compatibility.
+
 Public `goal-channel inspect-operation/consume-operation/report-operation`
 remain fail-closed before private reads or writes, even with matching
 `CODEX_THREAD_ID`, route flags, self-signed proof or an older runtime's actor
@@ -534,18 +597,22 @@ required acceptance condition using the existing scheduling/session owner.
 The backend slice's focused native/normalization tests do not certify that the
 companion UI ships in its commit or that source delivery is connected.
 
-### Automatic continuation and original-audience return: remaining work
+### Automatic continuation and original-audience return: qualification frontier
 
-An authenticated confirmation callback currently records the claim and projects
-the managed handoff; it does not launch the original host. Native `report`
+The default-off callback continuation described above can request the original
+managed Codex host through an operator-granted delegation. Its synthetic
+File/SQLite qualification does not establish a genuine confirmation, installed
+host acceptance or financial execution. Without that grant, confirmation only
+records the claim and projects the managed handoff. Native `report`
 commits an outcome and returns on the tool connection, while delivery recovery
 updates the original Lark card. Neither is delivery to a selected source
 conversation. An `outcome_observed` operation is absent from the pending-work
 Inbox, so exhausting that Inbox cannot certify original-audience return.
 
-The same implementation Todo and capability owner retain both gaps. The next
-bounded deliveries must prove the following in order; these are planned work,
-not qualified features of the preparation/readback slice:
+The existing implementation Todo and capability owner retain the live
+continuation and source-return acceptance gaps. The next bounded deliveries
+must prove the following in order; the synthetic continuation slice above
+does not satisfy these live acceptance conditions:
 
 | Delivery | Reused owner and required boundary | Exit evidence |
 | --- | --- | --- |
@@ -568,3 +635,39 @@ Any new automatic launch configuration must reuse the existing configuration
 owner and expose its effective state in the affected product entry points.
 Keep the original consumer Todo open until these receipts are observed; do not
 convert a cancelled test card or synthetic receipt into genuine approval.
+
+### DSH model availability and operation transport are separate
+
+The current [`projectManagedOperationTransport`](../../../loopx/control_plane/work_items/operation_agent_handoff.ts)
+accepts only `codex-cli`. A configured `dsh` executor can pass the existing
+runtime, credential and model-profile checks while a request for operation
+tools returns `operation_transport_host_unsupported`. The
+[`DSH Turn adapter`](../../../loopx/dsh_goal_mode/turn_host_adapter.py) runs the
+model through the SDK; it does not install the owned `loopx_operation`
+connection described above. SDK built-in tools, a successful model response,
+`unrestricted` permission mode, or a registered source thread cannot replace
+that identity producer. Enabling more shell tools does not supply it.
+
+The current binding's generic `correct_execution_profile` remediation for this
+transport refusal is insufficient: changing a supported model or configuring
+the same credential again cannot make an unsupported host transport supported.
+The shared typed transport owner must expose that distinction; the requested
+host remains selected and must not silently fall back to Codex.
+
+The DSH transport delivery must reuse the existing operation and Turn owners:
+
+1. Read back transport support independently of ordinary DSH launchability.
+   Keep operation tools opt-in and public CLI consumption fail-closed.
+2. Qualify an owned DSH connection's real session/Turn metadata and effective
+   profile, including source audience selection and revocation. A caller's
+   session string or injected actor is not native identity evidence.
+3. Carry prepare, confirmation, first consumption and outcome on that bound
+   connection, retaining the canonical action store and existing locks. Prove
+   duplicate, profile/session drift, disabled transport and lost-response cases.
+4. Qualify genuine non-financial confirmation and native consumer adoption
+   before a financial probe. Original-card recovery and source-audience return
+   need their own authenticated readbacks; a tool response proves neither.
+
+This is a required adapter frontier, not a shipped DSH execution grant. Finance
+continues to own financial preflight and venue evidence; its read-only checkers
+do not authenticate an operation actor, reserve funds or submit an order.

@@ -8,13 +8,15 @@ from loopx.extensions.lark.outbound import (
 )
 
 
-@pytest.mark.parametrize("value", ["x" * 149992, "测" * 49997, "😀" * 37498])
+@pytest.mark.parametrize("value", ["x" * 149992, "测" * 49997, "😀" * 37498],
+                         ids=["ascii", "cjk", "emoji"])
 def test_provider_byte_budget_accepts_large_text(value):
     # {"x":""} costs eight bytes; UTF-8 code points have different costs.
     validate_lark_text_request_size({"x": value})
 
 
-@pytest.mark.parametrize("value", ["x" * 149993, "测" * 49998, "😀" * 37499])
+@pytest.mark.parametrize("value", ["x" * 149993, "测" * 49998, "😀" * 37499],
+                         ids=["ascii", "cjk", "emoji"])
 def test_provider_byte_budget_rejects_oversize_utf8(value):
     with pytest.raises(LarkOutboundTextError):
         validate_lark_text_request_size({"x": value})

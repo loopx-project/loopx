@@ -58,7 +58,7 @@ class BenchmarkCodex(CodexOffline):
         stride_strategy=None,
         checkpoint_request_path=None,
         task_entry=None,
-        planning_timeout_sec=300,
+        planning_timeout_sec=None,
         turn_envelope=False,
         task_objective=None,
         goal_id=_GOAL_ID,
@@ -77,9 +77,10 @@ class BenchmarkCodex(CodexOffline):
             task_entry,
             turn_envelope,
         )
-        self.planning_timeout = None if planning_timeout_sec is None else float(planning_timeout_sec)
-        if self.planning_timeout is not None and not 0 < self.planning_timeout < float("inf"):
-            raise ValueError("planning timeout must be finite and positive")
+        if planning_timeout_sec is not None:
+            raise ValueError(
+                "Remove planning_timeout_sec; planning shares scheduler_timeout_sec with execution"
+            )
         self.scheduler_timeout = int(scheduler_timeout_sec)
         if self.scheduler_timeout <= self.execution.timeout_seconds + 150:
             raise ValueError(
@@ -691,19 +692,22 @@ class BenchmarkCodex(CodexOffline):
             env = self._worker_env(cwd=cwd)
             if self.execution.task_entry == "loopx-planned":
                 result_path = f"{_CONTROL}/planning-phase-{self._phase_number:03d}.json"
-                planning_timeout = deadline - time.monotonic() - 30
-                if self.planning_timeout is not None:
-                    planning_timeout = min(self.planning_timeout, planning_timeout)
-                if planning_timeout <= 0:
+                remaining = int(deadline - time.monotonic())
+                if remaining <= 160:
                     raise TimeoutError("Task budget exhausted before planning")
                 await self.exec_as_agent(
-                    environment, command=shlex.join(wake_command), cwd=cwd,
+                    environment,
+                    command=(
+                        # Use the remote task clock, as the execution path does.
+                        f"export LOOPX_PHASE_DEADLINE_EPOCH=$(( $(date +%s) + {remaining} )); "
+                        f"{shlex.join(wake_command)}"
+                    ),
+                    cwd=cwd,
                     env=env | {
                         "LOOPX_TASK_STAGE": "plan",
-                        "LOOPX_PLANNING_TIMEOUT_SEC": str(planning_timeout),
                         "LOOPX_PLANNING_RESULT": result_path,
                     },
-                    timeout_sec=planning_timeout + 30,
+                    timeout_sec=remaining + 30,
                 )
                 observed = await environment.exec(command=f"cat {result_path}")
                 entry = json.loads(observed.stdout or "")

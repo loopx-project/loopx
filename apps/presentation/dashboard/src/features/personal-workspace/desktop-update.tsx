@@ -11,7 +11,10 @@ const workingPhases: Phase[] = ["checking", "connecting", "downloading", "instal
 
 const updateErrors: Record<string, [string, string]> = {
   app_install_failed: ["App 更新未完成，已确认当前版本完好。可继续使用或重新检查更新。", "The App update failed; the current version was verified intact. Keep using it or check for updates again."],
-  app_install_incomplete: ["App 安装未完成，当前版本可能不完整。请保持窗口打开，在「高级选项」恢复上个版本，或重新安装完整 App。", "App installation is incomplete; the current version may be damaged. Keep this window open and restore the previous version in Advanced options, or reinstall the complete App."],
+  app_install_incomplete: ["App 安装未完成，当前版本可能不完整。请保持窗口打开，恢复上个版本后重启；没有可用备份时，请重新安装完整 App。", "App installation is incomplete; the current version may be damaged. Keep this window open, restore the previous version, then restart. If no backup is available, reinstall the complete App."],
+  backup_unavailable: ["没有可验证的 App 备份，未执行恢复。请重新安装完整 App；当前窗口仍可保留。", "No verified App backup is available; restoration did not run. Reinstall the complete App; you can keep this window open."],
+  backup_failed: ["App 备份无法保存或未通过完整性校验，替换已停止。请检查磁盘空间与权限，或重新安装完整 App。", "The App backup could not be saved or failed integrity verification; replacement stopped. Check disk space and permissions, or reinstall the complete App."],
+  rollback_failed: ["恢复 App 未完成，请保持窗口打开。可重试恢复；若仍失败，请重新安装完整 App。", "App restoration did not finish. Keep this window open and retry restoration; if it still fails, reinstall the complete App."],
   runtime_bundle_missing: ["App 缺少配套运行时文件。请恢复上个版本或重新安装完整 App。", "The App's bundled runtime files are missing. Restore the previous version or reinstall the complete App."],
   runtime_selection_explicit: ["当前运行时由其他安装方式或启动参数管理。请通过原安装方式维护它；App 不会覆盖该安装。", "This runtime is managed by another installer or launch override. Maintain it through that owner; the App will not overwrite it."],
   desktop_status_unavailable: ["无法读取 App 更新状态。请重启 App 后再试；若仍失败，请重新安装最新 App。", "Cannot read the App update status. Restart the App; if this persists, reinstall the latest App."],
@@ -41,6 +44,7 @@ export function DesktopUpdate() {
   const invoke = (window as DesktopWindow).__TAURI__?.core.invoke;
   const working = workingPhases.includes(state.phase);
   const repairAvailable = runtimeSelection?.explicit !== true && runtimeSelection?.bundled_repair_available !== false;
+  const restoreInPlace = state.phase === "error" && state.details?.code === "app_install_incomplete" && rollbackAvailable;
 
   function readStatus(value: UpdateStatus, includeState = true) {
     setVersion(value.app_version);
@@ -141,7 +145,9 @@ export function DesktopUpdate() {
     installing_runtime: zh ? "正在安装匹配的运行时，请稍候…" : "Installing the matching runtime…",
     restart_required: zh ? "重启后将自动完成运行时安装与服务连接。" : "Restart to finish runtime installation and reconnect services.",
     ready: zh ? "更新完成，服务已就绪。" : "Update completed; services are ready.",
-    error: updateErrors[state.details?.code ?? ""]?.[zh ? 0 : 1] ?? (zh ? "更新未完成。请重试；启动失败可尝试修复当前版本。" : "Update incomplete. Retry; repair this version if startup fails."),
+    error: updateErrors[state.details?.code ?? ""]?.[zh ? 0 : 1] ?? (repairAvailable
+      ? (zh ? "更新未完成。请重试；启动失败可尝试修复当前版本。" : "Update incomplete. Retry; repair this version if startup fails.")
+      : (zh ? "更新未完成。请重新检查更新；若仍失败，请重新安装完整 App。" : "Update incomplete. Check for updates again; if it still fails, reinstall the complete App.")),
   };
   const label = working ? (zh ? "正在更新…" : "Updating…") : state.phase === "available" ? (zh ? "有可用更新" : "Update available") : state.phase === "restart_required" ? (zh ? "重启完成更新" : "Restart to finish") : state.phase === "error" ? (zh ? "更新需重试" : "Retry update") : (zh ? "更新 LoopX" : "Update LoopX");
   return <div className="personal-desktop-update">
@@ -160,6 +166,7 @@ export function DesktopUpdate() {
       {state.phase === "downloading" && state.details?.total ? <progress aria-label={zh ? "下载进度" : "Download progress"} max={state.details.total} value={state.details.received ?? 0} /> : null}
       {invoke ? <div className="personal-update-actions">
         {state.phase === "restart_required" ? <button type="button" onClick={() => void run("restart")}>{zh ? "重启完成更新" : "Restart to finish"}</button> : <>
+          {restoreInPlace ? <button type="button" onClick={() => void run("rollback")}>{zh ? "恢复上个版本" : "Restore previous version"}</button> : null}
           <button type="button" disabled={working} onClick={() => void run("check")}>{zh ? "检查更新" : "Check for updates"}</button>
           {state.phase === "available" ? <button type="button" onClick={() => void run("apply")}>{zh ? "更新并准备重启" : "Install update"}</button> : null}
         </>}
@@ -180,7 +187,7 @@ export function DesktopUpdate() {
           <button disabled={working || state.phase === "restart_required"} type="button" onClick={() => void run("forget_runtime_selection")}>{zh ? "清除记住的运行时选择" : "Forget runtime choice"}</button>
         </> : null}
       </> : null}
-      {invoke && rollbackAvailable ? <details><summary>{zh ? "恢复上个版本" : "Restore previous version"}</summary><p>{zh ? "将恢复已保留的 App 和它的运行时，需要重启。" : "Restore the retained App and its runtime, then restart."}</p><button disabled={working || state.phase === "restart_required"} type="button" onClick={() => void run("rollback")}>{zh ? "确认恢复上版" : "Restore previous version"}</button></details> : null}
+      {invoke && rollbackAvailable && !restoreInPlace ? <details><summary>{zh ? "恢复上个版本" : "Restore previous version"}</summary><p>{zh ? "恢复保留的 App 后需要重启。单独管理的 CLI 不会被覆盖。" : "Restore the retained App, then restart. A separately managed CLI will not be overwritten."}</p><button disabled={working || state.phase === "restart_required"} type="button" onClick={() => void run("rollback")}>{zh ? "确认恢复上版" : "Restore previous version"}</button></details> : null}
       </details>
     </section>
   </div>;

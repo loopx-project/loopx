@@ -116,7 +116,9 @@ const errors = {
   app_install_failed: "App 安装未能完成，本次更新未生效；已确认当前版本完好且运行时可用，可直接重启继续使用，或重新检查更新后再试。",
   app_install_incomplete: "App 安装中断，且无法确认当前版本是否完整，请勿直接重启。请在恢复与更新面板还原上一版本（或重新安装）后再试。",
   runtime_pairing_required: "旧版本未能自动选择可用组件。请检查 App 更新，或通过恢复入口重新连接。",
-  backup_failed: "无法备份当前版本，更新已停止。请检查磁盘空间后重试。",
+  backup_unavailable: "没有可验证的 App 备份，未执行恢复。请重新安装完整 App；当前窗口仍可保留。",
+  backup_failed: "App 备份无法保存或未通过完整性校验，替换已停止。请检查磁盘空间与权限，或重新安装完整 App。",
+  rollback_failed: "恢复 App 未完成，请保持窗口打开。可重试恢复；若仍失败，请重新安装完整 App。",
 };
 function codeText(code, phase) {
   if (runtimeExplicit && ["runtime_identity_unavailable", "runtime_selection_explicit"].includes(code)) {

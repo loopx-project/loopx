@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from ..agents.profile import agent_profile_candidate_rank
-from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ..effect_runtime import (
+    MAX_LOCAL_SNAPSHOT_BYTES, EffectRuntimeRejected, effect_runtime_result,
+)
 from ..runtime.time import now_utc, parse_timestamp
 from .contract import (
     normalize_todo_claimed_by, normalize_todo_bound_agent, normalize_todo_blocks_agent,
@@ -66,6 +69,44 @@ def _closure_source_facts(value: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _decode_quota_planning_wire(wire: Any) -> dict[str, Any]:
+    error = "invalid TypeScript quota planning wire"
+    if not isinstance(wire, dict) or wire.get("schema_version") != "todo_quota_planning_wire_v1":
+        raise RuntimeError(error)
+    planning, records, record_lanes = (
+        wire.get("planning"), wire.get("records"), wire.get("record_lanes")
+    )
+    if (
+        not isinstance(planning, dict) or not isinstance(planning.get("lanes"), dict)
+        or not isinstance(records, list) or any(not isinstance(row, dict) for row in records)
+        or not isinstance(record_lanes, list)
+        or any(not isinstance(name, str) for name in record_lanes)
+        or len(set(record_lanes)) != len(record_lanes)
+    ):
+        raise RuntimeError(error)
+    if set(record_lanes) != {
+        name for name, entries in planning["lanes"].items() if isinstance(entries, list)
+    }:
+        raise RuntimeError(error)
+    serialized_records = [json.dumps(row, ensure_ascii=False, separators=(",", ":")) for row in records]
+    sizes = [len(row.encode()) for row in serialized_records]
+    expanded_bytes = len(json.dumps(planning, ensure_ascii=False, separators=(",", ":")).encode())
+    for name in record_lanes:
+        indices = planning["lanes"].get(name)
+        if not isinstance(indices, list) or any(
+            type(index) is not int or not 0 <= index < len(records) for index in indices
+        ):
+            raise RuntimeError(error)
+        expanded_bytes += sum(sizes[index] - len(str(index)) for index in indices)
+    if expanded_bytes > MAX_LOCAL_SNAPSHOT_BYTES:
+        raise RuntimeError("TypeScript quota planning expanded response is oversized")
+    lanes = dict(planning["lanes"])
+    for name in record_lanes:
+        # Inline JSON used to give each occurrence an independent mutable record.
+        lanes[name] = [json.loads(serialized_records[index]) for index in lanes[name]]
+    return {**planning, "lanes": lanes}
+
+
 def project_quota_planning(
     value: dict[str, Any], *, all_open_items: list[dict[str, Any]],
     source_open_count: Any, agent_identity: dict[str, Any] | None,
@@ -117,8 +158,8 @@ def project_quota_planning(
         return [encode(item) for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
 
     try:
-        result = effect_runtime_result("todo.quota_planning.project", {
-            "schema_version": "todo_quota_planning_request_v3",
+        wire = effect_runtime_result("todo.quota_planning.project", {
+            "schema_version": "todo_quota_planning_request_v4",
             "current_time": observed_now.isoformat(),
             "frontier_deadline": value.get("frontier_deadline"),
             "route_items": build_todo_route_continuation_facts(value, handoff_gates=handoff_gates),
@@ -145,6 +186,7 @@ def project_quota_planning(
         })
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None
+    result = _decode_quota_planning_wire(wire)
     if not isinstance(result, dict) or result.get("schema_version") != "todo_quota_planning_v0":
         raise RuntimeError("TypeScript Todo quota planning shape mismatch")
     if not isinstance(result.get("lanes"), dict) or not isinstance(result["lanes"].get("gate_items"), list):

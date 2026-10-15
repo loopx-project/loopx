@@ -49,6 +49,8 @@ LOCAL_SNAPSHOT_METHODS = frozenset({
     "goal.checkpoint_read_context.commit",
     "goal.checkpoint_read_context.inspect_replay",
     "performance_diagnosis.inspect",
+    "state.recovery.archive.verify",
+    "state.recovery.manifest.verify",
 })
 MAX_STARTUP_DIAGNOSTIC_BYTES = 8 * 1024
 STARTUP_LOCK_TIMEOUT_SECONDS = 15.0
@@ -447,7 +449,7 @@ def _start_lock_holder_pid(path: Path) -> int | None:
     return value if value > 0 else None
 
 
-def _read_info(path: Path, *, fingerprint: str) -> dict[str, Any] | None:
+def _read_info(path: Path, *, fingerprint: str | None) -> dict[str, Any] | None:
     for attempt in range(RUNTIME_LOCATOR_PERMISSION_RETRIES + 1):
         try:
             raw = path.read_text(encoding="utf-8")
@@ -474,7 +476,11 @@ def _read_info(path: Path, *, fingerprint: str) -> dict[str, Any] | None:
         return None
     if (
         payload.get("schema_version") != EFFECT_RUNTIME_INFO_SCHEMA_VERSION
-        or payload.get("fingerprint") != fingerprint
+        or (fingerprint is not None and payload.get("fingerprint") != fingerprint)
+        or (fingerprint is None and (
+            not isinstance(payload.get("fingerprint"), str)
+            or not BARE_SHA256_PATTERN.fullmatch(payload["fingerprint"])
+        ))
         or payload.get("host") != "127.0.0.1"
         or not isinstance(payload.get("port"), int)
         or not isinstance(payload.get("token"), str)
@@ -587,17 +593,35 @@ def _locator_retirement_pending(info_path: Path) -> bool:
         return True
 
 
-def restart_effect_runtime(*, timeout: float = 5.0) -> dict[str, Any]:
+def restart_effect_runtime(*, timeout: float = 5.0, wait_for_exit: bool = False) -> dict[str, Any]:
     """Stop the managed runtime serving this source revision.
 
     The replacement runtime resolves Node from the PATH of the next request, so
     this is the operator action after installing a qualified Node: a runtime
-    started earlier keeps its own Node until it exits.
+    started earlier keeps its own Node until it exits. ``wait_for_exit`` is for
+    disposable namespace owners: serving retirement alone permits a delayed
+    exit-time cache write, whereas filesystem cleanup requires observed exit.
     """
 
     fingerprint = _runtime_fingerprint()
     info_path = _runtime_info_path(fingerprint)
     info = _read_info(info_path, fingerprint=fingerprint)
+    return _stop_effect_runtime(info_path, info, timeout=timeout, wait_for_process_exit=wait_for_exit)
+
+
+def _stop_effect_runtime(
+    info_path: Path,
+    info: Mapping[str, Any] | None,
+    *,
+    timeout: float,
+    wait_for_process_exit: bool = False,
+) -> dict[str, Any]:
+    """Transport shutdown for a validated locator, optionally awaiting OS exit.
+
+    Operator restart keeps its existing serving-locator turnover semantics.
+    An isolated fixture instead needs the original process to stop writing
+    before deleting its namespace. TS still owns admission, drain and retirement.
+    """
     identity = runtime_identity_from_info(info)
     if info is None:
         return {
@@ -629,6 +653,27 @@ def restart_effect_runtime(*, timeout: float = 5.0) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     stopped = False
     while time.monotonic() < deadline:
+        if wait_for_process_exit:
+            if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+                break
+            _reap_exited_runtime_child(info)
+            if not _pid_is_alive(pid):
+                stopped = True
+                break
+            if os.name == "posix":
+                # A non-child zombie cannot write, but kill(pid, 0) still sees
+                # it. Managed runtimes start in their own session/process group.
+                from ..extensions.process_runtime import _posix_owned_group_has_exited
+                try:
+                    stopped = _posix_owned_group_has_exited(
+                        pid, max(.001, deadline - time.monotonic()),
+                    )
+                except (OSError, subprocess.TimeoutExpired, UnicodeError, RuntimeError):
+                    stopped = False
+                if stopped:
+                    break
+            time.sleep(.05)
+            continue
         published, published_token = _serving_token(info_path)
         if published and published_token is not None and published_token != serving_token:
             stopped = True

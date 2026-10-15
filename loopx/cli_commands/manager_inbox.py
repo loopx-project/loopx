@@ -29,6 +29,7 @@ def register_manager_inbox(subparsers, add_format):
             "link",
             "report",
             "status",
+            "control",
             "configure-read-scope",
             "configure-delivery-scope",
             "configure-ssh-read-scope",
@@ -53,6 +54,12 @@ def register_manager_inbox(subparsers, add_format):
     parser.add_argument("--brief-file", help="For request: collaboration_brief_v0 JSON file.")
     parser.add_argument("--parent-request-id", help="For request: an inbox request received by the sender.")
     parser.add_argument("--goal-id")
+    parser.add_argument("--goal-instance-id", help="Exact source Goal instance for request control.")
+    parser.add_argument("--control-operation", choices=("inspect", "revise", "cancel", "recover"),
+                        help="For control: inspect, correct, cancel or recover this original request.")
+    parser.add_argument("--control-file", help="For control: bounded JSON operation parameters; no source or effect facts.")
+    parser.add_argument("--request-revision", type=int, help="For acknowledge/report: the supplied request revision; omitted means original revision 1.")
+    parser.add_argument("--request-digest", help="For acknowledge: the supplied request revision digest.")
     parser.add_argument("--agent-id", help="Agent identity; for delivery grants, omit to cover all current/future Agents in --goal-id.")
     parser.add_argument("--channel-id")
     parser.add_argument("--ssh-host")
@@ -81,6 +88,41 @@ def register_manager_inbox(subparsers, add_format):
 
 def handle_manager_inbox(args, registry_path, runtime_root):
     try:
+        if args.manager_inbox_action != "control" and any(getattr(args, key, None) is not None for key in ("control_operation", "control_file", "goal_instance_id")):
+            raise ValueError("request control routing flags require the control action")
+        if getattr(args, "request_revision", None) is not None and args.manager_inbox_action not in {"acknowledge", "report"}:
+            raise ValueError("--request-revision is only supported for acknowledge/report")
+        if getattr(args, "request_digest", None) is not None and args.manager_inbox_action != "acknowledge":
+            raise ValueError("--request-digest is only supported for acknowledge")
+        if args.manager_inbox_action == "control":
+            from ..control_plane.collaboration.request_amendment import control_request
+            from ..control_plane.goals.goal_ref_validation import exact_goal_ref
+
+            if not args.goal_instance_id or not args.request_id or not args.control_operation:
+                raise ValueError("control requires --goal-instance-id, --request-id and --control-operation")
+            receiver = args.peer_agent_id or args.agent_id
+            if not receiver:
+                raise ValueError("control requires the original receiver in --peer-agent-id")
+            parameters = {}
+            if args.control_file:
+                with Path(args.control_file).open("rb") as stream:
+                    raw = stream.read(128_001)
+                if len(raw) > 128_000:
+                    raise ValueError("request control parameters are too large")
+                parameters = json.loads(raw)
+                if not isinstance(parameters, dict) or "operation_id" in parameters:
+                    raise ValueError("control parameters must be an object; use --operation-id for retry identity")
+            if args.control_operation in {"revise", "cancel"}:
+                parameters["operation_id"] = args.operation_id
+            from ..capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
+
+            result = control_request(registry_path=registry_path, runtime_root=runtime_root,
+                replan_configuration_reader=resolve_todo_replan_cadence_goal,
+                goal_ref=exact_goal_ref(args.goal_id, args.goal_instance_id), receiver_agent_id=receiver,
+                request_id=args.request_id, actor_agent_id=args.agent_id, operation=args.control_operation,
+                parameters=parameters, execute=args.execute)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if result["ok"] else 1
         local_delivery_scope = getattr(args, "local_delivery_scope", None)
         sender_id = getattr(args, "sender_id", None)
         if args.manager_inbox_action != "configure-delivery-scope" and (local_delivery_scope is not None or sender_id is not None):
@@ -198,6 +240,11 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 "with manager-inbox link. Return audience-ready results with manager-inbox report "
                 "--phase conclusion --reply-text; use --phase decision for meaningful interim news."
             )
+            if any(item.get("request_revision") is not None for item in result.get("items", [])):
+                result["followthrough"] += (
+                    " When request_revision is supplied, acknowledge with --request-revision and --request-digest, "
+                    "and report with --request-revision. Omitted revision stays bound to original revision 1."
+                )
         elif args.manager_inbox_action == "report":
             from ..capabilities.manager_context.roundtrip import report
 
@@ -210,6 +257,7 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 args.reply_text or "",
                 update_id=getattr(args, "update_id", None),
                 attachment_refs=getattr(args, "attachment_ref", None),
+                request_revision=getattr(args, "request_revision", None),
                 workspace=Path.cwd(),
                 registry=registry_path,
             )
@@ -250,6 +298,8 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 args.decision or "",
                 args.reason or "",
                 registry=registry_path,
+                request_revision=getattr(args, "request_revision", None),
+                request_revision_digest=getattr(args, "request_digest", None),
             )
     except (OSError, ValueError) as exc:
         result = {"ok": False, "error": str(exc)}

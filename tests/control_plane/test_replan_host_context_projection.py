@@ -239,6 +239,11 @@ def test_replan_guidance_survives_cli_and_host_compaction_without_new_authority(
     assert "probe that distinguishes remaining explanations" in guidance[4]
     assert "scope negative results to tested conditions and local proxies to their coverage" in guidance[4]
     assert "Reuse still-applicable evidence" in guidance[4]
+    assert "Correct within the affected work first" in guidance[4]
+    assert "goal, path, dependency or acceptance evidence" in guidance[4]
+    assert "A due review can retain the path" in guidance[4]
+    assert "subsequent work and authoritative outcomes" in guidance[4]
+    assert "neither adoption nor improvement" in guidance[4]
     compact = compact_quota_should_run_cli_payload(source)
     envelope = build_turn_envelope(source)
     for packet in (compact, envelope):
@@ -253,12 +258,14 @@ def test_replan_guidance_survives_cli_and_host_compaction_without_new_authority(
     assert turn_envelope_action_signature_document(envelope) == signature
     signature["replan_action_packet"].pop("planning_guidance")
     assert signature == quota_action_signature_document(baseline)
-    # Preserve an existing budget warning. The original three clauses consume
-    # 670 bytes; objective/evidence guidance adds about 660 bytes. Retain all
-    # decision obligations with bounded headroom instead of compressing them.
+    # Preserve the existing 8 KiB envelope warning, including the already-large
+    # vision fixture. The five advice clauses now cost 1,772 bytes on both
+    # fixtures (363 text bytes added for local correction/followthrough). This is a
+    # bounded advice allocation, not permission to truncate authority or raise
+    # the envelope/transport/compute budget.
     assert envelope["compaction"]["within_budget"] == old_envelope["compaction"]["within_budget"]
     assert (envelope["compaction"]["envelope_json_bytes"]
-            - old_envelope["compaction"]["envelope_json_bytes"]) <= 1500
+            - old_envelope["compaction"]["envelope_json_bytes"]) <= 1800
     envelope["replan_action_packet"].pop("planning_guidance")
     assert envelope["replan_action_packet"] == old_envelope["replan_action_packet"]
 

@@ -413,6 +413,13 @@ Todo owns the bounded postcondition. Replan owns direction change. A stride
 controller may recommend split, merge, continue, settle, or escalate, but it
 must not close a Todo, fabricate evidence, or clear a replan obligation.
 
+The [wake/context/correction chain](agent-session-execution-modes-v0.md#wake-current-context-and-correction-form-one-chain)
+keeps prompt prose subordinate to these owners. Local correction preserves
+unaffected work; widening requires relevant current evidence. A due review may
+retain the path, and later work/outcome readback qualifies correction benefit.
+Heartbeat templates no longer add independent two-stall replan/self-pause rules.
+This does not remove Core stall triggers or change configured review cadence.
+
 Research goals may also consume the typed frontier defined by the Research
 Exploration RFC. A composition experiment can be one delivery slice; the
 stride model does not create another research graph.
@@ -425,6 +432,13 @@ dashboards, and scheduler projections may recommend intervention but cannot
 silently convert a proposal into authority.
 
 ### 7.5 Long-running work and decision checkpoints (proposed refinement)
+
+Pause and wake eligibility precede this observation loop. Follow the
+[session pause/resume boundary](agent-session-execution-modes-v0.md#pause-resume-and-automatic-dispatch-boundaries):
+explicit stops disarm continuation; dependency waits retain bounded observation;
+validated no-follow-up ends polling. A result event or scheduler timer cannot
+clear a stop, and a pre-pause admission cannot survive resume. Qualify actual
+request/timer readback separately from prompt guidance and in-flight settlement.
 
 This 2026-10-04 refinement is a proposal for M3/M5, not shipped adaptive
 scheduling. It separates an **experiment boundary**, a **model decision
@@ -605,6 +619,16 @@ with invented evidence. The field never qualifies execution, scientific novelty,
 utility, effective-Turn counts or acceptance; these remain independent checks.
 No new scheduler, selection rule, quota debit or per-result settlement is added.
 
+The history reader covers both legacy Todo-bound decisions and autonomous
+replan decisions. For an autonomous decision, the recorded Goal, Agent, Turn,
+obligation, settlement identity and accepted acknowledgement must agree; the
+derived decision reference includes that obligation instead of inventing a
+Todo. The existing settlement owner defines the binding, while the Python
+codec only transports its facts. Enabled reviews therefore receive the prior
+decision through the same `previous_review` requirement. Feature-off context
+and legacy decision references remain unchanged. This repairs feedback
+delivery; execution quality and goal benefit still require separate evidence.
+
 #### An iterative strategy and engineering boundary
 
 The first strategy is **model-guided, evidence-conditioned work planning**.
@@ -671,6 +695,25 @@ but its novelty does not establish that it addresses the remaining gap. Local or
 synthetic improvement needs applicable transfer evidence; repeated identical
 outcomes are not new information. Prefer the smallest coverage that resolves the
 choice to another broad sweep, while preserving relevant failure evidence.
+
+Before a local check vetoes further work, identify its source and the goal it
+protects. Original constraints and frozen study criteria retain their authority.
+An agent-proposed candidate heuristic may be revised prospectively with an
+explicit rationale and retained counterevidence; the previous failed result
+stays failed. Compare incumbent behavior under the same relevant control and
+measure or bound the discrepancy's effect on the goal, reusing applicable
+evidence before spending on a finite diagnosis. Readiness for an authorized
+informative evaluation differs from evidence sufficient to replace the
+incumbent. Both decisions retain budget, feedback and permission limits and
+account for full marginal and opportunity cost.
+
+| Evidence at the decision | Appropriate interpretation |
+|---|---|
+| An output violates the task interface or uses forbidden information | Preserve the constraint and repair or reject; heuristic revision cannot waive it. |
+| A candidate misses an agent-chosen numerical tolerance, with task impact unknown | Compare the incumbent and task impact; declare any prospective replacement criterion. Do not claim either safety or harm from the threshold alone. |
+| A frozen comparison criterion fails | Retain that verdict; a revised experiment is separately declared, not a retroactive pass. |
+| A valid candidate regresses on the authoritative objective | Preserve the incumbent and scoped regression, even if local proxies improve. |
+| A synthetic probe improves | Transfer remains unknown; weigh an eligible informative evaluation against its cost, without automatic submission or adoption. |
 
 These questions guide existing axis plans/reasons and `next_probe`; they add no
 decision field, settlement gate, automatic pivot, family ban or strategy version.
@@ -873,6 +916,14 @@ reauthentication remains with the existing owner. Full research state means the
 declared participants needed to resume useful work, not a copy of every file or
 the model's unobservable internal state.
 
+The optional POSIX heartbeat CLI entry now disables only its worker process's
+soft core-dump limit before launching the native Host and tools. It preserves
+the hard limit, parent launcher and feature-off behavior. Existing declared
+files are still captured exactly; diagnostic retention or relocation is an
+explicit operator action, never a filename filter in the artifact owner.
+This prevents one source of later snapshot growth, but neither qualifies the
+capture deadline for arbitrary inputs nor provides process-memory recovery.
+
 Historical conversation truncation cannot reconstruct earlier code, research
 state or feedback consumption from their terminal versions. Without a qualified
 contemporaneous capture of those participants, such a probe establishes Host
@@ -891,8 +942,19 @@ checks the session's actual workspace and current source binding/profile, and re
 probe. A later source Turn in the read-to-probe gap is rejected; the artifact
 owner's witness checks cover subsequent writes. It seals rollout/index/paged
 stores and verifies native forks at fixed guest paths. These source-basis checks
-are qualified separately from research utility. An explicit source-checkout
-controller now prepares a verified fork through the existing registry/session
+are qualified separately from research utility.
+
+Both completed-wake and interrupted-replan benchmark capture reuse the existing
+native inspection process across the two full reads and keep it open through
+artifact sealing or controller handoff. Native shutdown can checkpoint SQLite;
+closing it between the byte probe and sealing can invalidate the source witness.
+This changes inspection lifetime only: history pagination, cursor/profile
+freshness, byte witnesses, optional activation and the original capture/phase
+deadlines remain unchanged. Reduced preflight cost does not establish sustained
+capture reliability for growing histories or qualify a later receiver point.
+
+An explicit source-checkout controller now prepares a verified fork through the
+existing registry/session
 owners, with distinct registered Goal/Agent identities and a matching captured
 session profile. The registry fence guards configuration through the binding write;
 existing lifetime semantics remain. The lifecycle-only source-session profile
@@ -951,6 +1013,22 @@ resume prevents publication. This closes the manual provider's file-writer
 barrier gap only. No process memory, native cursor eligibility, external writers,
 automatic pre-decision handoff or isolated continuation are qualified by it.
 
+The automatic supervisor keeps the prepared deadline for the live-source
+barrier and native capture. After successful source release it seals only its
+private exported files under the captured original Host phase deadline, which
+also bounds typed artifact publication. Later source work cannot enter that
+point. This separates source hold time from final sealing; it grants no trial
+time, cooldown or opportunities. Direct callers retain their total timeout.
+
+Warm continuation preserves its captured remaining phase by default. An
+explicit operator-authorized phase extension defines a new study condition,
+bound to its first destination activation and included in recovery identity.
+Recovery cannot change that grant or restart its clock. The extension changes
+neither native cooldown nor accepted round limits, history or scoring. A matched
+strategy comparison declares the same extension on both arms and reports the
+shared prefix separately; it is not a matched-total-budget comparison with the
+original source. See the warm-entry options below for activation and rollback.
+
 The ordinary SForge worker's explicit warm entry composes these
 owners. It uses a fresh current preparation Todo with full retained evidence,
 then requires an accepted current replan before restoring the normal cadence.
@@ -959,6 +1037,41 @@ current preparation/replan, candidate work and released native feedback using
 real native processes and deterministic local inference. Scientific utility,
 actual task/profile admission and the frontend journey remain unqualified.
 See the [warm entry contract](../../../benchmark/README.md#explicit-warm-worker-composition-qualification-in-progress).
+
+The [generic research checkpoint entry](../../reference/research-checkpoint.md)
+now composes the existing artifact, session and Todo/Explore owners for ordinary
+Goals. Codex storage and fork IO live in its Host provider; benchmark adapters
+call inward and add evaluator/budget participants. Capture and adoption are
+separate explicit operations. This CLI/Host stage does not complete the packaged
+frontend or disaster-replacement acceptance.
+
+File coverage and knowledge adoption are separate acceptance dimensions. An
+integrity-verified archive proves its declared roots, not the availability of
+every candidate, data file or report mentioned in native history. The SForge
+receiver now offers explicit selection of captured research components outside
+the workspace, with fresh data destinations and post-copy byte/mode verification.
+Source capture still requires explicit roots; neither path inference nor later
+salvage completes an earlier point. Validate a retained experiment requiring
+those files before claiming usable research-state continuity. Existing points,
+active runs, default workspace-only restoration, budgets and feedback are
+unchanged. This closes a provider transport omission; automatic dependency
+coverage and the generic frontend remain open.
+
+Retaining historical research files alone does not deliver them to a current
+typed review. Explicit warm-context adoption now seeds the fresh Goal's Explore
+knowledge log from the verified source, preserving scoped findings, counterevidence
+and topology with checkpoint/event provenance. The existing result-log owner
+guards ordered-prefix recovery; newer destination evidence is never overwritten.
+Historical research-observation execution lineage remains inert in the archive.
+The synthetic joined receiver exercises a current review citing a retained
+counterexample. Scientific continuation still needs actual first/next review
+readback and prior-decision followthrough; importing facts cannot certify model
+judgment or revive source decision authority. An empty destination projection
+cannot establish that retained research is absent. The strategy's
+existing three-axis guidance now asks for a discriminating observation, checks
+that an intervention actually changes relevant behavior, and distinguishes
+non-execution from failed transfer or limited route potential. These questions
+guide judgment; they neither force a route switch nor certify research benefit.
 
 A native fresh registration is not restored admission. In the controlled native
 Docker qualification, one of twelve source submissions was consumed and its
@@ -1076,6 +1189,21 @@ obligation itself remains ineligible; a subsequent genuinely new node can be
 captured. Retry, restart and a lost admission response preserve the original
 source-root/digest binding. This is a machine-enforced capture barrier, not
 additional execution or budget authority.
+
+A replayed guard can expose the next replan while the current Turn still owes
+its original Todo closeout. The checkpoint selector validates that original
+settlement identity and releases the response without capture or interruption;
+it must not treat the visible next obligation as this Turn's admitted capture
+boundary. The later properly bound replan remains eligible. The Unix transport
+and typed-owner regression cover this distinction; successful restoration alone
+still does not qualify an end-to-end research continuation.
+
+The same boundary covers the replan owner's `settlement_only` follow-through:
+recording a successor, writing its required vision or spending the original
+receipt does not admit another capture. Selection verifies the original
+settlement identity and semantic obligation, then releases the exact response
+without native interruption. The existing settlement owner still decides the
+remaining step; capture neither performs it nor grants a fresh work budget.
 
 Completed pre-model points now retain the original pending guard as a sealed
 participant, as interrupted points already do. The pending packet is read as

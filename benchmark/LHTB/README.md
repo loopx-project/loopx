@@ -122,8 +122,11 @@ benchmark scoring or hidden-verifier feedback is introduced.
 `LOOPX_TASK_ENTRY=seeded-todo` retains the former generic phase Todo entry.
 Omitting this setting now selects `loopx-planned` for LoopX modes and invokes
 the product planning checkpoint before
-heartbeat, Turn or LoopX Goal execution. `LOOPX_PLANNING_TIMEOUT_SEC` defaults
-to 300 and consumes the existing phase budget. Both entry policies preserve
+heartbeat, Turn or LoopX Goal execution. Planning and execution share the
+`scheduler_timeout_sec` phase budget; there is no separate planning cap. Remove
+legacy `--planning-timeout` arguments and non-null `planning_timeout_sec`
+settings. The worker uses `LOOPX_PHASE_DEADLINE_EPOCH`; legacy
+`LOOPX_PLANNING_TIMEOUT_SEC` values are rejected. Both entry policies preserve
 existing waits when new phases arrive. See the shared runtime for session and
 planning-readback semantics.
 

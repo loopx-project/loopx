@@ -2,7 +2,7 @@
 
 - **RFC status:** Accepted
 - **Supersedes / closes:** none
-- **Delivery maturity:** Proposal; backup creation and configuration-only isolated recovery exist, complete state verification and reactivation do not
+- **Delivery maturity:** Partial: bounded M1 full-archive verification and inert File/SQLite inspection implemented; controlled reactivation remains open
 - **Authors / owners:** Control-plane state, reliability, and affected domain maintainers
 - **Created:** 2026-10-08
 - **Last normative revision:** 2026-10-08
@@ -23,6 +23,24 @@ implementation slices, not live recovery, provider promotion, credential
 transfer, or a default change.
 
 ## 1. Decision summary
+
+### Current implementation checkpoint
+
+The bounded M1 path now has additive `backup-state verify`, loopback HTTP upload
+and immutable report readback, and a packaged Settings/Capability Center journey.
+It verifies real producer archives and reads captured configuration plus selected
+File/SQLite Todo/history through existing owners after original sources become
+unavailable. Every v0 audit remains held for incomplete capture/owner metadata;
+unknown state is not relabeled recoverable, and execution authority is always
+false. Limits, rollback and reproduction are in the [backup guide](../../reference/configuration-backup.md#inspect-a-complete-backup-without-activating-it).
+Reports retain measured archive/regular-file bytes and archive-processing and
+owner-read durations; historical readback does not retime them. The backup guide
+records individual native capacity cases, including exact member/history
+boundaries and 128 File/SQLite Goals. History overflow refuses publication.
+The Section 12 capacity-default decision is recorded; operational qualification
+remains partial for compound worst cases and broader platform/provider profiles.
+This checkpoint does not qualify M2/M3, live adoption, remote providers or the G1
+team journey. No original identity or receipt is rewritten.
 
 ### First supported user outcome
 
@@ -181,6 +199,55 @@ This RFC composes existing owners; it does not replace them:
 | [Effect Interpreter](agent-loop-effect-interpreter-v0.md) | Owns effect identity, settlement, unknown-outcome readback, and replay decisions. Recovery only routes original evidence to it. |
 | [Configuration backup](../../reference/configuration-backup.md) | Keeps configuration in an isolated checkpoint. Adoption continues through machine and Goal configuration owners. |
 
+### Backup inspection and research checkpoint reuse
+
+The merged [research checkpoint contract](../../reference/research-checkpoint.md)
+serves a distinct research branch with an independently admitted Goal/session.
+Complete-backup inspection serves an operator whose source may be unavailable.
+Neither format is an input to the other's verifier today. Both retain original
+owner authority; research branching may retain a live source, while disaster
+replacement must exclude old writers before admitting new work.
+
+| Boundary | Existing owner and reuse | Deliberate separation |
+| --- | --- | --- |
+| State inventory | `state_backup.build_state_backup_plan`; checkpoint `_loopx_state_components` already calls it for a scoped single Goal | Full archives can contain multiple Goals; checkpoint rejects incomplete or moving scoped inventory |
+| SQLite capture | Both creation paths use the existing `snapshotSqliteDatabase` owner | M1 reads captured databases offline; it must not snapshot an untrusted restored database into current authority |
+| Digests | Both typed owners reuse `canonicalAuthoritySha256` for structured identity; byte digests bind files | Archive/external/embedded manifests and checkpoint component witnesses have different schemas; digest equality is not cross-format compatibility |
+| Isolation and publication | Existing archive adapter plus typed recovery owner; checkpoint `checkpoint_artifacts.ts` owns its private staging and manifest verification | Untrusted tar links, headers and expansion require archive-specific checks; checkpoint directory capture rejects symlinks and checks source movement. Similar filesystem operations do not establish duplicate decision rules |
+| Historical readback | M1 uses canonical configuration/File/SQLite/Todo/history readers and immutable saved audits | Checkpoint uses revision-bound Todo context, Explore event codec and native session history; an M1 readability report is not an adoptable session |
+| Session, knowledge and work adoption | Existing Goal lifetime, Codex session, Todo continuation, Explore and effect owners | Checkpoint admission/adoption is explicit; M1 invokes none of it. Leases, quota, timers, credentials and effects remain historical |
+
+The bounded refactor assessment finds the shared inventory, snapshot and digest
+rules already reused. No new common restore service or format converter is
+needed for M1; merging the two extraction paths would obscure their different
+input checks. Python remains the archive/Host adapter; typed owners retain
+shared decisions. This assessment records source contracts, not a newly executed
+joint-recovery result.
+
+**M2 checkpoint:** extend the existing component/profile acceptance with explicit
+format/version, complete component inventory, captured owner revisions and
+capture boundary, and provider qualification. A future bridge must first verify
+these facts in isolation. Missing v0 facts stay unknown; never infer them from
+file timestamps or successful SQLite reads. Keep existing v0 historical readers.
+
+**M3 checkpoint:** only a qualified profile can proceed from isolated verification
+to current Goal/session admission, knowledge adoption and current work admission.
+Reuse the existing owners above; retain source digest, destination identity and
+operation identity across retries. A partial interruption requires original-owner
+readback/compensation, and an unknown external result requires reconciliation
+under its original identity. Branching does not certify exclusive replacement.
+No format bridge or automatic activation is shipped by M1.
+
+The existing M3 drill remains the joint acceptance: an ordinary Goal completes
+some work and leaves a Todo unfinished; after its source becomes unavailable,
+the packaged journey previews recovered/historical/unknown work, obtains owner
+admission, continues the unfinished work and independently checks its result.
+Include missing/corrupt components, version/provider refusal, capture movement,
+stale identity, retry and interrupted adoption; prove no old authority revival
+or private-data disclosure. This is M2/M3 evidence, not a new full-recovery M1
+prerequisite. M1's existing Settings entry reports readable tasks/history and
+holds; it cannot offer a working continuation action before those stages qualify.
+
 ## 4. Current-system contract
 
 At the named baseline, `loopx/state_backup.py` discovers the runtime root,
@@ -196,11 +263,11 @@ Other files and directories are traversed while the source may remain live.
 The command therefore has component-local SQLite snapshot semantics and
 best-effort file capture, not a cross-owner point-in-time guarantee.
 
-`loopx backup-state` supports plan and create. It does not verify an existing
-archive, safely materialize one, classify state owners, reconcile references,
-or reactivate a runtime. Current tests extract with the Python tar API, validate
-SQLite integrity and content, and verify publication/permission behavior. They
-do not establish a restore contract.
+At the design baseline, `loopx backup-state` supported plan/create only, and
+tests manually extracted archives. The current bounded M1 route in Section 1
+adds verified inert extraction and existing-owner readback through CLI and the
+packaged UI. It does not adopt identity, reconcile pending effects or reactivate
+a runtime; those later owner boundaries remain open.
 
 Configuration backup separately supports export, verify, and isolated restore.
 Its checkpoint is inert: it creates no live registry, provider selection,
@@ -665,7 +732,9 @@ The RFC pull request implements none of these runtime milestones.
 1. **M1 capacity defaults.** The backup/reliability maintainers must freeze
    archive, expansion, entry, graph, and verification-time defaults before M1
    merge. Recommendation: derive them from current backup-size telemetry and
-   fail closed with explicit overrides. This does not block the RFC.
+   fail closed with explicit overrides. This does not block the RFC. The
+   [recorded decision below](#m1-capacity-default-decision) freezes only the
+   existing local inert-inspection profile; broader qualification remains open.
 2. **Exact replacement continuity.** The Goal lifecycle and provider owners must
    decide before M3 whether any local disaster-recovery profile may retain a
    source `goal_instance_id`. Recommendation: mint a new lifetime unless the old
@@ -680,6 +749,48 @@ The RFC pull request implements none of these runtime milestones.
    claims support. M1 may report the platform as unqualified and stop before
    extraction.
 
+<a id="pending-m1-capacity-default-decision"></a>
+### M1 capacity-default decision
+
+**Status: approved for the existing local POSIX File/SQLite inert-inspection
+profile.** On 2026-10-15, maintainer @huangruiteng [approved the capacity
+proposal](https://github.com/loopx-project/loopx/pull/6279#issuecomment-6186241464) presented for revision
+`5751b050f616f156fa591aac5aa82627d8396fe0`. The limits below remain unchanged at
+`7f62b602019429c05a03254ab2f30a3fafa32c6e`. This closes only Section 12 item 1;
+it does not grant merge authority or approve compound maximum loads, a production
+SLO, another platform/provider, capture consistency, identity adoption or M2/M3
+reactivation. The same comment requests checkpoint reuse assessment, recorded
+in Section 3 below; that requirement is independent of the capacity consent.
+
+The archive adapter, typed audit owner and disposable worker enforce the
+current bounds; the [backup guide](../../reference/configuration-backup.md#measured-local-capacity-cases)
+retains the original source, environment, measurements and reproduction command.
+Those measurements are historical evidence, not measurements of a later merge.
+
+| Approved existing value for this profile | What it protects | Available evidence and limit of that evidence |
+| --- | --- | --- |
+| Archive 128 MiB; expanded tar stream and regular-file total 512 MiB; expansion ratio 2,000 | Bound compressed input, copying and decompression amplification before publication | Guide: near-limit native inputs and over-limit refusals. Ratio is source-enforced; an independent exact-ratio boundary measurement is not recorded. |
+| External and embedded manifest 16 MiB each; extended tar header 128 KiB each and 16 MiB cumulative; JSON depth 64 | Bound metadata decoding and traversal | Guide: external 16 MiB / one-byte-over cases; recovery tests reject oversized PAX variants and sparse records before decoding. Maximum structured metadata, cumulative-header and depth combinations remain unqualified. |
+| 20,000 members; paths at most 64 components / 1,024 characters / 255 UTF-8 bytes per component; link resolution at most 40 hops | Bound inventory/path work and reject ambiguous or escaping extraction | Guide: exact 20,000 / 20,001 members; recovery tests cover path, link, collision and occupied-target refusals. Exact limits for every path shape and maximum link chains are not measured. |
+| 128 Goals; 128 SQLite files; 20,000 committed transactions per Goal | Bound owner inventory and complete historical reads, without truncating history | Guide: native 128 / 129 inventories. `test_real_sqlite_history_limit_is_complete_and_overflow_refuses_publication` covers 20,000 / 20,001. This is not a guarantee that 128 maximum-history Goals fit the other bounds or deadline. |
+| At most 258 emitted components and 128 dependency links in the current audit shape | Bound this profile's graph through the above inventories | Derived from one configuration component, up to 128 database components, up to 128 Goal components each linked to configuration, and one unknown remainder. This is not a general graph limit or a complete mutable-owner inventory; generic graph profiles remain outside this proposal. |
+| Disposable owner verifier: 90 seconds; V8 old-space 512 MiB; SQLite process-wide heap at most 64 MiB | Contain database/owner inspection outside the shared daemon | Timeout cleanup and SQLite-view refusal tests exercise containment. Heap values are source-enforced; process-tree peak memory and worst-case timing are not qualified. The timeout is not an end-to-end archive-processing deadline or RTO. |
+| Existing transport limits: 64 MiB private snapshot only for the two manifest checks; normal RPC and worker input 2 MiB; owner stdout 2 Mi characters; saved-audit input 16 MiB | Bound exchanges and historical report decoding without widening ordinary transport | Large-manifest transport and audit-integrity tests cover the path. These independent limits are not additive capacity or proof that every maximum-size audit is publishable. |
+| Free destination space at least copied regular-file bytes plus 16 MiB before copying | Refuse a known-insufficient destination before publication | Source check plus failure-cleanup tests; concurrent disk consumption and a successful worst-case space reservation are not guaranteed. |
+
+Source owners: [`state_recovery_io.py`](../../../loopx/control_plane/state_recovery_io.py),
+[`state_recovery.ts`](../../../loopx/control_plane/state_recovery.ts), and
+[`state_recovery_worker.ts`](../../../loopx/control_plane/state_recovery_worker.ts).
+Existing [Python recovery cases](../../../tests/test_state_recovery.py) and
+[typed audit cases](../../../tests/control_plane_ts/state_recovery.test.ts)
+separate readability, rejection, cleanup and historical readback. No test count
+substitutes for the maintainer decision. Actual production backup-size telemetry
+and compound maximum-load qualification are not supplied by the synthetic guide.
+
+The approved values retain the evidence limits above. Readable copied state
+remains historical data: capacity consent cannot activate a Goal, confer a
+current Goal-basis writer, restore a lease or authorize pending-effect replay.
+
 ---
 
 ## Appendix A: Execution ledger (non-normative)
@@ -693,9 +804,10 @@ entries under `ledger/complete-state-recovery-v0/` following the
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
 | --- | --- | --- | --- | --- |
 | 2026-10-08 | Propose inert-first, owner-composed complete state recovery | RFC review through issue #5940 | Raw extraction, monolithic transaction, manual-only runbook | Initial document |
+| 2026-10-15 | Freeze unchanged M1 local POSIX File/SQLite inert-inspection capacities; reviewed proposal `5751b050f`, unchanged at `7f62b6020` | [@huangruiteng capacity consent](https://github.com/loopx-project/loopx/pull/6279#issuecomment-6186241464) | Raise limits, add overrides, or defer the local profile | §12.1; broader qualification and merge authority excluded |
 
-Design acceptance occurs only when the RFC pull request is merged. The row above
-records proposal history, not prior maintainer approval.
+The initial row records proposal history. The scoped capacity decision above
+does not qualify the remaining recovery milestones.
 
 ## Appendix C: Evidence registry
 

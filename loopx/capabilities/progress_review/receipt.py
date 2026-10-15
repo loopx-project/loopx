@@ -36,7 +36,12 @@ PROGRESS_REVIEW_NOUL_QUESTIONS: tuple[str, ...] = (
     "evidence_increment",
 )
 PROGRESS_REVIEW_SIGNAL_KEYS: tuple[str, ...] = ("noul", "choice")
-PROGRESS_REVIEW_SIGNAL_RULE_VERSION = "progress_review_signal_rule_v1"
+PROGRESS_REVIEW_SIGNAL_RULE_VERSION = "progress_review_signal_rule_v2"
+PROGRESS_REVIEW_LEGACY_SIGNAL_RULE_VERSION = "progress_review_signal_rule_v1"
+PROGRESS_REVIEW_SIGNAL_RULE_VERSIONS = (
+    PROGRESS_REVIEW_LEGACY_SIGNAL_RULE_VERSION,
+    PROGRESS_REVIEW_SIGNAL_RULE_VERSION,
+)
 PROGRESS_REVIEW_PENDING_REASON = "pending_evaluation"
 MAX_RECEIPT_BYTES = 65536
 MAX_LOADED_RECEIPTS = 256
@@ -103,6 +108,8 @@ def noul_drift_signal(
     serves_acceptance: float | None,
     evidence_increment: float | None,
     minimum: float,
+    *,
+    rule_version: str = PROGRESS_REVIEW_SIGNAL_RULE_VERSION,
 ) -> bool | None:
     """Drift when the delta neither serves acceptance nor adds goal evidence.
 
@@ -111,12 +118,19 @@ def noul_drift_signal(
     negative finding that serves acceptance or adds evidence is not.
     """
 
+    if rule_version not in PROGRESS_REVIEW_SIGNAL_RULE_VERSIONS:
+        raise ValueError("unsupported progress-review signal rule")
     if serves_acceptance is None or evidence_increment is None:
         return None
     ceiling = 1.0 - minimum
-    if serves_acceptance <= ceiling and evidence_increment <= ceiling:
+    drift = serves_acceptance <= ceiling and evidence_increment <= ceiling
+    not_drift = serves_acceptance >= minimum or evidence_increment >= minimum
+    # Historical v1 receipts retain their drift-first tie rule on replay.
+    if drift and not_drift and rule_version != PROGRESS_REVIEW_LEGACY_SIGNAL_RULE_VERSION:
+        return None
+    if drift:
         return True
-    if serves_acceptance >= minimum or evidence_increment >= minimum:
+    if not_drift:
         return False
     return None
 
@@ -134,6 +148,7 @@ def derive_drift_signals(
     *,
     threshold: float,
     status: str,
+    rule_version: str = PROGRESS_REVIEW_SIGNAL_RULE_VERSION,
 ) -> dict[str, bool | None]:
     """The only place the receipt boolean signals are defined."""
 
@@ -144,7 +159,8 @@ def derive_drift_signals(
     return {
         "noul": (
             noul_drift_signal(
-                noul.get("serves_acceptance"), noul.get("evidence_increment"), threshold
+                noul.get("serves_acceptance"), noul.get("evidence_increment"), threshold,
+                rule_version=rule_version,
             )
             if isinstance(noul, Mapping)
             else None
@@ -171,9 +187,10 @@ def normalize_progress_review_receipt(value: Any) -> dict[str, Any]:
         raise ValueError(
             f"receipt must use {PROGRESS_REVIEW_RECEIPT_SCHEMA_VERSION}"
         )
-    if value.get("signal_rule_version") != PROGRESS_REVIEW_SIGNAL_RULE_VERSION:
+    rule_version = value.get("signal_rule_version")
+    if rule_version not in PROGRESS_REVIEW_SIGNAL_RULE_VERSIONS:
         raise ValueError(
-            f"receipt must use {PROGRESS_REVIEW_SIGNAL_RULE_VERSION}"
+            f"receipt must use one of {PROGRESS_REVIEW_SIGNAL_RULE_VERSIONS}"
         )
     status = _text(value.get("status"), field="status")
     reason = _text(value.get("reason"), field="reason", required=False)
@@ -255,7 +272,8 @@ def normalize_progress_review_receipt(value: Any) -> dict[str, Any]:
     if threshold is None or threshold < 0.5:
         raise ValueError("receipt.label_probability_threshold must be at least 0.5")
     expected_signal = derive_drift_signals(
-        {"choice": choice, "noul": noul}, threshold=threshold, status=status
+        {"choice": choice, "noul": noul}, threshold=threshold, status=status,
+        rule_version=rule_version,
     )
     if drift_signal != expected_signal:
         raise ValueError("receipt.drift_signal disagrees with its typed judgments")
@@ -289,7 +307,7 @@ def normalize_progress_review_receipt(value: Any) -> dict[str, Any]:
         "run": run,
         "status": status,
         "reason": reason,
-        "signal_rule_version": PROGRESS_REVIEW_SIGNAL_RULE_VERSION,
+        "signal_rule_version": rule_version,
         "question_version": _text(value.get("question_version"), field="question_version"),
         "model": _text(value.get("model"), field="model"),
         "judgments": {"choice": choice, "noul": noul},

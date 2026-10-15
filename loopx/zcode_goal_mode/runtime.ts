@@ -4,8 +4,8 @@ import {readFile} from "node:fs/promises";
 import {durableWriteJson} from "../control_plane/effect_runtime_io.ts";
 import {BARE_SHA256_PATTERN} from "../control_plane/content_digest.ts";
 import type {JsonObject} from "../control_plane/effect_program.ts";
-import type {NativeObservation, NativeRequest, QuotaObservation, ZCodeModelSelection, ZCodeGoalAction, ZCodeGoalReadback} from "./contract.ts";
-import {sameBinding, ZCodeGoalError, safeFailure} from "./contract.ts";
+import type {GoalBasis, NativeObservation, NativeRequest, QuotaObservation, ZCodeModelSelection, ZCodeGoalAction, ZCodeGoalReadback} from "./contract.ts";
+import {isGoalBasis, sameBinding, sameGoalBasis, ZCodeGoalError, safeFailure} from "./contract.ts";
 
 export interface NativeHost {
   initialize(): Promise<unknown>;
@@ -27,7 +27,13 @@ export type BindingState = {
   objective_sha256: string;
   start_pending?: boolean;
   last_execution_error?: "zcode_native_execution_failed";
+  /** Basis the current native objective was set under. Absent for journals written before it was
+   * recorded or started without one; such a target cannot prove the current basis and refuses a plain
+   * resume until an explicit stop/start records the basis it delivers. */
+  goal_basis?: GoalBasis;
 };
+export const GOAL_BASIS_CHANGED = "goal_basis_changed";
+export const GOAL_BASIS_UNAVAILABLE = "goal_basis_unavailable";
 export type ControllerDependencies = {
   host: NativeHost;
   validate: (cleanupOnly?: boolean) => Promise<void>;
@@ -49,7 +55,8 @@ export async function readState(path: string): Promise<BindingState | null> {
       || (state.target_id !== null && (typeof state.target_id !== "string" || !state.target_id))
       || (state.last_execution_error !== undefined && state.last_execution_error !== "zcode_native_execution_failed")
       || (state.start_pending !== undefined && typeof state.start_pending !== "boolean")
-      || typeof state.objective_sha256 !== "string" || !BARE_SHA256_PATTERN.test(state.objective_sha256)) {
+      || typeof state.objective_sha256 !== "string" || !BARE_SHA256_PATTERN.test(state.objective_sha256)
+      || (state.goal_basis !== undefined && !isGoalBasis(state.goal_basis))) {
       throw new ZCodeGoalError("Unsupported ZCode binding; inspect or remove it before binding");
     }
     return state;
@@ -165,7 +172,7 @@ export class NativeGoalController {
     return true;
   }
 
-  async operate(action: ZCodeGoalAction, model?: ZCodeModelSelection, taskBody?: string): Promise<ZCodeGoalReadback> {
+  async operate(action: ZCodeGoalAction, model?: ZCodeModelSelection, taskBody?: string, goalBasis?: GoalBasis): Promise<ZCodeGoalReadback> {
     return this.exclusive(async () => {
       try {
         // Read-only status may show revocation; cleanup of this exact native session remains allowed.
@@ -208,6 +215,15 @@ export class NativeGoalController {
           if (!this.observed?.selected_model) {
             this.reason = "Select an available ZCode model before starting"; return this.readback(false);
           }
+          if (action === "resume") {
+            // A plain resume cannot re-deliver current requirements into the native conversation, so it
+            // must prove the objective was delivered under the current criterion/source basis. Without
+            // a recorded basis (a journal written before one existed) or a presented current basis
+            // there is no proof; the target stays paused until an explicit stop/start records the basis
+            // it delivers. Resume never backfills a basis it did not deliver.
+            if (!this.state.goal_basis || !goalBasis) { this.reason = GOAL_BASIS_UNAVAILABLE; return this.readback(false); }
+            if (!sameGoalBasis(this.state.goal_basis, goalBasis)) { this.reason = GOAL_BASIS_CHANGED; return this.readback(false); }
+          }
           const quota = await this.admission();
           if (!quota.should_run) {
             this.reason = quota.reason ?? "quota_denied";
@@ -220,6 +236,7 @@ export class NativeGoalController {
             if (!objective?.trim()) throw new ZCodeGoalError("A canonical LoopX task body is required");
             this.state.request.task_body = objective;
             this.state.objective_sha256 = objectiveDigest(objective);
+            if (goalBasis) this.state.goal_basis = goalBasis; else delete this.state.goal_basis;
             this.state.start_pending = true;
             await this.dependencies.persist(this.state);
             const next = await this.dependencies.host.setGoal(this.state.session_id, objective);
@@ -250,6 +267,7 @@ export class NativeGoalController {
           }
           this.state.start_pending = false;
           delete this.state.last_execution_error;
+          delete this.state.goal_basis;
           await this.dependencies.persist(this.state);
           this.reason = "user_stopped";
         }

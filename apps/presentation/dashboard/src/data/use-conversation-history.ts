@@ -28,6 +28,7 @@ export function useConversationHistory({ agentId, currentAgentId, channelId, goa
   const retryRead = useRef<(() => void) | null>(null);
   const retry = useCallback(() => retryRead.current?.(), []);
   const cached = useRef<{ scope: string; history: ChatHistory } | null>(null);
+  const refreshGeneration = useRef(0);
   const cachedHistory = (forScope: string) => cached.current?.scope === forScope ? cached.current.history : null;
   const params = useRef({ agentId, channelId, goalId, scope });
   params.current = { agentId, channelId, goalId, scope };
@@ -37,10 +38,11 @@ export function useConversationHistory({ agentId, currentAgentId, channelId, goa
   // conversation keeps a single history owner.
   const refresh = useCallback(async () => {
     const { agentId, channelId, goalId, scope } = params.current;
+    const generation = ++refreshGeneration.current;
     const loaded = await fetchChatHistory({ agentId, channelId, goalId });
     // The caller may still need its completed read, but a conversation that
     // was left while it waited no longer owns this hook's visible history.
-    if (params.current.scope !== scope) return loaded;
+    if (params.current.scope !== scope || generation !== refreshGeneration.current) return loaded;
     cached.current = { scope, history: loaded };
     setState({ scope, history: loaded, reading: false, failed: false });
     return loaded;
@@ -55,15 +57,19 @@ export function useConversationHistory({ agentId, currentAgentId, channelId, goa
       if (cancelled || reading) return;
       clearTimeout(retryTimer);
       reading = true;
+      const generation = refreshGeneration.current;
       const previous = cachedHistory(scope);
+      // A retry can start during a refresh but still carry the older cached snapshot.
+      const isCurrentRead = () => !cancelled && params.current.scope === scope
+        && generation === refreshGeneration.current && cachedHistory(scope) === previous;
       setState({ scope, history: previous, reading: true, failed: false });
       try {
         const loaded = await fetchChatHistory({ agentId, channelId, goalId }, previous ?? undefined);
-        if (cancelled || params.current.scope !== scope) return;
+        if (!isCurrentRead()) return;
         cached.current = { scope, history: loaded };
         setState({ scope, history: loaded, reading: false, failed: false });
       } catch {
-        if (cancelled || params.current.scope !== scope) return;
+        if (!isCurrentRead()) return;
         setState({ scope, history: cachedHistory(scope), reading: false, failed: true });
       } finally {
         reading = false;
@@ -78,6 +84,7 @@ export function useConversationHistory({ agentId, currentAgentId, channelId, goa
     void read();
     return () => {
       cancelled = true;
+      refreshGeneration.current += 1;
       clearTimeout(retryTimer);
       retryRead.current = null;
     };

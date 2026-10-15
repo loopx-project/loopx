@@ -12,6 +12,7 @@ from ...authority import validate_public_safe_text
 from ...file_lock import LockAcquireTimeoutError, exclusive_file_lock
 from ...runtime import validate_goal_id_path_segment
 from ..effect_runtime import EffectRuntimeConflict
+from ..quota.spend_commit import QuotaRunIndexConflict
 from ..effect_program import (
     SettlementStepKind,
     interpret_turn_result_packet,
@@ -65,6 +66,7 @@ from .settlement import (
     TurnSettlementJournalAdapter,
     execute_turn_driver_settlement,
     invoke_result_effect,
+    invoke_turn_effect,
     terminal_closeout_requirement,
     turn_settlement_failure_outcome,
     turn_settlement_outcome,
@@ -1162,6 +1164,20 @@ def _typed_settlement_stage(
             return invoke_result_effect(completion_writeback, result, effect_ref)
         return invoke_result_effect(writeback, result, effect_ref)
 
+    def spend_effect(effect_ref: str) -> Mapping[str, Any]:
+        try:
+            return invoke_turn_effect(spend, effect_ref)
+        except QuotaRunIndexConflict as exc:
+            # A failed run-index precondition proves this spend did not commit.
+            # Project it as a settlement rejection; ambiguous provider errors
+            # must remain prepared for readback and recovery.
+            return {
+                "ok": False,
+                "appended": False,
+                "reason": str(exc),
+                "reason_code": exc.reason_code,
+            }
+
     journal_adapter = TurnSettlementJournalAdapter(
         journal=journal,
         effects=effects,
@@ -1200,7 +1216,7 @@ def _typed_settlement_stage(
             else None
         ),
         writeback=writeback_effect,
-        spend=spend,
+        spend=spend_effect,
         checkpoint=journal_adapter.checkpoint,
         committed_effect_id=_journal_committed_effect_id(journal),
         terminal_closeout_required=terminal_closeout_required,

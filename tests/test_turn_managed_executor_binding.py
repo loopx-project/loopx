@@ -116,6 +116,7 @@ def test_owned_operation_transport_is_opt_in_and_read_back_by_the_existing_host_
     blocked = managed_executor_binding_from_host_args(options, environ={})
     assert blocked["available"] is False
     assert blocked["unavailable_reason"] == "operation_transport_profile_required"
+    assert blocked["unavailable_remediation"] == ["correct_execution_profile"]
     pinned = managed_executor_binding_from_host_args(
         [*options, "--codex-model", "test-model", "--codex-reasoning-effort", effort],
         environ={},
@@ -136,8 +137,69 @@ def test_operation_transport_never_disappears_or_falls_back_on_another_host(host
     )
     assert observed["available"] is False
     assert observed["unavailable_reason"] == "operation_transport_host_unsupported"
+    assert observed["executor"] == host
+    assert observed["unavailable_remediation"] == ["select_supported_operation_host"]
+    assert observed["operation_transport"]["supported_hosts"] == ["codex-cli"]
+    assert observed["operation_transport"]["supported_sandboxes"] == ["read-only", "workspace-write"]
     assert observed["operation_transport"]["configuration_valid"] is False
     assert observed["operation_transport"]["runtime_qualified"] is False
+
+
+def test_operation_transport_sandbox_refusal_is_not_a_model_or_credential_remedy():
+    binding = managed_executor_binding(
+        "codex-cli", environ={}, codex_operation_tools=True,
+        codex_sandbox="danger-full-access", model="test-model", reasoning_effort="high",
+    )
+    assert binding["available"] is False
+    assert binding["unavailable_reason"] == "operation_transport_sandbox_unsupported"
+    assert binding["unavailable_remediation"] == ["select_supported_operation_sandbox"]
+    payload = managed_executor_unavailable_payload(
+        {"managed_executor": binding}, execute=True, host_projection={"kind": "codex-cli"},
+    )
+    assert payload["remediation"] == binding["unavailable_remediation"]
+    assert payload["remediation_env_vars"] == []
+
+
+def test_configured_dsh_model_does_not_qualify_operation_transport_or_change_host():
+    kwargs = dict(
+        environ={"DEEPSEEK_API_KEY": "fixture-token"}, module_probe=_RUNTIME,
+        provider="deepseek-official", model="deepseek-flash", reasoning_effort="high",
+    )
+    ordinary = managed_executor_binding("dsh", **kwargs)
+    assert ordinary["available"] is True
+    assert "operation_transport" not in ordinary
+    blocked = managed_executor_binding("dsh", codex_operation_tools=True, **kwargs)
+    assert blocked["executor"] == ordinary["executor"] == "dsh"
+    assert blocked["execution_profile"] == ordinary["execution_profile"]
+    assert blocked["runtime_probe"] == ordinary["runtime_probe"]
+    assert blocked["unavailable_remediation"] == ["select_supported_operation_host"]
+    payload = managed_executor_unavailable_payload(
+        {"managed_executor": blocked}, execute=True, host_projection={"kind": "dsh"},
+    )
+    assert payload["status"] == "unavailable"
+    assert payload["host"] == {"kind": "dsh"}
+    assert payload["remediation_env_vars"] == []
+    assert "fixture-token" not in json.dumps([ordinary, blocked, payload])
+
+
+def test_explicit_dsh_native_transport_uses_resolved_profile_without_claiming_qualification():
+    kwargs = dict(
+        environ={"DEEPSEEK_API_KEY": "fixture-token"}, module_probe=_RUNTIME,
+        provider="deepseek-official", model="fixture-model", reasoning_effort="high",
+    )
+    ordinary = managed_executor_binding("dsh", **kwargs)
+    observed = managed_executor_binding("dsh", dsh_operation_module_configured=True, **kwargs)
+    assert "operation_transport" not in ordinary
+    assert observed["available"] is True
+    assert observed["execution_profile"] == ordinary["execution_profile"]
+    transport = observed["operation_transport"]
+    assert transport["kind"] == "owned_native_sdk"
+    assert transport["revision"] == "dsh-native-operation-tools-v0"
+    assert transport["configuration_valid"] is True
+    assert transport["runtime_qualified"] is False
+    assert transport["human_confirmation_required"] is True
+    assert transport["first_consumption_required"] is True
+    assert transport["source_conversation_is_executor"] is False
 
 
 def test_managed_executor_reports_the_operator_credential_and_endpoint():

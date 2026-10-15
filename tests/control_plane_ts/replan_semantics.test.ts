@@ -318,6 +318,9 @@ test("planning advice cannot discharge a replan or widen source-specific exits",
     assert.match(guidance[4], /Compare expected goal\/information gain with full marginal cost/);
     assert.match(guidance[4], /executed path and current artifact/);
     assert.match(guidance[4], /scope negative results to tested conditions/);
+    assert.match(guidance[4], /Correct within the affected work first/);
+    assert.match(guidance[4], /A due review can retain the path/);
+    assert.match(guidance[4], /neither adoption nor improvement/);
     const refusal = projectReplanSemantics({operation: "qualify", obligation: source,
       planning_guidance: projection.planning_guidance});
     assert.equal(refusal.accepted, false);

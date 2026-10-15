@@ -8,3 +8,16 @@
 .personal-collaboration ul { padding-left: 20px; }
 .personal-collaboration small { display: block; font-family: var(--font-mono); font-size: var(--text-caption); line-height: var(--leading-caption); }
 .personal-collaboration summary:focus-visible { outline: 2px solid var(--color-link, #0070f3); outline-offset: 2px; }
+.personal-request-control { border-top: 1px solid var(--pw-line); margin-top: 16px; padding-top: 12px; }
+.personal-request-control form, .personal-request-control label { display: grid; gap: 6px; }
+.personal-request-control form { gap: 12px; margin-top: 12px; }
+.personal-request-control input, .personal-request-control textarea { width: 100%; min-width: 0; box-sizing: border-box; }
+.personal-request-control textarea { min-height: 72px; resize: vertical; }
+.personal-request-control fieldset { min-width: 0; margin: 0; border: 0; padding: 0; }
+.personal-request-input { display: grid; gap: 8px; margin: 10px 0; padding-bottom: 10px; border-bottom: 1px solid var(--pw-line); }
+.personal-request-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.personal-request-help { color: var(--pw-muted); }
+.personal-request-control button { min-height: 44px; padding: 8px 12px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: var(--pw-card); color: inherit; cursor: pointer; }
+.personal-request-control button:disabled { opacity: .5; cursor: default; }
+.personal-request-control :is(button, input, textarea):focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
+.personal-request-control :is(input, textarea) { padding: 8px 10px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); font: inherit; }

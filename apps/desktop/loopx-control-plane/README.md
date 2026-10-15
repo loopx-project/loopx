@@ -114,6 +114,33 @@ the bundled runtime and then reconnects the same window automatically; it no
 longer requires a second App restart. Reloading the WebView cannot terminate
 the native startup supervisor.
 
+On macOS, loss of the workspace's WebContent process re-arms that same native
+navigation owner. It retains the current same-origin page, including SPA
+history, and retries every two seconds until WebKit commits the document.
+Recovery does not restart services or submit a task. Slow committed documents
+are allowed to finish; boot pages retain the framework's reload behavior.
+This changes post-crash navigation only; other platforms keep their existing
+handoff policy.
+
+The opt-in macOS regression uses a hidden incognito window, a synthetic local
+server and a separate App identifier. It terminates only that window's own
+WebContent process, simulates a temporary backend failure and a slow response,
+and requires automatic return to the original route without write requests:
+
+```sh
+uv run --extra test python scripts/desktop_runtime_bundle.py
+cd apps/desktop/loopx-control-plane/src-tauri
+cargo run --example webcontent_recovery
+# Negative control: framework-only reload is expected to exit 1.
+cargo run --example webcontent_recovery -- --baseline
+```
+
+It reads no Goals or accounts and never targets an installed LoopX process.
+The fault injector uses a private WebKit process-id getter only in this example;
+production recovery uses the public Tauri termination hook.
+This controlled regression does not establish long-duration reliability or
+identify the cause of a past uninstrumented incident.
+
 Legacy update/rollback journals are resolved against the running App before
 startup. An incomplete App installation retains its recovery state; runtime
 freshness must prevent a journal from silently downgrading a newer CLI.
@@ -277,6 +304,43 @@ cd ..
 ./scripts/dashboard.sh build
 npm run build
 ```
+
+On macOS, also qualify a released artifact using the opt-in checks below
+(run from `src-tauri`, replacing the paths with downloaded release artifacts).
+Keep the updater archive's `.sig` file beside it:
+
+```bash
+LOOPX_TEST_APP="/path/to/LoopX.app" cargo test --lib \
+  real_release_backup_restores_damage_and_rejects_tampering -- --ignored
+LOOPX_TEST_SIGNED_ARCHIVE="/path/to/LoopX.app.tar.gz" cargo test \
+  --test signed_bundle -- --ignored
+```
+
+The first check copies the signed App into temporary directories, then exercises
+the production restore path after removing its executable, a sealed runtime
+resource, or the entire target bundle. It also rejects a tampered backup before
+journaling or replacement and checks that the source artifact remains intact.
+The second verifies the updater archive with the shipped public key and rejects
+modified bytes. Neither check launches the App or writes to an installed App or
+user data. These qualify the native recovery and signature boundaries; they do
+not replace packaged UI checks of download failure, restart, or runtime handoff.
+
+### Recover An Interrupted App Update
+
+If replacement leaves the App incomplete and a backup is available, the update
+panel exposes **Restore previous version** directly. Restore it, then choose
+**Restart to finish**. This removes two navigation disclosures from the failure
+path; choosing a healthy installation's rollback remains under Advanced options.
+The native updater still verifies the backup before replacement. An unavailable
+or invalid backup reports its cause without recommending an unavailable runtime
+repair. Restoring the App does not overwrite a separately managed CLI.
+
+| Previous recovery panel | Direct recovery action |
+| --- | --- |
+| ![Recovery hidden in Advanced options](docs/recovery-before.png) | ![Restore action beside the incomplete-installation message](docs/recovery-after.png) |
+
+These packaged-panel captures use synthetic native status for presentation
+comparison; they do not certify an installed update or an executing task's recovery.
 
 `npm run build` produces the configured platform bundles under
 `src-tauri/target/release/bundle/`. The release workflow builds macOS `.dmg`

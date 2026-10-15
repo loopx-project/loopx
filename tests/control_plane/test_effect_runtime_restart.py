@@ -325,3 +325,28 @@ def test_unknown_locator_content_cannot_prove_a_stopped_runtime(
     assert effect_runtime._serving_token(locator) == (True, None)
     locator.unlink()
     assert effect_runtime._serving_token(locator) == (False, None)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX runtime session observation")
+@pytest.mark.parametrize("observation_error", [TimeoutError, RuntimeError, PermissionError])
+def test_namespace_restart_cannot_certify_failed_exit_observation(tmp_path, monkeypatch, observation_error):
+    from loopx.extensions import process_runtime
+
+    info = {"pid": 12345, "token": "serving"}
+    monkeypatch.setattr(effect_runtime, "_runtime_fingerprint", lambda: "fixture")
+    monkeypatch.setattr(effect_runtime, "_runtime_info_path", lambda _: tmp_path / "runtime.json")
+    monkeypatch.setattr(effect_runtime, "_read_info", lambda *_a, **_kw: info)
+    monkeypatch.setattr(effect_runtime, "_request_with_info", lambda *_a, **_kw: {})
+    monkeypatch.setattr(effect_runtime, "_serving_token", lambda _: (True, "replacement"))
+    monkeypatch.setattr(effect_runtime, "_pid_is_alive", lambda _: True)
+
+    def unavailable(pid, timeout):
+        assert pid == info["pid"]
+        raise observation_error("synthetic unavailable exit observation")
+
+    monkeypatch.setattr(process_runtime, "_posix_owned_group_has_exited", unavailable)
+    result = effect_runtime.restart_effect_runtime(wait_for_exit=True)
+    assert result["status"] == "shutdown_pending"
+    assert result["stopped"] is False
+    # Ordinary serving retirement retains its existing, non-destructive contract.
+    assert effect_runtime.restart_effect_runtime()["status"] == "stopped"

@@ -52,6 +52,11 @@ function candidate(
  * read instead of being hidden behind a newer Turn. Results are newest first
  * and carry at most one effective receipt per Turn, which is the same single
  * binding the caller's recovery decision may act on.
+ *
+ * On reentry, only Turns first recorded before the current Turn may be its
+ * prerequisites. Replays can change recency and upgrade an unbound receipt,
+ * but cannot make a later Turn a prerequisite of an earlier one. Turn ids and
+ * wall clocks are not an ordering authority.
  */
 export function selectCloseoutCandidates(
   receipts: readonly JsonObject[],
@@ -60,12 +65,15 @@ export function selectCloseoutCandidates(
   excludeTurnInstanceId: string | null,
 ): { candidates: PriorHostTurnCloseoutCandidate[]; turnsValidated: number } {
   const perTurn = new Map<string, HeartbeatReceiptFact[]>();
+  const firstRecorded = new Map<string, number>();
   for (const event of receipts) {
     const fact = heartbeatReceiptFactFromEvent(event);
     const turnInstanceId = fact.run_id;
-    if (!turnInstanceId || turnInstanceId === excludeTurnInstanceId) {
-      continue;
+    if (!turnInstanceId) continue;
+    if (!firstRecorded.has(turnInstanceId)) {
+      firstRecorded.set(turnInstanceId, firstRecorded.size);
     }
+    if (turnInstanceId === excludeTurnInstanceId) continue;
     const existing = perTurn.get(turnInstanceId);
     if (existing) {
       existing.push(fact);
@@ -80,6 +88,8 @@ export function selectCloseoutCandidates(
   }
 
   const candidates: PriorHostTurnCloseoutCandidate[] = [];
+  const currentPosition = excludeTurnInstanceId === null
+    ? undefined : firstRecorded.get(excludeTurnInstanceId);
   let validated = 0;
   for (const turnInstanceId of [...perTurn.keys()].reverse()) {
     const entries = (perTurn.get(turnInstanceId) ?? []).map((fact) => ({
@@ -89,6 +99,9 @@ export function selectCloseoutCandidates(
     const effective = selectEffectiveHeartbeatReceipt(goalId, agentId, entries);
     validated += 1;
     if (effective === null) continue;
+    // Validate identities even outside the causal candidate set: filtering
+    // must not conceal a conflicting persisted settlement binding.
+    if (currentPosition !== undefined && firstRecorded.get(turnInstanceId)! >= currentPosition) continue;
     // Closeout is opt-in on the persisted receipt, so older receipts from
     // before this contract cannot become new recovery obligations.
     if (!effective.closeout_required) continue;

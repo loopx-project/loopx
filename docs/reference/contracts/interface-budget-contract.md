@@ -51,14 +51,37 @@ for the richer generator packet; neither is the recurring Agent hot path.
 
 The heartbeat envelope ceiling covers the unbound and representative agent/scope-bound
 Codex App thin fixtures. Its 5,400-character JSON ceiling remains independent of
-the **3,000-character thin task body**, 4,000-character native Goal body,
+the **3,200-character thin task body**, 4,000-character native Goal body,
 structural limits, and emitted CLI ceilings. These are presentation regression
 budgets, not external host limits, token counts, execution quota, or permission.
+
+All scoped heartbeat envelope fixtures now measure that same shipped Agent
+projection, rather than generator diagnostics. On the unchanged two-scope fixture,
+the shared stop/readback clause changes Agent JSON from 3,182 to 3,299 characters;
+the 5,400 JSON ceiling stays unchanged. Separately, the compact
+scoped body grows from 7,086 to 7,213 normalized characters, including the fixed
+640-character Reward Memory allowance, exceeding its previous 7,140 limit.
+The compact base allowance becomes 6,700 (7,340 with that optional contract),
+preserving the exact heartbeat target, single attempt, verified result and
+unconfirmed-stop handling instead of deleting those obligations. The real thin CLI
+fixture with a supported 320-character scope grows from 2,992 to 3,109; its body
+ceiling becomes 3,200. Full/brief/native Goal body limits, key counts and execution
+budgets do not change. The broader full-scoped fixture already
+exceeded its limit before this repair and remains an overflow diagnostic.
+
+同一 scoped fixture 的 Agent JSON 从 3,182 增至 3,299 字符，仍沿用 5,400 上限；
+不再把生成器诊断误算为 Agent 输入。compact 正文从 7,086 增至 7,213（均含可选契约的
+640 字符余量），超过旧 7,140；基础展示预算仅从 6,500 调至 6,700，保留停止对象、
+单次尝试、结果确认与未确认处理。真实 thin CLI 的 320 字符范围输入从 2,992 增至 3,109，正文上限调至 3,200；
+full／brief／native Goal、字段数和执行预算不变；原已超限的 full
+大范围 fixture 仍如实报告超限。
+
 Do not abbreviate admission, continuation, scope, safety or settlement instructions
 solely to fit a historical character count, or copy dynamic quota decisions into
 the static prompt.
 
-The thin body ceiling rises from 2,500 to 3,000 to retain readable peer guidance.
+The earlier readable-peer qualification raised the thin body ceiling from 2,500
+to 3,000; those historical measurements follow.
 On the same real CLI fixture with a host scope and three runtime capabilities,
 latest main measured 2,515 normalized body characters, the earlier compressed
 PR measured 2,495, and readable guidance measures 2,632. With the supported
@@ -78,7 +101,67 @@ missing or altered authority wording, other surfaces, and subsequent edits after
 this block is in the base use the ordinary growth budget. Absolute emitted
 ceilings, line limits and semantic anchors remain enforced.
 
-thin 正文回归预算从 2,500 调至 3,000，保留完整的准入、接续与权限说明。同一真实
+The pause/correction qualification measures the same small/crowded/multi-Agent
+thin CLI fixtures at `a59aed703` as 3,070 JSON / 4,998 Markdown characters,
+the pause-only branch as 3,187 / 5,115, and the correction refinement as
+3,224 / 5,152; all remain 65 Markdown lines. The prior 5,100 Markdown ceiling
+already fails on pause-only instructions. Retain verified-stop and Core-owned
+correction clauses and raise only that human diagnostic ceiling to 5,250;
+the 3,400 JSON ceiling, body, line, key and execution budgets stay unchanged.
+The ordinary generated full body shrinks by 215 characters; compact/brief/thin
+grow by 88/46/37 on the matched public fixture. No second summary or model call
+is added. Replan advice gains 363 text bytes for local scope and outcome checks;
+its separate advice allocation becomes 1,800 bytes, preserving the 8 KiB envelope
+warning and any already-over-budget fixture instead of truncating requirements.
+
+暂停／纠偏的同一三场景 thin CLI 从 main 的 3,070／4,998 字符，经过暂停补丁的
+3,187／5,115，变为 3,224／5,152（JSON／Markdown）；Markdown 均为 65 行。
+仅人工诊断输出上限由 5,100 调至 5,250，机器 JSON／正文／行数／执行预算不变。
+重规划指导增加 363 字节，独立指导预算为 1,800；8 KiB 总包告警及原有超限仍保留。
+
+The same qualification also covers emitted `--compact` Markdown, independently
+of the task-body and thin-output limits. On the unchanged native mode fixture,
+base `3e611660a` emits 11,315 characters and the pause/correction head
+`84e00bac1` emits 11,530, failing the old 11,500 ceiling; both have 145 lines.
+The 215-character growth carries the current-heartbeat single stop attempt,
+confirmation and unresolved-stop handling, plus evidence-scoped correction and
+original settlement obligations. These clauses guide different decisions and
+are not removable duplicate diagnostics. Preserve the complete text and raise
+only this Markdown regression ceiling to 11,750, leaving 220 characters of
+headroom (the base had 185) for bounded wording variation. JSON grows from
+12,658 to 12,873 under the unchanged 13,500 ceiling; the 155-line cap, semantic
+anchors, fixture population, growth checks and execution limits remain intact.
+This qualifies readable output size, not installed host behavior or model adoption.
+
+The base/head differential independently detects the same instruction rollout:
+work-context text adds 208 characters (one receipt character may vary), optional
+replan advice adds 363, and thin/brief/compact heartbeat output adds 154/163/215.
+The existing probe records complete historical/current clauses and grants a
+one-time allowance only on their named carriers: 224 characters for context,
+384 for replan advice, or 224 for heartbeat text. Context and replan allowances
+combine only when both transitions are observed. JSON bytes/compact characters
+follow the same bounded allowance; line limits and absolute ceilings do not
+change. Missing or contradictory observations, already-upgraded bases, other
+surfaces and growth beyond the allowance retain ordinary failure behavior.
+This evidence does not qualify arbitrary future wording or runtime authority.
+
+同一资格化还须独立覆盖 `--compact` 的完整 Markdown 输出：不改原生 mode 夹具时，
+基线 `3e611660a` 为 11,315 字符，暂停／纠偏头 `84e00bac1` 为 11,530，
+确实超过旧 11,500 上限；两者均为 145 行。新增 215 字符承载当前心跳单次停止、
+结果确认、未确认处理、证据限定的局部纠偏及原结算义务，各自支持不同决定，
+不能作为重复诊断删除。保留全文，仅将该 Markdown 回归上限调至 11,750，
+留 220 字符余量供有界措辞变化（基线余量为 185）。JSON 从 12,658 增至
+12,873，仍遵守原 13,500 上限；155 行、语义锚点、夹具规模、增长检查和执行限制
+不变。这只资格化可读输出尺寸，不证明安装态行为或模型采纳。
+
+base/head 差异门独立测得工作上下文增加 208 字符（回执可能差 1 字符）、可选
+replan 指引增加 363、thin/brief/compact 输出增加 154/163/215。既有 probe
+记录完整的新旧条款，仅在对应输出表面首次迁移时分别允许 224、384 或 224 字符；
+上下文与 replan 余量只有同时观察到两项迁移才相加。字节及 compact JSON 使用同一
+有界余量，行数和绝对上限不变。缺失／矛盾观察、已升级基线、其他表面或超额增长
+仍失败；这不资格化未来任意措辞，也不改变运行时权限。
+
+此前 thin 正文回归预算从 2,500 调至 3,000，保留完整的准入、接续与权限说明。同一真实
 CLI、host scope 和三项 runtime 能力下，最新 main／此前压缩版本／清晰版本分别为
 2,515／2,495／2,632 字符；320 字符 scope 时为 2,805／2,785／2,922，新预算余量
 78 字符。单 peer 与双 peer 结果相同。计量只替换 Goal 与 state 路径，不缩短身份、

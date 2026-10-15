@@ -110,12 +110,14 @@ loopx-jev drift configure --state-dir "$OBSERVER" --mode shadow
 
 模型只收到操作者 basis 中的 `objective`、`acceptance`、`non_goals`、`horizon`、`evidence`、`already_known` 字段和限定材料。Goal 身份、样例名称与实验记账不会进入请求；有测试固定“只有 `goal_id` 不同的两份 basis 生成字节相同的请求”。
 
-每次请求问两道 Choice（`relation`、`increment`）和三道 Noul。`behavior_change` 问 delta 是否改变可观察的运行行为；`serves_acceptance` 与 `evidence_increment` 针对**前后检查点之间的变化**而不是 after 状态整体：是否实现、验证或作为前置服务于一条 before 检查点尚未满足的验收条件，以及是否新增关于某条验收条件的可核对证据。漂移布尔值由规则 `progress_review_signal_rule_v1` 按标签阈值 `t` 推导；核心会从类型化判断重新计算并拒绝布尔值不一致的回执：
+每次请求问两道 Choice（`relation`、`increment`）和三道 Noul。`behavior_change` 问 delta 是否改变可观察的运行行为；`serves_acceptance` 与 `evidence_increment` 针对**前后检查点之间的变化**而不是 after 状态整体：是否实现、验证或作为前置服务于一条 before 检查点尚未满足的验收条件，以及是否新增关于某条验收条件的可核对证据。漂移布尔值由规则 `progress_review_signal_rule_v2` 按标签阈值 `t` 推导；核心会从类型化判断重新计算并拒绝布尔值不一致的回执。若下面两种 `noul` 判别条件同时成立，信号为 null：
 
 | 信号 | 判为漂移 | 判为非漂移 | 其余 |
 | --- | --- | --- | --- |
 | `noul` | `P(serves_acceptance) ≤ 1−t` 且 `P(evidence_increment) ≤ 1−t` | 任一概率 `≥ t` | null |
 | `choice` | `relation = off_goal` 且 `increment = no_new_evidence` | `on_goal`、`necessary_prerequisite` 或 `new_evidence` | null |
+
+当 `t=0.5`、两个概率都不超过0.5且至少一个等于0.5时，判别条件重叠；v2 输出 null，不能据此形成新的 `noul` 重规划义务。默认阈值0.6的判别语义和 `choice` 规则不变。历史 `progress_review_signal_rule_v1` 回执仍按原先“先判漂移”的规则读取，不改写文件，也不自动撤销其既有政策效果。只支持v1的旧核心会拒绝v2回执；共享运行时的读取端须先升级。
 
 `behavior_change` 只记录、不参与判定：一个无关的行为变化仍是漂移；服务验收或新增目标证据的文档、负结果不是漂移。落在 `(1−t, t)` 内的 Noul 概率视为未决；没有任何已决答案的评估记为 `abstained`。`abstained`、`failed`、`not_evaluated`、`stale` 事件的回执信号全为 null。
 

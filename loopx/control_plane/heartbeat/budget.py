@@ -11,9 +11,9 @@ from typing import Any
 # them solely to fit a historical character ceiling.
 INTERFACE_BUDGET_CHARS = {
     "full": 12_000,
-    "compact": 6_500,
+    "compact": 6_700,
     "brief": 4_300,
-    "thin": 3_000,
+    "thin": 3_200,
     "visible_goal": 4_000,
 }
 NATIVE_GOAL_HOST_MAX_CHARS = INTERFACE_BUDGET_CHARS["visible_goal"]

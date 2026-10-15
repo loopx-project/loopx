@@ -1579,3 +1579,85 @@ test("host-bound Pi authority rejects agent and capability rebinding before leas
   assert.equal(tamperedResult.error_code, "authority_mismatch")
   assert.equal(calls.length, 0)
 })
+
+test("hard pause stays disarmed across idle events until explicit resume and fresh admission", async () => {
+  const fixture = harness({ should_run: false, scheduler_hint: { action: "stop_until_explicit_resume" } })
+  fixture.loop.bind("paused", fixture.services)
+  await fixture.activate("paused")
+  await fixture.loop.settle("paused")
+  fixture.setDecision({ should_run: true, scheduler_hint: { action: "run_now" } })
+  for (let i = 0; i < 3; i++) await fixture.loop.settle("paused")
+  assert.equal(fixture.calls.quota, 1)
+  assert.equal(fixture.calls.send, 0)
+  assert.equal(fixture.scheduled.length, 0)
+  await fixture.loop.resume("paused")
+  await fixture.loop.settle("paused")
+  assert.equal(fixture.calls.quota, 2)
+  assert.equal(fixture.calls.send, 1)
+})
+
+test("pause then resume fences the pre-pause quota result", async () => {
+  let release
+  let started
+  const ready = new Promise(resolve => { started = resolve })
+  const fixture = harness(() => { started(); return new Promise(resolve => { release = resolve }) })
+  fixture.loop.bind("race", fixture.services)
+  await fixture.activate("race")
+  const pending = fixture.loop.settle("race")
+  await ready
+  await fixture.loop.interrupt("race")
+  await fixture.loop.resume("race")
+  release({ should_run: true, scheduler_hint: { action: "run_now" } })
+  await pending
+  assert.equal(fixture.calls.send, 0)
+  fixture.setDecision({ should_run: true, scheduler_hint: { action: "run_now" } })
+  await fixture.loop.settle("race")
+  assert.equal(fixture.calls.send, 1)
+})
+
+test("scheduler run_now never overrides denied admission", async () => {
+  const fixture = harness({ should_run: false, scheduler_hint: { action: "run_now" } })
+  fixture.loop.bind("denied", fixture.services)
+  await fixture.activate("denied")
+  await fixture.loop.settle("denied")
+  assert.equal(fixture.calls.send, 0)
+})
+
+test("cancelled timer cannot steal the replacement wake after explicit resume", async () => {
+  const fixture = harness(backoffDecision())
+  fixture.loop.bind("timer", fixture.services)
+  await fixture.activate("timer")
+  await fixture.loop.settle("timer")
+  const oldTimer = fixture.scheduled.at(-1)
+  await fixture.loop.interrupt("timer")
+  await fixture.loop.resume("timer")
+  await fixture.loop.settle("timer")
+  const replacement = fixture.scheduled.at(-1)
+  const probes = fixture.calls.quota
+  await oldTimer.callback()
+  assert.equal(fixture.calls.quota, probes)
+  fixture.setDecision({ should_run: true, scheduler_hint: { action: "run_now" } })
+  await replacement.callback()
+  assert.equal(fixture.calls.send, 1)
+})
+
+test("file-backed Core pause survives a new loop instance and resume rechecks admission", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-pause-"))
+  try {
+    const store = createBindingStore(root)
+    const first = harness({ should_run: false, scheduler_hint: { action: "stop_until_explicit_resume" } })
+    first.loop.bind("durable", { ...first.services, store })
+    await first.activate("durable")
+    await first.loop.settle("durable")
+    first.loop.dispose()
+    const second = harness({ should_run: true, scheduler_hint: { action: "run_now" } })
+    second.loop.bind("durable", { ...second.services, store: createBindingStore(root) })
+    await second.loop.settle("durable")
+    assert.equal(second.calls.quota, 0)
+    await second.loop.resume("durable")
+    await second.loop.settle("durable")
+    assert.equal(second.calls.quota, 1)
+    assert.equal(second.calls.send, 1)
+    second.loop.dispose()
+  } finally { await fs.rm(root, { recursive: true, force: true }) }
+})

@@ -170,18 +170,36 @@ Changes to the classifier or workflow need both code-path and documentation-only
 qualification. Keep required check names stable and never require a
 workflow-level path-filtered check that cannot report on every PR.
 
+Cancelled `main` push workflows skip the runner-backed `checks`, `pytest`,
+`stage2c-correctness-e2e` and `merge-gate` aggregates. Previously their job-level
+`always()` conditions kept requesting runners after cancellation. The guard
+uses GitHub's [`cancelled()` status](https://docs.github.com/en/actions/reference/workflows-and-actions/expressions#status-check-functions)
+only for push events: an uncancelled main run still aggregates failed upstream
+work, and PR, nightly, manual and merge-group gate conditions retain their
+existing behavior. Evidence-upload steps keep `always()`. A cancelled main
+cohort is incomplete qualification, never a successful full run; this change
+does not reserve capacity or establish a release-priority guarantee.
+
+已取消的 `main` push 工作流跳过需申请 runner 的 `checks`、`pytest`、
+`stage2c-correctness-e2e` 和 `merge-gate` 汇总；此前 job 级 `always()` 在取消后
+仍会申请 runner。新条件仅对 push 事件检查 `cancelled()`：未取消的主干运行仍汇总
+上游失败，PR、夜间、手动和合并队列的门禁条件保留原行为。证据上传步骤继续使用
+`always()`。已取消主干候选仍是未完成资格，不能报告全量成功；本改动不预留容量，
+也不保证发布优先级。
+
 Closing or merging a PR retires its outstanding Python qualification. A PR
 number keeps the same concurrency lane when the merged close event changes
 `github.ref` to the base branch. Closed events skip classification and the final
 gate; open PRs retain the same required jobs and cancellation failures.
 
-A trusted `pull_request_target` cleanup handles closed and synchronize events.
-Closed events cancel remaining runs
-of this workflow, using job-local `actions: write` without checking out PR code.
+A trusted `pull_request_target` cleanup in **CI Maintenance** handles closed and
+synchronize events. Closed events cancel remaining runs of Python Tests, using
+job-local `actions: write` without checking out PR code.
 It verifies the current closed PR, source repository/branch and close time;
-it preserves reopened PRs, another open PR on that branch, newer runs and
-foreign repositories. A missing run-to-PR association requires the exact closed
-head. After ordinary cancellation, it uses GitHub's force-cancel endpoint for
+it preserves reopened PRs, another open PR on that branch, newer runs at a
+different head and foreign repositories. Delayed runs at the exact closed head
+can be retired even when created after close. A missing run-to-PR association
+requires the exact closed head. After ordinary cancellation, it uses GitHub's force-cancel endpoint for
 nonterminal `always()` aggregates. Before either cancellation stage it rereads
 both the target PR and open PRs sharing its source branch; a new sibling or
 unavailable lookup prevents the effect. A fresh retry can resume after the
@@ -191,9 +209,11 @@ providing a GitHub shared-pool priority guarantee.
 
 PR 关闭或合并后，以 PR 编号维持原并发 lane，关闭事件跳过分类与最终门；开放
 PR 的必需检查及取消失败规则不变。来自目标分支的可信 `pull_request_target`
-清理任务处理 closed 与 synchronize 事件（更新规则见下方共享分片说明），仅自身持有 `actions: write`，不检出 PR 代码。它核验当前关闭
-状态、源仓库/分支与关闭时间，保留重开的 PR、同源分支上的其他开放 PR、更新
-运行及其他仓库；缺少 PR 关联时只处理确切关闭 head。普通取消后仍未结束的
+CI Maintenance 清理任务处理 closed 与 synchronize 事件（更新规则见下方共享分片说明），
+仅自身持有 `actions: write`，不检出 PR 代码。它核验当前关闭
+状态、源仓库/分支与关闭时间，保留重开的 PR、同源分支上的其他开放 PR、不同 head 的更新
+运行及其他仓库；确切关闭 head 的延迟运行即使在关闭后创建也可清理，缺少 PR 关联时
+同样只处理确切关闭 head。普通取消后仍未结束的
 `always()` 汇总使用强制取消 API。普通及强制取消前都重读目标 PR 和同源分支的
 开放 PR；新出现的共享分支 PR 或读取失败会阻止副作用，分支不再共享后可重新
 触发清理。清理需要一个短 runner 任务；这会释放过期
@@ -385,6 +405,42 @@ Effect 后台进程；相同源码指纹可能让源码环境与已安装版本�
 演练进程。进程隔离不消除整机资源竞争：耗时对照顺序运行，发现竞争则保留失败与
 回执、作废受污染耗时并重新采样；超时不能当作服务端已停止，也不能因此重复恢复。
 恢复成功不证明并发管理操作公平性或自然时间 soak 已合格。
+
+The Effect server drains admitted handlers before retiring. With compilation
+caching enabled, its final synchronous cache flush has a one-second allowance,
+supervised by a worker in the same process. Healthy completion still persists
+the real Node cache before removing the locator. A blocked/failed flush or
+unavailable supervisor instead performs the same fenced, identity-checked
+locator cleanup and forcefully exits the already settled process, bypassing
+Node's automatic cache flush at exit. This may discard optional cache entries;
+it never authorizes abandoning an admitted effect. Cache-disabled execution
+uses ordinary cleanup without a worker. The allowance does not bound locator
+lock/storage waits or OS scheduling. Native platform qualification remains
+separate from injected-failure coverage; V8 CPU samples do not measure kernel IO.
+
+Effect 服务先排空已接纳的 handler，再退出。启用编译缓存时，同进程 worker
+监督最终同步写盘，给缓存一秒处理时间；正常完成仍先持久化真实 Node 缓存，
+再清理定位文件。写盘阻塞、失败或监督 worker 不可用时，复用同一锁和精确身份
+校验清理定位文件，然后强制终止已结算的进程，绕过 Node 退出时的自动缓存写盘。
+这可能丢弃可选缓存条目，不允许放弃已接纳的业务操作。关闭缓存时无需 worker，
+继续普通清理。一秒额度不涵盖定位文件锁、存储等待或操作系统调度；故障注入不能
+代替原生平台资格验证，V8 CPU 样本也不测量内核 IO。
+
+Smoke cleanup owns every valid runtime locator in its newly created private
+temporary namespace, including runtimes loaded by temporary base checkouts.
+It uses the existing authenticated shutdown protocol, then observes actual
+process exit before deleting the namespace; serving-locator turnover alone
+does not establish that Node has finished its exit-time cache writes. Namespace
+and locator symlinks are not followed. A cleanup failure retains the fixture
+and reports a failed check with the original command output. Operator restart
+keeps its existing serving-handoff semantics. This fixture repair does not
+qualify native intermittent failures or sustained operation.
+
+Smoke 清理覆盖新建私有临时目录中所有合法 runtime locator，包括临时基线 checkout
+启动的进程。它复用既有认证 shutdown，等实际进程退出后再删目录；定位文件退休不代表
+Node 的退出缓存写入已经结束。清理不跟随 namespace 或 locator 符号链接；无法证明
+退出时保留 fixture，以失败结果报告并保留原命令输出。操作员 restart 仍沿用既有服务
+交接语义；该 fixture 修复不认证原生间歇故障或持续运行。
 
 Keep a deterministic, public-safe production-scale fixture beside the focused
 cases. Its envelope should cover realistic role/status distributions,
@@ -629,7 +685,7 @@ network latency, provider availability, or a two-hour matrix.
 它刻意不包含真实模型调用和 full smoke catalog，因此普通迭代不依赖凭证、网络
 时延、模型服务可用性或两小时级测试矩阵。
 
-The Linux suite uses four hosted runners with two xdist workers each.
+The Linux suite uses six hosted runners with two xdist workers each.
 `pytest-split` partitions the complete collection using `least_duration`;
 without a timing file, tests have equal weight and alternate between shards.
 Lint, type checks, and the CLI budget run separately. The required `pytest`
@@ -644,13 +700,28 @@ the xdist controller. Read the downloaded log with
 `node scripts/ci/pytest_timing.ts JOB_LOG`; incomplete evidence remains incomplete
 and does not replace JUnit, coverage or the required gate. See the
 [timing observation boundary](ci-impact-selection.md#four-complete-python-shards).
+Full Python shards also opt into `--ci-stall-after 120` on the existing pytest
+observer: a long-running test attempts to print its executing thread's Python stack without
+terminating it or changing its result. This cooperative diagnostic needs the
+interpreter to schedule its observer thread; it does not diagnose native code
+that holds the GIL indefinitely. The dump is diagnostic evidence, not proof that the last named test
+caused a stall. Reproduce with `-p scripts.ci.pytest_timing --ci-stall-after 120`; omit
+`--ci-stall-after` or set it to `0` to keep this default-off diagnostic disabled. This grants no authority to
+inspect other processes. Large text-boundary fixtures use short parameter IDs
+so verbose progress records their cases without printing the payload.
+Each triggered snapshot uses an isolated same-interpreter writer with a 100ms
+self-exit deadline, plus a 500ms parent communication timeout with kill/reap.
+This bounds pipe backpressure without changing shared stderr flags or leaving
+a persistently blocked writer after pytest exits; native process startup can add latency.
+Snapshots may be dropped on IO failure or backpressure. Default `0` starts no
+observer timer or writer process; pytest's own results and reports remain authoritative.
 The reusable Sonar workflow consumes that same run's XML and never reruns
 pytest or reads cross-run artifacts. Missing Sonar tokens still skip analysis
 successfully; test jobs receive no Sonar secret. The trigger is the union of
 the former Python and Sonar paths. Client-only PRs use the exemption above;
 Sonar-configuration changes remain full, including on forks without a token.
 
-Linux 全套测试分到四台 hosted runner，每台保留两个 xdist worker。`pytest-split`
+Linux 全套测试分到六台 hosted runner，每台保留两个 xdist worker。`pytest-split`
 按完整 collection 分片；没有历史耗时时，等权测试交替分配。lint、类型检查和 CLI
 预算独立执行。必需的 `pytest` 汇总检查会拒绝失败／跳过的分片和缺失的 coverage，
 合并后再执行原有 19.6% 门槛；不要求单个分片达到全套覆盖率。coverage 使用相对路径，
@@ -660,52 +731,73 @@ CI 同时在 xdist controller 流式记录 pytest 原生 phase 耗时。下载�
 `node scripts/ci/pytest_timing.ts JOB_LOG` 回读；不完整证据保持不完整，不能替代
 JUnit、coverage 或必过门禁。归属与测量边界见
 [分片耗时记录](ci-impact-selection.md#four-complete-python-shards)。
+全量 Python 分片在既有 pytest observer 上显式启用 `--ci-stall-after 120`：测试
+超过该时长就尝试输出其执行线程的 Python 栈，不终止测试或改变结果。此协作式诊断
+需要解释器调度观察线程，无法诊断始终占有 GIL 的原生代码。栈用于诊断，不能只凭
+最后一个测试名认定卡顿根因。本地加 `-p scripts.ci.pytest_timing --ci-stall-after 120`
+复现，省略此参数或设为 `0` 可保持默认关闭；它不授予检查其他进程的权限。大文本边界 fixture 使用简短参数 ID，详细进度保留用例身份，
+不打印整个载荷。
+每次触发栈输出时，使用同解释器的隔离 writer，100ms 自行退出；父进程另设
+500ms 通信期限，超时则终止并回收。管道背压不会改变共享 stderr 标志或留下
+持续阻塞的 writer；原生进程启动仍可能增加延迟。IO 失败或背压时可丢弃栈输出。
+默认 `0` 不启动观察 timer 或 writer 进程；pytest 原生结果和报告仍是权威。
 Sonar 只复用同一次 run 的 XML，不重复测试、不跨 run 取产物。缺少 token 仍成功跳过
 Sonar，测试 job 不接收 Sonar secret。触发范围取原有两套 workflow 的并集；纯前端
 PR 使用前述豁免，Sonar 配置变更仍全量运行，包括没有 token 的 fork。
 
-Full Python shards share four repository-wide job concurrency groups, one per
+Full Python shards share six repository-wide job concurrency groups, one per
 `matrix.shard`, across PR, main, merge-queue and manual runs carrying this
-workflow version. Each group admits one running job and uses `queue: max`
+workflow version. Shards wait for `checks`; ordinary PRs enter only after it
+succeeds. Non-PR runs still collect Python diagnostics after failed checks when
+classification and the source bundle succeeded and the workflow is not cancelled.
+Skipped required shards remain a qualification failure. This avoids long-test
+work for known-red PRs but adds serial latency when capacity is idle; see the
+[admission tradeoff](ci-impact-selection.md#six-complete-python-shards).
+Each group admits one running job and uses `queue: max`
 to retain up to 100 pending jobs instead of replacing another current
 candidate. Workflow-level cancellation requests retirement of the same PR's
 obsolete head. Trusted base-branch cleanup on `synchronize` also retires its
 remaining obsolete runs, including `always()` aggregates that survive ordinary
-cancellation. It requires the event's current head, exact PR association, source
-repository and branch, and rechecks the current head before ordinary and force
+cancellation. It requires the event's current head, source repository and branch,
+plus either an exact PR association or the exact webhook `before` head with
+`after` and event source identity matching the current PR. It rechecks the current head before ordinary and force
 cancellation. It preserves another open PR sharing that branch. Current-head
-runs, unassociated open-PR runs and ordinary required gate predicates remain
+runs, other unassociated open-PR runs and ordinary required gate predicates remain
 unchanged: cancelled, skipped or incomplete dependencies cannot become a green
 aggregate. This adds one short trusted cleanup job per update without checkout,
 PR-code execution or new permissions on qualification jobs. Older workflow
 versions on the base branch retain only closed-event cleanup. Queue overflow, cancellation and missing coverage remain failures of
-the required gate; collection, four partitions, two workers, reports and the
+the required gate; collection, six partitions, two workers, reports and the
 coverage floor stay unchanged. Contributors can wait longer for a shard during
-overlapping full runs. This limits long-shard occupancy to four runners; it
+overlapping full runs. This limits long-shard occupancy to six runners; it
 does not reserve release capacity or prioritize releases over other jobs or
 repositories in the organization's shared hosted pool. Older workflow versions
 do not participate. Roll back by removing this job-level concurrency block,
 retaining workflow-level cancellation and the required gate. See GitHub's
 [concurrency queue contract](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
 
-全量 Python 分片按 `matrix.shard` 共用四个仓库级 job concurrency 组，适用于
-携带本版 workflow 的 PR、main、merge queue 和手动运行。每组允许一个运行中 job，
+全量 Python 分片按 `matrix.shard` 共用六个仓库级 job concurrency 组，适用于
+携带本版 workflow 的 PR、main、merge queue 和手动运行。分片先等待 `checks`，
+普通 PR 仅在其成功后进入队列；非 PR 在分类、源码构建成功且未取消时仍保留失败后
+的完整 Python 诊断。必需分片跳过仍判失败。此规则减少已知失败 PR 的长测试占用，
+但会增加空闲队列中的串行延迟。每组允许一个运行中 job，
 用 `queue: max` 保留至多 100 个等待 job，不替换其他有效候选。workflow 级取消
 请求清退同 PR 的旧 head；可信 base 分支的 `synchronize` 清理还会取消遗留
 旧 run，包括普通取消后仍继续的 `always()` 汇总。清理要求事件中的当前 head、
-精确 PR 关联、源仓库和分支，在普通及强制取消前重新读取 head；同分支另一 open
-PR、当前 head 和无关联 run 均被保护。必过汇总条件不变，取消、跳过或缺失依赖
+源仓库和分支，以及精确 PR 关联，或 `after` 和事件来源均匹配当前 PR 时的确切
+webhook `before` head；普通及强制取消前重新读取 head。同分支另一 open PR、
+当前 head 和其他无关联 run 均被保护。必过汇总条件不变，取消、跳过或缺失依赖
 不能变绿。每次更新增加一个短清理 job，不 checkout 或执行 PR 代码，不增加普通
 验证 job 的权限；base 分支旧版 workflow 仍只清理 closed 事件。队列溢出、取消
 和缺失 coverage 仍不能通过必需检查。
-完整 collection、四分片、双 worker、报告和覆盖率门槛保持不变；重叠的全量运行
-会增加贡献者等待分片的时间。此限制只把长分片占用约束到四台 runner，不预留发布
+完整 collection、六分片、双 worker、报告和覆盖率门槛保持不变；重叠的全量运行
+会增加贡献者等待分片的时间。此限制只把长分片占用约束到六台 runner，不预留发布
 容量，也不保证发布优先于组织共享 hosted 池中的其他 job 或仓库。旧版 workflow
 不参与该限制。回退时移除此 job 的 concurrency 块，保留 workflow 级取消和必需
 检查；队列行为遵循上述 GitHub 官方契约。
 
-Reproduce one shard locally with `uv run --extra test python -m pytest -v -n 2 --splits 4 --group 1
---splitting-algorithm least_duration --cov=loopx`. Omit the split arguments to
+Reproduce one shard locally with `uv run --extra test python -m pytest -v -n 2 --splits 6 --group 1
+--splitting-algorithm least_duration -p scripts.ci.pytest_timing --ci-stall-after 120 --cov=loopx`. Omit the split arguments to
 run the complete suite locally. 全量本地测试仍省略分片参数即可。
 
 ## Smokes And Canary / Smoke 与 Canary

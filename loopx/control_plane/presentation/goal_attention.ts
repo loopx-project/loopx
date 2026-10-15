@@ -3,6 +3,36 @@
 import type {JsonObject} from "../effect_program.ts";
 import {requireInteger, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {projectDecisionNotice} from "./decision_notice.ts";
+import {hasGoalFailureStatus} from "./goal_failure_status.ts";
+
+/** Rebuild a stale read model from a successful current-state read. Historical
+ * failures and owner gates are not cache drift and cannot be cleared here.
+ * This changes no Run, Todo, lease, settlement or execution authority. */
+export function reconcileGoalAttention(input: JsonObject): JsonObject {
+  const item = requireJsonObject(input.item, "item");
+  const goalId = requireNonEmptyString(item.goal_id, "item.goal_id");
+  const warning = input.warning == null ? null : requireJsonObject(input.warning, "warning");
+  const current = input.active_state_item == null ? null
+    : requireJsonObject(input.active_state_item, "active_state_item");
+  const run = input.historical_run == null ? null : requireJsonObject(input.historical_run, "historical_run");
+  const outcome = run?.delivery_outcome;
+  const progress = outcome === "outcome_progress" || outcome === "primary_goal_outcome";
+  const refresh = item.status === "state_refreshed"
+    && (outcome == null || outcome === "surface_only" || progress);
+  if (warning?.requires_refresh_state !== true || current === null
+      || hasGoalFailureStatus([item.status, run?.classification, run?.lifecycle_phase])
+      || current.goal_id !== goalId || current.source !== "active_state"
+      || !["active_state_agent_todo", "active_state_user_todo", "active_state_user_gate"].includes(String(current.status))
+      || (item.source !== "active_state" && (item.source !== "latest_run"
+        || (!progress && !refresh) || item.severity === "high"
+        || item.waiting_on === "controller" || item.waiting_on === "user_or_controller"))) {
+    return {item, warning};
+  }
+  return {
+    item: {...item, ...current},
+    warning: null,
+  };
+}
 
 export function projectGoalAttention(input: JsonObject): {
   items: JsonObject[]; coverage: {known: number; included: number; omitted: number};

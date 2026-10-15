@@ -19,15 +19,19 @@ import {parseQuotaAccountingOwner, withBorrowedQuotaAccountingOwner} from "../qu
 import {EffectRuntimeConflictError} from "../effect_runtime_errors.ts";
 import {registryAuthoritySourceCheck, uncheckedAuthoritySource, type AuthoritySourceCheck} from "../coordination/authority_source.ts";
 import {readGoalAcceptanceLifecycle, sameExactGoalRef} from "./acceptance_lifecycle.ts";
+import {readRequestControl, requestControlView, requestTerminalSummary, normalizeRequestBasis} from "../collaboration/request_control.ts";
+import type {RequestAmendmentOutcome} from "../collaboration/request_control_contract.ts";
 
 export const SHARED_GOAL_INTENT_SCHEMA = "shared_goal_intent_v0";
 export const GOAL_AMENDMENT_OPERATION_SCHEMA = "goal_amendment_operation_v0";
 export const GOAL_AMENDMENT_RESULT_SCHEMA = "goal_amendment_result_v0";
 export const GOAL_AMENDMENT_PROPOSAL_SCHEMA = "goal_work_graph_amendment_v0";
+export const GOAL_REQUEST_AMENDMENT_PROPOSAL_SCHEMA = "goal_request_work_graph_amendment_v0";
 const LIMITS = {templates: 16, proposals: 64, created: 256, peers: 128, bytes: 256 * 1024};
-const OPERATION_FIELDS = {inspect: [], configure: ["root_intent", "policy", "expected_provider_revision"],
+const OPERATION_FIELDS = {inspect: [], request_basis: [], configure: ["root_intent", "policy", "expected_provider_revision"],
     propose: ["proposal_id", "template_id", "base_goal_revision", "base_intent_digest", "base_work_digest", "evidence_refs", "replan_obligation_id"],
-    commit: ["proposal_id", "proposal_digest"], adopt: ["base_goal_revision", "base_intent_digest", "base_work_digest"], receipt: ["receipt_operation_id"], claim: ["todo_id", "expected_provider_revision", "base_goal_revision", "base_intent_digest", "base_work_digest", "lease_request"]} as const;
+    commit: ["proposal_id", "proposal_digest"], abort_request: ["proposal_id", "proposal_digest"],
+    adopt: ["base_goal_revision", "base_intent_digest", "base_work_digest"], receipt: ["receipt_operation_id"], claim: ["todo_id", "expected_provider_revision", "base_goal_revision", "base_intent_digest", "base_work_digest", "lease_request"]} as const;
 type Operation = keyof typeof OPERATION_FIELDS;
 type GoalRef = {goal_id: string; goal_instance_id: string};
 interface Template extends JsonObject {id: string; todo: JsonObject; digest: string}
@@ -40,11 +44,12 @@ interface Policy extends JsonObject {
   eligible_agents: string[]; templates: Template[]; max_created_todos: number; out_of_policy: "reject";
 }
 interface Proposal extends JsonObject {
-  schema_version: typeof GOAL_AMENDMENT_PROPOSAL_SCHEMA;
+  schema_version: typeof GOAL_AMENDMENT_PROPOSAL_SCHEMA | typeof GOAL_REQUEST_AMENDMENT_PROPOSAL_SCHEMA;
   proposal_id: string; proposer_agent_id: string; goal_ref: GoalRef;
   base_goal_revision: number; base_intent_digest: string; base_work_digest: string;
   template_id: string; template_digest: string; evidence_refs: string[];
   replan_obligation_id: string | null; digest: string;
+  source_request?: JsonObject;
 }
 interface IntentState extends JsonObject {
   schema_version: typeof SHARED_GOAL_INTENT_SCHEMA; goal_ref: GoalRef;
@@ -149,9 +154,11 @@ function readIntent(head: JsonObject): IntentState | null {
   const proposals = list(raw.proposals, "proposals", LIMITS.proposals).map(v => {
     const p = object(v, "stored proposal");
     keys(p, ["schema_version", "proposal_id", "proposer_agent_id", "goal_ref", "base_goal_revision", "base_intent_digest", "base_work_digest",
-      "template_id", "template_digest", "evidence_refs", "replan_obligation_id", "digest"]);
+      "template_id", "template_digest", "evidence_refs", "replan_obligation_id", "digest"], ["source_request"]);
     const {digest, ...content} = p;
-    requireValue(digest === canonicalAuthoritySha256(content) && p.schema_version === GOAL_AMENDMENT_PROPOSAL_SCHEMA && same(p.goal_ref, goalRef), "stored amendment proposal is corrupt");
+    requireValue(digest === canonicalAuthoritySha256(content) && same(p.goal_ref, goalRef), "stored amendment proposal is corrupt");
+    requireValue(p.schema_version === (p.source_request === undefined ? GOAL_AMENDMENT_PROPOSAL_SCHEMA : GOAL_REQUEST_AMENDMENT_PROPOSAL_SCHEMA), "stored proposal source schema is invalid");
+    if (p.source_request !== undefined) requestBasis(p.source_request);
     id(p.proposal_id, "proposal id");
     requireValue(rules.eligible_agents.includes(id(p.proposer_agent_id, "proposal Agent")), "stored proposal actor is outside the root policy");
     integer(p.base_goal_revision, "proposal revision", 1, revision);
@@ -197,10 +204,41 @@ function view(head: AuthorityStoreHead, goalRef: GoalRef, agents: string[], sour
 }
 function command(request: JsonObject, op: Operation) {
   const content = Object.fromEntries(Object.entries(request).filter(([key]) => !["runtime_root", "source", "observed_at", "dry_run"].includes(key)));
+  const reservation = requestReservation(request);
+  // Commit and conditional abort compete for ONE original operation receipt.
+  // Later request controls cannot change this immutable binding's identity.
+  const identity = reservation === null ? {op, ...content}
+    : {goal_ref: request.goal_ref, reservation: reservation.binding, reservation_digest: reservation.digest};
   return new CoordinationCommandReceipt({result_schema: GOAL_AMENDMENT_RESULT_SCHEMA,
     identity: {schema_version: GOAL_AMENDMENT_OPERATION_SCHEMA, goal_id: String(ref(request.goal_ref).goal_id),
-      operation_id: id(request.operation_id, "operation_id"), request_sha256: canonicalAuthoritySha256({op, ...content})},
+      operation_id: id(request.operation_id, "operation_id"), request_sha256: canonicalAuthoritySha256(identity)},
     failure, decode: commandReceiptResult});
+}
+/** Normalize an independently read Goal receipt under the same identity owner
+ * used for commit/abort. A missing receipt cannot prove no effect occurred.
+ */
+export function projectRequestAmendmentReceipt(params: JsonObject): JsonObject {
+  const entry = object(params.entry, "source-owned request"), control = readRequestControl(entry);
+  const reservation = control.reservations.find(row => row.digest === params.reservation_digest);
+  requireValue(reservation, "original request reservation is unavailable");
+  const b = reservation.binding;
+  const request = {operation: "commit", operation_id: b.operation_id, goal_ref: entry.goal_ref, actor_agent_id: entry.agent_id,
+    proposal_id: b.proposal_id, proposal_digest: b.proposal_digest,
+    source: {request_entry: entry, request_reservation_digest: reservation.digest}};
+  const received = object(params.receipt, "original Goal receipt readback");
+  if (received.status === "missing") return {found: false, terminal: null};
+  requireValue(received.status === "found", "original Goal receipt remains unavailable");
+  const records = list(received.receipts, "Goal receipt records", 1);
+  requireValue(records.length === 1, "original Goal receipt is incomplete");
+  const original = object(records[0], "original Goal operation");
+  requireValue(Object.entries(command(request, "commit").contract.identity).every(([key, value]) => original[key] === value),
+    "Goal receipt does not identify the reserved request operation");
+  const result = commandReceiptResult(original).fields;
+  const terminal = requestTerminalSummary({operation_id: b.operation_id, reservation_digest: result.reservation_digest,
+    outcome: result.request_outcome, goal_ref: result.goal_ref, goal_changed: result.goal_changed,
+    goal_revision: result.goal_revision, todo_id: result.todo_id ?? null, receipt_sha256: canonicalAuthoritySha256(original)}, reservation);
+  requireValue(result.terminal_recorded === true, "Goal operation lacks a recorded terminal decision");
+  return {found: true, terminal};
 }
 function requireOpenObligation(source: JsonObject, obligation: unknown, actor: string, goalRef: GoalRef): void {
   const rows = list(source.open_replan_obligations, "source replan inventory", 128).map(v => object(v, "source obligation"));
@@ -212,6 +250,103 @@ function currentBasis(request: JsonObject, state: IntentState, head: JsonObject)
     "goal_amendment_needs_rebase");
 }
 
+function requestBasis(value: unknown): JsonObject {
+  return normalizeRequestBasis(value);
+}
+function requestReservation(request: JsonObject) {
+  if (request.operation !== "commit" && request.operation !== "abort_request") return null;
+  const source = object(request.source, "source");
+  if (source.request_entry === undefined) {
+    requireValue(request.operation !== "abort_request", "conditional abort requires an authenticated request reservation"); return null;
+  }
+  const entry = object(source.request_entry, "source-owned request entry"), control = readRequestControl(entry);
+  const reservation = control.reservations.find(row => row.digest === source.request_reservation_digest);
+  requireValue(reservation && same(entry.goal_ref, request.goal_ref) && entry.agent_id === request.actor_agent_id,
+    "amendment request reservation belongs to another Goal or receiver");
+  const b = reservation.binding;
+  requireValue(b.operation_id === request.operation_id && b.proposal_id === request.proposal_id && b.proposal_digest === request.proposal_digest,
+    "amendment request reservation binding mismatch");
+  if (request.operation === "abort_request") requireValue(control.cancellation !== null || control.revisions.length > Number(b.request_revision),
+    "request owner has not authorized cancellation or correction of this effect");
+  return reservation;
+}
+async function requestAuthorityDigest(store: AuthorityStore, request: JsonObject): Promise<string> {
+  const identity = await store.storeIdentity();
+  requireValue(identity.status === "available", "request effect authority identity is unavailable");
+  const source = object(request.source, "source");
+  const registry = source.registry_source === undefined ? null : object(source.registry_source, "registry source");
+  return canonicalAuthoritySha256({store_identity: identity.store_identity, goal_ref: request.goal_ref,
+    runtime_root: request.runtime_root ?? null, registry_path: registry?.path ?? null});
+}
+function planWorkCommit(request: JsonObject, state: IntentState, loaded: AuthorityStoreHead, source: JsonObject,
+    agents: string[], actor: string, now: string): {next: JsonObject; result: JsonObject} {
+  const goalRef = ref(request.goal_ref);
+  requireValue(same(state.goal_ref, goalRef) && state.policy.eligible_agents.includes(actor), "actor is outside the current Goal amendment policy");
+  const proposal = state.proposals.find(p => p.proposal_id === request.proposal_id);
+  requireValue(proposal && proposal.digest === request.proposal_digest && proposal.proposer_agent_id === actor, "amendment proposal identity mismatch");
+  requireValue(proposal.source_request === undefined || requestReservation(request) !== null,
+    "request-derived amendment requires its original reservation; source context cannot be discarded");
+  currentBasis(proposal, state, loaded.head);
+  requireOpenObligation(source, proposal.replan_obligation_id, actor, goalRef);
+  requireValue(state.adoptions[actor]?.goal_revision === state.goal_revision, "Agent must adopt the current Goal basis");
+  requireValue(state.created_todo_ids.length < state.policy.max_created_todos, "amendment creation capacity exceeded");
+  const template = state.policy.templates.find(t => t.id === proposal.template_id && t.digest === proposal.template_digest);
+  requireValue(template, "amendment template changed");
+  const todoId = amendmentTodoId(goalRef, proposal.proposal_id), index = indexCoordinationProjection(loaded.head, goalRef.goal_id);
+  const plan = planCoordinationTodoCreate({goal_id: goalRef.goal_id, operation_id: String(request.operation_id), actor_agent_id: actor,
+    registered_agents: agents, dry_run: true, now: new Date(now), todo: {...template.todo, schema_version: TODO_DOMAIN_ITEM_SCHEMA,
+      todo_id: todoId, role: "agent", task_class: "advancement_task", status: "open", done: false, archive_state: "active"}},
+    index.todos, object(loaded.head.todo_read_model, "Todo read model").schema_version);
+  requireValue(plan.status === "planned", "amendment Todo is already satisfied or conflicts; revise the proposal");
+  const commit = prepareCoordinationProjectionCommit({goal_id: goalRef.goal_id, operation_id: String(request.operation_id),
+    expected_provider_revision: loaded.provider_revision, projection: loaded.head,
+    mutations: [{kind: "todo_upsert", todo: object(plan.todo, "planned Todo")}]});
+  const updated = structuredClone(state); updated.goal_revision++; updated.created_todo_ids.push(todoId);
+  return {next: {...commit.next_projection, shared_goal_intent: updated}, result: {changed: true, goal_ref: goalRef,
+    canonical_effect: "committed", proposal_id: proposal.proposal_id, proposal_digest: proposal.digest,
+    prior_goal_revision: state.goal_revision, goal_revision: updated.goal_revision, intent_digest: state.intent_digest,
+    todo_id: todoId, todo: plan.todo, lease_disposition: "unaffected", lease_basis_digest: canonicalAuthoritySha256([...index.leases]),
+    replan_obligation_id: proposal.replan_obligation_id, replan_settlement: proposal.replan_obligation_id === null ? "not_required" : "pending",
+    peer_adoption: "pending"}};
+}
+async function settleReservedAmendment(store: AuthorityStore, request: JsonObject, state: IntentState | null,
+    loaded: AuthorityStoreHead, source: JsonObject, agents: string[], actor: string,
+    receipt: CoordinationCommandReceipt<typeof GOAL_AMENDMENT_RESULT_SCHEMA>, sourceCurrent: AuthoritySourceCheck): Promise<JsonObject> {
+  const reservation = requestReservation(request)!;
+  const b = reservation.binding, goalRef = ref(request.goal_ref);
+  requireValue(b.authority_source_sha256 === await requestAuthorityDigest(store, request),
+    "reserved effect belongs to another authority source; recover its original store before retrying");
+  requireValue(state !== null && same(state.goal_ref, goalRef), "original request Goal intent is unavailable");
+  const proposal = state.proposals.find(p => p.proposal_id === request.proposal_id);
+  requireValue(proposal && proposal.digest === b.proposal_digest && proposal.proposer_agent_id === actor && proposal.source_request !== undefined
+    && same(proposal.source_request, {request_id: b.request_id, request_revision: b.request_revision, request_digest: b.request_digest})
+    && proposal.base_goal_revision === b.base_goal_revision && proposal.base_intent_digest === b.base_intent_digest
+    && proposal.base_work_digest === b.base_work_digest, "reservation does not authenticate this source-derived proposal");
+  let next = loaded.head, outcome: RequestAmendmentOutcome = "aborted";
+  let result: JsonObject = {changed: false, goal_ref: goalRef, canonical_effect: "none", goal_revision: null};
+  if (request.operation === "commit") {
+    try {
+      const planned = planWorkCommit(request, state, loaded, source, agents, actor, text(request.observed_at, "observed_at", 64));
+      next = planned.next; result = planned.result; outcome = "committed";
+    } catch (error) {
+      if (!(error instanceof AuthorityStoreProtocolError)) throw error;
+      outcome = "rejected";
+      result.reason_code = error instanceof GoalAmendmentRebase ? error.reasonCode : "goal_amendment_rejected";
+      result.reason = error.message;
+    }
+  }
+  if (!await sourceCurrent()) return failure("authority_source_changed", "Request Goal source changed before its terminal decision");
+  bounded(next.shared_goal_intent);
+  result = {...result, request_outcome: outcome, reservation_digest: reservation.digest,
+    source_request: proposal.source_request, goal_changed: outcome === "committed", execution_authority_granted: false};
+  if (request.dry_run === true) return {schema_version: GOAL_AMENDMENT_RESULT_SCHEMA, status: "planned", ...result,
+    changed: false, canonical_effect: "none", goal_changed: false, request_outcome: null, terminal_recorded: false, dry_run: true};
+  return {...await receipt.commit(store, {expected_provider_revision: loaded.provider_revision, operation_id: String(request.operation_id),
+    next_projection: next, events: [{schema_version: GOAL_AMENDMENT_OPERATION_SCHEMA, operation: "request_terminal",
+      goal_ref: goalRef, operation_id: request.operation_id, request_outcome: outcome, reservation_digest: reservation.digest}],
+    receipts: [{...receipt.contract.identity, result: {...result, terminal_recorded: true}}]}), execution_authority_granted: false};
+}
+
 /** The source adapter holds the exact Goal lifecycle and registry guards until
  * this call returns. No source-supplied boolean alone can replace that contract. */
 export async function executeGoalAmendment(store: AuthorityStore, value: unknown, sourceCurrent: AuthoritySourceCheck = uncheckedAuthoritySource): Promise<JsonObject> {
@@ -220,7 +355,7 @@ export async function executeGoalAmendment(store: AuthorityStore, value: unknown
   // Success is operation-specific: a missing receipt is a completed historical
   // lookup, but missing authority cannot successfully inspect or perform work.
   // Transports must not maintain their own, diverging status classifications.
-  const ok = request.operation === "inspect" ? result.status === "loaded"
+  const ok = request.operation === "inspect" || request.operation === "request_basis" ? result.status === "loaded"
     : request.operation === "receipt" ? result.status === "found" || result.status === "missing"
     : ["planned", "applied", "recovered", "replayed", "no_change"].includes(String(result.status));
   return {...result, ok, ...(!ok && result.status === "missing" ? {
@@ -233,26 +368,31 @@ async function executeAmendmentOperation(store: AuthorityStore, value: unknown, 
   const request = object(value, "Goal amendment request"); bounded(request);
   const op = request.operation as Operation;
   requireValue(Object.hasOwn(OPERATION_FIELDS, op), "unsupported Goal amendment operation");
-  keys(request, ["operation", "goal_ref", "actor_agent_id", "source", ...OPERATION_FIELDS[op]], ["runtime_root", "observed_at", "dry_run", "operation_id"]);
+  keys(request, ["operation", "goal_ref", "actor_agent_id", "source", ...OPERATION_FIELDS[op]],
+    ["runtime_root", "observed_at", "dry_run", "operation_id", ...(op === "propose" ? ["source_request"] : [])]);
   const goalRef = ref(request.goal_ref), source = object(request.source, "source-owned facts");
-  keys(source, ["profile_id", "current_goal_ref", "gate", "registered_agents", "open_replan_obligations", "goal_status", "root_commitments"], ["registry_source", "accounting_admission"]);
+  keys(source, ["profile_id", "current_goal_ref", "gate", "registered_agents", "open_replan_obligations", "goal_status", "root_commitments"],
+    ["registry_source", "accounting_admission", "request_entry", "request_reservation_digest", "request_preview"]);
+  requireValue(source.request_preview !== true || request.dry_run === true, "a preview reservation cannot authorize a Goal effect");
   const agents = strings(source.registered_agents, "registered Agents", LIMITS.peers).map(v => id(v, "Agent"));
   const actor = request.actor_agent_id === null ? null : id(request.actor_agent_id, "actor Agent");
-  requireValue(actor === null || agents.includes(actor), "amendment actor is not currently registered");
+  requireValue(op === "abort_request" || actor === null || agents.includes(actor), "amendment actor is not currently registered");
   if (op === "receipt") {
     const receipt = await store.readReceipt(id(request.receipt_operation_id, "receipt operation"));
     if (receipt.status === "found") requireValue(receipt.receipts.length === 1 && receipt.receipts[0].schema_version === GOAL_AMENDMENT_OPERATION_SCHEMA
       && same(object(receipt.receipts[0].result, "amendment receipt").goal_ref, goalRef), "historical amendment receipt belongs to another Goal instance or operation");
     return {schema_version: GOAL_AMENDMENT_RESULT_SCHEMA, ...receipt, historical_only: true, execution_authority_granted: false};
   }
-  const receipt = op === "inspect" || op === "claim" ? null : command(request, op);
+  const receipt = op === "inspect" || op === "request_basis" || op === "claim" ? null : command(request, op);
   if (receipt && request.dry_run !== true) {
     const replay = await receipt.read(store);
     if (replay !== null) return {...replay, historical_only: true, execution_authority_granted: false};
   }
   if (!await sourceCurrent()) return failure("authority_source_changed", "Source Goal registration changed; inspect before retrying");
   const readiness = sourceGoalMutationReadiness({...source, requested_goal_ref: goalRef});
-  if (op !== "inspect" && readiness.kind === "reject") return failure(readiness.code, "Goal lifetime does not admit this mutation");
+  if (op === "abort_request") requireValue(source.profile_id === "source_session_v1" && same(source.current_goal_ref, goalRef),
+    "conditional abort requires the original exact source Goal");
+  else if (op !== "inspect" && op !== "request_basis" && readiness.kind === "reject") return failure(readiness.code, "Goal lifetime does not admit this mutation");
   const observation = receipt ? await receipt.observe(store) : {kind: "authority" as const, authority: await store.loadAuthority()};
   if (observation.kind === "receipt") return {...observation.result, historical_only: true, execution_authority_granted: false};
   const loaded = observation.authority;
@@ -262,12 +402,17 @@ async function executeAmendmentOperation(store: AuthorityStore, value: unknown, 
   // A timed-out caller releases its source locks while the RPC can still be
   // queued. Recreation serializes this canonical retirement fence under the
   // same writer lock, so delayed old-instance requests cannot pass cached facts.
-  if (op !== "inspect" && lifecycle !== null &&
-      (lifecycle.state !== "active" || !sameExactGoalRef(lifecycle.goal_ref, goalRef))) {
+  if (op !== "inspect" && op !== "request_basis" && lifecycle !== null &&
+      ((lifecycle.state !== "active" && op !== "abort_request") || !sameExactGoalRef(lifecycle.goal_ref, goalRef))) {
     return failure("stale_goal_instance", "The canonical Goal lifetime is retiring or has changed");
   }
   const state = readIntent(loaded.head);
   if (op === "inspect") return view(loaded, goalRef, agents, source);
+  if (op === "request_basis") return {...view(loaded, goalRef, agents, source), authority_source_sha256: await requestAuthorityDigest(store, request)};
+  if (requestReservation(request) !== null) {
+    requireValue(actor !== null && receipt !== null, "reserved request effect requires its receiver and original operation");
+    return settleReservedAmendment(store, request, state, loaded, source, agents, actor, receipt, sourceCurrent);
+  }
   if (op === "claim") {
     requireValue(state !== null && same(state.goal_ref, goalRef) && actor !== null, "current exact Goal intent is unavailable");
     requireValue(state.created_todo_ids.includes(String(request.todo_id)), "claim must target work created by this Goal amendment owner");
@@ -333,36 +478,23 @@ async function executeAmendmentOperation(store: AuthorityStore, value: unknown, 
       requireValue(/^replan-[a-f0-9]{16}$/.test(obligation), "invalid replan obligation id");
       requireOpenObligation(source, obligation, actor, goalRef);
       const evidence = evidenceRefs(request.evidence_refs);
-      const content = {schema_version: GOAL_AMENDMENT_PROPOSAL_SCHEMA as typeof GOAL_AMENDMENT_PROPOSAL_SCHEMA, proposal_id: proposalId, proposer_agent_id: actor, goal_ref: goalRef,
+      let sourceRequest: JsonObject | undefined;
+      if (request.source_request !== undefined) {
+        sourceRequest = requestBasis(request.source_request);
+        const entry = object(source.request_entry, "source-owned request entry"), current = requestControlView(entry);
+        requireValue(same(entry.goal_ref, goalRef) && entry.agent_id === actor && current.cancellation === null
+          && same(sourceRequest, {request_id: current.request_id, request_revision: current.revision, request_digest: current.revision_digest}),
+        "source request changed before proposal admission");
+      }
+      const content = {schema_version: (sourceRequest === undefined ? GOAL_AMENDMENT_PROPOSAL_SCHEMA : GOAL_REQUEST_AMENDMENT_PROPOSAL_SCHEMA) as Proposal["schema_version"],
+        proposal_id: proposalId, proposer_agent_id: actor, goal_ref: goalRef,
         base_goal_revision: state.goal_revision, base_intent_digest: state.intent_digest, base_work_digest: workDigest(loaded.head),
-        template_id: template.id, template_digest: template.digest, evidence_refs: evidence, replan_obligation_id: obligation};
+        template_id: template.id, template_digest: template.digest, evidence_refs: evidence, replan_obligation_id: obligation,
+        ...(sourceRequest === undefined ? {} : {source_request: sourceRequest})};
       const proposal: Proposal = {...content, digest: canonicalAuthoritySha256(content)};
       updated.proposals.push(proposal); result = {changed: true, goal_ref: goalRef, canonical_effect: "none", proposal};
     } else {
-      const proposal = state.proposals.find(p => p.proposal_id === request.proposal_id);
-      requireValue(proposal && proposal.digest === request.proposal_digest && proposal.proposer_agent_id === actor, "amendment proposal identity mismatch");
-      currentBasis(proposal, state, loaded.head);
-      requireOpenObligation(source, proposal.replan_obligation_id, actor, goalRef);
-      requireValue(state.adoptions[actor]?.goal_revision === state.goal_revision, "Agent must adopt the current Goal basis");
-      requireValue(state.created_todo_ids.length < state.policy.max_created_todos, "amendment creation capacity exceeded");
-      const template = state.policy.templates.find(t => t.id === proposal.template_id && t.digest === proposal.template_digest);
-      requireValue(template, "amendment template changed");
-      const todoId = amendmentTodoId(goalRef, proposal.proposal_id);
-      const index = indexCoordinationProjection(loaded.head, goalRef.goal_id);
-      const plan = planCoordinationTodoCreate({goal_id: goalRef.goal_id, operation_id: String(request.operation_id), actor_agent_id: actor,
-        registered_agents: agents, dry_run: true, now: new Date(now), todo: {...template.todo, schema_version: TODO_DOMAIN_ITEM_SCHEMA,
-          todo_id: todoId, role: "agent", task_class: "advancement_task", status: "open", done: false, archive_state: "active"}},
-        index.todos, object(loaded.head.todo_read_model, "Todo read model").schema_version);
-      requireValue(plan.status === "planned", "amendment Todo is already satisfied or conflicts; revise the proposal");
-      const commit = prepareCoordinationProjectionCommit({goal_id: goalRef.goal_id, operation_id: String(request.operation_id),
-        expected_provider_revision: loaded.provider_revision, projection: loaded.head,
-        mutations: [{kind: "todo_upsert", todo: object(plan.todo, "planned Todo")}]});
-      updated.goal_revision++; updated.created_todo_ids.push(todoId); next = {...commit.next_projection, shared_goal_intent: updated};
-      result = {changed: true, goal_ref: goalRef, canonical_effect: "committed", proposal_id: proposal.proposal_id, proposal_digest: proposal.digest,
-        prior_goal_revision: state.goal_revision, goal_revision: updated.goal_revision, intent_digest: state.intent_digest,
-        todo_id: todoId, todo: plan.todo, lease_disposition: "unaffected", lease_basis_digest: canonicalAuthoritySha256([...index.leases]),
-        replan_obligation_id: proposal.replan_obligation_id, replan_settlement: proposal.replan_obligation_id === null ? "not_required" : "pending",
-        peer_adoption: "pending"};
+      ({next, result} = planWorkCommit(request, state, loaded, source, agents, actor, now));
     }
   }
   if (!await sourceCurrent()) return failure("authority_source_changed", "Source Goal registration changed before commit");
@@ -382,10 +514,10 @@ export async function goalAmendmentLocal(value: unknown): Promise<JsonObject> {
   try {
     const source = object(request.source, "source");
     const observationOwner = parseQuotaAccountingOwner({runtimeRoot: root, goalId: goal.goal_id,
-      goalRefValue: request.operation === "inspect" || request.operation === "receipt" ? source.current_goal_ref : goal,
+      goalRefValue: ["inspect", "request_basis", "receipt"].includes(String(request.operation)) ? source.current_goal_ref : goal,
       sourceAdmissionValue: source.accounting_admission});
     return await withBorrowedQuotaAccountingOwner(observationOwner, async () =>
-      withCanonicalWriter(root, goal.goal_id, request.operation === "inspect" || request.operation === "receipt" || request.dry_run === true,
+      withCanonicalWriter(root, goal.goal_id, ["inspect", "request_basis", "receipt"].includes(String(request.operation)) || request.dry_run === true,
         async () => executeGoalAmendment(await openLocalAuthorityStore(root, goal.goal_id), request,
           registryAuthoritySourceCheck({registry_source: source.registry_source}, true))));
   } catch (error) {

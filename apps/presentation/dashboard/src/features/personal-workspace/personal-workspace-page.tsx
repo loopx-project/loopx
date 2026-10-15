@@ -51,6 +51,7 @@ import { MessageActivity } from "./message-activity";
 import { ChannelTimeline } from "./channel-timeline";
 import { ContextDrawer } from "./context-drawer";
 import { monitorScheduleReadback } from "./monitor-readback";
+import { AttachedAgentConversations } from "./attached-agent-conversations";
 import { GoalSidebar } from "./goal-sidebar";
 import { GoalTasksView } from "./goal-tasks-view";
 import { GoalOverview, goalOverviewAttentionId } from "./goal-overview";
@@ -857,7 +858,7 @@ export function PersonalWorkspacePage({
   const [localGoalId, setLocalGoalId] = useState<string | null>(controlledGoalId ?? null);
   const [localAgentId, setLocalAgentId] = useState(controlledAgentId ?? agents.find((agent) => agent.available)?.agentId ?? "codex");
   const selectionScope = `${statusSourceControl?.activeSource.statusUrl ?? "/status.json"}:${controlledGoalId === undefined ? localGoalId : controlledGoalId}`;
-  const [selectionState, setSelectionState] = useState<{scope: string; value: WorkspaceDrawerSelection | null; visible: boolean} | null>(null);
+  const [selectionState, setSelectionState] = useState<{scope: string; value: WorkspaceDrawerSelection | null} | null>(null);
   const selection = selectionState?.scope === selectionScope ? selectionState.value : null;
   const currentSelectionScope = useRef({scope: selectionScope, generation: 0});
   if (currentSelectionScope.current.scope !== selectionScope) {
@@ -866,7 +867,7 @@ export function PersonalWorkspacePage({
   const selectionGeneration = currentSelectionScope.current.generation;
   function setSelection(value: WorkspaceDrawerSelection | null) {
     if (currentSelectionScope.current.generation !== selectionGeneration) return;
-    setSelectionState({scope: selectionScope, value, visible: true});
+    setSelectionState({scope: selectionScope, value});
     const todoId = value?.kind === "todo" ? value.item.todoId : null;
     if (todoId !== (routedTodoId ?? null)) callbacks.onSelectTodo?.(todoId);
   }
@@ -1176,7 +1177,7 @@ export function PersonalWorkspacePage({
     if (!todo && readOnly) {setSelectionState(null); return;}
     const item = todo ?? {todoId: routedTodoId, sourceTodoId: routedTodoId, detailMode: "request_only" as const,
       text: locale === "zh-CN" ? "任务详情待读取" : "Task details pending", done: false};
-    setSelectionState({scope: selectionScope, visible: true, value: {kind: "todo", item: {...item,
+    setSelectionState({scope: selectionScope, value: {kind: "todo", item: {...item,
       goalId: selectedGoal.goalId, goalTitle: selectedGoal.title, ownerLabel: item.claimedBy}}});
   }, [selectionScope, routedTodoId, selectedGoal, readOnly, locale, selectionState]);
   const workspaceReview = useDeliveryReview(selectedGoal, model.userTodos, !readOnly && !settingsOpen
@@ -2091,7 +2092,7 @@ export function PersonalWorkspacePage({
     <div hidden={settingsOpen}>
     <WorkspaceShell
       notice={serviceNotice}
-      drawer={drawerSelection && selectionState?.visible ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })} callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={readOnly ? [] : larkConnections}
+      drawer={drawerSelection ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })} callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={readOnly ? [] : larkConnections}
         todoReadbackUnavailable={drawerSelection.kind === "todo" && !workspaceGoals.some((goal) =>
           goal.goalId === drawerSelection.item.goalId && !goal.loadState && (drawerSelection.item.detailMode !== undefined || drawerSelection.item.done
             || goal.agentTodos.some((todo) => todo.todoId === drawerSelection.item.todoId)))}
@@ -2110,12 +2111,10 @@ export function PersonalWorkspacePage({
           });
         }
         setTaskInspectorExpanded(false);
-        if (drawerSelection.kind === "todo") {
-          setSelectionState({scope: selectionScope, value: drawerSelection, visible: false});
-        } else setSelection(null);
+        setSelection(null);
       }} onToggleInspectorSize={() => setTaskInspectorExpanded((current) => !current)} readOnly={readOnly} runs={items.flatMap((item) => item.kind === "run" ? [item.run] : [])} selection={drawerSelection} /> : null}
       drawerMode={drawerSelection?.kind === "todo" ? (taskInspectorExpanded ? "inspector-full" : "inspector") : "panel"}
-      drawerOpen={drawerSelection !== null && selectionState?.visible === true}
+      drawerOpen={drawerSelection !== null}
       mobileSidebarOpen={mobileSidebarOpen}
       onCloseMobileSidebar={() => setMobileSidebarOpen(false)}
       theme={theme}
@@ -2195,6 +2194,7 @@ export function PersonalWorkspacePage({
               followConversationRef.current = nearBottom;
               setShowLatestMessage(!nearBottom);
             }}>
+            {selectedGoalId && selectedGoalTab === "chat" && !readOnly ? <AttachedAgentConversations key={selectedGoalId} goalId={selectedGoalId} zh={locale === "zh-CN"}/> : null}
             {selectedGoalId && selectedGoalTab === "chat" && !readOnly && selectedAgentId === "codex" && conversationSessionId && loopxMode?.settings.execution_config && loopxMode.settings.agent_id ? <GoalTeamResults
               key={`${conversationSessionId}:${loopxMode.settings.agent_id}:${loopxMode.settings.execution_config}`}
               sessionId={conversationSessionId} zh={locale === "zh-CN"}

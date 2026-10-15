@@ -7,7 +7,7 @@ import type {JsonObject} from "../control_plane/effect_program.ts";
 import {BARE_SHA256_PATTERN} from "../control_plane/content_digest.ts";
 import {dirname, isAbsolute, join} from "node:path";
 import {fileURLToPath} from "node:url";
-import {ZCODE_GOAL_ACTIONS, sameBinding, ZCodeGoalError, safeFailure, type NativeRequest, type ZCodeGoalReadback} from "./contract.ts";
+import {ZCODE_GOAL_ACTIONS, isGoalBasis, sameBinding, ZCodeGoalError, safeFailure, type NativeRequest, type ZCodeGoalReadback} from "./contract.ts";
 import {NativeGoalController, readState, atomicState, type BindingState} from "./runtime.ts";
 import {ZCodeAppServer} from "./app-server.ts";
 import {acquireFileMutationLock, releaseFileMutationLock, durableWriteJson} from "../control_plane/effect_runtime_io.ts";
@@ -33,6 +33,7 @@ function parseRequest(raw: unknown): NativeRequest {
     || !Array.isArray(r.loopx_command) || !r.loopx_command.length
     || !Array.isArray(r.validation_command) || !r.validation_command.length
     || (r.cli_command !== undefined && (!Array.isArray(r.cli_command) || !r.cli_command.length))
+    || (r.goal_basis !== undefined && !isGoalBasis(r.goal_basis))
     || ![...r.loopx_command, ...r.validation_command, ...(r.cli_command ?? [])].every(v => typeof v === "string" && v.length > 0)) {
     throw new ZCodeGoalError("Invalid ZCode binding operation");
   }
@@ -176,7 +177,7 @@ async function serve(request: NativeRequest): Promise<void> {
           throw new ZCodeGoalError("ZCode controller binding changed");
         }
         clearTimeout(idle); idle = undefined;
-        const reply = await controller!.operate(incoming.action, incoming.model_selection, incoming.task_body);
+        const reply = await controller!.operate(incoming.action, incoming.model_selection, incoming.task_body, incoming.goal_basis);
         if (reply.ok && (incoming.action === "start" || incoming.action === "resume")) {
           clearTimeout(executionDeadline);
           if (reply.native?.running || reply.native?.status === "active") {

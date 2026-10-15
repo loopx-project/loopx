@@ -3,8 +3,42 @@
 from __future__ import annotations
 
 import json
+import math
 import subprocess
+import time
 from pathlib import Path
+
+
+def render_planning_prompt(packet: dict, env: dict[str, str], *, execution_reserve_seconds: int) -> str:
+    """Project caller-owned clocks without changing the product planning packet."""
+    if "LOOPX_PLANNING_TIMEOUT_SEC" in env:
+        raise ValueError(
+            "Remove LOOPX_PLANNING_TIMEOUT_SEC; planning uses LOOPX_PHASE_DEADLINE_EPOCH"
+        )
+    window = []
+    key = "LOOPX_PHASE_DEADLINE_EPOCH"
+    if key in env:
+        value = float(env[key])
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{key} must be finite and positive")
+        observed = time.time()
+        window.extend([
+            f"Absolute phase deadline: {value} Unix UTC seconds.",
+            f"Remaining phase time at observation {observed}: {max(0, value - observed):.1f} seconds.",
+            f"Existing execution reserve: {execution_reserve_seconds} seconds. "
+            f"Observed work window before that reserve: {max(0, value - observed - execution_reserve_seconds):.1f} seconds.",
+            "This shared window includes planning and subsequent execution; "
+            "runtime startup and settlement reserves also consume it.",
+        ])
+    prefix = "$loopx\n\n"
+    if window:
+        prefix += "Host execution window:\n" + "\n".join(window) + "\n"
+        prefix += (
+            "Use these observations to size the plan and its validation. They age "
+            "as work proceeds; the runtime still enforces its original limits. "
+            "They grant no extra time or authority and do not relax task acceptance.\n\n"
+        )
+    return prefix + "Host-supplied planning checkpoint:\n" + json.dumps(packet, ensure_ascii=False)
 
 
 def task_plan_packet(env: dict[str, str], cli: list[str]) -> dict:

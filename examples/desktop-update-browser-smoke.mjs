@@ -196,11 +196,14 @@ try {
   // Preserve the native recovery code; a runtime-only repair cannot restore it.
   installFailureCode = "app_install_incomplete";
   nativeRuntimeSelection = { explicit: false, remembered: true, bundled_repair_available: false };
+  await page.getByText("高级选项", { exact: true }).click();
   await page.getByRole("button", { name: "检查更新", exact: true }).click();
   await page.getByRole("button", { name: "更新并准备重启", exact: true }).click();
   await page.getByText(/App 安装未完成，当前版本可能不完整/).waitFor({ timeout: 2000 });
+  assert.equal(await page.getByRole("button", { name: "恢复上个版本", exact: true }).isVisible(), true, "an incomplete App exposes recovery without opening advanced controls");
+  assert.equal(await page.getByRole("button", { name: "确认恢复上版", exact: true }).count(), 0, "do not duplicate the same recovery action behind a second disclosure");
+  await page.getByText("高级选项", { exact: true }).click();
   assert.equal(await page.getByRole("button", { name: "修复当前版本", exact: true }).isEnabled(), false);
-  assert.equal(await page.getByRole("button", { name: "确认恢复上版", exact: true }).isEnabled(), true);
   await page.getByText(/当前 App 无法重装运行时/).waitFor();
   assert.equal(await page.locator(".personal-update-panel").getByRole("button", { name: "重启完成更新", exact: true }).count(), 0);
   await page.screenshot({ path: resolve(output, "update-incomplete-recovery.png") });
@@ -223,6 +226,22 @@ try {
   assert.equal(await page.getByText("恢复上个版本", { exact: true }).count(), 0, "an older terminal read cannot replace current recovery metadata");
   checkUpToDate = false;
   fastInstallFailure = false;
+
+  // Restore failures retain the native cause instead of suggesting a Repair
+  // action that this independently managed runtime cannot perform.
+  nativeRuntimeSelection = { explicit: true, bundled_repair_available: false };
+  for (const [code, message] of [
+    ["backup_unavailable", /没有可验证的 App 备份，未执行恢复/],
+    ["backup_failed", /App 备份无法保存或未通过完整性校验/],
+    ["rollback_failed", /恢复 App 未完成，请保持窗口打开/],
+  ]) {
+    nativeState = { phase: "error", details: { code } };
+    const beforeRead = calls.length;
+    await page.reload();
+    await page.getByRole("button", { name: "更新需重试", exact: true }).click();
+    await page.getByRole("status").filter({ hasText: message }).waitFor();
+    assert.equal(calls.length, beforeRead, "reading a failure must not repeat recovery effects");
+  }
 
   // The native owner decides whether Repair can maintain this installation.
   // The workspace consumes that projection rather than inferring from a path.

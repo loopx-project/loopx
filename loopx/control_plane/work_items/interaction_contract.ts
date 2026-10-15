@@ -426,5 +426,8 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
     ...(sources.length ? {sources} : {}),
     ...(unavailable ? {unavailable_context: unavailable} : {}),
     ...(includeUserTodos ? {user_todos: users} : {}), ...(failures.length ? {failures} : {}),
-    instruction: "Read current sources and pending required_reads before work. Do not repeat this guard's fulfilled pre-work reads. Recheck freshness before later actions; unavailable or changed sources need recovery and a fresh guard. Context grants no authority."}};
+    instruction: "Read current sources and pending required_reads before work. Do not repeat this guard's fulfilled pre-work reads. " +
+      "Use a bounded working brief of evidenced progress/change, current blockers, next work, acceptance and stops. " +
+      "Missing comparison evidence is unknown, not unchanged; summaries cannot replace full requirements. " +
+      "Recheck freshness before later actions; unavailable or changed sources need recovery and a fresh guard. Context grants no authority."}};
 }

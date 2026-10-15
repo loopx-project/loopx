@@ -91,8 +91,10 @@ def replan_evidence_rows(runs: Iterable[Mapping[str, Any]], *, goal_id: str, age
                 source["goal_ref"] = run.get("goal_ref")
                 source["agent_vision"] = run.get("agent_vision")
                 source["autonomous_replan_ack"] = run.get("autonomous_replan_ack")
+                source["replan_obligation_id"] = run.get("replan_obligation_id")
             for key, fields in (("settlement_identity", (
-                "schema_version", "goal_id", "agent_id", "todo_id", "turn_instance_id", "effect_id")),
+                "schema_version", "goal_id", "agent_id", "todo_id", "turn_instance_id", "effect_id",
+                *(("binding_kind", "binding_id", "replan_obligation_id") if include_decisions else ()))),
                 ("quota_spend_commit", ("schema_version", "effect_id"))):
                 value = run.get(key)
                 source[key] = {field: value.get(field) for field in fields} if isinstance(value, Mapping) else None

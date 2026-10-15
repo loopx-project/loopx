@@ -34,7 +34,7 @@ Workspace 设备设置复用同一个 TypeScript owner。优先级是显式
 关闭统计清除标识与测量记录，但保留自愿用途标签。
 
 新增 `POST /v1/installation`，契约 `loopx_installation_usage_v1`。
-同一个随机安装 ID 会与每日固定 CLI 功能计数、数字版本、UTC 活动日期、自愿环境
+同一个随机安装 ID 会与每日固定 CLI 功能计数、发布版本、UTC 活动日期、自愿环境
 标签、已观测运行分钟、快照 revision 和截断标志关联。每天首次观察后固定该日
 标签和版本，后续配置不能反向改写历史。这是**新增关联**，不是匿名汇总。
 CLI 诊断及安装概要增加 `heartbeat|state|agent|memory|capability|maintenance`
@@ -91,8 +91,11 @@ ID 随机生成，属于持久机器状态目录，不绑定账号、不从硬�
 告知升级保留 ID，明确关闭删除 ID。临时 home、删/复制状态或重新开启会影响统计。
 它能跨天关联，因此不能称为完全匿名。
 系统只允许 `darwin|linux|windows|other`，架构只允许 `x64|arm64|x86|other`，
-安装渠道只允许 `pip|local_release|source|unknown`。版本只接受数字三段式，包含
-自定义后缀的版本不会上传。
+安装渠道只允许 `pip|local_release|source|unknown`。心跳、诊断和每日安装概要共用
+同一版本语法：数字三段式 `major.minor.patch`，可带规范 Python 预发布标签，
+例如 `2.0.0a1`、`2.0.0b2`、`2.0.0rc3`。三个数字分量仍分别最多 3/3/4 位，
+预发布序号为 1–4 位。保留原标签，不把预发布版本归成正式版；自定义或本地
+后缀、路径及首尾空白均拒绝。旧 v0 契约不变。
 
 无 ID CLI 诊断 `POST /v1/aggregate`（最初随告知版本 5 引入）：
 
@@ -100,7 +103,7 @@ ID 随机生成，属于持久机器状态目录，不绑定账号、不从硬�
 {"schema":"loopx_usage_diagnostics_v1","counters":[{"feature":"pr-review","operation":"merge-readiness","outcome":"blocked","error":"not_ready","duration":"lt_1s","count":4,"version":"1.2.3","activity_day":"2026-09-30","context":"unknown","signal":"none"}]}
 ```
 
-默认新增数字三段版本、UTC 活动**日期**（非事件时间）、固定子操作、结果/原因及
+默认新增发布版本、UTC 活动**日期**（非事件时间）、固定子操作、结果/原因及
 回执支持的生命周期信号。环境类型由设备设置或优先级更高的 `LOOPX_USAGE_CONTEXT` 自愿声明：
 `unknown`（默认）、`personal`、`shared_service`、`ephemeral`、`organization_managed`、
 `maintainer`；无效值成为 `unknown`，不猜企业、人数或机器拓扑，不接受公司名称。

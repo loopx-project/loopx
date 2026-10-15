@@ -16,6 +16,7 @@ from loopx.capabilities.progress_review.receipt import (
     PROGRESS_REVIEW_RECEIPT_SCHEMA_VERSION,
     load_progress_review_receipts,
     normalize_progress_review_receipt,
+    noul_drift_signal,
     progress_review_receipt_root,
     progress_review_receipt_summary,
     write_progress_review_receipt,
@@ -165,6 +166,56 @@ def test_receipt_normalization_is_strict() -> None:
         receipt(judgments={"choice": {"relation": "unknown", "increment": "new_evidence"}, "noul": {"behavior_change": 0.1, "serves_acceptance": 0.2, "evidence_increment": 0.9}}, drift_signal={"noul": False, "choice": False})
     )
     assert probe["drift_signal"] == {"noul": False, "choice": False}
+
+
+@pytest.mark.parametrize(
+    ("threshold", "serves", "evidence", "expected"),
+    [
+        (0.5, 0.5, 0.5, None),
+        (0.5, 0.5, 0.49, None),
+        (0.5, 0.49, 0.5, None),
+        (0.5, 0.49, 0.49, True),
+        (0.5, 0.51, 0.49, False),
+        (0.5, 0.49, 0.51, False),
+        (0.5, 0.5, 0.51, False),
+        (0.5, None, 0.1, None),
+        (0.5, 0.1, None, None),
+        (0.6, 0.5, 0.5, None),
+        (0.6, 0.4, 0.4, True),
+        (0.6, 0.6, 0.1, False),
+        (0.6, 0.1, 0.6, False),
+    ],
+)
+def test_noul_overlapping_classes_are_undecided(threshold, serves, evidence, expected):
+    assert noul_drift_signal(serves, evidence, threshold) is expected
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [("progress_review_signal_rule_v1", True), ("progress_review_signal_rule_v2", None)],
+)
+def test_receipt_replay_preserves_recorded_tie_rule(tmp_path, version, expected):
+    raw = receipt(
+        signal_rule_version=version,
+        label_probability_threshold=0.5,
+        judgments={"choice": None, "noul": {
+            "behavior_change": 0.5, "serves_acceptance": 0.5, "evidence_increment": 0.5,
+        }},
+        drift_signal={"noul": expected, "choice": None},
+    )
+    path = progress_review_receipt_root(tmp_path, GOAL_ID) / f"{raw['event_id']}.json"
+    path.parent.mkdir(parents=True)
+    original = json.dumps(raw).encode()
+    path.write_bytes(original)
+
+    loaded, rejected = load_progress_review_receipts(tmp_path, GOAL_ID)
+    assert rejected == 0 and len(loaded) == 1
+    assert loaded[0]["signal_rule_version"] == version
+    assert loaded[0]["drift_signal"] == {"noul": expected, "choice": None}
+    assert path.read_bytes() == original
+    raw["drift_signal"] = {"noul": None if expected is True else True, "choice": None}
+    with pytest.raises(ValueError, match="disagrees"):
+        normalize_progress_review_receipt(raw)
 
 
 def test_receipts_write_load_newest_first_and_reject_tampered_files(tmp_path: Path) -> None:

@@ -614,9 +614,22 @@ def test_extension_cli_keeps_legacy_machine_state_without_a_global_registry(tmp_
         "schema_version": "loopx_extension_state_v0",
         "extensions": {"example": {"id": "example", "enabled": True}},
     })
-    assert _list_extensions(source.parents[1])[0]["id"] == "example"
+    state_file = source / "extensions" / "state.json"
+    original = state_file.read_bytes()
+    [status] = _list_extensions(source.parents[1])
+    assert status["id"] == "example"
+    assert status["enabled"] is True
+    assert status["doctor_verified"] is False
+    assert state_file.read_bytes() == original
+    refused = _extension_cli_result(source.parents[1], "enable", "example", "--execute")
+    assert refused.returncode == 2
+    assert "extension revision history is invalid" in refused.stdout
+    assert state_file.read_bytes() == original
     assert _extension_cli(source.parents[1], "disable", "example", "--execute")["changed"]
-    assert _read(source / "extensions" / "state.json")["extensions"]["example"]["enabled"] is False
+    [disabled] = _list_extensions(source.parents[1])
+    assert disabled["enabled"] is False
+    assert disabled["doctor_verified"] is False
+    assert _read(state_file)["extensions"]["example"] == {"id": "example", "enabled": False}
     assert not target.exists()
 
 

@@ -54,10 +54,12 @@ loopx configure-goal --goal-id <goal-id> --clear-progress-review-configuration -
 
 `sequence` 是写回执的观察器的本地计数，`drift init` 创建新的观察器状态时会从 0 重新计数。核心从不跨观察器比较 sequence：加载、加载上限、最新修订判断和同一转换两条回执的合并，都按 run 的 `generated_at`、再 `recorded_at`、再 `sequence` 排序（`progress_review_receipt_order_key`）。
 
-漂移信号遵循规则 `progress_review_signal_rule_v1`，按标签阈值 `t` 推导；核心读取回执时会从类型化判断重新计算，并拒绝布尔值不一致的回执：
+漂移信号遵循规则 `progress_review_signal_rule_v2`，按标签阈值 `t` 推导；核心读取回执时会从类型化判断重新计算，并拒绝布尔值不一致的回执。若下面两种 `noul` 判别条件同时成立，信号为 null：
 
 - `noul`：`P(serves_acceptance) ≤ 1−t` **且** `P(evidence_increment) ≤ 1−t` 为漂移；任一概率 `≥ t` 为非漂移；其余为 null。`behavior_change` 只记录、不参与判定。
 - `choice`：`relation = off_goal` **且** `increment = no_new_evidence` 为漂移；`on_goal`、`necessary_prerequisite` 或 `new_evidence` 为非漂移；其余为 null。
+
+当 `t=0.5`、两个概率都不超过0.5且至少一个等于0.5时，判别条件重叠；v2 输出 null，不能据此形成新的 `noul` 重规划义务。默认阈值0.6的判别语义和 `choice` 规则不变。历史 `progress_review_signal_rule_v1` 回执仍按原先“先判漂移”的规则读取，不改写文件，也不自动撤销其既有政策效果。只支持v1的旧核心会拒绝v2回执；共享运行时的读取端须先升级。
 
 两道问题都针对检查点之间的变化而不是 after 状态整体：对已经满足验收的文件做改动是漂移，而服务验收条件或新增其证据的文档、负结果、前置测试不是。
 

@@ -22,7 +22,16 @@ from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
 from .driver import selected_turn_todo, session_identity_fields
 
 CODEX_CLI_SESSION_SCHEMA_VERSION = "loopx_codex_cli_session_v1"
+MANAGED_CLI_SESSION_SCHEMA_VERSION = "loopx_managed_cli_session_v1"
 SESSION_ID_MAX_CHARS = 256
+
+
+def _host_session_schema(host: str) -> str:
+    if host == "codex-cli":
+        return CODEX_CLI_SESSION_SCHEMA_VERSION
+    if host == "dsh":
+        return MANAGED_CLI_SESSION_SCHEMA_VERSION
+    raise ValueError("unsupported managed session host")
 
 
 def _lineage(request: Mapping[str, Any]) -> dict[str, str]:
@@ -79,7 +88,9 @@ def load_codex_cli_session(
     *,
     lineage: Mapping[str, str],
     session_scope: str = "todo",
+    host: str = "codex-cli",
 ) -> dict[str, Any] | None:
+    schema = _host_session_schema(host)
     path = _session_path(runtime_root, lineage, session_scope)
     if not path.exists():
         return None
@@ -89,7 +100,7 @@ def load_codex_cli_session(
         return None
     if not isinstance(value, dict):
         return None
-    if value.get("schema_version") != CODEX_CLI_SESSION_SCHEMA_VERSION:
+    if value.get("schema_version") != schema or value.get("host", "codex-cli") != host:
         return None
     if value.get("session_scope", "todo") != session_scope:
         return None
@@ -109,9 +120,11 @@ def _codex_session_goal_ref(
     *,
     lineage: Mapping[str, str],
     session_scope: str = "todo",
+    host: str = "codex-cli",
 ) -> object:
     if (
-        value.get("schema_version") != CODEX_CLI_SESSION_SCHEMA_VERSION
+        value.get("schema_version") != _host_session_schema(host)
+        or value.get("host", "codex-cli") != host
         or value.get("session_scope", "todo") != session_scope
         or any(
             value.get(field) != lineage[field]
@@ -148,6 +161,7 @@ def codex_cli_session_binding(
     *,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
     session_scope: str = "todo",
+    host: str = "codex-cli",
 ) -> dict[str, str] | None:
     lineage = _lineage({"turn_envelope": dict(turn_envelope)})
     session = select_codex_cli_session(
@@ -155,6 +169,7 @@ def codex_cli_session_binding(
         lineage=lineage,
         session_scope=session_scope,
         goal_admission=goal_admission,
+        host=host,
     )
     if session is None:
         return None
@@ -169,6 +184,7 @@ def _store_codex_cli_session(
     *,
     lineage: Mapping[str, str],
     session_scope: str = "todo",
+    host: str = "codex-cli",
     session_id: str,
     goal_ref: Mapping[str, Any] | None = None,
     session_profile_digest: str | None = None,
@@ -191,7 +207,7 @@ def _store_codex_cli_session(
             raise ValueError("session binding already exists; read back the original admission")
         # Provenance survives ordinary observations of this exact conversation,
         # but cannot migrate to a replacement session, profile or Goal lifetime.
-        prior = load_codex_cli_session(runtime_root, lineage=lineage, session_scope=session_scope)
+        prior = load_codex_cli_session(runtime_root, lineage=lineage, session_scope=session_scope, host=host)
         retained_source = None
         retained_root = None
         if prior and (prior.get("session_id"), prior.get("goal_ref"), prior.get("session_profile_digest")) == (
@@ -213,6 +229,7 @@ def _store_codex_cli_session(
             runtime_root,
             lineage=lineage,
             session_scope=session_scope,
+            host=host,
             session_profile_digest=session_profile_digest,
             session_id=session_id,
             goal_ref=goal_ref,
@@ -229,6 +246,7 @@ def _write_codex_cli_session(
     *,
     lineage: Mapping[str, str],
     session_scope: str = "todo",
+    host: str = "codex-cli",
     session_id: str,
     goal_ref: Mapping[str, Any] | None = None,
     session_profile_digest: str | None = None,
@@ -238,6 +256,7 @@ def _write_codex_cli_session(
     checkpoint_artifact_sha256: str | None = None,
     checkpoint_artifact_root: str | None = None,
 ) -> None:
+    schema = _host_session_schema(host)
     normalized_session_id = _valid_session_id(session_id)
     if not normalized_session_id:
         raise ValueError("Codex CLI returned an invalid session id")
@@ -254,9 +273,9 @@ def _write_codex_cli_session(
         descriptor = -1
         with handle:
             payload: dict[str, Any] = {
-                "schema_version": CODEX_CLI_SESSION_SCHEMA_VERSION,
+                "schema_version": schema,
                 **lineage,
-                "host": "codex-cli",
+                "host": host,
                 "session_id": normalized_session_id,
             }
             if session_scope != "todo":
@@ -270,7 +289,10 @@ def _write_codex_cli_session(
             if checkpoint_artifact_root is not None:
                 payload["checkpoint_artifact_root"] = checkpoint_artifact_root
             if operation_profile_digest is not None:
-                payload["operation_transport"] = "app-server-operation-tools-v0"
+                payload["operation_transport"] = (
+                    "dsh-native-operation-tools-v0" if host == "dsh"
+                    else "app-server-operation-tools-v0"
+                )
                 payload["operation_profile_digest"] = operation_profile_digest
                 payload["operation_model"] = operation_model
                 payload["operation_reasoning_effort"] = operation_reasoning_effort
@@ -309,6 +331,7 @@ def select_codex_cli_session(
     *,
     lineage: Mapping[str, str],
     session_scope: str = "todo",
+    host: str = "codex-cli",
     goal_admission: FirstPartyHostGoalAdmission | None = None,
 ) -> dict[str, Any] | None:
     """Select through the existing Goal lifetime fence, then validate identity.
@@ -317,6 +340,7 @@ def select_codex_cli_session(
     silently create a replacement conversation.
     """
     session_identity_fields(session_scope)
+    _host_session_schema(host)
 
     def read() -> dict[str, Any] | None:
         return _read_codex_cli_session_document(
@@ -332,6 +356,7 @@ def select_codex_cli_session(
                 item,
                 lineage=lineage,
                 session_scope=session_scope,
+                host=host,
             ),
         )
         if goal_admission is not None
@@ -339,7 +364,7 @@ def select_codex_cli_session(
     )
     if value is None:
         return None
-    if _codex_session_goal_ref(value, lineage=lineage, session_scope=session_scope) == {
+    if _codex_session_goal_ref(value, lineage=lineage, session_scope=session_scope, host=host) == {
         "malformed": True
     }:
         if session_scope == "agent":

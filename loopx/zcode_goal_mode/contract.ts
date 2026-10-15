@@ -26,6 +26,12 @@ export type ZCodeGoalReadback = {
   native: NativeObservation | null; quota: QuotaObservation | null;
   actions: ZCodeGoalAction[];
 };
+/** Current owning requirements the native objective was delivered under: criterion and
+ * explicit-source revisions, never a whole-prompt hash. Core supplies it on bind/start/resume. */
+export type GoalBasis = {
+  acceptance: {revision: number | null; contract_digest: string | null} | null;
+  authority_sources: {id: string; revision: number | string | null}[];
+};
 export type NativeRequest = {
   action: ZCodeGoalAction; project: string; registry: string;
   goal_id: string; goal_ref: GoalRef; agent_id: string;
@@ -33,7 +39,27 @@ export type NativeRequest = {
   cli_command?: string[]; cli_path?: string; loopx_command: string[]; task_body?: string;
   validation_command: string[];
   goal_creation_operation_id?: string | null; model_selection?: ZCodeModelSelection;
+  goal_basis?: GoalBasis;
 };
+export function isGoalBasis(value: unknown): value is GoalBasis {
+  const basis = value as GoalBasis;
+  if (!basis || typeof basis !== "object" || Array.isArray(basis)) return false;
+  const acceptance = basis.acceptance;
+  if (acceptance !== null && (!acceptance || typeof acceptance !== "object"
+    || (acceptance.revision !== null && !Number.isSafeInteger(acceptance.revision))
+    || (acceptance.contract_digest !== null && typeof acceptance.contract_digest !== "string"))) return false;
+  return Array.isArray(basis.authority_sources) && basis.authority_sources.length <= 4096
+    && basis.authority_sources.every(row => row && typeof row === "object" && typeof row.id === "string" && row.id.length > 0
+      && (row.revision === null || typeof row.revision === "string" || Number.isSafeInteger(row.revision)));
+}
+/** Canonical comparison: order of declared sources is not a semantic change. */
+export function sameGoalBasis(a: GoalBasis, b: GoalBasis): boolean {
+  const canonical = (basis: GoalBasis) => JSON.stringify({
+    acceptance: basis.acceptance === null ? null : {revision: basis.acceptance.revision, contract_digest: basis.acceptance.contract_digest},
+    authority_sources: [...basis.authority_sources].map(row => [row.id, row.revision]).sort((x, y) => String(x[0]).localeCompare(String(y[0]))),
+  });
+  return canonical(a) === canonical(b);
+}
 export function sameBinding(a: NativeRequest, b: NativeRequest): boolean {
   return a.project === b.project && a.registry === b.registry && a.agent_id === b.agent_id
     && a.goal_ref.goal_id === b.goal_ref.goal_id

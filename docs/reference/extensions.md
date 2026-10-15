@@ -302,7 +302,11 @@ names the exact repair command.
 For a separately distributed provider, pass `--manifest <extension.toml>`.
 `upgrade` validates and probes the new manifest before changing the active
 revision. `rollback` probes the previous revision before switching back. A
-failed probe leaves the current revision untouched. Activation state contains
+failed probe leaves the current revision untouched. Neither operation changes
+the enablement decision: a disabled extension stays disabled across an upgrade
+or rollback until an explicit `enable`. The operation result reports the
+enablement state it committed, so an `enable` or `disable` that completes while
+the probe runs shows in the result as well as in `list`. Activation state contains
 validated manifest snapshots and revision ids in the private LoopX runtime
 root; it does not contain provider output or credentials.
 
@@ -596,6 +600,15 @@ unloadable validators fail closed. Core does not freeze any one domain's view
 into core. Dashboard's generic status parser consumes only that compact
 contract. A built-in renderer may separately own a provider view schema, as the
 Finance renderer does for `decision_research_dashboard_v0`.
+
+The public `loopx.extensions.presentation` API also exports
+`find_public_safe_local_path(text)`. Providers use this shared path classifier
+through their existing presentation API rather than importing its internal Core
+owner. It does not certify that text is secret-free or authorize publication;
+providers retain their complete view validation and the normal publication gate.
+A provider that requires this utility must reject presentation when it is
+unavailable, while unrelated non-presentation operations may retain their
+explicit legacy validation path.
 
 The validator executes inside the active runtime interpreter - the extension's
 own environment, not the LoopX process - and LoopX launches it isolated

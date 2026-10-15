@@ -757,6 +757,45 @@ def _authoring_input_migration(
     return limits, [reason + "; bounded one-time growth"] if limits else []
 
 
+def _continuation_instruction_migration(
+    base: dict[str, Any], candidate: dict[str, Any],
+) -> tuple[dict[Metric, int], list[str]]:
+    """Qualify only reviewed instruction transitions on their actual carriers."""
+    surface = str(base["row_id"]).split("/")[1]
+    before = base.get("continuation_instructions") or {}
+    after = candidate.get("continuation_instructions") or {}
+
+    def migrated(clause: str) -> bool:
+        return (before.get(f"{clause}_before") is True
+                and before.get(f"{clause}_after") is False
+                and after.get(f"{clause}_before") is False
+                and after.get(f"{clause}_after") is True)
+
+    chars = 0
+    if surface in {
+        "quota_should_run", "loopx_turn_plan", "quota_should_run_all_detail",
+        "quota_should_run_goal_boundary_detail", "quota_should_run_scheduler_detail",
+        "quota_should_run_todo_summary_detail", "quota_should_run_turn_envelope",
+        "quota_should_run_user_todo_summary_detail", "quota_should_run_vision_detail",
+    }:
+        # Same-fixture context +208, with one character of receipt metadata
+        # variation; optional replan guidance +363. Do not loosen line budgets.
+        if migrated("context"):
+            chars += 224
+        if migrated("replan"):
+            chars += 384
+    elif surface in {"heartbeat_prompt_thin", "heartbeat_prompt_brief", "heartbeat_prompt_compact"}:
+        # Complete stop/correction rollout: thin +154, brief +163, compact +215.
+        if migrated("stop"):
+            chars = 224
+    if not chars:
+        return {}, []
+    return {
+        "chars": chars, "utf8_bytes": chars, "lines": 0,
+        "compact_payload_chars": chars if base.get("format") == "json" else 0,
+    }, ["reviewed continuation instructions migrated; bounded one-time growth"]
+
+
 def _compare_row_growth(
     base: dict[str, Any], candidate: dict[str, Any], *,
     migration: _SchemaMigrationState,
@@ -777,6 +816,8 @@ def _compare_row_growth(
     review_signals.extend(fence_signals)
     authoring_allowance, authoring_signals = _authoring_input_migration(base, candidate)
     review_signals.extend(authoring_signals)
+    continuation_allowance, continuation_signals = _continuation_instruction_migration(base, candidate)
+    review_signals.extend(continuation_signals)
     deltas: dict[str, int | None] = {}
     allowances: dict[str, int | None] = {}
     for metric in ("chars", "utf8_bytes", "lines", "compact_payload_chars"):
@@ -818,6 +859,7 @@ def _compare_row_growth(
             projection_allowance.get(metric, 0),
             fence_allowance.get(metric, 0),
             authoring_allowance.get(metric, 0),
+            continuation_allowance.get(metric, 0),
         )
         # Thin installed prompts contain bilingual lifecycle instructions. A
         # small character-level clarification can cost three bytes per CJK

@@ -119,16 +119,21 @@ class LarkPrivateConversations:
                           "--as", "bot", "--no-reactions", "--format", "json"]))
 
             group = selected["binding"].get("audience") == "group"
+            observation = None
             if group:
                 # Both projections read this exact message under the same App.
                 # The root is read only after canonical ancestry checks below.
                 # Outbound provenance needs no display rendering. Admission
                 # retains that projection unchanged for text and media inputs.
                 if render_content:
-                    with ThreadPoolExecutor(max_workers=2) as reads:
+                    # The fresh Bot identity and exact message projections
+                    # are independent reads. Join all three before checking
+                    # the root mention; Core still rechecks under its fences.
+                    with ThreadPoolExecutor(max_workers=3) as reads:
                         current = reads.submit(self._group_source_message, record["profile"], event["message_id"])
                         display = reads.submit(rendered)
-                        canonical, result = current.result(), display.result()
+                        identity = reads.submit(self.bindings.observe, record["profile"])
+                        canonical, result, observation = current.result(), display.result(), identity.result()
                     message = _message(json_payload(result), event["message_id"])
                 else:
                     canonical = self._group_source_message(record["profile"], event["message_id"])
@@ -171,7 +176,8 @@ class LarkPrivateConversations:
                     original = (message if root == event["message_id"] else
                                 self._group_source_message(record["profile"], root))
                     from .event_inbox import lark_event_mentions_bot
-                    observation = self.bindings.observe(record["profile"])
+                    if observation is None:
+                        observation = self.bindings.observe(record["profile"])
                     if (not original or original.get("chat_id") != event["chat_id"]
                             or original.get("sender", {}).get("sender_type") != "user"
                             or original.get("parent_id") or original.get("root_id") not in (None, "", root)
@@ -216,8 +222,9 @@ class LarkPrivateConversations:
                 return text[len(leading[0]["key"]):].strip()
         return text
 
-    def _inbox(self, record: dict[str, Any]) -> Path:
-        observation = self.bindings.observe(record["profile"])
+    def _inbox(self, record: dict[str, Any], *, observation: dict[str, Any] | None = None) -> Path:
+        if observation is None:
+            observation = self.bindings.observe(record["profile"])
         scope = record["source"]["source_ref"]
         path = self.runtime_root / ".loopx" / "config" / "private-chat" / f"{scope}.json"
         _atomic_write_json(path, {
@@ -625,29 +632,86 @@ class LarkPrivateConversations:
     def reconcile(self) -> int:
         return sum(self.reconcile_request(path) for path in self.pending_delivery_paths())
 
+    def _received_during_recovery(self, path: Path) -> None:
+        """Acknowledge durable ordinary admission independently of recovery.
+
+        This is presentation only and holds only the transport fence. Core
+        still performs every recovery check on the existing reply worker.
+        """
+        if not self.reaction_feedback:
+            return
+        with exclusive_file_lock(path, operation="deliver_private_chat_request"):
+            record = _read_json(path)
+            if (record["status"] != "accepted"
+                    or record.get("feedback", {}).get("received", {}).get("ok")):
+                return
+            native = self.core.read_request(record["request_ref"])
+            if (native["status"] != "accepted" or native.get("agent_target")
+                    or native.get("command") or any(native.get(key) != record.get(key)
+                        for key in ("request_ref", "binding_id", "source", "session_id", "turn_id"))):
+                return
+            store = self.core.controller.store
+            session = store.load_session(record["session_id"])
+            turn = store.load_turn(record["session_id"], record["turn_id"])
+            saved = (session or {}).get("project_context") or (session or {}).get("steward_context")
+            if (not session or not turn or not saved or session.get("status") == "closed"
+                    or turn.get("session_id") != session["session_id"]
+                    or turn.get("client_turn_id") != f"external-{record['request_ref']}"
+                    or identity_ref(saved["provider_ref"], record["event"]["message_id"]) != record["request_ref"]
+                    or record["source"] != lark_private_source(
+                        provider_ref=saved["provider_ref"], event=record["event"])):
+                return
+            selected = self.bindings.resolve(binding_id=record["binding_id"],
+                session_context=saved, include_observation=True, **record["source"])
+            if (record["profile"] != selected["binding"]["transport_ref"]
+                    or session.get("goal_id") != ("loopx-manager" if selected["binding"]["context_kind"] == "steward" else None)
+                    or session.get("channel_id") != selected["channel_id"]):
+                return
+            self._feedback(path, record, inbox=lambda: self._inbox(record, observation=selected["observation"]))
+
     def reconcile_request(self, path: Path) -> int:
         # Repair only this persisted source. Core still owns admission, recovery
         # and the shared Session queue/fence; transport workers never run models.
         row = _read_json(path)
         if row["status"] == "captured":
             self.admit(row["profile"], row["event"])
+            row = _read_json(path)
         native_path = self.core.root / f"{row['request_ref']}.json"
         if native_path.exists():
-            self.core.recover(request_ref=row["request_ref"])
+            if (self.reaction_feedback and row["status"] == "accepted"
+                    and not row.get("feedback", {}).get("received", {}).get("ok")):
+                # One bounded presentation job per existing reply worker. A
+                # slow host cannot delay Get, nor can slow provider feedback
+                # delay Core recovery. Join before processing/final delivery;
+                # the existing Inbox journal still owns uncertain writes.
+                with ThreadPoolExecutor(max_workers=1) as feedback:
+                    received = feedback.submit(self._received_during_recovery, path)
+                    self.core.recover(request_ref=row["request_ref"])
+                    try:
+                        received.result()
+                    except (KeyError, ValueError, OSError):
+                        pass  # Presentation never suppresses durable recovery.
+            else:
+                self.core.recover(request_ref=row["request_ref"])
         with exclusive_file_lock(path, operation="deliver_private_chat_request"):
             record = _read_json(path)
             if record["status"] in {"captured", "delivered"}:
                 return 0
             config: Path | None = None
+            selected: dict[str, Any] | None = None
 
             def inbox() -> Path:
                 nonlocal config
                 if config is None:
-                    config = self._inbox(record)
+                    # The binding owner just verified this exact source. Only
+                    # reuse its presentation metadata; outbound provenance and
+                    # Core recovery/admission keep their own fresh checks.
+                    config = self._inbox(record, observation=selected["observation"] if selected else None)
                 return config
 
             try:
-                self.bindings.resolve(binding_id=record["binding_id"], **record["source"])
+                selected = self.bindings.resolve(binding_id=record["binding_id"],
+                                                 include_observation=True, **record["source"])
                 if record["status"] in {"command_queued", "command_completed", "commission_running"}:
                     native = self.core.read_request(record["request_ref"])
                     if native["status"] == "command_queued":

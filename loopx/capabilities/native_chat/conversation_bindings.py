@@ -178,7 +178,7 @@ class ChatConversationBindings:
     def resolve(self, *, binding_id: str, source_ref: str, sender_ref: str,
                 private_human_message: bool, session_context: dict[str, Any] | None = None,
                 group_ref: str | None = None, topic_ref: str | None = None,
-                group_human_message: bool = False) -> dict[str, Any]:
+                group_human_message: bool = False, include_observation: bool = False) -> dict[str, Any]:
         current = self.read()
         row = next((item for item in current.get("bindings", []) if item.get("binding_id") == binding_id), None)
         if row is None:
@@ -186,15 +186,20 @@ class ChatConversationBindings:
         registry_scope = {}
         if row.get("goal_scope") == "all_registered":
             registry_scope["available_goal_ids"] = self.goal_scope_ids(row)
-        return self._core("collaboration.conversation.bound_context", {
+        observation = dict(self.observe(row["transport_ref"]))
+        selected = self._core("collaboration.conversation.bound_context", {
             "current": current, "binding_id": binding_id, "source_ref": source_ref, "sender_ref": sender_ref,
-            "private_human_message": private_human_message, "observation": self.observe(row["transport_ref"]),
+            "private_human_message": private_human_message, "observation": observation,
             "available_projects": self.projects.available(),
             **registry_scope,
             **({"session_context": session_context} if session_context is not None else {}),
             **({"group_ref": group_ref, "topic_ref": topic_ref,
                 "group_human_message": group_human_message} if group_ref is not None or topic_ref is not None or group_human_message else {}),
         })
+        # Presentation may need the name from this exact verified read. Keep it
+        # outside the persisted context and opt-in; it is never a cached grant
+        # or a substitute for the next admission/delivery owner's fresh check.
+        return {**selected, "observation": observation} if include_observation else selected
 
     def goal_scope_ids(self, binding: dict[str, Any]) -> list[str]:
         if binding.get("goal_scope") != "all_registered":

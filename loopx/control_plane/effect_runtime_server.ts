@@ -1,7 +1,6 @@
 import { writeSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
-import { flushCompileCache } from "node:module";
-import { readFile, rm, type FileHandle } from "node:fs/promises";
+import { type FileHandle } from "node:fs/promises";
 
 import type { JsonObject } from "./effect_program.ts";
 import {
@@ -13,6 +12,7 @@ import {
   effectRuntimeErrorPayload,
 } from "./effect_runtime_errors.ts";
 import { atomicWriteJson, withFileMutationLock } from "./effect_runtime_io.ts";
+import { retireRuntime } from "./effect_runtime_compile_cache.ts";
 import { sqliteRuntimeIdentity } from "./coordination/sqlite_runtime.ts";
 import {openPrivateResponseSink, readPrivateJsonSnapshot, writePrivateResponse} from "./effect_runtime_snapshot.ts";
 import {
@@ -35,6 +35,8 @@ const LOCAL_SNAPSHOT_METHODS = new Set([
   "goal.checkpoint_read_context.commit",
   "goal.checkpoint_read_context.inspect_replay",
   "performance_diagnosis.inspect",
+  "state.recovery.archive.verify",
+  "state.recovery.manifest.verify",
 ]);
 const DEFAULT_IDLE_MS = 5 * 60 * 1_000;
 // Bounds for LOOPX_EFFECT_RUNTIME_IDLE_MS. The upper bound is the largest
@@ -269,24 +271,7 @@ server.on("close", () => {
     if (pendingRequests > 0) {
       await new Promise<void>((resolve) => { resolveDrain = resolve; });
     }
-    // Retiring the locator lets a fixture remove the private namespace. Flush
-    // compiled code first, so Node's exit does not recreate a cleaned cache.
-    // This optional optimization never decides whether shutdown is permitted.
-    flushCompileCache();
-    await withFileMutationLock(infoPath, async () => {
-      let published: Record<string, unknown>;
-      try {
-        published = JSON.parse(await readFile(infoPath, "utf8"));
-      } catch {
-        return;
-      }
-      // A timed-out client may have published a replacement server. The old
-      // server must never erase that server's locator when it finally exits.
-      if (published.token === token && published.pid === process.pid &&
-          published.fingerprint === fingerprint) {
-        await rm(infoPath, { force: true });
-      }
-    });
+    await retireRuntime({ infoPath, token, pid: process.pid, fingerprint });
   })().finally(() => process.exit(0));
 });
 

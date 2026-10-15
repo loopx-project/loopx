@@ -77,9 +77,10 @@ across observers: receipts are ordered by the run's `generated_at`, then
 loader, in the load limit, in the newest-revision check and in the join of two
 receipts for one transition.
 
-The drift signals follow rule `progress_review_signal_rule_v1` with the label
+The drift signals follow rule `progress_review_signal_rule_v2` with the label
 threshold `t`; the core recomputes them from the typed judgments when it reads a
-receipt and rejects any receipt whose booleans disagree:
+receipt and rejects any receipt whose booleans disagree. If both `noul`
+classification conditions below hold, the signal is null:
 
 - `noul`: `P(serves_acceptance) ≤ 1−t` **and** `P(evidence_increment) ≤ 1−t` is
   drift; either probability `≥ t` is not drift; anything else is null.
@@ -87,6 +88,14 @@ receipt and rejects any receipt whose booleans disagree:
 - `choice`: `relation = off_goal` **and** `increment = no_new_evidence` is
   drift; `on_goal`, `necessary_prerequisite` or `new_evidence` is not drift;
   anything else is null.
+
+At `t=0.5`, the conditions overlap when both probabilities are at most 0.5
+and at least one equals 0.5. Rule v2 returns null, so those receipts cannot
+form a new `noul` replan obligation. The default 0.6 classification and `choice`
+rule are unchanged. Historical `progress_review_signal_rule_v1` receipts retain
+their original drift-first rule on read; files and existing policy effects are
+not migrated automatically. Older cores that only support v1 reject v2 receipts;
+upgrade readers of a shared runtime before producing v2 receipts.
 
 Both questions are asked about the change between checkpoints, not the after
 state as a whole, so churn on a file that already satisfies acceptance is drift,

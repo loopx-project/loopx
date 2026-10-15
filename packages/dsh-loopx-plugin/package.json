@@ -22,6 +22,14 @@
       "types": "./lib/types/observer.d.ts",
       "default": "./lib/observer.js"
     },
+    "./native-operation-context": {
+      "types": "./lib/types/native-operation-context.d.ts",
+      "default": "./lib/native-operation-context.js"
+    },
+    "./native-operation": {
+      "types": "./lib/types/native-operation.d.ts",
+      "default": "./lib/native-operation.js"
+    },
     "./client": {
       "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"

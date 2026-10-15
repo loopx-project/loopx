@@ -182,6 +182,7 @@ CONSUMER_MODULES = (
     "loopx.control_plane.collaboration.inbox",
     "loopx.control_plane.collaboration.links",
     "loopx.control_plane.collaboration.peers",
+    "loopx.control_plane.collaboration.request_control_source",
     "loopx.control_plane.collaboration.result_files",
     "loopx.control_plane.coordination.local_authority_shadow_history",
     "loopx.control_plane.coordination.shadow_management",
@@ -206,6 +207,7 @@ CONSUMER_MODULES = (
     "loopx.extensions.lark.document_comment_provider",
     "loopx.extensions.openviking_semantic_preference.history_export",
     "loopx.extensions.presentation",
+    "loopx.hosts.codex_checkpoint",
     "loopx.presentation.chat_bundle",
     "loopx.presentation.static_site",
 )

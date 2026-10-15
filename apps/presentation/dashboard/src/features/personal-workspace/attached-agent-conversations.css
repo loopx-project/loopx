@@ -1,0 +1,22 @@
+.attached-agent-conversations {margin: 12px 24px;}
+.attached-conversation-entry {font: inherit; padding: 8px 12px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); cursor: pointer;}
+.attached-conversation-dialog {position: fixed; inset: 0; margin: auto; width: min(960px, calc(100vw - 24px)); max-height: calc(100dvh - 48px); padding: 0; border: 1px solid var(--pw-line); border-radius: 12px; background: var(--pw-card); color: var(--pw-text); font: inherit;}
+.attached-conversation-dialog[open] {display: flex; flex-direction: column;}
+.attached-conversation-dialog::backdrop {background: rgb(0 0 0 / 32%);}
+.attached-conversation-heading {display: flex; align-items: center; justify-content: space-between; padding: 16px; gap: 16px; border-bottom: 1px solid var(--pw-line);}
+.attached-conversation-heading h2 {margin: 0; font-size: var(--text-heading);}
+.attached-conversation-heading button {font: inherit; padding: 8px 12px; color: inherit; background: var(--pw-card); border: 1px solid var(--pw-line); border-radius: 6px;}
+.attached-conversation-content {padding: 0 16px 16px; font-size: var(--text-body); min-height: 0; overflow: auto;}
+.attached-conversation-content > p {color: var(--pw-text);}
+.attached-conversation-content label {display: grid; gap: 8px; margin-block: 12px;}
+.attached-conversation-content select, .attached-conversation-content textarea {font: inherit; padding: 8px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-card); color: var(--pw-text);}
+.attached-conversation-content textarea {min-height: 88px; width: 100%; resize: vertical;}
+.attached-conversation-content button {font: inherit; padding: 8px 12px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); cursor: pointer;}
+.attached-conversation-content button:disabled, .attached-conversation-content button[aria-disabled="true"] {opacity: .5; cursor: default;}
+.attached-conversation-content .attached-conversation-open {border: 0; padding: 0; border-radius: 0; background: transparent; text-decoration: underline; text-underline-offset: 3px;}
+.attached-conversation-messages {max-height: min(40vh, 360px); overflow: auto; overscroll-behavior: contain; margin-block: 16px;}
+.attached-conversation-messages article {padding-block: 16px; border-top: 1px solid var(--pw-line); overflow-wrap: anywhere;}
+.attached-conversation-messages header {display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline;}
+.attached-conversation-messages time {font-size: var(--text-caption); color: var(--pw-muted);}
+.attached-conversation-messages [data-role="user"] {padding-inline: 12px; background: var(--pw-hover); border-radius: 6px;}
+@media (max-width: 640px) {.attached-agent-conversations {margin: 12px;} .attached-conversation-messages {max-height: 48vh;}}

@@ -1258,10 +1258,40 @@ This is a fragment, not a complete collector configuration. `execution_config`
 is project-relative, without traversal or symlinks, and remains outside the
 member workspace. The selected binding must grant that registered requester
 the operation's exact Agent/Todo. Use `codex-cli`, `--codex-operation-tools`
-and the original pinned model/effort. Do not select `fresh`, change the owning
+and the original pinned model/effort, or the explicit DSH entry described below.
+Do not select `fresh`, change the owning
 home, binary, sandbox or effective MCP configuration, or retarget the Todo.
 Prepare the operation in this same managed session/profile. Existing delegation
 inspection and ordinary Turn admission still determine whether it can run.
+
+For the candidate DSH transport, prepare through the normal CLI with
+`--host dsh --dsh-operation-module /absolute/native-operation.js` and retain
+those exact options in the original delegation binding. Also pin the original
+`--dsh-runtime-bin`, `--dsh-home`, `--dsh-cordis`, provider/model/effort and token
+budget. The supported restart candidate is Python SDK `0.2.1a3` built from
+official source `2fbf4359` plus explicit npm runtime
+`@deepseek-ai/dsh@0.2.1-alpha.3`; it is not a published Python runtime release.
+SDK/bundled runtime `0.1.5rc1` cannot resume across processes. Do not substitute
+`--dsh-runner`, a replacement home/session, or a changed provider endpoint.
+The native module, SDK/runtime closure, effective profile, patch and endpoint
+hash are compared again before model input. Missing/corrupt history refuses.
+
+`--operation-source-route-json '{"host_surface":"registered-surface","thread_id":"registered-thread"}'`
+selects an already registered return audience when required. The original
+source is not executor authentication. `--confirmed-operation-id` is the
+callback-owned exact locator; both flags retain their old Codex aliases.
+Do not supply a locator as proof of confirmation. Removing
+`--dsh-operation-module` disables this transport for subsequent Turns; it does
+not cancel an existing operation or reconcile an uncertain result. Keep the
+old pinned SDK/runtime/profile available for rollback and original recovery.
+Ordinary DSH and legacy Codex paths retain their existing behavior.
+
+中文：DSH 候选通过正常 CLI 显式加载绝对路径原生模块，并把相同参数保留在原
+delegation binding。保持原 runtime/home/patch、provider、模型/深度、token
+预算及 endpoint；不能换 session 绕过恢复失败。缺失/损坏历史在模型输入前拒绝。
+配置可用不等于运行资格；夹具确认、派发、规范结果、原卡回传和真实交易分别验收。
+移除模块开关只关闭后续 Turn 的该 transport，不取消旧操作或解除未知结果；保留
+旧 pin 供回滚与原操作恢复，不改全局安装。
 
 If the original standalone operation Session was prepared **without** a
 delegation MCP server, its profile includes `mcp_server: null`. Preserve that

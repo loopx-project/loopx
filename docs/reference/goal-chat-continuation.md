@@ -149,6 +149,12 @@ messages; images use the ordinary conversation after pausing.
   in-flight requests can overshoot it and member usage is accounted separately.
 - Browser refresh reconnects to the existing local run. After service loss,
   reconnect restores and pauses the original native thread before resuming.
+  Stop and recovery verify non-active Goal state with a fresh host read after
+  requesting pause. If readback fails, disappears or remains active, the owned
+  transport is closed and the operation fails; an ACK is not a pause receipt.
+  Late native turn-start events are used only to interrupt that turn, never to
+  inject queued messages or resume context after Stop. Already-submitted effects
+  retain their original reconciliation and settlement obligations.
   The Chat hard timeout remains in force; this is not an unattended daemon.
 - When a delegated result is first accepted, the Chat service continues the
   lead once through the same admission as `resume`. The wake belongs to the
@@ -213,6 +219,9 @@ For a disposable mixed-team setup, use the
 升级底层线程；已有未结束的原生 Goal 时拒绝替换。以后恢复都沿用该线程。
 服务重启先恢复并暂停原线程；浏览器刷新不会另起运行。运行仍有硬超时，尚非
 无人值守 daemon。配置文件在未结束的 Goal 中保持摘要绑定，改变后需先协调处理。
+请求暂停后会重新读取宿主 Goal，确认已非 active；读回失败、目标消失或仍 active 时
+关闭自有连接并返回失败，ACK 不算暂停回执。Stop 后迟到的 start 事件仅用于中断对应
+回合，不再注入排队消息或恢复上下文；已提交效果仍保留原操作的对账和结算义务。
 
 成员结果首次被接受时，Chat 服务按与 `resume` 相同的准入规则继续协调员一次。
 唤醒绑定在「启动该操作的回合所属会话」上：同一 Goal 与身份下的其他会话不会被选为

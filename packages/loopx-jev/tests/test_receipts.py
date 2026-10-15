@@ -10,6 +10,16 @@ from loopx.capabilities.progress_review.receipt import (
     load_progress_review_receipts,
     normalize_progress_review_receipt,
 )
+from loopx.control_plane.status.autonomous_replan_projection import (
+    build_autonomous_replan_obligation,
+)
+from loopx.control_plane.work_items.autonomous_replan_ack import (
+    autonomous_replan_ack_recorded,
+)
+from loopx.control_plane.work_items.external_progress_review import (
+    external_progress_review_obligation,
+)
+from loopx.control_plane.work_items.progress_review_policy import progress_review_goal_policy
 from loopx_jev import drift
 from loopx_jev.progress import choice_drift_signal, noul_drift_signal
 from loopx_jev.protocol import validate_noul
@@ -63,7 +73,7 @@ def test_noul_validation_and_drift_signal_derivation() -> None:
     for bad in ({"type": "choice"}, {"type": "noul", "noul": 1.5}, {"type": "noul", "noul": True}, {"type": "noul"}):
         with pytest.raises(ValueError):
             validate_noul(bad)
-    # Rule v1 gates on serves_acceptance and evidence_increment; behaviour change is recorded only.
+    # Behaviour change is recorded only; it does not protect unrelated work.
     assert noul_drift_signal(0.05, 0.1, 0.6) is True
     assert noul_drift_signal(0.9, 0.1, 0.6) is False
     assert noul_drift_signal(0.05, 0.7, 0.6) is False
@@ -95,7 +105,7 @@ def test_completed_drift_evaluation_writes_a_normalized_goal_receipt(runtime_stu
     assert receipt["run"]["turn_instance_id"] == "turn-1"
     assert receipt["run"]["agent_id"] == "worker"
     assert receipt["question_version"] == "scoped-progress-sentinel-v2"
-    assert receipt["signal_rule_version"] == "progress_review_signal_rule_v1"
+    assert receipt["signal_rule_version"] == "progress_review_signal_rule_v2"
     assert receipt["reason"] is None
     assert receipt["model"] == "fixture-v1"
     assert receipt["timing_ns"]["evaluation"] >= 0
@@ -106,6 +116,59 @@ def test_completed_drift_evaluation_writes_a_normalized_goal_receipt(runtime_stu
     assert view["receipts_written"] == 1
     assert view["events"][0]["receipt"]["status"] == "written"
     assert view["events"][0]["drift_signal"] == {"noul": True, "choice": True}
+
+
+@pytest.mark.parametrize(
+    ("threshold", "serves", "evidence", "expected"),
+    [
+        (0.5, 0.5, 0.5, None),
+        (0.5, 0.5, 0.49, None),
+        (0.5, 0.49, 0.5, None),
+        (0.5, 0.49, 0.49, True),
+        (0.5, 0.51, 0.49, False),
+        (0.6, 0.5, 0.5, None),
+        (0.6, 0.2, 0.2, True),
+    ],
+)
+def test_observer_only_forms_noul_obligation_from_decisive_drift(
+    runtime_study, threshold, serves, evidence, expected
+):
+    root, repo, basis, config, runtime = runtime_study
+    configured = json.loads(config.read_text())
+    configured["minimum_label_probability"] = threshold
+    atomic_json(config, configured)
+
+    def send(request, config, key):
+        return {"response": response(request, ["off_goal", "no_new_evidence"], nouls={
+            "behavior_change": 0.5, "serves_acceptance": serves, "evidence_increment": evidence,
+        })}
+
+    for sequence in (1, 2):
+        change_and_queue((root, repo, basis, config), sequence)
+        drained = drift.drain(root, config, transport=send, credential=lambda: "fixture")
+        assert drained["processed"][0]["status"] == "completed"
+    receipts, rejected = load_progress_review_receipts(runtime, "drift-test")
+    assert rejected == 0 and len(receipts) == 2
+    assert all(row["signal_rule_version"] == "progress_review_signal_rule_v2" for row in receipts)
+    assert all(row["drift_signal"] == {"noul": expected, "choice": True} for row in receipts)
+    runs = [{
+        **row["run"], "classification": "bounded_delivery",
+        "progress_observation": {
+            "schema_version": "typed_progress_observation_v0", "result_class": "advanced",
+            "hypothesis_id": f"probe-{row['sequence']}",
+        },
+    } for row in receipts]
+    formed = {}
+    for mode in ("off", "shadow", "assist"):
+        policy = progress_review_goal_policy({"control_plane": {"progress_review": {
+            "mode": mode, "contract_revision": receipts[0]["contract_revision"],
+        }}})
+        formed[mode] = external_progress_review_obligation(
+            runs, external_progress_review={"policy": policy, "receipts": receipts},
+            agent_id="worker", ack_recorded=autonomous_replan_ack_recorded,
+            build_obligation=build_autonomous_replan_obligation, agent_todos=None,
+        ) is not None
+    assert formed == {"off": False, "shadow": False, "assist": expected is True}
 
 
 def test_on_goal_and_abstained_evaluations_never_carry_a_drift_flag(runtime_study):

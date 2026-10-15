@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -152,7 +153,7 @@ def normalize_canary_command(command: str, repo_root: Path | None = None) -> dic
         "argv": argv,
         "display_argv": _display_argv(argv, repo_root=repo_root),
         "injected_args": injected_args,
-        "script": str(script.relative_to(repo_root)),
+        "script": script.relative_to(repo_root).as_posix(),
     }
 
 
@@ -164,7 +165,7 @@ def _display_argv(argv: list[str], repo_root: Path | None = None) -> list[str]:
     for index, value in enumerate(displayed[1:], start=1):
         path = Path(value)
         if path.is_absolute() and _is_relative_to(path.resolve(), repo_root.resolve()):
-            displayed[index] = str(path.resolve().relative_to(repo_root.resolve()))
+            displayed[index] = path.resolve().relative_to(repo_root.resolve()).as_posix()
     return displayed
 
 
@@ -258,6 +259,35 @@ def _restore_tracked_paths(paths: list[str], repo_root: Path | None = None) -> d
     }
 
 
+def _retire_fixture_runtimes(root: Path, *, timeout: float = 15) -> None:
+    """Stop all source revisions in this newly created private smoke root."""
+    from ..control_plane.effect_runtime import _read_info, _stop_effect_runtime
+
+    deadline = time.monotonic() + timeout
+    for namespace in sorted(root.glob("loopx-effect-runtime-*")):
+        if namespace.is_symlink() or not namespace.is_dir():
+            continue
+        for path in sorted(namespace.glob("runtime-*.json")):
+            # Never follow fixture links into an unrelated runtime namespace.
+            if path.is_symlink() or not path.is_file():
+                continue
+            # The namespace can contain a temporary base checkout's revision.
+            # Read and validate one snapshot before retirement removes it.
+            info = _read_info(path, fingerprint=None)
+            if info is None:
+                continue
+            if path.name != f"runtime-{info['fingerprint'][:16]}.json":
+                raise RuntimeError(f"invalid managed runtime fingerprint: {path.name}")
+            remaining = (deadline - time.monotonic()) / 2
+            if remaining <= 0:
+                raise RuntimeError("managed runtime cleanup deadline exceeded")
+            result = _stop_effect_runtime(
+                path, info, timeout=min(5, remaining), wait_for_process_exit=True,
+            )
+            if result["status"] != "stopped":
+                raise RuntimeError(f"managed runtime still exiting: {path.name}")
+
+
 def _run_check(
     check: dict[str, Any],
     *,
@@ -280,9 +310,10 @@ def _run_check(
         return result
 
     started = time.monotonic()
+    cleanup_error: str | None = None
+    root = Path(tempfile.mkdtemp(prefix="loopx-smoke-"))
     try:
-        with tempfile.TemporaryDirectory(prefix="loopx-smoke-") as temporary:
-            root = Path(temporary)
+        try:
             home = root / "home"
             home.mkdir()
             env = {**os.environ, "LOOPX_USAGE_PING": "0", "HOME": str(home),
@@ -297,35 +328,32 @@ def _run_check(
                 ("OPENCODE_CONFIG_DIR", ".config/opencode"),
             ):
                 env[name] = str(home / directory)
+            with subprocess.Popen(
+                normalized["argv"], cwd=repo_root, env=env,
+                text=True, encoding="utf-8", errors="replace",
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                start_new_session=os.name == "posix",
+            ) as process:
+                try:
+                    stdout, stderr = process.communicate(timeout=timeout_seconds)
+                except BaseException:
+                    # Deadline/cancellation must stop the owned children
+                    # before deleting their fixture, even after leader exit.
+                    # Reuse OS transport; keep the caller's existing budget.
+                    terminate_process_tree(process, grace_seconds=0)
+                    raise
+                completed = subprocess.CompletedProcess(
+                    normalized["argv"], process.returncode, stdout, stderr,
+                )
+        finally:
             try:
-                with subprocess.Popen(
-                    normalized["argv"], cwd=repo_root, env=env,
-                    text=True, encoding="utf-8", errors="replace",
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    start_new_session=os.name == "posix",
-                ) as process:
-                    try:
-                        stdout, stderr = process.communicate(timeout=timeout_seconds)
-                    except BaseException:
-                        # Deadline/cancellation must stop the owned children
-                        # before deleting their fixture, even after leader exit.
-                        # Reuse OS transport; keep the caller's existing budget.
-                        terminate_process_tree(process, grace_seconds=0)
-                        raise
-                    completed = subprocess.CompletedProcess(
-                        normalized["argv"], process.returncode, stdout, stderr,
-                    )
-            finally:
-                # Each fixture owns its Effect process as well as its data.
-                # Use the existing shutdown owner in the same temporary scope.
-                if any(root.glob("loopx-effect-runtime-*/runtime-*.json")):
-                    subprocess.run(
-                        [sys.executable, "-c", "from loopx.control_plane.effect_runtime "
-                         "import restart_effect_runtime; r=restart_effect_runtime(); "
-                         "raise SystemExit(r['status'] == 'shutdown_pending')"],
-                        cwd=repo_root, env=env, check=True, timeout=15,
-                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    )
+                _retire_fixture_runtimes(root)
+                shutil.rmtree(root)
+            except (OSError, RuntimeError, ValueError) as error:
+                # Retain the owned namespace if shutdown cannot be proved.
+                # Do not mask the check with unconditional second deletion.
+                cleanup_error = f"fixture cleanup failed; retained {root}: {error}"
+
     except subprocess.TimeoutExpired as exc:
         result.update(
             {
@@ -337,18 +365,22 @@ def _run_check(
                 "stderr_tail": (exc.stderr or "")[-800:] if isinstance(exc.stderr, str) else "",
             }
         )
+        if cleanup_error:
+            result["reason"] = cleanup_error
         return result
 
     result.update(
         {
-            "status": "passed" if completed.returncode == 0 else "failed",
-            "ok": completed.returncode == 0,
+            "status": "passed" if completed.returncode == 0 and not cleanup_error else "failed",
+            "ok": completed.returncode == 0 and not cleanup_error,
             "returncode": completed.returncode,
             "duration_seconds": round(time.monotonic() - started, 3),
             "stdout_tail": completed.stdout[-800:],
             "stderr_tail": completed.stderr[-800:],
         }
     )
+    if cleanup_error:
+        result["reason"] = cleanup_error
     return result
 
 

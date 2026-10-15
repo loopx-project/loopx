@@ -89,18 +89,24 @@ def handle_turn_command(
         strict_goal_admission = goal_admission if goal_admission.enabled else None
         if getattr(args, "codex_operation_tools", False) and args.host != "codex-cli":
             raise ValueError("--codex-operation-tools requires the codex-cli host")
-        if getattr(args, "codex_confirmed_operation_id", None) and not getattr(
-            args, "codex_operation_tools", False
+        dsh_operation_module = getattr(args, "dsh_operation_module", None)
+        if dsh_operation_module and (
+            args.host != "dsh" or getattr(args, "dsh_runner", None)
         ):
+            raise ValueError("--dsh-operation-module requires the dsh SDK host without --dsh-runner")
+        if dsh_operation_module and not Path(dsh_operation_module).is_absolute():
+            raise ValueError("--dsh-operation-module must be an absolute compiled module path")
+        operation_tools = bool(getattr(args, "codex_operation_tools", False) or dsh_operation_module)
+        if getattr(args, "codex_confirmed_operation_id", None) and not operation_tools:
             raise ValueError(
                 "confirmed operation continuation requires the owned operation transport"
             )
         if (
             getattr(args, "codex_operation_source_route_json", None) is not None
-            and not getattr(args, "codex_operation_tools", False)
+            and not operation_tools
         ):
             raise ValueError(
-                "--codex-operation-source-route-json requires --codex-operation-tools"
+                "--operation-source-route-json requires --codex-operation-tools for codex-cli or --dsh-operation-module for dsh"
             )
         # Planning and dry-run execution inspect existing admitted intents.
         # Only an executing wake may sync inboxes or reserve a calendar window.
@@ -164,7 +170,7 @@ def handle_turn_command(
                          and not getattr(args, "codex_operation_tools", False) else "todo")
         if (
             args.turn_command == "run-once"
-            and args.host == "codex-cli"
+            and (args.host == "codex-cli" or dsh_operation_module)
             and not resume_requested
             and not args.resume_turn_key
             and args.iteration_context != "fresh"
@@ -178,9 +184,10 @@ def handle_turn_command(
                     turn_envelope,
                     goal_admission=strict_goal_admission,
                     session_scope=session_scope,
+                    host=args.host,
                 )
                 if strict_goal_admission is not None
-                else codex_cli_session_binding(runtime_root, turn_envelope, session_scope=session_scope)
+                else codex_cli_session_binding(runtime_root, turn_envelope, session_scope=session_scope, host=args.host)
             )
         payload = build_loopx_turn_plan(
             turn_envelope,

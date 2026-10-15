@@ -99,6 +99,72 @@ def test_authoring_growth_is_bounded_one_time_and_surface_scoped(
         assert _compare_row(base, inflated)["failures"]
 
 
+@pytest.mark.parametrize("surface,fmt,clauses,growth", [
+    ("quota_should_run", "json", ["context"], 208),
+    ("loopx_turn_plan", "json", ["context"], 209),
+    ("quota_should_run", "json", ["context", "replan"], 571),
+    ("quota_should_run_vision_detail", "markdown", ["context"], 208),
+    ("heartbeat_prompt_compact", "markdown", ["stop"], 215),
+    ("heartbeat_prompt_brief", "markdown", ["stop"], 163),
+    ("heartbeat_prompt_thin", "json", ["stop"], 154),
+])
+def test_continuation_growth_requires_observed_transition_and_bounds(surface, fmt, clauses, growth):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+
+    old = {key: value for clause in clauses
+           for key, value in [(f"{clause}_before", True), (f"{clause}_after", False)]}
+    new = {key: not value for key, value in old.items()}
+    base = _row(row_id=f"surface/{surface}/small/{fmt}", format=fmt,
+                chars=1000, utf8_bytes=1000, lines=20, compact_payload_chars=800,
+                continuation_instructions=old)
+    candidate = {**base, "continuation_instructions": new,
+                 "chars": 1000 + growth, "utf8_bytes": 1000 + growth,
+                 "compact_payload_chars": 800 + growth if fmt == "json" else 800}
+    result = _compare_row(base, candidate)
+    assert not result["failures"]
+    assert result["review_signals"]
+    for observations in [new, {}, {**old, f"{clauses[0]}_after": True}]:
+        assert _compare_row({**base, "continuation_instructions": observations}, candidate)["failures"]
+    for observations in [old, {}, {**new, f"{clauses[0]}_before": True}]:
+        assert _compare_row(base, {**candidate, "continuation_instructions": observations})["failures"]
+    assert _compare_row(
+        {**base, "row_id": f"surface/status/small/{fmt}"},
+        {**candidate, "row_id": f"surface/status/small/{fmt}"},
+    )["failures"]
+    for metric in ("chars", "utf8_bytes", "lines", "compact_payload_chars"):
+        assert _compare_row(base, {**candidate, metric: base[metric] + result["allowances"][metric] + 1})["failures"]
+
+
+def test_continuation_observation_retains_every_stop_and_context_clause():
+    from loopx.control_plane.testing.cli_output_semantics import continuation_instruction_observations
+
+    stop = (
+        "host_action=pause_or_delete_current_heartbeat: automation_update pause current "
+        "heartbeat once; verify stopped; unconfirmed/unavailable: never claim stopped; "
+        "end; no work/spend/retry/RRULE fallback."
+    )
+    prefix = ("Read current sources and pending required_reads before work. "
+              "Do not repeat this guard's fulfilled pre-work reads. ")
+    suffix = ("Recheck freshness before later actions; unavailable or changed sources need "
+              "recovery and a fresh guard. Context grants no authority.")
+    brief = ("Use a bounded working brief of evidenced progress/change, current blockers, next work, acceptance and stops. "
+             "Missing comparison evidence is unknown, not unchanged; summaries cannot replace full requirements. ")
+    for render in [lambda s: s, lambda s: json.dumps({"task_body": s})]:
+        assert continuation_instruction_observations(render(stop))["stop_after"]
+        for clause in ["current heartbeat", "once; ", "verify stopped; ", "never claim stopped; ",
+                       "end; ", "work/", "spend/", "retry/", "RRULE fallback"]:
+            assert not continuation_instruction_observations(render(stop.replace(clause, "")))["stop_after"]
+        old = continuation_instruction_observations(render(prefix + suffix))
+        new = continuation_instruction_observations(render(prefix + brief + suffix))
+        assert old["context_before"] and not old["context_after"]
+        assert new["context_after"] and not new["context_before"]
+        for clause in ["pending required_reads", "Do not repeat", "evidenced progress/change", "current blockers",
+                       "acceptance and stops", "unknown, not unchanged", "cannot replace full requirements",
+                       "fresh guard", "grants no authority"]:
+            assert not continuation_instruction_observations(
+                render((prefix + brief + suffix).replace(clause, "")))["context_after"]
+
+
 def test_authoring_observations_require_complete_structured_or_rendered_guidance():
     from loopx.control_plane.testing.cli_output_semantics import authoring_input_observations
 

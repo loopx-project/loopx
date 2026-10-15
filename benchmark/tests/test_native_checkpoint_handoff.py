@@ -12,8 +12,8 @@ import time
 
 import pytest
 
-from benchmark.runtime.native_checkpoint import native_session_checkpoint
-from benchmark.tests.test_native_checkpoint import real_native_source
+from loopx.hosts.codex_checkpoint import native_session_checkpoint
+from tests.control_plane.codex_checkpoint_fixture import real_native_source
 from loopx.capabilities.benchmark_toolkit.native_codex_goal import (
     NativeGoalProtocolError, StdioNativeGoalTransport,
 )
@@ -505,6 +505,20 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
             prior = run_once(env)
             settle_work(prior, value)
         assert len(set(work_turns)) == 6 and len(calls) == 13
+        if explore_mode == "planning":
+            from loopx.capabilities.explore.result_log import (
+                append_explore_result_events, build_explore_node_event, build_explore_finding_event,
+                explore_result_log_path,
+            )
+            assert candidate.read_text() == "6" and json.loads((project / "evidence-1.json").read_text())["value"] == 1
+            append_explore_result_events(explore_result_log_path(runtime, cli.GOAL_ID), [
+                build_explore_node_event(goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID,
+                    node_id="restart-at-one", title="Does restarting at one retain local progress?", status="dead_end"),
+                build_explore_finding_event(goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID,
+                    node_id="restart-at-one", finding_id="restart-counterexample", title="Restart loses retained local progress",
+                    status="refuted", tags=["writeback-result"], evidence_refs=["evidence-1.json", "evidence-6.json"],
+                    summary="In this synthetic counter fixture, one is below the retained six. Continue from six; this says nothing about benchmark quality.")],
+                expected_goal_id=cli.GOAL_ID)
         request = tmp_path / "request.json"
         request.write_text(json.dumps({"destination": str(logs.parent / "checkpoints"),
             "components": [{"id": "task_workspace", "source_path": str(project)}],
@@ -538,8 +552,9 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
                         "cost_bound": "One native wake plus its validation and settlement.",
                         "minimum_evidence": "Native tool output, candidate bytes, evidence and accountable settlement."})
         if "explore_review" in decision:
-            decision["explore_review"].update(disposition="no_applicable_evidence", considered_refs=[],
-                reason="The delivered graph contains no findings; retain the tested synthetic method.")
+            assert any(row["finding_id"] == "restart-counterexample" for row in control["explore_basis"]["finding_refs"])
+            decision["explore_review"].update(disposition="used", considered_refs=["restart-counterexample"],
+                reason="The scoped source counterexample rejects restarting at one; continue the synthetic counter from six.")
         vision = tmp_path / "vision.json"
         vision.write_text(json.dumps({"schema_version": "goal_vision_replan_contract_v0",
             "state": "vision_patch_proposed", "vision_patch": {"acceptance_summary": "Continuation qualification remains."},
@@ -725,7 +740,7 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
                 # Reconstruct the earlier captured store after the source has
                 # already continued. Fixed guest paths require an isolated home;
                 # retain and restore the source bytes around this synthetic test.
-                from benchmark.runtime.native_checkpoint import fork_native_checkpoint, admit_native_checkpoint_session
+                from loopx.hosts.codex_checkpoint import fork_native_checkpoint, admit_native_checkpoint_session
                 from benchmark.runtime.codex import Execution
                 home = Path(native["guest_home"])
                 saved_home = home.with_name(home.name + "-retained")
@@ -733,7 +748,7 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
                 config.write_bytes((home / "config.toml").read_bytes())
                 with pytest.raises(ValueError, match="distinct destination"):
                     admit_native_checkpoint_session({**env, "CODEX_HOME": str(home)},
-                        point, event["sha256"], config, execution=Execution(context="resume"), timeout=20)
+                        point, event["sha256"], config, sandbox=(Execution(context="resume")).sandbox, timeout=20)
                 home.rename(saved_home)
                 try:
                     forked = fork_native_checkpoint({**env, "CODEX_HOME": str(home)},
