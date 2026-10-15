@@ -221,7 +221,7 @@ def test_registered_actor_can_correct_unclaimed_todo_without_claim(tmp_path: Pat
     )
     assert result["mutation_authority"]["mode"] == "registered_peer_actor"
     corrected = _agent_todo(state, todo["todo_id"])
-    assert corrected["text"] == "Correct unclaimed copy"
+    assert corrected["text"] == "[P1] Correct unclaimed copy"
     assert corrected["note"] == "Correct note"
     assert not corrected.get("claimed_by")
 

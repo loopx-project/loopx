@@ -41,6 +41,7 @@ export const goalWorkspaceCreateScenario = {
       await task.fill(text);await now.getByRole('button',{name:'检查任务',exact:true}).click();
       const drawer=page.locator('.personal-context-drawer');await drawer.waitFor();
       assert.equal(requests.length,1);assert.equal(requests[0].normalized_parameters.text,text);
+      assert.equal(requests[0].normalized_parameters.priority,undefined,'Ordinary creation leaves priority to the Todo owner');
       await drawer.locator('.personal-primary-action').click();
       await drawer.getByText(/失败/).first().waitFor();
       await page.locator('.personal-drawer-close').click();assert.equal(await task.inputValue(),text);
@@ -53,9 +54,11 @@ export const goalWorkspaceCreateScenario = {
       await now.locator('.goal-work-row').filter({hasText:text}).waitFor();
       assert.equal(await task.inputValue(),'');
       const {stdout}=await promisify(execFile)(python,['-c','from loopx.entrypoint import main; main()','--format','json','--registry',ready.registry,'todo','list','--goal-id','progress-projection','--role','agent'],{cwd:repoRoot,env:{...process.env,PYTHONPATH:repoRoot,LOOPX_USAGE_PING:'0'},timeout:30000});
-      const result=JSON.parse(stdout);assert.equal(result.todos.filter(todo=>todo.text===text).length,1,'CLI must read exactly one created task');
+      const result=JSON.parse(stdout),created=result.todos.filter(todo=>todo.title===text);
+      assert.equal(created.length,1,'CLI must read exactly one created task');
+      assert.equal(created[0].priority,'P1','The real Todo owner defaults omitted creation priority');
       await page.screenshot({path:resolve(outputDir,'goal-workspace-created.png'),animations:'disabled'});
-      return {coverageEntries:[],note:'Packaged inline Add task -> real action HTTP/File Todo owner -> refreshed row and independent CLI readback. Failed apply retains draft; recovery creates once. No model execution.'};
+      return {coverageEntries:[],note:'Packaged inline Add task -> real action HTTP/File Todo owner -> refreshed row and independent CLI readback with default P1. Failed apply retains draft; recovery creates once. No model execution.'};
     } catch(error){if(diagnostics)process.stderr.write(diagnostics);if(context)await context.page.screenshot({path:resolve(outputDir,'goal-workspace-create-failed.png')});throw error;}
     finally {clearTimeout(timer);await context?.close();lines.close();if(child.exitCode===null&&child.signalCode===null){child.kill('SIGTERM');const kill=setTimeout(()=>child.kill('SIGKILL'),5000);try{await closed;}finally{clearTimeout(kill);}}await rm(root,{recursive:true,force:true});}
   },

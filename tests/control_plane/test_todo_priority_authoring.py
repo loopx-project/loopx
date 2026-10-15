@@ -73,8 +73,19 @@ def test_priority_authoring_round_trip(tmp_path, monkeypatch, provider):
     cli("todo", "update", "--todo-id", todo_id, "--clear-priority")
     assert read(todo_id).get("priority") is None
     assert "[P4] New task title" not in state.read_text()
-    unranked = cli("todo", "add", "--role", "agent", "--text", "Investigate P0 prose without declaring priority")
-    assert read(unranked["todo_id"]).get("priority") is None
+    ordinary = cli("todo", "add", "--role", "agent", "--text", "Investigate P0 prose without declaring priority")
+    assert read(ordinary["todo_id"])["priority"] == "P1"
     selected = cli("quota", "should-run", "--codex-app", "--agent-id", AGENT_ID,
-        "--todo-id", unranked["todo_id"], "--turn-instance-id", "priority-selection", "--scan-path", str(project))
+        "--todo-id", ordinary["todo_id"], "--turn-instance-id", "priority-selection", "--scan-path", str(project))
     assert selected["should_run"] is True
+    cli("todo", "update", "--todo-id", todo_id, "--text", "Still explicitly unranked")
+    assert read(todo_id).get("priority") is None
+    if provider != "legacy":
+        create = ["todo", "add", "--role", "agent", "--text", "Default priority receipt",
+                  "--operation-id", "default-priority-once"]
+        first = cli(*create)
+        assert read(first["todo_id"])["priority"] == "P1"
+        cli("todo", "update", "--todo-id", first["todo_id"], "--priority", "P4")
+        assert cli(*create)["status"] == "replayed"
+        assert read(first["todo_id"])["priority"] == "P4"
+        cli(*create, "--priority", "P0", success=False)

@@ -1,10 +1,17 @@
+import {mkdtemp, rm} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
+import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
+import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
+import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
+import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
-import {planCoordinationTodoCreate} from "../../loopx/control_plane/coordination/todo_create.ts";
+import {executeCoordinationTodoCreate, COORDINATION_TODO_CREATE_RECEIPT_SCHEMA, planCoordinationTodoCreate} from "../../loopx/control_plane/coordination/todo_create.ts";
 import {TODO_DOMAIN_ITEM_SCHEMA, TODO_DOMAIN_READ_RECORD_SCHEMA} from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
 import {readFileSync} from "node:fs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import {planTodoPriority, readTodoPriority, todoPriorityRank} from "../../loopx/control_plane/todos/priority.ts";
+import {planTodoCreationPriority, planTodoPriority, readTodoPriority, todoPriorityRank} from "../../loopx/control_plane/todos/priority.ts";
 
 test("priority is declared metadata; prose is never scheduling input", () => {
   assert.equal(readTodoPriority({text: "Investigate P0 parser behavior"}), null);
@@ -44,7 +51,7 @@ test("complex fixture priority vocabulary matches the compatibility codec", () =
 });
 
 
-test("canonical create normalizes before duplicate matching and clears absent priority", () => {
+test("canonical create defaults omission to P1, normalizes duplicates and respects explicit null", () => {
   const input = {goal_id: "priority-goal", actor_agent_id: null, registered_agents: [],
     operation_id: "create-priority", dry_run: false, now: new Date("2026-09-20T00:00:00Z"),
     todo: {schema_version: TODO_DOMAIN_ITEM_SCHEMA, todo_id: "new-todo", role: "agent",
@@ -60,4 +67,50 @@ test("canonical create normalizes before duplicate matching and clears absent pr
   const unranked = planCoordinationTodoCreate({...input, todo: {...input.todo, priority: null}},
     new Map(), TODO_DOMAIN_READ_RECORD_SCHEMA).todo as JsonObject;
   assert.equal(unranked.priority, undefined); assert.equal(unranked.text, "A task");
+  const {priority: _omitted, ...todo} = input.todo;
+  const ordinary = planCoordinationTodoCreate({...input, todo},
+    new Map(), TODO_DOMAIN_READ_RECORD_SCHEMA).todo as JsonObject;
+  assert.equal(ordinary.priority, "P1");
+  assert.equal(ordinary.text, "[P1] A task");
 });
+
+
+test("creation defaults never override a declared prefix or explicit clearing", () => {
+  assert.equal(planTodoCreationPriority({text: "Normal work"}).priority, "P1");
+  for (const priority of ["P0", "P1", "P2", "P3", "P4"]) {
+    assert.equal(planTodoCreationPriority({text: "Normal work", priority}).priority, priority);
+    assert.equal(planTodoCreationPriority({text: `[${priority}] Legacy work`}).priority, priority);
+  }
+  assert.equal(planTodoCreationPriority({text: "Unranked", priority: null}).priority, null);
+  assert.equal(planTodoCreationPriority({text: "Unranked", clear_priority: true}).priority, null);
+  assert.equal(planTodoPriority({text: "Historical work"}, {text: "Edited historical work"}).priority, null);
+  assert.throws(() => planTodoCreationPriority({text: "[P0] Conflict", priority: "P1"}), /conflict/);
+});
+
+
+for (const provider of ["file", "sqlite"] as const) {
+  test(`${provider}: an old creation receipt keeps its unranked result on upgrade`, async t => {
+    const root = await mkdtemp(join(tmpdir(), "loopx-priority-replay-"));
+    t.after(() => rm(root, {recursive: true, force: true}));
+    const store = provider === "file" ? new FileAuthorityStore(root, "goal-a") : new SqliteAuthorityStore(root, "goal-a");
+    const todo = {schema_version: TODO_DOMAIN_ITEM_SCHEMA, todo_id: "todo-old", role: "agent",
+      status: "open", done: false, archive_state: "active", text: "Historical unranked task"};
+    const request = {goal_id: "goal-a", operation_id: "old-create", actor_agent_id: null,
+      registered_agents: [], dry_run: false, todo, now: new Date("2026-01-01T00:00:00Z")};
+    const receipt = {schema_version: COORDINATION_TODO_CREATE_RECEIPT_SCHEMA,
+      operation_id: request.operation_id, goal_id: request.goal_id, todo_id: todo.todo_id, todo,
+      request_sha256: canonicalAuthoritySha256({goal_id: request.goal_id, todo,
+        actor_agent_id: null, dry_run: false})};
+    assert.equal((await store.commitAuthority({operation_id: "old-create", expected_provider_revision: null,
+      events: [], receipts: [receipt], next_projection: {goal_id: "goal-a", handoff_mode: "soft_claim",
+        todos: [todo], leases: [], todo_read_model: coordinationTodoReadModel([todo], TODO_DOMAIN_READ_RECORD_SCHEMA)}})).status, "applied");
+    const before = await store.loadAuthority();
+    const result = await executeCoordinationTodoCreate(store, request,
+      async () => {throw new Error("receipt replay must precede current-source admission");});
+    assert.equal(result.status, "replayed");
+    assert.deepEqual(result.todo, todo);
+    assert.deepEqual(await store.loadAuthority(), before);
+    const changed = await executeCoordinationTodoCreate(store, {...request, todo: {...todo, priority: "P0"}});
+    assert.equal(changed.reason_code, "coordination_operation_identity_mismatch");
+  });
+}

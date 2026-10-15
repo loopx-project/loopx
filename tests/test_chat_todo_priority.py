@@ -32,3 +32,13 @@ def test_chat_create_keeps_priority_and_rejects_conflicting_marker(tmp_path):
     with pytest.raises(ValueError, match="conflict"):
         service.preview({**request, "idempotency_key": "priority-conflict",
             "normalized_parameters": {"goal_id": GOAL_ID, "text": "[P1] Task", "priority": "P0"}})
+
+
+def test_chat_create_defaults_without_overriding_reviewed_priority(tmp_path):
+    project, _, service = _fixture(tmp_path)
+    request = {"action_kind": "todo.create", "summary": "Create ordinary task",
+        "normalized_parameters": {"goal_id": GOAL_ID, "text": "An ordinary task"},
+        "context": {}, "idempotency_key": "priority-default"}
+    preview = service.preview(request)
+    assert service.apply(preview["proposal_id"])["proposal"]["status"] == "applied"
+    assert "[P1] An ordinary task" in _todos(project)

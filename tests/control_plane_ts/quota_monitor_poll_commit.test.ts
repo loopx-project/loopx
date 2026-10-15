@@ -586,7 +586,7 @@ test("Todo commit fences the full material successor receipt", async (t) => {
       target_key: "public-release:42",
       result_hash: "approved-42",
       material_change: true,
-      next_agent_todo: "Advance the approved release.",
+      next_agent_todo: "[P1] Advance the approved release.",
       next_action_kind: "ADVANCE_RELEASE",
       next_task_repository: "https://github.com/owner/repo.git",
       next_required_capabilities: ["filesystem-write"],
@@ -599,6 +599,7 @@ test("Todo commit fences the full material successor receipt", async (t) => {
 
   const successor = {
     todo_id: "todo_successor001",
+    priority: "P1",
     role: "agent",
     task_class: "advancement_task",
     action_kind: "advance_release",
@@ -626,7 +627,7 @@ test("Todo commit fences the full material successor receipt", async (t) => {
     todo_update: { ok: true },
     next_todos: [{
       ...successor,
-      todo: "Advance the approved release.",
+      todo: "[P1] Advance the approved release.",
     }],
     successor_receipts: [successor],
   };
@@ -654,7 +655,7 @@ test("Todo commit fences the full material successor receipt", async (t) => {
         ...providerReceipt,
         next_todos: [{
           ...successor,
-          todo: "Advance the approved release.",
+          todo: "[P1] Advance the approved release.",
           target_key: "public-release:42:other",
         }],
       },
@@ -662,6 +663,11 @@ test("Todo commit fences the full material successor receipt", async (t) => {
     /agent next_todo target_key must match provider plan/,
   );
 
+  for (const priority of ["P0", null]) {
+    await assert.rejects(() => evaluateQuotaMonitorPollCommit({...params, phase: "commit",
+      provider_receipt: {...providerReceipt, successor_receipts: [{...successor, priority}]}}),
+    /successor priority must match/);
+  }
   const written = await evaluateQuotaMonitorPollCommit({
     ...params,
     phase: "commit",
@@ -730,7 +736,7 @@ test("Todo commit rejects injected defaults in the material successor route", as
       todo_id: "todo_public_monitor",
       result_hash: "approved-default",
       material_change: true,
-      next_agent_todo: "Advance the approved release.",
+      next_agent_todo: "[P1] Advance the approved release.",
       next_action_kind: "advance_release",
     }),
   });
@@ -739,6 +745,7 @@ test("Todo commit rejects injected defaults in the material successor route", as
     .update("approved-default", "utf8").digest("hex").slice(0, 16)}`;
   const successor = {
     todo_id: "todo_successor002",
+    priority: "P1",
     role: "agent",
     task_class: "advancement_task",
     action_kind: "advance_release",
@@ -761,7 +768,7 @@ test("Todo commit rejects injected defaults in the material successor route", as
     next_due_at: null,
     cadence: null,
     todo_update: {},
-    next_todos: [{ ...successor, todo: "Advance the approved release." }],
+    next_todos: [{ ...successor, todo: "[P1] Advance the approved release." }],
     successor_receipts: [successor],
   };
 
@@ -782,7 +789,7 @@ test("Todo commit rejects injected defaults in the material successor route", as
           next_todos: [{
             ...successor,
             ...mutation,
-            todo: "Advance the approved release.",
+            todo: "[P1] Advance the approved release.",
           }],
         },
       }),

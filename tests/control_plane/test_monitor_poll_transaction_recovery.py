@@ -143,8 +143,8 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, str, tuple[str, ...]]:
 
 def _successors(registry: Path, runtime: Path) -> dict[str, dict]:
     todos = _ok(registry, runtime, "todo", "list", "--goal-id", GOAL)["todos"]
-    return {todo["text"]: todo for todo in todos
-            if todo["text"] in (AGENT_TASK, USER_TASK)}
+    return {todo["title"]: todo for todo in todos
+            if todo["title"] in (AGENT_TASK, USER_TASK)}
 
 
 def _poll_events(runtime: Path) -> list[dict]:
@@ -331,7 +331,7 @@ def test_enabled_shadow_business_replay_then_bounded_drain_recovers_batch(
     before = read_local_authority_shadow(runtime_root=runtime, goal_id=GOAL,
                                         scan_limit=20)
     assert {todo["text"] for todo in before["head"]["todos"]} == {
-        "Observe public synthetic target"}
+        "[P1] Observe public synthetic target"}
     state_after = state.read_bytes()
     original_ids = {
         todo["todo_id"] for todo in _business_receipt(state)["writeback"]["next_todos"]}
@@ -356,7 +356,7 @@ def test_enabled_shadow_business_replay_then_bounded_drain_recovers_batch(
                 runtime_root=runtime, goal_id=GOAL, scan_limit=20,
             )["proof"]["transactions"] == before["proof"]["transactions"]
     assert {todo["todo"] for todo in retry["todo_writeback"]["next_todos"]} == {
-        AGENT_TASK, USER_TASK}
+        f"[P1] {AGENT_TASK}", f"[P1] {USER_TASK}"}
     assert set(retry["successor_todo_ids"]) == original_ids
     assert state.read_bytes() == state_after
     receipt_after = _quota_receipt(runtime).read_bytes()
@@ -370,7 +370,7 @@ def test_enabled_shadow_business_replay_then_bounded_drain_recovers_batch(
     view = read_local_authority_shadow(runtime_root=runtime, goal_id=GOAL,
                                       scan_limit=20)
     assert {todo["text"] for todo in view["head"]["todos"]} == {
-        "Observe public synthetic target", AGENT_TASK, USER_TASK}
+        "[P1] Observe public synthetic target", f"[P1] {AGENT_TASK}", f"[P1] {USER_TASK}"}
     assert len(view["proof"]["transactions"]) == 2  # Baseline and original batch.
     assert list(outbox.glob("*.prepared.json")) == []
     late_retry = _ok(registry, runtime, *poll)
@@ -556,7 +556,7 @@ def test_historical_canonical_pending_plan_settles_existing_business_receipt(
     assert (code, result) == (73, None)
     committed = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL)
     successor_ids = {todo["todo_id"] for todo in committed["todos"]
-                     if todo["text"] in (AGENT_TASK, USER_TASK)}
+                     if todo["title"] in (AGENT_TASK, USER_TASK)}
     assert len(successor_ids) == 2
     assert _poll_events(runtime) == []
     pending_path = _quota_receipt(runtime)
@@ -645,8 +645,8 @@ def test_pending_retry_keeps_original_successor_identity_after_public_edit(
 
     retry = _ok(registry, runtime, *poll)
     writeback = retry["todo_writeback"]
-    assert writeback["todo_update"]["todo"] == "Observe public synthetic target"
-    assert [todo["todo"] for todo in writeback["next_todos"]] == [AGENT_TASK, USER_TASK]
+    assert writeback["todo_update"]["todo"] == "[P1] Observe public synthetic target"
+    assert [todo["todo"] for todo in writeback["next_todos"]] == [f"[P1] {AGENT_TASK}", f"[P1] {USER_TASK}"]
     assert all(todo["added"] is True for todo in writeback["next_todos"])
     assert set(retry["successor_todo_ids"]) == original_ids
     assert state.read_bytes() == edited_state

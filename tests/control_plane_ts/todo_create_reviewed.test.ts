@@ -64,6 +64,7 @@ for (const provider of ["file", "sqlite", "postgresql"] as const) {
     const current = {...request, expected_provider_revision: later.provider_revision};
     const applied = await executeCoordinationTodoCreate(store, current);
     assert.equal(applied.status, "applied");
+    assert.equal((applied.todo as Record<string, unknown>).priority, "P1");
     const accepted = await store.loadAuthority();
     assert.equal(accepted.status, "loaded");
     if (accepted.status !== "loaded") throw new Error("missing accepted head");

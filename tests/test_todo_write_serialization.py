@@ -147,6 +147,6 @@ def test_concurrent_add_and_update_share_the_goal_todo_write_lock(
 
     by_id = {str(item["todo_id"]): item for item in items}
     assert str(added["todo_id"]) in by_id, items
-    assert by_id[str(added["todo_id"])]["text"] == CONCURRENT_TODO
+    assert by_id[str(added["todo_id"])]["text"] == f"[P1] {CONCURRENT_TODO}"
     assert by_id[target_id]["status"] == "blocked"
     assert by_id[target_id]["reason"] == UPDATE_REASON

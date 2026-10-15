@@ -130,3 +130,44 @@ test("legacy successor reuses a semantic duplicate with omitted empty capabiliti
     (source.todos as JsonObject[])[0], missingLink]}),
   /different unblocks_todo_id/);
 });
+
+
+test("monitor discoveries default independently and accept per-role priorities", () => {
+  const source = request();
+  source.todos = (source.todos as JsonObject[]).map(todo => ({...todo, priority: "P0"}));
+  for (const [extra, expected] of [
+    [{}, ["P1", "P1"]],
+    [{next_agent_priority: "P0", next_user_priority: "P3"}, ["P0", "P3"]],
+  ] as const) {
+    const input = {...source, intent: {...(source.intent as JsonObject),
+      next_user_todo: "Review result", next_user_task_class: "user_action", ...extra}};
+    const first = planLegacyMonitorBatch(input);
+    const writeback = first.writeback as JsonObject;
+    assert.deepEqual((writeback.next_todos as JsonObject[]).map(todo => todo.priority), expected);
+    assert.deepEqual((writeback.successor_receipts as JsonObject[]).map(todo => todo.priority), expected);
+    const retry = planLegacyMonitorBatch({...input, previous_receipt: first.receipt});
+    assert.equal(retry.replayed, true);
+    assert.deepEqual(retry.mutations, []);
+    assert.throws(() => planLegacyMonitorBatch({...input, previous_receipt: first.receipt,
+      intent: {...input.intent, next_agent_priority: "P4"}}), /request mismatch/);
+  }
+  for (const extra of [{next_agent_priority: "P5"}, {next_user_priority: "P0"},
+    {next_agent_priority: "P0", next_agent_todo: "[P1] Conflict"}]) {
+    assert.throws(() => planLegacyMonitorBatch({...source, intent: {...(source.intent as JsonObject), ...extra}}));
+  }
+});
+
+test("historical unranked monitor receipts replay without applying the new default", () => {
+  const first = planLegacyMonitorBatch(request());
+  const receipt = structuredClone(first.receipt) as JsonObject;
+  const writeback = receipt.writeback as JsonObject;
+  for (const todo of writeback.next_todos as JsonObject[]) {
+    todo.text = todo.todo = "Deliver observed result";
+    delete todo.priority; delete todo.title;
+  }
+  for (const todo of writeback.successor_receipts as JsonObject[]) delete todo.priority;
+  const replay = planLegacyMonitorBatch({...request(), previous_receipt: receipt, todos: []});
+  assert.equal(replay.replayed, true);
+  assert.deepEqual(replay.mutations, []);
+  assert.equal(((replay.writeback as JsonObject).next_todos as JsonObject[])[0].priority, undefined);
+});
