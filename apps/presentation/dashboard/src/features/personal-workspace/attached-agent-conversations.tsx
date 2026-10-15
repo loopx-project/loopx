@@ -42,6 +42,7 @@ export function AttachedAgentConversations({goalId, zh}: {goalId: string; zh: bo
     else if (!open && dialog.current?.open) dialog.current.close();
   }, [open]);
   const binding = agents.find(agent => agent.agent_id === selected);
+  const awaitingReceipt = Boolean(submission?.status && submission.status !== "delivered");
   const cacheKey = binding ? `loopx-attached-input:${goalId}:${binding.binding_ref}` : "";
   const query = binding ? new URLSearchParams({goal_id: goalId, agent_id: binding.agent_id, binding_ref: binding.binding_ref}) : null;
 
@@ -66,7 +67,7 @@ export function AttachedAgentConversations({goalId, zh}: {goalId: string; zh: bo
       if (stored) {
         const pending = JSON.parse(stored) as Submission;
         if (!pending || typeof pending.operation_id !== "string" || typeof pending.text !== "string" || !["pending", "delivered"].includes(pending.status ?? "")) throw new Error("Invalid recovery record");
-        setDraft(pending.text); setSubmission(pending);
+        setDraft(pending.status === "delivered" ? "" : pending.text); setSubmission(pending);
       }
     } catch {setRecoveryError(zh ? "浏览器回复恢复记录不可读，暂不能安全发送。请先在原 App 核对。" : "Reply recovery is unreadable; check the original App before clearing it.");}
     let timer: ReturnType<typeof setTimeout>;
@@ -121,9 +122,9 @@ export function AttachedAgentConversations({goalId, zh}: {goalId: string; zh: bo
   }
 
   async function send() {
-    if (!binding || sending || error || recoveryError || !snapshot?.can_reply || !draft.trim() || submission?.status) return;
+    if (!binding || sending || error || recoveryError || !snapshot?.can_reply || !draft.trim() || awaitingReceipt) return;
     const current = generation.current;
-    const pending = submission ?? {operation_id: crypto.randomUUID(), text: draft, status: "pending"};
+    const pending = {operation_id: crypto.randomUUID(), text: draft, status: "pending"};
     try {sessionStorage.setItem(cacheKey, JSON.stringify(pending));}
     catch {setError(zh ? "无法保存回复回执，未发送。" : "Cannot save reply recovery; nothing was sent."); return;}
     setSubmission(pending); setSending(true);
@@ -132,6 +133,7 @@ export function AttachedAgentConversations({goalId, zh}: {goalId: string; zh: bo
       if (current === generation.current) {
         const delivered = {...pending, status: result.status};
         sessionStorage.setItem(cacheKey, JSON.stringify(delivered)); setSubmission(delivered);
+        if (result.status === "delivered") setDraft("");
         revision.current = "";
       }
     } catch (failure) {if (current === generation.current) setError(String(failure));}
@@ -146,6 +148,7 @@ export function AttachedAgentConversations({goalId, zh}: {goalId: string; zh: bo
       if (current === generation.current) {
         const next = {...submission, status: receipt.status};
         sessionStorage.setItem(cacheKey, JSON.stringify(next)); setSubmission(next);
+        if (receipt.status === "delivered") {setDraft(""); setRecoveryError("");}
       }
     } catch (failure) {if (current === generation.current) setRecoveryError(String(failure));}
   }
@@ -172,7 +175,8 @@ export function AttachedAgentConversations({goalId, zh}: {goalId: string; zh: bo
           {messages.map(message => <article key={message.id} data-role={message.role}><header><strong>{message.role === "user" ? (zh ? "你" : "You") : binding.agent_id}</strong> {message.timestamp ? <time>{new Date(message.timestamp).toLocaleString()}</time> : null}</header><MarkdownText text={message.text}/>{message.truncated ? <p>{zh ? "此消息已截短；完整内容见原 App。" : "Message shortened; open the original App for full content."}</p> : null}</article>)}
           {!messages.length && snapshot ? <p>{zh ? "当前有界历史窗口内没有可显示的消息，可读取更早记录。" : "No displayable messages in this bounded window; read earlier records."}</p> : null}
         </div>
-        {submission?.status ? <p role="status">{submission.status === "delivered" ? (zh ? "已由原 App 接纳；等待 Agent 结果。" : "Accepted by the original App; awaiting the Agent result.") : (zh ? "投递尚未确认，请先在原 App 核对，不会自动重发。" : "Delivery unconfirmed; check the original App. No automatic resend.")} {submission.status === "pending" ? <button type="button" disabled={sending} onClick={() => void readReceipt()}>{zh ? "重读投递回执" : "Recheck delivery receipt"}</button> : null}<button type="button" disabled={sending} onClick={nextReply}>{zh ? "已核对，写下一条" : "Checked; write another"}</button></p> : <form onSubmit={event => {event.preventDefault(); void send();}}><label>{zh ? `回复 ${binding.agent_id}` : `Reply to ${binding.agent_id}`}<textarea value={draft} maxLength={24000} disabled={sending} onChange={event => {setDraft(event.target.value); setSubmission(null);}}/></label><button type="submit" disabled={sending || Boolean(error || recoveryError) || !snapshot?.can_reply || !draft.trim()}>{sending ? (zh ? "正在交给原 App…" : "Sending to original App…") : (zh ? "发送到原会话" : "Send to original conversation")}</button></form>}
+        {submission?.status ? <p role="status">{submission.status === "delivered" ? (zh ? "已由原 App 接纳；等待 Agent 结果。" : "Accepted by the original App; awaiting the Agent result.") : (zh ? "投递尚未确认，请先在原 App 核对，不会自动重发。" : "Delivery unconfirmed; check the original App. No automatic resend.")} {submission.status === "pending" ? <button type="button" disabled={sending} onClick={() => void readReceipt()}>{zh ? "重读投递回执" : "Recheck delivery receipt"}</button> : null}{awaitingReceipt ? <button type="button" disabled={sending} onClick={nextReply}>{zh ? "已核对，写下一条" : "Checked; write another"}</button> : null}</p> : null}
+        {!awaitingReceipt ? <form onSubmit={event => {event.preventDefault(); void send();}}><label>{zh ? `回复 ${binding.agent_id}` : `Reply to ${binding.agent_id}`}<textarea value={draft} maxLength={24000} disabled={sending} onChange={event => {setDraft(event.target.value); setSubmission(null);}}/></label><button type="submit" disabled={sending || Boolean(error || recoveryError) || !snapshot?.can_reply || !draft.trim()}>{sending ? (zh ? "正在交给原 App…" : "Sending to original App…") : (zh ? "发送到原会话" : "Send to original conversation")}</button></form> : null}
       </> : null}
     </div>
     </dialog>

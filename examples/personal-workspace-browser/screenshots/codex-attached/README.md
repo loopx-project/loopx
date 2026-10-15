@@ -14,4 +14,6 @@ node examples/personal-workspace-browser-smoke.mjs
 
 The scenario writes current screenshots under `output/playwright/personal-workspace`.
 The checked-in images document the proposed entry, desktop conversation, narrow
-conversation and explicit open-failure state; they are not golden pixel oracles.
+conversation, explicit open-failure state and unconfirmed delivery; they are not
+golden pixel oracles. Confirmed delivery keeps an empty composer available;
+unconfirmed delivery exposes receipt recovery and never automatically resends.

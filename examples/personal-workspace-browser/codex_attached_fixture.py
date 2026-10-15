@@ -23,7 +23,9 @@ with (
     tempfile.TemporaryDirectory(prefix="lx-ui-", dir="/tmp") as directory,
     ExitStack() as patches,
 ):
-    with fixture(Path(directory), goal_id="product-release") as (
+    with fixture(
+        Path(directory), goal_id="product-release", uncertain="--uncertain" in sys.argv
+    ) as (
         request,
         rollout,
         _methods,
@@ -58,6 +60,8 @@ with (
             def do_GET(self):
                 if self.path == "/fixture/opened":
                     self._send_json({"ok": True, "count": len(launches)})
+                elif self.path == "/fixture/inputs":
+                    self._send_json({"ok": True, "count": len(_inputs)})
                 else:
                     super().do_GET()
 
@@ -67,6 +71,30 @@ with (
                     append_message(
                         rollout, "assistant", "原 Agent 的新结果：已保留原会话。"
                     )
+                    with rollout.open("a") as stream:
+                        stream.write(
+                            json.dumps(
+                                {
+                                    "type": "event_msg",
+                                    "timestamp": "2026-01-01T00:00:03Z",
+                                    "payload": {"type": "task_complete"},
+                                }
+                            )
+                            + "\n"
+                        )
+                    self._send_json({"ok": True})
+                elif self.path == "/fixture/busy":
+                    with rollout.open("a") as stream:
+                        stream.write(
+                            json.dumps(
+                                {
+                                    "type": "event_msg",
+                                    "timestamp": "2026-01-01T00:00:02Z",
+                                    "payload": {"type": "task_started"},
+                                }
+                            )
+                            + "\n"
+                        )
                     self._send_json({"ok": True})
                 elif self.path == "/fixture/rebind":
                     value = json.loads(registry.read_text())

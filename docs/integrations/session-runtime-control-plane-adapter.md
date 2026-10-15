@@ -98,6 +98,15 @@ artifact, or human decision not yet recorded.
 
 ## Experimental owner-local Codex App conversations
 
+This is a follow-up path for an owner already reviewing a Goal: read a specific
+Agent's result, give it a correction and keep the original conversation. It is
+not the general Goal entrypoint or a replacement for the native App. The useful
+product comparison is the complete task, including finding the right Agent,
+understanding its result and recovering an interrupted reply. An additional
+chat window or successful transport alone does not establish a better experience
+than working in Codex App. Goal progress and acceptance still come from their
+existing owners, never from the transcript or an input acknowledgement.
+
 The Goal **Chat** view can open **Original Codex App conversations**, select a
 registered Agent, read its original saved messages and send a plain-text reply
 when that conversation is observed idle. Closing the dialog stops observation;
@@ -124,7 +133,10 @@ complete attached-session acceptance or Lark parity.
 
 Input receipts contain an operation id, binding, content fingerprint and native
 acknowledgement, without copying the message body. The same operation cannot be
-sent twice. An unacknowledged submission remains pending: reopening can read its
+sent twice. A confirmed submission clears the draft and leaves the next reply
+composer available, including after reload; it does not require a second human
+acknowledgement. Sending again still requires an explicit new message and a fresh
+idle observation. An unacknowledged submission remains pending: reopening can read its
 receipt, but never silently retries a native effect. Check the original App
 before discarding an uncertain receipt. The UI keeps only its reply recovery
 record in the current browser session. Replies are explicit local owner actions;
