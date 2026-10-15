@@ -27,7 +27,9 @@ export type BindingState = {
   objective_sha256: string;
   start_pending?: boolean;
   last_execution_error?: "zcode_native_execution_failed";
-  /** Basis the current native objective was set under; absent for journals written before it was recorded. */
+  /** Basis the current native objective was set under. Absent for journals written before it was
+   * recorded or started without one; such a target cannot prove the current basis and refuses a plain
+   * resume until an explicit stop/start records the basis it delivers. */
   goal_basis?: GoalBasis;
 };
 export const GOAL_BASIS_CHANGED = "goal_basis_changed";
@@ -213,11 +215,13 @@ export class NativeGoalController {
           if (!this.observed?.selected_model) {
             this.reason = "Select an available ZCode model before starting"; return this.readback(false);
           }
-          if (action === "resume" && this.state.goal_basis) {
-            // The native objective was delivered under a recorded criterion/source basis. A plain
-            // resume cannot re-deliver current requirements into the native conversation, so a
-            // changed or unproven basis keeps the target paused until an explicit stop/start does.
-            if (!goalBasis) { this.reason = GOAL_BASIS_UNAVAILABLE; return this.readback(false); }
+          if (action === "resume") {
+            // A plain resume cannot re-deliver current requirements into the native conversation, so it
+            // must prove the objective was delivered under the current criterion/source basis. Without
+            // a recorded basis (a journal written before one existed) or a presented current basis
+            // there is no proof; the target stays paused until an explicit stop/start records the basis
+            // it delivers. Resume never backfills a basis it did not deliver.
+            if (!this.state.goal_basis || !goalBasis) { this.reason = GOAL_BASIS_UNAVAILABLE; return this.readback(false); }
             if (!sameGoalBasis(this.state.goal_basis, goalBasis)) { this.reason = GOAL_BASIS_CHANGED; return this.readback(false); }
           }
           const quota = await this.admission();
