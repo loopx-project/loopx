@@ -62,7 +62,7 @@ try {
   const evidence = dialog.getByRole("region", {name: "执行证据"});
   await evidence.getByLabel("证据内容: output.json").waitFor();
   assert.deepEqual((await command("withdraw")).host_calls, ["1", "1", "1"]);
-  const recheck = evidence.getByRole("button", {name: "重新读取证据", exact: true});
+  const recheck = evidence.getByRole("button", {name: "重新检查交付", exact: true});
   await recheck.click();
   await evidence.getByText("接收方输入不可用", {exact: true}).waitFor();
   await evidence.getByRole("button", {name: "查看阻断来源", exact: true}).waitFor();
