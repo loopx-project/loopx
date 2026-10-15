@@ -12,8 +12,8 @@ import time
 
 import pytest
 
-from benchmark.runtime.native_checkpoint import native_session_checkpoint
-from benchmark.tests.test_native_checkpoint import real_native_source
+from loopx.control_plane.turn_driver.codex_checkpoint import native_session_checkpoint
+from tests.control_plane.codex_checkpoint_fixture import real_native_source
 from loopx.capabilities.benchmark_toolkit.native_codex_goal import (
     NativeGoalProtocolError, StdioNativeGoalTransport,
 )
@@ -740,7 +740,7 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
                 # Reconstruct the earlier captured store after the source has
                 # already continued. Fixed guest paths require an isolated home;
                 # retain and restore the source bytes around this synthetic test.
-                from benchmark.runtime.native_checkpoint import fork_native_checkpoint, admit_native_checkpoint_session
+                from loopx.control_plane.turn_driver.codex_checkpoint import fork_native_checkpoint, admit_native_checkpoint_session
                 from benchmark.runtime.codex import Execution
                 home = Path(native["guest_home"])
                 saved_home = home.with_name(home.name + "-retained")
@@ -748,7 +748,7 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
                 config.write_bytes((home / "config.toml").read_bytes())
                 with pytest.raises(ValueError, match="distinct destination"):
                     admit_native_checkpoint_session({**env, "CODEX_HOME": str(home)},
-                        point, event["sha256"], config, execution=Execution(context="resume"), timeout=20)
+                        point, event["sha256"], config, sandbox=(Execution(context="resume")).sandbox, timeout=20)
                 home.rename(saved_home)
                 try:
                     forked = fork_native_checkpoint({**env, "CODEX_HOME": str(home)},

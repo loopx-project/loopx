@@ -2,15 +2,14 @@
 import hashlib
 import json
 import os
-import threading
 import time
-import uuid
 from contextlib import contextmanager
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from benchmark.runtime.native_checkpoint import native_session_checkpoint
+from tests.control_plane.codex_checkpoint_fixture import real_native_source
+
+from loopx.control_plane.turn_driver.codex_checkpoint import native_session_checkpoint
 from benchmark.tests.test_checkpoint_controller import controllers  # noqa: F401 -- shared real HTTP fixture
 
 
@@ -44,8 +43,8 @@ def fixture(tmp_path, monkeypatch, pages):
             assert method == "thread/turns/list"  # No model or fork is requested.
             return pages.pop(0)
 
-    monkeypatch.setattr("benchmark.runtime.native_checkpoint.StdioNativeGoalTransport.spawn", lambda *a, **k: Native())
-    monkeypatch.setattr("benchmark.runtime.native_checkpoint.subprocess.check_output", lambda *a, **k: "codex-cli fixture")
+    monkeypatch.setattr("loopx.control_plane.turn_driver.codex_checkpoint.StdioNativeGoalTransport.spawn", lambda *a, **k: Native())
+    monkeypatch.setattr("loopx.control_plane.turn_driver.codex_checkpoint.subprocess.check_output", lambda *a, **k: "codex-cli fixture")
     return {"CODEX_HOME": str(home), "CODEX_BIN": "/fixture/codex", "LOOPX_PROJECT": str(tmp_path)}, calls
 
 
@@ -86,94 +85,6 @@ def test_foreign_native_session_is_rejected_before_history(tmp_path, monkeypatch
     assert "thread/turns/list" not in calls
 
 
-@contextmanager
-def real_native_source(root, binary, workspace, *, close_source=False, response_builder=None, sandbox="read-only"):
-    """Real native writer/readback; a local static stream replaces only the model.
-
-    No paid model, tool invocation, user credential or benchmark cell. Fixtures
-    become completed Turns through the native protocol, not copied fake receipts.
-    """
-    from loopx.capabilities.benchmark_toolkit.native_codex_goal import (
-        NativeGoalProtocolError, StdioNativeGoalTransport,
-    )
-    home = root / "home"
-    home.mkdir(parents=True)
-    calls = []
-    class Provider(BaseHTTPRequestHandler):
-        def log_message(self, *args):
-            pass
-
-        def do_POST(self):
-            request = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
-            calls.append(self.path)
-            message = {"type": "message", "id": "msg_" + uuid.uuid4().hex, "role": "assistant",
-                       "content": [{"type": "output_text", "text": "Synthetic source result."}]}
-            if response_builder is not None:
-                message = response_builder(request, len(calls), message)
-            result = {"id": "resp_" + uuid.uuid4().hex, "status": "completed", "output": [message],
-                      "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}
-            events = [{"type": "response.created", "response": {**result, "status": "in_progress", "output": []}},
-                      {"type": "response.output_item.done", "output_index": 0, "item": message},
-                      {"type": "response.completed", "response": result}]
-            raw = "".join("event: " + event["type"] + "\ndata: " + json.dumps(event) + "\n\n"
-                          for event in events).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Content-Length", str(len(raw)))
-            self.end_headers()
-            self.wfile.write(raw)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
-    thread = threading.Thread(target=server.serve_forever)
-    thread.start()
-    (home / "config.toml").write_text(
-        'model="fixture"\nmodel_reasoning_effort="high"\nmodel_provider="fixture"\napproval_policy="never"\n'
-        f'sandbox_mode={json.dumps(sandbox)}\n'
-        + ('[sandbox_workspace_write]\nnetwork_access=true\n' if sandbox == "workspace-write" else "") +
-        '[features]\ngoals=false\nresponses_websockets_v2=false\nplugins=false\nremote_plugin=false\nplugin_sharing=false\n'
-        '[model_providers.fixture]\nname="Synthetic local"\n'
-        f'base_url="http://127.0.0.1:{server.server_port}/v1"\nwire_api="responses"\n'
-        'env_key="SYNTHETIC_PROVIDER_KEY"\n')
-    # No ambient provider credentials or app integrations enter this fixture.
-    env = {key: value for key, value in os.environ.items()
-           if key in {"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL",
-                      "SYSTEMROOT", "PYTHONPATH", "VIRTUAL_ENV"}}
-    env.update(CODEX_HOME=str(home), CODEX_BIN=binary, LOOPX_PROJECT=str(workspace),
-               SYNTHETIC_PROVIDER_KEY="synthetic-local-only", LOOPX_USAGE_PING="0")
-    try:
-        with (root / "stderr.txt").open("w") as stderr, StdioNativeGoalTransport.spawn(
-            [binary, "-c", "features.goals=false", "app-server", "--listen", "stdio://"],
-            cwd=str(workspace), env=env, stderr=stderr, response_timeout_sec=20,
-        ) as native:
-            native.request("initialize", {"clientInfo": {"name": "checkpoint_qualification", "version": "0.1.0"},
-                                          "capabilities": {"experimentalApi": True}})
-            native.notify("initialized", {})
-            source = native.request("thread/start", {"cwd": str(workspace), "sandbox": sandbox,
-                "approvalPolicy": "never", "persistExtendedHistory": True})["thread"]["id"]
-            def complete_turn():
-                expected_turn = native.request("turn/start", {"threadId": source,
-                    "input": [{"type": "text", "text": "Synthetic storage fixture. Return its source result."}]})["turn"]["id"]
-                stop = time.monotonic() + 30
-                while time.monotonic() < stop:
-                    try:
-                        page = native.request("thread/turns/list", {"threadId": source,
-                            "sortDirection": "asc", "itemsView": "full", "limit": 100})
-                    except NativeGoalProtocolError:
-                        # A first live Turn may not have a persisted page yet.
-                        time.sleep(.05)
-                        continue
-                    if (page.get("data") and page["data"][-1].get("id") == expected_turn and
-                            page["data"][-1].get("status") == "completed"):
-                        return page["data"][-1]["id"]
-                    time.sleep(.05)
-                raise AssertionError("Real native fixture did not complete its source Turn")
-            complete_turn()
-            if close_source:
-                native.close()
-            yield env, source, complete_turn, calls
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
 
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
@@ -297,7 +208,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     import sys
     from pathlib import Path
     from benchmark.runtime.codex import Execution
-    from benchmark.runtime.native_checkpoint import admit_native_checkpoint_session
+    from loopx.control_plane.turn_driver.codex_checkpoint import admit_native_checkpoint_session
     from benchmark.runtime.sessions import BenchmarkSessionWake
     from benchmark.runtime.worker import native_command
     from loopx.cli import main
@@ -340,7 +251,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     assert main([*prefix, "quota", "should-run", "--runtime-profile", "generic_cli", *binding]) == 0
     guard = json.loads(capsys.readouterr().out)
     assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
-    from benchmark.runtime.research_checkpoint import canonical_context, research_context, adopt_todo_context, _encoded
+    from loopx.control_plane.runtime.research_checkpoint import canonical_context, research_context, adopt_todo_context, _encoded
     source_prefix = ["--format", "json", "--registry", str(source_registry), "--runtime-root", str(source_runtime)]
     def invoke(arguments):
         code = main(arguments)
@@ -488,19 +399,19 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         capsys.readouterr()
         with pytest.raises(ProjectRegistryProtocolError, match="lifecycle-only"):
             admit_native_checkpoint_session({**env, "LOOPX_REGISTRY": str(lifecycle_registry),
-                "LOOPX_GOAL_ID": "lifecycle-only"}, unit, digest, config, execution=execution, timeout=30)
+                "LOOPX_GOAL_ID": "lifecycle-only"}, unit, digest, config, sandbox=(execution).sandbox, timeout=30)
         assert not Path(env["CODEX_HOME"]).exists() and len(calls) == 1
         unsupported_config = tmp_path / "automatic-goal-config.toml"
         unsupported_config.write_text(config.read_text().replace("goals=false", "goals=true"))
         with monkeypatch.context() as automatic:
             def forbidden_automatic_fork(*args, **kwargs):
                 raise AssertionError("an unsupported automatic Goal profile must fail before native reconstruction")
-            automatic.setattr("benchmark.runtime.native_checkpoint.fork_native_checkpoint", forbidden_automatic_fork)
+            automatic.setattr("loopx.control_plane.turn_driver.codex_checkpoint.fork_native_checkpoint", forbidden_automatic_fork)
             with pytest.raises(ValueError, match="automatic Goals explicitly disabled"):
-                admit_native_checkpoint_session(env, unit, digest, unsupported_config, execution=execution, timeout=30)
+                admit_native_checkpoint_session(env, unit, digest, unsupported_config, sandbox=(execution).sandbox, timeout=30)
         with pytest.raises(ValueError, match="distinct destination"):
             admit_native_checkpoint_session({**env, "LOOPX_GOAL_ID": source_goal}, unit, digest,
-                                            config, execution=execution, timeout=30)
+                                            config, sandbox=(execution).sandbox, timeout=30)
         assert not Path(env["CODEX_HOME"]).exists() and len(calls) == 1
         if case == "scope_change":
             from benchmark.runtime import native_checkpoint
@@ -513,7 +424,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
                 return result
             monkeypatch.setattr(native_checkpoint, "fork_native_checkpoint", change_scope_after_real_fork)
             with pytest.raises(ValueError, match="Goal configuration changed"):
-                admit_native_checkpoint_session(env, unit, digest, config, execution=execution, timeout=30)
+                admit_native_checkpoint_session(env, unit, digest, config, sandbox=(execution).sandbox, timeout=30)
             assert load_codex_cli_session(runtime, lineage={"goal_id": destination_goal,
                 "agent_id": destination_agent}, session_scope="agent") is None
             assert len(calls) == 1  # A native fork occurred; no binding or model did.
@@ -522,7 +433,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         if case == "profile_change":
             with pytest.raises(ValueError, match="profile changed"):
                 admit_native_checkpoint_session({**env, "REASONING_EFFORT": "low"}, unit, digest,
-                                                config, execution=execution, timeout=30)
+                                                config, sandbox=(execution).sandbox, timeout=30)
             assert load_codex_cli_session(runtime, lineage={"goal_id": destination_goal,
                 "agent_id": destination_agent}, session_scope="agent") is None
             assert len(calls) == 1
@@ -530,7 +441,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             return
         recovered_fork = None
         if case in {"fork_reply_loss", "fork_missing", "fork_ambiguous"}:
-            from benchmark.runtime.native_checkpoint import StdioNativeGoalTransport
+            from loopx.control_plane.turn_driver.codex_checkpoint import StdioNativeGoalTransport
             original_request = StdioNativeGoalTransport.request
             forks = []
             def lose_fork_reply(self, method, params):
@@ -544,7 +455,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             with monkeypatch.context() as lost:
                 lost.setattr(StdioNativeGoalTransport, "request", lose_fork_reply)
                 with pytest.raises(TimeoutError, match="loss before fork reply"):
-                    admit_native_checkpoint_session(env, unit, digest, config, execution=execution, timeout=30)
+                    admit_native_checkpoint_session(env, unit, digest, config, sandbox=(execution).sandbox, timeout=30)
             assert load_codex_cli_session(runtime, lineage={"goal_id": destination_goal,
                 "agent_id": destination_agent}, session_scope="agent") is None
             assert len(calls) == 1 and retained_source() == before
@@ -555,7 +466,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
                 with monkeypatch.context() as retry:
                     retry.setattr(StdioNativeGoalTransport, "request", no_second_fork)
                     with pytest.raises(ValueError, match="absent or ambiguous"):
-                        admit_native_checkpoint_session(env, unit, digest, config, execution=execution, timeout=30)
+                        admit_native_checkpoint_session(env, unit, digest, config, sandbox=(execution).sandbox, timeout=30)
                 assert load_codex_cli_session(runtime, lineage={"goal_id": destination_goal,
                     "agent_id": destination_agent}, session_scope="agent") is None
                 assert len(calls) == 1 and retained_source() == before
@@ -563,23 +474,24 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             recovered_fork = forks[0]
             # The isolated attempt is bound to this destination, not merely an
             # equivalent visible history or another Goal's transport directory.
-            from benchmark.runtime.native_checkpoint import fork_native_checkpoint
+            from loopx.control_plane.turn_driver.codex_checkpoint import fork_native_checkpoint
             with pytest.raises(ValueError, match="attempt differs"):
                 fork_native_checkpoint({**env, "LOOPX_AGENT_ID": "unrelated-destination"},
                     unit, digest, config, timeout=30)
         if case == "binding_reply_loss":
-            original_bind = BenchmarkSessionWake._bind_verified_fork
+            from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
+            original_bind = CodexAgentSession._bind_verified_fork
             def lose_binding_reply(self, *args):
                 original_bind(self, *args)
                 raise TimeoutError("synthetic loss after atomic binding")
             with monkeypatch.context() as lost:
-                lost.setattr(BenchmarkSessionWake, "_bind_verified_fork", lose_binding_reply)
+                lost.setattr(CodexAgentSession, "_bind_verified_fork", lose_binding_reply)
                 with pytest.raises(TimeoutError, match="loss after atomic binding"):
-                    admit_native_checkpoint_session(env, unit, digest, config, execution=execution, timeout=30)
+                    admit_native_checkpoint_session(env, unit, digest, config, sandbox=(execution).sandbox, timeout=30)
             assert load_codex_cli_session(runtime, lineage={"goal_id": destination_goal,
                 "agent_id": destination_agent}, session_scope="agent")["checkpoint_artifact_sha256"] == digest
             assert len(calls) == 1
-        admitted_cli = subprocess.run([sys.executable, "-m", "benchmark.runtime.native_checkpoint",
+        admitted_cli = subprocess.run([sys.executable, "-m", "loopx.control_plane.turn_driver.codex_checkpoint",
             "--root", str(unit), "--expected-sha256", digest, "--config-path", str(config), "--sandbox", execution.sandbox],
             env=env, text=True, capture_output=True, timeout=40)
         assert admitted_cli.returncode == 0, admitted_cli.stderr
@@ -596,8 +508,8 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         with monkeypatch.context() as replay:
             def forbidden_fork(*args, **kwargs):
                 raise AssertionError("a repeated admission must not create a second native fork")
-            replay.setattr("benchmark.runtime.native_checkpoint.fork_native_checkpoint", forbidden_fork)
-            recovered = admit_native_checkpoint_session(env, unit, digest, config, execution=execution, timeout=30)
+            replay.setattr("loopx.control_plane.turn_driver.codex_checkpoint.fork_native_checkpoint", forbidden_fork)
+            recovered = admit_native_checkpoint_session(env, unit, digest, config, sandbox=(execution).sandbox, timeout=30)
             assert recovered == admitted
             assert bound["checkpoint_artifact_sha256"] == digest
             # Transport reply loss leaves the atomic source-bound binding as the
@@ -607,14 +519,14 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             assert json.loads(retry_cli.stdout) == admitted
             with pytest.raises(ValueError, match="profile changed"):
                 admit_native_checkpoint_session({**env, "REASONING_EFFORT": "low"}, unit, digest,
-                                                config, execution=execution, timeout=30)
+                                                config, sandbox=(execution).sandbox, timeout=30)
         assert len(calls) == 1 and load_codex_cli_session(runtime, lineage={
             "goal_id": destination_goal, "agent_id": destination_agent}, session_scope="agent") == bound
         if case == "resume":
             wrong_config = tmp_path / "changed-source-config.toml"
             wrong_config.write_text(config.read_text() + "\n# different source configuration\n")
             with pytest.raises(ValueError, match="effective configuration differs"):
-                admit_native_checkpoint_session(env, unit, digest, wrong_config, execution=execution, timeout=30)
+                admit_native_checkpoint_session(env, unit, digest, wrong_config, sandbox=(execution).sandbox, timeout=30)
             from loopx.control_plane.turn_driver.codex_sessions import _session_path
             binding_path = _session_path(runtime, {"goal_id": destination_goal, "agent_id": destination_agent}, "agent")
             original_binding = binding_path.read_bytes()
@@ -628,7 +540,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
                     changed["checkpoint_artifact_sha256"] = wrong_source
                 binding_path.write_text(json.dumps(changed))
                 with pytest.raises(ValueError, match="without this checkpoint admission"):
-                    admit_native_checkpoint_session(env, unit, digest, config, execution=execution, timeout=30)
+                    admit_native_checkpoint_session(env, unit, digest, config, sandbox=(execution).sandbox, timeout=30)
                 assert json.loads(binding_path.read_text()) == changed and len(calls) == 1
             binding_path.write_bytes(original_binding)
 
@@ -637,7 +549,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         lease = invoke([*prefix, "task-lease", "acquire", "--goal-id", destination_goal,
             "--todo-id", destination_todo, "--owner", destination_agent, "--idempotency-key", "branch-context"])
         current = invoke([*prefix, "todo", "list", "--goal-id", destination_goal, "--todo-id", destination_todo])
-        context_command = [sys.executable, "-m", "benchmark.runtime.research_checkpoint",
+        context_command = [sys.executable, "-m", "loopx.control_plane.runtime.research_checkpoint",
             "--root", str(unit), "--expected-sha256", digest, "--source-todo-id", source_todo,
             "--todo-id", destination_todo, "--operation-id", "branch-context",
             "--expected-revision", current["authority_read"]["provider_revision"],
@@ -755,7 +667,7 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
             "agent_id": destination_agent}, session_scope="agent")
         assert after_work["checkpoint_artifact_sha256"] == digest
         with pytest.raises(ValueError, match="advanced or differs"):
-            admit_native_checkpoint_session(env, unit, digest, config, execution=execution, timeout=30)
+            admit_native_checkpoint_session(env, unit, digest, config, sandbox=(execution).sandbox, timeout=30)
         assert load_codex_cli_session(runtime, lineage={"goal_id": destination_goal,
             "agent_id": destination_agent}, session_scope="agent") == after_work
         with pytest.raises(ValueError, match="native history or configuration moved"):
@@ -791,7 +703,7 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monk
     """A stopped command is eligible only at the declared pre-output boundary."""
     import copy
     import shlex
-    from benchmark.runtime.native_checkpoint import _verify_interrupted_guard
+    from loopx.control_plane.turn_driver.codex_checkpoint import _verify_interrupted_guard
 
     guard = {"cli": "/fixture/loopx", "workspace": str(tmp_path), "registry": "/fixture/registry.json",
              "runtime_root": "/fixture/runtime", "goal_id": "research", "agent_id": "worker",

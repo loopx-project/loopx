@@ -32,11 +32,11 @@ def test_captured_point_continues_with_fresh_authority(
     assert os.getuid() != 0, "Workspace continuation must qualify the actual non-root writer"
     from benchmark.edgebench.checkpoint_controller import restore
     from benchmark.runtime.codex import Execution
-    from benchmark.runtime.native_checkpoint import (
+    from loopx.control_plane.turn_driver.codex_checkpoint import (
         admit_native_checkpoint_session,
         native_session_checkpoint,
     )
-    from benchmark.runtime.research_checkpoint import adopt_todo_context
+    from loopx.control_plane.runtime.research_checkpoint import adopt_todo_context
     from benchmark.runtime.sessions import BenchmarkSessionWake
     from benchmark.runtime.worker import native_command
     from loopx.cli import main
@@ -198,34 +198,35 @@ def test_captured_point_continues_with_fresh_authority(
             unit,
             digest,
             config,
-            execution=execution,
+            sandbox=(execution).sandbox,
             timeout=30,
         )
     with pytest.raises(EffectRuntimeRemoteError):
         admit_native_checkpoint_session(
-            env, unit, "f" * 64, config, execution=execution, timeout=30
+            env, unit, "f" * 64, config, sandbox=(execution).sandbox, timeout=30
         )
     assert not home.exists()
-    original_bind = BenchmarkSessionWake._bind_verified_fork
+    from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
+    original_bind = CodexAgentSession._bind_verified_fork
 
     def lose_binding_reply(self, *args):
         original_bind(self, *args)
         raise TimeoutError("synthetic loss after committed native binding")
 
     with monkeypatch.context() as lost:
-        lost.setattr(BenchmarkSessionWake, "_bind_verified_fork", lose_binding_reply)
+        lost.setattr(CodexAgentSession, "_bind_verified_fork", lose_binding_reply)
         with pytest.raises(TimeoutError, match="committed native binding"):
             admit_native_checkpoint_session(
-                env, unit, digest, config, execution=execution, timeout=30
+                env, unit, digest, config, sandbox=(execution).sandbox, timeout=30
             )
     admitted = admit_native_checkpoint_session(
-        env, unit, digest, config, execution=execution, timeout=30
+        env, unit, digest, config, sandbox=(execution).sandbox, timeout=30
     )
     assert (
         admitted["session_id"] != native["session_id"] and admitted["model_calls"] == 0
     )
     replay = admit_native_checkpoint_session(
-        env, unit, digest, config, execution=execution, timeout=30
+        env, unit, digest, config, sandbox=(execution).sandbox, timeout=30
     )
     assert replay["session_id"] == admitted["session_id"] and replay["history_verified"]
     lease = cli(
@@ -507,7 +508,7 @@ else:
         assert retained["turn_ids"][:-1] == native["turn_ids"]
         with pytest.raises(ValueError):
             admit_native_checkpoint_session(
-                env, unit, digest, config, execution=execution, timeout=30
+                env, unit, digest, config, sandbox=(execution).sandbox, timeout=30
             )
         vision = tmp_path / "vision.json"
         vision.write_text(

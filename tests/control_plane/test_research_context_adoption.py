@@ -12,9 +12,22 @@ import pytest
 
 from loopx.cli import main
 from loopx.control_plane.effect_runtime import effect_runtime_result
-from benchmark.runtime.research_checkpoint import canonical_context, research_context, verify_context_sources, adopt_todo_context, _encoded
+from loopx.control_plane.runtime.research_checkpoint import canonical_context, research_context, verify_context_sources, adopt_todo_context, _encoded
 from canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
+
+
+@pytest.fixture(autouse=True)
+def no_benchmark_dependency(monkeypatch):
+    """Ordinary Goal continuation must work with benchmark unavailable."""
+    import builtins
+    original = builtins.__import__
+    def guarded(name, globals=None, locals=None, fromlist=(), level=0):
+        package = (globals or {}).get("__package__", "")
+        if name == "benchmark" or name.startswith("benchmark.") or (level and package.startswith("benchmark.")):
+            raise ImportError("benchmark is unavailable to this ordinary Goal")
+        return original(name, globals, locals, fromlist, level)
+    monkeypatch.setattr(builtins, "__import__", guarded)
 
 
 @pytest.mark.parametrize("lost_response,with_knowledge", [
@@ -83,7 +96,7 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
         session_scope='agent',session_id='branch-session',session_profile_digest='synthetic-profile')
     # This owner-focused fixture substitutes only native history verification.
     # The real Host + CLI + canonical context journey lives in test_native_checkpoint.
-    monkeypatch.setattr('benchmark.runtime.research_checkpoint._context_session', lambda *_: 'branch-session')
+    monkeypatch.setattr('loopx.control_plane.runtime.research_checkpoint._context_session', lambda *_: 'branch-session')
     before=run('todo','list','--goal-id','branch','--todo-id',destination_todo)
     args=dict(source_todo_id=source_todo,todo_id=destination_todo,operation_id='context-adoption',
         expected_revision=before['authority_read']['provider_revision'],lease_key='branch-lease',lease_version=1)
@@ -125,7 +138,7 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
                     raise OSError("synthetic committed knowledge response lost")
                 interrupted.setattr(result_log, "append_explore_result_events", lost_append)
             else:
-                from benchmark.runtime import research_checkpoint
+                from loopx.control_plane.runtime import research_checkpoint
                 original_handoff = research_checkpoint._handoff
                 def lost_handoff(env, payload):
                     result = original_handoff(env, payload)
@@ -143,7 +156,18 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
         with pytest.raises(ValueError, match='continuation rejected'):
             adopt_todo_context(env,unit,digest,**{**args,'operation_id':'replacement-operation'})
         assert run('todo','list','--goal-id','branch','--todo-id',destination_todo)['todo']==interrupted_todo['todo']
-    result=adopt_todo_context(env,unit,digest,**args)
+    if with_knowledge and lost_response is None:
+        # Exercise the shipped ordinary CLI, with only native observation
+        # substituted above; the artifact/SQLite/claim/lease owners are real.
+        for key, value in {"CODEX_BIN": "synthetic-native", "CODEX_HOME": str(tmp_path / "home"),
+                           "MODEL_NAME": "fixture", "REASONING_EFFORT": "high"}.items():
+            monkeypatch.setenv(key, value)
+        result = run('research-checkpoint', 'adopt-context', '--goal-id', 'branch', '--agent-id', 'branch-actor',
+            '--project', str(workspace), '--sandbox', 'read-only', '--root', str(unit), '--expected-sha256', digest,
+            '--source-todo-id', source_todo, '--todo-id', destination_todo, '--operation-id', args['operation_id'],
+            '--expected-revision', args['expected_revision'], '--lease-key', args['lease_key'], '--lease-version', '1', '--execute')
+    else:
+        result=adopt_todo_context(env,unit,digest,**args)
     assert result['context_adopted'] and result['model_calls']==0 and not result['research_point_qualified']
     if with_knowledge:
         log = explore_result_log_path(destination_root, 'branch')
@@ -174,6 +198,8 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
     assert 'Candidate 999' not in Path(result['artifact']).read_text()
     assert source_run('todo','list','--goal-id','source','--todo-id',source_todo)==source_before
     assert run('task-lease','inspect','--goal-id','branch','--todo-id',destination_todo)['lease']==lease['lease']
+    if with_knowledge and lost_response is None:
+        _ordinary_review_and_work(run, workspace, tmp_path, destination_todo, digest, monkeypatch)
     # The adapter does not mint another receipt/session when retried after commit.
     replay=adopt_todo_context(env,unit,digest,**args)
     assert replay['continuation']['adoption']['status']=='replayed'
@@ -202,6 +228,81 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
     with pytest.raises(ValueError,match='continuation rejected'):
         adopt_todo_context(env,unit,digest,**args)
     assert run('todo','list','--goal-id','branch','--todo-id',destination_todo)==moved
+
+
+def _ordinary_review_and_work(run, workspace, tmp_path, todo, digest, monkeypatch, work=None):
+    """Real current-owner replan consumes inherited counterevidence, then work."""
+    monkeypatch.chdir(workspace)
+    run('configure-goal', '--goal-id', 'branch', '--execution-replan-after-turns', '1',
+        '--execution-stride-strategy', 'evidence_conditioned_v1', '--execute')
+    actor = ['--goal-id', 'branch', '--agent-id', 'branch-actor']
+    def settle(turn, vision, *, review=False):
+        path = tmp_path / (turn + '.json')
+        path.write_text(json.dumps(vision))
+        written = run('refresh-state', *actor, '--todo-id', todo, '--turn-instance-id', turn,
+            '--classification', 'ordinary_checkpoint_research', '--delivery-batch-scale', 'single_surface',
+            '--delivery-outcome', 'outcome_progress', '--delivery-boundary', 'semantic_closeout' if review else 'in_flight_continuation',
+            '--agent-vision-json', str(path), '--no-global-sync', '--suppress-external-sinks')
+        run('quota', 'spend-slot', *actor, '--todo-id', todo, '--turn-instance-id', turn,
+            '--slots', '1', '--source', 'heartbeat', '--execute')
+        return written
+    vision = {'schema_version': 'goal_vision_replan_contract_v0', 'state': 'vision_patch_proposed',
+        'vision_patch': {'acceptance_summary': 'Use retained counterevidence in the next complete experiment.'},
+        'path_delta': {'outcome': 'continue', 'prior_assumption': 'Retained evidence needs current verification.',
+            'observed_reality': 'The current ordinary Goal reads the inherited rejected candidate.',
+            'retained': ['Candidate 3 is rejected; keep candidate 7.'], 'evidence_refs': ['checkpoint:' + digest]}}
+    initial = run('quota', 'should-run', *actor, '--todo-id', todo, '--turn-instance-id', 'ordinary-preparation',
+        '--runtime-profile', 'generic_cli', '--available-capability', 'shell')
+    assert initial['interaction_contract']['agent_channel']['delivery_allowed']
+    settle('ordinary-preparation', vision)
+    review = run('quota', 'should-run', *actor, '--turn-instance-id', 'ordinary-review',
+        '--runtime-profile', 'generic_cli', '--available-capability', 'shell')
+    assert review['interaction_contract']['mode'] == 'autonomous_replan'
+    review = run('quota', 'should-run', *actor, '--todo-id', todo, '--turn-instance-id', 'ordinary-review',
+        '--runtime-profile', 'generic_cli', '--available-capability', 'shell')
+    control = review['replan_action_packet']['stride_control']
+    assert any(row['finding_id'] == 'negative-3' for row in control['explore_basis']['finding_refs'])
+    decision = json.loads(json.dumps(control['minimal_example']))
+    decision.update(basis='supported_progress', action='grow', axes={
+        'work_slice': {'plan': 'Complete candidates 8 and 9 in one accepted work unit.',
+            'reason': 'The preparation already verified retained candidate 7 and the source counterexample.'},
+        'route_distance': {'plan': 'Keep the candidate increment mechanism.',
+            'reason': 'Candidate 3 is refuted; this fixture tests continuation, not a new prediction route.'},
+        'validation_scope': {'plan': 'Read both candidate values and retained rejection 3 from the result file.',
+            'reason': 'Both results are needed to interpret this complete experiment.'}}, next_probe={
+        'scope': 'One two-candidate ordinary Goal experiment.', 'prediction': 'Candidates 8 and 9 are both retained.',
+        'adoption_criterion': 'The result contains both values and excludes rejected candidate 3.',
+        'cost_bound': 'One current authorized work Turn.',
+        'minimum_evidence': 'Actual result bytes, source-bound counterexample and current settlement.'})
+    decision['explore_review'].update(disposition='used', considered_refs=['negative-3'],
+        reason='The captured counterexample excludes candidate 3; complete the next two candidates from 7.')
+    revised = json.loads(json.dumps(vision))
+    revised['stride_decision'] = decision
+    revised['path_delta'].update(outcome='replan', observed_reality='Current review read the source-bound refuted finding.',
+        changed=['Complete candidates 8 and 9 together, keeping the rejected route excluded.'])
+    reviewed = settle('ordinary-review', revised, review=True)
+    from loopx.history import load_index_snapshot
+    indexed = load_index_snapshot(Path(reviewed['index_path']), include_artifact_status=False).records
+    accepted = next(row for row in indexed if row.get('turn_instance_id') == 'ordinary-review')
+    actual_decision = accepted['agent_vision']['stride_decision']
+    assert actual_decision['action'] == 'grow'
+    assert actual_decision['explore_review']['disposition'] == 'used'
+    assert actual_decision['explore_review']['considered_refs'] == ['negative-3']
+    # The accepted decision is read from canonical history, not the submitted JSON.
+    following = run('quota', 'should-run', *actor, '--todo-id', todo, '--turn-instance-id', 'ordinary-experiment',
+        '--runtime-profile', 'generic_cli', '--available-capability', 'shell')
+    assert following['interaction_contract']['agent_channel']['delivery_allowed']
+    # Source history and operational observations are never used as current work.
+    result_path = workspace / 'complete-experiment.json'
+    if work is None:
+        result_path.write_text(json.dumps({'candidates': [8, 9], 'rejected': [3], 'retained_start': 7}))
+    else:
+        work(following)
+    assert json.loads(result_path.read_bytes())['candidates'] == [8, 9]
+    # Settlement proves actual current work can continue under the original lease.
+    revised.pop('stride_decision')
+    revised['path_delta'].update(outcome='continue', observed_reality='Candidates 8 and 9 were completed in one ordinary work unit.')
+    settle('ordinary-experiment', revised)
 
 
 def test_research_history_is_complete_and_bound_to_original_source(tmp_path, monkeypatch, capsys):
@@ -268,7 +369,7 @@ def test_research_history_is_complete_and_bound_to_original_source(tmp_path, mon
     with pytest.raises(ValueError, match="appeared before sealing"):
         verify_context_sources(absent, components, appeared["source_witness"])
     # An append during the canonical read is also rejected, not silently mixed.
-    from benchmark.runtime import research_checkpoint
+    from loopx.control_plane.runtime import research_checkpoint
     original_read = research_checkpoint.canonical_context
     def racing_read(*args, **kwargs):
         result = original_read(*args, **kwargs)

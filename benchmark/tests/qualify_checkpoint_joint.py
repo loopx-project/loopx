@@ -163,16 +163,29 @@ def main():
                   {"LOOPX_JOINT_RECEIVER_POINT": "/point", "LOOPX_JOINT_RECEIVER_CONFIG": "/captured-config.toml",
                    "LOOPX_RUNTIME_ROOT": "/results/transport-runtime",
                    **({"LOOPX_JOINT_RECEIVER_STRIDE": "1"} if stride else {})}, output / f"{name}.log")
+        # The same native provider must also complete the public Core journey
+        # with every benchmark import forbidden by its test fixture.
+        results = output / "core"
+        results.mkdir()
+        guest(["python", "-m", "pytest",
+               "tests/control_plane/test_research_checkpoint_cli.py::test_explicit_ordinary_goal_capture_preserves_context_without_activation[True]",
+               "-q", "-rs", "-p", "no:cacheprovider", "--basetemp=/results/test",
+               "--junitxml=/results/junit.xml"],
+              {str(results): {"bind": "/results", "mode": "rw"}},
+              {"LOOPX_RUNTIME_ROOT": "/results/transport-runtime"}, output / "core.log")
         assert subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip() == source_revision, "Source changed during qualification"
         assert not subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"], text=True).strip(), "Source changed during qualification"
         receipt = {"passed": True, "controller_uid": os.getuid(), "provider_revision": PROVIDER_REVISION,
                    "source_revision": source_revision, "source_tree_dirty": False,
                    "qualification_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in
                        [Path(__file__), source / "benchmark/tests/test_native_checkpoint_handoff.py",
-                        source / "benchmark/tests/test_checkpoint_joint_receiver.py"]},
+                        source / "benchmark/tests/test_checkpoint_joint_receiver.py",
+                        source / "tests/control_plane/test_research_checkpoint_cli.py",
+                        source / "tests/control_plane/codex_checkpoint_fixture.py"]},
                    "image_id": image, "point_sha256": packet["sha256"],
                    "binary_sha256": {k: hashlib.sha256(p.read_bytes()).hexdigest() for k, p in binaries.items()},
-                   "ordinary_and_stride": True, "research_point_qualified": False}
+                   "ordinary_and_stride": True, "core_goal_without_benchmark": True,
+                   "research_point_qualified": False}
         (output / "result.json").write_text(json.dumps(receipt, indent=2))
         print(json.dumps(receipt))
     finally:
