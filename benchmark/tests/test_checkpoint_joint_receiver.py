@@ -94,7 +94,16 @@ def test_captured_point_continues_with_fresh_authority(
     original_runtime = Path(historical["common_runtime_root"])
     assert not original_runtime.exists()
     source_goal = metadata["loopx_state"]["goal_id"]
-    assert historical["goals"][0]["id"] == source_goal
+    # A later generation may retain an even older project-local registry.
+    # The source's separately sealed canonical registry owns its current Goal;
+    # neither registry becomes destination authority through workspace copying.
+    registry_basis = metadata["loopx_state"]
+    captured_registry = unit / "components" / registry_basis["registry_component_id"]
+    if registry_basis["registry_member_path"]:
+        captured_registry = captured_registry / registry_basis["registry_member_path"]
+    captured_registry_bytes = captured_registry.read_bytes()
+    assert hashlib.sha256(captured_registry_bytes).hexdigest() == registry_basis["registry_sha256"]
+    assert source_goal in {row["id"] for row in json.loads(captured_registry_bytes)["goals"]}
     assert (workspace / "evidence-6.json").read_bytes() == (source_workspace / "evidence-6.json").read_bytes()
     retained_object = workspace / ".git/objects/ab/retained-object"
     assert retained_object.read_text() == "Readonly source evidence"
