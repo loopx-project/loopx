@@ -228,8 +228,8 @@ relax the environment policy, or replace Trusted Publishing with a token.
 For a browser-fixture error discovered after an immutable tag was published,
 maintainers may dispatch the release workflow from reviewed tooling with
 `tag` set to that existing release and `browser_fixture_commit` set to a full,
-merged commit SHA. Only the personal-workspace fixture, typed-actions and goal-work-map
-scenario files are extracted from that commit; its other changes are not
+merged commit SHA. Only the personal-workspace fixture, typed-actions,
+goal-work-map and goal-workspace-m2 scenario files are extracted from that commit; its other changes are not
 applied to the product checkout. A non-default commit must contain at least
 one correction in these fixture owners. The wheel and sdist are built before
 those test corrections are applied; checksums are verified again after the

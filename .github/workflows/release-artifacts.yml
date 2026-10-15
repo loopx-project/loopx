@@ -242,6 +242,7 @@ jobs:
               "examples/personal-workspace-browser/fixture.mjs",
               "examples/personal-workspace-browser/typed-actions.mjs",
               "examples/personal-workspace-browser/goal-work-map.mjs",
+              "examples/personal-workspace-browser/goal-workspace-m2.mjs",
           }
           changed = set(git("diff", "--name-only", product, fixture, "--", *sorted(allowed)).splitlines())
           if fixture != product and not changed:
