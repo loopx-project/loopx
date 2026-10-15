@@ -302,6 +302,18 @@ rather than being copied.
   owner selects "Mark seen" or leaves the Goal after the line was shown.
 - The line is not a notification channel and does not touch the attention queue.
 
+For long-horizon research, the proposed [progress reading journey](../../product/use-cases/auto-research/long-horizon-progress-design.md)
+uses this page and its shared selection to connect a native outcome/time window,
+one episode/branch and inline versioned evidence. The already-open Goal needs
+no setup; one selection should expose what changed, its check and subsequent
+adoption or the exact gap. An optional comparison preserves window/focus and
+labels unmatched or unavailable evidence. A summary or Todo-count delta does
+not establish information gain or outcome improvement. Reuse the existing
+since-last-look and usage semantics above; do not invent a second cost ledger,
+progress percentage, live signal or writable graph. This is a design extension,
+not delivered M1/M2 behavior; packaged source/access/recovery and comprehension
+qualification remain required.
+
 ### 5.8 Direction and measurable target
 
 - When an acceptance contract is enabled, show its objective and criteria.

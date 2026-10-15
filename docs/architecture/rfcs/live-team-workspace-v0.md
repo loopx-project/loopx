@@ -188,6 +188,36 @@ provider scope; motion rate or token count does not imply financial cost.
   local Chat SSE infrastructure where compatible; provider-specific streaming
   can be absent. Without granular events, show last observed state honestly.
 
+### Long-horizon progress reading
+
+The [product reading journey](../../product/use-cases/auto-research/long-horizon-progress-design.md)
+refines this presentation owner; it does not introduce another research graph,
+metric authority or writable lifecycle. Research leads episode/rubric, baseline,
+window/cost and calibration decisions; product refines selection and evidence
+reading. These requirements are proposed, not qualified implementation.
+
+For an already-open Goal, target zero setup actions to read the native outcome
+and material change, one selection to see its source, exact artifact/check basis,
+next decision and adoption observation, and an optional second action for a
+valuable comparison or source drill-down. Timeline, branch context and inline
+evidence share one selection. Missing decisive evidence remains a visible gap;
+a summary alone does not satisfy the one-action target.
+
+Keep result, information, actual adoption and realized benefit distinct, with
+reliability, cost and coverage alongside. Original scorer/acceptance owners retain
+authority. Time adjacency is not a causal edge; graph/Todo counts or model
+interpretations are not verified progress. Later windows use the research
+owner's declared budget/checkpoint, exposing inherited prefix, source age,
+measurement gaps, censoring and unmatched controls. A check remains bound to its
+artifact/input revision. Restricted evidence cannot appear accessible, and absent
+adoption cannot appear observed; neither silently negates a separate valid check.
+
+Qualify the eventual read-only slice in the packaged frontend and real backend,
+including source access, missing data, version changes, refresh/back and no
+replayed effects. Comprehension against the existing list/map and independent
+scientific calibration are separate exits. This design does not advance delivery
+maturity or delay the existing L1/R2 correction journey behind all research work.
+
 ## 6. Research and technical choices
 
 These primary sources inform the design; they do not qualify LoopX behavior.

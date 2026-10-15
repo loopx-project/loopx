@@ -512,6 +512,88 @@ These measurements must come from typed observations, receipts, runner events,
 or verifier checkpoints. Prose similarity and keyword matching cannot be the
 semantic source of truth.
 
+#### Evidence-based episode evaluation (proposed refinement)
+
+A flat native score can coexist with useful information, an executed method change,
+or expensive activity that did not reduce uncertainty. Keep those observations
+separate. A trajectory judge or research graph must not replace benchmark-native
+outcomes, integrity, treatment fidelity or comparison eligibility.
+
+Use a **research episode** as the analysis unit: a scoped question or competing
+explanation, a discriminating experiment, its actual artifacts and observations,
+and the resulting decision. One episode may span multiple model Turns; an input
+batch is one experiment rather than one successful exploration per input. Split
+when the question, intervention or decision changes, not whenever a tool returns.
+Retain unfinished episodes, justified repetitions, recovery and unallocated work.
+Freeze segmentation rules before inspecting arm labels and final outcome gains.
+
+Report a vector rather than an uncalibrated value score:
+
+| Dimension | Numerator / denominator or observation | Required qualification |
+|---|---|---|
+| Native outcome | Best and final native result, valid/invalid/missing submissions and time to a declared threshold | Pin feedback availability, source and opportunity budget; do not backdate later results |
+| Information | Independently reviewed episodes whose valid experiment changes a stated decision-relevant uncertainty / all eligible episodes | Retain relevance, novelty, validity and scoped counterevidence separately; a noisy result may remain inconclusive |
+| Discrimination | Completed valid experiments that distinguish their stated competing explanations / completed eligible experiments | An attractive proxy or identical work-clock trace does not establish native transfer or wall-clock transparency |
+| Adoption | Applicable evidence with a subsequent opportunity and an artifact- or behavior-traced consequence / applicable evidence with such an opportunity | A citation, self-report, Todo closure or graph edge alone is insufficient; no subsequent opportunity is not ignored evidence |
+| Repetition | Reviewed same-question/intervention/input episodes with no new information / assessable episodes | Distinguish justified replication, noise controls and recovery from redundant work |
+| Cost and coverage | Episode and assessable counts; wall intervals, active model/tool work, control, evaluation waiting, recovery, cached/uncached input and output tokens | Keep unobserved costs unknown; deduplicate ancestor responses but charge newly processed context |
+
+If the full episode population N is known, display confirmed n/N, unknown u/N and
+coverage; [n/N, (n+u)/N] is a missing-data bound, not a statistical confidence
+interval. If N is unknown, do not publish a population fraction. Episode-count
+and resource-weighted fractions are different estimands. Use interval unions for
+concurrent wall time; retain overlapping resource/wait labels and unallocated
+cost instead of double-counting or inventing exclusive attribution. Separate
+prefix/seed cost, continuation marginal cost, repeated setup and total study cost.
+
+Define late work prospectively by the declared total budget or mature checkpoint
+rule, never by the hindsight time of the last improvement. For continuation,
+show source age, continuation elapsed, remaining budget and evaluation opportunity
+state separately. Freeze common windows; unfinished work remains visible without
+using future feedback. Information progress cannot compensate for an undisclosed
+native regression or higher total cost.
+
+Apply the common evidence rubric to baseline and treatment trajectories. Missing
+LoopX-specific metadata is unknown observability, not zero progress. Todo,
+replan and Explore records explain a mechanism only when connected to execution
+and external artifacts. A stride-disabled LoopX arm is not a native-harness
+baseline. Purpose-selected examples do not estimate a whole-run useful-exploration
+fraction or a causal treatment effect.
+
+Qualification starts with independently reproducible source/input/submission/
+feedback and time/cost binding. Then use at least two independent human coders,
+report episode-boundary and dimension-level agreement, unknown coverage and
+adjudication. Freeze the rubric before testing a model judge on held-out episodes.
+First hide arm labels and final scores when judging design and decision relevance;
+then reveal execution, adoption and outcomes. Include same-code score differences,
+stale sources, delayed feedback, invalid controls, useful negative or inconclusive
+experiments, legitimate repeats, missing baseline metadata and unfinished work in
+the error set. Measure unsupported positive judgments and missed useful evidence
+separately. A small manual pilot is neither a reliability estimate nor a qualified
+model evaluator. Product/UX or code review does not supply independent scientific
+coding. Report model-judge precision and recall per dimension, including abstention,
+rather than promoting agreement on hand-picked examples.
+
+Keep initial annotations in a read-only analysis sidecar under the benchmark
+owner. Reuse native result/board authority and existing Explore evidence and
+legal relationships; do not create a second truth graph, derive closure from
+analysis prose, or feed diagnoses into frozen solvers. Research may use permitted
+private evidence under its contract, but only audience-authorized, safe versioned
+projections with coverage enter the product. Hidden evaluator material requires
+both a terminated solver and completed scoring and never returns to solver
+context or runtime feedback. Product presentation
+should connect the existing score/time view to episodes, evidence and subsequent
+adoption, exposing observation, interpretation, unknowns and version scope in
+place. The minimum journey includes missing/denied evidence and keyboard return
+to the selected window. A synthetic diagram or specification qualifies a design,
+not a packaged interaction, installed evaluator or capability benefit. Subsequent
+runtime effects require their own accepted contract and qualification.
+
+See the [product reading journey](../../product/use-cases/auto-research/long-horizon-progress-design.md)
+for the synthetic example, one-selection detail and separate comprehension
+acceptance. These are proposed analysis and presentation requirements, not a new
+runtime protocol, metric promotion or an authorization to expand a study.
+
 ### 6.4 Human attention
 
 For assisted studies only:
