@@ -184,8 +184,8 @@ def prepare_owned_process_cleanup(process: subprocess.Popen[bytes]) -> Callable[
     import ctypes
     from ctypes import wintypes
 
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    native = ctypes.WinDLL("ntdll")
+    kernel = getattr(ctypes, "WinDLL")("kernel32", use_last_error=True)
+    native = getattr(ctypes, "WinDLL")("ntdll")
     kernel.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
     kernel.CreateJobObjectW.restype = wintypes.HANDLE
     kernel.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
@@ -205,9 +205,9 @@ def prepare_owned_process_cleanup(process: subprocess.Popen[bytes]) -> Callable[
         process.wait()
         raise OSError("Owned process job creation failed")
     try:
-        if not kernel.AssignProcessToJobObject(job, int(process._handle)):
+        if not kernel.AssignProcessToJobObject(job, int(getattr(process, "_handle"))):
             raise OSError("Owned process job assignment failed")
-        if native.NtResumeProcess(int(process._handle)) != 0:
+        if native.NtResumeProcess(int(getattr(process, "_handle"))) != 0:
             raise OSError("Owned process resume failed")
     except BaseException:
         process.kill()

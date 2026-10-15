@@ -169,7 +169,8 @@ def test_grouped_canary_preserves_explicit_path_priority(monkeypatch):
     assert environment["PATH"].split(os.pathsep)[0] == "/qualified/toolchain/bin"
 
 
-def test_runtime_started_by_smoke_is_stopped_before_fixture_cleanup(tmp_path, monkeypatch):
+@pytest.mark.parametrize("delayed_exit", [False, True])
+def test_runtime_started_by_smoke_is_stopped_before_fixture_cleanup(tmp_path, monkeypatch, delayed_exit):
     import os
     import sys
     import tempfile
@@ -188,7 +189,36 @@ def test_runtime_started_by_smoke_is_stopped_before_fixture_cleanup(tmp_path, mo
             "r=collect_effect_runtime_readiness(deep=True); assert r['ready'], r"],
             env=env,check=True,capture_output=True,text=True)
         try:
-            result = runner._run_check({"command": "python examples/runtime.py"}, timeout_seconds=30)
+            if delayed_exit:
+                from concurrent.futures import ThreadPoolExecutor, TimeoutError
+                ready, release, exited = (tmp_path / name for name in ("retired", "release", "exited"))
+                preload = tmp_path / "delayed-exit.mjs"
+                preload.write_text(
+                    "import { existsSync, writeFileSync } from 'node:fs';\n"
+                    "const exit = process.exit.bind(process);\n"
+                    f"process.exit = code => {{ writeFileSync({json.dumps(str(ready))}, process.env.TMPDIR);\n"
+                    f"const poll = setInterval(() => {{ if (existsSync({json.dumps(str(release))})) {{\n"
+                    f"clearInterval(poll); writeFileSync({json.dumps(str(exited))}, 'exit'); exit(code); }} }}, 10); }};\n",
+                    encoding="utf-8",
+                )
+                monkeypatch.setenv("NODE_OPTIONS", "--import=" + preload.as_uri())
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(runner._run_check,
+                        {"command": "python examples/runtime.py"}, timeout_seconds=30)
+                    try:
+                        deadline = time.monotonic() + 10
+                        while not ready.exists() and time.monotonic() < deadline:
+                            time.sleep(.01)
+                        assert ready.exists(), "owned runtime did not reach its exit barrier"
+                        with pytest.raises(TimeoutError):
+                            future.result(timeout=.2)
+                        assert Path(ready.read_text()).exists(), "cleanup preceded actual exit"
+                    finally:
+                        release.touch()
+                    result = future.result(timeout=10)
+                assert exited.exists(), "runner returned before its runtime's exit hook"
+            else:
+                result = runner._run_check({"command": "python examples/runtime.py"}, timeout_seconds=30)
             assert result['ok'], result
             isolated_temp = Path(json.loads(result['stdout_tail'])['temp'])
             assert str(isolated_temp) != owner and not isolated_temp.exists()

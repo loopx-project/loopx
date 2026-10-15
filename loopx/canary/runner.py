@@ -321,7 +321,7 @@ def _run_check(
                 if any(root.glob("loopx-effect-runtime-*/runtime-*.json")):
                     subprocess.run(
                         [sys.executable, "-c", "from loopx.control_plane.effect_runtime "
-                         "import restart_effect_runtime; r=restart_effect_runtime(); "
+                         "import restart_effect_runtime; r=restart_effect_runtime(wait_for_exit=True); "
                          "raise SystemExit(r['status'] == 'shutdown_pending')"],
                         cwd=repo_root, env=env, check=True, timeout=15,
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
