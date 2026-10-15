@@ -526,8 +526,9 @@ def test_checkpoint_supervisor_is_bound_to_container_and_only_solver_execution(t
     calls = []
     controller = SimpleNamespace(bind=lambda env: calls.append(("bind", env["SFORGE_TOKEN"])),
         start=lambda raw: calls.append(("start", raw)), close=lambda: calls.append(("close",)))
+    monkeypatch.setattr("docker.from_env", lambda: pytest.fail("Unit transport must use its explicit client"))
     backend = RecordingDockerBackend(log_dir=tmp_path / "collected", logger=None,
-                                    oauth_proxy=True, checkpoint=controller)
+                                    oauth_proxy=True, checkpoint=controller, client=SimpleNamespace())
     handle = SimpleNamespace(raw="exact-container")
     monkeypatch.setattr(DockerBackend, "create_container", lambda *a, **kw: handle)
     backend.create_container("image", "name", environment={"SFORGE_TOKEN": "synthetic"})

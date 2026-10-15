@@ -8,6 +8,8 @@ import {goalWorkspaceSelectionScenario} from "./personal-workspace-browser/goal-
 import {firstGoalHomeScenario} from "./personal-workspace-browser/first-goal-home.mjs";
 import {attentionNotificationsScenario} from "./personal-workspace-browser/attention-notifications.mjs";
 import {attentionNotificationsLiveScenario} from "./personal-workspace-browser/attention-notifications-live.mjs";
+import {goalSuggestionsScenario} from "./personal-workspace-browser/goal-suggestions.mjs";
+import {goalSuggestionsLiveScenario} from "./personal-workspace-browser/goal-suggestions-live.mjs";
 import { replanCadenceScenario } from "./personal-workspace-browser/replan-cadence.mjs";
 import {nativeChildActivityScenario} from "./personal-workspace-browser/native-child-activity.mjs";
 import {privateStewardScopeScenario} from "./personal-workspace-browser/private-steward-scope.mjs";
@@ -115,6 +117,8 @@ scenarioCatalog.push(goalWorkspaceSelectionScenario);
 scenarioCatalog.push(firstGoalHomeScenario);
 scenarioCatalog.push(attentionNotificationsScenario);
 scenarioCatalog.push(attentionNotificationsLiveScenario);
+scenarioCatalog.push(goalSuggestionsScenario);
+scenarioCatalog.push(goalSuggestionsLiveScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
 scenarioCatalog.push(agentModelSelectionScenario);
 const scenarios = requestedScenario
