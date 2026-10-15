@@ -125,6 +125,16 @@ sys.stdin.read()
     }
 
 
+def test_non_heartbeat_wakes_do_not_import_checkpoint_control_plane(tmp_path, monkeypatch):
+    # plain/native-goal workers stage no LoopX control plane; a checkpoint import
+    # there turned a 90-minute trial into a 0.7s ModuleNotFoundError exit.
+    monkeypatch.setitem(sys.modules, "benchmark.runtime.checkpoint_wake", None)
+    env = worker_env(tmp_path)
+    receipt = run_once(env)
+    assert receipt["ok"], receipt
+    assert receipt.get("error_kind") is None and "checkpoint" not in receipt
+
+
 def test_fresh_wakes_share_environment_without_resuming_or_duplicate_session_copies(
     tmp_path,
 ):

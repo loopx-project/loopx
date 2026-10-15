@@ -269,6 +269,13 @@ def native_command(env, execution, stage, wake, session_wake):
     return command
 
 
+class _InertCheckpointWake:
+    """No checkpoint listener: plain, native-Goal, Turn and loopx-goal wakes."""
+
+    socket_path = None
+    listener = None
+
+
 def run_once(env: dict[str, str]) -> dict:
     if env.get("LOOPX_TURN_ENVELOPE", "0") not in {"0", "1"}:
         raise ValueError("LOOPX_TURN_ENVELOPE must be 0 or 1")
@@ -339,9 +346,14 @@ def run_once(env: dict[str, str]) -> dict:
                 Path(env["LOOPX_MODEL_CATALOG"]) if env.get("LOOPX_MODEL_CATALOG") else None
             ),
         )
-        from benchmark.runtime.checkpoint_wake import CheckpointWake
+        if execution.mode == "heartbeat":
+            # Checkpoint capture needs the LoopX control plane, which only
+            # heartbeat workers stage; other modes must not import it.
+            from benchmark.runtime.checkpoint_wake import CheckpointWake
 
-        checkpoint_wake = checkpoint_context.enter_context(CheckpointWake(env, receipt))
+            checkpoint_wake = checkpoint_context.enter_context(CheckpointWake(env, receipt))
+        else:
+            checkpoint_wake = _InertCheckpointWake()
         body = "Finish the task."
         if stage == "plan":
             from benchmark.runtime.planning import render_planning_prompt, task_plan_packet
