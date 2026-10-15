@@ -48,6 +48,22 @@ export const runtimeReadinessLiveScenario = {
       assert.match(text, /Claude API：未设置环境变量 ANTHROPIC_API_KEY/, "The real service names the unset variable");
       await page.screenshot({ path: resolve(outputDir, "runtime-readiness-live.png"), animations: "disabled" });
 
+      // On a phone the real probed paths must wrap inside the card: every
+      // paragraph, list item and code token ends within the notice and the
+      // viewport. The document's own scroll width cannot prove this.
+      await page.setViewportSize({ width: 390, height: 844 });
+      await notice.waitFor({ state: "visible" });
+      const bounds = await notice.evaluate((node) => {
+        const card = node.getBoundingClientRect();
+        const children = [...node.querySelectorAll("p, li, code, h2")].map((child) => { const box = child.getBoundingClientRect(); return { tag: child.tagName, right: box.right, width: box.width }; });
+        return { card: { right: card.right, width: card.width }, children, viewport: window.innerWidth };
+      });
+      for (const child of bounds.children) {
+        assert.ok(child.right <= bounds.card.right + 1 && child.right <= bounds.viewport, `${child.tag} ends at ${child.right} beyond the card (${bounds.card.right}) or the viewport (${bounds.viewport})`);
+      }
+      await page.screenshot({ path: resolve(outputDir, "runtime-readiness-live-phone.png"), animations: "disabled" });
+      await page.setViewportSize({ width: 1440, height: 900 });
+
       // The owner installs Codex; Check again re-reads the real probe.
       await writeFile(join(ready.bins, "codex"), "#!/bin/sh\nexit 0\n");
       await chmod(join(ready.bins, "codex"), 0o755);

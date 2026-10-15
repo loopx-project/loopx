@@ -332,15 +332,18 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-system-health-diagnostics { margin-top: 6px; font-size: var(--text-caption); line-height: var(--leading-caption); }
 .personal-system-health-diagnostics summary { cursor: pointer; }
 .personal-system-health-diagnostics ul { margin: 4px 0 0 16px; padding: 0; }
-.personal-runtime-readiness { display: grid; gap: 10px; max-width: 640px; min-width: 0; padding: 14px 16px; border: 1px solid var(--pw-amber); border-radius: 12px; background: var(--pw-amber-bg); color: var(--pw-text); }
+.personal-runtime-readiness { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; max-width: 640px; min-width: 0; padding: 14px 16px; border: 1px solid var(--pw-amber); border-radius: 12px; background: var(--pw-amber-bg); color: var(--pw-text); }
 .personal-runtime-readiness h2 { margin: 0; font-size: var(--text-body); line-height: var(--leading-body); font-weight: 600; }
 .personal-runtime-readiness p { margin: 0; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
 .personal-runtime-readiness ul { margin: 0; padding-left: 18px; font-size: var(--text-caption); line-height: var(--leading-caption); }
+/* A probed executable path is one long token; it must wrap inside the card on a phone instead of widening the track. */
+.personal-runtime-readiness > *, .personal-runtime-readiness li { min-width: 0; overflow-wrap: anywhere; }
+.personal-runtime-readiness code { overflow-wrap: anywhere; word-break: break-all; }
 .personal-runtime-readiness-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .personal-runtime-readiness-actions button { min-height: 36px; padding: 0 14px; border: 1px solid var(--pw-amber); border-radius: 8px; background: var(--pw-card); color: var(--pw-amber); font-size: var(--text-caption); font-weight: 600; cursor: pointer; }
 .personal-runtime-readiness-actions button:disabled { opacity: .6; cursor: wait; }
 .personal-runtime-readiness-actions a { color: var(--pw-blue-ink); font-size: var(--text-caption); line-height: var(--leading-caption); }
-.personal-runtime-readiness-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; color: var(--pw-amber); }
+.personal-runtime-readiness-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-width: 0; overflow-wrap: anywhere; color: var(--pw-amber); }
 .personal-runtime-readiness-line button { min-height: 28px; padding: 0 10px; border: 1px solid var(--pw-amber); border-radius: 6px; background: transparent; color: var(--pw-amber); font-size: var(--text-caption); cursor: pointer; }
 .personal-runtime-readiness-line a { color: var(--pw-blue-ink); }
 .personal-home-lane { display: flex; flex-direction: column; min-width: 0; min-height: 100%; border: 1px solid var(--pw-line); border-radius: 16px; background: #fff; box-shadow: 0 1px 4px rgb(30 28 20 / 4%); }
