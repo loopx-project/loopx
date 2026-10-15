@@ -1,6 +1,7 @@
 /** Bounded evidence for the existing replan boundary; no settlement authority. */
 import {createHash} from "node:crypto";
-import type {JsonObject} from "../effect_program.ts";
+import {settlementIdentityPayload, SETTLEMENT_IDENTITY_SCHEMA_VERSION,
+  SCOPED_SETTLEMENT_IDENTITY_SCHEMA_VERSION, type JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
@@ -104,16 +105,33 @@ function coreGoal(value: unknown): JsonObject {
     objective_missing: objective === null, acceptance_contract: acceptance};
 }
 
+/** Qualify recorded bindings using the settlement owner, without settling work.
+ * Keep historical Todo evidence eligible under its existing read contract.
+ */
+function decisionBindingMatches(row: JsonObject, source: JsonObject, delta: JsonObject | null): boolean {
+  const identity = objectOrNull(source.settlement_identity);
+  if (!identity || identity.turn_instance_id !== source.turn_instance_id ||
+      typeof identity.turn_instance_id !== "string" || !ID.test(identity.turn_instance_id)) return false;
+  if (identity.schema_version === SETTLEMENT_IDENTITY_SCHEMA_VERSION) {
+    return ["goal_id", "agent_id", "todo_id"].every(key => identity[key] === row[key]);
+  }
+  if (identity.schema_version !== SCOPED_SETTLEMENT_IDENTITY_SCHEMA_VERSION ||
+      typeof row.goal_id !== "string" || typeof row.agent_id !== "string" ||
+      [row.todo_id, source.todo_id, identity.todo_id].some(value => value != null && value !== "") ||
+      ["goal_id", "agent_id"].some(key => source[key] !== row[key]) ||
+      typeof source.replan_obligation_id !== "string" || !ID.test(source.replan_obligation_id) ||
+      delta?.obligation_id !== source.replan_obligation_id) return false;
+  const expected = settlementIdentityPayload({goal_id: row.goal_id, agent_id: row.agent_id,
+    turn_instance_id: identity.turn_instance_id, replan_obligation_id: source.replan_obligation_id});
+  return Object.entries(expected).every(([key, value]) => identity[key] === value);
+}
+
 function acceptedDecisionSource(row: JsonObject): boolean {
   const source = objectOrNull(row._source_facts);
-  const identity = objectOrNull(source?.settlement_identity);
   const vision = objectOrNull(source?.agent_vision);
   const ack = objectOrNull(source?.autonomous_replan_ack);
   const delta = objectOrNull(ack?.semantic_delta);
-  return !!source && identity?.schema_version === "quota_settlement_identity_v0" &&
-    ["goal_id", "agent_id", "todo_id"].every(key => identity[key] === row[key]) &&
-    identity.turn_instance_id === source.turn_instance_id &&
-    typeof identity.turn_instance_id === "string" && ID.test(identity.turn_instance_id) &&
+  return !!source && decisionBindingMatches(row, source, delta) &&
     !objectOrNull(source.quota_spend_commit) &&
     vision?.schema_version === "goal_vision_replan_contract_v0" && vision.agent_id === row.agent_id &&
     (vision.goal_id == null || vision.goal_id === row.goal_id) &&
@@ -137,8 +155,10 @@ function recordedDecision(row: JsonObject): JsonObject | null {
   let stride: JsonObject | null;
   try { stride = normalizeRecordedStrideDecision(objectOrNull(source.agent_vision)?.stride_decision); }
   catch { return null; }
+  const autonomous = objectOrNull(source.settlement_identity)?.schema_version === SCOPED_SETTLEMENT_IDENTITY_SCHEMA_VERSION;
   const decision = {history_evidence_ref: "replan-evidence-" + digest(publicEvidenceRow(row)),
-    generated_at: row.generated_at, todo_id: row.todo_id, turn_instance_id: source.turn_instance_id,
+    generated_at: row.generated_at, todo_id: autonomous ? null : row.todo_id, turn_instance_id: source.turn_instance_id,
+    ...(autonomous ? {replan_obligation_id: source.replan_obligation_id} : {}),
     goal_ref: ref ? {goal_id: ref.goal_id, goal_instance_id: ref.goal_instance_id} : null,
     path_delta: path, ...(stride ? {stride_decision: stride} : {})};
   // Existing history refs keep their identity. This derived ref additionally
@@ -235,6 +255,10 @@ export function validateReplanContext(value: unknown): JsonObject {
     identifier(previous.evidence_ref, "previous_decision.evidence_ref");
     identifier(previous.history_evidence_ref, "previous_decision.history_evidence_ref");
     identifier(previous.turn_instance_id, "previous_decision.turn_instance_id");
+    if (previous.replan_obligation_id !== undefined) {
+      identifier(previous.replan_obligation_id, "previous_decision.replan_obligation_id");
+      if (previous.todo_id !== null) throw new EffectRuntimeRequestError("previous decision cannot bind both Todo and autonomous replan");
+    }
     normalizeGoalPathDelta(previous.path_delta);
     normalizeRecordedStrideDecision(previous.stride_decision);
   }
