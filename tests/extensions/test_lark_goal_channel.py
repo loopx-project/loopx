@@ -439,7 +439,7 @@ def test_private_binding_atomic_failure_preserves_existing_file(
         raise OSError("fixture replace failure")
 
     monkeypatch.setattr(
-        "loopx.file_lock.os.replace",
+        "loopx.extensions.lark.private_json.os.replace",
         fail_replace,
     )
 
