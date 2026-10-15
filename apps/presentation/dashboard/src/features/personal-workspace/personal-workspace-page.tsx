@@ -2352,9 +2352,12 @@ export function PersonalWorkspacePage({
   useEffect(() => {
     if (!attentionNotificationsActive) { seenAttentionKeysRef.current = null; return; }
     const items = attentionItemsRef.current;
-    const keys = new Set(items.map(attentionNotificationKey));
     const seen = seenAttentionKeysRef.current;
-    seenAttentionKeysRef.current = keys;
+    // Identities seen while on are kept for the whole activation: a partial
+    // read that omits an item must not turn its return into a new decision.
+    const remembered = seen ? new Set(seen) : new Set<string>();
+    for (const item of items) remembered.add(attentionNotificationKey(item));
+    seenAttentionKeysRef.current = remembered;
     if (!seen) return;
     // Every listed item is remembered, so an optional action that later turns
     // blocking is not a new item; only an item first seen while it waits on

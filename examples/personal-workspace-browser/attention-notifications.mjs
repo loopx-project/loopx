@@ -67,6 +67,27 @@ export const attentionNotificationsScenario = {
       await page.screenshot({ path: resolve(outputDir, "attention-notifications-settings.png"), animations: "disabled" });
       await page.getByRole("button", { name: "返回工作区", exact: true }).click();
 
+      // A partial read that omits a gate already seen at enable time, then a
+      // full read that lists it again, is not a new decision: identities seen
+      // while on are kept, so nothing is replayed.
+      const partialOmitsSeededGate = (fixture) => {
+        const first = fixture.attention_queue.items[0];
+        for (const group of [first.user_todos, first.project_asset?.user_todos]) {
+          if (!group?.items) continue;
+          const before = group.items.filter((todo) => !todo.done).length;
+          group.items = group.items.filter((todo) => todo.todo_id !== "todo-browser-user-gate");
+          if ("open_count" in group) group.open_count = before;
+          if ("open" in group) group.open = before;
+        }
+      };
+      api.transformStatus = partialOmitsSeededGate;
+      await page.clock.runFor(31_000);
+      await page.waitForTimeout(1_000);
+      api.transformStatus = null;
+      await page.clock.runFor(31_000);
+      await page.waitForTimeout(1_000);
+      assert.equal((await notifications()).length, 0, "A gate seen at enable time is not replayed after a partial read omitted it");
+
       // A decision raised elsewhere arrives through the background re-read.
       const readsBefore = api.statusRequestCount;
       api.transformStatus = (fixture) => addGate(fixture, "gate-restatement", gateText);
