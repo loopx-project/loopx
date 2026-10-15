@@ -9,7 +9,7 @@ import {tmpdir} from "node:os";
 import {resolve} from "node:path";
 import {resolveTestPython} from "../../scripts/test-python.mjs";
 import {launchBrowser, loadPlaywright, waitForHttp} from "../dashboard-browser-smoke-support.mjs";
-import {openWorkspacePage} from "./scenario-context.mjs";
+import {fetchWorkspaceBackend, openWorkspacePage} from "./scenario-context.mjs";
 import {outputDir, packaged, port, repoRoot, startServer} from "./fixture.mjs";
 
 async function startAuthority({unsettled = true} = {}) {
@@ -74,7 +74,7 @@ async function importSettled(browser, url, provider) {
     context = await openWorkspacePage(browser, url, {beforeGoto: async (_api, page) => {
       await page.route(/\/api\/chat\/goal-(storage|ownership)(?:[/?]|$)/, async route => {
         const parsed = new URL(route.request().url());
-        const response = await route.fetch({url: authority.url + parsed.pathname + parsed.search});
+        const response = await fetchWorkspaceBackend(route, authority.url);
         if (parsed.pathname.endsWith("/import/apply") && ++applyCount === 1) {
           assert.equal(response.status(), 200); // Commit succeeded; only its response is lost.
           await route.abort("failed");
@@ -139,8 +139,7 @@ const goalStorageScenario = {
       context = await openWorkspacePage(browser, url, {beforeGoto: async (_api, page) => {
         await page.route(/\/api\/chat\/goal-(storage|ownership)(?:[/?]|$)/, async route => {
           if (route.request().method() !== "GET") writes++;
-          const parsed = new URL(route.request().url());
-          await route.fulfill({response: await route.fetch({url: authority.url + parsed.pathname + parsed.search})});
+          await route.fulfill({response: await fetchWorkspaceBackend(route, authority.url)});
         });
       }});
       const {page} = context;

@@ -43,19 +43,25 @@ def instrument_copied_runtime(root: Path) -> None:
     for before, after in (
         ('shutdownRequested = true;', 'shutdownRequested = true; fixtureTrace("shutdown_requested");'),
         ('server.on("close", () => {', 'server.on("close", () => { fixtureTrace("close", {pending: pendingRequests});'),
-        ('flushCompileCache();', 'fixtureTrace("flush_enter"); flushCompileCache(); fixtureTrace("flush_done");'),
-        ('published = JSON.parse(await readFile(infoPath, "utf8"));',
-         'published = JSON.parse(await readFile(infoPath, "utf8")); fixtureTrace("locator_read_done");'),
-        ('} catch {\n        return;\n      }\n      // A timed-out client',
-         '} catch (error) {\n        fixtureTrace("locator_read_error", {code: fixtureCode(error)});\n        return;\n      }\n      // A timed-out client'),
-        ('await rm(infoPath, { force: true });',
-         'fixtureTrace("locator_unlink_enter");\n        try { await rm(infoPath, { force: true }); fixtureTrace("locator_unlink_done"); }\n'
-         '        catch (error) { fixtureTrace("locator_unlink_error", {code: fixtureCode(error)}); throw error; }'),
         ('})().finally(() => process.exit(0));',
          '})().finally(() => { fixtureTrace("cleanup_finally"); process.exit(0); });'),
     ):
         text = _replace(text, before, after)
     server.write_text(text)
+    cache = root / "effect_runtime_compile_cache.ts"
+    text = _replace(cache.read_text(), 'const FLUSHING =', TRACE + '\nconst FLUSHING =')
+    for before, after in (
+        ('flushCompileCache();', 'fixtureTrace("flush_enter"); flushCompileCache(); fixtureTrace("flush_done");'),
+        ('published = JSON.parse(await readFile(locator.infoPath, "utf8"));',
+         'published = JSON.parse(await readFile(locator.infoPath, "utf8")); fixtureTrace("locator_read_done");'),
+        ('} catch {\n      return;\n    }\n    // Both retirement paths',
+         '} catch (error) {\n      fixtureTrace("locator_read_error", {code: fixtureCode(error)});\n      return;\n    }\n    // Both retirement paths'),
+        ('await rm(locator.infoPath, { force: true });',
+         'fixtureTrace("locator_unlink_enter");\n      try { await rm(locator.infoPath, { force: true }); fixtureTrace("locator_unlink_done"); }\n'
+         '      catch (error) { fixtureTrace("locator_unlink_error", {code: fixtureCode(error)}); throw error; }'),
+    ):
+        text = _replace(text, before, after)
+    cache.write_text(text)
     io = root / "effect_runtime_io.ts"
     text = io.read_text()
     text = _replace(text, 'const MUTATION_LOCK_TIMEOUT_MS =', TRACE + '\nconst MUTATION_LOCK_TIMEOUT_MS =')

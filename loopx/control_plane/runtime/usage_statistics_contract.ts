@@ -22,6 +22,11 @@ function keys(value: Record<string, unknown>, fields: string[]): boolean {
   return Object.keys(value).sort().join() === fields.sort().join();
 }
 export function validId(value: unknown): value is string { return typeof value === "string" && UUID.test(value); }
+/** Fixed wire grammar, shared by client and collector; preserve the release label. */
+export function validUsageVersion(value: unknown): value is string {
+  return typeof value === "string"
+    && /^\d{1,3}\.\d{1,3}\.\d{1,4}(?:(?:a|b|rc)\d{1,4})?$/.exec(value)?.[0] === value;
+}
 export function validCounter(value: unknown): value is Counter {
   if (!object(value) || !keys(value, ["feature", "outcome", "duration", "error", "count"])) return false;
   if (!(FEATURES as readonly unknown[]).includes(value.feature) || !(OUTCOMES as readonly unknown[]).includes(value.outcome)
@@ -42,7 +47,7 @@ export function validAggregate(value: unknown): value is Aggregate {
 export function validPing(value: unknown): value is Ping {
   return object(value) && keys(value, ["schema", "install_id", "version", "os", "arch", "python", "channel"])
     && value.schema === PING_SCHEMA && validId(value.install_id)
-    && typeof value.version === "string" && /^\d{1,3}\.\d{1,3}\.\d{1,4}$/.test(value.version)
+    && validUsageVersion(value.version)
     && ["darwin", "linux", "windows", "other"].includes(String(value.os))
     && ["x64", "arm64", "x86", "other"].includes(String(value.arch))
     && typeof value.python === "string" && /^3\.\d{1,2}$/.test(value.python)

@@ -494,6 +494,11 @@ class ChatExternalConversations:
             try:
                 if row.get("delivery_verified") and not row.get("commission_adoption_pending"):
                     continue
+                # Completed commands have no Core execution left to recover.
+                # The transport still revalidates the binding and source before
+                # delivering their pending response; do not add an idle probe.
+                if row["status"] == "command_completed" and not row.get("commission_adoption_pending"):
+                    continue
                 self.bindings.resolve(binding_id=row["binding_id"], **row["source"])
                 if row["status"] == "prepared":
                     self.admit(binding_id=row["binding_id"], source=row["source"], request_ref=row["request_ref"],

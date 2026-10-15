@@ -116,7 +116,7 @@ import {
   type WorkspaceAgentTodo,
 } from "../features/personal-workspace/personal-workspace-model";
 import { monitorTodoReadback } from "../features/personal-workspace/monitor-readback";
-import { goalExecution } from "../features/personal-workspace/goal-activity";
+import { goalExecution, taskSessionStatus } from "../features/personal-workspace/goal-activity";
 
 const protectedOperationLabels: Record<ProtectedActionProposal["operation"], string> = {
   delete: "删除",
@@ -2538,9 +2538,10 @@ function PersonalGoalHome({
     ...(selectedGoal ? executionSessions.map((session): WorkspaceTimelineItem => {
       const todoId = session.channel_id?.startsWith("task.") ? session.channel_id.slice(5) : undefined;
       const todo = selectedGoal.agentTodos.find((candidate) => candidate.todoId === todoId);
-      const running = Boolean(session.active_turn_id);
       const snapshot = executionSessionSnapshots[session.session_id];
       const hasResult = snapshot?.messages.some((message) => isAgentResultMessage(message.role, message.text)) === true;
+      const status = taskSessionStatus(session, { done: todo?.done === true, hasResult });
+      const running = status === "running";
       return {
         id: `run:task:${session.session_id}`,
         kind: "run",
@@ -2548,12 +2549,12 @@ function PersonalGoalHome({
           agentId: session.agent_id,
           agentLabel: personalAgentLabel(session.agent_id),
           canInterrupt: running,
-          completedSteps: todo?.done || hasResult ? 1 : 0,
+          completedSteps: status === "completed" ? 1 : 0,
           goalId: selectedGoal.goalId,
           goalTitle: selectedGoal.title,
           latestActivity: running
             ? "Agent 正在执行，可进入 Session 查看过程或发送纠偏。"
-            : hasResult
+            : status === "completed" && hasResult
               ? "Agent 已返回结果，点击查看结果与完整运行记录。"
               : "执行 Session 已保留，可继续纠偏或恢复。",
           resumable: session.resumable,
@@ -2565,8 +2566,8 @@ function PersonalGoalHome({
             role: message.role === "user" ? "user" : isAgentResultMessage(message.role, message.text) ? "assistant" : "error",
             text: message.role === "user" ? message.text : visibleAgentMessage(message.text),
           })),
-          sessionStatus: hasResult ? "completed" : session.status,
-          status: todo?.done || hasResult ? "completed" : running ? "running" : session.status === "resume_failed" ? "failed" : "waiting",
+          sessionStatus: status === "completed" ? "completed" : session.status,
+          status,
           title: todo?.text ?? "Agent 执行任务",
           todoId,
           totalSteps: 1,

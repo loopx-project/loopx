@@ -168,7 +168,7 @@ def _public_boundary_changed_files_run(
     display_paths: list[str] = []
     for path in existing_paths:
         try:
-            display_paths.append(str(path.relative_to(repo_root.resolve())))
+            display_paths.append(path.relative_to(repo_root.resolve()).as_posix())
         except ValueError:
             display_paths.append(str(path))
     display_argv = ["loopx", "check"]
@@ -345,7 +345,7 @@ def _display_argv(argv: list[str], *, repo_root: Path = REPO_ROOT) -> list[str]:
     for index, value in enumerate(displayed[1:], start=1):
         path = Path(value)
         try:
-            displayed[index] = str(path.resolve().relative_to(repo_root.resolve()))
+            displayed[index] = path.resolve().relative_to(repo_root.resolve()).as_posix()
         except (OSError, ValueError):
             displayed[index] = value
     return displayed

@@ -53,6 +53,58 @@ def test_premerge_uses_selected_checkout_for_nested_plans(tmp_path):
             assert Path(check["normalized"]["argv"][1]).is_relative_to(repo / "examples")
 
 
+def _selected_checks(payload: dict) -> list[dict]:
+    checks = [check for check in payload.get("selected_checks") or [] if isinstance(check, dict)]
+    for section in ("catalog_run", "risk_profile_run"):
+        run = payload.get(section)
+        if isinstance(run, dict):
+            checks.extend(check for check in run.get("selected_checks") or [] if isinstance(check, dict))
+    return checks
+
+
+def _assert_canonical_path(rendered: str) -> None:
+    """A repository-relative path keeps the canonical POSIX spelling.
+
+    ``PurePosixPath`` would leave a host separator untouched, so the stray
+    backslash is rejected explicitly rather than through a normalization that
+    already agrees with the value.
+    """
+
+    assert "\\" not in rendered, rendered
+    assert rendered == Path(rendered).as_posix(), rendered
+
+
+def test_plan_renders_repository_paths_in_canonical_posix_form(tmp_path):
+    """A plan's repository-relative paths keep the canonical spelling everywhere.
+
+    The catalog, the suite checks, the shipped contract smokes and the public
+    docs all declare ``python3 examples/<...>.py``. Rendering the same path with
+    the host separator makes one check read differently per host, which fails
+    those smokes on Windows and records host-dependent premerge evidence.
+    """
+
+    repo = _checkout(tmp_path / "repo")
+    suite = build_canary_smoke_suite_run(repo_root=repo)
+    gate = build_premerge_validation_gate(
+        repo_root=repo, changed_files=["loopx/canary/runner.py"],
+        base_ref="HEAD", execute=False,
+    )
+    checks = _selected_checks(suite) + _selected_checks(gate)
+    rendered = []
+    for check in checks:
+        normalized = check.get("normalized") or {}
+        if normalized.get("ok") is not True:
+            continue
+        rendered.append(str(normalized.get("script") or ""))
+        rendered.extend(
+            str(token) for token in normalized.get("display_argv") or [] if "examples" in str(token)
+        )
+    commands = [str(item) for item in gate["validation_summary"]["selected_commands"]]
+    assert rendered and commands
+    for item in [*rendered, *commands]:
+        _assert_canonical_path(item)
+
+
 @pytest.mark.parametrize("jobs", [1, 2])
 def test_target_checkout_write_guard_detects_and_restores(tmp_path, jobs):
     repo = _checkout(tmp_path / "repo", mutate=True)

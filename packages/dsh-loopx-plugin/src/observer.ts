@@ -73,6 +73,8 @@ const SUMMARY_TOKEN = /^[A-Za-z0-9][A-Za-z0-9_./:-]{0,79}$/u
 const LOCAL_PATH_SURFACES = [
   /(?<![:/a-z0-9])\/(?:users|home|volumes|private|tmp|var|etc|opt|srv|mnt|root|workspace|workspaces)\/[^\s`'"<>]+/iu,
   /(?<![:/a-z0-9])[a-z]:[/\\](?:users|documents and settings)[/\\][^\s`'"<>]+/iu,
+  /(?<![\w:])path:[/\\][^\s`'"<>]+/iu,
+  /\bfile:\/+/iu,
 ] as const
 const SECRET_LIKE_SURFACES = [
   /\bbearer\s+[a-z0-9._~+/=-]{16,}/iu,

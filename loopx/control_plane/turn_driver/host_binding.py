@@ -198,7 +198,7 @@ def _with_operation_transport(
         if observed["reason"]:
             binding["available"] = False
             binding["unavailable_reason"] = observed["reason"]
-            binding["unavailable_remediation"] = [REMEDY_CORRECT_EXECUTION_PROFILE]
+            binding["unavailable_remediation"] = observed["remediation"]
     return binding
 
 
@@ -422,7 +422,13 @@ def managed_executor_unavailable_payload(
             if str(code)
         ],
         "remediation_host": INDIVIDUAL_TURN_HOST,
-        "remediation_env_vars": list(OPERATOR_CREDENTIAL_ENV_VARS),
+        # An operation transport refusal is not an instruction to configure
+        # model credentials. The existing typed transport owner supplies its
+        # remedies and supported hosts/sandboxes independently of launchability.
+        "remediation_env_vars": (
+            [] if "operation_transport" in binding
+            else list(OPERATOR_CREDENTIAL_ENV_VARS)
+        ),
     }
 
 
