@@ -19,6 +19,15 @@ _AUTHORITY_PRINCIPAL = re.compile(r"^[a-z][a-z0-9._-]{0,30}:[A-Za-z0-9._:-]{1,20
 class ChatActionNormalizationMixin:
     """Normalize typed action inputs without owning effects or persistence."""
 
+    def _goal(self, goal_id: str) -> dict[str, Any]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _allowed_parameters(
+        parameters: Mapping[str, Any], *, allowed: set[str],
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
     def _normalize(
         self, action_kind: str, parameters: Mapping[str, Any]
     ) -> dict[str, Any]:

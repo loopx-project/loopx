@@ -8,7 +8,7 @@ preparation only validates a document and cannot configure or run it.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 from uuid import uuid4
 
 from ...chat_action_store import ActionConflictError, ChatActionStore
@@ -17,6 +17,12 @@ from .acceptance import (
     configure_goal_acceptance, inspect_goal_acceptance, public_goal_acceptance,
     verify_goal_acceptance,
 )
+
+
+class _AcceptanceRoute(TypedDict):
+    registry_path: Path
+    runtime_root: str
+    goal_id: str
 
 
 def prepare_acceptance_check(*, registry_path: Path, runtime_root: str | None,
@@ -28,7 +34,9 @@ def prepare_acceptance_check(*, registry_path: Path, runtime_root: str | None,
 
     root = effective_runtime_root(registry_path, runtime_root)
     if not execute:
-        route = {"registry_path": registry_path, "runtime_root": str(root), "goal_id": goal_id}
+        route: _AcceptanceRoute = {
+            "registry_path": registry_path, "runtime_root": str(root), "goal_id": goal_id,
+        }
         before = inspect_goal_acceptance(**route, agent_id=agent_id)
         preview = configure_goal_acceptance(**route, document=document,
             expected_provider_revision=before["provider_revision"],
@@ -50,7 +58,7 @@ class GoalAcceptanceActionMixin:
     store: ChatActionStore
     registry_path: Path
 
-    def _acceptance_route(self, goal_id: str) -> dict[str, Any]:
+    def _acceptance_route(self, goal_id: str) -> _AcceptanceRoute:
         # ChatHTTPServer and the prepare CLI both use runtime/chat/actions.
         return {"registry_path": self.registry_path, "goal_id": goal_id,
                 "runtime_root": str(self.store.root.parent.parent)}
