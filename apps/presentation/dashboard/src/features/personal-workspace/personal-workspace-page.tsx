@@ -87,6 +87,17 @@ import { ManagerBrief } from "./manager-brief";
 import { WorkspaceSettingsPage } from "./workspace-settings-page";
 import { UsageStatisticsNotice } from "./usage-statistics-notice";
 import { readWorkspaceTheme, writeWorkspaceTheme, type WorkspaceTheme } from "./workspace-theme";
+import {
+  attentionNotificationContents,
+  attentionNotificationKey,
+  attentionNotificationSupport,
+  attentionPollIntervalMs,
+  newAttentionItems,
+  readAttentionNotificationPreference,
+  shouldNotifyAttention,
+  writeAttentionNotificationPreference,
+  type AttentionNotificationSupport,
+} from "./attention-notifications";
 import { compareProposalRecency } from "./proposal-recency";
 import { WorkspaceShell } from "./workspace-shell";
 import type { StatusSourceControl } from "./status-source-switcher";
@@ -972,6 +983,10 @@ export function PersonalWorkspacePage({
   const restoredProposalIdsRef = useRef(new Set<string>());
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [theme, setTheme] = useState<WorkspaceTheme>(readWorkspaceTheme);
+  const [attentionNotificationsEnabled, setAttentionNotificationsEnabled] = useState<boolean>(readAttentionNotificationPreference);
+  const [attentionNotificationSupportState, setAttentionNotificationSupportState] = useState<AttentionNotificationSupport>(() => attentionNotificationSupport());
+  // Keys seen since notifications were enabled; null until the first read seeds it.
+  const seenAttentionKeysRef = useRef<Set<string> | null>(null);
   const [goalContexts, setGoalContexts] = useState<Record<string, GoalRepositoryContext>>({});
   const [larkConnections, setLarkConnections] = useState<LarkGoalConnection[]>([]);
   const digestInitRef = useRef(false);
@@ -1925,6 +1940,52 @@ export function PersonalWorkspacePage({
     writeWorkspaceTheme(next);
   }
 
+  /**
+   * Turning notifications on asks the browser once, from this click, and
+   * only keeps the preference when the browser granted it. Items already
+   * waiting are seeded as seen so enabling never replays the current lane.
+   */
+  async function updateAttentionNotifications(enabled: boolean) {
+    if (!enabled) {
+      setAttentionNotificationsEnabled(false);
+      writeAttentionNotificationPreference(false);
+      seenAttentionKeysRef.current = null;
+      return;
+    }
+    let support = attentionNotificationSupport();
+    if (support === "default") {
+      try {
+        support = attentionNotificationSupport({ Notification: { permission: await Notification.requestPermission() } });
+      } catch {
+        support = "denied";
+      }
+    }
+    setAttentionNotificationSupportState(support);
+    if (support !== "granted") {
+      setAttentionNotificationsEnabled(false);
+      writeAttentionNotificationPreference(false);
+      return;
+    }
+    seenAttentionKeysRef.current = new Set(model.userTodos.map(attentionNotificationKey));
+    setAttentionNotificationsEnabled(true);
+    writeAttentionNotificationPreference(true);
+  }
+
+  // A notification opens its item in place. Selection is scoped to the
+  // current Goal, so an item in another Goal waits until that Goal is shown.
+  const [pendingNotificationItem, setPendingNotificationItem] = useState<WorkspaceAttention | null>(null);
+  useEffect(() => {
+    if (!pendingNotificationItem || pendingNotificationItem.goalId !== selectedGoalId) return;
+    setPendingNotificationItem(null);
+    setSelection({ kind: "attention", item: pendingNotificationItem });
+  }, [pendingNotificationItem, selectedGoalId]);
+  function openAttentionFromNotification(item: WorkspaceAttention) {
+    window.focus();
+    if (item.goalId === selectedGoalId) { setSelection({ kind: "attention", item }); return; }
+    setPendingNotificationItem(item);
+    selectGoal(item.goalId, "overview");
+  }
+
   async function sendMessage(messageOverride?: string) {
     const pendingImages = messageOverride ? [] : imageAttachments;
     const message = (messageOverride ?? composer).trim() || (pendingImages.length ? t("composer.imageAnalysisPrompt") : "");
@@ -2102,8 +2163,60 @@ export function PersonalWorkspacePage({
         onClose={closeSettings}
         onThemeChange={updateTheme}
         theme={theme}
+        attentionNotifications={readOnly ? undefined : { enabled: attentionNotificationsEnabled, support: attentionNotificationSupportState }}
+        onAttentionNotificationsChange={readOnly ? undefined : updateAttentionNotifications}
       />
   ) : null;
+
+  const attentionNotificationsActive = attentionNotificationsEnabled && attentionNotificationSupportState === "granted" && !readOnly;
+  const backgroundRefreshRef = useRef(callbacks.onBackgroundRefresh);
+  backgroundRefreshRef.current = callbacks.onBackgroundRefresh;
+  const openAttentionRef = useRef(openAttentionFromNotification);
+  openAttentionRef.current = openAttentionFromNotification;
+  // Background freshness: while notifications are on, re-read the workspace
+  // on a slow cadence so a decision raised elsewhere reaches this page.
+  useEffect(() => {
+    if (!attentionNotificationsActive || !backgroundRefreshRef.current) return;
+    let cancelled = false;
+    let timer = 0;
+    const schedule = () => {
+      timer = window.setTimeout(async () => {
+        try { await backgroundRefreshRef.current?.(); } catch { /* the next tick retries */ }
+        if (!cancelled) schedule();
+      }, attentionPollIntervalMs(document.hidden));
+    };
+    const onVisibility = () => { if (!document.hidden && !cancelled) { window.clearTimeout(timer); schedule(); } };
+    schedule();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => { cancelled = true; window.clearTimeout(timer); document.removeEventListener("visibilitychange", onVisibility); };
+  }, [attentionNotificationsActive]);
+  // The effect keys on the item identities, so a text or ordering change alone
+  // never re-notifies; the items are read through a ref for the same reason.
+  const attentionItemsRef = useRef(model.userTodos);
+  attentionItemsRef.current = model.userTodos;
+  const attentionKeySignature = model.userTodos.map(attentionNotificationKey).join("\n");
+  useEffect(() => {
+    if (!attentionNotificationsActive) { seenAttentionKeysRef.current = null; return; }
+    const items = attentionItemsRef.current;
+    const keys = new Set(items.map(attentionNotificationKey));
+    const seen = seenAttentionKeysRef.current;
+    seenAttentionKeysRef.current = keys;
+    if (!seen) return;
+    const fresh = newAttentionItems(seen, items);
+    if (!fresh.length || !shouldNotifyAttention({
+      enabled: true, support: attentionNotificationSupportState,
+      visible: document.visibilityState === "visible", focused: document.hasFocus(),
+    })) return;
+    for (const content of attentionNotificationContents(fresh, { fallbackTitle: "LoopX", more: (count) => t("notifications.attentionMore", { count }) })) {
+      try {
+        const notification = new Notification(content.title, { body: content.body, tag: content.tag });
+        const target = fresh.find((item) => attentionNotificationKey(item) === content.tag);
+        notification.onclick = () => { notification.close(); openAttentionRef.current(target ?? fresh[0]); };
+      } catch {
+        // A constructor the environment refuses is not a page error.
+      }
+    }
+  }, [attentionKeySignature, attentionNotificationsActive, attentionNotificationSupportState, t]);
 
   const composerSuggestions = !selectedWorkspaceRef && (!conversationOpen || !conversationMessages.length) ? <details className="personal-composer-tools" key={conversationKey} onKeyDown={(event) => {
     if (event.key !== "Escape") return;

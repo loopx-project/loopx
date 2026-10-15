@@ -1204,6 +1204,7 @@ function PersonalGoalHome({
   onSelectWorkspace,
   onReconcileStatus,
   onRefresh,
+  onBackgroundRefresh,
   onRetryGoalArchive,
   payload,
   progress,
@@ -1229,6 +1230,7 @@ function PersonalGoalHome({
   selectedWorkspaceRef: string | null;
   onReconcileStatus: (options?: { invalidateGoalIds?: string[] }) => void | Promise<void>;
   onRefresh: (scope?: WorkspaceReadScope) => Promise<WorkspaceRefreshResult>;
+  onBackgroundRefresh?: () => void | Promise<void>;
   onRetryGoalArchive: () => void | Promise<void>;
   payload: StatusPayload;
   progress: WorkspaceProgress | null;
@@ -2977,6 +2979,7 @@ function PersonalGoalHome({
             setCapabilityRevision((revision) => revision + 1);
             return result;
           },
+          onBackgroundRefresh,
           onRetryResumeRun: retryManagerSession,
           onSelectAgent: chooseAgent,
           onSelectAgentModel: chooseAgentModel,
@@ -3542,6 +3545,7 @@ export function DashboardPage() {
           return { ok: false, error: formatStatusError(error) } as const;
         }
       }}
+      onBackgroundRefresh={() => loadFromUrl(source.kind === "url" ? source.label : (statusUrl || defaultGlobalStatusUrl), { background: true, readScope: "all", rejectOnError: true })}
       payload={payload}
       progress={progress}
       rows={goalRows}
