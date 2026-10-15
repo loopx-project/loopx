@@ -9,6 +9,8 @@ import os
 import subprocess
 import sys
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -24,7 +26,8 @@ from test_local_delegation import service as delegation_service, wait
 service = delegation_service
 
 
-def test_public_dsh_operation_entry_and_confirmed_callback(service, monkeypatch):
+@pytest.mark.parametrize("original_owner", [False, True], ids=["peer", "original-owner"])
+def test_public_dsh_operation_entry_and_confirmed_callback(service, monkeypatch, original_owner):
     pytest.importorskip("deepseek_harness")
     module = os.environ.get("DSH_NATIVE_OPERATION_MODULE")
     runtime = os.environ.get("DSH_NATIVE_OPERATION_RUNTIME")
@@ -152,6 +155,25 @@ def test_public_dsh_operation_entry_and_confirmed_callback(service, monkeypatch)
         wake_config = {"registry_path": str(runner.registry), "goal_id": runner.goal_id,
             "requester_agent_id": runner.agent_id, "project": str(root),
             "execution_config": "delegations.json", "binding_id": binding["id"]}
+        if original_owner:
+            from loopx.control_plane.turn_driver.journal_store import load_turn_journal, turn_journal_path
+
+            from loopx.collaboration_mcp import Delegations
+            from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError
+
+            # Ordinary self-delegation is still rejected, even with a grant.
+            binding["requesters"] = [binding["agent_id"]]
+            runner.config.write_text(json.dumps(config))
+            owner = Delegations(runner.root, runner.registry, runner.goal_id,
+                                binding["agent_id"], runner.config)
+            with pytest.raises(EffectRuntimeRemoteError, match="caller has no delegation grant"):
+                owner.binding(binding["id"])
+            binding["continuation_kind"] = "original_operation"
+            # This route needs canonical operation evidence, not a fabricated
+            # completed Task, peer result or file validator.
+            binding["output_refs"] = []
+            wake_config["requester_agent_id"] = binding["agent_id"]
+            runner.config.write_text(json.dumps(config))
         original_args = binding["host_args"].copy()
         binding["host_args"][binding["host_args"].index("--dsh-model") + 1] = "replacement-model"
         runner.config.write_text(json.dumps(config))
@@ -160,20 +182,55 @@ def test_public_dsh_operation_entry_and_confirmed_callback(service, monkeypatch)
         assert len(steps) == 4
         binding["host_args"] = original_args
         runner.config.write_text(json.dumps(config))
-        receipt = dispatch_confirmed_operation_wake(confirmed, runtime_root=runner.root, configuration=wake_config)
-        assert receipt["state"] == "delegation_requested", receipt
-        completion = wait(runner, receipt["operation_id"])
+        if original_owner:
+            def dispatch():
+                return dispatch_confirmed_operation_wake(confirmed,
+                    runtime_root=runner.root, configuration=wake_config)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                receipts = list(pool.map(lambda _: dispatch(), range(2)))
+            assert sorted(row["state"] for row in receipts) == ["existing_turn", "turn_requested"], receipts
+            receipt = next(row for row in receipts if row["state"] == "turn_requested")
+            deadline = time.monotonic() + 75
+            turn_journal = None
+            while time.monotonic() < deadline:
+                current = operation()
+                turn_key = (current["operation"].get("host_start") or {}).get("turn_key")
+                if turn_key:
+                    turn_journal = load_turn_journal(turn_journal_path(runner.root,
+                        goal_id=runner.goal_id, turn_key=turn_key))
+                if ((current["operation"].get("outcome") or {}).get("outcome") == "not_executed"
+                        and len(steps) == 9 and turn_journal and turn_journal.get("status") == "stopped"):
+                    break
+                time.sleep(0.1)
+            assert len(steps) == 9, (operation(), steps, errors)
+            assert turn_journal and turn_journal["status"] == "stopped"
+            assert turn_journal["result_kind"] == "wait"
+            # Merely declaring this continuation did not make the peer API a
+            # self-delegation route.
+            with pytest.raises(EffectRuntimeRemoteError, match="caller has no delegation grant"):
+                owner.binding(binding["id"])
+            completion = None
+        else:
+            receipt = dispatch_confirmed_operation_wake(confirmed, runtime_root=runner.root, configuration=wake_config)
+            assert receipt["state"] == "delegation_requested", receipt
+            completion = wait(runner, receipt["operation_id"])
         stored = store.load(proposal["proposal_id"])
         resumed = load_codex_cli_session(runner.root, lineage=lineage, host="dsh")
         assert resumed["session_id"] == session["session_id"]
         assert resumed["operation_profile_digest"] == session["operation_profile_digest"]
         assert len(steps) == 9 and not errors, (completion, steps, errors)
         assert stored["operation"]["outcome"]["outcome"] == "not_executed", stored
-        journal = json.loads(runner.path(receipt["operation_id"]).read_text())
-        assert stored["operation"]["host_start"]["turn_key"] == journal["turn_key"]
+        if original_owner:
+            assert stored["operation"]["turn_launch"]["turn_instance_id"] == receipt["turn_instance_id"]
+            assert stored["operation"]["turn_launch"]["schema_version"] == "operation_turn_launch_v0"
+            assert not list((runner.root / "collaboration").rglob("operation-wake-*.json"))
+        else:
+            journal = json.loads(runner.path(receipt["operation_id"]).read_text())
+            assert stored["operation"]["host_start"]["turn_key"] == journal["turn_key"]
         assert stored["operation"]["host_start"]["route"]["thread_id"] == session["session_id"]
         # Waiting is deliberately not validated Todo completion or a domain effect.
-        assert completion["status"] == "rejected", completion
+        if completion is not None:
+            assert completion["status"] == "rejected", completion
         tool_results = [block for message in responses[-1]
                         for block in message.get("content", []) if isinstance(block, dict) and block.get("type") == "tool_result"]
         results = []
@@ -187,8 +244,14 @@ def test_public_dsh_operation_entry_and_confirmed_callback(service, monkeypatch)
         assert any(row.get("status") == "already_consumed" for row in results), results
         assert sum(row.get("execution_allowed") is True for row in results) == 1, results
         assert dispatch_confirmed_operation_wake(stored, runtime_root=runner.root,
-            configuration=wake_config)["state"] == "existing_delegation"
+            configuration=wake_config)["state"] == ("existing_turn" if original_owner else "existing_delegation")
         assert len(steps) == 9
+        task_read = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(runner.registry),
+            "--runtime-root", str(runner.root), "--format", "json", "todo", "list",
+            "--goal-id", runner.goal_id, "--todo-id", binding["todo_id"]],
+            capture_output=True, text=True, timeout=20, check=True)
+        task = json.loads(task_read.stdout)["todo"]
+        assert task["done"] is False and task["status"] == "open"
     finally:
         (root / "provider-steps.json").write_text(json.dumps({"steps": steps, "errors": errors}))
         server.shutdown()

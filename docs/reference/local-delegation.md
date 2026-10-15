@@ -1361,6 +1361,58 @@ frame, but does **not** edit this grant. Frontend grant editing and genuine
 original-source outcome delivery remain partial; synthetic startup tests do
 not establish an end-to-end user or trading loop.
 
+### Continue the original operation owner
+
+Ordinary delegation requires different requester and worker Agents and a task
+completion basis. An authenticated confirmation may instead need to continue
+the same Agent's original operation Session while its broader Todo stays open.
+Do not create another Agent or declare that Todo complete to obtain a wake.
+For this case, the same operator-owned execution configuration can opt in one
+binding with `"continuation_kind": "original_operation"`. Set both `agent_id`
+and its sole intended `requesters` entry to the original operation Agent,
+`todo_id` to the original executor Todo, and preserve that Session's exact
+workspace, host arguments and bounded timeout. `output_refs` may be empty:
+this route returns canonical operation evidence, not accepted peer artifacts.
+Keep the existing collector `managed_turn_wake` pointed at this exact binding.
+This does not make the ordinary delegation API accept self-delegation.
+
+The callback checks the Goal lifetime, explicit owner grant, confirmation,
+unexpired immutable operation, original session/profile, and absence of prior
+start/consumption/outcome. It commits one `operation_turn_launch_v0` intent in
+the existing operation store before requesting the normal `turn run-once`
+entrypoint. The intent's `turn_instance_id` locates the existing Turn journal.
+`turn_requested` is a process request, not verified native start or domain
+execution. `existing_turn` never spawns again. `launch_uncertain` retains the
+original intent for explicit reconciliation; callback replay does not retry it.
+Native host start, first consumption, actual outcome and original-source
+delivery still require their own receipts. A typed wait never completes the
+broader Todo or creates a peer acceptance receipt.
+
+This exact authenticated human input uses the existing manual interval bypass;
+it does not shorten the automatic heartbeat interval. Removing the binding or
+collector wake stops new admission. An already reserved/requested Turn must be
+inspected or stopped through the existing Turn/host recovery path; grant removal
+does not cancel it or prove that no effect occurred. Keep the original SDK,
+runtime, home, module, patch and endpoint pins for recovery. Never use an expired
+or terminal operation to qualify a new launch. Configuration and local tests
+do not qualify a live collector, original-card delivery or financial effects.
+Dashboard grant editing remains a separate frontend gap; no new setting or
+default activation is introduced here.
+
+中文：同一 Agent 的原操作确认续跑，使用原 execution configuration 中显式的
+`continuation_kind: original_operation`，requester、Agent、Todo 必须精确指向原
+操作 owner。保留原工作树、session/profile、runtime/home/patch 和有界 timeout；
+不另造角色，不靠完成整个 Todo 或空校验器取得启动资格。普通 delegation 的跨
+Agent 和任务验收规则不放宽。原 collector 的 wake 配置仍须明确绑定此项，默认不启用。
+
+确认回调只在原 canonical operation 写入一次启动 intent，再沿正常 Turn 入口
+继续；并发/重复回调不再 spawn，启动响应丢失保留 intent、只允许原记录对账。
+`turn_requested`、`existing_turn` 和 `launch_uncertain` 都不是原生启动、消费、
+成交或原卡送达证明。真实本人确认沿已有 manual interval bypass 处理，自动心跳
+周期不变；撤销配置只阻止新准入，已申请的 Turn 须沿原恢复/停止路径核对。typed
+wait 不完成原 Todo、不产生 peer acceptance。前端配置、真实 collector/原卡和金融
+效果分别验收，不从本机测试或启动 intent 推断已完成。
+
 中文：此适配默认关闭。认证 Lark 确认只能请求既有 delegation 续跑，不能直接
 执行金融操作；启动 grant 与用户对不可变条款的批准独立。上例是原 collector v1
 配置片段，不是完整配置。`execution_config` 必须项目内相对路径、无穿越或符号

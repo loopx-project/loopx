@@ -212,6 +212,7 @@ export function planAgentOperationHandoff(input: JsonObject): JsonObject {
     route, authorization_source: "canonical_typed_operation", execution_allowed: false,
     host_delivery: hostStart ? "native_start_accepted" : "not_attempted", host_start: hostStart,
     external_write_performed: false,
+    ...(operation.turn_launch != null ? {turn_launch: operation.turn_launch} : {}),
     executor_kind: executor.kind, source_route: parameters.source_route ?? null,
     host_authentication_required: !managed};
   const handoff = operation.agent_handoff == null ? null
@@ -243,12 +244,43 @@ export function planAgentOperationHandoff(input: JsonObject): JsonObject {
       && Object.entries(route).every(([key, value]) => selected[key] === value)
       && selected.model === executor.model && selected.reasoning_effort === executor.reasoning_effort,
       "operation wake must resume the original managed session and profile");
+    // An explicitly granted original-owner continuation is not peer work.
+    // Its durable launch intent lives with this operation, not a second Todo
+    // completion or delegation acceptance record. Ordinary delegation keeps
+    // its different-Agent requirement.
+    let turnLaunch: JsonObject | null = null;
+    if (input.turn_launch != null) {
+      const launchIntent = requireJsonObject(input.turn_launch, "operation Turn launch");
+      const binding = requireJsonObject(input.operator_binding, "operation continuation binding");
+      requireThat(binding.continuation_kind === "original_operation"
+        && binding.agent_id === parameters.agent_id && binding.todo_id === executor.todo_id
+        && input.requester_agent_id === parameters.agent_id
+        && Array.isArray(binding.requesters) && binding.requesters.includes(input.requester_agent_id),
+      "original operation continuation requires its exact owner launch grant");
+      requireThat(typeof launchIntent.configuration_digest === "string"
+        && BARE_SHA256_PATTERN.test(launchIntent.configuration_digest)
+        && launchIntent.binding_id === binding.id,
+      "operation Turn launch requires the current operator configuration");
+      turnLaunch = {schema_version: "operation_turn_launch_v0",
+        binding_id: id(binding.id, "binding_id"),
+        turn_instance_id: id(launchIntent.turn_instance_id, "turn_instance_id"),
+        configuration_digest: launchIntent.configuration_digest};
+      if (operation.turn_launch != null) {
+        const prior = requireJsonObject(operation.turn_launch, "original operation Turn launch");
+        requireThat(Object.entries(turnLaunch).every(([key, value]) => prior[key] === value),
+          "operation Turn launch changed; reconcile the original attempt");
+        return {...base, status: "wake_admitted", wake_allowed: false,
+          launch_new_turn: false, turn_launch: prior};
+      }
+    }
     requireThat(!hostStart && !handoff && !observed
       && operation.lifecycle_state === "claimed" && proposal.status === "applying",
       "operation wake requires an unstarted, unconsumed confirmed operation");
     requireThat(now < expires && timestamp(confirmation.confirmed_at) <= now,
       "operation wake is outside the confirmation lifetime");
-    return {...base, status: "wake_admitted", wake_allowed: true};
+    return {...base, status: "wake_admitted", wake_allowed: true,
+      ...(turnLaunch ? {launch_new_turn: true,
+        write_turn_launch: {...turnLaunch, recorded_at: input.now}} : {})};
   }
   if (action === "observe_host_start") {
     const actor = requireJsonObject(input.actor, "native start actor");

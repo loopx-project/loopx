@@ -1071,6 +1071,29 @@ class ChatActionStore:
         except EffectRuntimeRemoteError as exc:
             raise ActionConflictError(str(exc)) from exc
 
+    def reserve_agent_operation_turn(
+        self, proposal_id: str, **launch_context: Any,
+    ) -> dict[str, Any]:
+        """Internal callback launch intent; neither host start nor consumption.
+
+        Commit before spawning. A lost/failed spawn is reconciled from the
+        original Turn; callback replay never launches a replacement process.
+        """
+        token = _opaque_id(proposal_id, field="proposal_id")
+        with exclusive_file_lock(self.path, operation="reserve_operation_turn"):
+            payload = self._read()
+            proposal = payload["proposals"].get(token)
+            if not isinstance(proposal, dict):
+                raise KeyError("typed operation was not found")
+            plan = self._agent_operation_plan(proposal, action="wake", **launch_context)
+            receipt = plan.pop("write_turn_launch", None)
+            if receipt is not None:
+                proposal["operation"]["turn_launch"] = receipt
+                proposal["updated_at"] = _utc_now()
+                self._write(payload)
+                plan["turn_launch"] = receipt
+            return plan
+
     def record_agent_operation_host_start(
         self, proposal_id: str, *, actor: Mapping[str, Any],
         binding_current: bool, turn_key: str,
