@@ -39,9 +39,11 @@ export const firstGoalHomeScenario = {
     const session = await openWorkspacePage(browser, url, { collectCoverage, viewport: { width: 1440, height: 900 },
       beforeGoto: (api) => { api.transformStatus = (fixture) => emptyWorkspace(fixture); } });
     const { page } = session;
+    // "Sends nothing" means no Turn is created. Session admission on focus is
+    // not a send, so only turn creation and steering count.
     const turnRequests = [];
     page.on("request", (request) => {
-      if (request.method() === "POST" && /\/api\/chat\/sessions/.test(request.url())) turnRequests.push(request.url());
+      if (request.method() === "POST" && /\/api\/chat\/sessions\/[^/]+\/turns/.test(request.url())) turnRequests.push(request.url());
     });
     try {
       const firstGoal = page.getByTestId("personal-first-goal");
@@ -62,7 +64,7 @@ export const firstGoalHomeScenario = {
       const exampleText = (await example.innerText()).trim();
       await example.click();
       assert.equal((await composer.inputValue()).trim(), exampleText, "The example fills the composer verbatim");
-      assert.equal(turnRequests.length, 0, "Selecting an example sends nothing");
+      assert.equal(turnRequests.length, 0, `Selecting an example sends nothing: ${turnRequests.join(", ")}`);
       await page.keyboard.press("Escape");
 
       // Create a Goal opens the existing typed Goal form in place.
