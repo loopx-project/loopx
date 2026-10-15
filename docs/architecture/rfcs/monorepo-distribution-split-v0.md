@@ -269,7 +269,7 @@ changes.
 | Kernel-only install without Node | package-smoke lane on a runner without Node: `pip install loopx-core && loopx --help && loopx status --format json` | exit 0 | Effectful commands excluded |
 | Effectful command without Node fails typed | same runner: `loopx heartbeat-prompt ...` | `node_unavailable` diagnostic, exit non-zero | — |
 | Absent capability package = off state | install `loopx-core` only; `loopx capability list` | capability reported unavailable, core commands unaffected | — |
-| No kernel truth duplicated | import-boundary tests + `tests/architecture/test_package_kernel_import_ratchet.py` (pins every `loopx.*` import under `packages/*/src`) | no new package → kernel import; a retired edge lowers the pin in the same PR | Static imports only; 13 pre-existing edges in 3 packages (`loopx-ark-turn`, `loopx-finance-value-discovery`, `loopx-jev`) remain pinned, so "zero" is a target, not the measured state |
+| No kernel truth duplicated | import-boundary tests + review of `packages/*/src` for kernel-private imports; interim guard: `tests/architecture/test_package_kernel_import_ratchet.py` pins every `loopx.*` import under `packages/*/src`, fails on a new edge, and requires a retired edge to lower the pin in the same PR | zero violations | Static imports only, as today. The pin currently holds 13 pre-existing edges in 3 packages (`loopx-ark-turn`, `loopx-finance-value-discovery`, `loopx-jev`); a green ratchet proves no growth, not this row, until the pin is empty |
 | Meta-package parity | `pip install loopx` then existing full smoke | identical to pre-split smoke | — |
 
 Deterministic conformance rows above are required for each milestone; no live
@@ -354,11 +354,13 @@ qualification or performance claim is made by this RFC.
   `control_plane.turn_driver.host_candidate` without declaring `loopx` as a
   dependency; `loopx-jev` imports seven `control_plane`/`capabilities`
   modules; `loopx-finance-value-discovery` imports two `extensions` modules.
-- **Known gaps:** the Section 9 row still names zero violations as the
-  target; the pinned edges are the migration backlog for M4/M5, not a
-  sanctioned surface. D1–D4 remain open.
-- **Effect on normative design:** none; the row's evidence column now points
-  at an executable check instead of a manual review.
+- **Known gaps:** the Section 9 row keeps zero violations as its required
+  result; the 13 pinned edges are the migration backlog for M4/M5, not a
+  sanctioned surface, and a green ratchet does not satisfy that row or the
+  M4/M5 milestones that cite it. D1–D4 remain open.
+- **Effect on normative design:** none; the required result is unchanged and
+  the evidence column gains an executable interim no-growth check beside the
+  manual review.
 
 ## Appendix B: Decision log
 
