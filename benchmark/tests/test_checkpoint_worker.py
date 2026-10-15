@@ -214,6 +214,8 @@ def test_post_release_sealing_preserves_captured_bytes_and_original_phase(
     unit = tmp_path / "point"
     def delayed_seal(method, params, **kwargs):
         if params.get("action") == "capture" and params.get("destination") == str(unit):
+            if seal_within_phase:
+                assert params["deadline_epoch_ms"] <= min(held_deadline + 30, phase_epoch) * 1000 + 1
             container.reload()
             assert container.attrs["State"]["Running"] and not container.attrs["State"]["Paused"]
             before = counter(container)

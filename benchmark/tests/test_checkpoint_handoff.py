@@ -42,7 +42,7 @@ def test_original_request_only_and_cleanup_after_missed_point(tmp_path, response
             assert await_controller_capture(*args)["sha256"] == "retained"
         else:
             with pytest.raises(TimeoutError if response == "timeout" else ValueError):
-                await_controller_capture(*args)
+                await_controller_capture(*args, phase_deadline=args[-1])
     finally:
         thread.join(3)
     assert not thread.is_alive() and not ready.exists() and len(observed) == 1
@@ -57,6 +57,49 @@ def test_surviving_request_is_not_overwritten(tmp_path):
         await_controller_capture(tmp_path / "checkpoints", [], {},
             {"source_sha256": "later", "source_witness": {}}, time.time() + 1)
     assert ready.read_bytes() == b"original uncertain request"
+
+
+@pytest.mark.parametrize("response", ["captured", "failed", "foreign", "missing", "phase_expired"])
+def test_sealed_reply_after_capture_deadline_is_bounded_and_bound(tmp_path, monkeypatch, response):
+    from types import SimpleNamespace
+    from benchmark.runtime import checkpoint_handoff as handoff
+
+    clock = [100.0]
+    mailbox = tmp_path / "checkpoint-controller"
+    ready = mailbox / "ready.json"
+    published = []
+    def advance(seconds):
+        clock[0] += seconds
+        if clock[0] < 100.25 or published or response in {"missing", "phase_expired"}:
+            return
+        raw = ready.read_bytes()
+        request = json.loads(raw)
+        # The extra completion time must not leak into the writer barrier.
+        assert request["deadline_epoch"] == 100.1
+        result = {"request_sha256": "foreign" if response == "foreign" else hashlib.sha256(raw).hexdigest(),
+                  "ok": response == "captured", "error_kind": "SealingFailed",
+                  "capture": {"sha256": "sealed-original", "research_point_qualified": False}}
+        (mailbox / (request["capture_id"] + ".json")).write_text(json.dumps(result))
+        published.append(True)
+    monkeypatch.setattr(handoff, "time", SimpleNamespace(time=lambda: clock[0], sleep=advance))
+    monkeypatch.setattr(handoff, "CONTROLLER_SEAL_SECONDS", .5)
+    args = (tmp_path / "checkpoints", [], {}, {"source_sha256": "prepared", "source_witness": {}}, 100.1)
+    phase = 100.2 if response == "phase_expired" else 1000
+    if response == "captured":
+        assert handoff.await_controller_capture(*args, phase_deadline=phase)["sha256"] == "sealed-original"
+    else:
+        with pytest.raises(TimeoutError if response in {"missing", "phase_expired"} else ValueError):
+            handoff.await_controller_capture(*args, phase_deadline=phase)
+    assert 100.1 < clock[0] < (100.3 if response == "phase_expired" else 100.7)
+    assert not ready.exists()
+
+
+@pytest.mark.parametrize("capture,phase", [(float("nan"), None), (float("inf"), None),
+    (100, float("nan")), (100, float("inf"))])
+def test_controller_completion_requires_finite_clocks(capture, phase):
+    from benchmark.runtime.checkpoint_handoff import controller_completion_deadline
+    with pytest.raises(ValueError, match="finite"):
+        controller_completion_deadline(capture, phase)
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Qualifies the Linux writer process group")

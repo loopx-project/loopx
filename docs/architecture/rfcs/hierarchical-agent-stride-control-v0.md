@@ -1017,7 +1017,13 @@ The automatic supervisor keeps the prepared deadline for the live-source
 barrier and native capture. After successful source release it seals only its
 private exported files under the captured original Host phase deadline, which
 also bounds typed artifact publication. Later source work cannot enter that
-point. This separates source hold time from final sealing; it grants no trial
+point. The worker reply wait and controller publication share a completion
+deadline of the original capture deadline plus at most 30 seconds, capped by
+that phase. This closes the mismatch where the controller sealed successfully
+after release but the worker already reported capture failure. It also bounds
+an absent controller or stalled sealing without waiting out the whole trial.
+The original 30-second preparation/live-capture deadline is unchanged; the
+extra allowance never admits a late source/native capture. This grants no trial
 time, cooldown or opportunities. Direct callers retain their total timeout.
 
 Warm continuation preserves its captured remaining phase by default. An

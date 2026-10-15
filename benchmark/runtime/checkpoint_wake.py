@@ -161,7 +161,9 @@ class CheckpointWake:
                 verify_research_participants(self.env, components, metadata, research, probe["source_witness"], window)
             if self.request.get("controller_handoff"):
                 from .checkpoint_handoff import await_controller_capture
-                return await_controller_capture(self.root, components, metadata, probe, window)
+                return await_controller_capture(self.root, components, metadata, probe, window,
+                    phase_deadline=time.time() + deadline - time.monotonic()
+                    if deadline != float("inf") else None)
             self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
             return effect_runtime_result("runtime.checkpoint_artifacts", {
                 "action": "capture", "components": components, "destination": str(destination),

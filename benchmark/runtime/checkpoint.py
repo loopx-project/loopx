@@ -380,7 +380,8 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
                 if research is None:
                     raise ValueError("controller checkpoint requires complete canonical research context")
                 from .checkpoint_handoff import await_controller_capture
-                captured = await_controller_capture(root, components, metadata, probe, deadline)
+                captured = await_controller_capture(root, components, metadata, probe, deadline,
+                    phase_deadline=float(phase_deadline) if phase_deadline is not None else None)
                 receipt["checkpoint"] = {"captured": True, **captured}
                 return
             captured = effect_runtime_result("runtime.checkpoint_artifacts", {

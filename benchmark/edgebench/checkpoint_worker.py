@@ -19,6 +19,7 @@ from pathlib import Path, PurePosixPath
 from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.file_lock import exclusive_file_lock
 from benchmark.runtime.checkpoint import _participant_id
+from benchmark.runtime.checkpoint_handoff import controller_completion_deadline
 
 from .checkpoint_controller import _controller, _physical, _remaining, _phase_budget, capture
 
@@ -264,7 +265,9 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                     # original phase owner and its captured physical clock.
                     remaining_phase = _phase_budget(phase.read_bytes(), {
                         "captured_at_epoch": time.time()})["remaining_seconds"]
-                    deadline = time.monotonic() + remaining_phase
+                    completion = controller_completion_deadline(
+                        prepared["deadline_epoch"], time.time() + remaining_phase)
+                    deadline = time.monotonic() + completion - time.time()
                 sealing_epoch_ms = (time.time() + _remaining(deadline)) * 1000
                 native_component = _participant_id(components, "native_capsule")
                 components.append({"id": native_component, "source_path": str(stage / "native")})

@@ -7,12 +7,34 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import time
 import uuid
 
 
-def await_controller_capture(root, components, metadata, probe, deadline):
+CONTROLLER_SEAL_SECONDS = 30
+
+
+def controller_completion_deadline(capture_deadline, phase_deadline=None):
+    """Bound private sealing separately without extending live-source capture.
+
+    This is the benchmark mailbox's transport budget, not a new trial budget or
+    artifact admission rule. Both peers use the original absolute capture clock;
+    starting or retrying a reader cannot renew the completion allowance.
+    """
+    if not math.isfinite(capture_deadline):
+        raise ValueError("controller capture deadline must be finite")
+    completion = capture_deadline + CONTROLLER_SEAL_SECONDS
+    if phase_deadline is not None:
+        if not math.isfinite(phase_deadline):
+            raise ValueError("controller phase deadline must be finite")
+        completion = min(completion, phase_deadline)
+    return completion
+
+
+def await_controller_capture(root, components, metadata, probe, deadline, *, phase_deadline=None):
+    completion_deadline = controller_completion_deadline(deadline, phase_deadline)
     directory = root.parent / "checkpoint-controller"
     directory.mkdir(mode=0o700, exist_ok=True)
     if directory.resolve() != directory:
@@ -38,7 +60,11 @@ def await_controller_capture(root, components, metadata, probe, deadline):
     finally:
         pending.unlink()
     try:
-        while time.time() < deadline:
+        # The request still carries the original capture deadline. Only the
+        # controller can attest that its barrier/native capture finished in it.
+        # Its sealed reply can arrive after source release, within this separate
+        # bounded window. Do not silently discard that successful publication.
+        while time.time() < completion_deadline:
             if reply.exists():
                 if reply.is_symlink():
                     raise ValueError("checkpoint controller reply must be physical")
@@ -49,7 +75,7 @@ def await_controller_capture(root, components, metadata, probe, deadline):
                     raise ValueError("controller checkpoint failed: " + str(result.get("error_kind")))
                 return result["capture"]
             time.sleep(.05)
-        raise TimeoutError("controller did not capture before the original checkpoint deadline")
+        raise TimeoutError("controller did not publish a sealed checkpoint before the completion deadline")
     finally:
         # The controller must reread this exact file under its pause barrier.
         # Once absent, a late controller cannot capture a resumed source.
