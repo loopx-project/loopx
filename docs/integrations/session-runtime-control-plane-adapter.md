@@ -147,6 +147,11 @@ newer pages remain reachable when the visible window reaches 300 records.
 Looking back pauses automatic insertion; new activity is disclosed without
 moving the reader. Source and content fingerprints reject stale detail reads;
 history replacement resets the visible window instead of mixing conversations.
+An interrupted or timed-out history read keeps the records already displayed
+and explains that updates resume automatically when the connection recovers.
+Replies remain disabled until a fresh observation permits them. Changing the
+display language preserves the reader's position. These are read-recovery
+guarantees; interrupted reply delivery still follows its receipt contract.
 Pages contain at most 100 records and scan approximately 2 MiB, allowing a whole
 larger record at a boundary. The reader skips up to eight metadata-only windows
 per read gesture or observation; it stops on visible work, the source boundary,
