@@ -22,9 +22,10 @@ shared presentation owner. Missing record times stay unknown.
 
 ## Inputs
 
-Either an append-only `explore-result-log.jsonl`, or the redacted fixture JSON
-(`apps/presentation/dashboard/src/data/fixtures/edgebench-research-history.json`
-from PR #6616).
+Either an append-only `explore-result-log.jsonl`, or one of the captured-event
+wrappers in the [three-checkpoint reproduction guide](../personal-workspace-browser/research-history.md).
+The Portfolio example is
+`apps/presentation/dashboard/src/data/fixtures/edgebench-research-history.json`.
 
 ```sh
 node --no-warnings --experimental-strip-types examples/research-history-lark/board.mts \
@@ -44,4 +45,5 @@ npx -y @larksuite/whiteboard-cli@^0.2.13 -i /tmp/research.svg -f svg --to openap
       --idempotent-token <unique-token>
 ```
 
-Only publish public-safe data (the redacted fixture or an authorized projection).
+Publish only data authorized for that destination. The example's external
+trajectory publication does not authorize publishing an unrelated live Goal.
