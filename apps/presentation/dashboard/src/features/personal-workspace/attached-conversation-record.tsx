@@ -30,10 +30,11 @@ function ToolContent({text, complete, zh}: {text: string; complete: boolean; zh:
   return <pre>{text}</pre>;
 }
 
-export function AttachedConversationRecord({record, agent, zh, load, live = false}: {
+export function AttachedConversationRecord({record, agent, zh, load, live = false, active = false}: {
   record: ConversationRecord; agent: string; zh: boolean;
   load: (record: ConversationRecord, offset: number) => Promise<ContentPage>;
   live?: boolean;
+  active?: boolean;
 }) {
   const [storedText, setText] = useState(record.text);
   const text = live ? record.text : storedText;
@@ -50,7 +51,7 @@ export function AttachedConversationRecord({record, agent, zh, load, live = fals
     function_call: "Tool call", custom_tool_call: "Tool call",
     function_call_output: "Tool result", custom_tool_call_output: "Tool result",
   };
-  const title = live && record.role === "tool" ? `${zh ? "正在执行" : "In progress"} · ${record.label}` :
+  const title = live && record.role === "tool" ? record.label :
     record.role === "user" ? (zh ? "你" : "You") : record.role === "assistant" ? agent :
     `${labels[record.kind] ?? (zh ? "记录暂不可读" : "Record unavailable")}${record.label && record.label !== record.kind ? ` · ${record.label}` : ""}`;
   async function continueReading() {
@@ -67,7 +68,8 @@ export function AttachedConversationRecord({record, agent, zh, load, live = fals
     {more ? <button type="button" disabled={loading} onClick={() => void continueReading()}>{loading ? (zh ? "正在读取…" : "Loading…") : (zh ? "继续读取完整内容" : "Read more of this record")}</button> : null}
     {error ? <p role="alert">{error}</p> : null}
   </>;
-  const heading = <><strong>{title}</strong>{record.timestamp ? <time>{new Date(record.timestamp).toLocaleString()}</time> : null}</>;
+  const activityLabel = active ? (zh ? "原宿主执行中" : "Work observed in the original host") : (zh ? "回看的原宿主记录" : "Previously observed host record");
+  const heading = <><strong>{live && record.role !== "activity" ? <span className="attached-activity-mark" data-active={active || undefined} role="img" aria-label={activityLabel} title={activityLabel}/> : null}{title}</strong>{record.timestamp ? <time>{new Date(record.timestamp).toLocaleString()}</time> : null}</>;
   return <article data-role={record.role} data-record-id={record.id}>
     {record.role !== "tool" ? <header>{heading}</header> : null}
     {record.unavailable ? <p>{zh ? "源记录无法安全读取；此处保留缺口，未将其当作完成。" : "This source record could not be read safely. The gap is retained, not treated as completion."}</p> :

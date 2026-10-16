@@ -117,6 +117,9 @@ export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
   const liveEnabled = Boolean(snapshot?.connected && snapshot.activity.state !== "idle");
   const liveIdentity = `${goalId}:${targetAgentId ?? ""}:${binding?.agent_id ?? ""}:${binding?.binding_ref ?? ""}`;
   const liveRecords = liveView.identity === liveIdentity ? liveView.records : [];
+  // Frozen history is still readable, but must not look like current work.
+  // Connection/registration alone is never an activity observation.
+  const liveActive = liveEnabled && !liveUnavailable && !readingHistory;
   const query = binding ? new URLSearchParams({goal_id: goalId, agent_id: binding.agent_id, binding_ref: binding.binding_ref}) : null;
 
   useEffect(() => {
@@ -350,7 +353,7 @@ export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
       {error ? <p role="alert">{error} <button type="button" onClick={() => setRefresh(value => value + 1)}>{zh ? "重新连接" : "Reconnect"}</button></p> : null}
       {sendNotice ? <p role="status">{sendNotice}</p> : null}
       {binding ? <>
-        <div className="attached-connection-status"><div><p className="attached-conversation-source">{zh ? "Codex App · 已保存消息与工具记录自动更新" : "Codex App · saved messages and tools update automatically"}</p><p role="status">{!snapshot ? (zh ? "正在连接或连接不可用" : "Connecting or unavailable") : snapshot.can_reply ? (zh ? "原会话可回复" : "Original conversation accepts replies") : snapshot.activity.state === "turn_open" ? (zh ? "原会话有未结束执行；可在原 App 中追加输入" : "The original conversation has an unfinished turn; add input in the original App") : (zh ? "历史可读；回复连接或执行状态尚未确认" : "History available; reply connection or execution state unconfirmed")}</p></div>
+        <div className="attached-connection-status"><div><p className="attached-conversation-source" title={zh ? "已保存消息与工具记录自动更新；实时内容来自原宿主。" : "Saved messages and tools update automatically; live content comes from the original host."}>Codex App</p><p role="status">{!snapshot ? (zh ? "正在连接或连接不可用" : "Connecting or unavailable") : snapshot.can_reply ? (zh ? "原会话可回复" : "Original conversation accepts replies") : snapshot.activity.state === "turn_open" ? (zh ? "原会话有未结束执行；可在原 App 中追加输入" : "The original conversation has an unfinished turn; add input in the original App") : (zh ? "历史可读；回复连接或执行状态尚未确认" : "History available; reply connection or execution state unconfirmed")}</p></div>
         <button type="button" className="attached-conversation-open" aria-disabled={opening} aria-busy={opening} onClick={() => void openOriginal()}>{zh ? "在 Codex App 中打开" : "Open in Codex App"}</button></div>
         {openRequested ? <p role="status">{zh ? "已请求打开原会话，请在 Codex App 中查看。" : "Requested opening the original conversation; check Codex App."}</p> : null}
         {openError ? <p role="alert">{openError}</p> : null}
@@ -359,8 +362,7 @@ export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
         <div className="attached-conversation-messages" ref={transcript} onWheel={event => {if (event.deltaY < 0) pauseHistory();}} onTouchMove={pauseHistory} onClick={pauseHistory} onKeyDown={event => {if (["ArrowUp", "PageUp", "Home"].includes(event.key)) pauseHistory();}} aria-label={zh ? "原会话消息" : "Original conversation messages"}>
           {messages.map(message => <AttachedConversationRecord key={`${history.current?.source}:${message.id}:${message.content_ref ?? ""}`} record={message} agent={binding.agent_id} zh={zh} load={loadContent}/>)}
           {liveRecords.length ? <div aria-label={zh ? "原宿主实时记录" : "Original host live records"}>
-            <p>{zh ? "正在发生 · 原宿主实时观察" : "In progress · observed from the original host"}</p>
-            {liveRecords.map(record => <AttachedConversationRecord key={record.id} record={record} agent={binding.agent_id} zh={zh} load={loadContent} live/>)}
+            {liveRecords.map(record => <AttachedConversationRecord key={record.id} record={record} agent={binding.agent_id} zh={zh} load={loadContent} live active={liveActive}/>)}
           </div> : null}
           {!messages.length && !liveRecords.length && snapshot ? <p>{zh ? "当前有界历史窗口内没有可显示的消息，可读取更早记录。" : "No displayable messages in this bounded window; read earlier records."}</p> : null}
         </div>
