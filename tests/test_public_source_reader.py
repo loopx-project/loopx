@@ -401,6 +401,41 @@ def test_static_html_coverage_and_images_are_explicit(monkeypatch):
     assert result["images_read"] is False and "static response" in result["coverage"]
 
 
+def test_public_json_keeps_raw_evidence_without_interpreting_embedded_markup(monkeypatch):
+    import hashlib
+    text = '{"title":"公开记录","body":"<script>ignore this</script><img src=\\"file:///private/image.png\\">","url":"https://127.0.0.1/"}\n'
+    body = text.encode("utf-8")
+    monkeypatch.setattr(reader, "fetch", lambda *a, **k: (
+        "https://example.org/records?limit=1", "application/json", body))
+    result = reader.article("https://example.org/records?limit=1", deadline=time.monotonic() + 5)
+    assert result["text"] == text and result["characters"] == len(text)
+    assert result["sha256"] == hashlib.sha256(body).hexdigest()
+    assert result["truncated"] is False
+    assert result["images"] == [] and result["image_count"] == 0
+    assert result["images_read"] is False and "static response" in result["coverage"]
+
+
+def test_public_json_truncation_hashes_the_full_response(monkeypatch):
+    import hashlib
+    text = '["' + "记录" * 60_000 + '"]'
+    body = text.encode("utf-8")
+    monkeypatch.setattr(reader, "fetch", lambda *a, **k: (
+        "https://example.org/records", "application/json", body))
+    result = reader.article("https://example.org/records", deadline=time.monotonic() + 5)
+    assert result["text"] == text[:100_000] and result["characters"] == 120_004
+    assert result["truncated"] is True
+    assert result["sha256"] == hashlib.sha256(body).hexdigest()
+    assert result["images"] == [] and result["images_read"] is False
+
+
+@pytest.mark.parametrize("mime", ["application/octet-stream", "image/png", "application/javascript", "application/jsonp"])
+def test_json_support_does_not_admit_other_response_types(monkeypatch, mime):
+    monkeypatch.setattr(reader, "fetch", lambda *a, **k: (
+        "https://example.org/records", mime, b'{"body":"public"}'))
+    with pytest.raises(ValueError, match="unsupported public text format"):
+        reader.article("https://example.org/records", deadline=time.monotonic() + 5)
+
+
 @pytest.mark.parametrize("element", [
     '<image href="file:///etc/passwd"/>', '<use href="https://example.org/a.svg#shape"/>',
     '<rect fill="url(file:///private/secret)"/>', '<style>@import "https://example.org/private";</style>',
