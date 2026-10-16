@@ -193,14 +193,24 @@ async function runConversation(browser, uncertain) {
       const live = panel.getByLabel('原宿主实时记录',{exact:true});
       await page.request.post(new URL('/fixture/live-start',url).href);
       await live.getByText('原宿主实时草稿',{exact:true}).waitFor();
+      const activeMarks = panel.getByRole('img',{name:'原宿主执行中',exact:true});
+      assert.equal(await activeMarks.count(),2,'Only the observed current message and tool show activity');
+      assert.equal(await panel.getByText('正在发生 · 原宿主实时观察',{exact:true}).count(),0);
+      assert.equal(await live.getByText('正在执行 · verify_artifact',{exact:true}).count(),0);
+      await page.screenshot({path:resolve(outputDir,'attached-codex-live-desktop.png')});
+      await page.emulateMedia({reducedMotion:'reduce'});
+      assert.equal(await activeMarks.first().evaluate(node => getComputedStyle(node,'::after').animationName),'none','Reduced motion retains the glyph without movement');
+      await page.emulateMedia({reducedMotion:'no-preference'});
       assert.equal(await panel.getByText('HIDDEN REASONING MUST NOT APPEAR',{exact:true}).count(),0);
       await live.getByText('原宿主实时草稿',{exact:true}).click();
+      assert.equal(await activeMarks.count(),0,'Reading freezes both content and activity treatment');
       await page.request.post(new URL('/fixture/live-update',url).href);
       await panel.getByText('正在回看历史 · 有新活动',{exact:true}).waitFor();
       assert.equal(await live.getByText('原宿主实时草稿',{exact:true}).count(),1,'History reading freezes live insertion too');
       assert.equal(await live.getByText('原宿主实时草稿，已持续更新。',{exact:true}).count(),0);
       await panel.getByRole('button',{name:'回到最新',exact:true}).click();
       await live.getByText('原宿主实时草稿，已持续更新。',{exact:true}).waitFor();
+      assert.equal(await activeMarks.count(),2,'Returning to the tail restores the current observation');
       assert.equal(await inputCount(),0,'Observation never submits native input');
       await panel.getByRole('combobox',{name:'查看 Agent'}).selectOption('remote-worker');
       await panel.getByText('来源：cursor。此宿主的工作记录与回复尚未接入。',{exact:true}).waitFor();
@@ -208,7 +218,7 @@ async function runConversation(browser, uncertain) {
       await page.waitForFunction(async () => (await (await fetch('/fixture/following')).json()).events.at(-1) === false);
       await panel.getByRole('combobox',{name:'查看 Agent'}).selectOption('worker');
       await live.getByText('原宿主实时草稿，已持续更新。',{exact:true}).waitFor();
-      assert.equal(await live.locator('article').count(),1,'A new baseline does not duplicate old live rows');
+      assert.equal(await live.locator('article').count(),2,'A new baseline does not duplicate old live rows');
       // The other tail-return path must publish the buffered projection too.
       // Pin the subscription events so the newer draft can only come from the
       // buffer: a fresh follow replays the host snapshot and would decide
@@ -226,6 +236,7 @@ async function runConversation(browser, uncertain) {
       assert.equal(await inputCount(),0,'Observation never submits native input');
       await page.request.post(new URL('/fixture/live-finish',url).href);
       await page.waitForFunction(() => !document.querySelector('[aria-label="原宿主实时记录"]'));
+      assert.equal(await activeMarks.count(),0,'Completed work is never left animating');
       await panel.locator('.attached-conversation-messages').getByText('原宿主实时草稿，已持续更新。',{exact:true}).waitFor();
       await panel.getByText('原会话可回复',{exact:true}).waitFor();
       assert.equal(await inputCount(),0);

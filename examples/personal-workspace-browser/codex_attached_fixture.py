@@ -288,6 +288,14 @@ with (
                                                 "type": "reasoning",
                                                 "content": "HIDDEN REASONING MUST NOT APPEAR",
                                             },
+                                            {
+                                                "id": "live-tool",
+                                                "type": "mcpToolCall",
+                                                "status": "inProgress",
+                                                "server": "synthetic",
+                                                "tool": "verify_artifact",
+                                                "arguments": {"artifact": "release candidate"},
+                                            },
                                         ],
                                     }
                                 ],
