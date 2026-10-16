@@ -379,9 +379,8 @@ def build_heartbeat_prompt(
         native_goal_host=native_goal_host,
         turn_instance_id=normalized_turn_instance_id,
         decision_handoff_socket=decision_handoff_socket,
+        turn_envelope=turn_envelope,
     )
-    if turn_envelope and decision_output_root is None:
-        raise ValueError("TurnEnvelope requires an explicit decision capture root")
     explicit_agent_scopes = normalize_agent_scopes(agent_scopes)
     if explicit_agent_scopes:
         normalized_agent_scopes = explicit_agent_scopes

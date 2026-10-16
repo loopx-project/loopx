@@ -30,11 +30,14 @@ def resolve_heartbeat_capture_root(
     native_goal_host: bool,
     turn_instance_id: str | None,
     decision_handoff_socket: str | None = None,
+    turn_envelope: bool = False,
 ) -> Path | None:
     """Validate capture transport for an already resolved host-owned Turn."""
     if root is None:
         if decision_handoff_socket is not None:
             raise ValueError("decision handoff requires an explicit decision capture root")
+        if turn_envelope:
+            raise ValueError("TurnEnvelope requires an explicit decision capture root")
         return None
     if not thin or full or compact or brief or native_goal_host or not turn_instance_id:
         raise ValueError("--decision-output-root requires thin mode and an explicit host-owned Turn ID")
