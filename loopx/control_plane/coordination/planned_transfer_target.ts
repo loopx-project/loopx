@@ -240,6 +240,8 @@ export async function stageAuthorityForPlannedTransfer(value: JsonObject): Promi
     }
     await mkdir(directory, {recursive: true, mode: 0o700});
     await retainJson(pendingPath, plan.identity);
+    await retainJson(join(directory, "registration.json"), {identity_sha256: canonicalAuthoritySha256(plan.identity),
+      registry_path: witness.path, goal: plan.goal});
     const engaged = await engageLegacyCoordinationWriterFenceUnderLocks(root, plan.goalId, plan.statePath, fence);
     if (engaged.status !== "applied" && engaged.status !== "replayed") reject("Destination transfer fence readback failed");
     await mkdir(dirname(plan.statePath), {recursive: true, mode: 0o700});

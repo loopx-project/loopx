@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { access, lstat, readFile } from "node:fs/promises";
+import { access, lstat, readFile, readdir, realpath } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
 
 import type { JsonObject } from "../effect_program.ts";
@@ -11,6 +11,8 @@ import {
   withFileMutationLock,
 } from "../effect_runtime_io.ts";
 import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
+import {withGoalRuntimeWriter} from "../coordination/local_authority_write.ts";
+import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {
   jsonObject,
   optionalNonEmptyString as optionalString,
@@ -109,6 +111,7 @@ export interface QuotaAccountingArtifactCommitRequest {
   expectedIndexDigest: string | null;
   goalRef?: JsonObject;
   indexLockHeld?: boolean;
+  maintenanceLock?: unknown;
   prepare: (
     context: QuotaAccountingArtifactPrepareContext,
   ) =>
@@ -891,6 +894,58 @@ async function ensureReceiptArtifacts(
   return repaired;
 }
 
+/** Source preparation owns maintenance, the same exclusion as actual quota
+ * commits above. Inspect the original receipt/index/artifacts without repair.
+ * A prepared or incomplete debit/void must finish through its existing owner
+ * before transfer; directory emptiness is not an external-effect certificate.
+ */
+export async function readGoalQuotaHistoryForTransfer(root: string, goalId: string): Promise<JsonObject> {
+  const runs = join(root, "goals", goalId, "runs"), index = join(runs, "index.jsonl");
+  try {
+    if (await realpath(runs) !== runs) throw new EffectRuntimeRequestError("Transfer quota history contains a linked ancestor");
+  } catch (error) { if (!isNodeErrorCode(error, "ENOENT")) throw error; }
+  await rejectSymlinkPath(index, "transfer quota index");
+  const indexBytes = await readOptionalBytes(index), records = parseQuotaAccountingIndex(indexBytes?.toString("utf8") ?? null);
+  const receipts: JsonObject[] = [];
+  const seen = new Set<string>();
+  for (const kind of ["spend", "void"] as const) {
+    const contract = contractFor(kind), directory = join(runs, ".transactions", contract.transactionDirectory);
+    await rejectSymlinkPath(directory, "transfer quota transactions");
+    let entries: string[];
+    try { entries = await readdir(directory); }
+    catch (error) { if (isNodeErrorCode(error, "ENOENT")) entries = []; else throw error; }
+    for (const name of entries.sort()) {
+      if (!/^[a-f0-9]{24}\.json$/u.test(name)) throw new EffectRuntimeRequestError("Transfer quota transaction has an unattributable address");
+      const path = join(directory, name);
+      await rejectSymlinkPath(path, "transfer quota receipt");
+      const receipt = await readReceipt(contract, path, runs);
+      if (!receipt || receipt.record.goal_id !== goalId || path !== transactionPath(contract, runs, receipt.effect_id)) throw new EffectRuntimeRequestError("Transfer quota receipt identity is unavailable");
+      const resolution = resolveQuotaAccountingEffect(kind, records, receipt.effect_id, receipt.goal_ref ?? null);
+      const body = await readOptionalText(receipt.json_path), markdown = await readOptionalText(receipt.markdown_path);
+      let bodyMatches = false;
+      if (body !== null) {
+        try { bodyMatches = canonicalJson(JSON.parse(body)) === canonicalJson(receipt.record); }
+        catch { throw new EffectRuntimeRequestError("Transfer quota artifact is unreadable"); }
+      }
+      const closed = receipt.status === "committed" && resolution.kind === "matched" &&
+        canonicalJson(resolution.record) === canonicalJson(receipt.index_record) && bodyMatches && markdown === receipt.markdown;
+      receipts.push({kind, effect_id: receipt.effect_id, receipt_sha256: canonicalAuthoritySha256(receipt), closed});
+      seen.add(`${kind}:${receipt.effect_id}`);
+    }
+    for (const record of records) {
+      if (record.classification !== contract.classification) continue;
+      if (record.goal_id !== goalId) throw new EffectRuntimeRequestError("Transfer quota index belongs to another Goal");
+      const effect = jsonObject(record[contract.metadataField])?.effect_id;
+      if (typeof effect !== "string" || !seen.has(`${kind}:${effect}`)) {
+        throw new EffectRuntimeRequestError("Transfer quota index has no matching original receipt; reconcile its owner before transfer");
+      }
+    }
+  }
+  const facts = {closed: receipts.every(row => row.closed === true), receipts,
+    index_sha256: indexBytes === null ? null : sha256Bytes(indexBytes)};
+  return {...facts, sha256: canonicalAuthoritySha256(facts)};
+}
+
 export async function commitQuotaAccountingArtifactTransaction(
   request: QuotaAccountingArtifactCommitRequest,
 ): Promise<QuotaAccountingArtifactCommitOutcome> {
@@ -1038,7 +1093,11 @@ export async function commitQuotaAccountingArtifactTransaction(
       indexDigest: await quotaAccountingIndexDigest(indexPath),
     };
   };
-  return request.indexLockHeld
-    ? await commit()
-    : await withFileMutationLock(indexPath, commit);
+  const lockedCommit = () => request.indexLockHeld ? commit() : withFileMutationLock(indexPath, commit);
+  const goal = dirname(request.runsDir), goals = dirname(goal);
+  if (basename(request.runsDir) === "runs" && basename(goals) === "goals") {
+    return withGoalRuntimeWriter(dirname(goals), basename(goal), lockedCommit, request.maintenanceLock);
+  }
+  if (request.maintenanceLock !== undefined) throw new EffectRuntimeRequestError("Quota maintenance handoff requires its canonical runtime route");
+  return lockedCommit();
 }

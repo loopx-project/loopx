@@ -30,6 +30,19 @@ from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runti
 from tests.control_plane.test_project_registry_codec import _strict
 from loopx.global_registry import sync_project_registry_to_global
 from loopx.paths import global_registry_path
+from loopx.control_plane.turn_driver.journal_store import write_turn_journal_checkpoint
+from loopx.control_plane.quota.spend_commit import record_quota_slot_spend_from_preview, replay_quota_spend_by_effect_ref
+from tests.control_plane.test_quota_spend_commit_runtime import _preview as quota_preview
+
+
+def _original_turn(goal: str, todo: str) -> dict:
+    key = "sha256:" + "a" * 64
+    return {"schema_version": "loopx_turn_journal_v0", "goal_id": goal, "turn_key": key,
+        "status": "in_progress", "completed_phases": [], "plan": {
+            "turn_envelope": {"goal_id": goal, "agent_id": "agent-a", "action": {"selected_todo": {"todo_id": todo}}},
+            "transaction": {"turn_key": key, "settlement_plan": {"schema_version": "quota_settlement_plan_v1",
+                "identity": {"schema_version": "quota_settlement_identity_v0", "goal_id": goal, "agent_id": "agent-a",
+                    "todo_id": todo, "turn_instance_id": key, "effect_id": f"{goal}:agent-a:{todo}:{key}"}}}}}
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -213,6 +226,40 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
         assert inspect()["provider_revision"] == released["provider_revision"]
         preview = preview_registered_goal_transfer(registry_path=global_registry, goal_id="report", operation_id="prepared-move")
         assert preview_registered_goal_transfer(registry_path=registry, goal_id="report", operation_id="prepared-move") == preview
+
+        # The real journal/checkpoint and quota facades serialize against the
+        # preparation owner. Terminal metadata is not physical Host drain; no
+        # model or Host is run by this synthetic boundary fixture.
+        journal = _original_turn("report", todo)
+        journal_path = runtime / "goals/report/turns" / ("a" * 64 + ".json")
+        write_turn_journal_checkpoint(journal_path, journal)
+        active_turn = preview_registered_goal_transfer(registry_path=registry, goal_id="report", operation_id="prepared-move")
+        assert active_turn["ready_for_authority_preparation"] is False
+        assert active_turn["turn_history"]["closed"] is False
+        with pytest.raises(EffectRuntimeRemoteError, match="Turn effects are not closed"):
+            prepare_registered_goal_transfer(registry_path=registry, goal_id="report", operation_id="prepared-move",
+                expected_preview_sha256=active_turn["preview_sha256"])
+        phases = ["host_execute", "typed_result", "validation", "durable_writeback", "quota_spend", "scheduler_apply", "scheduler_ack"]
+        for count in (2, 3, 4, 5, 7):
+            journal["completed_phases"] = phases[:count]
+            if count == 7:
+                journal["status"] = "committed"
+            write_turn_journal_checkpoint(journal_path, journal)
+        with pytest.raises(EffectRuntimeRemoteError, match="preview changed"):
+            prepare_registered_goal_transfer(registry_path=registry, goal_id="report", operation_id="prepared-move",
+                expected_preview_sha256=preview["preview_sha256"])
+        preview = preview_registered_goal_transfer(registry_path=registry, goal_id="report", operation_id="prepared-move")
+        debit_preview = quota_preview(goal_id="report", agent_id="agent-a", effect_ref="original-boundary-effect#quota_spend")
+        debit = record_quota_slot_spend_from_preview(debit_preview, {"runtime_root": str(runtime)},
+            goal_id="report", execute=True, registry_path=registry)
+        assert debit["appended"] is True and debit["slots"] == 1
+        with pytest.raises(EffectRuntimeRemoteError, match="preview changed"):
+            prepare_registered_goal_transfer(registry_path=registry, goal_id="report", operation_id="prepared-move",
+                expected_preview_sha256=preview["preview_sha256"])
+        preview = preview_registered_goal_transfer(registry_path=registry, goal_id="report", operation_id="prepared-move")
+        assert preview["turn_history"]["closed"] is True and preview["quota_history"]["closed"] is True
+        assert len(preview["quota_history"]["receipts"]) == 1
+        assert json.loads(legacy_coordination_writer_fence_path(runtime_root=runtime, goal_id="report").read_text()) == original_fence
         request = {"runtime_root": str(runtime), "goal_id": "report", "operation_id": "prepared-move",
             "expected_provider_revision": released["provider_revision"],
             "expected_writer_fence_sha256": hashlib.sha256(canonical_bytes(original_fence)).hexdigest(),
@@ -238,6 +285,28 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
         assert prepared["original_registration_verified"] is True
         assert prepared["execution_authority_granted"] is False
         assert prepared["host_drain_qualified"] is False
+        frozen_registry, frozen_journal = registry.read_bytes(), journal_path.read_bytes()
+        frozen_index = Path(debit["index_path"]).read_bytes()
+        for cold in (False, True):
+            if cold:
+                restart_effect_runtime(wait_for_exit=True)
+            with pytest.raises(EffectRuntimeRemoteError, match="prepared for transfer"):
+                write_turn_journal_checkpoint(journal_path, journal)
+            with pytest.raises(ValueError, match="prepared for transfer"):
+                record_quota_slot_spend_from_preview(debit_preview, {"runtime_root": str(runtime)},
+                    goal_id="report", execute=True, registry_path=registry)
+            readback = replay_quota_spend_by_effect_ref(runtime, goal_id="report",
+                effect_ref=debit["effect_id"], agent_id="agent-a", read_only=True, registry_path=registry)
+            assert readback["replay_found"] is True and readback["appended"] is False
+            rejected_metadata = cli("configure-goal", "--goal-id", "report", "--registered-agent", "agent-b", "--execute", expected_code=1)
+            assert "prepared for transfer" in rejected_metadata["error"]
+            action = cli("goal-lifecycle", "--goal-id", "report", "--operation", "resume")
+            refused_resume = cli("goal-lifecycle", "--goal-id", "report", "--operation", "resume",
+                "--actor-kind", "owner", "--expected-state-fingerprint", action["observed_state_fingerprint"],
+                "--execute", expected_code=1)
+            assert "prepared for transfer" in refused_resume["error"]
+            assert registry.read_bytes() == frozen_registry and journal_path.read_bytes() == frozen_journal
+            assert Path(debit["index_path"]).read_bytes() == frozen_index
         for cold in (False, True):
             if cold:
                 restart_effect_runtime(wait_for_exit=True)
@@ -407,6 +476,10 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
 
             target_task = target_cli("todo", "list", "--goal-id", "report", "--todo-id", todo)["todo"]
             assert target_task == source_task
+            staged_registry = target_registry.read_bytes()
+            refused_binding = target_cli("configure-goal", "--goal-id", "report", "--registered-agent", "agent-a", "--execute", expected_code=1)
+            assert "prepared for transfer" in refused_binding["error"]
+            assert target_registry.read_bytes() == staged_registry
             # The existing ordinary reconnect may read this registered Goal;
             # it must not mint a creation receipt or reset imported work to an
             # empty new Goal, even if a caller supplies creation-style inputs.

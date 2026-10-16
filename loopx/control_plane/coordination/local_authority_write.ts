@@ -1,7 +1,8 @@
 import {withFileMutationLock} from "../effect_runtime_io.ts";
 import type {JsonObject} from "../effect_program.ts";
+import {EffectRuntimeConflictError} from "../effect_runtime_errors.ts";
 import {loadLegacyCoordinationWriterFence, PLANNED_TRANSFER_WRITER_FENCE_SCHEMA} from "./legacy_writer_fence.ts";
-import {requireShadowPrimaryWriteAllowed, shadowMaintenanceLockPath} from "./shadow_management.ts";
+import {requireShadowPrimaryWriteAllowed, shadowMaintenanceLockPath, withShadowMaintenanceLock} from "./shadow_management.ts";
 
 // File-v0 still verifies and republishes its retained history on each write.
 // Give a competing canonical writer a bounded wait for that real critical
@@ -56,6 +57,23 @@ export function canonicalWriteRouteFailure(error: unknown): JsonObject {
 
 interface CanonicalWriterOptions {
   businessWrite?: CanonicalBusinessWrite;
+}
+
+/** Runtime artifacts share the prepared Goal's exclusion, including operations
+ * that could otherwise repair a receipt or debit outside the Todo provider.
+ * Ordinary missing/promotion fences preserve their existing runtime behavior.
+ */
+export async function withGoalRuntimeWriter<T>(root: string, goalId: string,
+  write: () => Promise<T>, borrowedMaintenance?: unknown): Promise<T> {
+  return withShadowMaintenanceLock(root, goalId, async () => {
+    const fence = await loadLegacyCoordinationWriterFence(root, goalId);
+    if (fence.status === "failed") throw new EffectRuntimeConflictError(fence.reason, "canonical_authority_fence_invalid");
+    if (fence.status === "loaded" && fence.fence.schema_version === PLANNED_TRANSFER_WRITER_FENCE_SCHEMA) {
+      throw new EffectRuntimeConflictError(`Goal runtime is prepared for transfer ${fence.fence.operation_id}; recover that original operation`,
+        "canonical_authority_transfer_prepared");
+    }
+    return write();
+  }, borrowedMaintenance);
 }
 
 /** Call only while holding the Goal maintenance lock. */

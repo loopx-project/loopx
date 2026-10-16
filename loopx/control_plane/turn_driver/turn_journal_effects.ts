@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import {withGoalRuntimeWriter} from "../coordination/local_authority_write.ts";
 
 import type { JsonObject } from "../effect_program.ts";
 import { settlementIdentityFromPlan } from "../effect_program.ts";
@@ -337,7 +338,7 @@ export async function commitTurnJournal(
     );
   }
   const incomingOperationId = operationId(journal);
-  const commit = async (): Promise<JsonObject> =>
+  const commitBytes = async (): Promise<JsonObject> =>
     await withFileMutationLock(path, async () => {
       let existing: JsonObject | null = null;
       try {
@@ -382,6 +383,15 @@ export async function commitTurnJournal(
         operation_id: incomingOperationId,
       };
     });
+  const commit = async (): Promise<JsonObject> => {
+    const turns = dirname(path), goal = dirname(turns), goals = dirname(goal);
+    if (basename(turns) !== "turns" || basename(goals) !== "goals") {
+      if (params.maintenance_lock !== undefined) conflict("Turn journal maintenance handoff requires its canonical runtime route");
+      return commitBytes();
+    }
+    if (basename(goal) !== journal.goal_id || resolve(path) !== path) conflict("Turn journal runtime route differs from its original Goal");
+    return withGoalRuntimeWriter(dirname(goals), basename(goal), commitBytes, params.maintenance_lock);
+  };
   if (goalBinding.kind === "legacy") {
     if (params.source_admission !== undefined) {
       throw new EffectRuntimeRequestError(

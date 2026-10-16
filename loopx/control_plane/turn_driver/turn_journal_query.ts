@@ -1,6 +1,7 @@
 /** Settlement-addressed File journal readback; observations never grant execution. */
-import { constants } from "node:fs";
-import { open, readdir } from "node:fs/promises";
+import { constants, type Dirent } from "node:fs";
+import {createHash} from "node:crypto";
+import { open, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
 import {
@@ -22,6 +23,7 @@ import {
   interpretTurnJournal,
   parseTurnJournalGoalBinding,
 } from "./turn_journal.ts";
+import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 
 interface JournalEvidence {
   turn_key: string;
@@ -50,6 +52,49 @@ function decodeGoalRef(value: unknown): ExactGoalRef {
 
 function journalConflict(message: string): never {
   throw new EffectRuntimeConflictError(message, "journal_readback_conflict");
+}
+
+async function journalSnapshot(path: string): Promise<{value: JsonObject; sha256: string}> {
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    if (!(await handle.stat()).isFile()) journalConflict("Turn journal snapshot is not a regular file");
+    const bytes = await handle.readFile();
+    let value: JsonObject;
+    try { value = requireJsonObject(JSON.parse(new TextDecoder("utf-8", {fatal: true}).decode(bytes)), "Turn journal"); }
+    catch { journalConflict("Turn journal history is unreadable; reconcile it before retrying"); }
+    return {value, sha256: createHash("sha256").update(bytes).digest("hex")};
+  } finally { await handle.close(); }
+}
+
+/** Call while source preparation owns Goal maintenance. The existing journal
+ * interpreter decides terminal/uncertain effects. This closes only Turn
+ * history, never physical Host drain, provider absence or external outboxes.
+ */
+export async function readGoalTurnHistoryForTransfer(root: string, goalId: string): Promise<JsonObject> {
+  const directory = join(root, "goals", goalId, "turns");
+  let entries: Dirent[];
+  try {
+    if (await realpath(directory) !== directory) journalConflict("Transfer Turn history contains a linked ancestor");
+    entries = await readdir(directory, {withFileTypes: true});
+  }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") entries = []; else throw error; }
+  const turns: JsonObject[] = [];
+  for (const entry of entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
+    if (!entry.name.endsWith(".json")) continue;
+    if (!/^[a-f0-9]{64}\.json$/u.test(entry.name) || !entry.isFile()) journalConflict("Transfer source has an unattributable Turn journal; reconcile its owning operation");
+    const {value: journal, sha256} = await journalSnapshot(join(directory, entry.name));
+    const key = `sha256:${entry.name.slice(0, -5)}`;
+    const envelope = jsonObject(jsonObject(journal.plan)?.turn_envelope);
+    const agent = envelope?.agent_id;
+    if (typeof agent !== "string" || !agent) journalConflict("Transfer source Turn has no original owner");
+    const observed = interpretTurnJournal({schema_version: "loopx_turn_journal_interpretation_request_v0",
+      journal, goal_id: goalId, agent_id: agent, turn_key: key});
+    turns.push({turn_key: key, journal_sha256: sha256,
+      closed: observed.journal_consistent && ["committed", "stopped"].includes(observed.journal_status) &&
+        observed.recovery_decision.action === "return_existing",
+      recorded_effects: observed.recorded_effects, violations: observed.violations});
+  }
+  return {closed: turns.every(row => row.closed === true), turns, sha256: canonicalAuthoritySha256(turns)};
 }
 
 function observedCapabilities(envelope: JsonObject): string[] {
@@ -153,22 +198,10 @@ async function querySettlementJournal(
   for (const entry of entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
     if (!/^[a-f0-9]{64}\.json$/u.test(entry.name)) continue;
     if (!entry.isFile()) journalConflict("Turn journal history contains a non-regular snapshot; reconcile it before retrying");
-    let value: unknown;
     // Journals are atomic-replace files. Read one complete version without
     // creating reader lock files; do not follow a replaced symlink. This is
     // not a snapshot of the directory or proof of provider-side absence.
-    const handle = await open(join(directory, entry.name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    try {
-      if (!(await handle.stat()).isFile()) journalConflict("Turn journal snapshot is not a regular file");
-      try {
-        value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await handle.readFile()));
-      } catch (error) {
-        if (error instanceof SyntaxError || error instanceof TypeError) journalConflict("Turn journal history is unreadable; reconcile it before retrying");
-        throw error;
-      }
-    } finally {
-      await handle.close();
-    }
+    const {value} = await journalSnapshot(join(directory, entry.name));
     const evidence = evidenceForJournal(
       value,
       `sha256:${entry.name.slice(0, -5)}`,

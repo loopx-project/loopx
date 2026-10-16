@@ -15,6 +15,32 @@ from ..effect_runtime import effect_runtime_result
 from ..projects.registry_codec import load_project_registry, project_registry_transaction
 
 
+def require_goal_transfer_registry_write(
+    *, registry_path: Path, before: dict[str, Any], after: dict[str, Any],
+    registry_witness: dict[str, Any],
+) -> None:
+    """Adapt an existing codec transaction; never parse or decide fence state."""
+    from ..coordination.legacy_writer_fence import legacy_coordination_writer_fence_path
+
+    # This is an IO-only fast path. Source preparation takes the same registry
+    # lock, so it cannot install a new fence between this observation and save.
+    roots = {value["common_runtime_root"] for value in (before, after)
+             if isinstance(value.get("common_runtime_root"), str) and Path(value["common_runtime_root"]).is_absolute()}
+    goals = [goal for value in (before, after) for goal in
+             (value["goals"] if isinstance(value.get("goals"), list) else [])]
+    if not any(isinstance(goal, dict) and isinstance(goal.get("id"), str)
+               and legacy_coordination_writer_fence_path(runtime_root=Path(root), goal_id=goal["id"]).exists()
+               for root in roots for goal in goals):
+        return
+    if registry_witness["path"] != str(registry_path.expanduser().resolve()):
+        raise ValueError("Registry transfer witness route changed")
+    result = effect_runtime_result("coordination.planned_transfer.registry_write_check", {
+        "before": before, "after": after, "registry_witness": registry_witness,
+    })
+    if result != {"allowed": True}:
+        raise ValueError("Registry transfer guard did not admit this mutation")
+
+
 def _read_goal_transfer_snapshot(*, registry_path: Path, goal_id: str) -> dict[str, Any]:
     """Codec/byte IO only; the native Goal owner decides supported admission."""
     from ...registry import find_registry_goal, resolve_state_file

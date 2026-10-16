@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from ...file_lock import exclusive_cross_runtime_file_lock, exclusive_file_lock
+from ...file_lock import cross_runtime_lock_witness, exclusive_cross_runtime_file_lock, exclusive_file_lock
 from ..coordination.shadow_management import (
     runtime_artifact_lock_target,
     shadow_maintenance_lock_target,
@@ -77,12 +77,13 @@ def write_turn_journal_checkpoint(
     *,
     source_admission: Mapping[str, Any] | None = None,
 ) -> None:
-    def write() -> None:
+    def write(maintenance_lock: Mapping[str, Any] | None = None) -> None:
         write_turn_journal(
             str(path),
             journal,
             expected_effect_id=journal_committed_effect_id(journal),
             source_admission=source_admission,
+            maintenance_lock=maintenance_lock,
         )
 
     route = _turn_journal_goal_route(path)
@@ -96,7 +97,7 @@ def write_turn_journal_checkpoint(
             shadow_maintenance_lock_target(runtime_root, goal_id),
             operation="turn_journal_runtime_artifact_commit",
         ):
-            write()
+            write(cross_runtime_lock_witness(shadow_maintenance_lock_target(runtime_root, goal_id)))
 
     if source_admission is not None:
         write_under_maintenance()
@@ -122,14 +123,14 @@ def load_loopx_turn_plan_from_journal(
     plan = journal.get("plan")
     if not isinstance(plan, dict):
         raise TypeError("LoopX Turn resume journal does not contain a plan")
-    transaction = (
-        plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
-    )
+    transaction = plan.get("transaction")
+    if not isinstance(transaction, dict):
+        transaction = {}
     if transaction.get("turn_key") != turn_key or journal.get("turn_key") != turn_key:
         raise ValueError("LoopX Turn resume journal has mismatched turn lineage")
-    envelope = (
-        plan.get("turn_envelope") if isinstance(plan.get("turn_envelope"), dict) else {}
-    )
+    envelope = plan.get("turn_envelope")
+    if not isinstance(envelope, dict):
+        envelope = {}
     if envelope.get("goal_id") != goal_id or journal.get("goal_id") != goal_id:
         raise ValueError("LoopX Turn resume journal belongs to another goal")
     return dict(plan)

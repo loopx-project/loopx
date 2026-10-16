@@ -374,6 +374,8 @@ class ProjectRegistryTransaction:
             self._finished = True
             return False
 
+        self._require_transfer_write(payload)
+
         encoded = _encode_document(
             payload,
             format=self._document.format,
@@ -410,6 +412,7 @@ class ProjectRegistryTransaction:
         if not self._path.exists():
             self._finished = True
             return False
+        self._require_transfer_write({})
         self._path.unlink()
         if self._path.exists():
             raise ProjectRegistryMutationError(
@@ -417,6 +420,16 @@ class ProjectRegistryTransaction:
             )
         self._finished = True
         return True
+
+    def _require_transfer_write(self, payload: dict[str, Any]) -> None:
+        # The format-preserving codec retains serialization, locking and
+        # compensation. The existing typed Goal owner decides prepared state.
+        from ..goals.planned_transfer_io import require_goal_transfer_registry_write
+
+        require_goal_transfer_registry_write(registry_path=self._path,
+            before=self._document.payload, after=payload,
+            registry_witness=(self.source_read_witness() if self._existed else
+                {"path": str(self._path.resolve()), "sha256": None}))
 
     def restore(self) -> None:
         if self._existed:

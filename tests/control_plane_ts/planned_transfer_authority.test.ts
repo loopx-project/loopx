@@ -8,19 +8,26 @@ import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {prepareAuthorityForPlannedTransfer as prepare} from "../../loopx/control_plane/coordination/planned_transfer_authority.ts";
 import {stageAuthorityForPlannedTransfer as stage} from "../../loopx/control_plane/coordination/planned_transfer_target.ts";
 import {localAuthorityProviderPaths, selectLocalAuthorityTarget, openLocalAuthorityStoreHandle} from "../../loopx/control_plane/coordination/local_authority_provider.ts";
-import {withFileMutationLock} from "../../loopx/control_plane/effect_runtime_io.ts";
+import {withFileMutationLock, acquireFileMutationLock, mutationLockOwner, releaseFileMutationLock} from "../../loopx/control_plane/effect_runtime_io.ts";
 import {COLD_SOURCE_IMPORT_WRITER_FENCE_SCHEMA, legacyCoordinationWriterFencePath,
   loadLegacyCoordinationWriterFence, checkLegacyCoordinationWriteAllowed,
   LEGACY_COORDINATION_WRITE_CHECK_REQUEST_SCHEMA} from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
-import {CanonicalWriteRouteError, withCanonicalWriter, type CanonicalBusinessWrite} from "../../loopx/control_plane/coordination/local_authority_write.ts";
+import {CanonicalWriteRouteError, withCanonicalWriter, withGoalRuntimeWriter, type CanonicalBusinessWrite} from "../../loopx/control_plane/coordination/local_authority_write.ts";
 import {projectCoordinationSource, SOURCE_PROJECTION_REQUEST_SCHEMA} from "../../loopx/control_plane/coordination/source_projection.ts";
-import {shadowManagementDirectory} from "../../loopx/control_plane/coordination/shadow_management.ts";
+import {shadowManagementDirectory, shadowMaintenanceLockPath} from "../../loopx/control_plane/coordination/shadow_management.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {manageLocalAuthorityArchive} from "../../loopx/control_plane/coordination/local_authority_archive.ts";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
 import {todo} from "./shadow_file_fixture.ts";
 import {resolveTestPython} from "../../scripts/test-python.mjs";
+import {commitTurnJournal} from "../../loopx/control_plane/turn_driver/turn_journal_effects.ts";
+import {readGoalTurnHistoryForTransfer} from "../../loopx/control_plane/turn_driver/turn_journal_query.ts";
+import {transactionPhases} from "../../loopx/control_plane/turn_driver/turn_journal.ts";
+import {evaluateQuotaSpendCommit, QUOTA_SPEND_COMMIT_REQUEST_SCHEMA} from "../../loopx/control_plane/quota/spend_commit.ts";
+import {evaluateQuotaVoidCommit, QUOTA_VOID_COMMIT_REQUEST_SCHEMA} from "../../loopx/control_plane/quota/void_commit.ts";
+import {readGoalQuotaHistoryForTransfer} from "../../loopx/control_plane/quota/accounting_artifact_transaction.ts";
+import {checkPlannedTransferRegistryWrite} from "../../loopx/control_plane/coordination/planned_transfer_authority.ts";
 
 // Mirror the ordinary Python entrypoint's fixed daemon context. Requests cannot
 // choose an interpreter; the real codec is used in every context-binding test.
@@ -117,6 +124,8 @@ for (const sourceProvider of ["file", "sqlite"] as const) {
         await assert.rejects(withCanonicalWriter(d.root, "goal-a", false, async () => ++calls, {businessWrite}), /prepared for transfer/);
       }
       assert.equal(calls, 0);
+      await assert.rejects(withGoalRuntimeWriter(d.root, "goal-a", async () => ++calls), /prepared for transfer/);
+      assert.equal(calls, 0, "stopped target runtime cannot debit or publish a Turn either");
       // Model the codec adapter's exact publication, then retry with its fresh
       // byte witness. Unrelated registry revisions are not an operation identity.
       const registryBytes = JSON.stringify(registry);
@@ -211,6 +220,151 @@ for (const sourceProvider of ["file", "sqlite"] as const) {
     }
   });
 }
+
+function originalTurn(goal = "goal-a", digest = "a"): JsonObject {
+  const key = `sha256:${digest.repeat(64)}`, task = "unfinished";
+  return {schema_version: "loopx_turn_journal_v0", goal_id: goal, turn_key: key,
+    status: "in_progress", completed_phases: [], plan: {
+      turn_envelope: {goal_id: goal, agent_id: "agent-a", action: {selected_todo: {todo_id: task}}},
+      transaction: {turn_key: key, settlement_plan: {schema_version: "quota_settlement_plan_v1",
+        identity: {schema_version: "quota_settlement_identity_v0", effect_id: `${goal}:agent-a:${task}:${key}`,
+          goal_id: goal, agent_id: "agent-a", todo_id: task, turn_instance_id: key}}}}};
+}
+
+function quotaRequest(root: string): JsonObject {
+  const decision = (spent_slots: number) => ({should_run: true, normal_delivery_allowed: true,
+    recovery_delivery_allowed: false, effective_action: "advance", self_repair_allowed: false,
+    capability_repair_allowed: false, workspace_repair_allowed: false, state: "eligible",
+    safe_bypass_allowed: false, safe_bypass_kind: null, blocked_action_scope: null,
+    compute: 1, window_hours: 24, slot_minutes: 1, spent_slots, allowed_slots: 1440});
+  const before = decision(0), after = decision(1);
+  return {schema_version: QUOTA_SPEND_COMMIT_REQUEST_SCHEMA, effect_id: "original-effect#quota_spend",
+    runtime_root: root, goal_id: "goal-a", source: "heartbeat", generated_at: "2026-08-25T12:00:00+08:00",
+    execute: true, expected_index_digest: null, resolved_agent_id: "agent-a", before, after,
+    preview: {ok: true, mode: "spend-slot", dry_run: true, goal_id: "goal-a", slots: 1, agent_id: "agent-a",
+      before, after, appended: false, registry_mutated: false, delivery_completion_spend: false,
+      safe_bypass_spend: false, delivery_workspace_validated: false}};
+}
+
+for (const provider of ["file", "sqlite"] as const) {
+  test(`${provider}: a live or uncertain original Turn holds preparation; closed history stays frozen`, async t => {
+    const f = await fixture(t, provider), path = join(f.root, "goals/goal-a/turns", `${"a".repeat(64)}.json`);
+    const journal = originalTurn();
+    await commitTurnJournal({path, journal});
+    const before = await readFile(path), head = await f.store.loadAuthority();
+    assert.equal((await readGoalTurnHistoryForTransfer(f.root, "goal-a")).closed, false);
+    await assert.rejects(prepare(f.request), /Turn effects are not closed/);
+    assert.deepEqual(await readFile(path), before); assert.deepEqual(await f.store.loadAuthority(), head);
+    assert.deepEqual(JSON.parse(await readFile(f.fencePath, "utf8")), f.fence);
+    for (const count of [2, 3, 4, 5, 7]) {
+      journal.completed_phases = transactionPhases.slice(0, count);
+      if (count === 7) journal.status = "committed";
+      await commitTurnJournal({path, journal});
+    }
+    const closed = await readGoalTurnHistoryForTransfer(f.root, "goal-a");
+    assert.equal(closed.closed, true);
+    const prepared = await prepare(f.request), frozen = await readFile(path);
+    assert.equal(prepared.host_drain_qualified, false, "terminal history cannot certify a physical Host or an external outbox");
+    await assert.rejects(commitTurnJournal({path, journal}), /prepared for transfer/);
+    const nextPath = join(f.root, "goals/goal-a/turns", `${"b".repeat(64)}.json`);
+    await assert.rejects(commitTurnJournal({path: nextPath, journal: originalTurn("goal-a", "b")}), /prepared for transfer/);
+    assert.deepEqual(await readFile(path), frozen);
+    await assert.rejects(readFile(nextPath), {code: "ENOENT"});
+    assert.deepEqual(await readGoalTurnHistoryForTransfer(f.root, "goal-a"), closed);
+    assert.deepEqual(await prepare(f.request), prepared);
+    const sibling = join(f.root, "goals/other-goal/turns", `${"c".repeat(64)}.json`);
+    assert.equal((await commitTurnJournal({path: sibling, journal: originalTurn("other-goal", "c")})).appended, true);
+  });
+
+  test(`${provider}: incomplete quota holds transfer; prepared source refuses fresh debit, void and receipt repair`, async t => {
+    const f = await fixture(t, provider), request = quotaRequest(f.root);
+    const spent = await evaluateQuotaSpendCommit(request), payload = spent.payload as JsonObject;
+    assert.equal(spent.status, "written");
+    const runs = join(f.root, "goals/goal-a/runs"), transactions = join(runs, ".transactions/quota-spend");
+    const receiptPath = join(transactions, (await readdir(transactions))[0]);
+    const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
+    await writeFile(receiptPath, JSON.stringify({...receipt, status: "prepared"}));
+    assert.equal((await readGoalQuotaHistoryForTransfer(f.root, "goal-a")).closed, false);
+    await assert.rejects(prepare(f.request), /quota effects are not closed/);
+    assert.deepEqual(JSON.parse(await readFile(f.fencePath, "utf8")), f.fence);
+    assert.equal((await evaluateQuotaSpendCommit(request)).status, "replayed");
+    assert.equal((await readGoalQuotaHistoryForTransfer(f.root, "goal-a")).closed, true);
+    const prepared = await prepare(f.request), index = await readFile(String(payload.index_path));
+    for (const effect_id of [request.effect_id, "later-effect#quota_spend"]) {
+      await assert.rejects(evaluateQuotaSpendCommit({...request, effect_id}), /prepared for transfer/);
+    }
+    await assert.rejects(evaluateQuotaVoidCommit({schema_version: QUOTA_VOID_COMMIT_REQUEST_SCHEMA,
+      operation: "commit", effect_id: "original-void", runtime_root: f.root, goal_id: "goal-a",
+      voided_run_generated_at: request.generated_at, source: "heartbeat", reason_summary: "Fixture void",
+      generated_at: request.generated_at, execute: true, expected_index_digest: null,
+      before: {...request.before as JsonObject, quota: {spent_slots: 1, allowed_slots: 1440, window_hours: 24,
+        compute: 1, slot_minutes: 1}}}), /prepared for transfer/);
+    const jsonPath = String(payload.json_path), bytes = await readFile(jsonPath);
+    await rm(jsonPath);
+    await assert.rejects(evaluateQuotaSpendCommit(request), /prepared for transfer/);
+    await assert.rejects(readFile(jsonPath), {code: "ENOENT"});
+    assert.deepEqual(await readFile(String(payload.index_path)), index);
+    await assert.rejects(prepare(f.request), /quota effects are not closed/);
+    await writeFile(jsonPath, bytes); // fixture repairs its own synthetic loss
+    assert.deepEqual(await prepare(f.request), prepared);
+  });
+}
+
+test("prepared registry guard preserves the exact Goal/root while admitting unrelated metadata", async t => {
+  const f = await fixture(t, "file"), d = await destination(t, f, "sqlite");
+  const before = {common_runtime_root: f.root, goals: [d.context.goal, {id: "unrelated", display_name: "before"}]};
+  const path = d.context.registry_path;
+  await writeFile(path, JSON.stringify(before));
+  const check = (after: JsonObject, sha256 = createHash("sha256").update(JSON.stringify(before)).digest("hex")) =>
+    checkPlannedTransferRegistryWrite({before, after, registry_witness: {path, sha256}});
+  assert.deepEqual(await check({...before, goals: [d.context.goal, {id: "unrelated", display_name: "after"}]}), {allowed: true});
+  for (const after of [{...before, common_runtime_root: join(f.root, "other-runtime")}, {...before, registry_role: "global-local"},
+    {...before, profile_id: "source_session_v1"}, {...before, goals: []},
+    {...before, goals: [{...d.context.goal, activation: {state: "active"}}]}, {}]) {
+    await assert.rejects(check(after), /prepared for transfer/);
+  }
+  await assert.rejects(check(before, "0".repeat(64)), /observation changed/);
+  assert.equal(await readFile(path, "utf8"), JSON.stringify(before));
+});
+
+test("first target publication accepts only its completed stopped proposal", async t => {
+  const f = await fixture(t, "file"), d = await destination(t, f, "sqlite");
+  const staged = await stage(d.request), after = staged.destination_registry as JsonObject;
+  const check = (proposed: JsonObject) => checkPlannedTransferRegistryWrite({before: {}, after: proposed,
+    registry_witness: {path: d.registry, sha256: null}});
+  assert.deepEqual(await check(after), {allowed: true});
+  const original = (after.goals as JsonObject[])[0];
+  for (const goal of [{...original, activation: {state: "active"}},
+    {...original, coordination: {registered_agents: ["forged-agent"]}}]) {
+    await assert.rejects(check({...after, goals: [goal]}), /prepared for transfer/);
+  }
+  for (const metadata of [{registry_role: "global-local"}, {role: "global-local"}, {profile_id: "source_session_v1"}]) {
+    await assert.rejects(check({...after, ...metadata}), /prepared for transfer/);
+    await assert.rejects(stage({...d.request, destination_registry: metadata}), /actual project registry|own lifetime admission/);
+  }
+  const directory = join(shadowManagementDirectory(d.root, "goal-a"), "planned-transfer-targets", canonicalAuthoritySha256("move-original"));
+  const receipt = await readFile(join(directory, "receipt.json"));
+  await rm(join(directory, "receipt.json"));
+  await assert.rejects(check(after), /prepared for transfer/);
+  await writeFile(join(directory, "receipt.json"), receipt);
+  assert.deepEqual(await check(after), {allowed: true});
+  await assert.rejects(readFile(d.registry), {code: "ENOENT"}, "the guard cannot publish the registry itself");
+});
+
+test("runtime maintenance handoff retains the caller's lock and refuses a stale or foreign witness", async t => {
+  const f = await fixture(t, "file"), target = shadowMaintenanceLockPath(f.root, "goal-a");
+  let writes = 0;
+  await assert.rejects(withGoalRuntimeWriter(f.root, "goal-a", async () => ++writes,
+    {target, pid: process.pid, token: "not-a-held-token"}), /maintenance_lock_expired/);
+  const {token} = await acquireFileMutationLock(target);
+  try {
+    const witness = {...await mutationLockOwner(target), target};
+    await assert.rejects(withGoalRuntimeWriter(f.root, "other-goal", async () => ++writes, witness), /maintenance_lock_invalid/);
+    assert.equal(await withGoalRuntimeWriter(f.root, "goal-a", async () => ++writes, witness), 1);
+    assert.equal((await mutationLockOwner(target))?.token, token, "borrowed readback must not release its Python/native transaction owner");
+    assert.equal(writes, 1);
+  } finally { await releaseFileMutationLock(target, token); }
+});
 
 test("target staging recovers an interrupted real File archive write under the original closed fence", async t => {
   const f = await fixture(t, "sqlite"), d = await destination(t, f, "file");

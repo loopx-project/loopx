@@ -182,6 +182,7 @@ export function planPreparedGoalStage(value: JsonObject): PreparedGoalStage {
       fresh_admission_required: true}};
   const registry = requireJsonObject(value.destination_registry, "destination registry");
   if (registry.profile_id !== undefined) reject("Destination registry profile requires its own lifetime admission");
+  if (registry.registry_role === "global-local" || registry.role === "global-local") reject("Destination must be the actual project registry, not a global read model");
   if (registry.common_runtime_root !== undefined && registry.common_runtime_root !== root) reject("Destination registry belongs to a different runtime");
   if (registry.goals !== undefined && !Array.isArray(registry.goals)) reject("Invalid destination Goal inventory");
   const matches = ((registry.goals ?? []) as unknown[]).map(item => requireJsonObject(item, "registered destination Goal"))

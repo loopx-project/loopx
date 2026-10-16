@@ -6,7 +6,8 @@
  * exposing a cutover. No public activation entry is registered here.
  */
 import {mkdir, readFile} from "node:fs/promises";
-import {join, resolve} from "node:path";
+import {isAbsolute, join, resolve} from "node:path";
+import {createHash} from "node:crypto";
 import type {JsonObject} from "../effect_program.ts";
 import {durableWriteJson} from "../effect_runtime_io.ts";
 import {EffectRuntimeConflictError} from "../effect_runtime_errors.ts";
@@ -26,9 +27,62 @@ import type {AuthorityStore} from "./authority_store.ts";
 import {newGoalCreationBinding} from "./new_goal_initialization.ts";
 import {readPromotionReceipt} from "./promotion_receipt.ts";
 import {NEW_GOAL_WRITER_FENCE_SCHEMA} from "./legacy_writer_fence.ts";
+import {readGoalTurnHistoryForTransfer} from "../turn_driver/turn_journal_query.ts";
+import {readGoalQuotaHistoryForTransfer} from "../quota/accounting_artifact_transaction.ts";
 
 export {PREPARATION_SCHEMA} from "../goals/planned_transfer.ts";
 const REGISTERED_SOURCE_PREVIEW_SCHEMA = "loopx_planned_transfer_source_preview_v0";
+
+/** The codec calls while holding its original registry transaction. Ordinary
+ * metadata can no longer reopen, remove or redirect a prepared Goal. Changes
+ * to other Goals remain legal; the registry is not frozen as a whole. This
+ * consumes codec-decoded facts and a byte witness, never another JSON parser.
+ */
+export async function checkPlannedTransferRegistryWrite(value: JsonObject): Promise<JsonObject> {
+  if (!hasExactAuthorityKeys(value, ["before", "after", "registry_witness"])) reject("Registry transfer guard requires its codec observation");
+  const before = requireJsonObject(value.before, "current registry"), after = requireJsonObject(value.after, "proposed registry");
+  const witness = requireJsonObject(value.registry_witness, "registry codec witness");
+  if (!hasExactAuthorityKeys(witness, ["path", "sha256"]) || typeof witness.path !== "string" ||
+      !isAbsolute(witness.path) || resolve(witness.path) !== witness.path ||
+      (witness.sha256 !== null && !BARE_SHA256_PATTERN.test(String(witness.sha256)))) reject("Invalid registry codec witness");
+  const verify = async () => {
+    let digest: string | null;
+    try { digest = createHash("sha256").update(await readFile(String(witness.path))).digest("hex"); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; digest = null; }
+    if (digest !== witness.sha256) reject("Registry codec observation changed");
+  };
+  await verify();
+  // A global-local registry is a projection, never the actual source owner.
+  if (before.registry_role !== "global-local") {
+    const original = Array.isArray(before.goals) ? before.goals : [];
+    const proposed = Array.isArray(after.goals) ? after.goals : [];
+    const roots = new Set([before.common_runtime_root, after.common_runtime_root].filter(value => typeof value === "string"));
+    const ids = new Set([...original, ...proposed].map(raw => requireAuthorityStoreId(requireJsonObject(raw, "Goal").id, "Goal id")));
+    for (const rawRoot of roots) for (const goalId of ids) {
+      const root = requireLocalAuthorityRuntimeRoot(rawRoot);
+      const fence = await loadLegacyCoordinationWriterFence(root, goalId);
+      if (fence.status === "failed") reject("Goal writer fence is unreadable; preserve its original registration");
+      if (fence.status !== "loaded" || fence.fence.schema_version !== PLANNED_TRANSFER_WRITER_FENCE_SCHEMA) continue;
+      const matches = proposed.filter(row => row !== null && typeof row === "object" && !Array.isArray(row) && (row as JsonObject).id === goalId);
+      const prior = original.filter(row => row !== null && typeof row === "object" && !Array.isArray(row) && (row as JsonObject).id === goalId);
+      if (prior.length === 0 && fence.fence.role === "target" && matches.length === 1) {
+        const directory = join(shadowManagementDirectory(root, goalId), "planned-transfer-targets", canonicalAuthoritySha256(fence.fence.operation_id));
+        const registration = await optionalJson(join(directory, "registration.json")), receipt = await optionalJson(join(directory, "receipt.json"));
+        if (registration && receipt && registration.identity_sha256 === fence.fence.source_identity_sha256 && registration.registry_path === witness.path &&
+            receipt.identity_sha256 === fence.fence.source_identity_sha256 && receipt.target_is_active === false &&
+            receipt.execution_authority_granted === false && after.common_runtime_root === root && same(registration.goal, matches[0]) &&
+            after.profile_id === undefined && after.registry_role !== "global-local" && after.role !== "global-local" &&
+            ["registry_role", "role", "profile_id"].every(key => same(before[key] ?? null, after[key] ?? null))) continue;
+      }
+      if (root !== before.common_runtime_root || prior.length !== 1 || matches.length !== 1 || !same(matches[0], prior[0]) ||
+          ["common_runtime_root", "registry_role", "role", "profile_id"].some(key => !same(before[key] ?? null, after[key] ?? null))) {
+        reject(`Goal registration is prepared for transfer ${fence.fence.operation_id}; recover that original operation`);
+      }
+    }
+  }
+  await verify();
+  return {allowed: true};
+}
 
 function reject(message: string): never { throw new EffectRuntimeConflictError(message); }
 function same(a: unknown, b: unknown): boolean { return canonicalAuthorityBytes(a).equals(canonicalAuthorityBytes(b)); }
@@ -72,11 +126,14 @@ async function registeredSourcePreview(context: JsonObject, originalFence: JsonO
   const index = indexCoordinationProjection(head.head, goalId);
   const retainedLeases = [...index.leases].map(([todo, lease]) => canonicalTaskLease(lease, goalId, todo))
     .filter(lease => lease.status !== "released");
+  const turnHistory = await readGoalTurnHistoryForTransfer(String(context.runtime_root), goalId);
+  const quotaHistory = await readGoalQuotaHistoryForTransfer(String(context.runtime_root), goalId);
   const facts = {schema_version: REGISTERED_SOURCE_PREVIEW_SCHEMA, goal_id: goalId, operation_id: operationId,
     source_context_sha256: canonicalAuthoritySha256(context), original_registration_verified: true,
     original_writer_fence_sha256: canonicalAuthoritySha256(originalFence), provider,
     provider_revision: head.provider_revision, cursor: head.cursor, source_store_identity: storeIdentity,
-    retained_leases: retainedLeases, ready_for_authority_preparation: retainedLeases.length === 0,
+    retained_leases: retainedLeases, turn_history: turnHistory, quota_history: quotaHistory,
+    ready_for_authority_preparation: retainedLeases.length === 0 && turnHistory.closed === true && quotaHistory.closed === true,
     host_drain_qualified: false, portable_artifact_qualified: false, execution_authority_granted: false};
   return {...facts, preview_sha256: canonicalAuthoritySha256(facts)};
 }
@@ -152,11 +209,17 @@ export async function prepareAuthorityForPlannedTransfer(value: JsonObject): Pro
     if (leases.some(lease => lease.status !== "released")) {
       reject("Source retains an unreleased lease; settle its original operation before planned transfer");
     }
+    const turnHistory = await readGoalTurnHistoryForTransfer(root, goal);
+    if (turnHistory.closed !== true) reject("Source Turn effects are not closed; settle or recover their original operations before preparing transfer");
+    const quotaHistory = await readGoalQuotaHistoryForTransfer(root, goal);
+    if (quotaHistory.closed !== true) reject("Source quota effects are not closed; recover the original debit or void before preparing transfer");
     const pendingPath = join(directory, "preparation.json");
     const pending = await optionalJson(pendingPath);
     const facts = {schema_version: PREPARATION_SCHEMA, request,
       source_provider: opened.provider, source_store_identity: identity.store_identity,
       source_cursor: head.cursor, source_projection_sha256: canonicalAuthoritySha256(head.head),
+      source_turn_history: turnHistory,
+      source_quota_history: quotaHistory,
       ...(context ? {source_context: context, source_context_sha256: canonicalAuthoritySha256(context)} : {})};
     let priorFence: JsonObject;
     if (pending) {

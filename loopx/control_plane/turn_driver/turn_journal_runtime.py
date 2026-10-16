@@ -167,6 +167,7 @@ def write_turn_journal(
     *,
     expected_effect_id: str | None = None,
     source_admission: Mapping[str, Any] | None = None,
+    maintenance_lock: Mapping[str, Any] | None = None,
 ) -> dict[str, object]:
     """Commit a Turn-journal transition through the TS semantic owner."""
 
@@ -177,6 +178,8 @@ def write_turn_journal(
     }
     if source_admission is not None:
         request["source_admission"] = dict(source_admission)
+    if maintenance_lock is not None:
+        request["maintenance_lock"] = dict(maintenance_lock)
     payload = effect_runtime_result(
         "turn_journal.write",
         request,
