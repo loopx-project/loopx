@@ -238,6 +238,9 @@ export function localizeCapability(
 }
 
 export function localizedCapabilityFieldCopy(locale: WorkspaceLocale, capabilityId?: string): FieldCopy {
+  if (capabilityId === "reward_memory") return {...fieldCopy[locale], agent_id: locale === "zh-CN" ? {
+    label: "独立绑定的 Agent", description: "选择已注册的 Agent；留空编辑共享绑定。", options: {"": "共享绑定"},
+  } : { label: "Independent Agent binding", description: "Select a registered Agent; leave blank for the shared binding.", options: {"": "Shared binding"} }};
   if (capabilityId === "explore_harness") return {...fieldCopy[locale], mode: locale === "zh-CN" ? {
     label: "探索模式", description: "规划包含证据图谱；派生 Agent 和执行权限仍单独控制。",
     options: {off: "关闭", evidence: "仅记录证据", planning: "证据与规划"},

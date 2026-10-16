@@ -14,6 +14,8 @@ from ...control_plane.reward_memory import (
     reward_memory_goal_policy,
     reward_memory_host_coverage,
 )
+from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ...agent_registry import normalize_registered_agents
 from .experiment import (
     load_reward_memory_experiment_config,
     preflight_reward_memory_experiment_config,
@@ -76,7 +78,7 @@ def reward_memory_goal_configuration_summary(
                 or status.get("automatic_recall") is True
             )
     effective_available = bool(effective_verified_agents)
-    return {
+    summary = {
         "enabled": policy["enabled"],
         "binding_status": binding["status"],
         "effective_available": effective_available,
@@ -94,6 +96,46 @@ def reward_memory_goal_configuration_summary(
         "enabled_agents": list(policy["enabled_agents"]),
         "enablement_verified_agents": effective_verified_agents,
     }
+    registered = normalize_registered_agents(
+        (goal.get("coordination") or {}).get("registered_agents")
+    )
+    summary["registered_agents"] = registered
+    summary["agent_bindings"] = []
+    raw = (goal.get("control_plane") or {}).get("reward_memory") or {}
+    if "agent_bindings" in raw:
+        _project_agent_bindings(goal, registered, summary)
+    return summary
+
+
+def _project_agent_bindings(
+    goal: Mapping[str, Any], registered: Sequence[str], summary: dict[str, Any]
+) -> None:
+    """Load existing IO observations for the typed binding projection owner."""
+    observations = []
+    for agent in registered:
+        policy = reward_memory_goal_policy(goal, agent_id=agent)
+        status, _ = resolve_goal_reward_memory_experiment(goal=goal, agent_id=agent)
+        binding = operator_inbox_binding(
+            project=str(goal.get("repo") or ""), config_path=policy["config_path"],
+            expected_digest=policy["config_digest"],
+        )
+        receipt = policy["enablement_receipts"].get(agent) or {}
+        observations.append({
+            "agent_id": agent,
+            "binding_source": "agent" if policy.get("binding_agent_id") else "goal",
+            "enabled": status["enabled"],
+            "configured_for_agent": status["configured_for_agent"],
+            "status": status["status"], "available": status["available"],
+            "binding_status": binding["status"],
+            "config_pointer_registered": bool(policy["config_path"]),
+            "automatic_ingest": status["automatic_ingest"],
+            "automatic_recall": status["automatic_recall"],
+            "receipt": {key: receipt.get(key) for key in ("status", "writability_verified", "exact_readback_verified")},
+            "binding_identity": [agent, policy.get("binding_agent_id"), policy["enabled"], policy["config_path"], policy["config_digest"], policy["enabled_agents"]],
+        })
+    summary.update(effect_runtime_result("reward_memory.binding.project", {
+        "summary": summary, "observations": observations,
+    }))
 
 
 def reward_memory_automatic_ingest_for_agent(
@@ -107,7 +149,7 @@ def reward_memory_automatic_ingest_for_agent(
     the configured provider.
     """
 
-    policy = reward_memory_goal_policy(goal)
+    policy = reward_memory_goal_policy(goal, agent_id=agent_id)
     if (
         not policy["enabled"]
         or policy["automation"].get("automatic_ingest") is not True
@@ -125,6 +167,18 @@ def reward_memory_automatic_ingest_for_agent(
     return status.get("available") is True and status.get("automatic_ingest") is True
 
 
+def reward_memory_configuration_readback_matches(
+    actual: Mapping[str, Any], desired: Mapping[str, Any], applied: Mapping[str, Any]
+) -> bool:
+    """Transport safe observations to the existing typed binding owner."""
+    preflight = applied.get("reward_memory_enablement_preflight") or {}
+    expected_agents = sorted((preflight.get("agent_receipts") or {}).keys())
+    return effect_runtime_result("reward_memory.binding.verify_readback", {
+        "actual": dict(actual), "desired": dict(desired),
+        "expected_verified_agents": expected_agents,
+    })["verified"] is True
+
+
 def plan_reward_memory_goal_configuration(
     *,
     goal: Mapping[str, Any],
@@ -135,21 +189,34 @@ def plan_reward_memory_goal_configuration(
     clear: bool,
     observed_at: str,
     execute: bool,
+    agent_id: str | None = None,
 ) -> dict[str, Any]:
     """Validate one Goal-local Reward Memory change before registry mutation."""
 
-    existing = reward_memory_goal_policy(goal)
+    if agent_id is not None or requested_config_path is not None or requested_agents is not None or clear:
+        try:
+            target = effect_runtime_result("reward_memory.binding.plan", {
+                "agent_id": agent_id, "registered_agents": list(registered_agents),
+                "requested_agents": list(requested_agents) if requested_agents is not None else None,
+                "config_requested": requested_config_path is not None, "clear": clear,
+            })
+        except EffectRuntimeRejected as exc:
+            # Preserve configure-goal's input-error contract, not transport errors.
+            raise ValueError(str(exc)) from exc
+        agent_id = target["agent_id"]
+        requested_agents = target["enabled_agents"]
+    existing = reward_memory_goal_policy(goal, agent_id=agent_id)
     agents = list(
         requested_agents if requested_agents is not None else existing["enabled_agents"]
     )
     change_requested = requested_config_path is not None or requested_agents is not None
     config_path = requested_config_path or existing["config_path"]
-    if change_requested and not config_path:
+    if change_requested and not clear and not config_path:
         raise ValueError(
             "--reward-memory-agent requires an existing or supplied "
             "--reward-memory-config"
         )
-    if change_requested and not agents:
+    if change_requested and not clear and not agents:
         raise ValueError(
             "enabling Reward Memory requires at least one --reward-memory-agent"
         )
@@ -234,6 +301,7 @@ def plan_reward_memory_goal_configuration(
         "enabled_agents": agents,
         "preflight": preflight,
         "policy": policy,
+        "agent_id": agent_id,
     }
 
 
@@ -246,10 +314,15 @@ def apply_reward_memory_goal_configuration(
         return
     current = goal.get("control_plane")
     control_plane = dict(current) if isinstance(current, Mapping) else {}
-    if plan.get("clear"):
+    patched = effect_runtime_result("reward_memory.binding.patch", {
+        "current": control_plane.get("reward_memory") or {},
+        "agent_id": plan.get("agent_id"), "clear": bool(plan.get("clear")),
+        "binding": plan.get("policy"),
+    })["policy"]
+    if patched is None:
         control_plane.pop("reward_memory", None)
     else:
-        control_plane["reward_memory"] = deepcopy(plan["policy"])
+        control_plane["reward_memory"] = patched
     goal["control_plane"] = control_plane
 
 

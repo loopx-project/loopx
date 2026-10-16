@@ -663,6 +663,11 @@ export function createEffectRuntimeHandlers(
     ["reward_memory.decision.plan", lazyHandler(() => import("./capabilities/reward_memory_decision.ts"), ({planRewardMemoryDecision}) => planRewardMemoryDecision)],
     ["reward_memory.decision.project", lazyHandler(() => import("./capabilities/reward_memory_decision.ts"), ({projectRewardMemoryDecision}) => projectRewardMemoryDecision)],
     ["reward_memory.read_authority.surface_checkpoints", lazyHandler(() => import("./capabilities/reward_memory_decision.ts"), ({buildRewardMemorySurfaceReadCheckpoints}) => buildRewardMemorySurfaceReadCheckpoints)],
+    ["reward_memory.binding.select", lazyHandler(() => import("./capabilities/reward_memory_binding.ts"), ({selectRewardMemoryBinding}) => selectRewardMemoryBinding)],
+    ["reward_memory.binding.plan", lazyHandler(() => import("./capabilities/reward_memory_binding.ts"), ({planRewardMemoryBinding}) => planRewardMemoryBinding)],
+    ["reward_memory.binding.patch", lazyHandler(() => import("./capabilities/reward_memory_binding.ts"), ({patchRewardMemoryBinding}) => patchRewardMemoryBinding)],
+    ["reward_memory.binding.verify_readback", lazyHandler(() => import("./capabilities/reward_memory_binding.ts"), ({verifyRewardMemoryBindingReadback}) => verifyRewardMemoryBindingReadback)],
+    ["reward_memory.binding.project", lazyHandler(() => import("./capabilities/reward_memory_binding.ts"), ({projectRewardMemoryBindings}) => projectRewardMemoryBindings)],
     [
       "manager.return_delivery.normalize_attempt",
       lazyHandler(() => import("./collaboration/return_delivery.ts"), ({normalizeManagerReturnDeliveryAttempt}) => (params) => normalizeManagerReturnDeliveryAttempt(params.attempt)),

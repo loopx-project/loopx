@@ -510,6 +510,7 @@ def run_configured_turn_outcome_ingest(
                 "agent_id": agent_id,
                 "source_event_id": source_event_id,
                 "turn_key": turn_key,
+                "binding_revision": experiment_status.get("binding_revision"),
             }.items()
         ):
             return _base(
@@ -590,6 +591,7 @@ def run_configured_turn_outcome_ingest(
         "agent_id": agent_id,
         "turn_key": turn_key,
         "source_event_id": source_event_id,
+        **({"binding_revision": experiment_status["binding_revision"]} if experiment_status.get("binding_revision") else {}),
         "surface_id": surface_id,
         "reflection": reflection,
         "reflection_validation": reflection_validation,
@@ -745,6 +747,14 @@ def reconcile_pending_turn_outcome_ingests(
     receipts: list[dict[str, Any]] = []
     effective_observed_at = observed_at or datetime.now(timezone.utc).isoformat()
     for path, value in pending[:limit]:
+        if value.get("binding_revision") != experiment_status.get("binding_revision"):
+            # A pending write belongs to its original route. Reconfiguration
+            # cannot authorize replay into a replacement provider/corpus.
+            receipts.append(_base(
+                goal_id=goal_id, agent_id=agent_id, status="runtime_state_invalid",
+                reason_code="outcome_sidecar_identity_mismatch",
+            ))
+            continue
         legacy_receipt = _terminalize_legacy_pending_sidecar(
             path,
             value,

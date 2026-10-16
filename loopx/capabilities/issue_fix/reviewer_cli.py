@@ -719,7 +719,7 @@ def handle_issue_fix_reviewer_command(
                             }
                 else:
                     semantic_history_status = "not_applicable"
-        reward_policy = reward_memory_goal_policy(goal)
+        reward_policy = reward_memory_goal_policy(goal, agent_id=args.agent_id)
         reviewer_artifact_required = bool(notification_sinks_input) and (
             reward_policy["enabled"] is True
         )
