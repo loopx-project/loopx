@@ -56,7 +56,7 @@ export {
   pendingGoalReviews,
   proposalReviewState,
   sessionInvalidatedByPayload,
-  selectAvailableChatAgent,
+  selectChatAgent,
   selectChatGoal,
   stewardPrompts,
   turnReplaySafeByPayload,

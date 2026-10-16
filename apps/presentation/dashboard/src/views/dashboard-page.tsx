@@ -67,7 +67,7 @@ import {
   sendChatTurnStreaming,
   chatSessionQueuesFollowUps,
   chatSessionSupportsSteering,
-  selectAvailableChatAgent,
+  selectChatAgent,
   sessionInvalidatedByPayload,
   isTodoProposal,
   type ChatSessionSnapshot,
@@ -1406,7 +1406,7 @@ function PersonalGoalHome({
   const [selectedAgents, setSelectedAgents] = useState<Record<string, string>>(readPersonalAgentSelections);
   const [selectedAgentModels, setSelectedAgentModels] = useState<Record<string, string>>({});
   const selectedAgentId = selectedAgents[contextId] ?? agentDefaultForContext(contextId);
-  const selectedAgent = selectAvailableChatAgent(agentOptions, selectedAgentId, defaultAgentId);
+  const selectedAgent = selectChatAgent(agentOptions, selectedAgentId, defaultAgentId);
   const [messagesByContext, setMessagesByContext] = useState<Record<string, PersonalManagerMessage[]>>({});
   const [runtimeBindings, setRuntimeBindings] = useState<Record<string, PersonalRuntimeBinding>>({});
   // Bound Sessions whose mode queues a message sent while a Turn runs, read
@@ -2175,8 +2175,9 @@ function PersonalGoalHome({
       ? model.goals.find((goal) => goal.goalId === targetContext.goalId) ?? null
       : null;
     const selectedRoute = route?.agentId
-      ? selectAvailableChatAgent(agentOptions, route.agentId, defaultAgentId)
+      ? selectChatAgent(agentOptions, route.agentId, defaultAgentId)
       : selectedAgent;
+    if (!selectedRoute.available) throw new Error(t("agent.workspaceUnavailable"));
     const targetQuestionModel = targetContextId === "manager"
       ? model
       : targetGoal

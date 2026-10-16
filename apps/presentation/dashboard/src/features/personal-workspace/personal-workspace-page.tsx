@@ -2768,7 +2768,8 @@ export function PersonalWorkspacePage({
             {imageAttachmentError ? <p className="personal-composer-error" role="alert">{imageAttachmentError}</p> : null}
             {!readOnly && (selectedGoal || managerChatOpen) && (runtimeReadiness.kind === "none_available" || runtimeReadiness.kind === "selected_unavailable") ? (
               <p className="personal-composer-status personal-runtime-readiness-line" data-testid="runtime-readiness-line" role="status">
-                <span>{runtimeReadiness.kind === "none_available" ? t("readiness.selectedUnavailableNone") : t("readiness.selectedUnavailable", { label: runtimeReadiness.selected.label })}</span>
+                <span>{runtimeReadiness.kind === "none_available" ? t(agents.some((agent) => agent.adapterKind === "status_projection" && agent.available)
+                  ? "readiness.selectedUnavailableReadonly" : "readiness.selectedUnavailableNone") : t("readiness.selectedUnavailable", { label: runtimeReadiness.selected.label })}</span>
                 {callbacks.onRecheckRuntimes ? <button disabled={recheckingRuntimes} onClick={recheckRuntimes} type="button">{recheckingRuntimes ? t("readiness.rechecking") : t("readiness.recheck")}</button> : null}
                 <a href={runtimeSetupGuideUrl} rel="noreferrer" target="_blank">{t("readiness.guide")}</a>
               </p>
