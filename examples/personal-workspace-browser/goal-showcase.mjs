@@ -98,7 +98,12 @@ export const goalShowcaseScenario = {
       const errorHeight = await failure.evaluate(node => node.getBoundingClientRect().height);
       assert.ok(errorHeight > 0 && errorHeight <= 28, `A region failure is one announced line, not a banner (${errorHeight}px)`);
       await page.screenshot({ path: resolve(outputDir, "goal-showcase-region-error.png"), animations: "disabled" });
+      assert.match(await page.locator(".goal-overview-progress").innerText(), /当前保留旧快照/,
+        "A failed owning read cannot present retained criteria as currently passing");
       state.deliveryFails = false;
+      await page.locator(".delivery-review-toolbar button").first().click();
+      await page.locator(".goal-overview-progress").filter({ hasText: "2/4 项条件当前通过" }).waitFor();
+      await failure.waitFor({ state: "detached" });
 
       await page.setViewportSize({ width: 1024, height: 768 });
       await page.screenshot({ path: resolve(outputDir, "goal-showcase-1024.png"), animations: "disabled" });

@@ -99,8 +99,13 @@ export const goalMastheadScenario = {
 
       await page.locator(".personal-goal-tabs button", { hasText: "概览" }).click();
       const direction = page.locator(".goal-overview-direction");
-      assert.match(await direction.innerText(), /Reconcile operating cash flow[\s\S]*1\/3 项条件当前通过/);
-      assert.equal(await direction.locator(".goal-overview-criteria .is-failed").count(), 1);
+      // This masthead fixture supplies a retained status snapshot, not a
+      // current local acceptance read. Keep that provenance visible.
+      assert.match(await direction.innerText(), /Reconcile operating cash flow[\s\S]*当前保留旧快照/);
+      assert.doesNotMatch(await direction.innerText(), /项条件当前通过/);
+      assert.equal(await direction.locator(".goal-overview-criteria .is-unverified").count(), 3);
+      assert.equal(await direction.locator(".goal-overview-criteria .is-failed").count(), 0);
+      assert.equal(await direction.getByRole("button", { name: "检查交付", exact: true }).count(), 0);
       assert.equal(await page.locator(".goal-overview-usage").count(), 0, "Usage moved to the vitals strip");
       await page.screenshot({ path: resolve(outputDir, "goal-masthead-overview.png"), animations: "disabled" });
 
