@@ -15,3 +15,12 @@
   .ts-migration .lead { font-size: 17px; }
   .ts-migration .figure-scroll img { min-width: 660px; }
 }
+
+/* Keep editorial HTML script-free in the exported frontstage bundle. */
+.ts-migration .desktop-contents { position: sticky; top: 32px; }
+.ts-migration .toc-caption { min-height: 44px; margin: 0; font-weight: 600; }
+.ts-migration .mobile-contents { display: none; }
+@media (max-width: 768px) {
+  .ts-migration .desktop-contents { display: none; }
+  .ts-migration .mobile-contents { display: block; }
+}
