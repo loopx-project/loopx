@@ -162,11 +162,23 @@ def _check_research_destinations(entries):
             raise ValueError("Research destination requires an existing physical parent")
 
 
+def _phase_read_timeout(declaration: dict, limit: float) -> float:
+    deadline = declaration["deadline_epoch"]
+    if type(deadline) is not int or not 0 < deadline < 2 ** 53:
+        raise ValueError("Warm session requires its original integer phase deadline")
+    remaining = deadline - time.time()
+    if remaining <= 0:
+        raise ValueError("Original warm start allowance expired before checkpoint admission")
+    return min(limit, remaining)
+
+
 def restore_workspace(declaration: dict, workspace: Path):
     """Materialize one isolated receiver workspace; never import its registry."""
     unit = Path(declaration["root"])
     effect_runtime_result("runtime.checkpoint_artifacts", {
-        "action": "verify", "root": str(unit), "expected_sha256": declaration["sha256"]})
+        "action": "verify", "root": str(unit), "expected_sha256": declaration["sha256"]},
+        timeout=_phase_read_timeout(declaration, _CHECKPOINT_VERIFY_TIMEOUT_SECONDS))
+    _phase_read_timeout(declaration, _CHECKPOINT_VERIFY_TIMEOUT_SECONDS)
     manifest = json.loads((unit / "checkpoint.json").read_bytes())
     metadata = manifest["point_metadata"]
     research = _research_components(unit, metadata, workspace, declaration.get("research_component_ids", ()))
@@ -203,9 +215,11 @@ def restore_workspace(declaration: dict, workspace: Path):
             shutil.copystat(captured, target)
     if research:
         copied = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe",
-            "components": [{"id": key, "source_path": str(target)} for key, _, target in research]})
+            "components": [{"id": key, "source_path": str(target)} for key, _, target in research]},
+            timeout=_phase_read_timeout(declaration, _CHECKPOINT_VERIFY_TIMEOUT_SECONDS))
         if any(copied["source_witness"][key] != manifest["artifact_witness"][key] for key, _, _ in research):
             raise ValueError("Restored research files differ from the sealed artifacts; preserve this failed receiver")
+    _phase_read_timeout(declaration, _CHECKPOINT_VERIFY_TIMEOUT_SECONDS)
 
 
 def _prepare_native_skills(home: Path, installed: Path) -> None:
@@ -230,10 +244,24 @@ def _prepare_native_skills(home: Path, installed: Path) -> None:
         skills.symlink_to(installed.resolve(), target_is_directory=True)
 
 
+def admit_warm_session(env: dict[str, str], declaration: dict) -> dict:
+    """Recheck the full native participant within its original remaining phase.
+
+    Mature histories need the same bounded read allowance at initial preparation
+    and fresh-context revalidation. This retains source/cursor checks; it neither
+    trusts a cached history digest nor grants another execution window.
+    """
+    from loopx.hosts.codex_checkpoint import admit_native_checkpoint_session
+
+    timeout = _phase_read_timeout(declaration, 90)
+    result = admit_native_checkpoint_session(env, Path(declaration["root"]), declaration["sha256"],
+        Path(declaration["config"]), sandbox=env["LOOPX_CODEX_SANDBOX"], timeout=timeout)
+    _phase_read_timeout(declaration, 90)
+    return result
+
+
 def prepare_context(env: dict[str, str], declaration: dict) -> dict:
     """Join actual session + research owners on one freshly bootstrapped Goal."""
-    from benchmark.runtime.codex import Execution
-    from loopx.hosts.codex_checkpoint import admit_native_checkpoint_session
     from loopx.hosts.research_checkpoint import adopt_todo_context
     from benchmark.runtime.worker import loopx_command
     import subprocess
@@ -244,9 +272,7 @@ def prepare_context(env: dict[str, str], declaration: dict) -> dict:
         raise ValueError("Warm context requires its declared destination lineage")
     if declaration["deadline_epoch"] <= time.time():
         raise ValueError("Original warm start allowance expired during installation")
-    execution = Execution(context="resume", sandbox=env["LOOPX_CODEX_SANDBOX"])
-    native = admit_native_checkpoint_session(env, unit, digest, Path(declaration["config"]),
-                                            sandbox=execution.sandbox, timeout=30)
+    native = admit_warm_session(env, declaration)
     _prepare_native_skills(Path(env["CODEX_HOME"]), Path(env["LOOPX_SHARED_SKILLS"]))
     def cli(*args):
         result = subprocess.run([*loopx_command(env), *args], env=env,

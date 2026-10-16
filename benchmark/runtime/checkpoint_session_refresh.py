@@ -70,7 +70,7 @@ def _prepare_fresh_replan(env, session, wake, declaration):
     is manufactured or fed to the fresh decision maker.
     """
     from loopx.control_plane.effect_runtime import effect_runtime_result
-    from loopx.hosts.codex_checkpoint import admit_native_checkpoint_session
+    from benchmark.runtime.sforge_warm_start import admit_warm_session
 
     unit = Path(declaration["root"])
     manifest = effect_runtime_result("runtime.checkpoint_artifacts", {
@@ -99,8 +99,7 @@ def _prepare_fresh_replan(env, session, wake, declaration):
     # A lost launch reply is recovered only by the session owner's original
     # output. Re-admitting an advanced fork would hide that outcome.
     if not attempt.exists():
-        admitted = admit_native_checkpoint_session(env, unit, declaration["sha256"],
-            Path(declaration["config"]), sandbox=env["LOOPX_CODEX_SANDBOX"], timeout=30)
+        admitted = admit_warm_session(env, declaration)
         if admitted["session_id"] != session.session_id:
             raise ValueError("fresh replan source session differs")
     session.prepare_checkpoint_refresh(None, attempt, wake / "stdout.jsonl", pre_replan_basis=basis)

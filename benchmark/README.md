@@ -963,7 +963,17 @@ Warm verification hashes the complete checkpoint with a read window of up to
 60 seconds, capped by the original execution deadline. It rejects a read that
 finishes after that deadline. The launcher reuses this verified metadata before
 native registration; subsequent participant checks still verify the retained
-bytes. This read window grants no extra execution time.
+bytes. Workspace restoration uses the same bounded full-artifact read allowance.
+Native conversation admission and fresh-replan revalidation allow up to 90 seconds
+per read, capped by the original phase deadline, while preserving full-history,
+cursor and identity checks. These allowances grant no extra execution time and
+do not establish sustained performance for growing checkpoints.
+
+Concurrent receivers importing the same native point serialize bank publication
+with a bounded per-point lock. Each receiver still obtains its own native run and
+credentials; an existing bank member must match the sealed bytes. Conflicting or
+partial members fail closed. A lock timeout leaves the attempt for inspection;
+it does not authorize reusing a failed trial directory.
 
 Both comparison arms first settle actual preparation at cadence one and consume
 the retained decision through a current semantic replan. The existing joint
