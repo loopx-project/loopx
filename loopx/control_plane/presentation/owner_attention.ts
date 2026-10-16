@@ -3,14 +3,25 @@
 import type {JsonObject} from "../effect_program.ts";
 import {requireInteger, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {canonicalAuthoritySha256 as digest} from "../coordination/authority_store_codec.ts";
+import {projectGoalAttention} from "./goal_attention.ts";
 
 const records = (value: unknown, name: string): JsonObject[] => {
   if (!Array.isArray(value)) throw new TypeError(`${name} must be a complete array`);
   return value.map(row => requireJsonObject(row, name));
 };
-const active = (row: JsonObject) => row.role === "user" && row.done !== true
-  && !row.superseded_by && ["open", "blocked"].includes(String(row.status))
-  && ["user_action", "user_gate"].includes(String(row.task_class));
+function active(row: JsonObject, goalId: string): boolean {
+  if (row.goal_id != null && row.goal_id !== goalId) throw new Error("foreign owner Todo");
+  // Reuse the existing attention owner, one source at a time. Its presentation
+  // bound cannot omit this single subject; incomplete notice terms are still
+  // restored independently from the native exact reader before delivery.
+  return projectGoalAttention({goal_id: goalId, todos: [row], blockers: [], limit: 1}).items.length === 1;
+}
+
+export function ownerAttentionReferences(input: JsonObject): JsonObject {
+  const goalId = requireNonEmptyString(input.goal_id, "goal_id");
+  return {todo_ids: records(input.todos, "todos").filter(row => active(row, goalId))
+    .map(row => requireNonEmptyString(row.todo_id, "todo_id"))};
+}
 
 /** Local provider-journal vocabulary; never canonical Todo/Run status. */
 function readState(raw: unknown): JsonObject {
@@ -45,7 +56,7 @@ export function planOwnerAttention(input: JsonObject): JsonObject {
   for (const goal of records(input.goals, "goals")) {
     const goalId = requireNonEmptyString(goal.goal_id, "goal_id");
     for (const todo of records(goal.todos, "todos")) {
-      if (!active(todo)) continue;
+      if (!active(todo, goalId)) continue;
       if (todo.goal_id != null && todo.goal_id !== goalId) throw new Error("foreign owner Todo");
       const todoId = requireNonEmptyString(todo.todo_id, "todo_id");
       const text = requireNonEmptyString(todo.text, "todo.text");

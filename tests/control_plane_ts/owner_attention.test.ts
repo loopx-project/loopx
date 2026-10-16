@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {observeOwnerAttention, ownerAttentionHealth, planOwnerAttention} from "../../loopx/control_plane/presentation/owner_attention.ts";
+import {observeOwnerAttention, ownerAttentionHealth, ownerAttentionReferences, planOwnerAttention} from "../../loopx/control_plane/presentation/owner_attention.ts";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 
 const empty = () => ({schema_version: "lark_owner_attention_v0", revision: 0, enabled: true, initialized: false, subjects: [], outbox: []});
@@ -68,4 +68,10 @@ test("unknown journal states cannot present healthy or authorize delivery", () =
   assert.throws(() => ownerAttentionHealth({state: broken}));
   assert.throws(() => plan(broken, [task]));
   assert.throws(() => ownerAttentionHealth({state: {...empty(), enabled: "true"}}));
+});
+
+test("reference discovery and planning share active-subject semantics without a display cap", () => {
+  const tasks = Array.from({length: 80}, (_, i) => ({...task, todo_id: `todo_${i}`}));
+  const todos = [...tasks, {...task, todo_id: "todo_done", done: true}, {...task, role: "agent"}];
+  assert.deepEqual(ownerAttentionReferences({goal_id: "alpha", todos}).todo_ids, tasks.map(row => row.todo_id));
 });

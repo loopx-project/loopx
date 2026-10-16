@@ -134,10 +134,12 @@ class LarkOwnerAttention:
             if listing.get("ok") is not True or listing.get("todo_count") != len(listing.get("todos", [])):
                 raise ValueError("the native Todo source is incomplete")
             todos = []
-            # Exact reads restore source text; a bounded summary never supplies
-            # notification terms. Read every listed user row without a prefix.
-            for row in listing["todos"]:
-                detail = list_goal_todos(**args, todo_id=row["todo_id"])
+            # The same typed owner selects the complete active population.
+            # Terminal history needs no full-body read on every service scan;
+            # bounded summaries never supply the actual notification terms.
+            refs = effect_runtime_result("presentation.owner_attention.references", {"goal_id": goal_id, "todos": listing["todos"]})
+            for todo_id in refs["todo_ids"]:
+                detail = list_goal_todos(**args, todo_id=todo_id)
                 if detail.get("ok") is not True or not detail.get("matched") or not isinstance(detail.get("todo"), dict):
                     raise ValueError("a native Todo changed while reading")
                 todos.append(detail["todo"])
