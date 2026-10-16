@@ -1,29 +1,32 @@
 # 合并后的本地权威退役节奏
 
-- 当前候选 checkpoint：2026-10-15，#6396 `5d29213d3`；历史 1.x 计划：2026-10-07，`06b6caa07`；历史核对基线：`ce3862e33`；采用后续核对：`71525ab90`，2026-09-28；[English](2026-09-28-retirement-cadence.md)。
+- 当前实现检查点：2026-10-16，#6396 已合入 `a4483aaec`；历史 1.x 计划：2026-10-07，`06b6caa07`；历史核对基线：`ce3862e33`；采用后续核对：`71525ab90`，2026-09-28；[English](2026-09-28-retirement-cadence.md)。
 - Owner：总 roadmap R3/R4/R5/R6、shared authority D1–D3、TS 迁移 T0–T4。
 - 本记录替代 9 月 27 日 recovery、Host supervision 记录的**当前清单和估算**，
   不替代其历史验证结果。
 
 <a id="current-candidate-checkpoint"></a>
 
-## 当前候选 checkpoint（2026-10-15）
+## 当前实现检查点（2026-10-16）
 
-贡献者主导的 [#6396](https://github.com/loopx-project/loopx/pull/6396)，已评审 head
-`5d29213d3`，已实现 C1/T4 删除包，纳入 fork 补缺及
-[#6366 已吸收义务](../../../../reference/local-authority-provider-selection.md#retirement-proposal-reconciliation)。
-这是开放的 2.0 候选，不是已发布的兼容 1.x 基线。
+贡献者主导的 [#6396](https://github.com/loopx-project/loopx/pull/6396) 已合入 `a4483aaec`，
+与最终 PR head `404433aee` 完整 tree 相同。C1/T4 删除包包含 fork 补缺、原生 Core
+版本修复及 [#6366 已吸收义务](../../../../reference/local-authority-provider-selection.md#retirement-proposal-reconciliation)。
+兼容 1.4.2 已先发布；2.0 截止已进入 main，不等于发布默认或完整采用资格完成。
 
-| 边界 | 候选现状 | 剩余工作／保留义务 |
+| 边界 | 已落地事实 | 剩余工作／保留义务 |
 | --- | --- | --- |
-| 普通 Markdown mutation 与 capture producer | 废弃 writer 实现已不存在，包括 `todos/legacy_mutation.py`、`todos/line_update.py` 和 `runtime_shadow_writer_adapter.py`；canonical 创建／写入、team-plan、Monitor 及 lease caller 使用既有 typed owner。 | 集成并验证采用后的源码，不从历史表再创建 writer 删除任务；保留永久文档／显示 IO 及受支持的导入／恢复。 |
-| 所有权策略 | fresh 执行／配置目标为 `soft_claim`／`hard_lease`；typed runtime 准入及 proof inspect 拒绝 live `legacy` 执行。 | 历史三值解码、原回执、精确 release 与有备份的审核策略迁移保留；真实安装迁移及受影响 Host／App 消费者分别验证。 |
-| Source／outbox 恢复 | 普通 producer 退役不抹去 prepared／committed 历史。 | 保留原 receipt／cursor 恢复；删除 reader 前对账或明确处置未完成 outbox。存储转换不等于所有权迁移完成。 |
-| 采用与发布 | PR 按源码 revision 记录精确 head 评审及选定组合 tree 验证。 | 可回退核心开发者试用、自然 Host 使用、Goal-instance 生命周期／恢复及正式 D2／D3／默认资格沿用原 owner 与开放出口；保留失败／缺失项，mock、混合版本经过时间或 PR 合并都不能替代。 |
+| 普通 Markdown mutation 与 capture producer | 废弃 writer 和普通 producer 已删除；canonical 创建／写入、team-plan、Monitor 和 lease caller 复用既有 typed owner。 | 验证最终 main 的安装 caller，不重做该删除家族；保留永久文档 IO 及受支持导入／恢复。 |
+| 所有权与历史恢复 | fresh 执行／配置接受 soft／hard，历史 legacy codec、精确 release 和原回执保留。 | 验证受影响安装 Host／App、旧 proof、过期未释放租约及后写保持；存储转换不等于生命周期接纳。 |
+| 最终组合 | #7 后的源码及安装修复有明确 tree／source 对应；后续 main 合并等于自动 tree，并含 #6597。 | [已执行证据](https://github.com/loopx-project/loopx/pull/6396#issuecomment-6208115093) 保留原 revision；图等价和合入状态不认证未执行的最终组合。 |
+| 完整备份与身份 | M1 隔离验证／读回已存在，源／导入历史仍可读。 | 既有完整恢复 M2/M3 与 #5206 负责捕获一致性、生命周期／旧 writer／effect drain 及受控接纳；pending outbox 保留原 receipt／cursor／处置 owner。 |
+| 持续／默认资格 | 新 Goal 的 SQLite／hard-lease 源码选择已存在。 | D2 保留正式容量／经过时间失败和缺失项；D3 与 shared-authority 7.2 区分 cohort 和发布默认决定；本计划不启动 cohort／soak。 |
 
-新工作以本表及 [TS 当前交付边界](../../typescript-control-plane-migration-v0.zh-CN.md#当前交付边界2026-10-02)
-为准。下方具名历史记录保留原源码上的测量与依赖判断；“旧 writer 仍可达”
-只描述当时基线，不能再次派生候选已经实现的工作。
+新工作沿 [R5 合入后顺序](../../loopx-overall-roadmap-v0.zh-CN.md#post-6396-delivery-plan)
+和 [TS 当前边界](../../typescript-control-plane-migration-v0.zh-CN.md#当前交付边界2026-10-02)。
+下方具名记录保留原测量与依赖判断；“普通源 writer 仍可达”描述其旧基线，不能当作
+当前 main 尚未实现的工作。后续 adapter 删除须有真实最后 caller／兼容证据；
+历史恢复、provider／OS IO 不因 writer 已退役而变成无用代码。
 
 ## 历史核对基线
 

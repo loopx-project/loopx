@@ -143,6 +143,7 @@ def test_legacy_mixed_revision_archive_remains_readable_and_inert(tmp_path, prov
     legacy = json.loads(manifest.read_text())
     legacy["registry_discovery"].pop("goal_runtime_roots")
     execution = legacy["execution"]
+    execution.pop("authority_captures", None)
     execution.pop("configuration_capture")
     execution["configuration_backup"] = verify_configuration_backup(later)
     execution["archive_sha256"] = execution["archive_size_bytes"] = None
@@ -281,6 +282,7 @@ def test_legacy_archive_without_source_bindings_keeps_original_runtime_readback(
         embedded = json.load(source.extractfile("manifest.json"))
     for payload in (external, embedded):
         payload["registry_discovery"].pop("goal_runtime_roots", None)
+        payload["execution"].pop("authority_captures", None)
     manifest.write_text(json.dumps(external))
     _rewrite(archive, manifest, replacements={"manifest.json": json.dumps(embedded).encode()})
     audit = verify_state_backup(archive=archive, manifest=manifest, destination=tmp_path / "inert", execute=True)
@@ -292,6 +294,19 @@ def test_legacy_archive_without_source_bindings_keeps_original_runtime_readback(
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_real_backup_recovers_readable_authority_after_original_sources_disappear(tmp_path, provider):
     archive, manifest = _backup(tmp_path, provider)
+    source_args = ("--registry", tmp_path / "registry.json", "--runtime-root", tmp_path / "runtime")
+    code, captured = _cli(*source_args, "todo", "list", "--goal-id", "goal-a")
+    assert code == 0, captured
+    captured_position = captured["authority_read"]
+    assert captured_position["cursor"] == "2"
+    # A later real source commit must not become this backup's recovery point.
+    code, later = _cli(*source_args, "todo", "add", "--goal-id", "goal-a", "--role", "agent",
+                       "--claimed-by", "agent-a", "--operation-id", "after-backup",
+                       "--text", "This later work is outside the captured checkpoint")
+    assert code == 0, later
+    code, current = _cli(*source_args, "todo", "list", "--goal-id", "goal-a")
+    assert code == 0, current
+    assert current["authority_read"]["provider_revision"] != captured_position["provider_revision"]
     (tmp_path / "project").rename(tmp_path / "unavailable-project")
     (tmp_path / "runtime").rename(tmp_path / "unavailable-runtime")
     (tmp_path / "registry.json").rename(tmp_path / "unavailable-registry.json")
@@ -318,6 +333,11 @@ def test_real_backup_recovers_readable_authority_after_original_sources_disappea
     assert goal["facts"]["todo_count"] == 1
     assert goal["facts"]["history_commits"] == 2
     assert goal["facts"]["provider"] == provider
+    assert goal["facts"]["provider_revision"] == captured_position["provider_revision"]
+    assert goal["facts"]["cursor"] == captured_position["cursor"]
+    assert captured_position["provider_revision"] in render_state_recovery_markdown(audit)
+    saved = read_state_recovery_audit(destination)
+    assert saved["components"] == audit["components"]
     captures = json.loads(manifest.read_text())["included"]
     state_path = next(row["archive_path"] for row in captures if row["key"] == "registry_active_state:goal-a")
     assert "Preserve the full Goal, including unfinished acceptance." in (destination / "data" / state_path).read_text()
@@ -438,7 +458,8 @@ def test_restored_code_remains_unclassified_data_and_is_never_loaded(tmp_path):
     assert remaining["state"] == "unknown" and audit["execution_authority_granted"] is False
 
 
-def test_sqlite_views_are_never_evaluated_as_authority_tables(tmp_path):
+@pytest.mark.parametrize("native_capture", [False, True], ids=["legacy-raw", "native-export"])
+def test_sqlite_views_are_never_evaluated_as_authority_tables(tmp_path, native_capture):
     archive, manifest = _backup(tmp_path, "sqlite")
     with tarfile.open(archive) as source:
         database_member = next(row.name for row in source if row.name.endswith(".sqlite"))
@@ -453,14 +474,43 @@ def test_sqlite_views_are_never_evaluated_as_authority_tables(tmp_path):
     changed = database_path.read_bytes()
     external = json.loads(manifest.read_text())
     for envelope in (external, embedded):
+        if not native_capture:
+            envelope["execution"].pop("authority_captures")
         witness = next(row for row in envelope["execution"]["file_members"] if row["archive_path"] == database_member)
         witness.update(sha256=hashlib.sha256(changed).hexdigest(), size_bytes=len(changed))
     manifest.write_text(json.dumps(external))
     _rewrite(archive, manifest, replacements={database_member: changed, "manifest.json": json.dumps(embedded).encode()})
     result = verify_state_backup(archive=archive, manifest=manifest, destination=tmp_path / "view-inert", execute=True)
     [goal] = [row for row in result["components"] if row["owner_kind"] == "coordination_authority"]
-    assert goal["state"] == "unknown"
-    assert goal["reason_code"] == "sqlite_requires_owner_recovery"
+    if native_capture:
+        # The independent logical export remains readable. The poisoned raw
+        # database still fails its storage owner and is never queried as work.
+        assert goal["state"] == "readable" and goal["facts"]["todo_count"] == 1
+    else:
+        assert goal["state"] == "unknown"
+        assert goal["reason_code"] == "sqlite_requires_owner_recovery"
+    [storage] = [row for row in result["components"] if row["owner_kind"] == "sqlite_storage"]
+    assert storage["state"] == "unknown" and storage["reason_code"] == "sqlite_schema_requires_owner_recovery"
+
+
+@pytest.mark.parametrize("damaged", ["authority.jsonl", "writer-fence.json"])
+def test_native_capture_corruption_stays_unknown_instead_of_falling_back_to_valid_raw_authority(tmp_path, damaged):
+    archive, manifest = _backup(tmp_path, "file")
+    external = json.loads(manifest.read_text())
+    with tarfile.open(archive) as source:
+        embedded = json.load(source.extractfile("manifest.json"))
+    capture = external["execution"]["authority_captures"][0]
+    member = str(Path(capture["archive_path"]).with_name(damaged))
+    changed = b'{"corrupt": true}\n'
+    for envelope in (external, embedded):
+        witness = next(row for row in envelope["execution"]["file_members"] if row["archive_path"] == member)
+        witness.update(sha256=hashlib.sha256(changed).hexdigest(), size_bytes=len(changed))
+    manifest.write_text(json.dumps(external))
+    _rewrite(archive, manifest, replacements={member: changed, "manifest.json": json.dumps(embedded).encode()})
+    result = verify_state_backup(archive=archive, manifest=manifest, destination=tmp_path / "inert", execute=True)
+    [goal] = [row for row in result["components"] if row["owner_kind"] == "coordination_authority"]
+    assert goal["state"] == "unknown" and goal["reason_code"] == "authority_capture_unavailable"
+    assert result["status"] == "held" and result["execution_authority_granted"] is False
 
 
 def test_offline_worker_timeout_does_not_leave_a_copy_or_stop_shared_runtime(tmp_path, monkeypatch):
@@ -676,10 +726,14 @@ def test_symlink_parent_and_occupied_directory_are_not_recovery_targets(tmp_path
     assert (occupied / "keep").read_text() == "unchanged"
 
 
-def test_real_http_upload_verify_reload_and_corrupt_input_keep_live_state_unchanged(tmp_path):
+@pytest.mark.parametrize("provider", [None, "file", "sqlite"], ids=["empty", "file", "sqlite"])
+def test_real_http_upload_verify_reload_and_corrupt_input_keep_live_state_unchanged(tmp_path, provider):
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 
-    archive, manifest = _backup(tmp_path)
+    archive, manifest = _backup(tmp_path, provider)
+    if provider:
+        for name in ("runtime", "project", "registry.json"):
+            (tmp_path / name).rename(tmp_path / f"lost-{name}")
     runtime = tmp_path / "replacement-runtime"
     runtime.mkdir()
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
@@ -707,6 +761,10 @@ def test_real_http_upload_verify_reload_and_corrupt_input_keep_live_state_unchan
         status, result = request("/verify", inputs)
         assert status == 200, result
         assert result["execution_authority_granted"] is False
+        if provider:
+            [authority] = [row for row in result["components"] if row["owner_kind"] == "coordination_authority"]
+            assert authority["state"] == "readable" and authority["facts"]["todo_count"] == 1
+            assert authority["facts"]["capture_started_at"]
         assert not server.registry_path.exists()
         status, rows = request("")
         assert status == 200 and rows["items"][0]["checkpoint_ref"] == result["checkpoint_ref"]

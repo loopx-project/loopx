@@ -81,6 +81,14 @@ export function decodeStateRecoveryAudit(value: unknown): StateRecoveryAudit {
       && Array.isArray(row.dependency_ids) && row.dependency_ids.every(token));
     const facts = requireJsonObject(row.facts, "recovery component facts");
     requireValue(facts.goal_id === undefined || (typeof facts.goal_id === "string" && recoveryGoalLabel(facts.goal_id) === facts.goal_id));
+    // Older audits did not retain the inspected position. Never synthesize it
+    // from an observation time or a commit count on historical readback.
+    if (facts.provider_revision !== undefined || facts.cursor !== undefined) {
+      requireValue(row.owner_kind === "coordination_authority" && row.state === "readable"
+        && token(facts.provider_revision) && typeof facts.cursor === "string"
+        && Number.isSafeInteger(facts.history_commits) && Number(facts.history_commits) > 0
+        && facts.cursor === String(facts.history_commits));
+    }
     ids.add(row.component_id);
     counts[row.state as RecoveryComponentState]++;
   }

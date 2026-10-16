@@ -112,7 +112,13 @@ export function StateRecoverySettings() {
         {audit.measurements ? <p>{zh ? "归档字节" : "Archive bytes"}: {audit.measurements.archive_bytes.toLocaleString(locale)} · {zh ? "普通文件字节" : "Regular file bytes"}: {audit.measurements.regular_file_bytes.toLocaleString(locale)}<br />
           {zh ? "归档检查与复制" : "Archive checks and copy"}: {audit.measurements.archive_processing_ms.toLocaleString(locale)} ms · {zh ? "记录读取" : "Owner reads"}: {audit.measurements.owner_read_ms.toLocaleString(locale)} ms</p>
           : <p>{zh ? "此历史报告未记录数据量和阶段耗时。" : "This historical report has no recorded size or phase durations."}</p>}
-        <ul>{audit.components.map(row => <li key={row.component_id}><code>{row.component_id}: {row.reason_code}</code></li>)}</ul>
+        <ul>{audit.components.map(row => <li key={row.component_id}><code>{row.component_id}: {row.reason_code}</code>
+          {row.owner_kind === "coordination_authority" && row.state === "readable" ? <p>
+            {typeof row.facts.provider_revision === "string"
+              ? <>{zh ? "备份中的存储检查点" : "Checkpoint in backup"}: <code>{row.facts.provider_revision}</code> · {zh ? "游标" : "Cursor"}: <code>{String(row.facts.cursor)}</code></>
+              : (zh ? "这份历史报告未记录存储检查点。" : "This historical report did not record a storage checkpoint.")}
+          </p> : null}
+        </li>)}</ul>
       </details>
     </div> : null}
     {history ? <div aria-label={zh ? "历史备份检查" : "Previous backup inspections"}>

@@ -420,6 +420,7 @@ export function createEffectRuntimeHandlers(
     ["state.recovery.manifest.verify", lazyHandler(() => import("./state_recovery.ts"), ({verifyStateRecoveryManifest}) => verifyStateRecoveryManifest)],
     ["state.recovery.audit.readback", lazyHandler(() => import("./state_recovery.ts"), ({verifySavedStateRecoveryAudit}) => verifySavedStateRecoveryAudit)],
     ["coordination.sqlite_backup.snapshot", lazyHandler(() => import("./coordination/sqlite_backup.ts"), ({snapshotSqliteBackup}) => snapshotSqliteBackup)],
+    ["coordination.authority_backup.capture", lazyHandler(() => import("./coordination/authority_backup.ts"), ({captureAuthorityBackup}) => captureAuthorityBackup)],
     ["coordination.local_authority.new_goal_storage", lazyHandler(() => import("./coordination/local_authority_defaults.ts"), ({manageNewGoalStorage}) => manageNewGoalStorage)],
     ["coordination.local_authority.promotion_review", lazyHandler(() => Promise.all([import("./coordination/local_authority_runtime.ts"), import("./coordination/source_transfer.ts")]), ([{reviewLocalCoordinationAuthorityPromotion}, {withCoordinationSourceTransfer}]) => withCoordinationSourceTransfer("coordination.local_authority.promotion_review", reviewLocalCoordinationAuthorityPromotion))],
     ["coordination.local_authority.promotion_reviewed", lazyHandler(() => import("./coordination/local_authority_runtime.ts"), ({executeReviewedCoordinationPromotion}) => executeReviewedCoordinationPromotion)],

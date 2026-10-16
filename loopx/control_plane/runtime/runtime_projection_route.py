@@ -113,6 +113,7 @@ def resolve_goal_source_runtime_route(
     goal_id: str,
     runtime_root_override: str | None = None,
     registry: dict[str, Any] | None = None,
+    source_snapshots: dict[Path, bytes | None] | None = None,
 ) -> dict[str, Any]:
     """Resolve goal-scoped writes and reads to the canonical source runtime.
 
@@ -124,7 +125,9 @@ def resolve_goal_source_runtime_route(
     """
 
     invoked_registry = registry_path.expanduser().resolve()
-    registry_payload = registry if registry is not None else load_registry(invoked_registry)
+    registry_payload = registry if registry is not None else load_registry(
+        invoked_registry, source_snapshots=source_snapshots,
+    )
     invoked_runtime = _registry_runtime_root(
         registry_payload,
         registry_path=invoked_registry,
@@ -185,7 +188,7 @@ def resolve_goal_source_runtime_route(
             f"goal {goal_id!r} source_registry is missing; refusing to use the shared runtime as source"
         )
     try:
-        source_payload = load_registry(source_registry)
+        source_payload = load_registry(source_registry, source_snapshots=source_snapshots)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError(
             f"goal {goal_id!r} source_registry is unreadable; refusing to use the shared runtime as source"

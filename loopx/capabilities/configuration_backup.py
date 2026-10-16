@@ -4,7 +4,7 @@ from typing import Any
 
 from ..control_plane.effect_runtime import effect_runtime_result
 from ..control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
-from ..control_plane.projects.registry_codec import decode_registry_snapshot
+from ..control_plane.projects.registry_codec import load_registry
 from ..registry import registry_goals
 from .machine_configuration.store import read_stored_machine_configuration
 
@@ -18,30 +18,17 @@ def capture_configuration_backup(
     # cannot witness the bytes used here (the source may change A -> B -> A).
     sources = source_snapshots if source_snapshots is not None else {}
 
-    def read_registry(path: Path) -> dict[str, Any]:
-        source = path.expanduser().resolve()
-        if source not in sources:
-            try:
-                sources[source] = source.read_bytes()
-            except FileNotFoundError:
-                sources[source] = None
-        raw = sources[source]
-        if raw is None:
-            raise FileNotFoundError(path)
-        return decode_registry_snapshot(path, raw)
-
-    try:
-        registry = read_registry(registry_path)
-    except FileNotFoundError:
-        registry = {"goals": []}
+    registry = load_registry(registry_path, source_snapshots=sources)
     selected = goal_ids if goal_ids is not None else [str(goal["id"]) for goal in registry_goals(registry)]
     if len(selected) != len(set(selected)):
         raise ValueError("configuration backup Goal ids must be unique")
     snapshots = []
     for goal_id in selected:
-        route = resolve_goal_source_runtime_route(registry_path=registry_path, goal_id=goal_id, registry=registry)
+        route = resolve_goal_source_runtime_route(registry_path=registry_path, goal_id=goal_id,
+            registry=registry, source_snapshots=sources)
         source = Path(route["source_registry"])
-        matches = [goal for goal in registry_goals(read_registry(source)) if goal.get("id") == goal_id]
+        matches = [goal for goal in registry_goals(load_registry(source, source_snapshots=sources))
+                   if goal.get("id") == goal_id]
         if len(matches) != 1:
             raise ValueError("configuration backup requires exactly one source-owned Goal")
         snapshots.append({"goal_id": goal_id, "goal_configuration": matches[0]})

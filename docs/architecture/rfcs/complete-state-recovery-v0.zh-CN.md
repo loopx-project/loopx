@@ -33,6 +33,21 @@ held，未知状态不改称可恢复，执行权限始终为 false。限制与�
 本检查点不证明 M2/M3、live adoption、远端 provider 或 G1 团队验收，不重写原身份或回执。
 
 
+### writer 截止后的交付（2026-10-16）
+
+已合入的 [R5/T4 截止](loopx-overall-roadmap-v0.zh-CN.md#post-6396-delivery-plan)
+简化当前写入归属，不提供更强的捕获 profile 或激活回执。复用 M1 verifier、安全
+解包和可读审计；下一实现沿既有 M2，先做一个本地 File／SQLite profile：记录必要
+组件 owner revision 与实际捕获一致性，覆盖并发／静止／crash／降级；v0 继续可读，
+不完整审计继续 held。
+
+随后复用 [#5206](https://github.com/loopx-project/loopx/issues/5206) 的 Goal 生命周期
+工作交付 M3 单 Goal 打包恢复。演练前冻结 owner 支持、源／目标 fence、替代延续或
+新生命周期决定、effect 处置和 RPO/RTO。原操作、后写和不支持／未知 effect 各自归
+原 owner；复制 lease 或 provider 身份不能激活目标。在发起产品入口返回独立验收的
+未完成工作结果，记录已恢复、丢失／未知工作和人工介入。服务及额外平台 profile
+继续由 M4/M5 承接。本协调检查点未实现 M2/M3，也不启动恢复或激活。
+
 ### 首个支持的用户结果
 
 首个有界用户承诺是：一个本地 Goal 的来源工作区不可用或不再可信后，用户可以恢复
@@ -465,6 +480,14 @@ Goal 文档，同时维持 inert/held。M2 仍需完整 required-owner closure�
 快照，比较每份已映射普通文件副本；字节不同或缺少见证就停止发布。File/SQLite
 覆盖持续变化与 A → B → A 回退，事后重读 live 路径不能证明这类情况；路由到
 外部的源 registry 与缺少见证各有负向覆盖。
+
+发现到复制之间另有拒绝边界：旧计划生成后 registry 声明可能改变，导致归档
+保留旧文档、新原始 registry 和与新 registry 匹配的配置 checkpoint。新完整备份
+计划保留实际 registry 读取及固定归档路径，已复制成员也必须与发现时字节一致。
+路由、发现和配置复用既有 registry codec 的不可变读取选项。File/SQLite 验证
+拒绝、重新规划恢复及失源后的 inert 读回。这是保守的字节检查（无关 registry
+变更也要求重试），不等于必要材料 export、共享 owner epoch 或 M2 profile 合格；
+历史计划和有界迁移 producer 保持原契约。
 
 同一规则也覆盖既有 machine 配置 store owner：checkpoint 和见证使用同一次
 实际读取，包括确认不存在。变更、新建或删除配置都不能与已复制文件矛盾；

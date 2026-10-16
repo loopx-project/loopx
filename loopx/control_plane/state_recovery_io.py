@@ -379,6 +379,7 @@ def verify_state_backup(
                      "recovery_input_changed")
             audit = _audit_owners({"data_root": str(data), "verified": verified,
                 "registry_discovery": external.get("registry_discovery"), "included": external.get("included"),
+                "authority_captures": external.get("execution", {}).get("authority_captures"),
                 "measurements": {"archive_bytes": archive_size,
                     "regular_file_bytes": copied["logical_bytes"],
                     "archive_processing_ms": (time.monotonic_ns() - started) // 1_000_000},
@@ -440,4 +441,9 @@ def render_state_recovery_markdown(payload: dict[str, Any]) -> str:
     if isinstance(measurements, dict):
         lines.append(f"Archive: {measurements['archive_bytes']} bytes; regular files: {measurements['regular_file_bytes']} bytes; "
                      f"archive checks/copy: {measurements['archive_processing_ms']} ms; owner reads: {measurements['owner_read_ms']} ms.")
+    for component in payload.get("components", []):
+        facts = component["facts"]
+        if "provider_revision" in facts:
+            lines.append(f"Captured authority {component['component_id']}: "
+                         f"provider revision {facts['provider_revision']}; cursor {facts['cursor']}.")
     return "\n".join(lines)

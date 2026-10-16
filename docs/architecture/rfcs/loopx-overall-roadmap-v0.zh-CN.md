@@ -7,7 +7,10 @@
 - 责任：总纲拥有产品目标、跨领域依赖、优先级和组合验收；领域 RFC/稳定协议拥有具体规则；运行 Todo 拥有执行状态。
 - 语言：[English](loopx-overall-roadmap-v0.md) 与本文互为语义镜像。
 
-**本地权威收尾检查点（2026-10-02）。** R5/T4 使用按 `9b0486dc1` 复核的[验证→迁移→删除计划](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.zh-CN.md#当前收尾验证迁移与删除2026-10-02)。先收尾现有 #5413/#5466/#5283，验证一个安装态可回退候选，再分别决定有界自愿试用和发布默认准入。Canonical 创建、legacy 策略迁移与最后 writer 删除各有明确出口；Python 替代 owner 随最后调用方删除。R6 独立，不用固定剩余 PR 数或历史测试数量证明完成。
+**本地权威检查点（2026-10-16）。** 贡献者主导的 #6396 已落地 2.0 普通 writer
+截止并吸收恢复／原生补缺。沿 [R5 合入后顺序](#post-6396-delivery-plan) 推进最终主干
+安装资格、完整恢复／生命周期 owner 集成及独立 D2/D3 证据。保留具名历史和兼容
+1.4.2 路线；不重复创建 writer 任务、不宣称发布默认或全局等待所有 RFC。
 
 **S2/S12 启动诊断检查点（2026-10-04）** 已移至[执行账本](ledger/loopx-overall-roadmap-v0/2026-10-04-s2-s12-startup-diagnostic.zh-CN.md)。
 
@@ -661,6 +664,38 @@ L3 检查点：独立领取/接管、原子 claim 准入与维护共用 typed le
 - **交付：** 用已选本地 profile 验证完整来源读取、单向 Markdown 投影、event/receipt 保留、重启恢复、容量与长期成本；source 失败不能回退 legacy。R1 不能把大计划正文塞入 coordination head。
 - **退出：** 按 shared-authority 7.2 分别决定有界改动、可回退自愿 cohort、发布默认值，各自在适用范围具备真实 CLI/backend、独立基线、负例和恢复证据。正式 D2 保留适用容量及至少十日证据，cohort 不必等该证书。D3 保留明确切换权限。本计划没有启动 soak 或晋升 provider。
 - **回滚：** 按已审阅的 fenced export/import 和 schema-aware downgrade，不能靠替换二进制恢复旧写权威。
+
+<a id="post-6396-delivery-plan"></a>
+
+#### 合入后的交付顺序（2026-10-16）
+
+[#6396](https://github.com/loopx-project/loopx/pull/6396) 已在 `a4483aaec` 落地 2.0
+普通 Markdown writer 与 live legacy 执行截止，最终 PR head `404433aee` 完整 tree
+相同。保留 Duang 的贡献与已吸收补缺。这关闭该实现家族，不等于 R5、安装 cohort
+或发布默认资格完成。[证据记录](https://github.com/loopx-project/loopx/pull/6396#issuecomment-6208115093)
+将早期已执行源码与尚未执行的最终组合分开；下方具名源码检查点不能再次派生已完成
+writer 工作。
+
+| 既有里程碑／优先级 | 下一独立可评审结果 | 验收与后续 |
+| --- | --- | --- |
+| T4/C1 + D1 · P1，先做 | 冻结最终 main 源码及正常安装的 CLI／App／受影响本地 Host 升级旅程，包含 #6597 重启恢复 | 比较完整 active／archive、claim、lease epoch、原 receipt 和后写；覆盖过期未释放租约、旧 preview／proof、provider 不可用、中断 apply，拒绝时状态不变；通过审核迁移退出且保留新写。既有安装修复证据先核对源码／caller 适用性再复用。 |
+| 完整恢复 M2 → M3 · P1 | 为一个受支持本地 profile 声明捕获一致性，再从不可用来源恢复一个 Goal 并继续未完成工作 | 复用 manifest／registry／Goal／provider／session／effect owner；演练前冻结 decision-owner 矩阵和 RPO/RTO，对账 pending effect 与目标身份。M1 检查仍隔离无执行权；M3 须 owner 准入、受保护重复操作为零、hold 可见，并在发起产品入口返回独立验收的结果。 |
+| Goal lifetime M2–M5／#5206 · 仅涉及的 P1 依赖 | 补齐所选 profile 剩余旧／warm writer 和 effect drain fence，再做其孤儿恢复／退役同名重建旅程 | 删除源码 writer 不排除已安装 1.x 二进制或缓存 executor。旧 A 不得写入、投递、扣额或结算同名 B；B 和无关工作仍推进。profile 的必要 owner 行通过前保持 activation hold；不重建已交付 codec／source-session 事务。 |
+| D2 · P1，与相关实现并行 | 同负载 File／SQLite 对照归因剩余完整命令／历史增长成本，对账正式容量和经过时间证据 | 分开 caller／bridge、共享 typed 事务和 provider 成本；保留当前 release 与迁移前对照、冻结失败／缺失轴、durability、恢复空间及十日／事务量要求。无关改动不重置有效经过时间证据，本计划不启动新 soak。 |
+| D3 · 自身证据齐备后 | 决定受支持发布／默认 profile，具备可用升级、故障恢复及关闭／回退说明 | 新 Goal 的 SQLite／hard-lease 源码选择已存在，应资格化而非再加 selector。既有显式 provider 保持，provider 缺失不选 Markdown；发布／平台支持与维护者权限分别判断。 |
+
+这里复用既有 RFC 里程碑，不另建 roadmap 或全局依赖链。可回退开发者 cohort 按
+shared-authority 7.2 自身的可恢复安装门槛；完整备份重新激活声明另需完整恢复 M3。
+已支持 profile 上的普通 R1–R4 交付不等待全部生命周期、云端或 fleet 工作。
+Goal workspace／Settings／Task 交互投影同一 owner，人工管理与 Agent 执行 proof
+保留各自权限；伴随工作须有真实 unavailable／retry／readback，不以复制命令按钮
+或第二套 UI 决策源代替。
+
+后续 TS 收益只针对实证热事务：重复权威与最后废弃跨界一起删除，报告完整 caller／
+恢复行为和端到端成本。保留仍有消费者的 Python provider／OS IO、格式 reader 和
+永久文档投影。本计划不启动新框架、逐字段 bridge 系列、付费运行、live 迁移或发布。
+
+#### 具名源码实现证据
 
 冷旧 Goal 导入复用既有 TS source/promotion/receipt owner，CLI/App 使用绑定实际
 备份字节的预览、明确确认、停写 fence 与原操作恢复。POSIX 人工停止旅程现以真实
