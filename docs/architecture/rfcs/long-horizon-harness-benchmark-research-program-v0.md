@@ -594,6 +594,37 @@ for the synthetic example, one-selection detail and separate comprehension
 acceptance. These are proposed analysis and presentation requirements, not a new
 runtime protocol, metric promotion or an authorization to expand a study.
 
+#### Relationship collection before a new study
+
+The [collection and reading slice](../../product/use-cases/auto-research/long-horizon-progress-design.md#record-relationships-before-the-next-study)
+is grounded in the #6648 whole-history proposal, not an already qualified
+assessment service. Reuse ordinary Explore result writeback and its optional
+relations to preserve the evidence behind a route change. Distinguish explicit
+relations, parent grouping, and inferred analysis; retain meaningful hypothesis,
+experiment and artifact identities rather than only question/finding counts.
+The existing edge writer lacks direct evidence-reference and endpoint-version
+binding. Preserve reproducible associations in the read-only analysis sidecar
+and expose missing provenance; a prose summary cannot close that gap.
+
+For a study claiming relationship-informed decision quality, qualify one
+permitted real case through result writeback, pre-replan checkpoint, restore,
+receiver readback and the next observable action before launch. Check the
+#6648-derived packaged reading path separately, including correct item selection,
+missing/invalid relations, duplicate replay, delayed observations and changed
+inputs. An open product defect is not a scientific pass. Native results with
+weaker observability retain their narrower claim; all V12 analysis is not a
+prerequisite for unrelated valid research.
+
+Freeze collection guidance and costs across compared arms: asking the Agent to
+organize relationships is itself a possible intervention, unlike passive capture.
+Checkpoint capture must not implicitly select TurnEnvelope or another input
+mode. Preserve old frozen runs and unknown baseline coverage. Judge whether the
+record explains a decision and permits independent verification, not whether the
+graph has more edges. Research owns source/claim calibration and actual adoption;
+Explore owns persistence and legal relations; product owns truthful reading.
+No new relation vocabulary, runtime enforcement, paid-run authorization or
+causal-effect conclusion is introduced by this documentation slice.
+
 ### 6.4 Human attention
 
 For assisted studies only:
