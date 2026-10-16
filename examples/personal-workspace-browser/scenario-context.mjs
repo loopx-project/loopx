@@ -31,10 +31,7 @@ export async function openWorkspacePage(
   let coverageRunning = false;
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => {
-    if (message.type() === "error") {
-      const source = message.location().url;
-      errors.push(`${message.text()}${source ? ` (${source})` : ""}`);
-    }
+    if (message.type() === "error") errors.push(message.text());
   });
   if (collectCoverage) {
     await page.coverage.startJSCoverage({ resetOnNavigation: false });
