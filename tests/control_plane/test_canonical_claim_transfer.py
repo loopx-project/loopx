@@ -99,7 +99,8 @@ def test_public_claim_transfer_recipient_and_projection_recovery(tmp_path, monke
 
 
 @pytest.mark.parametrize("handoff_mode", ["legacy", "soft_claim", "hard_lease"])
-def test_claim_transfer_never_emulates_a_legacy_two_write_handover(tmp_path, handoff_mode):
+@pytest.mark.parametrize("output_format", ["json", "markdown", None])
+def test_claim_transfer_never_emulates_a_legacy_two_write_handover(tmp_path, handoff_mode, output_format):
     registry = tmp_path / "registry.json"
     runtime = tmp_path / "runtime"
     state = tmp_path / "state.md"
@@ -136,15 +137,22 @@ def test_claim_transfer_never_emulates_a_legacy_two_write_handover(tmp_path, han
     assert caught.value.payload["operation"] == "task_lease_transfer"
     assert caught.value.payload["write_admitted"] is False
     child = subprocess.run([
-        sys.executable, "-m", "loopx.cli", "--registry", str(registry), "--format", "json",
+        sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+        *(["--format", output_format] if output_format is not None else []),
         "task-lease", "transfer", "--goal-id", "example", "--todo-id", "todo_example",
         "--owner", "agent-a", "--idempotency-key", "source-a", "--expected-version", "1",
         "--new-owner", "agent-b", "--new-idempotency-key", "receiver-b", "--transfer-claim",
     ], cwd=REPO, capture_output=True, text=True, timeout=60, check=False)
     assert child.returncode == 1, child.stdout + child.stderr
-    rejected = json.loads(child.stdout)
-    assert rejected["error_code"] == "canonical_authority_required"
-    assert rejected["write_admitted"] is False
-    assert rejected["recovery"] == {"action": "migrate_goal_authority", "backup_required": True}
+    assert "Traceback" not in child.stderr
+    if output_format == "json":
+        rejected = json.loads(child.stdout)
+        assert rejected["error_code"] == "canonical_authority_required"
+        assert rejected["write_admitted"] is False
+        assert rejected["recovery"] == {"action": "migrate_goal_authority", "backup_required": True}
+    else:
+        assert "canonical_authority_required" in child.stdout
+        assert "migrate_goal_authority" in child.stdout
+        assert "backup_required: `True`" in child.stdout
     assert state.read_bytes() == original_state
     assert lease_path.read_bytes() == original_lease

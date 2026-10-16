@@ -39,7 +39,10 @@ def render_task_lease_markdown(payload: dict[str, object]) -> str:
     if payload.get("error_code"):
         lines.append(f"- error_code: `{payload.get('error_code')}`")
     recovery = payload.get("recovery")
-    if isinstance(recovery, dict):
+    if isinstance(recovery, dict) and payload.get("error_code") == "canonical_authority_required":
+        lines.append(f"- recovery: `{recovery['action']}`")
+        lines.append(f"- backup_required: `{recovery['backup_required']}`")
+    elif isinstance(recovery, dict):
         import shlex
         lines.append(f"- repair: `{shlex.join(['loopx', *recovery['cli_args']])}`")
         lines.append(f"- supply: `{', '.join(recovery['requires_flags']) or 'none'}`")
