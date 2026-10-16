@@ -859,6 +859,31 @@ jobs:
           tests/control_plane_ts/local_authority_provider.test.ts
           tests/control_plane_ts/sqlite_runtime_admission.test.ts
 
+      - name: Install the TypeScript suite dependencies
+        # The host-qualified suites import real packages (for example the
+        # skipped PostgreSQL provider still imports `pg`), and this lane never
+        # installed the root dependencies before.
+        run: npm ci --ignore-scripts
+
+      - name: Qualify host-hardened control-plane suites on native Windows
+        # These suites carry the native Windows branches, durability flushes and
+        # host-independent path assertions written by #6258, #6356 and #6562:
+        # the curated lane omitted them, so a Windows-only regression in their
+        # behavior could pass qualification.
+        run: >-
+          node --no-warnings --experimental-sqlite --experimental-strip-types --test
+          tests/control_plane_ts/agent_preferences.test.ts
+          tests/control_plane_ts/authority_archive.test.ts
+          tests/control_plane_ts/canonical_task_lease_renew.test.ts
+          tests/control_plane_ts/checkpoint_artifacts.test.ts
+          tests/control_plane_ts/cold_source_import.test.ts
+          tests/control_plane_ts/coordination_runtime_shadow.test.ts
+          tests/control_plane_ts/effect_runtime_snapshot.test.ts
+          tests/control_plane_ts/goal_acceptance_authority.test.ts
+          tests/control_plane_ts/quota_void_commit.test.ts
+          tests/control_plane_ts/shadow_entry_delivery.test.ts
+          tests/control_plane_ts/sqlite_backup.test.ts
+
       - name: Install the frontend dependencies for a source rebuild
         working-directory: apps/presentation/dashboard
         run: npm ci --ignore-scripts

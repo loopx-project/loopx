@@ -943,8 +943,9 @@ follow-up instead of staying as an opaque watch. A user follow-up must declare
 a blocking owner decision and `user_action` for a visible reminder that must
 not block the bound agent lane. Omitting the task class fails before writeback.
 The monitor remains an observe-only `continuous_monitor`; `--next-agent-todo`
-creates a separate runnable `advancement_task`. New successors default to P1
-independently of the monitor. Use `--next-agent-priority` and
+creates a separate runnable `advancement_task`. Independently of the monitor,
+agent successors and `user_action` default to P1 while `user_gate` defaults to
+P0. Use `--next-agent-priority` and
 `--next-user-priority` to declare urgency for each successor; each option
 requires its corresponding Todo. Conflicting priority and legacy text prefix
 are rejected before observation writeback. For the corresponding

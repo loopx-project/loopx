@@ -1102,7 +1102,9 @@ function requireProviderSuccessorPriority(
   const text = String(plan[`next_${role}_todo`]);
   const key = `next_${role}_priority`;
   const explicit = Object.hasOwn(plan, key);
-  const expected = planTodoCreationPriority({text, ...(explicit ? {priority: plan[key]} : {})});
+  const taskClass = role === "agent" ? "advancement_task" : plan.next_user_task_class;
+  const expected = planTodoCreationPriority({text, task_class: taskClass,
+    ...(explicit ? {priority: plan[key]} : {})});
   if (!explicit && nextTodo.todo === text) return; // Historical provider plan and original receipt.
   requireProviderTodoText(nextTodo.todo, String(expected.text), `${role} next_todo text`);
   requireProviderMatch(readTodoPriority(receipt), expected.priority, `${role} successor priority`);

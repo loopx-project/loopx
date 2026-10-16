@@ -29,11 +29,14 @@ sync catch up.
 
 ## Priority intent
 
-Priority is scheduling intent, with `P0` highest and `P4` lowest. New Todos
-default to **P1** when neither a priority parameter nor a legacy prefix is
-supplied. Reserve P0 for explicitly urgent work; routine creation must not
-compete with it just because the author omitted a field. Create or edit
-priority independently of the task description:
+Priority is scheduling intent, with `P0` highest and `P4` lowest. When neither
+a priority parameter nor a legacy prefix is supplied, new machine-declared
+blocking work (`user_gate`, `blocker`, or `status=blocked`) defaults to **P0**;
+other new work defaults to **P1**. This keeps an omitted field from hiding a
+known gate while routine creation does not compete with it. A runnable repair
+that is still an ordinary `advancement_task` must declare P0 explicitly when
+it is urgent; LoopX does not infer urgency from prose or action-kind names.
+Create or edit priority independently of the task description:
 
 ```bash
 loopx todo add --goal-id <goal-id> --role agent --priority P1 --text '<agent action>'
@@ -62,12 +65,14 @@ Direct `complete`/`supersede` continuations retain the predecessor's declared
 priority unless the successor explicitly supplies a different legacy prefix.
 Monitor discoveries are independent work: `quota monitor-poll` accepts
 `--next-agent-priority` and `--next-user-priority`, each tied to its corresponding
-successor. Omission uses the new-Todo default, not the monitor's priority. A P0
-watch therefore creates an ordinary P1 follow-up unless the caller declares
-urgency. The successor record and receipt expose the resulting priority.
+successor. Omission uses the new-Todo semantic default, not the monitor's
+priority. A P0 watch therefore creates an ordinary P1 agent follow-up or user
+action, while a declared `user_gate` defaults to P0. The successor record and
+receipt expose the resulting priority.
 
 **Default change and compatibility:** previously omitted creation priority was
-unranked; new CLI, Chat, canonical and monitor-created Todos now receive P1.
+unranked; new CLI, Chat, canonical and monitor-created Todos now receive the
+semantic P0/P1 default described above.
 Existing unranked Todos and explicit clears remain unranked and sort after P4.
 Ordinary edits preserve them. Creation defaults apply after original receipt
 lookup, so upgrading and retrying an old operation does not reprioritize its

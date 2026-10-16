@@ -43,6 +43,8 @@ class LarkPrivateConversations:
         self.runtime_root, self.runner, self.cli_bin = runtime_root, runner, cli_bin
         self.reaction_feedback = reaction_feedback
         self.root = controller.store.root / "lark-private-deliveries"
+        from .owner_attention import LarkOwnerAttention
+        self.owner_attention = LarkOwnerAttention(self)
 
     def profiles(self) -> dict[str, dict[str, str]]:
         """Discover current App configuration, never authorize a conversation.

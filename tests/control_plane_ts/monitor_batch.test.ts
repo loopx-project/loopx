@@ -247,12 +247,13 @@ test("canonical fresh planning remains actor-owned", () => {
 test("canonical monitor discoveries default independently and accept per-role priorities", () => {
   const source = request();
   source.todos = source.todos.map(todo => ({...todo, priority: "P0"}));
-  for (const [extra, expected] of [
-    [{}, ["P1", "P1"]],
-    [{next_agent_priority: "P0", next_user_priority: "P3"}, ["P0", "P3"]],
+  for (const [taskClass, extra, expected] of [
+    ["user_action", {}, ["P1", "P1"]],
+    ["user_gate", {}, ["P1", "P0"]],
+    ["user_gate", {next_agent_priority: "P0", next_user_priority: "P3"}, ["P0", "P3"]],
   ] as const) {
     const input = {...source, intent: {...source.intent,
-      next_user_todo: "Review result", next_user_task_class: "user_action", ...extra}};
+      next_user_todo: "Review result", next_user_task_class: taskClass, ...extra}};
     const first = planMonitorBatch(input);
     const writeback = first.writeback;
     assert.deepEqual((writeback.next_todos as JsonObject[]).map(todo => todo.priority), expected);
