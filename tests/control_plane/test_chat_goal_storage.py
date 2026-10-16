@@ -6,6 +6,8 @@ import threading
 
 import pytest
 
+from test_chat_cold_source_import import capture_present, cold_api  # noqa: F401 - shared real-server fixtures
+
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.control_plane.coordination.local_authority import (
     read_canonical_todos_if_promoted,
@@ -55,7 +57,7 @@ def api(tmp_path, monkeypatch, request):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    def call(action="", body=None, origin=None):
+    def call(action="", body=None, origin=None, goal="example"):
         connection = http.client.HTTPConnection(
             "127.0.0.1", server.server_port, timeout=90
         )
@@ -63,7 +65,7 @@ def api(tmp_path, monkeypatch, request):
         if origin:
             headers["Origin"] = origin
         path = "/api/chat/goal-storage" + (
-            f"/{action}" if action else "?goal_id=example"
+            f"/{action}" if action else f"?goal_id={goal}"
         )
         connection.request(
             "POST" if body is not None else "GET",
@@ -78,6 +80,22 @@ def api(tmp_path, monkeypatch, request):
         assert str(tmp_path) not in json.dumps(value)
         return response.status, value
 
+    def restart(selected_registry=registry, selected_runtime=runtime):
+        nonlocal server, thread
+        previous_port = server.server_port
+        server.shutdown()
+        thread.join(5)
+        server.server_close()
+        server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+        server.runtime_root = selected_runtime
+        server.registry_path = selected_registry
+        server.runtime_root_override = str(selected_runtime)
+        server.verbose = False
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        assert server.server_port != previous_port
+
+    call.restart = restart
     yield call, runtime, registry
     server.shutdown()
     thread.join(5)
@@ -98,6 +116,157 @@ def operate(call, plan, action="apply", **overrides):
 
 def read(runtime, goal="example"):
     return read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal, include_leases=True)
+
+
+def carrier(plan):
+    return {key: plan[key] for key in ("goal_id", "preview_id", "plan_sha256")}
+
+
+def test_pending_preview_survives_new_server_origin_without_applying(api):
+    call, runtime, _ = api
+    initial = call()[1]["current"]["provider"]
+    plan = preview(call, "sqlite" if initial == "file" else "file")
+    original = carrier(plan)
+    before = read(runtime)
+    call.restart()
+    code, current = call()
+    assert code == 200 and current["pending_preview"] == original
+    assert current["current"]["provider"] == initial and read(runtime) == before
+    assert operate(call, original, "recover")[0] == 200
+    assert read(runtime) == before, "restoring the editor must never apply its preview"
+
+
+def test_saved_preview_is_registry_and_goal_scoped(api, tmp_path):
+    call, runtime, registry = api
+    initial = call()[1]["current"]["provider"]
+    plan = preview(call, "sqlite" if initial == "file" else "file")
+    original = carrier(plan)
+    assert call(goal="other")[1].get("pending_preview") is None
+    other_registry = tmp_path / "another-registry.json"
+    other_registry.write_bytes(registry.read_bytes())
+    call.restart(other_registry)
+    assert call()[1].get("pending_preview") is None
+    call.restart(registry)
+    assert call()[1]["pending_preview"] == original
+    assert read(runtime)["todos"] == []
+
+
+def test_saved_preview_is_runtime_scoped(api, tmp_path):
+    call, runtime, _ = api
+    initial = call()[1]["current"]["provider"]
+    original = carrier(preview(call, "sqlite" if initial == "file" else "file"))
+    separate = tmp_path / "other-runtime"
+    initialize_canonical_authority(separate, "example",
+        build_todo_runtime_shadow_projection(goal_id="example", handoff_mode="legacy", todos=[]),
+        state_path=tmp_path / "example.md", provider=initial)
+    call.restart(selected_runtime=separate)
+    code, observed = call()
+    assert code == 200 and observed["pending_preview"] is None
+    call.restart()
+    assert call()[1]["pending_preview"] == original
+
+
+def test_pre_upgrade_cold_apply_retains_the_exact_original_intent(cold_api):  # noqa: F811 - imported pytest fixture
+    call, read_todos, state, _, runtime, _, _, _ = cold_api
+    code, plan = call("preview", {"goal_id": "cold", "provider": "sqlite", "handoff_mode": "hard_lease"})
+    assert code == 200 and plan["ok"], plan
+    original = {key: plan[key] for key in ("goal_id", "operation_id", "plan_sha256")}
+    # A preview prepared by a pre-journal server has only its original handle.
+    records = list((runtime / "chat" / "storage-previews").glob("*.json"))
+    assert len(records) == 1
+    records[0].unlink()
+    source = state.read_bytes()
+    code, applied = call("apply", {**original, "writers_stopped": True})
+    assert code == 200 and applied["status"] == "applied", applied
+    assert call()[1]["pending_preview"] == original
+    assert len(read_todos()["todos"]) == 2 and state.read_bytes() == source
+
+
+def test_discard_is_exact_and_old_clients_cannot_resurrect_a_preview(api):
+    call, runtime, _ = api
+    initial = call()[1]["current"]["provider"]
+    target = "sqlite" if initial == "file" else "file"
+    old = preview(call, target)
+    current = preview(call, target)
+    assert old["preview_id"] != current["preview_id"]
+    before = read(runtime)
+    assert operate(call, old, "discard")[0] == 409
+    assert operate(call, old)[0] == 409
+    assert call()[1]["pending_preview"] == carrier(current)
+    assert operate(call, old, "recover")[0] == 200
+    assert call()[1]["pending_preview"] == carrier(current)
+    assert operate(call, current, "discard")[0] == 200
+    call.restart()
+    assert call()[1]["pending_preview"] is None
+    assert operate(call, current, "recover")[0] == 200
+    assert call()[1]["pending_preview"] is None
+    assert operate(call, current)[0] == 409
+    assert read(runtime) == before
+
+
+def test_completed_preview_restart_retains_original_receipt_and_later_writes(api):
+    call, runtime, registry = api
+    initial = call()[1]["current"]["provider"]
+    plan = preview(call, "sqlite" if initial == "file" else "file")
+    assert operate(call, plan)[0] == 200
+    add_goal_todo(registry_path=registry, goal_id="example", role="agent",
+                  text="Acknowledged after cutover", claimed_by="agent-a")
+    written = read(runtime)
+    call.restart()
+    assert call()[1]["pending_preview"] == carrier(plan)
+    code, original = operate(call, plan, "recover")
+    assert code == 200 and original["recovery"]["phase"] == "completed"
+    assert operate(call, plan)[1]["status"] == "already_applied"
+    assert read(runtime) == written
+
+
+def test_original_browser_only_handle_remains_explicitly_recoverable(api):
+    call, runtime, _ = api
+    initial = call()[1]["current"]["provider"]
+    plan = preview(call, "sqlite" if initial == "file" else "file")
+    before = read(runtime)
+    # Pre-upgrade servers persisted immutable plans, without an editor record.
+    journal, = (runtime / "chat" / "storage-previews").glob("*.json")
+    journal.unlink()
+    call.restart()
+    assert call()[1]["pending_preview"] is None
+    assert operate(call, plan, "recover")[0] == 200
+    assert call()[1]["pending_preview"] == carrier(plan)
+    assert read(runtime) == before
+
+
+def test_corrupt_or_unsafe_editor_record_cannot_create_or_apply_new_intent(api, tmp_path):
+    call, runtime, _ = api
+    initial = call()[1]["current"]["provider"]
+    target = "sqlite" if initial == "file" else "file"
+    plan = preview(call, target)
+    journal, = (runtime / "chat" / "storage-previews").glob("*.json")
+    original = journal.read_bytes()
+    before = read(runtime)
+    for corrupted in [b"{broken", b"x" * 5000, json.dumps({"carrier": {
+            **carrier(plan), "goal_id": "other"}}).encode()]:
+        journal.write_bytes(corrupted)
+        assert call()[0] == 503
+        assert call("preview", {"goal_id": "example", "provider": target})[0] == 503
+        assert operate(call, plan)[0] == 503
+        assert operate(call, plan, "recover")[0] == 200
+        assert journal.read_bytes() == corrupted and read(runtime) == before
+    journal.write_bytes(original)
+    if hasattr(journal, "symlink_to"):
+        outside = tmp_path / "unrelated-record.json"
+        outside.write_bytes(original)
+        journal.unlink()
+        try:
+            journal.symlink_to(outside)
+        except OSError:  # Windows may require a separate symlink privilege.
+            journal.write_bytes(original)
+        else:
+            assert call()[0] == 503
+            assert operate(call, plan, "discard")[0] == 503
+            assert outside.read_bytes() == original and read(runtime) == before
+            journal.unlink()
+            journal.write_bytes(original)
+    assert call()[1]["pending_preview"] == carrier(plan)
 
 
 def test_storage_switch_retains_new_metadata_and_history_after_restart(api):

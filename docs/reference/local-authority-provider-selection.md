@@ -438,14 +438,27 @@ settings use the same transaction for cold import:
    Confirm **Import reviewed Markdown source**. Apply
    rechecks the bound original source and backup; a changed source needs a new
    reviewed preview.
-4. After a lost response or reload, **Read original preview and current storage**
+4. After a lost response, reload or native App restart, **Read original preview and current storage**
    observes the saved operation and current store independently. Reload never
    completes an unfinished import. Confirm again to retry the original operation;
    do not discard its carrier while the commit is ambiguous.
 
-Only Goal/operation/digest identifiers survive in browser storage. Full plans,
-source bytes and backup paths stay local to the server. Completed receipt
+The local server retains only the existing Goal/operation/digest identifiers as
+editor intent, scoped to the runtime, registry and Goal. This also covers a
+canonical File/SQLite migration preview. A native App can recover the same
+original preview after restarting on another loopback port; recovery does not
+apply it. Browser storage is a compatibility cache, not the durable owner. Full
+plans, source bytes and backup paths stay local to the server. Completed receipt
 readback neither overwrites later writes nor reselects a provider.
+
+**Discard original preview** clears only the matching editor intent and survives
+restart. A stale tab cannot discard or apply a newer preview. Discard retains
+plans, backups and original receipts; it does not roll back a committed migration.
+A corrupt saved editor record makes inspection and mutation unavailable rather
+than guessing a replacement; explicit original-receipt readback remains available.
+Pre-upgrade browser-only handles remain explicitly readable through the original
+API/CLI recovery path. A new server does not automatically adopt an unscoped
+browser cache from a possibly different runtime or registry.
 The operator-led POSIX stop path is exercised with actual owned Host processes
 and native unpromoted-source leases on File/SQLite: import refuses while the
 Host runs and after it exits with an active lease; native release permits

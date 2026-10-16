@@ -71,7 +71,7 @@ async function importSettled(browser, url, provider) {
   let context;
   let applyCount = 0;
   try {
-    context = await openWorkspacePage(browser, url, {beforeGoto: async (_api, page) => {
+    const connect = () => openWorkspacePage(browser, url, {beforeGoto: async (_api, page) => {
       await page.route(/\/api\/chat\/goal-(storage|ownership)(?:[/?]|$)/, async route => {
         const parsed = new URL(route.request().url());
         const response = await fetchWorkspaceBackend(route, authority.url);
@@ -81,7 +81,8 @@ async function importSettled(browser, url, provider) {
         } else await route.fulfill({response});
       });
     }});
-    const {page} = context;
+    context = await connect();
+    let {page} = context;
     async function open() {
       const navigation = page.getByRole("button", {name: "打开 Goal 导航", exact: true});
       if (await navigation.isVisible()) await navigation.click();
@@ -107,6 +108,15 @@ async function importSettled(browser, url, provider) {
     await panel.getByRole("status").filter({hasText: "已准备"}).waitFor();
     assert.ok(await panel.getByRole("button", {name: "导入已审核的 Markdown 来源", exact: true}).isDisabled());
     assert.equal(applyCount, 0, "reload observes the original prepared operation without applying");
+    // A native process gets a fresh loopback origin. A fresh browser context
+    // likewise has no origin-local carrier; only the real server can recover it.
+    await context.close();
+    context = await connect();
+    ({page} = context);
+    panel = await open();
+    await panel.getByRole("checkbox").waitFor();
+    assert.equal(await page.evaluate(() => localStorage.getItem("loopx-storage-preview:multi-agent-projection")), saved);
+    assert.equal(applyCount, 0, "a fresh context must recover the same prepared intent without applying");
     await page.setViewportSize({width: 390, height: 844});
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
     await panel.getByRole("checkbox").focus();
@@ -116,14 +126,24 @@ async function importSettled(browser, url, provider) {
     await panel.getByRole("alert").waitFor();
     assert.equal(applyCount, 1);
     assert.equal(await page.evaluate(() => localStorage.getItem("loopx-storage-preview:multi-agent-projection")), saved);
-    await page.reload({waitUntil: "networkidle"});
+    await context.close();
+    context = await connect();
+    ({page} = context);
     panel = await open();
     await panel.getByRole("status").filter({hasText: "原导入回执已核验"}).waitFor();
     assert.equal(applyCount, 1, "completed readback does not apply again");
     await panel.getByText(provider, {exact: true}).waitFor();
     assert.equal(await panel.getByRole("checkbox").count(), 0);
+    await panel.getByRole("button", {name: "放弃原预览", exact: true}).click();
+    await panel.getByRole("button", {name: "预览存储变更", exact: true}).waitFor();
+    await context.close();
+    context = await connect();
+    ({page} = context);
+    panel = await open();
+    await panel.getByRole("button", {name: "预览存储变更", exact: true}).waitFor();
+    assert.equal(await page.evaluate(() => localStorage.getItem("loopx-storage-preview:multi-agent-projection")), null);
     assert.equal(await readFile(resolve(authority.root, "state.md"), "utf8"), authority.source);
-    await panel.getByRole("status").filter({hasText: "原导入回执已核验"}).scrollIntoViewIfNeeded();
+    await panel.scrollIntoViewIfNeeded();
     await page.screenshot({path: resolve(outputDir, `goal-storage-import-${provider}-mobile.png`), animations: "disabled"});
     assert.equal(context.errors.filter(e => !e.includes("ERR_FAILED")).length, 0, context.errors.join("; "));
   } finally { await context?.close(); await authority.close(); }
@@ -189,7 +209,7 @@ const goalStorageScenario = {
       // Deliberately induced HTTP failures may be logged by the browser.
       assert.equal(context.errors.filter(e => !e.includes("503") && !e.includes("409")).length, 0, context.errors.join("; "));
       for (const provider of ["file", "sqlite"]) await importSettled(browser, url, provider);
-      return {note: "Cold/archived tasks, expired orphan lease, original outbox, unavailable source and fresh recovery; refused expired lease; confirmed File/SQLite import, readonly reload and lost-response original receipt recovery; packaged Chinese/English desktop/mobile."};
+      return {note: "Cold/archived tasks, expired orphan lease and outbox refusals; confirmed File/SQLite import, readonly reload/fresh-context recovery, lost-response original receipt and durable dismissal; packaged Chinese/English desktop/mobile."};
     } finally { await context?.close(); await authority.close(); }
   },
 };
