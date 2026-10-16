@@ -72,6 +72,7 @@ export const researchHistoryScenario = {
       });
       assert(target.width >= 44 && target.height >= 44, "A readable marker has a separate touch target");
       assert.equal(target.dotWidth, target.dotHeight, "A point is not stretched into a status bar by button minimums");
+      await history.screenshot({path: resolve(outputDir, "research-history-recorded-timeline.png"), animations: "disabled"});
       const day = history.locator(".research-unlinked-days button").first();
       await day.click();
       await history.locator(".research-history-detail").waitFor();

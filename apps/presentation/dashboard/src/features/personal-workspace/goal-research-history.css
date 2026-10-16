@@ -65,6 +65,9 @@
 .research-phase-counts b + b, .research-phase-counts b:not(:first-child) { margin-left: 12px; }
 .research-phase-bar { display: flex; gap: 2px; height: 18px; border-radius: 4px; overflow: hidden; background: var(--pw-track); }
 .research-phase-bar span { display: flex; align-items: center; min-width: 4px; padding-inline: 6px; overflow: hidden; color: var(--pw-bg); font-size: var(--text-caption); font-weight: 600; white-space: nowrap; }
+.research-phase-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: var(--text-caption); color: var(--pw-text); }
+.research-phase-legend > span { display: inline-flex; align-items: center; gap: 4px; }
+.research-phase-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: var(--research-tone); }
 .research-phase-decisions { font-size: var(--text-caption); color: var(--pw-text); }
 .research-phase-line { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: var(--text-caption); color: var(--pw-muted); line-height: var(--leading-caption); }
 .research-phase-line em, .research-trail-list em, .research-finding-sections dt { font-style: normal; font-weight: 600; color: var(--pw-text); margin-right: 6px; }
