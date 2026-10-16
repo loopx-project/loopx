@@ -152,6 +152,15 @@ and explains that updates resume automatically when the connection recovers.
 Replies remain disabled until a fresh observation permits them. Changing the
 display language preserves the reader's position. These are read-recovery
 guarantees; interrupted reply delivery still follows its receipt contract.
+
+These examples use public synthetic records and an isolated Desktop protocol
+peer. They illustrate the recovery message, not a live executor or installed-App
+qualification.
+
+| Interrupted read before | Recovery feedback |
+| --- | --- |
+| ![Interrupted history read with a technical error](../../examples/personal-workspace-browser/assets/attached-history-outage-before.png) | ![Retained history with automatic recovery guidance](../../examples/personal-workspace-browser/assets/attached-history-outage-after.png) |
+
 Pages contain at most 100 records and scan approximately 2 MiB, allowing a whole
 larger record at a boundary. The reader skips up to eight metadata-only windows
 per read gesture or observation; it stops on visible work, the source boundary,
