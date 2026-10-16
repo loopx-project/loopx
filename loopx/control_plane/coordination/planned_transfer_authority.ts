@@ -20,8 +20,9 @@ import {openLocalAuthorityStoreHandle, requireLocalAuthorityRuntimeRoot} from ".
 import {loadLegacyCoordinationWriterFence, preparePlannedTransferWriterFenceUnderLock,
   PLANNED_TRANSFER_WRITER_FENCE_SCHEMA} from "./legacy_writer_fence.ts";
 import {readShadowManagementState, shadowManagementDirectory, withShadowMaintenanceLock} from "./shadow_management.ts";
+import {withVerifiedGoalTransferContext} from "../goals/planned_transfer.ts";
 
-const PREPARATION_SCHEMA = "loopx_planned_transfer_authority_preparation_v0";
+export const PREPARATION_SCHEMA = "loopx_planned_transfer_authority_preparation_v0";
 
 function reject(message: string): never { throw new EffectRuntimeConflictError(message); }
 function same(a: unknown, b: unknown): boolean { return canonicalAuthorityBytes(a).equals(canonicalAuthorityBytes(b)); }
@@ -47,8 +48,9 @@ async function retain(path: string, value: JsonObject): Promise<void> {
  * It never reopens the source or rewrites a receipt following later changes.
  */
 export async function prepareAuthorityForPlannedTransfer(value: JsonObject): Promise<JsonObject> {
+  const contextBound = value.source_context !== undefined;
   if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id", "operation_id", "expected_provider_revision",
-      "expected_writer_fence_sha256", "execute"]) || value.execute !== true ||
+      "expected_writer_fence_sha256", "execute", ...(contextBound ? ["source_context", "registry_witness"] : [])]) || value.execute !== true ||
       typeof value.expected_writer_fence_sha256 !== "string" || !BARE_SHA256_PATTERN.test(value.expected_writer_fence_sha256)) {
     reject("Transfer authority preparation requires an explicit execution and the complete reviewed source identity");
   }
@@ -60,6 +62,7 @@ export async function prepareAuthorityForPlannedTransfer(value: JsonObject): Pro
     expected_writer_fence_sha256: value.expected_writer_fence_sha256};
   const directory = join(shadowManagementDirectory(root, goal), "planned-transfers", canonicalAuthoritySha256(operation));
   return withShadowMaintenanceLock(root, goal, async () => {
+    const prepare = async (context?: JsonObject) => {
     const managed = await readShadowManagementState(root, goal);
     if (managed && managed.status !== "inactive") reject("Source capture requires disposition before planned transfer");
     const current = await loadLegacyCoordinationWriterFence(root, goal);
@@ -78,7 +81,8 @@ export async function prepareAuthorityForPlannedTransfer(value: JsonObject): Pro
     const pending = await optionalJson(pendingPath);
     const facts = {schema_version: PREPARATION_SCHEMA, request,
       source_provider: opened.provider, source_store_identity: identity.store_identity,
-      source_cursor: head.cursor, source_projection_sha256: canonicalAuthoritySha256(head.head)};
+      source_cursor: head.cursor, source_projection_sha256: canonicalAuthoritySha256(head.head),
+      ...(context ? {source_context: context, source_context_sha256: canonicalAuthoritySha256(context)} : {})};
     let priorFence: JsonObject;
     if (pending) {
       priorFence = requireJsonObject(pending.original_writer_fence, "original source writer fence");
@@ -86,7 +90,7 @@ export async function prepareAuthorityForPlannedTransfer(value: JsonObject): Pro
       // A carrier is written before the fence, so an interrupted first call may
       // still find the exact original fence. Neither case permits other bytes.
       const expectedFence = {schema_version: PLANNED_TRANSFER_WRITER_FENCE_SCHEMA, state: "engaged", goal_id: goal,
-        fence_id: `planned-transfer:${operation}`, operation_id: operation, source_identity_sha256: canonicalAuthoritySha256(pending)};
+        role: "source", fence_id: `planned-transfer:${operation}`, operation_id: operation, source_identity_sha256: canonicalAuthoritySha256(pending)};
       if (!same(current.fence, priorFence) && !same(current.fence, expectedFence)) reject("Source writer fence changed during transfer preparation");
     } else {
       if (current.fence.schema_version === PLANNED_TRANSFER_WRITER_FENCE_SCHEMA) reject("Source is already prepared by another transfer operation");
@@ -98,7 +102,7 @@ export async function prepareAuthorityForPlannedTransfer(value: JsonObject): Pro
     await retain(pendingPath, preparation);
     await preparePlannedTransferWriterFenceUnderLock(root, goal, priorFence, {
       schema_version: PLANNED_TRANSFER_WRITER_FENCE_SCHEMA, state: "engaged", goal_id: goal,
-      fence_id: `planned-transfer:${operation}`, operation_id: operation,
+      role: "source", fence_id: `planned-transfer:${operation}`, operation_id: operation,
       source_identity_sha256: canonicalAuthoritySha256(preparation),
     });
     // Export reuses the native retained-journal owner and its independent audit.
@@ -115,8 +119,11 @@ export async function prepareAuthorityForPlannedTransfer(value: JsonObject): Pro
         captured.projection_sha256 !== facts.source_projection_sha256) reject("Transfer archive differs from its prepared source");
     const result: JsonObject = {schema_version: PREPARATION_SCHEMA, operation_id: operation, goal_id: goal,
       authority_write_fenced: true, authority_archive: {...captured}, archive,
+      ...(context ? {source_context_sha256: canonicalAuthoritySha256(context)} : {}),
       host_drain_qualified: false, portable_artifact_qualified: false, execution_authority_granted: false};
     await retain(join(directory, "receipt.json"), result);
     return result;
+    };
+    return contextBound ? withVerifiedGoalTransferContext(value.source_context, value.registry_witness, goal, root, prepare) : prepare();
   });
 }

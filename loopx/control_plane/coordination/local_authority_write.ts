@@ -83,7 +83,7 @@ export async function requireCanonicalBusinessWrite(
   }
   if (fence.status === "loaded" && fence.fence.schema_version === PLANNED_TRANSFER_WRITER_FENCE_SCHEMA) {
     throw new CanonicalWriteRouteError("canonical_authority_transfer_prepared", goalId, operation,
-      `Source authority is prepared for transfer ${fence.fence.operation_id}; recover that operation before retrying`);
+      `Authority is prepared for transfer ${fence.fence.operation_id}; recover that operation before retrying`);
   }
 }
 
@@ -105,7 +105,7 @@ export async function withCanonicalWriter<T>(
       const fence = await loadLegacyCoordinationWriterFence(root, goalId);
       if (fence.status === "loaded" && fence.fence.schema_version === PLANNED_TRANSFER_WRITER_FENCE_SCHEMA) {
         throw new CanonicalWriteRouteError("canonical_authority_transfer_prepared", goalId, "authority_maintenance",
-          `Source authority is prepared for transfer ${fence.fence.operation_id}; recover that operation before retrying`);
+          `Authority is prepared for transfer ${fence.fence.operation_id}; recover that operation before retrying`);
       }
     }
     return await write();

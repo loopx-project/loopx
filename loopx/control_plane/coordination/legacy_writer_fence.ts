@@ -37,9 +37,19 @@ export {
 
 /** A cold import pins its own source and operation; it has no shadow revision. */
 export const COLD_SOURCE_IMPORT_WRITER_FENCE_SCHEMA = "loopx_cold_source_import_writer_fence_v0";
-/** Source-side write exclusion. Older decoders reject this schema, so an older
- * binary cannot mistake prepared history for an ordinary writable authority. */
+/** Transfer write exclusion on a prepared source or an inert destination.
+ * Older decoders reject this schema rather than treating retained history as a
+ * fresh execution grant. The role is part of the exact persisted binding. */
 export const PLANNED_TRANSFER_WRITER_FENCE_SCHEMA = "loopx_planned_transfer_writer_fence_v0";
+export interface PlannedTransferWriterFence extends JsonObject {
+  schema_version: typeof PLANNED_TRANSFER_WRITER_FENCE_SCHEMA;
+  state: "engaged";
+  role: "source" | "target";
+  goal_id: string;
+  fence_id: string;
+  operation_id: string;
+  source_identity_sha256: string;
+}
 
 // Caller adapter: remediation is rendered here, never inside
 // checkLegacyCoordinationWriteAllowed, which owns only the stable typed reason
@@ -115,7 +125,8 @@ export function decodeLegacyCoordinationWriterFence(value: unknown): JsonObject 
   const fence = canonicalAuthorityObject(value, "legacy coordination writer fence");
   if (fence.schema_version === PLANNED_TRANSFER_WRITER_FENCE_SCHEMA) {
     if (fence.state !== "engaged" || !hasExactAuthorityKeys(fence,
-        ["schema_version", "state", "goal_id", "fence_id", "operation_id", "source_identity_sha256"]) ||
+        ["schema_version", "state", "goal_id", "fence_id", "operation_id", "source_identity_sha256", "role"]) ||
+        (fence.role !== "source" && fence.role !== "target") ||
         !BARE_SHA256_PATTERN.test(String(fence.source_identity_sha256))) throw new Error("Invalid planned transfer writer fence");
     for (const key of ["goal_id", "fence_id", "operation_id"]) requireAuthorityStoreId(fence[key], key);
     return fence;
@@ -199,12 +210,12 @@ export async function completeNewGoalWriterFenceUnderLocks(root: string, goalId:
  * and complete source identity. This transition never reopens a prepared source.
  */
 export async function preparePlannedTransferWriterFenceUnderLock(root: string, goalId: string,
-  prior: JsonObject, prepared: JsonObject): Promise<void> {
+  prior: JsonObject, prepared: PlannedTransferWriterFence): Promise<void> {
   decodeLegacyCoordinationWriterFence(prior);
   decodeLegacyCoordinationWriterFence(prepared);
   if (prior.goal_id !== goalId || prepared.goal_id !== goalId ||
       prior.schema_version === PLANNED_TRANSFER_WRITER_FENCE_SCHEMA ||
-      prepared.schema_version !== PLANNED_TRANSFER_WRITER_FENCE_SCHEMA) throw new Error("Invalid transfer fence transition");
+      prepared.schema_version !== PLANNED_TRANSFER_WRITER_FENCE_SCHEMA || prepared.role !== "source") throw new Error("Invalid transfer fence transition");
   const path = legacyCoordinationWriterFencePath(root, goalId);
   await withFileMutationLock(path, async () => {
     const current = await loadLegacyCoordinationWriterFence(root, goalId);
