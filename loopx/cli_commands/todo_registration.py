@@ -65,7 +65,8 @@ def register_todo_command(
         "--update-operation-id",
         help=("For promoted text/note, planning, validator revision or User completion update, reuse this operation id after a lost response; "
               "changed intent is rejected. Planning supports status, evidence, reason, resume conditions and successor links; "
-              "User status=done uses terminal validation and lease release; other leased status changes remain unsupported."),
+              "Owner pause/deferral and explicit resume commit applicable lease retirement atomically; "
+              "User status=done uses terminal validation and lease release."),
     )
     todo_parser.add_argument(
         "--update-expected-provider-revision",
@@ -106,7 +107,7 @@ def register_todo_command(
             "becomes the semantic receipt; no follow-up ACK command is required."
         ),
     )
-    todo_parser.add_argument("--status", choices=["open", "done", "blocked", "deferred"], help="For todo add/update, set the lifecycle status.")
+    todo_parser.add_argument("--status", choices=["open", "done", "blocked", "deferred"], help="For add/update, set lifecycle status. Owner pause/resume with --reason and optional --note/--evidence atomically retires the applicable lease; no manual release is needed.")
     todo_parser.add_argument("--note", help="Public-safe note to attach to a lifecycle transition.")
     todo_parser.add_argument("--evidence", help="Public-safe evidence pointer or short result for complete/update.")
     todo_parser.add_argument("--result-file", help="For todo complete with bound Goal acceptance criteria, bind a bounded local .json, .md or .txt result. A Todo validator alone is insufficient; use --evidence for a local artifact pointer.")
@@ -295,8 +296,9 @@ def register_todo_command(
         "--task-lease-idempotency-key",
         help=(
             "For todo claim on promoted hard-lease authority, atomically acquire "
-            "the canonical lease and claim; for promoted text/note or planning update, complete and supersede, prove the "
-            "execution instance that owns the active lease."
+            "the canonical lease and claim. Optional for administrative edits and bounded owner pause/resume; "
+            "when supplied, this proof and the current version are strictly checked. "
+            "Complete, supersede and other execution-fenced updates require the active execution proof."
         ),
     )
     todo_parser.add_argument(
@@ -304,8 +306,9 @@ def register_todo_command(
         type=int,
         help=(
             "For promoted todo claim, optionally compare-and-set the canonical "
-            "lease version; for promoted text/note or planning update, complete and supersede, supply the active lease "
-            "version when it is effective."
+            "lease version. For updates with an explicit lease key, supply its current version; "
+            "partial or stale proof is rejected. Complete, supersede and other execution-fenced "
+            "updates require the active lease version when it is effective."
         ),
     )
     todo_parser.add_argument(

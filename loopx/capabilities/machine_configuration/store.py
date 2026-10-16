@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
@@ -115,7 +116,9 @@ def read_machine_configuration(
     return normalized
 
 
-def read_stored_machine_configuration(runtime_root: Path) -> dict[str, Any] | None:
+def read_stored_machine_configuration(
+    runtime_root: Path, *, source_snapshots: dict[Path, bytes | None] | None = None,
+) -> dict[str, Any] | None:
     """Read the exact stored envelope for fenced repair and rollback.
 
     Normal reads remain fail-closed through ``read_machine_configuration``.
@@ -124,9 +127,24 @@ def read_stored_machine_configuration(runtime_root: Path) -> dict[str, Any] | No
     """
 
     path = machine_configuration_store_path(runtime_root)
-    if not path.is_file():
-        return None
-    payload = read_json(path)
+    if source_snapshots is None:
+        if not path.is_file():
+            return None
+        payload = read_json(path)
+    else:
+        # The backup caller needs the exact bytes this owner decoded, including
+        # a confirmed absence. A later live read cannot witness this snapshot.
+        if path not in source_snapshots:
+            try:
+                source_snapshots[path] = path.read_bytes()
+            except FileNotFoundError:
+                if path.is_symlink():
+                    raise ValueError("machine configuration source is a broken symbolic link") from None
+                source_snapshots[path] = None
+        raw = source_snapshots[path]
+        if raw is None:
+            return None
+        payload = json.loads(raw.decode("utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("machine_configuration must be an object")
     return payload

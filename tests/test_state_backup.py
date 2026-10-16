@@ -14,6 +14,8 @@ import pytest
 
 import loopx.state_backup as state_backup
 from loopx.state_backup import build_state_backup_plan, execute_state_backup_plan
+from loopx.control_plane.state_recovery_io import verify_state_backup
+from tests.control_plane.canonical_authority_fixture import promoted_create_fixture
 
 
 pytestmark = pytest.mark.usefixtures("isolated_effect_runtime")
@@ -203,6 +205,143 @@ def _backup_cli(root: Path) -> list[str]:
             "--project", str(root / "project"), "--output-dir", str(root / "backups"),
             "--backup-id", "exclusive", "--no-automations", "--no-skills",
             "--current-project-only", "--execute"]
+
+
+def _strict_registry(payload: dict, writer: str = "goal_instance_v1") -> list:
+    canonical = json.dumps(payload, ensure_ascii=False, allow_nan=False,
+                           sort_keys=True, separators=(",", ":")).encode()
+    return [{"schema_version": "loopx_project_registry_envelope_v1",
+             "minimum_writer_protocol": writer,
+             "payload_sha256": "sha256:" + hashlib.sha256(canonical).hexdigest()}, payload]
+
+
+def test_global_discovery_deduplicates_shared_canonical_runtimes(tmp_path):
+    runtime, source_runtime = tmp_path / "runtime", tmp_path / "canonical-runtime"
+    runtime.mkdir()
+    source_runtime.mkdir()
+    project = tmp_path / "project"
+    project.mkdir()
+    state = project / "current.md"
+    state.write_text("Original unfinished commitments")
+    goals = [{"id": goal_id, "repo": str(project), "state_file": "current.md"}
+             for goal_id in ("goal-a", "goal-b")]
+    source = tmp_path / "canonical.json"
+    source.write_text(json.dumps({"common_runtime_root": str(source_runtime), "goals": goals}))
+    (runtime / "registry.global.json").write_text(json.dumps({"registry_role": "global-local",
+        "common_runtime_root": str(runtime), "goals": [{**goal, "source_registry": "../canonical.json"} for goal in goals]}))
+    plan = build_state_backup_plan(project=project, runtime_root=runtime, output_dir=tmp_path / "backups",
+        include_automations=False, include_skills=False)
+    roots = plan["registry_discovery"]["goal_runtime_roots"]
+    assert roots["goal-a"] == roots["goal-b"] != "runtime-root"
+    assert sum(row["source_path"] == str(source_runtime) for row in plan["included"]) == 1
+    assert sum(row["source_path"] == str(source) for row in plan["included"]) == 1
+
+
+@pytest.mark.parametrize("source_state", ["missing", "undeclared-runtime", "missing-repository"])
+def test_global_discovery_records_unavailable_sources_without_copying_implicit_host_state(tmp_path, monkeypatch, source_state):
+    from loopx import paths
+
+    runtime, implicit = tmp_path / "runtime", tmp_path / "implicit-host-runtime"
+    runtime.mkdir()
+    implicit.mkdir()
+    (implicit / "unselected.txt").write_text("Outside the explicitly selected backup roots")
+    monkeypatch.setattr(paths, "select_default_runtime_root", lambda: implicit)
+    project = tmp_path / "project"
+    project.mkdir()
+    source = tmp_path / "source.json"
+    goal = {"id": "goal-a", "repo": str(project), "state_file": "current.md"}
+    if source_state != "missing":
+        source.write_text(json.dumps({"goals": [goal if source_state != "missing-repository" else {"id": "goal-a"}]}))
+    (runtime / "registry.global.json").write_text(json.dumps({"registry_role": "global-local",
+        "common_runtime_root": str(runtime), "goals": [{**goal, "source_registry": "../source.json"}]}))
+    plan = build_state_backup_plan(project=project, runtime_root=runtime, output_dir=tmp_path / "backups",
+        include_automations=False, include_skills=False)
+    assert plan["registry_discovery"]["goal_runtime_roots"] == {"goal-a": None}
+    assert any(row["key"] == "registry_runtime:goal-a" for row in plan["missing"])
+    assert not any(row["source_path"] == str(implicit) for row in plan["included"])
+    if source.exists():
+        assert any(row["source_path"] == str(source) for row in plan["included"])
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("writer", [None, "goal_instance_v1", "future_writer_v99"],
+                         ids=["legacy", "strict-v1", "readable-future-writer"])
+def test_native_backup_retains_external_routes_for_readable_project_registries(tmp_path, provider, writer):
+    registry, runtime, old_state = promoted_create_fixture(tmp_path, provider=provider)
+    added = subprocess.run([sys.executable, "-I", "-m", "loopx.cli", "--format", "json",
+        "--registry", str(registry), "--runtime-root", str(runtime), "todo", "add",
+        "--goal-id", "goal-a", "--role", "agent", "--claimed-by", "agent-a",
+        "--operation-id", "retained-work", "--text", "Keep this unfinished commitment"],
+        capture_output=True, text=True, check=True, timeout=90)
+    assert json.loads(added.stdout)["ok"] is True
+    external = tmp_path / "external"
+    external.mkdir()
+    state = external / "full-goal.md"
+    state.write_text(old_state.read_text() + "\n## Original commitments\nCurrent full Goal beyond the stale conventional copy.\n")
+    source = external / "source-registry.json"
+    source.write_bytes(registry.read_bytes())
+    payload = json.loads(registry.read_text())
+    payload["goals"][0].update(state_file="../external/full-goal.md", source_registry=str(source))
+    project_registry = tmp_path / "project/.loopx/registry.json"
+    project_registry.parent.mkdir()
+    project_registry.write_text(json.dumps(_strict_registry(payload, writer) if writer else payload))
+    expected = {"registry_active_state:goal-a": state.read_bytes(),
+                "registry_source_registry:goal-a": source.read_bytes(),
+                "configuration_source_registry": project_registry.read_bytes()}
+    completed = subprocess.run(_backup_cli(tmp_path), capture_output=True, text=True, check=True, timeout=90)
+    backup = json.loads(completed.stdout)
+    assert backup["ok"] is True
+    captured = {row["key"]: row["archive_path"] for row in backup["included"]}
+    assert expected.keys() <= captured.keys(), backup["warnings"]
+    for name in ("project", "runtime", "external", "registry.json"):
+        (tmp_path / name).rename(tmp_path / f"unavailable-{name}")
+    destination = tmp_path / "inert"
+    audit = verify_state_backup(archive=Path(backup["archive_path"]), manifest=Path(backup["manifest_path"]),
+                                destination=destination, execute=True)
+    assert audit["status"] == "held" and audit["activation_eligible"] is False
+    assert audit["execution_authority_granted"] is False
+    assert audit["workspace"] == {"isolation": "inert", "registered": False}
+    [authority] = [row for row in audit["components"] if row["owner_kind"] == "coordination_authority"]
+    assert authority["state"] == "readable", authority
+    assert authority["facts"]["provider"] == provider
+    assert authority["facts"]["todo_count"] == 1 and authority["facts"]["history_commits"] == 2
+    for key, raw in expected.items():
+        assert (destination / "data" / captured[key]).read_bytes() == raw
+    assert not (destination / "registry.global.json").exists()
+
+
+@pytest.mark.parametrize("refusal", ["digest", "schema", "lifecycle", "global-envelope"])
+def test_native_backup_keeps_registry_compatibility_refusals_and_previous_pair(tmp_path, refusal):
+    project_registry = tmp_path / "project/.loopx/registry.json"
+    project_registry.parent.mkdir(parents=True)
+    project_registry.write_text('{"goals": []}')
+    previous = execute_state_backup_plan(backup_plan(tmp_path))
+    paths = [Path(previous[key]) for key in ("archive_path", "manifest_path")]
+    original = [path.read_bytes() for path in paths]
+    payload = {"goals": []}
+    if refusal == "lifecycle":
+        payload["profile_id"] = "source_session_v1"
+    envelope = _strict_registry(payload)
+    expected_error = {"digest": "payload digest", "schema": "schema_version",
+                      "lifecycle": "lifecycle-only", "global-envelope": "JSON object"}[refusal]
+    if refusal == "digest":
+        envelope[0]["payload_sha256"] = "sha256:" + "0" * 64
+    elif refusal == "schema":
+        envelope[0]["schema_version"] = "unsupported_registry_v99"
+    elif refusal == "lifecycle":
+        envelope[0].update(schema_version="loopx_project_registry_envelope_v2", minimum_writer_protocol="goal_instance_v2")
+    command = _backup_cli(tmp_path)
+    if refusal == "global-envelope":
+        project_registry = tmp_path / "runtime/registry.global.json"
+        project_registry.parent.mkdir(exist_ok=True)
+        command.remove("--current-project-only")
+    project_registry.write_text(json.dumps(envelope))
+    result = subprocess.run(command, capture_output=True, text=True, timeout=90)
+    assert result.returncode == 1, result.stdout
+    rejected = json.loads(result.stdout)
+    assert rejected["ok"] is False and expected_error in rejected["error"], rejected
+    assert [path.read_bytes() for path in paths] == original
+    assert set(paths[0].parent.iterdir()) == set(paths)
 
 
 def test_native_cli_refuses_a_reused_backup_id_and_keeps_original_data(tmp_path):

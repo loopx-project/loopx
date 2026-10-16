@@ -66,7 +66,24 @@ revision and status remain a separate `acceptance_contract`: a selected-work
 contract and an Agent's current task do not redefine the whole Goal. This read
 model creates no new Goal or acceptance authority.
 
-Evidence retains public-safe validation/action summaries linked to typed
+The current Goal and selected evidence are scoped decision input. Replan keeps
+complete objective, validation and action text, including task/material paths
+and credential-like strings present in the source; it does not run the public
+publication sanitizer or cut those fields to a 240-character display prefix.
+This changes formerly suppressed or shortened replan fields for both ordinary
+and stride-enabled replan. The existing source scoping, bounded observation
+selection, omitted-source reads and private snapshot transport remain intact.
+These packets are not public artifacts: export/upload/publication boundaries
+still require their own redaction and validation.
+
+Each admitted delivery Turn also receives the existing full Goal-state read in
+`interaction_contract.agent_channel.required_reads`, with configured scoped
+acceptance read separately. `planning_horizon` is an optional bounded view of
+work, relations and acceptance gaps; its absence does not remove Goal
+persistence or replace those reads. Reading the Goal does not grant execution
+authority or prove that a subsequent decision used it.
+
+Evidence retains scoped validation/action text linked to typed
 `coverage_ledger` observations by fingerprint. Other Agents and unattributed
 records cannot supply proof for a scoped Agent. Counts describe the available
 source, not complete Goal acceptance. Omitted observations expose counts, time
@@ -87,7 +104,7 @@ loopx --format json history --goal-id <goal-id> --agent-id <agent-id> --evidence
 ```
 
 Execute the supplied action only when more detail is needed. It resolves one
-public-safe compact record in the same Goal and Agent; a changed or unavailable reference fails explicitly and asks the caller to refresh context.
+scoped compact-index record in the same Goal and Agent; a changed or unavailable reference fails explicitly and asks the caller to refresh context.
 It never falls back to another Agent or the latest unrelated record. It reads no
 raw transcript and creates no read receipt. Ordinary `history` remains the
 operator's compact run-history view; `--agent-id` scopes that view as well.

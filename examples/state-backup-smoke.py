@@ -15,7 +15,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.state_backup import (
+# Standalone smoke entrypoints resolve this checkout before importing LoopX.
+from loopx.state_backup import (  # noqa: E402
     build_state_backup_plan,
     execute_state_backup_plan,
     render_state_backup_markdown,
@@ -37,7 +38,8 @@ def seed_fixture(root: Path) -> tuple[Path, Path, Path]:
     runtime = codex_home / "loopx"
     project = root / "project"
 
-    write_json(project / ".loopx" / "registry.json", {"schema_version": "0.1", "goals": [{"id": "fixture"}]})
+    write_json(project / ".loopx" / "registry.json", {"schema_version": "0.1", "common_runtime_root": str(runtime),
+        "goals": [{"id": "fixture", "repo": str(project), "state_file": ".codex/goals/fixture/ACTIVE_GOAL_STATE.md"}]})
     write_text(project / ".codex" / "goals" / "fixture" / "ACTIVE_GOAL_STATE.md", "# fixture\n")
     write_text(project / ".claude" / "goals" / "fixture" / "ACTIVE_GOAL_STATE.md", "# claude fixture\n")
     write_text(project / ".local" / "goals" / "fixture" / "ACTIVE_GOAL_STATE.md", "# local fixture\n")
@@ -45,12 +47,14 @@ def seed_fixture(root: Path) -> tuple[Path, Path, Path]:
     remote_project = root / "remote-project"
     remote_registry = remote_project / ".loopx" / "registry.json"
     remote_state = remote_project / ".codex" / "goals" / "remote" / "ACTIVE_GOAL_STATE.md"
-    write_json(remote_registry, {"schema_version": "0.1", "goals": [{"id": "remote"}]})
+    write_json(remote_registry, {"schema_version": "0.1", "common_runtime_root": str(runtime),
+        "goals": [{"id": "remote", "repo": str(remote_project), "state_file": ".codex/goals/remote/ACTIVE_GOAL_STATE.md"}]})
     write_text(remote_state, "# remote fixture\n")
     write_json(
         runtime / "registry.global.json",
         {
             "schema_version": "0.1",
+            "common_runtime_root": str(runtime),
             "goals": [
                 {
                     "id": "fixture",
@@ -190,6 +194,7 @@ def main() -> int:
                 "source_registry_route_count": 2,
                 "source_registry_included_count": 2,
                 "source_registry_missing_count": 0,
+                "goal_runtime_roots": {goal_id: "runtime-root" for goal_id in ("fixture", "remote", "missing-project")},
             }, plan
             assert any(
                 item.get("key") == "registry_project:missing-project"
@@ -207,8 +212,9 @@ def main() -> int:
             )
             assert current_only["registry_discovery"]["enabled"] is False, current_only
             assert current_only["summary"]["logical_source_bytes"] > 0, current_only
+            assert current_only["registry_discovery"]["goal_runtime_roots"] == {"fixture": "runtime-root"}, current_only
             assert not any(
-                str(item.get("key") or "").startswith("registry_")
+                Path(item["source_path"]).resolve().is_relative_to((root / "remote-project").resolve())
                 for item in current_only["included"]
             ), current_only
         finally:

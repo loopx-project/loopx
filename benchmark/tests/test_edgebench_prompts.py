@@ -10,7 +10,7 @@ import pytest
 
 from benchmark.edgebench.prompts import (
     blind_task_prompt, best_only_task_prompt, native_task_prompt, native_task_instructions,
-    native_task_objective,
+    native_research_guidance,
 )
 
 
@@ -81,7 +81,7 @@ def test_each_worker_receives_and_records_selected_prompt(tmp_path, monkeypatch,
         instructions = native_task_instructions(["solver.py"],
             submission_cooldown=3600, eval_interval=0, internet=False,
             selection="pass_rate_first", score_direction="maximize")
-        objective = native_task_objective()
+        objective = "Complete the supplied task."
     else:
         render = best_only_task_prompt if feedback == "best-only" else blind_task_prompt
         prompt = render("Complete the supplied task.", ["solver.py"])
@@ -128,7 +128,7 @@ def test_each_worker_receives_and_records_selected_prompt(tmp_path, monkeypatch,
         assert agents.read_text().startswith("Task-owned instructions: preserve the interface.\n")
         assert agents.read_text().endswith(instructions)
         assert prompt.startswith(instructions)
-        assert objective == worker.task_objective and objective in agents.read_text()
+        assert objective == worker.task_objective and objective in prompt
         assert "`sforge-submit --result ID --details`" in agents.read_text()
         assert "`sforge-submit --help`" in prompt
         assert (tmp_path / "workspace-AGENTS.md").read_text() == agents.read_text()
@@ -151,13 +151,13 @@ def test_native_research_guidance_preserves_original_task_without_budget_injecti
                    selection="score_first", score_direction="maximize")
     policy = native_task_instructions(["solution.py"], **options)
     assert native_task_prompt(query, ["solution.py"], **options) == policy + "---\n\n" + query + "\n"
-    assert native_task_objective() in policy
+    assert native_research_guidance() in policy
     assert "total trial budget" not in policy
     assert "remaining time" not in policy
 
 
 @pytest.mark.parametrize("objective", ["", "  ", 64800, "Unrelated objective"])
-def test_native_goal_transport_rejects_objective_outside_task_policy(objective, tmp_path, monkeypatch):
+def test_native_goal_transport_rejects_objective_outside_task_prompt(objective, tmp_path, monkeypatch):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from sforge.harness.config import SForgeConfig
@@ -191,7 +191,8 @@ def test_native_research_objective_and_full_planning_input_survive_real_goal_boo
     cli.chmod(0o755)
     for name, value in {"_CONTROL": control, "_TASK_DOC": control / "task.md",
                         "_REGISTRY": control / "registry.json", "_CLI": cli,
-                        "_LOOPX_RUNTIME": tmp_path / "runtime"}.items():
+                        "_LOOPX_RUNTIME": tmp_path / "runtime",
+                        "_SRC": Path(__file__).resolve().parents[2]}.items():
         monkeypatch.setattr(harbor, name, str(value))
     # Exercise real shell, task uploads, bootstrap/configure and planner without
     # staging binaries, contacting a model or creating a task/grader container.
@@ -214,12 +215,13 @@ def test_native_research_objective_and_full_planning_input_survive_real_goal_boo
     monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
     options = dict(submission_cooldown=3600, eval_interval=0, internet=False,
                    selection="score_first", score_direction="maximize")
-    query = "Optimize original metric A while preserving hard constraint B."
+    query = ("Optimize metric A first, then metric C, while preserving hard constraint B.\n"
+             "Do not replace the original priorities with a local proxy.")
     policy = native_task_instructions(["solution.py"], **options)
     prompt = native_task_prompt(query, ["solution.py"], **options)
     worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
         profile=profile, cwd=str(project), feedback_prompt=prompt, workspace_instructions=policy,
-        task_objective=native_task_objective())
+        task_objective=query)
     worker.install_stop_hook(None, None, tmp_path, None)
     worker.environment = Environment()
     remote = control / "entry.md"
@@ -229,7 +231,9 @@ def test_native_research_objective_and_full_planning_input_survive_real_goal_boo
         state = Path(registry["goals"][0]["state_file"])
         if not state.is_absolute():
             state = project / state
-        assert worker.task_objective in state.read_text()
+        from loopx.control_plane.goals.active_state_metadata import split_state_frontmatter
+        assert split_state_frontmatter(state.read_text())[0]["objective"] == query
+        assert native_research_guidance() not in state.read_text()
         assert remote.read_text() == prompt
         assert policy in (project / "AGENTS.md").read_text()
         packet = task_plan_packet(env | worker.runtime._worker_env(cwd=str(project)),
@@ -238,8 +242,22 @@ def test_native_research_objective_and_full_planning_input_survive_real_goal_boo
         assert packet["text"].endswith(prompt)
         assert worker.task_objective in packet["text"] and query in packet["text"]
         assert packet["existing_todos"] == [] and packet["execution_handoff"]["spends_quota"] is False
+        # Real typed replan owner reads the bootstrapped registry/state, not a
+        # hand-built objective fixture. It must retain both ordered priorities
+        # and the trailing constraint through the scoped source projection.
+        readback = subprocess.run([sys.executable, "-c",
+            "import json,sys; from loopx.control_plane.work_items.replan_context_codec "
+            "import project_replan_context; print(json.dumps(project_replan_context("
+            "goal_id='benchmark-goal',agent_id='benchmark-agent',runs=(),"
+            "source_status={'registry':sys.argv[1],'runtime_root':sys.argv[2],'run_history':{'runs':[]}})))",
+            harbor._REGISTRY, harbor._LOOPX_RUNTIME], env=env, cwd=project,
+            capture_output=True, text=True, timeout=90)
+        assert readback.returncode == 0, readback.stderr
+        core = json.loads(readback.stdout)["core_goal"]
+        assert core["objective"] == " ".join(query.split())
+        assert core["objective_source"] == "active_state" and core["acceptance_contract"] is None
         assert worker.format_run_cmd(str(remote), internet=False, resume=True) == command
-        assert (project / "AGENTS.md").read_text().count(native_task_objective()) == 1
+        assert (project / "AGENTS.md").read_text().count(native_research_guidance()) == 1
     finally:
         subprocess.run([sys.executable, "-c", "from loopx.control_plane.effect_runtime import "
             "effect_runtime_result; effect_runtime_result('runtime.shutdown',{},retry_safe=False)"],

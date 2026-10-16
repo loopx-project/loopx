@@ -1656,7 +1656,7 @@ export function registerAuthorityStoreConformance(
       assert.equal(rejected.reason_code, "claim_owner_mismatch");
       assert.deepEqual(await store.loadAuthority(), loaded);
     });
-    test(`${providerName} conformance: lease-fenced text/note update (${native ? "native" : "v0"})`, async (t) => {
+    test(`${providerName} conformance: explicit-proof text/note update with administrative preview (${native ? "native" : "v0"})`, async (t) => {
       const {store, contender} = await factory(t);
       const goalId = "goal-claim";
       const projection = {...todoClaimProjection(goalId, native), handoff_mode: "hard_lease"};
@@ -1685,14 +1685,15 @@ export function registerAuthorityStoreConformance(
         {...request, actor_agent_id: "agent-b"},
         {...request, lease_idempotency_key: "old-execution"},
         {...request, lease_expected_version: 3},
-        {...request, lease_idempotency_key: null, lease_expected_version: null},
+        {...request, lease_idempotency_key: null, lease_expected_version: 4},
         {...request, now: new Date("2026-09-05T06:00:00Z")},
       ]) {
         assert.equal((await executeCoordinationTodoUpdate(store, invalid)).status, "failed");
         assert.deepEqual(await store.loadAuthority(), before);
         assert.equal((await store.readReceipt(request.operation_id)).status, "missing");
       }
-      assert.equal((await executeCoordinationTodoUpdate(store, {...request, dry_run: true})).status, "planned");
+      assert.equal((await executeCoordinationTodoUpdate(store, {...request, dry_run: true,
+        lease_idempotency_key: null, lease_expected_version: null})).status, "planned");
       assert.deepEqual(await store.loadAuthority(), before);
       assert.equal((await executeCoordinationTodoUpdate(store, request)).status, "applied");
       const after = await store.loadAuthority();

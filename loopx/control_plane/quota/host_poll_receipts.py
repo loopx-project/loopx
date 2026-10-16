@@ -107,17 +107,59 @@ def record_host_poll_receipt(
 
 
 def read_host_poll_receipt(path: Path | None) -> dict[str, Any] | None:
+    """Read one valid receipt, preserving the historical optional return API."""
+
+    observation = read_host_poll_receipt_observation(path)
+    receipt = observation.get("receipt")
+    return receipt if isinstance(receipt, dict) else None
+
+
+def read_host_poll_receipt_observation(
+    path: Path | None,
+    *,
+    expected_goal_id: str | None = None,
+) -> dict[str, Any]:
+    """Classify an expected receipt location without hiding corrupt data.
+
+    A missing per-goal receipt is normal because host polling is opt-in. Files
+    that exist but cannot satisfy the receipt contract are unreadable so global
+    projections cannot certify the source as fresh and complete.
+    """
+
     if path is None:
-        return None
+        return {"read_status": "missing", "receipt": None}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"read_status": "missing", "receipt": None}
     except (OSError, json.JSONDecodeError):
-        return None
+        return {"read_status": "unreadable", "receipt": None}
     if not isinstance(payload, dict):
-        return None
+        return {"read_status": "unreadable", "receipt": None}
     if payload.get("schema_version") != HOST_POLL_RECEIPT_SCHEMA_VERSION:
-        return None
-    return payload
+        return {"read_status": "unreadable", "receipt": None}
+    goal_id = payload.get("goal_id")
+    if not isinstance(goal_id, str) or not goal_id.strip():
+        return {"read_status": "unreadable", "receipt": None}
+    if expected_goal_id is not None and goal_id != expected_goal_id:
+        return {"read_status": "unreadable", "receipt": None}
+    if not isinstance(payload.get("agent_id"), str):
+        return {"read_status": "unreadable", "receipt": None}
+    poll_count = payload.get("poll_count")
+    if isinstance(poll_count, bool) or not isinstance(poll_count, int) or poll_count < 0:
+        return {"read_status": "unreadable", "receipt": None}
+    if not isinstance(payload.get("expected_continuation"), bool):
+        return {"read_status": "unreadable", "receipt": None}
+    if not isinstance(payload.get("last_decision_action"), str):
+        return {"read_status": "unreadable", "receipt": None}
+    raw_last_poll = payload.get("last_poll_at")
+    if not isinstance(raw_last_poll, str):
+        return {"read_status": "unreadable", "receipt": None}
+    try:
+        datetime.fromisoformat(raw_last_poll.replace("Z", "+00:00"))
+    except ValueError:
+        return {"read_status": "unreadable", "receipt": None}
+    return {"read_status": "read", "receipt": payload}
 
 
 def stale_host_poll_risk(

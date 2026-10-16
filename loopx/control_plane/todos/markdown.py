@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from typing import Any
 
 from .contract import TODO_STATUS_OPEN, todo_marker_for_status
@@ -15,8 +16,13 @@ def _render_lease_recovery(payload: dict[str, Any]) -> list[str]:
     for step in ("inspect", "acquire", "retry", "release"):
         instruction = recovery.get(step)
         if isinstance(instruction, dict) and instruction.get("command"):
-            lines.append(f"- {step}: `{instruction['command']}`")
-    lines.append("- Use `--format json` for the recovery arguments and current-version requirements.")
+            arguments = instruction.get("cli_args")
+            command = shlex.join(["loopx", *arguments]) if isinstance(arguments, list) else instruction["command"]
+            lines.append(f"- {step}: `{command}`")
+            if instruction.get("requires_flags"):
+                lines.append(f"  - supply: `{', '.join(instruction['requires_flags'])}`")
+            if instruction.get("remove_flags"):
+                lines.append(f"  - remove if supplied: `{', '.join(instruction['remove_flags'])}`")
     return lines
 
 

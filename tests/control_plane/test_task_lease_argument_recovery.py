@@ -100,6 +100,9 @@ def test_missing_inputs_are_combined_and_wrong_owner_is_not_repaired(lease_cli):
     assert repaired[repaired.index("--expected-version") + 1] == "0"
     denied = run(repaired, code=1)
     assert denied["ok"] is False and "recovery" not in denied
+    observed = run(denied["inspection"]["cli_args"])
+    assert observed["lease"] == before
+    assert denied["inspection"]["execution_authority_granted"] is False
     assert run(action("inspect"))["lease"] == before
 
 

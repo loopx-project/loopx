@@ -179,9 +179,10 @@ class SForgeWorker(CodexAgent):
             raise ValueError("Workspace feedback instructions must match the native task wrapper")
         if task_objective is not None and (
             not isinstance(task_objective, str) or not task_objective.strip()
-            or workspace_instructions is None or task_objective not in workspace_instructions
+            or workspace_instructions is None or feedback_prompt is None
+            or task_objective not in feedback_prompt
         ):
-            raise ValueError("Task objective must occur in the native workspace instructions")
+            raise ValueError("Task objective must occur in the native task prompt")
         self.feedback = feedback
         self.feedback_prompt = feedback_prompt
         self.workspace_instructions = workspace_instructions

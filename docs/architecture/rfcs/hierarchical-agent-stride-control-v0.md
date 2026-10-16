@@ -687,7 +687,15 @@ repeating unchanged checks is not a default policy. The next probe declares
 minimum evidence for a coherent accepted deliverable or interpretable experiment, its prediction, adoption criterion and full cost.
 
 The enabled review now supplies `decision_value_review` questions for the three
-existing axes. Identify the remaining authoritative goal gap, its limiting
+existing axes. It separately considers first-deliverable quality and later gain
+beyond the retained best: recovery from an avoidably weak initial artifact does
+not establish additional capability. Compare attributable artifact versions,
+input conditions and original budgets, retaining submission and feedback-arrival
+times separately. Check whether later work implemented the proposed mechanism;
+a decision record, saved snapshot or new identifier alone does not establish
+adoption, restoration or improved results. These are refinements of the existing
+Agent questions, not new decision fields, score thresholds or settlement gates;
+the strategy remains default-off. Identify the remaining authoritative goal gap, its limiting
 component and plausible headroom before choosing the next mechanism. Compare
 continuation with one feasible different approach that could affect that
 component, including complete cost. A changed auxiliary mechanism can be useful,

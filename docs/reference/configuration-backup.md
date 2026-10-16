@@ -56,10 +56,56 @@ paths outside conventional Goal directories. Relative routes resolve against
 the registered repository. The selected project's `.loopx/registry.json` owns
 this scope, even when `--registry` names another project. Other projects are not
 followed; default host-wide discovery continues to use the global registry.
+For global discovery, the existing canonical source route owns the Goal: relative
+`source_registry` values resolve against the global registry's parent, and the
+source registry supplies the current repository, full `state_file` and declared
+`common_runtime_root`. Distinct source runtimes are captured once and shared by
+their Goals. Review the dry-run paths before execution: this can include more
+private state than the shared runtime alone. An unavailable source or an
+undeclared external runtime remains missing; discovery does not copy an implicit
+host-wide default to fill that gap.
+
 Inspect `included`, `missing` and `warnings`: successful publication alone does
 not prove every registered source was reachable. Full-state copies retain raw
 Markdown history and runtime files; inert extraction does not import their
 leases, pending effects or historical receipts as new execution authority.
+
+Discovery uses the same registry reader as configuration capture. Legacy project
+objects and valid strict-v1 project envelopes both retain their declared external
+routes and the original registry bytes. A readable envelope's minimum writer
+protocol does not authorize a writer: backup only preserves data. Invalid
+envelopes and lifecycle-only `source_session_v1` project registries still refuse
+publication; global discovery registries remain object-only. This does not
+qualify lifecycle journals for capture or change the v0 consistency and recovery
+holds below.
+
+New v0 archives record `registry_discovery.goal_runtime_roots` as archive-relative
+capture bindings. Inert owner inspection reads each Goal from its captured source
+root. An absent Goal binding, an explicit null, a missing directory or a symlink
+root remains unknown; another runtime's same-named Goal is not a substitute.
+Bindings must name safe included roots. Historical archives without the entire
+binding map retain their original `runtime-root` readback. The map records capture
+location, not cross-owner consistency, complete owner coverage or activation
+eligibility.
+
+中文：状态发现与配置捕获复用同一个 registry reader；旧对象格式及有效 strict-v1
+项目信封均保存声明的外置路径及原始 registry 字节。可读信封的最低 writer 协议
+不授予写入权，备份只保留数据。无效信封和仅供生命周期操作的 `source_session_v1`
+项目仍拒绝发布，global registry 仍只接受对象。这不代表已完成生命周期日志捕获
+资格，也不改变下文 v0 的一致性限制与恢复 hold。
+
+全局发现沿用 canonical source 路由：相对 `source_registry` 以 global registry
+父目录为基准，当前仓库、完整 `state_file` 与显式 `common_runtime_root` 均来自
+源 registry；多个 Goal 共用的 runtime 只捕获一次。执行前检查 dry-run 路径，
+捕获范围可能比共享 runtime 更大，并包含私有状态。源不可达或外部 runtime 未声明
+时保留缺失，不擅自复制隐式主机默认目录。`--current-project-only` 仍保留所选
+runtime 及以注册仓库为基准的历史相对路径规则。
+
+新 v0 清单的 `registry_discovery.goal_runtime_roots` 只记录归档内的源位置，隔离
+读回按此定位；缺少 Goal 条目、null、目录缺失或根目录是符号链接均为 unknown，
+不能拿另一 runtime 的同名 Goal 代替。绑定必须指向安全且已列入清单的根路径。
+完全不含此映射的旧归档继续按 `runtime-root` 读回。映射不证明跨 owner 一致性、
+owner 完整覆盖或可激活性。
 
 Settings → Capability Center → **Configuration backup and recovery** offers
 download, file verification and isolated recovery through the same typed owner.
@@ -133,6 +179,43 @@ writers. A reviewed cold import still needs complete source discovery, writer
 and Host quiescence, lease/outbox disposition, immutable source/target binding,
 explicit confirmation and original-operation recovery. Neither this manifest
 nor configuration verification authorizes an import or a new execution grant.
+
+Full backups also compare the registry and stored machine-configuration bytes
+actually decoded into `configuration-backup.json` with every mapped regular tar
+copy. Missing witnesses or different bytes refuse publication; an owner-confirmed
+absence also refuses when the archive contains that source's earlier file.
+A revision mismatch reports
+`backup configuration source differs from copied bytes; retry the backup`.
+This tightens the earlier best-effort behavior that could publish older raw
+configuration beside a newer checkpoint, or claim absence beside an earlier
+file. Self-contained local aliases resolve through saved tar metadata to an
+included regular target witness; repointing a live symlink cannot select another
+saved target. A retained tar link also prevents a false absence. A later
+source-path reread cannot replace the snapshot witness: an
+A → B → A change must still be caught when the checkpoint used B. A malformed
+or unreadable machine source is not a confirmed absence. Unchanged sources
+retain the same configuration envelope and v0 archive format. The bounded
+migration backup keeps its existing source-owner witness contract. Older
+archives remain readable under the existing recovery holds.
+
+The private `execution.configuration_capture` records the configuration capture
+interval and matching member revisions, including routed registries and the
+stored machine configuration when present. These are configuration-owner IO
+facts; they do not establish a common point in time with authority, effects or
+other owners, or qualify the M2 `online` profile.
+
+中文：完整备份将配置 owner 实际解码的 registry 与 machine 配置字节，同每份
+映射的普通 tar 副本比较。缺少见证或字节不同就停止发布；owner 确认源不存在而
+归档仍保留其旧文件，也会拒绝。原先可能发布“旧原始配置 + 新 checkpoint”或把
+旧文件误作不存在的 best-effort 行为因此收紧。自包含链接复用归档内普通目标文件：
+硬链接与符号链接只按保存的 tar route 解析，live 链接改向不能重选别的见证；保留的
+tar 链接也不能
+被误判为不存在。比较的不是事后重读路径，所以配置
+使用 B 后即使源回退为 A 仍会拒绝。损坏或不可读的 machine 源不当作确认不存在。
+未变化来源、v0 格式和历史归档读回保持兼容；有界 migration backup 仍使用原
+source owner 的见证契约。私有 `execution.configuration_capture` 记录配置捕获
+区间与匹配成员 revision，包括外部 registry 和存在的 machine 配置；它不证明
+与 authority、effect 等其他 owner 的跨源同时刻，也不代表 M2 `online` 合格。
 
 ## Full-state recovery after cold import
 

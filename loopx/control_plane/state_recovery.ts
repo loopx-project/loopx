@@ -38,6 +38,28 @@ function manifestCore(value: JsonObject): JsonObject {
   return {...value, execution};
 }
 
+/** Optional v0 capture bindings; absence alone retains the legacy root. */
+function capturedRuntimeRoots(manifest: JsonObject): Map<string, string | null> | null {
+  if (manifest.registry_discovery == null) return null;
+  const discovery = requireJsonObject(manifest.registry_discovery, "registry discovery");
+  if (!Object.hasOwn(discovery, "goal_runtime_roots")) return null;
+  const roots = requireJsonObject(discovery.goal_runtime_roots, "captured Goal runtime roots");
+  check(Array.isArray(manifest.included), "backup_manifest_invalid");
+  const included = new Set(manifest.included.map(raw =>
+    requireJsonObject(raw, "included target").archive_path));
+  const result = new Map<string, string | null>();
+  for (const [goalId, root] of Object.entries(roots)) {
+    check(goalId.length > 0 && goalId.trim() === goalId, "backup_manifest_invalid");
+    if (root !== null) {
+      check(typeof root === "string" && !root.includes("\\") && !root.includes("\0") &&
+        !/^[A-Za-z]:/.test(root) && root.split("/").every(part => part && part !== "." && part !== "..") &&
+        included.has(root), "backup_manifest_invalid");
+    }
+    result.set(goalId, root);
+  }
+  return result;
+}
+
 function externalEvidence(request: JsonObject): {external: JsonObject; execution: JsonObject} {
   const external = requireJsonObject(request.external_manifest, "external backup manifest");
   check(external.schema_version === "loopx_state_backup_v0", "backup_schema_unsupported");
@@ -77,6 +99,7 @@ export function verifyStateRecoveryManifest(value: unknown): JsonObject {
       "backup_schema_unsupported");
     check(canonicalAuthoritySha256(manifestCore(external)) === canonicalAuthoritySha256(manifestCore(embedded)),
       "manifest_disagreement");
+    capturedRuntimeRoots(external);
     check(Array.isArray(request.files), "member_inventory_invalid");
     check(Number.isSafeInteger(request.sqlite_member_count) && Number(request.sqlite_member_count) >= 0
       && Number(request.sqlite_member_count) <= MAX_SQLITE_FILES, "sqlite_inventory_capacity");
@@ -124,11 +147,15 @@ async function regular(path: string): Promise<void> {
   check(stat.isFile() && !stat.isSymbolicLink(), "owner_source_not_regular");
 }
 
-async function inspectGoal(root: string, goalId: string, standaloneSqlite: Set<string>): Promise<RecoveryComponent> {
+async function inspectGoal(root: string | null, goalId: string, standaloneSqlite: Set<string>): Promise<RecoveryComponent> {
   const id = `goal:${hash(goalId).slice(0, 20)}`;
-  const paths = localAuthorityProviderPaths(root, goalId);
   const goalFacts = recoveryGoalLabel(goalId) === null ? {} : {goal_id: goalId};
+  if (root === null) return component(id, "coordination_authority", "unknown", "authority_source_unavailable",
+    "inspect_captured_authority_with_owner", goalFacts, ["configuration"]);
+  const paths = localAuthorityProviderPaths(root, goalId);
   try {
+    const directory = await lstat(root);
+    check(directory.isDirectory() && !directory.isSymbolicLink(), "owner_source_not_regular");
     let selection: ReturnType<typeof decodeLocalAuthoritySelection> | null = null;
     try {
       await regular(paths.marker);
@@ -188,6 +215,7 @@ async function inspectGoal(root: string, goalId: string, standaloneSqlite: Set<s
 async function auditOwners(value: unknown): Promise<JsonObject> {
   const started = performance.now();
   const request = requireJsonObject(value, "recovery owner audit");
+  const runtimeRoots = capturedRuntimeRoots(request);
   const measurements = decodeRecoveryMeasurements({
     ...requireJsonObject(request.measurements, "host recovery measurements"), owner_read_ms: 0});
   const basis = requireJsonObject(request.verified, "verified recovery basis");
@@ -254,7 +282,11 @@ async function auditOwners(value: unknown): Promise<JsonObject> {
   if (configuration !== null) {
     const goals = (configuration.data as JsonObject).goals as JsonObject[];
     check(goals.length <= MAX_GOALS, "goal_inventory_capacity");
-    for (const goal of goals) components.push(await inspectGoal(join(dataRoot, "runtime-root"), String(goal.goal_id), ownerReadableSqlite));
+    for (const goal of goals) {
+      const goalId = String(goal.goal_id);
+      const root = runtimeRoots === null ? "runtime-root" : runtimeRoots.get(goalId);
+      components.push(await inspectGoal(root ? join(dataRoot, root) : null, goalId, ownerReadableSqlite));
+    }
   }
   // A v0 file inventory does not identify every session/effect/extension owner.
   // Retained bytes must not masquerade as a successful owner-local read.

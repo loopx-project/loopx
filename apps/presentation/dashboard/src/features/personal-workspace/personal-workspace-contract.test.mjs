@@ -50,7 +50,8 @@ for (const operation of ["reassign", "block"]) {
 assert.match(drawer, /previewTodoTransition\(selection\.item, "defer"/, "Todo defer collects a resume condition before preview");
 assert.match(drawer, /resume_when:\s*resumeWhen/, "Todo defer sends its explicit resume condition");
 assert.doesNotMatch(drawer + page, /owner_resume/, "Personal Workspace never emits the unsupported owner_resume sentinel");
-assert.match(drawer, /previewTodoTransition\(selection\.item, "complete"/, "Todo complete is the primary drawer action");
+assert.match(drawer, /\["blocked", "deferred"\]\.includes\(selection\.item\.status/, "Paused Todos offer resume through the existing primary action");
+assert.match(drawer, /className="personal-primary-action" onClick=\{\(\) => void previewTodoTransition\(selection\.item, todoAwaitingResume \? "resume" : "complete"/, "The primary Todo action resumes paused work and completes open work through typed preview");
 assert.match(drawer, /actionKind: "todo\.create"/, "Todo successor uses the canonical create action");
 
 for (const field of ["evidence", "explanation"]) {

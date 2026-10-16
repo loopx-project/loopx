@@ -434,6 +434,58 @@ grant。协调器记录这些 receipt，但不能铸造或扩大它们。
 identity；Agent 永远不获得数据库访问权。NoKV 或其他 provider 在独立证明同一
 逻辑契约前不受支持。通用 filesystem copy 不能代替 provider profile。
 
+### 首个本地 profile 的捕获 owner 清单
+
+下列源码清单面向首个单 Goal File/SQLite profile，标明 M2 应从哪里取得证据，
+**不证明**某份备份已经包含全部必要组件。实际捕获必须解析所选 Goal 的 route 与
+dependency closure，区分 owner 确认不存在、来源不可读和来源无法识别，并让尚未
+解决的必要 owner 保持 hold。可选安装不意味着活跃 Goal 的依赖也是可选的。
+
+| 可变边界与既有 owner | 当前捕获／读回 | 尚缺的捕获或 adoption 证据 |
+| --- | --- | --- |
+| Registry route 与 machine/Goal 配置：[配置捕获 adapter](../../../loopx/capabilities/configuration_backup.py)、[类型化 checkpoint envelope](../../../loopx/control_plane/configuration_backup.ts)、[machine 配置 store](../../../loopx/capabilities/machine_configuration/store.py) | 完整备份比较各自 owner 实际解码的 registry 与 machine 配置字节和映射副本见证；缺失／不同副本、A → B → A，以及确认不存在却仍保留旧副本均拒绝发布。私有清单记录匹配 revision 与配置捕获区间。 | 仍需绑定 authority 和其他所有必要 owner 的独立区间与依赖；配置来源一致和有效 envelope 不证明跨 owner 一致性。 |
+| Goal 正文、vision 与权威材料引用：registry 解析的 active state、[vision checkpoint owner](../../../loopx/control_plane/goals/vision_checkpoint.ts) | 复制发现的 active-state 路径及 included root 内文件，不递归解析外部材料引用。 | 保留完整 Goal 与绑定 revision 的必要 artifact，分类不可用依赖，并让派生 Markdown 投影服从其 owner。 |
+| Canonical 工作、租约及保留的 operation history：[本地 provider selection](../../../loopx/control_plane/coordination/local_authority_provider.ts)、[authority archive owner](../../../loopx/control_plane/coordination/authority_archive.ts)、[legacy writer fence](../../../loopx/control_plane/coordination/legacy_writer_fence.ts) | File head/history 位于同一原子 envelope；SQLite 使用[既有 physical snapshot owner](../../../loopx/control_plane/coordination/sqlite_backup.ts)。M1 只打开已有 store 并验证 head/history，不选定 live 目标。 | 绑定 provider/store identity、selector、fence、revision 与 cursor，取得 owner export 或合格 snapshot。组件本地一致性不证明跨 owner 一致性，也不使历史租约有效。 |
+| Quota 记账与 Turn settlement：[accounting artifact transaction](../../../loopx/control_plane/quota/accounting_artifact_transaction.ts)、[spend owner](../../../loopx/control_plane/quota/spend_commit.ts)、[Turn journal commit](../../../loopx/control_plane/turn_driver/turn_journal_effects.ts) | 保留 included runtime/project root 内文件；M1 不 reconcile 其 transaction lineage。 | 将已提交 receipt、index 与进行中 journal input 按精确 settlement identity 一起捕获；由原 owner 处置 replay 或歧义，避免第二次扣账。 |
+| Goal lifetime 与 session/execution binding：[source-session lifetime owner](../../../loopx/control_plane/goals/source_session_lifetime.ts)、[Chat session lifecycle](../../../loopx/control_plane/goals/chat_session_lifecycle.ts)、[execution identity](../../../loopx/control_plane/runtime/execution_identity.ts) | 原始 route/journal 字节可能存在；发现范围外的原生 Host session store 不会被隐式捕获或采用。 | 解析真实入口的 owner、lifetime 与 generation，在原入口继续之前证明 stale executor 排除与合格 session recovery 路径。 |
+| Pending effect、delivery 与派生投影 outbox：[source Turn effect gate](../../../loopx/control_plane/goals/source_session_lifetime.ts)、[return-delivery classifier](../../../loopx/control_plane/collaboration/return_delivery.ts)、[authority shadow outbox](../../../loopx/control_plane/coordination/local_authority_shadow_outbox.ts) | Included journal/outbox 只保留为字节，不推断外部结果或 replay 资格。 | 每个 effect/transport owner 处置 committed、absent 或 unknown 结果及精确 receipt；区分派生投影与外部 effect，未知外部结果保持 hold。 |
+| Scheduler 与可选 Host automation：[scheduler state owner](../../../loopx/control_plane/scheduler/state_store.ts)、[备份发现](../../../loopx/state_backup.py) | 可复制 runtime scheduler 文件及显式纳入的 Codex automation/skill 目录；保存的 timer 不是观察到的活跃 Host schedule。 | 绑定 cadence/reset identity，reconcile 真实 Host 状态并排除重复 admission；其他 Host/provider 状态需要独立、显式的捕获契约。 |
+| Knowledge/artifact、extension 状态与 credential：所选 Goal 的 material/provider owner，适用时包括 [decision-context recovery](../../../loopx/capabilities/decision_context/capture_recovery.py) | 只纳入发现的 root；physical SQLite snapshot 不证明 provider 语义完整性。私有原始字节可能含 credential。 | 枚举实际必要来源与 provider version，取得各自 export/verify 证据。Credential custody、轮换／撤销及外部访问仍归各自 owner；复制字节不授予访问权。 |
+
+一个具体 route 覆盖缺口是 [source-session lifecycle journal
+root](../../../loopx/control_plane/goals/source_session_registry_state.py)：它位于
+source registry 旁的 `.loopx/lifecycle/goal-instance`。外部 registry 的这一相邻目录
+若不在任何 included root 内，复制 registry 文件并不会纳入它。M2 必须解析该 owner
+的实际 storage，不能从 registry 文件存在或归档大小推断完整性。
+
+**顺序反例与有界拒绝。** 旧 producer 可能先复制 registry A、再编码配置 B，
+同时通过所有字节与配置 digest 检查。当前完整 producer 保留解码实际使用的源
+快照，比较每份已映射普通文件副本；字节不同或缺少见证就停止发布。File/SQLite
+覆盖持续变化与 A → B → A 回退，事后重读 live 路径不能证明这类情况；路由到
+外部的源 registry 与缺少见证各有负向覆盖。
+
+同一规则也覆盖既有 machine 配置 store owner：checkpoint 和见证使用同一次
+实际读取，包括确认不存在。变更、新建或删除配置都不能与已复制文件矛盾；
+不可用的 machine 来源拒绝捕获，不被标成不存在。自包含的本地链接复用归档内
+普通目标文件的见证；保留的 tar 链接不能伪装成 owner 确认不存在。这只关闭配置
+来源的 IO 边界；链接改向及 A → B → A 均按已保存的 route 核对。
+尚未关闭完整恢复集的 owner closure 或一致性 profile。
+
+历史 v0 归档仍可能包含上述组合。[恢复测试](../../../tests/test_state_recovery.py)
+显式构造保留较早原始 registry／工作、较晚 owner 验证配置的旧归档，不携带新的
+捕获声明。原来源消失后，M1 读回较早工作并保留 `held`、`legacy_best_effort`、
+`legacy_manifest_incomplete` 及无执行权边界。这保留历史读回，同时收紧新发布；
+不代表 `online` profile 或 M2 完整清单合格。上面的生命周期日志缺口也不授权
+通用备份绕过仅供生命周期操作的 `source_session_v1` 拒绝规则。
+
+下一实现切片归属既有 backup/recovery workflow：解析一个 Goal 的必要 owner
+closure，经各自 owner 捕获配置与 canonical authority，在任何 profile 合格前记录
+source interval/dependency。复用类型化 authority export/snapshot 与配置 envelope，
+Python 保留 filesystem/transport adapter 角色。通过真实 producer 与惰性 verifier
+覆盖并发写入、必要 owner 缺失和 dependency 移动；其他行在取得 owner 证据前显式
+保持 hold。M2 完整清单准入及各 profile 出口、M3 admission、冻结的 RPO/RTO 条件
+仍开放；本清单不新增平行 coordinator，也不改变这些条件。
+
 ### 实现归属与复用证据
 
 M3 实现必须在代码准入前记录 decision-owner matrix。对于每个 Goal identity、

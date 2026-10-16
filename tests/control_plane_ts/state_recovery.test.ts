@@ -46,6 +46,28 @@ test("legacy absent member witnesses stay unqualified rather than becoming verif
   assert.equal(result.capture_profile, "legacy_best_effort");
 });
 
+test("captured runtime bindings are optional data and must name included inert roots", () => {
+  for (const root of ["runtime-root", null]) {
+    const input = request();
+    for (const manifest of [input.external_manifest, input.embedded_manifest]) {
+      Object.assign(manifest, {registry_discovery: {goal_runtime_roots: {"goal-a": root}},
+        included: [{archive_path: "runtime-root"}]});
+    }
+    const result = verifyStateRecoveryManifest(input);
+    assert.equal(result.ok, true);
+    assert.equal(result.execution_authority_granted, false);
+    assert.equal(JSON.stringify(result).includes("goal_runtime_roots"), false);
+  }
+  for (const root of ["/outside", "../outside", "runtime-root/../other", "runtime-root//other", "unlisted", 1, true]) {
+    const input = request();
+    for (const manifest of [input.external_manifest, input.embedded_manifest]) {
+      Object.assign(manifest, {registry_discovery: {goal_runtime_roots: {"goal-a": root}},
+        included: [{archive_path: "runtime-root"}]});
+    }
+    assert.equal(verifyStateRecoveryManifest(input).ok, false, String(root));
+  }
+});
+
 function audit() {
   const body = {ok: true, schema_version: STATE_RECOVERY_AUDIT_SCHEMA,
     recovery_id: "e".repeat(64), status: "held", written: true, manifest_verified: true,

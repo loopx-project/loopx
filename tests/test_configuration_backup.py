@@ -5,6 +5,8 @@ import sys
 import tarfile
 import threading
 import http.client
+import hashlib
+from datetime import datetime
 from pathlib import Path
 import venv
 
@@ -142,6 +144,202 @@ def test_full_state_backup_has_first_class_configuration_component(environment, 
         backup = json.load(archive.extractfile("configuration-backup.json"))
     assert backup["data"]["goals"][0]["goal_configuration"] == goal
     assert payload["execution"]["configuration_backup"]["readback_verified"] is True
+    capture = payload["execution"]["configuration_capture"]
+    assert datetime.fromisoformat(capture["started_at"]) <= datetime.fromisoformat(capture["completed_at"])
+    with tarfile.open(payload["archive_path"]) as archive:
+        # The shared projection and the routed source each retain their actual
+        # copied bytes. Aliases can be links to the first regular member.
+        witnesses = capture["source_revisions"]
+        assert len(witnesses) >= 2
+        assert {row["sha256"] for row in witnesses} == {
+            hashlib.sha256(source.read_bytes()).hexdigest(), hashlib.sha256(registry.read_bytes()).hexdigest(),
+            hashlib.sha256((runtime / "machine/configuration.json").read_bytes()).hexdigest(),
+        }
+        for row in witnesses:
+            raw = archive.extractfile(row["archive_path"]).read()
+            assert row["sha256"] == hashlib.sha256(raw).hexdigest()
+            assert row["size_bytes"] == len(raw)
+
+
+@pytest.mark.parametrize("change", ["changed", "removed", "created", "aba"])
+def test_full_backup_refuses_machine_configuration_from_another_capture(
+    environment, tmp_path, monkeypatch, change,
+):
+    from loopx.capabilities import configuration_backup
+
+    source, runtime, _, _ = environment
+    path = runtime / "machine/configuration.json"
+    original = path.read_bytes()
+    if change == "created":
+        path.unlink()
+    original_capture = configuration_backup.capture_configuration_backup
+    captured = []
+
+    def between_owner_captures(**kwargs):
+        # All tar members are already copied. Exercise the real configuration
+        # owner with a later complete envelope (or its confirmed absence).
+        if change == "removed":
+            path.unlink()
+        else:
+            replacement = json.loads(original)
+            replacement["namespaces"]["goal_storage"]["new_goal_provider"] = "file"
+            path.write_text(json.dumps(replacement))
+        checkpoint = original_capture(**kwargs)
+        captured.append(checkpoint["data"]["machine_configuration"])
+        if change == "aba":
+            path.write_bytes(original)
+        return checkpoint
+
+    monkeypatch.setattr(configuration_backup, "capture_configuration_backup", between_owner_captures)
+    plan = build_state_backup_plan(project=source.parent.parent, runtime_root=runtime,
+        output_dir=tmp_path / "backups", include_skills=False, include_automations=False)
+    with pytest.raises(ValueError, match="configuration .*copied bytes"):
+        execute_state_backup_plan(plan)
+    assert len(captured) == 1
+    assert not list((tmp_path / "backups").iterdir()), "contradictory configuration must not publish"
+
+
+@pytest.mark.parametrize("removed", [False, True], ids=["retained", "removed-after-copy"])
+@pytest.mark.parametrize("link_kind", ["hardlink", "internal-symlink"])
+def test_machine_configuration_alias_uses_copied_target_witness(
+    environment, tmp_path, monkeypatch, removed, link_kind,
+):
+    from loopx.capabilities import configuration_backup
+
+    source, runtime, _, _ = environment
+    machine = runtime / "machine/configuration.json"
+    # A regular copy can witness a supported local alias. Confirmed absence
+    # still cannot contradict either retained kind of link.
+    target = runtime / "earlier-machine.json"
+    if link_kind == "hardlink":
+        os.link(machine, target)
+    else:
+        if os.name == "nt":
+            pytest.skip("native Windows symlink privilege is not qualified")
+        machine.rename(target)
+        machine.symlink_to("../earlier-machine.json")
+    original_capture = configuration_backup.capture_configuration_backup
+
+    def after_copy(**kwargs):
+        if removed:
+            machine.unlink()
+        return original_capture(**kwargs)
+
+    monkeypatch.setattr(configuration_backup, "capture_configuration_backup", after_copy)
+    plan = build_state_backup_plan(project=source.parent.parent, runtime_root=runtime,
+        output_dir=tmp_path / "backups", include_skills=False, include_automations=False)
+    if removed:
+        with pytest.raises(ValueError, match="configuration source absence differs from copied bytes"):
+            execute_state_backup_plan(plan)
+        assert not list((tmp_path / "backups").iterdir())
+    else:
+        payload = execute_state_backup_plan(plan)
+        with tarfile.open(payload["archive_path"]) as archive:
+            member = archive.getmember("runtime-root/machine/configuration.json")
+            assert member.islnk() if link_kind == "hardlink" else member.issym()
+            checkpoint = json.load(archive.extractfile("configuration-backup.json"))
+            assert json.load(archive.extractfile(member)) == checkpoint["data"]["machine_configuration"]
+        assert any(row["archive_path"] == "runtime-root/earlier-machine.json"
+            for row in payload["execution"]["configuration_capture"]["source_revisions"])
+
+
+@pytest.mark.skipif(os.name == "nt", reason="native Windows symlink privilege is not qualified")
+@pytest.mark.parametrize("restore_alias", [False, True], ids=["repointed", "aba"])
+def test_machine_configuration_alias_route_must_match_saved_target(
+    environment, tmp_path, monkeypatch, restore_alias,
+):
+    from loopx.capabilities import configuration_backup
+
+    source, runtime, _, _ = environment
+    machine = runtime / "machine/configuration.json"
+    first, second = runtime / "first-machine.json", runtime / "second-machine.json"
+    machine.rename(first)
+    changed = json.loads(first.read_text())
+    changed["namespaces"]["goal_storage"]["new_goal_provider"] = "file"
+    second.write_text(json.dumps(changed))
+    machine.symlink_to("../first-machine.json")
+    original_capture = configuration_backup.capture_configuration_backup
+
+    def after_copy(**kwargs):
+        machine.unlink()
+        machine.symlink_to("../second-machine.json")
+        checkpoint = original_capture(**kwargs)
+        if restore_alias:
+            machine.unlink()
+            machine.symlink_to("../first-machine.json")
+        return checkpoint
+
+    monkeypatch.setattr(configuration_backup, "capture_configuration_backup", after_copy)
+    plan = build_state_backup_plan(project=source.parent.parent, runtime_root=runtime,
+        output_dir=tmp_path / "backups", include_skills=False, include_automations=False)
+    with pytest.raises(ValueError, match="configuration source differs from copied bytes"):
+        execute_state_backup_plan(plan)
+    assert not list((tmp_path / "backups").iterdir())
+
+
+@pytest.mark.parametrize("invalid", ["directory", "malformed", "broken-link"])
+def test_full_backup_does_not_treat_unreadable_machine_source_as_absent(
+    environment, tmp_path, invalid,
+):
+    source, runtime, _, _ = environment
+    path = runtime / "machine/configuration.json"
+    path.unlink()
+    if invalid == "directory":
+        path.mkdir()
+    elif invalid == "malformed":
+        path.write_bytes(b"not a configuration envelope")
+    else:
+        if os.name == "nt":
+            pytest.skip("native Windows symlink privilege is not qualified")
+        path.symlink_to("unavailable-configuration.json")
+    plan = build_state_backup_plan(project=source.parent.parent, runtime_root=runtime,
+        output_dir=tmp_path / "backups", include_skills=False, include_automations=False)
+    with pytest.raises((ValueError, OSError)):
+        execute_state_backup_plan(plan)
+    assert not list((tmp_path / "backups").iterdir())
+
+
+def test_full_backup_refuses_registry_absence_after_its_bytes_were_copied(
+    environment, tmp_path, monkeypatch,
+):
+    from loopx.capabilities import configuration_backup
+
+    source, runtime, registry, _ = environment
+    original_capture = configuration_backup.capture_configuration_backup
+
+    def after_copy(**kwargs):
+        registry.unlink()
+        return original_capture(**kwargs)
+
+    monkeypatch.setattr(configuration_backup, "capture_configuration_backup", after_copy)
+    plan = build_state_backup_plan(project=source.parent.parent, runtime_root=runtime,
+        output_dir=tmp_path / "backups", include_skills=False, include_automations=False)
+    with pytest.raises(ValueError, match="configuration source absence differs from copied bytes"):
+        execute_state_backup_plan(plan)
+    assert not list((tmp_path / "backups").iterdir())
+
+
+def test_full_backup_refuses_a_changed_routed_registry_source(environment, tmp_path, monkeypatch):
+    source, runtime, _, _ = environment
+    original_add = tarfile.TarFile.add
+    changed = []
+
+    def after_copy(tar, path, *args, **kwargs):
+        result = original_add(tar, path, *args, **kwargs)
+        if str(kwargs.get("arcname", "")).endswith("/source-registry/registry.json"):
+            captured = json.loads(source.read_text())
+            captured["goals"][0]["description"] = "Changed canonical source"
+            source.write_text(json.dumps(captured))
+            changed.append(True)
+        return result
+
+    monkeypatch.setattr(tarfile.TarFile, "add", after_copy)
+    plan = build_state_backup_plan(project=source.parent.parent, runtime_root=runtime,
+        output_dir=tmp_path / "backups", include_skills=False, include_automations=False)
+    with pytest.raises(ValueError, match="configuration source differs from copied bytes"):
+        execute_state_backup_plan(plan)
+    assert changed == [True]
+    assert not list((tmp_path / "backups").iterdir())
 
 
 def test_full_archive_explicit_configuration_cohort_retains_missing_source_inventory(environment, tmp_path):

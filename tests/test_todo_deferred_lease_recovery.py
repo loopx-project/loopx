@@ -66,7 +66,7 @@ def fixture(tmp_path: Path, monkeypatch, provider: str, lease_state: str | None,
     ("hard_lease", "active"), ("legacy", "released"),
     ("soft_claim", "released"), ("soft_claim", "expired"),
 ])
-def test_deferred_bundled_edit_names_executable_lifecycle_recovery(tmp_path, monkeypatch, provider, mode, lease_state):
+def test_deferred_owner_resume_commits_context_without_execution_grant(tmp_path, monkeypatch, provider, mode, lease_state):
     cli, snapshot = fixture(tmp_path, monkeypatch, provider, lease_state, mode=mode)
     before = snapshot()
     # A fresh lease cannot be acquired while this Todo remains deferred.
@@ -76,31 +76,40 @@ def test_deferred_bundled_edit_names_executable_lifecycle_recovery(tmp_path, mon
         assert snapshot() == before
     bundled = ("todo", "update", "--agent-id", "agent-a", "--status", "open",
         "--clear-resume-when", "--note", "Reviewed note", "--evidence", "artifact:reviewed")
-    for dry in [("--dry-run",), ()]:
-        rejected = cli(*bundled, *dry, ok=False)
-        recovery = rejected["recovery"]
-        assert recovery["action"] == "resolve_lifecycle_edit"
-        assert recovery["execution_authority_granted"] is False
-        assert "acquire" not in recovery
-        if lease_state == "active":
-            assert "retry" not in recovery
-        else:
-            assert "--clear-resume-when" in recovery["retry"]["command"]
-            assert "deferred" in render_todo_markdown(rejected)
-            assert "Do not bundle notes, evidence" in recovery["reason"]
-        assert snapshot() == before
+    if mode == "legacy":
+        # Retirement permits historical inspection/release, not administrative
+        # resume. This also pins the inherited legacy diagnostic case.
+        for dry in [("--dry-run",), ()]:
+            rejected = cli(*bundled, *dry, ok=False)
+            assert rejected["error_code"] == "handoff_mode_retired"
+            assert "retry" not in rejected.get("recovery", {})
+            assert "acquire" not in rejected.get("recovery", {})
+            assert snapshot() == before
+        inspected = cli("task-lease", "inspect")
+        assert inspected["active"] is False
+        assert inspected["lease"] == before["leases"][0]
+        for proof in [("--task-lease-idempotency-key", "old-execution"),
+            ("--task-lease-idempotency-key", "old-execution", "--task-lease-expected-version", "5")]:
+            assert cli(*bundled, *proof, ok=False)["error_code"] == "handoff_mode_retired"
+            assert snapshot() == before
+        return
     # A stale or partial execution proof cannot become administrative authority.
     for proof in [("--task-lease-idempotency-key", "old-execution"),
         ("--task-lease-idempotency-key", "old-execution", "--task-lease-expected-version", "5")]:
         stale = cli(*bundled, *proof, ok=False)
+        assert stale["error_code"] == "deferred_resume_execution_proof_not_allowed"
         assert "retry" not in stale.get("recovery", {})
         assert snapshot() == before
-    reopen = ("todo", "update", "--agent-id", "agent-a", "--status", "open", "--clear-resume-when",
-        "--reason", "Reviewed wait; original acceptance remains", "--update-operation-id", "resume-once",
+    reopen = (*bundled, "--reason", "Reviewed wait; original acceptance remains", "--update-operation-id", "resume-once",
         "--update-expected-provider-revision", before["provider_revision"])
     if lease_state == "active":
-        assert cli(*reopen, ok=False)["error_code"] == "deferred_resume_active_lease"
-        assert snapshot() == before
+        for dry in [("--dry-run",), ()]:
+            rejected = cli(*reopen, *dry, ok=False)
+            assert rejected["error_code"] == "deferred_resume_active_lease"
+            recovery = rejected["recovery"]
+            assert recovery["execution_authority_granted"] is False
+            assert "retry" not in recovery and "acquire" not in recovery
+            assert snapshot() == before
         return
     assert cli(*reopen, "--dry-run")["status"] == "planned"
     assert snapshot() == before
@@ -109,6 +118,7 @@ def test_deferred_bundled_edit_names_executable_lifecycle_recovery(tmp_path, mon
     opened = snapshot()
     task = opened["todos"][0]
     assert task["status"] == "open" and not task["done"] and "resume_when" not in task
+    assert task["note"] == "Reviewed note" and task["evidence"] == "artifact:reviewed"
     for field in ("text", "claimed_by", "priority", "task_class", "completion_validation_required"):
         assert task[field] == before["todos"][0][field]
     if lease_state is not None:
@@ -116,20 +126,32 @@ def test_deferred_bundled_edit_names_executable_lifecycle_recovery(tmp_path, mon
         assert opened["leases"][0]["version"] == 5
         assert opened["leases"][0]["lease_epoch"] == 3
         assert opened["leases"][0]["idempotency_key"] == "old-execution"
+    else:
+        assert opened["leases"] == []
+    assert cli("task-lease", "inspect")["active"] is False
     assert cli(*reopen)["status"] == "replayed"
     assert snapshot() == opened
+    stale_revision = cli("todo", "update", "--agent-id", "agent-a", "--note", "Unreviewed overwrite",
+        "--update-operation-id", "stale-copy", "--update-expected-provider-revision", before["provider_revision"], ok=False)
+    assert stale_revision["reason_code"] == "provider_revision_mismatch"
+    assert snapshot() == opened
     if mode == "soft_claim":
-        assert "do not acquire a lease in soft_claim" in recovery["reason"]
-        assert cli("todo", "update", "--agent-id", "agent-a", "--note", "Reviewed note")["ok"]
+        assert cli("todo", "update", "--agent-id", "agent-a", "--note", "Updated copy")["ok"]
         edited = snapshot()
-        assert edited["todos"][0]["note"] == "Reviewed note"
+        assert edited["todos"][0]["note"] == "Updated copy"
         assert edited["leases"] == opened["leases"]
         cli("todo", "update", "--agent-id", "agent-a", "--evidence", "artifact:reviewed", ok=False)
         assert snapshot() == edited
         return
-    # Reopening alone still cannot authorize the pending copy/evidence edit.
-    cli("todo", "update", "--agent-id", "agent-a", "--note", "Reviewed note", ok=False)
-    assert snapshot() == opened
+    # Ordinary owner copy is administrative; it cannot mint a lease or epoch.
+    assert cli("todo", "update", "--agent-id", "agent-a", "--note", "Updated copy",
+        "--evidence", "artifact:updated")["ok"]
+    edited = snapshot()
+    assert edited["todos"][0]["note"] == "Updated copy"
+    assert edited["todos"][0]["evidence"] == "artifact:updated"
+    assert edited["leases"] == opened["leases"]
+    assert cli("task-lease", "inspect")["active"] is False
+    # Actual execution still obtains a new generation through its own owner.
     lease = cli("task-lease", "acquire", "--owner", "agent-a", "--idempotency-key", "fresh-execution",
         "--expected-version", "0" if lease_state is None else "5")["lease"]
     assert lease["lease_epoch"] == (1 if lease_state is None else 4)
@@ -154,5 +176,19 @@ def test_deferred_recovery_does_not_relax_actor_admission(tmp_path, monkeypatch,
         rejected = cli("todo", "update", "--agent-id", actor, "--status", "open", "--clear-resume-when",
             "--reason", "Reviewed wait", *extra, ok=False)
         assert rejected["error_code"] == code
-        assert "recovery" not in rejected
+        if code == "actor_not_registered":
+            assert "recovery" not in rejected
+        else:
+            recovery = rejected["recovery"]
+            assert recovery["action"] == "reconcile_lease_owner"
+            assert recovery["todo_status"] == "deferred" and recovery["claimed_by"] == "agent-a"
+            assert recovery["execution_authority_granted"] is False
+            assert "retry" not in recovery and "acquire" not in recovery
+            inspect = recovery["inspect"]["cli_args"]
+            assert f"--registry={tmp_path / 'registry.json'}" in inspect
+            assert f"--runtime-root={tmp_path / 'runtime'}" in inspect
+            assert inspect[-6:] == ["todo", "list", "--goal-id", "goal-recovery",
+                "--todo-id", "todo_recovery"]
+            assert "todo list" in render_todo_markdown(rejected)
+            assert cli(*inspect)["todo"]["status"] == "deferred"
         assert snapshot() == before

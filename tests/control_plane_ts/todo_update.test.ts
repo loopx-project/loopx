@@ -405,8 +405,6 @@ test("user-action metadata exception retains actor, binding, class, lifecycle an
     {facts: {excluded_agents: ["agent-a"]}, input: {}, code: "actor_excluded"},
     {facts: {bound_agent: null}, input: {}, code: "todo_not_executable"},
     {facts: {task_class: "user_gate"}, input: {}, code: "handoff_mode_requires_lease"},
-    {facts: {role: "agent", task_class: "advancement_task", claimed_by: "agent-a"},
-      input: {expected_role: "agent"}, code: "handoff_mode_requires_lease"},
     {facts: {status: "blocked"}, input: {}, code: "todo_not_executable"},
     {facts: {}, input: {planning_intent: {status: "blocked"}}, code: "todo_not_executable"},
     {facts: {}, input: {planning_intent: {required_capabilities: ["shell"]}}, code: "todo_not_executable"},
@@ -855,7 +853,7 @@ test("provider-first update rejects authority and lifecycle escalation", async (
 });
 
 for (const claimed_by of ["agent-a", null]) {
-test(`provider-first update fails closed without a hard-lease execution proof (${claimed_by ?? "unclaimed"})`, async () => {
+test(`provider-first administrative copy preserves a hard lease without consuming proof (${claimed_by ?? "unclaimed"})`, async () => {
   const {store, request} = await seeded({claimed_by});
   const head = await store.loadAuthority();
   assert.equal(head.status, "loaded");
@@ -868,8 +866,11 @@ test(`provider-first update fails closed without a hard-lease execution proof ($
       idempotency_key: "execution-a", version: 1, lease_epoch: 1,
     }]}});
   const result = await executeCoordinationTodoUpdate(store, request);
-  assert.equal(result.reason_code, "lease_fence_required");
-  assert.equal((await store.readReceipt(request.operation_id)).status, "missing");
+  assert.equal(result.status, "applied", JSON.stringify(result));
+  const after = await store.loadAuthority();
+  if (after.status !== "loaded") assert.fail("missing authority");
+  assert.deepEqual(after.head.leases, [{todo_id: "todo_a", owner: "agent-a", status: "active",
+    expires_at: "2026-09-06T00:00:00Z", idempotency_key: "execution-a", version: 1, lease_epoch: 1}]);
 });
 }
 
@@ -938,7 +939,7 @@ test("schema-less historical canonical leases retain active execution semantics 
 });
 
 
-test("retained execution fences distinguish recovery; soft released owner copy needs no proof", async () => {
+test("administrative copy retains lease history; explicit execution recovery stays distinct", async () => {
   for (const mode of ["legacy", "soft_claim", "hard_lease"]) {
     for (const state of ["released", "expired", "active"]) {
       for (const owner of ["agent-a", "agent-b"]) {
@@ -962,7 +963,7 @@ test("retained execution fences distinguish recovery; soft released owner copy n
           assert.equal((await store.readReceipt(request.operation_id)).status, "missing");
           continue;
         }
-        if (mode === "soft_claim" && state === "released" && owner === "agent-a") {
+        if (owner === "agent-a" && (mode === "hard_lease" || mode === "soft_claim" && state === "released")) {
           assert.equal(result.status, "planned");
           assert.deepEqual(await store.loadAuthority(), before);
           continue;
@@ -1083,8 +1084,8 @@ test("recovery preserves stale-proof rejection and never offers foreign proof", 
 
 test("inactive history does not invent an executable lease acquisition", async () => {
   for (const [overrides, intent, mode, expected] of [
-    [{status: "blocked"}, {}, "hard_lease", "resolve_acquire_rejection"],
-    [{claimed_by: null}, {}, "hard_lease", "reconcile_lease_owner"],
+    [{status: "blocked"}, {unblocks_todo_id: "todo_other"}, "hard_lease", "resolve_acquire_rejection"],
+    [{claimed_by: null}, {unblocks_todo_id: "todo_other"}, "hard_lease", "reconcile_lease_owner"],
     [{}, {required_capabilities: ["code_review"]}, "hard_lease", "resolve_lifecycle_edit"],
     [{}, {status: "blocked"}, "hard_lease", "resolve_lifecycle_edit"],
     [{status: "blocked"}, {}, "soft_claim", "resolve_acquire_rejection"],
@@ -1132,7 +1133,7 @@ for (const blocker of ["scope", "acceptance"]) test(`recovery respects ${blocker
     assert.equal(configured.status, "applied");
   }
   const before = await store.loadAuthority();
-  const result = await executeCoordinationTodoUpdate(store, request);
+  const result = await executeCoordinationTodoUpdate(store, {...request, planning_intent: {unblocks_todo_id: "todo_other"}});
   const recovery = result.recovery as Record<string, unknown>;
   assert.equal(recovery.action, "resolve_acquire_rejection");
   assert.equal(recovery.reason_code, blocker === "scope" ? "write_scope_conflict" : "goal_acceptance_unbound");

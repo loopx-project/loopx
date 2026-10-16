@@ -140,7 +140,7 @@ for (const provider of ["file", "sqlite"] as const) {
     assert.equal((await executeCoordinationTodoUpdate(active, input)).reason_code, "blocked_lifecycle_active_lease");
     assert.equal((await executeCoordinationTodoUpdate(active, {...input,
       lease_idempotency_key: "old-execution", lease_expected_version: 29})).reason_code,
-      "blocked_lifecycle_execution_proof_not_allowed");
+      "lease_cas_mismatch");
     assert.deepEqual(await read(active), before);
   });
 
@@ -151,8 +151,9 @@ for (const provider of ["file", "sqlite"] as const) {
       [{}, "blocked_lifecycle_active_lease"],
       [{lifecycle_grants: []}, "update_owner_mismatch"],
       [{lease_idempotency_key: "old-execution", lease_expected_version: 29},
-        "blocked_lifecycle_execution_proof_not_allowed"],
-      [{patch: {note: "Bundled work"}}, "lease_fence_required"],
+        "lease_cas_mismatch"],
+      [{patch: {note: "Bundled note"}}, "blocked_lifecycle_active_lease"],
+      [{patch: {text: "Changed work"}}, "lease_fence_required"],
     ];
     for (const [change, code] of cases) {
       const result = await executeCoordinationTodoUpdate(active, {...pause("reject-pause"), ...change});

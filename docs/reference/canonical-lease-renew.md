@@ -173,6 +173,39 @@ already assigned to the eligible receiver. Without `--transfer-claim`, transfer 
 claim. Neither form overrides an exclusion or widens write scopes. Use the actual readback
 versions, not these example numbers.
 
+### Ordinary task operations
+
+Use `todo update` for ordinary owner notes, evidence, priority, pause and resume.
+The canonical typed owner prepares current state and performs the authorized
+operation in one CAS; do not acquire a lease merely to edit a note. A pause can
+retire its current holder's lease atomically with note/evidence. Resume grants no
+execution; a new execution still uses this document's explicit lease lifecycle.
+See [Todo administrative and nonterminal updates](../project-agent-todo-contract.md#canonical-nonterminal-planning-updates).
+
+An explicit key/version remains a strict generation constraint. LoopX never
+silently replaces it, borrows a foreign holder or retries an ambiguous mutation
+as new work. Acquire, renew and transfer change execution authority and remain
+explicit. Every CLI lease refusal includes a routed `inspection.cli_args` command
+to read the actual holder/state/version; JSON and Markdown retain the original
+error. Parameter errors additionally explain missing and unsupported flags.
+Inspection is read-only and does not authorize the displayed lease's use.
+
+中文：普通本人任务的备注、证据、优先级、暂停和恢复直接使用 `todo update`，无需为改
+备注临时领租约。本人暂停可原子退休当前租约，恢复不授予执行。显式 key/version 仍是
+严格 generation 约束；不会自动替换、借用他人或把不确定提交作为新工作重试。
+领取、续期和转交执行权限仍须明确请求。所有 CLI lease 拒绝都提供带原路由的
+`inspection.cli_args`，可直接读取真实持有者、状态和版本；JSON/Markdown 保留原错误，
+参数错误另列缺失和冲突参数。读回不是使用凭证的授权。
+
+The synthetic deferred task below uses the same disposable canonical data in
+both views. The task detail now offers **Resume task** as its primary operation;
+completion proof is kept with completion. These compare source presentations,
+not an installed-App upgrade or a claim that a process stopped.
+
+| Previous task detail | Task detail with explicit resume |
+| --- | --- |
+| ![Deferred task with completion controls](../../apps/presentation/dashboard/smoke/assets/todo-lifecycle/before-deferred.png) | ![Deferred task with resume controls](../../apps/presentation/dashboard/smoke/assets/todo-lifecycle/after-deferred.png) |
+
 ### Action help and argument recovery
 
 Use `loopx task-lease renew --help` to inspect only that action's options;
@@ -390,9 +423,12 @@ read the same task again: `resume_ready=true` allows acquisition under the usual
 owner/key/version checks. If the wait itself needs correction, use the existing
 authorized `todo update --resume-when ...` or `--clear-resume-when` operation;
 neither inspecting nor editing the wait grants execution authority.
-In hard-lease mode, ordinary edits still need an active execution proof. After
-release or expiry, use the existing narrow owner pause/reopen lifecycle, with a
-stable operation id, current provider revision and explicit reason:
+In hard-lease mode, execution-sensitive updates retain their active-proof or
+dedicated lifecycle admission. Ordinary owner text, note, evidence, reason and
+priority edits use the administrative provider-CAS path without acquiring a
+lease; see [administrative edits and explicit execution proof](../project-agent-todo-contract.md#administrative-edits-and-explicit-execution-proof).
+Correct an obsolete execution wait through the bounded owner pause/reopen
+lifecycle, with a stable operation id, current provider revision and explicit reason:
 
 ```bash
 loopx todo update --goal-id example-goal --todo-id todo_work --agent-id owner \
@@ -405,6 +441,7 @@ loopx todo update --goal-id example-goal --todo-id todo_work --agent-id owner \
 
 Read back between operations and acquire a fresh lease before executing. Do not
 attach an old lease proof or bundle ownership, text or work-requirement edits.
+Optional note/evidence may accompany each lifecycle step in its atomic update.
 
 在 canonical File、SQLite 和 PostgreSQL Goal 中，`todo_done` 和 `resume_at` 等待同时约束
 实际执行入口，而不只是候选任务展示。必须由真实前置 Todo 的 `done` 状态满足条件，
@@ -416,10 +453,12 @@ attach an old lease proof or bundle ownership, text or work-requirement edits.
 但有效 `active=false`。释放、历史完成读回、授权 supersede、普通分配和等待修复
 沿用原规则。前置任务正常完成或到达指定恢复时刻后，重新读回并按原 owner、key、
 version 规则继续执行。其他恢复条件及 governed amendment 的边界保持独立。
-hard-lease 普通编辑仍须提供有效执行 proof。租约释放或到期后，可按上面的既有窄范围
-流程，以明确理由、稳定操作 ID 和当前 provider revision 暂停并清除等待；读回后再用
-新 revision 明确重新打开，最后领取新租约。不能附带旧 proof、文案、归属或工作要求修改，
-也不能把暂停或重新打开当作执行授权。
+hard-lease 的执行敏感更新仍须有效执行 proof 或专属 lifecycle 准入；本人的普通说明、
+备注、证据、原因和优先级编辑走行政性 provider CAS，无需获取执行租约。
+修正过时等待时，可按上面的既有窄范围流程，以明确理由、稳定操作 ID 和当前
+provider revision 暂停并清除等待；读回后再用
+新 revision 明确重新打开，最后领取新租约。不能附带旧 proof、任务正文、归属或工作要求修改，
+也不能把暂停或重新打开当作执行授权；每步可原子附带备注和证据。
 
 A successful readback is still a point-in-time proof, not a lock over subsequent
 external effects. Execution must retain its existing mutation fences; this

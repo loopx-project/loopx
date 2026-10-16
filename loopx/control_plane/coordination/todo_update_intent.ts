@@ -1,6 +1,8 @@
 /** Canonical edit decoding and materialization shared by ordinary updates and
  * User completion. Admission, validation effects and commits stay with callers. */
 import {decodeTaskLeaseProof} from "./task_lease_proof.ts";
+import {isBlockedLifecycleTransition} from "./todo_blocked_lifecycle.ts";
+import {isDeferredReopen} from "./todo_deferred_lifecycle.ts";
 import {planTodoPriority} from "../todos/priority.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {AuthorityStoreProtocolError, canonicalAuthorityObject, canonicalAuthorityBytes,
@@ -203,7 +205,11 @@ export function prepareUpdatedTodo(
   }
   let monitorTransition: JsonObject | undefined;
   if (Object.keys(input.planning_intent ?? {}).length || input.monitor_observation !== undefined) {
-    const plan = planNativeTodoUpdate(todo, input.planning_intent ?? {}, head,
+    const clearLifecycleWait = input.planning_intent?.resume_when == null &&
+      (isBlockedLifecycleTransition(input, todo) || isDeferredReopen(input, todo));
+    const intent = clearLifecycleWait ? {...input.planning_intent, clear_resume_when: true}
+      : input.planning_intent ?? {};
+    const plan = planNativeTodoUpdate(todo, intent, head,
       input.actor_agent_id, input.registered_agents, String(next.updated_at), kind, input.monitor_observation);
     const updates = plan.updates;
     monitorTransition = plan.monitorTransition;
@@ -214,7 +220,7 @@ export function prepareUpdatedTodo(
       if (value === null || value === "") { delete next[field]; clearFields.add(field); }
       else next[field] = value;
     }
-    if (input.planning_intent?.clear_resume_when === true) {
+    if (intent.clear_resume_when === true) {
       // These are observations of the old condition, not independent resume
       // authority. Keeping either after an explicit clear resurrects a stale
       // wait in canonical readback even though resume_when is absent.

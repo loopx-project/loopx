@@ -378,6 +378,7 @@ def verify_state_backup(
             _require(copied == observation and _sha(archive_handle) == (archive_sha, archive_size),
                      "recovery_input_changed")
             audit = _audit_owners({"data_root": str(data), "verified": verified,
+                "registry_discovery": external.get("registry_discovery"), "included": external.get("included"),
                 "measurements": {"archive_bytes": archive_size,
                     "regular_file_bytes": copied["logical_bytes"],
                     "archive_processing_ms": (time.monotonic_ns() - started) // 1_000_000},

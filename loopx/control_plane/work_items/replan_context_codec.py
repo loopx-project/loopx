@@ -1,4 +1,4 @@
-"""Public-safe history codec for the TypeScript-owned replan evidence view."""
+"""Scoped source codec for the TypeScript-owned replan evidence view."""
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
@@ -8,9 +8,14 @@ import shlex
 from typing import Any
 
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
-from ..runtime.public_safety import public_safe_compact_text
 from ..runtime.time import parse_timestamp
 from ..runtime.agent_evidence_history import goal_history_runs
+
+
+def _source_text(value: Any) -> str | None:
+    """Keep decision input complete; publication owns its own redaction."""
+    text = str(value or "").strip()
+    return text or None
 
 
 def replan_history_from_status(status: Mapping[str, Any], goal_id: str) -> list[dict[str, Any]]:
@@ -73,7 +78,7 @@ def replan_evidence_rows(runs: Iterable[Mapping[str, Any]], *, goal_id: str, age
             "progress_observation": progress,
         }
         for key in ("classification", "delivery_outcome", "health_check", "recommended_action", "todo_id"):
-            text = public_safe_compact_text(run.get(key), limit=240)
+            text = _source_text(run.get(key))
             if text:
                 row[key] = text
         if "settlement_identity" in run or "quota_spend_commit" in run or (include_decisions and "agent_vision" in run):
@@ -111,8 +116,7 @@ def _goal_facts(status: Mapping[str, Any] | None, goal_id: str, acceptance: Mapp
     def goal_text(value: Any) -> str | None:
         if value is not None and not isinstance(value, str):
             raise ValueError("Goal objective must be text")
-        # Preserve the complete core objective, including trailing constraints.
-        return public_safe_compact_text(value, limit=max(1, len(value or "")))
+        return _source_text(value)
 
     facts: dict[str, Any] = {}
     if status and status.get("registry"):
