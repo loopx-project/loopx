@@ -667,7 +667,7 @@ def test_invalid_checkpoint_declaration_rejects_before_trial_registration(tmp_pa
     ("lean_analysis_proofs", [], 43200, 0),
     ("portfolio_risk_calibration", ["--timeout", "1800", "--eval-interval", "60"], 1800, 60),
     ("lean_analysis_proofs", ["--eval-interval", "0"], 43200, 0)])
-def test_edgebench_receipt_records_resolved_entry_and_enabled_treatment(tmp_path, monkeypatch, enabled, task, timeout_args, expected, interval, entry, cadence_args, field, count):
+def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(tmp_path, monkeypatch, enabled, task, timeout_args, expected, interval, entry, cadence_args, field, count):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from types import SimpleNamespace
@@ -694,7 +694,10 @@ def test_edgebench_receipt_records_resolved_entry_and_enabled_treatment(tmp_path
         assert kwargs["eval_interval"] == interval
         agent = kwargs["agent"]
         assert "total trial budget" not in agent.workspace_instructions
-        assert agent.task_objective in agent.workspace_instructions
+        assert agent.task_objective == "fixture task"
+        assert agent.task_objective in agent.feedback_prompt
+        assert agent.task_objective not in agent.workspace_instructions
+        assert "Continue researching" in agent.workspace_instructions
         assert agent.feedback_prompt.startswith(agent.workspace_instructions)
         raise RuntimeError("synthetic launch failure")
     monkeypatch.setattr(run, "run_agent", stop_before_solver)

@@ -68,7 +68,7 @@ const focusableSelector = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
-type TodoOperation = "block" | "complete" | "defer" | "successor_create";
+type TodoOperation = "block" | "resume" | "complete" | "defer" | "successor_create";
 
 type GoalSubagentPreview = {
   codexHostCapacity?: WorkspaceGoalSubagentConfiguration["codexHostCapacity"];
@@ -422,7 +422,8 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
       normalizedParameters: {
         agent_id: todo.claimedBy ?? todoAgentId,
         goal_id: todo.goalId,
-        operation,
+        operation: operation === "resume" ? "edit" : operation,
+        ...(operation === "resume" ? {status: "open"} : {}),
         ...(operation === "block" ? { note: t("drawer.taskSuccessorNote") } : {}),
         ...(operation === "defer" && resumeWhen ? { resume_when: resumeWhen } : {}),
         todo_id: todo.todoId,
@@ -432,6 +433,8 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     });
   }
 
+  const todoAwaitingResume = selection.kind === "todo" && ["blocked", "deferred"].includes(selection.item.status ?? "");
+  const todoCompleted = selection.kind === "todo" && (selection.item.status === "done" || selection.item.status == null && selection.item.done);
   const currentSubagentConfiguration: WorkspaceGoalSubagentConfiguration = selection.kind === "goal"
     ? verifiedSubagentConfiguration
       ?? selection.item.subagentExecution
@@ -642,14 +645,14 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
           <>
             <section className="personal-task-inspector-summary">
               <div className="personal-task-inspector-status">
-                <span className={selection.item.done ? "is-done" : selection.item.status === "blocked" ? "is-blocked" : "is-open"}>
-                  <i />{selection.item.done ? t("drawer.taskStatusCompleted") : selection.item.retryReadback ? t("drawer.resumePending") : selection.item.status === "deferred" ? t("drawer.taskStatusDeferred") : selection.item.status === "blocked" ? t("drawer.taskStatusBlocked") : t("drawer.taskStatusOpen")}
+                <span className={selection.item.status === "done" ? "is-done" : selection.item.status === "blocked" ? "is-blocked" : "is-open"}>
+                  <i />{selection.item.status === "done" ? t("drawer.taskStatusCompleted") : selection.item.retryReadback ? t("drawer.resumePending") : selection.item.status === "deferred" ? t("drawer.taskStatusDeferred") : selection.item.status === "blocked" ? t("drawer.taskStatusBlocked") : t("drawer.taskStatusOpen")}
                 </span>
                 {selection.item.priority ? <span>{selection.item.priority}</span> : null}
                 <span>{selection.item.taskClass === "advancement_task" ? t("drawer.taskAdvancement") : selection.item.taskClass ?? t("drawer.taskOrdinary")}</span>
               </div>
               <TaskRequest todo={selection.item} local={!readOnly} />
-              {selection.item.status === "blocked" && !selection.item.done ? <section aria-label={t("drawer.blockedReason")} className="personal-task-blocked-reason" data-recorded={selection.item.blockedReason ? "true" : "false"}>
+              {selection.item.status === "blocked" ? <section aria-label={t("drawer.blockedReason")} className="personal-task-blocked-reason" data-recorded={selection.item.blockedReason ? "true" : "false"}>
                 <h4><AlertCircle size={14} />{t("drawer.blockedReason")}</h4>
                 <p>{selection.item.blockedReason ?? t("drawer.blockedReasonMissing")}</p>
               </section> : null}
@@ -659,7 +662,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               <dl>
                 <div><dt>Goal</dt><dd>{selection.item.goalTitle}</dd></div>
                 <div><dt>{t("common.owner")}</dt><dd>{selection.item.claimedBy ? selection.item.ownerLabel ?? selection.item.claimedBy : t("drawer.notAssigned")}</dd></div>
-                <div><dt>{t("common.status")}</dt><dd>{selection.item.done ? t("drawer.taskStatusCompleted") : selection.item.retryReadback ? t("drawer.resumePending") : selection.item.status === "deferred" ? t("drawer.taskStatusDeferred") : selection.item.status === "blocked" ? t("drawer.taskStatusBlocked") : t("drawer.taskStatusOpen")}</dd></div>
+                <div><dt>{t("common.status")}</dt><dd>{selection.item.status === "done" ? t("drawer.taskStatusCompleted") : selection.item.retryReadback ? t("drawer.resumePending") : selection.item.status === "deferred" ? t("drawer.taskStatusDeferred") : selection.item.status === "blocked" ? t("drawer.taskStatusBlocked") : t("drawer.taskStatusOpen")}</dd></div>
                 <div><dt>{t("drawer.priority")}</dt><dd>{selection.item.priority ?? t("drawer.notSet")}</dd></div>
                 {selection.item.completedAt ? <div><dt>{t("drawer.completedAt")}</dt><dd><time dateTime={selection.item.completedAt}>{selection.item.completedAt}</time></dd></div> : null}
                 {selection.item.dependencies ? <div><dt>{t("drawer.dependencies")}</dt><dd>{selection.item.dependencies.join(" · ") || t("common.none")}</dd></div> : null}
@@ -676,10 +679,10 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                   <div><dt>{t("drawer.validationDigest")}</dt><dd><code>{selection.item.validationDigest}</code></dd></div>
                   {selection.item.validationRevisionActor ? <div><dt>{t("drawer.validationRevisionActor")}</dt><dd>{selection.item.validationRevisionActor}</dd></div> : null}
                 </> : null}
-                <div><dt>{t("drawer.nextTransition")}</dt><dd>{selection.item.nextTransition ?? (selection.item.done ? t("drawer.taskNextCompleted") : selection.item.resumeInvalidReason === "dependency_cycle" ? t("drawer.taskNextCycle") : selection.item.retryReadback ? t("drawer.taskNextDeferred") : selection.item.resumeReady ? t("drawer.taskNextResumeReady") : selection.item.status === "deferred" ? t("drawer.taskNextDeferred") : selection.item.status === "blocked" ? t("drawer.taskNextBlocked") : t("drawer.taskNextOpen"))}</dd></div>
+                <div><dt>{t("drawer.nextTransition")}</dt><dd>{selection.item.nextTransition ?? (selection.item.status === "done" ? t("drawer.taskNextCompleted") : selection.item.resumeInvalidReason === "dependency_cycle" ? t("drawer.taskNextCycle") : selection.item.retryReadback ? t("drawer.taskNextDeferred") : selection.item.resumeReady ? t("drawer.taskNextResumeReady") : selection.item.status === "deferred" ? t("drawer.taskNextDeferred") : selection.item.status === "blocked" ? t("drawer.taskNextBlocked") : t("drawer.taskNextOpen"))}</dd></div>
               </dl>
             </section>
-            {!readOnly && !selection.item.done ? <div className="personal-task-inspector-actions" aria-label={t("drawer.taskActions")}>
+            {!readOnly && selection.item.status !== "done" ? <div className="personal-task-inspector-actions" aria-label={t("drawer.taskActions")}>
               <details className="personal-task-management">
                 <summary><MoreHorizontal size={16} />{t("drawer.taskManage")}</summary>
                 <div>
@@ -706,12 +709,13 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                       actionKind: "todo.update",
                       context: {goal_id: selection.item.goalId, kind: "todo", todo_id: selection.item.todoId},
                       idempotencyKey: `workspace-todo-${selection.item.todoId}-priority-${todoPriority}-${Date.now().toString(36)}`,
-                      normalizedParameters: {goal_id: selection.item.goalId, todo_id: selection.item.todoId, operation: "edit",
+                      normalizedParameters: {goal_id: selection.item.goalId, todo_id: selection.item.todoId,
+                        agent_id: selection.item.claimedBy ?? todoAgentId, operation: "edit",
                         ...(todoPriority === "clear" ? {clear_priority: true} : {priority: todoPriority})},
                       summary: `${t("drawer.taskPriority")}: ${todoPriority === "clear" ? t("drawer.taskPriorityClear") : todoPriority}`,
                     })} type="button">{t("timeline.review")}</button>
                   </label>
-                  <strong>{t("drawer.taskDeferUntil")}</strong>
+                  {!todoAwaitingResume ? <><strong>{t("drawer.taskDeferUntil")}</strong>
                   <label className="personal-inline-agent-select personal-inline-resume-when">{t("drawer.taskDeferUntil")}
                     <input
                       aria-label={t("drawer.taskDeferCondition")}
@@ -722,21 +726,21 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                     />
                     <button className="personal-secondary-action" disabled={!normalizedTodoResumeWhen} onClick={() => void previewTodoTransition(selection.item, "defer", t("drawer.taskDefer"), normalizedTodoResumeWhen ?? undefined)} type="button">{t("drawer.taskDeferReview")}</button>
                     <small>{todoResumeWhen.trim() && !normalizedTodoResumeWhen ? t("drawer.taskDeferInvalid") : t("drawer.taskDeferSupported")}</small>
-                  </label>
+                  </label></> : null}
                   <div className="personal-task-management-secondary">
-                    {todoTransitions.map((transition) => (
+                    {todoTransitions.filter(transition => !todoAwaitingResume || transition.operation !== "block").map((transition) => (
                       <button key={transition.operation} onClick={() => void previewTodoTransition(selection.item, transition.operation, t(transition.key))} type="button">{t(transition.key)}</button>
                     ))}
                   </div>
                 </div>
               </details>
-              <button className="personal-primary-action" onClick={() => void previewTodoTransition(selection.item, "complete", t("drawer.taskComplete"))} type="button"><Check size={17} />{t("drawer.taskComplete")}</button>
-              <details className="personal-task-completion-proof">
+              <button className="personal-primary-action" onClick={() => void previewTodoTransition(selection.item, todoAwaitingResume ? "resume" : "complete", t(todoAwaitingResume ? "drawer.taskResume" : "drawer.taskComplete"))} type="button">{!todoAwaitingResume ? <Check size={17} /> : null}{t(todoAwaitingResume ? "drawer.taskResume" : "drawer.taskComplete")}</button>
+              {todoAwaitingResume ? <small>{t("drawer.taskResumeHint")}</small> : <details className="personal-task-completion-proof">
                 <summary>{t("drawer.taskCompletionProof")}</summary>
                 <label><textarea aria-label={t("drawer.taskCompletionProof")} rows={4}
                   value={todoCompletionProof} onChange={(event) => setTodoCompletionProof(event.target.value)} />
                   <small>{t("drawer.taskCompletionProofHint")}</small></label>
-              </details>
+              </details>}
             </div> : null}
             {selection.item.evidence ? <section className="personal-detail-card" aria-label={t("drawer.evidence")}>
               <h4>{t("drawer.evidence")}</h4>
@@ -746,7 +750,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               <summary>{t("drawer.notes")}</summary>
               <MarkdownText text={selection.item.note} />
             </details> : null}
-            {selection.item.done ? <div className="personal-task-completed-note"><Check size={16} /><span><strong>{t("drawer.taskCompletedTitle")}</strong><small>{t("drawer.taskCompletedNote")}</small></span></div> : null}
+            {selection.item.status === "done" ? <div className="personal-task-completed-note"><Check size={16} /><span><strong>{t("drawer.taskCompletedTitle")}</strong><small>{t("drawer.taskCompletedNote")}</small></span></div> : null}
           </>
         ) : null}
 

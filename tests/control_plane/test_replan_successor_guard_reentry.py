@@ -170,10 +170,17 @@ def test_machine_default_stride_due_allows_evidence_linked_terminal_review(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("objective", [
+    "Deliver the independently accepted source outcome.",
+    "Read /home/runner/work/task.md and preserve the accepted quality target.",
+])
 def test_real_mcp_replan_delivers_objective_and_evidence_guidance(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, objective: str,
 ) -> None:
     _fixture(tmp_path, monkeypatch, provider, later_vision=True)
+    state = tmp_path / "project/ACTIVE_GOAL_STATE.md"
+    state.write_text(state.read_text().replace(
+        "Deliver the independently accepted source outcome.", objective))
     control = GoalModeMCPControlPlane(
         GoalModeMCPConfig(server_name="synthetic-replan", runtime_profile="claude_code",
                           legacy_host_surface="claude_code"),
@@ -190,6 +197,9 @@ def test_real_mcp_replan_delivers_objective_and_evidence_guidance(
     assert "executed path and current artifact" in guidance
     assert "scope negative results to tested conditions" in guidance
     assert packet["autonomous_replan_obligation"]["required"] is True
+    core = packet["autonomous_replan_obligation"]["replan_context"]["core_goal"]
+    assert core["objective"] == objective
+    assert core["objective_source"] == "active_state"
     assert packet["interaction_contract"]["cli_channel"]["spend_allowed_now"] is False
 
 

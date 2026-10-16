@@ -16,7 +16,7 @@ from loopx.control_plane.todos.markdown import render_todo_markdown
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_hard_lease_recovery_through_public_cli(tmp_path: Path, monkeypatch, provider: str) -> None:
+def test_execution_scoped_planning_recovery_through_public_cli(tmp_path: Path, monkeypatch, provider: str) -> None:
     mode = "hard_lease"
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     runtime = tmp_path / "runtime"
@@ -55,7 +55,7 @@ def test_hard_lease_recovery_through_public_cli(tmp_path: Path, monkeypatch, pro
         "--expected-version", str(first["lease"]["version"]))
     before = snapshot()
     display_before = state.read_bytes() if state.exists() else None
-    edit = ("todo", "update", "--agent-id", "agent-a", "--text", "Recovered edit")
+    edit = ("todo", "update", "--agent-id", "agent-a", "--text", "Recovered edit", "--unblocks-todo-id", "todo_recovery")
     for dry in [("--dry-run",), ()]:
         rejected = cli(*edit, *dry, ok=False)
         assert rejected["error_code"] == "handoff_mode_requires_lease"
@@ -214,14 +214,16 @@ def test_blocked_edit_recovers_by_separate_lifecycle_before_execution(
         if lease_state == "active":
             assert "retry" not in recovery
         else:
-            assert "--clear-resume-when" in recovery["retry"]["command"]
+            assert "--status open" in recovery["retry"]["command"]
             assert "--reason" in render_todo_markdown(rejected)
         assert "acquire" not in recovery
         assert snapshot() == before
     if claimed:
         foreign = cli("todo", "update", "--agent-id", "agent-b", "--status", "open", "--note", "Foreign edit", ok=False)
         assert foreign["error_code"] == "update_owner_mismatch"
-        assert "recovery" not in foreign
+        assert foreign["recovery"]["execution_authority_granted"] is False
+        assert "retry" not in foreign["recovery"] and "acquire" not in foreign["recovery"]
+        assert foreign["recovery"]["claimed_by"] == "agent-a"
         assert snapshot() == before
     unknown = cli("todo", "update", "--agent-id", "agent-unknown", "--status", "open", "--note", "Foreign edit", ok=False)
     assert unknown["error_code"] == "actor_not_registered"

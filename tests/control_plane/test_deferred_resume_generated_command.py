@@ -1,4 +1,4 @@
-"""Quota's deferred-resume command must consume the existing narrow lifecycle."""
+"""Generated resume accepts planning copy while preserving execution proof fences."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ from test_quota_settlement_cli import (
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("fallback", [False, True])
-def test_generated_deferred_resume_preserves_execution_lease_boundary(
+def test_generated_deferred_resume_keeps_proof_fences_with_planning_note(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -153,7 +153,6 @@ def test_generated_deferred_resume_preserves_execution_lease_boundary(
     )
     assert rc == 1 and premature["error_code"] == "todo_not_open", premature
     for extra, actor in (
-        (["--note", "This is an execution edit."], AGENT_ID),
         ([], peer),
         (
             [
@@ -185,13 +184,17 @@ def test_generated_deferred_resume_preserves_execution_lease_boundary(
         assert rc == 1 and rejected["ok"] is False, rejected
         assert state.read_bytes() == before
 
-    # Execute the actual quota output; the old --note template fails here.
-    rc, resumed = cli(*resume)
+    # A caller may retain planning context alongside the generated transition;
+    # neither the note nor resume can substitute for the next execution grant.
+    note = "Retain the planning context while resuming unchanged work."
+    rc, resumed = cli(*resume, "--note", note)
     assert rc == 0 and resumed["status"] == "applied", json.dumps(resumed, indent=2)
     assert "--reason" in resume and "--note" not in resume
     transition = resumed["deferred_resume_transition"]
     assert transition["execution_authority_granted"] is False
     assert transition["next_execution"] == "acquire_fresh_lease"
+    rc, current = cli("todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
+    assert rc == 0 and current["todo"]["note"] == note, current
     rc, absent = cli(
         "task-lease", "inspect", "--goal-id", GOAL_ID, "--todo-id", TODO_ID
     )

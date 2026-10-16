@@ -52,6 +52,21 @@ export function isSoftClaimReleasedCopyUpdate(todo: JsonObject, lease: JsonObjec
   return leaseRepositoryRejection(todo, lease) === null;
 }
 
+/** Current-owner planning copy is administrative state, not task execution.
+ * Keep this bounded: work requirements, ownership, dependencies, validators,
+ * Monitor observations and terminal effects retain their separate fences. */
+export function isOwnerAdministrativeCopyUpdate(todo: JsonObject, input: CoordinationTodoUpdateInput): boolean {
+  return todo.role === "agent" && ["open", "blocked", "deferred"].includes(String(todo.status)) &&
+    input.actor_agent_id !== null && (todo.claimed_by == null || todo.claimed_by === input.actor_agent_id) &&
+    input.completion === undefined && input.completion_validation_revision === undefined &&
+    input.monitor_observation === undefined &&
+    Object.keys(input.patch).every(field => field === "text" || field === "note") &&
+    input.clear_fields.every(field => field === "note") &&
+    Object.entries(input.planning_intent ?? {}).every(([field, value]) =>
+      ["evidence", "reason", "priority", "clear_priority"].includes(field) ||
+      (field === "status" && value === todo.status));
+}
+
 export function decodeTaskLeaseProof(value: unknown): TaskLeaseProof | null {
   if (value == null) return null;
   const proof = requireJsonObject(value, "lease_proof");
@@ -135,15 +150,35 @@ export function todoUpdateLeaseRecovery(head: JsonObject, input: CoordinationTod
   const sameOwner = lease !== null && lease.owner === input.actor_agent_id;
   const ownerRelation: TodoUpdateLeaseRecovery["owner_relation"] =
     lease === null ? "none" : sameOwner ? "same_owner" : "foreign_owner";
+  const todo = index.todos.get(input.todo_id)!;
   const base = {
     lease_state: leaseState,
     owner_relation: ownerRelation,
     observed_version: lease?.version ?? 0,
-    inspect: {command: "loopx task-lease inspect", goal_id: input.goal_id, todo_id: input.todo_id},
+    observed_owner: lease?.owner ?? null,
+    todo_status: todo.status,
+    claimed_by: todo.claimed_by ?? null,
+    inspect: {command: "loopx task-lease inspect", goal_id: input.goal_id, todo_id: input.todo_id,
+      cli_args: ["task-lease", "inspect", "--goal-id", input.goal_id, "--todo-id", input.todo_id]},
     execution_authority_granted: false,
   };
-  const todo = index.todos.get(input.todo_id)!;
   const intent = input.planning_intent ?? {};
+  if ((intent.status === "blocked" || intent.status === "deferred") &&
+      (input.lease_idempotency_key != null || input.lease_expected_version != null)) {
+    return {...base, action: "inspect_current_proof", reason: "This lifecycle request supplied execution proof that did not qualify. Inspect the current lease and review the intended operation; do not silently replace its key or version. A proof-free administrative pause is a new, explicit request, not a retry of the stale execution."};
+  }
+  if (lease?.active && !sameOwner) {
+    return {...base, action: "reconcile_lease_owner", reason: "Another active holder owns this execution. Its owner must release or explicitly hand it over through the lease lifecycle; this request cannot borrow its proof or take over. Inspect the current holder before retrying."};
+  }
+  if (intent.status === "blocked" || intent.status === "deferred") {
+    return {...base, action: "resolve_lifecycle_edit",
+      reason: "Pause with a reason and optional note/evidence in one Todo update. The current holder's lease is retired atomically; no acquire or separate release is needed. Work requirements, text, ownership and successor changes are separate operations. A foreign active holder cannot be retired by this request; explicit stale proof is never replaced.",
+      retry: {command: "loopx todo update", cli_args: ["todo", "update", "--goal-id", input.goal_id,
+        "--todo-id", input.todo_id, ...(input.actor_agent_id ? ["--agent-id", input.actor_agent_id] : []), "--status", intent.status],
+        requires_flags: ["--reason", ...(intent.status === "deferred" ? ["--resume-when"] : [])],
+        remove_flags: ["--text", "--claimed-by", "--required-write-scope", "--successor-todo-id"],
+        proof_source: "fresh_lifecycle_admission"}};
+  }
   if (leaseExecutionTargetRejection(todo) !== null) {
     if (!isBoundUserActionMetadataUpdate(todo, input)) {
       return {...base, action: "resolve_lifecycle_edit", reason_code: "todo_not_executable",
@@ -190,12 +225,15 @@ export function todoUpdateLeaseRecovery(head: JsonObject, input: CoordinationTod
   if (intent.status === "open" && (canReopen || canResume)) {
     const nextEdit = mode === "soft_claim"
       ? "Then retry only a permitted owner copy edit without either lease proof flag. Planning, ownership and terminal edits keep their own admission; do not acquire a lease in soft_claim."
-      : "Then claim/acquire a fresh execution lease before retrying the remaining edit.";
+      : "Ordinary owner metadata then needs no execution lease; other work still uses its execution or lifecycle admission.";
     return {...base, action: "resolve_lifecycle_edit",
-      reason: `Reopen this ${todo.status} Todo separately with only status, clear-resume-when and a reviewed reason. Do not bundle notes, evidence, work requirements or ownership. Use a fresh update operation and current provider revision after reviewing the wait. ${nextEdit} Reopening alone grants no execution authority.`,
-      retry: {command: "loopx todo update --status open --clear-resume-when --reason '<reviewed reason>'",
+      reason: `Reopen this ${todo.status} Todo with status=open and a reviewed reason; optional note/evidence can commit with it. Keep text, work requirements, ownership and successors separate. Use a fresh update operation and current provider revision after reviewing the wait. An omitted wait is cleared by this explicit resume. ${nextEdit} Reopening alone grants no execution authority.`,
+      retry: {command: "loopx todo update --status open --reason '<reviewed reason>'",
+        cli_args: ["todo", "update", "--goal-id", input.goal_id, "--todo-id", input.todo_id,
+          ...(input.actor_agent_id ? ["--agent-id", input.actor_agent_id] : []), "--status", "open"],
         goal_id: input.goal_id, todo_id: input.todo_id, agent_id: input.actor_agent_id,
-        requires_flags: ["--status", "--clear-resume-when", "--reason"],
+        requires_flags: ["--reason"],
+        remove_flags: ["--text", "--claimed-by", "--required-write-scope", "--successor-todo-id"],
         proof_source: "fresh_lifecycle_admission"}};
   }
   const editRejection = lease === null || isOwnerDeferral(input, todo) ? null : leasedTodoEditRejection(todo, intent);
@@ -222,7 +260,7 @@ export function todoUpdateLeaseRecovery(head: JsonObject, input: CoordinationTod
         lease: index.leases.get(input.todo_id), lease_idempotency_key: null,
         lease_expected_version: null, now: input.now}) === null) {
     return {...base, action: "resolve_lifecycle_edit", reason_code: dependency.code,
-      reason: "Keep waiting if the dependency remains valid. For an evidence-backed owner replan, first block the unchanged Todo and clear its obsolete wait through the existing lifecycle, then reopen it. Each step requires fresh provider CAS and its own operation identity; neither consumes an old lease or grants execution. Do not bundle copy, evidence, requirements or ownership edits. Acquire a fresh execution lease afterwards.",
+      reason: "Keep waiting if the dependency remains valid. For an evidence-backed owner replan, first block the unchanged Todo and clear its obsolete wait through the existing lifecycle, then reopen it. Each step requires fresh provider CAS and its own operation identity; neither consumes an old lease or grants execution. Optional note/evidence may accompany the transition; text, requirements and ownership edits remain separate. Actual execution still needs a fresh lease afterwards.",
       lifecycle_replan: {condition: "owner_reviewed_obsolete_dependency", steps: [
         {command: "loopx todo update --status blocked --clear-resume-when --reason '<reviewed obsolete dependency>'"},
         {command: "loopx todo update --status open --clear-resume-when --reason '<reviewed new route>'"},

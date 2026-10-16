@@ -216,7 +216,7 @@ export function registerNativePlanningUpdateConformance(provider: string, factor
       original.find(t => t.todo_id === request.todo_id)?.last_actor_agent_id,
       "planning-only updates preserve legacy actor attribution");
     for (const [operation_id, change] of [
-      ["no-proof", {lease_idempotency_key: null, lease_expected_version: null}],
+      ["partial-proof", {lease_idempotency_key: null}],
       ["status-change", {planning_intent: {status: "deferred", resume_when: "pr_merged:#123"}}],
       ["requirements-change", {planning_intent: {required_write_scopes: ["new/**"]}}],
       ["wrong-owner", {actor_agent_id: "agent-b"}],

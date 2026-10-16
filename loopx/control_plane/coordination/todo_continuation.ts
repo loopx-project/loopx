@@ -153,6 +153,10 @@ export async function executeTodoContinuation(store: AuthorityStore, value: unkn
     actor_agent_id: agentId, registered_agents: registered, dry_run: false, now: new Date()};
   if (input.action === "prepare") {
     if (todo.claimed_by !== agentId) return reject("continuation_owner_required", "Only the current Todo owner can prepare a continuation note");
+    // A leased handoff requires execution authority. Ordinary note-edit admission
+    // cannot replace this check; the update below pins the same source CAS.
+    if (leased && !execution.allowed) return reject(execution.reason_code,
+      "Preparation requires the current execution lease and admission; inspect the reported authority gap");
     const context = buildContextFromInput(input);
     const todoFacts = computeContinuationTodoFacts(todo);
     const noteObj = buildContinuationNote(context, sessionId, todoFacts);

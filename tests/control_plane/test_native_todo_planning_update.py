@@ -484,7 +484,7 @@ def test_dependency_replan_uses_existing_inactive_lifecycle_then_fresh_lease(
     code, rejected = lease("acquire", "--owner", "agent-a", "--idempotency-key", "paused-execution")
     assert code == 1 and rejected["error_code"] == "todo_not_open"
     update(registry, "--status", "open", "--clear-resume-when", "--reason", "Reviewed new route",
-           "--evidence", "Bundled evidence is a separate leased edit", ok=False)
+           "--text", "Changing acceptance is a separate edit", ok=False)
     assert records(registry) == blocked
     reopen = shlex.split(guide["steps"][1]["command"])[3:]
     update(registry, *reopen, "--update-operation-id", "stale-reopen",

@@ -12,11 +12,12 @@ import {TODO_WORK_REQUIREMENT_FIELDS} from "../todos/work_requirements.ts";
 import {TODO_OWNERSHIP_INTENT_FIELDS} from "../todos/authoring_scope.ts";
 import {evaluateCoordinationTodoMutationDecision,
   COORDINATION_TODO_MUTATION_DECISION_REQUEST_SCHEMA} from "./todo_lifecycle_decision.ts";
-import {decodeTaskLeaseProof, evaluateCanonicalTaskLeaseProof, todoUpdateLeaseRecovery, leasedTodoEditRejection, isBoundUserActionMetadataUpdate, isSoftClaimReleasedCopyUpdate} from "./task_lease_proof.ts";
+import {decodeTaskLeaseProof, evaluateCanonicalTaskLeaseProof, todoUpdateLeaseRecovery, leasedTodoEditRejection, isBoundUserActionMetadataUpdate, isSoftClaimReleasedCopyUpdate, isOwnerAdministrativeCopyUpdate} from "./task_lease_proof.ts";
 import {deferredReopenRejection, isDeferredReopen, isOwnerDeferral} from "./todo_deferred_lifecycle.ts";
 import {blockedLifecycleRejection, isBlockedLifecycleTransition} from "./todo_blocked_lifecycle.ts";
 import {indexCoordinationProjection} from "./coordination_projection.ts";
 import {canonicalTaskLease} from "./task_lease_state.ts";
+import {leaseIsActive} from "../work_items/task_lease_acquire.ts";
 
 interface TodoUpdateRejection {code: string; reason: string; handoff_mode?: string; recovery?: JsonObject}
 const reject = (code: string, reason: string): TodoUpdateRejection => ({code, reason});
@@ -54,6 +55,9 @@ export function todoUpdateAdmissionRejection(
   const retired = retiredHandoffModeRejection(mode);
   if (retired !== null) return {...reject(retired, HANDOFF_MODE_RETIRED_REASON), handoff_mode: mode};
   const intent = input.planning_intent ?? {};
+  const hasProof = input.lease_idempotency_key != null || input.lease_expected_version != null;
+  const withRecovery = (refusal: {code: string; reason: string} | null): TodoUpdateRejection | null =>
+    refusal === null ? null : {...refusal, handoff_mode: mode, recovery: todoUpdateLeaseRecovery(head, input, mode)};
   const ownershipMutation = ["claimed_by", "clear_claim", "excluded_agents", "bound_agent",
     "goal_bound", "blocks_agent", "clear_blocks_agent", "global_gate", "clear_global_gate"]
     .some(field => Object.hasOwn(intent, field));
@@ -89,7 +93,11 @@ export function todoUpdateAdmissionRejection(
     const reason = code === "update_owner_mismatch"
       ? "Todo update cannot edit another claim owner's work"
       : "Todo update is outside the actor's registered owner/binding scope";
-    return reject(code, reason);
+    return {...reject(code, reason), handoff_mode: mode,
+      recovery: {action: "reconcile_lease_owner", reason,
+        todo_status: todo.status, claimed_by: todo.claimed_by ?? null,
+        execution_authority_granted: false,
+        inspect: {command: "loopx todo list", cli_args: ["todo", "list", "--goal-id", input.goal_id, "--todo-id", input.todo_id]}}};
   }
   // Promotion deliberately preserves legacy claims without inventing leases.
   // An explicitly granted controller must be able to repair planning state on
@@ -127,10 +135,24 @@ export function todoUpdateAdmissionRejection(
   }
   if (mode === "hard_lease" && isBlockedLifecycleTransition(input, todo)) {
     try {
-      return blockedLifecycleRejection({goal_id: input.goal_id, todo_id: input.todo_id,
+      // Proof, if supplied, is an explicit generation constraint. Never replace
+      // a stale/partial proof with a convenient current holder read.
+      if (hasProof) {
+        const fence = evaluateCanonicalTaskLeaseProof({todo, lease, handoff_mode: mode,
+          registered_agents: input.registered_agents, actor_agent_id: input.actor_agent_id,
+          lease_idempotency_key: input.lease_idempotency_key ?? null,
+          lease_expected_version: input.lease_expected_version ?? null, now: input.now});
+        if (fence.outcome !== "apply") return withRecovery(reject(String(fence.code), "Explicit execution proof is stale or unavailable; inspect this Todo before retrying"));
+      }
+      if (lease !== undefined) {
+        const repository = leaseRepositoryRejection(todo, canonicalTaskLease(lease, input.goal_id, input.todo_id));
+        if (repository !== null) return withRecovery(reject(repository, "Lifecycle change must preserve the execution repository"));
+      }
+      return withRecovery(blockedLifecycleRejection({goal_id: input.goal_id, todo_id: input.todo_id,
         actor_agent_id: input.actor_agent_id, registered_agents: input.registered_agents,
         lease, lease_idempotency_key: input.lease_idempotency_key ?? null,
-        lease_expected_version: input.lease_expected_version ?? null, now: input.now});
+        lease_expected_version: input.lease_expected_version ?? null, now: input.now,
+        allow_current_holder: todo.status === "open", proof_validated: hasProof}));
     } catch (error) {
       return reject("invalid_coordination_projection",
         error instanceof Error ? error.message : "invalid retained lease facts");
@@ -138,13 +160,32 @@ export function todoUpdateAdmissionRejection(
   }
   if ((mode === "hard_lease" || lease !== undefined) && isDeferredReopen(input, todo)) {
     try {
-      return deferredReopenRejection({goal_id: input.goal_id, todo_id: input.todo_id,
+      return withRecovery(deferredReopenRejection({goal_id: input.goal_id, todo_id: input.todo_id,
         actor_agent_id: input.actor_agent_id, registered_agents: input.registered_agents,
         lease, lease_idempotency_key: input.lease_idempotency_key ?? null,
-        lease_expected_version: input.lease_expected_version ?? null, now: input.now});
+        lease_expected_version: input.lease_expected_version ?? null, now: input.now}));
     } catch (error) {
       return reject("invalid_coordination_projection",
         error instanceof Error ? error.message : "invalid retained lease facts");
+    }
+  }
+  // Current-head preparation and provider CAS replace the artificial acquire /
+  // edit / release dance for administrative work. No execution grant is made.
+  // Existing explicit-proof callers keep their strict generation semantics.
+  if (mode === "hard_lease" && !hasProof &&
+      (isOwnerAdministrativeCopyUpdate(todo, input) || isOwnerDeferral(input, todo))) {
+    try {
+      if (lease !== undefined) {
+        const current = canonicalTaskLease(lease, input.goal_id, input.todo_id);
+        leaseIsActive(current, input.now); // Validate the retained clock as well.
+        const repository = leaseRepositoryRejection(todo, current);
+        if (repository !== null) return withRecovery(reject(repository, "Administrative edit must preserve the execution repository"));
+        if (current.owner !== input.actor_agent_id) return withRecovery(reject("lease_owner_mismatch",
+          "This Todo retains another holder's execution; reconcile that holder before editing"));
+      }
+      return null;
+    } catch (error) {
+      return reject("invalid_coordination_projection", error instanceof Error ? error.message : "invalid retained lease");
     }
   }
   // A completed owner's evidence association is metadata, not renewed work.
@@ -207,7 +248,7 @@ export function todoUpdateAdmissionRejection(
         return reject("update_owner_mismatch", "Leased Todo update requires the current claim owner");
       }
       if (lease !== undefined) {
-        return isOwnerDeferral(input, todo) ? null : leasedTodoEditRejection(todo, input.planning_intent ?? {});
+        return isOwnerDeferral(input, todo) ? null : withRecovery(leasedTodoEditRejection(todo, input.planning_intent ?? {}));
       }
     } catch (error) {
       return reject("invalid_coordination_projection",
