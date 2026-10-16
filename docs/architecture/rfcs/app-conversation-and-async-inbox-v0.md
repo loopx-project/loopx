@@ -118,6 +118,12 @@ later answer. Core freezes the original Session and canonical candidate Turn
 identities in the existing request journal **before** native inventory or
 transport resume can fail. Native observation may only narrow that frozen set;
 a retry cannot add later completed/active Turns or switch to a newer Session.
+The existing Lark listener returns after this durable freeze; its existing reply
+workers recover the prepared request to observe and cancel native background
+commands. Slow or unavailable native control therefore does not hold inbound
+admission. This is scheduling only: it introduces no queue or completion state,
+does not defer an active Turn's exact interrupt, and sends no successful stop
+reply until native control and the original delivery checks have succeeded.
 A recovered legacy request without a recorded target has unknown original scope;
 Core rejects retargeting and preserves it unconfirmed. A fresh stop is a separate
 user request, never an automatic replacement for the unknown one.

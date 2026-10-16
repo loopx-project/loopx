@@ -91,7 +91,7 @@ class ChatExternalConversations:
     def admit(self, *, binding_id: str, source: dict[str, Any], request_ref: str,
               message: str, command: str | None = None,
               attachments: list[dict[str, Any]] | None = None,
-              origin: str = "lark") -> dict[str, Any]:
+              origin: str = "lark", defer_background_stop: bool = False) -> dict[str, Any]:
         import re
         if origin not in {"lark", "external"}:
             raise ValueError("unsupported external conversation origin")
@@ -106,35 +106,51 @@ class ChatExternalConversations:
             if not isinstance(ref, str) or not re.fullmatch(r"[a-f0-9]{24}", ref):
                 raise ValueError("invalid external conversation source reference")
         path = self.root / f"{request_ref}.json"
-        with exclusive_file_lock(self.root / "source-fences" / f"{binding_id}.{source['source_ref']}.json", operation="route_external_chat_request"), exclusive_file_lock(path, operation="admit_external_chat_request"):
-            # Resolve after waiting for both fences, including exact replay.
-            # A lock-external provider probe cannot authorize the write and
-            # would duplicate this fresh authority check on every request.
-            selected = self.bindings.resolve(binding_id=binding_id, **source)
-            expected = {"binding_id": binding_id, "source": source, "message": message, "command": command,
-                        "attachments": normalize_chat_image_attachments(attachments) or None, "origin": origin}
-            recovering_request = path.exists()
-            if recovering_request:
-                row = _read_json(path)
-                # Existing Lark journals predate persisted transport origin.
-                if any((row.get(key, "lark") if key == "origin" else row.get(key)) != value
-                       for key, value in expected.items()):
-                    raise ValueError("external request identity was reused with different content")
-                if row.get("status") != "prepared":
-                    return row
-            else:
-                row = {"schema_version": "loopx_chat_external_request_v0", "request_ref": request_ref,
-                       **expected, "status": "prepared", "session_id": None, "turn_id": None,
-                       "created_at": datetime.now(timezone.utc).isoformat()}
-                _atomic_write_json(path, row)
+        # A duplicate waits on its own request before taking the route fence;
+        # it must not hold up other messages while native cancellation runs.
+        with exclusive_file_lock(path, operation="admit_external_chat_request"):
+            with exclusive_file_lock(self.root / "source-fences" / f"{binding_id}.{source['source_ref']}.json", operation="route_external_chat_request"):
+                # Resolve after waiting for both fences, including exact replay.
+                # A lock-external provider probe cannot authorize the write and
+                # would duplicate this fresh authority check on every request.
+                selected = self.bindings.resolve(binding_id=binding_id, **source)
+                expected = {"binding_id": binding_id, "source": source, "message": message, "command": command,
+                            "attachments": normalize_chat_image_attachments(attachments) or None, "origin": origin}
+                recovering_request = path.exists()
+                if recovering_request:
+                    row = _read_json(path)
+                    # Existing Lark journals predate persisted transport origin.
+                    if any((row.get(key, "lark") if key == "origin" else row.get(key)) != value
+                           for key, value in expected.items()):
+                        raise ValueError("external request identity was reused with different content")
+                    if row.get("status") != "prepared":
+                        return row
+                else:
+                    row = {"schema_version": "loopx_chat_external_request_v0", "request_ref": request_ref,
+                           **expected, "status": "prepared", "session_id": None, "turn_id": None,
+                           "created_at": datetime.now(timezone.utc).isoformat()}
+                    _atomic_write_json(path, row)
+                try:
+                    row = self._admit_prepared(path, row, selected, recovering_request=recovering_request)
+                except ValueError:
+                    self._reject_prepared(path, row)
+                    raise
+            # Native inventory/cancellation needs the frozen request fence,
+            # not the route fence. New messages retain their own fresh checks.
+            if (defer_background_stop or row["status"] != "prepared"
+                    or row.get("command") != "stop" or not row.get("background_turn_ids")):
+                return row
             try:
-                return self._admit_prepared(path, row, selected, recovering_request=recovering_request)
+                return self._finish_background_stop(path, row, selected)
             except ValueError:
-                # Invalid commands and definitive grant denials are terminal
-                # admission outcomes; recovery must not retry them forever.
-                row.update(status="rejected", response="原授权或命令格式不可用，本条未进入执行队列；请用 /agents 或 /project 查看可用入口。")
-                _atomic_write_json(path, row)
+                self._reject_prepared(path, row)
                 raise
+
+    @staticmethod
+    def _reject_prepared(path: Path, row: dict[str, Any]) -> None:
+        # Definitive command/grant denials must not retry indefinitely.
+        row.update(status="rejected", response="原授权或命令格式不可用，本条未进入执行队列；请用 /agents 或 /project 查看可用入口。")
+        _atomic_write_json(path, row)
 
     def _admit_prepared(self, path: Path, row: dict[str, Any], selected: dict[str, Any],
                         *, recovering_request: bool = False) -> dict[str, Any]:
@@ -264,17 +280,7 @@ class ChatExternalConversations:
                 row["background_turn_ids"] = plan.get("background_turn_ids", [])
             _atomic_write_json(path, row)
             if operation == "stop" and row["background_turn_ids"]:
-                from .codex_background_control import completed_background_turns, interrupt_completed_background_turns
-                row["background_turn_ids"] = completed_background_turns(
-                    controller, row["session_id"], row["background_turn_ids"])
-                _atomic_write_json(path, row)
-                # Reuse Core's response projection after narrowing. No live
-                # terminals is idle; failed inventory never reaches this point.
-                plan = effect_runtime_result("collaboration.conversation.request", {
-                    "request": {key: value for key, value in row.items() if key != "attachments"},
-                    "current_session": current, "binding": selected["binding"], "agent_target": target})
-                if row["background_turn_ids"]:
-                    interrupt_completed_background_turns(controller, row["session_id"], row["background_turn_ids"])
+                return row  # Finish outside the route fence, under this request.
             if operation == "stop" and row["session_id"] and row["turn_id"]:
                 controller.interrupt_turn(session_id=row["session_id"], turn_id=row["turn_id"])
             elif operation == "new" and row["session_id"]:
@@ -301,6 +307,26 @@ class ChatExternalConversations:
                 if str(exc) != "session_queue_full":
                     raise
                 row.update(status="rejected", response="队列已满，本条没有被受理；请稍后重新发送。")
+        _atomic_write_json(path, row)
+        return row
+
+    def _finish_background_stop(self, path: Path, row: dict[str, Any], selected: dict[str, Any]) -> dict[str, Any]:
+        from .codex_background_control import completed_background_turns, interrupt_completed_background_turns
+        from ...control_plane.effect_runtime import effect_runtime_result
+
+        controller = self.controller
+        row["background_turn_ids"] = completed_background_turns(
+            controller, row["session_id"], row["background_turn_ids"])
+        _atomic_write_json(path, row)
+        # Reuse the typed response after narrowing. No live terminals is idle;
+        # failed inventory never reaches this point. Later work is ineligible.
+        plan = effect_runtime_result("collaboration.conversation.request", {
+            "request": {key: value for key, value in row.items() if key != "attachments"},
+            "current_session": controller.store.load_session(row["session_id"]),
+            "binding": selected["binding"], "agent_target": row.get("agent_target")})
+        if row["background_turn_ids"]:
+            interrupt_completed_background_turns(controller, row["session_id"], row["background_turn_ids"])
+        row.update(status="command_completed", response_code=plan["response_code"])
         _atomic_write_json(path, row)
         return row
 

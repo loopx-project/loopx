@@ -332,7 +332,8 @@ class LarkPrivateConversations:
             raise ValueError("private source could not be captured")
         return path
 
-    def admit(self, profile: str, event: dict[str, Any]) -> dict[str, Any]:
+    def admit(self, profile: str, event: dict[str, Any], *,
+              defer_background_stop: bool = False) -> dict[str, Any]:
         try:
             binding = self._binding(profile)
             source = lark_private_source(provider_ref=binding["provider_ref"], event=event)
@@ -425,7 +426,8 @@ class LarkPrivateConversations:
                 command = "unsupported"
             try:
                 admitted = self.core.admit(binding_id=binding["binding_id"], source=source,
-                    request_ref=request, message=text, command=command, attachments=attachments)
+                    request_ref=request, message=text, command=command, attachments=attachments,
+                    defer_background_stop=defer_background_stop)
             except ValueError:
                 record.update(status="rejected", response=("群助手仅处理当前项目和话题，不能选择个人 Agent 会话；/status 查看状态，/help 查看用法。" if binding.get("audience") == "group" else "操作或原授权不可用；Agent 请先用 /agents 查看确切命令，/project 返回项目对话。新委托请使用 /delegate --tokens N 具体目标，确认或取消请使用原预览中的完整命令。"))
                 _atomic_write_json(path, record)
@@ -436,7 +438,10 @@ class LarkPrivateConversations:
                 record.update(status="rejected", response="队列已满，本条没有被受理；请稍后重试。")
                 _atomic_write_json(path, record)
                 return {"status": "queue_rejected"}
-            record.update(status=admitted["status"], session_id=admitted["session_id"],
+            # Keep the existing recoverable capture until Core has performed
+            # the frozen stop. Older transport readers can recover it too.
+            record.update(status="captured" if admitted["status"] == "prepared" else admitted["status"],
+                          session_id=admitted["session_id"],
                           turn_id=admitted["turn_id"], response=admitted.get("response"), response_code=admitted.get("response_code"))
             _atomic_write_json(path, record)
             status = "durably_accepted" if admitted["status"] == "accepted" else (
@@ -765,6 +770,23 @@ class LarkPrivateConversations:
             # read its result before retrying admission from a stale snapshot.
             with exclusive_file_lock(path, operation="capture_private_chat_request"):
                 row = _read_json(path)
+                native_path = self.core.root / f"{row['request_ref']}.json"
+                if row["status"] == "captured" and native_path.exists():
+                    native = self.core.read_request(row["request_ref"])
+                    if (native.get("command") == "stop" and native.get("target_recorded") is True
+                            and all(native.get(key) == row.get(key)
+                                    for key in ("request_ref", "binding_id", "source"))):
+                        # This source was already admitted and target-frozen.
+                        # Core revalidates recovery; delivery below re-reads the
+                        # provider source. No second content admission is needed.
+                        self.core.recover(request_ref=row["request_ref"])
+                        native = self.core.read_request(row["request_ref"])
+                        if native["status"] == "prepared":
+                            return 0
+                        if native["status"] == "command_completed":
+                            row.update(**{key: native.get(key) for key in
+                                ("status", "session_id", "turn_id", "response", "response_code")})
+                            _atomic_write_json(path, row)
             if row["status"] == "captured":
                 self.admit(row["profile"], row["event"])
                 row = _read_json(path)

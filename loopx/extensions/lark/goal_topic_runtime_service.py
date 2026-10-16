@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
+from functools import partial
 import hashlib
 import logging
 from pathlib import Path
@@ -311,7 +312,8 @@ class LarkGoalTopicRuntimeService:
                             stop=stop,
                             runtime_root=self.runtime_root,
                             answer=answer,
-                            private_admitter=(self.private_conversations.admit if self.private_conversations is not None else None),
+                            private_admitter=(partial(self.private_conversations.admit, defer_background_stop=True)
+                                if self.private_conversations is not None else None),
                             proposal_deliverer=deliver_proposals,
                             review_callback_handler=(
                                 handle_review_callback

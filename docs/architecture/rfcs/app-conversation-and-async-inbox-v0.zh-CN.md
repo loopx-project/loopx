@@ -81,6 +81,14 @@ listener、队列或模型 runner。一个 App 仍只有一个 binding owner，�
 编辑和回执恢复复用现有投递路径，使用 `source_thread` 落点。解绑或原消息不可读后，
 即使执行完成，也不得继续发送结果。
 
+普通 Codex 话题空闲时，`/stop` 也覆盖同一原生 Session 中已完成 Turn 遗留的后台命令。
+Core 先在原请求日志固定 Session 与候选 Turn，原 listener 随即继续受理消息；现有
+回复工作池再恢复这条 prepared 请求，读取原生命令清单并取消原目标。恢复只能缩小
+固定候选，不能追停后来的 Turn 或新 Session。慢速或失败的原生控制不阻塞入站，
+也不提前回复“已停止”；没有固定目标的旧请求保持未知，活跃 Turn 仍沿原确切中断路径。
+这只调整现有 IO 调度，不新增队列、消费者或完成状态；实际安装、停止时延与完整社区
+准出仍需分别验收。
+
 群上下文强制使用 `workspace_only`，不受本人私聊 `host_default` 影响。只保留选定
 工作区的读写 grant，不提供个人 portfolio、直连 Agent 选择、全局 skills、MCP、
 shell profile 或继承的账号环境。原生宿主必须确认确切 permissions profile 和工作区
