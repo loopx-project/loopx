@@ -1,4 +1,5 @@
 import {useEffect, useId, useMemo, useRef, useState} from "react";
+import {defaultParseSearch} from "@tanstack/react-router";
 import {ArrowLeft, Circle, FlaskConical, GitBranch, RefreshCw, Sparkles} from "lucide-react";
 import {buildExploreTimeline, parseExploreFindingSections} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
 import {GoalResearchTimeline} from "./goal-research-timeline";
@@ -6,12 +7,19 @@ import {requestJson} from "../../data/chat";
 import {groupUnlinkedHistoryQuestions, layoutExploreHistory, parseExploreHistoryPage, projectExploreHistory, type ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.js";
 import "./goal-research-history.css";
 
-type Selection = {node: string; day: string | null};
+type Selection = {nodes: string[]; day: string | null};
 type Lens = "timeline" | "graph";
 type Read = {events: ExploreHistoryEvent[]; total: number | null; complete: boolean};
 const selectedFromUrl = (goal: string): Selection => {
   const query = new URLSearchParams(window.location.search);
-  return query.get("research_goal") === goal ? {node: query.get("research_node") ?? "", day: query.get("research_group")} : {node: "", day: null};
+  if (query.get("research_goal") !== goal) return {nodes: [], day: null};
+  const day = query.get("research_group");
+  // Reuse the router's array encoding so a grouped selection also survives
+  // canonicalization on reload. Existing scalar node links remain valid.
+  const search = defaultParseSearch(window.location.search);
+  const decoded = "research_node" in search ? search.research_node : undefined;
+  const nodes = Array.isArray(decoded) && decoded.every(id => typeof id === "string") ? decoded : query.getAll("research_node");
+  return {nodes: day === null ? [...new Set(nodes.filter(Boolean))] : [], day};
 };
 
 /** An effect-free history consumer. Its source is Explore, not raw sessions or
@@ -36,7 +44,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0}: {
     all: "回到全图", scope: "Explore 已记录历史", coverage: "其他来源覆盖、尝试发生时序尚未核验",
     partial: "历史尚未完整载入", failure: "无法继续读取历史。已读记录保留；请重试。",
     analysis: "深度分析", unavailable: "尚未接入轨迹评测；浏览历史不会调用 Agent。",
-    time: "记录时间", unknown: "时间未记录", records: "条记录", evidence: "已记录依据",
+    time: "记录时间（本地）", unknown: "时间未记录", records: "条记录", evidence: "已记录依据",
     interpretation: "独立检查与实际采用尚未核验", versions: "来源与版本引用", updates: "历史记录",
     changes: "次记录", findings: "条结论", links: "显式关联", missing: "部分关联的来源节点尚未记录",
     group: "来源分组", lost: "当前记录中找不到所选节点，其他历史仍可浏览。",
@@ -45,7 +53,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0}: {
     all: "Whole graph", scope: "Recorded Explore history", coverage: "Other-source coverage and attempt-time coverage are unverified",
     partial: "History is not fully loaded", failure: "Cannot continue reading history. Loaded records remain; retry.",
     analysis: "Deep analysis", unavailable: "Trajectory assessment is not connected. Reading history never invokes an Agent.",
-    time: "Recorded time range", unknown: "Time not recorded", records: "records", evidence: "Recorded evidence",
+    time: "Recorded time (local)", unknown: "Time not recorded", records: "records", evidence: "Recorded evidence",
     interpretation: "Independent checking and actual adoption are unverified", versions: "Source and version references", updates: "History",
     changes: "records", findings: "findings", links: "Explicit relationships", missing: "Some linked source nodes are not recorded",
     group: "Source grouping", lost: "The selected node is absent from this snapshot. Other history remains readable.",
@@ -133,9 +141,10 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0}: {
   const fullTime = (at: number) => new Intl.DateTimeFormat(zh ? "zh-CN" : "en", {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false}).format(new Date(at));
   const dayTime = (at: number) => new Intl.DateTimeFormat(zh ? "zh-CN" : "en", {month: "numeric", day: "numeric"}).format(new Date(at));
   const positions = new Map(layout.map(item => [item.node.id, item]));
-  const selectedId = selection.node;
+  const selectedId = selection.nodes.length === 1 ? selection.nodes[0]! : "";
   const selected = value?.nodes.find(node => node.id === selectedId);
   const selectedGroup = selection.day !== null ? grouped.groups.find(group => group.day === selection.day) : undefined;
+  const selectedMembers = selectedGroup?.nodes ?? (selection.nodes.length > 1 ? value?.nodes.filter(node => selection.nodes.includes(node.id)) : undefined);
   const clusterY = layout.length ? Math.max(...layout.map(item => item.y + 124)) + 24 : 24;
   const width = Math.max(600, grouped.groups.length ? 944 : 0, ...layout.map(item => item.x + 230));
   const height = Math.max(230, ...layout.map(item => item.y + 124), grouped.groups.length ? clusterY + Math.ceil(grouped.groups.length / 4) * 124 : 0);
@@ -143,21 +152,25 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0}: {
     setSelection(next);
     const url = new URL(window.location.href);
     url.searchParams.delete("research_node"); url.searchParams.delete("research_group");
-    if (next.node || next.day !== null) {url.searchParams.set(next.day !== null ? "research_group" : "research_node", next.day ?? next.node); url.searchParams.set("research_goal", goalId);}
+    if (next.nodes.length || next.day !== null) {
+      if (next.day !== null) url.searchParams.set("research_group", next.day);
+      else url.searchParams.set("research_node", next.nodes.length === 1 ? next.nodes[0]! : JSON.stringify(next.nodes));
+      url.searchParams.set("research_goal", goalId);
+    }
     else url.searchParams.delete("research_goal");
-    if (selection.node !== next.node || selection.day !== next.day) window.history.pushState(null, "", url);
-    if (focus && (next.node || next.day !== null)) window.requestAnimationFrame(() => {
+    if (selection.day !== next.day || selection.nodes.length !== next.nodes.length || selection.nodes.some((id, index) => id !== next.nodes[index])) window.history.pushState(null, "", url);
+    if (focus && (next.nodes.length || next.day !== null)) window.requestAnimationFrame(() => {
       const panel = detail.current;
       if (panel) {panel.scrollTop = 0; panel.focus({preventScroll: true}); panel.scrollIntoView({block: "nearest"});}
     });
   };
-  const choose = (id: string, focus = true) => select({node: id, day: null}, focus);
+  const choose = (id: string, focus = true) => select({nodes: id ? [id] : [], day: null}, focus);
   if (!busy && !error && !read.events.length) return null;
   return <section className="research-history" aria-label={copy.title} aria-busy={busy}>
     <header className="research-history-heading"><div><h2>{copy.title}</h2>
       <p>{copy.scope}{value?.startAt ? <> · {copy.time} <time>{timeLabel(value.startAt)}</time> — <time>{timeLabel(value.endAt)}</time></> : null}</p></div>
       <div className="research-history-controls">
-        {selectedId || selection.day !== null ? <button type="button" onClick={() => {choose("", false); graph.current?.focus();}}><ArrowLeft size={14} aria-hidden/>{copy.all}</button> : null}
+        {selection.nodes.length || selection.day !== null ? <button type="button" onClick={() => {choose("", false); graph.current?.focus();}}><ArrowLeft size={14} aria-hidden/>{copy.all}</button> : null}
         <div className="research-lens" role="group" aria-label={zh ? "视图" : "View"}>{(["timeline", "graph"] as const).map(item => <button key={item} type="button" aria-pressed={lens === item} onClick={() => chooseLens(item)}>{item === "timeline" ? (zh ? "时间线" : "Timeline") : (zh ? "关系图" : "Graph")}</button>)}</div>
         <button type="button" disabled title={copy.unavailable} aria-describedby={`${presentationId}-analysis`}><Sparkles size={14} aria-hidden/>{copy.analysis}</button>
         <button type="button" aria-label={copy.refresh} disabled={busy} onClick={() => setRevision(n => n + 1)}><RefreshCw size={15} aria-hidden/></button>
@@ -167,9 +180,9 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0}: {
         : `${read.events.length} / ${read.total} ${copy.records}${read.complete ? "" : ` · ${copy.partial}`}`} · {copy.coverage}</p>
     {error || history.error ? <p role="alert" className="research-history-error">{copy.failure} <small>{error || history.error}</small></p> : null}
     {busy && !read.events.length ? <div className="research-history-loading" role="status">{copy.loading}…</div> : null}
-    {value?.nodes.length ? <div className={`research-history-layout${selected || selectedGroup ? " has-selection" : ""}`}>
+    {value?.nodes.length ? <div className={`research-history-layout${selected || selectedMembers?.length ? " has-selection" : ""}`}>
       {lens === "timeline" && timeline ? <div className="research-history-canvas is-timeline" ref={graph} tabIndex={-1}>
-        <GoalResearchTimeline timeline={timeline} zh={zh} selectedId={selectedId} selectedDay={selection.day} dayGroups={grouped.groups} onGroupSelect={day => select({node: "", day})} phase={phase} onPhase={setPhase} onSelect={id => choose(id)} timeLabel={fullTime} dayLabel={dayTime}/>
+        <GoalResearchTimeline timeline={timeline} zh={zh} selectedIds={selection.nodes} selectedDay={selection.day} dayGroups={grouped.groups} onGroupSelect={day => select({nodes: [], day})} phase={phase} onPhase={setPhase} onSelect={id => choose(id)} onSelectMany={nodes => select({nodes, day: null})} timeLabel={fullTime} dayLabel={dayTime}/>
       </div> : <div className="research-history-canvas" ref={graph} tabIndex={0} aria-label={zh ? "完整已载入研究关系图；可滚动" : "Full loaded research graph; scrollable"}>
         <div className="research-history-stage" style={{width, height}}>
           <svg width={width} height={height} aria-hidden="true" className="research-history-edges">
@@ -191,13 +204,13 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0}: {
               return <path key={`parent:${item.node.id}`} className="is-grouping" d={`M${parent.x + 206},${parent.y + 47} C${parent.x + 226},${parent.y + 47} ${item.x - 20},${item.y + 47} ${item.x},${item.y + 47}`} />;
             })}
           </svg>
-          {layout.map(({node, x, y}) => <button key={node.id} type="button" className={`research-history-node is-${node.latest.status}${selectedId === node.id ? " is-selected" : ""}`}
-            style={{left: x, top: y}} aria-pressed={selectedId === node.id} aria-label={`${node.latest.title} · ${stateLabel(node.latest.status)}`} onClick={() => choose(node.id)}>
+          {layout.map(({node, x, y}) => <button key={node.id} type="button" className={`research-history-node is-${node.latest.status}${selection.nodes.includes(node.id) ? " is-selected" : ""}`}
+            style={{left: x, top: y}} aria-pressed={selection.nodes.includes(node.id)} aria-label={`${node.latest.title} · ${stateLabel(node.latest.status)}`} onClick={() => choose(node.id)}>
             <span className="research-node-meta">{node.latest.node_kind === "experiment" ? <FlaskConical size={13} aria-hidden/> : <Circle size={12} aria-hidden/>}{kindLabel(node.latest.node_kind)}<small>{stateLabel(node.latest.status)}</small></span>
             <strong>{node.latest.title}</strong><span className="research-node-count"><time>{timeLabel(node.updates[0]?.recorded_at)}</time>{node.updates.length > 1 ? ` · ${node.updates.length} ${copy.changes}` : ""}{node.findings.length ? ` · ${node.findings.length} ${copy.findings}` : ""}</span>
           </button>)}
           {grouped.groups.map((group, index) => <button type="button" key={`day:${group.day}`} className={`research-history-node research-history-group${selectedGroup === group ? " is-selected" : ""}`} style={{left: (index % 4) * 230 + 24, top: clusterY + Math.floor(index / 4) * 124}}
-            aria-pressed={selectedGroup === group} onClick={() => select({node: "", day: group.day})}>
+            aria-pressed={selectedGroup === group} onClick={() => select({nodes: [], day: group.day})}>
             <span className="research-node-meta"><Circle size={12} aria-hidden/>{zh ? "未关联问题" : "Unlinked questions"}</span>
             <strong>{group.day ? `${group.day} UTC` : copy.unknown}</strong><span className="research-node-count">{group.nodes.length} {zh ? "个问题 · 展开全部" : "questions · read all"}</span>
           </button>)}
@@ -215,17 +228,17 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0}: {
         {selected.latest.parent_id ? <p>{copy.group} · {positions.get(selected.latest.parent_id)?.node.latest.title ?? "—"}</p> : null}
         <h4>{copy.updates}</h4>{updateRecords(selected.revisions)}
       </div> : null}
-      {selectedGroup ? <div className="research-history-detail" ref={detail} role="region" aria-label={zh ? "按日期收纳的未关联问题" : "Unlinked questions by date"} tabIndex={-1} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); choose("", false); graph.current?.focus();}}}>
-        <h3>{selectedGroup.day || copy.unknown} · {zh ? "未关联问题" : "Unlinked questions"}</h3>
-        <p className="research-history-note">{zh ? "这里只按首次记录日期收纳，不推断共同路线或因果。每个问题的记录与依据保留如下。" : "Grouped only by first recorded date, without inferring a shared route or causality. Every question and its evidence remains below."}</p>
+      {selectedMembers?.length ? <div className="research-history-detail" ref={detail} role="region" aria-label={selectedGroup ? (zh ? "按日期收纳的未关联问题" : "Unlinked questions by date") : (zh ? "相邻研究项的全部记录" : "All records for nearby research items")} tabIndex={-1} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); choose("", false); graph.current?.focus();}}}>
+        <h3>{selectedGroup ? `${selectedGroup.day || copy.unknown} · ${zh ? "未关联问题" : "Unlinked questions"}` : (zh ? `相邻研究项 · ${selectedMembers.length}` : `Nearby research items · ${selectedMembers.length}`)}</h3>
+        <p className="research-history-note">{selectedGroup ? (zh ? "这里只按首次记录日期收纳，不推断共同路线或因果。每个问题的记录与依据保留如下。" : "Grouped only by first recorded date, without inferring a shared route or causality. Every question and its evidence remains below.") : (zh ? "这些点在当前宽度下互相遮挡，合拢后一次展开。每项研究的原始时间、结论与依据完整保留；合拢不表示关联或因果。" : "These points would overlap at the current width and open together. Every original time, finding and source remains; grouping implies no relationship or cause.")}</p>
         <p className="research-history-note">{copy.interpretation}</p>
-        {selectedGroup.nodes.map(node => <article className="research-history-group-member" key={node.id}><h4>{node.latest.title}</h4><p>{stateLabel(node.latest.status)} · {node.latest.summary}</p>{node.latest.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}
+        {selectedMembers.map(node => <article className="research-history-group-member" key={node.id} data-research-node={node.id}><h4>{node.latest.title}</h4><p>{stateLabel(node.latest.status)} · {node.latest.summary}</p>{node.latest.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}
           {node.findings.map(findingElement)}
           {updateRecords(node.revisions)}
         </article>)}
       </div> : null}
     </div> : null}
-    {(selectedId || selection.day !== null) && !selected && !selectedGroup && read.complete && !busy && !error && !history.error ? <p role="status">{copy.lost}</p> : null}
+    {(selection.nodes.some(id => !value?.nodes.some(node => node.id === id)) || (selection.day !== null && !selectedGroup)) && read.complete && !busy && !error && !history.error ? <p role="status">{copy.lost}</p> : null}
     {value?.events.length && !value.nodes.length ? <p className="research-history-note">{zh ? "尚未记录节点结构；可展开下面的已读记录。" : "Node structure has not been recorded; loaded records remain available below."}</p> : null}
     {value?.missingLinks.length ? <p className="research-history-note">{copy.missing} · {value.missingLinks.length}</p> : null}
     {value?.unknownTimeCount ? <p className="research-history-note">{copy.unknown} · {value.unknownTimeCount}</p> : null}

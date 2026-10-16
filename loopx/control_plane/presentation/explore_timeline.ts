@@ -49,8 +49,8 @@ function parseDecision(interpretation: string): ExploreDecision | null {
 }
 
 export type TimelineFinding = {event: ExploreHistoryEvent; at: number | null; sections: ExploreFindingSections | null};
-export type TimelineBin = {start: number; end: number; events: number; questions: number; labels: Record<string, number>; decisions: Record<string, number>};
-export type TimelinePhase = {index: number; start: number; end: number; questions: number; findings: number; labels: Record<string, number>; decisions: Record<string, number>; lastDecision: TimelineFinding | null};
+export type TimelineBin = {start: number; end: number; events: number; nodes: number; labels: Record<string, number>; decisions: Record<string, number>};
+export type TimelinePhase = {index: number; start: number; end: number; nodes: number; findings: number; labels: Record<string, number>; decisions: Record<string, number>; lastDecision: TimelineFinding | null};
 export type TimelineRoute = {id: string; nodeIds: string[]; first: number | null; last: number | null};
 export type TimelineNode = {node: ExploreHistoryNode; first: number | null; last: number | null; label: string; routeId: string | null};
 export type ExploreTimeline = {
@@ -59,6 +59,25 @@ export type ExploreTimeline = {
   nodes: Map<string, TimelineNode>; routes: TimelineRoute[]; singles: string[]; edges: readonly ExploreHistoryEvent[];
   findings: TimelineFinding[]; decisions: TimelineFinding[]; structuredCount: number;
 };
+
+/** Combine colliding touch targets, never source records or relationships.
+ * At the supplied plot width every displayed centre is at least 44px apart.
+ * A group opens all members with their original timestamps and evidence. Its
+ * mean record time positions the group only; it is not a new event timestamp. */
+export function groupExploreTimelinePoints(items: readonly TimelineNode[], start: number, end: number, width: number): {items: TimelineNode[]; at: number}[] {
+  const known = items.filter(item => item.first !== null).sort((a, b) => a.first! - b.first! || a.node.id.localeCompare(b.node.id));
+  const groups: {items: TimelineNode[]; at: number}[] = [];
+  const pixels = Number.isFinite(width) ? Math.max(0, width) : 0;
+  const span = Math.max(1, end - start);
+  for (const item of known) {
+    const previous = groups.at(-1);
+    if (previous && (item.first! - previous.at) / span * pixels < 44) {
+      previous.at += (item.first! - previous.at) / (previous.items.length + 1);
+      previous.items.push(item);
+    } else groups.push({items: [item], at: item.first!});
+  }
+  return groups;
+}
 
 const time = (value: string) => { const at = Date.parse(value); return Number.isFinite(at) ? at : null; };
 const bump = (counts: Record<string, number>, key: string) => { counts[key] = (counts[key] ?? 0) + 1; };
@@ -118,11 +137,11 @@ export function buildExploreTimeline(nodes: readonly ExploreHistoryNode[], edges
   singles.sort((a, b) => (timelineNodes.get(a)!.first ?? Infinity) - (timelineNodes.get(b)!.first ?? Infinity));
   const span = start !== null && end !== null ? Math.max(1, end - start) : 0;
   const binCount = span ? Math.max(1, Math.min(targetBins, Math.ceil(span / 3_600_000))) : 0;
-  const bins: TimelineBin[] = Array.from({length: binCount}, (_, index) => ({start: start! + span * index / binCount, end: start! + span * (index + 1) / binCount, events: 0, questions: 0, labels: {}, decisions: {}}));
-  const phases: TimelinePhase[] = span ? [0, 1, 2].map(index => ({index, start: start! + span * index / 3, end: start! + span * (index + 1) / 3, questions: 0, findings: 0, labels: {}, decisions: {}, lastDecision: null})) : [];
+  const bins: TimelineBin[] = Array.from({length: binCount}, (_, index) => ({start: start! + span * index / binCount, end: start! + span * (index + 1) / binCount, events: 0, nodes: 0, labels: {}, decisions: {}}));
+  const phases: TimelinePhase[] = span ? [0, 1, 2].map(index => ({index, start: start! + span * index / 3, end: start! + span * (index + 1) / 3, nodes: 0, findings: 0, labels: {}, decisions: {}, lastDecision: null})) : [];
   const slot = <T,>(items: T[], at: number) => items[Math.min(items.length - 1, Math.floor((at - start!) / span * items.length))]!;
   for (const event of events) { const at = time(event.recorded_at); if (at !== null && bins.length) slot(bins, at).events++; }
-  for (const item of timelineNodes.values()) if (item.first !== null && bins.length) { slot(bins, item.first).questions++; slot(phases, item.first).questions++; }
+  for (const item of timelineNodes.values()) if (item.first !== null && bins.length) { slot(bins, item.first).nodes++; slot(phases, item.first).nodes++; }
   for (const item of findings) {
     if (item.at === null || !bins.length) continue;
     const bin = slot(bins, item.at), phase = slot(phases, item.at);

@@ -1,0 +1,2717 @@
+{
+  "description": "Unchanged Explore history from a real, sealed research checkpoint later restored by follow-up experiments. Original text, timestamps, identities and references; no invented relationships.",
+  "source_sha256": "de04b679e9f382b650e891e5c7dd7146bc690500435c511f107c9d24da4f4efa",
+  "source_bytes": 145296,
+  "goal_id": "ad-warm-off-20261015-01",
+  "display_name": "广告优化 · 近期研究 checkpoint",
+  "provenance": {
+    "case_id": "ad_placement_optimization",
+    "source_run_id": "ad-warm-stride-off-20261015-01",
+    "checkpoint_id": "8656d5442a664ada9d8bdb4877349f43",
+    "checkpoint_sha256": "1d5c9691440d941424ab531b5632f4b5e2bb526fd6039e00421409f809bc41e3",
+    "captured_at": "2026-10-15T14:32:27.665890+00:00",
+    "captured_native_turns": 87,
+    "selection": "Fixed previously receiver-qualified second-generation natural Ad8656d5 point, selected before this launch from existing14:31Z qualification; same exact digest, no selection by score or later source feedback.",
+    "restored_by": [
+      "ad-warm-stride-on-20261015-05",
+      "ad-warm-stride-off-20261015-05"
+    ],
+    "redactions": [],
+    "claim_scope": "diagnostic_only",
+    "score_countable": false,
+    "trajectory_publication": {
+      "status": "uploaded",
+      "repository": "https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015",
+      "revision": "c858f51021dc1c1cf08263f9c04b692a5e29b40b",
+      "archive": "ad_placement_optimization.zip",
+      "archive_sha256": "4a00c2e217ce3aac10fbbb3ec73b365342cfbdb11ee154311f2ff3df9b068fef"
+    },
+    "boundary": "Captured Explore knowledge only; original native execution state, credentials, evaluator and models are not imported."
+  },
+  "source_counts": {
+    "event_count": 105,
+    "event_kinds": {
+      "node": 48,
+      "finding": 57
+    },
+    "node_kinds": {
+      "question": 48
+    },
+    "statuses": {
+      "open": 48,
+      "tentative": 57
+    },
+    "first_recorded_at": "2026-10-14T18:55:41+00:00",
+    "last_recorded_at": "2026-10-15T14:23:55+00:00",
+    "edge_count": 0,
+    "parent_records": 0
+  },
+  "events": [
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "71c462d361749b53",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T18:55:41+00:00",
+      "result_id": "question_ab81670234b2e784a2279332a8e487b8ec15ebead3b7dd8132552044d26c2f61",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:fecfe6289ac8d8f8",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Current regrowth solver on generated seeds 0,1,3,6,8,9 and 200–223; paired uniform and mild-bias variants under a 4.60s search budget.",
+      "title": "Does mildly biasing move selection toward less-satisfied ads improve score within the 4.60-second search budget?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "60fbbe8a76f28829",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-bias-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_ab81670234b2e784a2279332a8e487b8ec15ebead3b7dd8132552044d26c2f61",
+      "recorded_at": "2026-10-14T18:55:41+00:00",
+      "result_id": "finding_eaa58db7ef557a0b86d2823478d2a988223f47599d11e8743897da84c8dfcab7",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:d9aa789883c60741",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: f46b58e53ddfb6f035d5f5656ac1da43c867488487b47f5f467f8961c34f46d6 Applicability: Current regrowth solver on generated seeds 0,1,3,6,8,9 and 200–223; paired uniform and mild-bias variants under a 4.60s search budget. Observation: Native checkpoint b526bec8 passes 50/50 with score 49332642308. Mild bias gains 0.61M mean points on 24 fresh seeds, with mixed individual results; candidate f46b58e5 remains native-untested. Interpretation: Outcome: continue retained: - Source-bound native evaluation and best-state retention - Useful local work during the 3600-second cooldown changed: - Prefer the less-satisfied of two random ads on half the moves",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does mildly biasing move selection toward less-satisfied ads improve score within the 4.60-second search budget?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "4eccd4d8807300ac",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T19:17:59+00:00",
+      "result_id": "question_d745d82439ff49e61e889ffc15393a1bc86d19534eede5ecf30c5b4fc7c65332",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:92b2c7500cf92da8",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Current mild-bias solver; six tuning seeds, paired fresh seeds 300–315 and cut-repair replication 316–331; tested slide and one/four-blocker cut settings.",
+      "title": "Do blocker slides or alternative cut-and-regrow repairs improve satisfaction within the 4.60-second search budget?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "dede0c014e825ded",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-repair-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_d745d82439ff49e61e889ffc15393a1bc86d19534eede5ecf30c5b4fc7c65332",
+      "recorded_at": "2026-10-14T19:17:59+00:00",
+      "result_id": "finding_725bb4ef39d028c8e5fc20796b7da3cf261f1372fe49c313da60754f61e5c88d",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:70370fe8823fd62d",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: f62ce9936d6b96123865247556f1160de8ef02e7d8dce4208742419e18004d26 Applicability: Current mild-bias solver; six tuning seeds, paired fresh seeds 300–315 and cut-repair replication 316–331; tested slide and one/four-blocker cut settings. Observation: Slides lost 474365.5 mean points on 16 fresh seeds. Alternative cuts gained 242797.1 then lost 282917.1, pooled -20060 on 32. All 104 outputs passed within 5 seconds; current f46b58e5 remains native-untested. Interpretation: Outcome: continue retained: - Current mild-bias candidate and separate native winner - Source-bound validation and submission cooldown changed: - Added paired evidence on fresh seeds 300–331 stopped: - Adoption of unconditional blocker slides - Adoption of alternative cuts at current settings",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do blocker slides or alternative cut-and-regrow repairs improve satisfaction within the 4.60-second search budget?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "9be581670fddeaee",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T19:42:53+00:00",
+      "result_id": "question_8a277db0ac93987eb58000636bf4ed6fbbe4d67266a51346d89d480841b8f044",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:a06c4de6c52233b0",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Mild-bias solver; endpoint tuning on six seeds, paired fresh seeds 400–431, and native combined-source comparison with b526bec8.",
+      "title": "Does gentler cooling improve the regrowth solver within the 4.60-second search budget?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "27ddad958fdb878a",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-floor-1",
+        "evidence:ad-native-2"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_8a277db0ac93987eb58000636bf4ed6fbbe4d67266a51346d89d480841b8f044",
+      "recorded_at": "2026-10-14T19:42:53+00:00",
+      "result_id": "finding_1fb166d0b50e9f530c80428b5a2bc1c1f07f117962204bf955281e3f4b962a48",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:fa53ab971ceb6f12",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: c77bbd69d02ef96cf9b05ba5cf4e2127a803608307e7cce82fc7440e0863bc65 Applicability: Mild-bias solver; endpoint tuning on six seeds, paired fresh seeds 400–431, and native combined-source comparison with b526bec8. Observation: Ending at 1e-4 gains 1.02M mean points on 32 fresh pairs, winning 26. Combined candidate c77bbd69 improves native total by 64880888 and passes 50/50. Free growth regresses; final polish adds only 74 points on saved layouts. Interpretation: Outcome: continue retained: - Feasible best-state retention and the 4.60-second search budget - Source-bound native evaluation and acceptance-based cooldown changed: - Final annealing temperature from 1e-7 to 1e-4 - Best native checkpoint to submission 3a5c8079e85b stopped: - Adoption of tested free-growth and hotter-endpoint settings",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does gentler cooling improve the regrowth solver within the 4.60-second search budget?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "92032c72afb9b718",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T19:59:21+00:00",
+      "result_id": "question_9ab9d162ee69f3aa3ac48db7aaa2f8971b1463d86dc6b0eacc7eec64dd0eadfc",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:110a8496071a4f49",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Initial-temperature tuning on six seeds; 0.008 versus 0.032 paired on fresh seeds 500–531, with 1e-4 ending and native-tested c77bbd69 comparator.",
+      "title": "Does a warmer starting temperature improve the gently cooled regrowth solver within its 4.60-second budget?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "2d7ec2378a491914",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-initial-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_9ab9d162ee69f3aa3ac48db7aaa2f8971b1463d86dc6b0eacc7eec64dd0eadfc",
+      "recorded_at": "2026-10-14T19:59:21+00:00",
+      "result_id": "finding_354ebc597b7824d9a5a6821590ad3cc5bac611e94b35d9efe8c79cd79e418f90",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:dd2511b3128163df",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 07d9f3cbf095f92c0ee3be2d47029653836753d85731af34cf92d56a24bee8ce Applicability: Initial-temperature tuning on six seeds; 0.008 versus 0.032 paired on fresh seeds 500–531, with 1e-4 ending and native-tested c77bbd69 comparator. Observation: Starting at 0.032 gains 1.96M and 2.98M mean points on two fresh batches, pooled 2.47M with 25/32 wins. Source 07d9f3cb is native-untested; c77bbd69 remains the separately preserved native winner. Interpretation: Outcome: continue retained: - The 1e-4 endpoint, feasible best-state retention and 4.60-second budget - Source-bound native evaluation and submission cooldown changed: - Starting temperature from 0.008 to 0.032 - Promising candidate to 07d9f3cb; native-best checkpoint remains c77bbd69",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does a warmer starting temperature improve the gently cooled regrowth solver within its 4.60-second budget?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "e8dec7c419fc6049",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T20:21:00+00:00",
+      "result_id": "question_9013d40fc8889b9328b94bc6a9f77c5274738b8702c35986bbee830179078905",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:f1fbcdaf2000bea1",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Source 07d9f3cb; initial 0.032/0.064/0.128 screened on six seeds, 0.064 versus 0.032 on fresh 600–631; endpoint 1e-4 and 4.60-second budget.",
+      "title": "Do adjacent hotter starts improve the current 0.032 annealing candidate?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "a570411e49a0fcea",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-hotter-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_9013d40fc8889b9328b94bc6a9f77c5274738b8702c35986bbee830179078905",
+      "recorded_at": "2026-10-14T20:21:00+00:00",
+      "result_id": "finding_2c33e96ed05a5b923134d61e6b593aed4f632816798e59b48b7ad795327ab69e",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:bbe6bad6763e2dd3",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 07d9f3cbf095f92c0ee3be2d47029653836753d85731af34cf92d56a24bee8ce Applicability: Source 07d9f3cb; initial 0.032/0.064/0.128 screened on six seeds, 0.064 versus 0.032 on fresh 600–631; endpoint 1e-4 and 4.60-second budget. Observation: 0.064 gained 1.12M on six screening seeds, then lost 0.29M and 1.17M in fresh batches, pooled -0.73M with 13/32 wins. 0.128 lost 2.12M in screening. Tests remained valid under 5s. Interpretation: Outcome: continue retained: - Candidate 07d9f3cb; native winner c77bbd69 separately - Endpoint 1e-4, 4.60-second budget and source-bound evaluation changed: - Added paired evidence on fresh seeds 600–631 stopped: - Adoption of tested 0.064/0.128 starts under the unchanged schedule",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do adjacent hotter starts improve the current 0.032 annealing candidate?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "8c001de31d6d67f8",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T20:43:03+00:00",
+      "result_id": "question_d3c06997e7913b35fd8381385a6a9bb58c751dc7263fd357c94baa51655eedd3",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:c2a37d7d8d640b33",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Source 07d9f3cb comparator, exponents 0.75/1/1.25; six screening seeds and 32 fresh pairs per changed exponent, adopted 87f3e340 and combined native comparison with c77bbd69.",
+      "title": "Does changing cooling progression improve the warm-start regrowth solver within 4.60 seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "eeff5b0a1364db35",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-curve-1",
+        "evidence:ad-native-3"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_d3c06997e7913b35fd8381385a6a9bb58c751dc7263fd357c94baa51655eedd3",
+      "recorded_at": "2026-10-14T20:43:03+00:00",
+      "result_id": "finding_df77392388ce4a0749133104be6d07ff908b128b9a75aeeff089ca9510c08185",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:121020900627cb71",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 87f3e340fceb1b1cd0e3ae8ff2756c67061ce0971de9099c6894856f55ddae05 Applicability: Source 07d9f3cb comparator, exponents 0.75/1/1.25; six screening seeds and 32 fresh pairs per changed exponent, adopted 87f3e340 and combined native comparison with c77bbd69. Observation: Earlier cooling gained 0.140M and 0.168M in fresh batches, pooled 0.154M with 13/32 wins; delayed cooling lost in both. The combined warmer-start/earlier-cooling source gains 100747013 native total points, 50/50 passed; individual native effects remain unknown. Interpretation: Outcome: continue retained: - Feasible best-state retention, endpoint 1e-4 and 4.60-second budget - Source-bound checkpoints and acceptance-based submission cooldown changed: - Cooling progression to p^0.75 - Native-best source to 87f3e340/submission 54b9cd2bb608 stopped: - Adoption of the tested delayed-cooling schedule",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does changing cooling progression improve the warm-start regrowth solver within 4.60 seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "7df922e95c8e0e72",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T21:06:40+00:00",
+      "result_id": "question_cd5526f82a411b9ed41b2ba4238107e32c941441b4b8ef443d617a8013a5ae88",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:7af9bc99a6197fc6",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Source 87f3e340; global modes screened on 800–805, mode 2 paired on 816–847; conditional mode 3 screened on 850–855 and paired on 856–887, same cooling and 4.60s budget.",
+      "title": "Do global or satisfaction-conditional late-small-step policies improve the native-tested annealing solver?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "8b1d4682ac9fdfcc",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-steps-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_cd5526f82a411b9ed41b2ba4238107e32c941441b4b8ef443d617a8013a5ae88",
+      "recorded_at": "2026-10-14T21:06:40+00:00",
+      "result_id": "finding_a6220604a8e2af15490412da21ccf57539df8d0a8b9c77347f5e18b1be2798ef",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:1ab28a78c1a9b5bf",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 94268ddce13ed493435de99ec427f97841f27c1f8f8f63d7f76bb492a95c05a0 Applicability: Source 87f3e340; global modes screened on 800–805, mode 2 paired on 816–847; conditional mode 3 screened on 850–855 and paired on 856–887, same cooling and 4.60s budget. Observation: Global reweighting lost 0.024M and 0.063M in fresh batches, pooled -0.043M. Conditional reweighting lost 0.358M then gained 1.389M, pooled +0.516M with 20/32 wins. Its batch signs conflict; neither policy is adopted. Interpretation: Outcome: continue retained: - Native winner 87f3e340 and its cooling/budget - Conditional alternative 5dc41f3e without native-score attribution changed: - Added source-bound step-policy evidence on fresh seeds 800–887 - Next structural probe: regrowth following an area-neutral primary move stopped: - Adoption of the tested global late-small-step policies",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do global or satisfaction-conditional late-small-step policies improve the native-tested annealing solver?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "10e9b3ca1c412d37",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T21:23:41+00:00",
+      "result_id": "question_9b0148646d3d45f542978ef0e09dead30ea296f69a2c4ca8e384da76b76c029d",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:70d581ed7dc8407a",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Native source 87f3e340; always or quarter-sampled neutral recovery for <=2 blockers, six screening seeds 900–905 and sampled recovery paired on 916–947, same cooling/proposals.",
+      "title": "Does neighbor regrowth after an area-neutral primary move improve packing under the 4.60-second budget?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "3e7f889806ac49b1",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-neutral-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_9b0148646d3d45f542978ef0e09dead30ea296f69a2c4ca8e384da76b76c029d",
+      "recorded_at": "2026-10-14T21:23:41+00:00",
+      "result_id": "finding_1444e864dd58af87f21a263551730b981e8a0076243606b70e34adac4c6f2bcb",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:036031897a1df3ba",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 162d0dc44e286f2ed0be32237e0e11c0d87e78360e1b5e2ef7061b9f75827880 Applicability: Native source 87f3e340; always or quarter-sampled neutral recovery for <=2 blockers, six screening seeds 900–905 and sampled recovery paired on 916–947, same cooling/proposals. Observation: Quarter-sampled recovery gained 74223 points in six-case screening, then lost 608598 and 210423 in fresh batches, pooled -409510 with 16/32 wins. All 82 outputs passed; benefit under the tested conditions is unsupported. Interpretation: Outcome: replan retained: - Native winner 87f3e340, cooling progression and 4.60-second budget - Unadopted conditional-step checkpoint 5dc41f3e changed: - Next probe targets initial topology through weighted point partitions stopped: - Adoption of tested neutral-primary recovery settings",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does neighbor regrowth after an area-neutral primary move improve packing under the 4.60-second budget?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "e1e19d0ff9b45de2",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-native-4",
+        "evidence:ad-steps-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_cd5526f82a411b9ed41b2ba4238107e32c941441b4b8ef443d617a8013a5ae88",
+      "recorded_at": "2026-10-14T21:45:26Z",
+      "result_id": "finding_a6220604a8e2af15490412da21ccf57539df8d0a8b9c77347f5e18b1be2798ef",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:870d5589c0722884",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Source 5dc41f3e, AD_STEP_MODE=3, gains 27505940 native total points over 87f3e340 in accepted submission a83a3f1f24f2, all 50 passed. Adopted exact checkpoint. Local evidence remains mixed: prior fresh batches -357534 and +1388894.5; new 1100-1107 batch -555327.5; pooled 40 fresh pairs +301478.7, 23 wins/17 losses. Native details expose PASS statuses only. Global policies and other step settings remain separately scoped; generalization and per-case native gains are unknown.",
+      "title": "Conditional late-small steps gain 27505940 native total points, 50/50 passed"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "886dbae59eb18cd3",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T21:46:53+00:00",
+      "result_id": "question_db5ee516fa3119d2cca299ef34405ad741e28b0efc5ef7db74e7e9edbc781dfd",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:ad53317c82f62b54",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Source 4c245312, AD_INIT_MODE 0/1/2; screen 1000–1005, mode 1 fresh 1016–1047, cooler mode-1 starts screen 1200–1205. All search budgets 4.60s.",
+      "title": "Does weighted partition initialization improve final ad-placement score within the same time budget?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "9a0cabca18fc1835",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-partition-1",
+        "evidence:ad-partition-cooling-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_db5ee516fa3119d2cca299ef34405ad741e28b0efc5ef7db74e7e9edbc781dfd",
+      "recorded_at": "2026-10-14T21:46:53+00:00",
+      "result_id": "finding_ccc76aed72d3ac3455ac241adcf690d969c6ecdeff300af6c44d59d86d519bc9",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:b157a7edac2db375",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 4c2453125a9b990e6872f475a26dec26bee3a2cc27b2d9c9694ff28d3d8423c4 Applicability: Source 4c245312, AD_INIT_MODE 0/1/2; screen 1000–1005, mode 1 fresh 1016–1047, cooler mode-1 starts screen 1200–1205. All search budgets 4.60s. Observation: Partition-only initial mean rose from 0.9200 to 0.9523 in screening, but fresh final batches gained 666255 and lost 860646, pooled -97195, 13/32 wins. Starts 0.016/0.008 lost 1.360M/2.090M versus warm partition on six new cases. All 124 partition-stage outputs passed. Interpretation: Do not adopt these variants. Hybrid gained 459115 in six-case screening but has no fresh replication; test it on current native winner 5dc41f3e. Better initialization does not establish final benefit, and the small cooler screen does not prove general inferiority.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does weighted partition initialization improve final ad-placement score within the same time budget?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "03abd6526fef423a",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T22:02:54+00:00",
+      "result_id": "question_7d9f65be0c83cc9fb71a1bfe72a81a31dc620ec0de49375409ea3ff8ac307c19",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:b06235f166a7216f",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Source 5dc41f3e comparator and 72b03f01 hybrid; screening 1300–1305, fresh 1316–1347, same cooling/steps and 4.60s budget.",
+      "title": "Does hybrid greedy/weighted-partition initialization improve the native-winning conditional-step solver?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "16531e6b4fc0bd1a",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-hybrid-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_7d9f65be0c83cc9fb71a1bfe72a81a31dc620ec0de49375409ea3ff8ac307c19",
+      "recorded_at": "2026-10-14T22:02:54+00:00",
+      "result_id": "finding_05dab6dd051fe64fb8e9c83316b11ac49d2e274950cfa83e39301b922799193d",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:f83fda4352561dbd",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 72b03f016d6c378ef03a5a419b50f681cf8eae70da1dda1e06602779937be8e7 Applicability: Source 5dc41f3e comparator and 72b03f01 hybrid; screening 1300–1305, fresh 1316–1347, same cooling/steps and 4.60s budget. Observation: Hybrid gained 749595 and 332492 mean points in fresh batches, pooled +541044 with 22/32 wins. All 92 outputs passed. The 4.747s case reran at 4.614/4.616s with varying scores. Source 72b03f01 is the promising local candidate; its native effect is unknown. Interpretation: Outcome: continue retained: - Native-tested source 5dc41f3e and acceptance-based submission cooldown - Conditional steps, cooling schedule and 4.60-second total budget changed: - Hybrid initialization in solution.cpp and best-supported checkpoint - Next local parameter probe: conditional step satisfaction threshold stopped: - Attributing existing native feedback to the unsubmitted hybrid candidate",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does hybrid greedy/weighted-partition initialization improve the native-winning conditional-step solver?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "a8062039e3095642",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T22:23:13+00:00",
+      "result_id": "question_6b12c07a469887a2d96291bf760bb754328154b8c155a7596cf7838dd35a01e2",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:f4541b0b76f1628e",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Hybrid 72b03f01, thresholds 0.95/0.98/0.995 screened on 1400–1405; 0.95 fresh paired on 1416–1447. Diagnostics verify changed paths; native transfer untested.",
+      "title": "Does changing the late-small-step satisfaction threshold improve hybrid annealing within 4.60 seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "aeef678a7978aaf5",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-threshold-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_6b12c07a469887a2d96291bf760bb754328154b8c155a7596cf7838dd35a01e2",
+      "recorded_at": "2026-10-14T22:23:13+00:00",
+      "result_id": "finding_ce5294c7d7f64e514f63767ba465a68f6ba7b66159ed843786ce1661478b29c3",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:e6640f3cd528e986",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 6fa273a2ac11bb5ca81178ec4dcc7e78b9cb2eab2b697bad808fc10632fe530f Applicability: Hybrid 72b03f01, thresholds 0.95/0.98/0.995 screened on 1400–1405; 0.95 fresh paired on 1416–1447. Diagnostics verify changed paths; native transfer untested. Observation: Threshold 0.95 lost 165687 in six-case screening, then gained 547434 and 770272 in fresh batches, pooled +658853 with 20/32 wins. All 84 outputs passed; both changed predicates executed. Its native effect remains unknown. Interpretation: Outcome: continue retained: - Hybrid initialization, cooling and 4.60-second budget - Separate native winner 5dc41f3e and source-bound checkpoints changed: - Late-small-step satisfaction threshold from 0.98 to 0.95 - Next probe targets rectangle-relative amplitude, rather than another threshold sweep stopped: - Adoption of the screened-only 0.995 variant",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does changing the late-small-step satisfaction threshold improve hybrid annealing within 4.60 seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "a522326de2208481",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T22:37:53+00:00",
+      "result_id": "question_811011eb5010826448b388be29318ff0c6dedc8954c6c1fc24903c7c7c9aab81",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:69f3538c9024ab74",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Source 6fa273a2 vs modes 0/1/2 in f4c6f5e6; side/4 and side/8 screen 1500–1505, side/8 fresh 1516–1547. Native transfer untested.",
+      "title": "Do rectangle-relative late-step caps improve the threshold-0.95 hybrid within 4.60 seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "fdff2b28eb40b773",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-relative-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_811011eb5010826448b388be29318ff0c6dedc8954c6c1fc24903c7c7c9aab81",
+      "recorded_at": "2026-10-14T22:37:53+00:00",
+      "result_id": "finding_b998ffa281ceb5c3ed0e10fd6eb1045c5892f4f0c76e6db94d053a8657797625",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:38643b13c0bb650f",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: f4c6f5e604cb554a904f1c20cb6daab0a6007b7771b0538a6d37ac91a00fa218 Applicability: Source 6fa273a2 vs modes 0/1/2 in f4c6f5e6; side/4 and side/8 screen 1500–1505, side/8 fresh 1516–1547. Native transfer untested. Observation: Side/8 cap screened +35546, then lost 449966 and 514496 in fresh batches, pooled -482231 with 13/32 wins. Side/4 screened -838579. All 84 outputs passed; diagnostics verified both changed paths. No cap is adopted. Interpretation: Outcome: continue retained: - Uncapped threshold-0.95 hybrid source 6fa273a2 and 4.60-second budget - Separate native winner 5dc41f3e and acceptance-based cooldown changed: - Next priority is native transfer of the locally supported hybrid/threshold candidate stopped: - Adoption of the tested side/4 and side/8 late-step caps",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do rectangle-relative late-step caps improve the threshold-0.95 hybrid within 4.60 seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "14b1f32b227fd6a4",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T22:47:10+00:00",
+      "result_id": "question_b1c8a9d038aa09fc89f89d7ea9bb1f87af7097b6e528e68e7300af8b28c47e6d",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:99044d79f7aa46e7",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Native source 6fa273a2/9ae3a0c9e323 versus 5dc41f3e/a83a3f1f24f2; combined initialization and threshold changes under 4.60 seconds.",
+      "title": "Do combined hybrid initialization and threshold 0.95 improve native score over the prior conditional-step winner?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "8f76b34d8d0cf24a",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-native-5"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_b1c8a9d038aa09fc89f89d7ea9bb1f87af7097b6e528e68e7300af8b28c47e6d",
+      "recorded_at": "2026-10-14T22:47:10+00:00",
+      "result_id": "finding_a5d457f710199a53121517ac5b0a30f80328beef27e9968a4a3d431bf9001237",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:6769dd1a3f1af277",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 6fa273a2ac11bb5ca81178ec4dcc7e78b9cb2eab2b697bad808fc10632fe530f Applicability: Native source 6fa273a2/9ae3a0c9e323 versus 5dc41f3e/a83a3f1f24f2; combined initialization and threshold changes under 4.60 seconds. Observation: Native score 49527208218, 50/50 passed, +1432069 over prior best. Source was compared with its accepted checkpoint before promotion. Public per-test details expose passed statuses only. Interpretation: Keep accepted source 6fa273a2 as native best. This small single-evaluation gain supports score_first selection but does not isolate the two changes or quantify runtime-dependent variability. Preserve former winner and continue fresh local experiments.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do combined hybrid initialization and threshold 0.95 improve native score over the prior conditional-step winner?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "5ce24859c0a39159",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T22:56:40+00:00",
+      "result_id": "question_9517e66c3cac79b48d22611214c56847b7d16d57a579fbbd7d8b59b2aef96fcf",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:70dcc9b6a52ee7a7",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Source 6fa273a2 vs be900c53 mode 2, floor 0.001 after 60% progress for satisfaction below 0.95; screen 1600–1605, fresh 1616–1647. Native transfer untested.",
+      "title": "Does a late temperature floor limited to poorly satisfied ads improve the native-winning hybrid under 4.60 seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "1f77ad39d40b356a",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-poor-temperature-1",
+        "evidence:ad-poor-temperature-screen-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_9517e66c3cac79b48d22611214c56847b7d16d57a579fbbd7d8b59b2aef96fcf",
+      "recorded_at": "2026-10-14T22:56:40+00:00",
+      "result_id": "finding_782c7afbf8df95740b4bd7c669b7400ddfbbf8bd8bcf7b70130d44c2b6113b2e",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:15eb407db56be600",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 84c7e5b75c14f665f6009d226eb0c267d6205863de889b0baf051c633f5bf4d8 Applicability: Source 6fa273a2 vs be900c53 mode 2, floor 0.001 after 60% progress for satisfaction below 0.95; screen 1600–1605, fresh 1616–1647. Native transfer untested. Observation: Conditional floor 0.001 gained 82379 and 649154 in fresh batches, pooled +365767, 17/32 wins; paired SD 1.90M. All 64 new outputs passed. Both positive means support provisional local adoption; native transfer remains unknown. Interpretation: Outcome: continue retained: - Hybrid initialization, geometric invariants and 4.60-second budget - Native winner 6fa273a2 and acceptance-based cooldown changed: - Local candidate to source 84c7e5b7 with conditional late floor 0.001 - Next probe: floor qualification 0.90/0.98 versus 0.95 stopped: - Adoption of the screened-only conditional floor 0.0003",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does a late temperature floor limited to poorly satisfied ads improve the native-winning hybrid under 4.60 seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "a1aee13065a0390e",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T23:10:03+00:00",
+      "result_id": "question_3c76440eacd4ae2f338e427e06a2e6ea84a2ed5b60531fb2242fd5387687bacb",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:8eaa80cfccc17a0b",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Source 84c7e5b7 vs 793cf97a thresholds 0.90/0.95/0.98; screen 1700–1705, 0.90 fresh 1716–1747; floor 0.001 after 60%, 4.60-second budget. Native effect untested.",
+      "title": "Does changing the qualification threshold for the conditional late temperature floor improve ad-placement score?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "b59f19a6c3638c96",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-floor-threshold-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_3c76440eacd4ae2f338e427e06a2e6ea84a2ed5b60531fb2242fd5387687bacb",
+      "recorded_at": "2026-10-14T23:10:03+00:00",
+      "result_id": "finding_488d172738506532c3bee8458b04f0a72b51837f0d3a26233329c980861446a5",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:70d447366999601f",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 69fa3f047c7495f89adf1f482fb1132e2047c467ee69a54cbeed37a4460c3fd5 Applicability: Source 84c7e5b7 vs 793cf97a thresholds 0.90/0.95/0.98; screen 1700–1705, 0.90 fresh 1716–1747; floor 0.001 after 60%, 4.60-second budget. Native effect untested. Observation: Threshold 0.90 gained 363686 and 224516 in fresh batches, pooled +294101, 17/32 wins, SD 1.69M. All 86 outputs passed. A 0.98 run took 4.853s, repeated at 4.619s; cause unresolved. Fresh max 4.627s. Native effect unknown. Interpretation: Outcome: continue retained: - Conditional floor 0.001 after 60%, step qualification 0.95 and 4.60-second budget - Source-bound native winner 6fa273a2 changed: - Local candidate floor qualification from 0.95 to 0.90, source 69fa3f04 - Next probe: proposal mix emphasizing shape changes or translations stopped: - Adopting the screened-only 0.98 heat qualification",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does changing the qualification threshold for the conditional late temperature floor improve ad-placement score?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "60ca4fccaa57486b",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T23:22:04+00:00",
+      "result_id": "question_9ee7d67ab9d2a39f8e7fdb7f47e5d3f6ea706a346301011b353bc02417a7bb94",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:3423f906da44e6aa",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Source 69fa3f04 vs 06b784bd modes 0/1/2; screening 1800–1805, more-shape fresh 1816–1847. Same heat, initialization and 4.60-second budget. Native transfer untested.",
+      "title": "Does shifting proposal probability from expansion to shape changes or translations improve ad-placement score?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "ca517941e2db701a",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-move-mix-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_9ee7d67ab9d2a39f8e7fdb7f47e5d3f6ea706a346301011b353bc02417a7bb94",
+      "recorded_at": "2026-10-14T23:22:04+00:00",
+      "result_id": "finding_741b895b6b01d120b4029b078872801be05282f05e5dde0c3bf23a432926037a",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:f4a7133ff606130a",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 1fe4e7f2418f44a66eb83bbaa9c78cb9973c0219fd517e04f639b9c3370cc8b6 Applicability: Source 69fa3f04 vs 06b784bd modes 0/1/2; screening 1800–1805, more-shape fresh 1816–1847. Same heat, initialization and 4.60-second budget. Native transfer untested. Observation: Shape mix gained 274281 and 870507 in fresh batches, pooled +572394, 14/32 wins; paired SD 2.60M. Extra translations screened -624303. All 84 outputs passed. Mean gains meet the local rule despite more losses than wins; native transfer unknown. Interpretation: Outcome: continue retained: - Hybrid, conditional heat and 4.60-second budget - Separate native winner 6fa273a2 and accepted-result cooldown changed: - Local proposal mix to 26/11/19/30/11/3, source 1fe4e7f2 - Next step: evidence/cost route review before further tuning stopped: - Adoption of the screened-only extra-translation mix",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does shifting proposal probability from expansion to shape changes or translations improve ad-placement score?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "ee0ccd9cc2461508",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T23:46:49+00:00",
+      "result_id": "question_7d465c70037e8d26766168f64370dc3942339fc32f2484174936df298eba185d",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:319871c40d1275d1",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Source 1fe4e7f2 versus 78f28710 modes 0/1/2; screen 1900–1905, high-loss-first fresh 1916–1947. Native transfer untested.",
+      "title": "Does prioritizing contracted blockers by lost satisfaction improve compound recovery within 4.60 seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "9480394a66b19290",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-regrow-order-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_7d465c70037e8d26766168f64370dc3942339fc32f2484174936df298eba185d",
+      "recorded_at": "2026-10-14T23:46:49+00:00",
+      "result_id": "finding_c652328314cf9ac2757f85dfcbdb9907bb719cf1a1e36185926640694663a9f2",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:4631e4b73c1ab3c0",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 78f287102965442f2b18f9cb6dcbb678a2a480345ab79b674c075d25a1379225 Applicability: Source 1fe4e7f2 versus 78f28710 modes 0/1/2; screen 1900–1905, high-loss-first fresh 1916–1947. Native transfer untested. Observation: High-loss-first gained in screening but lost pooled fresh score. Heat/shape candidate gained 954331 native points; its effects are combined. Interpretation: Outcome: continue retained: - Source 1fe4e7f2 as current/native best; geometry and 4.60-second budget - Input-order compound recovery and source-bound accepted feedback changed: - Next probe: target-area shape goals for poor ads, rather than recovery ordering stopped: - Adoption of tested high-loss-first ordering; low-loss-first remains screened only",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does prioritizing contracted blockers by lost satisfaction improve compound recovery within 4.60 seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "2941f61b7ab77172",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T23:57:13+00:00",
+      "result_id": "question_c1493e636c25a00dac91855c3bd63efc4c99e73ef715d75a7e7131fd4da50b1c",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:341dd80674551954",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Source 1fe4e7f2 versus cd62c408 modes 0/1/2: 25/50/75% below 0.95; screen 2000–2005, 50% fresh 2016–2047. Native transfer untested.",
+      "title": "Does increasing target-area shape probability only for poorly satisfied ads improve score within 4.60 seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "492416d19bdcb422",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-shape-goal-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_c1493e636c25a00dac91855c3bd63efc4c99e73ef715d75a7e7131fd4da50b1c",
+      "recorded_at": "2026-10-14T23:57:13+00:00",
+      "result_id": "finding_94c2c7d8ca560bdfdef01e0295157a0445dab5ba5f1a2bae47fc5e16da44d552",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:383a21b45a034221",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: cd62c408ed2642e6c4b0b70f54b9e51165205280f9243d31bb2596343841fa67 Applicability: Source 1fe4e7f2 versus cd62c408 modes 0/1/2: 25/50/75% below 0.95; screen 2000–2005, 50% fresh 2016–2047. Native transfer untested. Observation: 50% lost both fresh means, pooled -512583. One short diagnostic found 67–72% of poor target proposals contain another required point. Interpretation: Outcome: continue retained: - Native/current 1fe4e7f2, original 25% target probability, compound scoring and 4.60-second budget changed: - Next probe: point-aware orthogonal alignment, original-edge clamp versus point centering stopped: - Adoption of tested 50% target frequency; 75% is screened only",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does increasing target-area shape probability only for poorly satisfied ads improve score within 4.60 seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "3eca4a69d9fe1c7f",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T00:10:24+00:00",
+      "result_id": "question_bfaf907dad21fb0a2ef6b9037fb4ac48a276a63bf42d197ef7916a170069567f",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:4c4b9557019e92f7",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Native 1fe4e7f2 versus 1b5e6a66 modes 0/1/2; screen 2100–2105, centering fresh 2116–2147; promoted a28d2fe0. Native transfer untested.",
+      "title": "Does point-aware alignment of poor-ad target shapes improve score within the same 4.60-second budget?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "d90b51db1e9e270b",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-point-align-1",
+        "evidence:ad-point-bound-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_bfaf907dad21fb0a2ef6b9037fb4ac48a276a63bf42d197ef7916a170069567f",
+      "recorded_at": "2026-10-15T00:10:24+00:00",
+      "result_id": "finding_acbecd211715cacb9843a732900ef4feeb9d6ddfca695d4bfb92f73805c6f731",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:aadf9da9d3014474",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: a28d2fe0e0ccc1995e690b8b37694d1fb51796444306b63a6a6940b68e8e7060 Applicability: Native 1fe4e7f2 versus 1b5e6a66 modes 0/1/2; screen 2100–2105, centering fresh 2116–2147; promoted a28d2fe0. Native transfer untested. Observation: Centering gained in both fresh batches. Oracle-checked point bounds force 1.28M local loss/case, about 17% of residual loss; joint packing can force more. Interpretation: Outcome: continue retained: - Geometry, original 25% target frequency, heat and 4.60-second budget - Separate native winner 1fe4e7f2 and accepted-result cooldown changed: - Local candidate to centered alignment, source a28d2fe0 - Next probe: bias selection by gap or relative satisfaction to point-feasible ceiling stopped: - Adoption of screened-only old-edge clamp",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does point-aware alignment of poor-ad target shapes improve score within the same 4.60-second budget?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "1f3a852297c6d286",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T00:24:52+00:00",
+      "result_id": "question_fcf244e904ed1101979079ae1047fed93aed941db3e01b74b534fd8c7659d29a",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:3aed994b70db859c",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Local a28d2fe0 versus e602d140 modes 0/1/2; screen 2200–2205, relative policy fresh 2216–2247. Native transfer untested.",
+      "title": "Does move selection using point-feasible satisfaction ceilings improve score within 4.60 seconds including preprocessing?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "1765f37e22248f73",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-ceiling-bias-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_fcf244e904ed1101979079ae1047fed93aed941db3e01b74b534fd8c7659d29a",
+      "recorded_at": "2026-10-15T00:24:52+00:00",
+      "result_id": "finding_bc15ab1fd37bd50fa817e395f433961bed52215616d420b74aad573e8562984b",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:33c189cb96dcbffe",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: e602d1406e425d4c233b85c9b054cb676b1c65c01a5d9908d51d60c26ff50e35 Applicability: Local a28d2fe0 versus e602d140 modes 0/1/2; screen 2200–2205, relative policy fresh 2216–2247. Native transfer untested. Observation: Relative bias gained in screening but lost pooled fresh score. Bounded cases lost 564377 on average; post hoc groups do not isolate causality. Interpretation: Outcome: continue retained: - Local a28d2fe0, native 1fe4e7f2, raw selection and 4.60-second budget changed: - Next probe: mandatory-point clipping of translation proposals stopped: - Adoption of tested relative-ceiling selection; gap policy screened only",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does move selection using point-feasible satisfaction ceilings improve score within 4.60 seconds including preprocessing?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "65fc3ba69962e72b",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T00:36:45+00:00",
+      "result_id": "question_ab6e1ffda47c3f35ac605ad01dcad90b93606ab46251f6619c0b40a90acffcd5",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:a031abef30980e7b",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Local a28d2fe0 versus 36bf6a8e modes 0/1/2; screen 2300–2305, poor-ad policy fresh 2316–2347. Native transfer untested.",
+      "title": "Does mandatory-point clipping of size-preserving translations improve score within the same 4.60-second budget?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "ec3978aaaa873678",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-point-translate-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_ab6e1ffda47c3f35ac605ad01dcad90b93606ab46251f6619c0b40a90acffcd5",
+      "recorded_at": "2026-10-15T00:36:45+00:00",
+      "result_id": "finding_af9fca9733b50f24e9f9bae38eed3a8243c59c31a6193efc726defbbc4917017",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:985846b0f728db4f",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 36bf6a8e8fa35c419ea2b0ddca5c616b749d4d6ed459f2b5914a99e9996d18b1 Applicability: Local a28d2fe0 versus 36bf6a8e modes 0/1/2; screen 2300–2305, poor-ad policy fresh 2316–2347. Native transfer untested. Observation: Clipping removed diagnosed point contacts but failed fresh score adoption. Two short cases show frequent point contacts in poor-ad expansions; their benefit remains unproven. Interpretation: Outcome: continue retained: - Local a28d2fe0, native 1fe4e7f2, original translations and 4.60-second budget changed: - Next probe: clip ordinary expansion proposals at mandatory points stopped: - Adoption of poor-ad translation clipping; all-ad clipping screened only",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does mandatory-point clipping of size-preserving translations improve score within the same 4.60-second budget?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "78d35ef4bc35d6a3",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-native-7",
+        "evidence:ad-point-align-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_bfaf907dad21fb0a2ef6b9037fb4ac48a276a63bf42d197ef7916a170069567f",
+      "recorded_at": "2026-10-15T00:51:46+00:00",
+      "result_id": "finding_72dfad365e222f610ec1f0342629e8de866c6b518d94d4c2cf490701b0221b5c",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:3eabffbaac4db33e",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: a28d2fe0e0ccc1995e690b8b37694d1fb51796444306b63a6a6940b68e8e7060 Applicability: Native 1fe4e7f2 versus 1b5e6a66 modes 0/1/2; screen 2100–2105, centering fresh 2116–2147; promoted a28d2fe0. Native transfer untested. Observation: Native a28d2fe0 lost 4152903, so restored 1fe4e7f2. Expansion clipping on a28 lost both fresh means; public native details do not diagnose geometry. Interpretation: Outcome: continue retained: - Native winner/source 1fe4e7f2, raw scoring, geometry checks and 4.60-second budget - Source-bound accepted feedback and separate checkpoints changed: - Root restored after byte comparison; next review tests repair-only shape fallback stopped: - Native adoption of a28d2fe0 and local adoption of tested all-ad expansion clipping",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does point-aware alignment of poor-ad target shapes improve score within the same 4.60-second budget?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "1490121bf3cb2a54",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T01:12:24+00:00",
+      "result_id": "question_0817dc8c12fb21bf9de1d35c07ad4b5f6e1f1b9a5f1936d744b90be914888b41",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:6bdf35fdd9bdb1dc",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Native 1fe4e7f2 vs c14ed515 modes 0/1/2; screen 2500–2505, center fresh 2516–2547, a28d2fe0 head pairs 2560–2567; promoted b53ff507. Native untested.",
+      "title": "Does repairing only point-blocked poor-ad target shapes improve score within 4.60 seconds while preserving point-free originals?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "3d502b1dda512d07",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-repair-only-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_0817dc8c12fb21bf9de1d35c07ad4b5f6e1f1b9a5f1936d744b90be914888b41",
+      "recorded_at": "2026-10-15T01:12:24+00:00",
+      "result_id": "finding_ccba9edec9ad3041b7cd5eefdaf8a744707e47d6ba9554f2d74dee679ffe8b28",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:a1823502b04e981a",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: b53ff507c22d9aa16782267a3f24c039d23d8ae07b51f14117abdc759171b80f Applicability: Native 1fe4e7f2 vs c14ed515 modes 0/1/2; screen 2500–2505, center fresh 2516–2547, a28d2fe0 head pairs 2560–2567; promoted b53ff507. Native untested. Observation: Both fresh means gained versus 1fe4e7f2. Conditional centering lost to always-centering on 8 matched cases; native discrepancy remains unexplained. Interpretation: Outcome: continue retained: - Native winner 1fe4e7f2, raw scoring and 4.60-second total budget - Exact source checkpoints and unfavorable matched comparisons changed: - Local candidate to blocked-only centered repair, source b53ff507 - Next local probe: neighbor-contraction-aware repaired placement stopped: - Adoption of screened-only blocked-edge clamp",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does repairing only point-blocked poor-ad target shapes improve score within 4.60 seconds while preserving point-free originals?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "0a45ec2dc5415589",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T01:34:24+00:00",
+      "result_id": "question_f6098061334c931cd036136e7982c57e452b1f999ef7cf4ac13d255dbe27b7ac",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:bfe60cf4214fab3a",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Local b53ff507 vs eb7fc1ed modes 0/1/2: screen 2600–2605, selected 1 fresh 2616–2647. Optimized 9c4b5f58 mode 1 skips fixed positions; fresh 2716–2747. Native untested.",
+      "title": "Does choosing repaired target-shape positions by immediate neighbor contraction score improve satisfaction within 4.60 seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "f81475fe0b3b6b44",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-repair-position-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_f6098061334c931cd036136e7982c57e452b1f999ef7cf4ac13d255dbe27b7ac",
+      "recorded_at": "2026-10-15T01:34:24+00:00",
+      "result_id": "finding_8b5af65306992ff6d4030d0feca76b0f568a5a287ec72f95d84d7f159b576ff0",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:dca46228f5221c7d",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 9c4b5f58e470fb2b8bbc49fd6244d0a4ae45ea751d91f192baf7ecf115a1a370 Applicability: Local b53ff507 vs eb7fc1ed modes 0/1/2: screen 2600–2605, selected 1 fresh 2616–2647. Optimized 9c4b5f58 mode 1 skips fixed positions; fresh 2716–2747. Native untested. Observation: v1 fresh means -122470/+120533; v2 skips fixed positions and gives -414183/+516443. Both mixed; raw preview gains did not establish a reliable final score benefit. Interpretation: Outcome: continue retained: - Local b53ff507, separate native 1fe4e7f2, raw scoring and 4.60-second budget - Point-free original proposals, exact source checkpoints and unfavorable cases changed: - Next local probe: narrower repair eligibility after checking concentration stopped: - Adoption of tested neighbor-contraction-ranked repaired placements",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does choosing repaired target-shape positions by immediate neighbor contraction score improve satisfaction within 4.60 seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "fca1de3633750447",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-native-8",
+        "evidence:ad-repair-threshold-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_0817dc8c12fb21bf9de1d35c07ad4b5f6e1f1b9a5f1936d744b90be914888b41",
+      "recorded_at": "2026-10-15T01:51:36+00:00",
+      "result_id": "finding_a1c2c96e36357bb9e4ae18b454064810baec740e44b15f6073ce91588ff91ba1",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:a752135633adb710",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: b53ff507c22d9aa16782267a3f24c039d23d8ae07b51f14117abdc759171b80f Applicability: Native 1fe4e7f2 vs c14ed515 modes 0/1/2; screen 2500–2505, center fresh 2516–2547, a28d2fe0 head pairs 2560–2567; promoted b53ff507. Native untested. Observation: Native8 lost852499 despite50/50 valid. Narrow.85 lost both fresh means. Restored1fe4e7f2; retained submitted sources. On native-base short runs,5–8-blocker negative improving compounds occurred1278/832 times. Interpretation: Outcome: continue retained: - Native winner1fe4e7f2, raw objective, exact checkpoints and4.60-second budget - Native/local losses and source-bound accepted identities changed: - Root restored after comparing b53 submitted bytes; next probe expands regrowth blocker limit stopped: - Native adoption of b53ff507 and local adoption of tested.85 repair qualification",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does repairing only point-blocked poor-ad target shapes improve score within 4.60 seconds while preserving point-free originals?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "40984bc700bfc559",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T02:04:52+00:00",
+      "result_id": "question_d83ebcca721d665ed191d2b0b26ee6dd823c3edc691bd344d2895caae7a9e680",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:d479869026c4c13d",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Local native1fe4e7f2 vs fc2d5a63 cap4/8/12. Screen2900–2905, selected cap12 fresh2916–2947; short diagnostics2900/2901 and full boundary tests. Native untested.",
+      "title": "Does increasing compound-regrowth blocker ceilings from4 to8 or12 improve score within4.60seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "4efd765b03f60b4f",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-regrow-limit-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_d83ebcca721d665ed191d2b0b26ee6dd823c3edc691bd344d2895caae7a9e680",
+      "recorded_at": "2026-10-15T02:04:52+00:00",
+      "result_id": "finding_3572bcb769c1689c4b08543b5d49cf73b14b9830477d54bf081231cf5b41a263",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:16e9e088591fa15b",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: fc2d5a6343027d9e768005b3cde0552aa378632778b4491a5a350143d50cdeaa Applicability: Local native1fe4e7f2 vs fc2d5a63 cap4/8/12. Screen2900–2905, selected cap12 fresh2916–2947; short diagnostics2900/2901 and full boundary tests. Native untested. Observation: Cap12 fresh means+214336/-317364; no adoption. All124 poor baseline ads touched neighbors;87.17% of561 directed contact edges led to ads with satisfaction>=.95. Interpretation: Outcome: continue retained: - Native1fe4e7f2, exact checkpoints, raw objective and4.60-second budget - Mixed batch signs and previous native/local counterevidence changed: - Next probe: touching-neighbor move selection from poor ads stopped: - Adoption of tested cap12; cap8 remains screened only",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does increasing compound-regrowth blocker ceilings from4 to8 or12 improve score within4.60seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "11d929ae5df7355b",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T02:21:47+00:00",
+      "result_id": "question_deb85156cbffd56ae7249a29ae3275de36d31a5da9b1b0de32f179f6a765b505",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:602335e5225f5fc3",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Native1fe4e7f2 vs e1610cc9 modes0/25%/50%; screen3000-3005,selected50% fresh3016-3047. Short diagnostics3000/3001 and boundary checks. Native untested.",
+      "title": "Does redirecting moves from poor ads to edge-touching neighbors improve satisfaction within4.60seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "113b03a73a5df152",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-neighbor-selection-2"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_deb85156cbffd56ae7249a29ae3275de36d31a5da9b1b0de32f179f6a765b505",
+      "recorded_at": "2026-10-15T02:21:47+00:00",
+      "result_id": "finding_f773119d927cc6ef79b5768e32bddde1508b2f7c5ddd26dfa7231c2d624b6005",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:7974f941b9436862",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: e1610cc99143e7b7273029e6ed7ebbf35c7273287d2f266f19e7e7f92e7f922f Applicability: Native1fe4e7f2 vs e1610cc9 modes0/25%/50%; screen3000-3005,selected50% fresh3016-3047. Short diagnostics3000/3001 and boundary checks. Native untested. Observation: Redirect50% failed adoption: fresh-853647/+184142, pooled-334753/32. Short runs found80/125 positive feasible shrink-plus-origin-regrowth previews; their repeated trajectory gains do not predict final score. Interpretation: Outcome: continue retained: - Native1fe4e7f2, exact checkpoints, raw acceptance and4.60-second budget - Unfavorable local/native evidence and all completed outputs changed: - Next probe: explicitly coordinate neighbor shrink with original poor-ad regrowth stopped: - Adoption of tested50% redirect;25% screened only",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does redirecting moves from poor ads to edge-touching neighbors improve satisfaction within4.60seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "576c85c68743fa7a",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T03:03:55+00:00",
+      "result_id": "question_4a4b9d0f1f3a7491c288a88d63a095b2782e82ce1468aab89620efcc240bb1d3",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:5f78652b11b40e98",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Native1fe vs f97/f279/ef844 pair variants,25%/50%; fresh3116-3147/3216-3247,triples3300-3331; oracles/traces,cost cull; native9ba52.",
+      "title": "Do coordinated neighbor-shrink and poor-ad-regrowth compounds improve satisfaction within4.60seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "65b7e661d1744b6c",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-neighbor-pair-1",
+        "evidence:ad-neighbor-pair-fast-1",
+        "evidence:ad-native-9"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_4a4b9d0f1f3a7491c288a88d63a095b2782e82ce1468aab89620efcc240bb1d3",
+      "recorded_at": "2026-10-15T03:03:55+00:00",
+      "result_id": "finding_aebef46f1edf55168b6bdc91acd8cb6d4b954df11fdbd4a242d20d5f7052faf5",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:ebb2381305c868f1",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: ba52c69d869a8ab02a8a38c5f1c79479c5460dea23a19f0945c2a180145e92b5 Applicability: Native1fe vs f97/f279/ef844 pair variants,25%/50%; fresh3116-3147/3216-3247,triples3300-3331; oracles/traces,cost cull; native9ba52. Observation: Native9/ba52 lost4046621 despite50/50;root restored1fe. Pair pooled means-150905/-337717/-91909. Contact cull preservedfixedtraces and lowereddriverCPU,but no finalscoregain was established. Interpretation: Outcome: replan retained: - Native1fe4e7f2,raw objective,4.60-second budget and exact checkpoints - All local/native losses and validated constraint/cost evidence changed: - Next probe: audit exact point-containing-proposal rejection on the native winner stopped: - Adoption of tested coordinated shrink/regrowth variants,including nativeba52",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do coordinated neighbor-shrink and poor-ad-regrowth compounds improve satisfaction within4.60seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "aadba742ae840efd",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T03:31:25+00:00",
+      "result_id": "question_b9b83e3f9907332facc046ebc67466f9b9f7f7b71b6582be42e795e3c961ff6c",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:4edf31e5c7993581",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Native1fe vs f2d27d54 group0/2/4neighbors; screen3400-3405,selected2 fresh3416-3447; state/RNG oracles,diagnostics,boundaries; promoted e42bffdd, native untested.",
+      "title": "Do rare small-group ruin and greedy reconstruction improve satisfaction within4.60seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "3f83bfc21c1a229f",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-group-rebuild-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_b9b83e3f9907332facc046ebc67466f9b9f7f7b71b6582be42e795e3c961ff6c",
+      "recorded_at": "2026-10-15T03:31:25+00:00",
+      "result_id": "finding_e00299eff8baf49c6b693af9fe7938388f3772aa3c15b55610bb6f9255879f42",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:f5a77aab137e63c8",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: e42bffdd3b9ddca826c029ca7978bef91a849a03124cac6c96111108c66d4724 Applicability: Native1fe vs f2d27d54 group0/2/4neighbors; screen3400-3405,selected2 fresh3416-3447; state/RNG oracles,diagnostics,boundaries; promoted e42bffdd, native untested. Observation: Two-neighbor rebuild gained261971/630746 fresh,+446359 pooled,17/32; e42 promoted locally. Large variation and prior native/local disagreement remain; native transfer untested. Interpretation: Outcome: replan retained: - Native1fe best and exact checkpoints; raw objective and4.60-second total budget - Unfavorable local/native evidence and complete tester/state checks changed: - Local source to e42bffdd,rare group3 ruin/reconstruction - Next: source-bound native transfer; during cooldown test partial group resets stopped: - Adoption of screened-only group5 treatment",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do rare small-group ruin and greedy reconstruction improve satisfaction within4.60seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "25c14032b59d5416",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T03:47:51+00:00",
+      "result_id": "question_80417e49afcb5a884e68746a73d1a265d54190591eb76db5ee583ba54df9cfec",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:9f18a9232146b44e",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Local e42 vs0413 reset0/half/quarter; screen3500-3505,selectedquarter fresh3516-3547; geometry/state/RNG oracles,diagnostics,boundaries; native untested.",
+      "title": "Do contained half- or quarter-side seeds improve small-group reconstruction within4.60seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "ce8046b1acc5529e",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-group-reset-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_80417e49afcb5a884e68746a73d1a265d54190591eb76db5ee583ba54df9cfec",
+      "recorded_at": "2026-10-15T03:47:51+00:00",
+      "result_id": "finding_a6fd0f2fd65a637a8b97451b546efcabd429c46c764dda379dea4fe856319afd",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:cd78ca2df7226c2f",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 0413f0362ffd7be08eb328740ca82e2f0d0c661262564373c2cb2e930f41d798 Applicability: Local e42 vs0413 reset0/half/quarter; screen3500-3505,selectedquarter fresh3516-3547; geometry/state/RNG oracles,diagnostics,boundaries; native untested. Observation: Quarter seeds gave+632347/-249875 fresh,+191236/32,17wins. Gain did not repeat;root e42 retained. Valid containment/state/RNG checks and89outputs do not establish native transfer. Interpretation: Outcome: continue retained: - Local e42 and native1fe separately; exact checkpoints and unfavorable results - Group2/1x1 method,raw objective,4.60-second total budget changed: - Next: native transfer; during cooldown test group opportunity period stopped: - Adoption of tested quarter-side resets; half-side remains screened only",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do contained half- or quarter-side seeds improve small-group reconstruction within4.60seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "64a8c75309e2a47b",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-native-10"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_b9b83e3f9907332facc046ebc67466f9b9f7f7b71b6582be42e795e3c961ff6c",
+      "recorded_at": "2026-10-15T04:11:12Z",
+      "result_id": "finding_012c9d08d147",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:7e9930d533bfddc7",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Submission b4b066102b19 (agent-10), source e42bffdd3b9ddca826c029ca7978bef91a849a03124cac6c96111108c66d4724; score 49524696922 versus 49528162549. Earlier local +446358.53125/32 did not transfer to retained native best. Public details expose only PASS statuses. Period8192 is a different native-untested challenger. Root restored to native1fe after submitted-byte comparison.",
+      "title": "Native e42 at period 4096 passed 50/50 and scored 3,465,627 below the incumbent"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "4349b30e93505d30",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T04:14:53+00:00",
+      "result_id": "question_b287a269366a3a265143881f92cd0ed85d64b9c2ab8f993aaefdae34b0618e6b",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:3d46983decac34b1",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Local e42/4096 vs5df masks2047/8191;screen3600-3605,selected8192 fresh3616-3647;head3660-3667 vs1fe/e42. Normal f64e native untested; native10 separately tests parent e42.",
+      "title": "Do group-reconstruction periods2048 or8192 improve satisfaction over4096 within4.60seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "7e0a238006e3afa8",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-native-10",
+        "evidence:ad-group-period-1",
+        "evidence:ad-residual-3"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_b287a269366a3a265143881f92cd0ed85d64b9c2ab8f993aaefdae34b0618e6b",
+      "recorded_at": "2026-10-15T04:14:53+00:00",
+      "result_id": "finding_c22b94ebfcd4cc73ee677aba26199c44fd84ccdb20e797f7a10f61eda6333e18",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:d0a34b9fa6bb38e1",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: f64e28af6d059a1ca608819ca8fe98c2fd1d20e9b95ff448c8733a053ad90b43 Applicability: Local e42/4096 vs5df masks2047/8191;screen3600-3605,selected8192 fresh3616-3647;head3660-3667 vs1fe/e42. Normal f64e native untested; native10 separately tests parent e42. Observation: Native e42/4096 lost3465627 despite50/50. Period8192 gained288562/32 vs e42,but head lost986699/8 vs1fe. Restored1fe after submitted-byte comparison; f64e preserved. Local residuals remain blocked/undersized. Interpretation: Outcome: replan retained: - Native1fe best; source-bound native feedback and all unfavorable results - Period8192 challenger f64e separately; raw objective and4.60-second budget changed: - Root restored to1fe; next audit exact rejection cost on the incumbent stopped: - Native adoption of e42 and promotion of f64e over the incumbent on current evidence",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do group-reconstruction periods2048 or8192 improve satisfaction over4096 within4.60seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "cfbe99ba93131af6",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T04:31:53+00:00",
+      "result_id": "question_03925b2e839f3062f80a70d47ff3e303ab3b5b2f557003b9b7ba67a6e1c5afb2",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:e7ca77da026b6a2d",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Local native1fe vs c42 AD_POINT_REJECT0/1; fixed traces on3416-3427; screen3700-3705,fresh3716-3747; checkpoint1b2c,boundaries. Native untested.",
+      "title": "Does exact early rejection of point-containing proposals save CPU and improve satisfaction within4.60seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "bafc033f7ba6ce43",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-point-reject-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_03925b2e839f3062f80a70d47ff3e303ab3b5b2f557003b9b7ba67a6e1c5afb2",
+      "recorded_at": "2026-10-15T04:31:53+00:00",
+      "result_id": "finding_d90a6fd6e470055fc55eb2d89f3983542157e02251fb0e458781fba0b7c247af",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:f6969db1e6474615",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 1b2ca3e77025ea4613ecdac045662adfec146388c23565231ed42c69ffee77c5 Applicability: Local native1fe vs c42 AD_POINT_REJECT0/1; fixed traces on3416-3427; screen3700-3705,fresh3716-3747; checkpoint1b2c,boundaries. Native untested. Observation: 300k exact calls matched. Driver CPU medians fell3.44%/2.14%;fresh score means -400242/+549105,+74432 pooled/32. Native1fe stays root;1b2c candidate preserved. Short diagnostics found point-containing proposals in15.29% of calls. Interpretation: Outcome: continue retained: - Native1fe best and all prior local/native counterevidence; raw objective,4.60-second budget - Exact cost candidate1b2c separately,native untested; mixed final-score evidence changed: - Next test static mandatory-point rejection before rectangle scans; validate exactness and useful cost first stopped: - Score-based promotion from the mixed fresh result; this is not permanent route rejection",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does exact early rejection of point-containing proposals save CPU and improve satisfaction within4.60seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "7d14b6259ae40cbe",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T04:51:02+00:00",
+      "result_id": "question_d7bf21e35a5020da892b55125b5ce6c4559091f8c3ecd3ef31dd8b9a5c598637",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:2bf4d703bf8075f0",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Native1fe vs867prefix and7ef gated2x;reused3416-3427,query/state oracles,3800-3805diagnostics,boundaries;no score sweep/native. GNU11.4/gprof2.38.",
+      "title": "Do static mandatory-point prefix queries reduce move evaluation cost within4.60seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "743dd11de8e43063",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-point-prefilter-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_d7bf21e35a5020da892b55125b5ce6c4559091f8c3ecd3ef31dd8b9a5c598637",
+      "recorded_at": "2026-10-15T04:51:02+00:00",
+      "result_id": "finding_baee54b256301eb9fb4881d1bbcde26aca8714002fbdcbb17b601007a38193e3",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:6c3b39b7e7cba545",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 18257363eda48b9ead849e18a94d33d9ea607288913c769921a678915099ca71 Applicability: Native1fe vs867prefix and7ef gated2x;reused3416-3427,query/state oracles,3800-3805diagnostics,boundaries;no score sweep/native. GNU11.4/gprof2.38. Observation: Prefix passed exactness but CPU rose10.66%;2x gating recovered2.99% vsunconditional,still6.99% overnative. Init~.03ms;profile query inlined,root cause unresolved. Root1fe preserved;no score sweep. Legacy cost varied across drivers. Interpretation: Outcome: replan retained: - Native1fe best,raw satisfaction,4.60-second budget and all unfavorable local/native evidence - Early1b2c separately,native untested;scope cost claims to their exact driver changed: - Switch from static queries to removing redundant cut containment checks using unchanged neighbor anchors stopped: - Score sweeps and promotion of both tested prefix variants after failed cost criteria;no universal route ban",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do static mandatory-point prefix queries reduce move evaluation cost within4.60seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "33a18ae62f455d7b",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T05:08:44+00:00",
+      "result_id": "question_a9bab617045455016a90803b37c08476283f3cbac321270ea26e884a1a78731d",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:4aca457b53707b81",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Native1fe vsd7a modes0/1/2 on3416-3427 traces;3900-3905screen,3916-3947fresh,boundaries;normal2f6c native11/50cases. GNU11.4/O2.",
+      "title": "Do anchor-only legal-cut predicates reduce move cost and improve satisfaction within4.60seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "f7e1c05a9c7d59ed",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-cut-legality-1",
+        "evidence:ad-native-11"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_a9bab617045455016a90803b37c08476283f3cbac321270ea26e884a1a78731d",
+      "recorded_at": "2026-10-15T05:08:44+00:00",
+      "result_id": "finding_cc8ee7c65a29f6cf9049dfe1ba736a6fbde808aaed2952ce9db8cf13dee1ed44",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:81f043886b873767",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 2f6cdae0da953ee11c3b4ac8797d24829f5c0230fe2ea18c1d2983783851051d Applicability: Native1fe vsd7a modes0/1/2 on3416-3427 traces;3900-3905screen,3916-3947fresh,boundaries;normal2f6c native11/50cases. GNU11.4/O2. Observation: Exact predicates reduced fixed-driver CPU6.55%;fresh local scores stayed mixed. Native11 scored49540117810,+11955261,50/50. Promoted submitted2f6c after byte comparison;prior1fe retained. One timed native result does not certify transfer. Interpretation: Outcome: replan retained: - Raw satisfaction,4.60-second budget,and all negative/mixed local and native evidence - Old native1fe and unsubmitted1b2c separately;driver-specific cost claims remain scoped changed: - Root/best-native/best-supported now exact native11/2f6c;next test unrolled cuts on this incumbent stopped: - No local two-positive score qualification claimed;no prefix adoption or native retry during cooldown",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do anchor-only legal-cut predicates reduce move cost and improve satisfaction within4.60seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "1b157f116ade9c12",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T05:22:33+00:00",
+      "result_id": "question_3691eda592e455d5b45c77456d1d5cc8f1a67040abdc68b11f7b78772e691185",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:cf58d2ecd97db8c9",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Native2f6c vsc0ea modes0/1;3916-3927 saved layouts/exact traces,4000-4005screen,4016-4047fresh,boundaries. GNU11.4/O2;normal ea288 native untested.",
+      "title": "Does unrolling legal-cut cases reduce move cost and improve satisfaction within4.60seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "ddb9fe90f54d8956",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-cut-unroll-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_3691eda592e455d5b45c77456d1d5cc8f1a67040abdc68b11f7b78772e691185",
+      "recorded_at": "2026-10-15T05:22:33+00:00",
+      "result_id": "finding_cf1963ec2655b42ebd231810170b53df6944adea79372c0dc836a47ca65469b4",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:2e36f5ceced51635",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: ea2880053fef8a156e6111ab7692768a2c43d986b399519d257aeec0666a1bcf Applicability: Native2f6c vsc0ea modes0/1;3916-3927 saved layouts/exact traces,4000-4005screen,4016-4047fresh,boundaries. GNU11.4/O2;normal ea288 native untested. Observation: Unroll cost fell3.55%,but fresh score means+288984/-289572,pooled-294/32. Kept native2f6c/root;ea288 retained separately. Static regrowth audit shows only two distinct extents in four direction iterations;cache benefit unmeasured. Interpretation: Outcome: continue retained: - Native2f6c best,raw satisfaction,4.60-second budget and all unfavorable local/native evidence - Exact-cost route;valid unroll ea288 is a separate,native-untested contender changed: - Next measure cached regrowth extents on2f6c with exact state/RNG and cost controls stopped: - Local score promotion of unroll after mixed batches;no claim of equivalence or universal route rejection",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does unrolling legal-cut cases reduce move cost and improve satisfaction within4.60seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "cf66d79a4c62eb12",
+      "event_kind": "node",
+      "evidence_refs": [
+        "evidence:ad-grow-cache-1",
+        "evidence:ad-grow-integer-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T06:03:27Z",
+      "result_id": "node_18d6354b9412",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:096bf8c2b19a12e4",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Compare original2f6c with float-cache1cd9 and integer-cache4de on saved3916-3927 layouts under GNU11.4/O2;600k exact move calls,10.59M rounding checks,384million-call cost traces. No full score sweeps after failed cost criteria.",
+      "title": "Do cached target extents improve move cost on native2f6c?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "69b5596f571f47ca",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-grow-cache-1",
+        "evidence:ad-grow-integer-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "node_18d6354b9412",
+      "recorded_at": "2026-10-15T06:03:49Z",
+      "result_id": "finding_b06df8730244",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:b78ebf024c14a13a",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "GNU11.4/O2;2f6c vs1cd9 float cache:300k exact moves,192million-call traces,CPU reduction0.3224%/1.0852%,pooled0.2881%,8/12positive.2f6c vs4de integer cache:300k exact moves,10.59M numeric checks,192traces,reductions-2.3693%/-0.9356%,pooled-0.9407%,3/12positive. Each failed >=1%in both halves and>=8/12pooledpositive. All24short diagnostic outputs valid. Skipped full score sweeps and stopped further extent variants in this segment;no universal arithmetic or score-transfer claim. Sources and all unfavorable rows preserved separately.",
+      "title": "Both tested extent caches missed the controlled CPU adoption rule"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "85a068192c22e027",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-native-12",
+        "evidence:ad-cut-unroll-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_3691eda592e455d5b45c77456d1d5cc8f1a67040abdc68b11f7b78772e691185",
+      "recorded_at": "2026-10-15T06:05:47Z",
+      "result_id": "finding_b596d4e94b69",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:b58a2dc5c3d9bc22",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Exact frozen ea2880053fef8a156e6111ab7692768a2c43d986b399519d257aeec0666a1bcf,submission45798148902f/agent-12 accepted2026-10-15T06:02:12Z observed. Score49504247688/50valid versus retained5600e8405946/2f6c/49540117810,delta-35870122. Prior fixed-driver CPU reduction3.55%and mixed fresh-294/32 did not transfer to native gain. Current/frozen byte comparison preceded restoration of2f6c;candidate retained separately. Public details expose50PASS but no per-case scores or layouts. No permanent unrolling ban or attribution to rejected bias/extent variants;next native no earlier07:02:12Z.",
+      "title": "Native12 unrolled cuts passed50cases but lost35870122 against native2f6c"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "0c45f5c2bc7d5a5a",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-bias-quarter-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_ab81670234b2e784a2279332a8e487b8ec15ebead3b7dd8132552044d26c2f61",
+      "recorded_at": "2026-10-15T06:06:16Z",
+      "result_id": "finding_59223d3ac909",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:10f9486b559a9212",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "On native2f6c compare unchanged f8ac52cb921dc99b5a9506799f9557e9b5a5ab1a62c951afd20031b8ed4da600/default25% vs50%,same4.60second budget. Screen4200-4205 delta-779000/6;validation4216-4231 +23560/16;replication4232-4247 -1262560/16. Pooled fresh-619500/32,9wins,pairedSD1742163. All76comparisons and2policyboundaries valid;max4.64809s/RSS5708KiB,plus exact selected-root smoke valid. One candidate,alternating/reverse order,no retune or sign-based stopping. No local/native promotion. Earlier50%vsuniform result used older solver;this scoped loss does not prove globally optimal bias or predict75%.",
+      "title": "Reducing worst-of-two selection from50%to25% failed fresh score replication"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "1fda4fa31f22047f",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T06:08:38+00:00",
+      "result_id": "question_f384d7aba1c65ef76c68ced0c365e07e98ebc7bba050c2873e8a59d0f89c0a80",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:487e8db659630fc0",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "GNU11.4/O2;2f6c vs1cd9 float-cache and4de integer-cache;saved3916-3927 layouts,600kexactmoves/384million-calltraces;no fullscores/native for caches.",
+      "title": "Do float and integer extent caches meet the paired CPU cost rule on native2f6c?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "ae90915475eef42d",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-grow-cache-1",
+        "evidence:ad-grow-integer-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_f384d7aba1c65ef76c68ced0c365e07e98ebc7bba050c2873e8a59d0f89c0a80",
+      "recorded_at": "2026-10-15T06:08:38+00:00",
+      "result_id": "finding_e37843479c3370ba28c23735d3c2c81692dcdcbfd8f4b0515892f1fad05d4365",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:c2a89417d4e0bb07",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 4de01f4e9190b3c5a625df08b96a880789cb119ebe05290b7f3918a551bcb49d Applicability: GNU11.4/O2;2f6c vs1cd9 float-cache and4de integer-cache;saved3916-3927 layouts,600kexactmoves/384million-calltraces;no fullscores/native for caches. Observation: Both passed300kexactmoves. Float-cache CPU reduction0.322%/1.085%,pooled0.288%;integer-cache-2.369%/-0.936%,pooled-0.941%. Both failed useful-cost rule;no score sweeps. Numeric10.59Mchecks passed. Interpretation: Outcome: continue retained: - Native2f6c best,raw satisfaction,4.60-second budget;all scoped local/native counterevidence - Unroll native12 regression and bias25 loss recorded separately;no universal route bans changed: - Next test75%frequency with samples2 on unchanged2f6c;native cooldown gates only submission stopped: - Further extent variants in this segment and score sweeps after failed cost criteria - Promotion of bias25 and native12/unroll after measured losses",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do float and integer extent caches meet the paired CPU cost rule on native2f6c?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "8bef96ee99621a59",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-bias-threequarter-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_ab81670234b2e784a2279332a8e487b8ec15ebead3b7dd8132552044d26c2f61",
+      "recorded_at": "2026-10-15T06:23:39+00:00",
+      "result_id": "finding_0b94f1178d858a5fd50fd3b07b10f3212b0b79ff702b1305de4d2240eec1f51f",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:42a8905fa918921c",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 5d2d5179d7dd074b7850cedb5277670af5ba6f67f628ca3cd93341bf4d61504e Applicability: Current regrowth solver on generated seeds 0,1,3,6,8,9 and 200–223; paired uniform and mild-bias variants under a 4.60s search budget. Observation: 75%fresh means+913080/+692922;pooled+803001/32,20wins. All79valid,max4.69018s/RSS5784KiB. Current75%layouts:99.972%loss undersized;153/158poor blocked,98thin. Local gain is not native proof. Interpretation: Outcome: continue retained: - Raw satisfaction,geometry,4.60s budget;native2f6c49540117810 kept separately - All source-bound unfavorable local/native evidence,including25%,unroll12 and extent variants changed: - Root/best-supported now exact75%5d2d after two positive fresh batches;native untested - Next test fading compactness acceptance energy;raw SAT remains cache,best and output objective stopped: - Further frequency variants in this segment;freeze75% before native/auxiliary experiments",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does mildly biasing move selection toward less-satisfied ads improve score within the 4.60-second search budget?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "25421722b3a52414",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-native-13",
+        "evidence:ad-bias-threequarter-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_ab81670234b2e784a2279332a8e487b8ec15ebead3b7dd8132552044d26c2f61",
+      "recorded_at": "2026-10-15T07:06:41Z",
+      "result_id": "finding_d7edf8f45570",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:a4864dff20b600aa",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Exact5d2d/75% had fresh local+913080/+692922,pooled+803001/32. Native13/0fb595013e1e scored49530923907,50/50,delta-9193903vsnative2f6c49540117810. Comparedfrozenbytes thenrestored2f6c root/best-supported;75%checkpoint andallnegativeevidence retained. Compactness/rotation were distinctunsubmittedchildren. Scoped native/localdisagreement,no universalbiasban.",
+      "title": "75%selection local gain regressed in native13;restored50%incumbent"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "104fabbb02870777",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T07:07:47+00:00",
+      "result_id": "question_80c0b60c597f6c9e372266eae6816d1cf19c070f1ed0218ab61baf8fc915fdfc",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:3415cd924342006a",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Parent 75% 5d2d; compactness 1aad and rotation 6f7; generated 4400-4405/4416-4447 and 4500-4505/4516-4547. Native13 tested parent 5d2d only.",
+      "title": "Do fading compactness or rare 90-degree rotations improve packing within 4.60 seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "9e4ded7645a68b90",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-compactness-1",
+        "evidence:ad-rotation-1",
+        "evidence:ad-native-13"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_80c0b60c597f6c9e372266eae6816d1cf19c070f1ed0218ab61baf8fc915fdfc",
+      "recorded_at": "2026-10-15T07:07:47+00:00",
+      "result_id": "finding_dc9ed2ebba4878413d92ec4141ee59143a0ff53c51c3b025ad80936815c65d7a",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:c17675122115c6f3",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 6f7af3b50eb38018c8da14e12825bb2fefd444b631288c577c5ef1e405193e6c Applicability: Parent 75% 5d2d; compactness 1aad and rotation 6f7; generated 4400-4405/4416-4447 and 4500-4505/4516-4547. Native13 tested parent 5d2d only. Observation: Compactness fresh means -105523/-305211, pooled -205367; rotation +39619/-1266868, pooled -613625. Neither qualified. Native13/5d2d scored 49530923907, 50/50, -9193903 vs 2f6c; restored incumbent after exact source comparison. 171 local outputs valid. Interpretation: Outcome: continue retained: - Raw satisfaction, geometry and 4.60s budget; native 2f6c best remains 49540117810 - All checkpoints and scoped unfavorable evidence, including positive local 75% results changed: - Restored root/best-supported to 2f6c after native13 regression - Next measure late stagnation before selecting a reset/reheat policy stopped: - Promotion of these compactness/rotation variants and native13 candidate",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do fading compactness or rare 90-degree rotations improve packing within 4.60 seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "ab265d80f6d57f28",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T07:36:49+00:00",
+      "result_id": "question_266f993ce456486507f4ac323dd1380dfbd0cd473d05b20cc0650a46015a138d",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:f091629f62bf7c74",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Native 2f6c/50%; diagnostic 20c174 seeds4600-4615; combined81e seeds4700-4705/4716-4747; reset-onlyb2 seeds4800-4805/4816-4847. Normal4.60s.",
+      "title": "Does late stagnation justify resets, with or without a short heat pulse, within 4.60 seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "e88ca4c378570ad5",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-stagnation-1",
+        "evidence:ad-restart-1",
+        "evidence:ad-reset-only-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_266f993ce456486507f4ac323dd1380dfbd0cd473d05b20cc0650a46015a138d",
+      "recorded_at": "2026-10-15T07:36:49+00:00",
+      "result_id": "finding_a4720f6091a9e0b8c1adc7ff2cce7baa1be55aa870f38ee33cecd5950ac70397",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:2e9477b46c178f44",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: b2b6e75be63070c6b455cfb4de536025a41cf0c036ca107138a0bd2086ea52aa Applicability: Native 2f6c/50%; diagnostic 20c174 seeds4600-4615; combined81e seeds4700-4705/4716-4747; reset-onlyb2 seeds4800-4805/4816-4847. Normal4.60s. Observation: 16/16 cases had 71%-97% late meaningful-stale samples. Combined fresh means -31666/+178284, pooled +73309/32; reset-only -165592/-1283814, pooled -724703/32. Neither qualified. All 186 outputs valid; retained native 2f6c. No new native submission. Interpretation: Outcome: continue retained: - Native 2f6c winner, raw satisfaction and 4.60s budget; all scoped local/native counterevidence - All tested sources and complete pairs, including positive combined screen and pooled mean changed: - Validated observer, controller and resets; 900k fixed moves plus independent accounting checks - Next compare heat-only policy on native parent, preserving state at the pulse trigger stopped: - Local promotion of these fixed combined and reset-only policies; no universal route ban",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does late stagnation justify resets, with or without a short heat pulse, within 4.60 seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "a195e6cd191a63ba",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-native-14",
+        "evidence:ad-restart-1",
+        "evidence:ad-heat-only-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_266f993ce456486507f4ac323dd1380dfbd0cd473d05b20cc0650a46015a138d",
+      "recorded_at": "2026-10-15T08:16:24Z",
+      "result_id": "finding_c6a276e98b1d",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:73774c2ac63c47e8",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Exact combined restart81e native14/acd2f362485c scored49555673017,50/50,+15555207 versus native11/2f6c. Compared frozen submitted/current sources before adopting81e to root,best-supported and best-native. Combined local fresh-31666/+178284 remain mixed; heat-only2452 fresh+163138/-758362,pooled-297612/32,not promoted and not submitted. Native result supports this fixed combination; it does not isolate component effects. Cap prototypes remain separate. Next native eligible>=09:03:21Z from acceptance observation.",
+      "title": "Combined restart became native best; heat-only stayed mixed"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "1eef9a1d81ebbd85",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T08:23:36+00:00",
+      "result_id": "question_412941fac497498beb43bf2e1a25366012b381209f3cbb76c5375906616cc055",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:b47298da35f12b39",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Parent native14/81e; cap121, normal4.60s, generated5100-5105/5116-5147. Rejection diagnostic used prior2f6c. Native14 evaluated81e only.",
+      "title": "Does retrying point-blocked expansion with an anchor-capped edge improve native14 within 4.60 seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "6ce1b3f52f5e73d2",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-rejection-1",
+        "evidence:ad-anchor-cap-native14-1",
+        "evidence:ad-native-14"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_412941fac497498beb43bf2e1a25366012b381209f3cbb76c5375906616cc055",
+      "recorded_at": "2026-10-15T08:23:36+00:00",
+      "result_id": "finding_b300007c0e88e08564d1a949b6cdc870bba08903dd964d84b7628b55b298f9f3",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:c74d3e07122e9b33",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 121686c909bb70b0f0ccf3839258467f1ce49e144becfcc9b5ee869f03e09c29 Applicability: Parent native14/81e; cap121, normal4.60s, generated5100-5105/5116-5147. Rejection diagnostic used prior2f6c. Native14 evaluated81e only. Observation: Native14/81e gained 15555207 with 50/50. Heat-only fresh +163138/-758362; cap121 -972111/+292679, pooled -339716/32. Neither qualified locally. Cap geometry and 300k rebased state/RNG steps passed; all 193 local outputs valid. Interpretation: Outcome: replan retained: - Raw satisfaction, geometry and 4.60s budget; all source-bound local/native counterevidence - Native14/81e remains separate from unsubmitted heat-only2452 and cap121 changed: - Adopted exact native14/81e to root, best-supported and best-native after source comparison - Next measure capped retry outcomes by phase/SAT before choosing a focused gate stopped: - Promotion of heat-only2452 and cap121 under the fixed local rule; no universal route ban",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does retrying point-blocked expansion with an anchor-capped edge improve native14 within 4.60 seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "2f94034b9d4b3946",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T08:44:39+00:00",
+      "result_id": "question_74e30f8a9e6dd5ad2e00e7a4a828255aa9159733531c1dd18bd690f61017cf78",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:1293a95167a76222",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Native14/81e parent; focus4d2, normal4.60s, generated5300-5305/5316-5347. Diagnostic on unconditional cap121 used5200-5215; no new native evaluation.",
+      "title": "Does restricting anchor-capped retries to ads below 95% satisfaction improve native14 within 4.60 seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "801d24b1662940b0",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-cap-outcomes-1",
+        "evidence:ad-cap-focus-1",
+        "evidence:ad-anchor-cap-native14-1"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_74e30f8a9e6dd5ad2e00e7a4a828255aa9159733531c1dd18bd690f61017cf78",
+      "recorded_at": "2026-10-15T08:44:39+00:00",
+      "result_id": "finding_eead1a0cfd05cdb722bd580dc07327fd374f0053cec90211988b80b45ab379c9",
+      "run_id": "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd:e34b45111db62f56",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 4d2dcc7a630fd4eb7cd891e8ef972f172e2d43c40bf73fd9afe7591fdc245605 Applicability: Native14/81e parent; focus4d2, normal4.60s, generated5300-5305/5316-5347. Diagnostic on unconditional cap121 used5200-5215; no new native evaluation. Observation: SAT>=.95 caused 86.6% of retries but also gains. Focus4d2 fresh means -646966/-1053295, pooled -850130/32,11 wins. Both failed. New 600k state/RNG/accounting steps passed;101 local outputs valid. Retained native81e; no new native result. Interpretation: Outcome: continue retained: - Raw satisfaction, geometry and 4.60s budget; native14/81e best 49555673017 - Complete unconditional/focused cap pairs and valid4d2 as a separate native-untested checkpoint changed: - Measured cap outcomes by phase/SAT and validated the focused gate independently - Next audit maximum anchored empty rectangles to separate fixed-neighbor room from proposal limitations stopped: - Local promotion of4d2 and further frequency variants in this segment; no universal cap or native-evaluation ban",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does restricting anchor-capped retries to ads below 95% satisfaction improve native14 within 4.60 seconds?"
+    },
+    {
+      "agent_id": "warm-off-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "d1dc57d3d1d330f5",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T12:00:33+00:00",
+      "result_id": "question_bbd4c0bac14dad72981efa45a500c9428495bd7b0b3e373296ef1ad9534f6031",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Source3809 versus native81e;normal4.60s,local6700-6731,shared-prefix diagnostic6700-6715,native agent-17 a70f6773ad73.",
+      "title": "Does a4.58s triad interruption with original cooling and returned unused time improve native81e?"
+    },
+    {
+      "agent_id": "warm-off-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "f4c4d8c3f0b5c237",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-triad-continuation-native-1",
+        "evidence:ad-triad-continuation-1",
+        "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_bbd4c0bac14dad72981efa45a500c9428495bd7b0b3e373296ef1ad9534f6031",
+      "recorded_at": "2026-10-15T12:00:33+00:00",
+      "result_id": "finding_3d3bce36c72bcd19496580c330f30c13fc7efc148d3c87733670c40cc637ada8",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 38096ac7daac48b06c0f5e275661fda6e15cbac1e52ae4f1782e9214b12362c8 Applicability: Source3809 versus native81e;normal4.60s,local6700-6731,shared-prefix diagnostic6700-6715,native agent-17 a70f6773ad73. Observation: Native3809 passed50/50 but lost9925530; conditional shared-prefix gains did not establish whole-solver improvement. Current root matches81e after source comparison and valid smoke. Interpretation: Outcome: replan retained: - Native best81e,raw satisfaction,geometry and5s/1GB - 3809 checkpoint,114prior valid outputs and all scoped local/native losses changed: - Completed source-bound native continuation and restored verified81e - Phase-room successor now uses native loss and preserves restored root stopped: - Promotion or repeat submission of unchanged3809 - Inferring universal joint-move failure or causal explanation from aggregate score",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does a4.58s triad interruption with original cooling and returned unused time improve native81e?"
+    },
+    {
+      "agent_id": "warm-off-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "04f567fbb5380a37",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T12:16:44+00:00",
+      "result_id": "question_5935a0503ad58db6a52e9ac8d5be2810b03bf38d7442ff66efd98c8765d9572f",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Source81e,observer0e5c,normal4.60s,fresh6800-6815,60%/80%/4.58s;unchanged kernel and sequential offline witnesses.",
+      "title": "Do earlier81e best states offer materially more realizable triad room than4.58s states?"
+    },
+    {
+      "agent_id": "warm-off-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "5eb6b14b150c9014",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-phase-triad-room-1",
+        "evidence:ad-triad-continuation-native-1",
+        "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_5935a0503ad58db6a52e9ac8d5be2810b03bf38d7442ff66efd98c8765d9572f",
+      "recorded_at": "2026-10-15T12:16:44+00:00",
+      "result_id": "finding_db53b29e5b638e48d00658fd7d9ca5eef3ef6f3f55713fef3c53677a31390c13",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 0e5ca741b5c79a26059373b65fe5d74f2dd3392587003f44852c75021383faf3 Applicability: Source81e,observer0e5c,normal4.60s,fresh6800-6815,60%/80%/4.58s;unchanged kernel and sequential offline witnesses. Observation: Earlier wins12/16and10/16cases but means are0.628/0.546of late;late gain is concentrated. Offline feasible gains recover1.038/0.918/1.694%normalized residual at3.10/3.36/3.40ms mean sweep cost. Neither earlier phase meets frozen routing criterion. Interpretation: Outcome: replan retained: - Native best81e49555673017,raw satisfaction,geometry and5s/1GB - 3809 loss9925530 and all complete scoped local/native counterevidence changed: - Validated read-only phase observer and complete source-bound offline query/replay - Next test expands feasible three-ad region before another timing/frequency variant stopped: - Claiming native benefit from offline gains or majority signs alone",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do earlier81e best states offer materially more realizable triad room than4.58s states?"
+    },
+    {
+      "agent_id": "warm-off-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "b07d11d812dd144b",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T12:31:33+00:00",
+      "result_id": "question_a2790fa9aa8dfa49c86a816874e3f1cd1ea701df9ee297e215d42c7e648fc25e",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Exact81e,extended helper8587,box/board/union offline sweeps,fresh6900-6915,normal4.60s final layouts;fixed foreign ads.",
+      "title": "Does expanding the feasible region materially improve three-ad allocation on81e final layouts?"
+    },
+    {
+      "agent_id": "warm-off-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "0e15713e0a9bfd34",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-expanded-triad-room-1",
+        "evidence:ad-phase-triad-room-1",
+        "evidence:ad-triad-continuation-native-1",
+        "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_a2790fa9aa8dfa49c86a816874e3f1cd1ea701df9ee297e215d42c7e648fc25e",
+      "recorded_at": "2026-10-15T12:31:33+00:00",
+      "result_id": "finding_c3e28eab07e387f2cb160bd806d5f6808249b1b77b5b6796b56f5dd6a0fd8c5f",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 8587f24faf3d86dd1b4fb31ea4718389c9a6735a64f0c8bb29795622149618d1 Applicability: Exact81e,extended helper8587,box/board/union offline sweeps,fresh6900-6915,normal4.60s final layouts;fixed foreign ads. Observation: Union mean increment314,median0.010points;11raw positives include6subpoint changes,only5official gains. Extra mean8.08ms,max full sweep51.12ms. Frozen rule favors runtime; complete gain/cost/resolution evidence favors a fourth-blocker probe next. Interpretation: Outcome: replan retained: - Native best81e49555673017,raw objective,geometry and5s/1GB - 3809 and prior native/local losses;full data and original frozen recommendation changed: - Validated explicit-region extension and box/board/union sequential witnesses - Replanned from nominal sign-count recommendation to four-ad allocation research stopped: - Treating subpoint raw gains as material native-scale progress - Promoting a region candidate from conditional witness gains alone",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does expanding the feasible region materially improve three-ad allocation on81e final layouts?"
+    },
+    {
+      "agent_id": "warm-off-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "85e36e604fb8d24d",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T12:45:23+00:00",
+      "result_id": "question_98bf1547fa6e6e620cd272423557ad6a20d68ef29e41aa91d5d6cbe90bc7fddf",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Exact81e,four helperd3dd,initial deficient-center contact groups,fresh7000-7015,normal4.60s finals;foreign ads fixed.",
+      "title": "Does releasing a fourth touching blocker materially improve joint allocation over matching triads on81e final layouts?"
+    },
+    {
+      "agent_id": "warm-off-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "4277619acf216052",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-four-ad-room-1",
+        "evidence:ad-expanded-triad-room-1",
+        "evidence:ad-triad-continuation-native-1",
+        "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_98bf1547fa6e6e620cd272423557ad6a20d68ef29e41aa91d5d6cbe90bc7fddf",
+      "recorded_at": "2026-10-15T12:45:23+00:00",
+      "result_id": "finding_46844c13377dfd5d0ec1c8c9f03213230d4a4e1dc5771f0c31e8a0f10e57fe4b",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: d3dd213ada5df32616372abdb914fcc933fa76b62e918570cb8339523a09fc23 Applicability: Exact81e,four helperd3dd,initial deficient-center contact groups,fresh7000-7015,normal4.60s finals;foreign ads fixed. Observation: Union adds1289mean/0median points over matching triads;3official gains,96%from7000. Extra50.55ms,full sweep57.20mean/150.53maxms. Eligible centers hold78.65%residual but incremental recovery is0.01425%. Interpretation: Outcome: replan retained: - Native best81e49555673017;raw objective,integer geometry,5s/1GB - 3809and prior pair/group/shrink-regrow native/local losses changed: - Validated memoized four-way guillotine search and matching triad controls - Select joint blocker-trim choices before regrow,without common slicing requirement stopped: - Copying expensive full four-ad sweep into runtime from conditional witness gain",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does releasing a fourth touching blocker materially improve joint allocation over matching triads on81e final layouts?"
+    },
+    {
+      "agent_id": "warm-off-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "6e71a650f84ad98d",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T13:00:59+00:00",
+      "result_id": "question_fdea237f1b9cb741e1748f28b342afa63c2d2d9f70d24f0ae66d7bff570bb601",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Exact81e,trim helper596a,fresh7100-7115finals,coarse frozen proposals plus separately frozen adaptive boundary reuse;<=3blockers,foreign ads fixed.",
+      "title": "Do joint blocker-trim choices improve attainable end-state gain beyond81e independent-best trim and regrowth?"
+    },
+    {
+      "agent_id": "warm-off-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "e0d5aaaa45aecc0a",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-blocker-trim-room-1",
+        "evidence:ad-four-ad-room-1",
+        "evidence:ad-triad-continuation-native-1",
+        "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_fdea237f1b9cb741e1748f28b342afa63c2d2d9f70d24f0ae66d7bff570bb601",
+      "recorded_at": "2026-10-15T13:00:59+00:00",
+      "result_id": "finding_455ec6c0dbd136e5127a0bb6488e45e8b3b7bfc586071aa47b66fe20a9070511",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 596a0a58d14ae88d1db09b175f22d97948e88ec99a0c2edfd3b1ee108ae026d0 Applicability: Exact81e,trim helper596a,fresh7100-7115finals,coarse frozen proposals plus separately frozen adaptive boundary reuse;<=3blockers,foreign ads fixed. Observation: Both coarse and adaptive fine schedules showzero joint-choice increment. Finer base proposals instead gain6376mean points on16/16reused layouts at2.31meanms. Adaptive diagnostic changes proposal scale;native benefit unknown. Interpretation: Outcome: replan retained: - Native best81e49555673017;raw objective,integer geometry,5s/1GB - 3809and earlier triad,pair,random group/shrink-regrow losses changed: - Validated joint trim search,exact base control,rollback and real transactions - Select bounded deterministic base boundary polish;preserve parent annealing timeline stopped: - Adding orientation/order enumeration without demonstrated end-state gain",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do joint blocker-trim choices improve attainable end-state gain beyond81e independent-best trim and regrowth?"
+    },
+    {
+      "agent_id": "warm-off-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "db4104b1fb367288",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T13:30:43+00:00",
+      "result_id": "question_834801b15c96f5c64b78a85613e64820251184825956baaf98ea1fab546e6fea",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Exactd71vs81e,one10ms-capped final base pass,32fresh normal pairs7200-7231andnative48eb5473e82b/agent18;5s/1GB.",
+      "title": "Does the original-clock post-greedy boundary-polish policy improve native raw score over81e?"
+    },
+    {
+      "agent_id": "warm-off-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "57b37be2ff401e81",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-boundary-polish-native-1",
+        "evidence:ad-boundary-polish-1",
+        "evidence:ad-boundary-review-1",
+        "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_834801b15c96f5c64b78a85613e64820251184825956baaf98ea1fab546e6fea",
+      "recorded_at": "2026-10-15T13:30:43+00:00",
+      "result_id": "finding_6cfeb36900ecbbe2bcffa048107ba4ca0210baf8f95b5a2d5f2244f30ed15bed",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: d71c786874c423547e9b597a29dab000503acb97fd66c862c24ee0e6b4346841 Applicability: Exactd71vs81e,one10ms-capped final base pass,32fresh normal pairs7200-7231andnative48eb5473e82b/agent18;5s/1GB. Observation: Semantic prefix and actual post-greedy commits are verified,all outputs valid.32normal pairs are mixed;one native result loses23189487. Root81e restored after exact source comparison. Compiled-prefix throughput remains unmeasured;no cause inferred. Interpretation: Outcome: replan retained: - Native best81e49555673017;raw objective,5s/1GB,integer geometry - d71/3809and all earlier native/local losses,complete source-bound evidence changed: - Completed candidate/native continuation and restored supported incumbent - Next distinguish compiled-prefix throughput from conditional pass gain and timed variance stopped: - Promoting d71 from offline gain or successful output validity - Another late frequency/reservation variant without new discriminating evidence",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does the original-clock post-greedy boundary-polish policy improve native raw score over81e?"
+    },
+    {
+      "agent_id": "warm-off-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "211a9b848b8a7fe9",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T13:48:59+00:00",
+      "result_id": "question_f5005110a0c1b31702898f5779a83009a7e3aad3d8de4141e14b6f2d955d141c",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Exact81e/d71/GCC11.4-O2,four retained7200/7203/7214/7230 inputs,4M fixed moves,CPU0,balanced orders;not native causality.",
+      "title": "Does adding d71 boundary-polish code consistently slow an otherwise equivalent parent search, and does outlining correct it?"
+    },
+    {
+      "agent_id": "warm-off-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "e0dcb06789439ed6",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-prefix-throughput-1",
+        "evidence:ad-boundary-polish-native-1",
+        "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_f5005110a0c1b31702898f5779a83009a7e3aad3d8de4141e14b6f2d955d141c",
+      "recorded_at": "2026-10-15T13:48:59+00:00",
+      "result_id": "finding_75100e751792d35924b48cd9e96f142b9362975e04a5cfef0986e5103e7ba4be",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 81e58e2378ef6bf7379a638dc3f66a5129b879e8a6213bf4f86911797ceb08bc Applicability: Exact81e/d71/GCC11.4-O2,four retained7200/7203/7214/7230 inputs,4M fixed moves,CPU0,balanced orders;not native causality. Observation: Layout-sensitive local CPU effects exist,but disabled is often faster and outlining has no consistent benefit. Profiles place92-94%in unchanged attempt/regrow. No causal native explanation or score gain is established. Interpretation: Outcome: replan retained: - Native best81e49555673017,integer geometry,4.60s/5s/1GB - d71/3809and prior unrolling/pair/group native/local losses changed: - Completed controlled throughput,hot-code and C++ profile readback - Next test exact SIMD overlap scan on incumbent with unchanged search semantics stopped: - Promoting noinline correction or inferring native loss from code size - Further arbitrary layout tuning on four reused inputs",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does adding d71 boundary-polish code consistently slow an otherwise equivalent parent search, and does outlining correct it?"
+    },
+    {
+      "agent_id": "warm-off-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "21146d952b4301ad",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T14:11:05+00:00",
+      "result_id": "question_339452d5d092b904c5ce404b369367cf6a26845fdf21e44936f847825679cc3f",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Exact9dc/SSE2 versus81e GCC11.4-O2;4retained fixed-work fixtures and32fresh7300-7331pairs;native pending.",
+      "title": "Does exact SIMD overlap filtering on81e improve whole-solver native raw score through lower geometry cost?"
+    },
+    {
+      "agent_id": "warm-off-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "3fc2bc5dc66383c6",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-simd-overlap-1",
+        "evidence:ad-prefix-throughput-1",
+        "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_339452d5d092b904c5ce404b369367cf6a26845fdf21e44936f847825679cc3f",
+      "recorded_at": "2026-10-15T14:11:05+00:00",
+      "result_id": "finding_ae361e99732e2ec1510f8f81387e661a5e38ecd1ef7e1d241c23085ef8d2680b",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 9dcadc6a4646c25e05cbfc109bfaccbad9edfb04009e4714db3feea70fbe24f0 Applicability: Exact9dc/SSE2 versus81e GCC11.4-O2;4retained fixed-work fixtures and32fresh7300-7331pairs;native pending. Observation: Predicates and complete trajectories match;controlled cost is lower. Fresh score comparison is uncertain. Root9dc is prepared,not native-adopted;cooldown pending. Best81e and all failed checkpoints remain intact. Interpretation: Outcome: continue retained: - Raw native score objective,integer geometry,4.60s/5s/1GB and best81e49555673017 - Prior d71/3809/unrolling and neighborhood losses changed: - Implemented and froze9dc;completed local proof,cost and fresh comparisons - Bound native readiness Monitor and independent read-only-root P2 continuation - Recover original bound writeback after pre-writeback wait projection failed stopped: - Claiming native improvement or completion from CPU/local checks",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does exact SIMD overlap filtering on81e improve whole-solver native raw score through lower geometry cost?"
+    },
+    {
+      "agent_id": "warm-off-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "028fcedccb3d3193",
+      "event_kind": "node",
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T14:23:55+00:00",
+      "result_id": "question_e28c5409393bb4c2918ca9093763b356a3dbc5796ba3807556925ccc46b0625c",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "7102vs9dc,GCC11.4-O2/CPU0,4reused55-192ad inputs;semantics and local throughput only.",
+      "title": "Does exact SSE2 obstacle-bound reduction in growAvailable improve total fixed-work cost on9dc?"
+    },
+    {
+      "agent_id": "warm-off-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "40de83b7cae96371",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:ad-simd-grow-1",
+        "evidence:ad-simd-overlap-1",
+        "checkpoint:112c48732389b1d06d32e206058e37823611657e3173e146affdda8a7d2e9bbd"
+      ],
+      "goal_id": "ad-warm-off-20261015-01",
+      "node_id": "question_e28c5409393bb4c2918ca9093763b356a3dbc5796ba3807556925ccc46b0625c",
+      "recorded_at": "2026-10-15T14:23:55+00:00",
+      "result_id": "finding_61f797e745ccf3f328e36152a98098cdd4a549f11396823c571b48d3b6c4e274",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "tentative",
+      "summary": "Input revision: 7102cfee317acb20ef0b101da01956bfb1b3e1525b48eab5a56f582022ae9942 Applicability: 7102vs9dc,GCC11.4-O2/CPU0,4reused55-192ad inputs;semantics and local throughput only. Observation: Geometry and complete trajectories match;balanced total timings show no supported cost benefit or size threshold.7102 stays local;9dc native request remains pending. Interpretation: Outcome: replan retained: - Raw native-score objective;integer geometry,4.60s/5s/1GB;best81e49555673017 - Prepared9dc and prior d71/3809/unroll/neighborhood counterevidence changed: - Completed independent growAvailable SIMD proof and total-cost comparison - Return to original9dc source-bound native continuation stopped: - Promoting7102 or tuning a size threshold on4reused fixtures",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does exact SSE2 obstacle-bound reduction in growAvailable improve total fixed-work cost on9dc?"
+    }
+  ]
+}

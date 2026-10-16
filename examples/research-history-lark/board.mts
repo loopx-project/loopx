@@ -1,8 +1,8 @@
 #!/usr/bin/env -S node --no-warnings --experimental-strip-types
 /** Render the time-anchored research history as a Lark-whiteboard SVG.
  *
- * Input is either a JSONL Explore result log or the redacted fixture JSON
- * exported with PR #6616. The SVG is display-only: record-time thirds, routes
+ * Input is either a JSONL Explore result log or a captured-event fixture JSON.
+ * The SVG is display-only: record-time thirds, routes
  * from recorded edges/parent grouping and explicit path_delta decisions; it
  * never adds edges, scores or evaluations. Upload via the lark-whiteboard skill:
  *   npx -y @larksuite/whiteboard-cli@^0.2.13 -i out.svg -f svg --check
@@ -51,7 +51,7 @@ const X = (at: number) => plotX + (at - t.start!) / Math.max(1, t.end! - t.start
 // Header
 text(M, y + 10, title, {size: 28, weight: 700});
 const spanH = (t.end! - t.start!) / 3_600_000;
-text(M, y + 44, `Explore 已记录历史 · ${fmt(t.start!)} — ${fmt(t.end!)} · 跨度 ${spanH >= 48 ? `${(spanH / 24).toFixed(1)} 天` : `${spanH.toFixed(1)} 小时`} · ${view.events.length} 条记录 · ${view.nodes.length} 个问题 · ${t.findings.length} 条结论`, {size: 15, color: C.muted});
+text(M, y + 44, `Explore 已记录历史 · ${fmt(t.start!)} — ${fmt(t.end!)} · 跨度 ${spanH >= 48 ? `${(spanH / 24).toFixed(1)} 天` : `${spanH.toFixed(1)} 小时`} · ${view.events.length} 条记录 · ${view.nodes.length} 项研究 · ${t.findings.length} 条结论`, {size: 15, color: C.muted});
 text(M, y + 68, "时间为记录时间（含延后分析与回填），不是尝试发生时间；原生成绩未接入，本图不表达分数提升。", {size: 13, color: C.faint});
 y += 100;
 
@@ -63,7 +63,7 @@ for (const p of t.phases) {
   const late = p.index === 2;
   s.push(`<rect x="${x}" y="${y}" width="${cardW}" height="${cardH}" rx="12" fill="${late ? "#F0F4FC" : "#FFFFFF"}" stroke="${late ? C.cont : C.line}" stroke-width="2"/>`);
   text(x + 20, y + 32, `${names[p.index]} · ${fmt(p.start)} — ${fmt(p.end)}`, {size: 16, weight: 700});
-  text(x + 20, y + 62, `新问题 ${p.questions}`, {size: 22, weight: 700});
+  text(x + 20, y + 62, `研究项 ${p.nodes}`, {size: 22, weight: 700});
   text(x + 160, y + 62, `结论 ${p.findings}`, {size: 22, weight: 700});
   // stacked label bar
   const total = Math.max(1, p.findings); let bx = x + 20; const bw = cardW - 40;

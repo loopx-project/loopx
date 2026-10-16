@@ -1,5 +1,7 @@
 """Real loopback reads: unfolded history, stable pagination and no writes."""
+import hashlib
 import json
+from pathlib import Path
 import threading
 from urllib.error import HTTPError
 from urllib.parse import quote
@@ -12,6 +14,22 @@ from loopx.capabilities.explore.result_log import (
     explore_result_log_path,
 )
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+
+
+@pytest.mark.parametrize("name,digest,size", [
+    ("edgebench-research-history.json", "b876dd7660e0aab19db717f60e86865494a74b8fa27b42a5a67ee295ef524397", 104922),
+    ("edgebench-graph-checkpoint-history.json", "b105de360ed7d015ae5d7bf96b545879e12507b1fc97eaeb5fb6fa2c0bbc00ab", 200333),
+    ("edgebench-ad-checkpoint-history.json", "de04b679e9f382b650e891e5c7dd7146bc690500435c511f107c9d24da4f4efa", 145296),
+])
+def test_checkpoint_fixture_reconstructs_original_captured_log_bytes(name, digest, size):
+    fixture = Path(__file__).resolve().parents[2] / "apps/presentation/dashboard/src/data/fixtures" / name
+    capture = json.loads(fixture.read_text())
+    original = "".join(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n"
+        for event in capture["events"]).encode()
+    # Frozen independently from the source JSONL, not generated from the fixture.
+    assert hashlib.sha256(original).hexdigest() == digest
+    assert len(original) == size
+    assert capture["provenance"]["redactions"] == []
 
 
 def test_history_keeps_updates_in_snapshot_isolates_goal_and_view_and_never_writes(tmp_path):
@@ -40,7 +58,8 @@ def test_history_keeps_updates_in_snapshot_isolates_goal_and_view_and_never_writ
     before = {file: file.read_bytes() for file in (registry, state, log)}
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.registry_path, server.runtime_root_override, server.verbose = registry, None, False
-    worker = threading.Thread(target=server.serve_forever, daemon=True); worker.start()
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
     base = f"http://127.0.0.1:{server.server_port}/api/chat/explore-results?goal_id="
     def read(query):
         with urlopen(base + query) as response:
@@ -76,4 +95,6 @@ def test_history_keeps_updates_in_snapshot_isolates_goal_and_view_and_never_writ
         assert read(f"history-fixture&view=history&cursor={cursor}")["total"] == 76
         assert read("history-fixture&view=history")["total"] == 77
     finally:
-        server.shutdown(); worker.join(timeout=5); server.server_close()
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()

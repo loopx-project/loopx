@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {readFileSync} from "node:fs";
 import {parseExploreHistoryPage, projectExploreHistory, layoutExploreHistory, groupUnlinkedHistoryQuestions} from "../../loopx/control_plane/presentation/explore_history.ts";
 
 const goal = "history-fixture";
@@ -94,7 +95,7 @@ test("time-anchored reading keeps record-time thirds, routes and explicit decisi
   const view = projectExploreHistory(rows, goal);
   const timeline = buildExploreTimeline(view.nodes, view.edges, view.events);
   assert.equal(timeline.bins.length > 0, true);
-  assert.deepEqual(timeline.phases.map(phase => phase.questions), [1, 1, 1]);
+  assert.deepEqual(timeline.phases.map(phase => phase.nodes), [1, 1, 1]);
   assert.equal(timeline.routes.length, 1, "recorded parent grouping joins a reading route");
   assert.equal(timeline.routes[0]!.nodeIds[0], "q1");
   assert.equal(timeline.singles.length, 1, "time adjacency never joins q3 to the route");
@@ -123,4 +124,56 @@ test("phase reading retains successive decisions for one question, including a l
   assert.equal(exploreTimelinePhaseAt(timeline.phases, timeline.end), 2);
   assert.equal(exploreTimelinePhaseAt(timeline.phases, null), null, "missing record time remains unknown");
   assert.equal(view.nodes[0]!.latest.status, "open", "display-time sorting cannot rewrite canonical node state");
+});
+
+test("coincident and nearby records remain accessible without overlapping 44px targets", async () => {
+  const {buildExploreTimeline, groupExploreTimelinePoints} = await import("../../loopx/control_plane/presentation/explore_timeline.ts");
+  const rows = Array.from({length: 25}, (_, index) => event({event_id: `point-${index}`, result_id: `q-${index}`,
+    recorded_at: index < 9 ? "2026-01-01T00:00:00Z" : `2026-01-01T${String(index - 8).padStart(2, "0")}:00:00Z`}));
+  rows.push(event({event_id: "unknown", result_id: "unknown", recorded_at: "unknown"}));
+  const view = projectExploreHistory(rows, goal), timeline = buildExploreTimeline(view.nodes, view.edges, view.events);
+  const items = [...timeline.nodes.values()].reverse(), before = JSON.stringify(items);
+  for (const width of [0, 1, 100, 300, 720, 1200]) {
+    const groups = groupExploreTimelinePoints(items, timeline.start!, timeline.end!, width);
+    assert.deepEqual(groups.flatMap(group => group.items.map(item => item.node.id)).sort(), rows.slice(0, 25).map(row => row.result_id).sort());
+    assert(groups.every(group => group.items.every(item => item.first !== null)));
+    assert(groups[0]!.items.filter(item => item.first === timeline.start).length === 9, "all exactly simultaneous records stay in the selectable group");
+    for (let index = 1; index < groups.length; index++) assert((groups[index]!.at - groups[index - 1]!.at) / (timeline.end! - timeline.start!) * width >= 44 - 1e-9);
+  }
+  assert.equal(JSON.stringify(items), before, "grouping never changes any timestamp, finding or source object");
+  assert.equal(view.edges.length, 0, "display proximity creates no source relationship");
+  assert.equal(view.unknownTimeCount, 1, "the unknown time remains available outside the axis");
+});
+
+test("three unchanged research checkpoints retain their actual findings and missing relationships", async () => {
+  const {buildExploreTimeline, groupExploreTimelinePoints} = await import("../../loopx/control_plane/presentation/explore_timeline.ts");
+  for (const [name, digest, eventCount, nodeCount, findingCount, refutedCount] of [
+    ["edgebench-research-history.json", "b876dd7660e0aab19db717f60e86865494a74b8fa27b42a5a67ee295ef524397", 76, 38, 38, 32],
+    ["edgebench-graph-checkpoint-history.json", "b105de360ed7d015ae5d7bf96b545879e12507b1fc97eaeb5fb6fa2c0bbc00ab", 134, 66, 68, 34],
+    ["edgebench-ad-checkpoint-history.json", "de04b679e9f382b650e891e5c7dd7146bc690500435c511f107c9d24da4f4efa", 105, 48, 57, 0],
+  ] as const) {
+    const capture = JSON.parse(readFileSync(new URL(`../../apps/presentation/dashboard/src/data/fixtures/${name}`, import.meta.url), "utf8"));
+    const rows = parseExploreHistoryPage({ok: true, goal_id: capture.goal_id, total: capture.events.length, next_cursor: null, items: capture.events}, capture.goal_id).items;
+    const view = projectExploreHistory(rows, capture.goal_id), timeline = buildExploreTimeline(view.nodes, view.edges, view.events);
+    assert.equal(capture.source_sha256, digest);
+    assert.equal(rows.length, eventCount);
+    assert.equal(view.nodes.length, nodeCount);
+    assert.equal(timeline.findings.length, findingCount);
+    assert.equal(timeline.findings.filter(item => item.event.status === "refuted").length, refutedCount);
+    assert.deepEqual(timeline.routes, []);
+    assert.equal(timeline.singles.length, nodeCount);
+    for (const width of [90, 300, 700, 1200]) {
+      const members = [...timeline.nodes.values()];
+      const groups = groupExploreTimelinePoints(members, timeline.start!, timeline.end!, width);
+      assert.deepEqual(groups.flatMap(group => group.items.map(item => item.node.id)).sort(), members.map(item => item.node.id).sort());
+      for (let index = 1; index < groups.length; index++) assert((groups[index]!.at - groups[index - 1]!.at) / (timeline.end! - timeline.start!) * width >= 44 - 1e-9);
+    }
+    if (name === "edgebench-research-history.json") {
+      const negative = timeline.nodes.get("question_97e36b6161239743d643c33214e574370f75f5e9b470341790869ed4c4800a83")!;
+      assert.equal(negative.label, "refuted");
+      assert.match(negative.node.findings[0]!.summary, /daily trials1\.53-2\.99\/199-719%/);
+      assert.deepEqual(negative.node.findings[0]!.evidence_refs, ["evidence:opportunity-cost-gates"]);
+    }
+    assert.equal(view.edges.length, 0, "the real solver recorded no typed relationships; chronology cannot supply them");
+  }
 });
