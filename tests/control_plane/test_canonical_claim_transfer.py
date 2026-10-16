@@ -104,7 +104,8 @@ def test_claim_transfer_never_emulates_a_legacy_two_write_handover(tmp_path, han
     registry = tmp_path / "registry.json"
     runtime = tmp_path / "runtime"
     state = tmp_path / "state.md"
-    state.write_text("# Retained source\n\n## Agent Todo\n- [ ] Historical work <!-- todo_id=todo_example -->\n")
+    state.write_text(f"---\nhandoff_mode: {handoff_mode}\n---\n"
+                     "# Retained source\n\n## Agent Todo\n- [ ] Historical work <!-- todo_id=todo_example -->\n")
     lease_path = runtime / "goals/example/task-leases/todo_example.json"
     lease_path.parent.mkdir(parents=True)
     now = datetime.now(UTC).replace(microsecond=0)
@@ -125,7 +126,6 @@ def test_claim_transfer_never_emulates_a_legacy_two_write_handover(tmp_path, han
             "coordination": {
                 "registered_agents": ["agent-a", "agent-b"],
                 "agent_model": "peer_v1",
-                "handoff_mode": handoff_mode,
             },
         }],
     }))
