@@ -122,6 +122,29 @@ def _digest(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def _write_owned_operation_patch(module: Path, socket_path: Path) -> Path:
+    """Write paired loader files; the caller owns their directory and lifetime."""
+    wrapper = socket_path.parent / "operation.mjs"
+    wrapper.write_text(
+        "import {apply} from " + json.dumps(module.as_uri()) + ";\n"
+        "export const name='loopx-owned-operation';\n"
+        "export const inject=['agents','tools','sessionProjections'];\n"
+        "export function applyOwned(ctx) { apply(ctx,{socketPath:"
+        + json.dumps(str(socket_path))
+        + "}); }\n"
+        "export {applyOwned as apply};\n",
+        encoding="utf-8",
+    )
+    owned_patch = socket_path.parent / "operation.patch.yml"
+    owned_patch.write_text(
+        "- insert:\n    - id: loopx-owned-operation\n      name: "
+        + json.dumps(wrapper.as_uri())
+        + "\n",
+        encoding="utf-8",
+    )
+    return owned_patch
+
+
 def _run_dsh_operation_host(
     request: Mapping[str, Any],
     *,
@@ -296,24 +319,7 @@ def _run_dsh_operation_host(
         )
         owner.connection = connection
         owner.session_id = session_id
-        wrapper = connection.path.parent / "operation.mjs"
-        wrapper.write_text(
-            "import {apply} from " + json.dumps(module.as_uri()) + ";\n"
-            "export const name='loopx-owned-operation';\n"
-            "export const inject=['agents','tools','sessionProjections'];\n"
-            "export function applyOwned(ctx) { apply(ctx,{socketPath:"
-            + json.dumps(str(connection.path))
-            + "}); }\n"
-            "export {applyOwned as apply};\n",
-            encoding="utf-8",
-        )
-        owned_patch = connection.path.parent / "operation.patch.yml"
-        owned_patch.write_text(
-            "- insert:\n    - id: loopx-owned-operation\n      name: "
-            + json.dumps(wrapper.as_uri())
-            + "\n",
-            encoding="utf-8",
-        )
+        owned_patch = _write_owned_operation_patch(module, connection.path)
         config = build_sdk_config(
             provider=provider,
             model=model,
