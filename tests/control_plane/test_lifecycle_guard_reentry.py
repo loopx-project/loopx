@@ -12,8 +12,10 @@ from test_replan_successor_guard_reentry import AGENT, GOAL, _fixture, _guard
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("later_user_gate", [False, True])
+@pytest.mark.parametrize("large_history", [False, True])
 def test_hidden_completed_source_recovers_its_original_guard_after_new_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, later_user_gate: bool,
+    large_history: bool,
 ) -> None:
     original_id = "todo_original_lifecycle"
     completion_key = "local_completion_" + sha256(
@@ -32,6 +34,7 @@ def test_hidden_completed_source_recovers_its_original_guard_after_new_work(
     # Enough newer terminal rows to move the original outside display budgets.
     recent = [{**completed, "todo_id": f"todo_later_{i}", "index": i + 2,
         "text": f"Accepted independent source {i}.", "no_followup": True,
+        "note": "Synthetic retained evidence. " + ("x" * 96_000 if large_history else ""),
         "completion_continuation": "no_followup", "completion_turn_key": f"later-{i}",
         "completed_at": "2026-08-02T00:00:00Z", "updated_at": "2026-08-02T00:00:00Z"}
         for i in range(24)]
@@ -54,8 +57,9 @@ def test_hidden_completed_source_recovers_its_original_guard_after_new_work(
 
     closed = call("todo", "complete", "--goal-id", GOAL, "--todo-id", original_id,
         "--agent-id", AGENT, "--completion-identity-key", completion_key,
-        "--no-follow-up", "--note", "The finite maintenance outcome was independently accepted.")
+        "--no-follow-up", "--reason", "The finite maintenance outcome was independently accepted.")
     assert closed["completion_recovery"] == "lifecycle_reentry_terminal_closeout"
+    assert call("todo", "list", "--goal-id", GOAL, "--todo-id", original_id)["todo"]["note"] == completed["note"]
     # A later human request owns a different live frontier, not this old review.
     later = call("todo", "add", "--goal-id", GOAL, "--role", "agent",
         "--claimed-by", AGENT, "--text", "Validate the newly requested independent source.",
@@ -73,6 +77,8 @@ def test_hidden_completed_source_recovers_its_original_guard_after_new_work(
     assert recovered["autonomous_replan_obligation"]["resolution_mode"] == "receipt_bound_replan_settlement"
     assert recovered["replan_action_packet"]["decision"] == "vision_outcome_checkpoint_required"
     assert recovered["replan_action_packet"]["semantic_delta"] is None
+    if large_history:
+        assert len(json.dumps(recent).encode()) > 2 * 1024 * 1024
     denied = call("quota", "spend-slot", "--goal-id", GOAL, "--agent-id", AGENT,
         "--codex-app", "--turn-instance-id", turn, "--replan-obligation-id",
         obligation["obligation_id"], "--source", "heartbeat", "--execute", expected_code=1)

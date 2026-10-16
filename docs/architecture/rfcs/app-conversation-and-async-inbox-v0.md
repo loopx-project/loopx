@@ -52,6 +52,9 @@ A lost admission correlation cannot move a request to a newer Session. Admission
 feedback and final delivery use separate durable provider intents; an ambiguous
 write is read back without blind resend. Unsupported media receives an explicit
 notice. The workspace grant conveys no Goal, portfolio or peer execution authority.
+Lark queued notices describe the observed queue state without claiming that an
+earlier request is running: the first Turn can also await its native claim.
+Recovery retains an already persisted notice's exact text and provider intent.
 
 The packaged settings journey, source revocation/recovery, duplicate events,
 native queue/stop and two-App isolation have synthetic-provider regression and

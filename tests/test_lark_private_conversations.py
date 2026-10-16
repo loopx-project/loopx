@@ -217,14 +217,28 @@ def test_recovery_waits_for_inflight_capture_without_readmitting(ordinary, monke
         transport.reconcile()
         assert len(store.list_sessions()) == 1
         assert [m["text"] for m in store.messages(row["session_id"]) if m["role"] == "user"] == [event["content"]]
-        final = ("notes-app", result["response"]["message"])
-        assert provider.writes[-1] == final and provider.writes.count(final) == 1
+        delivered = read(path)
+        terminal = delivered["deliveries"]["terminal"]
+        assert delivered["status"] == "delivered" and terminal["verified"] is True
+        # A running Turn can create a draft before recovery returns. Terminal
+        # delivery then edits it; writes records creations, not current bodies.
+        final_ref = terminal["attempt"]["message_ref"]
+        final_message = provider.messages[final_ref]
+        content = json.loads(final_message["body"]["content"])
+        final_text = result["response"]["message"]
+        assert content["zh_cn"]["content"][0][0]["text"] == final_text
+        assert sum(message.get("body") == final_message["body"]
+                   for message in provider.messages.values()) == 1
         assert all(profile == "notes-app" for profile, _ in provider.writes)
         packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
         assert sum(packet["method"] == "turn/start" for packet in packets) == 1
         if group:
             assert provider.topic_writes[0][:2] == (event["chat_id"], event["message_id"])
+        visible_before = json.dumps(provider.messages, sort_keys=True)
+        writes_before = list(provider.writes)
         assert transport.reconcile() == 0
+        assert json.dumps(provider.messages, sort_keys=True) == visible_before
+        assert provider.writes == writes_before
     finally:
         release_core.set()
         runtime.close()

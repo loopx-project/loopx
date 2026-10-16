@@ -600,6 +600,19 @@ for (const key of ["home.firstGoal.title", "home.firstGoal.lead", "home.firstGoa
   assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);
 }
 
+// Runtime readiness: the service's own reason fields drive the copy; the
+// read-only status projection and the loading placeholder never count as a
+// runtime; a re-check reads the catalog again and nothing is installed.
+const runtimeReadiness = source("./runtime-readiness.ts");
+assert.match(runtimeReadiness, /if \(agents\.length === 0\) return \{ kind: "detecting" \};/, "An empty catalog is detecting, not absence");
+assert.match(page, /agent\.adapterKind !== "status_projection" && agent\.source !== "detecting"/, "Readiness ignores the status projection and the loading placeholder");
+assert.match(dashboard, /onRecheckRuntimes: \(\) => setCapabilityRevision\(\(revision\) => revision \+ 1\)/, "Re-check re-reads the capabilities catalog");
+assert.match(dashboard, /source: "detecting",/, "The placeholder row is typed as detecting");
+assert.doesNotMatch(dashboard, /statusLabel: "正在检测"|"可用" : "需要配置"|当前 Goal 写入前验证/, "Agent status labels are localized");
+for (const key of ["readiness.noneTitle", "readiness.missingExecutable", "readiness.missingEnvironment", "readiness.selectedUnavailable", "readiness.recheck", "agent.statusDetecting"]) {
+  assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);
+}
+
 // Needs-you desktop notifications: a per-browser opt-in. Off by default, the
 // page neither asks for permission nor re-reads the workspace in the background.
 const attentionNotifications = source("./attention-notifications.ts");

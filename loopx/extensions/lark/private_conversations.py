@@ -747,7 +747,9 @@ class LarkPrivateConversations:
                         if native.get("agent_target"):
                             admission = "已收到，等待原 Agent 宿主处理。/status 查看状态，/project 返回项目对话。"
                         elif turn and turn["status"] == "queued":
-                            admission = "正在处理前一条，这条已排队。"
+                            # A first Turn can also await its native claim;
+                            # queued alone does not prove a preceding request.
+                            admission = "已收到，这条已排队。"
                         elif (record.get("feedback", {}).get("received") or {}).get("ok") is not True:
                             admission = "已收到，正在处理。"
                     if admission:

@@ -1613,10 +1613,18 @@ travel through a private, digest-bound local file reference. The same reducer
 checks all rows, lane-scoped ACKs and retry identities; neither the RPC budget
 nor a display window permits history truncation. Missing, altered or malformed
 snapshots fail before a decision, and the adapter removes temporary files on
-return or rejection. This repairs a T3/S2 settlement blocker and supplies S7/R7
+return or rejection. The replan semantic projection also uses the existing
+same-UID, digest-bound request/response snapshot channel for complete lifecycle
+and receipt-recovery facts. Its callers share one transport adapter; lifecycle,
+stride and receipt decisions remain in the same TypeScript owner. Ordinary RPCs
+retain their 2 MiB limit and local snapshots retain their 64 MiB bound. File/SQLite
+CLI recovery covers full facts above the wire budget, later independent work and
+user gates, durable refresh and replay, and exactly one quota debit. This repairs
+a T3/S2 settlement blocker and supplies S7/R7
 wire-growth evidence; it does not make full-history parsing constant-memory or
-qualify distributed execution. Cursor/checkpoint reduction remains a measured
-follow-up with complete-source parity, not a second Python policy. See the
+qualify installed-host adoption or distributed execution. Cursor/checkpoint
+reduction remains a measured follow-up with complete-source parity, not a second
+Python policy. See the
 [history decision evidence](ledger/typescript-control-plane-migration-v0/2026-09-22-replan-history-policy.md).
 
 **Checkpoint read-context transport.** A long-lived Goal can exceed the Effect

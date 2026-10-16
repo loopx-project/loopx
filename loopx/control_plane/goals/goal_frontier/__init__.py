@@ -61,7 +61,7 @@ from .acceptance import (
     GOAL_ACCEPTANCE_HOLD_TRIGGERS,
     acceptance_gaps_from_held_goal_binding,
 )
-from ...effect_runtime import effect_runtime_result
+from ...work_items.replan_semantics_codec import project_replan_semantics
 from .ack_policy import (
     attach_rejected_replan_feedback,
     autonomous_replan_ack_satisfies_obligation,
@@ -924,7 +924,7 @@ def _vision_gap_acknowledged(
             )
         ):
             return False
-    return effect_runtime_result("work_item.replan_semantics.project", {
+    return project_replan_semantics({
         "operation": "vision_ack",
         "acceptance_gaps": acceptance_gaps,
         "ack": latest_replan_ack,
