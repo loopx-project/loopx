@@ -119,6 +119,7 @@ async function importSettled(browser, url, provider) {
     assert.equal(applyCount, 0, "a fresh context must recover the same prepared intent without applying");
     await page.setViewportSize({width: 390, height: 844});
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+    await panel.locator('input[type="checkbox"]:enabled').waitFor();
     await panel.getByRole("checkbox").focus();
     await page.keyboard.press("Space");
     assert.equal(await panel.getByRole("checkbox").isChecked(), true);
