@@ -119,6 +119,37 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
         adopt_todo_context(env,unit,digest,**args)
     assert list(outside.iterdir())==[]
     (workspace/'.local').unlink()
+    # A complete slow read may finish after the caller's deadline. Neither
+    # initial verification nor the last pre-prepare verification may authorize
+    # a continuation write then; immutable staging remains safe to replay.
+    if lost_response is None and with_knowledge:
+        from types import SimpleNamespace
+        from loopx.hosts import research_checkpoint
+        original_rpc = research_checkpoint.effect_runtime_result
+        original_handoff = research_checkpoint._handoff
+        for expire_at in (1, 2):
+            clock, reads, writes = [100.0], [], []
+            def slow_read(method, payload, **kwargs):
+                if method == "runtime.checkpoint_artifacts" and payload["action"] == "verify":
+                    reads.append(kwargs["timeout"])
+                    assert kwargs["timeout"] == 40
+                    result = original_rpc(method, payload, **kwargs)
+                    if len(reads) == expire_at:
+                        clock[0] = 141.0
+                    return result
+                return original_rpc(method, payload, **kwargs)
+            def track_handoff(env, payload):
+                if payload["action"] != "inspect":
+                    writes.append(payload["action"])
+                return original_handoff(env, payload)
+            with monkeypatch.context() as bounded:
+                bounded.setattr(research_checkpoint, "time", SimpleNamespace(time=lambda: clock[0]))
+                bounded.setattr(research_checkpoint, "effect_runtime_result", slow_read)
+                bounded.setattr(research_checkpoint, "_handoff", track_handoff)
+                with pytest.raises(TimeoutError, match="original context adoption deadline"):
+                    adopt_todo_context(env, unit, digest, **args, deadline=140)
+            assert len(reads) == expire_at and not writes
+        assert run('todo','list','--goal-id','branch','--todo-id',destination_todo)['authority_read']['provider_revision'] == args['expected_revision']
     source_run('todo','update','--goal-id','source','--todo-id',source_todo,'--agent-id','source-actor',
         '--note','Candidate 999 is later evidence excluded from the captured point.',
         '--update-operation-id','later-source-evidence','--update-expected-provider-revision',source_context['snapshot']['provider_revision'],
@@ -378,3 +409,15 @@ def test_research_history_is_complete_and_bound_to_original_source(tmp_path, mon
     monkeypatch.setattr(research_checkpoint, "canonical_context", racing_read)
     with pytest.raises(ValueError, match="moved during the context read"):
         research_context(env, deadline=time.time() + 30)
+
+
+@pytest.mark.parametrize("deadline", [float("nan"), float("inf"), True, "later", 0, -1])
+def test_adoption_rejects_invalid_or_expired_deadline_before_io(tmp_path, monkeypatch, deadline):
+    from loopx.hosts import research_checkpoint
+    def forbidden(*args, **kwargs):
+        raise AssertionError("expired/invalid admission must not read artifact or authority")
+    monkeypatch.setattr(research_checkpoint, "effect_runtime_result", forbidden)
+    with pytest.raises((ValueError, TimeoutError), match="deadline"):
+        adopt_todo_context({}, tmp_path / "absent", "digest", source_todo_id="source",
+            todo_id="destination", operation_id="original", expected_revision="revision",
+            lease_key="lease", lease_version=1, deadline=deadline)

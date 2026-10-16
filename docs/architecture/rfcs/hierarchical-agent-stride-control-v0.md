@@ -687,7 +687,15 @@ repeating unchanged checks is not a default policy. The next probe declares
 minimum evidence for a coherent accepted deliverable or interpretable experiment, its prediction, adoption criterion and full cost.
 
 The enabled review now supplies `decision_value_review` questions for the three
-existing axes. Identify the remaining authoritative goal gap, its limiting
+existing axes. It separately considers first-deliverable quality and later gain
+beyond the retained best: recovery from an avoidably weak initial artifact does
+not establish additional capability. Compare attributable artifact versions,
+input conditions and original budgets, retaining submission and feedback-arrival
+times separately. Check whether later work implemented the proposed mechanism;
+a decision record, saved snapshot or new identifier alone does not establish
+adoption, restoration or improved results. These are refinements of the existing
+Agent questions, not new decision fields, score thresholds or settlement gates;
+the strategy remains default-off. Identify the remaining authoritative goal gap, its limiting
 component and plausible headroom before choosing the next mechanism. Compare
 continuation with one feasible different approach that could affect that
 component, including complete cost. A changed auxiliary mechanism can be useful,
@@ -1257,27 +1265,23 @@ a deterministic local provider; absent/multiple outcomes and foreign destination
 attempts reject. The controller participant recovery above does not yet qualify
 automatic joint session/research/evaluator/Host activation recovery.
 
-The explicit warm-worker `--restore-fresh-after-replan` treatment uses the same
-current semantic-review owner before replacing native context. It binds the
-original checkpoint and predecessor conversation to the completed destination
-decision, delivers that decision in the new conversation's first input, and
-preserves the current research/code/opportunity owners. Ordinary replacement
-still cannot inherit provenance. The provider records the original output
-location and source basis before dispatch; an unobserved identity cannot permit
-a second launch. Later capture must observe completed native work in that new
-conversation and seal its refresh lineage. Dropping the old native prefix is
-declared information loss, never exact retained-history continuation. Synthetic
-receiver/capture qualification and actual model evidence use or research benefit
-remain separate; the treatment authorizes no new study cells or hot updates.
+By default, warm-worker continuation keeps the admitted native conversation across
+the current semantic replan and later work. An explicit `--restore-fresh-replan`
+treatment instead starts a fresh conversation before preparation and the first
+current replan from a verified pending-decision checkpoint. The original objective,
+retained research evidence, code and incumbent remain the decision basis; no
+post-checkpoint decision is inherited. Preparation uses the original deadline. The post-replan context-reset option
+has been removed. Existing refresh provenance remains readable for previously
+captured artifacts; ordinary replacement still cannot inherit provenance.
+This removal does not qualify scientific benefit, a new study cell or hot updates.
 
 The joined qualification must distinguish a manual partial artifact from a
-new automatic full point after useful destination work. The fresh-context
+new automatic full point after useful destination work. The retained-history
 receiver uses its synthetic profile's explicitly selected cadence to reach that
 new periodic review and the actual controller/native opportunity barrier to seal
 code/research/native/phase state, then sends that point to another isolated receiver for real
-work. Source-prefix verification uses the explicitly bound reset baseline rather
-than demanding native messages that this treatment discarded. The completed
-cursor and both full history/source observations remain mandatory. Reusing a
+work. Source-prefix verification preserves the complete admitted native history. The
+completed cursor and both full history/source observations remain mandatory. Reusing a
 verified synthetic source point skips only source generation, never counts a
 prior source test as passed, and still exercises every receiver. This closes a
 mechanical composition seam when qualification passes; sustained large-point

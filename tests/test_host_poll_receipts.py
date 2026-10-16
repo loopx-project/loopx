@@ -10,6 +10,7 @@ from loopx.control_plane.quota.host_poll_receipts import (
     HOST_POLL_RECEIPT_SCHEMA_VERSION,
     receipt_path_for_goal,
     read_host_poll_receipt,
+    read_host_poll_receipt_observation,
     record_host_poll_receipt,
     stale_host_poll_risk,
 )
@@ -91,6 +92,37 @@ def test_read_receipt_rejects_foreign_schemas(tmp_path: Path) -> None:
     path.write_text("{broken", encoding="utf-8")
     assert read_host_poll_receipt(path) is None
     assert read_host_poll_receipt(tmp_path / "missing.json") is None
+
+
+def test_read_receipt_observation_distinguishes_missing_and_unreadable(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "receipt.json"
+    assert read_host_poll_receipt_observation(path) == {
+        "read_status": "missing",
+        "receipt": None,
+    }
+
+    path.write_text("{broken", encoding="utf-8")
+    assert read_host_poll_receipt_observation(path) == {
+        "read_status": "unreadable",
+        "receipt": None,
+    }
+
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": HOST_POLL_RECEIPT_SCHEMA_VERSION,
+                "goal_id": "goal-1",
+                "last_poll_at": "not-a-timestamp",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert read_host_poll_receipt_observation(path) == {
+        "read_status": "unreadable",
+        "receipt": None,
+    }
 
 
 def test_stale_host_poll_risk_only_for_quiet_expecting_loops() -> None:

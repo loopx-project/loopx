@@ -754,6 +754,22 @@ def test_error_envelopes_are_generated_and_public_safe(monkeypatch, tmp_path) ->
 	assert payload["boundary"] == global_risks.public_safe_boundary()
 
 
+def test_global_risks_error_survives_projection_runtime_failure(monkeypatch) -> None:
+	monkeypatch.setattr(
+		global_risks,
+		"seal_projection_envelope",
+		lambda **_: (_ for _ in ()).throw(RuntimeError("runtime unavailable")),
+	)
+
+	payload = global_risks.build_global_risks_error("status unavailable")
+
+	assert payload["ok"] is False
+	assert "projection_envelope" not in payload
+	assert "no projection envelope" in global_risks.render_global_risks_markdown(
+		payload
+	)
+
+
 @pytest.mark.parametrize(
 	("value", "expected"),
 	[

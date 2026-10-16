@@ -49,8 +49,6 @@ def test_captured_point_continues_with_fresh_authority(
     # Each variant uses its own fresh guest because the native fork retains
     # fixed captured workspace/home paths. The default variant stays unchanged.
     stride_continuation = os.environ.get("LOOPX_JOINT_RECEIVER_STRIDE") == "1"
-    fresh_context = os.environ.get("LOOPX_JOINT_RECEIVER_FRESH") == "1"
-    assert not fresh_context or stride_continuation, "Fresh-context qualification requires the completed current review"
     unit = Path(os.environ["LOOPX_JOINT_RECEIVER_POINT"])
     manifest = json.loads((unit / "checkpoint.json").read_bytes())
     digest, metadata = manifest["sha256"], manifest["point_metadata"]
@@ -304,7 +302,7 @@ def test_captured_point_continues_with_fresh_authority(
     if external:
         # Operator credentials and the native bank stay outside the guest.
         # Only this destination's public worker registration enters it.
-        assert fresh_context
+        assert stride_continuation
         url, fresh, grades = external["url"], external["activation"], []
     else:
         _, branch, _, url, controller_files, grades = request.getfixturevalue("controllers")
@@ -485,9 +483,6 @@ else:
     def run_native_work(current_guard, logs, purpose):
         logs.mkdir()
         wake = BenchmarkSessionWake(env, execution, {})
-        if fresh_context and env.get("LOOPX_WARM_START"):
-            from benchmark.runtime.checkpoint_session_refresh import prepare_session_refresh
-            purpose = prepare_session_refresh(env, wake, logs) + purpose
         command = native_command(env, execution, "execute", logs, wake)
         result = subprocess.run(
             [
@@ -506,13 +501,6 @@ else:
         )
         assert result.returncode == 0, result.stderr
         (logs / "stdout.jsonl").write_text(result.stdout)
-        if fresh_context and wake.checkpoint_refresh is not None:
-            # Lose the first observation reply after actual native work. The
-            # next Host recovers its original output, without another launch.
-            from benchmark.runtime.checkpoint_session_refresh import prepare_session_refresh
-            wake = BenchmarkSessionWake(env, execution, {})
-            prepare_session_refresh(env, wake, logs.with_name("not-launched"))
-            assert wake.session_id != admitted["session_id"]
         wake.observe(logs / "stdout.jsonl")
         return wake
 
@@ -787,11 +775,10 @@ else:
             )
             reopened = restored_capture_gate(env)
             assert reopened["capture_allowed"], reopened
-            if fresh_context:
-                from benchmark.runtime.checkpoint_continuation import restored_checkpoint_review
-                review_only = restored_checkpoint_review(env)
-                assert review_only["semantic_review_accepted"] and "capture_allowed" not in review_only
-                assert review_only["review_basis"]["identity"]["turn_instance_id"] == review_turn
+            from benchmark.runtime.checkpoint_continuation import restored_checkpoint_review
+            review_only = restored_checkpoint_review(env)
+            assert review_only["semantic_review_accepted"] and "capture_allowed" not in review_only
+            assert review_only["review_basis"]["identity"]["turn_instance_id"] == review_turn
             assert not reopened["instructions"]  # Do not repeat the historical packet after consumption.
             assert not restored_capture_gate(env, obligation["obligation_id"])["capture_allowed"]
             configured = cli(
@@ -880,11 +867,6 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
             provider_phase.update(
                 count=0, command=shlex.quote(sys.executable) + " grow.py"
             )
-            if fresh_context:
-                warm = tmp_path / "warm-start.json"
-                warm.write_text(json.dumps({"sha256": digest, "goal_id": goal, "agent_id": agent,
-                    "fresh_after_replan": True}))
-                env.update(LOOPX_WARM_START=str(warm), LOOPX_ITERATION_CONTEXT="resume")
             larger_wake = run_native_work(
                 next_guard,
                 tmp_path / "larger-work",
@@ -909,19 +891,9 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
             grown = native_session_checkpoint(env, active_session_id, timeout=30)[
                 "metadata"
             ]
-            if fresh_context:
-                assert active_session_id != admitted["session_id"] and len(grown["turn_ids"]) == 1
-                assert "Completed current decision" in json.dumps(requests[2])
-                assert "Complete candidates 9 and 10" in json.dumps(requests[2])
-                assert larger_wake.binding["checkpoint_artifact_sha256"] == digest
-                from benchmark.runtime.checkpoint_session_refresh import prepare_session_refresh
-                replay = BenchmarkSessionWake(env, execution, {})
-                assert prepare_session_refresh(env, replay, tmp_path / "unlaunched-retry") == ""
-                assert replay.session_id == active_session_id
-                assert not (tmp_path / "unlaunched-retry").exists()
-            else:
-                assert grown["turn_ids"][:-2] == native["turn_ids"]
-                assert len(grown["turn_ids"]) == len(native["turn_ids"]) + 2
+            assert active_session_id == admitted["session_id"]
+            assert grown["turn_ids"][:-2] == native["turn_ids"]
+            assert len(grown["turn_ids"]) == len(native["turn_ids"]) + 2
             work_vision = tmp_path / "larger-vision.json"
             work_vision.write_text(
                 json.dumps(
@@ -1022,7 +994,7 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
                 assert cm["held_decision_component_id"] and cm["replan"]["obligation_id"] != obligation["obligation_id"]
                 assert cm["native_session"]["turn_ids"] == grown["turn_ids"]
                 assert (recaptured / "components/task_workspace/candidate.txt").read_text() == "10"
-                assert cm["session"]["checkpoint_context_refresh"]["checkpoint_sha256"] == digest
+                assert cm["session"]["session_id"] == admitted["session_id"]
                 nested = recaptured / "components" / cm["worker_file_snapshot"]["native_capsule_component_id"]
                 native_point = json.loads((nested / "checkpoint.json").read_bytes())["point_metadata"]
                 assert (nested / "components/native_judge/incumbent.tar.gz").read_bytes() == b"7"
@@ -1059,11 +1031,6 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
                 assert completed["checkpoint"]["captured"], completed
                 captured = json.loads((manual / "checkpoint.json").read_text())
                 assert captured["point_metadata"]["native_session"]["turn_ids"] == grown["turn_ids"]
-                if fresh_context:
-                    provenance = captured["point_metadata"]["session"]["checkpoint_context_refresh"]
-                    assert provenance["checkpoint_sha256"] == digest
-                    assert provenance["source_session_id"] == admitted["session_id"]
-                    assert provenance["session_id"] == active_session_id
                 assert (manual / "components/code").read_text() == "10"
                 verified_point = effect_runtime_result("runtime.checkpoint_artifacts", {
                     "action": "verify", "root": str(manual), "expected_sha256": captured["sha256"]})

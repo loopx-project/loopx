@@ -8,6 +8,10 @@ from pathlib import Path
 import pytest
 
 from loopx.cli import main
+from loopx.control_plane.goals.start_contract import (
+    build_goal_start_prompt,
+    goal_planner_contract,
+)
 from loopx.control_plane.goals.task_planning import build_task_planning_packet
 
 
@@ -138,6 +142,28 @@ def test_public_cli_returns_a_read_only_checkpoint_and_rejects_execution(bound_g
     packet = json.loads(output.getvalue())
     assert packet["read_only"] and packet["dry_run"]
     assert packet["runnable_todo_ids"] == []
+    quality = packet["planner"]["first_delivery_guidance"]
+    # Agent-consumed obligations must reach both public planning entrypoints;
+    # their presence is not a measurement of the resulting model quality.
+    for obligation in (
+        "strongest feasible approach",
+        "deliberately weak placeholder",
+        "quality, latency and full cost",
+        "existing acceptance, feedback and authority limits",
+    ):
+        assert obligation in quality
+    for fine_grained in (False, True):
+        assert goal_planner_contract(fine_grained=fine_grained)[
+            "first_delivery_guidance"
+        ] == quality
+        assert quality in build_goal_start_prompt(
+            goal_text=bound_goal["text"],
+            goal_id=bound_goal["goal_id"],
+            agent_id=bound_goal["agent_id"],
+            fine_grained=fine_grained,
+        )
+    assert packet["execution_handoff"]["spends_quota"] is False
+    assert packet["execution_handoff"]["requires_quota_guard"] is True
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         assert main(command + ["--execute"]) == 1

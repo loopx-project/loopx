@@ -8,6 +8,12 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+from .control_plane.projection_envelope_facts import (
+	render_projection_envelope_markdown,
+	seal_projection_envelope,
+	source_fact,
+)
+
 class _CollectStatus(Protocol):
 	def __call__(
 		self,
@@ -16,6 +22,15 @@ class _CollectStatus(Protocol):
 		runtime_root_override: str | None,
 		scan_roots: list[Path],
 		limit: int,
+	) -> dict[str, Any]: ...
+
+
+class _ReadHostPollReceiptObservation(Protocol):
+	def __call__(
+		self,
+		path: Path | None,
+		*,
+		expected_goal_id: str | None = None,
 	) -> dict[str, Any]: ...
 
 
@@ -63,11 +78,11 @@ receipt_path_for_goal = cast(
 		"receipt_path_for_goal",
 	),
 )
-read_host_poll_receipt = cast(
-	Callable[[Path | None], dict[str, Any] | None],
+read_host_poll_receipt_observation = cast(
+	_ReadHostPollReceiptObservation,
 	getattr(
 		import_module("loopx.control_plane.quota.host_poll_receipts"),
-		"read_host_poll_receipt",
+		"read_host_poll_receipt_observation",
 	),
 )
 stale_host_poll_risk = cast(
@@ -157,8 +172,10 @@ def build_global_risks_error(
 	*,
 	time_range: str = "24h",
 	error_code: str = "global_risks_unavailable",
+	status_payload: dict[str, Any] | None = None,
+	status_read_at: str | None = None,
 ) -> dict[str, Any]:
-	return {
+	payload = {
 		"ok": False,
 		"schema_version": SCHEMA_VERSION,
 		"generated_at": now_utc_iso(),
@@ -170,6 +187,23 @@ def build_global_risks_error(
 		],
 		"boundary": public_safe_boundary(),
 	}
+	try:
+		payload["projection_envelope"] = _risks_envelope(
+			status_payload or {},
+			status_read_at=status_read_at,
+			host_poll_status="not_read",
+			host_poll_read_at=None,
+			host_poll_receipt_count=None,
+			host_poll_unreadable_count=0,
+			host_poll_unreadable_goal_refs=[],
+			source_rows_omitted=0,
+			shown_count=0,
+			available_count=0,
+			agent_id=None,
+		)
+	except Exception:
+		pass
+	return payload
 
 
 def _warning(
@@ -390,14 +424,14 @@ def _collect_stale_host_poll_risks(
 	registry_path: Path,
 	scan_limit: int,
 	warnings: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], str, int | None, int, int, list[str]]:
 	"""Scan project-local host poll receipts for loops that died mid-wait."""
 
 	risks: list[dict[str, Any]] = []
 	try:
 		registry_payload = load_registry(registry_path)
 	except FileNotFoundError:
-		return risks
+		return risks, "missing", None, 0, 0, []
 	except (OSError, ValueError) as exc:
 		warnings.append(
 			_warning(
@@ -406,13 +440,15 @@ def _collect_stale_host_poll_risks(
 				detail=str(exc)[:200],
 			)
 		)
-		return risks
+		return risks, "unreadable", None, 0, 1, []
 	goals = registry_payload.get("goals") if isinstance(registry_payload, dict) else None
 	if not isinstance(goals, list):
-		return risks
-	for source_index, goal in enumerate(goals):
-		if len(risks) >= scan_limit:
-			break
+		return risks, "unreadable", None, 0, 1, []
+	receipt_count = 0
+	unreadable_count = 0
+	unreadable_goal_refs: list[str] = []
+	inspected_goals = goals[:scan_limit]
+	for source_index, goal in enumerate(inspected_goals):
 		if not isinstance(goal, dict) or not goal.get("id"):
 			continue
 		state_path = resolve_goal_local_path(
@@ -421,9 +457,26 @@ def _collect_stale_host_poll_risks(
 			fallback_base=registry_path.parent,
 		)
 		receipt_path = receipt_path_for_goal(goal, state_path)
-		receipt = read_host_poll_receipt(receipt_path)
-		if receipt is None:
+		observation = read_host_poll_receipt_observation(
+			receipt_path,
+			expected_goal_id=str(goal.get("id") or ""),
+		)
+		read_status = observation.get("read_status")
+		if read_status == "missing":
 			continue
+		goal_ref = _redact_text(str(goal.get("id") or ""), limit=120)
+		if read_status != "read":
+			unreadable_count += 1
+			if goal_ref and len(unreadable_goal_refs) < 8:
+				unreadable_goal_refs.append(goal_ref)
+			continue
+		receipt = observation.get("receipt")
+		if not isinstance(receipt, dict):
+			unreadable_count += 1
+			if goal_ref and len(unreadable_goal_refs) < 8:
+				unreadable_goal_refs.append(goal_ref)
+			continue
+		receipt_count += 1
 		raw_risk = stale_host_poll_risk(receipt)
 		if raw_risk is None:
 			continue
@@ -460,7 +513,14 @@ def _collect_stale_host_poll_risks(
 				"requires_user_approval": True,
 			}
 		)
-	return risks
+	return (
+		risks,
+		"read",
+		receipt_count,
+		max(0, len(goals) - len(inspected_goals)),
+		unreadable_count,
+		unreadable_goal_refs,
+	)
 
 
 def _normalize_stale_warning(
@@ -688,15 +748,172 @@ def _groups(risks: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
 	}
 
 
+def _risks_envelope(
+	status_payload: dict[str, Any],
+	*,
+	status_read_at: str | None,
+	host_poll_status: str,
+	host_poll_read_at: str | None,
+	host_poll_receipt_count: int | None,
+	host_poll_unreadable_count: int,
+	host_poll_unreadable_goal_refs: list[str],
+	source_rows_omitted: int,
+	host_poll_goals_omitted: int = 0,
+	shown_count: int,
+	available_count: int,
+	agent_id: str | None,
+) -> dict[str, Any]:
+	global_registry = as_dict(status_payload.get("global_registry"))
+	status_envelope = as_dict(status_payload.get("projection_envelope"))
+	global_source = next(
+		(
+			row
+			for row in as_list(status_envelope.get("sources"))
+			if isinstance(row, dict) and row.get("source_id") == "global_registry"
+		),
+		{},
+	)
+	available = global_registry.get("available") is True
+	count = global_registry.get("global_goal_count")
+	expected = (
+		count
+		if available and isinstance(count, int) and not isinstance(count, bool)
+		else None
+	)
+	excluded = (
+		int(global_registry.get("current_registry_excluded_goal_count") or 0)
+		if available
+		else 0
+	)
+	omitted = []
+	if excluded:
+		omitted.append(
+			{
+				"reason": "outside_current_registry",
+				"count": excluded,
+				"refs": [
+					str(ref)
+					for ref in as_list(
+						global_registry.get("current_registry_excluded_goal_ids")
+					)[:8]
+				],
+			}
+		)
+	if source_rows_omitted:
+		omitted.append(
+			{"reason": "source_rows_not_scanned", "count": source_rows_omitted}
+		)
+	if host_poll_goals_omitted:
+		omitted.append(
+			{
+				"reason": "host_poll_goals_not_scanned",
+				"count": host_poll_goals_omitted,
+			}
+		)
+	if host_poll_unreadable_count:
+		omitted.append(
+			{
+				"reason": "host_poll_receipts_unreadable",
+				"count": host_poll_unreadable_count,
+				"refs": host_poll_unreadable_goal_refs[:8],
+			}
+		)
+	if status_payload and status_payload.get("ok") is not True:
+		omitted.append({"reason": "status_unavailable", "count": 1})
+	contract = as_dict(status_payload.get("contract"))
+	queue = as_dict(status_payload.get("attention_queue"))
+	history = as_dict(status_payload.get("run_history"))
+	contract_read = isinstance(status_payload.get("contract"), dict) and isinstance(
+		contract.get("error_diagnostics", []), list
+	)
+	queue_read = isinstance(status_payload.get("attention_queue"), dict) and isinstance(
+		queue.get("items", []), list
+	)
+	sources = [
+		source_fact(
+			"global_registry",
+			read_status=(
+				str(global_source.get("read_status") or "read")
+				if available
+				else str(
+					global_registry.get("read_status")
+					or ("missing" if status_read_at else "not_read")
+				)
+			),
+			last_read_at=global_source.get("last_read_at")
+			or (status_read_at if available else None),
+			item_count=expected,
+		),
+		source_fact(
+			"status_contract",
+			read_status="read" if contract_read else "not_read",
+			last_read_at=status_read_at if contract_read else None,
+			item_count=(
+				len(as_list(contract.get("error_diagnostics")))
+				if contract_read
+				else None
+			),
+		),
+		source_fact(
+			"attention_queue",
+			read_status="read" if queue_read else "not_read",
+			last_read_at=status_read_at if queue_read else None,
+			item_count=len(as_list(queue.get("items"))) if queue_read else None,
+		),
+		source_fact(
+			"host_poll_receipts",
+			read_status=host_poll_status,
+			last_read_at=host_poll_read_at,
+			item_count=host_poll_receipt_count,
+			unreadable_count=host_poll_unreadable_count,
+		),
+		*(
+			[]
+			if status_envelope
+			else [source_fact("status", read_status="not_read")]
+		),
+	]
+	if agent_id:
+		history_read = isinstance(history.get("goals"), list)
+		sources.append(
+			source_fact(
+				"agent_scope",
+				read_status="read" if history_read else "not_read",
+				last_read_at=status_read_at if history_read else None,
+				item_count=len(as_list(history.get("goals"))) if history else None,
+			)
+		)
+	return seal_projection_envelope(
+		projection="global_risks",
+		observed_at=now_utc_iso(),
+		sources=sources,
+		coverage={
+			"scope": "global",
+			"expected_count": expected,
+			"included_count": (
+				max(0, expected - excluded) if expected is not None else 0
+			),
+			"omitted": omitted,
+			"shown_count": shown_count,
+			"available_count": available_count,
+		},
+		upstream=[status_envelope] if status_envelope else [],
+	)
+
+
 def _malformed_projection_error(
 	error: object,
 	*,
 	time_range: str,
+	status_payload: dict[str, Any] | None = None,
+	status_read_at: str | None = None,
 ) -> dict[str, Any]:
 	return build_global_risks_error(
 		error,
 		time_range=time_range,
 		error_code="malformed_status_projection",
+		status_payload=status_payload,
+		status_read_at=status_read_at,
 	)
 
 
@@ -731,6 +948,7 @@ def build_global_risks(
 			time_range=normalized_time_range,
 		)
 	status_payload: dict[str, Any] = status_result
+	status_read_at = now_utc_iso()
 	try:
 		contract = _required_container(status_payload, "contract")
 		global_registry = _required_container(status_payload, "global_registry")
@@ -739,7 +957,12 @@ def build_global_risks(
 		findings = _optional_source_list(global_registry, "findings")
 		items = _optional_source_list(attention_queue, "items")
 	except ValueError as exc:
-		return _malformed_projection_error(exc, time_range=normalized_time_range)
+		return _malformed_projection_error(
+			exc,
+			time_range=normalized_time_range,
+			status_payload=status_payload,
+			status_read_at=status_read_at,
+		)
 
 	warnings: list[dict[str, Any]] = []
 	risks: list[dict[str, Any]] = []
@@ -800,12 +1023,21 @@ def build_global_risks(
 			)
 		)
 
-	host_poll_risks = _collect_stale_host_poll_risks(
+	(
+		host_poll_risks,
+		host_poll_status,
+		host_poll_receipt_count,
+		host_poll_goals_omitted,
+		host_poll_unreadable_count,
+		host_poll_unreadable_goal_refs,
+	) = _collect_stale_host_poll_risks(
 		registry_path=registry_path,
 		scan_limit=scan_limit,
 		warnings=warnings,
 	)
+	host_poll_read_at = now_utc_iso() if host_poll_status == "read" else None
 	risks.extend(host_poll_risks)
+	source_rows_truncated = source_rows_truncated or host_poll_goals_omitted > 0
 
 	try:
 		risks, history_truncated = _filter_for_agent(
@@ -820,6 +1052,8 @@ def build_global_risks(
 			exc,
 			time_range=normalized_time_range,
 			error_code="agent_scope_unavailable",
+			status_payload=status_payload,
+			status_read_at=status_read_at,
 		)
 	source_rows_truncated = source_rows_truncated or history_truncated
 
@@ -859,6 +1093,28 @@ def build_global_risks(
 		"risks": retained,
 		"source_warnings": warnings[:SOURCE_WARNING_LIMIT],
 		"source_warnings_truncated": warning_count > SOURCE_WARNING_LIMIT,
+		"projection_envelope": _risks_envelope(
+			status_payload,
+			status_read_at=status_read_at,
+			host_poll_status=host_poll_status,
+			host_poll_read_at=host_poll_read_at,
+			host_poll_receipt_count=host_poll_receipt_count,
+			host_poll_unreadable_count=host_poll_unreadable_count,
+			host_poll_unreadable_goal_refs=host_poll_unreadable_goal_refs,
+			source_rows_omitted=sum(
+				max(
+					0,
+					int(warning.get("available_count") or 0)
+					- int(warning.get("inspected_count") or 0),
+				)
+				for warning in warnings
+				if warning.get("reason_code") == "source_rows_truncated"
+			),
+			host_poll_goals_omitted=host_poll_goals_omitted,
+			shown_count=returned_risk_count,
+			available_count=matched_risk_count,
+			agent_id=agent_id,
+		),
 		"omissions": [dict(_ROLLBACK_OMISSION)],
 		"boundary": public_safe_boundary(),
 	}
@@ -911,6 +1167,7 @@ def render_global_risks_markdown(payload: dict[str, Any]) -> str:
 			"- ok: `False`",
 			f"- error_code: `{_redact_text(payload.get('error_code'), limit=120)}`",
 			f"- error: {_redact_text(payload.get('error'))}",
+			*render_projection_envelope_markdown(payload.get("projection_envelope")),
 		]
 		omissions = [
 			_redact_text(item)
@@ -932,6 +1189,7 @@ def render_global_risks_markdown(payload: dict[str, Any]) -> str:
 		f"- matched: `{summary.get('matched_risk_count')}`",
 		f"- returned: `{summary.get('returned_risk_count')}`",
 		f"- truncated: `{bool(summary.get('truncated'))}`",
+		*render_projection_envelope_markdown(payload.get("projection_envelope")),
 		"",
 		(
 			"No current accepted source proves a rollback candidate; "

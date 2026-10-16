@@ -58,6 +58,8 @@ test("goal-value questions are enabled review input, not persisted decisions or 
   assert.deepEqual(Object.keys(contract.decision_value_review as object),
     ["work_slice", "route_distance", "validation_scope"]);
   const validation = (contract.decision_value_review as Record<string, string>).validation_scope;
+  const work = (contract.decision_value_review as Record<string, string>).work_slice;
+  const route = (contract.decision_value_review as Record<string, string>).route_distance;
   // These clauses are Agent-consumed behavior, not machine classification of
   // a failed check. Keep both decision value and the authority boundary visible.
   assert.match(validation, /identify its source and protected goal/);
@@ -69,6 +71,13 @@ test("goal-value questions are enabled review input, not persisted decisions or 
   assert.match(validation, /readiness for an authorized informative evaluation/);
   assert.match(validation, /evidence sufficient to replace the incumbent/);
   assert.match(validation, /budget, feedback and permission limits/);
+  assert.match(work, /first deliverable.*later gain/);
+  assert.match(work, /recovering an avoidable initial quality deficit/);
+  assert.match(route, /retained best artifact/);
+  assert.match(route, /subsequent work actually implements/);
+  assert.match(validation, /artifact version, input conditions/);
+  assert.match(validation, /feedback became available/);
+  assert.match(validation, /not proof of restoration or continued execution/);
   // All existing legal choices remain valid without answering a new field.
   for (const action of ["grow", "switch", "verify"]) {
     const decision = normalizeStrideDecision({...proposal, action})[0]!;

@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import time
 from pathlib import Path, PurePosixPath
@@ -134,7 +135,7 @@ def _handoff(env, payload):
 
 
 
-def _context_session(env, metadata):
+def _context_session(env, metadata, timeout=30):
     """Read the admitted native branch before publishing captured Todo context."""
     from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
     from loopx.hosts.codex_checkpoint import native_session_checkpoint
@@ -144,7 +145,7 @@ def _context_session(env, metadata):
     if (not wake.session_id or wake.session_id == native["session_id"] or
             wake.digest != metadata.get("session", {}).get("session_profile_digest")):
         raise ValueError("context adoption requires the admitted destination session profile")
-    observed = native_session_checkpoint(env, wake.session_id, timeout=30,
+    observed = native_session_checkpoint(env, wake.session_id, timeout=timeout,
         interrupted_guard=native.get("interrupted_guard"))["metadata"]
     cursor_key = "interrupted_turn_id" if native.get("interrupted_guard") is not None else "completed_turn_id"
     for key in ("visible_history_sha256", "turn_ids", cursor_key, "host_version", "config_sha256"):
@@ -155,7 +156,7 @@ def _context_session(env, metadata):
 
 def adopt_todo_context(env: dict[str, str], unit: Path, digest: str, *, source_todo_id: str,
                        todo_id: str, operation_id: str, expected_revision: str,
-                       lease_key: str, lease_version: int) -> dict:
+                       lease_key: str, lease_version: int, deadline: float | None = None) -> dict:
     """Adopt retained context using the destination's current claim and lease.
 
     No Todo is created, completed or transferred, and no historical authority,
@@ -163,14 +164,36 @@ def adopt_todo_context(env: dict[str, str], unit: Path, digest: str, *, source_t
     without operational observation grants. Prepare/adopt each use stable original
     operation identities. A failed/uncertain call must be read back through that
     same owner; this adapter never guesses a new identity or starts model work.
+    Complete artifact/native reads allow up to 90 seconds each, bounded by the
+    caller's original deadline when supplied. This IO allowance grants no lease
+    extension and does not alter the typed continuation owner.
     """
     from loopx.control_plane.turn_driver.codex_sessions import select_codex_cli_session
     from loopx.control_plane.todos.provider_projection import (
         settle_canonical_todo_projection, projection_delivery_requires_ack,
     )
 
-    effect_runtime_result("runtime.checkpoint_artifacts", {
-        "action": "verify", "root": str(unit), "expected_sha256": digest})
+    if deadline is not None and (isinstance(deadline, bool) or not isinstance(deadline, (int, float))
+                                 or not math.isfinite(deadline)):
+        raise ValueError("context adoption requires a finite original deadline")
+
+    def read_timeout():
+        remaining = 90 if deadline is None else deadline - time.time()
+        if remaining <= 0:
+            raise TimeoutError("original context adoption deadline expired; inspect the original operation")
+        return min(90, remaining)
+
+    def verify_artifact():
+        effect_runtime_result("runtime.checkpoint_artifacts", {
+            "action": "verify", "root": str(unit), "expected_sha256": digest}, timeout=read_timeout())
+        read_timeout()  # A late successful read cannot authorize the next write.
+
+    def read_session():
+        session = _context_session(env, metadata, read_timeout())
+        read_timeout()
+        return session
+
+    verify_artifact()
     metadata = json.loads((unit / "checkpoint.json").read_bytes())["point_metadata"]
     if not all(isinstance(metadata.get(key), dict) for key in ("loopx_state", "native_session", "research_context")):
         raise ValueError("checkpoint lacks its canonical Todo or native session context participant")
@@ -209,7 +232,7 @@ def adopt_todo_context(env: dict[str, str], unit: Path, digest: str, *, source_t
     knowledge = rebase_explore_knowledge_events(evidence.get("explore_events", []),
         source_goal_id=source["goal_id"], destination_goal_id=env["LOOPX_GOAL_ID"],
         source_ref="checkpoint:" + digest)
-    session_id = _context_session(env, metadata)
+    session_id = read_session()
     bound = select_codex_cli_session(Path(env["LOOPX_RUNTIME_ROOT"]), lineage={
         "goal_id": env["LOOPX_GOAL_ID"], "agent_id": env["LOOPX_AGENT_ID"]}, session_scope="agent")
     if bound is None or bound["session_id"] != session_id:
@@ -227,7 +250,7 @@ def adopt_todo_context(env: dict[str, str], unit: Path, digest: str, *, source_t
     if (inspect["claimed_by"] != env["LOOPX_AGENT_ID"] or
             inspect.get("execution_authority", {}).get("allowed") is not True):
         raise ValueError("destination context revision, owner or execution authority changed")
-    destination = canonical_context(env, deadline=time.time() + 30)["snapshot"]
+    destination = canonical_context(env, deadline=time.time() + min(30, read_timeout()))["snapshot"]
     current = next((row for row in destination["todos"] if row["todo_id"] == todo_id), None)
     if destination["provider_revision"] != inspect["provider_revision"] or current is None:
         raise ValueError("destination canonical context moved before preparation")
@@ -240,6 +263,7 @@ def adopt_todo_context(env: dict[str, str], unit: Path, digest: str, *, source_t
     # current note. Changed operation/context/proof must still fail there.
     # Keep the complete source read in a workspace-relative private artifact.
     # Never overwrite a moved artifact on an operation retry.
+    read_timeout()
     relative = Path(".local/checkpoint-context") / (digest + ".json")
     target = workspace / relative
     for directory in (workspace / ".local", target.parent):
@@ -259,8 +283,7 @@ def adopt_todo_context(env: dict[str, str], unit: Path, digest: str, *, source_t
             raise ValueError("destination context artifact already differs")
     if target.read_bytes() != raw:
         raise ValueError("destination context artifact readback differs")
-    effect_runtime_result("runtime.checkpoint_artifacts", {
-        "action": "verify", "root": str(unit), "expected_sha256": digest})
+    verify_artifact()
     # Keep old context-only request bytes stable for original receipt recovery
     # across an adapter upgrade. New history is disclosed only when captured.
     history_guidance = (" Read its research_evidence for prior branches, negative results and vision/stride decisions."
@@ -271,22 +294,24 @@ def adopt_todo_context(env: dict[str, str], unit: Path, digest: str, *, source_t
                         "source-revision:" + declared["provider_revision"]],
         "files_touched": [{"path": relative.as_posix(), "action": "read",
                            "summary": "Complete captured canonical Todo population, including retained notes and rejected approaches."}]}
+    read_timeout()
     prepared = _handoff(env, {**common, "action": "prepare", "session_id": metadata["native_session"]["session_id"],
         "operation_id": operation_id + "-prepare", "expected_provider_revision": expected_revision, "context": note})
     if select_codex_cli_session(Path(env["LOOPX_RUNTIME_ROOT"]), lineage={
             "goal_id": env["LOOPX_GOAL_ID"], "agent_id": env["LOOPX_AGENT_ID"]}, session_scope="agent") != bound:
         raise ValueError("destination session changed; inspect the original prepared context")
-    if _context_session(env, metadata) != session_id:
+    if read_session() != session_id:
         raise ValueError("destination native branch changed; inspect the original prepared context")
     # Preserve the original prepare commit revision. The outer readback may
     # already include adoption if its response was lost; using that newer head
     # would change the adopt request hash and defeat original-receipt recovery.
+    read_timeout()
     adopted = _handoff(env, {**common, "action": "adopt", "artifacts": [relative.as_posix()],
         "operation_id": operation_id + "-adopt", "expected_provider_revision": prepared["result"]["provider_revision"]})
-    effect_runtime_result("runtime.checkpoint_artifacts", {
-        "action": "verify", "root": str(unit), "expected_sha256": digest})
+    verify_artifact()
     if target.read_bytes() != raw:
         raise ValueError("adopted context artifact changed; inspect the original continuation receipt")
+    read_timeout()
     result = settle_canonical_todo_projection(adopted, registry_path=Path(env["LOOPX_REGISTRY"]),
         runtime_root=Path(env["LOOPX_RUNTIME_ROOT"]), goal_id=env["LOOPX_GOAL_ID"])
     if result.get("ok") is not True or not projection_delivery_requires_ack(result["projection_delivery"]):
@@ -300,9 +325,11 @@ def adopt_todo_context(env: dict[str, str], unit: Path, digest: str, *, source_t
         if (current_owner["claimed_by"] != env["LOOPX_AGENT_ID"] or
                 current_owner.get("execution_authority", {}).get("allowed") is not True):
             raise ValueError("destination knowledge adoption lost current execution authority")
+        read_timeout()
         knowledge_result = append_explore_result_events(
             explore_result_log_path(Path(env["LOOPX_RUNTIME_ROOT"]), env["LOOPX_GOAL_ID"]),
             knowledge, expected_goal_id=env["LOOPX_GOAL_ID"], require_ordered_prefix=True)
+    read_timeout()
     return {"context_adopted": True, "session_id": bound["session_id"], "todo_id": todo_id,
         "artifact": str(target), "context_sha256": declared["sha256"],
         **({"explore_knowledge": knowledge_result} if knowledge_result is not None else {}),

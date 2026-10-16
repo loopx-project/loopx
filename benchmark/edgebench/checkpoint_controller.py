@@ -6,6 +6,7 @@ owner seals and verifies the bank bytes. Nothing here belongs in a solver payloa
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import fcntl
 import hashlib
 import json
@@ -16,6 +17,7 @@ import shutil
 import stat
 import tempfile
 import time
+from time import monotonic, sleep
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
@@ -238,6 +240,36 @@ def capture(controller_file: Path, *, token: str, capture_id: str, destination: 
     return {**result, "native_reference": reference}
 
 
+@contextmanager
+def _bank_import_lock(target: Path, timeout: float):
+    """Serialize publication of one provider bank member, never run admission.
+
+    Keep the lock inode: unlinking it would let a third importer bypass a waiter.
+    Staging stays outside the lock; partial destinations still fail verification.
+    """
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("Native bank import timeout must be finite and positive")
+    lock = target.with_name(".loopx-import-" + target.name + ".lock")
+    descriptor = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_nlink != 1:
+            raise ValueError("Native bank import lock must be an owner-only regular file")
+        deadline = monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Native bank import is busy; inspect the original attempt before retry")
+                sleep(min(.02, remaining))
+        yield
+    finally:
+        os.close(descriptor)
+
+
 def restore(controller_file: Path, *, root: Path, expected_sha256: str, run_id: str,
             timeout: float = 30, phase_deadline_file: Path | None = None, recover: bool = False,
             phase_extension_seconds: int = 0) -> dict:
@@ -307,22 +339,23 @@ def restore(controller_file: Path, *, root: Path, expected_sha256: str, run_id: 
             }, retry_safe=False)
             imported = stage / "unit/components/native_judge"
             _bound_bank(imported, reference)
-            if target.exists():
-                _bound_bank(_physical(target), reference)  # No overwrite, even on retry.
-            else:
-                # POSIX rename can replace an empty destination. Reserve its name
-                # exclusively; interruption leaves an unusable point, never grants.
-                target.mkdir(mode=0o700)
-                try:
-                    imported.rename(target)
-                except BaseException:
-                    target.rmdir()
-                    raise
-                descriptor = os.open(bank, os.O_RDONLY | os.O_DIRECTORY)
-                try:
-                    os.fsync(descriptor)
-                finally:
-                    os.close(descriptor)
+            with _bank_import_lock(target, timeout):
+                if target.exists():
+                    _bound_bank(_physical(target), reference)  # No overwrite, even on retry.
+                else:
+                    # POSIX rename can replace an empty destination. Reserve its name
+                    # exclusively; interruption leaves an unusable point, never grants.
+                    target.mkdir(mode=0o700)
+                    try:
+                        imported.rename(target)
+                    except BaseException:
+                        target.rmdir()
+                        raise
+                    descriptor = os.open(bank, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        os.fsync(descriptor)
+                    finally:
+                        os.close(descriptor)
         body = {"checkpoint_id": reference["checkpoint_id"],
                 "manifest_sha256": reference["manifest_sha256"], "run_id": run_id}
         phase_epoch = None

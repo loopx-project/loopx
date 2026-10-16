@@ -130,8 +130,9 @@ class CodexAgentSession:
             ))
         self.receipt["session"]["session_id"] = observed
 
-    def prepare_checkpoint_refresh(self, review_basis: dict, attempt: Path, stdout: Path) -> None:
-        """Start once after a qualified current review; recover observed results.
+    def prepare_checkpoint_refresh(self, review_basis: dict | None, attempt: Path, stdout: Path,
+                                   *, pre_replan_basis: dict | None = None) -> None:
+        """Start once from a qualified checkpoint boundary; recover observed results.
 
         An uncertain launch without a native identity remains unresolved. Never
         dispatch another fresh conversation merely because its reply was lost.
@@ -144,8 +145,12 @@ class CodexAgentSession:
             raise ValueError("checkpoint context refresh requires physical absolute attempt/output paths")
         if not self.binding or not self.binding.get("checkpoint_artifact_root"):
             raise ValueError("checkpoint context refresh requires a source-bound conversation")
+        if (review_basis is None) == (pre_replan_basis is None):
+            raise ValueError("checkpoint refresh requires exactly one qualified boundary basis")
         refresh = {"checkpoint_sha256": self.binding["checkpoint_artifact_sha256"],
-            "source_session_id": self.binding["session_id"], "review_basis": review_basis}
+            "source_session_id": self.binding["session_id"],
+            **({"review_basis": review_basis} if review_basis is not None else
+               {"pre_replan_basis": pre_replan_basis})}
         basis = {"binding": self.binding, "refresh": refresh}
         with exclusive_file_lock(attempt):
             if attempt.exists():

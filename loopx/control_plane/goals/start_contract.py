@@ -4,6 +4,18 @@ from typing import Any
 
 GOAL_START_SCHEMA_VERSION = "loopx_goal_start_command_v0"
 
+# Shared Agent guidance, not a quality classifier or an admission gate.
+_FIRST_DELIVERY_GUIDANCE = (
+    "Use the strongest feasible approach supported by current knowledge for the "
+    "first deliverable, including its necessary implementation and validation as "
+    "a coherent slice. Do not choose a deliberately weak placeholder merely to "
+    "obtain earlier feedback or declare progress. Compare first-result quality, "
+    "latency and full cost; neither immediate feedback nor indefinite preparation "
+    "is the objective. Useful diagnostic probes remain allowed under the existing "
+    "acceptance, feedback and authority limits; identify their purpose and do not "
+    "substitute them for the requested deliverable."
+)
+
 
 def goal_planner_contract(*, fine_grained: bool = False) -> dict[str, Any]:
     planner = {
@@ -39,6 +51,7 @@ def goal_planner_contract(*, fine_grained: bool = False) -> dict[str, Any]:
         "required_fields": ["priority", "text", "task_class", "action_kind"],
         "public_safe_only": True,
         "budget_policy": "minimum sufficient plan; no fixed-count filler",
+        "first_delivery_guidance": _FIRST_DELIVERY_GUIDANCE,
     }
     if fine_grained:
         planner["fine_grained_plan_horizon"] = (
@@ -208,7 +221,7 @@ Goal id: {goal_id}.{agent_clause}
 Rules:
 1. Identity: use verified binding/active contract; a stable unbound host gets a fresh public-safe agent. Existing lanes require explicit takeover plus bind/readback before Todo; never infer peers from Todo/worktree/arguments. Unknown host: `loopx agent-onboard --list-agent-types`.
 2. Capability: only `selected_capability_route`; run entry/admission and its later `capability show`; never infer from text/URLs. Capability state owns facts; generic Todos schedule.
-3. Todos: {todo_rule}.
+3. Todos: {todo_rule}. {_FIRST_DELIVERY_GUIDANCE}
 4. Writeback: current Todo evidence + next executable Todo, then `loopx refresh-state --goal-id {goal_id}` and quota readback. Chat/model summaries are not durable state.
 5. Host loop: after Todo write, activate missing/unknown/stale/type-changed Codex App heartbeat automation, CLI/TraeX `/goal`, Claude `/loop`, OpenCode bridge, Ark one-shot, or custom gate. Else surface the exact pasteable gate; never claim autonomy.
 6. Run the returned typed `quota_guard`; finish one bounded segment with validation + LoopX writeback or an exact blocker. Setup/planning/claim is not delivery.
