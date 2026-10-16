@@ -217,6 +217,33 @@ source owner 的见证契约。私有 `execution.configuration_capture` 记录�
 区间与匹配成员 revision，包括外部 registry 和存在的 machine 配置；它不证明
 与 authority、effect 等其他 owner 的跨源同时刻，也不代表 M2 `online` 合格。
 
+Full-backup discovery also retains declared local `authority_sources` entries
+with `kind=goal_doc`, including documents outside conventional state directories.
+The existing material resolver confines reads to the selected Goal's repository,
+state and runtime roots; a missing or out-of-scope document is reported in the
+private missing-source inventory. A directory is not treated as a document.
+Global discovery uses the actual source-owned Goal declarations, not the cached
+shared row. Hash-only registrations and links inside document text are not
+permission to discover more files.
+
+For a registered Goal, discovery also retains existing registration, recreation
+and Turn-settlement directories beside its actual registry. The same lifetime
+path helpers are used by their existing writers. Discovery scopes these paths
+by Goal identity, does not sweep the sibling lifetime root or initialize absent
+state, and does not resume any restored journal. Full archives can consequently
+contain additional private source bytes; the migration-only backup is unchanged.
+These are raw, individually witnessed historical files. They establish neither
+an owner export, a consistent capture profile nor permission to reactivate.
+
+中文：完整备份新增保留已声明的本地 `kind=goal_doc` 文档，以及实际 registry
+旁按 Goal 身份定位的注册、重建和 Turn-settlement 目录。文档沿用既有材料解析器
+的 repo/state/runtime 读取边界；缺失或越界文档进入私有 missing 清单，目录不被
+当作文档。全局发现使用真实 source-owned Goal，不采用共享缓存行的材料声明；
+不会从哈希引用或正文链接继续抓取。生命周期目录复用实际 writer 的路径 owner，
+不扫描整个相邻目录，不创建不存在的状态，也不执行恢复日志。因此完整归档可能
+包含更多私有原始字节；有界 migration 备份不变。这些仍是各自见证的历史文件，
+不证明 owner export、一致性 profile 或再激活权限。
+
 ## Full-state recovery after cold import
 
 Keep the reviewed pre-import backup as well as a new full-state backup after

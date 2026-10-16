@@ -18,6 +18,12 @@ from . import __version__
 from .paths import _is_redirected_path, select_default_runtime_root
 from .presentation.markdown import markdown_scalar
 from .registry import registry_goals
+from .materials import resolve_review_material_path
+from .control_plane.goals.source_session_registry_state import (
+    recreation_journal_directory,
+    registration_journal_directory,
+    turn_settlement_directory,
+)
 from .control_plane.effect_runtime import effect_runtime_result
 from .control_plane.projects.registry_codec import load_registry
 from .control_plane.runtime.document_io import fsync_state_directory
@@ -200,6 +206,8 @@ def _discover_targets(
                 raise ValueError("backup discovery requires unique Goal ids")
             goal_runtime_roots[goal_id] = None
             source_registry: Path | None = None
+            source_context_available = True
+            goal_runtime_root = runtime_root
             if include_registry_projects:
                 try:
                     # Reuse the same source route as configuration capture. A
@@ -217,6 +225,7 @@ def _discover_targets(
                     if source_registry is not None:
                         source_registry = source
                     source_runtime = Path(route["source_runtime_root"])
+                    goal_runtime_root = source_runtime
                     if source_runtime != runtime_root and not source_payload.get("common_runtime_root"):
                         raise ValueError("external source runtime is undeclared; refusing implicit host-wide discovery")
                     runtime_segment = hashlib.sha256(str(source_runtime).encode()).hexdigest()
@@ -224,6 +233,7 @@ def _discover_targets(
                         f"registry_runtime:{goal_id}", source_runtime, f"source-runtimes/{runtime_segment}",
                     )
                 except (OSError, ValueError) as exc:
+                    source_context_available = False
                     missing.append({"key": f"registry_runtime:{goal_id}", "source_path": "",
                                     "reason": f"source runtime route unavailable: {exc}"})
                     warnings.append(f"could not capture source runtime for {goal_id}: {exc}")
@@ -309,6 +319,47 @@ def _discover_targets(
                         "reason": "registry goal has no state_file",
                     }
                 )
+
+            # These are declared local Goal inputs, not recursively followed
+            # Markdown links or hash-only material registrations. The existing
+            # material owner retains its repo/state/runtime permission boundary.
+            declarations = goal.get("authority_sources")
+            for index, declaration in enumerate(
+                declarations if source_context_available and isinstance(declarations, list) else []
+            ):
+                if not isinstance(declaration, dict) or declaration.get("kind") != "goal_doc":
+                    continue
+                key = f"registry_goal_document:{goal_id}:{index}"
+                try:
+                    document = resolve_review_material_path(
+                        goal=goal, raw_path=str(declaration.get("path") or ""),
+                        runtime_root=goal_runtime_root, repo_relative=True,
+                    )
+                    if document.exists() and not document.is_file():
+                        raise ValueError("registered Goal document is not a regular file")
+                except (OSError, ValueError) as exc:
+                    missing.append({"key": key, "source_path": "",
+                                    "reason": f"registered Goal document unavailable: {exc}"})
+                    continue
+                add(key, document, f"registry-goals/{goal_segment}/documents/{index}.md")
+
+            # A source registry file does not contain its adjacent lifetime
+            # journals. Reuse the actual owners' Goal-scoped paths; never sweep
+            # the sibling root, copy another Goal, or initialize absent state.
+            lifetime_registry = (
+                source_registry if include_registry_projects and source_registry is not None
+                else discovery_registry
+            )
+            journal_directories = (
+                registration_journal_directory(lifetime_registry, goal_id),
+                recreation_journal_directory(lifetime_registry, goal_id),
+                turn_settlement_directory(lifetime_registry, goal_id),
+            ) if source_context_available else ()
+            for journal_directory in journal_directories:
+                if journal_directory.exists() or journal_directory.is_symlink():
+                    family = journal_directory.parent.name
+                    add(f"registry_lifetime:{goal_id}:{family}", journal_directory,
+                        f"registry-goals/{goal_segment}/lifetime/{family}")
 
     codex_home = _codex_home()
     if include_automations:
