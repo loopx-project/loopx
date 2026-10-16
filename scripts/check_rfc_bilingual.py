@@ -1,4 +1,4 @@
-"""Require both existing RFC language mirrors in the same staged or PR diff."""
+"""Premerge check for both existing RFC language mirrors in the same PR diff."""
 
 from __future__ import annotations
 

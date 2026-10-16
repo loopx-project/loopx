@@ -1,19 +1,19 @@
 """Exercise the bilingual gate through real staged and committed Git diffs."""
 
 from pathlib import Path
+import json
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 
-import yaml
-
-SCRIPT = Path(__file__).with_name("rfc_bilingual.py")
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts/check_rfc_bilingual.py"
 ROOT = "docs/architecture/rfcs/"
 EN, ZH = ROOT + "alpha.md", ROOT + "alpha.zh-CN.md"
 
 
-class BilingualDiffTest(unittest.TestCase):
+class GitFixture(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -49,6 +49,8 @@ class BilingualDiffTest(unittest.TestCase):
     def branch_check(self):
         return self.check("--base", self.base, "--head", "HEAD")
 
+
+class BilingualDiffTest(GitFixture):
     def test_english_only_fails_with_the_exact_missing_path(self):
         self.write(EN)
         self.commit()
@@ -141,18 +143,109 @@ class BilingualDiffTest(unittest.TestCase):
         self.assertEqual(self.check("--staged", "--head", "HEAD").returncode, 2)
 
 
-class WorkflowPlacementTest(unittest.TestCase):
-    def test_every_pr_checks_pairing_before_document_exemptions(self):
-        workflow = SCRIPT.parents[2] / ".github/workflows/python-tests.yml"
-        steps = yaml.safe_load(workflow.read_text())["jobs"]["changes"]["steps"]
-        gate = next(i for i, s in enumerate(steps) if s.get("name") == "Require paired RFC language changes")
-        classify = next(i for i, s in enumerate(steps) if s.get("id") == "classify")
-        self.assertLess(gate, classify)
-        self.assertEqual(steps[gate]["if"], "github.event_name == 'pull_request'")
-        self.assertEqual(steps[gate]["env"]["BASE_SHA"], "${{ github.event.pull_request.base.sha }}")
-        self.assertEqual(steps[gate]["env"]["HEAD_SHA"], "${{ github.event.pull_request.head.sha }}")
-        self.assertIn('--base "$BASE_SHA" --head "$HEAD_SHA"', steps[gate]["run"])
-        self.assertEqual(steps[0]["with"]["fetch-depth"], 0)
+class PremergeTest(GitFixture):
+    def setUp(self):
+        super().setUp()
+        from loopx.canary.planner import DEFAULT_CATALOG_PATH
+
+        checker = self.repo / "scripts/check_rfc_bilingual.py"
+        checker.parent.mkdir()
+        shutil.copyfile(SCRIPT, checker)
+        examples = self.repo / "examples"
+        examples.mkdir()
+        (examples / "fixture-smoke.py").write_text("print('fixture')\n")
+        self.write("fixture.txt", "Synthetic premerge validation input\n")
+        catalog = self.repo / "docs/concepts/interaction-pattern-catalog.md"
+        catalog.parent.mkdir()
+        shutil.copyfile(DEFAULT_CATALOG_PATH, catalog)
+        self.commit()
+        self.base = self.git("rev-parse", "HEAD").strip()
+
+    def premerge_cli(self):
+        # This small repository supplies an explicit validation selector rather
+        # than claiming it contains LoopX's full semantic-canary source tree.
+        # RFC pairing must still inspect its complete real committed Git diff.
+        result = subprocess.run(
+            [sys.executable, "-m", "loopx.cli", "--format", "json", "canary", "premerge",
+             "--changed-file", "fixture.txt", "--git-diff-base", self.base,
+             "--tier", "quick", "--no-progress"],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertTrue(result.stdout, result.stderr)
+        return result, json.loads(result.stdout)
+
+    def test_real_premerge_cli_rejects_a_single_language_even_in_quick_tier(self):
+        self.write(EN)
+        self.commit()
+        result, payload = self.premerge_cli()
+        check = next(c for c in payload["direct_checks"] if c["id"] == "rfc_bilingual_diff")
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse(payload["gate"]["merge_gate_passed"])
+        self.assertEqual(check["status"], "failed")
+        self.assertIn(ZH, check["stderr_tail"])
+
+    def test_real_premerge_cli_accepts_a_committed_pair(self):
+        self.write(EN)
+        self.write(ZH)
+        self.commit()
+        result, payload = self.premerge_cli()
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertTrue(payload["gate"]["merge_gate_passed"])
+        check = next(c for c in payload["direct_checks"] if c["id"] == "rfc_bilingual_diff")
+        self.assertEqual(check["status"], "passed")
+
+    def test_omitted_change_selector_cannot_skip_the_direct_gate(self):
+        from loopx.canary.premerge import build_premerge_validation_gate
+
+        self.write(EN)
+        self.commit()
+        payload = build_premerge_validation_gate(
+            repo_root=self.repo, changed_files=[], base_ref=self.base, tier="quick", execute=True,
+        )
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["gate"]["merge_gate_passed"])
+        self.assertEqual(payload["gate"]["direct_failure_count"], 1)
+
+    def test_uncommitted_translation_does_not_satisfy_the_merge_gate(self):
+        self.write(EN)
+        self.commit()
+        self.write(ZH)
+        result, payload = self.premerge_cli()
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse(payload["gate"]["merge_gate_passed"])
+
+    def test_deleting_a_registered_checker_fails_instead_of_skipping(self):
+        (self.repo / "scripts/check_rfc_bilingual.py").unlink()
+        self.write(EN)
+        self.commit()
+        result, payload = self.premerge_cli()
+        self.assertEqual(result.returncode, 1)
+        check = next(c for c in payload["direct_checks"] if c["id"] == "rfc_bilingual_diff")
+        self.assertEqual(check["status"], "failed")
+
+    def test_preview_does_not_claim_a_passed_merge_gate(self):
+        from loopx.canary.premerge import build_premerge_validation_gate
+
+        payload = build_premerge_validation_gate(
+            repo_root=self.repo, changed_files=[EN], base_ref=self.base, tier="quick", execute=False,
+        )
+        check = next(c for c in payload["direct_checks"] if c["id"] == "rfc_bilingual_diff")
+        self.assertEqual(check["status"], "ready")
+        self.assertFalse(payload["gate"]["merge_gate_passed"])
+
+
+class UnregisteredRepositoryTest(GitFixture):
+    def test_other_repositories_retain_their_original_direct_checks(self):
+        from loopx.canary.premerge import build_premerge_validation_gate
+
+        payload = build_premerge_validation_gate(
+            repo_root=self.repo, changed_files=[], base_ref=self.base, tier="quick", execute=True,
+        )
+        self.assertEqual(
+            [c["id"] for c in payload["direct_checks"]],
+            ["diff_check_committed", "diff_check_staged", "diff_check_unstaged"],
+        )
+        self.assertTrue(payload["ok"])
 
 
 if __name__ == "__main__":

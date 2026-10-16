@@ -174,6 +174,6 @@ than attaching private fixtures, snapshot identifiers, raw output or infrastruct
 - [ ] Neither the diff nor this PR body/comments/attachments disclose private state, credentials, raw traces or verifier output, internal links, or local machine paths (including `.loopx/`, `.codex/goals/`, and live `ACTIVE_GOAL_STATE.md`).
 - [ ] I did not duplicate maintainer-owned benchmark work unless a maintainer split out a public issue for it.
 - [ ] I kept the change scoped to the linked issue/task.
-- [ ] Existing English/Chinese RFC pairs (including ledger entries) both have a diff, and `python3 scripts/ci/rfc_bilingual.py --base origin/main --head HEAD` passes, or no paired RFC changed.
+- [ ] Existing English/Chinese RFC pairs (including ledger entries) both have a diff, and the local premerge check `python3 scripts/check_rfc_bilingual.py --base origin/main --head HEAD` passes, or no paired RFC changed.
 - [ ] I completed the visual evidence section for UI changes, or marked UI impact `none`.
 - [ ] Every commit includes a DCO `Signed-off-by` trailer (`git commit -s`).

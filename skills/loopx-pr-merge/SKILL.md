@@ -28,7 +28,13 @@ authorized: a diff read, green CI, or pull-request metadata is not a substitute.
    surface.
 2. Apply `completion_gate` literally, and re-read the remote head immediately
    before the decision.
-3. Immediately before the merge, run `loopx --format json pr-review --goal-id
+3. For this repository, run `python3 scripts/check_rfc_bilingual.py --base
+   origin/main --head HEAD` from the exact reviewed checkout before merge;
+   substitute the PR's actual target branch and verify local HEAD matches the
+   remote reviewed head. The source-checkout `loopx canary premerge` includes
+   the same direct blocking check. A failed check holds merge regardless of CI
+   waiting or authorized admin bypass. Working-tree changes cannot satisfy it.
+4. Immediately before the merge, run `loopx --format json pr-review --goal-id
    GOAL --repo OWNER/REPO --check-merge-readiness NUMBER@HEAD_OID`. Merge only
    when it returns `ready=true` for that unchanged head; this records the
    compact Goal readiness observation consumed by future review queues.

@@ -124,14 +124,18 @@ including its ledger entries, both files must change in the same PR. Check the
 staged files before committing:
 
 ```bash
-python3 scripts/ci/rfc_bilingual.py --base origin/main --staged
+python3 scripts/check_rfc_bilingual.py --base origin/main --staged
 ```
 
-The staged check includes earlier branch commits. Check a complete committed
-branch with `--base origin/main --head HEAD`. The check uses
-the merge base, covers paired deletion/renaming, and leaves legacy single-language
-files alone. CI runs it before documentation-only exemptions. Review the actual
-translation; this gate checks paired diffs, not semantic equivalence.
+The staged check includes earlier branch commits. Before merge, run
+`python3 scripts/check_rfc_bilingual.py --base origin/main --head HEAD` against
+the PR's actual target branch and exact reviewed head. The source-checkout
+`uv run --extra test loopx canary premerge --from-git-diff` runs this as a direct
+blocking check, including in the quick tier. A failure holds merge even when CI
+waiting is disabled or admin bypass is authorized. It checks the committed diff;
+an unstaged translation cannot satisfy it. The check uses the merge base, covers
+paired deletion/renaming, and leaves legacy single-language files alone. Review
+the actual translation; paired diffs do not certify semantic equivalence.
 
 For non-trivial repository changes, especially anything that touches benchmark
 adapters, smoke tests, public docs, or commit/push workflows, use the

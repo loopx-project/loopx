@@ -100,12 +100,15 @@ failure leaves the generated files untouched.
 
 Existing English/Chinese RFC pairs and their ledger entries must both have a
 diff in the same PR. Before committing, run
-`python3 scripts/ci/rfc_bilingual.py --base origin/main --staged` (including
-earlier branch commits); before submission, run
-`python3 scripts/ci/rfc_bilingual.py --base origin/main --head HEAD`.
-CI checks this before documentation-only exemptions. It compares from the merge
-base, includes paired deletion/renaming, and does not require translations for
-legacy single-language files. Paired diffs do not certify translation accuracy.
+`python3 scripts/check_rfc_bilingual.py --base origin/main --staged` (including
+earlier branch commits). Before merge, run
+`python3 scripts/check_rfc_bilingual.py --base origin/main --head HEAD`, using
+the PR's actual target branch and reviewed head. Source-checkout
+`uv run --extra test loopx canary premerge --from-git-diff` includes this direct
+blocking check in every tier. CI waiting and admin bypass do not waive it.
+Only committed changes satisfy the merge check. It compares from the merge base,
+includes paired deletion/renaming, and leaves legacy single-language files alone.
+Paired diffs do not certify translation accuracy.
 
 ## Overall Product and Delivery Roadmap
 
