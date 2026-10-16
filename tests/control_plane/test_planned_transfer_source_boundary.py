@@ -1,10 +1,12 @@
 """Migration must compose admission closure and drain, not reinterpret Goal stop.
 
-These are real CLI/provider characterizations of the existing owners. They do
-not implement destination admission or qualify a complete Agent transfer.
+These are real CLI/provider checks of the existing owners and the source
+authority preparation under development. They do not implement destination
+admission or qualify Host drain or a complete Agent transfer.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -12,7 +14,9 @@ from pathlib import Path
 
 import pytest
 
-from loopx.control_plane.effect_runtime import restart_effect_runtime
+from loopx.control_plane.effect_runtime import effect_runtime_result, restart_effect_runtime
+from loopx.control_plane.coordination.legacy_writer_fence import legacy_coordination_writer_fence_path
+from loopx.control_plane.coordination.local_authority_shadow_projection import canonical_bytes
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 
 
@@ -129,5 +133,44 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
         assert update("released-proof-write", "Must not revive released work.", expected_code=1)["ok"] is False
         assert inspect()["provider_revision"] == released["provider_revision"]
         assert cli("todo", "list", "--goal-id", "report", "--todo-id", todo)["todo"]["note"] == retained["note"]
+
+        # Establish the actual counterfactual: with registration retained, a
+        # new ordinary execution can still be admitted before preparation.
+        fresh_before = cli("task-lease", "acquire", "--goal-id", "report", "--todo-id", todo,
+            "--owner", "agent-a", "--idempotency-key", "fresh-before-preparation",
+            "--write-scope", "report.txt", "--write-worktree", str(worktree))["lease"]
+        cli("task-lease", "release", "--goal-id", "report", "--todo-id", todo,
+            "--owner", "agent-a", "--idempotency-key", fresh_before["idempotency_key"],
+            "--expected-version", str(fresh_before["version"]))
+        released = inspect()
+
+        # Unlike temporary membership withdrawal, the authority preparation
+        # survives retained registration, fresh execution keys and a cold Host.
+        # It only fences the authority: no source Host drain or target admission
+        # is inferred from this real production-entrypoint check.
+        original_fence = json.loads(legacy_coordination_writer_fence_path(
+            runtime_root=runtime, goal_id="report").read_text())
+        request = {"runtime_root": str(runtime), "goal_id": "report", "operation_id": "prepared-move",
+            "expected_provider_revision": released["provider_revision"],
+            "expected_writer_fence_sha256": hashlib.sha256(canonical_bytes(original_fence)).hexdigest(),
+            "execute": True}
+        prepared = effect_runtime_result("coordination.planned_transfer.prepare_authority", request,
+            timeout=45, retry_safe=False)
+        assert prepared["authority_write_fenced"] is True
+        assert prepared["execution_authority_granted"] is False
+        assert prepared["host_drain_qualified"] is False
+        for cold in (False, True):
+            if cold:
+                restart_effect_runtime(wait_for_exit=True)
+            assert effect_runtime_result("coordination.planned_transfer.prepare_authority", request,
+                timeout=45, retry_safe=False) == prepared
+            rejected = update(f"prepared-write-{cold}", "Must not overwrite prepared work.", expected_code=1)
+            assert rejected["reason_code"] == "canonical_authority_transfer_prepared"
+            acquired = cli("task-lease", "acquire", "--goal-id", "report", "--todo-id", todo,
+                "--owner", "agent-a", "--idempotency-key", f"fresh-after-preparation-{cold}",
+                "--write-scope", "report.txt", "--write-worktree", str(worktree), expected_code=1)
+            assert "prepared for transfer" in acquired["error"]
+            assert inspect()["provider_revision"] == released["provider_revision"]
+            assert cli("todo", "list", "--goal-id", "report", "--todo-id", todo)["todo"]["note"] == retained["note"]
     finally:
         restart_effect_runtime(wait_for_exit=True)

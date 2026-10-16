@@ -416,6 +416,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.runtime_shadow.rollback", lazyHandler(() => Promise.all([import("./coordination/runtime_shadow.ts"), import("./coordination/source_transfer.ts")]), ([{rollbackCoordinationRuntimeShadow}, {withCoordinationSourceTransfer}]) => withCoordinationSourceTransfer("coordination.runtime_shadow.rollback", rollbackCoordinationRuntimeShadow))],
     ["coordination.local_authority.promote", lazyHandler(() => import("./coordination/local_authority_runtime.ts"), ({promoteLocalCoordinationAuthority}) => promoteLocalCoordinationAuthority)],
     ["coordination.authority_archive.manage", lazyHandler(() => import("./coordination/local_authority_archive.ts"), ({manageLocalAuthorityArchive}) => manageLocalAuthorityArchive)],
+    ["coordination.planned_transfer.prepare_authority", lazyHandler(() => import("./coordination/planned_transfer_authority.ts"), ({prepareAuthorityForPlannedTransfer}) => prepareAuthorityForPlannedTransfer)],
     ["configuration.backup", lazyHandler(() => import("./configuration_backup.ts"), ({configurationBackupOperation}) => configurationBackupOperation)],
     ["runtime.checkpoint_artifacts", lazyHandler(() => import("./runtime/checkpoint_artifacts.ts"), ({checkpointArtifacts}) => checkpointArtifacts)],
     ["state.recovery.archive.verify", lazyHandler(() => import("./state_recovery.ts"), ({verifyStateRecoveryArchive}) => verifyStateRecoveryArchive)],
