@@ -12,6 +12,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tarfile
 
 import pytest
 
@@ -131,6 +132,44 @@ print(json.dumps({{'package': loopx.__file__, 'observations': observations}}))
     assert observations[0] == observations[1]
     assert all(row[0] == 0 for row in observations[0][:5])
     assert all(row[0] == 2 for row in observations[0][5:])
+
+
+def test_prepare_without_manifest_copies_only_selected_authority_state(tmp_path, monkeypatch):
+    cli, _, _, _, runtime, _, _ = workspace(tmp_path, monkeypatch)
+    project = tmp_path / "project"
+    research = project / ".loopx/research"
+    research.mkdir(parents=True)
+    retained = research / "benchmark-output.bin"
+    retained.write_bytes(b"unrelated experiment artifact")
+    cache = runtime / "benchmark-cache/model-output.bin"
+    cache.parent.mkdir(parents=True)
+    cache.write_bytes(b"unrelated runtime cache")
+
+    prepared = cli("prepare-import", "--provider", "file",
+        "--target-handoff-mode", "hard_lease")["cold_import"]
+    assert prepared["status"] == "prepared"
+    assert prepared["target_capacity_preflight"]["status"] == "sufficient"
+    assert prepared["target_capacity_preflight"]["available_bytes"] >= (
+        prepared["target_capacity_preflight"]["required_bytes"])
+    carrier = json.loads(Path(prepared["plan_path"]).read_text())
+    witness = carrier["plan"]["source_backup"]
+    assert witness["backup_profile"] == "local_authority_migration_v1"
+    manifest = json.loads(Path(witness["manifest_path"]).read_text())
+    assert manifest["configuration_goal_ids"] == ["cold"]
+    selected = {Path(row["source_path"]) for row in manifest["included"]}
+    assert project / ".loopx/registry.json" in selected
+    assert project / ".loopx" not in selected
+    assert runtime not in selected
+    with tarfile.open(witness["archive_path"]) as archive:
+        names = {member.name for member in archive}
+    assert not any("research" in name or "benchmark-cache" in name for name in names)
+    assert retained.read_bytes() == b"unrelated experiment artifact"
+    assert cache.read_bytes() == b"unrelated runtime cache"
+
+    replay = cli("prepare-import", "--provider", "file",
+        "--target-handoff-mode", "hard_lease")["cold_import"]
+    assert replay["plan_sha256"] == prepared["plan_sha256"]
+    assert replay["plan_path"] == prepared["plan_path"]
 
 
 @pytest.mark.parametrize("readback_present", [True, False])
