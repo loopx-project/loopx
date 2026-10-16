@@ -159,10 +159,17 @@ function lifecycleObligation(request: JsonObject): JsonObject | null {
   const source = lifecycleSource(request);
   const items = source.items as JsonObject[];
   const triggers = Array.isArray(obligation.triggers) ? obligation.triggers.map(object) : [];
-  if (source.settled !== true || triggers.length !== Math.min(3, items.length) ||
+  if (items.length === 0 ||
+      (typeof request.lifecycle_settled === "boolean" && request.lifecycle_settled !== source.settled) ||
+      triggers.length !== Math.min(3, items.length) ||
       triggers.some((trigger, index) => trigger.kind !== "completed_advancement_without_successor" ||
         trigger.agent_id !== request.agent_id || trigger.todo_id !== items[index].todo_id ||
         trigger.completion_turn_key !== items[index].completion_turn_key)) return null;
+  // New independent work may change the frontier before the admitted lifecycle
+  // is closed. Preserve its exact pending actions; recovery is not settlement.
+  if (source.settled !== true) {
+    return {...obligation, required: true, selection_binding: "heartbeat_receipt"};
+  }
   const reason = "The exact completed Todo lifecycle is settled. Reassess the original acceptance with evidence, then write back and settle this Turn once; do not repeat the original work.";
   return {...obligation, required: true, selection_binding: "heartbeat_receipt",
     resolution_mode: "receipt_bound_replan_settlement", satisfying_semantic_outcomes: [...VISION_OUTCOMES],
@@ -198,7 +205,7 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
   for (const value of request.transition_candidates) {
     const candidate = object(value);
     const obligation = object(candidate.obligation);
-    if (request.guard_scoped && candidate.lifecycle_settled === true) {
+    if (request.guard_scoped && object(candidate.source_obligation).resolution_mode === "todo_lifecycle_settlement") {
       const recovered = lifecycleObligation({...candidate, obligation: candidate.source_obligation,
         selected_obligation_id: selected, agent_id: request.agent_id});
       if (recovered) return {obligation: recovered};
