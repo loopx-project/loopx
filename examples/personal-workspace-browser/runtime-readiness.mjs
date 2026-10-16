@@ -37,7 +37,7 @@ export const runtimeReadinessScenario = {
       await notice.waitFor({ state: "hidden", timeout: 15_000 });
       assert.equal(await page.getByTestId("runtime-readiness").count(), 0, "A repaired runtime clears the notice");
 
-      // With a Goal open and every runtime missing, the composer says why nothing can be sent.
+      // With a Goal open and execution runtimes missing, status-only remains usable.
       api.runtimeAgentsOverride = missing;
       await page.getByRole("button", { name: "刷新状态", exact: true }).click();
       await page.locator(".personal-goal-row").first().locator(".personal-goal-link").click();
@@ -45,7 +45,8 @@ export const runtimeReadinessScenario = {
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "对话", exact: true }).click();
       const line = page.getByTestId("runtime-readiness-line");
       await line.waitFor({ state: "visible", timeout: 15_000 });
-      assert.match(await line.innerText(), /还没有可用的 Agent 运行环境|不可用/);
+      assert.match(await line.innerText(), /Agent 执行尚未就绪.*仅查状态/);
+      assert.doesNotMatch(await line.innerText(), /无法发送消息/);
       await page.screenshot({ path: resolve(outputDir, "runtime-readiness-composer.png"), animations: "disabled" });
       api.runtimeAgentsOverride = repaired;
       await line.getByRole("button", { name: "重新检查" }).click();
