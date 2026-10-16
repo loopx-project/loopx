@@ -154,10 +154,12 @@ display language preserves the reader's position. These are read-recovery
 guarantees; interrupted reply delivery still follows its receipt contract.
 Initial conversation discovery also retries network interruptions, timeouts and
 server failures automatically, including service failures that answer with an
-HTML or empty body. Permission, other client errors and unreadable successful
-responses remain visible without automatic retries. Leaving the Agent page
-cancels pending discovery retries; recovery never submits input or selects
-another Agent.
+HTML or empty body. The response status keeps deciding retryability when the
+body stalls or is cut short after the headers have arrived, so a retryable
+service failure still recovers while a denied read stays stopped. Permission,
+other client errors and unreadable successful responses remain visible without
+automatic retries. Leaving the Agent page cancels pending discovery retries;
+recovery never submits input or selects another Agent.
 
 These examples use public synthetic records and an isolated Desktop protocol
 peer. They illustrate the recovery message, not a live executor or installed-App

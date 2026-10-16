@@ -16,7 +16,16 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
   // Read the body as text first: a service failure can answer with an HTML or
   // empty body, and the caller still needs the HTTP status to decide whether
   // the read is retryable. Parsing first would surface a SyntaxError instead.
-  const body = await response.text();
+  let body: string;
+  try {
+    body = await response.text();
+  } catch {
+    // The headers arrived, so the status is already known even though the body
+    // did not. Drop the status here and a stalled 503 body looks like a plain
+    // transport failure while a truncated 403 body looks retryable; the caller
+    // must classify on this status, not on how the body read failed.
+    throw new ConversationRequestError("Conversation unavailable", undefined, response.status);
+  }
   let value: Record<string, unknown> | null = null;
   try {value = body ? JSON.parse(body) as Record<string, unknown> : null;} catch {value = null;}
   if (!response.ok || value?.ok !== true) throw new ConversationRequestError(

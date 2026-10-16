@@ -107,6 +107,41 @@ async function runConversation(browser, uncertain) {
         await page.unroute('**/api/chat/codex-attached?*',discoveryFailure);
         await owner.getByRole('button',{name:'返回概览',exact:true}).click();
       }
+      // A failure that begins after the response headers must still keep the
+      // status they carried: a stalled 5xx body stays retryable, while a denied
+      // 4xx body that drops mid-read must stay stopped. Playwright cannot stream
+      // a partial body, so these two faults come from the HTTP fixture.
+      for (const fault of [
+        {name:'body-timeout-503', arm:'/fixture/discovery-body-timeout', retryable:true},
+        {name:'body-drop-403', arm:'/fixture/discovery-body-drop', retryable:false},
+      ]) {
+        let discoveryReads = 0;
+        const discoveryFailure = async route => {
+          const request = route.request();
+          const endpoint = new URL(request.url());
+          if (request.method() !== 'GET' || endpoint.searchParams.has('agent_id')) return route.continue();
+          discoveryReads++;
+          return route.continue();
+        };
+        await page.request.post(new URL(fault.arm,url).href);
+        await page.route('**/api/chat/codex-attached?*',discoveryFailure);
+        await entry.click();
+        await owner.getByRole('alert').waitFor();
+        assert.equal(await owner.getByRole('textbox').count(),0);
+        if (fault.retryable === false) {
+          const heldReads = discoveryReads;
+          await page.waitForTimeout(1300);
+          assert.equal(discoveryReads,heldReads,`${fault.name} does not retry automatically`);
+          await owner.getByRole('button',{name:'重新连接',exact:true}).click();
+        }
+        await owner.getByText('Original result',{exact:true}).waitFor()
+          .catch(error => {throw new Error(`${fault.name} left discovery unrecovered: ${error.message}`);});
+        assert.ok(discoveryReads >= 2,`${fault.name} recovery observes the original binding again`);
+        assert.equal(new URL(page.url()).searchParams.get('workAgent'),'worker');
+        assert.equal((await (await page.request.get(new URL('/fixture/inputs',url).href)).json()).count,0);
+        await page.unroute('**/api/chat/codex-attached?*',discoveryFailure);
+        await owner.getByRole('button',{name:'返回概览',exact:true}).click();
+      }
       await entry.click();
       await owner.getByText('Original result',{exact:true}).waitFor();
       assert.equal(await owner.getByRole('combobox',{name:'查看 Agent'}).inputValue(),'worker', 'The owner was already selected by the entry');
