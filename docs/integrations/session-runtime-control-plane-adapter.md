@@ -152,6 +152,10 @@ and explains that updates resume automatically when the connection recovers.
 Replies remain disabled until a fresh observation permits them. Changing the
 display language preserves the reader's position. These are read-recovery
 guarantees; interrupted reply delivery still follows its receipt contract.
+Initial conversation discovery also retries network interruptions, timeouts and
+server failures automatically. Permission and other client errors remain visible
+without automatic retries. Leaving the Agent page cancels pending discovery
+retries; recovery never submits input or selects another Agent.
 
 These examples use public synthetic records and an isolated Desktop protocol
 peer. They illustrate the recovery message, not a live executor or installed-App

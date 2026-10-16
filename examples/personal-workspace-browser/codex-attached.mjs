@@ -61,8 +61,39 @@ async function runConversation(browser, uncertain) {
       await other.waitFor();
       assert.ok(await other.evaluate(node => node === document.activeElement));
       const entry = page.getByRole('button',{name:'与 worker 对话',exact:true});
-      await entry.click();
       const owner = page.getByRole('region',{name:'Agent 工作会话',exact:true});
+      // Recovery begins before a binding exists. Transient discovery failures
+      // must not require another user action; a permission denial must not spin.
+      for (const fault of ['network', 503, 403]) {
+        let failing = true, discoveryReads = 0;
+        const discoveryFailure = async route => {
+          const request = route.request();
+          const endpoint = new URL(request.url());
+          if (request.method() !== 'GET' || endpoint.searchParams.has('agent_id')) return route.continue();
+          discoveryReads++;
+          if (!failing) return route.continue();
+          if (fault === 'network') return route.abort('failed');
+          return route.fulfill({status:fault,contentType:'application/json',body:JSON.stringify({ok:false,error:fault === 403 ? 'Owner access is required' : 'Temporary discovery outage'})});
+        };
+        await page.route('**/api/chat/codex-attached?*',discoveryFailure);
+        await entry.click();
+        await owner.getByRole('alert').waitFor();
+        assert.equal(await owner.getByRole('textbox').count(),0);
+        failing = false;
+        if (fault === 403) {
+          const deniedReads = discoveryReads;
+          await page.waitForTimeout(1300);
+          assert.equal(discoveryReads,deniedReads,'Permission denial does not retry automatically');
+          await owner.getByRole('button',{name:'重新连接',exact:true}).click();
+        }
+        await owner.getByText('Original result',{exact:true}).waitFor();
+        assert.ok(discoveryReads >= 2,'Recovery observes the original binding again');
+        assert.equal(new URL(page.url()).searchParams.get('workAgent'),'worker');
+        assert.equal((await (await page.request.get(new URL('/fixture/inputs',url).href)).json()).count,0);
+        await page.unroute('**/api/chat/codex-attached?*',discoveryFailure);
+        await owner.getByRole('button',{name:'返回概览',exact:true}).click();
+      }
+      await entry.click();
       await owner.getByText('Original result',{exact:true}).waitFor();
       assert.equal(await owner.getByRole('combobox',{name:'查看 Agent'}).inputValue(),'worker', 'The owner was already selected by the entry');
       assert.equal(new URL(page.url()).searchParams.get('workAgent'),'worker');
