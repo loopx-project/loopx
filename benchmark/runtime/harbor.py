@@ -19,7 +19,7 @@ from harbor.utils.trajectory_utils import format_trajectory_json
 from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_strategy
 
 from .codex_offline import MODEL_CATALOG_REMOTE, CodexOffline, stage_portable_python
-from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution
+from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, turn_envelope_receipt
 from .layout import _ROOT, _SRC, _CONTROL, _CODEX_HOME
 
 
@@ -66,6 +66,7 @@ class BenchmarkCodex(CodexOffline):
         replan_after_turns=None,
         stride_strategy=None,
         checkpoint_request_path=None,
+        checkpoint_request=None,
         task_entry=None,
         planning_timeout_sec=None,
         turn_envelope=False,
@@ -115,6 +116,12 @@ class BenchmarkCodex(CodexOffline):
         self.stride_strategy = (normalize_stride_strategy(stride_strategy)
                                 if stride_strategy is not None else None)
         self.checkpoint_request_path = None
+        self._checkpoint_declaration = None
+        if checkpoint_request is not None:
+            if checkpoint_request_path is None:
+                raise ValueError("checkpoint_request requires its staged guest path")
+            from .checkpoint import parse_checkpoint_request
+            self._checkpoint_declaration = parse_checkpoint_request(checkpoint_request)
         if checkpoint_request_path is not None:
             if self.execution.mode not in {"heartbeat", "turn"}:
                 raise ValueError("checkpoint_request_path requires a settled-work worker")
@@ -143,11 +150,10 @@ class BenchmarkCodex(CodexOffline):
         A checkpoint handoff socket makes the worker capture TurnEnvelope on
         fresh_replan execute wakes; per-wake receipts remain authoritative.
         """
-        if self.execution.turn_envelope:
-            return {"turn_envelope": True, "turn_envelope_source": "explicit"}
-        if self.checkpoint_request_path is not None and self.execution.mode == "heartbeat":
-            return {"turn_envelope": True, "turn_envelope_source": "checkpoint_handoff"}
-        return {}
+        return turn_envelope_receipt(
+            explicit=self.execution.turn_envelope, mode=self.execution.mode,
+            checkpoint_request=self._checkpoint_declaration,
+        )
 
     def _planning_receipt(self) -> dict:
         return {"planning_feedback_first": True} if self.planning_feedback_first else {}

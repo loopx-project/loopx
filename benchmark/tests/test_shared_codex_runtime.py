@@ -146,7 +146,8 @@ def test_native_goal_staged_source_is_importable_without_loopx_control_plane(tmp
     head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
     archive = tmp_path / "source.tar"
     archive_source(repo, head, archive, NATIVE_GOAL_SOURCE_PATHS)
-    staged = tmp_path / "staged"; staged.mkdir()
+    staged = tmp_path / "staged"
+    staged.mkdir()
     subprocess.run(["tar", "-xf", str(archive), "-C", str(staged)], check=True)
     # -I -S: no site-packages, so the editable checkout cannot mask a missing staged file.
     result = subprocess.run(
@@ -613,11 +614,39 @@ def test_default_execution_has_no_independent_turn_deadline(tmp_path):
     assert "--timeout-seconds" not in turn_command(env, execution, "wake-default")
 
 
-@pytest.mark.parametrize("enabled", [False, True])
-def test_harbor_install_receipt_preserves_opt_out(tmp_path, monkeypatch, enabled):
+@pytest.mark.parametrize("enabled,trigger,expected", [
+    (False, None, None),
+    (True, None, "explicit"),
+    (False, "after_wake", None),
+    (False, "fresh_replan", "checkpoint_handoff"),
+    (True, "fresh_replan", "explicit"),
+])
+def test_harbor_install_receipt_matches_actual_checkpoint_trigger(tmp_path, monkeypatch, enabled, trigger, expected):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex, CodexOffline
-    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", turn_envelope=enabled)
+    from benchmark.runtime.checkpoint_wake import CheckpointWake
+    wake_root = tmp_path / "wakes"
+    wake_root.mkdir()
+    request = tmp_path / "request.json"
+    checkpoint_args = {}
+    if trigger is not None:
+        declaration = {"destination": str(tmp_path / "checkpoints"),
+            "components": [{"id": "workspace", "source_path": str(tmp_path)}],
+            "point_metadata": {}}
+        if trigger == "fresh_replan":
+            declaration["trigger"] = trigger
+        request.write_text(json.dumps(declaration))
+        checkpoint_args = {"checkpoint_request_path": str(request),
+                           "checkpoint_request": request.read_bytes()}
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", turn_envelope=enabled,
+                           **checkpoint_args)
+    with CheckpointWake({"LOOPX_WAKE_LOG_DIR": str(wake_root),
+            **({"LOOPX_CHECKPOINT_REQUEST": str(request)} if trigger else {})},
+            {"turn_id": "fixture", "mode": "heartbeat", "stage": "execute"}) as wake:
+        # Real declaration parser and socket lifecycle, independent of the
+        # metadata helper. Omitted trigger is legal after-wake capture.
+        assert bool(wake.socket_path) is (trigger == "fresh_replan")
+        assert bool(enabled or wake.socket_path) is (expected is not None)
     commands = []
     command_envs = {}
     async def no_op(*args, **kwargs):
@@ -651,8 +680,9 @@ def test_harbor_install_receipt_preserves_opt_out(tmp_path, monkeypatch, enabled
         if "install-local.sh" in command or " doctor " in command:
             assert command_envs[command]["LOOPX_USAGE_PING"] == "0"
     assert agent._worker_env(cwd="/task")["LOOPX_USAGE_PING"] == "0"
-    assert ("turn_envelope" in receipt) is enabled
-    if enabled:
+    assert ("turn_envelope" in receipt) is (expected is not None)
+    assert receipt.get("turn_envelope_source") == expected
+    if expected:
         assert receipt["turn_envelope"] is True
 
 

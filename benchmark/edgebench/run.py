@@ -20,7 +20,7 @@ from sforge.harness.constants import get_admin_secret
 from sforge.harness.run_agent import run_agent
 from sforge.harness.task_spec import make_task_spec
 
-from benchmark.runtime.codex import TASK_ENTRIES
+from benchmark.runtime.codex import TASK_ENTRIES, turn_envelope_receipt
 from loopx.control_plane.work_items.stride_policy_codec import stride_strategy_options
 from benchmark.runtime.sforge import (
     DEFAULT_TIMEOUT_SECONDS, PROFILES, SForgeWorker,
@@ -327,10 +327,9 @@ def main(argv=None):
            if agent.task_entry == "loopx-planned" else {}),
         "model": args.model, "effort": args.effort, "timeout_seconds": args.timeout,
         "loopx_commit": pins[0], "runner_commit": pins[1],
-        **({"turn_envelope": True, "turn_envelope_source": "explicit"} if args.turn_envelope
-           else {"turn_envelope": True, "turn_envelope_source": "checkpoint_handoff"}
-           if checkpoint_request is not None and declaration.get("trigger") == "fresh_replan"
-           and args.worker.startswith("heartbeat-") else {}),
+        **turn_envelope_receipt(explicit=args.turn_envelope,
+            mode="heartbeat" if args.worker.startswith("heartbeat-") else "plain",
+            checkpoint_request=declaration if checkpoint_request is not None else None),
         **({"planning_feedback_first": True} if args.feedback_first else {}),
         "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
         "feedback": args.feedback, "internet": task.internet,

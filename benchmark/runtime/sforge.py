@@ -265,6 +265,7 @@ class SForgeWorker(CodexAgent):
                 replan_after_todos=self.replan_after_todos,
                 stride_strategy=self.stride_strategy,
                 checkpoint_request_path=self.checkpoint_request_path,
+                checkpoint_request=self.checkpoint_request,
                 task_objective=self.task_objective,
                 **({"goal_id": self.warm_start.goal_id, "agent_id": self.warm_start.agent_id,
                     "defer_codex_home": True} if self.warm_start is not None else {}),
