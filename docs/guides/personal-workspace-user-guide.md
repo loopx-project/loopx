@@ -53,6 +53,8 @@ LoopX 通过本机已安装的命令行工具驱动 Agent（Codex、Claude Code�
 未设置的环境变量），并提供「重新检查」和「安装指引」。安装并登录后点「重新检查」，页面重新读取
 服务的运行环境目录并回读结果；本页不会安装任何东西，也不授予任何权限。打开 Goal 对话时，如果选中的
 运行环境在本机不可用，输入框上方会给出同样的说明和重新检查。
+执行环境缺失不影响管家和 Goal 中的「仅查状态」：它保存原问题与状态回答，不启动 Agent。
+没有该选项的项目对话会明确拒绝未就绪的执行路线，并保留未发送的草稿。
 
 LoopX drives Agents through a command-line tool installed on this machine (Codex, Claude Code,
 Kiro CLI) or through an API key. When none is ready, the manager overview says so at the top,
@@ -61,6 +63,9 @@ offers **Check again** and a **Setup guide** link. After installing and signing 
 re-reads the service's runtime catalog and reads the result back; the page installs nothing and
 grants nothing. In a Goal conversation, the same notice and re-check appear above the composer when
 the selected runtime is unavailable here.
+Missing execution runtimes do not disable **Status only** in manager and Goal conversations: it
+stores the original question and status answer without starting an Agent. A project conversation
+without that option refuses an unavailable execution route and retains the unsent draft.
 
 ## 🧭 2. 控制台核心架构
 
