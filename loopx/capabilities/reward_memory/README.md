@@ -226,7 +226,16 @@ provider content and sibling bindings untouched. Re-enable it with its private
 configuration file. A stale route is requalified with the same Agent flag; do
 not copy a digest into an old receipt. Same-Turn recall receipts are tied to the
 opaque binding revision, and pending outcome ingestion cannot migrate to a
-replacement route.
+replacement route. Automatic reconciliation applies its one-to-three-event
+retry limit only to journals for the current binding. Other bindings' ambiguous
+journals remain unchanged and make no provider calls; they cannot starve the
+current route and can be retried if their original binding is restored.
+`pending_count` includes all retained pending journals; `attempted_count` counts
+only the current binding's selected retries.
+
+[Settings examples: independent route, missing path and narrow readback](https://github.com/loopx-project/loopx/tree/main/loopx/capabilities/reward_memory/assets)
+use a synthetic visual fixture. Provider observations in these repository
+screenshots are simulated; they do not qualify an installed memory service.
 
 The existing repeatable `--reward-memory-agent` still edits the shared allowlist;
 it cannot be combined with the new scope flag. Shared edits preserve overrides.

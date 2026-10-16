@@ -734,6 +734,7 @@ def reconcile_pending_turn_outcome_ingests(
     ).parent
     if not directory.is_dir():
         return base | {"status": "empty"}
+    pending_count = 0
     pending: list[tuple[Path, dict[str, Any]]] = []
     for path in sorted(directory.glob("*.json")):
         value = _load_sidecar(path)
@@ -743,18 +744,15 @@ def reconcile_pending_turn_outcome_ingests(
             and value.get("agent_id") == agent_id
             and value.get("status") == "pending"
         ):
-            pending.append((path, value))
+            pending_count += 1
+            # Retain ambiguous journals for their original route, but do not
+            # let them consume a replacement binding's bounded retry slots.
+            # Direct replay still checks the full identity before any write.
+            if value.get("binding_revision") == experiment_status.get("binding_revision"):
+                pending.append((path, value))
     receipts: list[dict[str, Any]] = []
     effective_observed_at = observed_at or datetime.now(timezone.utc).isoformat()
     for path, value in pending[:limit]:
-        if value.get("binding_revision") != experiment_status.get("binding_revision"):
-            # A pending write belongs to its original route. Reconfiguration
-            # cannot authorize replay into a replacement provider/corpus.
-            receipts.append(_base(
-                goal_id=goal_id, agent_id=agent_id, status="runtime_state_invalid",
-                reason_code="outcome_sidecar_identity_mismatch",
-            ))
-            continue
         legacy_receipt = _terminalize_legacy_pending_sidecar(
             path,
             value,
@@ -806,7 +804,7 @@ def reconcile_pending_turn_outcome_ingests(
         receipts.append(receipt)
     return base | {
         "status": "completed" if receipts else "empty",
-        "pending_count": len(pending),
+        "pending_count": pending_count,
         "attempted_count": len(receipts),
         "completed_count": sum(
             receipt.get("reconciliation_state") == "completed" for receipt in receipts

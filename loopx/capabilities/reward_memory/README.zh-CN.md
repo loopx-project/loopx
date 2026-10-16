@@ -155,6 +155,13 @@ Goal/Agent actor，不会替换共享绑定或其它 Agent 的路由。Goal 设�
 --execute` 只关闭该 Agent，并保留关闭声明；不删除 provider 内容，也不改变其它绑定。
 重新启用时提供它的私有配置文件；漂移后的重新验证仍使用同一个 Agent 参数，不手动补写 digest。
 同 Turn recall receipt 绑定不透明的配置 revision，待确认的 outcome 写入也不能迁移至新路由。
+自动 reconciliation 先按当前 binding 筛选，再应用每批一至三个事件的重试上限。其它绑定的
+含糊提交 journal 原样保留、不调用 Provider，也不占用当前路由的重试位置；恢复原绑定后
+仍可重试。`pending_count` 包括所有保留的 pending journal，`attempted_count` 只计当前绑定
+实际选中的重试。
+
+[设置示例：独立路由、缺少路径与窄屏读回](https://github.com/loopx-project/loopx/tree/main/loopx/capabilities/reward_memory/assets)
+使用公开安全的合成界面夹具；截图中的 Provider 观测是模拟值，不代表已安装记忆服务的资格。
 
 既有可重复参数 `--reward-memory-agent` 仍编辑共享 allowlist，不能与独立绑定参数混用；
 共享编辑保留独立绑定。不指定 Agent 的 `--clear-reward-memory-config` 会显式清除**全部**绑定。

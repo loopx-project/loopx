@@ -324,3 +324,107 @@ def test_committed_binding_with_unavailable_readback_is_partial_not_rollback(ind
     assert handler.response["readback_verified"] is False
     assert "prior state was preserved" not in handler.response["error"]
     assert status_for(registry, "writer")["available"] is True
+
+
+@pytest.mark.parametrize("limit", [1, 3])
+def test_stale_binding_journals_cannot_starve_bounded_current_route_retries(independent, limit):
+    from loopx.capabilities.context_providers.base import ContextProviderSync
+    from loopx.capabilities.reward_memory.outcome_lifecycle import (
+        reconcile_pending_turn_outcome_ingests,
+        run_configured_turn_outcome_ingest,
+        turn_outcome_ingest_sidecar_path,
+    )
+    from tests.capabilities.test_agent_turn_recall import raw_config
+    from tests.capabilities.test_reward_memory_outcome_lifecycle import (
+        OutcomeProvider,
+        _reflection,
+        _settlement_evidence,
+    )
+
+    class AmbiguousPerEventProvider(OutcomeProvider):
+        def sync(self, **kwargs):
+            result = super().sync(**kwargs)
+            if result.write_count == 0:
+                return result
+            return ContextProviderSync(
+                provider=self.provider_id, namespace=result.namespace,
+                status="committed_pending", observed_at=result.observed_at,
+                requested_count=1, completed_count=0, write_count=result.write_count,
+                result_refs=result.result_refs, pending_count=1,
+                reason_code="provider_commit_ambiguous", retry_disposition="retry_same_event",
+            )
+
+    registry, config_path, _ = independent
+    config = raw_config(goal_id="binding-goal", agent_id="writer", peer_ref="agent:writer")
+    config["automation"]["automatic_ingest"] = True
+    config["corpora"][0]["standing_policy"].update(
+        allowed_source_kinds=["research_review"], allowed_actor_roles=["validated_goal_agent"])
+    config["corpora"][0]["corpus"]["maintenance"]["writeback_triggers"] = ["research_review"]
+    config_path.write_text(json.dumps(config))
+    enable_writer(registry)
+    provider = AmbiguousPerEventProvider()
+    reflection = _reflection()
+    request = dict(registry_path=registry, goal_id="binding-goal", agent_id="writer",
+        host_result={"reward_memory_reflection_json": reflection},
+        settlement_evidence=_settlement_evidence(reflection), provider=provider)
+
+    def stage(turn):
+        result = run_configured_turn_outcome_ingest(**request, turn_key=turn)
+        assert result["reconciliation_state"] == "pending"
+        return turn_outcome_ingest_sidecar_path(Path(read_goal(registry)["repo"]),
+            goal_id="binding-goal", agent_id="writer", source_event_id=result["source_event_id"])
+
+    old_paths = [stage(f"retry-old-{index}") for index in range(3)]
+    old_bytes = {path: path.read_bytes() for path in old_paths}
+    original_provider = provider
+    original_config = config_path.read_bytes()
+    config["surfaces"][0]["recall_profile"]["limit"] = 3
+    config["project_provider_binding"]["corpus_scopes"][0]["scope_ref"] += "/replacement"
+    config["corpora"][0]["corpus"]["provider_scope_ref_digest"] = hashlib.sha256(
+        config["project_provider_binding"]["corpus_scopes"][0]["scope_ref"].encode()).hexdigest()[:16]
+    config_path.write_text(json.dumps(config))
+    enable_writer(registry)
+    provider = AmbiguousPerEventProvider()
+    request["provider"] = provider
+    # Fixed identities put every current journal after all three stale ones.
+    current_paths = [stage(f"retry-new-{index}") for index in (5, 7)]
+    assert max(path.name for path in old_paths) < min(path.name for path in current_paths)
+    assert provider.sync_calls == 2 and len(provider.resources) == 2
+    stale_replay = run_configured_turn_outcome_ingest(**request, turn_key="retry-old-0")
+    assert stale_replay["reason_code"] == "outcome_sidecar_identity_mismatch"
+    assert provider.sync_calls == 2
+
+    remaining = 2
+    while remaining:
+        attempts = min(limit, remaining)
+        before = provider.sync_calls
+        result = reconcile_pending_turn_outcome_ingests(
+            registry_path=registry, goal_id="binding-goal", agent_id="writer",
+            provider=provider, limit=limit)
+        assert result["pending_count"] == 3 + remaining
+        assert result["attempted_count"] == result["completed_count"] == attempts, [
+            (receipt["status"], receipt.get("reason_code")) for receipt in result["receipts"]]
+        assert result["provider_sync_count"] == attempts
+        assert provider.sync_calls == before + attempts
+        assert all(receipt["exact_readback_verified"] and receipt["deduplicated"]
+            for receipt in result["receipts"])
+        assert all(path.read_bytes() == original for path, original in old_bytes.items())
+        assert original_provider.sync_calls == 3
+        remaining -= attempts
+
+    calls = provider.sync_calls
+    empty = reconcile_pending_turn_outcome_ingests(
+        registry_path=registry, goal_id="binding-goal", agent_id="writer", provider=provider, limit=limit)
+    assert empty["pending_count"] == 3 and empty["attempted_count"] == 0
+    replay = run_configured_turn_outcome_ingest(**request, turn_key="retry-new-5")
+    assert replay["sidecar_receipt_reused"] and replay["provider_sync_count"] == 0
+    assert provider.sync_calls == calls and len(provider.resources) == 2
+    assert all(json.loads(path.read_text())["status"] == "completed" for path in current_paths)
+    assert all(path.read_bytes() == original for path, original in old_bytes.items())
+    # Retention also preserves recovery through the original binding owner.
+    config_path.write_bytes(original_config)
+    enable_writer(registry)
+    restored = reconcile_pending_turn_outcome_ingests(
+        registry_path=registry, goal_id="binding-goal", agent_id="writer", provider=original_provider)
+    assert restored["pending_count"] == restored["completed_count"] == 3
+    assert original_provider.sync_calls == 6 and len(original_provider.resources) == 3
