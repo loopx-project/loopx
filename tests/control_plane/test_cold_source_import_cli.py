@@ -6,6 +6,8 @@ of their remaining callers, or full Goal history recovery.
 """
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -170,6 +172,45 @@ def test_prepare_without_manifest_copies_only_selected_authority_state(tmp_path,
         "--target-handoff-mode", "hard_lease")["cold_import"]
     assert replay["plan_sha256"] == prepared["plan_sha256"]
     assert replay["plan_path"] == prepared["plan_path"]
+
+
+@pytest.mark.parametrize("names", [("A.txt", "a.txt"), ("caf\u00e9.txt", "cafe\u0301.txt")])
+def test_prepare_accepts_complete_backup_with_distinct_unrelated_names(tmp_path, monkeypatch, names):
+    cli, _, backup, _, _, _, _ = workspace(tmp_path, monkeypatch)
+    archive_path, manifest_path = Path(backup["archive_path"]), Path(backup["manifest_path"])
+    manifest = json.loads(manifest_path.read_text())
+    extras = [(f"runtime-root/unrelated/{name}", name.encode()) for name in names]
+    manifest["execution"]["file_members"].extend({
+        "archive_path": path, "size_bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    } for path, data in extras)
+    embedded = json.loads(json.dumps(manifest))
+    embedded["execution"].update(archive_sha256=None, archive_size_bytes=None)
+    replacement = archive_path.with_suffix(".staged")
+    with tarfile.open(archive_path, "r:gz") as source, tarfile.open(replacement, "w:gz") as destination:
+        for member in source:
+            if member.name == "manifest.json":
+                data = json.dumps(embedded).encode()
+                member.size = len(data)
+                destination.addfile(member, io.BytesIO(data))
+            elif member.isfile():
+                with source.extractfile(member) as content:
+                    destination.addfile(member, content)
+            else:
+                destination.addfile(member)
+        for path, data in extras:
+            member = tarfile.TarInfo(path)
+            member.size = len(data)
+            destination.addfile(member, io.BytesIO(data))
+    replacement.replace(archive_path)
+    manifest["execution"].update(
+        archive_sha256=hashlib.sha256(archive_path.read_bytes()).hexdigest(),
+        archive_size_bytes=archive_path.stat().st_size)
+    manifest_path.write_text(json.dumps(manifest))
+    prepared = cli("prepare-import", "--backup-manifest", manifest_path,
+        "--provider", "file", "--target-handoff-mode", "hard_lease")["cold_import"]
+    assert prepared["status"] == "prepared"
+    assert prepared["execution_authority_granted"] is False
 
 
 @pytest.mark.parametrize("readback_present", [True, False])

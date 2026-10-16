@@ -8,17 +8,17 @@ independent bounded inspection profile in ``state_recovery_io``.
 
 from __future__ import annotations
 
-import dbm
+from contextlib import closing
 import errno
 import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
 import shutil
+import sqlite3
 import stat
 import tarfile
 import tempfile
-import unicodedata
 from typing import Any, BinaryIO
 
 from ...state_backup import (
@@ -121,27 +121,42 @@ def _safe_link(name: str, target: str, *, hardlink: bool) -> str:
 
 
 def _member_key(name: str) -> bytes:
-    return unicodedata.normalize("NFC", name).casefold().encode("utf-8")
+    # This witness never extracts paths. Preserve distinctions that are legal
+    # on the source filesystem; generic recovery owns portability policy.
+    return name.encode("utf-8")
 
 
-def _require_directory_ancestors(database: Any, name: str) -> None:
+def _member_marker(database: sqlite3.Connection, key: bytes) -> bytes | None:
+    row = database.execute("SELECT marker FROM members WHERE name = ?", (key,)).fetchone()
+    return None if row is None else row[0]
+
+
+def _record_member(database: sqlite3.Connection, key: bytes, marker: bytes) -> None:
+    database.execute("INSERT INTO members(name, marker) VALUES (?, ?) "
+        "ON CONFLICT(name) DO UPDATE SET marker = excluded.marker", (key, marker))
+
+
+def _require_directory_ancestors(database: sqlite3.Connection, name: str) -> None:
     parts = PurePosixPath(name).parts
     prefix = parts[0]
     for part in parts[1:]:
-        marker = database.get(_member_key(prefix))
-        if marker is not None and marker != b"D":
+        key = _member_key(prefix)
+        marker = _member_marker(database, key)
+        if marker is None:
+            _record_member(database, key, b"I")  # Inferred from an earlier child.
+        elif marker not in (b"D", b"I"):
             raise ColdSourceBackupError("cold_import_backup_member_unsafe")
         prefix += "/" + part
 
 
-def _require_acyclic_symlink(database: Any, name: str, target: str) -> None:
+def _require_acyclic_symlink(database: sqlite3.Connection, name: str, target: str) -> None:
     current = _member_key(target)
     seen = {_member_key(name)}
     while True:
         if current in seen:
             raise ColdSourceBackupError("cold_import_backup_link_unsafe")
         seen.add(current)
-        marker = database.get(current)
+        marker = _member_marker(database, current)
         if marker is None or marker == b"L:" or not marker.startswith(b"L:"):
             return
         current = marker[2:]
@@ -183,41 +198,49 @@ def _scan_archive(
         raise ColdSourceBackupError("cold_import_backup_workspace_unsafe")
     try:
         with tempfile.TemporaryDirectory(prefix=".cold-import-index-", dir=workspace) as temporary:
-            database_path = Path(temporary) / "members"
+            database_path = Path(temporary) / "members.sqlite3"
             embedded: dict[str, Any] | None = None
             members: list[dict[str, Any]] = []
             member_count = logical_bytes = 0
             archive.seek(0)
-            with dbm.open(str(database_path), "n") as database:
+            # One disposable transaction avoids per-prefix durable writes.
+            # This scratch index is not a Goal authority or recovery store.
+            with closing(sqlite3.connect(database_path)) as database:
+                database.execute("CREATE TABLE members (name BLOB PRIMARY KEY, marker BLOB NOT NULL) WITHOUT ROWID")
                 with tarfile.open(fileobj=archive, mode="r|gz") as tar:
-                    for member in tar:
+                    # r|gz streams bytes but still caches every TarInfo on
+                    # supported Python versions. No random member lookup is
+                    # needed: hardlink coverage already lives in the disk DB.
+                    for member in iter(tar.next, None):
+                        tar.members.clear()
                         name = _member_name(member.name)
                         key_bytes = _member_key(name)
-                        if key_bytes in database:
+                        prior = _member_marker(database, key_bytes)
+                        if prior is not None and not (member.isdir() and prior == b"I"):
                             raise ColdSourceBackupError("cold_import_backup_member_unsafe")
                         _require_directory_ancestors(database, name)
                         member_count += 1
                         if member.isdir():
-                            database[key_bytes] = b"D"
+                            _record_member(database, key_bytes, b"D")
                             continue
                         if member.issym():
                             if selected is not None and _matches(name, selected):
                                 target = _safe_link(name, member.linkname, hardlink=False)
                                 _require_acyclic_symlink(database, name, target)
-                                database[key_bytes] = b"L:" + _member_key(target)
+                                _record_member(database, key_bytes, b"L:" + _member_key(target))
                             else:
                                 # A complete disaster-recovery archive may retain
                                 # unrelated absolute links. This witness never
                                 # extracts or grants byte coverage from them.
-                                database[key_bytes] = b"L:"
+                                _record_member(database, key_bytes, b"L:")
                             continue
                         if member.islnk():
                             target = _safe_link(name, member.linkname, hardlink=True)
-                            marker = database.get(_member_key(target))
+                            marker = _member_marker(database, _member_key(target))
                             if marker is None or not marker.startswith(b"F:"):
                                 raise ColdSourceBackupError("cold_import_backup_link_unsafe")
                             digest = marker[2:].decode("ascii")
-                            database[key_bytes] = marker
+                            _record_member(database, key_bytes, marker)
                             if _matches(name, selected):
                                 members.append({"archive_path": name, "sha256": digest})
                             continue
@@ -238,7 +261,7 @@ def _scan_archive(
                             raise ColdSourceBackupError("cold_import_backup_member_unreadable")
                         logical_bytes += size
                         hexdigest = digest.hexdigest()
-                        database[key_bytes] = b"F:" + hexdigest.encode("ascii")
+                        _record_member(database, key_bytes, b"F:" + hexdigest.encode("ascii"))
                         if name == "manifest.json":
                             try:
                                 parsed = json.loads(bytes(data or b""))
@@ -249,9 +272,13 @@ def _scan_archive(
                             embedded = parsed
                         elif _matches(name, selected):
                             members.append({"archive_path": name, "sha256": hexdigest})
+                database.commit()
             workspace_bytes = sum(path.stat().st_size for path in Path(temporary).iterdir())
-    except OSError as exc:
-        if exc.errno == errno.ENOSPC:
+    except (OSError, sqlite3.Error) as exc:
+        if (getattr(exc, "errno", None) == errno.ENOSPC
+                or getattr(exc, "sqlite_errorcode", None) == getattr(sqlite3, "SQLITE_FULL", 13)
+                # Python 3.10 does not expose sqlite_errorcode.
+                or isinstance(exc, sqlite3.OperationalError) and str(exc) == "database or disk is full"):
             available = shutil.disk_usage(workspace).free
             raise ColdSourceBackupError("cold_import_backup_workspace_capacity", available_bytes=available) from exc
         raise

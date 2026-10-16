@@ -400,6 +400,10 @@ member-count ceiling; actual filesystem and process resources bound the
 operation. Per-member path, collision, digest and source-change checks remain
 fail-closed; selected-source links cannot escape or form a cycle. Generic
 browser/inert archive recovery retains its separate bounded inspection policy.
+The trusted migration witness preserves case and Unicode distinctions in source
+member names because it never extracts them. It rejects actual duplicate paths
+and file/ancestor conflicts in either order, while its disk index also replaces
+tar's unused in-memory member cache across supported Python versions.
 An operator may still pass `--backup-manifest` for
 an existing complete backup. That compatibility path validates every archive
 member, including older backups without a member list, while transporting only
