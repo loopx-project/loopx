@@ -1329,12 +1329,12 @@ Python 拥有的投影只传入紧凑的读取 facts。每个投影一次请求�
 status projection 迁入 kernel（§4 已将其列为 facade 退出条件），由 TS 直接收集
 facts，adapter 随之删除。
 
-推广顺序。`status`（含 `--goal-id` 与 projection cache 命中）、`global-summary`
-与 `global-gates` 现已携带 envelope。其他 `collect_status` 调用方会在 payload 里
-收到 status envelope，但尚未输出自己的 envelope。下一步依次为：`global-todos` 与
-`global-risks`（同样的组合，各一次调用）、`quota should-run`、`review-packet`，
-以及 Decision Context packet。新加入或迁入 TypeScript 的读模型在同一个 PR 里输出
-envelope；§6 把这一条定为 promotion 门禁。
+推广顺序。`status`（含 `--goal-id` 与 projection cache 命中）、`global-summary`、
+`global-gates`、`global-todos`、`global-risks` 与 `quota should-run` 现已携带
+envelope。其他 `collect_status` 调用方会在 payload 里收到 status envelope，但尚未
+输出自己的 envelope。下一步依次为：`review-packet` 与 Decision Context packet。
+新加入或迁入 TypeScript 的读模型在同一个 PR 里输出 envelope；§6 把这一条定为
+promotion 门禁。
 
 消费者把缺失 envelope 视为新鲜度未知；envelope 告警时，必须先披露，再陈述依赖它的
 结论。字段语义与消费者规则见
@@ -1392,7 +1392,7 @@ replay、receipt 与 settlement。这个架构选择已经落地，不再是假�
 | Quota monitor-poll commit transaction | TypeScript 拥有 monitor admission 复核、target/event/result 构造、effect replay/index CAS、provider intent，以及可修复的 JSON/Markdown/index persistence | Python 投影 compact `should-run` facts，在最多两次 reduction 之间调用真实 Todo provider，刷新 legacy status，并持有 cross-writer index lock |
 | Runtime decoder（[#3443](https://github.com/loopx-project/loopx/pull/3443)） | 稳定 primitive decoding 进入一个很小的共享模块；domain decoder 仍留在本地 | 没有理由建设更大的 schema framework |
 | Transaction 兑现（[#3464](https://github.com/loopx-project/loopx/pull/3464)、[#3481](https://github.com/loopx-project/loopx/pull/3481) 与 Todo completion） | Turn settlement、quota delivery routing 与 Todo completion 均只跨一个粗粒度 TS boundary；Todo transaction 拥有 identity、replay fence、validation planning/result reduction、continuation/recovery 与 completion metadata | Python 仍执行显式 external provider，并物化 legacy Markdown result；其他 domain 仍需各自的 bounded cutover |
-| Projection envelope | TypeScript 拥有 `loopx_projection_envelope_v0` 的解码，以及全部 freshness、告警、完整性与重放判定 | 在 `status`、`global-summary`、`global-gates` 迁移前，Python 仍为它们收集读取 facts |
+| Projection envelope | TypeScript 拥有 `loopx_projection_envelope_v0` 的解码，以及全部 freshness、告警、完整性与重放判定 | 在这些投影迁移前，Python 仍为 `status`、`global-summary`、`global-gates`、`global-todos`、`global-risks` 与 quota `should-run` 收集读取 facts |
 
 Scheduler facade exit 已交付第一段有边界的 Stage 3 路径。带版本的
 `heartbeat_followup_cli.ts` 从生成的 ACK/failure hint 接收有大小上限的 compact host

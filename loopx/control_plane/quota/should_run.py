@@ -29,6 +29,8 @@ from ..quota.goal_boundary import (
     registry_goal_by_id as _registry_goal_by_id,
 )
 from ..quota.projection_repair import build_boundary_projection_repair_hint
+from ..projection_envelope_facts import seal_projection_envelope, source_fact
+from ..runtime.time import now_utc_iso
 from ..quota.selected_todo_projection import selected_todo_projection
 from ..quota.states import (
     AutomaticTurnPauseCause,
@@ -68,11 +70,155 @@ QUOTA_PAUSED_MODE = "quota_paused"
 GOAL_STOPPED_MODE = "goal_stopped"
 
 
+def _tracked_read_callback(
+    callback: Callable[..., Any] | None,
+    *,
+    source_id: str,
+    direct_sources: dict[str, dict[str, Any]],
+) -> Callable[..., Any] | None:
+    """Record a supplied live reader only when quota invokes it."""
+
+    if callback is None:
+        return None
+
+    def tracked(*args: Any, **kwargs: Any) -> Any:
+        read_at = now_utc_iso()
+        try:
+            result = callback(*args, **kwargs)
+        except (OSError, RuntimeError, ValueError):
+            direct_sources[source_id] = source_fact(
+                source_id,
+                read_status="unreadable",
+                last_read_at=read_at,
+                unreadable_count=1,
+            )
+            raise
+        read_status = (
+            "unreadable"
+            if isinstance(result, Mapping)
+            and result.get("projection_status") == "unavailable"
+            else "read"
+        )
+        direct_sources[source_id] = source_fact(
+            source_id,
+            read_status=read_status,
+            last_read_at=read_at,
+            item_count=0 if result is None else 1,
+            unreadable_count=1 if read_status == "unreadable" else 0,
+        )
+        return result
+
+    return tracked
+
+
+def _automation_cadence_source(
+    payload: Mapping[str, Any], *, observed_at: str
+) -> dict[str, Any] | None:
+    readback = payload.get("automation_cadence_readback")
+    if not isinstance(readback, Mapping):
+        return None
+    eligibility = readback.get("eligibility")
+    reason = (
+        str(eligibility.get("reason") or "")
+        if isinstance(eligibility, Mapping)
+        else "owner_read_failed"
+    )
+    if reason == "runtime_root_unavailable":
+        return source_fact("automation_cadence", read_status="not_read")
+    if reason == "owner_read_failed":
+        return source_fact(
+            "automation_cadence",
+            read_status="unreadable",
+            last_read_at=observed_at,
+            unreadable_count=1,
+        )
+    return source_fact(
+        "automation_cadence",
+        last_read_at=observed_at,
+        item_count=1,
+    )
+
+
+def _attach_quota_should_run_envelope(
+    payload: dict[str, Any],
+    status_payload: Mapping[str, Any],
+    *,
+    safe_goal_id: str,
+    direct_sources: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    observed_at = now_utc_iso()
+    status_envelope = status_payload.get("projection_envelope")
+    has_status_envelope = isinstance(status_envelope, Mapping)
+    cadence_source = _automation_cadence_source(payload, observed_at=observed_at)
+    goal_found = not (
+        payload.get("state") == "unknown"
+        and payload.get("status") == "goal_not_found"
+    )
+    omitted = []
+    if not goal_found:
+        omitted.append(
+            {
+                "reason": "goal_not_found",
+                "count": 1,
+                "refs": [safe_goal_id] if safe_goal_id else [],
+            }
+        )
+    payload["projection_envelope"] = seal_projection_envelope(
+        projection="quota_should_run",
+        observed_at=observed_at,
+        sources=[
+            *[dict(row) for row in direct_sources.values()],
+            *([cadence_source] if cadence_source else []),
+            *(
+                []
+                if has_status_envelope
+                else [source_fact("status", read_status="not_read")]
+            ),
+        ],
+        coverage={
+            "scope": "goal",
+            "expected_count": 1,
+            "included_count": 1 if goal_found else 0,
+            "omitted": omitted,
+        },
+        upstream=[dict(status_envelope)] if has_status_envelope else [],
+    )
+    return payload
+
+
+def _record_app_scheduler_state_source(
+    payload: Mapping[str, Any],
+    status_payload: Mapping[str, Any],
+    resolved_scheduler_context: SchedulerExecutionContextResolution,
+    direct_sources: dict[str, dict[str, Any]],
+) -> None:
+    context = resolved_scheduler_context.context
+    if not (
+        resolved_scheduler_context.ok
+        and context is not None
+        and context.app_automation_applicable
+    ):
+        return
+    identity = payload.get("agent_identity")
+    agent_id = (
+        str(identity.get("agent_id") or "").strip()
+        if isinstance(identity, Mapping)
+        else ""
+    )
+    read = bool(status_payload.get("runtime_root") and agent_id)
+    direct_sources["app_scheduler_state"] = source_fact(
+        "app_scheduler_state",
+        read_status="read" if read else "not_read",
+        last_read_at=now_utc_iso() if read else None,
+    )
+
+
 def _apply_selected_todo_guards(
     prepared: _QuotaDecisionPreparation,
     route: _QuotaDecisionRoute,
     *,
     workspace_path: Path | None = None,
+    direct_sources: dict[str, dict[str, Any]] | None = None,
 ) -> _QuotaDecisionRoute:
     """Bind workspace and boundary guards to the exact projected Todo.
 
@@ -136,6 +282,12 @@ def _apply_selected_todo_guards(
     local_workspace = observe_goal_local_workspace(
         prepared.item, selected_todo, goal_boundary.get("write_scope", [])
     )
+    if direct_sources is not None:
+        direct_sources["delivery_workspace"] = source_fact(
+            "delivery_workspace",
+            last_read_at=now_utc_iso(),
+            item_count=1 if selected_todo else 0,
+        )
     if not prepared.inbox_priority_due:
         workspace_guard = build_agent_workspace_guard(
             prepared.item,
@@ -336,6 +488,17 @@ def build_quota_should_run(
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = str(goal_id or "").strip()
+    direct_sources: dict[str, dict[str, Any]] = {}
+    tracked_operator_inbox_reader = _tracked_read_callback(
+        operator_inbox_urgency_projector,
+        source_id="operator_inbox",
+        direct_sources=direct_sources,
+    )
+    tracked_replan_explore_reader = _tracked_read_callback(
+        replan_explore_reader,
+        source_id="replan_explore",
+        direct_sources=direct_sources,
+    )
     resolved_scheduler_context = resolve_scheduler_execution_context(
         scheduler_execution_context
     )
@@ -369,7 +532,7 @@ def build_quota_should_run(
     )
     if item:
         if _quota_item_is_paused(item):
-            return build_quota_paused_should_run_payload(
+            payload = build_quota_paused_should_run_payload(
                 status_payload,
                 safe_goal_id=safe_goal_id,
                 requested_agent_id=agent_id,
@@ -383,6 +546,12 @@ def build_quota_should_run(
                 runtime_root=runtime_root,
                 goal_ref=goal_ref,
             )
+            return _attach_quota_should_run_envelope(
+                payload,
+                status_payload,
+                safe_goal_id=safe_goal_id,
+                direct_sources=direct_sources,
+            )
         prepared = _prepare_quota_should_run_item(
             status_payload,
             safe_goal_id=safe_goal_id,
@@ -392,7 +561,7 @@ def build_quota_should_run(
             codex_app_current_rrule=codex_app_current_rrule,
             codex_app_automation_id=codex_app_automation_id,
             resolved_scheduler_context=resolved_scheduler_context,
-            operator_inbox_urgency_projector=operator_inbox_urgency_projector,
+            operator_inbox_urgency_projector=tracked_operator_inbox_reader,
             registry_goal=registry_goal,
             plan=plan,
             goal_health_ok=goal_health_ok,
@@ -405,18 +574,35 @@ def build_quota_should_run(
             receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
             receipt_bound_replan_guard_scoped=receipt_bound_replan_guard_scoped,
             authoritative_fallback_todo_items=authoritative_fallback_todo_items,
-            replan_explore_reader=replan_explore_reader,
+            replan_explore_reader=tracked_replan_explore_reader,
             receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
         )
         route = _resolve_quota_should_run_route(prepared)
-        route = _apply_selected_todo_guards(prepared, route, workspace_path=workspace_path)
-        return _build_quota_should_run_payload(
+        route = _apply_selected_todo_guards(
+            prepared,
+            route,
+            workspace_path=workspace_path,
+            direct_sources=direct_sources,
+        )
+        payload = _build_quota_should_run_payload(
             prepared,
             route,
             turn_instance_id=turn_instance_id,
             include_agent_todo_detail=include_agent_todo_detail,
             runtime_root=runtime_root,
             goal_ref=goal_ref,
+        )
+        _record_app_scheduler_state_source(
+            payload,
+            status_payload,
+            resolved_scheduler_context,
+            direct_sources,
+        )
+        return _attach_quota_should_run_envelope(
+            payload,
+            status_payload,
+            safe_goal_id=safe_goal_id,
+            direct_sources=direct_sources,
         )
     if health_item:
         payload = {
@@ -444,8 +630,13 @@ def build_quota_should_run(
             runtime_root=runtime_root or status_payload.get("runtime_root"),
             resolved_scheduler_context=resolved_scheduler_context,
         )
-        return payload
-    return {
+        return _attach_quota_should_run_envelope(
+            payload,
+            status_payload,
+            safe_goal_id=safe_goal_id,
+            direct_sources=direct_sources,
+        )
+    payload = {
         "ok": False,
         "mode": "should-run",
         "goal_id": safe_goal_id,
@@ -461,3 +652,9 @@ def build_quota_should_run(
         ),
         "plan_summary": plan.get("summary"),
     }
+    return _attach_quota_should_run_envelope(
+        payload,
+        status_payload,
+        safe_goal_id=safe_goal_id,
+        direct_sources=direct_sources,
+    )
