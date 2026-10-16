@@ -8,6 +8,7 @@ Confirmation is an authenticated *fixture*, never live transaction authority.
 import json
 import hashlib
 import os
+import shutil
 import threading
 from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -117,6 +118,14 @@ def test_real_sdk_native_prepare_confirmation_consume_report_and_profile_revocat
     runtime_bin = os.environ.get("DSH_NATIVE_OPERATION_RUNTIME")
     if connection_lifetime != "retained" and not runtime_bin:
         pytest.skip("explicit resume-capable runtime required")
+    # Exercise URI/JSON escaping through the actual SDK loader, including
+    # the frozen-request and persisted-session paths, without changing code.
+    if request_transport == "frozen":
+        escaped_module = tmp_path / 'native module "quoted" 雪'
+        escaped_module.mkdir()
+        for source in Path(module).parent.glob("*.js"):
+            shutil.copy2(source, escaped_module / source.name)
+        module = str(escaped_module / Path(module).name)
     service, store = fixtures.service(tmp_path)
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     projection = build_todo_runtime_shadow_projection(
@@ -497,3 +506,54 @@ def test_callback_failure_quiesces_owned_sdk_before_host_can_be_reused(
         assert not host.connection.path.exists()
         with pytest.raises(ValueError, match="closed"):
             host.run(request(), **options)
+
+
+@pytest.mark.parametrize("failed_artifact", ["operation.mjs", "operation.patch.yml"])
+def test_artifact_write_failure_closes_connection_before_sdk_launch(
+    tmp_path, monkeypatch, failed_artifact
+):
+    sdk = pytest.importorskip("deepseek_harness")
+    service, store = fixtures.service(tmp_path)
+    module = tmp_path / "native-operation.js"
+    module.write_text("export function apply() {}\n")
+    writes = []
+    original_write = Path.write_text
+
+    def write(path, *args, **kwargs):
+        if path.name in {"operation.mjs", "operation.patch.yml"}:
+            writes.append(path.name)
+            if path.name == failed_artifact:
+                raise OSError("fixture artifact write failed")
+        return original_write(path, *args, **kwargs)
+
+    def forbidden_launch(*_args, **_kwargs):
+        pytest.fail("artifact failure must precede SDK process launch")
+
+    monkeypatch.setattr(Path, "write_text", write)
+    monkeypatch.setattr(sdk, "DeepSeekHarness", forbidden_launch)
+    with OwnedDshOperationHost() as host:
+        with pytest.raises(OSError, match="fixture artifact write failed"):
+            host.run(
+                request(),
+                runtime_root=store.root.parent.parent,
+                registry_path=service.registry_path,
+                project=service.registry_path.parent.parent,
+                dsh_home=tmp_path / "sdk-home",
+                operation_module=module,
+                provider="deepseek-official",
+                model="fixture-model",
+                reasoning_effort="high",
+                max_tokens=128,
+                runtime_bin=(Path(os.environ["DSH_NATIVE_OPERATION_RUNTIME"])
+                    if os.environ.get("DSH_NATIVE_OPERATION_RUNTIME") else None),
+            )
+        assert writes == (["operation.mjs"] if failed_artifact == "operation.mjs"
+                          else ["operation.mjs", "operation.patch.yml"])
+        assert host.harness is None
+        assert not host.connection.path.exists()
+        assert not host.connection.path.parent.exists()
+        with pytest.raises(ValueError, match="closed"):
+            host.run(request())
+        assert load_codex_cli_session(
+            store.root.parent.parent, lineage=_lineage(request()), host="dsh"
+        ) is None
