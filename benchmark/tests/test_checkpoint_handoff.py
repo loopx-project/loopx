@@ -261,8 +261,9 @@ def test_closeout_does_not_relax_settlement_identity(field, value):
             "goal_id": "source", "agent_id": "agent", "turn_instance_id": "turn"})
 
 
-@pytest.mark.parametrize("fault", [None, "first_read", "probe", "cursor_moved", "capture"])
-def test_interrupted_capture_keeps_reader_through_publication_and_cleans_up(tmp_path, monkeypatch, fault):
+@pytest.mark.parametrize("fault", [None, "first_read", "probe", "cursor_moved", "source_moved", "capture"])
+@pytest.mark.parametrize("restored", [False, True])
+def test_interrupted_capture_keeps_reader_through_publication_and_cleans_up(tmp_path, monkeypatch, fault, restored):
     from contextlib import contextmanager
     from types import SimpleNamespace
     from benchmark.runtime.checkpoint_wake import CheckpointWake
@@ -287,6 +288,17 @@ def test_interrupted_capture_keeps_reader_through_publication_and_cleans_up(tmp_
     monkeypatch.setattr("benchmark.runtime.sessions.BenchmarkSessionWake", lambda *a, **k: binding)
     events = []
     token = object()
+    native_options = {"retained_history": {"turn_ids": ["source"], "visible_history_sha256": "source-digest"},
+                      "required_completed_turn_id": "continued"} if restored else {}
+    if restored or fault == "source_moved":
+        history_reads = []
+        def history(*args, **kwargs):
+            history_reads.append(True)
+            if fault == "source_moved" and len(history_reads) == 2:
+                raise ValueError("restored capture source changed after preflight")
+            return native_options
+        monkeypatch.setattr("benchmark.runtime.checkpoint_continuation.restored_capture_history",
+                            history)
     @contextmanager
     def reader(*args, **kwargs):
         events.append("open")
@@ -296,6 +308,7 @@ def test_interrupted_capture_keeps_reader_through_publication_and_cleans_up(tmp_
             events.append("closed")
     def read(*args, transport, interrupted_guard, **kwargs):
         assert transport is token and interrupted_guard["decision_sha256"] == held["sha256"]
+        assert {key: kwargs[key] for key in native_options} == native_options
         events.append("read")
         if fault == "first_read":
             raise ValueError("synthetic read failure")
@@ -318,10 +331,77 @@ def test_interrupted_capture_keeps_reader_through_publication_and_cleans_up(tmp_
     monkeypatch.setattr("benchmark.runtime.checkpoint_wake.effect_runtime_result", artifact)
     phase_deadline = time.time() + 5
     if fault:
-        with pytest.raises(ValueError, match="failure|cursor moved"):
+        with pytest.raises(ValueError, match="failure|cursor moved|source changed"):
             hook._capture(held, time.monotonic() + 5)
         assert events[-1] == "closed"
         assert ("capture" in events) is (fault == "capture")
     else:
         assert hook._capture(held, time.monotonic() + 5)["sha256"] == "sealed"
         assert events == ["open", "read", "probe", "read", "capture", "closed"]
+
+
+@pytest.mark.parametrize("fault", [None, "binding_lost", "source_moved", "session_moved", "no_cursor", "pending_review"])
+@pytest.mark.parametrize("reset", [False, True])
+def test_restored_capture_cannot_drop_its_preflight_basis(tmp_path, monkeypatch, fault, reset):
+    from benchmark.runtime import checkpoint_continuation as continuation
+    native = {"turn_ids": ["source"], "visible_history_sha256": "retained-digest"}
+    binding = {"session_id": "destination", "checkpoint_artifact_sha256": "a" * 64,
+               "checkpoint_artifact_root": str(tmp_path / "point")}
+    gate = {"capture_allowed": True, "checkpoint_sha256": "a" * 64,
+            "native_continuation_cursor": "continued"}
+    if reset:
+        binding["checkpoint_context_refresh"] = {"checkpoint_sha256": "a" * 64,
+            "session_id": "destination", "review_basis": {"decision_sha256": "accepted"}}
+    if fault == "binding_lost":
+        binding = None
+    elif fault == "source_moved":
+        binding["checkpoint_artifact_sha256"] = "b" * 64
+    elif fault == "session_moved":
+        binding["session_id"] = "another"
+    elif fault == "no_cursor":
+        gate.pop("native_continuation_cursor")
+    elif fault == "pending_review":
+        gate["capture_allowed"] = False
+    reads = []
+    monkeypatch.setattr(continuation, "load_codex_cli_session", lambda *a, **k: binding)
+    def basis(method, request):
+        assert request == {"action": "read_basis", "root": str(tmp_path / "point"), "expected_sha256": "a" * 64}
+        reads.append(True)
+        return {"point_metadata": {"native_session": native}}
+    monkeypatch.setattr(continuation, "effect_runtime_result", basis)
+    env = {"LOOPX_RUNTIME_ROOT": str(tmp_path), "LOOPX_GOAL_ID": "goal", "LOOPX_AGENT_ID": "agent"}
+    if fault:
+        with pytest.raises(ValueError, match="preflight|admitted session"):
+            continuation.restored_capture_history(env, gate, session_id="destination")
+        assert not reads
+    else:
+        assert continuation.restored_capture_history(env, gate, session_id="destination") == {
+            "retained_history": ({"turn_ids": [], "visible_history_sha256": hashlib.sha256(b"[]").hexdigest()}
+                                 if reset else native), "required_completed_turn_id": "continued"}
+        assert reads == [True]
+
+
+@pytest.mark.parametrize("native_participant", [False, True])
+def test_preflight_defers_history_only_when_capture_will_verify_it(tmp_path, monkeypatch, native_participant):
+    from types import SimpleNamespace
+    from benchmark.runtime import checkpoint
+    wake = tmp_path / "wakes" / "turn"
+    wake.mkdir(parents=True)
+    request = tmp_path / "request"
+    request.write_text(json.dumps({"destination": str(tmp_path / "checkpoints"),
+        "trigger": "fresh_replan", "native_session": native_participant,
+        "components": [{"id": "code", "source_path": str(tmp_path / "code")}], "point_metadata": {}}))
+    monkeypatch.setattr(checkpoint.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=json.dumps({"ok": True})))
+    monkeypatch.setattr(checkpoint, "effect_runtime_result", lambda *a, **k: {"capture": False, "reason": "no_fresh_replan"})
+    observed = []
+    def gate(*args, full_history):
+        observed.append(full_history)
+        return {"capture_allowed": True}
+    monkeypatch.setattr("benchmark.runtime.checkpoint_continuation.restored_capture_gate", gate)
+    env = {"LOOPX_CHECKPOINT_REQUEST": str(request), "LOOPX_WAKE_LOG_DIR": str(wake.parent),
+        "LOOPX_CLI": "loopx", "LOOPX_PROJECT": str(tmp_path), "LOOPX_RUNTIME_ROOT": str(tmp_path),
+        "LOOPX_REGISTRY": str(tmp_path / "registry"), "LOOPX_GOAL_ID": "goal", "LOOPX_AGENT_ID": "agent"}
+    receipt = {"turn_id": "turn", "mode": "heartbeat", "stage": "execute"}
+    assert checkpoint.capture_before_replan(env, receipt, "current work").endswith("current work")
+    assert observed == [not native_participant]
+    assert receipt["checkpoint"]["reason"] == "no_fresh_replan"

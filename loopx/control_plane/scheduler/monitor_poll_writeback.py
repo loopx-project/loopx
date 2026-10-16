@@ -8,6 +8,12 @@ from ..todos.contract import (
     normalize_todo_id,
 )
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ..coordination.local_authority import (
+    LocalCoordinationAuthorityRejection,
+    read_canonical_todos_if_promoted,
+    require_canonical_authority,
+)
+from ...paths import effective_runtime_root
 
 
 def resolve_monitor_todo_item(
@@ -18,19 +24,24 @@ def resolve_monitor_todo_item(
     todo_id: str | None = None,
     target_key: str | None = None,
 ) -> dict[str, Any]:
-    from ...control_plane.todos.list_readback import list_goal_todos
-
     normalized_todo_id = normalize_todo_id(todo_id) if todo_id else None
     safe_target_key = str(target_key or "").strip()
     if not normalized_todo_id and not safe_target_key:
         raise ValueError("monitor todo writeback requires --todo-id or --target-key")
-    payload = list_goal_todos(
-        registry_path=registry_path,
+    authority = read_canonical_todos_if_promoted(
+        runtime_root=effective_runtime_root(
+            registry_path,
+            str(runtime_root) if runtime_root is not None else None,
+        ),
         goal_id=goal_id,
-        role="agent",
-        runtime_root_arg=str(runtime_root) if runtime_root is not None else None,
     )
-    items = payload.get("todos") if isinstance(payload.get("todos"), list) else []
+    if authority is None:
+        require_canonical_authority(goal_id=goal_id, operation="monitor_poll")
+    items = [
+        item
+        for item in authority["todos"]
+        if item.get("role") == "agent" and item.get("archive_state") != "archive"
+    ]
     try:
         result = effect_runtime_result("scheduler.monitor_target.select", {
             "schema_version": "loopx_monitor_target_request_v0", "items": items,
@@ -73,11 +84,10 @@ def write_monitor_poll_todo_state(
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
     gate_scope_guard: bool = False,
-    legacy_batch_version: int | None = 1,
+    legacy_batch_version: int | None = None,
 ) -> dict[str, Any] | None:
     """Route one typed Monitor transaction to its owning storage adapter."""
     from .monitor_batch_receipts import replay_legacy_monitor_poll
-    from .provider_monitor_poll import poll_canonical_monitor_if_promoted
 
     lease_proof = ({"idempotency_key": task_lease_idempotency_key,
                     "expected_version": task_lease_expected_version}
@@ -106,35 +116,44 @@ def write_monitor_poll_todo_state(
         "actor_agent_id": agent_id, "dry_run": not execute,
         "observation": observation, "intent": intent,
         "gate_scope_guard": gate_scope_guard, "legacy_batch_version": legacy_batch_version}
+    from .provider_monitor_poll import (
+        poll_canonical_monitor_if_promoted,
+    )
+
+    # A selected provider must be readable before any historical fallback.
+    # An unmigrated source may still replay its exact business receipt; that
+    # typed readback does not admit a fresh Monitor write or drain old captures.
+    authority = read_canonical_todos_if_promoted(
+        runtime_root=runtime_root,
+        goal_id=goal_id,
+    )
+    source_error: OSError | ValueError | None = None
     if monitor_effect_id and lease_proof is None:
         # Legacy receipts are historical facts even after authority promotion.
-        previous = replay_legacy_monitor_poll(registry_path=registry_path, request=request)
+        try:
+            previous = replay_legacy_monitor_poll(registry_path=registry_path, request=request)
+        except (OSError, ValueError) as error:
+            if authority is None:
+                raise
+            # Keep the typed native receipt available when its display is
+            # damaged. v4 forbids planning or committing if that receipt is
+            # absent; a malformed historical source never permits fresh work.
+            previous = None
+            source_error = error
         if previous is not None:
-            from ..coordination.local_authority import local_authority_is_promoted
-            # A crash after the one Markdown install can leave its prepared
-            # shadow entry without a commit marker. The existing drain proves
-            # that source replacement and recovers it from durable readback.
-            # Historical receipts after promotion must not drain stale legacy
-            # state into the canonical authority.
-            if not local_authority_is_promoted(runtime_root=runtime_root, goal_id=goal_id):
-                from ..coordination.local_authority_shadow_adapter import drain_local_authority_shadow_outbox
-                from ..coordination.local_authority_shadow_outbox import outbox_root
-
-                if outbox_root(runtime_root, goal_id).exists():
-                    drain_local_authority_shadow_outbox(
-                        registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id)
             return previous
-    canonical = poll_canonical_monitor_if_promoted(
-        registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id,
-        execute=execute, monitor_effect_id=monitor_effect_id, agent_id=agent_id,
-        lease_proof=lease_proof, gate_scope_guard=gate_scope_guard,
-        observation=observation, intent=intent,
-    )
-    if canonical is not None:
-        return canonical
-    if lease_proof is not None:
-        raise ValueError("Monitor lease proof requires promoted canonical authority; no legacy write attempted")
-    from .legacy_monitor_poll import apply_legacy_monitor_poll
-
-    return apply_legacy_monitor_poll(
-        registry_path=registry_path, runtime_root=runtime_root, request=request)
+    if authority is None:
+        require_canonical_authority(goal_id=goal_id, operation="monitor_poll")
+    try:
+        canonical = poll_canonical_monitor_if_promoted(
+            registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id,
+            execute=execute, monitor_effect_id=monitor_effect_id, agent_id=agent_id,
+            lease_proof=lease_proof, gate_scope_guard=gate_scope_guard,
+            receipt_only=source_error is not None,
+            observation=observation, intent=intent,
+        )
+    except LocalCoordinationAuthorityRejection as error:
+        if source_error is not None and error.code == "monitor_poll_original_receipt_required":
+            raise source_error from error
+        raise
+    return canonical

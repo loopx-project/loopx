@@ -186,8 +186,9 @@ layout or responsive navigation is introduced.
 
 </details>
 
-To disable future canonical creation, preview and apply the same v1 document
-with `canonical_creation=false`. Removing the preference restores the candidate
+In 2.0, `canonical_creation=false` preserves an inspectable preference but
+refuses new Goal creation. Enable canonical creation and review the preview
+before retrying. Removing the preference restores the candidate
 SQLite/hard-lease default for future new Goals; removal is **not** opt-out.
 To remove the whole preference:
 
@@ -247,7 +248,8 @@ CLI 使用上面的完整 JSON 和 preview/apply/inspect/bootstrap 命令；App 
 后的存储丢失须恢复完整备份，不能重新创建空库；通用 force 不能重建。原回执在
 后续写入后仍可读回，重试不得丢失或重复 Todo。
 
-显式设置 `canonical_creation=false` 才关闭之后的新建；remove 删除偏好会恢复候选
+2.0 中，显式 `canonical_creation=false` 保留可查看的偏好，但拒绝之后的新建；
+须启用并审核配置，再重试创建。remove 删除偏好会恢复候选
 SQLite/hard-lease 默认，不能用于关闭。两者均不会迁回已有数据、
 删除 fence 或重新开放旧 writer。既有 Goal 升级仍需备份、停止写入、结算租约和
 审核计划；反向迁移须保留新增写入。受支持的旧备份、格式和原回执恢复能力保留。
@@ -266,18 +268,18 @@ boolean and integer facts remain distinct even where Python object equality
 would equate them. This uses the same encoding boundary as capture identity,
 without granting a prose writer any Todo mutation or provider fallback.
 
-## Retirement boundaries before changing the release default
+## 2.0 retirement boundaries
 
-SQLite adoption and Python retirement need separate evidence. A canonical Goal
-can bypass a source writer while supported unmigrated Goals still call it.
-Changing the creation default does not migrate those Goals or settle their
-capture history. Use the existing [retirement cadence](../architecture/rfcs/ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md)
-to qualify each last caller family independently.
+Normal mutation now requires canonical authority. Python still owns supported
+Markdown projection, reviewed cold import and historical recovery adapters.
+Changing the creation default does not migrate an existing Goal or settle its
+historical obligations. The existing [retirement cadence](../architecture/rfcs/ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md)
+records how each former writer family reached this cutoff.
 
-| Retained boundary | Current value and owner | Evidence needed before removal |
+| Retained boundary | Current value and owner | Required evidence |
 | --- | --- | --- |
-| `todos/mutation_api.py` → `todos/legacy_mutation.py`; `bootstrap.py`, `work_items/team_plan_adapter.py`, `scheduler/legacy_monitor_poll.py` | These are still reachable unpromoted mutation families. Production callers have left the historic `todos.py` re-export; canonical transactions use their concrete typed owners. | Qualify the import-first cutoff for every family below, then delete its normal source-write dispatch and implementation together. Keep Markdown display, historical imports where supported, and import/export recovery. |
-| `runtime_shadow_writer_adapter.py`, `local_authority_shadow_outbox.py` | Source writers prepare capture before the primary write and record commit afterward; outbox records preserve interrupted operations. Typed coordination owners interpret the captured mutations. | Stop the corresponding source producers, classify every pending prepared/committed entry against its source and exact receipt, and prove recovery after producer removal. Clearing configuration cannot cancel an active capture obligation. |
+| `todos.py`, `bootstrap.py`, canonical Todo and lease adapters | Public mutation entrypoints admit only File, SQLite or PostgreSQL authority. Markdown remains a display and import source, not a write authority. | Run creation, update and recovery with the removed writer modules absent. Keep Markdown projection and supported import/export. |
+| `local_authority_shadow_outbox.py` and its typed reader | New outbox production is removed. Historical prepared and committed entries remain available for bounded disposition and exact receipt replay. | Seed historical bytes directly, classify each entry against its source and receipt, and prove restart recovery without a business write. |
 | `local_authority_shadow_projection.py` | Python transports full source artifacts, rejects floats and unsafe integers before Python/JS digest comparison, and checks identity, size, digest and regular-file readback. `coordination.source.project` remains the typed projection owner. | Preserve exact-byte and malformed-input behavior in the replacement, including symlink rejection, bounded transfer and ambiguous-operation errors. A language-only rewrite is insufficient. |
 | `runtime_shadow.py`, `local_authority_shadow_adapter.py`; retained `configuration.py`, `authority_source_capture.py`, `local_authority_shadow_history.py`, `local_authority_shadow_readback.py` | Configuration, cold-source capture and read-only diagnostics now have concrete owners independent of producers. Explicit shadow bootstrap/drain/promotion and recovery still have live callers. | Retire obsolete producer aliases only after their supported callers exit. Preserve the retained import/history/readback owners and outbox recovery; inspect or cold import succeeding without producers does not make a live drain unused. |
 | `authority_core.py` | Live Todo adapters delegate to typed mutation/ownership rules; scope overlap delegates to the typed lease owner. The lease-mode input compatibility contract is explicitly retained. | Trace direct, internal, dynamic and exported callers separately. Review registered historical input support before retiring its vocabulary; do not infer a fresh grant from old `legacy` inputs. |
@@ -288,60 +290,47 @@ process cleanup, private validation declarations and supported backup/original
 receipt readers where they still serve real callers. Their I/O or recovery
 value is distinct from a duplicated decision owner.
 
-For each proposed deletion, record the supported caller, replacement owner,
-persisted obligations and rollback. Search references and exports, then exercise
-the real CLI and installed package in a disposable runtime with the retired
-path absent. Include interrupted writes, restart/replay, malformed evidence and
-unavailable selected-provider cases. The provider must fail visibly without
-falling back to a Markdown writer. Keep historical recovery coverage; reverse
-cutover must retain writes made after the original migration.
+The cutoff qualification records the supported caller, replacement owner,
+persisted obligations and rollback. It exercises the real CLI and installed
+package with the retired writer path absent. The provider fails visibly without
+falling back to a Markdown writer. Historical recovery tests seed old evidence
+directly instead of calling a retired producer.
 
 Useful existing regressions include `test_source_projection.py`,
-`test_source_transfer.py`, `test_local_authority_shadow_outbox.py`,
-`test_runtime_shadow_bounded_e2e.py`, `test_shadow_writer_boundaries.py` and
-`test_shadow_cursor_recovery_e2e.py` under `tests/control_plane/`. Transport
-fault tests use injected faults; source/recovery tests also run real CLI/native
-writers against disposable File stores. These are bounded regression evidence,
-not sustained SQLite, PostgreSQL, packaged App or release-default qualification.
+`test_source_transfer.py`, `test_shadow_writer_boundaries.py`,
+`test_cold_source_inspection.py`, `test_shadow_registry_source.py` and
+`test_shadow_management_variant_e2e.py` under `tests/control_plane/`. These
+tests cover cold source admission, historical management evidence and
+producer-free recovery. Provider conformance and installed-package tests cover
+the canonical write path separately.
 
-### Proposed compatibility cutoff and release sequence
+### 2.0 compatibility cutoff and release sequence
 
-**Proposal, not installed behavior or a release announcement.** The current
-implementation still accepts target-only v0 settings, explicit
-`canonical_creation=false`, and normal writes to unpromoted Markdown Goals.
-Retiring that supported write path is an incompatible change; target a **2.0**
-release rather than silently removing it in a compatible 1.x update. This
-follows [Semantic Versioning's compatibility distinction](https://semver.org/).
-The implementation and release decision remain subject to the existing
+The implementation still decodes target-only v0 settings and explicit
+`canonical_creation=false` for inspection and reviewed configuration upgrade.
+It rejects normal writes to unpromoted Markdown Goals. This is an incompatible
+change for the 2.0 release, not a compatible 1.x update. The release decision
+remains subject to the existing
 [shared-authority RFC](../architecture/rfcs/shared-goal-authority-state-provider-v0.md)
 and [retirement cadence](../architecture/rfcs/ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md).
 
-The proposed cutoff is **canonical authority before normal mutation**, not
-SQLite for every Goal and not removal of every Python module:
+The cutoff is **canonical authority before normal mutation**, not SQLite for
+every Goal and not removal of every Python module:
 
-| Existing state | Proposed major-release behavior |
+| Existing state | 2.0 behavior |
 | --- | --- |
 | Unpromoted Markdown authority | Retain inspection and explicit upgrade/recovery; reject normal mutation before any write or new execution grant, with an actionable supported migration route. Do not silently initialize an empty canonical store. |
 | Canonical File or SQLite | Keep the recorded provider and either supported `soft_claim` or `hard_lease` policy. New unconfigured Goals default to SQLite; existing File Goals do not have to switch. Missing providers remain errors. |
-| Canonical store with `legacy` ownership policy | Review a claim-preserving policy migration to `soft_claim` or `hard_lease` before normal execution. Changing policy does not require promoting the store again or switching its provider. |
+| Canonical store with `legacy` ownership policy | Normal ownership mutations and execution proofs return `handoff_mode_retired`; old receipt recovery and exact release remain available. Review a claim-preserving policy migration to `soft_claim` or `hard_lease`. This does not require another storage promotion or provider switch. |
 | Target-only v0 or v1 creation disabled | Keep decoding for inspection and reviewed configuration upgrade. Require an explicit compatible creation choice before creating a writable Goal; do not erase the preference or reinterpret disabled as enabled. |
 | Historical ownership inputs, source captures and backups | Recognize them in declared migration/recovery contracts. Historical leases, receipts and a restored source do not grant new execution authority. Preserve supported original-operation recovery and permanent Markdown display. |
 
-There is a concrete prerequisite for the unpromoted cohort: today's reviewed
-promotion requires an enabled, bootstrapped shadow qualified by **real source
-mutations**, with the saved operation/event policy. An empty shadow cannot pass.
-If the major release first blocks the writer that produces those mutations, a
-cold Goal cannot manufacture its own migration qualification. The selected
-upgrade path is **reviewed import of the existing source**, implemented by the
-existing typed transaction and CLI/App storage settings described below,
-without requiring a compatible 1.x writer to create new captures.
-Do not lower operation counts, fabricate capture history or bypass source and
-receipt verification to hide this dependency. Implementation and bounded
-source/normal-wheel recovery evidence do not close installed adoption, complete
-Goal backup or every supported historical source. Keep those acceptance rows
-open; canonical create and isolated archive restore cannot substitute for them.
-Keep the compatible installer available for recovery until
-the declared historical support matrix has been qualified.
+Pre-cutoff promotion depended on an enabled shadow qualified by source
+mutations. A cold Goal can no longer manufacture that capture history. The 2.0
+upgrade path uses a separately qualified **reviewed import of the existing
+source**. It does not lower operation counts, fabricate capture history or ask
+a retired 1.x writer to create new evidence. Canonical create and isolated
+archive restore remain separate workflows.
 
 The import package must close one installed user journey through the existing
 typed coordination owner and Goal storage settings, shared by CLI and App:
@@ -438,14 +427,27 @@ settings use the same transaction for cold import:
    Confirm **Import reviewed Markdown source**. Apply
    rechecks the bound original source and backup; a changed source needs a new
    reviewed preview.
-4. After a lost response or reload, **Read original preview and current storage**
+4. After a lost response, reload or native App restart, **Read original preview and current storage**
    observes the saved operation and current store independently. Reload never
    completes an unfinished import. Confirm again to retry the original operation;
    do not discard its carrier while the commit is ambiguous.
 
-Only Goal/operation/digest identifiers survive in browser storage. Full plans,
-source bytes and backup paths stay local to the server. Completed receipt
+The local server retains only the existing Goal/operation/digest identifiers as
+editor intent, scoped to the runtime, registry and Goal. This also covers a
+canonical File/SQLite migration preview. A native App can recover the same
+original preview after restarting on another loopback port; recovery does not
+apply it. Browser storage is a compatibility cache, not the durable owner. Full
+plans, source bytes and backup paths stay local to the server. Completed receipt
 readback neither overwrites later writes nor reselects a provider.
+
+**Discard original preview** clears only the matching editor intent and survives
+restart. A stale tab cannot discard or apply a newer preview. Discard retains
+plans, backups and original receipts; it does not roll back a committed migration.
+A corrupt saved editor record makes inspection and mutation unavailable rather
+than guessing a replacement; explicit original-receipt readback remains available.
+Pre-upgrade browser-only handles remain explicitly readable through the original
+API/CLI recovery path. A new server does not automatically adopt an unscoped
+browser cache from a possibly different runtime or registry.
 The operator-led POSIX stop path is exercised with actual owned Host processes
 and native unpromoted-source leases on File/SQLite: import refuses while the
 Host runs and after it exits with an active lease; native release permits
@@ -469,16 +471,13 @@ selected command dispatcher and
 the existing Goal path resolver; its File/SQLite import and original-receipt
 recovery run with `todos.py`, `bootstrap.py`, `runtime_shadow_writer_adapter.py`
 and `local_authority_shadow_outbox.py` physically absent in a disposable package.
-This proves that command's independence, not that other commands or supported
-writers can lose those files. The retained prose-write guard now belongs to the
-existing source/fence boundary and shares the source partition projector with
-capture. Its old import remains compatible. Configuration and the guard load
-with both capture modules absent. Pure runtime-root routing now belongs to
+The retired writer and producer modules are absent from normal and installed
+qualification. Historical outbox inspection and disposition use independent
+readers. Pure runtime-root routing belongs to
 `paths.effective_runtime_root`; canonical Todo, terminal lifecycle, acceptance,
-Chat and CLI callers import that owner directly. The old adapter reexports the
-same function for supported capture callers. Source and fresh-wheel File/SQLite
-qualification runs the complete `serve_chat`
-entrypoint with all four modules physically absent. The packaged Goal settings
+Chat and CLI callers import that owner directly. Source and fresh-wheel
+File/SQLite qualification runs the complete `serve_chat` entrypoint with the
+retired modules physically absent. The packaged Goal settings
 journey performs backup/preview, reload and original-operation readback before
 explicit confirmation. Full current and archived requirements survive import;
 subsequent reviewed App creation, editing and completion work with the explicitly
@@ -493,10 +492,8 @@ retains subsequent writes. Unreviewed v0/v1 callers keep their existing intent
 and receipt identity. Import and original-receipt recovery refresh current
 ownership independently on the same settings screen, including retryable read
 failures; a saved receipt does not substitute for today's policy.
-Supported old APIs reexport the same functions; their real Markdown writers and bootstrap
-operations remain for actual callers. This qualifies the bounded import/loading
-journey, not retirement of every writer, full-state identity adoption, D2 or a
-released SQLite default.
+Read-only compatibility APIs retain their declared historical inputs. They do
+not reexport a Markdown business writer or grant fresh execution authority.
 
 已审核的 canonical Todo 创建使用请求 v2，将预览的 provider revision 绑定到既有
 命令身份和事务 CAS；并发修改会拒绝过期请求。原操作恢复先于当前 head 校验，保留
@@ -513,95 +510,29 @@ used by the source witness, including registries outside conventional Goal folde
 App 备份使用与 source witness 一致的 registry 实际路径，也覆盖位于常规 Goal
 目录之外的 registry。
 
-The last-writer inventory at `38cb407ed` names the next implementation frontier:
+The 2.0 cutoff was qualified in this order:
 
-| Caller family | Existing owner and cutoff proof |
-| --- | --- |
-| Ordinary Todo add/update/claim/complete/supersede/archive | `todos/mutation_api.py`, `provider_create.py`, `provider_update.py`, `provider_terminal_lifecycle.py`. Five legacy mutation dispatches remain; claim uses the update route. Require canonical authority before a fresh mutation, then remove `legacy_mutation.py` and writer-only line editing after tracing public imports. Preserve validators, display publication and original receipt recovery. |
-| Bootstrap/reconnect and explicit creation opt-out | `bootstrap.py` and the typed creation/default owner. Preserve existing canonical selection and interrupted initialization; an unmigrated source or disabled creation setting receives the reviewed import/configuration route before source replacement. Do not turn an old Goal into an empty new store. |
-| Confirmed team-plan commit | `work_items/team_plan_adapter.py` and `work_items.team_plan.commit`. Remove the unpromoted batch writer after canonical-required admission; recover historical confirmation receipts without applying the plan again or losing later work. |
-| Monitor observation and succession | `scheduler/monitor_poll_writeback.py`, `provider_monitor_poll.py`, `monitor_batch.ts`. Remove fresh `legacy_monitor_poll.py` writes, retaining `monitor_batch_receipts.py` recovery and exact generation/successor/once-only identity. A promoted historical replay must leave old outbox bytes inert. |
-| Ownership-policy/source lease entrypoints | `todos/handoff_mode.py`, `provider_handoff_mode.py` and the existing lease owners. Keep source inspection and settled lease history for import; refuse fresh unmigrated execution grants. An expired but unreleased lease still blocks import. This is separate from File/SQLite provider selection. |
-| Capture and active binding | `runtime_shadow_writer_adapter.py` and the existing typed source/outbox owners. Removing a configuration switch does not cancel an active binding. Classify prepared, committed and ambiguous entries against source bytes and original receipts before removing the last producer; retain recovery readers for the declared support window. |
-
-These are live call sites, not modules approved for immediate deletion. The
-implementation PR must join their shared typed admission boundary and exercise
-both fresh refusal **before any effect** and original-operation recovery. Do not
-deliver one PR per fallback. Use one cohesive normal-writer cutoff package,
-then a separate producer cleanup when its last callers and outboxes are settled.
-
-**Admission ordering for the 2.0 implementation.** The existing promotion fence
-is not itself the release cutoff. Today, a missing fence permits legacy writes;
-the Python adapter also returns early when that file is absent. Changing only
-the TypeScript missing-fence decision would leave that Python path open.
-Conversely, denying every legacy operation would block the original lease
-release required by cold import: an expired but unreleased lease is still an
-import refusal. The implementation must distinguish the following operations
-through the existing typed transaction owners, before deleting their callers:
-
-| Operation on an unmigrated source | Required cutoff behavior and retained owner |
-| --- | --- |
-| Fresh Todo, team-plan or Monitor mutation; new execution grant, renewal or ownership transfer | Refuse before source replacement, capture preparation or a new execution receipt. Route to reviewed cold import; do not enable creation settings, invent a store or fall back after a selected provider failure. Python transports the typed decision and cannot bypass it with a missing-file check. |
-| Original lease release or close of its existing execution fence, including an expired active lease | Preserve the original owner/key/version, generation and lock-token checks in `work_items/task_lease_lifecycle.ts`; allow settlement/abort without a new holder verification or execution grant. A wrong owner, stale proof or corrupt record must still refuse. Never delete a lease to make import pass. |
-| Original business receipt replay | Validate the original identity and return the recorded result before fresh-work admission. `work_items/team_plan_adapter.py` currently reads an unpromoted receipt inside its legacy write transaction; move that recovery route with the cutoff. Retain the Monitor receipt owner and keep promoted historical replay from draining old source state. A changed intent is a new operation, not recovery. |
-| Prepared or committed shadow work | Use the existing bounded drain and source/receipt reconciliation. Business replay success does not promise that its inline drain finished. Explicit catch-up must retain its budget, cursor and original identity; ambiguous source replacement remains a refusal. Do not recreate a business write to obtain a new capture. |
-| Explicit import, supported backup/format recovery and Markdown display | Keep their specific owners and source checks. `state_migration.py` and `projects/registry.py` also call the current fence/replacement helpers, so a blanket replacement of those helpers is not a complete cutoff. Recovery must not reopen normal writers or consume historical receipts as fresh authority. |
-
-The public entrypoints must preserve this distinction. CLI and packaged App
-should offer the existing reviewed import path for an unmigrated Goal; a missing
-selected provider instead requires restoration of that provider. Supported Lark
-entrypoints must return the same typed refusal and recovery boundary. A preview
-must not advertise a fresh legacy write that confirmation will reject. These
-are implementation requirements, not a shipped 2.0 switch or a new setting.
-
-The decisive combined acceptance starts with a cold source carrying an expired
-unreleased lease and an interrupted original operation: reject fresh work,
-release only the original lease, reconcile the original receipt/outbox, import,
-perform a canonical write, then restart and retry the old operation without
-losing the new write. Repeat for File and SQLite, wrong/stale release proofs,
-changed replay intent, malformed history and unavailable selected providers.
-Run it through the normal wheel and affected packaged entrypoints with the
-retired normal writers physically absent. Existing cold-import lease refusal,
-lease lifecycle retry, Monitor catch-up and team-plan replay tests characterize
-the components; they do not establish this future cutoff journey by themselves.
-
-Deliver complete, reversible PR packages in this order:
-
-1. **Direct source import and support boundary.** Qualify the existing
-   reviewed cold-source import on the installed CLI and packaged App, alongside
+1. **Direct source import and support boundary.** Qualify the reviewed
+   cold-source import on the installed CLI and packaged App, alongside
    existing new-Goal creation/retry and provider migration. Cover both
    qualified and cold unpromoted sources, target-only settings, stopped writers,
    active/expired leases, pending captures, missing providers and original-plan
-   recovery. Publish the selected major-release support contract before removing
-   its writer. An additive 1.x release may ship the importer and deprecation
-   guidance first; using the old writer is not a prerequisite for import.
-   New SQLite creation is already implemented.
-2. **Core-developer SQLite trial.** Between import qualification and the breaking
-   cutoff, use the existing [reversible trial procedure](sqlite-authority-store.md#reversible-developer-trial--可逆开发者试用).
-   Record actual installed source, CLI/App/Host adoption, ordinary use and recovery
-   outcomes for the declared small cohort. Use disposable copies for conversion
-   drills when an existing Goal is already canonical. Rollback/export starts at
-   the current head and retains new writes. A local conversion exercise is not
-   natural cohort observation; keep formal D2 results separately visible.
-3. **Normal writer family cutoff.** In the major-release implementation, enforce
-   that boundary through the existing typed admission owner and remove the
+   recovery. The importer does not call the retired writer.
+2. **Normal writer family cutoff.** Enforce the boundary through the existing
+   typed admission owner and remove the
    corresponding Markdown create/update/claim/complete/supersede/archive paths
    together with their private dispatch and writer-only tests. Trace CLI,
    internal, dynamic and supported import callers; keep shared rendering,
    validation effects and migration/recovery readers. Run the real wheel and
    packaged user journey with the retired paths physically absent, including
-   refusal and recovery for an unmigrated Goal. Do not land the breaking package
-   into an otherwise compatible 1.x release line.
-4. **Capture producer and duplicate decision retirement.** After the writer
-   family exits, remove only producers and bridges without supported callers.
+   refusal and recovery for an unmigrated Goal.
+3. **Capture producer and duplicate decision retirement.** Remove producers and
+   bridges without supported callers.
    Reconcile each prepared/committed outbox entry against source bytes and its
    original receipt first. Retain the codecs/readers needed by supported old
    backups and interrupted migrations. Prove restart/replay and forward recovery
    without recreating a business write or losing a later canonical write.
 
-Publish 2.0 beta, then rc and final only as these user journeys qualify for the
-declared support matrix. Do not wait for every external Goal to have migrated;
-each affected user must have a tested route before its next normal write.
 Software installation, authority-format upgrade, provider migration and
 ownership-policy migration remain distinct operations. Binary updates do not
 automatically switch authority. Reverse File/SQLite cutover starts from the
@@ -613,12 +544,76 @@ D2 capacity/soak qualification; missing or failed D2 evidence stays visible.
 A microbenchmark failure alone does not block an unrelated, proven internal
 deletion, and passing those deletions does not certify the release default.
 
-### 切换发布默认前的退役边界
+### Retirement proposal reconciliation
 
-canonical 写入绕过旧 writer，不代表未迁移 Goal 的调用方已消失。默认值修改也不
-迁移已有 Goal 或结算 capture 历史。按调用族分别验收，不把整项迁移设成所有小批
-退役的前置依赖；仍有调用的 writer/producer 在对应迁移后删，已无调用的内部桥接
-可先删，受支持的备份、格式、原回执恢复与 Markdown 展示继续保留。
+The contributor-led [#6396](https://github.com/loopx-project/loopx/pull/6396)
+and [supplement #2](https://github.com/Duang777/loopx/pull/2) carry the useful
+contracts from [#6366](https://github.com/loopx-project/loopx/pull/6366).
+Reconciliation follows supported behavior, rather than preserving every old
+module, response alias or test filename:
+
+| Contract | Current owner and regression evidence |
+| --- | --- |
+| Normal writer cutoff and deletion | Canonical mutation/creation/Monitor adapters; cold-source import and writer-isolation tests. Markdown mutation producers stay retired. |
+| Imported completion, succession and policy repair | Typed terminal/update owners; shared provider conformance and actual CLI consumer smokes in the supplement. |
+| Claim/lease ownership and atomic completion | `test_canonical_handoff_invariants.py`, canonical mutation/claim-transfer tests and provider conformance. Metadata cannot implement the retired two-write handoff. |
+| Original-operation recovery | Fixed 1.x lease, Monitor and team-plan artifacts guard exact replay, prepared matching effects, original release, lost close response and preservation of later state. Selected-provider failure remains a refusal; original receipts are checked before fresh-work admission. Fresh legacy verification/grants remain retired. |
+| Current ownership policy | Only `soft_claim` and `hard_lease` admit current work. Imported `legacy` records and original receipts cannot grant execution; reviewed backup/plan/migrate and exact release remain available. |
+| Retired lease helpers | Delete the unused Python lease writer/factory, generation/CAS helpers, owner-validation chain, and source Todo projection. The typed transaction remains the decision owner; retained JSON reading stays read-only. Release corruption/CAS assertions run through the actual native adapter with fixed 1.x records. |
+| Reviewed App creation and configuration | Chat binds the accepted operation to the reviewed provider revision and Todo identity; stale preview rejects, corrected preview can retry. Settings preserve a disabled preference and explain the required upgrade. |
+| Mutation-oracle strength and packaging | The fence oracle observes actual exclusive-open contention, including delayed startup. Existing prerelease bundle and installed-package checks retain their independent scope. |
+
+The ordinary lease CLI routes `renew`, `transfer` and `release` by the recorded
+provider. Unpromoted retries reach the retained typed lifecycle owner, which
+recognizes the original prepared/committed receipt before refusing fresh work.
+A successful historical renewal or transfer replay is not a current execution
+proof. Changed intent, ambiguous prepared effects and unavailable selected
+providers still refuse; the public adapter does not implement receipt decisions.
+
+Recovery and new execution retain separate admission paths. An unmigrated
+Monitor may finish its original quota transaction only from its matching retained
+business receipt; missing or changed evidence cannot rerun the observation,
+create a new reservation, or revive an old producer. Selected-provider failure
+never authorizes a fallback to historical Markdown. These cases run through the
+ordinary CLI as well as the retained receipt reader.
+
+For completed canonical creation and team plans, a missing or unreadable
+Markdown display is not a new-operation precondition. Exact creation/plan
+receipts remain recoverable after later Todos have been committed. Project
+registration keeps its original registry intent and frozen target; incomplete
+creation still validates its original source. Missing display recovery uses the
+current canonical projection and explicitly restores Todo sections only, never
+an empty registration template. An unreadable existing display remains intact:
+registration returns only the original creation readback, while a team-plan
+projection attempt reports its pending delivery. Creation readback does not
+certify display health.
+
+User actions retain their administrative operation through the bound Agent;
+they cannot acquire, renew or transfer an execution lease. Current proof and
+inspection use the same typed eligibility owner. An old invalid lease can still
+be released with its exact identity; the bound Agent can then resume the normal
+administrative edit or completion without creating another execution lease.
+
+The absorption does not qualify a release, contributor adoption, sustained D2
+operation or an unobserved Host. Full current-head CI and the combined adopted
+candidate retain their own acceptance. Historical output aliases and tests
+whose only subject was a deleted producer are superseded by the typed current
+contract and its supported recovery tests.
+
+Retirement removes internal Python helper exports with no shipped caller or
+registered import contract; it does not remove CLI/API lease operations, the
+historical wire vocabulary or receipt decoding. Test fixtures describe source
+records directly instead of keeping a production writer solely to construct
+fixtures. Owner eligibility remains covered at its typed owner and by real
+canonical claim/lease transactions. Historical generation checks belong to
+native recovery/release, including corrupt boolean generations and unchanged
+bytes after rejection.
+
+### 2.0 退役边界
+
+正常写入现在只接受 canonical authority；旧 writer、producer 和无调用内部桥接
+已删除。默认值修改仍不迁移已有 Goal 或自动处置历史 outbox。受支持的备份、格式、
+原回执恢复与 Markdown 展示继续保留。
 
 上表中的精确数字与摘要校验、安全文件传输、prepare→主写入→commit 顺序、游标
 恢复和 Host I/O 都有实际价值。替代实现须保留它们；Python 行数减少不能代替语义
@@ -628,65 +623,37 @@ canonical 写入绕过旧 writer，不代表未迁移 Goal 的调用方已消失
 新写入。现有回归覆盖不等于长期 SQLite、真实 PostgreSQL、打包 App 或发布默认
 已通过，trial 与正式默认的资格继续分别记录。
 
-**发布路径提案：**当前仍支持未晋升 Markdown Goal 的正常写入、v0 target-only
-和显式关闭 canonical creation；删除这条支持路径属于不兼容变更，建议在 **2.0**
-统一截止，不混入兼容 1.x 更新。要求是“正常写入前必须有 canonical authority”，
-不是所有 Goal 强制 SQLite。已有 canonical File/SQLite 和明确的两种 ownership
-policy 保持；已有 canonical store 若仍用 `legacy` policy，只需审核保留 claim 的
-policy 迁移，不重新晋升或强制换 provider。关闭/旧配置先明确审核升级，不删偏好
-或暗中启用。旧备份、格式、原回执和永久 Markdown 投影继续按其恢复契约支持。
+普通 lease CLI 的 renew／transfer／release 按原 provider 路由；未迁移的原操作重试
+先由既有 typed lifecycle owner 核验 prepared／committed 回执，再拒绝真正的新工作。
+历史 renew／transfer 的成功回读不提供当前执行证明；改意图、prepared 效果歧义或
+已选 provider 不可用仍拒绝，Python adapter 不新增回执判断规则。
 
-一个必须解决的死结是：当前晋升需要真实源写入形成合格 capture；冷启动、未资格化
-的旧 Goal 若先被禁止写入，就无法再产生迁移资格。选定主路径是独立验收的
-**旧源审核导入**，无需先在兼容 1.x writer 上新增 capture；不能降低计数、伪造
-capture 或把空库创建/isolated restore 当作此验收。先完整盘点和备份源，停止
-writer/Host、结算 lease 并逐项对账 outbox，再预览、明确确认、fence 旧 writer、
-导入并读回。未支持或歧义内容明确拒绝，旧 lease/回执不转为新授权；导入新回执
-与历史原回执分别保存。中断、失响应、重启须恢复同一操作，不重复副作用、不丢
-后续 canonical 新写入。此旅程与既有 canonical File/SQLite 切换及新身份 archive
-restore 分别验收。typed transaction、CLI 和 App 存储设置已实现，已有有界源码/
-正常 wheel 恢复证据；安装采用、完整 Goal 备份和全部历史源支持仍须各自验收，
-不能沿用“尚未实现”作为等待理由。历史支持矩阵验收前保留兼容安装包用于恢复。
+恢复与新执行分开准入：先验证已选 provider 可用性，再核验原操作的 typed 回执，
+最后才判断新写入。未迁移 Monitor 只能凭原业务回执完成原 quota 事务；缺失、损坏
+或身份改变不能重新观察、创建新 reservation 或恢复旧 producer。canonical 创建和
+team plan 的原回执不依赖 Markdown 展示仍然存在；重复注册保留原 registry 意图与
+已提交的新 Todo，缺展示时只从当前 canonical head 恢复 Todo 区域，不重写空模板。
+已有坏字节保留；注册只读回原创建回执，team-plan 的投影失败如实返回 pending，
+不把创建回执当成展示健康证明。User action 仍由绑定 Agent 执行行政编辑或完成，
+不能申请、续期或转移执行租约；历史错误租约可以精确释放，再继续原行政操作。
 
-当前真实调用族包括五处 mutation dispatch（claim 走 update）、bootstrap/
-creation opt-out、team-plan batch、Monitor、ownership/source lease 和 active
-binding/capture。上述表格逐族指定现有 owner、正常写入截止及历史恢复义务；
-消费者离开 `todos.py` 或 canonical 测试通过，不代表这些 writer 已无调用。
+**2.0 支持矩阵：**未迁移 Markdown Goal 的正常写入返回
+`canonical_authority_required`；v0 target-only 和显式关闭 canonical creation
+只用于检查与审核升级。要求是“正常写入前必须有 canonical authority”，不是所有
+Goal 强制 SQLite。已有 canonical File/SQLite 和两种 ownership policy 保持。
+旧备份、格式、原回执和永久 Markdown 投影继续按其恢复契约支持。
 
-**2.0 准入顺序：**现有 promotion fence 不能直接充当发布截止开关。TS 在缺少
-fence 时允许旧写入，Python 还有文件不存在即返回的快速路径；只改 TS 会漏掉
-后者。反过来全面拒绝 legacy 操作，会同时阻止导入所需的原租约释放。即使租约
-已过期，只要仍是 active，冷导入仍须拒绝，不能删记录或伪造结算来绕过。
+旧 Goal 通过独立验收的**旧源审核导入**迁移，无需调用退役 writer 新增 capture。
+流程先完整盘点和备份源，停止 Host、结算 lease 并逐项对账 outbox，再预览、明确
+确认、fence 旧 writer、导入并读回。未支持或歧义内容明确拒绝，旧 lease/回执不
+转为新授权；导入新回执与历史原回执分别保存。中断、失响应和重启恢复同一操作，
+不重复副作用，也不丢后续 canonical 新写入。
 
-截止包须在既有 typed transaction owner 区分新工作与原操作恢复：新 Todo、
-team-plan、Monitor 写入和新授权、续租、转移，在源写入、capture prepare 或
-新执行回执前拒绝；原租约释放及原执行 fence 关闭/中止继续核验原
-owner/key/version/generation 和 lock token，不重新 holder verify 或授予执行权。原业务回执先校验身份再读回结果，不能重新执行；team-plan 当前把未
-晋升回执读取放在 legacy 写事务内部，截止时须一起调整，Monitor 晋升后的旧回执
-重放仍不得 drain 旧源。改 intent、错 owner、过期版本或损坏历史继续明确拒绝。
-
-pending shadow 继续按原源字节和回执独立、有界地对账。业务重试成功不保证内联
-drain 已追平，也不能重做业务写入来生成新 capture。`state_migration.py` 和
-`projects/registry.py` 同样调用当前 fence/replacement helper；不能整体替换
-helper 后就宣告所有入口截止。显式导入、受支持格式/备份恢复和 Markdown 展示
-保留专属校验，同时不得重新打开正常 writer。CLI、packaged App 和受支持 Lark
-入口须区分“未迁移，走审核导入”和“已选 provider 缺失，先恢复 provider”，预览
-也不能许诺确认时会拒绝的旧写入；不新增开关或暗中开启已有创建设置。
-
-组合准出从“冷旧源＋过期未释放租约＋中断原操作”开始：拒绝新工作 → 仅原证明
-释放租约 → 原回执/outbox 对账 → 导入 → 新 canonical 写入 → 重启并重放旧操作，
-新写入不丢失。覆盖 File/SQLite、错误/过期释放证明、变更 intent、坏历史及
-provider 缺失；在正常 wheel/受影响 packaged 入口及旧正常 writer 物理缺席下
-验证。现有各组件测试只是这条未来截止旅程的依据，不是整条旅程已通过的证明。
-
-按上面的四个完整阶段推进：安装态 CLI/App 直接导入与支持边界 → 核心开发者
-SQLite 可逆试用 → 同边界
-create/update/claim/complete/supersede/archive 旧 writer 及私有 dispatch 删除 →
-逐项对账 outbox 后删除无调用的 capture producer/重复决策。大版本实现须有原生
-拒绝与恢复、旧路径物理缺席的真实入口验证；不要求所有外部用户已迁移。2.0
-beta→rc→final 依据明确支持矩阵的旅程验收，不将原失败/缺失 D2 改成通过，也不把
-独立微基准当所有内部退役的前置。二进制更新不自动切 authority，反向切换须保留
-当前 head 的新增写入。版本和截止仍是提案，尚未改变安装行为或宣布发布。
+实现按三个包完成：安装态 CLI/App 直接导入与支持边界；删除
+create/update/claim/complete/supersede/archive 旧 writer 及私有 dispatch；逐项
+对账 outbox 后删除无调用 capture producer 和重复决策。验收覆盖原生拒绝与恢复，
+并在旧路径物理缺席时运行真实入口。二进制更新不自动切 authority，反向切换须
+保留当前 head 的新增写入。
 
 ## Existing canonical Goal storage in the App
 

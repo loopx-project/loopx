@@ -5,8 +5,12 @@ from pathlib import Path
 
 import pytest
 
+from canonical_authority_fixture import initialize_canonical_authority
 from loopx.cli import main
 from loopx.configure_goal import configure_goal
+from loopx.control_plane.coordination.runtime_shadow import (
+    build_todo_runtime_shadow_projection,
+)
 from loopx.todos import add_goal_todo
 
 
@@ -27,6 +31,7 @@ def _registry(tmp_path: Path) -> Path:
     registry.write_text(
         json.dumps(
             {
+                "common_runtime_root": str(tmp_path / "runtime"),
                 "goals": [
                     {
                         "id": GOAL_ID,
@@ -44,6 +49,16 @@ def _registry(tmp_path: Path) -> Path:
             }
         ),
         encoding="utf-8",
+    )
+    initialize_canonical_authority(
+        tmp_path / "runtime",
+        GOAL_ID,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID,
+            todos=[],
+            handoff_mode="soft_claim",
+        ),
+        state_path=tmp_path / "ACTIVE_GOAL_STATE.md",
     )
     return registry
 
@@ -225,9 +240,8 @@ def test_todo_cli_emits_delegated_override_receipt(
 
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["mutation_authority"]["mode"] == (
+    assert payload["mutation_authority"]["authority_mode"] == (
         "delegated_orchestration_override"
     )
-    assert payload["mutation_authority"]["authority_reason"] == (
-        "Verified the result before orchestration closeout."
-    )
+    assert payload["mutation_authority"]["code"] == "terminal_transition"
+    assert payload["source_authority"] == "file_v0"

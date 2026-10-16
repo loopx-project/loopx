@@ -124,21 +124,12 @@ def test_old_host_reflection_is_ignored_when_ingest_is_off(ingest: bool) -> None
 @pytest.mark.parametrize("mode", ["unconfigured", "disabled", "stale", "both_off", "recall_only", "ingest_only", "both_on"])
 def test_real_turn_cli_memory_projection_and_settlement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, mode: str) -> None:
     from loopx.cli import main
-    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
     from tests.control_plane.reward_memory_host_fixture import enable_live_memory
     from test_loopx_turn_driver import _write_live_fixture
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry = _write_live_fixture(tmp_path)
-    state = project / ".codex/goals/loopx-turn-fixture/ACTIVE_GOAL_STATE.md"
-    projection = build_todo_runtime_shadow_projection(goal_id="loopx-turn-fixture", handoff_mode="soft_claim", todos=[{
-        "schema_version": "todo_item_v0", "todo_id": "todo_fixture0001", "role": "agent",
-        "status": "open", "archive_state": "active", "source_section": "Agent Todo",
-        "task_class": "advancement_task", "action_kind": "fixture", "claimed_by": "codex-fixture",
-        "priority": "P0", "done": False, "text": "Advance one public fixture.",
-    }])
-    initialize_canonical_authority(runtime, "loopx-turn-fixture", projection, state_path=state, provider=provider)
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider)
     ingest = mode in {"ingest_only", "both_on"}
     if mode != "unconfigured":
         config = enable_live_memory(registry, recall=mode in {"recall_only", "both_on"}, ingest=ingest)

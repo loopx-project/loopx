@@ -173,13 +173,13 @@ def apply_role_successor_todos(
     decision_summary: Mapping[str, object],
     execute: bool,
     text_source_todo_id: str | None = None,
+    expected_provider_revision: str | None = None,
 ) -> dict[str, object]:
-    """Preview or create role-declared successor todos through LoopX state.
+    """Create successors, retaining qualified historical source bindings.
 
-    When text_source_todo_id is provided, it is used for rendering the
-    successor text (so the title is stable across different summary todos
-    that review the same failure lineage).  source_todo_id is still used
-    for the unblocks_todo_id binding.
+    Normally one source supplies both title and lineage. A caller recovering
+    an existing successor may preserve its original parent while rendering
+    the same title from the independently verified evidence lineage.
     """
 
     specs = [dict(spec) for spec in successor_specs if isinstance(spec, Mapping)]
@@ -257,6 +257,7 @@ def apply_role_successor_todos(
             action_kind=action_kind,
             claimed_by=claimed_by,
             unblocks_todo_id=source_todo_id,
+            expected_provider_revision=expected_provider_revision,
             dry_run=False,
         )
         successors.append(

@@ -4,8 +4,8 @@ One ladder, one row per completed RFC stage claim, one exit policy: the run
 is green only when every selected row passed. A row that cannot run in this
 environment (no PostgreSQL, no NoKV stack, no POSIX signals) reports
 ``unverified`` and, unless ``--allow-unverified`` is given, the ladder exits
-non-zero. Rows for stages that later PRs will land are declared as
-``pending`` so the report never silently claims them.
+non-zero. Future obligations may be declared as ``pending`` so the report never
+silently claims them.
 
 Rows drive the product through ``python -m loopx.cli`` (``real_cli``) or run
 the retained store-level probes (``store_direct``); this module adds no
@@ -39,27 +39,12 @@ from .authority_e2e_row_support import (
     sha256_hex,
     unverified,
 )
-from .authority_e2e_rows_stage2c import row_retired_observation_upgrade
-from .authority_e2e_rows_stage2c2 import (
-    capture_workspace,
-    delivered,
-    row_archive_after_leased_completion_parity,
-    row_drain_idempotent,
-    row_event_only_todo_source_holds,
-    row_growth_measurement_gate,
-    row_migration_seeds_and_drains,
-    row_outbox_prepared_then_committed_entries,
-    row_parity_divergent_detects_foreign_edit,
-    row_parity_equal,
-    row_rollback_with_pending_entries,
-    row_sigkill_between_primary_write_and_drain,
-    row_sigkill_mid_drain,
-)
 from .authority_e2e_fixtures import (
     REPO_ROOT,
     CliOutputError,
     TS_READBACK_PROBE,
     JsonObject,
+    build_canonical_file_workspace,
     node_executable,
     parse_json_object,
     run_cli,
@@ -70,7 +55,7 @@ from .authority_e2e_fixtures import (
 
 REPORT_SCHEMA = "loopx_shared_goal_authority_e2e_report_v0"
 LIST_SCHEMA = "loopx_shared_goal_authority_e2e_rows_v0"
-STAGES: tuple[str, ...] = ("0", "1", "2a", "2b", "2c1", "2c2")
+STAGES: tuple[str, ...] = ("0", "1", "2a", "2b")
 PRODUCT_PATHS: tuple[str, ...] = ("real_cli", "store_direct")
 GATES: tuple[str, ...] = (
     "deterministic",
@@ -137,8 +122,6 @@ PROBE_SOURCES: tuple[Path, ...] = (
     Path("loopx") / "control_plane" / "testing" / "authority_e2e_ladder.py",
     Path("loopx") / "control_plane" / "testing" / "authority_e2e_fixtures.py",
     Path("loopx") / "control_plane" / "testing" / "authority_e2e_row_support.py",
-    Path("loopx") / "control_plane" / "testing" / "authority_e2e_rows_stage2c.py",
-    Path("loopx") / "control_plane" / "testing" / "authority_e2e_rows_stage2c2.py",
 )
 MINIMUM_POSTGRES_TAP_PASSES = 9
 @dataclass(frozen=True)
@@ -249,8 +232,15 @@ def _row_local_conformance(context: RowContext, provider: str) -> RowOutcome:
 def _row_cli_document_decodes_through_ts_store(context: RowContext) -> RowOutcome:
     if node_executable() is None:
         return unverified("node_missing")
-    workspace = capture_workspace(context, "ladder-s1")
-    added = add_todo(workspace, "Decode this source transaction through the TypeScript store.")
+    workspace = build_canonical_file_workspace(
+        context.root,
+        goal_id=unique_goal_id("ladder-s1"),
+    )
+    added = add_todo(
+        workspace,
+        "Decode this source transaction through the TypeScript store.",
+        claimed_by=AGENT_A,
+    )
     todo_id = str(added["todo_id"])
     acquired = acquire_lease(
         workspace,
@@ -258,6 +248,9 @@ def _row_cli_document_decodes_through_ts_store(context: RowContext) -> RowOutcom
         owner=AGENT_A,
         idempotency_key="ladder-s1-lease",
     )
+    lease = acquired.get("lease")
+    expect(isinstance(lease, dict), "task-lease acquire must return its canonical lease")
+    assert isinstance(lease, dict)
     updated = run_cli(
         workspace,
         "todo",
@@ -270,10 +263,18 @@ def _row_cli_document_decodes_through_ts_store(context: RowContext) -> RowOutcom
         "A public-safe note recorded after the lease.",
         "--agent-id",
         AGENT_A,
+        "--task-lease-idempotency-key",
+        str(lease["idempotency_key"]),
+        "--task-lease-expected-version",
+        str(lease["version"]),
     )
     for label, payload in (("todo add", added), ("task-lease acquire", acquired), ("todo update", updated)):
-        delivered(payload, label=label)
-    probe = ts_readback(workspace, directory=workspace.runtime_root / "authority-shadow" / "file-v0")
+        expect(payload.get("source_authority") == "file_v0", f"{label} must use canonical File authority")
+        expect(payload.get("decision_read_from_provider") is True, f"{label} must read provider authority")
+        expect(payload.get("legacy_fallback_used") is False, f"{label} must not use a legacy fallback")
+        expect("coordination_runtime_shadow" not in payload, f"{label} must not emit retired capture evidence")
+    directory = workspace.runtime_root / "authority" / "file-v0"
+    probe = ts_readback(workspace, directory=directory)
     expect(probe is not None, "read-back probe requires node")
     assert probe is not None
     load, scan = probe.get("load"), probe.get("scan")
@@ -287,7 +288,7 @@ def _row_cli_document_decodes_through_ts_store(context: RowContext) -> RowOutcom
     expect(scan.get("cursors") == ["1", "2", "3", "4"], "transactions must retain source order")
     assert isinstance(operations, list)
     receipt_probe = ts_readback(workspace, receipt=str(operations[1]),
-                               directory=workspace.runtime_root / "authority-shadow" / "file-v0")
+                               directory=directory)
     expect(isinstance(receipt_probe, dict), "receipt probe must load")
     assert isinstance(receipt_probe, dict)
     receipt = receipt_probe.get("receipt")
@@ -526,124 +527,9 @@ LADDER_ROWS: tuple[LadderRow, ...] = (
         posix_only=False,
         run=_row_postgresql_conformance_live,
     ),
-    LadderRow(
-        id="s2c1.retired_observation_upgrade",
-        stage="2c1",
-        title="Retired settings cannot write; explicit replacement bootstrap captures the next transaction",
-        product_path="real_cli",
-        gate="deterministic",
-        posix_only=False,
-        run=row_retired_observation_upgrade,
-    ),
-    LadderRow(
-        id="s2c2.outbox_prepared_then_committed_entries",
-        stage="2c2",
-        title="Python and TypeScript writers leave prepared records with committed markers that one drain delivers once",
-        product_path="real_cli",
-        gate="deterministic",
-        posix_only=False,
-        run=row_outbox_prepared_then_committed_entries,
-    ),
-    LadderRow(
-        id="s2c2.drain_idempotent",
-        stage="2c2",
-        title="Bounded drains are cumulative, an idle drain changes nothing, and a writer replay mints no entry",
-        product_path="real_cli",
-        gate="deterministic",
-        posix_only=False,
-        run=row_drain_idempotent,
-    ),
-    LadderRow(
-        id="s2c2.sigkill_between_primary_write_and_drain",
-        stage="2c2",
-        title="A SIGKILL around the primary replace leaves a prepared-only entry that drain settles from the primary bytes",
-        product_path="real_cli",
-        gate="deterministic",
-        posix_only=True,
-        run=row_sigkill_between_primary_write_and_drain,
-    ),
-    LadderRow(
-        id="s2c2.sigkill_mid_drain",
-        stage="2c2",
-        title="A SIGKILL inside the inline drain is recovered from exact receipts without a second delivery",
-        product_path="real_cli",
-        gate="deterministic",
-        posix_only=True,
-        run=row_sigkill_mid_drain,
-    ),
-    LadderRow(
-        id="s2c2.rollback_with_pending_entries",
-        stage="2c2",
-        title="Rollback archives pending entries, holds capture until rebootstrap, and replays its historical result",
-        product_path="real_cli",
-        gate="deterministic",
-        posix_only=True,
-        run=row_rollback_with_pending_entries,
-    ),
-    LadderRow(
-        id="s2c2.parity_equal",
-        stage="2c2",
-        title="Sustained interleaving of Python and TypeScript writers keeps every bounded qualification matched",
-        product_path="real_cli",
-        gate="deterministic",
-        posix_only=False,
-        run=row_parity_equal,
-    ),
-    LadderRow(
-        id="s2c2.parity_divergent_detects_foreign_edit",
-        stage="2c2",
-        title="A direct primary edit is reported as drift, holds later captures, and recovers only by rollback and rebootstrap",
-        product_path="real_cli",
-        gate="deterministic",
-        posix_only=False,
-        run=row_parity_divergent_detects_foreign_edit,
-    ),
-    LadderRow(
-        id="s2c2.event_only_todo_source_holds",
-        stage="2c2",
-        title="A retired Todo event source refuses reads and primary writes without changing either source",
-        product_path="real_cli",
-        gate="deterministic",
-        posix_only=False,
-        run=row_event_only_todo_source_holds,
-    ),
-    LadderRow(
-        id="s2c2.migration_seeds_and_drains",
-        stage="2c2",
-        title="migrate-state refuses an active capture source; after rollback the migrated goal bootstraps a fresh lineage that drains",
-        product_path="real_cli",
-        gate="deterministic",
-        posix_only=False,
-        run=row_migration_seeds_and_drains,
-    ),
-    LadderRow(
-        id="s2c2.growth_measurement_gate",
-        stage="2c2",
-        title="file-v0 history growth is measured per transaction and gated on retention integrity, claiming no capacity horizon",
-        product_path="real_cli",
-        gate="deterministic",
-        posix_only=False,
-        run=row_growth_measurement_gate,
-    ),
-    LadderRow(
-        id="s2c2.archive_after_leased_completion_parity",
-        stage="2c2",
-        title="archiving a Todo whose released lease stays on disk keeps the candidate head matched and qualifiable",
-        product_path="real_cli",
-        gate="deterministic",
-        posix_only=False,
-        run=row_archive_after_leased_completion_parity,
-    ),
 )
 
-PENDING_ROWS: tuple[PendingRow, ...] = (
-    PendingRow(
-        "s2c2.sustained_parity_soak",
-        "2c2",
-        "a >=10-day synthetic-goal soak of the selected local profile (RFC section 7.2, lane L); "
-        "bounded qualification reports sustained_parity_verdict=not_evaluated",
-    ),
-)
+PENDING_ROWS: tuple[PendingRow, ...] = ()
 
 
 def row_by_id(row_id: str) -> LadderRow:

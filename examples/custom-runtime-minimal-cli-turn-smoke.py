@@ -24,6 +24,7 @@ if str(REPO_ROOT) not in sys.path:
 
 GOAL_ID = "custom-runtime-min"
 AGENT_ID = "custom-host-agent"
+TURN_ID = "custom-runtime-fixture-turn"
 MARKER_NAME = "public-marker.txt"
 MARKER_BODY = "ok-from-custom-runtime\n"
 ADVANCED_TURN_SMOKE = (
@@ -106,8 +107,10 @@ def write_project_fixture(root: Path) -> tuple[Path, Path, Path]:
     return project, registry_path, state_file
 
 
-def assert_mainstream_cli_turn() -> None:
+def assert_mainstream_cli_turn(provider: str) -> None:
     from loopx.status import parse_active_state_todos
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
 
     assert WAKE_TRIGGER, "host must own a wake trigger"
     assert "quota should-run" in REENTRY_INSTRUCTION
@@ -116,6 +119,7 @@ def assert_mainstream_cli_turn() -> None:
 
     with tempfile.TemporaryDirectory(prefix="loopx-custom-runtime-min-") as tmp:
         project, registry_path, state_file = write_project_fixture(Path(tmp))
+        import_fixture_authority(registry_path, GOAL_ID, provider=provider)
 
         status = run_cli(registry_path, "status", "--scan-root", str(project))
         assert status.get("ok") is True, status
@@ -160,6 +164,8 @@ def assert_mainstream_cli_turn() -> None:
             AGENT_ID,
             "--runtime-profile",
             "generic_cli",
+            "--todo-id", todo_id,
+            "--turn-instance-id", TURN_ID,
             "--scan-path",
             str(project),
         )
@@ -184,12 +190,13 @@ def assert_mainstream_cli_turn() -> None:
             AGENT_ID,
             "--agent-id",
             AGENT_ID,
+            "--turn-instance-id", TURN_ID,
             "--evidence",
             "public marker written under project root",
-            "--no-follow-up",
         )
         assert completed.get("changed") is True, completed
-        assert completed.get("no_followup") is True, completed
+        assert completed["completion_continuation"] == "active_goal", completed
+        assert completed["successor_todo_ids"] == [], completed
 
         summary = parse_active_state_todos(state_file.read_text(encoding="utf-8"))
         item = next(
@@ -198,12 +205,33 @@ def assert_mainstream_cli_turn() -> None:
             if row.get("todo_id") == todo_id
         )
         assert item.get("done") is True, item
+        canonical = read_canonical_todos_if_promoted(
+            runtime_root=Path(tmp) / "runtime", goal_id=GOAL_ID,
+        )
+        stored = next(row for row in canonical["todos"] if row["todo_id"] == todo_id)
+        assert stored["status"] == "done" and stored["claimed_by"] == AGENT_ID, stored
 
         refreshed = run_cli(
             registry_path,
             "refresh-state",
             "--goal-id",
             GOAL_ID,
+            "--agent-id", AGENT_ID,
+            "--agent-lane", AGENT_ID,
+            "--progress-scope", "agent_lane",
+            "--todo-id", todo_id,
+            "--turn-instance-id", TURN_ID,
+            "--classification", "validated_progress",
+            "--delivery-batch-scale", "multi_surface",
+            "--delivery-outcome", "outcome_progress",
+            "--delivery-boundary", "in_flight_continuation",
+            "--progress-result-class", "advanced",
+            "--progress-surface-id", "custom-runtime-cli",
+            "--progress-work-item-id", todo_id,
+            "--progress-hypothesis-id", "marker-terminal-single-debit",
+            "--progress-probe-kind", "real-cli-artifact-readback",
+            "--progress-coverage-scope-id", "canonical-cli-turn",
+            "--progress-evidence-id", "artifact:public-marker",
             "--no-global-sync",
         )
         assert refreshed.get("ok") is True, refreshed
@@ -217,10 +245,12 @@ def assert_mainstream_cli_turn() -> None:
             GOAL_ID,
             "--agent-id",
             AGENT_ID,
+            "--todo-id", todo_id,
+            "--turn-instance-id", TURN_ID,
             "--slots",
             "1",
             "--source",
-            "controller",
+            "heartbeat",
             "--execute",
             "--scan-path",
             str(project),
@@ -230,10 +260,25 @@ def assert_mainstream_cli_turn() -> None:
         after = spent["quota_event"]["after"]
         assert after["spent_slots"] == 1, spent
         assert after["allowed_slots"] == 5, spent
+        closed = run_cli(
+            registry_path, "todo", "complete", "--goal-id", GOAL_ID,
+            "--todo-id", todo_id, "--claimed-by", AGENT_ID, "--agent-id", AGENT_ID,
+            "--turn-instance-id", TURN_ID,
+            "--evidence", "public marker written under project root", "--no-follow-up",
+        )
+        assert closed["completion_continuation"] == "no_followup", closed
+        replay = run_cli(
+            registry_path, "quota", "spend-slot", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_ID, "--todo-id", todo_id,
+            "--turn-instance-id", TURN_ID, "--slots", "1", "--source", "heartbeat",
+            "--execute", "--scan-path", str(project),
+        )
+        assert replay["appended"] is False and replay["idempotent_replay"] is True, replay
 
 
 def main() -> int:
-    assert_mainstream_cli_turn()
+    for provider in ("file", "sqlite"):
+        assert_mainstream_cli_turn(provider)
     print("custom-runtime-minimal-cli-turn-smoke ok")
     return 0
 

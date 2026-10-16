@@ -78,7 +78,7 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
     if defer:
         next(todo for todo in listed["todos"] if todo["todo_id"] == TODO_ID)["claimed_by"] = AGENT_ID
     initialize_canonical_authority(runtime, GOAL_ID, build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID, todos=listed["todos"], handoff_mode="legacy" if defer else "soft_claim", leases=[],
+        goal_id=GOAL_ID, todos=listed["todos"], handoff_mode="hard_lease" if defer else "soft_claim", leases=[],
     ), state_path=state, provider=provider)
     binding = ("--agent-id", AGENT_ID, "--todo-id", TODO_ID,
                "--turn-instance-id", f"causal-blocked-{kind}-{provider}")

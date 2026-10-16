@@ -6,15 +6,12 @@ from test_native_todo_planning_update import fixture, records, update
 from loopx.todos import update_goal_todo
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_public_transfer_clear_exclusions_and_replay(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    promoted = provider != "legacy"
-    registry, state = fixture(tmp_path, promoted, provider)
+    registry, state = fixture(tmp_path, provider)
     before = records(registry)
-    transfer = ["--claimed-by", "Agent B"]
-    if promoted:
-        transfer += ["--update-operation-id", "transfer-first"]
+    transfer = ["--claimed-by", "Agent B", "--update-operation-id", "transfer-first"]
     update(registry, *transfer, "--dry-run")
     assert records(registry) == before
     update(registry, *transfer)
@@ -23,9 +20,8 @@ def test_public_transfer_clear_exclusions_and_replay(tmp_path, monkeypatch, prov
     update(registry, "--agent-id", "agent-b", "--clear-claim")
     cleared = records(registry)
     assert not cleared["todo_target"].get("claimed_by")
-    if promoted:
-        assert update(registry, *transfer)["status"] == "replayed"
-        assert records(registry) == cleared
+    assert update(registry, *transfer)["status"] == "replayed"
+    assert records(registry) == cleared
     update(registry, "--excluded-agent", "agent-b")
     excluded = records(registry)
     assert excluded["todo_target"]["excluded_agents"] == ["agent-b"]
@@ -37,27 +33,24 @@ def test_public_transfer_clear_exclusions_and_replay(tmp_path, monkeypatch, prov
     assert state.exists(), "canonical commit still delivers its permanent Markdown projection"
 
 
-@pytest.mark.parametrize("promoted", [False, True])
 @pytest.mark.parametrize("intent", [
     {"claimed_by": "unregistered"}, {"excluded_agents": ["agent-b", "unregistered"]},
     {"claimed_by": "agent-b", "clear_claim": True},
     {"claimed_by": "agent-b", "excluded_agents": ["agent-b"]},
     {"excluded_agents": ["agent-a"]},
 ])
-def test_invalid_ownership_intent_never_partially_writes_copy(tmp_path, promoted, intent):
-    registry, state = fixture(tmp_path, promoted)
+def test_invalid_ownership_intent_never_partially_writes_copy(tmp_path, intent):
+    registry, state = fixture(tmp_path)
     before = records(registry)
     with pytest.raises((ValueError, RuntimeError)):
         update_goal_todo(registry_path=registry, goal_id="goal-a", todo_id="todo_target",
                          agent_id="agent-a", text="Must not partially commit", **intent)
     assert records(registry) == before
-    if promoted:
-        assert not state.exists()
+    assert not state.exists()
 
 
-@pytest.mark.parametrize("promoted", [False, True])
-def test_clear_claim_and_exclude_former_holder_in_one_edit(tmp_path, promoted):
-    registry, _ = fixture(tmp_path, promoted)
+def test_clear_claim_and_exclude_former_holder_in_one_edit(tmp_path):
+    registry, _ = fixture(tmp_path)
     result = update_goal_todo(registry_path=registry, goal_id="goal-a", todo_id="todo_target",
         agent_id="agent-a", clear_claim=True, excluded_agents=["agent-a"])
     assert result["ok"]

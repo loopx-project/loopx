@@ -133,6 +133,8 @@ def main(argv=None):
     parser.add_argument("--restore-source-todo")
     parser.add_argument("--restore-research-component", action="append", default=[],
                         help="Opt-in captured file component ID to restore at its original research path; repeat per component")
+    parser.add_argument("--restore-fresh-after-replan", action="store_true",
+                        help="Explicit warm treatment: reset native context once after the initial completed current replan; retain research and checkpoint lineage")
     parser.add_argument("--restore-phase-extension-seconds", type=int, default=0,
                         help="Explicit authorized extra continuation time; omitted preserves the checkpoint's remaining phase")
     parser.add_argument("--eval-interval", type=int,
@@ -180,6 +182,8 @@ def main(argv=None):
         parser.error("A non-negative phase extension requires an explicit warm checkpoint continuation")
     if args.restore_research_component and not args.restore_checkpoint:
         parser.error("Research component restoration requires an explicit warm checkpoint continuation")
+    if args.restore_fresh_after_replan and not args.restore_checkpoint:
+        parser.error("Fresh context after replan requires an explicit warm checkpoint continuation")
     if args.restore_checkpoint and (not handoff or args.eval_interval != 0 or args.replan_after_todos is not None):
         parser.error("Warm continuation requires full native checkpoint capture, no periodic evaluation and effective-Turn cadence")
     # One directory is one attempt: never reuse native registration or overwrite
@@ -252,7 +256,7 @@ def main(argv=None):
         candidate = WarmStart(args.restore_checkpoint, args.restore_sha256, args.restore_config,
             args.restore_goal, args.restore_agent, args.restore_source_todo,
             int(time.time()) + args.timeout, args.replan_after_turns or 6,
-            tuple(args.restore_research_component))
+            tuple(args.restore_research_component), args.restore_fresh_after_replan)
         metadata = candidate.verify(task.cwd)
         snapshot = metadata["worker_file_snapshot"]
         capsule = args.restore_checkpoint / "components" / snapshot["native_capsule_component_id"]
@@ -327,6 +331,7 @@ def main(argv=None):
         "status": "starting", "score_countable": False,
         **({"restore_phase_extension_seconds": args.restore_phase_extension_seconds}
            if args.restore_phase_extension_seconds else {}),
+        **({"restore_fresh_after_replan": True} if args.restore_fresh_after_replan else {}),
         **({"restored_checkpoint_sha256": warm_start.sha256,
             "original_deadline_epoch": warm_start.deadline_epoch,
             "receiver_preparation_cadence": 1, "normal_replan_cadence": warm_start.normal_cadence}

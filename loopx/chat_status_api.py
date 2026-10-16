@@ -89,6 +89,27 @@ def _discovery_registry(registry_path: Path) -> dict[str, Any]:
         return {}
 
 
+def _discovery_contract(registry_path: Path) -> dict[str, Any]:
+    """The source facts a discovery read can state without opening runtime state.
+
+    A fresh install has no registry until the first Goal is created. The full
+    status reports that as a warning (allow_missing_registry); the directory
+    states the same fact in the same words, so the first-Goal home can show why
+    the workspace is empty. The caller redacts paths like every status response.
+    """
+
+    warnings: list[str] = []
+    if not registry_path.exists():
+        warnings.append(f"registry file does not exist: {registry_path}")
+    return {
+        "ok": True,
+        "summary": {"errors": 0, "warnings": len(warnings), "checks": 0},
+        "errors": [],
+        "warnings": warnings,
+        "checks": [],
+    }
+
+
 def _status_access_denied(error: BaseException) -> bool:
     """Recognize permission causes without reclassifying unrelated I/O failures."""
     current: BaseException | None = error
@@ -185,6 +206,20 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
                     registry, selected_goal_id=goal_id
                 )
                 if views == ["workspace-directory"]:
+                    directory["contract"] = _discovery_contract(self.server.registry_path)
+                    # Discovery stays metadata-only: redact with the roots this
+                    # server knows, without requiring the full runtime wiring.
+                    runtime_root = getattr(self.server, "runtime_root", None)
+                    directory = json.loads(
+                        redact_local_paths(
+                            json.dumps(directory, ensure_ascii=False),
+                            protected_paths=[
+                                self.server.registry_path,
+                                *(getattr(self.server, "scan_roots", None) or []),
+                                *([runtime_root] if runtime_root else []),
+                            ],
+                        )
+                    )
                     self._send_json(directory)
                     return
             projection = collect_status(

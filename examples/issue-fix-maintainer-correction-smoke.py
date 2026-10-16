@@ -18,6 +18,9 @@ from loopx.capabilities.issue_fix.pr_lifecycle import (  # noqa: E402
     normalise_issue_fix_maintainer_correction_input,
 )
 
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
+from loopx.todos import list_goal_todos  # noqa: E402
+
 GOAL_ID = "issue-fix-maintainer-correction-smoke"
 AGENT_ID = "issue-fix-agent"
 
@@ -43,7 +46,7 @@ def run_cli(registry: Path, args: list[str]) -> dict[str, object]:
     return json.loads(result.stdout)
 
 
-def write_fixture(root: Path) -> tuple[Path, Path, Path]:
+def write_fixture(root: Path, provider: str) -> tuple[Path, Path, Path]:
     project = root / "project"
     project.mkdir()
     state_file = project / "ACTIVE_GOAL_STATE.md"
@@ -57,6 +60,7 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
     registry.write_text(
         json.dumps(
             {
+                "common_runtime_root": str(root / "runtime"),
                 "goals": [
                     {
                         "id": GOAL_ID,
@@ -72,6 +76,7 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
         ),
         encoding="utf-8",
     )
+    import_fixture_authority(registry, GOAL_ID, provider=provider)
     metadata = root / "pr.json"
     metadata.write_text(
         json.dumps(
@@ -107,10 +112,10 @@ def base_correction(**overrides: object) -> dict[str, object]:
     return payload
 
 
-def main() -> int:
+def check_corrections(provider: str) -> None:
     with tempfile.TemporaryDirectory(prefix="loopx-maintainer-correction-") as tmpdir:
         root = Path(tmpdir)
-        project, registry, metadata = write_fixture(root)
+        project, registry, metadata = write_fixture(root, provider)
         correction = correction_file(root, "actionable.json", base_correction())
         common = [
             "issue-fix",
@@ -237,6 +242,14 @@ def main() -> int:
         assert quiet["todo_write"]["skip_reason"] == "unchanged_monitor_quiet", quiet
         assert quiet["todo_write_performed"] is False, quiet
 
+        native = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)
+        assert native["authority_read"]["decision_read_from_provider"] is True, native
+        assert native["authority_read"]["legacy_fallback_used"] is False, native
+        patches = [item for item in native["todos"]
+                   if item.get("action_kind") == "issue_fix_maintainer_correction_patch"]
+        assert len(patches) == 1, patches
+        assert patches[0]["claimed_by"] == AGENT_ID, patches
+
         for unsafe in (
             base_correction(raw_comment_body="raw body must not enter the contract"),
             base_correction(source_ref="https://localhost/reviews/42"),
@@ -250,6 +263,11 @@ def main() -> int:
             else:
                 raise AssertionError(f"unsafe correction input was accepted: {unsafe}")
 
+
+
+def main() -> int:
+    for provider in ("file", "sqlite"):
+        check_corrections(provider)
     print("issue-fix-maintainer-correction-smoke: ok")
     return 0
 

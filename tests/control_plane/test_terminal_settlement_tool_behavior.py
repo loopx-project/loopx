@@ -97,10 +97,7 @@ def _reentry_todo_action(index: int):
             if "loopx todo complete" in item
         ]
         command = commands[index]
-        command = command[command.index("loopx ") :].replace(
-            "<public-safe no-follow-up rationale>",
-            f"validated terminal slice {index + 1}; no successor remains",
-        )
+        command = command[command.index("loopx ") :]
         return ScriptedExecToolAction(command=command)
 
     return action

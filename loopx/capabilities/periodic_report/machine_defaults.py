@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .cadence import normalize_report_cadence
 
 from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
+from ...control_plane.goals.activation import goal_is_stopped
 from ...control_plane.todos.contract import normalize_todo_claimed_by
 from ...control_plane.digest_envelope import sha256_envelope
 from ..configuration_ui import resolve_capability_configuration
@@ -372,6 +373,22 @@ def resolve_goal_periodic_report_subscription(
         ) from exc
 
 
+def resolve_active_goal_periodic_report_subscription(
+    goal: Mapping[str, Any] | None,
+    machine_defaults: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Resolve the current standing authority for one Goal subscription."""
+
+    if (
+        not isinstance(goal, Mapping)
+        or goal_is_stopped(goal)
+        or goal.get("status") in {"stopped", "paused", "archived"}
+    ):
+        return None
+    subscription = resolve_goal_periodic_report_subscription(goal, machine_defaults)
+    return subscription if subscription.get("enabled") is True else None
+
+
 def normalize_periodic_report_delivery_authority(raw: object) -> dict[str, Any]:
     """Validate the frozen standing authority carried to an external delivery."""
 
@@ -580,6 +597,7 @@ __all__ = [
     "normalize_periodic_report_delivery_authority",
     "normalize_periodic_report_machine_defaults",
     "periodic_report_machine_configuration_namespace",
+    "resolve_active_goal_periodic_report_subscription",
     "resolve_goal_periodic_report_subscription",
     "select_goal_periodic_report_executor",
 ]

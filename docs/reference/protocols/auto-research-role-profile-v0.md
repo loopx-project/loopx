@@ -105,6 +105,20 @@ public/private boundary checks before another agent can run it.
 target is not met and a role-declared successor condition is satisfied, the
 worker must create or link that successor instead of closing the lane.
 
+For failure continuation, the successor's title and `unblocks_todo_id` share
+the failed evidence Todo from `research_failure_continuation_v0.source_todo_id`.
+Several summaries of that lineage therefore create or reuse one identical
+successor without rebinding its original parent. A historical successor may
+retain its original summary parent when the complete canonical records prove
+that summary belongs to the same failed evidence lineage; all other intent
+fields still pass the native duplicate check. Each completed summary keeps
+its own `successor_todo_ids` link to that successor. Other role handoffs still
+bind the selected source Todo. These links grant no execution or claim rights;
+the canonical owner continues to reject same-title requests with different
+lineage or other intent. Historical-parent reuse binds create to the inspected
+provider revision; a concurrent change refuses without rebinding and requires
+a fresh read before retry.
+
 ## Resolution Order
 
 Every visible auto-research worker should resolve its instructions in this

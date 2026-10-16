@@ -942,7 +942,7 @@ function requestDigest(request: MonitorRequest): string {
 
 function providerPlanFor(request: MonitorRequest, gateGuard = Boolean(
   request.observation.settlement_todo_id && request.observation.settlement_todo_id !== request.observation.todo_id
-), legacyBatchVersion: 1 | null = 1): MonitorProviderPlan {
+), legacyBatchVersion: 1 | null = null): MonitorProviderPlan {
   const resultHash = request.observation.result_hash;
   if (!resultHash) {
     throw new EffectRuntimeRequestError("monitor todo writeback requires --result-hash");

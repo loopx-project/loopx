@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from ...file_lock import exclusive_cross_runtime_file_lock
 from ...control_plane.runtime.time import now_local_iso
 from ...paths import (
     registered_goal_state_file,
@@ -12,7 +15,11 @@ from ...paths import (
     select_default_runtime_root,
 )
 from ..runtime.document_io import atomic_write_state_text as _atomic_write_text
-from ..coordination.legacy_writer_fence import legacy_todo_write_transaction, require_legacy_state_replacement_allowed
+from ..coordination.local_authority import (
+    read_canonical_todos_if_promoted,
+    require_canonical_authority,
+)
+from ..coordination.goal_storage_initialization import initialize_goal_storage_target
 from ..goals.source_session_services import (
     FreshSourceSessionRegistration,
     RecreateGoalRequest,
@@ -134,7 +141,77 @@ def _resolve_exact_project_binding(
     }
 
 
-def register_project_goal(
+def _bind_project_goal_storage(
+    *,
+    registry: dict[str, Any],
+    registry_path: Path,
+    runtime_root: Path | None,
+    project_id: str,
+    goal_id: str,
+    goal_record: dict[str, Any],
+    resolve_new_goal_storage_target: Callable[[Path], dict[str, Any]],
+) -> Path:
+    effective_root = resolve_runtime_root(
+        registry,
+        str(runtime_root) if runtime_root else None,
+        registry_path=registry_path,
+    )
+    existing_goal = next(
+        (
+            item
+            for item in registry.get("goals", [])
+            if isinstance(item, dict) and item.get("id") == goal_id
+        ),
+        None,
+    )
+    existing_target = (
+        (existing_goal.get("coordination") or {}).get("storage_target")
+        if existing_goal is not None
+        else None
+    )
+    resumable_creation = (
+        isinstance(existing_target, dict)
+        and existing_target.get("schema_version")
+        == "loopx_new_goal_storage_target_v1"
+        and isinstance(existing_goal.get("creation_operation_id"), str)
+        and existing_goal["creation_operation_id"] != ""
+    )
+    existing_authority = (
+        read_canonical_todos_if_promoted(
+            runtime_root=effective_root,
+            goal_id=goal_id,
+        )
+        if existing_goal is None or not resumable_creation
+        else None
+    )
+    if existing_goal is None and existing_authority is not None:
+        raise ValueError(
+            f"goal_id is already bound to canonical authority through another registry: {goal_id}"
+        )
+    if existing_goal is not None and existing_authority is None and not resumable_creation:
+        require_canonical_authority(goal_id=goal_id, operation="goal_create")
+    storage_target = (
+        existing_target
+        if existing_goal is not None
+        else resolve_new_goal_storage_target(effective_root)
+    )
+    if (
+        existing_goal is None
+        and (storage_target or {}).get("schema_version")
+        != "loopx_new_goal_storage_target_v1"
+    ):
+        require_canonical_authority(goal_id=goal_id, operation="goal_create")
+    if storage_target is not None:
+        goal_record.setdefault("coordination", {})["storage_target"] = storage_target
+    goal_record["creation_operation_id"] = (
+        (existing_goal or {}).get("creation_operation_id")
+        or "goal-create:project-register:"
+        + hashlib.sha256(f"{project_id}\0{goal_id}".encode()).hexdigest()[:24]
+    )
+    return effective_root
+
+
+def _register_project_goal_unlocked(
     *,
     registry_path: Path,
     runtime_root: Path | None,
@@ -150,6 +227,7 @@ def register_project_goal(
     stop_condition: str,
     repository_bindings: list[str],
     external_locator_bindings: list[str],
+    resolve_new_goal_storage_target: Callable[[Path], dict[str, Any]],
     goal_instance_profile: str | None = None,
     operation_id: str | None = None,
     registered_agents: list[str] | None = None,
@@ -260,6 +338,22 @@ def register_project_goal(
     if operation_id is not None:
         raise ValueError("operation_id requires goal_instance_profile")
 
+    initial_registry = existing_registry or {
+        "schema_version": "0.1",
+        "registry_role": "project-local",
+        "common_runtime_root": str(runtime_root or select_default_runtime_root()),
+    }
+    effective_root = _bind_project_goal_storage(
+        registry=initial_registry,
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        project_id=project_id,
+        goal_id=goal_id,
+        goal_record=goal_record,
+        resolve_new_goal_storage_target=resolve_new_goal_storage_target,
+    )
+
+    changed = True
     with project_registry_transaction(
         registry_path,
         operation="project_register",
@@ -298,55 +392,11 @@ def register_project_goal(
                 f"project_id already has its first registered goal: {project_id}"
             )
         effective_root = resolve_runtime_root(registry, str(runtime_root) if runtime_root else None, registry_path=registry_path)
-        with legacy_todo_write_transaction(registry_path, goal_id, state_file, None, "project_register_state", False, runtime_root=effective_root):
-            if not state_file.exists():
-                require_legacy_state_replacement_allowed(runtime_root=effective_root, goal_id=goal_id, goal=existing_goal)
-            if state_file.exists():
-                existing_state = state_file.read_text(encoding="utf-8")
-                existing_updated_at = registration_state_updated_at(existing_state)
-                matching_state = (
-                    render_registration_state(
-                        project_id=project_id,
-                        goal_id=goal_id,
-                        objective=objective,
-                        non_goals=non_goals,
-                        acceptance=acceptance,
-                        unknowns=unknowns,
-                        next_effect=next_effect,
-                        stop_condition=stop_condition,
-                        updated_at=existing_updated_at,
-                    )
-                    if existing_updated_at is not None
-                    else None
-                )
-                if matching_state is None or not registration_state_matches(
-                    existing_state, matching_state, objective=objective,
-                ):
-                    raise ValueError(
-                        f"goal state file conflicts with registration: {state_file}"
-                    )
-            if existing_project is not None and existing_goal is not None:
-                if not state_file.exists():
-                    _atomic_write_text(state_file, state_text)
-                    return {
-                        "ok": True,
-                        "schema_version": "loopx_project_registration_v0",
-                        "changed": True,
-                        "registry": str(registry_path),
-                        "project": existing_project,
-                        "goal": existing_goal,
-                        "state_file": str(state_file),
-                    }
-                return {
-                    "ok": True,
-                    "schema_version": "loopx_project_registration_v0",
-                    "changed": False,
-                    "registry": str(registry_path),
-                    "project": existing_project,
-                    "goal": existing_goal,
-                    "state_file": str(state_file),
-                }
-
+        if existing_project is not None and existing_goal is not None:
+            # A completed canonical operation can outlive its initial display.
+            # Defer source validation to the typed creation owner's request.
+            changed = False
+        else:
             state_file.parent.mkdir(parents=True, exist_ok=True)
             state_created = False
             try:
@@ -361,16 +411,129 @@ def register_project_goal(
                 if state_created:
                     state_file.unlink(missing_ok=True)
                 raise
+    current_registry = load_project_registry(registry_path)
+    registered_goal = next(
+        item
+        for item in current_registry.get("goals", [])
+        if isinstance(item, dict) and item.get("id") == goal_id
+    )
+
+    def validate_registration_source(existing_state: str) -> None:
+        existing_updated_at = registration_state_updated_at(existing_state)
+        matching_state = (
+            render_registration_state(
+                project_id=project_id, goal_id=goal_id, objective=objective,
+                non_goals=non_goals, acceptance=acceptance, unknowns=unknowns,
+                next_effect=next_effect, stop_condition=stop_condition,
+                updated_at=existing_updated_at,
+            ) if existing_updated_at is not None else None
+        )
+        if matching_state is None or not registration_state_matches(
+            existing_state, matching_state, objective=objective,
+        ):
+            raise ValueError(f"goal state file conflicts with registration: {state_file}")
+
+    storage_selection = initialize_goal_storage_target(
+        effective_root,
+        registered_goal,
+        registry_path=registry_path,
+        validate_source=validate_registration_source,
+    )
+    if storage_selection is None or storage_selection.get("authority_initialized") is not True:
+        raise RuntimeError("canonical project Goal initialization did not complete")
+
+    state_projection = None
+    if not state_file.exists():
+        from ..todos.provider_projection import project_current_canonical_todos
+
+        state_projection = project_current_canonical_todos(
+            registry_path=registry_path, runtime_root=effective_root,
+            goal_id=goal_id, project=knowledge_root, state_file=state_file,
+        )
+        changed = changed or state_projection["changed"]
 
     return {
         "ok": True,
         "schema_version": "loopx_project_registration_v0",
-        "changed": True,
+        "changed": changed,
         "registry": str(registry_path),
         "project": project_record,
         "goal": goal_record,
         "state_file": str(state_file),
+        "storage_selection": storage_selection,
+        **({"state_projection": state_projection} if state_projection is not None else {}),
     }
+
+
+def register_project_goal(
+    *,
+    registry_path: Path,
+    runtime_root: Path | None,
+    project_id: str,
+    project_kind: str,
+    knowledge_root: Path,
+    goal_id: str,
+    objective: str,
+    non_goals: list[str],
+    acceptance: list[str],
+    unknowns: list[str],
+    next_effect: str,
+    stop_condition: str,
+    repository_bindings: list[str],
+    external_locator_bindings: list[str],
+    resolve_new_goal_storage_target: Callable[[Path], dict[str, Any]],
+    goal_instance_profile: str | None = None,
+    operation_id: str | None = None,
+    registered_agents: list[str] | None = None,
+    canonical_storage: str | None = None,
+) -> dict[str, Any]:
+    normalized_goal_id = _identifier(goal_id, field="goal_id")
+    expanded_registry = registry_path.expanduser()
+    existing_registry = (
+        load_project_registry(expanded_registry) if expanded_registry.exists() else None
+    )
+    registry = existing_registry or {
+        "schema_version": "0.1",
+        "registry_role": "project-local",
+        "common_runtime_root": str(runtime_root or select_default_runtime_root()),
+    }
+    effective_root = resolve_runtime_root(
+        registry,
+        str(runtime_root) if runtime_root else None,
+        registry_path=expanded_registry,
+    )
+    digest = hashlib.sha256(normalized_goal_id.encode("utf-8")).hexdigest()[:16]
+    lock_target = (
+        effective_root
+        / "authority-transition"
+        / "project-registration"
+        / f"goal-{digest}"
+    )
+    with exclusive_cross_runtime_file_lock(
+        lock_target,
+        operation="project_register",
+    ):
+        return _register_project_goal_unlocked(
+            registry_path=expanded_registry,
+            runtime_root=runtime_root,
+            project_id=project_id,
+            project_kind=project_kind,
+            knowledge_root=knowledge_root,
+            goal_id=normalized_goal_id,
+            objective=objective,
+            non_goals=non_goals,
+            acceptance=acceptance,
+            unknowns=unknowns,
+            next_effect=next_effect,
+            stop_condition=stop_condition,
+            repository_bindings=repository_bindings,
+            external_locator_bindings=external_locator_bindings,
+            resolve_new_goal_storage_target=resolve_new_goal_storage_target,
+            goal_instance_profile=goal_instance_profile,
+            operation_id=operation_id,
+            registered_agents=registered_agents,
+            canonical_storage=canonical_storage,
+        )
 
 
 def bind_session(

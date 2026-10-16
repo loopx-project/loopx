@@ -550,6 +550,21 @@ point. Full-state capture additionally requires the controller writer barrier
 below. Capturing that point does not admit a destination session or prove useful
 continued research.
 
+On a restored conversation, both hooks still require an accepted current-Goal
+semantic replan citing the source checkpoint and a new completed native
+continuation. With `"native_session": true`, preflight reads only the latest
+Turn's identity/status (`itemsView: "notLoaded"`), after checking the bound native
+session and workspace. This provisional cursor admits a capture attempt; it does
+not certify the retained history. Both full native observations during capture
+must verify the retained history prefix and this completed continuation before
+sealing. After the explicitly bound initial context reset, that prefix is empty;
+the checkpoint/review/new-session binding remains required, and a new completed
+native Turn is still mandatory. Neither an absent prefix declaration nor a
+semantic-only review can replace those checks. A changed checkpoint/session, missing cursor or altered prefix fails
+capture. Preparation and declarations without native capture keep full-history
+preflight. Canonical review, first-boundary deduplication, current authority and
+the default-off path keep their existing rules.
+
 ### Controller-only native capsule transport
 
 The read-only participant above does **not** implement the newer native capsule
@@ -608,6 +623,14 @@ with the existing typed artifact owner. Component IDs are preserved when they
 collide with the automatic native capsule name. Neither Docker access nor judge
 administration is passed into the solver. Omit this command to retain ordinary
 capture behavior; there is no automatic activation or retention policy.
+
+The export destination's filesystem also holds each raw Docker archive while
+its members are extracted. Provision space for the raw transfer, extracted
+participants and sealing copies; moving the destination does not reduce those
+bytes or extend the capture deadline. The archive spool uses the private export
+staging directory instead of ambient temporary storage. If that filesystem fills,
+capture still fails and runs its existing reader/barrier cleanup without publishing an
+outer artifact; it does not retry on another volume or substitute a later point.
 
 The container must initially be running and unpaused. Cancellation, failed file
 reads, rejected native capture and a lost pause response attempt to release only
@@ -718,6 +741,31 @@ files remain historical: current authority uses a fresh external registry/runtim
 and the old Goal cannot be admitted through it. Only the model
 response stream and grading/backend fixtures are synthetic; the native CLI,
 canonical SQLite authority, worker, supervisor and capsule transport are real.
+The fresh-context variant now keeps the controller and its bank outside every
+guest mount. It performs and settles actual candidate work, reaches a genuinely
+new due replan, and captures research, new native history, code, incumbent,
+opportunity and the original phase through the real controller barrier. Another
+isolated receiver restores that newly sealed point and performs actual work.
+`fresh.log` and `grandreceiver.log` retain those assertions. The synthetic service
+uses host networking only for this controller-backed variant; its public worker
+registration enters the guest, while the controller configuration and bank do not.
+
+To reuse an already sealed **synthetic qualification** point, append
+`--reuse-point /private/sealed-point --captured-config /private/captured-config.toml`
+to the command above. The matching configuration digest and every source member
+are verified; the original source test is explicitly not counted as passed.
+This avoids replaying the six source work wakes. For an independently selected
+compatible integration, also pass `--provider-revision EXACT_COMMIT` with its
+`--provider-source` checkout; the declared pin must match the clean source.
+The default remains the documented compatibility revision. A capsule remains
+bound to the captured native provider's complete source fingerprint: selecting
+a different provider revision can correctly refuse restore. Generate and qualify
+a new source at that revision; never rewrite an older capsule or relax its fence.
+The parent wait covers the synthetic fixture's original phase plus cleanup;
+capture deadlines and worker phase checks remain unchanged. All receiver work still runs;
+this option neither admits a real study cell nor turns an earlier source failure
+into a pass. Output must remain fresh, physical and outside every source checkout.
+
 Check `result.json`, `source.log`, `ordinary.log` and `stride.log` in the private
 output directory; failure is an error, including missing prerequisites, and a
 skipped test cannot produce a passed receipt. A second attempt needs a new output
@@ -800,6 +848,11 @@ controller 保管，不能放进 worker；0600 不能证明隔离。原生 owner
 已用轮次和剩余冷却，生成新注册；完整研究接续仍需联合会话、LoopX 新权限、
 原点剩余总预算及 replan 前决策边界。此切片不启动研究、不证明收益，也不改历史源。
 
+Docker 原始归档在显式导出目标的文件系统中暂存，再解包到该私有 staging 目录，
+不再依赖环境默认的临时卷。目标容量仍须覆盖原始传输、已解包参与者及封存副本；
+改变目标位置不会减少这些字节或延长捕获截止时间。目标卷空间不足仍明确失败、
+执行现有 reader/barrier 清理且不发布外层产物，不自动换卷重试或用稍后状态替代原点。
+
 这是研究 checkpoint 的开发前置切片。EdgeBench CLI 的显式
 `--checkpoint-request` 会把 host JSON 原文安全放入 heartbeat worker，并在
 runtime receipt 绑定摘要；programmatic adapter 也可指定已放入 guest 的请求
@@ -827,6 +880,14 @@ Host 预检已提交 fresh replan，但尚待 Agent 选择工作时，仍可在�
 类型化 owner 核对原 Goal、已注册 Agent、Turn 和语义义务；不会伪造尚未形成的
 settlement identity，也不授予选择前的交付权限。源边界仍须来自上轮已结算的成功工作；
 已选 guard 的原结算身份检查保持。
+
+恢复会话的两处 hook 仍须先有引用源 checkpoint 的当前 Goal 已接受语义 replan，
+以及新的已完成原生接续。显式 `"native_session": true` 时，预检核对绑定的
+session/workspace，并仅读取最新 Turn 的身份/状态、不加载 items。此临时 cursor
+只准入一次捕获尝试，不证明完整历史；实际捕获的两次完整原生观测均须在封存前
+核验原历史前缀及该已完成接续。checkpoint/session 变化、cursor 缺失或前缀变化
+都拒绝捕获。准备验收及不捕获 native 的声明保持完整历史预检；canonical review、
+首边界去重、当前权限和默认关闭路径保持原规则。
 
 运行中出现的 fresh replan 可通过显式交接捕获。完整捕获需同时声明
 `controller_handoff`、`native_session`、`loopx_state`、`evaluation_opportunity`
@@ -894,6 +955,50 @@ continuation gate must accept that replan before the declared normal cadence
 returns. Preparation and context-reading cost belong in the comparison. Omit all
 restore flags for the unchanged cold entry; never reuse an ambiguous trial
 folder as a new attempt.
+
+An independently authorized context ablation can add
+`--restore-fresh-after-replan`. After the initial accepted, settled destination
+replan, the next work wake starts one new native conversation; later wakes resume
+that conversation. It retains the original
+checkpoint digest, source conversation and completed current decision in the
+existing session binding; the first input includes that decision as evidence.
+Research files, current Todo/Explore state, code, incumbent, cumulative deadline,
+consumed submissions and cooldown retain their owners. This deliberately drops
+earlier native messages from the new conversation input; archived source bytes
+are retained. This is a separate treatment from ordinary retained-history
+continuation. Omission preserves the default. Disable it on a new attempt;
+do not change a frozen trial. It grants neither new work nor extra evaluation.
+Unknown launches recover only from the original captured native output; missing
+or ambiguous identities stop that route instead of creating another conversation.
+The joined qualification described above exercises original-output recovery,
+actual two-candidate work and settlement, then a new due review with full
+controller-backed capture and useful work in another isolated receiver. Scripted
+model and grader responses qualify this declared mechanical chain, not research
+benefit or sustained growing-point reliability.
+This is a benchmark operator transport; the generic packaged restore UI remains
+an open acceptance boundary.
+
+资格脚本的 fresh 分支还要求：当前真实工作结算后产生新的 due replan，经 controller
+完整封存研究、新原生历史、代码、incumbent、机会与原 phase，再由另一隔离 receiver
+实际接续。controller 配置/bank 不进入 guest 挂载。可向上述资格命令同时增加
+`--reuse-point /private/sealed-point --captured-config /private/captured-config.toml`
+复用合成源点，逐项核验原字节和配置摘要；原 source 测试不计通过，所有 receiver
+仍真实执行。显式上下文重置使用空原生前缀时，仍须绑定原点/已完成复盘/新会话，
+并观察新完成 Turn；空前缀不等于缺声明，更不授予捕获或执行权。科研效用、持续容量
+及真实新 cell 的版本/准入验收仍独立保留。
+
+独立获授权的上下文消融可增加 `--restore-fresh-after-replan`：当前目标的 replan
+首次受理并结算后，下一工作唤醒才新建一次原生会话，后续唤醒恢复该会话。
+既有会话绑定保留原 checkpoint
+摘要、源会话及本次已完成决策，首次输入把决策作为证据交付；研究文件、当前
+Todo/Explore、代码、incumbent、累计时限、已用评测和冷却仍由原 owner 管理。
+新会话输入不包含此前原生消息，源归档字节仍保留；这是独立实验因素。
+省略即保持默认，关闭须使用新 attempt，
+不热改冻结运行，也不增加执行或评测权限。未知启动只能读取原始原生输出来恢复，
+缺失或歧义身份会阻塞该路径，不能另建会话。上述联合资格覆盖原输出恢复、实际
+双候选工作与结算，再经新的 due review 完整捕获，并由另一隔离接收端继续工作。
+脚本模型与 grader 只验证上述机械链路，不证明研究收益或 checkpoint 持续增大时
+的可靠性。该入口属于 benchmark 操作者传输，通用打包 restore UI 仍须另验收。
 
 Research files outside the task workspace need explicit capture **and** explicit
 receiver selection. Add each required directory or file to the source checkpoint

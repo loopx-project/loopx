@@ -881,6 +881,8 @@ path, and canary route rather than as a user-facing release baseline.
   Windows artifacts were verified without native client execution. No paired
   benchmark, sustained scientific continuation or isolated model causal uplift
   is claimed.
+  Existing Goals retain their recorded policy and require explicit migration;
+  canonical-only retirement remains a separate 2.0 candidate.
 
 - `v1.4.2` on 2026-10-16: clearer workspace onboarding and Agent work pages,
   state-aware suggestions, version-bound delivery checks, and original-operation

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -25,7 +23,10 @@ from loopx.control_plane.coordination.local_authority_shadow_adapter import (
 from loopx.control_plane.coordination.local_authority_shadow_projection import (
     ProjectionValueError,
 )
-from tests.control_plane.shadow_e2e_fixture import REPO, workspace as cli_workspace
+from tests.control_plane.shadow_e2e_fixture import (
+    ShadowWorkspace,
+    workspace as cli_workspace,
+)
 
 
 def workspace(root: Path):
@@ -103,6 +104,45 @@ def test_real_cli_rejects_unsafe_lease_source_before_bootstrap(tmp_path: Path, k
     assert list(outside.iterdir()) == [retained]
 
 
+def test_source_snapshot_preserves_inventory_without_projecting_orphan_leases(
+    tmp_path: Path,
+):
+    state, runtime, registry, goal, _ = workspace(tmp_path)
+    directory = runtime / "goals" / goal["id"] / "task-leases"
+    directory.mkdir(parents=True)
+    todo_ids = ("todo_alpha", "todo_Zulu", "todo_Bravo")
+    for todo_id in todo_ids:
+        (directory / f"{todo_id}.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "task_lease_v0",
+                    "goal_id": goal["id"],
+                    "todo_id": todo_id,
+                    "owner": "agent-a",
+                    "status": "released",
+                    "version": 1,
+                    "write_scopes": ["src/"],
+                    "idempotency_key": f"baseline-{todo_id}",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    projection, snapshot = capture(state, runtime, registry, goal)
+
+    assert [entry["name"] for entry in snapshot["lease_inventory"]] == [
+        "todo_Bravo.json",
+        "todo_Zulu.json",
+        "todo_alpha.json",
+    ]
+    assert projection["leases"] == []
+    assert bootstrap(runtime, goal, projection, snapshot)["status"] == "applied"
+    view = read_local_authority_shadow(
+        runtime_root=runtime, goal_id=goal["id"], scan_limit=1
+    )
+    assert view["proof"]["transactions"][0]["projection"]["leases"] == []
+
+
 @pytest.mark.parametrize("extension", [
     {}, {"future_extension": None}, {"future_extension": False},
     {"future_extension": {"missing_value": None, "flag": False}},
@@ -162,53 +202,6 @@ def test_terminal_lease_source_rejects_drift_before_publication(tmp_path: Path, 
     )
     assert read_shadow_management_state(runtime, goal["id"]) is None
     assert lease.read_bytes() == changed_bytes
-
-
-@pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_terminal_lease_survives_public_cutover_and_original_recovery(tmp_path: Path, provider):
-    ws = cli_workspace(tmp_path, bootstrap=False)
-    todo_id = "todo_0123456789ab"
-    ws.state.write_text(ws.state.read_text() +
-        f'- [x] Retained work\n  <!-- loopx:todo todo_id={todo_id} task_class=advancement_task -->\n')
-    expected = {
-        "schema_version": "task_lease_v0", "goal_id": ws.goal, "todo_id": todo_id,
-        "owner": "agent-a", "version": 2, "lease_epoch": 1, "status": "released",
-        "released_at": "2026-09-01T00:00:00Z", "idempotency_key": "retained-identity",
-        "future_extension": {"missing_value": None, "flag": False},
-    }
-    lease = ws.runtime / "goals" / ws.goal / "task-leases" / f"{todo_id}.json"
-    lease.parent.mkdir(parents=True)
-    original = json.dumps(expected, indent=2).encode()
-    lease.write_bytes(original)
-    if provider == "sqlite":
-        selection = subprocess.run([os.environ.get("LOOPX_CONTROL_PLANE_NODE", "node"),
-            "--no-warnings", "--experimental-strip-types", "--experimental-sqlite",
-            str((REPO / "loopx/control_plane/coordination/local_authority_provider.ts").resolve()), "--runtime-root",
-            str(ws.runtime), "--goal-id", ws.goal, "--execute"], cwd=REPO,
-            capture_output=True, text=True, timeout=45, check=True)
-        assert json.loads(selection.stdout) == {
-            "ok": True, "provider": "sqlite", "changed": True, "executed": True,
-        }
-    assert ws.cli("coordination-shadow", "bootstrap", "--execute")["bootstrap"]["status"] == "applied"
-    for index in range(3):
-        ws.add(f"Independent migration work {index}")
-    assert ws.drain(budget_seconds="60")["ok"] is True
-    preview = ws.cli("coordination-shadow", "promote")
-    assert preview["promotion"]["status"] == "preview_ready", preview
-    saved = tmp_path / "reviewed.json"
-    saved.write_text(json.dumps(preview))
-    applied = ws.cli("coordination-shadow", "promote", "--reviewed-plan", str(saved), "--execute")
-    assert applied["promotion"]["canonical_authority"] == f"{provider}_v0"
-    assert ws.cli("task-lease", "inspect", "--todo-id", todo_id)["lease"] == expected
-    later = ws.add("Later canonical work must survive recovery")
-    ws.state.unlink()
-    recovered = ws.cli("coordination-shadow", "recover-promotion", "--reviewed-plan", str(saved), "--execute")
-    assert recovered["promotion"]["status"] == "replayed", recovered
-    assert ws.cli("task-lease", "inspect", "--todo-id", todo_id)["lease"] == expected
-    retained = ws.cli("todo", "list", "--todo-id", later["todo_id"])
-    assert (retained["todo"]["text"], retained["todo"]["priority"]) == ("[P1] Later canonical work must survive recovery", "P1")
-    assert lease.read_bytes() == original
-    assert not ws.state.exists()
 
 
 @pytest.mark.parametrize(
@@ -298,6 +291,60 @@ def test_strict_registry_envelope_keeps_existing_codec(tmp_path: Path):
     )
     projection, snapshot = capture(state, runtime, registry, goal)
     assert bootstrap(runtime, goal, projection, snapshot)["status"] == "applied"
+
+
+def test_controller_rejects_an_override_runtime_root(tmp_path: Path):
+    ws = cli_workspace(tmp_path / "workspace", bootstrap=False)
+    original = ws.state.read_bytes()
+    override = ShadowWorkspace(ws.registry, tmp_path / "override-runtime", ws.state)
+
+    for registered_is_active in (False, True):
+        if registered_is_active:
+            result = ws.cli("coordination-shadow", "bootstrap", "--execute")
+            assert result["bootstrap"]["status"] == "applied", result
+
+        rejected = override.cli(
+            "coordination-shadow", "bootstrap", "--execute", success=False
+        )
+        assert rejected["bootstrap"]["status"] == "failed"
+        assert (
+            rejected["bootstrap"]["reason_code"]
+            == "shadow_source_runtime_root_mismatch"
+        )
+        assert not (override.runtime / "authority-shadow/file-v0").exists()
+        assert ws.state.read_bytes() == original
+
+
+def test_controller_rejects_an_alternate_state_file(tmp_path: Path):
+    ws = cli_workspace(tmp_path / "workspace", bootstrap=False)
+    alternate = ws.state.parent / "alternate-state.md"
+    alternate.write_bytes(ws.state.read_bytes())
+    original = ws.state.read_bytes()
+
+    for active in (False, True):
+        if active:
+            result = ws.cli("coordination-shadow", "bootstrap", "--execute")
+            assert result["bootstrap"]["status"] == "applied", result
+
+        rejected = ws.cli(
+            "coordination-shadow",
+            "bootstrap",
+            "--project",
+            str(ws.state.parent),
+            "--state-file",
+            str(alternate),
+            "--execute",
+            success=False,
+        )
+        assert rejected["bootstrap"]["status"] == "failed"
+        assert rejected["bootstrap"]["reason_code"] == (
+            "management_operation_identity_mismatch"
+            if active
+            else "shadow_source_state_path_mismatch"
+        )
+        assert ws.state.read_bytes() == alternate.read_bytes() == original
+        if not active:
+            assert not (ws.runtime / "authority-shadow/file-v0").exists()
 
 
 @pytest.mark.parametrize("writer", ["sync", "activation", "deletion"])

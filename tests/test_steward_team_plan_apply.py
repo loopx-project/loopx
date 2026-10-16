@@ -8,6 +8,10 @@ from pathlib import Path
 
 import pytest
 
+from control_plane.canonical_authority_fixture import initialize_canonical_authority
+from loopx.control_plane.coordination.runtime_shadow import (
+    build_todo_runtime_shadow_projection,
+)
 from loopx.control_plane.work_items.governed_transition_proposal import (
     GovernedTransitionSettlementPhase,
     settle_governed_transition_proposals,
@@ -71,6 +75,16 @@ def _fixture(
         ),
         encoding="utf-8",
     )
+    initialize_canonical_authority(
+        runtime,
+        GOAL_ID,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID,
+            todos=[],
+            handoff_mode="soft_claim",
+        ),
+        state_path=state_path,
+    )
     return project, registry_path
 
 
@@ -108,30 +122,6 @@ def _basis(registry_path: Path) -> str:
     return team_plan_state_fingerprint(
         registry_path=registry_path, goal_id=GOAL_ID, basis_agent_id=AGENT_ID
     )
-
-
-def test_legacy_registry_stays_locked_through_plan_and_write(tmp_path, monkeypatch):
-    from loopx.file_lock import exclusive_cross_runtime_file_lock, LockAcquireTimeoutError
-    from loopx.control_plane.work_items import team_plan_adapter
-
-    _project, registry = _fixture(tmp_path)
-    original_effect = team_plan_adapter.effect_runtime_result
-    checked = []
-
-    def inspect(method, request):
-        if method == "work_items.team_plan.plan":
-            with pytest.raises(LockAcquireTimeoutError):
-                with exclusive_cross_runtime_file_lock(registry, timeout_seconds=0):
-                    pass
-            checked.append(True)
-        return original_effect(method, request)
-
-    monkeypatch.setattr(team_plan_adapter, "effect_runtime_result", inspect)
-    result = _settle(registry, _proposal())
-    assert result[0]["status"] == "committed", result
-    assert checked == [True]
-    with exclusive_cross_runtime_file_lock(registry, timeout_seconds=0):
-        pass
 
 
 def _settle(
@@ -651,11 +641,17 @@ def test_a_failed_receipt_carries_a_typed_verdict_and_no_lane_identity() -> None
 
 def test_batch_write_failure_leaves_every_lane_unwritten(tmp_path: Path, monkeypatch) -> None:
     from loopx.control_plane.work_items import team_plan_adapter
+
     project, registry_path = _fixture(tmp_path, agents=(AGENT_ID, "agent-beta"))
     before = _todos(project)
-    def fail(*args, **kwargs):
-        raise OSError("batch write unavailable")
-    monkeypatch.setattr(team_plan_adapter, "write_captured_todo_state", fail)
+    original_effect = team_plan_adapter.effect_runtime_result
+
+    def fail(method, request):
+        if method == "work_items.team_plan.commit":
+            raise OSError("batch write unavailable")
+        return original_effect(method, request)
+
+    monkeypatch.setattr(team_plan_adapter, "effect_runtime_result", fail)
     with pytest.raises(OSError, match="batch write unavailable"):
         _settle(registry_path, _proposal(extra_lane=_second_lane()))
     assert _todos(project) == before

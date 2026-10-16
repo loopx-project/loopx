@@ -39,6 +39,48 @@ export function registerLeaseAcquisitionConformance(provider: string, factory: A
   }
 
   for (const schema of ["native", "legacy"] as const) {
+    test(`${provider} ${schema} User action history cannot grant execution and exact release remains available`, async t => {
+      const {store, contender, request} = await setup(t, schema);
+      const first = await acquire(store, request);
+      assert.equal(first.status, "applied");
+      const renewal = {...request, operation: "renew" as const, expected_version: 1};
+      const renewed = await mutate(store, renewal);
+      assert.equal(renewed.status, "applied");
+      const before = await loaded(store);
+      const prior = (before.head.todos as JsonObject[]).find(row => row.todo_id === request.todo_id)!;
+      // Model retained old authority without using today's mutation owner to
+      // manufacture the invalid history. Its receipts remain immutable facts.
+      const action: JsonObject = {...prior, role: "user", task_class: "user_action", bound_agent: "agent-a"};
+      delete action.claimed_by;
+      if (schema === "legacy") action.source_section = "User Todo";
+      assert.equal((await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: request.goal_id,
+        expected_provider_revision: before.provider_revision, operation_id: "retained-user-action-history",
+        projection: before.head, mutations: [{kind: "todo_upsert", todo: action, clear_fields: ["claimed_by"]}]}))).status, "applied");
+      const retained = await loaded(store);
+      const replay = await acquire(contender, request);
+      assert.equal(replay.reason_code, "todo_not_executable");
+      assert.deepEqual(replay.original_receipt, first.original_receipt);
+      assert.equal(evaluateCanonicalTaskLeaseProof({todo: action, lease: renewed.lease as JsonObject,
+        handoff_mode: "hard_lease", actor_agent_id: "agent-a", registered_agents: request.registered_agents,
+        lease_idempotency_key: request.idempotency_key, lease_expected_version: 2, now: request.now}).code,
+      "todo_not_executable");
+      const historicalRenewal = await mutate(contender, renewal);
+      assert.equal(historicalRenewal.status, "replayed");
+      assert.deepEqual(historicalRenewal.original_receipt, renewed.original_receipt);
+      assert.equal((await mutate(store, {...renewal, expected_version: 2})).reason_code, "todo_not_executable");
+      assert.equal((await mutate(store, {...request, operation: "transfer", expected_version: 2,
+        new_owner: "agent-b", new_idempotency_key: "action-transfer"})).reason_code, "todo_not_executable");
+      assert.deepEqual(await loaded(store), retained);
+      const release = {...request, operation: "release" as const, expected_version: 2,
+        registered_agents: [], ttl_seconds: null};
+      const released = await mutate(store, release);
+      assert.equal(released.status, "applied");
+      assert.equal((released.lease as JsonObject).status, "released");
+      assert.equal((released.lease as JsonObject).version, 2);
+      const afterRelease = await loaded(store);
+      assert.equal((await mutate(contender, release)).status, "replayed");
+      assert.deepEqual(await loaded(store), afterRelease);
+    });
     test(`${provider} ${schema} completion wait fences acquire and atomic claim, then archived completion releases the wait`, async t => {
       const {store, contender, request, fixture} = await setup(t, schema, (p, target, prerequisite) => {
         (p.todos as JsonObject[]).find(row => row.todo_id === target)!.resume_when = `todo_done:${prerequisite}`;

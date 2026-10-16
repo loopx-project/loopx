@@ -195,6 +195,62 @@ stops at the first exact readback hit, allows exactly one query at a
 provider-call telemetry plus an application receipt. A provider or application
 failure preserves the module's base output and is never a user gate.
 
+### Independent Agent bindings
+
+Use `--reward-memory-agent-id` to configure one registered Goal Agent without
+replacing the shared binding or another Agent's private route:
+
+```sh
+loopx configure-goal --goal-id GOAL --reward-memory-agent-id AGENT \
+  --reward-memory-config .loopx/config/reward-memory/agent.json
+loopx configure-goal --goal-id GOAL --reward-memory-agent-id AGENT \
+  --reward-memory-config .loopx/config/reward-memory/agent.json --execute
+loopx reward-memory experiment-status --goal-id GOAL --agent-id AGENT
+loopx configure-goal --goal-id GOAL --reward-memory-agent-id AGENT \
+  --clear-reward-memory-config --execute
+```
+
+Preview checks the provider; apply requires the existing fresh canary write and
+exact readback. A private route still binds exactly one canonical Goal/Agent
+actor. The existing Goal settings editor offers the same Agent selector,
+enable/disable operation, write-only path, locked preview and current readback.
+It compares the declared binding and verified activation, because a preview's
+unverified observations necessarily differ from the successful apply result.
+A committed change with failed readback is reported as a partial write; reload
+before deciding whether another change is needed.
+
+The persisted overrides live under `control_plane.reward_memory.agent_bindings`.
+An exact override, including a disabled or invalid one, never falls through to
+the shared allowlist. Scoped disable retains a disabled override and leaves
+provider content and sibling bindings untouched. Re-enable it with its private
+configuration file. A stale route is requalified with the same Agent flag; do
+not copy a digest into an old receipt. Same-Turn recall receipts are tied to the
+opaque binding revision, and pending outcome ingestion cannot migrate to a
+replacement route. Automatic reconciliation applies its one-to-three-event
+retry limit only to journals for the current binding. Other bindings' ambiguous
+journals remain unchanged and make no provider calls; they cannot starve the
+current route and can be retried if their original binding is restored.
+`pending_count` includes all retained pending journals; `attempted_count` counts
+only the current binding's selected retries.
+
+[Settings examples: independent route, missing path and narrow readback](https://github.com/loopx-project/loopx/tree/main/loopx/capabilities/reward_memory/assets)
+use a synthetic visual fixture. Provider observations in these repository
+screenshots are simulated; they do not qualify an installed memory service.
+
+The existing repeatable `--reward-memory-agent` still edits the shared allowlist;
+it cannot be combined with the new scope flag. Shared edits preserve overrides.
+Without the scope flag, `--clear-reward-memory-config` explicitly clears **all**
+bindings. Projects without overrides retain their previous default-off and
+shared-binding behavior. These operations add no publication, execution or
+cross-Agent authority and establish no memory utility or additional host coverage.
+
+Every invoking LoopX runtime must support these overrides before rollout.
+Older runtimes ignore the new map and still interpret the shared allowlist;
+they cannot enforce a scoped disable. Do not use mixed old/new readers for an
+override-enabled Goal. A rollback to such a runtime requires an owner-authorized
+feature-off configuration using the compatible CLI first; the unscoped clear
+above affects every binding and is not an automatic per-Agent rollback.
+
 `automatic_ingest=true` lets a module pass one already-distilled compact event
 to the configured adapter and ingest corpus. The adapter and standing policy
 remain responsible for exact actor/project/surface/action scope. The shared

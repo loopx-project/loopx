@@ -409,7 +409,7 @@ def test_model_exits_after_replan_confirms_goal_coverage_is_exhausted(
     assert receipt["semantic_reentry"] == {
         "decision": "skip",
         "effective_action": "monitor_quiet_skip",
-        "replan_rule": "future_monitor_wait",
+        "replan_rule": "terminal_coverage_exhausted",
         "replan_closed": True,
         "exited": True,
     }
@@ -767,6 +767,20 @@ def test_successor_dry_run_shares_quota_agent_scope_for_user_gates(
         fixture.project_root / ".loopx" / "registry.json",
     ):
         registry_path.write_text(registry_text, encoding="utf-8")
+    from loopx.todos import add_goal_todo
+
+    added = add_goal_todo(
+        registry_path=fixture.global_registry_path,
+        runtime_root_arg=str(fixture.runtime_root),
+        goal_id="replan-semantic-action-fixture",
+        role="user",
+        text="Review the other agent's independent delivery.",
+        priority="P0",
+        task_class="user_action",
+        bound_agent=other_agent_id,
+        operation_id="fixture-other-agent-review",
+    )
+    assert added["added"] is True
     state_path = (
         fixture.project_root
         / ".codex"
@@ -774,18 +788,6 @@ def test_successor_dry_run_shares_quota_agent_scope_for_user_gates(
         / "replan-semantic-action-fixture"
         / "ACTIVE_GOAL_STATE.md"
     )
-    state_text = state_path.read_text(encoding="utf-8").replace(
-        "## Agent Todo\n",
-        (
-            "## User Todo / Owner Review Reading Queue\n\n"
-            "- [ ] [P0] Review the other agent's independent delivery.\n"
-            "  <!-- loopx:todo todo_id=todo_other_agent_review status=open "
-            "task_class=user_action "
-            "bound_agent=codex-replan-other-agent -->\n\n"
-            "## Agent Todo\n"
-        ),
-    )
-    state_path.write_text(state_text, encoding="utf-8")
 
     quota = json.loads(
         _execute_loopx(

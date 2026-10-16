@@ -40,13 +40,11 @@ try {
   assert.equal(read().goal_acceptance_contract.enabled, false);
   await page.locator(".personal-goal-link", {hasText: "Multi Agent Projection"}).click();
   await page.getByRole("button", {name: "概览", exact: true}).click();
-  // The Agent does the technical preparation. The owner does not enter settings,
-  // inspect revisions, upload JSON or confirm the same facts in a second form.
-  cli("prepare", "--agent-id", "agent-a", "--document", resolve(root, "owner-contract.json"),
-    "--operation-id", "older-export-plan", "--execute");
-  const prepared = cli("prepare", "--agent-id", "agent-a", "--document", resolve(root, "owner-contract.json"),
-    "--operation-id", "prepare-export-check", "--execute");
+  // The admitted conversation tool prepares the plan through its real owner.
+  // The model is scripted; the owner does not repeat the facts in a JSON form.
+  const prepared = authority.prepared;
   assert.equal(prepared.executed, false);
+  assert.equal(prepared.proposal.normalized_parameters.prepared_by, "coordinator");
   assert.equal(read().goal_acceptance_contract.enabled, false, "preparation is not owner approval");
   const panel = page.locator(".delivery-acceptance-contract");
   const adopt = panel.getByRole("button", {name: "采用并检查", exact: true});
@@ -64,6 +62,7 @@ try {
   await panel.getByText("当前版本已核对", {exact: true}).waitFor();
   assert.equal(applyCount, 1, "one owner action adopts and checks the prepared plan");
   assert.equal(read().goal_acceptance_contract.criteria[0].oracle.state, "current");
+  const firstOperation = read().goal_acceptance_contract.verification.operation_id;
   assert.equal(await panel.locator('input[type="file"]').isVisible(), false, "technical import is optional");
   await panel.scrollIntoViewIfNeeded();
   await page.screenshot({path: resolve(outputDir, "oracle-current-desktop.png"), animations: "disabled"});
@@ -79,6 +78,7 @@ try {
   assert.equal(await panel.getByText("产物检查通过", {exact: true}).count(), 0);
   const oldOperation = read().goal_acceptance_contract.verification.operation_id;
   assert.equal(applyCount, 1);
+  assert.equal(oldOperation, firstOperation, "readback does not execute a new check");
   await run.click();
   await panel.getByText("检查失败；修复交付物后可再次检查", {exact: true}).waitFor();
   assert.notEqual(read().goal_acceptance_contract.verification.operation_id, oldOperation);
@@ -104,7 +104,7 @@ try {
   const expected = "Failed to load resource: the server responded with a status of 409 (Conflict)";
   const at = context.errors.indexOf(expected); if (at >= 0) context.errors.splice(at, 1);
   assert.deepEqual(context.errors.filter(value => !value.includes("404")), []);
-  console.log(JSON.stringify({status: "PASS", boundary: "Packaged UI with actual disposable SQLite/HTTP/CLI; Agent preparation is scripted, not live model or installed App evidence", checks: ["automatic prepared-plan discovery", "one contextual owner action", "no mandatory JSON/revision form", "exact native readback", "changed output clears green without execution", "failure/recovery", "advanced import rejection", "disable/default-off", "390px", "keyboard/reduced-motion"]}));
+  console.log(JSON.stringify({status: "PASS", boundary: "Packaged UI and admitted conversation tool with actual disposable SQLite/HTTP/CLI; model/tool transport is scripted, not live model or installed App evidence", checks: ["native conversation preparation without execution", "automatic prepared-plan discovery", "one contextual owner action", "no mandatory JSON/revision form", "exact native readback", "changed output clears green without execution", "failure/recovery", "advanced import rejection", "disable/default-off", "390px", "keyboard/reduced-motion"]}));
 } catch (error) {
   if (context?.page) {
     await mkdir(outputDir, {recursive: true});

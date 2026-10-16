@@ -10,8 +10,14 @@ from typing import Any
 
 import pytest
 
-import loopx.control_plane.effect_runtime as effect_runtime_module
+from canonical_authority_fixture import initialize_canonical_authority
 import loopx.control_plane.todos.completion_validation as completion_validation_module
+from loopx.control_plane.coordination.runtime_shadow import (
+    build_todo_runtime_shadow_projection,
+)
+from loopx.control_plane.coordination.local_authority import (
+    LocalCoordinationAuthorityUnavailable,
+)
 from loopx.control_plane.todos.completion_validation_projection import (
     completion_validation_declaration_sha256,
     project_completion_validation_authority,
@@ -26,7 +32,7 @@ from loopx.control_plane.todos.completion_validation_store import (
     read_completion_validation_declaration,
 )
 from loopx.status import parse_active_state_todos
-from loopx.todos import add_goal_todo, complete_goal_todo, update_goal_todo
+from loopx.todos import add_goal_todo, complete_goal_todo
 
 GOAL_ID = "todo-completion-validation"
 AGENT = "codex-author"
@@ -78,15 +84,23 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
         ),
         encoding="utf-8",
     )
+    initialize_canonical_authority(
+        tmp_path / "runtime",
+        GOAL_ID,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID,
+            todos=[],
+            handoff_mode="soft_claim",
+        ),
+        state_path=state,
+    )
     return registry, state
 
 
 def _agent_todo(state: Path, todo_id: str) -> dict:
     todos = parse_active_state_todos(state.read_text(encoding="utf-8"))
     return next(
-        item
-        for item in todos["agent_todos"]["items"]
-        if item["todo_id"] == todo_id
+        item for item in todos["agent_todos"]["items"] if item["todo_id"] == todo_id
     )
 
 
@@ -217,20 +231,8 @@ def _same_repository_worktrees(
     )
 
 
-def _record_completion_runtime_calls(
-    monkeypatch: pytest.MonkeyPatch,
-) -> list[str]:
-    calls: list[str] = []
-    original_request = effect_runtime_module._request_with_info
-
-    def recording_request(*args, **kwargs):  # type: ignore[no-untyped-def]
-        method = kwargs.get("method")
-        if isinstance(method, str) and method.startswith("todo.completion"):
-            calls.append(method)
-        return original_request(*args, **kwargs)
-
-    monkeypatch.setattr(effect_runtime_module, "_request_with_info", recording_request)
-    return calls
+def _validation_receipt(result: dict) -> dict:
+    return result["validation_failure"]["validation_receipt"]
 
 
 def test_validation_command_declared_and_passing_commits_completion(
@@ -251,9 +253,9 @@ def test_validation_command_declared_and_passing_commits_completion(
         calls["count"] += 1
         return original_runner(*args, **kwargs)
 
-    monkeypatch.setattr(completion_validation_module, "run_caller_validation", counting_runner)
-    transaction_calls = _record_completion_runtime_calls(monkeypatch)
-
+    monkeypatch.setattr(
+        completion_validation_module, "run_caller_validation", counting_runner
+    )
     result = complete_goal_todo(
         registry_path=registry,
         goal_id=GOAL_ID,
@@ -262,16 +264,10 @@ def test_validation_command_declared_and_passing_commits_completion(
         evidence="validated completion",
     )
     assert calls["count"] == 1  # the gate actually ran the declared command
-    assert [
-        method for method in transaction_calls
-        if method == "todo.completion.reduce"
-    ] == [
-        "todo.completion.reduce",
-        "todo.completion.reduce",
-    ]
-    assert "todo.completion_policy.resolve" not in transaction_calls
     assert result["ok"] is True
     assert result["changed"] is True
+    assert result["provider_status"] == "applied"
+    assert result["validation_receipt"]["passed"] is True
     assert "validation_blocked_completion" not in result
     assert _agent_todo(state, str(todo["todo_id"]))["status"] == "done"
 
@@ -383,8 +379,9 @@ def test_same_repository_validation_rejects_different_revision_without_running(
 
     assert calls["count"] == 0
     assert result["validation_blocked_completion"] is True
-    assert result["validation"]["status"] == "workspace_repository_mismatch"
-    assert str(tmp_path) not in json.dumps(result["validation"])
+    receipt = _validation_receipt(result)
+    assert receipt["status"] == "workspace_repository_mismatch"
+    assert str(tmp_path) not in json.dumps(receipt)
     assert _agent_todo(state, str(todo["todo_id"]))["status"] == "open"
 
 
@@ -408,7 +405,9 @@ def test_cross_repository_validation_without_recorded_workspace_fails_closed(
         calls["count"] += 1
         raise AssertionError("validation command must not run")
 
-    monkeypatch.setattr(completion_validation_module, "run_caller_validation", forbidden_runner)
+    monkeypatch.setattr(
+        completion_validation_module, "run_caller_validation", forbidden_runner
+    )
 
     result = complete_goal_todo(
         registry_path=registry,
@@ -421,8 +420,9 @@ def test_cross_repository_validation_without_recorded_workspace_fails_closed(
 
     assert calls["count"] == 0
     assert result["validation_blocked_completion"] is True
-    assert result["validation"]["status"] == "workspace_receipt_unavailable"
-    assert str(tmp_path) not in json.dumps(result["validation"])
+    receipt = _validation_receipt(result)
+    assert receipt["status"] == "workspace_receipt_unavailable"
+    assert str(tmp_path) not in json.dumps(receipt)
     assert _agent_todo(state, str(todo["todo_id"]))["status"] == "open"
 
 
@@ -449,7 +449,9 @@ def test_cross_repository_validation_rejects_foreign_worktree_without_running(
         calls["count"] += 1
         raise AssertionError("validation command must not run")
 
-    monkeypatch.setattr(completion_validation_module, "run_caller_validation", forbidden_runner)
+    monkeypatch.setattr(
+        completion_validation_module, "run_caller_validation", forbidden_runner
+    )
 
     result = complete_goal_todo(
         registry_path=registry,
@@ -463,8 +465,9 @@ def test_cross_repository_validation_rejects_foreign_worktree_without_running(
 
     assert calls["count"] == 0
     assert result["validation_blocked_completion"] is True
-    assert result["validation"]["status"] == "workspace_repository_mismatch"
-    assert str(tmp_path) not in json.dumps(result["validation"])
+    receipt = _validation_receipt(result)
+    assert receipt["status"] == "workspace_repository_mismatch"
+    assert str(tmp_path) not in json.dumps(receipt)
     assert _agent_todo(state, str(todo["todo_id"]))["status"] == "open"
 
 
@@ -489,7 +492,9 @@ def test_cross_repository_validation_rejects_dirty_worktree_without_running(
         calls["count"] += 1
         raise AssertionError("validation command must not run")
 
-    monkeypatch.setattr(completion_validation_module, "run_caller_validation", forbidden_runner)
+    monkeypatch.setattr(
+        completion_validation_module, "run_caller_validation", forbidden_runner
+    )
 
     result = complete_goal_todo(
         registry_path=registry,
@@ -503,8 +508,9 @@ def test_cross_repository_validation_rejects_dirty_worktree_without_running(
 
     assert calls["count"] == 0
     assert result["validation_blocked_completion"] is True
-    assert result["validation"]["status"] == "workspace_dirty"
-    assert str(tmp_path) not in json.dumps(result["validation"])
+    receipt = _validation_receipt(result)
+    assert receipt["status"] == "workspace_dirty"
+    assert str(tmp_path) not in json.dumps(receipt)
     assert _agent_todo(state, str(todo["todo_id"]))["status"] == "open"
 
 
@@ -522,7 +528,9 @@ def test_malformed_delivery_workspace_receipt_returns_typed_failure_without_runn
 
     def unexpected_validation(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         calls["count"] += 1
-        raise AssertionError("malformed workspace receipts must block before validation")
+        raise AssertionError(
+            "malformed workspace receipts must block before validation"
+        )
 
     monkeypatch.setattr(
         completion_validation_module,
@@ -550,8 +558,9 @@ def test_malformed_delivery_workspace_receipt_returns_typed_failure_without_runn
     assert calls["count"] == 0
     assert result["ok"] is False
     assert result["validation_blocked_completion"] is True
-    assert result["validation"]["status"] == "workspace_receipt_invalid"
-    assert result["validation"]["local_path_captured"] is False
+    receipt = _validation_receipt(result)
+    assert receipt["status"] == "workspace_receipt_invalid"
+    assert receipt["local_path_captured"] is False
     assert _agent_todo(state, str(todo["todo_id"]))["status"] == "open"
 
 
@@ -573,7 +582,7 @@ def test_missing_validation_executable_returns_typed_receipt(
     )
     assert result["ok"] is False
     assert result["validation_blocked_completion"] is True
-    receipt = result["validation"]
+    receipt = _validation_receipt(result)
     assert receipt["passed"] is False
     assert receipt["status"] == "command_not_run"
     assert str(missing_executable) not in json.dumps(receipt)
@@ -596,7 +605,7 @@ def test_malformed_validation_command_returns_typed_receipt(
     )
     assert result["ok"] is False
     assert result["validation_blocked_completion"] is True
-    receipt = result["validation"]
+    receipt = _validation_receipt(result)
     assert receipt["passed"] is False
     assert receipt["status"] == "command_malformed"
     assert _agent_todo(state, str(todo["todo_id"]))["status"] == "open"
@@ -623,7 +632,7 @@ def test_validation_command_declared_and_failing_blocks_completion(
     assert result["completed"] is False
     assert result["changed"] is False
     assert result["validation_blocked_completion"] is True
-    receipt = result["validation"]
+    receipt = _validation_receipt(result)
     assert receipt["passed"] is False
     assert receipt["exit_code"] == 1
     assert receipt["command_label"] == "caller-declared smoke"
@@ -637,11 +646,9 @@ def test_validation_command_declared_and_failing_blocks_completion(
 
 def test_no_validation_command_keeps_fast_path_unchanged(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry, state = _write_fixture(tmp_path)
     todo = _add_todo(registry)  # no validation_command declared
-    transaction_calls = _record_completion_runtime_calls(monkeypatch)
     note = "post-merge note parity"
     result = complete_goal_todo(
         registry_path=registry,
@@ -653,61 +660,11 @@ def test_no_validation_command_keeps_fast_path_unchanged(
     )
     assert result["ok"] is True
     assert result["changed"] is True
-    assert [
-        method for method in transaction_calls
-        if method == "todo.completion.reduce"
-    ] == ["todo.completion.reduce"]
-    assert "todo.completion_policy.resolve" not in transaction_calls
+    assert result["provider_status"] == "applied"
     assert "validation_blocked_completion" not in result
     persisted = _agent_todo(state, str(todo["todo_id"]))
     assert persisted["status"] == "done"
     assert persisted["note"] == note
-
-
-def test_validation_receipt_cannot_commit_a_changed_completion_source(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    registry, state = _write_fixture(tmp_path)
-    todo = _add_todo(
-        registry,
-        validation_command=_PASS_COMMAND,
-        validation_label="caller-declared smoke",
-    )
-    original_validation = (
-        completion_validation_module._run_declared_completion_validation
-    )
-
-    def validate_then_drift(**kwargs):  # type: ignore[no-untyped-def]
-        receipt = original_validation(**kwargs)
-        source = state.read_text(encoding="utf-8")
-        state.write_text(
-            source.replace(
-                "validation_label=caller-declared%20smoke",
-                "validation_label=drifted%20smoke",
-            ),
-            encoding="utf-8",
-        )
-        return receipt
-
-    monkeypatch.setattr(
-        completion_validation_module,
-        "_run_declared_completion_validation",
-        validate_then_drift,
-    )
-
-    result = complete_goal_todo(
-        registry_path=registry,
-        goal_id=GOAL_ID,
-        todo_id=str(todo["todo_id"]),
-        agent_id=AGENT,
-        evidence="stale validation receipt",
-    )
-
-    assert result["ok"] is False
-    assert result["completion_source_drift"] is True
-    assert result["changed"] is False
-    assert _agent_todo(state, str(todo["todo_id"]))["status"] == "open"
 
 
 def test_validation_receipt_cannot_commit_changed_completion_policy_source(
@@ -739,41 +696,16 @@ def test_validation_receipt_cannot_commit_changed_completion_policy_source(
         validate_then_change_registry,
     )
 
-    result = complete_goal_todo(
-        registry_path=registry,
-        goal_id=GOAL_ID,
-        todo_id=str(todo["todo_id"]),
-        agent_id=AGENT,
-        evidence="stale registry projection",
-    )
+    with pytest.raises(LocalCoordinationAuthorityUnavailable) as caught:
+        complete_goal_todo(
+            registry_path=registry,
+            goal_id=GOAL_ID,
+            todo_id=str(todo["todo_id"]),
+            agent_id=AGENT,
+            evidence="stale registry projection",
+        )
 
-    assert result["ok"] is False
-    assert result["completion_source_drift"] is True
-    assert result["changed"] is False
-    assert _agent_todo(state, str(todo["todo_id"]))["status"] == "open"
-
-
-def test_validation_timeout_blocks_completion(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        completion_validation_module, "_COMPLETION_VALIDATION_TIMEOUT_SECONDS", 0.5
-    )
-    registry, state = _write_fixture(tmp_path)
-    todo = _add_todo(registry, validation_command=_SLEEP_COMMAND)
-    result = complete_goal_todo(
-        registry_path=registry,
-        goal_id=GOAL_ID,
-        todo_id=str(todo["todo_id"]),
-        agent_id=AGENT,
-        evidence="claim of completion",
-    )
-    assert result["ok"] is False
-    assert result["validation_blocked_completion"] is True
-    receipt = result["validation"]
-    assert receipt["passed"] is False
-    assert receipt["status"] == "timeout"
+    assert caught.value.code == "authority_source_changed"
     assert _agent_todo(state, str(todo["todo_id"]))["status"] == "open"
 
 
@@ -791,7 +723,9 @@ def test_terminal_replay_short_circuits_before_validation(
         calls["count"] += 1
         return original_runner(*args, **kwargs)
 
-    monkeypatch.setattr(completion_validation_module, "run_caller_validation", counting_runner)
+    monkeypatch.setattr(
+        completion_validation_module, "run_caller_validation", counting_runner
+    )
 
     first = complete_goal_todo(
         registry_path=registry,
@@ -833,7 +767,7 @@ def test_per_todo_validation_timeout_overrides_default(tmp_path: Path) -> None:
     )
     assert result["ok"] is False
     assert result["validation_blocked_completion"] is True
-    receipt = result["validation"]
+    receipt = _validation_receipt(result)
     assert receipt["passed"] is False
     assert receipt["status"] == "timeout"
     assert "timed out after 1s" in receipt["summary"]
@@ -893,7 +827,7 @@ def test_validation_command_json_failing_blocks_completion(
     )
     assert result["ok"] is False
     assert result["validation_blocked_completion"] is True
-    receipt = result["validation"]
+    receipt = _validation_receipt(result)
     assert receipt["passed"] is False
     assert receipt["exit_code"] == 1
     assert _agent_todo(state, str(todo["todo_id"]))["status"] == "open"
@@ -927,62 +861,6 @@ def test_validation_command_json_must_be_nonempty_string_array(
         _add_todo(registry, validation_command_json=payload)
 
 
-def test_validation_timeout_works_with_command_json(tmp_path: Path) -> None:
-    registry, state = _write_fixture(tmp_path)
-    sleep_argv = json.dumps([sys.executable, "-c", "import time; time.sleep(30)"])
-    todo = _add_todo(
-        registry,
-        validation_command_json=sleep_argv,
-        validation_timeout_seconds=1,
-    )
-    result = complete_goal_todo(
-        registry_path=registry,
-        goal_id=GOAL_ID,
-        todo_id=str(todo["todo_id"]),
-        agent_id=AGENT,
-        evidence="claim of completion",
-    )
-    assert result["ok"] is False
-    receipt = result["validation"]
-    assert receipt["status"] == "timeout"
-    assert "timed out after 1s" in receipt["summary"]
-    assert _agent_todo(state, str(todo["todo_id"]))["status"] == "open"
-
-
-def test_corrupted_argv_declaration_fails_closed(tmp_path: Path) -> None:
-    registry, state = _write_fixture(tmp_path)
-    todo = _add_todo(
-        registry,
-        validation_command_json=json.dumps(
-            [sys.executable, "-c", "raise SystemExit(0)"]
-        ),
-    )
-    # Corrupt the persisted argv declaration in place; completion must run the
-    # gate and fail closed as a malformed command, never silently skip it.
-    text = state.read_text(encoding="utf-8")
-    corrupted, substitutions = re.subn(
-        r"validation_command_argv=\S+",
-        "validation_command_argv=%5Bbroken",
-        text,
-    )
-    assert substitutions == 1
-    state.write_text(corrupted, encoding="utf-8")
-    result = complete_goal_todo(
-        registry_path=registry,
-        goal_id=GOAL_ID,
-        todo_id=str(todo["todo_id"]),
-        agent_id=AGENT,
-        evidence="claim of completion",
-    )
-    assert result["ok"] is False
-    assert result["validation_blocked_completion"] is True
-    receipt = result["validation"]
-    assert receipt["passed"] is False
-    assert receipt["status"] == "declaration_invalid"
-    assert "validation_command_argv" in receipt["summary"]
-    assert _agent_todo(state, str(todo["todo_id"]))["status"] == "open"
-
-
 def test_empty_argv_declaration_reports_neutral_message(
     tmp_path: Path,
 ) -> None:
@@ -1000,159 +878,6 @@ def test_empty_argv_declaration_reports_neutral_message(
     assert receipt is not None
     assert receipt["status"] == "command_malformed"
     assert "validation command must not be empty" in receipt["summary"]
-
-
-def _user_todo(state: Path, todo_id: str) -> dict:
-    todos = parse_active_state_todos(state.read_text(encoding="utf-8"))
-    return next(
-        item
-        for item in todos["user_todos"]["items"]
-        if item["todo_id"] == todo_id
-    )
-
-
-def _spy_validation_runner(monkeypatch: pytest.MonkeyPatch) -> dict:
-    original_runner = completion_validation_module.run_caller_validation
-    calls = {"count": 0}
-
-    def counting_runner(*args, **kwargs):  # type: ignore[no-untyped-def]
-        calls["count"] += 1
-        return original_runner(*args, **kwargs)
-
-    monkeypatch.setattr(
-        completion_validation_module, "run_caller_validation", counting_runner
-    )
-    return calls
-
-
-def test_user_todo_update_done_runs_declared_validation_gate(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    registry, state = _write_fixture(tmp_path)
-    todo = add_goal_todo(
-        registry_path=registry,
-        goal_id=GOAL_ID,
-        role="user",
-        text="Operator-recorded outcome.",
-        task_class="user_action",
-        validation_command=_FAIL_COMMAND,
-        validation_label="caller-declared smoke",
-    )
-    calls = _spy_validation_runner(monkeypatch)
-    result = update_goal_todo(
-        registry_path=registry,
-        goal_id=GOAL_ID,
-        todo_id=str(todo["todo_id"]),
-        status="done",
-        evidence="claim of completion",
-    )
-    # The declared command ran once and blocked the update: nothing committed.
-    assert calls["count"] == 1
-    assert result["ok"] is False
-    assert result["changed"] is False
-    assert result["validation_blocked_completion"] is True
-    receipt = result["validation"]
-    assert receipt["passed"] is False
-    assert receipt["exit_code"] == 1
-    assert receipt["stdout_captured"] is False
-    assert _user_todo(state, str(todo["todo_id"]))["status"] == "open"
-
-
-def test_user_todo_update_done_without_declaration_keeps_fast_path(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    registry, state = _write_fixture(tmp_path)
-    todo = add_goal_todo(
-        registry_path=registry,
-        goal_id=GOAL_ID,
-        role="user",
-        text="Operator-recorded outcome.",
-        task_class="user_action",
-    )
-    calls = _spy_validation_runner(monkeypatch)
-    result = update_goal_todo(
-        registry_path=registry,
-        goal_id=GOAL_ID,
-        todo_id=str(todo["todo_id"]),
-        status="done",
-    )
-    assert calls["count"] == 0
-    assert result["ok"] is True
-    assert "validation_blocked_completion" not in result
-    assert _user_todo(state, str(todo["todo_id"]))["status"] == "done"
-
-
-def test_repeated_done_update_does_not_rerun_validation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    registry, state = _write_fixture(tmp_path)
-    todo = add_goal_todo(
-        registry_path=registry,
-        goal_id=GOAL_ID,
-        role="user",
-        text="Operator-recorded outcome.",
-        task_class="user_action",
-        validation_command=_PASS_COMMAND,
-    )
-    calls = _spy_validation_runner(monkeypatch)
-    first = update_goal_todo(
-        registry_path=registry,
-        goal_id=GOAL_ID,
-        todo_id=str(todo["todo_id"]),
-        status="done",
-        evidence="validated completion",
-    )
-    assert first["ok"] is True
-    assert calls["count"] == 1  # the passing command ran once via the update gate
-    assert _user_todo(state, str(todo["todo_id"]))["status"] == "done"
-
-    second = update_goal_todo(
-        registry_path=registry,
-        goal_id=GOAL_ID,
-        todo_id=str(todo["todo_id"]),
-        status="done",
-        note="re-acknowledged",
-    )
-    # Already-completed short-circuit: the command is not re-run.
-    assert second["ok"] is True
-    assert calls["count"] == 1
-    assert _user_todo(state, str(todo["todo_id"]))["status"] == "done"
-
-
-def test_agent_todo_update_done_keeps_guard_error_without_running_gate(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    registry, state = _write_fixture(tmp_path)
-    todo = _add_todo(registry, validation_command=_FAIL_COMMAND)
-    calls = _spy_validation_runner(monkeypatch)
-    with pytest.raises(ValueError, match="must use complete_goal_todo"):
-        update_goal_todo(
-            registry_path=registry,
-            goal_id=GOAL_ID,
-            todo_id=str(todo["todo_id"]),
-            status="done",
-        )
-    # The gate never runs for agent sections; the pre-existing guard fires.
-    assert calls["count"] == 0
-    assert _agent_todo(state, str(todo["todo_id"]))["status"] == "open"
-
-
-
-
-
-
-
-
-def _set_registry_event_log(registry: Path, event_log: Path) -> None:
-    data = json.loads(registry.read_text(encoding="utf-8"))
-    data["goals"][0]["event_log"] = str(event_log)
-    registry.write_text(json.dumps(data), encoding="utf-8")
-
-
 
 
 def test_private_validation_store_is_owner_only_and_detects_tampering(
@@ -1177,11 +902,14 @@ def test_private_validation_store_is_owner_only_and_detects_tampering(
     )
 
     assert path.stat().st_mode & 0o777 == 0o600
-    assert read_completion_validation_declaration(
-        runtime_root=tmp_path,
-        goal_id=GOAL_ID,
-        todo_id="todo_private_validation",
-    ) == declaration
+    assert (
+        read_completion_validation_declaration(
+            runtime_root=tmp_path,
+            goal_id=GOAL_ID,
+            todo_id="todo_private_validation",
+        )
+        == declaration
+    )
     assert digest == completion_validation_declaration_sha256(declaration)
 
     stored = json.loads(path.read_text(encoding="utf-8"))

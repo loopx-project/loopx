@@ -6,7 +6,7 @@ outbox disposition, model execution or whole-Goal restore.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import subprocess
@@ -58,9 +58,31 @@ def source_execution(tmp_path, monkeypatch, ttl=120):
         return json.loads(child.stdout)
 
     identity = ["--owner", "agent-a", "--idempotency-key", "old-execution"]
-    acquired = command("acquire", *identity, "--ttl-seconds", ttl)
-    assert acquired["ok"] and acquired["lease"]["status"] == "active", acquired
-    context = {"lease": acquired["lease"], "ttl_seconds": ttl,
+    now = datetime.now(timezone.utc)
+
+    def timestamp(value: datetime) -> str:
+        return value.isoformat().replace("+00:00", "Z")
+
+    lease = {
+        "schema_version": "task_lease_v0",
+        "goal_id": "cold",
+        "todo_id": "todo_current",
+        "owner": "agent-a",
+        "idempotency_key": "old-execution",
+        "write_scopes": [],
+        "acquire_ttl_seconds": ttl,
+        "version": 1,
+        "lease_epoch": 1,
+        "acquired_at": timestamp(now),
+        "updated_at": timestamp(now),
+        "expires_at": timestamp(now + timedelta(seconds=ttl)),
+        "status": "active",
+    }
+    lease_path = runtime / "goals/cold/task-leases/todo_current.json"
+    lease_path.parent.mkdir(parents=True)
+    lease_path.write_text(json.dumps(lease), encoding="utf-8")
+    assert command("inspect")["lease"] == lease
+    context = {"lease": lease, "ttl_seconds": ttl,
         "read_argv": [*argv, "inspect", *selected],
         "renew_argv": [*argv, "renew", *selected, *identity]}
 

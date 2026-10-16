@@ -1,3 +1,4 @@
+import {retiredHandoffModeRejection, HANDOFF_MODE_RETIRED_REASON} from "./handoff_mode_policy.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
 import {currentLeaseAcquisitionProof} from "./lease_acquisition_proof.ts";
 import {canonicalTaskLeaseAcquireFacts} from "./task_lease_state.ts";
@@ -526,6 +527,9 @@ async function executeClaimAttempt(
   if (!["legacy", "soft_claim", "hard_lease"].includes(handoffMode)) {
     return failure("invalid_handoff_mode", "canonical projection has an invalid handoff mode");
   }
+  const retired = retiredHandoffModeRejection(handoffMode);
+  if (retired !== null) return failure(retired, HANDOFF_MODE_RETIRED_REASON,
+    {todo_id: input.todo_id, handoff_mode: handoffMode}, "decision_rejection");
   if (leaseRequest !== null && handoffMode !== "hard_lease") {
     return failure(
       "claim_lease_requires_hard_lease",

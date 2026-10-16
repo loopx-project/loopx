@@ -181,7 +181,7 @@ if (database && installed) {
       status: "open", done: false, archive_state: "active", text: "[P2] Existing work",
       title: "Existing work", priority: "P2", task_class: "advancement_task"}];
     await store.commitAuthority({operation_id: "seed-priority", expected_provider_revision: null,
-      events: [], receipts: [], next_projection: {goal_id: options.goal_id, todos, leases: [],
+      events: [], receipts: [], next_projection: {goal_id: options.goal_id, handoff_mode: "soft_claim", todos, leases: [],
         todo_read_model: {schema_version: TODO_DOMAIN_READ_RECORD_SCHEMA, todo_count: 1,
           records_sha256: canonicalAuthoritySha256(todos), contract_fields: [...TODO_DOMAIN_RECORD_CONTRACT.fields]}}});
     const request = {goal_id: options.goal_id, todo_id: "todo_priority", expected_role: "agent",

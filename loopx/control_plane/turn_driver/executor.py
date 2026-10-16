@@ -241,6 +241,7 @@ def _normalize_host_path_delta(
     *,
     unchanged_reason: str,
     errors: list[str],
+    from_journal: bool = False,
 ) -> tuple[str, dict[str, Any] | None]:
     raw_path_delta_mode = result.get("path_delta_mode")
     path_delta_mode = ""
@@ -270,7 +271,25 @@ def _normalize_host_path_delta(
         errors.append("path_delta_mode must be unchanged or material_replan")
 
     agent_vision: dict[str, Any] | None = None
-    if agent_vision_json:
+    if from_journal and "agent_vision" in result:
+        # The journal stores the typed owner's decoded packet. Revalidate it
+        # through that same owner, without treating derived budget diagnostics
+        # as a new Host wire string or widening the untrusted Host protocol.
+        try:
+            if "agent_vision_json" in result:
+                raise ValueError("cached vision cannot carry both packet forms")
+            packet = result["agent_vision"]
+            if not isinstance(packet, dict):
+                raise TypeError("cached agent_vision must be a JSON object")
+            envelope = plan.get("turn_envelope") or {}
+            agent_vision = normalize_goal_vision_packet(
+                packet,
+                goal_id=str(envelope.get("goal_id") or ""),
+                agent_id=str(envelope.get("agent_id") or "") or None,
+            )
+        except (TypeError, ValueError) as exc:
+            errors.append(f"invalid cached agent_vision: {exc}")
+    elif agent_vision_json:
         if len(agent_vision_json) > HOST_AGENT_VISION_JSON_MAX_CHARS:
             errors.append(
                 "agent_vision_json exceeds "
@@ -321,10 +340,13 @@ def validate_loopx_turn_host_result(
     value: Mapping[str, Any],
     *,
     completion_lifecycle_configured: bool = False,
+    from_journal: bool = False,
 ) -> dict[str, Any]:
     result = dict(value)
     errors: list[str] = []
     allowed_fields = HOST_RESULT_FIELDS | subagent.subagent_host_result_fields(plan)
+    if from_journal:
+        allowed_fields = allowed_fields | {"agent_vision"}
     unknown = sorted(set(result) - allowed_fields)
     if unknown:
         errors.append("unsupported host result fields: " + ", ".join(unknown))
@@ -415,6 +437,7 @@ def validate_loopx_turn_host_result(
             result,
             unchanged_reason=unchanged_reason,
             errors=errors,
+            from_journal=from_journal,
         )
         if (
             path_delta_mode == "material_replan"
@@ -430,6 +453,7 @@ def validate_loopx_turn_host_result(
     elif (
         str(result.get("path_delta_mode") or "").strip()
         or str(result.get("agent_vision_json") or "").strip()
+        or (from_journal and "agent_vision" in result)
     ):
         errors.append(
             "non-material host results cannot declare path_delta_mode or agent_vision_json"
@@ -851,6 +875,7 @@ def _host_result_stage(
     usage_goal_id: str = "",
 ) -> tuple[dict[str, Any] | None, list[str], dict[str, Any] | None]:
     completed_phases = list(journal.get("completed_phases") or [])
+    from_journal = "typed_result" in completed_phases
     result = (
         journal.get("host_result")
         if isinstance(journal.get("host_result"), dict)
@@ -929,6 +954,7 @@ def _host_result_stage(
         plan,
         result or {},
         completion_lifecycle_configured=completion_lifecycle_configured,
+        from_journal=from_journal,
     )
     if not validation.get("ok"):
         failure = _host_failure(

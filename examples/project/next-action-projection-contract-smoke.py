@@ -8,10 +8,17 @@ import subprocess
 import sys
 import tempfile
 
-from loopx.control_plane.scheduler.execution_context import GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT
-from loopx.quota import build_quota_should_run
-from loopx.state_refresh import refresh_state_run
-from loopx.status import collect_status
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted  # noqa: E402
+from loopx.control_plane.scheduler.execution_context import GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT  # noqa: E402
+from loopx.control_plane.testing.canary_harness import import_fixture_authority, run_json_cli  # noqa: E402
+from loopx.control_plane.todos.mutation_api import complete_goal_todo  # noqa: E402
+from loopx.quota import build_quota_should_run  # noqa: E402
+from loopx.state_refresh import refresh_state_run  # noqa: E402
+from loopx.status import collect_status  # noqa: E402
 
 GOAL_ID = "next-action-projection-goal"
 ACTIVE_NEXT_ACTION = "Shared compatibility guidance."
@@ -93,9 +100,18 @@ def assert_state_next_action(path: Path, expected: str) -> None:
 
 
 
-def main() -> None:
+def assert_bound_projection(provider: str) -> None:
     with tempfile.TemporaryDirectory(prefix="loopx-bound-recommendation-") as directory:
         registry, runtime, project, state = write_fixture(Path(directory))
+        import_fixture_authority(registry, GOAL_ID, provider=provider)
+        original = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+        assert original["source_authority"] == provider + "_v0"
+        assert {row["todo_id"] for row in original["todos"]} == {"todo_primary", "todo_side"}
+        # Finish the import's display delivery before checking that a task
+        # step does not change the already-current Markdown projection.
+        run_json_cli("todo", "project-markdown", "--goal-id", GOAL_ID,
+            "--provider-revision", original["provider_revision"], "--execute",
+            registry_path=registry, runtime_root=runtime, cwd=REPO_ROOT)
         before = state.read_bytes()
         common = dict(registry_path=registry, runtime_root_override=str(runtime),
             goal_id=GOAL_ID, project=project, state_file=None, classification="state_refreshed",
@@ -133,7 +149,7 @@ def main() -> None:
         command = [sys.executable, "-m", "loopx.cli", "--registry", str(registry),
             "--runtime-root", str(runtime), "--format", "json", "status",
             "--goal-id", GOAL_ID, "--agent-id", "codex-side-bypass"]
-        readback = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        readback = subprocess.run(command, cwd=REPO_ROOT, capture_output=True, text=True, timeout=30)
         assert readback.returncode == 0, readback.stdout + readback.stderr
         item = next(item for item in json.loads(readback.stdout)["attention_queue"]["items"] if item["goal_id"] == GOAL_ID)
         projected = item.get("agent_lane_next_action") or item["project_asset"]["agent_lane_next_action"]
@@ -141,14 +157,37 @@ def main() -> None:
         assert projected["next_action_basis"] == lane["next_action_basis"]
         assert "next_action_basis" not in item  # the selected route owns the basis
         markdown = subprocess.run([*command[:command.index("--format")], "--format", "markdown",
-            *command[command.index("--format") + 2:]], capture_output=True, text=True, timeout=30)
+            *command[command.index("--format") + 2:]], cwd=REPO_ROOT, capture_output=True, text=True, timeout=30)
         assert markdown.returncode == 0 and "next_step: " + step in markdown.stdout
-        # A different selected task does not inherit the old experiment.
+        # Display metadata cannot complete the authoritative selected task.
         state.write_text(state.read_text().replace("todo_side status=open", "todo_side status=done"))
+        assert state.read_bytes() != before
+        spoofed = collect_status(registry_path=registry, runtime_root_override=str(runtime), scan_roots=[project], limit=2)
+        spoofed_decision = build_quota_should_run(spoofed, goal_id=GOAL_ID, agent_id="codex-side-bypass",
+            scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT)
+        assert spoofed_decision["agent_lane_next_action"]["todo_id"] == "todo_side"
+        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID) == original
+        state.write_bytes(before)
+
+        # Complete through the real owner: another selected task must not
+        # inherit the original task's retained recommendation receipt.
+        complete_goal_todo(registry_path=registry, goal_id=GOAL_ID,
+            todo_id="todo_side", agent_id="codex-side-bypass", evidence="Scoped fixture work verified.")
+        completed = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+        before_rows = {row["todo_id"]: row for row in original["todos"]}
+        after_rows = {row["todo_id"]: row for row in completed["todos"]}
+        assert after_rows["todo_side"]["status"] == "done"
+        assert after_rows["todo_side"]["claimed_by"] == before_rows["todo_side"]["claimed_by"]
+        assert after_rows["todo_primary"] == before_rows["todo_primary"]
         changed = collect_status(registry_path=registry, runtime_root_override=str(runtime), scan_roots=[project], limit=2)
         next_decision = build_quota_should_run(changed, goal_id=GOAL_ID, agent_id="codex-side-bypass",
             scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT)
         assert step not in next_decision["interaction_contract"]["agent_channel"]["primary_action"]
+
+
+def main() -> None:
+    for provider in ("file", "sqlite"):
+        assert_bound_projection(provider)
     print("next-action-projection-contract-smoke ok")
 
 

@@ -43,13 +43,14 @@ async function locatorRetirement(locator: RuntimeLocator): Promise<() => Promise
   });
 }
 
-async function exitWithoutCache(retire: () => Promise<void>): Promise<void> {
+async function exitAfterRetirement(retire: () => Promise<void>): Promise<void> {
   try {
     await retire();
   } finally {
-    // process.exit() invokes Node's synchronous cache flush again. Only after
-    // drain and fenced cleanup may we bypass that optional exit hook. A worker
-    // shares this PID, so this cannot target a later process that reused a PID.
+    // Node runs the calling environment's native exit hooks even for self-kill.
+    // Only our cache-disabled worker bypasses the main environment's cache.
+    // The main-thread fallback remains best effort if no supervisor can start.
+    // A worker shares this PID and cannot target a later process reusing it.
     process.kill(process.pid, "SIGKILL");
   }
 }
@@ -60,7 +61,7 @@ async function superviseCache(data: RetirementWatchdog): Promise<void> {
   parentPort!.once("message", () => {
     setTimeout(() => {
       if (Atomics.compareExchange(state, 0, FLUSHING, RETIRING) === FLUSHING) {
-        void exitWithoutCache(retire);
+        void exitAfterRetirement(retire);
       }
     }, CACHE_FLUSH_BUDGET_MS);
   });
@@ -89,30 +90,30 @@ export async function retireRuntime(locator: RuntimeLocator): Promise<void> {
       watchdog!.once("exit", () => { clearTimeout(timer); reject(new Error("cache supervisor exited")); });
     });
   } catch {
-    // Cache persistence is optional even when worker startup is unavailable.
+    // There is no cache-free environment to terminate from in this fallback.
+    // Still retire the locator; native exit-time cache flushing is best effort.
     void watchdog?.terminate();
-    await exitWithoutCache(retire);
+    await exitAfterRetirement(retire);
     return;
   }
   watchdog.postMessage(null);
+  let flushed = false;
   try {
     flushCompileCache();
+    flushed = true;
   } catch {
-    if (Atomics.compareExchange(state, 0, FLUSHING, FLUSHED) === FLUSHING) {
-      await watchdog.terminate();
-      await exitWithoutCache(retire);
-      return;
-    }
+    // Keep the ready worker armed. Main-thread self-kill would run the native
+    // flush again, outside the optional-cache allowance we just supervised.
   }
-  if (Atomics.compareExchange(state, 0, FLUSHING, FLUSHED) === RETIRING) {
-    // The watchdog owns fenced cleanup now. Never terminate it while it holds
-    // the locator lock, even if the native flush finishes just after its timer.
-    await new Promise<void>(resolve => watchdog.once("exit", () => resolve()));
-    await exitWithoutCache(retire);
+  if (flushed && Atomics.compareExchange(state, 0, FLUSHING, FLUSHED) === FLUSHING) {
+    await watchdog.terminate();
+    await retire();
     return;
   }
-  await watchdog.terminate();
-  await retire();
+  // The worker owns failed or overdue persistence and fenced cleanup. Never
+  // terminate it while it holds the locator lock, including a late flush return.
+  await new Promise<void>(resolve => watchdog.once("exit", () => resolve()));
+  await exitAfterRetirement(retire);
 }
 
 function privateDirectory(stat: Stats): boolean {

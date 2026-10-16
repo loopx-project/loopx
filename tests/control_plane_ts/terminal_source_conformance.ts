@@ -10,7 +10,7 @@ import {executeCoordinationTodoTerminalLifecycle as execute,
 import {prepareCoordinationProjectionCommit} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import type {AuthorityStoreConformanceFactory} from "./authority_store_conformance.ts";
-import {projectionFixtureAsSchema} from "./authority_projection_fixture.ts";
+import {authorityProjectionFixture, projectionFixtureAsSchema} from "./authority_projection_fixture.ts";
 import {productionScaleCoordinationFixture,
   PRODUCTION_SCALE_VALIDATION_DECLARATION as declaration} from "./production_scale_coordination_fixture.ts";
 
@@ -27,6 +27,81 @@ const validation = {schema_version: "issue_fix_validation_command_v0", command_l
 
 export function registerTerminalSourceConformance(provider: string, factory: AuthorityStoreConformanceFactory): void {
   for (const schema of ["legacy", "native"] as const) {
+    for (const command of ["complete", "supersede"] as const) {
+      test(`${provider}: ${command} replaces its own title without admitting duplicate work (${schema})`, async t => {
+        const {store, contender} = await factory(t);
+        const goal = "terminal-same-title", title = "Continue the next verified slice";
+        const origin: JsonObject = {todo_id: "todo_origin", role: "agent", status: "open", done: false,
+          archive_state: "active", text: title, task_class: "advancement_task", claimed_by: "agent-a"};
+        await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
+          next_projection: authorityProjectionFixture(goal, [origin], [], schema, {handoff_mode: "soft_claim"}),
+          events: [], receipts: []});
+        const policy = {schema_version: "loopx_todo_completion_policy_request_v0", goal_id: goal,
+          agent_model: "peer_v1", registered_agents: ["agent-a", "agent-b"], claimed_by: "agent-a",
+          next_claimed_by: "agent-a", next_agent_todo: title, next_continuation_policy: null,
+          next_excluded_agents: [], self_merged: true, evidence: "Synthetic verified completion"};
+        const request: CoordinationTodoTerminalLifecycleInput = {
+          goal_id: goal, todo_id: "todo_origin", expected_role: "agent", command,
+          actor_agent_id: "agent-a", registered_agents: ["agent-a", "agent-b"], lifecycle_grants: [],
+          authority_reason: null, decision_outcome: null,
+          operation_identity: {kind: "explicit", operation_id: "replace-origin"},
+          lease_idempotency_key: null, lease_expected_version: null, allow_user_gate_auto_acquire: false,
+          requested_no_followup: false, requested_completion_turn_key: null,
+          requested_completion_identity_source: null, linked_successor_todo_ids: [],
+          successor_intents: [{role: "agent", text: title, task_class: "advancement_task", claimed_by: "agent-a"}],
+          note: null, evidence: "Synthetic verified completion", reason: null, clear_claim: false,
+          validation_declaration: null, validation_receipt: null,
+          completion_policy_request: command === "complete" ? policy : null,
+          dry_run: false, now: new Date("2026-09-05T23:00:00Z"),
+        };
+        const before = await loaded(store);
+        const foreign = await execute(store, {...request, actor_agent_id: "agent-b"});
+        assert.equal(foreign.reason_code, "claim_owner_mismatch");
+        assert.deepEqual(await loaded(store), before);
+        assert.equal((await store.readReceipt("replace-origin")).status, "missing");
+        const duplicateUser = {role: "user", text: "Verify the same outcome", task_class: "user_action", bound_agent: "agent-a"};
+        const siblings = await execute(store, {...request, successor_intents: [duplicateUser, duplicateUser],
+          completion_policy_request: command === "complete" ? {...policy, next_agent_todo: null, next_claimed_by: null} : null});
+        assert.equal(siblings.reason_code, "invalid_todo_successor_derivation", JSON.stringify(siblings));
+        assert.match(String(siblings.reason), /at most one generated user successor/);
+        assert.deepEqual(await loaded(store), before);
+        assert.equal((await store.readReceipt("replace-origin")).status, "missing");
+        const preview = await execute(store, {...request, dry_run: true});
+        assert.equal(preview.status, "planned", JSON.stringify(preview));
+        assert.deepEqual(await loaded(store), before);
+        assert.equal((await store.readReceipt("replace-origin")).status, "missing");
+        const result = await execute(store, request);
+        assert.equal(result.status, "applied", JSON.stringify(result));
+        const after = await loaded(store), records = after.head.todos as JsonObject[];
+        const completed = records.find(todo => todo.todo_id === "todo_origin")!;
+        const successor = records.find(todo => todo.todo_id !== "todo_origin")!;
+        assert.equal(records.length, 2);
+        assert.equal(completed.status, "done");
+        assert.equal(successor.status, "open");
+        assert.equal(successor.text, title);
+        if (command === "complete") assert.equal(successor.unblocks_todo_id, "todo_origin");
+        else {
+          assert.equal(completed.superseded_by, successor.todo_id);
+          assert.equal(successor.unblocks_todo_id, origin.unblocks_todo_id);
+        }
+        assert.deepEqual(completed.successor_todo_ids, [successor.todo_id]);
+        // A still-open peer with this title remains a conflict; completing the
+        // new successor cannot create a third copy while that peer is active.
+        const peer = {...successor, todo_id: "todo_peer", claimed_by: "agent-b"};
+        await contender.commitAuthority(prepareCoordinationProjectionCommit({goal_id: goal,
+          operation_id: "later-peer", expected_provider_revision: after.provider_revision,
+          projection: after.head, mutations: [{kind: "todo_upsert", todo: peer}]}));
+        const later = await loaded(store);
+        const duplicate = await execute(store, {...request, todo_id: String(successor.todo_id),
+          operation_identity: {kind: "explicit", operation_id: "must-not-duplicate"}});
+        assert.equal(duplicate.reason_code, "todo_semantic_duplicate_conflict", JSON.stringify(duplicate));
+        assert.equal(duplicate.todo_id, "todo_peer");
+        assert.deepEqual(await loaded(store), later);
+        assert.equal((await store.readReceipt("must-not-duplicate")).status, "missing");
+        assert.equal((await execute(contender, request)).status, "replayed");
+        assert.deepEqual(await loaded(store), later);
+      });
+    }
     test(`${provider}: completion resolves linked work from its canonical head (${schema})`, async t => {
       // Caller snapshots may lag a peer's completion, reopening or role change.
       // The declared link order, rather than caller-supplied facts or store order,

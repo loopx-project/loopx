@@ -65,7 +65,7 @@ def test_monitor_effect_replay_and_generation_are_locked_public_writer_semantics
     before = state.read_bytes()
     replay = _poll(registry, todo["todo_id"], "2030-01-01T02:00:00Z", "new",
                    monitor_effect_id="effect-one")
-    assert replay["monitor_poll_transition"]["provider_replayed"] is True
+    assert replay["status"] == "replayed"
     assert state.read_bytes() == before
     with pytest.raises(ValueError, match="different observation"):
         _poll(registry, todo["todo_id"], "2030-01-01T02:00:00Z", "other",

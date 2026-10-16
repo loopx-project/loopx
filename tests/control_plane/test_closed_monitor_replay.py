@@ -5,31 +5,24 @@ import json
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
-from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.control_plane.testing.canary_harness import run_json_cli, run_json_cli_result
-from loopx.todos import add_goal_todo, list_goal_todos
+from loopx.todos import add_goal_todo
 from tests.control_plane.test_monitor_followthrough_contract import (
     AGENT_ID, GOAL_ID, _add_monitor, _write_fixture,
 )
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("material", [False, True])
 @pytest.mark.parametrize("lifecycle", ["complete", "supersede"])
 def test_closed_monitor_replays_original_no_spend_turn(
     tmp_path, monkeypatch, provider, material, lifecycle,
 ):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, runtime, state = _write_fixture(tmp_path)
+    registry, runtime, _state = _write_fixture(tmp_path, provider=provider)
     monitor = _add_monitor(registry, text="Observe a public target",
         target_key="public-target", next_due_at="2000-01-01T00:00:00Z")
-    if provider != "legacy":
-        todos = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
-        projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID,
-            todos=todos, handoff_mode="soft_claim")
-        initialize_canonical_authority(runtime, GOAL_ID, projection,
-            state_path=state, provider=provider)
 
     def call(*args):
         return run_json_cli(*args, registry_path=registry, runtime_root=runtime)

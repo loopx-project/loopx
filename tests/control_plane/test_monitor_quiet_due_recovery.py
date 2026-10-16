@@ -12,24 +12,19 @@ import shlex
 
 import pytest
 
-from canonical_authority_fixture import (
-    initialize_canonical_authority,
-    isolate_sqlite_runtime,
-)
+from canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.test_monitor_followthrough_contract import (
     AGENT_ID,
     GOAL_ID,
     _add_monitor,
     _write_fixture,
 )
-from loopx.control_plane.coordination.runtime_shadow import (
-    build_todo_runtime_shadow_projection,
-)
+from tests.control_plane.test_native_monitor_poll import _canonical
 from loopx.control_plane.testing.canary_harness import run_json_cli, run_json_cli_result
-from loopx.todos import add_goal_todo, list_goal_todos
+from loopx.todos import add_goal_todo
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("material", [False, True], ids=["unchanged", "material"])
 @pytest.mark.parametrize("peer_gate", [False, True], ids=["no-gate", "peer-gate"])
 def test_quiet_turn_binds_due_monitor_and_recovers_lost_response(
@@ -40,7 +35,7 @@ def test_quiet_turn_binds_due_monitor_and_recovers_lost_response(
     peer_gate,
 ):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, runtime, state = _write_fixture(tmp_path)
+    registry, runtime, state = _write_fixture(tmp_path, provider=provider)
     add_goal_todo(
         registry_path=registry,
         goal_id=GOAL_ID,
@@ -54,15 +49,6 @@ def test_quiet_turn_binds_due_monitor_and_recovers_lost_response(
     monitor = _add_monitor(
         registry, text="Observe a public target", target_key="public-target"
     )
-    if provider != "legacy":
-        projection = build_todo_runtime_shadow_projection(
-            goal_id=GOAL_ID,
-            todos=list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"],
-            handoff_mode="soft_claim",
-        )
-        initialize_canonical_authority(
-            runtime, GOAL_ID, projection, state_path=state, provider=provider
-        )
 
     def call(*args):
         return run_json_cli(*args, registry_path=registry, runtime_root=runtime)
@@ -234,7 +220,7 @@ def test_quiet_turn_binds_due_monitor_and_recovers_lost_response(
 
 
 @pytest.mark.parametrize(("provider", "handoff_mode"), [
-    ("legacy", "soft_claim"), ("file", "soft_claim"), ("sqlite", "soft_claim"),
+    ("file", "soft_claim"), ("sqlite", "soft_claim"),
     ("file", "hard_lease"), ("sqlite", "hard_lease"),
 ])
 def test_blocked_bound_monitor_requires_verified_lifecycle_repair(
@@ -245,25 +231,17 @@ def test_blocked_bound_monitor_requires_verified_lifecycle_repair(
 ):
     """A blocker changes execution eligibility, never the committed binding."""
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, runtime, state = _write_fixture(tmp_path)
+    registry, runtime, state = _write_fixture(
+        tmp_path,
+        provider=provider,
+        handoff_mode=handoff_mode,
+    )
     monitor = _add_monitor(
         registry,
         text="Observe a public target",
         target_key="public-target",
         next_due_at="2000-01-01T00:00:00Z",
     )
-    if provider != "legacy":
-        initialize_canonical_authority(
-            runtime,
-            GOAL_ID,
-            build_todo_runtime_shadow_projection(
-                goal_id=GOAL_ID,
-                todos=list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"],
-                handoff_mode=handoff_mode,
-            ),
-            state_path=state,
-            provider=provider,
-        )
 
     def call(*args):
         return run_json_cli(*args, registry_path=registry, runtime_root=runtime)
@@ -372,20 +350,18 @@ def test_projected_restore_rejects_an_active_execution_lease(tmp_path, monkeypat
     from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, runtime, state = _write_fixture(tmp_path)
-    monitor = _add_monitor(registry, text="Observe a public target", target_key="public-target")
-    run_json_cli("todo", "update", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-                 "--todo-id", monitor["todo_id"], "--status", "blocked", registry_path=registry,
-                 runtime_root=runtime)
-    lease = {"schema_version": "task_lease_v0", "goal_id": GOAL_ID,
-             "todo_id": monitor["todo_id"], "owner": AGENT_ID, "idempotency_key": "active-monitor",
-             "status": "active", "expires_at": "2099-01-01T00:00:00Z", "version": 1,
-             "lease_epoch": 1, "write_scopes": [], "acquire_ttl_seconds": 900}
-    projection = build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID, todos=list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"],
-        handoff_mode="hard_lease", leases=[lease],
+    registry, runtime, state, monitor = _canonical(
+        tmp_path,
+        provider=provider,
+        monitor_status="blocked",
+        lease={
+            "status": "active",
+            "idempotency_key": "active-monitor",
+            "version": 1,
+            "lease_epoch": 1,
+            "expires_at": "2099-01-01T00:00:00Z",
+        },
     )
-    initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
     actions = recovery_cli_actions(
         {"unsettled_host_turn_recovery": {"repair": "lifecycle", "scope": "current_turn",
           "binding_id": monitor["todo_id"], "turn_instance_id": "held-monitor-turn"}},

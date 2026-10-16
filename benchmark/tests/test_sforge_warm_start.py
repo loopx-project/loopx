@@ -98,6 +98,7 @@ def point(tmp_path):
 @pytest.mark.parametrize("change", [
     {"goal_id": "source-goal"}, {"agent_id": "source-agent"}, {"source_todo_id": "missing"},
     {"deadline_epoch": 1}, {"deadline_epoch": True}, {"normal_cadence": 0}, {"normal_cadence": True},
+    {"fresh_after_replan": "false"},
 ])
 def test_invalid_participant_rejects_before_workspace_or_authority_changes(point, change):
     start, workspace = point
@@ -425,14 +426,15 @@ def test_research_selection_survives_staging(research_point, monkeypatch, tmp_pa
     assert declaration["research_component_ids"] == ["experiments"]
 
 
-def test_research_option_without_warm_entry_rejects_before_registration(tmp_path):
+@pytest.mark.parametrize("options", [["--restore-research-component", "experiments"], ["--restore-fresh-after-replan"]])
+def test_research_option_without_warm_entry_rejects_before_registration(tmp_path, options):
     pytest.importorskip("harbor")
     from benchmark.edgebench import run as entry
     with pytest.raises(SystemExit) as rejected:
         entry.main(["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
             "--run-id", "unadmitted", "--worker", "heartbeat-explore", "--model", "fixture",
             "--effort", "high", "--judge-url", "http://localhost:1",
-            "--restore-research-component", "experiments"])
+            *options])
     assert rejected.value.code == 2 and not list(tmp_path.iterdir())
 
 

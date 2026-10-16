@@ -415,7 +415,7 @@ def test_worker_capture_failure_releases_only_its_barrier(
     assert not (tmp_path / "later").exists()
 
 
-def test_full_temporary_volume_releases_real_archive_and_writer(
+def test_full_export_volume_releases_real_archive_and_writer(
         controllers, writer, tmp_path, monkeypatch):
     import errno
     from contextlib import contextmanager
@@ -438,8 +438,8 @@ def test_full_temporary_volume_releases_real_archive_and_writer(
         return response
 
     @contextmanager
-    def full_disk():
-        raise OSError(errno.ENOSPC, "synthetic full temporary volume")
+    def full_disk(**kwargs):
+        raise OSError(errno.ENOSPC, "synthetic full export volume")
         yield
 
     monkeypatch.setattr(api_type, "_get", retain_response)
@@ -449,7 +449,7 @@ def test_full_temporary_volume_releases_real_archive_and_writer(
     container.client.api.timeout = 2
     try:
         # Retain the traceback too: GC is not an acceptable resource-release rule.
-        with pytest.raises(OSError, match="synthetic full temporary volume") as failure:
+        with pytest.raises(OSError, match="synthetic full export volume") as failure:
             capture_worker(files[0], token=token, capture_id="9" * 32,
                 destination=tmp_path / "unit", request_file=request, timeout=2)
         assert failure.value.errno == errno.ENOSPC

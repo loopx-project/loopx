@@ -150,7 +150,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
 const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
   en: {
     new_goal_provider: { label: "New Goal storage provider", description: "File or SQLite; frozen at creation, independently of execution policy." },
-    canonical_creation: { label: "Create canonical authority", description: "Future Goals only. Disabled retains the post-promotion target; failures require the original creation retry." },
+    canonical_creation: { label: "Create canonical authority", description: "Required for new Goals in 2.0. An older disabled setting remains visible until you enable it; existing Goals require import." },
     new_goal_handoff_mode: { label: "New Goal execution policy", description: "soft_claim or hard_lease, used with canonical creation. Agents inherit the Goal policy; tool authority is unchanged." },
     runtime_profile: { label: "Runtime profile", description: "Restricted keeps scoped LoopX reads only. Trusted owner enables normal host tools while protected operations retain separate checks." },
     selection_policy: { label: "Selection policy", description: "Preferred allows an explicit user choice; pinned rejects another executor; flexible permits fallback only inside the eligible pool." },
@@ -185,7 +185,7 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
   },
   "zh-CN": {
     new_goal_provider: { label: "新 Goal 的存储 provider", description: "选择 File 或 SQLite；创建时固定，与执行策略分别选择。" },
-    canonical_creation: { label: "建立 canonical 权威存储", description: "仅影响此后新建的 Goal。关闭时仅固定晋升后的目标；失败须重试原创建操作。" },
+    canonical_creation: { label: "建立 canonical 权威存储", description: "2.0 新建 Goal 必须启用。旧的关闭设置会保留显示，需自行启用；已有 Goal 需导入。" },
     new_goal_handoff_mode: { label: "新 Goal 的执行策略", description: "canonical 创建使用 soft_claim 或 hard_lease。Agent 继承 Goal 策略；不授予工具权限。" },
     runtime_profile: { label: "运行模式", description: "restricted 仅使用受限 LoopX 读取；trusted_owner 开放常规宿主工具，但受保护操作仍单独校验。" },
     selection_policy: { label: "选择策略", description: "preferred 允许用户显式改选；pinned 拒绝其他执行器；flexible 只在已授权资源池内回退。" },
@@ -238,6 +238,9 @@ export function localizeCapability(
 }
 
 export function localizedCapabilityFieldCopy(locale: WorkspaceLocale, capabilityId?: string): FieldCopy {
+  if (capabilityId === "reward_memory") return {...fieldCopy[locale], agent_id: locale === "zh-CN" ? {
+    label: "独立绑定的 Agent", description: "选择已注册的 Agent；留空编辑共享绑定。", options: {"": "共享绑定"},
+  } : { label: "Independent Agent binding", description: "Select a registered Agent; leave blank for the shared binding.", options: {"": "Shared binding"} }};
   if (capabilityId === "explore_harness") return {...fieldCopy[locale], mode: locale === "zh-CN" ? {
     label: "探索模式", description: "规划包含证据图谱；派生 Agent 和执行权限仍单独控制。",
     options: {off: "关闭", evidence: "仅记录证据", planning: "证据与规划"},

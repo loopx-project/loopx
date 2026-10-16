@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile} from "node:fs/promises";
+import {chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {checkpointArtifacts} from "../../loopx/control_plane/runtime/checkpoint_artifacts.ts";
@@ -37,6 +37,22 @@ test("capture, verify and inert materialization preserve executable code and emp
   assert.deepEqual(await readFile(join(root, "restored/checkpoint.json")), await readFile(join(root, "captured/checkpoint.json")));
   await assert.rejects(checkpointArtifacts({action: "materialize", root: request.destination,
     expected_sha256: captured.sha256, destination: join(root, "restored")}), /already exists/);
+});
+
+test("a read-only participant's copied mode survives the durability flush and materialization", async t => {
+  const {root, request} = await fixture(t);
+  await chmod(join(root, "code/solution.sh"), 0o444);
+  const components = request.components;
+  const probe = await checkpointArtifacts({action: "probe", components});
+  const captured = await checkpointArtifacts({...request, components, expected_source_sha256: probe.source_sha256});
+  assert.equal(captured.integrity_verified, true);
+  const copied = join(root, "captured/components/code/solution.sh");
+  assert.equal((await stat(copied)).mode & 0o777, 0o444);
+  await checkpointArtifacts({action: "materialize", root: request.destination, expected_sha256: captured.sha256,
+    destination: join(root, "restored")});
+  const restored = join(root, "restored/components/code/solution.sh");
+  assert.equal(await readFile(restored, "utf8"), "#!/bin/sh\nexit 0\n");
+  assert.equal((await stat(restored)).mode & 0o777, 0o444);
 });
 
 test("changed source, duplicate identities and overlapping sources publish no unit", async t => {
@@ -90,8 +106,12 @@ test("symlink sources, nested links and redirected destinations reject without p
   const {root, request} = await fixture(t);
   await symlink(join(root, "code"), join(root, "alias"), process.platform === "win32" ? "junction" : "dir");
   await assert.rejects(checkpointArtifacts({action: "probe", components: [{id: "code", source_path: join(root, "alias")}]}), /symlink/);
-  await symlink(join(root, "conversation"), join(root, "code/link"));
-  await assert.rejects(checkpointArtifacts(request), /symlink/);
+  // File symlink creation needs Developer Mode or admin on Windows; the
+  // junction cases still cover redirected sources and destinations.
+  if (process.platform !== "win32") {
+    await symlink(join(root, "conversation"), join(root, "code/link"));
+    await assert.rejects(checkpointArtifacts(request), /symlink/);
+  }
   await assert.rejects(checkpointArtifacts({...request, destination: join(root, "alias/capture")}), /symlink/);
 });
 

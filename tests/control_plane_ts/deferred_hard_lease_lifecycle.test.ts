@@ -163,7 +163,7 @@ for (const provider of ["file", "sqlite"] as const) {
 
 for (const provider of ["file", "sqlite"] as const) {
   for (const mode of ["legacy", "hard_lease"] as const) {
-    test(`${provider}/${mode}: owner deferral releases its grant atomically and can resume`,
+    test(`${provider}/${mode}: ${mode === "legacy" ? "retired policy rejects deferral with retained proof" : "owner deferral releases its grant atomically and can resume"}`,
       {skip: provider === "sqlite" && sqliteSkip}, async () => {
       const store = await seeded(provider, {status: "open", done: false},
         oldLease("active", "2026-09-06T00:00:00Z"));
@@ -173,6 +173,15 @@ for (const provider of ["file", "sqlite"] as const) {
       const input = {...resume("defer-owner"), lease_idempotency_key: "old-execution", lease_expected_version: 3,
         planning_intent: {status: "deferred", resume_when: "todo_done:todo_dependency", reason: "Dependency is pending"}};
       const before = await read(store);
+      if (mode === "legacy") {
+        for (const dry_run of [true, false]) {
+          const rejected = await executeCoordinationTodoUpdate(store, {...input, dry_run});
+          assert.equal(rejected.reason_code, "handoff_mode_retired");
+          assert.deepEqual(await read(store), before);
+          assert.equal((await store.readReceipt(input.operation_id)).status, "missing");
+        }
+        return;
+      }
       for (const change of [{lease_expected_version: 2}, {lease_idempotency_key: "foreign"},
         {actor_agent_id: "agent-b"}, {lease_idempotency_key: null, lease_expected_version: null},
         {patch: {text: "Changed work"}}, {planning_intent: {...input.planning_intent, completion_criteria: "New contract"}}]) {

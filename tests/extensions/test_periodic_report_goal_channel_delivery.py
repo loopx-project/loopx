@@ -868,6 +868,30 @@ def test_goal_channel_delivery_revalidates_subscription_before_explicit_binding_
     assert calls == []
 
 
+def test_goal_channel_delivery_rejects_canonical_stop_before_send(
+    tmp_path: Path,
+) -> None:
+    registry_path = tmp_path / ".loopx" / "registry.json"
+    stopped = _goal()
+    stopped["activation_state"] = "stopped"
+    _write_registry(registry_path, goal=stopped)
+    _write_binding(registry_path)
+    calls: list[list[str]] = []
+
+    with pytest.raises(ValueError, match="subscription is disabled"):
+        deliver_periodic_report_to_goal_channel(
+            _request(),
+            registry_path=registry_path,
+            runtime_root=tmp_path / "runtime",
+            goal_id=GOAL_ID,
+            extension_activation=_extension_activation(),
+            execute=True,
+            runner=_runner(calls),
+        )
+
+    assert not any("+messages-send" in args for args in calls)
+
+
 def test_goal_channel_delivery_revalidates_live_machine_default_before_send(
     tmp_path: Path,
 ) -> None:
@@ -935,6 +959,62 @@ def test_goal_channel_delivery_revalidates_authority_between_message_writes(
         )
 
     assert len([args for args in calls if "+messages-send" in args]) == 1
+
+
+def test_goal_channel_delivery_stops_between_writes_then_resumes_without_resend(
+    tmp_path: Path,
+) -> None:
+    registry_path = tmp_path / ".loopx" / "registry.json"
+    _write_registry(registry_path)
+    _write_binding(registry_path)
+    calls: list[list[str]] = []
+    base_runner = _runner(calls)
+    stopped = False
+
+    def runner(
+        args: list[str],
+        cwd: Path | None,
+        timeout: float | None,
+    ) -> dict[str, Any]:
+        nonlocal stopped
+        result = base_runner(args, cwd, timeout)
+        if "+messages-send" in args and not stopped:
+            stopped = True
+            stopped_goal = _goal()
+            stopped_goal["activation_state"] = "stopped"
+            _write_registry(registry_path, goal=stopped_goal)
+        return result
+
+    with pytest.raises(ValueError, match="subscription is disabled"):
+        deliver_periodic_report_to_goal_channel(
+            _request(),
+            registry_path=registry_path,
+            runtime_root=tmp_path / "runtime",
+            goal_id=GOAL_ID,
+            extension_activation=_extension_activation(),
+            execute=True,
+            runner=runner,
+        )
+
+    assert len([args for args in calls if "+messages-send" in args]) == 1
+
+    _write_registry(registry_path)
+    resumed = deliver_periodic_report_to_goal_channel(
+        _request(),
+        registry_path=registry_path,
+        runtime_root=tmp_path / "runtime",
+        goal_id=GOAL_ID,
+        extension_activation=_extension_activation(),
+        execute=True,
+        runner=runner,
+    )
+
+    assert resumed["status"] == "satisfied"
+    assert len([args for args in calls if "+messages-send" in args]) == 2
+    assert [
+        item["semantic_dedupe_status"]
+        for item in resumed["sink_result"]["message_results"]
+    ] == ["existing_exact_message", "no_existing_exact_message"]
 
 
 def test_goal_channel_delivery_requires_native_message_sender_readback(

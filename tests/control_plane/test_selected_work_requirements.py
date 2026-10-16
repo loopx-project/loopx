@@ -22,6 +22,8 @@ from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
 from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
 from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
 
+REPO = Path(__file__).resolve().parents[2]
+
 
 def test_legacy_selected_todo_requires_same_goal_state_revision(tmp_path: Path) -> None:
     state = tmp_path / "state.md"
@@ -114,7 +116,7 @@ def test_inline_user_context_preserves_full_scoped_gates_without_granting_delive
         assert guard()["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_current_work_requirements_reach_real_guard_and_host_without_display_loss(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
 ) -> None:
@@ -135,15 +137,22 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
         goal_id="requirements-goal", domain="requirements", adapter_kind="generic_project_goal_v0",
         state_file=str(state), registered_agents=["agent-a", "agent-b"], quota_allowed_slots=None)
     expected = "[P1] " + work
-    if provider != "legacy":
-        goal = json.loads(registry.read_text())["goals"][0]
-        fields, _archived, _sections = parse_todo_source(state.read_text(), goal=goal, state_path=state)
-        full_items = retained_todo_summary_fields(fields["agent"], rollout_events=[])["agent_todos"]["items"]
-        snapshot = build_todo_runtime_shadow_projection(
-            goal_id="requirements-goal", todos=full_items, handoff_mode="soft_claim")
-        initialize_canonical_authority(runtime, "requirements-goal", snapshot,
-            state_path=state, provider=provider)
-        state.write_text(goal_requirements + "## Agent Todo\n- [ ] Stale display: do only an easier check.\n")
+    goal = json.loads(registry.read_text())["goals"][0]
+    fields, _archived, _sections = parse_todo_source(
+        state.read_text(), goal=goal, state_path=state,
+    )
+    full_items = retained_todo_summary_fields(
+        fields["agent"], rollout_events=[],
+    )["agent_todos"]["items"]
+    snapshot = build_todo_runtime_shadow_projection(
+        goal_id="requirements-goal", todos=full_items, handoff_mode="soft_claim",
+    )
+    initialize_canonical_authority(
+        runtime, "requirements-goal", snapshot, state_path=state, provider=provider,
+    )
+    state.write_text(
+        goal_requirements + "## Agent Todo\n- [ ] Stale display: do only an easier check.\n",
+    )
 
     def guard(*extra: str) -> dict:
         code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "requirements-goal",
@@ -164,9 +173,13 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert "work_context" in body
     script = re.search(r"```sh\n(.*?)\n```", body, re.S).group(1)
     assert "--turn-envelope" not in script and "--decision-output-root" not in script
-    env = {**os.environ, "LOOPX_REGISTRY": str(registry)}
+    env = {
+        **os.environ,
+        "LOOPX_REGISTRY": str(registry),
+        "PYTHONPATH": str(REPO),
+    }
     result = subprocess.run(["sh", "-c", script.replace("<current_time_iso>", "requirements-default-wake")],
-        cwd=tmp_path, env=env, capture_output=True, text=True, check=True)
+        cwd=REPO, env=env, capture_output=True, text=True, check=True)
     full = json.loads(result.stdout)
     assert full["should_run"] is True, full.get("reason")
     channel = full["interaction_contract"]["agent_channel"]
@@ -385,9 +398,13 @@ def test_short_selected_todo_deduplicates_body_but_keeps_canonical_note(
         registry_path=registry, runtime_root=runtime)
     assert code == 0 and generated["ok"], generated
     script = re.search(r"```sh\n(.*?)\n```", generated["task_body"], re.S).group(1)
-    env = {**os.environ, "LOOPX_REGISTRY": str(registry)}
+    env = {
+        **os.environ,
+        "LOOPX_REGISTRY": str(registry),
+        "PYTHONPATH": str(REPO),
+    }
     result = subprocess.run(["sh", "-c", script.replace("<current_time_iso>", "short-note-wake")],
-        cwd=tmp_path, env=env, capture_output=True, text=True, check=True)
+        cwd=REPO, env=env, capture_output=True, text=True, check=True)
     full = json.loads(result.stdout)
     channel = full["interaction_contract"]["agent_channel"]
     context = channel["work_context"]

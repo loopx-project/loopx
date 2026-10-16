@@ -133,7 +133,7 @@ export function replayTeamTransaction(request: JsonObject, previous: JsonObject)
     lane_settlements: (result.lane_settlements as JsonObject[]).map(lane => ({...lane, disposition: "reused"}))};
 }
 
-/** Pure whole-batch planner shared by legacy Markdown and AuthorityStore. */
+/** Pure whole-batch planner for AuthorityStore commits and historical receipt replay. */
 export function planTeamTransaction(value: unknown): JsonObject {
   const request = requireJsonObject(value, "team transaction");
   const identity = teamTransactionIdentity(request);

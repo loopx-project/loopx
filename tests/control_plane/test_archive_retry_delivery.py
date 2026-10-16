@@ -348,6 +348,15 @@ def test_unpromoted_archive_does_not_rebuild_missing_display(tmp_path: Path) -> 
     before = {path: path.read_bytes() for path in authority.rglob("*") if path.is_file()}
     result = _archive_cli(registry)
     assert result.returncode == 1
-    assert "active state file does not exist" in json.loads(result.stdout)["error"]
+    failure = json.loads(result.stdout)
+    assert failure["error_code"] == "canonical_authority_required"
+    assert failure["operation"] == "todo_archive"
+    assert failure["write_admitted"] is False
+    assert failure["decision_read_from_provider"] is False
+    assert failure["legacy_fallback_used"] is False
+    assert failure["recovery"] == {
+        "action": "migrate_goal_authority",
+        "backup_required": True,
+    }
     assert not state.exists()
     assert {path: path.read_bytes() for path in authority.rglob("*") if path.is_file()} == before

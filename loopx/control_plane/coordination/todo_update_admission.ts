@@ -1,6 +1,7 @@
 /** Admission for Todo edits; terminal completion retains its own lease proof.
  * Grants may cross a claim owner;
  * exclusions, bindings and execution lineage remain independent restrictions. */
+import {retiredHandoffModeRejection, HANDOFF_MODE_RETIRED_REASON} from "./handoff_mode_policy.ts";
 import {leaseRepositoryRejection} from "../work_items/task_lease_repository.ts";
 import {isExploreReferenceAppend} from "../todos/field_update.ts";
 import {acceptanceRestoration} from "./todo_acceptance_restoration.ts";
@@ -15,6 +16,7 @@ import {decodeTaskLeaseProof, evaluateCanonicalTaskLeaseProof, todoUpdateLeaseRe
 import {deferredReopenRejection, isDeferredReopen, isOwnerDeferral} from "./todo_deferred_lifecycle.ts";
 import {blockedLifecycleRejection, isBlockedLifecycleTransition} from "./todo_blocked_lifecycle.ts";
 import {indexCoordinationProjection} from "./coordination_projection.ts";
+import {canonicalTaskLease} from "./task_lease_state.ts";
 
 interface TodoUpdateRejection {code: string; reason: string; handoff_mode?: string; recovery?: JsonObject}
 const reject = (code: string, reason: string): TodoUpdateRejection => ({code, reason});
@@ -49,6 +51,8 @@ export function todoUpdateAdmissionRejection(
   if (typeof mode !== "string" || !["legacy", "soft_claim", "hard_lease"].includes(mode)) {
     return reject("invalid_handoff_mode", "canonical handoff mode is invalid");
   }
+  const retired = retiredHandoffModeRejection(mode);
+  if (retired !== null) return {...reject(retired, HANDOFF_MODE_RETIRED_REASON), handoff_mode: mode};
   const intent = input.planning_intent ?? {};
   const ownershipMutation = ["claimed_by", "clear_claim", "excluded_agents", "bound_agent",
     "goal_bound", "blocks_agent", "clear_blocks_agent", "global_gate", "clear_global_gate"]
@@ -155,12 +159,18 @@ export function todoUpdateAdmissionRejection(
     const repositoryRejection = leaseRepositoryRejection(todo, lease);
     return repositoryRejection === null ? null : reject(repositoryRejection, "Evidence association must retain the completed work repository");
   }
-  // User reminders cannot take agent claims. No-lineage copy edits retain the
-  // existing provider-CAS path. Retained lineage or even a partial explicit
-  // proof must pass the ordinary execution fence below before any copy edit.
+  // User reminders use an administrative provider-CAS edit. Retained released
+  // history is not an execution grant; active/expired history needs exact
+  // release first. Explicit or partial proof never grants this exception.
   const boundUserActionMetadata = isBoundUserActionMetadataUpdate(todo, input);
-  if (mode === "hard_lease" && boundUserActionMetadata && lease === undefined &&
+  if (boundUserActionMetadata && (lease === undefined || lease.status === "released") &&
       input.lease_idempotency_key == null && input.lease_expected_version == null) {
+    try {
+      if (lease !== undefined) canonicalTaskLease(lease, input.goal_id, input.todo_id);
+    } catch (error) {
+      return reject("invalid_coordination_projection",
+        error instanceof Error ? error.message : "invalid retained lease facts");
+    }
     return null;
   }
   // Policy migration retains released execution history. It must not force a
@@ -188,7 +198,9 @@ export function todoUpdateAdmissionRejection(
         if (restoration?.kind === "unavailable") {
           return reject("goal_acceptance_restoration_unavailable", restoration.reason);
         }
-        return {...reject(String(fence.code), "Todo update requires the current active lease execution proof"),
+        return {...reject(String(fence.code), fence.code === "todo_not_executable"
+          ? "User actions cannot consume execution proof; release retained execution before a bound administrative copy edit"
+          : "Todo update requires the current active lease execution proof"),
           handoff_mode: mode, recovery: todoUpdateLeaseRecovery(head, input, mode)};
       }
       if (lease !== undefined && todo.claimed_by !== input.actor_agent_id && !boundUserActionMetadata) {

@@ -148,13 +148,14 @@ export function projectTodoLifecycleSettlementReentry(value: unknown): JsonObjec
       "--completion-identity-key",
       completionIdentityKey,
     ];
+    // Reentry closes continuation only; it must not replace completion prose.
     return (
       `when no real successor remains for completed Todo ${todoId}: ` +
       `${commandPrefix} todo complete --goal-id ${shellArgument(goalId)} ` +
       `--todo-id ${shellArgument(todoId)}` +
       argumentSuffix(completionIdentityArgs) +
       argumentSuffix(lifecycleActorArgs) +
-      " --no-follow-up --note '<public-safe no-follow-up rationale>'"
+      " --no-follow-up"
     );
   });
   nextCliActions.push(

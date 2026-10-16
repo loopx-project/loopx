@@ -38,8 +38,14 @@ def reward_memory_host_coverage() -> list[dict[str, str]]:
     ]
 
 
-def reward_memory_goal_policy(goal: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the provider-neutral opt-in policy for one goal."""
+def reward_memory_goal_policy(
+    goal: Mapping[str, Any], *, agent_id: str | None = None
+) -> dict[str, Any]:
+    """Normalize the binding selected by the typed owner, without provider IO.
+
+    The legacy/default-off path does not cross the effect bridge. Exact Agent
+    overrides are independent policies; even invalid entries cannot fall back.
+    """
 
     control_plane = (
         goal.get("control_plane")
@@ -51,11 +57,22 @@ def reward_memory_goal_policy(goal: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(control_plane.get("reward_memory"), Mapping)
         else {}
     )
+    binding_agent_id = None
+    binding_revision = None
+    if agent_id is not None and "agent_bindings" in raw:
+        from .effect_runtime import effect_runtime_result
+
+        selected = effect_runtime_result("reward_memory.binding.select", {
+            "policy": dict(raw), "agent_id": agent_id,
+        })
+        raw = selected["policy"]
+        binding_agent_id = selected.get("binding_agent_id")
+        binding_revision = selected.get("binding_revision")
     enabled_agents: list[str] = []
     for value in raw.get("enabled_agents") or []:
-        agent_id = normalize_todo_claimed_by(value)
-        if agent_id and agent_id not in enabled_agents:
-            enabled_agents.append(agent_id)
+        enabled_agent_id = normalize_todo_claimed_by(value)
+        if enabled_agent_id and enabled_agent_id not in enabled_agents:
+            enabled_agents.append(enabled_agent_id)
     experimental = raw.get("experimental") is True
     enablement_receipts: dict[str, dict[str, Any]] = {}
     raw_receipts = raw.get("enablement_receipts")
@@ -86,7 +103,7 @@ def reward_memory_goal_policy(goal: Mapping[str, Any]) -> dict[str, Any]:
                 )
                 if key in receipt
             }
-    return {
+    policy = {
         "enabled": raw.get("enabled") is True and experimental,
         "experimental": experimental,
         "config_path": str(raw.get("config_path") or "").strip(),
@@ -104,6 +121,10 @@ def reward_memory_goal_policy(goal: Mapping[str, Any]) -> dict[str, Any]:
             else {}
         ),
     }
+    if binding_agent_id is not None:
+        policy["binding_agent_id"] = binding_agent_id
+        policy["binding_revision"] = binding_revision
+    return policy
 
 
 __all__ = [

@@ -8,8 +8,9 @@ from pathlib import Path
 import pytest
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 
+from loopx.control_plane.coordination.local_authority import CanonicalAuthorityRequired
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-from loopx.control_plane.work_items.task_lease import TaskLeaseError, transfer_task_lease
+from loopx.control_plane.work_items.task_lease import transfer_task_lease
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -98,10 +99,24 @@ def test_public_claim_transfer_recipient_and_projection_recovery(tmp_path, monke
 
 def test_claim_transfer_never_emulates_a_legacy_two_write_handover(tmp_path):
     registry = tmp_path / "registry.json"
-    registry.write_text(json.dumps({"goals": []}))
-    with pytest.raises(TaskLeaseError, match="requires canonical authority") as caught:
-        transfer_task_lease(registry_path=registry, runtime_root=tmp_path / "runtime", goal_id="example",
+    runtime = tmp_path / "runtime"
+    registry.write_text(json.dumps({
+        "common_runtime_root": str(runtime),
+        "goals": [{
+            "id": "example",
+            "repo": str(tmp_path),
+            "state_file": "state.md",
+            "coordination": {
+                "registered_agents": ["agent-a", "agent-b"],
+                "agent_model": "peer_v1",
+            },
+        }],
+    }))
+    with pytest.raises(CanonicalAuthorityRequired, match="Canonical authority is required") as caught:
+        transfer_task_lease(registry_path=registry, runtime_root=runtime, goal_id="example",
             todo_id="todo_example", owner="agent-a", idempotency_key="source-a", expected_version=1,
             new_owner="agent-b", new_idempotency_key="receiver-b", transfer_claim=True)
-    assert caught.value.code == "claim_transfer_requires_canonical_authority"
-    assert not (tmp_path / "runtime").exists()
+    assert caught.value.code == "canonical_authority_required"
+    assert caught.value.payload["operation"] == "task_lease_transfer"
+    assert caught.value.payload["write_admitted"] is False
+    assert not (runtime / "goals/example/task-leases/todo_example.json").exists()

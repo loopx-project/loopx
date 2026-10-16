@@ -12,15 +12,12 @@ from loopx.control_plane.coordination.coordination_state_contract_generated impo
 from loopx.control_plane.coordination.legacy_writer_fence import (
     LegacyCoordinationWriterFenced,
     legacy_coordination_write_remediation,
-    legacy_coordination_todo_lock_path,
     legacy_coordination_writer_fence_path,
-    legacy_todo_write_transaction,
     require_legacy_coordination_write_allowed,
 )
 from loopx.control_plane.coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable,
 )
-from loopx.file_lock import lock_holder_path
 from loopx.todos import add_goal_todo
 
 SPLIT_ROOT_GOAL_ID = "legacy-fence-split-root"
@@ -234,86 +231,6 @@ def test_remediation_renders_identically_in_python_and_typescript(
         input=json.dumps(guard), capture_output=True, text=True, check=True, timeout=45,
     )
     assert rendered.stdout == expected, name
-
-
-def test_todo_write_transaction_fences_under_the_effective_runtime_root(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """A fence engaged under --runtime-root must fence the legacy writer."""
-
-    registry, state, _runtime_registry, runtime_override = _write_split_root_fixture(
-        tmp_path
-    )
-    _engage_fence(runtime_override)
-    _blocked_effect_runtime(monkeypatch)
-
-    with pytest.raises(LegacyCoordinationWriterFenced):
-        with legacy_todo_write_transaction(
-            registry,
-            SPLIT_ROOT_GOAL_ID,
-            state,
-            SPLIT_ROOT_AGENT,
-            "todo_add",
-            False,
-            runtime_root=runtime_override,
-        ):
-            pytest.fail("transaction body must not run while fenced")
-
-
-def test_todo_write_transaction_keeps_registry_root_without_runtime_root(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """Omitting runtime_root keeps the registry-derived root (backward compat)."""
-
-    registry, state, runtime_registry, _runtime_override = _write_split_root_fixture(
-        tmp_path
-    )
-    _engage_fence(runtime_registry)
-    _blocked_effect_runtime(monkeypatch)
-
-    with pytest.raises(LegacyCoordinationWriterFenced):
-        with legacy_todo_write_transaction(
-            registry,
-            SPLIT_ROOT_GOAL_ID,
-            state,
-            SPLIT_ROOT_AGENT,
-            "todo_add",
-            False,
-        ):
-            pytest.fail("transaction body must not run while fenced")
-
-
-def test_todo_write_lock_lands_under_the_effective_runtime_root(
-    tmp_path: Path,
-) -> None:
-    """The todo mutex must serialize with promotion under the override root."""
-
-    registry, state, runtime_registry, runtime_override = _write_split_root_fixture(
-        tmp_path
-    )
-    override_lock = legacy_coordination_todo_lock_path(
-        runtime_root=runtime_override,
-        goal_id=SPLIT_ROOT_GOAL_ID,
-    )
-
-    registry_lock = legacy_coordination_todo_lock_path(
-        runtime_root=runtime_registry,
-        goal_id=SPLIT_ROOT_GOAL_ID,
-    )
-
-    with legacy_todo_write_transaction(
-        registry,
-        SPLIT_ROOT_GOAL_ID,
-        state,
-        SPLIT_ROOT_AGENT,
-        "todo_add",
-        False,
-        runtime_root=runtime_override,
-    ):
-        assert lock_holder_path(override_lock).exists()
-        assert not lock_holder_path(registry_lock).exists()
 
 
 def test_goal_todo_add_uses_provider_at_override_root_when_promoted(

@@ -13,14 +13,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.control_plane.quota.slot_accounting import (
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
+from loopx.control_plane.quota.slot_accounting import (  # noqa: E402
     build_quota_slot_preview_for_decision,
 )
-from loopx.control_plane.todos.active_state_todo_parser import (
+from loopx.control_plane.todos.active_state_todo_parser import (  # noqa: E402
     parse_active_state_todos,
 )
-from loopx.state_refresh import refresh_state_run
-from loopx.todos import add_goal_todo, complete_goal_todo
+from loopx.state_refresh import refresh_state_run  # noqa: E402
+from loopx.todos import add_goal_todo, complete_goal_todo  # noqa: E402
 
 GOAL_ID = "completion-validation-accountability"
 AGENT_ID = "codex-author"
@@ -71,6 +72,7 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
         ),
         encoding="utf-8",
     )
+    import_fixture_authority(registry, GOAL_ID)
     return registry, runtime, state
 
 

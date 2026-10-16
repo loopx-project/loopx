@@ -25,19 +25,19 @@ from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.chat_actions import ChatActionService
 from loopx.chat_action_store import ChatActionStore
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-from loopx.todos import add_goal_todo, list_goal_todos
+from loopx.todos import add_goal_todo
 r=pathlib.Path(sys.argv[1]); runtime=r/'runtime'; registry=r/'registry.json'; state=r/'state.md'
 state.write_text('---\\ngoal_id: product-release\\n---\\n\\n## Agent Todo\\n')
 agents=['codex-review','codex-delivery'] + (['codex'] if sys.argv[2]=='true' else [])
 registry.write_text(json.dumps({'common_runtime_root':str(runtime),'goals':[{'id':'product-release','repo':str(r),'state_file':'state.md','coordination':{'agent_model':'peer_v1','registered_agents':agents}}]}))
+config=json.loads(registry.read_text()); config['goals'][0]['coordination']['handoff_mode']='hard_lease'; registry.write_text(json.dumps(config))
+projection=build_todo_runtime_shadow_projection(goal_id='product-release',handoff_mode='hard_lease',todos=[])
+initialize_canonical_authority(runtime,'product-release',projection,state_path=state,provider='file')
 ids={}
 for operation in ['complete','cancel']:
-    target=add_goal_todo(registry_path=registry,goal_id='product-release',role='agent',text='Dependent '+operation,status='blocked',task_class='advancement_task',claimed_by='codex-delivery')
-    action=add_goal_todo(registry_path=registry,goal_id='product-release',role='user',text='Handle '+operation,task_class='user_action',bound_agent='codex-delivery',unblocks_todo_id=target['todo_id'])
+    target=add_goal_todo(registry_path=registry,goal_id='product-release',role='agent',text='Dependent '+operation,status='blocked',task_class='advancement_task',claimed_by='codex-delivery',operation_id='attention-user-action:'+operation+':target')
+    action=add_goal_todo(registry_path=registry,goal_id='product-release',role='user',text='Handle '+operation,task_class='user_action',bound_agent='codex-delivery',unblocks_todo_id=target['todo_id'],operation_id='attention-user-action:'+operation+':request')
     ids[operation]=[action['todo_id'],target['todo_id']]
-projection=build_todo_runtime_shadow_projection(goal_id='product-release',handoff_mode='hard_lease',todos=list_goal_todos(registry_path=registry,goal_id='product-release')['todos'])
-config=json.loads(registry.read_text()); config['goals'][0]['coordination']['handoff_mode']='hard_lease'; registry.write_text(json.dumps(config))
-initialize_canonical_authority(runtime,'product-release',projection,state_path=state,provider='file')
 s=ChatHTTPServer(('127.0.0.1',0),ChatRequestHandler)
 s.registry_path,s.runtime_root,s.runtime_root_override,s.verbose=registry,runtime,str(runtime),False
 s.selected_goal_id,s.scan_roots,s.limit='product-release',[],10

@@ -737,15 +737,26 @@ def test_dispatch_preserves_run_once_rejection_before_host_launch(
 
 
 def test_hard_lease_delegation_claims_before_host_launch(service, monkeypatch):
-    from loopx import collaboration_mcp as delegation
-
-    _, runner = service
+    root, runner = service
+    # Set up this new disposable canonical fixture through its actual store.
+    # Public policy migration has separate quiescence/backup requirements;
+    # patching the retired display reader would bypass typed lease inspection.
+    program = '''
+import {openLocalAuthorityStore} from "./loopx/control_plane/coordination/local_authority_provider.ts";
+const [root,goal] = process.argv.slice(1);
+const store = await openLocalAuthorityStore(root,goal);
+const state = await store.loadAuthority();
+const committed = await store.commitAuthority({expected_provider_revision:state.provider_revision,
+ operation_id:"fixture-hard-lease-dispatch",events:[],receipts:[],
+ next_projection:{...state.head,handoff_mode:"hard_lease"}});
+if(committed.status!=="applied") throw new Error(JSON.stringify(committed));
+'''
+    prepared = subprocess.run([
+        "node", "--no-warnings", "--experimental-sqlite", "--experimental-strip-types",
+        "--input-type=module", "-e", program, str(runner.root), runner.goal_id,
+    ], capture_output=True, text=True, timeout=30)
+    assert prepared.returncode == 0, prepared.stderr
     monkeypatch.setattr(runner, "_spawn", lambda _: None)
-    monkeypatch.setattr(
-        delegation,
-        "show_goal_handoff_mode",
-        lambda **_kwargs: {"handoff_mode": "hard_lease"},
-    )
     runner.start("analysis", "leased-dispatch", brief={
         "schema_version": "collaboration_brief_v0",
         "purpose": "Exercise an atomic hard-lease dispatch",
@@ -798,6 +809,7 @@ def test_hard_lease_delegation_claims_before_host_launch(service, monkeypatch):
     assert runner._delegated_lease_context(row, runner.binding("analysis"))["ttl_seconds"] is None
     assert result["status"] == "rejected"
     assert result["error"] == "stop after lease evidence"
+    assert not (root / "analyst" / "initial" / "host-invocations").exists()
 
 
 def test_exact_validated_turn_can_reopen_a_false_terminal_observation(

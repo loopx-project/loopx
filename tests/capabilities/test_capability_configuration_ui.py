@@ -98,6 +98,8 @@ def test_reward_memory_editor_writes_binding_without_returning_private_path() ->
     assert editor["editable"] is True
     assert editor["writable_scopes"] == ["goal"]
     assert [field["key"] for field in editor["fields"]] == [
+        "agent_id",
+        "enabled",
         "config_path",
         "enabled_agents",
     ]

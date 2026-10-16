@@ -55,8 +55,8 @@ class ImpactTests(unittest.TestCase):
                 target = root / path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(content)
-            def classify(base, *extra):
-                result = subprocess.run([sys.executable, script, "classify", "--base", base, "--head", "HEAD",
+            def classify(base, *extra, head="HEAD"):
+                result = subprocess.run([sys.executable, script, "classify", "--base", base, "--head", head,
                     "--plan", str(root / "plan.json"), *extra], cwd=root, env=env, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 return json.loads((root / "plan.json").read_text()), result.stdout
@@ -67,7 +67,8 @@ class ImpactTests(unittest.TestCase):
             path = "loopx/web/chat/index.html"
             write(path, "old")
             for policy in POLICY_PATHS:
-                write(policy, "reviewed policy")
+                write(policy, "jobs:\n  test-shard:\n    strategy:\n      matrix:\n        shard: [1, 2, 3, 4, 5, 6]\n"
+                      if policy.endswith(".yml") else "reviewed policy")
             git("add", ".")
             git("commit", "-qm", "base")
             base = git("rev-parse", "HEAD")
@@ -78,6 +79,7 @@ class ImpactTests(unittest.TestCase):
             self.assertFalse(packet["python_tests"])
             self.assertFalse(packet["backend_tests"])
             self.assertFalse(packet["stage2c_tests"])
+            self.assertEqual(packet["python_shards"], 0)
             self.assertTrue(packet["presentation_tests"])
             self.assertEqual(packet["head_sha"], git("rev-parse", "HEAD"))
             for flag in ("--force-full", "--non-pr"):
@@ -85,7 +87,7 @@ class ImpactTests(unittest.TestCase):
                 self.assertTrue(forced["python_tests"])
                 self.assertTrue(forced["backend_tests"])
                 self.assertTrue(forced["stage2c_tests"])
-                self.assertEqual(forced["python_shards"], 4)
+                self.assertEqual(forced["python_shards"], 6)
             # A policy change cannot authorize its own exemption.
             write(POLICY_PATHS[0], "changed policy")
             git("commit", "-qam", "policy")
@@ -116,6 +118,39 @@ class ImpactTests(unittest.TestCase):
             failed = subprocess.run([sys.executable, script, "classify", "--base", "missing", "--head", "HEAD"],
                                     cwd=root, env=env, capture_output=True)
             self.assertNotEqual(failed.returncode, 0)
+            # The workflow executing this checkout owns topology, even when
+            # the candidate head differs or an uncommitted file is misleading.
+            published = git("rev-parse", "HEAD")
+            workflow = POLICY_PATHS[-1]
+            prefix = "jobs:\n  test-shard:\n    strategy:\n      matrix:\n"
+            write(workflow, prefix + "        shard: [1, 2, 3, 4, 5, 6, 7, 8]\n")
+            self.assertEqual(classify(published, "--non-pr")[0]["python_shards"], 6)
+            git("commit", "-qam", "executing workflow has eight shards")
+            packet, _ = classify(published, "--non-pr", head=published)
+            self.assertEqual(packet["python_shards"], 8)
+            self.assertEqual(packet["head_sha"], published)
+            self.assertEqual(packet["checkout_sha"], git("rev-parse", "HEAD"))
+            for axis in ("shard: []", "shard: [1, 1]", "shard: [1, 3]", "shard: [1, '02']",
+                         "shard: '${{ inputs.shards }}'", "shard: [1, 2]\n        python: ['3.11']", None):
+                with self.subTest(axis=axis):
+                    write(workflow, prefix + "        " + axis + "\n" if axis else "jobs: {}\n")
+                    git("commit", "-qam", "unsupported execution topology")
+                    output = root / "rejected.json"
+                    result = subprocess.run([sys.executable, script, "classify", "--base", "HEAD",
+                        "--head", "HEAD", "--non-pr", "--plan", str(output)],
+                        cwd=root, env=env, capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("test-shard.strategy.matrix", result.stderr)
+                    self.assertFalse(output.exists(), "invalid topology must not publish a fallback plan")
+            # The docs exemption still reports no Python coverage or shards.
+            docs_base = git("rev-parse", "HEAD")
+            write("README.md", "fixture documentation")
+            git("add", "--", "README.md")
+            git("commit", "-qm", "docs-only change")
+            packet, _ = classify(docs_base)
+            self.assertEqual(packet["change_kind"], "docs")
+            self.assertFalse(packet["python_tests"])
+            self.assertEqual(packet["python_shards"], 0)
 
 
 if __name__ == "__main__":

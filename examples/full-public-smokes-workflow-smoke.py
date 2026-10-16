@@ -49,7 +49,7 @@ def main() -> int:
         "--jobs \"${SMOKE_JOBS}\"",
         "--no-execute",
         "--json",
-        'python -m pip install --disable-pip-version-check "jsonschema>=4.23,<5"',
+        "python -m pip install --disable-pip-version-check --editable '.[test]'",
         "actions/upload-artifact@",
         "$RUNNER_TEMP/loopx-smoke-results/full-public-shard-${{ matrix.shard }}.json",
         "${{ runner.temp }}/loopx-smoke-results/full-public-shard-${{ matrix.shard }}.json",

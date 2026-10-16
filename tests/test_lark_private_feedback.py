@@ -297,10 +297,17 @@ def test_terminal_cleanup_recovers_verified_answer_without_resend(ordinary):  # 
         transport.admit('notes-app', event)
         row = transport.core.pending()[0]
         active(store, row)
+        deadline = time.monotonic() + 10
+        while store.load_turn(row['session_id'], row['turn_id'])['status'] != 'running':
+            assert time.monotonic() < deadline
+            time.sleep(.01)
         transport.reconcile()
+        assert ('notes-app', event['message_id'], 'OnIt') in provider.reaction_creates
+        # Arm cleanup failure before stop makes terminal delivery eligible;
+        # an active Session claim alone does not prove OnIt was created.
+        provider.fail_reaction_delete = True
         transport.admit('notes-app', provider.event('notes-app', 'cleanup_stop', '/stop'))
         runtime.wait_for_turn(session_id=row['session_id'], turn_id=row['turn_id'], timeout_sec=10)
-        provider.fail_reaction_delete = True
         transport.reconcile()
         record_path = transport.root / f"{row['request_ref']}.json"
         record = json.loads(record_path.read_text())

@@ -7,9 +7,15 @@ from pathlib import Path
 
 import pytest
 
+from loopx.control_plane.coordination.runtime_shadow import (
+    build_todo_runtime_shadow_projection,
+)
 from loopx.goal_mode_mcp import GoalModeMCPConfig, GoalModeMCPControlPlane
 from loopx.status import parse_active_state_todos
 from loopx.todos import add_goal_todo
+from tests.control_plane.canonical_authority_fixture import (
+    initialize_canonical_authority,
+)
 
 GOAL_ID = "mcp-completion-validation"
 AGENT = "claude"
@@ -20,6 +26,7 @@ _FAIL_COMMAND = f'{shlex.quote(sys.executable)} -c "raise SystemExit(1)"'
 def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
     repo = tmp_path / "repo"
     repo.mkdir()
+    runtime = tmp_path / "runtime"
     state = repo / "ACTIVE_GOAL_STATE.md"
     state.write_text(
         "\n".join(
@@ -40,7 +47,7 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
     registry.write_text(
         json.dumps(
             {
-                "common_runtime_root": str(tmp_path / "runtime"),
+                "common_runtime_root": str(runtime),
                 "goals": [
                     {
                         "id": GOAL_ID,
@@ -61,6 +68,16 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
             }
         ),
         encoding="utf-8",
+    )
+    initialize_canonical_authority(
+        runtime,
+        GOAL_ID,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID,
+            todos=[],
+            handoff_mode="soft_claim",
+        ),
+        state_path=state,
     )
     return registry, state
 
@@ -123,7 +140,10 @@ def test_mcp_complete_task_fails_closed_on_failing_declared_validation(
     assert payload["ok"] is False
     assert payload["completed"] is False
     assert payload["validation_blocked_completion"] is True
-    assert payload["validation"]["passed"] is False
+    assert (
+        payload["validation_failure"]["validation_receipt"]["passed"]
+        is False
+    )
     assert "spend-slot" not in output
     assert "refresh-state" not in output
     assert _agent_todo_status(state, todo_id) != "done"

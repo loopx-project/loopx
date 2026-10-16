@@ -6,7 +6,7 @@ import type {AuthorityStore, AuthorityStoreLoadResult} from "./authority_store.t
 import {canonicalAuthorityObject} from "./authority_store_codec.ts";
 import {indexCoordinationProjection, validateCoordinationTodoReadModel} from "./coordination_projection.ts";
 import {canonicalTaskLease, canonicalTaskLeaseAcquireFacts} from "./task_lease_state.ts";
-import {HANDOFF_MODES} from "./handoff_mode_policy.ts";
+import {HANDOFF_MODES, retiredHandoffModeRejection, HANDOFF_MODE_RETIRED_REASON} from "./handoff_mode_policy.ts";
 import {requireStringLiteral} from "../runtime_decode.ts";
 import {leaseOwnerRejection} from "../work_items/task_lease_eligibility.ts";
 import {leaseEpoch, leaseVersion, leaseIsActive} from "../work_items/task_lease_acquire.ts";
@@ -48,10 +48,11 @@ export async function currentLeaseAcquisitionProof<S extends string>(store: Auth
   const current = facts.current;
   const details = {handoff_mode: mode, original_receipt: result.original_receipt,
     current_provider_revision: head.provider_revision, current_cursor: head.cursor};
-  const rejection = mode === "soft_claim" ? "handoff_mode_forbids_lease"
+  const rejection = retiredHandoffModeRejection(mode) ?? (mode === "soft_claim" ? "handoff_mode_forbids_lease"
     : input.required_handoff_mode !== undefined && mode !== input.required_handoff_mode ? "claim_lease_requires_hard_lease"
-    : leaseOwnerRejection(facts.todo, input.owner, input.registered_agents);
-  if (rejection) return failed(rejection, `current authority rejects lease acquire replay: ${rejection}`, details);
+    : leaseOwnerRejection(facts.todo, input.owner, input.registered_agents));
+  if (rejection) return failed(rejection, rejection === "handoff_mode_retired" ? HANDOFF_MODE_RETIRED_REASON
+    : `current authority rejects lease acquire replay: ${rejection}`, details);
   if (!current || !leaseIsActive(current, input.now) || current.owner !== input.owner ||
       current.idempotency_key !== input.idempotency_key || leaseEpoch(current) !== leaseEpoch(original) ||
       leaseVersion(current) < leaseVersion(original)) {

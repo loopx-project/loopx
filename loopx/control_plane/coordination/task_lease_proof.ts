@@ -1,5 +1,6 @@
 /** Current nonterminal mutation proof. Admission stays in the lifecycle owner;
  * this boundary never acquires, renews, releases or transfers a lease. */
+import {retiredHandoffModeRejection} from "./handoff_mode_policy.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
@@ -8,7 +9,7 @@ import {indexCoordinationProjection} from "./coordination_projection.ts";
 import {canonicalTaskLease, canonicalTaskLeaseAcquireFacts} from "./task_lease_state.ts";
 import {coordinationTodoWriteScopes} from "./todo_write_scopes.ts";
 import {decideTaskLeaseAcquire} from "../work_items/task_lease_acquire_decision.ts";
-import {leaseOwnerRejection} from "../work_items/task_lease_eligibility.ts";
+import {leaseOwnerRejection, leaseExecutionTargetRejection} from "../work_items/task_lease_eligibility.ts";
 import type {CoordinationTodoUpdateInput} from "./todo_update_intent.ts";
 import {deferredReopenRejection, isDeferredReopen, isOwnerDeferral} from "./todo_deferred_lifecycle.ts";
 import {blockedLifecycleRejection, isBlockedLifecycleTransition} from "./todo_blocked_lifecycle.ts";
@@ -70,6 +71,10 @@ export function evaluateCanonicalTaskLeaseProof(input: {
   actor_agent_id: string | null; registered_agents: readonly string[];
   lease_idempotency_key: string | null; lease_expected_version: number | null; now: Date;
 }) {
+  const retired = retiredHandoffModeRejection(input.handoff_mode);
+  if (retired !== null) return {outcome: "rejected", code: retired};
+  const targetRejection = leaseExecutionTargetRejection(input.todo);
+  if (targetRejection !== null) return {outcome: "rejected", code: targetRejection};
   const {lease} = input;
   if (!(input.now instanceof Date) || !Number.isFinite(input.now.valueOf())) {
     throw new EffectRuntimeRequestError("lease proof requires a valid transaction clock");
@@ -139,6 +144,24 @@ export function todoUpdateLeaseRecovery(head: JsonObject, input: CoordinationTod
   };
   const todo = index.todos.get(input.todo_id)!;
   const intent = input.planning_intent ?? {};
+  if (leaseExecutionTargetRejection(todo) !== null) {
+    if (!isBoundUserActionMetadataUpdate(todo, input)) {
+      return {...base, action: "resolve_lifecycle_edit", reason_code: "todo_not_executable",
+        reason: "User actions cannot acquire execution leases. Use the registered bound actor and the supported administrative text, note or evidence edit; other changes require their owning lifecycle. A new lease cannot authorize this request."};
+    }
+    if (lease === null || lease.status === "released") {
+      return {...base, action: "resolve_lifecycle_edit", reason_code: "todo_not_executable",
+        reason: "User actions do not grant execution leases. Retry this bound administrative copy edit without either lease proof flag, using a fresh update operation and current provider revision. Preserve released history; do not acquire another lease.",
+        retry: {command: "loopx todo update", goal_id: input.goal_id, todo_id: input.todo_id,
+          agent_id: input.actor_agent_id,
+          requires_flags: ["--update-operation-id", "--update-expected-provider-revision"]}};
+    }
+    return {...base, action: "reconcile_lease_owner", reason_code: "todo_not_executable",
+      reason: "The retained User-action execution must be released by its holder using the exact current owner/key/version, including after expiry. Then retry the bound administrative copy edit without lease proof under a fresh operation and current provider revision. Do not borrow the holder's proof or acquire another lease.",
+      release: {command: "loopx task-lease release",
+        requires_flags: ["--owner", "--idempotency-key", "--expected-version"],
+        proof_source: "current_owner_lease_readback"}};
+  }
   if (mode === "soft_claim" && isSoftClaimReleasedCopyUpdate(todo,
       index.leases.get(input.todo_id), input)) {
     return {...base, action: "resolve_lifecycle_edit",

@@ -339,7 +339,7 @@ def test_lost_edit_ack_recovered_by_readback_then_exact_stop_closes_draft(ordina
 def test_literal_mentions_use_exact_wire_proof_through_update_replay_and_final(ordinary):  # noqa: F811
     fake = ordinary[-2]
     final = "完整结果：@Fixture 与 @Later 都是普通文字。"
-    fake.write_text(fake.read_text().replace('"message": "Steered response.",', f'"message": {final!r},'))
+    fake.write_text(fake.read_text().replace('"message": "Steered response.",', f'"message": {ascii(final)},'))
     store, runtime, provider, transport, row = start(ordinary, first_text="阅读 @Fixture。\n")
     try:
         sid, tid = row["session_id"], row["turn_id"]
@@ -373,7 +373,7 @@ def test_literal_mentions_use_exact_wire_proof_through_update_replay_and_final(o
 def test_full_canonical_final_replaces_bounded_draft_without_truncation(ordinary):  # noqa: F811
     final = "**完整结果**\n\n" + "保留每一段证据。\n" * 850
     fake = ordinary[-2]
-    fake.write_text(fake.read_text().replace('"message": "Steered response.",', f'"message": {final!r},'))
+    fake.write_text(fake.read_text().replace('"message": "Steered response.",', f'"message": {ascii(final)},'))
     store, runtime, provider, transport, row = start(ordinary)
     try:
         sid, tid = row["session_id"], row["turn_id"]

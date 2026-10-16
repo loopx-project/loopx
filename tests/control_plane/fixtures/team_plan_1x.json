@@ -1,0 +1,80 @@
+{
+  "source_revision": "60d833b13c85135587b725013b247e827663ffb9",
+  "plan": {
+    "schema_version": "steward_team_plan_preview_v0",
+    "kind": "steward_team_plan_preview",
+    "goal_id": "goal-a",
+    "proposal_id": "historical-plan",
+    "objective": "Independent lane outcomes",
+    "quota_envelope": {
+      "slots": 2
+    },
+    "stop_condition": "Owner ends request",
+    "lanes": [
+      {
+        "lane_id": "lane-alpha",
+        "agent_id": "alpha",
+        "acceptance": "Return independent evidence",
+        "first_todo": {
+          "text": "Own work",
+          "priority": "P1",
+          "task_class": "advancement_task",
+          "action_kind": "implement"
+        }
+      }
+    ]
+  },
+  "basis": "e56dfe4695a07f36678032267de2d3aca064a7ce1cdf69db4cec2367a11da105",
+  "source": "<!-- loopx:team-plan:3e4431a216a95751fbd0a96e306bfd46f846d038465fbf055c6321efd216b62a eyJzY2hlbWFfdmVyc2lvbiI6InN0ZXdhcmRfdGVhbV9wbGFuX3RyYW5zYWN0aW9uX3YwIiwiZ29hbF9pZCI6ImdvYWwtYSIsIm9wZXJhdGlvbl9pZCI6InRlYW0tcGxhbjozZTQ0MzFhMjE2YTk1NzUxZmJkMGE5NmUzMDZiZmQ0NmY4NDZkMDM4NDY1ZmJmMDU1YzYzMjFlZmQyMTZiNjJhIiwicmVxdWVzdF9zaGEyNTYiOiJjYTJkYzIzZDM1ODMxMzE0YmVhNWU2ZWUxNDVhOWZjYzgzNTNhYTk1Y2M2OTFjZjI1MDFmNmJhNzYwMzJkMDYzIiwicmVzdWx0Ijp7ImFjdGlvbiI6ImNyZWF0ZWQiLCJ0b2RvX2lkIjoidG9kb18wMjU3YzAyYjBiZjc2YmE2YzdjM2VkNGUiLCJ0YXJnZXRfa2V5IjpudWxsLCJjcmVhdGVkX3RvZG9faWRzIjpbInRvZG9fMDI1N2MwMmIwYmY3NmJhNmM3YzNlZDRlIl0sImxhbmVfdG9kb19pZHMiOlsidG9kb18wMjU3YzAyYjBiZjc2YmE2YzdjM2VkNGUiXSwibGFuZV9zZXR0bGVtZW50cyI6W3sibGFuZV9pZCI6ImxhbmUtYWxwaGEiLCJhZ2VudF9pZCI6ImFscGhhIiwicHJpb3JpdHkiOiJQMSIsImFjY2VwdGFuY2UiOiJSZXR1cm4gaW5kZXBlbmRlbnQgZXZpZGVuY2UiLCJkaXNwb3NpdGlvbiI6ImNyZWF0ZWQiLCJ0b2RvX2lkIjoidG9kb18wMjU3YzAyYjBiZjc2YmE2YzdjM2VkNGUifV0sImdhcF9jb3VudCI6MCwiZ2FwX2xhbmVzIjpbXSwicmV1c2VkX2xhbmVfY291bnQiOjAsImludGVudF9iYXNpcyI6InNoYTI1NjowOTYwZjJiZWY1NjVkZjc2YTFjMDczYjI1Y2EyMGMzMWRiODI1YzViMWIzMGFjNjZlMDNkYzcyMWIzM2I0YzhlIiwibGFuZV9mYWlsdXJlIjpudWxsfX0= -->\n\n# Goal\n\n## Agent Todo\n\n- [ ] [P1] Own work\n  <!-- loopx:todo todo_id=todo_0257c02b0bf76ba6c7c3ed4e status=open task_class=advancement_task action_kind=implement claimed_by=alpha updated_at=2026-10-13T05:54:00Z -->\n\n",
+  "result": {
+    "action": "created",
+    "todo_id": "todo_0257c02b0bf76ba6c7c3ed4e",
+    "target_key": null,
+    "created_todo_ids": [
+      "todo_0257c02b0bf76ba6c7c3ed4e"
+    ],
+    "lane_todo_ids": [
+      "todo_0257c02b0bf76ba6c7c3ed4e"
+    ],
+    "lane_settlements": [
+      {
+        "lane_id": "lane-alpha",
+        "agent_id": "alpha",
+        "priority": "P1",
+        "acceptance": "Return independent evidence",
+        "disposition": "created",
+        "todo_id": "todo_0257c02b0bf76ba6c7c3ed4e"
+      }
+    ],
+    "gap_count": 0,
+    "gap_lanes": [],
+    "reused_lane_count": 0,
+    "intent_basis": "sha256:0960f2bef565df76a1c073b25ca20c31db825c5b1b30ac66e03dc721b33b4c8e",
+    "lane_failure": null,
+    "coordination_runtime_shadow": {
+      "schema_version": "loopx_local_authority_shadow_evidence_v1",
+      "outcome": "no_transaction",
+      "reason_code": "shadow_disabled",
+      "goal_id": "goal-a",
+      "entry": {
+        "entry_id": null,
+        "partition": null,
+        "seq": null,
+        "partition_digest": null,
+        "source_bytes_digest": null
+      },
+      "drain": null,
+      "capture_kind": "source_transaction_outbox",
+      "source_transaction_correlated": false,
+      "durable_source_outbox": false,
+      "source_candidate_compared": false,
+      "parity_verdict": "not_evaluated",
+      "primary_authority": "legacy_local",
+      "candidate_provider": "file",
+      "candidate_read_for_decision": false,
+      "provider_to_local_writes": false,
+      "primary_writeback_preserved": true,
+      "store_identity": null
+    }
+  }
+}

@@ -249,7 +249,21 @@ def release_build(tag: str, repository: str) -> None:
     ]
 
     def number(value: str) -> tuple[int, ...]:
-        return tuple(map(int, value.removeprefix("v").split(".")))
+        match = re.fullmatch(
+            r"v(\d+)\.(\d+)\.(\d+)(?:(a|b|rc)(\d+))?",
+            value,
+        )
+        if match is None:
+            raise ValueError(f"invalid LoopX release tag: {value}")
+        major, minor, patch, prerelease, prerelease_number = match.groups()
+        prerelease_rank = {None: 3, "a": 0, "b": 1, "rc": 2}[prerelease]
+        return (
+            int(major),
+            int(minor),
+            int(patch),
+            prerelease_rank,
+            int(prerelease_number or 0),
+        )
 
     predecessors = [r for r in versions if number(r["tag_name"]) < number(tag)]
     if not predecessors:

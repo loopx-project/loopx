@@ -44,11 +44,15 @@ def handle_turn_journal_inspection(
             runtime_root_override=runtime_root_arg,
         )
         scope = "todo"
+        session_host = "codex-cli"
         if args.retry_failed_turn:
             plan = load_loopx_turn_plan_from_journal(
                 runtime_root, goal_id=args.goal_id, turn_key=args.turn_key,
             )
             scope = str(((plan.get("session") or {}).get("context_policy") or {}).get("binding_scope") or "todo")
+            # The retained plan, not the operator's current default host, owns
+            # the failed Turn's session namespace. Legacy plans remain Codex.
+            session_host = str((plan.get("host") or {}).get("kind", "codex-cli"))
         fmt = output_format(args)
         if args.watch:
             interval = args.watch_interval
@@ -80,6 +84,7 @@ def handle_turn_journal_inspection(
                                 runtime_root,
                                 turn_envelope,
                                 session_scope=scope,
+                                host=session_host,
                             )
                         ),
                     )
@@ -153,6 +158,7 @@ def handle_turn_journal_inspection(
                     runtime_root,
                     turn_envelope,
                     session_scope=scope,
+                    host=session_host,
                 )
             ),
         )

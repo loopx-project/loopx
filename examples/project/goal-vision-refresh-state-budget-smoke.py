@@ -11,6 +11,16 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from loopx.control_plane.coordination.local_authority import (  # noqa: E402
+    LocalCoordinationAuthorityUnavailable,
+    read_canonical_todos_if_promoted,
+)
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
+from loopx.control_plane.todos.mutation_api import add_goal_todo  # noqa: E402
+
 GOAL_ID = "goal-vision-budget-fixture"
 AGENT_ID = "research-curator"
 
@@ -184,10 +194,27 @@ def write_json(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def main() -> int:
+def assert_vision_budget(provider: str) -> None:
     with tempfile.TemporaryDirectory(prefix="loopx-goal-vision-budget-") as tmp:
         root = Path(tmp)
         registry_path, runtime, project = write_fixture(root)
+        state_path = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
+        # A source fixture must be imported before any normal Todo writer.
+        source_before = state_path.read_bytes()
+        create_args = dict(registry_path=registry_path, goal_id=GOAL_ID, role="agent",
+            text="Validate the scoped delivery evidence.", task_class="advancement_task",
+            claimed_by=AGENT_ID, agent_id=AGENT_ID)
+        try:
+            add_goal_todo(**create_args)
+        except LocalCoordinationAuthorityUnavailable as error:
+            assert error.code == "canonical_authority_required", error
+        else:
+            raise AssertionError("unmigrated fixture must not admit a normal Todo write")
+        assert state_path.read_bytes() == source_before
+        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID) is None
+        import_fixture_authority(registry_path, GOAL_ID, provider=provider)
+        original = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+        assert original["source_authority"] == provider + "_v0"
         valid_path = root / "valid-vision.json"
         invalid_path = root / "invalid-vision.json"
         drift_path = root / "drift-vision.json"
@@ -603,10 +630,14 @@ def main() -> int:
         assert "limit is 80" in long_todo["error"], long_todo
         assert "suggested compact value" in long_todo["error"], long_todo
 
-        from loopx.todos import add_goal_todo
-        add_goal_todo(registry_path=registry_path, goal_id=GOAL_ID, role="agent",
-            text="Validate the scoped delivery evidence.", task_class="advancement_task",
-            claimed_by=AGENT_ID)
+        created = add_goal_todo(**create_args)
+        canonical = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+        assert len(canonical["todos"]) == len(original["todos"]) + 1
+        rows = {row["todo_id"]: row for row in canonical["todos"]}
+        assert rows[created["todo_id"]]["claimed_by"] == AGENT_ID
+        assert rows[created["todo_id"]]["text"] == create_args["text"]
+        for row in original["todos"]:
+            assert rows[row["todo_id"]] == row
         local_next_action = "/Users/example/private/raw-task-note"
         private_next_action_result = payload(
             run_cli(
@@ -689,6 +720,11 @@ def main() -> int:
         assert "vision_summary" in invalid["error"], invalid
         assert "suggested compact value" in invalid["error"], invalid
 
+
+
+def main() -> int:
+    for provider in ("file", "sqlite"):
+        assert_vision_budget(provider)
     print("goal-vision-refresh-state-budget-smoke ok")
     return 0
 

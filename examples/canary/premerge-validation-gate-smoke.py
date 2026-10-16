@@ -35,6 +35,36 @@ def commands_from(run: dict | None) -> list[str]:
     return commands
 
 
+def source_cli_argv(*args: str) -> list[str]:
+    """Build the argv for the host's source-checkout LoopX launcher.
+
+    ``scripts/loopx`` is a POSIX bash shim, so a native Windows host cannot
+    exec it (``OSError: [WinError 193]``). The shipped Windows entry is
+    ``scripts/loopx_entry.py``, which ``scripts/loopx.ps1`` and
+    ``loopx/windows_install.py`` both delegate to. ``tests/source_cli.py``
+    mirrors this selection for pytest, but an installed release snapshot copies
+    ``examples`` without ``tests``, so this smoke keeps its own copy.
+    """
+    if os.name == "nt":
+        return [
+            sys.executable,
+            "-I",
+            str(REPO_ROOT / "scripts" / "loopx_entry.py"),
+            *args,
+        ]
+    return [str(REPO_ROOT / "scripts" / "loopx"), *args]
+
+
+def source_cli_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """Build the launcher environment; the Windows entry needs a release root."""
+    env = dict(os.environ if base is None else base)
+    if os.name == "nt":
+        # scripts/loopx_entry.py refuses to start without a release root, and
+        # the shipped launchers pin it instead of trusting an ambient value.
+        env["LOOPX_RELEASE_ROOT"] = str(REPO_ROOT)
+    return env
+
+
 def assert_control_plane_change_retains_state_machine_and_vocabulary_validation() -> None:
     payload = build_premerge_validation_gate(
         changed_files=[
@@ -350,6 +380,19 @@ def assert_passed_validation_does_not_grant_self_merge_authority() -> None:
 
 
 def assert_installed_wrapper_uses_bound_python_and_redirects_to_checkout() -> None:
+    if os.name == "nt":
+        # scripts/loopx is the POSIX release shim: it binds LOOPX_PYTHON and
+        # redirects `canary premerge` to the checkout under review, and a native
+        # Windows host cannot exec it (WinError 193). The shipped Windows
+        # launcher (scripts/loopx.ps1 -> scripts/loopx_entry.py) selects Python
+        # from the current-release pointer and has no checkout redirect, so this
+        # contract stays POSIX-only. tests/test_loopx_launcher_python_selection.py
+        # and tests/test_windows_install.py pin the host launchers.
+        print(
+            "premerge-validation-gate-smoke: installed POSIX release shim contract"
+            " skipped on Windows"
+        )
+        return
     with tempfile.TemporaryDirectory() as temp_dir:
         release_root = Path(temp_dir) / "release"
         scripts_dir = release_root / "scripts"
@@ -415,8 +458,7 @@ def assert_external_dirty_worktree_uses_caller_repo() -> None:
 
         sample.write_text("value =\n", encoding="utf-8")
         failed = subprocess.run(
-            [
-                str(REPO_ROOT / "scripts" / "loopx"),
+            source_cli_argv(
                 "--format",
                 "json",
                 "canary",
@@ -431,11 +473,12 @@ def assert_external_dirty_worktree_uses_caller_repo() -> None:
                 "--no-progress",
                 "--timeout-seconds",
                 "60",
-            ],
+            ),
             cwd=external_repo,
-            env={**os.environ, "LOOPX_PYTHON": sys.executable},
+            env=source_cli_env({**os.environ, "LOOPX_PYTHON": sys.executable}),
             check=False,
             text=True,
+            encoding="utf-8",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -458,8 +501,7 @@ def assert_external_dirty_worktree_uses_caller_repo() -> None:
 
         sample.write_text("value = 2\n", encoding="utf-8")
         passed = subprocess.run(
-            [
-                str(REPO_ROOT / "scripts" / "loopx"),
+            source_cli_argv(
                 "--format",
                 "json",
                 "canary",
@@ -474,11 +516,12 @@ def assert_external_dirty_worktree_uses_caller_repo() -> None:
                 "--no-progress",
                 "--timeout-seconds",
                 "60",
-            ],
+            ),
             cwd=external_repo,
-            env={**os.environ, "LOOPX_PYTHON": sys.executable},
+            env=source_cli_env({**os.environ, "LOOPX_PYTHON": sys.executable}),
             check=False,
             text=True,
+            encoding="utf-8",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )

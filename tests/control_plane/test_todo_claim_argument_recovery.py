@@ -15,7 +15,7 @@ REPO = Path(__file__).resolve().parents[2]
 GOAL, TODO = "claim-arguments", "todo_claim_arguments"
 
 
-@pytest.fixture(params=["legacy", "file", "sqlite"])
+@pytest.fixture(params=["file", "sqlite"])
 def claim_cli(tmp_path, monkeypatch, request):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     provider = request.param
@@ -30,21 +30,22 @@ def claim_cli(tmp_path, monkeypatch, request):
         "id": GOAL, "repo": str(project), "state_file": state.name,
         "coordination": {"registered_agents": ["peer-a", "peer-b"]},
     }]}))
-    if provider != "legacy":
-        projection = build_todo_runtime_shadow_projection(
-            goal_id=GOAL, handoff_mode="hard_lease", leases=[], todos=[{
-                "schema_version": "todo_item_v0", "todo_id": TODO, "role": "agent",
-                "status": "open", "done": False, "text": "Claim one open task.",
-                "archive_state": "active", "source_section": "Agent Todo", "index": 1,
-                "task_class": "advancement_task", "required_write_scopes": ["src/**"],
-            }],
-        )
-        initialize_canonical_authority(runtime, GOAL, projection, state_path=state, provider=provider)
-        state.unlink()
+    projection = build_todo_runtime_shadow_projection(
+        goal_id=GOAL, handoff_mode="hard_lease", leases=[], todos=[{
+            "schema_version": "todo_item_v0", "todo_id": TODO, "role": "agent",
+            "status": "open", "done": False, "text": "Claim one open task.",
+            "archive_state": "active", "source_section": "Agent Todo", "index": 1,
+            "task_class": "advancement_task", "required_write_scopes": ["src/**"],
+        }],
+    )
+    initialize_canonical_authority(
+        runtime, GOAL, projection, state_path=state, provider=provider,
+    )
+    state.unlink()
 
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
     claim = ["todo", "claim", "--goal-id", GOAL, "--todo-id", TODO, "--agent-id", "peer-a"]
-    lease = [] if provider == "legacy" else [
+    lease = [
         "--claim-operation-id", "original-claim", "--task-lease-idempotency-key", "original-lease",
         "--task-lease-expected-version", "0",
     ]
@@ -101,12 +102,11 @@ def test_one_packet_repairs_all_grammar_errors_and_preserves_route(claim_cli):
     applied = run([*repaired, "--claimed-by", "peer-a"])
     assert applied["ok"] is True
     assert snapshot()[0][0]["claimed_by"] == "peer-a"
-    if provider != "legacy":
-        assert applied["lease"]["version"] == 1
-        assert applied["lease"]["write_scopes"] == ["src/**"]
-        replay = run([*repaired, "--claimed-by", "peer-a"])
-        assert replay["status"] == "replayed"
-        assert replay["changed"] is False
+    assert applied["lease"]["version"] == 1
+    assert applied["lease"]["write_scopes"] == ["src/**"]
+    replay = run([*repaired, "--claimed-by", "peer-a"])
+    assert replay["status"] == "replayed"
+    assert replay["changed"] is False
 
 
 def test_syntax_repair_does_not_authorize_a_different_executor(claim_cli):
@@ -143,7 +143,7 @@ def test_repair_preserves_an_invalid_cas_instead_of_weakening_it(claim_cli):
 
 
 def test_lease_input_requirement_preserves_zero_cas(claim_cli):
-    provider, run, snapshot, prefix, claim, _, _, _ = claim_cli
+    _, run, snapshot, prefix, claim, _, _, _ = claim_cli
     before = snapshot()
     rejected = run([
         *prefix, *claim, "--claimed-by", "peer-a", "--task-lease-expected-version", "0",
@@ -154,30 +154,19 @@ def test_lease_input_requirement_preserves_zero_cas(claim_cli):
     repaired = recovery["cli_args"]
     assert repaired[repaired.index("--task-lease-expected-version") + 1] == "0"
     completed_args = [*repaired, "--task-lease-idempotency-key", "explicit-execution"]
-    if provider == "legacy":
-        rejected = run(completed_args, expected_exit=1)
-        assert "requires promoted canonical authority" in rejected["error"]
-        assert snapshot() == before
-    else:
-        applied = run(completed_args)
-        assert applied["lease"]["version"] == 1
+    applied = run(completed_args)
+    assert applied["lease"]["version"] == 1
 
 
 def test_grammar_packet_does_not_guess_authority_mode(claim_cli):
-    provider, run, snapshot, prefix, claim, _, _, _ = claim_cli
+    _, run, snapshot, prefix, claim, _, _, _ = claim_cli
     before = snapshot()
     flags = ["--claimed-by", "peer-a"]
-    if provider == "legacy":
-        flags += ["--task-lease-idempotency-key", "canonical-only"]
     rejected = run([*prefix, *claim, *flags], expected_exit=1)
     assert rejected.get("error_code") != "todo_claim_invalid_arguments"
     assert snapshot() == before
-    if provider == "legacy":
-        assert "requires promoted canonical authority" in rejected["error"]
-        assert "recovery" not in rejected
-    else:
-        assert rejected["error_code"] == "handoff_mode_requires_lease"
-        assert rejected["recovery"]["requires_flags"] == ["--task-lease-idempotency-key"]
+    assert rejected["error_code"] == "handoff_mode_requires_lease"
+    assert rejected["recovery"]["requires_flags"] == ["--task-lease-idempotency-key"]
 
 
 def test_markdown_exposes_the_same_required_input():

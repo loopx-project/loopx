@@ -35,6 +35,7 @@ export const storageResultSchema = z.object({
     capture_artifacts_present: z.boolean(), outbox_files_present: z.boolean(),
     import_ready: z.literal(false), writer_stop_verified: z.literal(false), outbox_reconciliation_verified: z.literal(false),
   }).optional(),
+  pending_preview: storageCarrierSchema.nullable().optional(),
   recovery: z.object({phase: z.enum(["prepared", "completed"]), target_store_identity: z.string(), archive_sha256: z.string()}).nullable().optional(),
   reason_code: z.string().optional(),
   operation_id: z.string().regex(/^[a-f0-9]{32}$/).optional(),
@@ -68,4 +69,9 @@ export function recoverGoalStorage(carrier: StorageCarrier, apply = false) {
   if ("operation_id" in saved) return read(`/api/chat/goal-storage/import/${apply ? "apply" : "recover"}`, {
     method: "POST", body: JSON.stringify({...saved, ...(apply ? {writers_stopped: true} : {})})});
   return read(`/api/chat/goal-storage/${apply ? "apply" : "recover"}`, {method: "POST", body: JSON.stringify(storageCarrierSchema.parse(carrier))});
+}
+export function discardGoalStorage(carrier: StorageCarrier) {
+  return read("/api/chat/goal-storage/discard", {
+    method: "POST", body: JSON.stringify(storageCarrierSchema.parse(carrier)),
+  });
 }

@@ -100,7 +100,7 @@ def capability_configuration_editor(
                               options=["file", "sqlite"], required=True,
                               description="Fixed at creation. Existing Goals need a separate backed-up migration."),
                        _field("canonical_creation", "Create canonical authority", "boolean", required=True,
-                              description="Enabled by default for new Goals. Disabled retains the post-promotion target behavior."),
+                              description="Required for new Goals in 2.0. Enable before creating a Goal; import existing Markdown Goals separately."),
                        _field("new_goal_handoff_mode", "New Goal execution policy", "select",
                               options=["soft_claim", "hard_lease"], required=True,
                               description="Used only with canonical creation. Agents inherit the Goal policy; this grants no tool permissions.")],
@@ -403,6 +403,17 @@ def capability_configuration_editor(
             "writable_scopes": ["goal"],
             "fields": [
                 _field(
+                    "agent_id", "Independent Agent binding", "text",
+                    description=(
+                        "Select one registered Goal Agent to change only its route. "
+                        "Leave blank to edit the legacy shared binding."
+                    ),
+                ),
+                _field(
+                    "enabled", "Enable this Agent binding", "boolean",
+                    description="Disabling one Agent preserves all shared and sibling bindings.",
+                ),
+                _field(
                     "config_path",
                     "Local-private configuration path",
                     "text",
@@ -418,7 +429,7 @@ def capability_configuration_editor(
                     "string_list",
                     description=(
                         "One already registered Goal-local Agent id per line. Private "
-                        "bindings currently accept exactly one Agent."
+                        "bindings accept exactly one Agent. Used only when editing the shared binding."
                     ),
                 ),
             ],
@@ -580,6 +591,11 @@ def _merge_goal_feature(
         capability_id,
         explore_harness_profiles=feature.get("profiles") or explore_harness_profiles,
     )
+    if capability_id == "reward_memory":
+        for field in entry["configuration_editor"]["fields"]:
+            if field["key"] == "agent_id":
+                field["input_kind"] = "select"
+                field["options"] = list((entry.get("current") or {}).get("registered_agents") or [])
     if "machine" in entry["available_scopes"]:
         entry["effective_value_policy"] = "goal_override_over_live_machine_default"
 

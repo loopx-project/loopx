@@ -789,7 +789,8 @@ def resolve_reward_memory_surface_config(
 
 
 def _enablement_repair(
-    *, goal_id: str, agent_ids: Sequence[str], agent_id: str
+    *, goal_id: str, agent_ids: Sequence[str], agent_id: str,
+    binding_agent_id: str | None = None,
 ) -> dict[str, Any]:
     """Reuse the configuration owner without publishing its private pointer.
 
@@ -800,8 +801,11 @@ def _enablement_repair(
         "loopx", "--registry", "<invoked-registry>",
         "configure-goal", "--goal-id", goal_id,
     ]
-    for enabled_agent in agent_ids:
-        argv.extend(["--reward-memory-agent", enabled_agent])
+    if binding_agent_id:
+        argv.extend(["--reward-memory-agent-id", binding_agent_id])
+    else:
+        for enabled_agent in agent_ids:
+            argv.extend(["--reward-memory-agent", enabled_agent])
     return {
         "schema_version": "reward_memory_enablement_repair_v0",
         "kind": "requalify_existing_binding",
@@ -882,7 +886,7 @@ def resolve_goal_reward_memory_experiment(
     )
     if normalized_agent not in registered_agents:
         raise ValueError(f"agent_id is not registered for goal {goal_id}")
-    policy = reward_memory_goal_policy(goal)
+    policy = reward_memory_goal_policy(goal, agent_id=normalized_agent)
     registry_role = str(registry_role or "project-local").strip()
     config_runtime_route = {
         "schema_version": "reward_memory_config_runtime_route_v0",
@@ -896,6 +900,8 @@ def resolve_goal_reward_memory_experiment(
         "readback_status": "not_attempted",
         "exact_readback_verified": False,
     }
+    if policy.get("binding_agent_id"):
+        config_runtime_route["binding_agent_id"] = policy["binding_agent_id"]
     base = {
         "ok": True,
         "schema_version": "reward_memory_experiment_status_v1",
@@ -911,6 +917,7 @@ def resolve_goal_reward_memory_experiment(
         "config_runtime_route": config_runtime_route,
         "external_writes_performed": False,
         "host_coverage": reward_memory_host_coverage(),
+        **({"binding_revision": policy["binding_revision"]} if policy.get("binding_revision") else {}),
     }
     if not policy["enabled"]:
         return base | {"status": "disabled", "available": False}, None
@@ -964,6 +971,7 @@ def resolve_goal_reward_memory_experiment(
                 goal_id=goal_id,
                 agent_ids=policy["enabled_agents"],
                 agent_id=normalized_agent,
+                binding_agent_id=policy.get("binding_agent_id"),
             ),
             "isolation_mode": isolation["isolation_mode"],
             "actor_binding_verified": isolation["actor_binding_verified"],
@@ -995,6 +1003,7 @@ def resolve_goal_reward_memory_experiment(
                 goal_id=goal_id,
                 agent_ids=policy["enabled_agents"],
                 agent_id=normalized_agent,
+                binding_agent_id=policy.get("binding_agent_id"),
             ),
             "isolation_mode": isolation["isolation_mode"],
             "actor_binding_verified": isolation["actor_binding_verified"],

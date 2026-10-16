@@ -1,10 +1,10 @@
 import {useEffect, useRef, useState} from "react";
-import {fetchGoalStorage, previewGoalStorage, recoverGoalStorage, storageCarrierSchema,
+import {discardGoalStorage, fetchGoalStorage, previewGoalStorage, recoverGoalStorage, storageCarrierSchema,
   type StorageCarrier, type StorageResult, type StorageSource, type MigrationProvider} from "../../data/goal-storage";
 import {useWorkspaceI18n} from "./i18n";
 
-/** Only the immutable opaque carrier survives reload. Neither cached source
- * facts nor browser confirmation replace the server's current source checks. */
+/** Restore opaque intent from the owning server across native origin changes.
+ * Neither that carrier nor cached source facts replace current source checks. */
 export function GoalStorageSettings({goalId, onChanged}: {goalId: string; onChanged: () => void}) {
   const {t} = useWorkspaceI18n();
   const key = `loopx-storage-preview:${goalId}`;
@@ -19,24 +19,40 @@ export function GoalStorageSettings({goalId, onChanged}: {goalId: string; onChan
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
   const [invalidSaved, setInvalidSaved] = useState(false);
+  const [serverBound, setServerBound] = useState(false);
   const inFlight = useRef(false);
   const generation = useRef(0);
   const onChangedRef = useRef(onChanged);
   onChangedRef.current = onChanged;
   useEffect(() => {
     const token = ++generation.current;
-    setCurrent(null); setCold(undefined); setResult(null); setCarrier(null); setConfirmed(false); setMode(""); setInvalidSaved(false); setError(null); setBusy(true);
+    setCurrent(null); setCold(undefined); setResult(null); setCarrier(null); setConfirmed(false); setMode(""); setInvalidSaved(false); setServerBound(false); setError(null); setBusy(true);
     let saved: StorageCarrier | null = null;
+    let invalidLocal = false;
     try {
       const raw = localStorage.getItem(key);
       saved = raw ? storageCarrierSchema.parse(JSON.parse(raw)) : null;
       if (saved && saved.goal_id !== goalId) throw new Error("Goal mismatch");
-      setCarrier(saved);
-    } catch { setInvalidSaved(true); setError(t("storage.savedInvalid")); }
+    } catch { invalidLocal = true; }
     void (async () => {
       try {
         const observed = await fetchGoalStorage(goalId);
         if (token !== generation.current) return;
+        const bound = observed.pending_preview !== undefined;
+        setServerBound(bound);
+        if (bound) {
+          // A different runtime/registry must not inherit an origin-local
+          // handle. Explicit dismissal also wins over an old tab's cache.
+          saved = observed.pending_preview ?? null;
+          if (saved && saved.goal_id !== goalId) throw new Error("Goal mismatch");
+          invalidLocal = false;
+          try {
+            if (saved) localStorage.setItem(key, JSON.stringify(saved));
+            else localStorage.removeItem(key);
+          } catch { /* The durable server carrier does not depend on this cache. */ }
+        }
+        setCarrier(saved);
+        if (invalidLocal) { setInvalidSaved(true); setError(t("storage.savedInvalid")); }
         setCold(observed.cold_source);
         if (observed.ok && observed.current) {
           setCurrent(observed.current);
@@ -71,9 +87,11 @@ export function GoalStorageSettings({goalId, onChanged}: {goalId: string; onChan
       setResult(next);
       if (!apply && next.ok) {
         const saved = storageCarrierSchema.parse(next);
-        // Persist before showing an enabled write control. Storage failure must
-        // not allow a write whose original intent cannot be recovered.
-        localStorage.setItem(key, JSON.stringify(saved)); setCarrier(saved); setConfirmed(false);
+        // Old runtimes still require their browser carrier before enabling
+        // apply. Current runtimes have already retained it before replying.
+        try { localStorage.setItem(key, JSON.stringify(saved)); }
+        catch (error) { if (next.pending_preview === undefined) throw error; }
+        setCarrier(saved); setConfirmed(false);
       }
       if (apply) setCurrent(next.current ?? null);
       if (!next.ok) setError(t("storage.rejected"));
@@ -90,10 +108,25 @@ export function GoalStorageSettings({goalId, onChanged}: {goalId: string; onChan
     }
     finally { inFlight.current = false; if (token === generation.current) setBusy(false); }
   }
-  function discard() {
-    try { localStorage.removeItem(key); }
-    catch { setError(t("storage.savedInvalid")); return; }
-    setCarrier(null); setResult(null); setConfirmed(false); setInvalidSaved(false); setError(null);
+  async function discard() {
+    if (inFlight.current || busy) return;
+    const token = generation.current;
+    inFlight.current = true; setBusy(true); setError(null);
+    try {
+      if (carrier && serverBound) {
+        const discarded = await discardGoalStorage(carrier);
+        if (token !== generation.current) return;
+        if (!discarded.ok) { setError(t("storage.rejected")); return; }
+      }
+      try { localStorage.removeItem(key); }
+      catch (error) { if (!serverBound) throw error; }
+      if (token !== generation.current) return;
+      setCarrier(null); setResult(null); setConfirmed(false); setInvalidSaved(false);
+    } catch { if (token === generation.current) setError(t("storage.savedInvalid")); }
+    finally {
+      inFlight.current = false;
+      if (token === generation.current) setBusy(false);
+    }
   }
   const coldCarrier = carrier && "operation_id" in carrier;
   const completed = result?.recovery?.phase === "completed" || (coldCarrier &&
@@ -125,12 +158,12 @@ export function GoalStorageSettings({goalId, onChanged}: {goalId: string; onChan
         {carrier && !completed ? <label><input type="checkbox" checked={confirmed} disabled={busy} onChange={e => setConfirmed(e.target.checked)} />{t(coldCarrier ? "storage.coldConfirm" : "storage.confirm")}</label> : null}
         <div className="personal-cadence-actions">
           {carrier ? <><button className="is-primary" disabled={busy || !confirmed || completed || !result?.ok} onClick={() => void submit(true)} type="button">{t(coldCarrier ? "storage.coldApply" : "storage.apply")}</button>
-            <button disabled={busy} onClick={discard} type="button">{t("storage.fresh")}</button></>
+            <button disabled={busy} onClick={() => void discard()} type="button">{t("storage.fresh")}</button></>
             : <button className="is-primary" disabled={busy || invalidSaved || (current?.canonical ? !current.provider || target === current.provider : !mode)} onClick={() => void submit(false)} type="button">{t(current?.canonical ? "storage.preview" : "storage.coldPreview")}</button>}
         </div>
       </> : null}
       <div className="personal-cadence-actions">
-        {invalidSaved ? <button disabled={busy} onClick={discard} type="button">{t("storage.fresh")}</button> : null}
+        {invalidSaved ? <button disabled={busy} onClick={() => void discard()} type="button">{t("storage.fresh")}</button> : null}
         <button disabled={busy} onClick={() => setReload(n => n + 1)} type="button">{t(carrier ? "storage.recover" : "storage.refresh")}</button>
       </div>
       {completed ? <p role="status">{t(coldCarrier ? "storage.coldCompleted" : "storage.completed")}</p> : null}

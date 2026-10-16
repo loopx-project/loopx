@@ -11,6 +11,7 @@ import {openLocalAuthorityStoreHandle, localAuthorityOpenFailure,
 import {decodeTaskLeaseAuthority, leaseIsActive, normalizeGoalId, normalizeTodoId, normalizeHandoffMode,
   readLease, revalidateAuthoritySources, TaskLeaseAcquireError, TASK_LEASE_SCHEMA_VERSION,
   type LeaseRecord, type TodoFact} from "./task_lease_acquire.ts";
+import {retiredHandoffModeRejection, HANDOFF_MODE_RETIRED_REASON} from "../coordination/handoff_mode_policy.ts";
 import {leaseOwnerConstraint} from "./task_lease_eligibility.ts";
 import {leaseRepositoryRejection} from "./task_lease_repository.ts";
 import {todoExecutionDependencyRejection} from "../coordination/todo_execution_dependency.ts";
@@ -31,9 +32,7 @@ export async function inspectTaskLease(value: unknown,
     const input = requireJsonObject(value, "task lease inspection");
     if (input.schema_version !== TASK_LEASE_INSPECT_REQUEST ||
         (input.source !== "canonical" && input.source !== "legacy") ||
-        (input.phase !== undefined && input.phase !== "lease_record" && input.phase !== "effective_lease") ||
-        (input.source === "canonical" && input.phase === "lease_record") ||
-        Object.keys(input).some(key => !["schema_version", "source", "goal_id", "todo_id", "runtime_root", "authority", "phase"].includes(key))) {
+        Object.keys(input).some(key => !["schema_version", "source", "goal_id", "todo_id", "runtime_root", "authority"].includes(key))) {
       throw new TaskLeaseAcquireError("invalid task lease inspection request", "invalid_inspection_request");
     }
     goalId = normalizeGoalId(input.goal_id); todoId = normalizeTodoId(input.todo_id);
@@ -85,13 +84,15 @@ export async function inspectTaskLease(value: unknown,
       }
     }
     const timeActive = leaseIsActive(lease, at);
-    const needsProjection = !canonical && input.phase === "lease_record" && timeActive;
-    const ownerConstraint = !timeActive || lease === null || needsProjection ? null
+    const ownerConstraint = !canonical || !timeActive || lease === null ? null
       : authority.todo_projection_error !== null
         ? {effective: false, reason: authority.todo_projection_error.code}
         : leaseOwnerConstraint(todo, typeof lease.owner === "string" ? lease.owner : null, authority.registered_agents);
     const repositoryRejection = canonical && ownerConstraint?.effective === true ? leaseRepositoryRejection(todo, lease) : null;
-    const constraint = repositoryRejection !== null ? {effective: false, reason: repositoryRejection}
+    const retired = retiredHandoffModeRejection(mode);
+    const constraint = !canonical ? {effective: false, reason: "canonical_authority_required"}
+      : retired !== null ? {effective: false, reason: retired}
+      : repositoryRejection !== null ? {effective: false, reason: repositoryRejection}
       : dependency !== null && ownerConstraint?.effective === true
         ? {effective: false, reason: dependency.code} : ownerConstraint;
     // Both registration and route must still describe the source we inspected.
@@ -101,11 +102,13 @@ export async function inspectTaskLease(value: unknown,
     if (canonicalAuthoritySha256(afterFence) !== canonicalAuthoritySha256(beforeFence)) {
       throw new TaskLeaseAcquireError("lease authority route changed; retry inspection", "authority_source_changed");
     }
-    if (needsProjection) return {ok: true, schema_version: TASK_LEASE_SCHEMA_VERSION,
-      action: "inspect", todo_projection_required: true};
     return {ok: true, schema_version: TASK_LEASE_SCHEMA_VERSION, action: "inspect",
       goal_id: goalId, todo_id: todoId, active: timeActive && constraint?.effective === true,
       lease, lease_path: leasePath, ...evidence,
+      execution_policy: {supported: canonical && retired === null, execution_authority_granted: false,
+        ...(!canonical ? {reason_code: "canonical_authority_required",
+          reason: "Source leases are historical only. Use reviewed canonical import before starting execution."}
+          : retired !== null ? {reason_code: retired, reason: HANDOFF_MODE_RETIRED_REASON} : {})},
       ...(mode === null ? {} : {handoff_mode: mode}),
       ...(constraint?.effective === false ? {executor_constraint: constraint} : {}),
       ...(dependency === null ? {} : {resume_condition: dependency.condition})};

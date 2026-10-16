@@ -202,6 +202,7 @@ COVERAGE_SUFFIX_ANCHOR = (".py", ".ts")
 LITERAL_SCAN_ROOTS = ["loopx"]
 # Input producers with an executable witness in loopx.semantics.production.
 INPUT_PRODUCER_ANCHOR = {
+    "effective_action": "loopx/control_plane/quota/run_decision.ts::resolveQuotaRunDecision",
     "turn_result_kind": "loopx/control_plane/turn_driver/transaction.py::_result_kind",
     "loop_disposition": "loopx/control_plane/turn_driver/loop_controller.py::decide_loop_disposition",
     # The settlement binding kind is decided inside the TypeScript builder, so
@@ -210,14 +211,13 @@ INPUT_PRODUCER_ANCHOR = {
 }
 PRODUCER_VOCABULARY_ANCHOR = {
     "effective_action", "turn_route", "loop_disposition", "agent_scope_frontier_action", "turn_result_kind",
-    # First cross-runtime vocabulary carrying executed production evidence. One
-    # named boundary, not a claim about the rest of the cross-runtime set.
+    # Executed evidence is bound to named entrypoints, not every cross-runtime producer.
     "settlement_binding_kind",
 }
 RETURN_PRODUCER_ANCHOR = {
     "turn_route": {"loopx/control_plane/turn_driver/driver.py::_typed_route", "loopx/control_plane/turn_driver/loop_controller.py::_envelope_route", "loopx/control_plane/turn_driver/driver.py::build_loopx_turn_plan"},
     "loop_disposition": {"loopx/control_plane/turn_driver/turn_contract_generated.py::project_turn_route"},
-    "effective_action": {"loopx/control_plane/quota/decision_summary.py::quota_effective_action", "loopx/control_plane/quota/decision_summary.py::_task_orchestration_effective_action"},
+    "effective_action": {"loopx/control_plane/quota/run_decision.ts::quotaEffectiveAction", "loopx/control_plane/quota/run_decision.ts::taskOrchestrationEffectiveAction"},
     "turn_result_kind": {"loopx/control_plane/turn_driver/executor.py::_task_validation_receipt"},
 }
 # Reviewed output arguments/paths replace the old any-enum-use heuristic. These
@@ -231,7 +231,7 @@ CALL_PRODUCER_ANCHOR = {
     },
 }
 RETURN_PATH_ANCHOR = {
-    "effective_action": {"loopx/control_plane/quota/decision_summary.py::_task_orchestration_effective_action": [0]},
+    "effective_action": {"loopx/control_plane/quota/run_decision.ts::taskOrchestrationEffectiveAction": [0]},
     "turn_route": {"loopx/control_plane/turn_driver/driver.py::build_loopx_turn_plan": ["route", "kind"]},
     "turn_result_kind": {"loopx/control_plane/turn_driver/executor.py::_task_validation_receipt": ["recovery_kind"]},
 }

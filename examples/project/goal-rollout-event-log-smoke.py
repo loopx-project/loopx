@@ -21,6 +21,7 @@ from loopx.rollout_event_log import (  # noqa: E402
     rollout_event_log_path,
     summarize_rollout_events,
 )
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
 
 
 def assert_public_safe_text(text: str) -> None:
@@ -347,86 +348,113 @@ def main() -> None:
 
         assert_public_safe_text(log_path.read_text(encoding="utf-8"))
 
-        registry_path, cli_runtime_root, project, cli_goal_id = write_smoke_project(tmp_root / "auto")
-        claim_payload = run_loopx_cli(
-            "--registry",
-            str(registry_path),
-            "--runtime-root",
-            str(cli_runtime_root),
-            "--format",
-            "json",
-            "todo",
-            "claim",
-            "--goal-id",
-            cli_goal_id,
-            "--todo-id",
-            "todo_auto_rollout",
-            "--claimed-by",
-            "codex-main-control",
-        )
-        assert claim_payload["rollout_event"]["event_kind"] == "todo_claim", claim_payload
+        for provider in ("file", "sqlite"):
+            assert_cli_events(tmp_root / "auto" / provider, provider)
 
-        refresh_payload = run_loopx_cli(
-            "--registry",
-            str(registry_path),
-            "--runtime-root",
-            str(cli_runtime_root),
-            "--format",
-            "json",
-            "refresh-state",
-            "--goal-id",
-            cli_goal_id,
-            "--classification",
-            "automatic_rollout_logging_smoke",
-            "--delivery-batch-scale",
-            "implementation",
-            "--delivery-outcome",
-            "outcome_progress",
-            "--agent-id",
-            "codex-main-control",
-            "--agent-lane",
-            "smoke",
-            "--no-global-sync",
-        )
-        assert refresh_payload["rollout_event"]["event_kind"] == "refresh_state", refresh_payload
 
-        should_run_payload = run_loopx_cli(
-            "--registry",
-            str(registry_path),
-            "--runtime-root",
-            str(cli_runtime_root),
-            "--format",
-            "json",
-            "quota",
-            "should-run",
-            "--goal-id",
-            cli_goal_id,
-            "--agent-id",
-            "codex-main-control",
-            "--scan-root",
-            str(project),
-            "--limit",
-            "1",
-            allow_failure=True,
-        )
-        assert should_run_payload["rollout_event"]["event_kind"] == (
-            "quota_should_run"
-        ), should_run_payload
+def assert_cli_events(root: Path, provider: str) -> None:
+    registry_path, cli_runtime_root, project, cli_goal_id = write_smoke_project(root)
+    claim_args = (
+        "--registry", str(registry_path), "--runtime-root", str(cli_runtime_root),
+        "--format", "json", "todo", "claim", "--goal-id", cli_goal_id,
+        "--todo-id", "todo_auto_rollout", "--claimed-by", "codex-main-control",
+    )
+    state = project / "ACTIVE_GOAL_STATE.md"
+    before_state, before_registry = state.read_bytes(), registry_path.read_bytes()
+    refused = run_loopx_cli(*claim_args, allow_failure=True)
+    assert refused["ok"] is False, refused
+    assert refused["error_code"] == "canonical_authority_required", refused
+    assert state.read_bytes() == before_state
+    assert registry_path.read_bytes() == before_registry
+    import_fixture_authority(registry_path, cli_goal_id, provider=provider)
+    events_before = load_rollout_events(rollout_event_log_path(cli_runtime_root, cli_goal_id))
+    claim_payload = run_loopx_cli(
+        "--registry",
+        str(registry_path),
+        "--runtime-root",
+        str(cli_runtime_root),
+        "--format",
+        "json",
+        "todo",
+        "claim",
+        "--goal-id",
+        cli_goal_id,
+        "--todo-id",
+        "todo_auto_rollout",
+        "--claimed-by",
+        "codex-main-control",
+    )
+    assert claim_payload["rollout_event"]["event_kind"] == "todo_claim", claim_payload
+    readback = run_loopx_cli(
+        "--registry", str(registry_path), "--runtime-root", str(cli_runtime_root),
+        "--format", "json", "todo", "list", "--goal-id", cli_goal_id,
+        "--todo-id", "todo_auto_rollout",
+    )
+    assert readback["authority_read"]["source_authority"] == f"{provider}_v0", readback
+    assert readback["authority_read"]["legacy_fallback_used"] is False, readback
+    assert readback["todo"]["claimed_by"] == "codex-main-control", readback
 
-        auto_events = load_rollout_events(rollout_event_log_path(cli_runtime_root, cli_goal_id))
-        auto_kinds = [event["event_kind"] for event in auto_events]
-        assert auto_kinds == [
-            "todo_claim",
-            "refresh_state",
-            "quota_should_run",
-        ], auto_kinds
-        latest_event = auto_events[-1]
-        assert_boundary(latest_event)
-        auto_log_text = rollout_event_log_path(cli_runtime_root, cli_goal_id).read_text(
-            encoding="utf-8"
-        )
-        assert_public_safe_text(auto_log_text)
+    refresh_payload = run_loopx_cli(
+        "--registry",
+        str(registry_path),
+        "--runtime-root",
+        str(cli_runtime_root),
+        "--format",
+        "json",
+        "refresh-state",
+        "--goal-id",
+        cli_goal_id,
+        "--classification",
+        "automatic_rollout_logging_smoke",
+        "--delivery-batch-scale",
+        "implementation",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--agent-id",
+        "codex-main-control",
+        "--agent-lane",
+        "smoke",
+        "--no-global-sync",
+    )
+    assert refresh_payload["rollout_event"]["event_kind"] == "refresh_state", refresh_payload
 
+    should_run_payload = run_loopx_cli(
+        "--registry",
+        str(registry_path),
+        "--runtime-root",
+        str(cli_runtime_root),
+        "--format",
+        "json",
+        "quota",
+        "should-run",
+        "--goal-id",
+        cli_goal_id,
+        "--agent-id",
+        "codex-main-control",
+        "--scan-root",
+        str(project),
+        "--limit",
+        "1",
+        allow_failure=True,
+    )
+    assert should_run_payload["rollout_event"]["event_kind"] == (
+        "quota_should_run"
+    ), should_run_payload
+
+    auto_events = load_rollout_events(rollout_event_log_path(cli_runtime_root, cli_goal_id))
+    assert auto_events[:len(events_before)] == events_before
+    auto_kinds = [event["event_kind"] for event in auto_events[len(events_before):]]
+    assert auto_kinds == [
+        "todo_claim",
+        "refresh_state",
+        "quota_should_run",
+    ], auto_kinds
+    latest_event = auto_events[-1]
+    assert_boundary(latest_event)
+    auto_log_text = rollout_event_log_path(cli_runtime_root, cli_goal_id).read_text(
+        encoding="utf-8"
+    )
+    assert_public_safe_text(auto_log_text)
 
 if __name__ == "__main__":
     main()

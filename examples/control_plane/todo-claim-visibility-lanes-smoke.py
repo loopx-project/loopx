@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -17,7 +18,9 @@ from loopx.control_plane.agents.capability_gate import (  # noqa: E402
 from loopx.control_plane.todos.quota_selection import project_quota_planning  # noqa: E402
 from loopx.control_plane.todos.contract import parse_todo_metadata_line  # noqa: E402
 from loopx.quota import build_quota_should_run  # noqa: E402
-from loopx.todos import apply_todo_update_to_lines  # noqa: E402
+from loopx.control_plane.testing.canary_harness import (  # noqa: E402
+    import_fixture_authority, run_json_cli, run_json_cli_result, write_fixture_registry,
+)
 from work_lane_contract_fixtures import GOAL_ID, status_payload  # noqa: E402
 
 
@@ -423,40 +426,45 @@ def assert_legacy_review_handoff_write_requires_explicit_repair() -> None:
         "continuation_policy=review_handoff -->",
     ]
 
-    for updates in (
-        {"claimed_by": CURRENT_AGENT, "claim_only": True},
-        {"note": "Keep this legacy review blocked."},
-    ):
-        lines = list(original_lines)
-        try:
-            apply_todo_update_to_lines(
-                lines,
-                todo_id="todo_legacy_write",
-                role="agent",
-                updated_at="2026-07-11T06:00:00+08:00",
-                **updates,
-            )
-        except ValueError as exc:
-            assert "repair it" in str(exc), exc
-        else:
-            raise AssertionError("legacy review writes must fail closed")
-        assert lines == original_lines
-
-    repaired_lines = list(original_lines)
-    repaired = apply_todo_update_to_lines(
-        repaired_lines,
-        todo_id="todo_legacy_write",
-        role="agent",
-        continuation_policy="independent_handoff",
-        excluded_agents=[CURRENT_AGENT],
-        updated_at="2026-07-11T06:00:00+08:00",
-    )
-    assert repaired["continuation_policy"] == "independent_handoff", repaired
-    assert repaired["excluded_agents"] == [CURRENT_AGENT], repaired
-    repaired_text = "\n".join(repaired_lines)
-    assert "continuation_policy=review_handoff" not in repaired_text
-    assert "continuation_policy=independent_handoff" in repaired_text
-    assert f"excluded_agents={CURRENT_AGENT}" in repaired_text
+    with tempfile.TemporaryDirectory(prefix="loopx-claim-repair-") as tmp:
+        root = Path(tmp).resolve()
+        state = root / "ACTIVE_GOAL_STATE.md"
+        state.write_text("\n".join(original_lines) + "\n", encoding="utf-8")
+        registry = root / ".loopx/registry.json"
+        write_fixture_registry(
+            project=root, runtime_root=root / "runtime", registry_path=registry,
+            goal_id=GOAL_ID, domain="claim-repair-fixture",
+            adapter_kind="generic_project_goal_v0", state_file=state.name,
+            registered_agents=[CURRENT_AGENT, OTHER_AGENT],
+        )
+        import_fixture_authority(registry, GOAL_ID)
+        before = state.read_bytes()
+        prefix = ("todo", "update", "--goal-id", GOAL_ID,
+                  "--todo-id", "todo_legacy_write", "--agent-id", OTHER_AGENT)
+        revision = run_json_cli("todo", "list", "--goal-id", GOAL_ID,
+                                registry_path=registry)["authority_read"]["provider_revision"]
+        claim = ("todo", "claim", "--goal-id", GOAL_ID,
+                 "--todo-id", "todo_legacy_write", "--agent-id", CURRENT_AGENT,
+                 "--claimed-by", CURRENT_AGENT)
+        for request in (claim, (*prefix, "--note", "Keep this legacy review blocked.")):
+            code, rejected = run_json_cli_result(*request, registry_path=registry)
+            assert code == 1, rejected
+            if request is claim:
+                assert rejected["error_code"] == "removed_continuation_policy", rejected
+            else:
+                assert "repair it" in rejected["error"], rejected
+            assert state.read_bytes() == before
+            assert run_json_cli("todo", "list", "--goal-id", GOAL_ID,
+                                registry_path=registry)["authority_read"]["provider_revision"] == revision
+        repaired = run_json_cli(*prefix, "--continuation-policy", "independent_handoff",
+                                "--excluded-agent", CURRENT_AGENT, registry_path=registry)
+        assert repaired["source_authority"] == "file_v0", repaired
+        current = run_json_cli("todo", "list", "--goal-id", GOAL_ID,
+                               "--todo-id", "todo_legacy_write", registry_path=registry)["todo"]
+        assert current["continuation_policy"] == "independent_handoff", current
+        assert current["excluded_agents"] == [CURRENT_AGENT], current
+        assert not current.get("removed_continuation_policy"), current
+        assert "continuation_policy=review_handoff" not in state.read_text()
 
 
 def assert_claim_visibility_lanes_split_current_other_and_task_class() -> None:

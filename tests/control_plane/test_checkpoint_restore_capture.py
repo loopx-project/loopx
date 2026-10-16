@@ -7,6 +7,14 @@ from loopx.control_plane.effect_program import SettlementIdentity
 from loopx.control_plane.effect_runtime import effect_runtime_result
 
 
+def test_nonrestored_conversation_has_no_completed_checkpoint_review(tmp_path):
+    from benchmark.runtime.checkpoint_continuation import restored_capture_gate, restored_checkpoint_review
+    env = {"LOOPX_RUNTIME_ROOT": str(tmp_path), "LOOPX_GOAL_ID": "destination", "LOOPX_AGENT_ID": "worker"}
+    assert restored_capture_gate(env)["capture_allowed"]
+    review = restored_checkpoint_review(env)
+    assert review["semantic_review_accepted"] is False and "capture_allowed" not in review
+
+
 @pytest.mark.parametrize("fault", [None, "pending", "neutral", "source_actor", "unlinked", "same_node", "wrong_binding"])
 def test_restored_capture_requires_current_consumption_not_local_dedup(fault):
     sha = "a" * 64
@@ -39,6 +47,12 @@ def test_restored_capture_requires_current_consumption_not_local_dedup(fault):
     result = effect_runtime_result("runtime.checkpoint_artifacts", request)
     assert result["capture_allowed"] is (fault is None)
     assert result["execution_authority_granted"] is False
+    assert "review_basis" not in result
+    detailed = effect_runtime_result("runtime.checkpoint_artifacts", {**request, "include_review_basis": True})
+    assert ("review_basis" in detailed) is (fault is None)
+    if fault is None:
+        assert detailed["review_basis"]["identity"] == identity
+        assert detailed["review_basis"]["completed_decision"]["agent_vision"] == review["writeback_run"]["agent_vision"]
     # A fresh Goal/Agent cannot inherit even a valid destination review. This
     # is the outer restore-every-point counterexample to local-ID dedup.
     another = copy.deepcopy(request)

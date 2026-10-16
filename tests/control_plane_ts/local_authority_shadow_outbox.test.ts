@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { readFile, writeFile, rename, symlink, unlink } from "node:fs/promises";
+import { readFile, writeFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
@@ -10,13 +10,12 @@ import {
   localAuthorityShadowPartitionDigest,
   readLocalAuthorityShadow,
 } from "../../loopx/control_plane/coordination/local_authority_shadow.ts";
-import { outboxEntryIdentity, beginLeaseOutboxEntry } from "../../loopx/control_plane/coordination/local_authority_shadow_outbox.ts";
+import { outboxEntryIdentity } from "../../loopx/control_plane/coordination/local_authority_shadow_outbox.ts";
 import {
   drainShadowOutbox,
   SHADOW_DRAIN_SCHEMA,
   SHADOW_EXACT_DRAIN_SCHEMA,
 } from "../../loopx/control_plane/coordination/shadow_drain.ts";
-import { requireShadowCaptureBinding } from "../../loopx/control_plane/coordination/shadow_management.ts";
 import * as schemas from "../../loopx/control_plane/coordination/coordination_state_contract.generated.ts";
 import { fixture, pendingEntry, settleFiles, todo, sha } from "./shadow_file_fixture.ts";
 import { resolveTestPython } from "../../scripts/test-python.mjs";
@@ -252,102 +251,6 @@ test("concurrent commit_entry callers produce one exact receipt", async (t) => {
   const request = await pendingEntry(f, 1, { handoff_mode: "hard_lease", todos: [todo()] });
   const results = await Promise.all([commitLocalAuthorityShadowEntry(request), commitLocalAuthorityShadowEntry(request)]);
   assert.deepEqual(results.map((result) => result.outcome).sort(), ["delivered", "replayed"]);
-});
-
-test("a lease writer with a missing cursor obtains its next sequence from proved committed history", async (t) => {
-  const f = await fixture(t);
-  const lease = { schema_version: "task_lease_v0", goal_id: "goal-a", todo_id: "todo_one", owner: "agent-a", version: 1,
-    lease_epoch: 1, status: "active", updated_at: "2026-09-06T00:00:00Z" };
-  const entry = await pendingEntry(f, 1, { leases: [lease] }, { partition: "leases", writeClass: "task_lease_acquire" });
-  const delivered = await commitLocalAuthorityShadowEntry(entry);
-  assert.equal(delivered.outcome, "delivered");
-  await settleFiles(f, entry, delivered);
-  const directory = join(f.root, "authority-shadow", "outbox", "goal-a", "leases");
-  await unlink(join(directory, "drain-cursor.json"));
-  const capture = await beginLeaseOutboxEntry({ runtime_root: f.root, goal_id: "goal-a",
-    lease_directory: join(f.root, "goals", "goal-a", "task-leases"), write_class: "task_lease_renew",
-    operation_id: null, previous_lease: lease, planned_lease: { ...lease, version: 2 },
-    active_todo_ids: null });
-  assert.equal(capture.failure, null);
-  assert.equal(capture.seq, 2);
-  await assert.rejects(readFile(join(directory, "drain-cursor.json")), { code: "ENOENT" });
-});
-
-test("exact lease capture rejects a recreated Goal and an unstamped caller", async (t) => {
-  const f = await fixture(t, GOAL_A);
-  const lease = {
-    schema_version: "task_lease_v0",
-    goal_id: "goal-a",
-    todo_id: "todo_one",
-    owner: "agent-a",
-    version: 1,
-    lease_epoch: 1,
-    status: "active",
-    updated_at: "2026-09-06T00:00:00Z",
-  };
-  const input = {
-    runtime_root: f.root,
-    goal_id: "goal-a",
-    lease_directory: join(f.root, "goals", "goal-a", "task-leases"),
-    write_class: "task_lease_acquire",
-    operation_id: null,
-    previous_lease: null,
-    planned_lease: lease,
-    active_todo_ids: null,
-  };
-  const stale = await beginLeaseOutboxEntry({...input, goal_ref: GOAL_B});
-  assert.equal(stale.failure?.reason_code, "stale_goal_instance");
-  assert.equal(stale.failure?.error_class, "ShadowManagementError");
-  const unstamped = await beginLeaseOutboxEntry(input);
-  assert.equal(unstamped.failure?.reason_code, "goal_instance_id_missing");
-  assert.equal(unstamped.failure?.error_class, "ShadowManagementError");
-  const current = await beginLeaseOutboxEntry({...input, goal_ref: GOAL_A});
-  assert.equal(current.failure, null);
-  assert.equal(current.seq, 1);
-});
-
-test("a lease writer uses the active binding digest through a runtime-root alias", async (t) => {
-  const f = await fixture(t);
-  const alias = `${f.root}-alias`;
-  t.after(() => unlink(alias));
-  await symlink(f.root, alias, process.platform === "win32" ? "junction" : "dir");
-  const planned = { schema_version: "task_lease_v0", goal_id: "goal-a", todo_id: "todo_one",
-    owner: "agent-a", version: 1, lease_epoch: 1, status: "active", updated_at: "2026-09-06T00:00:00Z" };
-  const capture = await beginLeaseOutboxEntry({ runtime_root: alias, goal_id: "goal-a",
-    lease_directory: join(alias, "goals", "goal-a", "task-leases"), write_class: "task_lease_acquire",
-    operation_id: null, previous_lease: null, planned_lease: planned, active_todo_ids: null });
-  assert.equal(capture.failure, null);
-  const prepared = JSON.parse(await readFile(join(alias, "authority-shadow", "outbox", "goal-a", "leases",
-    `0000000001-${capture.entry_id}.prepared.json`), "utf8"));
-  assert.equal(prepared.source_root_digest, (await requireShadowCaptureBinding(alias, "goal-a")).source_root_digest);
-});
-
-test("lease capture omits a lease whose Todo left the current graph", async (t) => {
-  const f = await fixture(t);
-  const leaseDirectory = join(f.root, "goals", "goal-a", "task-leases");
-  const archivedLease = { schema_version: "task_lease_v0", goal_id: "goal-a", todo_id: "todo_gone",
-    owner: "agent-a", version: 1, lease_epoch: 1, status: "released", updated_at: "2026-09-06T00:00:00Z" };
-  await writeFile(join(leaseDirectory, "todo_gone.json"), JSON.stringify(archivedLease));
-  const planned = { schema_version: "task_lease_v0", goal_id: "goal-a", todo_id: "todo_one",
-    owner: "agent-a", version: 1, lease_epoch: 1, status: "active", updated_at: "2026-09-06T00:00:00Z" };
-  // `todo_gone` is absent from the graph: the capture must not project it.
-  const filtered = await beginLeaseOutboxEntry({ runtime_root: f.root, goal_id: "goal-a",
-    lease_directory: leaseDirectory, write_class: "task_lease_acquire", operation_id: "op-1",
-    previous_lease: null, planned_lease: planned, active_todo_ids: ["todo_one"] });
-  assert.equal(filtered.failure, null);
-  const prepared = JSON.parse(await readFile(
-    join(f.root, "authority-shadow", "outbox", "goal-a", "leases",
-      `0000000001-${filtered.entry_id}.prepared.json`), "utf8"));
-  assert.deepEqual(prepared.projection.leases.map((item: JsonObject) => item.file_stem), ["todo_one"]);
-  // A graph that still contains the Todo retains it: the rule drops orphans only.
-  const retained = await beginLeaseOutboxEntry({ runtime_root: f.root, goal_id: "goal-a",
-    lease_directory: leaseDirectory, write_class: "task_lease_acquire", operation_id: "op-2",
-    previous_lease: null, planned_lease: planned, active_todo_ids: ["todo_one", "todo_gone"] });
-  assert.equal(retained.failure, null);
-  const second = JSON.parse(await readFile(
-    join(f.root, "authority-shadow", "outbox", "goal-a", "leases",
-      `0000000002-${retained.entry_id}.prepared.json`), "utf8"));
-  assert.deepEqual(second.projection.leases.map((item: JsonObject) => item.file_stem), ["todo_gone", "todo_one"]);
 });
 
 for (const [marker, resolution, expected] of [

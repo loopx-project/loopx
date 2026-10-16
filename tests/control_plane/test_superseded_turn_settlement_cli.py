@@ -5,30 +5,9 @@ from pathlib import Path
 
 import pytest
 import test_declared_terminal_settlement_cli as declared
-import test_goal_handoff_mode as legacy
 import test_quota_settlement_cli as cli
 
 from loopx.control_plane.quota.settlement import read_heartbeat_settlement
-from loopx.todos import supersede_goal_todo
-
-
-@pytest.mark.parametrize("successors", [None, [], ["todo_existing_successor"]])
-def test_unpromoted_supersede_preserves_omitted_links_and_rejects_existing_links(
-    tmp_path: Path, successors: list[str] | None,
-) -> None:
-    registry, state = legacy._write_workspace(tmp_path)
-    todo = legacy._add_todo(registry, claimed_by=legacy.AGENT_A)
-    before = state.read_bytes()
-    arguments = dict(registry_path=registry, goal_id=legacy.GOAL_ID,
-                     todo_id=todo["todo_id"], agent_id=legacy.AGENT_A,
-                     reason="Retire the original approach.", successor_todo_ids=successors)
-    if successors:
-        with pytest.raises(ValueError, match="requires promoted canonical Todo authority"):
-            supersede_goal_todo(**arguments)
-        assert state.read_bytes() == before
-    else:
-        result = supersede_goal_todo(**arguments)
-        assert result["ok"] is True and result["superseded"] is True
 
 
 def _future_monitor(run, lease, *, link=True):

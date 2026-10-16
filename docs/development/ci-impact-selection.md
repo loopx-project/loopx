@@ -170,7 +170,18 @@ full qualification. A PR is classified from its merge base through its complete
 head, including changes from earlier commits, not just its latest commit.
 
 The `ci-impact-plan` artifact and job summary report exact revisions, change kind,
-per-job execution flags, reason and coverage scope. The merge gate requires
+per-job execution flags, reason and coverage scope. `python_shards` reads the
+static `test-shard.strategy.matrix.shard` axis from the immutable workflow at
+`checkout_sha`, currently six, rather than retaining a separate historical count.
+Unsupported or noncontiguous topology fails classification instead of publishing
+a fallback count. Docs/presentation exemptions still report zero. The number
+describes the workflow topology, not how many jobs actually ran.
+
+`python_shards` 从 `checkout_sha` 对应的不可变 workflow 读取静态分片轴，当前为六片，
+不另存历史计数；不支持或不连续的拓扑直接报错，不输出猜测值。文档／前端豁免仍为零。
+它描述 workflow 拓扑，不能证明任何分片实际执行或 JUnit／coverage 已完整。
+
+The merge gate requires
 success for required jobs and an explicit skip for exempt ones; failure,
 cancellation, missing outputs, contradictory flags or unexpected skips fail.
 

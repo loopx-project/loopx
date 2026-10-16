@@ -217,8 +217,19 @@ lease proof. Before downgrading to a version without this protocol, finish v1
 pending settlements; older binaries cannot interpret them. Never disable a
 writer fence to recover by writing an older Markdown projection.
 
-The bounded real-source rehearsal clones read-only source state and adds only
-synthetic records in disposable runtimes. It requires an isolated PostgreSQL URL:
+The bounded source rehearsal reads a stable Markdown snapshot, including
+unreferenced archives, and adds synthetic records only in disposable runtimes.
+Use a baseline that supports the same authority format and Monitor reactivation;
+all four arms must preserve the full source records and reach identical heads.
+The disposable cases use `soft_claim` for observation and `hard_lease` for
+execution. These fixture transitions do not qualify policy migration, whole-Goal
+recovery, or the contents of a selected canonical store. It requires an isolated
+PostgreSQL URL:
+
+有界演练读取稳定的 Markdown 快照，保留无依赖关系的完整归档；仅在临时运行目录添加
+合成记录。基线须支持相同的权威存储格式及 Monitor 重启语义，四组最终状态必须一致。
+观察使用 `soft_claim`，执行使用 `hard_lease`；样本内切换不证明实际策略迁移、完整
+Goal 恢复或已选 canonical 存储的内容验收。
 
 ```bash
 LOOPX_TEST_POSTGRES_URL="$DISPOSABLE_POSTGRES_URL" \

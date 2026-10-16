@@ -21,7 +21,7 @@ export async function coordinationCommandFixture(store: AuthorityStore, command:
   const projection = fixture.projection;
   // This recovery arm deliberately has no Monitor execution lease. The leased
   // arm separately proves current proof and historical replay in hard mode.
-  if (command === "monitor") projection.handoff_mode = "legacy";
+  if (command === "monitor") projection.handoff_mode = "soft_claim";
   const todos = projection.todos as JsonObject[];
   const leased = new Set((projection.leases as JsonObject[]).map(row => row.todo_id));
   const claimTodo = todos.find(row => row.role === "agent" && row.status === "open" &&

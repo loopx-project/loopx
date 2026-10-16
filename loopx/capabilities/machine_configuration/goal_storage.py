@@ -7,7 +7,6 @@ from typing import Any
 
 from .contract import MachineConfigurationNamespace
 from ...control_plane.effect_runtime import effect_runtime_result
-
 from ...control_plane.coordination.new_goal_storage_transport import (
     CANONICAL_GOAL_STORAGE_DEFAULTS_SCHEMA, NEW_GOAL_STORAGE_METHOD,
 )

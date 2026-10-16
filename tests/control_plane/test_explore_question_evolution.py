@@ -143,14 +143,28 @@ def test_concurrent_graph_change_refuses_the_whole_new_batch(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("case", ["valid", "foreign", "dangling", "cycle"])
-def test_real_cli_path_delta_result_evolves_question_and_reads_it_back(tmp_path, case):
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_real_cli_path_delta_result_evolves_question_and_reads_it_back(tmp_path, monkeypatch, case, provider):
+    from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.todos import list_goal_todos
     from tests.control_plane.test_quota_settlement_cli import (
         _write_fixture, _run_cli, AGENT_ID, GOAL_ID, TODO_ID, TURN_ID,
     )
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     config = json.loads(registry.read_text())
     config["goals"][0]["explore_graph"] = {"enabled": True}
     registry.write_text(json.dumps(config))
+    initialize_canonical_authority(
+        runtime, GOAL_ID,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID,
+            todos=list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"],
+            handoff_mode="soft_claim",
+        ),
+        state_path=project / config["goals"][0]["state_file"], provider=provider,
+    )
 
     def cli(*args):
         rc, result = _run_cli(registry, runtime, *args, cwd=project)

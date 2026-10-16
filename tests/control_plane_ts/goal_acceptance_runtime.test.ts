@@ -7,6 +7,7 @@ import {join} from "node:path";
 import test, {type TestContext} from "node:test";
 import {Pool} from "pg";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
+import type {HandoffMode} from "../../loopx/control_plane/coordination/handoff_mode_vocabulary.ts";
 import type {AuthorityStore} from "../../loopx/control_plane/coordination/authority_store.ts";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
@@ -36,7 +37,7 @@ function acceptance(records: JsonObject[], bound = true): JsonObject {
 }
 function projection(records: JsonObject[], state?: JsonObject): JsonObject {
   records = [...records].sort((a, b) => String(a.todo_id).localeCompare(String(b.todo_id)));
-  return {goal_id: "goal-a", handoff_mode: "legacy", todos: records, leases: [],
+  return {goal_id: "goal-a", handoff_mode: "soft_claim", todos: records, leases: [],
     todo_read_model: coordinationTodoReadModel(records, "loopx_todo_domain_read_record_v0"),
     unrelated_extension: {value: "retained"}, ...(state ? {goal_acceptance: state} : {})};
 }
@@ -65,7 +66,7 @@ async function replace(store: AuthorityStore, head: JsonObject, operation_id: st
   assert.equal((await store.commitAuthority({operation_id, expected_provider_revision: current.provider_revision,
     next_projection: head, events: [], receipts: []})).status, "applied");
 }
-async function seeded(t: TestContext, provider: string, state: "bound" | "unbound" | "off", extra: JsonObject = {}) {
+async function seeded(t: TestContext, provider: string, state: "bound" | "unbound" | "off", extra: JsonObject = {}, mode: HandoffMode = "soft_claim") {
   const root = await mkdtemp(join(tmpdir(), "loopx-acceptance-runtime-"));
   t.after(() => rm(root, {recursive: true, force: true}));
   let store: AuthorityStore;
@@ -81,7 +82,8 @@ async function seeded(t: TestContext, provider: string, state: "bound" | "unboun
     store = new PostgreSqlAuthorityStore(database, {tenant_id: `acceptance-${randomUUID()}`, goal_id: "goal-a"});
   } else store = new FileAuthorityStore(join(root, "authority", "file-v0"), "goal-a");
   const records = [todo(extra)];
-  const head = projection(records, state === "off" ? undefined : acceptance(records, state === "bound"));
+  const head = {...projection(records, state === "off" ? undefined : acceptance(records, state === "bound")),
+    handoff_mode: mode};
   assert.equal((await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
     next_projection: head, events: [], receipts: []})).status, "applied");
   return {store, root, head};
@@ -105,6 +107,9 @@ for (const provider of ["file", ...(process.env.LOOPX_TEST_POSTGRES_URL ? ["post
     assert.equal(plan.status, "execute_validation");
     assert.equal((plan.validation_effect as JsonObject).validation_label, "ordinary-check");
     assert.deepEqual(plan.goal_acceptance_validation_effects ?? [], []);
+    // Lease admission is exercised with hard_lease; soft_claim intentionally has no lease grant.
+    const current = await loaded(store);
+    await replace(store, {...current.head, handoff_mode: "hard_lease"}, "require-leased-execution");
     assert.equal((await executeCanonicalTaskLeaseAcquire(store, acquire)).status, "applied");
     assert.equal(acceptanceWorkGuard((await loaded(store)).head, "goal-a", "todo_probe")?.allowed, false);
   });
@@ -124,8 +129,11 @@ for (const provider of ["file", ...(process.env.LOOPX_TEST_POSTGRES_URL ? ["post
     const before = await loaded(store);
     assert.equal((await executeCoordinationTodoClaim(store, {...claim, actor_agent_id: "intruder"})).reason_code, "actor_not_registered");
     assert.equal((await executeCoordinationTodoClaim(store, claim)).reason_code, "goal_acceptance_unbound");
-    assert.equal((await executeCanonicalTaskLeaseAcquire(store, {...acquire, owner: "intruder"})).reason_code, "owner_not_registered");
-    assert.equal((await executeCanonicalTaskLeaseAcquire(store, acquire)).reason_code, "goal_acceptance_unbound");
+    const leased = await seeded(t, provider, "unbound", {}, "hard_lease");
+    const leaseBefore = await loaded(leased.store);
+    assert.equal((await executeCanonicalTaskLeaseAcquire(leased.store, {...acquire, owner: "intruder"})).reason_code, "owner_not_registered");
+    assert.equal((await executeCanonicalTaskLeaseAcquire(leased.store, acquire)).reason_code, "goal_acceptance_unbound");
+    assert.deepEqual(await loaded(leased.store), leaseBefore);
     assert.equal((await executeCoordinationTodoTerminalLifecycle(store, terminal)).reason_code, "goal_acceptance_unbound");
     assert.deepEqual(await loaded(store), before);
     assert.equal((await store.readReceipt("complete")).status, "missing");
@@ -165,7 +173,7 @@ for (const provider of ["file", ...(process.env.LOOPX_TEST_POSTGRES_URL ? ["post
   });
 
   test(`${provider}: acquisition replay checks current acceptance after current lease proof`, async t => {
-    const {store} = await seeded(t, provider, "bound");
+    const {store} = await seeded(t, provider, "bound", {}, "hard_lease");
     assert.equal((await executeCanonicalTaskLeaseAcquire(store, acquire)).status, "applied");
     const current = await loaded(store);
     await replace(store, {...current.head, goal_acceptance: acceptance(current.head.todos as JsonObject[], false)}, "unbind");

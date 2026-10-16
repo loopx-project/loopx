@@ -13,6 +13,7 @@ from tests.control_plane.test_quota_settlement_cli import (
     TODO_ID,
     _append_newly_due_monitor,
     _classification_count,
+    _initialize_fixture_authority,
     _projected_cli_args,
     _run_cli,
     _spend_run_count,
@@ -44,6 +45,7 @@ def test_settled_advancement_hold_preserves_independent_monitor(
     rc, first = _run_cli(registry, runtime, *guard)
     assert rc == 0, first
     _append_newly_due_monitor(project, watch_only=True)
+    _initialize_fixture_authority(project, runtime)
     rc, admitted = _run_cli(registry, runtime, *guard)
     assert rc == 0, admitted
     poll_command = admitted["interaction_contract"]["cli_channel"][
@@ -114,6 +116,7 @@ def test_receipt_bound_advancement_allows_one_auxiliary_due_monitor_receipt(
     assert first["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
 
     _append_newly_due_monitor(project, watch_only=True)
+    _initialize_fixture_authority(project, runtime)
     capability_args = (
         "--available-capability",
         "network",
@@ -203,11 +206,9 @@ def test_receipt_bound_advancement_allows_one_auxiliary_due_monitor_receipt(
 @pytest.mark.parametrize(
     ("provider", "writeback", "spend_first"),
     [
-        ("legacy", False, False),
-        ("legacy", True, False),
+        ("file", False, False),
         ("file", True, False),
         ("sqlite", True, False),
-        ("legacy", True, True),
         ("file", True, True),
         ("sqlite", True, True),
     ],
@@ -220,13 +221,7 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
     spend_first: bool,
 ) -> None:
     tmp_path = settlement_budget_root
-    from canonical_authority_fixture import (
-        initialize_canonical_authority,
-        isolate_sqlite_runtime,
-    )
-    from loopx.control_plane.coordination.runtime_shadow import (
-        build_todo_runtime_shadow_projection,
-    )
+    from canonical_authority_fixture import isolate_sqlite_runtime
     from loopx.control_plane.coordination.local_authority import (
         read_canonical_todos_if_promoted,
     )
@@ -261,6 +256,32 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
     rc, first = _run_cli(registry_path, runtime, *guard)
     assert rc == 0, first
     _append_newly_due_monitor(project, watch_only=True)
+    leases = [
+        {
+            "schema_version": "task_lease_v0",
+            "goal_id": GOAL_ID,
+            "todo_id": todo_id,
+            "owner": AGENT_ID,
+            "write_scopes": [],
+            "status": "active",
+            "idempotency_key": idempotency_key,
+            "version": 3,
+            "lease_epoch": 2,
+            "acquired_at": "2026-01-01T00:00:00Z",
+            "expires_at": "2099-01-01T00:00:00Z",
+        }
+        for todo_id, idempotency_key in (
+            (TODO_ID, "primary-execution"),
+            (DUE_MONITOR_TODO_ID, "own-monitor-execution"),
+        )
+    ]
+    _initialize_fixture_authority(
+        project,
+        runtime,
+        provider=provider,
+        handoff_mode="hard_lease",
+        leases=leases,
+    )
     rc, open_guard = _run_cli(registry_path, runtime, *guard)
     assert rc == 0, open_guard
     auxiliary = open_guard["interaction_contract"]["cli_channel"][
@@ -288,41 +309,18 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
         "--evidence",
         "read-only fixture delivery validated",
         "--no-follow-up",
+        "--task-lease-idempotency-key",
+        "primary-execution",
+        "--task-lease-expected-version",
+        "3",
     )
     assert rc == 0, complete
-    if provider != "legacy":
-        rc, listed = _run_cli(
-            registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID
-        )
-        assert rc == 0, listed
-        primary = next(todo for todo in listed["todos"] if todo["todo_id"] == TODO_ID)
-        assert primary["status"] == "done"
-        lease = {
-            "schema_version": "task_lease_v0",
-            "goal_id": GOAL_ID,
-            "todo_id": DUE_MONITOR_TODO_ID,
-            "owner": AGENT_ID,
-            "write_scopes": [],
-            "status": "active",
-            "idempotency_key": "own-monitor-execution",
-            "version": 3,
-            "lease_epoch": 2,
-            "acquired_at": "2026-01-01T00:00:00Z",
-            "expires_at": "2099-01-01T00:00:00Z",
-        }
-        projection = build_todo_runtime_shadow_projection(
-            goal_id=GOAL_ID,
-            todos=listed["todos"],
-            handoff_mode="hard_lease",
-            leases=[lease],
-        )
-        initialize_canonical_authority(
-            runtime,
-            GOAL_ID,
-            projection,
-            state_path=project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md",
-            provider=provider,
-        )
+    rc, listed = _run_cli(
+        registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID
+    )
+    assert rc == 0, listed
+    primary = next(todo for todo in listed["todos"] if todo["todo_id"] == TODO_ID)
+    assert primary["status"] == "done"
     if writeback:
         rc, refresh = _run_cli(
             registry_path,
@@ -358,21 +356,20 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
     assert poll["settlement_todo_id"] == TODO_ID
     assert poll["turn_continuation"]["current_turn_settled"] is spend_first
     assert poll["turn_continuation"]["next_turn_required"] is spend_first
-    if provider != "legacy":
-        canonical = read_canonical_todos_if_promoted(
-            runtime_root=runtime, goal_id=GOAL_ID, include_leases=True
-        )
-        assert canonical["source_authority"] == f"{provider}_v0"
-        observed = next(
-            todo
-            for todo in canonical["todos"]
-            if todo["todo_id"] == DUE_MONITOR_TODO_ID
-        )
-        assert observed["result_hash"] == "completed-primary-observation"
-        assert poll["todo_writeback"]["lease_proof"] == {
-            "idempotency_key": "own-monitor-execution",
-            "expected_version": 3,
-        }
+    canonical = read_canonical_todos_if_promoted(
+        runtime_root=runtime, goal_id=GOAL_ID, include_leases=True
+    )
+    assert canonical["source_authority"] == f"{provider}_v0"
+    observed = next(
+        todo
+        for todo in canonical["todos"]
+        if todo["todo_id"] == DUE_MONITOR_TODO_ID
+    )
+    assert observed["result_hash"] == "completed-primary-observation"
+    assert poll["todo_writeback"]["lease_proof"] == {
+        "idempotency_key": "own-monitor-execution",
+        "expected_version": 3,
+    }
     resume = poll["settlement_resume"]
     assert resume["identity"]["todo_id"] == TODO_ID
     assert resume["identity"]["turn_instance_id"] == turn
@@ -402,24 +399,23 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
     assert replay["replayed"] is True
     assert _classification_count(runtime, "quota_monitor_poll") == 1
     assert _spend_run_count(runtime) == int(spend_first)
-    if provider != "legacy":
-        rc, released = _run_cli(
-            registry_path,
-            runtime,
-            "task-lease",
-            "release",
-            "--goal-id",
-            GOAL_ID,
-            "--todo-id",
-            DUE_MONITOR_TODO_ID,
-            "--owner",
-            AGENT_ID,
-            "--idempotency-key",
-            "own-monitor-execution",
-            "--expected-version",
-            "3",
-        )
-        assert rc == 0, released
+    rc, released = _run_cli(
+        registry_path,
+        runtime,
+        "task-lease",
+        "release",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        DUE_MONITOR_TODO_ID,
+        "--owner",
+        AGENT_ID,
+        "--idempotency-key",
+        "own-monitor-execution",
+        "--expected-version",
+        "3",
+    )
+    assert rc == 0, released
     if spend_first:
         assert resume["next_step"] is None
         assert "settlement_owed" not in poll

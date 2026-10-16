@@ -36,6 +36,31 @@ def test_legacy_adoption_preserves_non_generated_suffix(tail: str, newline: str)
     ).markdown == projected.markdown
 
 
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize("indent", ["  ", "\t"])
+def test_legacy_folded_task_adoption_replaces_its_complete_block(newline, indent):
+    from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
+
+    task = ("- [ ] A folded task with\n" + indent + "a retained identity.\n" +
+            "  <!-- loopx:todo todo_id=todo_folded status=open task_class=advancement_task -->\n")
+    tail = "  Indented narrative after the task block.\n\n```markdown\n## Agent Todo\n- [ ] Example only.\n```\n"
+    source = (_source() + task + "\n" + tail).replace("\n", newline)
+    record = {"schema_version": "todo_item_v0", "role": "agent", "index": 1,
+              "source_section": "Agent Todo", "archive_state": "active",
+              "status": "open", "done": False, "task_class": "advancement_task",
+              "todo_id": "todo_folded", "text": "A folded task with a retained identity."}
+    projected = render_canonical_todo_sections(source, [record], provider_revision="rev-1")
+    assert projected.markdown.endswith(tail.replace("\n", newline))
+    assert projected.markdown.count("todo_id=todo_folded") == 1
+    assert projected.markdown.count("A folded task with a retained identity.") == 1
+    readback, _, _ = parse_todo_source(projected.markdown)
+    assert readback["agent"][0]["text"] == "A folded task with a retained identity."
+    assert readback["agent"][0]["todo_id"] == "todo_folded"
+    assert render_canonical_todo_sections(
+        projected.markdown, [record], provider_revision="rev-1"
+    ).markdown == projected.markdown
+
+
 @pytest.mark.parametrize("example", [
     "```markdown\n## Agent Todo\n- [ ] Example only.\n```\n",
     "~~~~markdown\n## Agent Todo\n- [ ] Example only.\n~~~~\n",

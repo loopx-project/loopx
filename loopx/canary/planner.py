@@ -432,9 +432,9 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
                 ),
             },
             {
-                "command": "python3 examples/control_plane/run-compaction-readmodel-smoke.py",
+                "command": "python3 examples/control_plane/run-history-readmodel-smoke.py",
                 "tier": "default",
-                "reason": "guards status wrapper parity for compact run read-model and summary projection attachment",
+                "reason": "guards status run-history parity, compact reward/gate privacy, and bounded history projection",
             },
             {
                 "command": "python3 examples/control_plane/goal-channel-readmodel-smoke.py",

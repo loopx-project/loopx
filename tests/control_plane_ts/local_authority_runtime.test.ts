@@ -50,8 +50,10 @@ import {computeContinuationTodoFacts} from "../../loopx/control_plane/coordinati
 import {
   checkLegacyCoordinationWriteAllowed,
   engageLegacyCoordinationWriterFence,
+  legacyCoordinationWriterFencePath,
   loadLegacyCoordinationWriterFence,
   LEGACY_COORDINATION_WRITER_FENCE_ENGAGE_REQUEST_SCHEMA,
+  LEGACY_COORDINATION_WRITER_FENCE_SCHEMA,
   LEGACY_COORDINATION_WRITE_CHECK_REQUEST_SCHEMA,
 } from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
 import {
@@ -66,6 +68,7 @@ import {
   TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA_VERSION,
   executeTaskLeaseLifecycle,
 } from "../../loopx/control_plane/work_items/task_lease_lifecycle.ts";
+import {atomicWriteJson} from "../../loopx/control_plane/effect_runtime_io.ts";
 
 function sha256(value: unknown): string {
   return createHash("sha256").update(canonicalAuthorityBytes(value)).digest("hex");
@@ -121,11 +124,24 @@ function noteFacts(note: unknown): string {
   return canonicalAuthoritySha256(parsed);
 }
 
+async function engageCanonicalRoute(root: string): Promise<void> {
+  await atomicWriteJson(legacyCoordinationWriterFencePath(root, "goal-a"), {
+    schema_version: LEGACY_COORDINATION_WRITER_FENCE_SCHEMA,
+    state: "engaged",
+    goal_id: "goal-a",
+    fence_id: "legacy-writer-fence:goal-a:test",
+    source_version: "state:test",
+    source_projection_sha256: "a".repeat(64),
+    expected_shadow_provider_revision: `file:1:${"a".repeat(24)}`,
+  });
+}
+
 async function claimSeededTodo(
   root: string,
   todo: Record<string, unknown>,
   operationId: string,
 ) {
+  await engageCanonicalRoute(root);
   const store = new FileAuthorityStore(join(root, "authority", "file-v0"), "goal-a");
   await store.commitAuthority({
     expected_provider_revision: null,
@@ -669,6 +685,7 @@ test("new bootstrap and provider list fail closed without exact Todo consumer se
 
 test("provider-first Todo claim preserves the complete record and is replay-safe", async () => {
   const root = await mkdtemp(join(tmpdir(), "loopx-local-authority-claim-"));
+  await engageCanonicalRoute(root);
   const store = new FileAuthorityStore(join(root, "authority", "file-v0"), "goal-a");
   const richTodo = todoRecord({
     priority: "P0",
@@ -764,6 +781,7 @@ test("agent id normalization folds any whitespace run like the Python kernel", a
   );
 
   const root = await mkdtemp(join(tmpdir(), "loopx-local-authority-claim-tab-"));
+  await engageCanonicalRoute(root);
   const store = new FileAuthorityStore(join(root, "authority", "file-v0"), "goal-a");
   const seeded = await store.commitAuthority({
     expected_provider_revision: null,
@@ -1150,6 +1168,7 @@ test("promoted claim normalizes persisted excluded-agent identities", async () =
 for (const native of [false, true]) {
   test(`claim rejects malformed previews and replays historical intent (${native ? "native" : "v0"})`, async () => {
     const root = await mkdtemp(join(tmpdir(), "loopx-claim-intent-"));
+    await engageCanonicalRoute(root);
     const store = new FileAuthorityStore(join(root, "authority", "file-v0"), "goal-a");
     const todo = todoRecord();
     if (native) {
@@ -1231,6 +1250,7 @@ for (const native of [false, true]) {
     for (const later of [{claimed_by: null}, {claimed_by: "agent-b"},
       {status: "done", done: true, archive_state: "archive"}]) {
       const root = await mkdtemp(join(tmpdir(), "loopx-claim-no-change-"));
+      await engageCanonicalRoute(root);
       const store = new FileAuthorityStore(join(root, "authority", "file-v0"), "goal-a");
       const todo = todoRecord({claimed_by: "agent-a", note: "preserve original bytes"});
       if (native) {
@@ -1305,9 +1325,10 @@ for (const native of [false, true]) {
 test("receipt-only claims revalidate CAS contention and recover a lost commit response", async () => {
   for (const fault of ["conflict", "lost_response"] as const) {
     const root = await mkdtemp(join(tmpdir(), "loopx-claim-no-change-fault-"));
+    await engageCanonicalRoute(root);
     const directory = join(root, "authority", "file-v0");
     const store = new FileAuthorityStore(directory, "goal-a");
-    const projection = withTodoReadModel({goal_id: "goal-a", todos: [
+    const projection = withTodoReadModel({goal_id: "goal-a", handoff_mode: "soft_claim", todos: [
       todoRecord({claimed_by: "agent-a"}),
     ], leases: []});
     await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
@@ -1360,6 +1381,7 @@ test("receipt-only claims revalidate CAS contention and recover a lost commit re
 
 test("provider-first Todo claim validates authority and hard-lease ownership", async () => {
   const root = await mkdtemp(join(tmpdir(), "loopx-local-authority-claim-gates-"));
+  await engageCanonicalRoute(root);
   const store = new FileAuthorityStore(join(root, "authority", "file-v0"), "goal-a");
   const initial = await store.commitAuthority({
     expected_provider_revision: null,
@@ -1432,6 +1454,7 @@ test("provider-first Todo claim validates authority and hard-lease ownership", a
 
 test("provider-first atomic claim replays current execution and rejects expired receipt proof", async () => {
   const root = await mkdtemp(join(tmpdir(), "loopx-local-authority-claim-lease-"));
+  await engageCanonicalRoute(root);
   const store = new FileAuthorityStore(join(root, "authority", "file-v0"), "goal-a");
   assert.equal((await store.commitAuthority({
     expected_provider_revision: null,
@@ -1529,6 +1552,7 @@ test("local canonical runtime never falls back when provider state is missing", 
 test("terminal and archive wire adapters reject coercible numeric values", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "loopx-local-authority-strict-numbers-"));
   t.after(() => rm(root, {recursive: true, force: true}));
+  await engageCanonicalRoute(root);
   await writeFile(join(root, "registry.json"), "{}");
   const terminalRequest = (leaseExpectedVersion: unknown) => ({
     schema_version: LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_REQUEST_SCHEMA,
@@ -1646,6 +1670,7 @@ test("terminal wire preserves legacy optional prose semantics", async (t) => {
   for (const [index, item] of cases.entries()) {
     const root = await mkdtemp(join(tmpdir(), `loopx-terminal-prose-${index}-`));
     t.after(() => rm(root, {recursive: true, force: true}));
+    await engageCanonicalRoute(root);
     const store = new FileAuthorityStore(join(root, "authority", "file-v0"), "goal-a");
     assert.equal((await store.commitAuthority({
       expected_provider_revision: null,
@@ -1707,10 +1732,13 @@ test("terminal wire preserves legacy optional prose semantics", async (t) => {
   }
 
   for (const field of ["note", "evidence", "reason"] as const) {
+    const invalidRoot = await mkdtemp(join(tmpdir(), `loopx-invalid-terminal-prose-${field}-`));
+    t.after(() => rm(invalidRoot, {recursive: true, force: true}));
+    await engageCanonicalRoute(invalidRoot);
     const invalid = await terminalLifecycleLocalCoordinationTodo({
       schema_version: LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_REQUEST_SCHEMA,
       registry_source: {path: join(tmpdir(), "unused-registry.json"), sha256: "0".repeat(64)},
-      runtime_root: join(tmpdir(), "loopx-invalid-terminal-prose"),
+      runtime_root: invalidRoot,
       goal_id: "goal-a",
       todo_id: "todo-a",
       role: "agent",
@@ -1745,7 +1773,7 @@ test("terminal wire preserves legacy optional prose semantics", async (t) => {
   }
 });
 
-test("engaged promotion fence blocks every native legacy task-lease writer", async () => {
+test("an engagement fence does not authorize retired legacy task-lease writers", async () => {
   const root = await mkdtemp(join(tmpdir(), "loopx-local-authority-lease-fence-"));
   const shadow = await qualifiedShadow(root);
   const request = promotionRequest(root, shadow.projection, shadow.providerRevision);
@@ -1785,7 +1813,14 @@ test("engaged promotion fence blocks every native legacy task-lease writer", asy
     authority,
   });
   assert.equal(acquire.ok, false);
-  assert.equal(acquire.error_code, "legacy_coordination_writer_fenced");
+  assert.equal(acquire.error_code, "canonical_authority_required");
+  assert.equal(acquire.write_admitted, false);
+  assert.equal(acquire.decision_read_from_provider, false);
+  assert.equal(acquire.legacy_fallback_used, false);
+  assert.deepEqual(acquire.recovery, {
+    action: "migrate_goal_authority",
+    backup_required: true,
+  });
 
   const renew = await executeTaskLeaseLifecycle({
     schema_version: TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA_VERSION,
@@ -1802,5 +1837,12 @@ test("engaged promotion fence blocks every native legacy task-lease writer", asy
     authority,
   });
   assert.equal(renew.ok, false);
-  assert.equal(renew.error_code, "legacy_coordination_writer_fenced");
+  assert.equal(renew.error_code, "canonical_authority_required");
+  assert.equal(renew.write_admitted, false);
+  assert.equal(renew.decision_read_from_provider, false);
+  assert.equal(renew.legacy_fallback_used, false);
+  assert.deepEqual(renew.recovery, {
+    action: "migrate_goal_authority",
+    backup_required: true,
+  });
 });

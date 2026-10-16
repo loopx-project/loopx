@@ -1465,17 +1465,6 @@ class ChatRuntimeController:
                 refreshed = self.store.load_session(session_id)
                 if refreshed is None:
                     return
-                preparation_error = None
-                try:
-                    adapter = self._ensure_adapter(
-                        refreshed,
-                        work_dir=work_dir,
-                        objective=objective,
-                    )
-                except Exception as exc:
-                    # An accepted queued request still owns an outcome when
-                    # workspace preparation or adapter restoration fails.
-                    preparation_error = exc
                 with self.lock:
                     self.session_queue_wakeups.discard(session_id)
                 turn = self.store.claim_next_queued_turn(session_id)
@@ -1489,8 +1478,19 @@ class ChatRuntimeController:
                             self.session_queue_threads.pop(session_id, None)
                     return
                 turn_id = str(turn["turn_id"])
-                if preparation_error is not None:
-                    self._fail_queue_preparation(session_id, turn_id, preparation_error)
+                try:
+                    # An empty queue needs no provider preparation. Claim real
+                    # work first, keeping the existing enqueue/retirement fence
+                    # above and the Turn's execution/stop checks below.
+                    adapter = self._ensure_adapter(
+                        self.store.load_session(session_id) or refreshed,
+                        work_dir=work_dir,
+                        objective=objective,
+                    )
+                except Exception as exc:
+                    # The claimed request still owns a terminal outcome when
+                    # workspace preparation or adapter restoration fails.
+                    self._fail_queue_preparation(session_id, turn_id, exc)
                     continue
                 done_event = threading.Event()
                 with self.lock:

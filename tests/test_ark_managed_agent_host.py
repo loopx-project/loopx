@@ -14,6 +14,12 @@ from loopx.control_plane.testing.canary_harness import (
     run_json_cli,
     write_fixture_registry,
 )
+from loopx.control_plane.coordination.runtime_shadow import (
+    build_todo_runtime_shadow_projection,
+)
+from loopx.control_plane.todos.active_state_todo_parser import (
+    parse_active_state_todos,
+)
 from loopx.doctor import collect_doctor
 from loopx.heartbeat_prompt import build_heartbeat_prompt
 from loopx.host_loop_activation import (
@@ -28,6 +34,9 @@ from loopx.skill_install_readback import (
     write_skill_install_readback,
 )
 from loopx.slash_command_install import materialize_loopx_entry_skill
+from tests.control_plane.canonical_authority_fixture import (
+    initialize_canonical_authority,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -409,6 +418,20 @@ def _write_continuity_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
         adapter_kind="harness_self_improvement",
         registered_agents=[CONTINUITY_AGENT_ID],
         quota_allowed_slots=None,
+    )
+    todos = parse_active_state_todos(
+        state.read_text(encoding="utf-8"),
+        item_limit=None,
+    )["agent_todos"]["items"]
+    initialize_canonical_authority(
+        runtime,
+        CONTINUITY_GOAL_ID,
+        build_todo_runtime_shadow_projection(
+            goal_id=CONTINUITY_GOAL_ID,
+            todos=todos,
+            handoff_mode="soft_claim",
+        ),
+        state_path=state,
     )
     return project, runtime, registry
 

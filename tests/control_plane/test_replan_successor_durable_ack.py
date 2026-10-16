@@ -40,6 +40,11 @@ def successor_state(obligation_id: str, *, owner: str = AGENT) -> str:
 
 
 def test_cli_completed_todo_successor_refresh_resets_periodic_window(tmp_path: Path, capsys) -> None:
+    from canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import (
+        build_todo_runtime_shadow_projection,
+    )
+
     project = tmp_path / "project"
     project.mkdir()
     state = project / "ACTIVE_GOAL_STATE.md"
@@ -56,6 +61,16 @@ def test_cli_completed_todo_successor_refresh_resets_periodic_window(tmp_path: P
         "coordination": {"agent_model": "peer_v1", "registered_agents": [AGENT]},
         "execution_profile": {"replan_after_completed_todos": 5},
     }]}))
+    initialize_canonical_authority(
+        runtime,
+        GOAL,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL,
+            todos=[],
+            handoff_mode="soft_claim",
+        ),
+        state_path=state,
+    )
     obligation = autonomous_replan_obligation_from_runs(runs, agent_todos={}, agent_id=AGENT)
     assert obligation is not None
     common = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
@@ -261,10 +276,18 @@ def test_canonical_periodic_successor_settles_original_open_validation_todo(
         expected_error="controller-declared completion validation")
 
 
-@pytest.mark.parametrize("route", ["writeback", "successor", "canonical-successor"])
+@pytest.mark.parametrize("route", ["writeback", "successor"])
 def test_long_chain_ack_survives_real_cli_history_and_peer_claim(tmp_path: Path, route: str) -> None:
     import subprocess
     import sys
+
+    from canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import (
+        build_todo_runtime_shadow_projection,
+    )
+    from loopx.control_plane.todos.active_state_todo_parser import (
+        parse_active_state_todos,
+    )
 
     project = tmp_path / "project"
     project.mkdir()
@@ -290,17 +313,20 @@ def test_long_chain_ack_survives_real_cli_history_and_peer_claim(tmp_path: Path,
         "coordination": {"agent_model": "peer_v1", "registered_agents": [AGENT, "peer-agent"]},
     }]}))
 
-    if route == "canonical-successor":
-        from canonical_authority_fixture import initialize_canonical_authority
-        from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
-        todos = parse_active_state_todos(state.read_text(), item_limit=None)["agent_todos"]["items"]
-        module = (Path(__file__).resolve().parents[2] / "tests/control_plane_ts/authority_projection_fixture.ts").as_uri()
-        built = subprocess.run(["node", "--no-warnings", "--experimental-strip-types", "--input-type=module", "-e",
-            f"import {{authorityProjectionFixture}} from {json.dumps(module)};"
-            "let s='';for await(const c of process.stdin)s+=c;"
-            "process.stdout.write(JSON.stringify(authorityProjectionFixture(process.argv[1],JSON.parse(s),[], 'legacy')));", GOAL],
-            input=json.dumps(todos), capture_output=True, text=True, check=True, timeout=30)
-        initialize_canonical_authority(runtime, GOAL, json.loads(built.stdout), state_path=state)
+    todos = parse_active_state_todos(
+        state.read_text(),
+        item_limit=None,
+    )["agent_todos"]["items"]
+    initialize_canonical_authority(
+        runtime,
+        GOAL,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL,
+            todos=todos,
+            handoff_mode="soft_claim",
+        ),
+        state_path=state,
+    )
 
     def call(*args):
         completed = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),

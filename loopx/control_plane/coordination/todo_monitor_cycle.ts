@@ -2,7 +2,7 @@
  * Admission and observation validation run first; all effects join their CAS. */
 import {evaluateCoordinationTodoMutationDecision, COORDINATION_TODO_MUTATION_DECISION_REQUEST_SCHEMA} from "./todo_lifecycle_decision.ts";
 import {evaluateCanonicalTaskLeaseProof, type TaskLeaseProof} from "./task_lease_proof.ts";
-import {HANDOFF_MODES} from "./handoff_mode_policy.ts";
+import {HANDOFF_MODES, HANDOFF_MODE_RETIRED_REASON} from "./handoff_mode_policy.ts";
 import {requireStringLiteral} from "../runtime_decode.ts";
 import type {JsonObject} from "../effect_program.ts";
 import type {CoordinationProjectionMutation} from "./coordination_projection.ts";
@@ -62,7 +62,8 @@ export function monitorMutationRejection(input: {
     });
     if (decision.outcome !== "apply") {
       return reject(decision.code === "claim_owner_mismatch" ? "update_owner_mismatch" : String(decision.code),
-        "Monitor observation is outside the actor's registered owner/binding scope");
+        decision.code === "handoff_mode_retired" ? HANDOFF_MODE_RETIRED_REASON
+          : "Monitor observation is outside the actor's registered owner/binding scope");
     }
     if (input.operation === "reactivate") {
       return input.proof === null ? null : reject("monitor_reactivation_execution_proof_not_allowed",
@@ -76,7 +77,6 @@ export function monitorMutationRejection(input: {
       }
       return executionWait();
     }
-    if (lease === undefined && mode !== "hard_lease" && input.proof === null) return executionWait();
     const fence = evaluateCanonicalTaskLeaseProof({todo, lease, handoff_mode: mode,
       actor_agent_id: actor, registered_agents: registered, now: input.now,
       lease_idempotency_key: input.proof?.idempotency_key ?? null,

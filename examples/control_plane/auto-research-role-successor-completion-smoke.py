@@ -13,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from loopx.control_plane.testing.canary_harness import (  # noqa: E402
+    import_fixture_authority,
     run_json_cli,
     run_json_cli_result,
     write_fixture_registry,
@@ -71,6 +72,7 @@ def write_fixture(root: Path, *, auto_research: bool) -> tuple[Path, Path, Path]
         registered_agents=[CURATOR, PROPOSER, EXECUTOR],
         peer_independent_worktree_required=False,
     )
+    import_fixture_authority(registry_path, GOAL_ID)
     return project, runtime, registry_path
 
 
@@ -122,7 +124,7 @@ def assert_actor_attribution_fails_closed() -> None:
             actor_agent_id=None,
         )
         assert missing_code == 1, missing
-        assert "requires --agent-id" in missing["error"], missing
+        assert missing["error_code"] == "actor_required", missing
         assert state_path.read_text(encoding="utf-8") == before
 
         wrong_code, wrong = complete_proposer(
@@ -131,7 +133,7 @@ def assert_actor_attribution_fails_closed() -> None:
             actor_agent_id=CURATOR,
         )
         assert wrong_code == 1, wrong
-        assert f"claimed_by={PROPOSER!r}" in wrong["error"], wrong
+        assert wrong["error_code"] == "claim_owner_mismatch", wrong
         assert state_path.read_text(encoding="utf-8") == before
 
 
@@ -142,7 +144,6 @@ def assert_auto_research_role_successor_allowed() -> None:
         assert returncode == 0, completed
         assert completed["ok"] is True, completed
         assert completed["status"] == "done", completed
-        assert completed["linked_successor_id"] == EXECUTOR_TODO, completed
         assert completed["successor_todo_ids"] == [EXECUTOR_TODO], completed
         assert completed["next_todos"] == [], completed
 
@@ -168,7 +169,6 @@ def assert_generic_peer_route_links_existing_successor() -> None:
         returncode, completed = complete_proposer(registry_path, runtime)
         assert returncode == 0, completed
         assert completed["ok"] is True, completed
-        assert completed["linked_successor_id"] == EXECUTOR_TODO, completed
         assert completed["successor_todo_ids"] == [EXECUTOR_TODO], completed
 
 

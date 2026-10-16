@@ -13,6 +13,9 @@ from loopx.control_plane.host_adapter_settlement import (
     host_adapter_turn_instance_id,
     settle_host_todo_completion,
 )
+from loopx.control_plane.coordination.goal_storage_initialization import (
+    initialize_goal_storage_target,
+)
 from loopx.goal_mode_mcp import GoalModeMCPConfig, GoalModeMCPControlPlane
 from loopx.status import parse_active_state_todos
 from loopx.todos import add_goal_todo
@@ -196,6 +199,7 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
                 "goals": [
                     {
                         "id": GOAL_ID,
+                        "creation_operation_id": f"goal-create:{GOAL_ID}",
                         "domain": "harness_self_improvement",
                         "status": "active",
                         "repo": str(project),
@@ -212,6 +216,11 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
                         "coordination": {
                             "agent_model": "peer_v1",
                             "registered_agents": [AGENT_ID],
+                            "storage_target": {
+                                "schema_version": "loopx_new_goal_storage_target_v1",
+                                "provider": "file",
+                                "handoff_mode": "soft_claim",
+                            },
                         },
                     }
                 ],
@@ -219,6 +228,14 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
         ),
         encoding="utf-8",
     )
+    goal = json.loads(registry.read_text(encoding="utf-8"))["goals"][0]
+    initialized = initialize_goal_storage_target(
+        tmp_path / "runtime",
+        goal,
+        registry_path=registry,
+    )
+    assert initialized["authority_initialized"] is True
+    assert initialized["legacy_fallback_used"] is False
     return registry, state_file
 
 

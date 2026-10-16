@@ -35,8 +35,11 @@ class WarmStart:
     deadline_epoch: int
     normal_cadence: int = 6
     research_component_ids: tuple[str, ...] = ()
+    fresh_after_replan: bool = False
 
     def verify(self, workspace: str) -> dict:
+        if type(self.fresh_after_replan) is not bool:
+            raise ValueError("fresh_after_replan requires an explicit boolean treatment")
         if (type(self.normal_cadence) is not int or not 1 <= self.normal_cadence <= 6
                 or type(self.deadline_epoch) is not int or not 0 < self.deadline_epoch < 2 ** 53
                 or self.deadline_epoch <= time.time()
@@ -92,6 +95,8 @@ class WarmStart:
                        normal_cadence=self.normal_cadence)
         if self.research_component_ids:
             payload["research_component_ids"] = list(self.research_component_ids)
+        if self.fresh_after_replan:
+            payload["fresh_after_replan"] = True
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "input.json"
             path.write_text(json.dumps(payload))

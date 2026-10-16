@@ -54,7 +54,10 @@ def test_cold_import_real_runtime_without_original_producers(tmp_path, monkeypat
     receiver = tmp_path / "receiver"
     package = Path(os.environ.get("LOOPX_COLD_IMPORT_PACKAGE", str(REPO / "loopx")))
     shutil.copytree(package, receiver / "loopx", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    for path in ("todos.py", "bootstrap.py", "control_plane/coordination/runtime_shadow_writer_adapter.py",
+    assert not (
+        receiver / "loopx/control_plane/coordination/runtime_shadow_writer_adapter.py"
+    ).exists()
+    for path in ("todos.py", "bootstrap.py",
                  "control_plane/coordination/local_authority_shadow_outbox.py"):
         (receiver / "loopx" / path).unlink()
     env = {**os.environ, "PYTHONPATH": str(receiver)}
