@@ -370,16 +370,15 @@ retained task lease and release it through `task-lease release`, using its
 original owner/key and current `--expected-version`. An expired lease is still
 unsettled; stopping a process does not release its lease. Dispose of pending
 capture/outbox through its owning workflow before preparing this import.
-Then execute `backup-state` with the source state, registry, coordination
-evidence and runtime root. Lease release after a saved preview changes its
-source: make a fresh backup and reviewed preview. `--writers-stopped` records
-an operator attestation, not an automatic process stop. For example, after
-shutdown and settlement, from the registered project:
+Prepare creates or replays a private, Goal-scoped authority archive unless an
+existing backup manifest is supplied explicitly. Lease release after a saved
+preview changes its source: use a new operation and reviewed preview.
+`--writers-stopped` records an operator attestation, not an automatic process
+stop. For example, after shutdown and settlement, from the registered project:
 
 ```bash
-loopx --format json backup-state --project . --execute --no-automations --no-skills
 loopx --format json coordination-shadow prepare-import --goal-id GOAL --operation-id IMPORT \
-  --backup-manifest SAVED-MANIFEST.json --provider sqlite --target-handoff-mode hard_lease
+  --provider sqlite --target-handoff-mode hard_lease
 # Inspect the immutable plan at plan_path. Confirm using its exact plan_sha256.
 loopx --format json coordination-shadow apply-import --goal-id GOAL --operation-id IMPORT \
   --plan-sha256 SAVED-SHA256 --writers-stopped --execute
@@ -389,16 +388,25 @@ loopx --format json coordination-shadow recover-import --goal-id GOAL --operatio
 ```
 
 Prepare reads complete active and archived Todo records and preserves metadata,
-original evidence and settled lease history. The trusted Python tar adapter
-reads actual archive members, including older backups without a member list;
-the TypeScript owner verifies coverage of the coordination source bytes and
-pins both saved artifacts. A missing source path in the backup refuses import.
-CLI and App retain the full backup and validate every archive member, but
-transport only member digests covering the registered Goal's source files,
-registry, evidence and lease directory. Unrelated backup inventory does not
-inflate the bounded import request; unsafe members and changed complete
-artifacts still reject. This does not reduce imported Todo records or qualify
-whole-Goal reactivation.
+original evidence and settled lease history. Its default migration archive is
+an allowlist of the registered Goal state, source registry, state-referenced
+evidence and that Goal's lease directory. It does not recursively add the
+runtime root or project `.loopx`; `.loopx/research`, experiment artifacts,
+caches and other unrelated project content remain in place and unchanged.
+
+The trusted Python tar adapter streams actual archive bytes and keeps its member
+index on disk. Authority migration has no fixed archive-size, expanded-size or
+member-count ceiling; actual filesystem and process resources bound the
+operation. Per-member path, collision, digest and source-change checks remain
+fail-closed; selected-source links cannot escape or form a cycle. Generic
+browser/inert archive recovery retains its separate bounded inspection policy.
+An operator may still pass `--backup-manifest` for
+an existing complete backup. That compatibility path validates every archive
+member, including older backups without a member list, while transporting only
+the digests that cover this Goal's source bytes. A missing source path, unsafe
+member or changed archive refuses import. The TypeScript owner pins both saved
+artifacts. This does not reduce imported Todo records or qualify whole-Goal
+reactivation.
 Prepare may select an empty target and persist its identity and immutable plan,
 but does not fence the writer, import state or grant execution authority.
 
@@ -412,17 +420,18 @@ import writes a separate new receipt. Recovery is not a provider rollback or a
 whole-Goal restore, and replacing the binary cannot clear the writer fence.
 
 `coordination_source_backup_verified=true` qualifies the prepared coordination
-source witness only. `complete_goal_backup_verified=false` preserves the full
-backup and original-history recovery acceptance. The packaged Goal storage
-settings use the same transaction for cold import:
+source witness only. `complete_goal_backup_verified=false` states that this
+scoped authority archive is not a complete disaster-recovery backup. Existing
+full backups and their original-history recovery acceptance remain independent.
+The packaged Goal storage settings use the same transaction for cold import:
 
 1. Select the Goal and open **Goal settings → Task ownership → Data storage**.
    Choose File or SQLite and an explicit supported execution policy.
 2. Stop affected writers/Hosts, verify their exit and settle/dispose of refused
    work through its owning workflow. The preview refuses unsettled leases,
    including expired active records; a checkbox cannot bypass this refusal.
-3. **Back up and preview import** creates a private local archive using the
-   existing backup owner, then displays the complete active/archive inventory.
+3. **Back up and preview import** creates a private Goal-scoped authority archive
+   using the existing backup owner, then displays the complete active/archive inventory.
    Preview does not import, stop a Host, settle leases or grant execution.
    Confirm **Import reviewed Markdown source**. Apply
    rechecks the bound original source and backup; a changed source needs a new
