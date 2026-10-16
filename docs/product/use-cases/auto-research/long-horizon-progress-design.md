@@ -107,6 +107,93 @@ and a version-specific independent check. An interpretation cites its basis and
 can abstain. A disputed interpretation remains disputed; selecting it does not
 promote it to a fact. These are presentation distinctions, not new protocol enums.
 
+## Record relationships before the next study
+
+This refinement is based on [the whole-history proposal #6648](https://github.com/loopx-project/loopx/pull/6648)
+at `f657a65c6abd03f1f6b87937c327f4ccfb2ccde2`: a default record-time view,
+optional relationship view, and inline recorded evidence. That source is a
+presentation proposal, not installed behavior or completed V11/V12 acceptance.
+It does not manufacture missing research relationships or automatically compare
+native outcomes. Its timeline target-selection defects and independent review
+remain separate product work; a corrected head needs its own readback.
+
+The first useful improvement is to retain **why the next experiment follows
+from the previous result**. At a meaningful conclusion or route change, the
+research Agent should reuse the existing question and attach an evidenced
+relation during ordinary result writeback. Users do not enter IDs, draw edges or
+approve individual links. This is study guidance, not a new mandatory attachment
+on every Turn or a graph-density quota.
+
+| Question the relation answers | Existing representation | Evidence needed |
+| --- | --- | --- |
+| What question or prerequisite does this attempt address? | Explicit question/hypothesis/experiment nodes; `answers` or `depends_on`, with direction matching the assertion | Attempt identity, tested inputs and an actual prerequisite or answer |
+| Which claim does this result support or contradict? | `supports` or `refutes` between existing nodes | Scoped finding, permitted result reference, uncertainty and applicable input revision; a failed run alone is not a refutation |
+| Why was this next route selected? | Explicit decision references; `leads_to` only for an evidenced consequence | The decision cites its basis; later artifact or behavior separately establishes adoption |
+| Which topic contains this work? | `subtopic_of` or an existing parent projection | Topic membership only; never count it as scientific support |
+
+Use the [existing result attachment](../../../../loopx/capabilities/explore/README.md#results-from-ordinary-work-writeback):
+`question_update` and up to four `relations` may accompany a complete result.
+Each relation runs from the current question to an existing same-Goal node;
+its summary states the observed basis. This hook does not create an arbitrary
+experiment/artifact graph. Materialize meaningful hypothesis, experiment or
+artifact objects through the existing Explore owner when the case requires
+those identities; do not recast every finding as another question just to add a
+line. Missing targets, wrong scope, self-links, duplicates and prohibited cycles
+must retain their existing rejection behavior. A successful replay does not
+append another relationship or claim another adoption.
+
+**The current evidence boundary is incomplete.** Findings carry evidence references
+and tested input revisions, but the edge writer has no direct `evidence_refs`
+or endpoint-version parameters. An edge summary is an assertion, not a durable
+version binding. Keep the edge event identity and source snapshot with the
+permitted finding/artifact references in the research analysis sidecar; if that
+association cannot be reproduced, report it as unknown. Do not send invented
+fields to the current strict writer. A future contract extension belongs to the
+existing Explore typed owner and must qualify writer, reader, checkpoint replay,
+CLI and packaged presentation together. It is not delivered by this document.
+
+The default graph shows explicit source relations and parent grouping distinctly.
+Any later inferred association stays in the on-demand analysis layer with its
+sources, method revision and uncertainty; it does not silently become a source
+edge. Same-checkpoint lineage, matched comparison, implementation inheritance
+and actual adoption are different facts. Neither `supports` nor `leads_to` is a
+catch-all for them. Record existing exact identities in the sidecar until a real
+caller and accepted contract justify extending the vocabulary.
+
+Before launching a new study that claims relationship-informed decision quality,
+research owns one end-to-end collection canary; product owns the corresponding
+reading check:
+
+1. Follow one permitted real case from question/attempt through result, an explicit
+   relation and the next decision. Reproduce its source, artifact/input revision,
+   record time and actual attempt time when available. Capture both the relation
+   and the relevant evidence before replan; restore the checkpoint and verify the
+   receiver can read the same basis without duplicate writes or future evidence.
+2. Read it through the actual result owner and the packaged #6648-derived history
+   view: the selected item must open its own evidence. Preserve missing links,
+   isolated nodes, rejected writes, delayed backfills and changed-input limitations.
+   If that view remains defective, report product acceptance open; do not treat
+   screenshots or a private custom rendering as the shipped journey.
+3. Inspect the receiver's next action separately. A relation being present or
+   cited proves neither adoption nor a more useful experiment. Keep unsupported
+   inferences and no-next-opportunity cases visible. Graph classification versus
+   runtime penalty, Portfolio proxy versus native transfer, and checkpoint capture
+   versus actual wake input supply three distinct diagnostic questions; select
+   authorized evidence, not predetermined favorable conclusions.
+4. Freeze the same collection instructions, fields and overhead accounting across
+   compared arms. Agent-authored relationship guidance can change decisions and is
+   therefore part of the treatment manifest; passive recording alone is not the
+   same intervention. Keep TurnEnvelope separately off unless explicitly studied.
+   Do not retrofit the new guidance into old frozen runs.
+
+The launch requirement is the scoped collection and restore check for the claims
+being tested, not completion of all V12 deep analysis or a general provenance
+schema. Native-outcome studies with weaker observability must declare that limit.
+Coverage diagnostics count unresolved associations, missing versions and erroneous
+links against the declared opportunities; edge count and connectivity are not
+progress metrics. Public documents use generalized cases; raw trajectories and
+private study identities remain in the authorized research store.
+
 ## Two layers, one trajectory-assessment basis
 
 The [Goal workspace contract](../../../architecture/rfcs/goal-workspace-surface-v0.md#511-research-goals-whole-history-explore-and-on-demand-analysis)
