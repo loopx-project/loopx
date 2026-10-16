@@ -806,21 +806,19 @@ through an authorized controller read route. The destination file must be new,
 outside the artifact and native bank, and installed at the Host's existing
 phase-file route before starting its ordinary entry command.
 
-Planning and heartbeat execution inputs no longer project the Host's deadline,
-remaining time, execution reserve or wake timeout to the model. The Host still
-enforces the same finite budget and retains clocks in runtime state and receipts.
-The model is guided to continue useful research from the original objective and
-evidence, preserving validated results along the way. Task-defined time constraints
-and evaluation cooldowns remain intact; this is not a general time-text filter.
+Planning input no longer projects the Host's deadline, remaining time or
+execution reserve to the model. The original task-planning packet is preserved;
+no replacement Host runtime guidance is added to planning or execution wakes.
+The Host still enforces its finite budget and retains clocks in runtime state
+and receipts. Task-defined time constraints and evaluation cooldowns are unchanged.
 
-This changes model context, not scoring, task acceptance, deadline accounting,
-TurnEnvelope settings or terminal authority. Plain, native-Goal, Turn and
-loopx-goal execution inputs are unchanged. Existing session archives are not
-rewritten: a new heartbeat explains that historical Host time-window messages
-are not research deadlines or evidence of completion. A restored terminal Goal
-still requires explicit resume through its owning contract. This adapter change
-does not conceal clocks in accessible runtime files or guarantee model adoption;
-compare pinned attempts to measure behavioral and outcome effects.
+This is a planning prompt default change. Execution inputs, scoring, acceptance,
+TurnEnvelope and terminal authority are unchanged. Old session archives may still
+contain historical deadline messages: this change does not rewrite or neutralize
+those messages. An authorized continuation must address stale context at its
+restore boundary, and a terminal Goal still requires explicit resume. This PR
+prevents new planning-clock injection; it does not qualify old-archive recovery
+or claim improved model behavior or scores.
 
 The sealed deadline and native capture timestamp determine the remainder; the
 receiver recomputes it. A point with two hours remaining keeps that duration

@@ -433,12 +433,6 @@ def run_once(env: dict[str, str]) -> dict:
             from benchmark.runtime.checkpoint import capture_before_replan
 
             body = capture_before_replan(env, receipt, body)
-        if stage == "execute" and execution.mode == "heartbeat":
-            from benchmark.runtime.planning import HOST_RUNTIME_GUIDANCE
-
-            # Compose last so checkpoint preloading and fresh-session context
-            # cannot leave a historical Host clock as the current instruction.
-            body = HOST_RUNTIME_GUIDANCE + body
         with (wake / "stderr.log").open("w") as stderr:
             if execution.native_goal and stage == "execute":
                 run_native_goal(env, execution, body, receipt, stderr)

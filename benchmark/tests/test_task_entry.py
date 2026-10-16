@@ -228,8 +228,7 @@ def test_planning_input_is_clock_independent_but_preserves_task_time_constraints
         assert render_planning_prompt(packet, env) == body
         assert env == {"LOOPX_PHASE_DEADLINE_EPOCH": deadline}
     assert json.loads(body.split("Host-supplied planning checkpoint:\n", 1)[1]) == packet
-    assert "Continue useful research" in body
-    assert "Task-defined constraints and evaluation rules still apply" in body
+    assert body == "$loopx\n\nHost-supplied planning checkpoint:\n" + json.dumps(packet, ensure_ascii=False)
 
 
 @pytest.mark.parametrize("value", ["nan", "inf", "-inf", "0", "-1", "not-a-clock"])
@@ -770,8 +769,7 @@ def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(planning_
         assert old_deadline not in body
         assert "Current wake execution limit" not in body
         assert "Existing execution reserve" not in body
-        assert "Do not use historical host time-window messages" in body
-        assert "does not reopen completed work" in body
+        assert "The Host enforces runtime limits externally" not in body
         assert "heartbeat-prompt" in body or "quota" in body
         assert receipt["session"]["action"] == ("resume" if context == "resume" else "start_new")
         assert "turn_envelope" not in receipt

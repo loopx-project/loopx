@@ -8,19 +8,6 @@ import subprocess
 from pathlib import Path
 
 
-# The benchmark Host owns its runtime budget. Keep this guidance shared by
-# planning and heartbeat wakes, including restored sessions with old clocks.
-HOST_RUNTIME_GUIDANCE = (
-    "The Host enforces runtime limits externally. Do not use historical host "
-    "time-window messages as a research deadline or evidence of Goal completion. "
-    "Continue useful research from the original objective and accumulated evidence "
-    "under the current admitted contract; preserve validated results as you go. "
-    "Task-defined constraints and evaluation rules still apply. This guidance "
-    "does not reopen completed work or override admission, settlement, stop "
-    "conditions or task acceptance.\n\n"
-)
-
-
 def render_planning_prompt(packet: dict, env: dict[str, str]) -> str:
     """Preserve the task packet without projecting the Host's execution clock."""
     if "LOOPX_PLANNING_TIMEOUT_SEC" in env:
@@ -32,8 +19,7 @@ def render_planning_prompt(packet: dict, env: dict[str, str]) -> str:
         value = float(env[key])
         if not math.isfinite(value) or value <= 0:
             raise ValueError(f"{key} must be finite and positive")
-    return ("$loopx\n\n" + HOST_RUNTIME_GUIDANCE +
-            "Host-supplied planning checkpoint:\n" + json.dumps(packet, ensure_ascii=False))
+    return "$loopx\n\nHost-supplied planning checkpoint:\n" + json.dumps(packet, ensure_ascii=False)
 
 
 def task_plan_packet(env: dict[str, str], cli: list[str]) -> dict:
