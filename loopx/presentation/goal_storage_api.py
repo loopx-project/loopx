@@ -276,8 +276,7 @@ class GoalStorageRequestMixin:
             if action == "prepare":
                 from ..control_plane.goals.state_resolution import resolve_goal_state
                 from ..control_plane.coordination.authority_source_capture import build_runtime_shadow_source_snapshot
-                from ..control_plane.coordination.cold_source_backup import read_cold_source_backup
-                from ..state_backup import build_state_backup_plan, execute_state_backup_plan
+                from ..control_plane.coordination.cold_source_backup import create_cold_source_backup
 
                 _, project, state = resolve_goal_state(registry=registry, goal_id=goal_id,
                     project_override=None, state_file_override=None)
@@ -289,17 +288,16 @@ class GoalStorageRequestMixin:
                 registry_path = Path(self.server.registry_path).resolve()
                 projection, snapshot = build_runtime_shadow_source_snapshot(goal=goal, runtime_root=root,
                     state_path=state, registry_path=registry_path, include_all_archived_todos=True)
-                backup = execute_state_backup_plan(build_state_backup_plan(project=project, runtime_root=root,
-                    output_dir=root / "backups" / "cold-import", backup_id=operation,
-                    include_automations=False, include_skills=False, include_registry_projects=False,
-                    registry_path=registry_path))
+                source_paths = [
+                    Path(snapshot["state_path"]), Path(snapshot["registry_source"]["path"]),
+                    *(Path(item["path"]) for item in snapshot["evidence_files"]),
+                    root / "goals" / goal_id / "task-leases",
+                ]
                 request.update(projection=projection, source_snapshot=snapshot,
                     target_provider=body["provider"], target_handoff_mode=body["handoff_mode"],
-                    source_backup=read_cold_source_backup(Path(backup["manifest_path"]), source_paths=[
-                        Path(snapshot["state_path"]), Path(snapshot["registry_source"]["path"]),
-                        *(Path(item["path"]) for item in snapshot["evidence_files"]),
-                        root / "goals" / goal_id / "task-leases",
-                    ]))
+                    source_backup=create_cold_source_backup(project=project, runtime_root=root,
+                        registry_path=registry_path, goal_id=goal_id, operation_id=operation,
+                        source_paths=source_paths))
             else:
                 request["expected_plan_sha256"] = _token(body, "plan_sha256", 64)
                 if action == "apply":

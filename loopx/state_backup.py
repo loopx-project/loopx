@@ -21,6 +21,7 @@ from .control_plane.runtime.document_io import fsync_state_directory
 
 
 STATE_BACKUP_SCHEMA_VERSION = "loopx_state_backup_v0"
+LOCAL_AUTHORITY_MIGRATION_BACKUP_PROFILE = "local_authority_migration_v1"
 ARCHIVE_SEGMENT_PATTERN = re.compile(r"[^a-zA-Z0-9._-]+")
 STAT_FIELDS = ("paths", "files", "directories", "symlinks", "bytes")
 
@@ -456,6 +457,69 @@ def build_state_backup_plan(
     }
 
 
+def build_scoped_state_backup_plan(
+    *, project: Path | str, runtime_root: Path | str, output_dir: Path | str,
+    backup_id: str, registry_path: Path, configuration_goal_ids: list[str],
+    sources: list[tuple[str, Path, str]], backup_profile: str,
+) -> dict[str, Any]:
+    """Build one explicit-source backup without discovering unrelated state.
+
+    Trusted local migrations call this only after their source owner selects
+    the exact authority files. Ordinary complete-state discovery is unchanged.
+    """
+    resolved_project = _resolved(Path(project))
+    resolved_runtime_root = _resolved(Path(runtime_root))
+    resolved_output_dir = _resolved(Path(output_dir))
+    exclude_roots = [_resolved(resolved_output_dir)]
+    included: list[dict[str, Any]] = []
+    missing: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    seen_sources: set[str] = set()
+    for key, source, archive_path in sources:
+        source_key = str(_resolved(source))
+        if source_key in seen_sources:
+            continue
+        seen_sources.add(source_key)
+        found, absent, target_warnings = _target(key=key, source_path=source.expanduser(),
+            archive_path=archive_path, exclude_roots=exclude_roots)
+        if found is not None:
+            included.append(found)
+        if absent is not None:
+            missing.append(absent)
+        warnings.extend(target_warnings)
+    total_stats = _sum_target_stats(included)
+    logical_source_bytes = total_stats["bytes"]
+    archive_path = resolved_output_dir / f"loopx-state-{backup_id}.tar.gz"
+    manifest_path = resolved_output_dir / f"loopx-state-{backup_id}.manifest.json"
+    return {
+        "ok": True, "schema_version": STATE_BACKUP_SCHEMA_VERSION,
+        "backup_profile": backup_profile, "mode": "state_backup", "dry_run": True,
+        "execute_requested": False, "created_at": datetime.now(timezone.utc).isoformat(),
+        "backup_id": backup_id, "project": str(resolved_project),
+        "runtime_root": str(resolved_runtime_root),
+        "configuration_source_registry": str(registry_path),
+        "configuration_goal_ids": configuration_goal_ids,
+        "registry_discovery": {"enabled": False, "goal_count": 0, "project_count": 0,
+            "reachable_project_count": 0, "missing_project_count": 0,
+            "active_state_route_count": 0, "active_state_included_count": 0,
+            "active_state_missing_count": 0, "source_registry_route_count": 0,
+            "source_registry_included_count": 0, "source_registry_missing_count": 0},
+        "codex_home": str(_codex_home()), "output_dir": str(resolved_output_dir),
+        "archive_path": str(archive_path), "manifest_path": str(manifest_path),
+        "included": included, "missing": missing, "warnings": warnings,
+        "summary": {"included_target_count": len(included),
+            "missing_target_count": len(missing), "warning_count": len(warnings),
+            "total_stats": total_stats, "logical_source_bytes": logical_source_bytes,
+            "category_stats": {"migration_authority": {
+                "target_count": len(included), **total_stats}},
+            "contained_overlap_stats": _contained_overlap_stats(
+                included, logical_source_bytes=logical_source_bytes)},
+        "execution": None,
+        "recommended_action": ("write the scoped private migration backup" if included
+            else "no migration sources found; re-read the source owner"),
+    }
+
+
 class _BackupReadStream(Protocol):
     def read(self, size: int = -1, /) -> bytes: ...
 
@@ -480,11 +544,13 @@ class _BackupTarFile(tarfile.TarFile):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self.file_members: list[dict[str, Any]] = []
+        self.record_file_members = True
         super().__init__(*args, **kwargs)
 
     def addfile(self, tarinfo: tarfile.TarInfo, fileobj: _BackupReadStream | None = None) -> None:
         # The manifest contains this list; the whole-archive digest covers it.
-        if not tarinfo.isfile() or tarinfo.name == "manifest.json":
+        if (not self.record_file_members or not tarinfo.isfile()
+                or tarinfo.name == "manifest.json"):
             super().addfile(tarinfo, fileobj)
             return
         if fileobj is None:
@@ -605,6 +671,11 @@ def execute_state_backup_plan(payload: dict[str, Any]) -> dict[str, Any]:
         staged_archive = staging / "archive.tar.gz"
         snapshots: dict[Path, tuple[Path, dict[str, Any]]] = {}
         with _BackupTarFile.open(staged_archive, "w:gz", dereference=False) as tar:
+            # Migration reads only source-owner-selected member digests. Avoid
+            # repeating an unbounded inventory in the external manifest.
+            tar.record_file_members = (
+                payload.get("backup_profile") != LOCAL_AUTHORITY_MIGRATION_BACKUP_PROFILE
+            )
             for item in included:
                 if not isinstance(item, dict):
                     continue
