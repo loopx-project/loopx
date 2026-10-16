@@ -1,0 +1,1145 @@
+commit,committed_at,title,associated_merged_prs,core_python_ts_additions,core_python_ts_deletions
+2aecff3e14254a263e607d4f2263ce51d4a48b45,2026-08-16T01:35:38+08:00,Merge pull request #3232 from huangruiteng/codex/public-smoke-repair,3232,9,2
+8b986a69ec8b34724524292a2584ec6ccf62b428,2026-08-16T01:51:43+08:00,Guard accountable benchmark closeout with Todo validation (#3229),3229,269,4
+aa09d8cfd2ca28bd0f81998cd9ca21a00892425a,2026-08-16T12:45:17+08:00,fix(goal): preserve terminal settlement order (#3247),3247,1,3
+1e582e1adbdbf99f89153c573450349bd4071812,2026-08-16T15:31:54+08:00,fix(control-plane): settle terminal no-followup after spend (#3250),3250,1073,60
+66492032eb99b2bca997874254c6abcbf82091d9,2026-08-16T16:14:29+08:00,Merge pull request #3256 from huangruiteng/codex/heartbeat-compact-budget-repair,3256,6,2
+92e4054972ba9cab106241c8b766cddf04f3655d,2026-08-16T16:33:28+08:00,Merge pull request #3255 from NIU-123370/feat/validation-command-json,3255,75,27
+370be2ef7b8fff5819843cfa8a75664ef2441733,2026-08-16T17:55:09+08:00,fix(control-plane): admit bounded live-gate reads (#3259),3259,133,19
+df4604a7598c9e61b34f84d284994b80306345a0,2026-08-16T21:30:57+08:00,fix(turn): resume preserved sessions on failed-turn retry (#3262),3262,117,6
+5d73c343b5076302f98c8ba985f08491d3e94cbd,2026-08-16T23:49:14+08:00,refactor(turn): isolate failed-session recovery (#3266),3266,75,45
+223d0aa5e6b7f95543fe94f22e7059068db31bb5,2026-08-17T00:18:39+08:00,fix(goal): prevent ambiguous quota spend retries (#3258),3258,20,18
+0cd999ca0dd6290c9b48b84bc23c5f6b40630516,2026-08-17T00:41:17+08:00,fix(goal): recover same-turn terminal closeout (#3261),3261,431,26
+76fe5bfebaf1d1d3e53629ae9886c0b734cd8550,2026-08-17T01:08:45+08:00,refactor: reset benchmark research around native runners (#3267),3267,7,913
+a521d8bfac0a02cb02fa443865bf5e70087c3816,2026-08-17T01:33:23+08:00,fix(goal): bind no-follow-up ACKs to lifecycle truth (#3270),3270,132,42
+08420a1d5b8926eec131d03b8ce04a042f607959,2026-08-18T02:49:41+08:00,Merge pull request #3300 from huangruiteng/codex/pr-2846-quota-failure-boundary,3300,5,1
+e4e40294945b35c400c6cac573f97aaf9363b89e,2026-08-19T00:32:10+08:00,fix: restore public smoke reliability (#3302),3302,2,0
+8f96fa031fc2a5d374c26a620b32d458021403bb,2026-08-19T00:46:25+08:00,fix(todos): close two side doors in the hard_lease handoff gate (#3306),3306,47,1
+d8be38d8865a6b7b45a0cded18e9cf18022c6810,2026-08-19T00:50:06+08:00,fix(evidence): 修复 Todo 身份过滤与 UTC 时序 (#3311),3311,30,7
+c30dab7daa64bc3ff8dcc5ec89680514cc7487b4,2026-08-19T01:25:30+08:00,fix(quota): preserve heartbeat todo on capability reentry (#3321),3321,50,8
+17dff735d674c0412fc4239403de3734f6c1c4b8,2026-08-19T02:39:54+08:00,fix(quota): settle Todo-less autonomous replans (#3304),3304,511,160
+187716c9fd95123de2ca790903b9fd8ba3f8b367,2026-08-19T03:00:29+08:00,Merge pull request #2791 from yixuanchen189756-source/codex/kunluncode-adapter,2791,8,0
+96d605d6d22532f8994eb607ca152345ce8f9ade,2026-08-19T03:23:47+08:00,fix(quota): preserve heartbeat receipt todo on replay (#3328),3328,78,3
+c11f9141f6b70e8b143cc22ed23e9941f73b0d39,2026-08-19T04:20:54+08:00,fix(quota): preserve heartbeat settlement identity (#3329),3329,14,0
+050d88e511d25772afe4dda53d50c0de7c2c778e,2026-08-19T06:10:07+08:00,fix(quota): bind monitor polls to heartbeat receipts (#3330),3330,153,9
+1a4958c1ed8384b4245687f7ba9a877c84f2fec3,2026-08-19T16:48:03+08:00,feat(control-plane): promote the personal Agent workspace (#3274),3274,242,16
+e966b54a7f127b26c24f55e9e817955b1f4a9829,2026-08-19T20:57:22+08:00,fix(control-plane): 保留 compact replan ACK 的路径结论 (#3345),3345,25,1
+7f4f0c4e4ed0da8da2fef3c57b0bd64b857f41d9,2026-08-19T20:57:39+08:00,feat(todo): add explicit per-section --limit to todo list (#3312),3312,94,11
+4bb8c394abd8b3b02ee87de390386ce1f53ed45d,2026-08-19T20:58:07+08:00,test(scheduler): migrate ACK rules into decision tables (#3288),3288,4,1
+eff0a8525d2e93801a51dbc8f8a75b52a8f6478e,2026-08-19T21:45:00+08:00,fix(quota): preserve heartbeat settlement binding on reentry (#3354),3354,73,7
+e11601a2c8a586638d06b807147aea7d1c9bfca9,2026-08-20T01:16:27+08:00,Admit Goal-bound external capability providers (#3352),3352,97,5
+84f25d839d039e7ba976f4a08f4472ec225515a9,2026-08-20T01:42:06+08:00,feat(goals): add reversible stop and resume (#3350),3350,426,24
+8f47372504a1565f6dab405f017be5da7e47328d,2026-08-20T01:48:03+08:00,fix(goal): project terminal Todo settlement actions (#3362),3362,128,19
+3ea26af46841e3cf1a953dc46d825e5ec30b5935,2026-08-20T05:53:15+08:00,Merge pull request #3375 from huangruiteng/codex/release-v0.5.0-smoke-readiness-20260820,3375,6,0
+741798d573d9b696cb81b7f78e5ceaee99dc2802,2026-08-20T19:01:01+08:00,fix(goal-channel): preserve terminal botmux receipts,3348,50,8
+cb71125959ba47f8c737cb010801f8e245972041,2026-08-20T19:01:01+08:00,fix(goal-channel): persist uncertain botmux dispatches,3348,331,59
+165fee937b2f90f1d4ea63344f9868d43a38de8a,2026-08-20T19:01:01+08:00,feat(goal-channel): add botmux runtime integration,3348,1161,0
+038ed9d6794ae8b38de4ee38aabddf9771c97f23,2026-08-20T19:02:40+08:00,fix(quota): make settlement identity recovery boundary fail-closed,3360,2,1
+6cfc84b90e943e278f56b6158e3363c5c0e5d94a,2026-08-20T20:11:07+08:00,revert: keep Goal Chat proposal RFC-only,3351,0,520
+2a62a5ac37a7bb4e26801a94af6e6d6c5e69ead5,2026-08-20T20:11:07+08:00,feat: add collaboration Goal status,3351,381,0
+7b54f7527252d3066778740b02d9122a6fb3f3b8,2026-08-20T20:11:07+08:00,feat: govern material Goal Chat turns,3351,139,0
+d12a64f7b18d174e3a0035f105d8f0322b4530f0,2026-08-20T22:55:37+08:00,Merge pull request #3386 from huangruiteng/codex/lark-goal-topic-agent-inbox-20260820,3386,11,1
+bf462a757d04a280dbd17a8317dacc8eb60f5f81,2026-08-21T00:37:18+08:00,Merge pull request #3370 from huangruiteng/codex/replan-obligation-todo-writeback-parity-20260820,3370,65,10
+76feaafe42febe51ffe32622deca595e55aa5194,2026-08-21T01:48:11+08:00,Merge pull request #3398 from huangruiteng/codex/fix-goal-stop-orphaned-latest-20260821,3398,128,10
+95e0891e7bc40a908909693203c1564a74e6cbc9,2026-08-21T13:10:11+08:00,fix(lease) task lease generation ABA (#3393),3393,118,17
+6e7dd0a0a9a8dafb053d3d0a0e7073a7abae5de7,2026-08-21T20:02:17+08:00,fix(mcp): settle completion under the original todo identity (#3342),3342,454,0
+a564bfe323b2b8330779438db316eeaa7c2712f3,2026-08-21T21:12:02+08:00,refactor(control-plane): move Effect Program authority to TypeScript (#3416),3416,3279,701
+1285c724fedcb30f876420be5b0a0e18092e77f5,2026-08-21T22:21:03+08:00,fix(runtime): probe Windows Effect process without signals (#3423),3423,36,1
+8c1ec1a3a92a7d65467da6d82a1751c1f50636f3,2026-08-21T22:27:34+08:00,fix(control-plane): rotate rearmed replan obligations (#3420),3420,33,0
+ad77a0487185aaf3fa26e04a6772a427053e0770,2026-08-21T22:40:25+08:00,fix(control-plane): dedupe progress retries by turn (#3422),3422,27,0
+c6243cfabb2808ccb97190e58869f923b6dd7cfe,2026-08-21T22:57:01+08:00,fix(todos): settle durable next action on completion (#3414),3414,636,0
+90532a7c9f921b04021ceef1119e0569fe16995f,2026-08-21T23:26:43+08:00,fix(control-plane): preserve monitor settlement binding (#3424),3424,71,8
+7937f1fd7c8a3dfd2247f77ab114e3802f5575ac,2026-08-21T23:50:10+08:00,feat(extensions): govern material capability execution (#3427),3427,329,0
+58adc1783ba9c2eb92cb81f48ffb1e29795ac062,2026-08-21T23:51:36+08:00,fix(control-plane): bound next-action effect payload (#3428),3428,37,4
+0bed0c61a375c9c9693777562b1b965b2cabe1b4,2026-08-22T00:31:51+08:00,fix(todos): make typed priority authoritative (#3429),3429,26,6
+6f90ba26f41f4df857d09d1295bb2fa715a3aa0e,2026-08-22T00:35:32+08:00,docs: move non-convention root docs into docs/ and merge bilingual Code of Conduct (#3430),3430,1,1
+62647e2e299d10b9c6aff657854943b1b41ae6a4,2026-08-22T00:36:40+08:00,fix(lark): make Goal Topic ingress diagnosable (#3419),3419,1,3
+4557fbdd08f2097e655b7ae282c7ea3c1b4987f4,2026-08-22T01:20:59+08:00,refactor(todos): move completion fence to TypeScript (#3431),3431,374,90
+0c59d47f6550db3d39dc074083d7054fa1d53c66,2026-08-22T01:25:33+08:00,fix(quota): preserve visible Goal settlement source (#3403),3403,73,65
+e524c818918a3304ae5b242eed0c8faded3f998d,2026-08-22T02:02:07+08:00,refactor(todos): move completion state to TypeScript (#3432),3432,464,125
+3f923c4feac93e84848309fcec2232d1a2034124,2026-08-22T02:11:40+08:00,feat(dashboard): add SSH control-plane source switching (#3409),3409,85,0
+e4563a93e05ef2cf2a9d19e32bca4dfc68ddef20,2026-08-22T02:24:10+08:00,refactor(quota): move workspace causality to TypeScript (#3433),3433,372,80
+50171b46ca25c6998ddb02ac31f23ebae7a71c79,2026-08-22T02:39:45+08:00,refactor(scheduler): move transition kernel to TypeScript (#3434),3434,265,61
+3eeb2dc4a63b386555c0484bd7ef325440a0e100,2026-08-22T14:32:38+08:00,"feat(dsh): add native LoopX skill, same-session driver, and GoalBar (#3396)",3396,213,20
+163411d46ea76b68e5421c3125deaece1224265a,2026-08-22T15:56:54+08:00,refactor(runtime): generalize mutation lock timeout (#3441),3441,1,1
+3f43e4ff1ebca3808d59db6fb10efce733abb1fe,2026-08-22T16:00:22+08:00,refactor(scheduler): move durable state into TS runtime (#3440),3440,1141,333
+8e7e02636cfae92c22eb6499153820f68bb6a2d8,2026-08-22T16:38:14+08:00,refactor(control-plane): centralize runtime decoders (#3443),3443,150,191
+8f11d91791240095505d5b781709adf491308fab,2026-08-22T18:23:23+08:00,fix(todos): gate event-projected completion validation (#3437),3437,617,82
+8da68a40305b605ae71147f47491934a3f5d10b0,2026-08-22T18:30:48+08:00,fix(control-plane): preserve heartbeat delivery continuity (#3444),3444,1124,72
+f5b039796769939e741e4314ae236689b628d533,2026-08-22T18:53:07+08:00,fix(canary): restore full-public smoke health (#3451),3451,12,5
+02cb68bb06fc811d41f207b62c5378249164f8c1,2026-08-22T20:43:33+08:00,refactor(turn): cut settlement over to a coarse TypeScript transaction (#3464),3464,575,519
+95261f6ad954f30408c33f7375150f6ebcebe12f,2026-08-22T21:21:39+08:00,fix(control-plane): make replan settlement binding explicit (#3465),3465,158,31
+10ae816e217fe7b6ad984df18d887b43280b5896,2026-08-22T22:42:48+08:00,feat(ssh-source): auto-establish SSH tunnel and remote status on switch (#3474),3474,140,0
+caf4c0db3b244f3761d6fbe2c47d7ae2262888f8,2026-08-22T23:22:24+08:00,fix(quota): type selected-registry roster preconditions (#3471),3471,63,7
+5ddef829b7de2b55415eab53b430cabc4fecf6a6,2026-08-22T23:54:13+08:00,fix(ssh-source): tolerate slow remote status probes in ensure (#3482),3482,1,1
+a7db535c92bc15a458ee4f52e81931298b49c840,2026-08-23T00:05:18+08:00,fix(goal): project terminal Todo settlement on refresh (#3484),3484,298,49
+35f894c32c4319ec6bd766a6d09a3fbec7d38c0d,2026-08-23T00:37:43+08:00,refactor(quota): cut over delivery routing transaction (#3481),3481,370,246
+dcc4c6229e878acc983b6ad1cb43db45f946e858,2026-08-23T01:51:33+08:00,fix(todo): make rejected replan reentry executable (#3493),3493,813,37
+76059cbbcf447921b0a991c7584d496b744bfdfa,2026-08-23T01:54:09+08:00,fix(replan): edge-trigger long Todo chains (#3492),3492,416,60
+d05c2a9220e08262fe27507077bcfd30de739685,2026-08-23T02:18:34+08:00,Keep deferred todos out of completed archive (#3452),3452,30,5
+cfcbf6edc040a7c084549b98aa6b54dcb37e5d66,2026-08-23T03:20:38+08:00,fix(turn): recover prepared settlement effects safely (#3485),3485,827,120
+eadd1251f8bc3c1b7f158328e0b2568dfe6fa026,2026-08-23T03:47:55+08:00,fix(replan): preserve vision checkpoint continuity (#3502),3502,68,5
+ce63b936c5b5ca5aa07922fe8553fd71b3c838a4,2026-08-23T07:44:38+08:00,release: LoopX v0.5.2 (#3505),3505,5,0
+bb7004571c0508f18ac7868e295cb5f113b96366,2026-08-23T13:04:39+08:00,Fix quota guards to follow the selected Todo (#3506),3506,74,37
+68eb797ef15345042010d3e7c5df1347d947c605,2026-08-23T13:56:41+08:00,fix(quota): expose bounded fallback action portfolio (#3514),3514,602,12
+7a243e083cd4200fc5fca803dc1f12c5f2372e82,2026-08-23T14:59:14+08:00,Settle governed continuous-monitor proposals in the Kernel (#3511),3511,569,3
+c219d6258cbc26cfb22548f08b00f0c7e9e04fe0,2026-08-23T15:50:47+08:00,fix(quota): close receipt-bound monitor settlement (#3513),3513,268,19
+e2902df1723dfc1b935ead0db548bbad13ed5a00,2026-08-23T17:11:13+08:00,fix(todos): rebind stale generated Next Action (#3524),3524,147,21
+1e6ca0c609a98f574faf78e12365022649febd3c,2026-08-23T18:40:28+08:00,refactor(todos): cut over completion transaction to TypeScript (#3530),3530,1047,378
+71742326e7cb9a38dd8fb4be580b0f23373c9683,2026-08-23T18:42:50+08:00,Merge pull request #3531 from huangruiteng/codex/fix-terminal-receipt-replay,3531,330,33
+02a714ffe82f902cbe26d3c401df1d4e80bbdb80,2026-08-23T19:21:48+08:00,fix(quota): make unknown workspace causality repairable (#3519),3519,174,13
+e7dbfd1d96e8879719ee3118f630ce99418b579d,2026-08-23T20:01:41+08:00,fix(control-plane): fail closed on malformed runtime recovery and settlement payloads (#3525),3525,114,70
+6a5ac72305a1abfb61616d91ef7f45708ef49e60,2026-08-23T21:36:40+10:00,refactor(authority): centralize coordination state rules (#3410),3410,2064,609
+fd237116eec247ec4f5e6f0e774ba1281b4a31c8,2026-08-24T09:53:33+08:00,Merge pull request #3548 from huangruiteng/codex/settlement-contract-repair-20260824,3548,34,8
+2dc0781983989be14eb2b04ec7eb4e448e7b35d7,2026-08-24T13:11:35+08:00,Merge pull request #3544 from huangruiteng/codex/fix-3535-scheduler-state-path,3544,92,13
+cbe261f11bd0a67e442e0b1425ae6195fa335e15,2026-08-24T13:52:00+08:00,fix(control-plane): make autonomous replan settlement atomic (#3536),3536,181,15
+e059b1757c2a5ab8eb909f55d068c70b05a7f6b9,2026-08-24T17:47:52+08:00,fix(control-plane): preserve guided agent autonomy (#3557),3557,731,62
+21c780c3fd63a4d0c2c65a7730d4175beb28ec91,2026-08-24T21:46:09+08:00,"feat(coordination): Stage 2 slice - aggregate head, file provider, claim_work executor (#3529)",3529,1301,0
+98ed3328dccbc83d1568ba807c814e5ce488ae19,2026-08-24T23:41:20+08:00,fix(runtime): fingerprint packaged control-plane sources (#3547),3547,120,30
+21350843e1c3aeb3d4de3ed871fd6efc1ac55fa2,2026-08-24T23:59:39+08:00,fix(runtime): preserve typed RPC failures (#3546),3546,487,161
+bcc09db2895b90538e6faad4188186bc3980ff1b,2026-08-25T00:08:33+08:00,Project repository delivery through capability hooks (#3570),3570,481,1
+894ad1523a93a9374cfee04fed36823178e2c1b8,2026-08-25T00:26:44+08:00,fix(quota): bind guided start to one turn (#3572),3572,4,2
+a20d39f057b17f532c9b8c09eb1a9b8dea0860b7,2026-08-25T01:06:06+08:00,fix(quota): settle gitless delivery workspaces (#3574),3574,409,35
+7e4904b8e946138f736ad64f7b723be506982513,2026-08-25T01:37:28+08:00,fix(quota): settle completed heartbeat replays (#3578),3578,207,101
+60f676a187360adc810bb0ad3a64f4c67b626e83,2026-08-25T02:18:51+08:00,Merge pull request #3581 from huangruiteng/codex/issue3539-portfolio-contract,3581,19,0
+f33a3c4a1c3add9c852b0862d413552d3636c4d0,2026-08-25T02:21:22+08:00,fix(scheduler): materialize monitor cadence schedules,3579,193,49
+ee39d1f8bb3628457ad27f5b705b04cafccecbd2,2026-08-25T02:52:56+08:00,fix(quota): bind SSH guided start to one turn (#3583),3583,7,0
+be84ec70343c566e056c8ee83c322bf6ada80337,2026-08-25T12:07:30+08:00,Merge pull request #3564 from yuefengw/codex/scheduler-ack-commit-v0,3564,1556,160
+f52ff592c7e85d63697cf2192c93ab916194322b,2026-08-25T13:07:06+08:00,Merge pull request #3591 from huangruiteng/codex/visible-goal-prompt-budget-20260825,3591,1,1
+4ce4786e4025397cb8ee37f9a5e0e5aea8778ede,2026-08-25T16:17:16+08:00,Merge pull request #3365 from now-ing/feat/zcode-goal-mode,3365,1,0
+6aa2fb8a9fb97f0bfa6ee8b0ca6fabf6265bbe95,2026-08-25T17:34:05+08:00,Merge pull request #3450 from now-ing/feat/agy-goal-mode,3450,1,0
+a817bc7597f0c945659790122e7a56584165d549,2026-08-25T20:33:00+08:00,Merge pull request #3588 from hua03/codex/goal-delete,3588,335,0
+b415b79226aea19ecf4c862c547147442225e944,2026-08-25T20:33:41+08:00,Merge pull request #3592 from huangruiteng/fix/close-stage2-promotion-gaps,3592,27,0
+f56fc2f0ca4d6ab8f053f40d128946e5c431c141,2026-08-25T21:11:39+08:00,Merge pull request #3602 from yuefengw/codex/scheduler-facade-exit,3602,357,350
+0a0423e737e62bc3fc3b7be96edc68c0b3fce1e1,2026-08-25T21:48:15+08:00,Merge pull request #3607 from huangruiteng/codex/issue-3598-context-assistant-routing-20260825,3607,97,24
+c142057281f8e70b76c450b2c9942cb1d70238ce,2026-08-25T22:33:20+08:00,Merge pull request #3596 from huangruiteng/codex/quota-spend-transaction-cutover,3596,1330,244
+e8175d4e9ffec578837906ac4af92e9b607acd36,2026-08-26T08:57:15+08:00,Merge pull request #3541 from Duang777/codex/core-experience-bug,3541,11,9
+601b07b10b58e4f26c203f1ea30df439892b9d9e,2026-08-26T15:43:09+08:00,Merge pull request #3599 from cocolord/codex/effect-runtime-startup-retry-20260825,3599,7,1
+bb5ebb974646a9dfe84e070f654f31191f8dac04,2026-08-26T17:27:43+08:00,Merge pull request #3613 from huangruiteng/codex/issue-3606-external-wait-context,3613,1548,404
+45e681a536bb4549c3c92dd73bb94cc7aae24cf8,2026-08-26T18:58:01+08:00,Merge pull request #3605 from steven-kid/fix/botmux-runtime-doctor-lock,3605,91,73
+2bc66bdaf80e4fa83e287da7bd2a81cf1e6674dc,2026-08-26T18:59:25+08:00,Merge pull request #3612 from Duang777/codex/fix-core-chat-quota-races,3612,8,1
+dca0498104b41ffbb38b805f7d6a7fa71ab01d35,2026-08-26T19:24:42+08:00,feat(control-plane): project typed planning horizon (#3617),3617,2272,399
+11824ef5f1561786750bb98b8ce98366ecc3f48d,2026-08-26T20:13:54+08:00,fix(quota): preserve visible Goal settlement causality,3671,175,18
+6d7245dae402c9c24e642ad200a38754447d5626,2026-08-26T20:13:54+08:00,fix(quota): preserve Todo selection under workspace guard,3671,6,1
+d9c36bc2799c4fcd8843bcef3ecbf304274947fa,2026-08-26T21:32:51+08:00,Merge pull request #3620 from huangruiteng/codex/lark-material-review-due-20260826,3620,237,46
+034816cca54f49004a7584f3e92df1be37da5710,2026-08-26T21:39:12+08:00,Merge pull request #3621 from huangruiteng/codex/fix-scheduler-ack-current-init-20260826,3621,10,4
+8bd818b5f67568297bfd174f37b326f9f7a1b1e2,2026-08-26T22:41:12+08:00,Merge pull request #3614 from huangruiteng/codex/fix-3609-successor-replan-arbitration,3614,322,120
+55d5a2a8ab9d1378326c1a66493adbdbb00a73d2,2026-08-26T23:47:20+08:00,Merge pull request #3677 from huangruiteng/codex/relocate-auto-research-demo,3677,0,2443
+f937a952de38f18fd07451c0bdecde58e2872453,2026-08-27T00:01:51+08:00,Merge pull request #3676 from huangruiteng/codex/repair-replan-spend-attribution-20260826,3676,129,79
+f0b6dfd4fe2713d59a8e0b4e0bdee5d13e00ab30,2026-08-27T00:55:42+08:00,Merge pull request #3682 from huangruiteng/codex/fix-capability-reentry-turn-3680,3682,6,0
+ca1ad455d7c487132ce688eb1900c1b5c72f935e,2026-08-27T00:59:24+08:00,feat(inbox): require turn-start Agent reading (#3678),3678,326,11
+ccb8127bf2dc04a3402db2cc1279986c41c0a545,2026-08-27T01:16:11+08:00,refactor(task-lease): cut settlement over to TypeScript (#3674),3674,610,361
+cabe2f96af130bbf94821dc9335996d3ae69966f,2026-08-27T04:57:34+08:00,Merge pull request #3683 from huangruiteng/codex/lark-addressed-identity-20260827,3683,30,17
+55f3d04399f91ae509fe05d5e8035c3258c6ca9f,2026-08-27T15:29:42+08:00,Merge pull request #3689 from now-ing/fix/iss-3560-dashboard-todo-progress,3689,7,0
+5d673971769629b41e8d5c046e01eef839c66d94,2026-08-27T16:02:27+08:00,Merge pull request #3679 from LIHUA919/codex/todo-list-thin,3679,347,3
+ae361192845f85edef4b27ad18f9b406915aa0cd,2026-08-27T22:06:25+08:00,Merge pull request #3667 from Duang777/codex/ts-quota-settlement,3667,979,507
+083f43977edf892f57611435d35a5e064f61cbab,2026-08-27T23:51:53+08:00,Merge pull request #3688 from Alicecooo/codex/ts-turn-settlement,3688,424,86
+df8f0afcd67431ce3ea8e4fec0c45f3ade45404e,2026-08-28T01:39:50+08:00,feat(lark): unify inbox mention acknowledgement,3708,11,1
+dc23bcf215a4e1cace60a186ea3fa3037d530b26,2026-08-28T01:46:40+08:00,fix(goal): re-enter Todo-less replans through guided Turns (#3699),3699,8,3
+86694786dd64608eeb5634963cd0658737829875,2026-08-28T09:13:55+08:00,Merge pull request #3690 from now-ing/feat/iss-3586-guided-takeover-todo-delta,3690,281,0
+0233a2f32ca6bd4f86dad4eb215dd49428864a71,2026-08-28T09:17:50+08:00,Merge pull request #3705 from hhyykk/codex/quota-planning-packet-native,3705,157,196
+f37f49885b14ded7975cfb70fcde37c83c7b6732,2026-08-29T00:13:43+08:00,feat(quota): GH-C95 typed per-run usage ingest for cost ledger (#3662),3662,674,75
+f48249f71e20c3ec5d21699a16d83af406821a26,2026-08-29T00:26:55+08:00,refactor(control-plane): move Vision refresh authority to TypeScript (#3720),3720,611,319
+37040fa543640410a1e196c34f08b5734890f46b,2026-08-29T01:41:30+08:00,feat(control-plane): make task lease acquire native (#3702),3702,1939,1042
+4e5e8386acb0a6d543679275f49f1d33ea5eca3b,2026-08-29T02:13:05+08:00,refactor(quota): retire granular settlement readback facade (#3714),3714,0,188
+635e9a1de0b96c835f2e0427cd02e6525aedd69d,2026-08-29T10:41:23+08:00,Unify Turn recovery decisions with Journal inspection (#3719),3719,875,131
+d585271ce2338d20e9cd996775348c78fdea9e50,2026-08-29T16:56:02+08:00,fix(quota): settle typed blocker outcomes (#3734),3734,171,33
+c76b5e726332a6b46345308db93af269052019a8,2026-08-29T20:10:27+08:00,fix(quota): prioritize Turn receipt in compact output (#3726),3726,6,1
+c258cd2228c15d3686c83740e9a764199c5d6f37,2026-08-29T21:07:54+08:00,refactor(quota): complete settlement readback facade cleanup (#3723),3723,396,128
+68f46794aca2ad805c972df108ed52634765a3c1,2026-08-29T21:33:59+08:00,feat(control-plane): move host Todo settlement to TypeScript (#3724),3724,1199,371
+3a4657246a42ae6b9db79d32708ad2e2a3691630,2026-08-30T00:09:10+08:00,refactor(turn): absorb fenced journal recovery into TypeScript (#3074),3074,221,43
+8eb074e49432d69ebcfd3f39a4f2979157eea756,2026-08-30T00:33:36+08:00,fix(quota): settle delayed scheduler ACK after autonomous replan (#3742),3742,31,9
+fe23d2e422a6ac53c301ba8a952d6d8c59c2a8da,2026-08-30T04:38:36+08:00,Merge pull request #3691 from now-ing/feat/iss-3479-post-writeback-hook,3691,1234,53
+2e3e43348b5927a32c7be5041fe2ed4ff81b5aa4,2026-08-30T12:08:22+08:00,fix(periodic-report): dispatch terminal Todo closeout hooks (#3748),3748,2,1
+0a9854d19ee2c4b38e53e1af239fdab41e2b94b6,2026-08-30T13:04:53+08:00,fix: consume pending periodic report intents (#3749),3749,253,4
+3d8ae43128e7de1b5198014a15ac87597f81fd0d,2026-08-30T15:05:46+08:00,fix(periodic-report): require Chinese analysis editorial (#3750),3750,7,1
+04012324d988575965c59d2f7b399130c6ef585b,2026-08-30T22:49:05+08:00,Fix read-only autonomous replan settlement (#3746),3746,248,17
+178c51f7bb2c8d0fa712e66bb98442926dbe64fe,2026-08-30T23:11:37+08:00,fix(control-plane): repair remaining public smoke boundaries (#3740),3740,9,3
+1b3a87ee95bd4a905d8c21655004d26dfa679003,2026-08-31T22:56:21+08:00,Merge pull request #3771 from songoow/codex/provider-capacity-recovery,3771,664,33
+d74f9dd904473731e2ab27139fa1bbe266df59ac,2026-08-31T23:51:51+08:00,Make onboarding connection validation ownership explicit (#3777),3777,1,0
+4cfee62531b59a65ff9c5766e0e3f07a01a3ee35,2026-08-31T23:59:22+08:00,fix(todos): verify repository delivery before completion (#3558),3558,5,1
+8af313d2ded7a7e655bf695667e9f120c8feebd2,2026-09-01T01:36:12+08:00,fix(control-plane): preserve runtime root in generated CLI actions (#3709),3709,487,203
+7e43e6a16f59ac581e770bcf3e027360013d8c1d,2026-09-01T12:41:56+08:00,feat(control-plane): add recoverable shared-authority foundation (#3669),3669,1241,100
+d453ef0c2773eb93403b8f04110975ccc6e67d8b,2026-09-01T13:48:59+08:00,Merge pull request #3788 from huangruiteng/codex/ts-refactor-typed-slice-20260901,3788,839,922
+eec0d3271fdec56577f6ee0704518bed18628b29,2026-09-01T21:48:56+08:00,fix(todos): make monitor advancement authoring discoverable (#3782),3782,170,13
+2e072fd6b3a0c25beaf1b96b921ba8b24c9359db,2026-09-01T22:56:40+08:00,Merge pull request #3798 from huangruiteng/codex/shared-authority-stage1-ts-store-contract-20260901,3798,718,0
+f73faba18a56df1d05e641528c01a14fb45fc7c0,2026-09-02T00:46:49+08:00,feat(coordination): add PostgreSQL authority store candidate (#3807),3807,829,147
+362e302d635101fdacd8b11f665452c2c3ef3ef9,2026-09-02T01:15:28+08:00,fix(dashboard): preserve projected Goal progress (#3561),3561,19,0
+cbb21131d99f543535c6d57a18417149ded1dd8d,2026-09-02T02:34:52+08:00,refactor(task-lease): migrate local lifecycle to native TypeScript (#3806),3806,4104,812
+7de2f04b15580a2e6ad66fe6a880f6296db0f9c5,2026-09-02T03:11:28+08:00,Migrate governed capability lifecycle validation to TypeScript (#3706),3706,428,1
+bf2b83fcf250fa5df6f89a1509bce5d68a55ae2b,2026-09-02T04:21:31+08:00,refactor(scheduler): route host follow-up through native CLI (#3704),3704,1133,984
+5ca3f55c73fad425a6cb0e45dadaefe1ac2e4c0e,2026-09-02T05:38:49+08:00,feat(quota): move monitor poll commit into TypeScript (#3715),3715,2741,839
+118917353f8f5ade3d4e2f44943ac0a3303490c1,2026-09-02T19:37:43+08:00,Merge pull request #3822 from songoow/codex/dsh-typed-host-failure-v2,3822,4,1
+bb1bc3d2d8e5a60f3980756ff82517e4641d35b6,2026-09-02T22:30:49+08:00,fix(control-plane): project turn-start required reads (#3845),3845,157,4
+db717f966572d2e6605db41825c268a17ac8d7f0,2026-09-02T23:13:52+08:00,fix(refresh-state): prefer the agent-lane selected Todo over shared Next Action prose (#3693),3693,474,0
+7d9607f1135f9e20e7f5f0a06c388741c69f03b4,2026-09-02T23:49:30+08:00,fix: reconcile agent-scoped cadence advisory (#3843),3843,6,0
+dfb6d82a074794a328843a5b0d18a281c448c675,2026-09-02T23:56:49+08:00,fix(control-plane): separate fresh inbox reads from recovery (#3848),3848,74,1
+ed00e671a549b2aa9a8b06bcc650afc898a45750,2026-09-02T23:59:32+08:00,feat(authority): add Stage 2A NoKV AuthorityStore candidate (#3819),3819,1640,0
+cabf7ec5de3809742e0a826b4eb598648eac2daf,2026-09-03T00:00:38+08:00,feat(quota): migrate void commit transaction to TypeScript (#3832),3832,2195,883
+5c0624760edb60341b40a10ff770904f5889eea9,2026-09-03T01:31:05+08:00,fix(control-plane): bind semantic replans to turn guards (#3840),3840,121,1
+0dd1fbc0de8caf28f2dc1b2b5e0d7492374f9044,2026-09-03T03:23:28+08:00,Merge pull request #3839 from huangruiteng/codex/postgresql-authority-tenant-rls,3839,199,92
+fe80aecd7f7c8302e1e8f4296ad4061aa4679dca,2026-09-03T04:27:48+08:00,Merge pull request #3864 from huangruiteng/codex/release-v0.5.4,3864,43,25
+17dc28a96dd51c65a41fd60e4bc1f1b177308cc8,2026-09-03T13:06:40+08:00,feat(control-plane): add Stage 2C local authority cutover kernel (#3882),3882,3121,6
+5484baf6e81771c9439a862f17f30983127d9f54,2026-09-03T14:55:07+08:00,fix(todos): preserve repository-bound PR resume evidence (#3885),3885,78,15
+c149ac68fdcffc4d115761a2dacb9b78e76d7e6c,2026-09-03T15:55:13+08:00,feat(machine-config): add typed durable machine policy (#3861),3861,18,18
+ae4887d707e69c19e712c379c4a1ef98b159ae64,2026-09-03T19:15:18+08:00,perf(summary): reuse collected run history (#3868),3868,13,3
+d2b5842e248ff784aadafbfc6ecd411ff6a25863,2026-09-03T21:52:36+08:00,feat(control-plane): fence legacy coordination writers (#3895),3895,212,6
+581c5dfdffe2c873d1db3677a3fce8767cca5529,2026-09-03T23:02:01+08:00,Merge pull request #3818 from huangruiteng/codex/local-authority-shadow-product-path,3818,1369,54
+79aa81e8cbea04d70d8bcd3d4ebe485e22a2b867,2026-09-04T09:42:46+08:00,fix: keep unscheduled watch monitors quiet (#3897),3897,3,0
+aff3d21aefc4afd5aa76fedc5cbdde90b1c0b779,2026-09-04T09:47:11+08:00,fix(stride): avoid authority marker substring matches (#3835),3835,25,4
+c3b0f332d32e9638f9c6af7983ac7b2149d24493,2026-09-04T12:45:02+08:00,feat(control-plane): route promoted Todo reads to file authority (#3899),3899,575,137
+70f2f9d80c80e58099bee0e0abff4ff59f2c6157,2026-09-04T12:46:13+08:00,perf(dashboard): load active goals before stopped history (#3906),3906,91,1
+a244d2cd20b0ff07ac840aaf5f35057c5530e784,2026-09-04T13:26:23+08:00,fix(control-plane): fence goal-scoped event log paths (#3912),3912,15,3
+d7d339db3196a1cc054c0b9027657a9df46e7aaa,2026-09-04T13:32:00+08:00,feat(goal): add read-only shared goal alignment projection (RFC stage 1) (#3874),3874,1039,0
+c514e0298a31aeee955bd17ed339216acd8cd65f,2026-09-04T13:34:12+08:00,test(authority): add the shared-goal-authority E2E stage ladder (#3869),3869,2467,0
+eb3e37d5e64c5b06f56ffa0dae3068ebaf60dac6,2026-09-04T16:41:19+08:00,fix: dedupe human gate notifications by state (#3919),3919,8,8
+6f191d794401254c21d8df59e2032e41a234888d,2026-09-04T17:03:47+08:00,feat: unify machine and Goal capability configuration (#3910),3910,61,2
+9e08ce2f2ce3b4a1ac0ed8a39c1e6f2074fcfcaf,2026-09-04T18:08:44+08:00,fix(replan): rotate periodic review identity (#3920),3920,6,0
+820d78b00f749ffb8edd7c2b969a1dbceeb43a4d,2026-09-04T18:22:46+08:00,fix(quota): distinguish blocked work from monitor-only (#3928),3928,38,11
+a2eaa086dbad54d44a3fe93bff544fbf6d1b688e,2026-09-04T19:53:52+08:00,fix(coordination): route the legacy todo write transaction through the effective runtime root (#3904),3904,33,5
+16bfb6979921d10258b5656f51556f8525e87317,2026-09-04T20:28:16+08:00,feat(control-plane): own post-writeback hook transactions in TypeScript (#3847),3847,1882,687
+ce51eca1946a37b00afe8fbc089c24b4bc79f352,2026-09-04T23:26:01+08:00,feat(authority): bound PostgreSQL commit admission (#3933),3933,34,0
+751765be6e04127e57c882faf1a7c0eb36e3f22d,2026-09-05T00:25:28+08:00,feat(runtime): add prevention-first sub-agent execution guard (#3668),3668,1211,54
+9761b6e0dcdf18ea8fd42fda7d4561a336f01bca,2026-09-05T01:46:15+08:00,feat: automate periodic-report delivery and unify capability settings (#3934),3934,2,2
+bf5dda59c3d34287553dd817f96113e55aceb785,2026-09-05T02:34:32+08:00,Merge pull request #3870 from huangruiteng/feat/stage2c-outbox-plumbing,3870,3707,164
+e26928f24e84f370600377d7427607818aa5187e,2026-09-05T03:29:44+08:00,fix(authority): keep event lookup inside control plane (#3938),3938,7,2
+e3f9b5366015f6ad7ae306f8b01fc6e2b3e3806b,2026-09-05T18:16:29+08:00,Merge pull request #3941 from huangruiteng/codex/typed-goal-state-repository,3941,480,168
+05ed534ec4e28ff87b3fa1149a70474552b63368,2026-09-05T20:20:47+08:00,Merge pull request #3945 from huangruiteng/codex/provider-first-todo-claim,3945,533,11
+54f2c07b1a6df3530b32bfbbe5524ffec2f58ceb,2026-09-05T20:59:31+08:00,Merge pull request #3947 from huangruiteng/codex/generated-coordination-contract,3947,254,172
+8bb8ddc1ba6e3273eca244d26d0a69ab1cb0b1bc,2026-09-05T21:37:21+08:00,Merge pull request #3946 from huangruiteng/codex/markdown-machine-section-projection,3946,470,1
+2d29f8e1b2dad803babf4a84423e27ad39a271ca,2026-09-05T22:35:35+08:00,Merge pull request #3948 from huangruiteng/codex/generated-local-authority-schema-identifiers,3948,63,21
+b49d4721e8e4cbeeac58f374d3312bb6bfe64f28,2026-09-05T22:43:44+08:00,Merge pull request #3949 from huangruiteng/codex/generated-runtime-shadow-schema-identifiers,3949,114,55
+bb6f561aff84d1c5a3d2cfd0273f14b478dffc67,2026-09-05T23:36:26+08:00,Merge pull request #3950 from huangruiteng/codex/generated-local-authority-shadow-schemas,3950,590,201
+492b4f270fffcb66e8736cf56fd24adb9a255dd9,2026-09-05T23:47:20+08:00,Merge pull request #3957 from huangruiteng/codex/typed-delivery-semantics-20260905,3957,25,77
+9edf8fad31a44df27d9f9d8c18c83c5cce8a093a,2026-09-06T00:22:58+08:00,Merge pull request #3958 from huangruiteng/codex/settlement-checkpoint-recovery,3958,178,0
+c33706f98f9101e01fcc00a666604adc1a13d14a,2026-09-06T01:15:29+08:00,feat(authority): promoted todo text/note edit through unified provider CAS (#3963),3963,244,0
+f8f82f3e5d3e61b064dee66008cf883aade56434,2026-09-06T04:30:29+08:00,refactor(todo): unify claim decision in TypeScript (#3972),3972,235,53
+3dfe874fd43e100946ecce5fabd868cf64699ef9,2026-09-06T05:08:04+08:00,fix(session-runtime): keep raw material out of compact projections (#3935),3935,8,3
+bf217e1e01bec79f357c9ecbd580cf2dfa73db8b,2026-09-06T07:09:26+08:00,Merge pull request #3973 from huangruiteng/codex/native-todo-create-authority,3973,465,34
+2515fc12d56b5f4c08da01fe3ae7a03cf671d177,2026-09-06T13:50:04+08:00,feat(todo): add provider-first native update (#3974),3974,311,9
+8c08efd3ad5d04faa2e26b98e4ce3655808fa898,2026-09-06T14:29:58+08:00,fix(periodic-report): align next-action fact selection with the canonical actionable-open predicate (#3871),3871,192,1
+2f4c8f33b822a175877a037b6e2a80d5d28ce8fe,2026-09-06T15:25:08+08:00,fix(todo): allow deferred native creation (#3980),3980,2,2
+ee47b613825b2d3456cc1806e705a63407d97fc0,2026-09-06T17:28:31+08:00,feat(todo): expose promoted claim retry identity (#3987),3987,2,1
+053ec75e499213bb1aa47ecbed46dfc5b6cfd11d,2026-09-06T18:27:10+08:00,Merge pull request #3997 from huangruiteng/codex/model-behavior-qualification-strengthening-20260906,3997,118,71
+8f72c21944b9d5ce9a130a7e962939e80c93c43e,2026-09-06T19:16:55+08:00,Merge pull request #4003 from huangruiteng/codex/cli-release-maintenance-20260906,4003,6,0
+c74ca00fbe2f2ff1890b6495d184d9f2f8d79659,2026-09-06T21:13:42+08:00,Merge pull request #4005 from huangruiteng/codex/unclaimed-todo-update-parity,4005,10,2
+0f0b586978673dc84a253f1dce10aedaad6184d6,2026-09-07T00:27:01+08:00,Merge pull request #4000 from now-ing/fix/claim-rejection-message-parity,4000,33,0
+0fb497af83dcb697f1617657869f05fd48668d2e,2026-09-07T03:21:21+08:00,Merge pull request #4032 from huangruiteng/codex/native-todo-ownership-transaction,4032,262,10
+97bab3ef92941a0e7a8a3739f79a3683857eb961,2026-09-07T11:34:45+08:00,docs(post-writeback): narrow the canonical JSON parity claim (#4026),4026,7,1
+1ee3cc428dde978bc50a9bd62a668c14c0365b63,2026-09-07T11:37:02+08:00,Merge pull request #4037 from huangruiteng/codex/periodic-report-runtime-result-fix,4037,69,8
+5ae0f9408f5973c235b42c44aeff266e14e7804b,2026-09-07T11:39:59+08:00,Merge pull request #4038 from huangruiteng/codex/authority-projection-outbox,4038,385,35
+78a92ac8be42d6fdf5012390b30d1b8b5440863d,2026-09-07T11:45:59+08:00,Merge pull request #3883 from now-ing/feat/rfc-3836-stage2-amendment-proposal,3883,1359,0
+ff690d42cf96852044bc557440e9df297d2c34fb,2026-09-07T11:47:25+08:00,Merge pull request #3978 from now-ing/fix/iss-3917-composition-retry-receipt,3978,472,0
+12b270f41d1ac70e46b0e87d98791bdeb10ec586,2026-09-07T11:48:43+08:00,Merge pull request #3979 from now-ing/fix/iss-3916-vision-fallback-gap,3979,577,72
+1e6e7dc300cc5db476df4ef25a85320766d7160f,2026-09-07T12:20:40+08:00,fix(post-writeback): project typed source rejections as composition failures (#4025),4025,45,1
+dabbf21adbf87bf82f7a47dac60974f2c02e2486,2026-09-07T15:04:30+08:00,Merge pull request #4020 from now-ing/fix/todo-claim-compat-details,4020,117,16
+0eebe01e75f21beeee763b5cde565fb084f3801c,2026-09-07T16:42:29+08:00,Merge pull request #4042 from KevinBarrus/codex/fix-runtime-fingerprint-topology,4042,26,67
+8937fa7b29e787375fb75920714059b0b1155362,2026-09-07T16:58:05+08:00,Merge pull request #4045 from huangruiteng/codex/configurable-todo-replan-cadence-20260907,4045,19,3
+eb2a2bb1eddd513130809524f65899228bc85d8d,2026-09-07T18:32:26+08:00,Merge pull request #3993 from Duang777/codex/fix-core-bug-5,3993,50,8
+e3087da86b09dcb28a40d69033e3e12cdc098a52,2026-09-07T19:59:49+08:00,Merge pull request #3985 from wchwawa/codex/stage2c-correctness-rollback,3985,4120,2865
+f084015518895440eb1e854dbc14f1be7a0d960b,2026-09-07T20:14:18+08:00,Merge pull request #4016 from liubf21/codex/usage-snapshot-model-binding,4016,81,9
+6462007499a0f71be7111717409489045cd8e8df,2026-09-07T21:13:36+08:00,refactor(todos): move completion policy into TypeScript (#4044),4044,663,172
+0b0193239447580ce6048a697d8c9719ec40a8cf,2026-09-08T14:58:16+08:00,Merge pull request #4079 from vlean/codex/guard-false-positive-fixes,4079,25,3
+b4373709a7378d52c48ab7822536d53e8f7d10f8,2026-09-08T18:37:55+08:00,Merge pull request #4053 from huangruiteng/codex/todo-terminal-lifecycle,4053,4037,204
+8efa86e5265b160a0ab3f4d162ef3aedca92d11a,2026-09-08T18:41:40+08:00,Merge pull request #4052 from xyx2002OvO/codex/fix-vision-terminal-no-followup,4052,69,3
+60e1f16854732edba5d29ddaa0f1fac764f7901d,2026-09-08T18:44:22+08:00,Merge pull request #4059 from cocolord/codex/canonical-wait-coverage-20260907,4059,456,264
+4c449bd3393307ec85529631ca5a5e34d75a29cf,2026-09-08T20:07:02+08:00,fix(todos): restore coarse completion transaction,4068,143,57
+b8742e852f22a269265ffdff4436891292bc824f,2026-09-08T22:27:29+08:00,fix(status): consume canonical Todos and align authority retirement RFCs (#4093),4093,33,6
+72bb0e3e16c28ac25ac58222936dfa7045ff35b5,2026-09-09T00:43:31+08:00,feat(todos): automatically recover missing canonical Markdown displays (#4097),4097,41,10
+e767ff860174fba7235bc12205cb9c57feb12880,2026-09-09T01:48:43+08:00,refactor(todos): unify lifecycle admission and retire Python authority rules (#4113),4113,657,742
+87367870dcf9b6ccc496764c4ceee78f5b215c54,2026-09-09T10:31:54+08:00,refactor(planning): close canonical Todo planning consumer paths (#4117),4117,92,33
+a7f32847ae1de8b22fcaee1a961fef3e8315b107,2026-09-09T10:37:50+08:00,refactor(todos): retire Python lifecycle field rules into TypeScript (#4118),4118,288,233
+d8c1584c3c9d960d9d131b40d6d01b390e6724d7,2026-09-09T10:43:21+08:00,fix(control-plane): type oversized runtime requests (#4112),4112,16,3
+a46fe93749163a6fafa2c1b38f0f2f8f51d74814,2026-09-09T11:11:25+08:00,Merge pull request #4129 from huangruiteng/codex/public-smoke-semantic-regressions,4129,249,86
+0d3cc514cce34191cb28a3a699d31a2bb49520e2,2026-09-09T15:47:44+08:00,Merge pull request #4122 from huangruiteng/codex/canonical-quota-consumers,4122,577,810
+b8837d84790c568772c26a956316f5307851cb0e,2026-09-09T15:49:24+08:00,Merge pull request #4134 from huangruiteng/codex/typed-delivery-history-projection,4134,216,213
+ddd2920ee150261a81f65227617a32370073c152,2026-09-09T17:14:08+08:00,Merge pull request #4136 from huangruiteng/codex/delivery-followthrough-policy,4136,52,2
+4d1772facd6bf5e0b67a6c5a0bc25235a922e1fa,2026-09-09T18:12:08+08:00,Merge pull request #4137 from huangruiteng/codex/canonical-delivery-response,4137,125,5
+f24a93411c7e2096687590fff544c37207ab582f,2026-09-09T19:34:38+08:00,fix(control-plane): reject invalid persisted lease ttl (#4110),4110,5,5
+3b29cfc132b364003153f62391423d27aa724d64,2026-09-09T20:56:21+08:00,fix: recover nested material monitor settlement (#4116),4116,16,5
+8749bf67b9ce01e4601e8aaf76b7075186dd616a,2026-09-09T20:56:57+08:00,feat(kiro-cli): add the Kiro CLI host surface (#4081),4081,1,0
+bc18304a02acabc3f7c8c55728743885c0c24f91,2026-09-09T21:35:44+08:00,Merge pull request #4142 from huangruiteng/codex/todo-update-target-admission,4142,228,166
+25143eb5986b3837effe5b79cd622d327e521aec,2026-09-10T09:33:27+08:00,fix(monitor): unify successor routing before writeback and receipt validation (#4145),4145,187,189
+8bd22d79f3518ba5db8c0e240c91d9140be95294,2026-09-10T16:06:31+08:00,fix(governance): unify canonical work snapshots for alignment and amendments (#4143),4143,261,250
+f75b8ee56e310f1b04be440078d8cc9c248dfd2e,2026-09-10T16:11:06+08:00,fix(monitor): unify typed observation state and generation (#4149),4149,317,366
+41a95d97566f5cb0aae224f193424c03ad6d1730,2026-09-10T17:08:15+08:00,perf(state): batch append event log writes (#4095),4095,3,1
+f28b13cf32b655e5cb6ee781779241b04064892d,2026-09-10T17:24:10+08:00,refactor(todos): compose public update planning over one snapshot (#4165),4165,163,126
+63df57694d8e623e5ea48bc81f08970b44cfe57f,2026-09-10T17:36:23+08:00,fix: retain archive receipts and safely validate scheduler transport (#4101),4101,431,12
+344f2fe6b3b203eb1206c3e145171542abb61fee,2026-09-10T18:14:29+08:00,fix(todos): support lease-fenced canonical text and note updates (#4152),4152,67,8
+7845a213ac9884c1fa95f6804e2702dce8285021,2026-09-10T19:37:47+08:00,fix(todos): reject lossy decision scope projections (#4179),4179,60,0
+14d02f714670f04ac0cd5c4ab2ba2fa6604a0785,2026-09-10T20:13:04+08:00,fix(manager): use global Core evidence and independent model defaults (#4170),4170,33,1
+6a8b8ad6768b3dd7052d1c503aa971afc1cee1be,2026-09-10T21:28:59+08:00,fix(heartbeat): clarify scope-bounded work without tiny-step bias (#4180),4180,48,40
+e7b82103b2193fccfc0031e2fecf81cdb1eb2ccd,2026-09-10T21:30:49+08:00,feat(heartbeat): load current thin rules from managed automations (#4194),4194,272,0
+863825b2367db1fc6a16fb190a969fd10c470d5e,2026-09-11T00:08:23+08:00,refactor(coordination): retire unused terminal-fence wire (#4203),4203,0,62
+c3597ec8db9ddd96f960e6590a04ae8ce1113acf,2026-09-11T04:40:45+08:00,feat(todos): compose canonical nonterminal planning updates (#4178),4178,202,98
+7a0d1d1d8e79b3fcbc306cad8ad36475d58f5d6a,2026-09-11T05:17:16+08:00,fix(todos): preserve decision and resume semantics across archived history (#4184),4184,458,145
+c4816c01d68350949453ffd53278bff3d4dbcc86,2026-09-11T09:39:15+08:00,Merge pull request #4126 from cocolord/codex/iteration-fresh-stop-20260908,4126,83,10
+b8e7be88d20f264e1109223c6ef4ed144d92f3f4,2026-09-11T09:43:51+08:00,Merge pull request #4139 from Duang777/codex/fix-scheduler-hint-safe-encoding,4139,3,9
+5687bb5e5147d31ec504a1a78ae483696def4b9b,2026-09-11T09:46:21+08:00,test(authority): execute the Stage 2C parity-half ladder rows (#4167),4167,1258,9
+74d6c9e045de3a3be673a48598fb95662cf7672a,2026-09-11T09:48:44+08:00,Merge pull request #4199 from BigDataDZ/codex/pr-4187-zero-generation-metadata,4199,3,1
+ec300f860e0e51f0d7df8cda78a583545e592775,2026-09-11T09:57:53+08:00,Merge pull request #4211 from huangruiteng/codex/canonical-consumer-closure,4211,302,565
+3b12a1a7524f47d8e9d02f1044bd33741c9238a5,2026-09-11T10:31:23+08:00,Merge pull request #4187 from huangruiteng/codex/monitor-observation-transaction,4187,382,57
+f601d179b5de8033750d8b322e3cd9d33c0edafe,2026-09-11T11:56:59+08:00,Merge pull request #4214 from huangruiteng/codex/release-v1.0.3,4214,76,18
+bde1632bb6f29aeb9a8b4ac23ead3e98ba2f2f55,2026-09-11T12:13:00+08:00,feat(coordination): add opt-in SQLite authority provider (#4121),4121,562,66
+b57c61502f37777473886ca57828b4c091f81dd2,2026-09-11T15:27:48+08:00,fix(heartbeat): share automation-first Goal execution contract (#4201),4201,546,129
+081b1142df897019ba049a371e128ea50d60d1b0,2026-09-11T16:00:45+08:00,fix(update): separate prompt readiness and harden pinned installs (#4228),4228,23,6
+854f98190697677d819b4cc9cf9d7415e46cd895,2026-09-11T16:51:38+08:00,fix(ui): manage remote SSH source lifecycle (#4232),4232,160,22
+d76d3b75ba057c0cedfdbc70805c151147f1cbb7,2026-09-11T16:59:57+08:00,fix(refresh): require explicit acknowledgement to resume paused external delivery (#4169),4169,200,8
+933dd394d153904d36a336b17ebed852276dceaa,2026-09-11T17:34:40+08:00,fix(ui): restore remote Goal lifecycle controls (#4234),4234,139,160
+49cee5b30fef9f5bacddb548dc37809d7aa71be3,2026-09-11T18:22:27+08:00,fix(vision): allow bounded evidence-rich replanning packets (#4238),4238,6,5
+04dd91ebd243b642529d06008bd7e8478730710e,2026-09-11T20:34:07+08:00,Configure child model preferences through CLI and Goal settings (#4239),4239,7,0
+091379eb32cae711ae4dd444378506452e5e93ee,2026-09-11T21:43:48+08:00,fix(host): recover vision settlement and preserve scoped replanning (#4208),4208,245,47
+3b2b79706280e5c246ce98b92e1fa19b1880ee78,2026-09-11T22:48:27+08:00,refactor(todo): unify decision dependency rules and repair gate scope contradictions (#4243),4243,278,393
+32bcfa230d1ff8c4836e617b6b6e3001ba1778d4,2026-09-11T22:57:15+08:00,"Provide capability context at coordinator planning, delegation and result boundaries (#4244)",4244,320,9
+5b163c37c9b708f6cc6f3f74a7efb500ce6409ce,2026-09-12T02:10:21+08:00,Merge pull request #4257 from songoow/codex/mypy-decision-scope-casts,4257,14,10
+84334f794126735a83a6cfb77882dd58ca8066d9,2026-09-12T03:07:09+08:00,fix: harden decision-scope boundaries and CI isolation (#4259),4259,153,27
+be75ae7a6f7ed63b4d4ff4d19e9cb7f79fce83ff,2026-09-12T10:45:37+08:00,refactor(quota): unify typed capability resolution and repair bindings (#4254),4254,187,380
+7efa6cd34a08b2a46e55aadb16a8f9305523eaad,2026-09-12T10:48:19+08:00,fix: persist accepted replan successor checkpoints (#4261),4261,11,0
+2ebd921ee989f7c696a7214ba1176d3bd5de6fb3,2026-09-12T10:57:21+08:00,feat(todos): explicit revision-guarded cross-agent session continuation (Stage A) (#4094),4094,641,6
+d7e47652b99148376e12d37cf56fe67ae0aad7ce,2026-09-12T11:29:53+08:00,refactor: trim thin heartbeat agent input (#4262),4262,128,11
+604b780e093ff0cbf121a331b49673b69b3eafa6,2026-09-12T12:11:11+08:00,feat(todo): close native work requirement edits with shared typed validation (#4252),4252,131,59
+fe18fd386073b973ddcd5b23fffa6c66a2a1124e,2026-09-12T12:13:56+08:00,feat(goals): show acceptance gaps and evidence-backed progress (#4248),4248,229,0
+72e5575863fa69a692892e6669fa7ccf9afc6aeb,2026-09-12T12:25:55+08:00,fix(quota): unify scoped gate fallback under typed dependency rules (#4253),4253,111,100
+18fda32fda59e1ed1101c723eb3bfbc981b74bfd,2026-09-12T12:58:23+08:00,refactor(frontier): unify typed revision and long-chain replan policy (#4258),4258,261,292
+8a9129379ed7f3ae52e8dfe990a30dd4e6f9c16f,2026-09-12T15:39:30+08:00,refactor(work-items): unify typed Todo topology across planning and task graph (#4267),4267,303,245
+6ef6838102cd1e0696bc98b046b0238f787e8f09,2026-09-12T16:57:43+08:00,fix(turn): warn on envelope growth and gate static delegation guidance (#4268),4268,84,40
+4d0f2437640796f4a7f7906520aa12001fdec177,2026-09-12T17:54:07+08:00,fix(leases): unify typed eligibility and canonical inspection (#4269),4269,116,108
+5bb312ccab5dbddb9c29f54e135bec9f56f8cac9,2026-09-12T18:30:51+08:00,Refactor shared authority transaction semantics (#4280),4280,59,117
+b9e8c74d4f852a1444c44cca7ac108911407c531,2026-09-12T18:58:11+08:00,feat(todos): close canonical ownership update boundary (#4273),4273,79,26
+39c76ece49170accf7d6b12b8833e2363dc4baa5,2026-09-12T19:53:34+08:00,feat(periodic-report): optional calendar settings and capability handoff (#4263),4263,49,7
+bb0ba5bf9c4677faed4d5ea3774b703663b8c133,2026-09-12T20:10:41+08:00,refactor(todo): converge canonical semantic kernel across control plane (#4279),4279,929,860
+0cbb8472fd09c3a335f46236bfecb998a61924de,2026-09-13T00:35:57+08:00,fix(quota): recover undeclared capabilities before fallback selection (#4285),4285,156,142
+6513b1b90dbd17b4cbc2d21daa68bb5a763921af,2026-09-13T06:39:16+08:00,fix(subagents): guide concurrent coordinator investigation (#4301),4301,4,4
+8570657f1eb6ed268bd2ccbdb781b163f4716b5a,2026-09-13T07:02:03+08:00,fix(loopx): reconcile skill discovery and persistent heartbeat startup (#4296),4296,71,19
+f0a7344551da26d06fa03d2ff6c9d2be8dae9da5,2026-09-13T07:46:45+08:00,fix(quota): decouple due monitor observation receipts (#4295),4295,28,4
+f5ca839680a50414eaf322bfd6a4998ad0918eda,2026-09-13T07:48:15+08:00,fix(reward-memory): verify private OpenViking scope (#4291),4291,54,0
+69342fcef371fb2ce06a8c43f4dcf36b458987eb,2026-09-13T11:57:22+08:00,ci(runtime): raise minimum Node.js to 22.18 (#4298),4298,3,3
+44d4222907cdbb398532be851088f23309ba7d9e,2026-09-13T12:04:34+08:00,feat(agents): remember scoped runtime capabilities and inherit Goal declarations (#4290),4290,268,31
+f39165ebcc427c651aaa5c8f8d5afe8aedc3e517,2026-09-13T12:07:54+08:00,fix(todos): unify document ownership and recover canonical projections (#4299),4299,232,297
+524154e421e279660d278397d6b4e1d5e338971d,2026-09-13T12:09:14+08:00,fix(heartbeat): recover unsettled host turns (#4302),4302,388,10
+8234a484fdb79bbd4b891a01a7c5b2f47317d8f1,2026-09-13T12:10:26+08:00,fix(configuration): route global settings through canonical goal source (#4303),4303,56,4
+58dbaeaec9bfad537f5b8ad2b1def9b2dcbd5197,2026-09-13T12:19:14+08:00,fix(quota): persist rolling-window projection semantics (#4310),4310,41,1
+fbd8fef0282f632bc0e2ba2d5119f90c0e9d8181,2026-09-13T12:57:27+08:00,refactor(authority): unify Todo presentation and provider conformance (#4283),4283,315,98
+970159de4227f1855f3de5f1b09c430501875ff7,2026-09-13T13:21:52+08:00,feat(reward-memory): connect private outcome lifecycle,4293,489,101
+34710d17addbbdfd56e6ea1f03ec73519a4aa7fd,2026-09-13T14:07:56+08:00,refactor(authority): unify retained journals and enforce scan snapshots (#4287),4287,200,319
+c0b572d2d508bb10c32701057dd71ff4f8eb663c,2026-09-13T18:34:33+08:00,refactor(coordination): unify command recovery and isolate archive transactions (#4286),4286,366,427
+6b337bcbde8457bc3268ec7d2780367ace3c6147,2026-09-13T18:35:02+08:00,fix(heartbeat): reserve readable Reward Memory prompt headroom (#4333),4333,56,7
+18fa81bc0517fd46c753af3a737a886fe4e117f8,2026-09-13T20:23:32+08:00,refactor(todo): typed update intent and scope semantics (#4289),4289,292,39
+16ee7e6c915a6cd3c89d7278397c16613b1cd7d2,2026-09-13T20:48:17+08:00,fix(quota): isolate recovery from current replan (#4329),4329,8,0
+df5e014b4777ad4def79c5970d15e60e140d7fa2,2026-09-13T21:25:48+08:00,fix(todos): validate in task repository worktree (#4308),4308,203,38
+6d3377ae28975293102a1996c9a893c929926b5e,2026-09-13T22:20:36+08:00,Merge pull request #4342 from huangruiteng/codex/host-closeout-canonical-recovery,4342,26,21
+ba6ba1b6e3a2788d188f36e012eb795e2616800e,2026-09-13T22:45:34+08:00,refactor(todo): migrate declarative decision metadata (#4292),4292,195,9
+b0f7aa0d12eab1947808d5af3f46ac51d37ec794,2026-09-13T23:21:45+08:00,fix(quota): preserve action and monitor receipt identities (#4335),4335,133,11
+9231d5b3d7a801803f36952d60dc716e8418b8e4,2026-09-13T23:42:57+08:00,refactor(coordination): unify canonical handoff mode authority and recovery (#4304),4304,296,47
+5ce8e9fcfef00215db3ac3d70d0fa5cedba4bc1c,2026-09-14T01:24:25+08:00,fix(quota): qualify explicit selection before final guard,4350,8,3
+201da973c603de7eb4d84b167bd5706819827fdf,2026-09-14T01:40:46+08:00,feat(todo): add timezone-aware resume_at triggers (#4347),4347,185,7
+003cb168a5d48420b7c12d3ee40094976ec8c7b2,2026-09-14T09:01:55+08:00,fix(sqlite): retain fast COUNT and add D2 qualification checks (#4328),4328,54,25
+4e73428ff3f170578a3be12bde15c2612cf55f99,2026-09-14T09:41:36+08:00,fix: restore public smoke contract parity (#4355),4355,23,4
+a371a30bf5071ac7a1bd43d8d0a050406bd44de5,2026-09-14T12:11:02+08:00,refactor(presentation): share operation review semantics in TypeScript (#4364),4364,240,0
+fa731a869fd695a5241bea69c2d5049e227504df,2026-09-14T12:47:27+08:00,feat(scheduler): add Trae App heartbeat host,4271,670,204
+ced85a63b2e390fbbe75c5e8da6b707307b01546,2026-09-14T14:44:30+08:00,refactor(coordination): make Goal Channel ownership provider-aware (#4316),4316,213,137
+24c109e270e822e31ddd064e85f4d8c9f0a6f685,2026-09-14T16:30:26+08:00,"refactor(coordination): unify local provider routing for File, SQLite, and PostgreSQL (#4317)",4317,222,62
+ab34380eee5374675f765b5deadc170ff0b955f4,2026-09-14T17:28:02+08:00,feat(coordination): support canonical lease renewal (#4348),4348,352,69
+e743f2404d4a17d52cbf2d15db1f879ff46caea8,2026-09-14T17:29:29+08:00,Merge pull request #4132 from huashuai/codex/c4-goal-actions,4132,281,0
+16df789a96cdb62c6ed6190c0b751a91c6a2f3a4,2026-09-14T18:22:47+08:00,Merge pull request #4349 from yilin-succeed/codex/validate-effect-runtime-idle-ms,4349,161,44
+ea4d53501cc3b78949300350ac0d1eaccd8bd5b6,2026-09-14T22:31:40+08:00,Merge pull request #4358 from songoow/codex/archive-leased-lease-cleanup,4358,185,14
+d5d19a91c0193a00cacade2b48d8cfe8fe8bc975,2026-09-15T00:52:40+08:00,fix(quota): keep boundary repair selection unbound (#4387),4387,3,0
+7ab81bb69c64761275351f27dc7d536bb5e6c6ba,2026-09-15T01:57:48+08:00,Merge pull request #4334 from huangruiteng/codex/postgresql-service-admission,4334,343,2
+a1c2516f4e553f9a84876dff587f60e47614bf24,2026-09-15T07:55:47+08:00,fix(todo): bind validation to delivery revision (#4406),4406,94,37
+12c9885dbeb6f108e2eed8eb24187c407449e5bd,2026-09-15T11:08:42+08:00,Merge pull request #4412 from huangruiteng/codex/fix-offline-registry-timeout-4407,4412,81,13
+2b4c3cf2676326886a255c25c1057e0e5ef55897,2026-09-15T11:48:33+08:00,Merge pull request #4415 from huangruiteng/codex/fix-monitor-poll-closeout-4414,4415,96,4
+7cbc57a0cd1a58abc1a20f8e6d472db958b1cda2,2026-09-15T12:50:40+08:00,Merge pull request #4351 from huangruiteng/codex/canonical-monitor-configuration,4351,47,46
+cd9cfa6d40b65ea0ea61f6b67ddae58167b845a6,2026-09-15T13:30:54+08:00,Merge pull request #4408 from huangruiteng/codex/bounded-local-authority-profile,4408,993,70
+4d57f53af6af44bca022fa12d6dbfb70608c41cc,2026-09-15T15:16:36+08:00,Merge pull request #4423 from huangruiteng/codex/runtime-identity-qualification,4423,249,24
+1dc6ad8d8608af7146d8669b9755d127748bf5cc,2026-09-15T15:25:49+08:00,Merge pull request #4361 from songoow/codex/managed-step-retry-continuation,4361,342,1
+6bb41310517692c2266f7e4c38054e28c6a496e6,2026-09-15T16:08:27+08:00,Merge pull request #4341 from LIHUA919/codex/4331-final-outcome-claim,4341,99,13
+662e75d5f656e388befddd2f0cb7226f0e84fec6,2026-09-15T16:39:50+08:00,Merge pull request #4372 from LIHUA919/codex/m3-delivery-verification,4372,116,0
+3f916ff3880b954e4ffdd0f03f17829fc12374ce,2026-09-15T18:53:28+08:00,Merge pull request #4443 from huangruiteng/codex/managed-execution-explicit-selection-20260915,4443,374,29
+934085c3a2b52ce87010a4d65d99b3d510f79131,2026-09-15T19:17:25+08:00,Merge pull request #4440 from huangruiteng/codex/automation-prompt-obligation,4440,188,16
+65fadb6af51a048107b001890cbd0a1ffc046eae,2026-09-15T19:23:38+08:00,Merge pull request #4421 from Yue021130/codex/4413-resume-at-clock,4421,2,0
+87a46aacb298060aaca52fa40f2f02764c936022,2026-09-15T19:24:24+08:00,Merge pull request #4426 from songoow/codex/public-safety-drive-qualified-paths,4426,6,5
+b0d1841b9692662db8fe5ed061af562e17ca099c,2026-09-15T19:25:37+08:00,Merge pull request #4429 from songoow/codex/fence-close-source-retry,4429,28,0
+aff69fd92153116834685d149a307c30a1a09084,2026-09-15T19:42:38+08:00,Merge pull request #4396 from BigDataDZ/codex/decode-github-subprocess-as-utf8,4396,36,36
+6fccb5362d23807cf1910658d10fa5a29e177188,2026-09-15T20:19:36+08:00,Merge pull request #4402 from ehz0ah/codex/fix-fenced-goal-prompt,4402,83,12
+19a69abd6c5cb96988d884f2956a0dca54e2969e,2026-09-15T20:38:53+08:00,Merge pull request #4433 from songoow/codex/semantic-vocabulary-contract,4433,6,3
+886fb8e9f789b503119896a2bf6f0a6307746842,2026-09-15T22:08:33+08:00,Merge pull request #4384 from rootkiller6788/fix/usage-summary-void-window,4384,87,19
+26eaefc21487294bb983ee084ad5879cadb54913,2026-09-16T02:12:35+08:00,Merge pull request #4465 from huangruiteng/codex/drop-first-connect-onboarding-todos,4465,0,1
+82b5ff50c28500a7882effcecd5d5fde3bab121b,2026-09-16T03:38:55+08:00,feat(managed): default the steward and managed Turns to one execution profile (#4470),4470,241,3
+c361dc2e7f4494a28d72f54da6f42e1e93c96f9c,2026-09-16T06:34:26+08:00,feat(turn): name the operator-reachable exits in a managed executor refusal (#4477),4477,72,0
+001e0c38080eb7e3269adeb37b33e0c09fecf621,2026-09-16T07:05:53+08:00,feat(turn): resolve the default host from the operator credential (#4479),4479,47,32
+887961badb20face7a50d9d07e547ba542089310,2026-09-16T09:06:29+08:00,feat(turn): admit one executing Turn per Turn lane (#4485),4485,207,2
+0c96f02d76c707116a3a820317bd404ae8a09271,2026-09-16T12:15:21+08:00,fix(authority): keep legacy JSON keys readable across the sqlite migration (#4497),4497,109,4
+75fcd5556c3f8dd438365ba7f16fea7c955955ba,2026-09-16T14:35:03+08:00,feat(semantics): separate action domains and verify production evidence (#4494),4494,311,118
+68d95514b0712705335d06ddcaf8f76cfc80f048,2026-09-16T15:20:36+08:00,feat(steward): make the operator credential a first-class machine setting (#4505),4505,475,0
+54333631832967c5f1acb3cac93fbf3234a7c583,2026-09-16T15:36:03+08:00,Merge pull request #4468 from huangruiteng/codex/state-log-json-key-fidelity,4468,27,4
+f34671d82bfe841051095226c489aca81d47bd20,2026-09-16T16:37:53+08:00,fix(quota): resolve an explicit Todo id beyond the display lanes (#4512),4512,17,5
+3acd07697f05d670b7c0f97f2e54a7a22ff71a41,2026-09-16T17:16:43+08:00,feat(steward): validate a team preview without letting it apply (#4519),4519,138,0
+c159a15b353a1a6224803e7da428c2b8c406aefd,2026-09-16T17:36:55+08:00,feat(steward): materialize a confirmed team plan through the Todo owner (#4524),4524,91,2
+1b64934120071cce86548b53bb38ef6faf70f4b1,2026-09-16T18:03:00+08:00,docs(rfc): record the shipped steward team intake and its multi-agent linkage (#4527),4527,8,5
+856dc9a38e570f7b1a505c3ec6a32fa8dd2ef2b9,2026-09-16T18:12:45+08:00,fix(steward): publish the team plan readback and keep its receipt valid (#4528),4528,45,7
+7bf8104c9daf224d47b0104d5c207f9966b1e8af,2026-09-16T18:35:09+08:00,feat(steward): make a team plan name the Goal it staffs (#4532),4532,23,7
+86530b35a98a021590527adb5d964dd4d0bdf578,2026-09-16T19:18:51+08:00,feat(steward): record the intent basis a materialized team plan advances (#4538),4538,63,1
+818db752272cd54b82a0b12f6453b26eb0e70fc8,2026-09-16T20:07:09+08:00,feat(agents): ship the first local producer of the peer agent directory (#4544),4544,277,0
+7c65b0c6037b80b81b3dd5daa5e40d16bd7dbfa9,2026-09-16T20:21:18+08:00,fix(quota): make an unreconcilable action selection self-diagnosing (#4545),4545,54,0
+4cc15ff0a40b55b3f46da7b752f44dfc57fd5e71,2026-09-16T21:04:08+08:00,perf(chat): bound completed event retention (#4463),4463,8,9
+58d5951bc2e1024dc17647cb05fbb2621684385f,2026-09-16T21:31:29+08:00,fix(replan): keep checkpoint replan ACKs visible past the run window (#4554),4554,39,3
+d3e39016aed55daef86e2e2391fcc625477dcfa8,2026-09-16T21:36:56+08:00,fix(quota): settle an autonomous replan spend from its own terminal frontier (#4536),4536,62,2
+dc935d73db4b2709e4d8bffc0ffaea76d31de8a4,2026-09-16T21:37:53+08:00,fix(quota): tell the owner a blocked priority todo while fallback continues (#4543),4543,22,4
+f2873c72a15b1a25d79e053da9a9d561d74d977e,2026-09-16T21:44:45+08:00,Merge pull request #4472 from huangruiteng/codex/todo-update-transaction-cutover,4472,1027,307
+5d66197c6341aaaf7b92b82479e1d70f78324920,2026-09-16T22:01:18+08:00,feat(goals): derive the Goal artifact lifecycle projection (#4360),4360,464,0
+324760f1a40177c6e428f6af0d1fceef0ef2ef94,2026-09-16T22:36:45+08:00,fix(replan): decide a lane's periodic review on lane-complete run history (#4561),4561,54,2
+262923de1984478e416c654746295378c97a3e54,2026-09-16T23:35:57+08:00,feat(semantics): generate shared Turn contracts and controller rules (M2) (#4499),4499,1056,362
+f1166e81ef55d9c0bd332ff24d34575688113342,2026-09-16T23:38:39+08:00,fix(manager): keep an unstaffable team lane a typed gap and offer the admitted plan as a card (#4569),4569,142,23
+023bcbcfabab3fa3d76ecb4bb5af7b5aebe7d109,2026-09-17T00:18:18+08:00,fix(turn-driver): import the Turn result owner from its generated module (#4571),4571,1,1
+cd1b32f4bf4e1af8fb567213d477e9f94612269c,2026-09-17T00:41:51+08:00,feat(presentation): compile a provider-neutral confirmation frame for a plan card (#4579),4579,125,0
+e6427250a00ba1dfb36321fcb54431945ae2af83,2026-09-17T01:12:22+08:00,fix(manager): keep a confirmed team plan's priority and report its real outcome (#4582),4582,137,5
+baedc07de986aeb2c52e3f7c28dcff0cf0130c7a,2026-09-17T01:33:32+08:00,fix(manager): bind a team plan to the intent it was reviewed against (#4585),4585,24,0
+6c2df458b0f2ed0f5dbd52513bd395c794c8b793,2026-09-17T11:01:16+08:00,fix(manager): make a partial team-plan materialization recoverable (#4587),4587,56,12
+809f0cfc367f4ae100cfd4cd213704fcdb07e715,2026-09-17T11:03:30+08:00,fix(goal-frontier): keep the long-chain replan ACK until this lane's own chain changes (#4610),4610,69,10
+e80f5f8902866e756e3ffd861b51276a7f6c433f,2026-09-17T13:17:19+08:00,Merge pull request #4595 from huangruiteng/codex/steward-unbound-receipt-repair,4595,32,2
+090be9884d8f3e60771ffe300cad719abb737199,2026-09-17T13:18:19+08:00,fix(quota): say when a turn still owes its settlement binding (#4597),4597,7,0
+e160b1bbcc51d6507daed4f5719157060a647f33,2026-09-17T16:49:27+08:00,Merge pull request #4633 from huangruiteng/codex/steward-team-transaction-20260917,4633,447,379
+897e9aedbdb6822344c1e98232025bac80e40dfe,2026-09-17T18:10:03+08:00,Merge pull request #4608 from songoow/feat/track-a-single-source-todo-task-class,4608,14,6
+e12e05ffffb5aafa6059de1540edb341f793245f,2026-09-17T19:34:13+08:00,Merge pull request #4632 from Duang777/codex/optimize-core-hotpath-6,4632,5,3
+a96c9aa91c9d92454efcd7937483bac76e35fd4a,2026-09-17T19:35:13+08:00,Merge pull request #4634 from Jim-jimu/fix/repository-url-ports,4634,2,2
+36cf2d8147d112725900178872563b7662cb70b1,2026-09-17T21:32:25+08:00,Merge pull request #4647 from huangruiteng/codex/runtime-probe-20260917,4647,16,0
+fdf693cf48cd92a68aab239c87a2b0c1edcdac76,2026-09-17T23:23:02+08:00,Merge pull request #4637 from huangruiteng/codex/control-plane-outcome-reconcile-20260917,4637,25,4
+3b4839e6a0a1f428ad94cbef6da88c666484c920,2026-09-17T23:26:08+08:00,fix(diagnostics): expose route health scope across status and doctor (#4636),4636,10,1
+a10f1bf4479057bdde509879daaa4927b245a044,2026-09-17T23:31:02+08:00,Merge pull request #4655 from huangruiteng/codex/replan-checkpoint-owner-20260917,4655,142,165
+8330a974cc2631ffd006d1fb7bd1627d2d690e85,2026-09-17T23:57:24+08:00,Merge pull request #4666 from huangruiteng/codex/authority-transaction-kernel-20260917,4666,325,245
+56fa3f11b5bbe108e1bf4de254fcbdf74a84a505,2026-09-18T01:04:54+08:00,Merge pull request #4670 from huangruiteng/codex/pr-4666-postmerge-audit-20260918,4670,2,1
+d8e7af1412c91027c7cdd337922c8b2c6231191c,2026-09-18T02:40:59+08:00,feat(coordination): close canonical lease acquisition and current-proof recovery (#4669),4669,710,519
+d5bf42a2930c97987f3f5bb89388cedfb320cb6d,2026-09-18T10:39:01+08:00,Merge pull request #4671 from huangruiteng/codex/benchmark-runtime-unification,4671,229,43
+575c0a6331de3c9dd85d82a2c929eade911926fe,2026-09-18T11:30:30+08:00,Merge pull request #4654 from huangruiteng/codex/heartbeat-selection-binding-4650,4654,51,1
+ed1464e622e4bba0c36ce03cfb1f4a3ff4e7af66,2026-09-18T11:49:52+08:00,Merge pull request #4672 from huangruiteng/codex/authority-foundations-20260918,4672,246,60
+4c32380a590439ac5907f150f351e6e16d392254,2026-09-18T12:48:20+08:00,feat(collaboration): add semantic peer collaboration and durable Chat returns (#4675),4675,730,0
+050f33b6abfd45cfac201cbef7211f65df517e9a,2026-09-18T12:49:52+08:00,Merge pull request #4678 from xiaods/codex/r2-worker-lifecycle,4678,107,13
+06ff9208418611a326c198a8fcbb44a5c4673614,2026-09-18T13:49:19+08:00,Merge pull request #4683 from songoow/codex/goal-acceptance-governance,4683,1090,16
+35b8f05f181491af0f2f9d8456d0df19e5e0da7c,2026-09-18T15:17:22+08:00,Merge pull request #4686 from huangruiteng/codex/authority-consumer-foundations-20260918,4686,606,467
+28b1c9f60d05755de05d44ee1a80110df118d002,2026-09-18T15:23:28+08:00,Merge pull request #4690 from Duang777/codex/optimize-core-hotpath-8,4690,55,18
+657902286b01e7c81a5f4b13ff1b16a3a5dbb9c4,2026-09-18T16:27:08+08:00,Merge pull request #4689 from huangruiteng/codex/canonical-reviewed-edits-20260918,4689,229,132
+f5c95ff08e58f80cc2d9f57fc0c724123d1c6e33,2026-09-18T19:06:54+08:00,Merge pull request #4688 from huangruiteng/codex/managed-team-foundation-20260918,4688,376,19
+211ebfa5119ff268d1fe2da9863b4d7b7c60c888,2026-09-18T20:15:23+08:00,Merge pull request #4694 from Duang777/codex/optimize-core-hotpath-9,4694,73,2
+0d90d6f66200f757a8a295e35753e78a8e029b6f,2026-09-18T20:16:07+08:00,Merge pull request #4695 from Duang777/codex/optimize-core-hotpath-10,4695,11,2
+d3a452eec0e520cbb7d3e78bec8544a574094eeb,2026-09-18T21:40:23+08:00,Merge pull request #4693 from huangruiteng/codex/canonical-authority-source-20260918,4693,229,131
+d2d748fc1844a92e1bf92edae26fe35e7fda8c53,2026-09-18T21:48:49+08:00,Merge pull request #4692 from YZJF/yzjf/blocked-transition-notice-contract,4692,338,2
+092a28c4e7704828b134e21757edb29924ff9b03,2026-09-18T21:49:27+08:00,Merge pull request #4696 from huangruiteng/codex/scoped-project-coordination-20260918,4696,50,5
+876fea9c4fe456c9bc711edc028aa61b08e4e8ed,2026-09-19T00:35:58+08:00,Merge pull request #4699 from huangruiteng/codex/canonical-local-lifecycle-20260918,4699,452,231
+d5f593b28d8b870f894db8722ff86daa8e91ad95,2026-09-19T13:37:56+08:00,feat(coordination): accept seed routing and report SDK capability mismatches in the NoKV helper (#4724),4724,52,6
+9f1916960306b3650d795895b89f331eeae2516e,2026-09-19T15:23:43+08:00,Retire unused Todo coordination command paths (#4723),4723,10,452
+bdc1c160444a83d6332da442110ce08b9d5ecbe3,2026-09-19T15:41:36+08:00,refactor(todos): preserve complete work counts across bounded projections (#4713),4713,305,213
+3d5fc5b462f8af1b357b32a227d200d15a338a47,2026-09-19T17:15:18+08:00,feat(chat): coordinate governed teams with inline Goal LoopX mode (#4700),4700,52,0
+74b62ebb55c9f9fefb209f0351593ba8f9c5d32d,2026-09-19T17:55:04+08:00,feat(collaboration): recover delegated team work after context loss (#4731),4731,121,1
+66d2b68b97f98b6ac482cd677b3fc599df1700e9,2026-09-19T21:17:01+08:00,fix(replan): align vision semantics and qualify native agent closeout (#4730),4730,624,211
+5b71158f573e235737d9142875c81c681f1ae3e8,2026-09-19T21:58:29+08:00,fix(dsh): terminalize output budget exhaustion,4745,39,2
+9c97de0172fd6a5ecf4aa04770af9e0ca2b8a214,2026-09-19T22:51:48+08:00,feat(delegation): expose authorized runtime routes to coordinators (#4741),4741,401,20
+cc8e28d8b58a9b15e928d7e2cee16097172567d1,2026-09-19T22:56:38+08:00,fix(turn-driver): classify repairs from typed actions (#4740),4740,19,12
+8fd32d4b72c2076004956aca602b5c802399a38b,2026-09-19T23:43:23+08:00,fix(quota): close committed monitor polls without spend (#4739),4739,33,20
+39247551d88f473034ea4dac97356c0a1bc9200b,2026-09-19T23:52:47+08:00,feat(workspace): focus first screens and inspect team work in Goal chat (#4736),4736,188,115
+e16cf747d835d57821be4bce9710c027539012c0,2026-09-20T00:25:09+08:00,feat(configuration): align Codex child-agent capacity (#4733),4733,169,2
+916763e2c7fc9c19274f877dd234f7db6a65390c,2026-09-20T02:21:56+08:00,feat(todos): converge Monitor observation and reactivation on canonical authority (#4732),4732,136,28
+5077b802397c9147f744deaedef2c3add4a7bf8a,2026-09-20T10:54:30+08:00,refactor(turn-driver): classify registered actions explicitly without changing admission,4746,55,1
+8dcabb94eb24eb3c915ae9d81c4eba4fd88a274f,2026-09-20T12:52:49+08:00,fix(delegation): preserve preflight rejection reasons (#4757),4757,49,2
+339de65c4ce145e454a8d7b8efa3910577bb17b8,2026-09-20T14:37:06+08:00,Merge pull request #4762 from loopx-project/codex/research-review-journey,4762,155,10
+4eb6ea9eed3a2e374933b233b62bd46419046263,2026-09-20T14:43:50+08:00,Merge pull request #4785 from loopx-project/codex/managed-codex-delegation,4785,43,8
+cd46f0ea15ac0df408f1cc17d10c49d594ee55b6,2026-09-20T19:55:19+08:00,Merge pull request #4754 from loopx-project/codex/authority-cutover-followthrough,4754,145,249
+36998656e60cbeb817cb78c1c99d4145f48b451b,2026-09-20T19:57:31+08:00,Merge pull request #4764 from loopx-project/codex/fix-turn-reselection-no-spend,4764,551,41
+84fb0526bb60fe405484cbc0ef3ad69ebed432e8,2026-09-20T20:01:11+08:00,Merge pull request #4802 from loopx-project/codex/local-agent-allocation,4802,1,14
+04ba65ac1a37c94d964adeedf3ff1f125c5ffe12,2026-09-20T20:19:22+08:00,Merge pull request #4761 from loopx-project/codex/authority-projection-recovery,4761,403,266
+be7789fd950998828103a266ac9823d6092549cf,2026-09-20T22:35:38+08:00,feat(coordination): fence NoKV authority publication on the workbench incarnation,4774,109,13
+6e5d540992bd698176ef2f7faba14d0fd958afcb,2026-09-20T22:43:16+08:00,Merge pull request #4775 from songoow/codex/coalesce-live-packet-rendering,4775,16,11
+a1d51130c2dd385f91fb9252c878be18afdb2217,2026-09-20T23:09:06+08:00,Merge pull request #4768 from loopx-project/codex/multi-subagent-native-capacity,4768,49,2
+f172435b4e320cc2d32dedea5146912b6001b4a6,2026-09-20T23:10:03+08:00,Merge pull request #4771 from loopx-project/codex/todo-authoring-priority-hint-20260920,4771,200,138
+9da19e6738aa191345b5c1891a362e4c5b51d658,2026-09-20T23:33:51+08:00,Merge pull request #4770 from loopx-project/codex/refresh-scale-alias-repair,4770,11,9
+2caada69d77f21c948541a703ad0d0076bee2cb9,2026-09-21T00:16:19+08:00,Merge pull request #4812 from loopx-project/codex/turn-lane-holder-host-20260920,4812,9,5
+48cb7a9d09a268507dff9f7b3d0cc6d028ff963e,2026-09-21T00:54:20+08:00,Merge pull request #4811 from loopx-project/codex/native-codex-worker-mcp,4811,69,0
+d6b31f054bfb9d5ec70000977a5e8031f69a9661,2026-09-21T01:18:45+08:00,Merge pull request #4821 from loopx-project/codex/steward-settlement-refusal-diagnosis-20260921,4821,98,0
+0ef7ebd749ec97a698a8fc7f2a29844dd368689b,2026-09-21T01:19:09+08:00,Merge pull request #4820 from loopx-project/codex/local-authority-runtime-closure,4820,122,38
+08a6d7ff5f557eb5b165838eb8b6f64c2a947961,2026-09-21T02:40:36+08:00,Merge pull request #4799 from loopx-project/codex/authority-promotion-bridge,4799,613,68
+632d03788261915457ec5b8c38f632ea2e8d35b9,2026-09-21T02:41:20+08:00,Merge pull request #4805 from loopx-project/codex/pr-merge-watch-monitor-repair,4805,304,50
+6df6a8bc38141c8e234a4e89170efe91c3089b07,2026-09-21T02:44:17+08:00,fix(control-plane): require explicit mutation actors (#4816),4816,55,3
+6c2976f8c3447a4bd1d3af79e251c2f78c9ed733,2026-09-21T11:11:19+08:00,Merge pull request #4814 from loopx-project/codex/lark-team-plan-confirmation,4814,66,15
+e896682c431a19b0baddf4d24b686ebb781849e1,2026-09-21T11:38:35+08:00,Merge pull request #4825 from loopx-project/codex/fix-replan-projection-4667,4825,46,29
+11ce9e1688c43cbb0e682b68921548253347d4c6,2026-09-21T12:08:28+08:00,Merge pull request #4783 from songoow/codex/direct-settled-replay-construction,4783,388,390
+16463b3b2dfb13132baa808bc9a99f30bd228719,2026-09-21T12:24:52+08:00,Merge pull request #4813 from loopx-project/codex/external-evidence-capability,4813,648,0
+bcbd63a7bbf2371c15960a527f61e07b3055a24b,2026-09-21T12:50:39+08:00,Merge pull request #4846 from loopx-project/codex/machine-credential-scope,4846,3,3
+cb634f02637a455e57aaf4b01a7fee5d0ed275d6,2026-09-21T12:54:25+08:00,Merge pull request #4788 from songoow/codex/finish-unadmitted-selection-construction,4788,466,135
+65afc4872db67d36f74625a9e53ae63da2bc619c,2026-09-21T13:05:24+08:00,Merge pull request #4824 from loopx-project/codex/reward-memory-experience-quality,4824,8,12
+37dbac91d1d6bcd4371c9d013519f72c4526e347,2026-09-21T13:34:28+08:00,Merge pull request #4794 from songoow/codex/pr05-packet-compat-preparation,4794,5,29
+9982ee0d0b398ac9653c612c2cbc8c8666f2d055,2026-09-21T14:15:28+08:00,Merge pull request #4823 from loopx-project/codex/authority-consumer-closure,4823,155,82
+92185803becdcbea10040c5e18c87e59b7354823,2026-09-21T14:34:21+08:00,Merge pull request #4837 from loopx-project/codex/steward-explicit-id-reachability-20260921,4837,47,10
+1dcb674c72b7d93637717143e1f5bf737c7beb8e,2026-09-21T14:37:10+08:00,Merge pull request #4834 from loopx-project/codex/steward-owed-spend-signal-20260921,4834,71,1
+7e64ade08e1e6b71676706978bc3474062107d4f,2026-09-21T15:02:33+08:00,Merge pull request #4835 from loopx-project/codex/issue-4796-promotion-plan-identity,4835,92,1
+6212b7a8ac21cdc352171fce83590482a84e4cdb,2026-09-21T15:07:00+08:00,Merge pull request #4831 from loopx-project/codex/stable-authority-resume-evaluation,4831,92,5
+fff22f8c5d5232572f07525f0873ad68902f8630,2026-09-21T15:18:06+08:00,Merge pull request #4827 from loopx-project/codex/authority-read-recovery,4827,295,209
+e8288db9e78e7e784ad36fa45feb93e308c7f0b9,2026-09-21T16:30:14+08:00,Merge pull request #4829 from loopx-project/codex/authority-next-owner,4829,223,105
+b5c5f88b108fa7d78163646e6fd7f8c29d52881f,2026-09-21T16:38:12+08:00,Merge pull request #4848 from loopx-project/codex/steward-preflight-budget-0921,4848,16,1
+056ce7541566311227903ee94976475c7a33e49e,2026-09-21T16:50:36+08:00,Merge pull request #4852 from loopx-project/codex/quota-authority-settlement-refactor,4852,138,135
+f19ecaa1d81120c463c929ae32afafee7aecf9b0,2026-09-21T17:09:53+08:00,Merge pull request #4833 from loopx-project/codex/todo-validator-revision-4832,4833,702,108
+154f71a6c79b820382dd3698bd7d79cee2795ad0,2026-09-21T17:24:10+08:00,Merge pull request #4847 from Duang777/codex/fix-quota-crowded-output-budget,4847,9,0
+59e11118f850462291bae477a40a8736a5f63e4d,2026-09-21T17:59:25+08:00,Merge pull request #4845 from loopx-project/codex/fix-ready-work-backoff,4845,56,26
+0ea9b5b1c4c5ff67a907d7417b4233a76e335a21,2026-09-21T18:35:14+08:00,Merge pull request #4858 from loopx-project/codex/managed-runtime-recovery-20260921,4858,8,1
+de3325c28281b8d124c229085f31da1e20d54e74,2026-09-21T22:45:59+08:00,refactor(quota): share inbox admission construction,4786,12,17
+da49e490b4a8be523de3514d2558991d51097319,2026-09-22T00:29:21+08:00,Merge pull request #4868 from loopx-project/codex/fix-selection-replan-deadlock,4868,8,2
+67ffe60df4135a2fbbad8b64fc9753ba501dd2a2,2026-09-22T09:53:25+08:00,Merge pull request #4856 from loopx-project/codex/authority-ts-convergence-0921,4856,103,39
+53334a99d54c077f04cc6daf87989342749b6b3e,2026-09-22T10:15:43+08:00,Merge pull request #4867 from loopx-project/codex/authority-consumers-0921,4867,101,0
+4c0a01744e4c8fdb97d46f425aa4c9bed0a7a63e,2026-09-22T10:17:57+08:00,Merge pull request #4870 from loopx-project/codex/claim-preserving-authority-migration,4870,372,30
+3a419abdfe03dcb7ff6da4844dc7b20bbbb2b7ef,2026-09-22T10:51:46+08:00,Merge pull request #4862 from loopx-project/codex/authority-execution-closure,4862,136,0
+2fff80564ea8f7308d95d0359432694c82b2c479,2026-09-22T11:48:41+08:00,Merge pull request #4866 from loopx-project/codex/reward-memory-requalification-20260921,4866,2,32
+4bed6ed3df8d9d47c0e275ea5316a8f25fe887b6,2026-09-22T14:00:10+08:00,Merge pull request #4871 from loopx-project/codex/delegation-route-projection-20260921,4871,150,128
+c4314d9b06a52073e12ec64fb76ff42e486bdc7e,2026-09-22T15:05:19+08:00,Merge pull request #4879 from loopx-project/codex/authority-closure-0922,4879,505,253
+7b5058a2cd98862e70439ea2b91e043baeb9c4ab,2026-09-22T17:55:23+08:00,Merge pull request #4883 from loopx-project/codex/repair-archived-bound-todo-closeout-clean,4883,89,17
+27e291a4405dc83fdcbca7770ac84f175c0b44f6,2026-09-22T18:15:27+08:00,fix(quota): resume interrupted advancement under its original turn (#4895),4895,54,10
+ea1d4b7ef8cbbbb50a709826ce32d8224292b1db,2026-09-22T20:05:42+08:00,fix(goal-start): fence guided bootstrap over orphaned Goal state (#4808),4808,379,0
+0d464d2ac80ecd7fb093e2492d510a4abe6621ee,2026-09-22T20:11:55+08:00,perf(authority): bound acceptance guard projection (#4899),4899,23,10
+cafc93b3a30cd4c0ffaa5e1f475dccdc2f78d624,2026-09-22T22:05:18+08:00,fix(collaboration): recover pending requests beyond the first inbox page (#4880),4880,34,6
+2e94e625ecb22adab8ae2c9db900b685480ebd4e,2026-09-22T22:35:57+08:00,fix(coordination): preserve shadow lineage across root aliases (#4896),4896,24,9
+4b4031c9ed70fa42220416ee964da65867b9d100,2026-09-22T23:40:59+08:00,fix(authority): recover concurrent commands and verify current claim execution (#4886),4886,159,82
+c41e09473a9ab883c53b077a73e47ee4eda78816,2026-09-22T23:41:18+08:00,feat(authority): add verified portable journal recovery (#4887),4887,338,0
+b82a2f9c6e7c59b67648b4351a420f623d76368a,2026-09-23T00:42:57+08:00,fix(quota): give an unbound same-turn receipt its own failure kind (#4893),4893,11,3
+c504d60ee322f954f1cf5d13ae7ca9dd1fafcea5,2026-09-23T01:42:57+08:00,Merge pull request #4888 from loopx-project/codex/finance-goal-promotion-20260922,4888,209,23
+912ffc3b8d2005ac51ae0ccda956896c8705e881,2026-09-23T01:44:58+08:00,Merge pull request #4894 from loopx-project/codex/handoff-transition-0922,4894,285,269
+992108d3a9f7a18894daa70bf45d2fed044088d8,2026-09-23T02:28:45+08:00,Merge pull request #4890 from loopx-project/codex/quota-deferred-selection-obligation-0922,4890,22,3
+bf1aed84b426a8e1b163ce3a8b92064f00c43c91,2026-09-23T09:36:51+08:00,Merge pull request #4907 from loopx-project/codex/quota-closeout-linear-scan,4907,344,61
+06ad6e8d7afd971b1fcfe50e0d9bb26a176921f1,2026-09-23T09:44:46+08:00,Merge pull request #4897 from loopx-project/codex/steward-no-locator-part-0922,4897,15,5
+b0341e5953f6fcee2f478fa5a43f09c020acc07e,2026-09-23T09:53:29+08:00,Merge pull request #4901 from loopx-project/codex/research-workspace-product,4901,13,3
+e0814f29c3d73f79314f987c90ca7a02f9f655f4,2026-09-23T09:54:30+08:00,Merge pull request #4905 from loopx-project/codex/archive-dependency-capture-0922,4905,41,16
+fbe5bb59571ed72d4bc57bd5581163686d110af6,2026-09-23T11:05:38+08:00,Merge pull request #4918 from loopx-project/codex/repair-agent-monitor-scope-0923,4918,7,0
+221a43da369127d78517d003111180892f629932,2026-09-23T11:15:14+08:00,Merge pull request #4902 from loopx-project/codex/replan-history-policy-0922,4902,496,440
+23edcb19c70394480e3a9ebe8a960f5a320c5342,2026-09-23T11:38:21+08:00,Merge pull request #4917 from Duang777/codex/project-registry-strict-codec,4917,604,87
+79241d7ef78f2e8d7177e567751d7495c5e570e4,2026-09-23T13:36:13+08:00,Merge pull request #4921 from loopx-project/codex/automation-min-interval,4921,179,21
+e57b49e7b6b485c7f3c364e22b3abe078e693b9b,2026-09-23T14:02:02+08:00,Merge pull request #4923 from loopx-project/codex/replan-history-transport,4923,77,2
+9e58541833f8c6ae38023ce778c0e12c90c0f250,2026-09-23T17:36:36+08:00,Merge pull request #4938 from loopx-project/codex/deferred-hard-lease-resume-20260923,4938,115,7
+31f3aef4f4141fe6cd53245d28cbd871215b4c71,2026-09-23T17:51:05+08:00,Merge pull request #4882 from xyx2002OvO/codex/checkpoint-read-context,4882,683,12
+b65ec8f9fcba63d3e55f199e7d6f235d79f8cbb6,2026-09-23T18:21:40+08:00,Merge pull request #4930 from Duang777/codex/goal-instance-m1,4930,315,4
+0edbdf28e28633f2ff69f028bf0344b7ee7d6777,2026-09-23T18:22:24+08:00,Merge pull request #4932 from loopx-project/codex/finance-quota-selection-20260923,4932,27,0
+04d382539ecf4cd8901018a69ccdcf547156c501,2026-09-23T18:24:00+08:00,Merge pull request #4934 from Duang777/codex/fix-run-history-offset-order,4934,24,21
+bd375250d90a887e6a94565a9d1efa5c1d824d0a,2026-09-23T18:25:47+08:00,Merge pull request #4916 from Duang777/codex/core-correctness-20260923-b,4916,263,74
+999ce80b24319a8866064ec0082eec49ce362579,2026-09-23T18:26:39+08:00,Merge pull request #4854 from songoow/codex/jev-drift-shadow-upstream,4854,786,15
+c8faa3fe4b4d00d906fb4dca217b627d749841e9,2026-09-23T18:28:12+08:00,Merge pull request #4939 from Duang777/codex/fix-rollout-torn-tail,4939,5,27
+e99441333f20a3296f602cb2c3b16bbe62bb44d3,2026-09-23T23:30:41+08:00,Merge pull request #4920 from loopx-project/codex/authority-promotion-lifecycle-0923,4920,296,230
+ece18ded67d215ace985735c9261f07af0045aef,2026-09-23T23:59:19+08:00,Merge pull request #4942 from GZY-SUPER-HACKER/fix/utf8-state-file-io,4942,2,2
+1ecf040fdb5655045bbe2b74f6c3477cbd018927,2026-09-24T00:00:25+08:00,Merge pull request #4946 from Duang777/codex/fix-quota-preview-cas,4946,18,14
+a038ad8d30703b42f1bb362eb9d0ab9bbf3aaaf0,2026-09-24T00:21:19+08:00,Merge pull request #4957 from loopx-project/codex/goal-acceptance-lifecycle-metadata-20260923,4957,54,1
+e77de55c86941d46dfbfb5be59c966caf1d1c7bb,2026-09-24T01:22:19+08:00,Merge pull request #4962 from loopx-project/codex/goal-acceptance-autorecovery-20260924,4962,158,21
+a41506661631f126522468e59a12ec6db3cff9eb,2026-09-24T02:05:51+08:00,Merge pull request #4963 from loopx-project/codex/goal-acceptance-validation-diagnostics-20260924,4963,43,1
+d2bae5ade9751ead18cb97bfb4237e698b3662ed,2026-09-24T02:26:37+08:00,Merge pull request #4950 from Duang777/codex/audit-chat-action-authority,4950,177,5
+9ee5f43a9226a65f71914c1f0ae9ea17ce45db8d,2026-09-24T10:55:32+08:00,fix: raise Node minimum to the WAL-fixed SQLite runtime (#4960),4960,11,4
+2ca58f406a3b63523dd2fa2bbc9085e683a16b53,2026-09-24T12:18:03+08:00,fix(control-plane): recover ambiguous canonical write responses safely (#4975),4975,238,58
+bf0df7b4131a822e5b1dae56eac51be7e5a5043a,2026-09-24T12:35:19+08:00,Merge pull request #4922 from loopx-project/codex/canonical-snapshot-pages-0923,4922,433,25
+d812ea93d5191e3bd6acfbb310a5b8b5ece37f49,2026-09-24T12:49:10+08:00,Merge pull request #4968 from loopx-project/codex/native-shadow-delivery-0924,4968,353,386
+13c28eee6b126f6d1bd8ebb8919f0d45ecfdd60d,2026-09-24T12:54:19+08:00,Merge pull request #4974 from loopx-project/codex/blocked-reason-projection-20260924,4974,30,4
+5446dea1c15499ec65f0f07118c1b4901be4b9aa,2026-09-24T12:56:06+08:00,Merge pull request #4929 from loopx-project/codex/turn-atomic-cadence-admission,4929,177,13
+e67483f3304599db2cb679718764dfe11dda73de,2026-09-24T13:04:20+08:00,Merge pull request #4933 from loopx-project/codex/automation-cadence-settings,4933,7,2
+c917a77ea927b2c9be3a02aec85d109f6a418c1a,2026-09-24T13:39:18+08:00,Merge pull request #4944 from Duang777/codex/goal-instance-m2-source-session,4944,1945,118
+b2ddbd5f6fe7318de756a3a10d428168a116251f,2026-09-24T13:40:35+08:00,Merge pull request #4898 from wchwawa/fix/shadow-management-symlinked-root-digest,4898,5,4
+0fd40cd759163c78b71b32eb959db2163bb75d8c,2026-09-24T14:19:56+08:00,Merge pull request #4961 from loopx-project/codex/authority-projection-delivery-0924,4961,101,32
+e07ee86a42b75d93b2a448607412010c66a8de1f,2026-09-24T14:30:44+08:00,Merge pull request #4983 from loopx-project/codex/acceptance-repair-frontier-0924,4983,127,97
+3eeae5bd40d0cb9a7d80535afa6778ea34cba3d5,2026-09-24T15:00:32+08:00,Merge pull request #4964 from loopx-project/codex/canonical-todo-readmodel-0924,4964,307,341
+718bc8ff382ffda19f37bff0bd67c5d0aa627ba2,2026-09-24T16:16:58+08:00,Merge pull request #4985 from loopx-project/codex/unsettled-turn-refusal-naming-0924,4985,51,5
+19ac9849c91cc9b0a710137d2634eb877ccbdbf1,2026-09-24T16:22:38+08:00,Merge pull request #4984 from loopx-project/codex/rsi-rollout-evidence-0924,4984,54,25
+4efafaf16b4fab1aa99e8e45d0aedb7a044820b2,2026-09-24T16:50:07+08:00,Merge pull request #4967 from loopx-project/codex/capture-source-contract-0924,4967,163,88
+bc5f76cf2b25ce2a44a4c78d06ff268ef3e3abcb,2026-09-24T17:07:22+08:00,Merge pull request #4988 from loopx-project/codex/monitor-poll-availability-0924,4988,34,1
+4b1b6a8315c89a32fa93da9aa23729dfaecc5b0b,2026-09-24T17:28:27+08:00,Merge pull request #4989 from loopx-project/codex/acceptance-scope-recovery-0924,4989,62,17
+4a41193de827b48b4d09efb9b84f92366ae62a0b,2026-09-24T17:39:43+08:00,Merge pull request #4949 from Duang777/codex/fix-goal-lifecycle-source-cas,4949,149,40
+da4acd4cfb8466268e6ec4a929e9f7929de0e433,2026-09-24T18:50:14+08:00,Merge pull request #4979 from loopx-project/codex/quota-inflight-spend-20260924,4979,52,0
+90f21a5299188d54f984a5313e774c9ac48d6595,2026-09-24T19:45:55+08:00,Merge pull request #4993 from loopx-project/codex/retained-selection-facts-0924,4993,43,2
+d64c4d3772400c958d51b773f1e1e165cbaca801,2026-09-24T21:16:03+08:00,Merge pull request #5002 from Duang777/codex/fix-windows-directory-fsync,5002,6,5
+93566c2b89dd5a43a2c23452f259a0498936a87d,2026-09-24T22:32:19+08:00,Merge pull request #5004 from Jim-jimu/fix/monitor-replan-threshold,5004,7,5
+46280da6e0cf1dd5a044cc26dab7a9d4bf53dbc5,2026-09-24T23:25:12+08:00,Merge pull request #4978 from loopx-project/codex/managed-result-local-readback-20260924,4978,249,9
+2e1e632603f4a7acf996a6fa3fd9c7d09404ca86,2026-09-25T00:10:42+08:00,Merge pull request #4994 from loopx-project/codex/leased-continuation-0924,4994,143,62
+3414fc7f4cd17c2d4373c7b2a08bb6f6c00a50f3,2026-09-25T00:39:44+08:00,Merge pull request #5010 from loopx-project/codex/release-integration-0924,5010,185,20
+a6b79e666c25d933dc3febaae282ceba71db7860,2026-09-25T00:43:46+08:00,Merge pull request #4991 from loopx-project/codex/monitor-poll-lease-admission-0924,4991,82,10
+989b249cd71ec5cbad48d3219fd24741886b4997,2026-09-25T01:08:30+08:00,Merge pull request #4995 from loopx-project/codex/monitor-poll-proof-projection-0924,4995,127,2
+31529980ade67475773fcdc4b74a98bed1eafdb8,2026-09-25T01:08:37+08:00,fix(quota): keep deferred receipt-bound Turn from selecting a successor (#4992),4992,179,27
+132a26df52593b6e0494bfe6a37973e5a7495c81,2026-09-25T02:30:04+08:00,Merge pull request #5018 from loopx-project/codex/release-preserve-action-command,5018,6,6
+116ed4a8945519c793f3e84031a93dc19db2f95d,2026-09-25T03:00:10+08:00,Merge pull request #5019 from loopx-project/codex/release-isolate-operator-provider,5019,7,2
+b73d59e972cd58518e77f572493fd71ccd050d1b,2026-09-25T04:45:28+08:00,Merge pull request #5021 from loopx-project/codex/release-monitor-replay-proof,5021,28,12
+c9b3c562b6a71ade700cb28a5f004491f6704842,2026-09-25T07:08:09+08:00,fix(release): stabilize live model qualification (#5022),5022,30,6
+563de3b7f347542d07c7b54281e41c2f2f32176e,2026-09-25T07:44:11+08:00,fix(release): probe real external-wait fallback decision (#5023),5023,17,16
+5a4617e6b96288eb2cbfbfe9ee97417c6c38f695,2026-09-25T09:32:54+08:00,Merge pull request #5025 from loopx-project/codex/release-vision-closeout-budget,5025,54,20
+91790ceb55b4a0bf9996aa7f2f0168641d419566,2026-09-25T11:37:01+08:00,test(quota): preserve scheduler cache hits before run changes,5005,1,1
+67ac8b11313fc552e31c8169f9f551bad5c0bd02,2026-09-25T11:37:01+08:00,fix(quota): invalidate stale scheduler run-index caches,5005,40,0
+c607091348d6bea0b58c84438b655263a1cd16b4,2026-09-25T11:37:01+08:00,fix(quota): defer blocked Turns with receipt-owned retries,5005,396,5
+04d053e9ccf92536401a8e04ca03a8ad4ddb0beb,2026-09-25T11:37:01+08:00,fix(quota): close typed blocked Turns without debit,5005,53,6
+bd24092af976c914fff74dcf818d9f4a72f6aed2,2026-09-25T12:04:52+08:00,Merge pull request #5003 from loopx-project/codex/event-completion-transaction-0924,5003,172,162
+166c68b0387ffc1a8fc4de938d8f7e48d6cdaad7,2026-09-25T12:19:11+08:00,Merge pull request #5014 from loopx-project/codex/typed-event-projection-0924,5014,177,0
+1e21976d61e3a8f6c04b95a845b8e21f92935541,2026-09-25T12:34:44+08:00,Merge pull request #5011 from loopx-project/codex/retire-observation-shadow-0924,5011,119,1640
+c36b41678928df2bd64d13cf6eeb81c5372b06c5,2026-09-25T12:44:35+08:00,Merge pull request #5012 from loopx-project/codex/recover-validated-todo-create-5007,5012,128,37
+d42adb874d042a039e5846ea19c4e3acba04b655,2026-09-25T13:07:28+08:00,Merge pull request #5013 from loopx-project/codex/restore-stale-acceptance-4971,5013,66,6
+542c3cb0e785f2a39e8c5cc862ecd8d50af92971,2026-09-25T13:27:42+08:00,Merge pull request #5030 from loopx-project/codex/semantic-twin-budget-0925,5030,17,17
+fbdc9690f39c417b8869c4a72223cf7429147d81,2026-09-25T13:59:42+08:00,fix(goals): bind deletion to source registry state,5016,439,43
+ab83c672b9e11bb2cabb446bafeef838639472bb,2026-09-25T16:04:43+08:00,Merge pull request #5035 from loopx-project/codex/finance-paused-todo-lifecycle-20260925,5035,106,4
+789ec6923f38b39629e46eae567784df3457221c,2026-09-25T16:40:08+08:00,Merge pull request #5040 from loopx-project/codex/goal-promotion-readiness-0925,5040,133,45
+cb4b5e384b02c9ccee87df58811e3057a3d661d5,2026-09-25T19:03:09+08:00,Merge pull request #5050 from loopx-project/codex/closeout-preflight-0925,5050,254,123
+b5340daba5986f3c357621ad48acc3d0d48af97d,2026-09-25T20:38:40+08:00,Merge pull request #4444 from fengyin-solo/codex/project-agent-handoff-shards,4444,1293,0
+3e443ad7c285973c40be883293970be6c0c51e06,2026-09-25T22:22:38+08:00,Merge pull request #5058 from NIU-123370/niu/startup-diagnostic-framing,5058,3,1
+a23e08175f38286682eabcf15b41a6bc439954ed,2026-09-26T01:50:24+08:00,Merge pull request #4125 from huashuai/codex/follow-user-language,4125,110,36
+71dbfd5e605da4e7efdb58c87cd3f4a96d39e0e5,2026-09-26T03:05:34+08:00,Merge pull request #5055 from Duang777/codex/fix-goal-config-route-race,5055,253,65
+3c85bcd8931b1bba19a67a06b13dee31b4efaebb,2026-09-26T18:23:49+08:00,Merge pull request #5098 from loopx-project/codex/legacy-lease-recovery-0926,5098,121,13
+1dbe2146aa74df9504dbd6589dea77023800379c,2026-09-26T19:24:22+08:00,Merge pull request #5090 from Duang777/codex/fix-goal-delete-crash-recovery,5090,531,5
+eaa0c0fd089e5844b763cc24132dcf8a3881c39b,2026-09-26T20:09:24+08:00,Merge pull request #5063 from loopx-project/codex/authority-write-timeout,5063,141,52
+a54739ea5fd83451265f4a9dfb60bf3e88a267de,2026-09-26T20:53:17+08:00,"Compact File authority history with recognized, backed-up format upgrades (#5102)",5102,521,54
+4d22fc32bce998b8fc7cf78c92efe45fcd1f8c94,2026-09-26T21:29:25+08:00,fix(history): serialize collision rebuilds with appends (#5088),5088,78,68
+6b6af81b03d604c0b0da14a4593b7379d96d984d,2026-09-26T22:08:50+08:00,refactor(authority): retire Python prototype and qualify native providers (#5105),5105,43,2560
+a5546afd113356404c0430423c23f51c96622fc6,2026-09-26T22:09:42+08:00,feat(usage): opt-in anonymous daily usage ping and self-hosted collector (#5083),5083,6,0
+96892b71cbf2a46328653fbc0c425969f2ab4865,2026-09-26T22:22:11+08:00,"feat(projection): kernel-owned projection envelope for status, global-summary and global-gates (#5085)",5085,618,1
+ea65fd0cec0f65ce0489f34aa3ce6106e37f31fb,2026-09-26T23:11:51+08:00,fix(runtime): verify mutation lock publication (#5089),5089,29,0
+c3820f7eff8b15a1a345808b55850e6e761a8e45,2026-09-26T23:12:13+08:00,fix(progress-review): reject unbound receipt and ACK attribution (#5097),5097,147,35
+59804c78222a5f0e4e0c158965de28c03fa23757,2026-09-26T23:31:24+08:00,Merge pull request #5068 from JunZ-Leo/codex/peer-route-candidate-summary,5068,40,0
+9849366c6e9f09f06872b697d2ad86126b536cea,2026-09-26T23:50:45+08:00,Merge pull request #5066 from JunZ-Leo/codex/agent-binding-candidate-summary,5066,43,21
+a71b86995c6a16cea2a9c58a6ea805dfe793429c,2026-09-26T23:59:51+08:00,Merge pull request #5109 from jackie-cqz/codex/fix-public-safety-field-keys,5109,9,4
+5c40583d85e038dc078d563f3d883e061fb747f9,2026-09-27T00:11:19+08:00,feat(usage): default basic statistics with a shared TypeScript owner (#5121),5121,261,0
+74b708b303f3b312327c64adb5ea1d8bc8442fa4,2026-09-27T01:27:43+08:00,Merge pull request #5133 from loopx-project/codex/goal-duration-statistics,5133,167,18
+cd32b28567216c9621bb86061ab1ae1b97724491,2026-09-27T02:57:03+08:00,Merge pull request #5137 from loopx-project/codex/goal-usage-host-sources,5137,259,47
+38696896cbdc3f48aff180b51cabe1809a0df9b7,2026-09-27T03:05:10+08:00,fix: frame the last JSONL readers on LF,5119,6,6
+ce5aef0f7bd5a83300e0b9fb2605c55f05342f92,2026-09-27T03:29:55+08:00,fix(turn): preserve effect uncertainty and original journal recovery on errors (#5142),5142,144,43
+ea3ace41825b2a0cc1cca45640336eff93f363a1,2026-09-27T03:39:05+08:00,feat(reward-memory): consume query-ready decisions through TS policy (#5138),5138,123,0
+05bf3349d0e20ae2fd7c19cb451213cc8cb92a0e,2026-09-27T03:44:49+08:00,Merge pull request #5064 from loopx-project/codex/app-intent-inbox-plan,5064,140,0
+96a3b90f41094bd2ddea7263b9c7ee37371a9c3b,2026-09-27T06:13:01+08:00,Merge pull request #5140 from loopx-project/codex/authority-archive-recovery,5140,465,208
+97c24e5cd7f81aab24ba1717001e3900b6d09d1d,2026-09-27T11:04:23+08:00,fix(authority): prevent cold File proofs from starving the shared runtime (#5156),5156,42,16
+33f560c34951b4a023a30025f8b5fbebce359916,2026-09-27T11:05:52+08:00,fix(usage): initiate daily heartbeat before releasing its claim,5151,15,5
+fdec8591184e202734c6bcec418179a9a70bd351,2026-09-27T11:08:42+08:00,fix(quota): retain auxiliary monitors after primary completion (#5159),5159,72,5
+e4b8d590f663e2c63ab7856ab8ff44f2e1590670,2026-09-27T11:10:20+08:00,Merge pull request #5132 from loopx-project/codex/replan-goal-fidelity,5132,16,2
+46621c4be15a1e98e1b803c2800681ac2f944e4a,2026-09-27T11:13:19+08:00,fix(reward-memory): retain verified delivery across assessment (#5158),5158,25,10
+703ad3941b3287347af227cfa205c5af505d7a19,2026-09-27T11:13:53+08:00,Merge pull request #5056 from loopx-project/codex/heartbeat-profile-scope-alignment,5056,15,5
+61c31ca6814b57a645b93aaf031acfd34f1c9acd,2026-09-27T11:17:13+08:00,refactor(public-safety): decide credential shapes in one owner (#5135),5135,18,11
+5ab28bd881ee2e83f199fcc2071eaa00eb658835,2026-09-27T11:19:58+08:00,fix(task-lease): scope canonical writes by frozen repository,5152,87,4
+6925b73cc7886492ff888ebdd801a92bef56ac44,2026-09-27T11:25:27+08:00,fix(control-plane): carry complete checkpoint context across local runtime,5059,264,48
+af3e7f1f00e2815e45f99258c0d8ec58774ec9bb,2026-09-27T12:17:19+08:00,Merge pull request #5141 from Duang777/codex/goal-instance-m3-host-runtime,5141,538,26
+70b3cca010cd8ab69ca93a0b87cf478ce873ac06,2026-09-27T12:39:16+08:00,Merge pull request #5154 from loopx-project/codex/reward-memory-surface-checkpoint-20260927,5154,37,0
+03b7e66f189518bb28253392ef8cf9ff9ae02c66,2026-09-27T13:12:43+08:00,Merge pull request #5052 from loopx-project/codex/native-child-receipts-5051,5052,36,5
+0943b0361fc5cfcd16deea8cebb05a9d5ae7a382,2026-09-27T13:21:35+08:00,refactor(state): retire legacy Todo events and isolate supervisor history (#5054),5054,407,1969
+3b366de0287a990ea522887516cf9ffcc201bd73,2026-09-27T13:33:01+08:00,Merge pull request #5144 from loopx-project/codex/managed-host-process-supervision,5144,349,107
+a6504dc9bc4331162c7c51ad7ff7579f6da348e9,2026-09-27T13:36:21+08:00,Merge pull request #5164 from gcl-coder/refactor/status-vocabulary-single-source,5164,28,14
+ab8da274afff800ca088d93cb9ff7fa7546f4704,2026-09-27T14:45:00+08:00,fix(release): finish retirement and repair stale CI contracts (#5179),5179,0,5
+7b00f4f564f9e92e0cf32c87b07ed8a5c129d49b,2026-09-27T15:08:37+08:00,fix(delegation): retain scoped runtime diagnosis,5176,41,1
+5bdae1b37190e47a275e0e189259b84ccbcc84f8,2026-09-27T15:09:37+08:00,fix(quota): admit due auxiliary monitors after primary settlement,5171,40,14
+b58e3f46831c5ba447e066d245c29abc4d4af4d2,2026-09-27T17:46:27+08:00,Resolve exact host routes for existing peer requests (#5183),5183,172,1
+bf737e4d862364dcd291d33543068ae364389622,2026-09-27T17:46:57+08:00,fix(quota): close settled in-flight progress Turns without completing Todos (#5184),5184,30,1
+32dd56cf4b4cf14931b72739cfc5e0a1c8432220,2026-09-27T17:47:20+08:00,Merge pull request #5173 from loopx-project/codex/local-provider-transition,5173,288,41
+6399b8db9e06b9f74b09e78cba7441935a0d4cfb,2026-09-27T17:48:05+08:00,fix(replan): recover exact successor proof for original Turn settlement,5182,76,2
+d23f1c87d05dce02ed6368ff91ff8b2d0c163213,2026-09-27T19:03:09+08:00,Merge pull request #5185 from loopx-project/codex/delegation-independent-validation-20260927,5185,142,16
+848e205af56bc259288684c1f1923bbc60638f6b,2026-09-28T00:42:03+08:00,refactor(authority): drain source outbox in one native batch (#5175),5175,478,541
+dede97f08ba6ba35bc3c677b08b4050278ef1451,2026-09-28T00:48:50+08:00,fix(todos): bind first completion validator through canonical updates (#5192),5192,104,33
+ce3862e33cb9c5b9f416627727fddfd46f9b6a2f,2026-09-28T00:54:12+08:00,fix(authority): verify and replay identical File/SQLite operations (#5169),5169,51,10
+9482a9496c6e612eeaad0a3bfafc43657f68d97a,2026-09-28T01:19:38+08:00,perf(authority): reuse owned state during SQLite and archive replay (#4931),4931,184,124
+40a6df9917d7ff5971d1dc2346be5039c17804a6,2026-09-28T01:45:52+08:00,feat(chat): let configured steward groups respond without @ mentions (#5189),5189,37,2
+8636bbd8c94692e65d873ebe96e5cf5657f73116,2026-09-28T01:46:34+08:00,refactor(public-safety): decide the raw-location shape in one owner (#5196),5196,4,0
+5eec57abd8a298d3eeb0aa1cceb59cb2be9a973a,2026-09-28T02:06:07+08:00,fix(turn): preserve quota refusal in delegation preflight (#5188),5188,85,0
+88b00d70c726c2319c5798eb25941bb6de6db729,2026-09-28T02:37:18+08:00,Unify CLI and App usage statistics activation after first disclosure (#5190),5190,10,2
+619297c83a183cf644f84bfdd382a391a79614ef,2026-09-28T02:51:31+08:00,Merge pull request #5219 from loopx-project/codex/scheduler-compat-authority-20260928,5219,40,11
+3b258937e75184fd2c68bb512239d9f86f5a9f20,2026-09-28T03:03:36+08:00,Merge pull request #5215 from loopx-project/codex/sqlite-replay-streaming-call,5215,15,9
+82dfe2e2c8c85d3fd63490313597886eba709aa0,2026-09-28T03:08:24+08:00,Merge pull request #5139 from Duang777/codex/app-continuity-ts-next,5139,1060,0
+6c641023234498a0d138aa8b881e813ff54d6e3b,2026-09-28T11:19:29+08:00,Merge pull request #5236 from loopx-project/codex/delegation-runtime-recovery-20260928,5236,28,0
+c65b1c8972e452f9e06347d08028a72efb63a1fc,2026-09-28T11:21:19+08:00,fix(quota): close registered causal blocked Turns without spending (#5230),5230,160,92
+57bff4edb88a051fdb5724d235bfa75bc4034623,2026-09-28T11:30:18+08:00,fix(presentation): preserve decision request bodies across App and Lark (#5216),5216,23,0
+f679911568eee2b3c3cfa1a6ade43dcb17cfb06e,2026-09-28T11:50:37+08:00,perf(authority): reuse File proofs and bound quota observation output (#5222),5222,61,16
+6643f367064b9921c864db75a042979fddc4b8c3,2026-09-28T13:21:49+08:00,perf(contract): overlap bounded full-tree file reads (#5239),5239,60,0
+d14f215bb1de81ca26f033706f695e9a14a2630b,2026-09-28T20:44:22+08:00,feat(chat): integrate conversational goal drafts into the existing workspace (#4376),4376,39,0
+2e243a173dcb711f7bd7dc9da94272b86a407c87,2026-09-28T20:45:10+08:00,feat(collaboration): bind inbox continuity to GoalRef (#5106),5106,1018,147
+056390f7d31bfc71abbf4e18548766e1145f43bc,2026-09-28T20:50:51+08:00,perf(history): defer artifact probes until after semantic retention (#5240),5240,18,1
+58d13a8cf15c9a1c28177643c7920f3ee96f3573,2026-09-28T20:51:50+08:00,feat(kiro-cli): typed visible-goal runtime profile and MCP control plane (#5243),5243,16,3
+da5aac12e1602bef9d572cef6e6cfe9a60205f9f,2026-09-28T20:53:29+08:00,fix: settle declared completions before terminal closeout (#5249),5249,247,70
+7fa104dc02bb07946b68bf1c7c4a77186f51cc6d,2026-09-28T21:43:21+08:00,refactor(control-plane): single owner for private-text classification (#5245),5245,23,37
+0730b6cc221082600288b453b447133ac732d978,2026-09-28T21:59:04+08:00,feat(chat): bind attached sessions to GoalRef (#5130),5130,280,0
+962abb4b2ab1bada359db8fcc31b260d3a10c4c9,2026-09-28T22:21:25+08:00,fix(status): use canonical authority for promoted Todo health (#5237),5237,208,17
+cf759d323b755e2040200f976eac1eeb89383b4d,2026-09-28T22:26:01+08:00,fix(collaboration): recover return verification without prose classifiers (#5253),5253,8,0
+7d165682f8bd3937e8efc82d00f4607ae8ce6f08,2026-09-28T23:50:43+08:00,feat(explore): add typed research evidence and composition shadow (#5250),5250,254,0
+526f250ad032303a4dab0b23a2d598a77817e926,2026-09-28T23:53:12+08:00,fix(quota): preserve original replan Turn after successor add (#5256),5256,159,18
+c1e1c500efc59951a3acb4ca963860d41ea42af2,2026-09-29T01:24:24+08:00,fix(subagents): admit replan reports through TS settlement readback (#5263),5263,104,10
+411f04ab9fc9d21c38556c5e6a2c94b2439d7c64,2026-09-29T01:32:14+08:00,fix(validation): stop owned descendants on timeout and cancellation (#5268),5268,20,7
+efaa18b8059e6b90d4b29ff00ebe2afdf94c8570,2026-09-29T01:53:51+08:00,feat(storage): configure creation-time Goal storage targets (#5242),5242,59,9
+df8b2f1f80addcb1dccc274c8e270855ba33463a,2026-09-29T12:51:02+08:00,fix(external-evidence): reject duplicate admitted source refs (#5260),5260,4,0
+a75b8b27f33192886b47c337a3f029bded27b73c,2026-09-29T12:52:11+08:00,perf(status): share canonical Todo inputs across contract and attention (#5273),5273,50,1
+b6c3d3d4b6c864e8ecc3c5ee020e7da37dcd255c,2026-09-29T12:56:05+08:00,fix(delegation): preserve bounded task validation diagnostics (#5274),5274,30,4
+ee1ea64b0aef45fdda81d2d7e48da356a1750eab,2026-09-29T15:58:48+08:00,fix(todos): keep whole-goal gates healthy with historical claims (#5282),5282,4,1
+159ed7955e14e438b234766659261ee853529d6d,2026-09-29T21:05:33+08:00,Merge pull request #5271 from loopx-project/codex/usage-same-day-batches,5271,29,15
+2f1d4119ca2699fbfc1e0a4a6399d99d8284ad3f,2026-09-29T21:10:24+08:00,Merge pull request #5281 from loopx-project/codex/todo-projection-prepare,5281,13,7
+b9a34c3e79884ea04464afe1f087b1ff1294ff6a,2026-09-29T21:10:37+08:00,Merge pull request #5285 from loopx-project/codex/status-carrier-single-owner,5285,47,14
+c57454e40bd443b002b953859c7b17283a34eeb5,2026-09-29T21:43:54+08:00,Merge pull request #5299 from loopx-project/codex/ownership-read-snapshot,5299,5,2
+00d07cbf92c58faf9c62653836f1373dc95ee7f6,2026-09-29T21:54:16+08:00,Merge pull request #5277 from LIHUA919/codex/settled-monitor-projection,5277,30,2
+8d301f5ed4ca9ba8bbb426a462887e7e363c1cf5,2026-09-29T21:56:06+08:00,Merge pull request #5279 from LIHUA919/codex/aux-monitor-scope-route,5279,167,23
+f7f50b86c2ec47ddb29b3140b66c0cf14881b60a,2026-09-29T23:26:57+08:00,Merge pull request #5117 from kokokoXUY/codex/jsonl-index-lf-framing,5117,21,2
+7da958e49cbc7d9bbb98a15205ef800ce3f2ce1f,2026-09-29T23:30:59+08:00,Merge pull request #5252 from karenchuu/karenchuu/single-content-digest-shape-owner,5252,76,51
+e3ffe3a6a413a7ff43ca3787acac1a987ce22fd7,2026-09-29T23:33:04+08:00,Merge pull request #5254 from karenchuu/karenchuu/single-digest-shape-owner-typescript,5254,98,55
+902b99698050fc21af2c3a8b0d0d3b8561d0bdd7,2026-09-30T00:32:18+08:00,Merge pull request #5305 from loopx-project/codex/validated-projection-read,5305,54,9
+75a668b07904ca5f27fd74a953591d404b8edb09,2026-09-30T00:33:02+08:00,Merge pull request #5311 from loopx-project/codex/status-cold-read-profile,5311,1,1
+3fae8cc4053da7b606668c8f76faf66da0208697,2026-09-30T01:04:12+08:00,Merge pull request #5314 from loopx-project/codex/succession-read-capacity,5314,56,18
+a1ecce7c2418879974d7c5ed1b4101ef8fb6e916,2026-09-30T02:08:24+08:00,refactor: derive Python digest patterns from the TypeScript owner (#5322),5322,5,16
+350f0f3269e78e7f3baa31197c43cc7f49ecc7e2,2026-09-30T02:09:08+08:00,feat(memory): retain and retire explicit Agent preferences across turns (#5320),5320,233,9
+028f60f1eb698ec7b4450d6c21f338c48b499baa,2026-09-30T03:20:51+08:00,fix(public-safety): decide the local-path check in one owner (#5296),5296,2,0
+649826221289cd4cb3dd8880d016e0afbbaca0fc,2026-09-30T03:21:52+08:00,fix(shadow): bind outbox lineages to exact GoalRef (#5278),5278,695,110
+4e66071bd8a8bcfb93a1865d2c8c26623c60a1da,2026-09-30T10:57:26+08:00,Label event-only Todos by id instead of the rollout audit sentence (#5312),5312,17,2
+87d858e49867eca795a4028b68b009559e823857,2026-09-30T11:09:25+08:00,fix(work-items): bind agent-originated team-plan settlement to the same basis and fail all-gap plans (#5302),5302,224,32
+07311771d617fd8893aba1d89ddd1ebbe5eaa663,2026-09-30T11:11:59+08:00,Merge pull request #5324 from loopx-project/codex/goal-instance-turn-journal,5324,403,95
+5135bb550a0117c5abec708f0d677b3db604481e,2026-09-30T11:14:11+08:00,Merge pull request #5331 from loopx-project/codex/todo-projection-lossless-0930,5331,38,31
+8e3d940a32b44ccf77699791d19a103af908b474,2026-09-30T11:33:02+08:00,fix: validate delegation in its bound worktree (#5294),5294,25,5
+3ec049e138917a8cce4f84197ba196d26445b2b0,2026-09-30T11:36:48+08:00,fix(collaboration): keep owed replies visible through receipt readback failures (#5333),5333,183,39
+ba1e92d860027d2cf209d869249dcf61e6a11651,2026-09-30T16:41:58+08:00,fix(chat): verify intent before handoff and adopt model edits (#5341),5341,1,1
+d29ac864e0cf8ceb9bdba673bbde5664bc287f1b,2026-09-30T16:57:01+08:00,"fix(agents): derive worker executing state from lane and lease facts, not Todo timestamps (#5306)",5306,488,40
+fd5f31bb3ad57448c32df6c7cddde36d07446934,2026-09-30T18:14:39+08:00,feat(operations): separate source context from admitted managed execution (#5327),5327,1114,15
+21f89e4ad483f3c012e3d81aef2135c5859d0e16,2026-09-30T18:59:33+08:00,Merge pull request #5287 from loopx-project/codex/aux-monitor-replan-receipt-20260929,5287,16,0
+955a91158d3b27326134f6c63793a42167a37dac,2026-10-01T00:30:12+08:00,perf(runtime): batch exact source fingerprint reads (#5323),5323,104,64
+04bf6b6c1c1d37d3b19194c91efe5b4c4d9daa7d,2026-10-01T03:15:10+08:00,Merge pull request #5366 from loopx-project/codex/telemetry-quality,5366,150,24
+7c556271cd255b2d539f5ed7b45e870535cf4645,2026-10-01T04:06:00+08:00,Merge pull request #5369 from loopx-project/codex/managed-operation-effort-parity-1001,5369,5,2
+803d4fe18fb89432320603a202cb0aa2151c5a0c,2026-10-01T04:06:58+08:00,Merge pull request #5364 from loopx-project/codex/lease-worktree-isolation,5364,163,17
+1d5795ce971e26e19fc388e9f7a1cf208a4263d8,2026-10-01T04:07:50+08:00,Merge pull request #5363 from loopx-project/codex/quota-bound-wait-recovery,5363,131,3
+9c9b90d8eb9972c6d2a308750db5fc22a53c5df3,2026-10-01T05:22:53+08:00,Remove unused worktree argument from lease lifecycle transport (#5372),5372,0,1
+f49b4a00870604d39fa4318da24d6dd35e72bb6e,2026-10-01T06:06:50+08:00,Qualify explicit registry routing in Turn output budgets (#5374),5374,89,30
+322b48e74a62c26da6737635e619e9b0e8413621,2026-10-01T12:23:25+08:00,fix(coordination): atomically defer owned leased work (#5386),5386,101,81
+647756d2181a75249b2ee4844d44b006f0be3d9e,2026-10-01T12:23:57+08:00,fix(runtime): validate batched source fingerprint snapshot (#5367),5367,24,11
+e240730ec6623837e26c5acc91c781142147c696,2026-10-01T12:24:55+08:00,fix(control-plane): reuse canonical lease digest matcher (#5377),5377,2,1
+b8646912fad3ec3308ab1a7ca722cd4f3da93ed5,2026-10-01T12:26:13+08:00,fix(manager-context): align Inbox links with canonical Todo ids (#5353),5353,2,1
+64402b4a80fd89ae9a866307a8a945f32f915ba6,2026-10-01T12:28:32+08:00,fix(collaboration): recover committed handoffs in the original conversation (#5381),5381,88,11
+c4c2320f3d453b09d5ef49078606247610562986,2026-10-01T12:29:47+08:00,fix(turn): observe process-group termination before Host return (#5382),5382,54,1
+638d0e39cff09948df1816a4a5c5ccce70262c57,2026-10-01T13:08:37+08:00,fix(control-plane): remove duplicate lease digest import (#5391),5391,0,1
+6a8a042ab868a0694e8c19a1ba29c534c575864a,2026-10-01T13:50:45+08:00,fix(operations): allow admitted prepare with a registered source audience (#5378),5378,58,3
+8474c8d86d41f2a2ef61e0d94a0aea3f6650b90d,2026-10-01T16:27:29+08:00,Retire unused Python lease facades and stabilize control-plane regressions (#5395),5395,9,563
+db3672f3c6646a75878158d66c79a1a5a32ceb32,2026-10-01T16:29:34+08:00,fix(replan): count only material monitor polls in periodic review (#5393),5393,12,1
+060e4698a39264988391b3f11bc18c91eb81d27f,2026-10-01T17:20:28+08:00,fix(manager): preserve request terms and refresh confirmation cards (#5394),5394,100,9
+b761219f8f94529cb6f63c3a8f246dbf08118629,2026-10-01T17:51:29+08:00,fix(collaboration): resolve named peers past archived host bindings (#5396),5396,134,42
+6b0da649fa95cd6deb1e6877d9a06fd8b7dcd556,2026-10-01T17:52:21+08:00,feat(operations): request operator-granted exact-session continuation after confirmation (#5383),5383,260,8
+d0d1d99d2c369e01fe49f676c152d2e38c3e665e,2026-10-01T17:55:06+08:00,fix(scheduler): preserve cadence after settled Turn replay (#5403),5403,80,4
+3a35ec19520634069a81029508cf4eee2744fd1b,2026-10-01T17:55:58+08:00,fix(conversation): retain exact reply source context (#5405),5405,45,0
+cef2311c097ae9c347822f505a9c3dff67b64868,2026-10-01T18:50:46+08:00,Merge pull request #5402 from loopx-project/codex/user-action-lifecycle-20261001,5402,72,31
+e5a945dae136c3ff4ad102e6df4e525c3c8d3621,2026-10-01T19:03:34+08:00,Merge pull request #5304 from songoow/codex/delegation-wake-lead,5304,140,2
+64a35a1d041ea8e560da0c88d2795d6877548634,2026-10-01T21:08:11+08:00,Merge pull request #5408 from loopx-project/codex/settlement-identity-contract,5408,97,63
+c84e9dde00178aae1566659fe2226f982811120f,2026-10-01T22:02:23+08:00,Merge pull request #5404 from loopx-project/codex/sqlite-admission-recovery-1001,5404,21,11
+b9b758ca4dfc30d0d610b45398fc31acd62781f6,2026-10-01T23:58:12+08:00,Merge pull request #5424 from loopx-project/codex/reply-source-recovery-1001,5424,112,3
+da5b7b11208a8b1d7d243f120c1048cedb3727ec,2026-10-02T00:09:14+08:00,Merge pull request #5425 from loopx-project/codex/approve-stale-review-reconciliation,5425,70,0
+f4e09f42d957cdfc29d729ab10b125ca28326371,2026-10-02T00:55:26+08:00,Merge pull request #5335 from sakurahello1/codex/public-safe-text-word-policy,5335,47,7
+b5c220d3d76dcf1fa2d0a85f19fe5e6629974fdd,2026-10-02T01:11:01+08:00,Merge pull request #5426 from loopx-project/codex/effect-runtime-inflight-drain-1001,5426,35,15
+9f16214fc9e5a7df49d3c407760c3153e65f3f90,2026-10-02T02:19:20+08:00,Merge pull request #5432 from loopx-project/codex/turn-journal-recovery-readback,5432,232,244
+f5ac36791bdad766e70c863cd24244ebd9c5bdb2,2026-10-02T02:22:04+08:00,Merge pull request #5370 from loopx-project/codex/quota-action-projection-1001,5370,29,0
+8c136dec3d3386833b085ec18d1f4662167e31bc,2026-10-02T02:23:34+08:00,Merge pull request #5360 from karenchuu/codex/public-safe-slug-owner,5360,2,3
+d03a963319c11b15e19da18eba8334eb1abbdb18,2026-10-02T02:24:18+08:00,Merge pull request #5337 from sakurahello1/codex/content-digest-envelope-owner,5337,46,0
+88132051b0d302a4b752ba3be59302a9d799b642,2026-10-02T02:37:55+08:00,Merge pull request #5415 from loopx-project/codex/app-gate-one-click-decision,5415,51,5
+29bd4bede8e43f0465c1df1138f36092e1e9a2f2,2026-10-02T03:30:11+08:00,Merge pull request #5416 from loopx-project/codex/saved-answer-return-context-1001,5416,2,4
+850268bffc6f7123e88f578d3743f8f6da5c5c73,2026-10-02T03:31:19+08:00,Unify default local state under .loopx with explicit migration (#4915),4915,781,16
+eff449561b57552d78ce07447d87152c95d8d523,2026-10-02T12:23:39+08:00,fix(delegation): renew the original lease through Host execution (#5436),5436,175,6
+a7c21bafa2d7e98be0f22bfe7708a89d146dce8c,2026-10-02T12:28:19+08:00,fix(coordination): revalidate canonical claims after CAS contention (#5371),5371,17,0
+29151dfc81d81f6d590a8d6f83f3918146c63235,2026-10-02T12:31:02+08:00,feat(workspace): show the whole Goal as a work map in Overview (#5429),5429,218,24
+42e843ac40d7bdc0278002295eb4945b9ad33d15,2026-10-02T12:35:21+08:00,fix(collaboration): ignore Windows lock holder sidecars in inbox scans (#5400),5400,5,3
+f85da9d8f909f7245e007929779ab0cd9fc993b5,2026-10-02T12:36:43+08:00,refactor(work-lane): decide the contract wire version in one owner (#5387),5387,2,2
+e38b057b3b7ca322419a214d9bfcb43ddb960e3c,2026-10-02T13:55:36+08:00,fix(backup): preserve committed SQLite data during state archives (#5431),5431,51,8
+d290f8ecf8fac2e2fce90231cd0f4a56d9a9267f,2026-10-02T14:36:18+08:00,perf(authority): copy journal JSON without repeated primitive allocation (#5251),5251,38,7
+0acd43980159c2351ac420ab484899160039e52d,2026-10-02T14:39:24+08:00,fix(collaboration): bind observed wake retirement to its original conversation (#5412),5412,19,1
+afd227f80428813e2a3820de233de6235a3a8acb,2026-10-02T16:09:41+08:00,fix(todos): exclude completion result bindings from Markdown parity (#5437),5437,3,0
+a51077fe76a17cf2f2fb4654abdecbb777be0506,2026-10-02T16:26:02+08:00,fix(chat): fence late workers after a persisted stop (#5451),5451,29,1
+78ebf893bc489aec1267eae377d3acf75ec7d21b,2026-10-02T17:17:20+08:00,fix(upgrade): preserve registered runtime routes (#5457),5457,1,17
+46a8c9b65ee8e2df5123a5762317e28b40d167fa,2026-10-02T18:05:20+08:00,fix(quota): recover receipt-bound Monitor Turns without weakening lease fences (#5450),5450,53,14
+3c50e59c0c3da96ac00b1715e7978440030c13a9,2026-10-02T19:08:10+08:00,release: prepare v1.2.4 and reconcile migration examples (#5439),5439,6,0
+7ae39e7b375f204c1223fab89b592f3590677131,2026-10-02T20:07:30+08:00,feat(diagnosis): add bounded local profile inspection,5454,272,0
+1d8e20f8171c35423bcf3254a5144cfe57164396,2026-10-02T20:13:20+08:00,fix(pr-review): read effective approvals across reviewer identities (#5447),5447,33,6
+62ca35f280b51fd4a474b4380a9664570d5aa802,2026-10-02T22:29:09+08:00,Merge pull request #5417 from loopx-project/codex/turn-settlement-recovery,5417,371,456
+1412d122975509bd2a54da9118560d95757cf0c3,2026-10-02T22:52:19+08:00,Merge pull request #5452 from jackie-cqz/codex/fix-blocked-notice-delivery,5452,8,11
+3cecb0d7cbf3d247cfd996267d7fc64627bd6e49,2026-10-02T23:15:26+08:00,Merge pull request #5389 from Duang777/codex/quota-goalref-owner-fence-clean,5389,1757,275
+0e7e34fdec6ff1ca175f48f072a152adf16890ff,2026-10-03T00:01:47+08:00,Merge pull request #5332 from LIHUA919/codex/replan-interaction-obligation,5332,11,2
+2fca4a97fab7022cef6d98c4240a032a39dfee20,2026-10-03T00:14:36+08:00,feat(telemetry): qualify installation usage and runtime clocks (#5477),5477,248,37
+e6f499c94b7358a270fd58028f516ba51548cb3c,2026-10-03T01:55:39+08:00,fix(collaboration): return later results to the original request (#5484),5484,284,126
+4ce894ca121ac1ce59e50955f3949b0c9f0c50e3,2026-10-03T01:56:51+08:00,Separate provider promotion from backed-up ownership policy migration (#5413),5413,373,172
+b509ff82dbb6b6ea3be7f2a580369f6f803a2482,2026-10-03T01:58:05+08:00,fix(context): preserve Todo constraints in shared conversation reads (#5468),5468,56,0
+760f0399f63cb1b710c68e38ee7d9f267b1f1736,2026-10-03T02:32:14+08:00,fix(quota): preserve selection refusal before default workspace guards (#5483),5483,10,0
+066b5bf26bbcf3fcb463fb8a9cc35c60da71b01b,2026-10-03T02:54:00+08:00,fix(delegation): complete under the original lease and preserve replan handoff (#5466),5466,5,0
+917d89bd27695b6ab63c517573f3a37d1ca19908,2026-10-03T04:49:53+08:00,feat(steward): unify Goal attention and intelligent channel notices (#5480),5480,151,2
+5c1cdbcd8bf9924609b7bfbfe508a5c742ebe720,2026-10-03T05:10:18+08:00,fix(release): share digest rules and quiesce installer fixtures (#5496),5496,2,1
+12d60f13fe1fae6848e2bc806688f26031c8869a,2026-10-03T13:34:10+08:00,fix: inherit managed Goal grants across context handoffs (#5492),5492,298,17
+96d9d9277751fd5c96e11bb14818b14578cd5f13,2026-10-03T14:01:31+08:00,fix(replan): reject recorded blockers across work-item bindings (#5486),5486,20,3
+c06bd62035286070c658fea885251eda31662c8a,2026-10-03T14:02:05+08:00,fix(archive): recover restore completion without replaying history (#5490),5490,62,4
+f93c1c950d9ebeda3fa362ec1cef35a4f45c8db8,2026-10-03T14:19:41+08:00,Merge pull request #5491 from loopx-project/codex/fix-authority-archive-windows-fsync-20261003,5491,2,2
+7d829aa2389ab312cf1198799081e5444acd14fc,2026-10-03T14:22:20+08:00,feat(capabilities): project bounded Goal improvement intent (#5493),5493,145,6
+58574643c0717508ec7cb3e2c35415566bbf720c,2026-10-03T14:25:42+08:00,fix(quota): replay qualified path-replan settlements (#5495),5495,27,1
+a4f105d962bc2c90d66d96ad57655a9078c66ad6,2026-10-03T14:34:07+08:00,fix(review): bind reviewer attribution to recorded execution metadata (#5514),5514,121,0
+e3385f6c2bf3fce419b7475f2abaa55ea6d1b34f,2026-10-03T14:34:56+08:00,feat(settings): migrate Goal ownership with verified backup and retry (#5508),5508,34,4
+52e964e90488559d3d2788919937c8ef2525d5da,2026-10-03T14:40:58+08:00,Merge pull request #5494 from loopx-project/codex/file-journal-decode-1003,5494,12,2
+a1f1bfa4ae50640a6ab242bdd11a4649f9bd52f6,2026-10-03T14:42:17+08:00,Merge pull request #5502 from loopx-project/codex/compact-owned-frontier-count-20261003,5502,45,5
+9c896107618b8e04ae0d02e80b1ac6ae631f286c,2026-10-03T14:45:56+08:00,fix: resume interrupted App Goal storage initialization (#5500),5500,12,1
+3870aa12d1719b84b50118dc50d9148d68c0e018,2026-10-03T14:52:22+08:00,fix(workspace): preserve archived task history and inspector facts (#5398),5398,44,8
+4a6f95e082047c3b9dc5b2201c9a124c9c6e1eb9,2026-10-03T15:46:18+08:00,feat(context): observe existing peer routes from conversations (#5509),5509,32,3
+9b5351d35f2c26abdcb3b6c80aac94475de07013,2026-10-03T15:48:39+08:00,fix(quota): keep initial replan recommendations unbound before choice (#5498),5498,52,8
+62ddcbf46b54b43d586b9e23033a8cc13330ed4a,2026-10-03T16:26:54+08:00,fix(collaboration): qualify existing peer handoffs on Windows (#5456),5456,23,2
+1e9e82b038273526880acd759f453313695ef00a,2026-10-03T16:40:35+08:00,fix(collaboration): retain receiver assessment and current work links (#5519),5519,229,2
+d0fb611b850c95db3a445cf633e2343241df3f8f,2026-10-03T18:07:32+08:00,fix(collaboration): deny lifecycle-only context recipient observation (#5522),5522,7,1
+cee95624f228fd81b00d9842483ef9c09aa32b5c,2026-10-03T19:12:22+08:00,Merge pull request #5338 from Duang777/codex/goalref-owner-fence-regression,5338,1831,166
+5949f7f33559932d43d263e0964c2ddd969b3e3d,2026-10-03T19:23:07+08:00,Merge pull request #5520 from loopx-project/codex/replan-primary-selection,5520,188,5
+2ffc1c625032d0eb23b8577d4018574d1146a0df,2026-10-03T19:23:31+08:00,Merge pull request #5517 from loopx-project/codex/settled-monitor-lifecycle-replay-20261003,5517,11,7
+c52b0aeb518450df0d69a1b7fad5f3acfd48df78,2026-10-03T20:33:44+08:00,Merge pull request #5527 from loopx-project/codex/benchmark-session-continuity,5527,429,280
+fd65e71f467fb76cf847f2ca904c4d463fcf65f8,2026-10-03T23:02:07+08:00,perf(turn): reduce duplicate preflight projections and isolate imports (#5283),5283,1263,669
+5d790b49dd723c1f366d69ac7c8ce35beafb155d,2026-10-04T00:33:40+08:00,Merge pull request #5455 from jackie-cqz/codex/fix-native-child-host-receipts,5455,51,4
+99839aeb8fed5fae38a5d319391cd050672a6508,2026-10-04T01:14:41+08:00,Merge pull request #5459 from jackie-cqz/codex/fix-public-github-evidence,5459,13,0
+6a172f699653a11c5a4dad578e244fe535013c4c,2026-10-04T15:43:39+08:00,Merge pull request #5558 from loopx-project/codex/owner-local-delivery-1004,5558,39,18
+343ddd3ea94ca0e2aa5308c6dd4c6aff514e099c,2026-10-04T16:42:23+08:00,Merge pull request #5536 from loopx-project/codex/replan-evidence-context,5536,845,626
+79b98a426865c1ca5fe04dde58ceb85317492a01,2026-10-04T16:52:40+08:00,Merge pull request #5557 from loopx-project/codex/configuration-backup,5557,105,0
+558d2140fea94df06283521df353523a6ae4c509,2026-10-04T16:54:52+08:00,Merge pull request #5531 from loopx-project/codex/next-action-writeback,5531,417,29
+7b13f88e899e9e93bfe3cd40460e71c14013a128,2026-10-04T17:53:39+08:00,Merge pull request #5308 from songoow/codex/delegation-stop,5308,606,30
+6f5505ee6b860c4994e959465736c59001d44399,2026-10-04T19:04:08+08:00,Merge pull request #5563 from Duang777/codex/fix-core-bug-13,5563,93,34
+1af7dbd43a1629b0356ecd5ee28a426ad45d1d7a,2026-10-04T20:02:45+08:00,fix: qualify local peer delivery without Git worktree (#5566),5566,62,4
+cf32e5de9f6e38a33dc8c29c183e56b1641e7d8c,2026-10-04T21:13:35+08:00,fix(todos): checkpoint completion phase identity for post-writeback hooks,5578,70,15
+d7ad25654ddf712080f290c5f688c708612136c5,2026-10-04T22:30:21+08:00,feat(chat): add authorized ordinary workspace conversations,5540,54,1
+f2efcb7705e842658350e75cdcce2ed1f998b6e4,2026-10-04T23:14:27+08:00,feat(goals): opt in to canonical creation with frozen execution policy (#5569),5569,169,1
+907eee37cf9646372c2d17590ff46da940fa7a7a,2026-10-05T00:48:11+08:00,feat(chat): owner private project admission with native queue and recovery (#5541),5541,167,6
+b007ef636f99a6f1a8f2060d8fded503b469e8aa,2026-10-05T00:49:50+08:00,feat(chat): native steward commissions in owner private Chat (#5542),5542,130,12
+a742c1209015d6d782dd557d27530996fe3e2124,2026-10-05T00:53:54+08:00,feat(chat): scoped status and help for owner private conversations (#5544),5544,53,4
+54b197cadf4a0246823ecb788fae64a5b67c3b76,2026-10-05T01:01:19+08:00,feat(chat): explicitly select authorized attached Agents in private chat (#5546),5546,125,3
+5b16c20f55ecb0947d9ae3bf19178b5a6d69df97,2026-10-05T02:21:49+08:00,fix(runtime): report safe startup locator publication failures (#5551),5551,24,16
+0527c09c213abff23c20858c3abb65bfe3ef0851,2026-10-05T02:27:39+08:00,feat(pr-review): persist per-Agent forward/reverse directions (#5608),5608,98,0
+5b502779b346732c40cb10130f77b55b7a17a95a,2026-10-05T03:41:11+08:00,fix(runtime): make single-turn execution deadlines opt-in (#5600),5600,13,13
+d783586f75d78c69e3bd816c100e6ba22f6f4d37,2026-10-05T03:41:43+08:00,fix(cli): return parsed claim repair arguments in one packet (#5586),5586,10,0
+e8ee190b1114a0708cd5858bd721ea31a7921596,2026-10-05T04:01:08+08:00,fix(workspace): settle registered originless local goals (#5614),5614,60,23
+018c4a661bd7ba8199241fa855845919528573fa,2026-10-05T08:09:29+08:00,fix(quota): complete runnable replan selection in one CLI call (#5628),5628,8,0
+01c6651366476820f329314983255ea5bc688ad5,2026-10-05T08:10:48+08:00,fix(goals): make checkpoint recovery hints match validation (#5573),5573,15,4
+96164637c21db7ccd2f741cb7da6ef630fa413e6,2026-10-05T08:31:33+08:00,fix(heartbeat): scope checkpoint recovery to committed writeback (#5629),5629,1,1
+f51289168e402111e535a7ecb0d26333eb24c588,2026-10-05T10:12:42+08:00,fix: guide evidence-linked vision closeout before settlement (#5633),5633,36,17
+fae7fd5e9382e5be87b29b42f37aab13d05f8387,2026-10-05T11:01:47+08:00,fix(quota): preserve settlement contract in TurnEnvelope (#5636),5636,17,1
+12ad293b2bebe9a24cd61e127f7375e35fcfd410,2026-10-05T12:03:35+08:00,feat(explore): unify Harness modes and provide turn-start context (#5610),5610,102,2
+9a5a219cce95d9213d6a9969efd172a35f417f3e,2026-10-05T12:09:09+08:00,fix(quota): defer local workspace guidance to admission rules (#5623),5623,1,1
+7a9a1d2031ba21c9b4e18ba492b690a51d8b342d,2026-10-05T12:24:15+08:00,fix(heartbeat): keep peer admission guidance readable (#5604),5604,41,6
+5e1c84029ec9c8f883c21c0bc06c3f0ad872f22e,2026-10-05T12:29:23+08:00,fix: stop POSIX preview input at its parent deadline (#5553),5553,28,1
+950de6a06f4913765eb4d527f9ed7161a810ceef,2026-10-05T12:31:29+08:00,fix(ci): reconcile exact-target recovery and settled readback (#5567),5567,95,32
+cf545a12c1f7604073cca71015770f042d9b0a30,2026-10-05T12:33:20+08:00,fix(leases): normalize observed worktree repository identities (#5584),5584,4,2
+608fe3b0e902bd392dbd752e3b02a5655b60848a,2026-10-05T12:36:40+08:00,Merge pull request #5640 from loopx-project/codex/settlement-negative-evidence,5640,9,6
+08699fe6f6f66c3d5019e6db513d5007d63a2084,2026-10-05T12:41:39+08:00,feat(deepseek): ship the canonical V4.1 Flash id and let the Ark rows be configured (#5561),5561,4,1
+6f3f19efb150b4ed484a589676edec4374783234,2026-10-05T13:31:32+08:00,Merge pull request #5594 from loopx-project/codex/shadow-history-compat,5594,5,1
+ee2b9d5cb821194f64580176384e90aab8b284c8,2026-10-05T13:33:50+08:00,feat(chat): default scoped project conversations to workspace writes (#5555),5555,15,8
+4b99d7139a59c29795d50b79ab4bbad3f815f9a2,2026-10-05T13:59:30+08:00,fix(runtime): wait for locator publication before dispatch (#5556),5556,10,1
+467b75dc78faaf18c365983784300a483232e839,2026-10-05T14:13:54+08:00,Merge pull request #5656 from loopx-project/codex/pr-review-owner-logins,5656,24,1
+58bf97c152666f57298aa547eb7b98d149484662,2026-10-05T14:42:45+08:00,fix(replan): rearm fresh vision gaps and preserve original Turn settlement (#5646),5646,74,29
+61e37f089a63aaf6e2bcdf77444e0be410b79a6b,2026-10-05T15:55:44+08:00,fix(explore): preserve finding titles in turn context,5658,2,1
+b9df6d1d0ad06909c31abfaedd57741d63fe5750,2026-10-05T16:02:38+08:00,fix(workspace): isolate edits and preserve complete current evidence (#5587),5587,53,16
+4c63b6427958f72032d1fd1671ad60f1b997a26d,2026-10-05T16:35:15+08:00,fix(runtime): preserve host permission diagnostics and recovery (#5644),5644,61,10
+3bb268d7c4ca35c972fb1bcaf19837ba3ffeacaa,2026-10-05T16:48:30+08:00,fix(quota): read captured envelope details without guard reentry (#5662),5662,24,2
+e1aa319de8777ef5a1a9b94eebfb343eff2db51d,2026-10-05T17:00:00+08:00,Merge pull request #5585 from hhyykk/codex/checkpoint-source-reduction,5585,20,37
+5d0e21468cdea17283f7940d406a9f8ce331ded7,2026-10-05T17:06:56+08:00,refactor(todos): retire unused Python transition adapters (#5664),5664,0,56
+385fcdcc5ddf97cda1cfb56b7c33892e3e23bc50,2026-10-05T17:53:04+08:00,Merge pull request #5667 from loopx-project/codex/json-settlement-commands,5667,3,1
+55708ee3ec78d26ae217d74ae5e50c737142346d,2026-10-05T19:09:34+08:00,refactor(shadow): retire unused snapshot mirror producer (#5666),5666,0,56
+b88f98949c46ba7474485a3b0f75c9943698f0fc,2026-10-05T19:11:07+08:00,Merge pull request #5661 from loopx-project/codex/install-current-format-read,5661,31,10
+e5a08d6789fb08c3ac25a5c10b8655a188fe7c1c,2026-10-05T19:25:07+08:00,Merge pull request #5603 from jackie-cqz/codex/fix-peer-input-paths,5603,6,4
+0e3b8e14a74c7cca2f9ff46597d072a04333461b,2026-10-05T19:47:15+08:00,Merge pull request #5674 from loopx-project/codex/explore-decision-evidence,5674,24,2
+095659a9375978621365e36c43e94350dcca0660,2026-10-05T19:48:22+08:00,Merge pull request #5595 from mikamikasuki/codex/loopx-source-context-instance-scope,5595,29,3
+fbe4ac3734de185ffb23f409521a60ce3251080f,2026-10-05T20:12:21+08:00,Merge pull request #5602 from jackie-cqz/codex/fix-windows-configuration-backup,5602,10,4
+457091856606df785a40c205817f396fc98ede75,2026-10-05T20:27:55+08:00,Merge pull request #5679 from loopx-project/codex/todo-retirement-callers-20261005,5679,1,25
+053a8c246d16f0bbf88491905038295a5c0843e1,2026-10-05T21:20:16+08:00,Merge pull request #5686 from loopx-project/codex/sqlite-shared-alignment-20261005,5686,11,3
+03794d7b0edb323a52c8aec05c9be24c27f4f5cc,2026-10-05T23:31:39+08:00,Merge pull request #5676 from loopx-project/codex/local-goal-write-admission-20261005,5676,111,10
+0a2c577ea54c590f368009cca3fc797632a4889d,2026-10-05T23:59:20+08:00,Merge pull request #5683 from loopx-project/codex/steward-registered-scope-20261005,5683,31,7
+61a1cda418744375b7cbc8dbd8c3e14f92f8bb24,2026-10-06T00:39:42+08:00,Merge pull request #5634 from loopx-project/codex/steward-inbox-work-activation-20261005,5634,127,51
+ce003af11105428697b1b07c9a7bb07fdd43d3ba,2026-10-06T00:57:30+08:00,Merge pull request #5533 from Duang777/codex/fix-main-ci-contracts-20261003,5533,167,47
+b2d05e21c74cd0338a32ca8e50e29213a73c041f,2026-10-06T01:10:00+08:00,Merge pull request #5684 from Inference1/codex/progress-scope-vocabulary-owner,5684,27,4
+e0addaf334aa980e1110c7d7f1762d12ed5854e0,2026-10-06T01:48:38+08:00,Merge pull request #5620 from loopx-project/codex/approved-agent-write-resume-20261005,5620,68,1
+60e94ddd7eb089f0a6ef60518b1d72315f2b7704,2026-10-06T02:31:57+08:00,Merge pull request #5581 from loopx-project/codex/native-private-images-20261004,5581,9,0
+609717519942a78a31b0efc800a23898e53ccc50,2026-10-06T03:25:02+08:00,Merge pull request #5697 from loopx-project/codex/release-1.3.0-qualification-repair,5697,10,4
+fc547844aa77bff3f0b5d3c58319f83fca3aa9c7,2026-10-06T03:39:46+08:00,Merge pull request #5698 from loopx-project/codex/atomic-existing-successor-20261005,5698,8,11
+9fbdc43c27be0bd013f031d598d3fdd687c8657e,2026-10-06T04:00:32+08:00,Merge pull request #5700 from loopx-project/codex/release-1.3.0-source-admission,5700,7,1
+18241d3ab8126c147af62f7a91258958b0f243b3,2026-10-06T06:15:45+08:00,Merge pull request #5707 from loopx-project/codex/release-1.3.0-shutdown-retirement,5707,25,3
+00739f9b247c1a84eca43d62370c4e4166bb15b5,2026-10-06T06:51:18+08:00,Merge pull request #5699 from loopx-project/codex/effective-turn-replan,5699,139,25
+79605ad980d095202e9214cff04a8f4a2f56388e,2026-10-06T08:06:20+08:00,Merge pull request #5718 from loopx-project/codex/release-1.3.0-replan-context-owner,5718,35,1
+9e783092231b6a7f4728569105f83a364a5f8bad,2026-10-06T10:42:31+08:00,fix(quota): settle accepted semantic progress before frontier reentry (#5727),5727,15,8
+b8b93f13aefc94d8bcb2ae9b4b51bd4156c3559f,2026-10-06T12:47:05+08:00,Merge pull request #5593 from loopx-project/codex/todo-blocked-recovery-20261004,5593,23,0
+aa3d5d2cb6cceb728b358f0ba02457fff36e7e7f,2026-10-06T12:51:28+08:00,Merge pull request #5703 from loopx-project/codex/todo-retirement-callers-20261006,5703,0,42
+a64fffb585bfdb095c710d5792f614f42610bf34,2026-10-06T12:59:03+08:00,Merge pull request #5705 from Duang777/codex/post-writeback-jsonl-tail-recovery-20261006,5705,9,1
+1e85a1e69c38d45b8085217b320988b2abeb5e77,2026-10-06T13:03:36+08:00,Merge pull request #5665 from loopx-project/codex/heartbeat-envelope-transport,5665,78,2
+4c42b4b7599365b1f27ef1265a6f227111491d6e,2026-10-06T13:05:09+08:00,Merge pull request #5710 from loopx-project/codex/decision-scope-retirement-220616,5710,3,34
+9a571e1a4aa39b464c35290c56656a22974cf062,2026-10-06T13:05:58+08:00,Merge pull request #5715 from loopx-project/codex/canonical-caller-225616,5715,4,4
+ffe0d5517a64979ef03bf2d4182aba2290e8c2bf,2026-10-06T13:08:21+08:00,Merge pull request #5712 from Duang777/codex/fix-live-runtime-start-lock-20261006,5712,1,1
+d26657c2b7ac1a0b57ddfa45a63e3f4086ae829a,2026-10-06T13:09:24+08:00,Merge pull request #5717 from Duang777/codex/fix-runtime-projection-artifact-readback-20261006,5717,30,7
+cdfe14643ef18d8f31beab72bd925f538eb7752f,2026-10-06T13:12:00+08:00,fix(status): preserve canonical peer work facts over audit rows (#5668),5668,51,24
+bcbe55c8f399c515896930bb70a376a86f0aaa6b,2026-10-06T13:20:10+08:00,refactor(todos): retire unused decision-scope Python facades (#5724),5724,0,7
+aee42245976cdc372ca667a9147d4d6159bd23b8,2026-10-06T13:46:40+08:00,Merge pull request #5726 from loopx-project/codex/prove-adapter-type-boundaries,5726,8,5
+8675cb366dd8c59604f03540c040324c7679a1fc,2026-10-06T13:47:53+08:00,Merge pull request #5723 from loopx-project/codex/explore-audit-truncation,5723,18,4
+4cf7102b4c254c9f0a424973ac23c81253e7ebd3,2026-10-06T13:51:40+08:00,Merge pull request #5719 from loopx-project/codex/retirement-stage-000017,5719,3,155
+a4cd008484de7fbba1c44bb1638bf8cdb62bd40c,2026-10-06T13:57:56+08:00,Merge pull request #5730 from mikamikasuki/codex/loopx-lx-0001,5730,11,2
+2e572b7a17c4879930e33fa803d7d0e96b6b610d,2026-10-06T14:07:44+08:00,fix(workspace): preserve verified reads during task updates (#5692),5692,100,3
+0ee29b9307e26f2a07d6044c1b0dbcb1492c72cb,2026-10-06T15:30:26+08:00,Merge pull request #5749 from loopx-project/codex/source-lease-reader-retirement,5749,0,25
+66adb071178be09cd9c21f9661ec1d3e09b95db6,2026-10-06T15:31:04+08:00,Merge pull request #5742 from Duang777/codex/fix-stopped-goal-collaboration-admission-20261006,5742,11,2
+73f429aad3399db9e52768e953de2743d02b2f73,2026-10-06T15:33:13+08:00,Merge pull request #5734 from mikamikasuki/codex/loopx-windows-locator-diagnostic,5734,6,0
+c39cf02a357db169db163824823addb738f3688c,2026-10-06T17:46:27+08:00,Merge pull request #5766 from loopx-project/codex/scheduler-valid-turn-receipts,5766,4,1
+5535edba85380d16b5d9df4007c9e67fa12b4a51,2026-10-06T20:37:48+08:00,refactor(todos): retire unconsumed Python read helpers,5776,0,22
+586333eadde02f038ab56ae231b6d754a91792e5,2026-10-06T20:58:52+08:00,fix(replan): review authorized next steps before no-follow-up,5768,4,0
+28a57fb595898f990702957b04cc4090d17675d6,2026-10-06T21:06:21+08:00,fix(todos): align succession warnings with ordinary continuation,5784,20,19
+5300294ff068abb5c84587620a603baaef2529ec,2026-10-06T21:13:42+08:00,fix(scheduler): fence receipt freshness through persistence,5745,94,44
+5e66d7d169f896b2d97f9d73e0b561e034f622f2,2026-10-06T21:13:42+08:00,fix(scheduler): recheck receipt freshness at commit,5745,91,32
+edb3eda44716d3994b1ff9b3bfda95ef62aa0e44,2026-10-06T21:15:28+08:00,fix(replan): allow evidence-linked paths at periodic review,5783,3,2
+cc7648a4d2ecd39722b516ba3ba38028633cc029,2026-10-06T22:31:50+08:00,Merge pull request #5743 from loopx-project/codex/explore-result-ingestion,5743,206,5
+827c97b5a95bc8d3bfabcc012cba7e60d7cdbb46,2026-10-06T22:52:06+08:00,Merge pull request #5773 from loopx-project/codex/typed-shadow-comparison,5773,4,2
+7da62c2ce640827199018b390bdba77c2d6b6d0c,2026-10-07T00:02:29+08:00,fix(explore): make optional evidence capture actionable (#5792),5792,14,4
+1cb7b7a792df91783511900ec20d98f968ab0633,2026-10-07T00:03:11+08:00,refactor(runtime): separate permanent document IO from Todo editing (#5791),5791,71,61
+ad6e2698d76fc14457ebc8b1974e9781b3bf814a,2026-10-07T01:12:26+08:00,fix(todos): report unavailable authority on create (#5797),5797,19,0
+ee3fa5ab32d6054b28f11f87d096d310e67350fc,2026-10-07T01:16:50+08:00,fix(history): preserve JSONL record framing (#5762),5762,42,8
+f35a3831a94f10a1e28f71d3833bca0fe348d906,2026-10-07T01:40:50+08:00,Merge pull request #5802 from loopx-project/codex/reward-memory-host-isolation,5802,82,16
+3a1a92ebd3e168b0e93e788b1127fb73e035f79c,2026-10-07T03:15:04+08:00,feat(coordination): default new Goals to canonical SQLite (#5805),5805,1,1
+f842bdea1732b72caebbf7cf1dae8dadaa06d137,2026-10-07T04:22:47+08:00,refactor(coordination): retire unused Python lease mode input (#5812),5812,3,43
+048692605c5527e0e21c3921083c753d33833f0d,2026-10-07T04:23:07+08:00,fix(credentials): serialize operator provider updates (#5808),5808,31,23
+03795da77af4b562f19ba8e408949dc251da1166,2026-10-07T04:23:38+08:00,fix(todo): bind journal capabilities to Goal lifetime (#5761),5761,80,10
+fb3e21ed6d51c78ffd53702b41007388145968f8,2026-10-07T04:24:44+08:00,Merge pull request #5810 from loopx-project/codex/explore-inline-results,5810,20,3
+b185aa5ff016f5cb65d6c0c67d3c7d591a2586aa,2026-10-07T04:25:51+08:00,fix(quota): preserve interrupted Turn binding before successor selection,5809,9,1
+87aaf06b2e01451ea434dd76576c63bb35432cd4,2026-10-07T05:07:48+08:00,Merge pull request #5815 from loopx-project/codex/heartbeat-turn-execution-parity,5815,3,1
+332f6de00fe7aa81a65c977ea25073ebf4954ce6,2026-10-07T05:08:20+08:00,Merge pull request #5813 from loopx-project/codex/deferred-resume-command-20261007,5813,1,1
+59396702c812b4bb91fb5f1b7e700c6b48aaf16e,2026-10-07T05:34:35+08:00,Merge pull request #5817 from Duang777/codex/fix-goal-recreation-canonical-race,5817,27,6
+a6f5ceb9d8a80d808f0d3eabaa9bbd2a0fdbc225,2026-10-07T05:56:21+08:00,Merge pull request #5818 from loopx-project/codex/heartbeat-registry-route-20261007,5818,46,8
+da45cfe771e96d20b9c5129a021a8c971ee03324,2026-10-07T07:29:25+08:00,fix(heartbeat): retain registry through live contract rebuilds (#5826),5826,12,0
+bff46dc0ab70644223a071421708ab77d61dc1dc,2026-10-07T09:26:52+08:00,fix(chat): bound manager attention previews and show compaction (#5829),5829,43,3
+d399043db685609ea6038e25b15a36c52f1bb629,2026-10-07T11:55:30+08:00,Merge pull request #5820 from loopx-project/codex/typed-todo-snapshot-refusal,5820,19,40
+31510ea75c2d95956c624a6828cd06384b4186d5,2026-10-07T12:29:45+08:00,Merge pull request #5819 from loopx-project/codex/explore-settlement-guidance,5819,75,10
+49af193c465409f488705b4dadfbc73fad13e8f5,2026-10-07T12:53:05+08:00,Merge pull request #5642 from hhyykk/codex/team-plan-source-fence,5642,142,30
+e0f02d5f848cc13356d16a307426ec6ed616e37d,2026-10-07T13:03:36+08:00,Merge pull request #5823 from mikamikasuki/codex/loopx-timestamp-parity-final,5823,69,3
+0527f4e3d81561e87a7ed2467329a69991673211,2026-10-07T13:04:53+08:00,Merge pull request #5827 from mikamikasuki/codex/loopx-thin-heartbeat-budget,5827,26,5
+684e07c023098af58c21c1353b8442f7b72ae688,2026-10-07T13:06:34+08:00,Merge pull request #5835 from mikamikasuki/codex/loopx-scheduler-identityless-success-guard,5835,25,6
+0b58490a270eb0b080e828bc45a46f821e80dfaa,2026-10-07T13:08:20+08:00,Merge pull request #5825 from loopx-project/codex/todo-retirement-frontier-224555,5825,102,151
+4905c3f2aead88664fb712c71d27004866edda24,2026-10-07T13:09:22+08:00,Merge pull request #5828 from loopx-project/codex/scheduler-captured-detail-233855,5828,7,3
+872e3f79a694827b9efac3a03e7400b581c0be51,2026-10-07T13:13:41+08:00,Merge pull request #5840 from loopx-project/codex/frontier-deadline-owner,5840,3,1
+7046f1904b81e3da9a4887267b44a1a91152b1ac,2026-10-07T13:14:07+08:00,fix(todos): bind route-replan facts to typed succession evidence (#5831),5831,41,27
+780c4a74ba8d6f231a6c6eca016447088b359cf3,2026-10-07T13:20:35+08:00,refactor(todos): share typed route and handoff visibility (#5832),5832,128,242
+5dc859467b3a3bc3d003e7ec6089a2c752a046c5,2026-10-07T14:10:02+08:00,Merge pull request #5843 from loopx-project/codex/typed-monitor-quota-lanes,5843,69,34
+55b9f397ccc96ec4b7db3f7b08276dc80d83bce1,2026-10-07T14:37:23+08:00,Merge pull request #5841 from loopx-project/codex/bounded-quota-turn-diagnostics-20261007,5841,19,13
+bee634a6d2aca6c63c32469ccc7d66c1513cda0d,2026-10-07T14:43:26+08:00,feat(chat): add opt-in native workspace-only tool policy (#5845),5845,35,1
+81e6220b3e91a200573d599c50e2a6bc11ec9a16,2026-10-07T14:45:50+08:00,Merge pull request #5844 from loopx-project/codex/unified-required-turn-context,5844,513,173
+746b868e9eb2cee5aefc255022be20e88f14c73b,2026-10-07T14:56:29+08:00,fix(todos): remove unused Path import (#5847),5847,0,1
+97d3c43f6281ab6af26f585ea970b62ceae44c42,2026-10-07T15:41:48+08:00,fix(agents): preserve unreadable lease state across caller views (#5853),5853,26,19
+0475fce1a546af0f26206f71b4d04f8ac3169a4d,2026-10-07T16:02:58+08:00,fix(testing): qualify native bound scheduler transports (#5860),5860,29,1
+718753e78e64c1943ea029e193282aceedce078a,2026-10-07T16:42:42+08:00,Merge pull request #5848 from loopx-project/codex/typed-frontier-deadline-batch,5848,120,35
+3344dea96c11a46d49a6fc4f5283e054ad537dc6,2026-10-07T17:21:07+08:00,fix(quota): explain artifact-only Todo completion before execution (#5865),5865,3,1
+980d5232335ffe514de4e982b8ed07b44ae8e9e9,2026-10-07T17:21:36+08:00,fix(quota): requalify same-Turn work after legal recovery,5867,128,3
+561dd6724738f7af92dff6ab30832e586e1921b1,2026-10-07T18:51:13+08:00,fix(monitor): commit observation and follow-ups as one batch,5648,792,416
+06b6caa07b3a7e420584f36c23320e173cddd1b8,2026-10-07T19:36:49+08:00,fix(context): disclose fresh preference state without repeated reads (#5870),5870,38,3
+6677684ea1b50148048a62db1182bb4c00fdee75,2026-10-07T19:50:49+08:00,fix(goals): fence deletion against canonical writes,5854,21,0
+cad1ffce031ddbf82944396248eefc65408bbe02,2026-10-07T19:51:28+08:00,refactor(todos): compose frontier index in the summary batch,5869,46,13
+02acd33f374564a3e61837534ebdd879f68c0e33,2026-10-07T20:21:15+08:00,fix(context): scope preference guidance to its participating hook (#5874),5874,3,17
+b92bff438422a75f91701a1ca32a7e902e117289,2026-10-07T22:38:44+08:00,Merge pull request #5879 from loopx-project/codex/benchmark-replan-turn-default,5879,47,40
+78a58023ecc3170844c65b1e49f21353fce6ccd6,2026-10-07T22:43:28+08:00,fix(explore): make first capture and scope-conflict recovery usable (#5889),5889,18,8
+d6b241749fddd24fc71a2bb7236798951514670d,2026-10-07T22:45:36+08:00,Merge pull request #5884 from hhyykk/codex/r4-governed-amendment-20261007,5884,135,13
+e47e4507a4d22ed9d52e9644a5d1f25f8f7f77e1,2026-10-07T23:17:15+08:00,feat(authority): recover existing Goal storage changes in settings (#5893),5893,55,4
+155c10dbffe411f147dc1a06e94df26529fc5585,2026-10-08T00:17:32+08:00,fix(public-safety): reject local references in typed exports (#5897),5897,12,4
+521b793c28c4530dfc6a82e94ce58cb94a44d345,2026-10-08T00:34:38+08:00,perf(quota): skip unused fallback todo projections (#5902),5902,18,16
+4202ab5ba78f3a09e1675660c4d6fe645ba98056,2026-10-08T01:00:58+08:00,fix(runtime): fence unrouted artifact writers,5862,115,46
+8c9d4c9ed282e3e9448dc29dd598ff1f241ee0a8,2026-10-08T01:00:58+08:00,fix(runtime): serialize archive with artifact writers,5862,67,30
+6eee13ebd6533438828f03838c378cea048cd063,2026-10-08T01:30:41+08:00,Merge pull request #5903 from loopx-project/codex/c1-writer-callers-20261008,5903,1,21
+2a5b7ffeed817945266bc043ef924abc3f384c9a,2026-10-08T01:31:09+08:00,Merge pull request #5725 from Duang777/codex/fix-quota-todo-cache-freshness-20261006,5725,1,0
+b6e0e53a81840059026ace3ef099f546901e2dfe,2026-10-08T03:25:15+08:00,Merge pull request #5850 from mikamikasuki/codex/loopx-closure-monitor-witness-count,5850,3,1
+0cd547b0c442a5c0ec7f608827b02dce7aeb0aac,2026-10-08T07:09:33+08:00,Merge pull request #5914 from loopx-project/codex/manager-result-attachments-20261008,5914,174,4
+89505091fe52d318112aaaefb85f97e61cf11b33,2026-10-08T11:16:15+08:00,Merge pull request #5911 from mikamikasuki/codex/loopx-selected-todo-freshness,5911,101,6
+ecf83a39bfc08acabb6fa8c10b3620bce85f3660,2026-10-08T12:10:19+08:00,Merge pull request #5871 from hhyykk/codex/effect-runtime-private-publication-20261007,5871,1,2
+b02b3d176028b8b20ebc47e848e0763bba43d245,2026-10-08T12:11:27+08:00,Merge pull request #5906 from loopx-project/codex/user-action-metadata-owner-20261008,5906,14,0
+db12af448b3ca4dc051be2bdc59a26a4b2e53d33,2026-10-08T12:13:03+08:00,Merge pull request #5909 from loopx-project/codex/canonical-monitor-writer-isolation,5909,7,5
+f800590cb0e811de28b7ab4b71e0ee1b3172a3f6,2026-10-08T12:19:32+08:00,Merge pull request #5901 from loopx-project/codex/content-reference-library,5901,173,2
+412ba816e91f2dd8c2ea59377b11f10a2fe0986c,2026-10-08T13:31:45+08:00,Merge pull request #5910 from loopx-project/codex/dependency-replan-20261008,5910,22,0
+21707b7fb64123df02e730bf7959192010f85a1b,2026-10-08T14:42:53+08:00,Merge pull request #5882 from mikamikasuki/codex/loopx-2881-selected-todo-context,5882,149,17
+a1890a37f4f759bc2e39823074bbe78f78e49fdb,2026-10-08T14:49:01+08:00,Merge pull request #5916 from loopx-project/codex/explore-capture-lease-order,5916,22,1
+c7bfb718014c1cb720e814cb8e34a7f9e0d4db63,2026-10-08T16:21:30+08:00,Merge pull request #5939 from hhyykk/codex/turn-post-writeback-source-adoption-20261008,5939,172,2
+05af21dd4cbc8256af1da9746a34abc13085cfd3,2026-10-08T16:23:26+08:00,Merge pull request #5943 from Duang777/codex/fix-postgresql-authority-identity-rotation-race-20261008,5943,18,0
+af85fac0898d00851bf42b5568d69b8954e8f96c,2026-10-08T17:25:01+08:00,Merge pull request #5918 from loopx-project/codex/app-create-recovery-224602,5918,63,7
+2438ffa0485d32c4a6007314e265aa30d82fd4d1,2026-10-08T17:33:38+08:00,Merge pull request #5924 from loopx-project/codex/todo-create-scope-owner-20261008,5924,17,4
+62acd670fc5c231f323176ebf28f228aee5bd334,2026-10-08T17:35:10+08:00,Merge pull request #5928 from loopx-project/codex/workspace-only-codex-context-20261008,5928,5,0
+4180a8ea07697972c6d2e89e7eb3e1a85ab397cd,2026-10-08T18:19:05+08:00,Merge pull request #5932 from loopx-project/codex/canonical-update-intent-routing-20261008,5932,0,27
+8fc53dc03b2daf739f9b4d561d8449e644f50011,2026-10-08T18:20:33+08:00,refactor(todo): retire unused Python policy queries and teach typed owners (#5937),5937,0,30
+827f461258fa9cd106fc328c16a554ad9cf491a8,2026-10-08T18:21:23+08:00,Merge pull request #5945 from loopx-project/codex/c1-retirement-r104,5945,137,151
+7ec2d9473a2a6552fba01ec4a288600ce1e6a730,2026-10-08T18:58:09+08:00,fix(manager-runtime): honor verified private steward host grants (#5957),5957,6,1
+5db65882b49b016807677d21852838f85e9e0f0c,2026-10-08T20:50:20+08:00,Merge pull request #5952 from mikamikasuki/codex/loopx-replan-history-no-turn-quota-read,5952,42,9
+aa0c2ea6a6bad1f105e8c2f66464cf4d8c4de2b1,2026-10-08T20:55:29+08:00,Merge pull request #5936 from mikamikasuki/codex/loopx-effect-runtime-windows-locator-retry,5936,21,10
+48accc7e4e323bfc75fc8b09b5faa5cc8f502474,2026-10-09T00:45:53+08:00,Merge pull request #5974 from loopx-project/codex/explore-durable-links,5974,16,8
+154d6e5534019d2745ae4b8749ffb2f26ad05f2e,2026-10-09T02:34:51+08:00,Merge pull request #5977 from mikamikasuki/patch-1,5977,2,1
+73dfd1f66dadbd7c08b25a94813c4d51ec99d1fe,2026-10-09T02:35:39+08:00,refactor(public-safety): decide the opaque id body in one owner (#5880),5880,2,2
+6ca04ed808d8b67efd4ff66a4486c595293f1591,2026-10-09T04:41:30+08:00,fix(chat): preserve bound external provenance through native admission (#5985),5985,6,3
+b27c4c7290b9fea5deac1afa54694f3d5c263b93,2026-10-09T09:11:12+08:00,feat(chat): connect isolated project Bots to selected Lark group topics (#5999),5999,53,9
+9632a9bdf2486b48f50fc859bb2dd40d475c47e4,2026-10-09T11:39:44+08:00,fix(runtime): preserve Node probe failures and accept slow compatible startup (#5997),5997,161,52
+f80dfaba8580aac5426d968109f92b9d46b4db03,2026-10-09T12:30:30+08:00,fix(runtime): honor Node prerelease version precedence (#6006),6006,11,4
+5f01436418ebda7ffcc4f6eb0760e4bb862fae22,2026-10-09T12:53:46+08:00,Merge pull request #5962 from mikamikasuki/codex/loopx-explore-context-qualification,5962,17,1
+b2974513984a262eb7206f92ccc5a0ed6b8d2a75,2026-10-09T13:00:40+08:00,fix(coordination): reject unsafe lease source snapshots (#5983),5983,98,10
+31b74bcd0cfcd6fb1dde3990024fcc76d98924f4,2026-10-09T14:33:35+08:00,feat(coordination): inspect cold sources through CLI and Goal settings (#5995),5995,268,4
+f03a9acf28b726949a855ab54e2f4f1d06799a3f,2026-10-09T17:07:41+08:00,Merge pull request #6004 from loopx-project/codex/cold-source-import-r128,6004,459,3
+5388e6c651b88caa76705c4a0c9df7dd89175ce8,2026-10-09T21:56:42+08:00,Merge pull request #5967 from Duang777/codex/fix-host-completion-goal-instance,5967,10,4
+aede67ead382fc02beb3de4d0f49463b1c30a8ae,2026-10-09T21:57:01+08:00,Merge pull request #5970 from Duang777/codex/fix-acceptance-goal-instance-fence,5970,469,33
+de3de98d14d3c6f735c156e49f01c491f0d355f8,2026-10-09T21:59:23+08:00,Merge pull request #6013 from loopx-project/codex/native-source-peer-recovery-r134,6013,46,7
+4aa569b58898fc56b3391cc12b52ebb7ac3cd2ea,2026-10-09T22:00:23+08:00,Merge pull request #6014 from loopx-project/codex/user-action-leased-metadata-20261009,6014,22,15
+ab64c5d1c36a88c587a54ac26cb1cda195d5f965,2026-10-09T22:02:51+08:00,Merge pull request #6027 from loopx-project/codex/cold-import-packaged-app-r142,6027,15,2
+c33e1f364388b9d8829c4c88deb2ed8bb5e8a802,2026-10-10T00:12:16+08:00,Merge pull request #6032 from loopx-project/codex/change-quality-baseline-attribution-r143,6032,115,0
+5e5f0576b15587a9233ce7a2d9571940bf22ad94,2026-10-10T00:13:14+08:00,Merge pull request #6028 from loopx-project/codex/fair-due-monitor-selection,6028,9,2
+1f3d735165b1b4bf300d9a514a850208e22f1381,2026-10-10T01:15:30+08:00,Merge pull request #6034 from loopx-project/codex/todo-list-body-once,6034,54,0
+7222d5443436aa760809fbf01863a45fe9d0b724,2026-10-10T01:18:32+08:00,fix(coordination): isolate App routing and prose guards from capture (#6020),6020,94,109
+92b744c95431f6913c6be14bb49bbd439bd072be,2026-10-10T02:09:44+08:00,Merge pull request #5950 from hhyykk/codex/work-lane-narrative-noninterference-20261008,5950,0,9
+eaca3e7f5eb1560263086d8539a0b5782e5e51ed,2026-10-10T02:13:06+08:00,Merge pull request #5954 from hhyykk/codex/managed-host-material-replan-20261008,5954,44,13
+073be70c151490174a002f6f7fc305a614f9221f,2026-10-10T02:20:05+08:00,Merge pull request #6022 from Jim-jimu/fix/explore-todo-readiness,6022;5986,6,1
+1d5284077b97ad77a0c173761c11690a7d039ea4,2026-10-10T02:49:59+08:00,Merge pull request #5926 from hhyykk/codex/canonical-timed-wait-execution-20261008,5926,37,17
+c85c57be34c32510483df65b974a9828f7ee66df,2026-10-10T03:23:39+08:00,Merge pull request #6039 from loopx-project/codex/benchmark-replan-cadence6,6039,15,8
+dcecad9b4f28d056d4e46974378ebd9eeaba51a2,2026-10-10T03:41:17+08:00,fix(chat): drain manager returns only on their source host (#6047),6047,12,2
+8a38ce4c9bbd49719f868e3657e0d71e99335358,2026-10-10T03:54:45+08:00,Merge pull request #6030 from Duang777/codex/fix-acceptance-source-recreation-main,6030,275,136
+ed79bfd63c0dae3dd0111ae3854790cce47ca014,2026-10-10T11:41:41+08:00,refactor(testing): separate CLI growth qualification from coverage,6052,52,31
+a97e6173cc6f8f8e7cda12d9e0d91f2ce44c8b0d,2026-10-10T11:41:41+08:00,test: qualify complete authoring input output growth,6052,90,1
+7b01f88db2db5b786296f491b865a644bb0af775,2026-10-10T11:41:41+08:00,fix: keep required replan authoring in default quota packets,6052,34,10
+8efa22fce52cedb6523ce8aecad4df7d74c0f00c,2026-10-10T11:41:41+08:00,fix: expose settlement authoring and exact planning readback,6052,32,2
+c0f77b2d99d4419ce64cd14bd207e28379ebfb05,2026-10-10T13:22:40+08:00,refactor(app): decouple canonical Todo workflows from legacy producers (#6050),6050,606,17
+f968b6e276e484df11e97d02d938c7ddf8b927d8,2026-10-10T15:07:44+08:00,feat(progress-review): bind observations to current task acceptance (#6066),6066,73,4
+66f015080a91c949c0b3584818a5c516fdcd79c3,2026-10-10T15:12:24+08:00,fix(coordination): resume soft-claim copy edits with released history,6058,36,2
+6c5cdbd3efa906b95d28734a28461b38a0dce676,2026-10-10T15:33:16+08:00,fix(todos): verify original quota settlement during lifecycle reentry,6070,45,4
+4ff2482fbaa3c3b978ad080ff2cded0ba400f19c,2026-10-10T15:33:16+08:00,fix(todos): persist lifecycle closeout after authority migration,6070,85,1
+32db4d13dbf2f499faf9560789c3c57a478aad02,2026-10-10T16:09:00+08:00,fix(collaboration): block current use of invalid declared ancestry (#6064),6064,196,34
+c2b17b3e1f59d0f226d0e50d566804baf58b1a93,2026-10-10T16:52:44+08:00,Merge pull request #5966 from Duang777/codex/fix-cadence-reservation-resume,5966,2,4
+30d2440024d39bbb07111233a1687199b4154e69,2026-10-10T18:52:40+08:00,fix(capability): retain scoped trial feedback in improvement advice,6106,43,11
+8d52959b89ad84a29799bcf3efe2e9b9646803a4,2026-10-10T20:22:28+08:00,fix(replan): reduce receipt-backed continuation repetition (#6103),6103,109,14
+57bb51609de92789c4d97fb49ba56ee15a174e57,2026-10-10T20:23:01+08:00,refactor(todos): isolate canonical entrypoints from retained Markdown writers (#6104),6104,1583,4
+2cd8e85188f4cf0c84af936f67e390f222c9db55,2026-10-10T20:23:27+08:00,fix(chat): preserve original queued Turn during Host recovery,6120,8,0
+85e7f8d08365bd3b2146fc961503a0366f537b76,2026-10-10T20:25:14+08:00,Merge pull request #6093 from mikamikasuki/codex/node-prerelease-minimum,6093,16,2
+5de71093cee3217c66cc32394fd841f6c831f5e2,2026-10-10T20:32:29+08:00,Merge pull request #6080 from mikamikasuki/codex/quota-int-overflow,6080,5,2
+f7b56a0dd01acda8668a374f39ceb5aea7cdfac0,2026-10-10T22:15:49+08:00,Merge pull request #6118 from JasonBuildAI/codex/digest-owner-progress-review-a1,6118,6,4
+95868b661045b00f85d8ff6049c331dff9268a1e,2026-10-10T23:01:01+08:00,Merge pull request #6130 from Duang777/codex/fix-stopped-goal-host-admission,6130,28,3
+62af46dc79363763773c9f18f56f60f5b16149d2,2026-10-11T00:26:33+08:00,Merge pull request #6133 from loopx-project/codex/planning-objective-evidence,6133,25,17
+1361b68a24fad987746b496c95c159c551aaf2b1,2026-10-11T00:27:39+08:00,test(capabilities): keep digest boundary regression after owner integration,6126,0,1
+411ca5c0a24c8dbf8d6b02cda30b07d60235c10a,2026-10-11T00:27:39+08:00,fix(capabilities): reuse the canonical trial feedback digest matcher,6126,1,0
+40295867d72bf6a3403ab339d8a6f47073d00172,2026-10-11T00:30:07+08:00,Merge pull request #6134 from loopx-project/codex/deferred-lease-recovery-20261010,6134,16,10
+272b418c236551eec632352984dceb5ed84dc7e0,2026-10-11T01:19:43+08:00,Merge pull request #6065 from songoow/codex/agent-task-revalidation-20261010,6065,239,4
+5c62c5c03f13cc84176338100f2bded12801530e,2026-10-11T01:23:08+08:00,Merge pull request #6123 from JasonBuildAI/codex/cli-output-semantics-readable-pattern,6123,10,5
+573c655879094d38aec2717e9b229962de8717a8,2026-10-11T08:40:10+08:00,fix(heartbeat): resume PR dependencies from complete retained facts (#6163),6163,198,12
+f5d7355317c5030f3549bbad2c5941d457f0bac1,2026-10-11T12:56:23+08:00,fix(coordination): skip disabled shadow capture projection inputs,6177,15,13
+82b0fbbd6097837f1d61b280156ae944fcc0a16a,2026-10-11T12:58:34+08:00,Merge pull request #6178 from loopx-project/codex/monitor-unavailable-closeout-20261011,6178,85,11
+19143525f1feaa85cb90c5498f3f133319812b2a,2026-10-11T13:11:55+08:00,Merge pull request #6182 from loopx-project/codex/review-conclusion-history-20261011,6182,51,11
+98698cf75e970950e2493855620d3b819240c753,2026-10-11T13:12:29+08:00,refactor(todos): compose compatibility resume validation in typed field plan,6183,6,7
+e66cb324e29e3d9227dbed35dbb5e8a5c3a47f21,2026-10-11T13:15:09+08:00,fix(todos): resolve linked completion facts from canonical head,6188,11,13
+288da6d4e9eb65f3521327ef13551c352c057d29,2026-10-11T13:17:00+08:00,Merge pull request #6189 from loopx-project/codex/c1-handoff-source-20261011,6189,13,11
+a846364e110e6c92323c46cf00451788edc169e8,2026-10-11T13:17:17+08:00,Merge pull request #6171 from loopx-project/codex/c1-todo-writer-retirement-20261011,6171,13,5
+2e65aa71465bc25e927bf39c5582361fb19af660,2026-10-11T13:26:28+08:00,Merge pull request #6127 from Duang777/codex/automatic-admission-readback,6127,504,12
+34e35f948df209b342f18e44a636b3b43b52f80b,2026-10-11T13:27:40+08:00,Merge pull request #6129 from GZY-SUPER-HACKER/feat/host-delivery-window,6129,278,0
+54a451acfb0ebd4246cdf80258af0fbb1788051a,2026-10-11T13:38:30+08:00,Merge pull request #6164 from LIHUA919/codex/windows-lock-holder-sidecar,6164,2,2
+a4ca8940862445fe0c7a59936d7459d2390780e8,2026-10-11T13:52:48+08:00,fix(todos): make fixed handoff matcher statically auditable,6174,1,4
+904c2d6963bdcf5a670e527f0531f91100c57afc,2026-10-11T13:52:48+08:00,fix(todos): retain oversized historical handoff sources,6174,12,1
+cb709858e9eb85dcb24f483cb209f67983ceafc6,2026-10-11T13:52:48+08:00,refactor(todos): converge handoff context on typed batch owner,6174,515,384
+f44dc14f1fafafce073f38008b6ecbb12e1b950d,2026-10-11T13:53:29+08:00,refactor(todos): compose public creation scope once,6179,109,39
+0df53a13f20765412b4c51026d1f28fc2f356d69,2026-10-11T14:14:07+08:00,Merge pull request #6193 from loopx-project/codex/c1-team-plan-20261011,6193,29,16
+4535bc2c8baccd148b31af8ebe9e900dc704fbdb,2026-10-11T15:51:44+08:00,Merge pull request #6197 from loopx-project/codex/c1-cli-shadow-isolation-20261011,6197,453,428
+be15bf4ffb3bf354fb255853a96f14b047874bb8,2026-10-11T15:52:10+08:00,Merge pull request #6186 from loopx-project/codex/blocked-retry-projection-20261011,6186,108,8
+dd49d917a64eba0ea9dc0709dab80d088a3d6d10,2026-10-11T17:08:26+08:00,Merge pull request #6212 from LIHUA919/codex/settlement-unbound-prior-turn,6212,248,111
+1b366b70765771230bfa21e69edf2f15103f8618,2026-10-11T17:10:19+08:00,Merge pull request #6208 from loopx-project/codex/c1-monitor-history-isolation-20261011,6208,75,58
+a4c072f603aba19bc566d40fc06a5cba8e463cd1,2026-10-11T17:31:55+08:00,Merge pull request #6201 from Duang777/codex/fix-cadence-stale-confirmation-20261011,6201,4,0
+43643a5e5dd25a05382c232824ebeb806ce45e25,2026-10-11T18:40:16+08:00,Merge pull request #6226 from loopx-project/codex/release-140-bounded-read-repair,6226,17,5
+fa3b37308680c4c325a6910d3454c287c1f0704c,2026-10-11T19:54:26+08:00,refactor(quota): isolate receipt guard parameter projection,6214,21,8
+79af2c1f1ffed2cf8fe5877ae4c6d2615ed09298,2026-10-11T19:54:26+08:00,fix(control-plane): exclude historical terminal rows from recovery,6214,15,2
+0bc6052d38039a1eba4469617e4e0a0a6390d36e,2026-10-11T19:54:26+08:00,fix(control-plane): recover receipt-bound terminal lifecycle settlement,6214,132,2
+2476716a1cce9e594482848c7a670e314584c294,2026-10-11T19:55:34+08:00,refactor(shadow): isolate retained history and status from capture producers,6232,712,648
+2510aeb7b89f25c84f244f4c3ceea4abdfde5caa,2026-10-11T19:56:27+08:00,Merge pull request #6222 from loopx-project/codex/c1-lease-capture-recovery-20261011,6222,5,3
+b6217cb236035ca1508c993398f7886dba3847d7,2026-10-11T20:19:16+08:00,fix(quota): scope vision authoring to material CLI closeout (#6236),6236,2,1
+94dd826a453bb3bfb34332ba8552fabcd5c696ac,2026-10-11T21:56:55+08:00,Merge pull request #6191 from loopx-project/codex/goal-workspace-m1-masthead,6191,213,0
+3699533301f65b5f17fe87956bb821c988decaaf,2026-10-11T22:47:05+08:00,Merge pull request #6244 from loopx-project/codex/release-140-bounded-batch-reads,6244,46,7
+c2044e3d0fda34cda73830db4b071dd88b65d844,2026-10-11T23:01:45+08:00,fix(quota): finish original settlement after a later dependency wait (#6243),6243,41,15
+aedb376db32a2d8a2e93686ee3800715463654e0,2026-10-12T00:07:55+08:00,Merge pull request #6245 from loopx-project/codex/receipt-next-action-isolation,6245,14,2
+56560d92db76e3b28a441e1f7ac5b9344fd54f10,2026-10-12T00:59:06+08:00,fix(todos): derive external-wait successors from source facts (#6247),6247,8,3
+c51ec1a60671edb8ef536ef0651836b9d7642878,2026-10-12T01:09:08+08:00,Merge pull request #6237 from Jim-jimu/fix/todo-completion-cycles,6237,156,20
+2a0a071bc508cb6b50c8c5f8db94dcbec364c9d4,2026-10-12T03:20:20+08:00,Merge pull request #6260 from songoow/codex/shared-interaction-authority-20261012,6260,89,28
+54dd04d481fad728f78beee9f98eb71852101ca1,2026-10-12T03:21:08+08:00,Merge pull request #6258 from JasonBuildAI/codex/backup-state-windows-fsync-q6t3,6258,3,1
+135bb67a5ad7e8101197ebed66c21f75177a7eef,2026-10-12T03:22:12+08:00,Merge pull request #6259 from loopx-project/codex/scheduler-current-host-ack-20261012,6259,22,2
+545d842945510deac8724f41ea96e293ce1ae8c5,2026-10-12T12:24:16+08:00,fix(quota): retain retry identity independently of the next wakeup,6265,31,10
+3cb15a41eca6e23c13f99fb59fca6380cee64e18,2026-10-12T12:24:16+08:00,fix(quota): retain full-source retry clocks before visibility caps,6265,9,2
+7474a67e54b86187fdcb62d4ad2ad0fd7d5f8048,2026-10-12T12:24:16+08:00,fix(quota): reconcile receipt retries with cached frontier deadlines,6265,26,12
+a68a56b90e7be369c159d158828e2a61f3155098,2026-10-12T12:26:15+08:00,refactor(lease): read source todos without the mutation facade,6272,1,1
+5f8497a402fce98207bab09d987f51cabec813f1,2026-10-12T12:27:53+08:00,fix(scheduler): preserve current host readback at installed launchers,6276,12,1
+220ae7c0ffa02163bba8cce78243c650c4a9c445,2026-10-12T12:34:08+08:00,fix(recommendation): preserve replan identity without Todo step authority (#6277),6277,16,28
+d949a7c435ae9165cc5bfb016ccf6f80b1df2a28,2026-10-12T12:39:01+08:00,fix(replan): compare expected gains with full marginal cost,6278,2,1
+b981aaf73009572fbf0f391386c9b8f100609d62,2026-10-12T12:40:46+08:00,refactor(shadow): retain observations independently of source producers,6281,193,169
+f408789e0315fbf7cd95e4422542af1008a6c97e,2026-10-12T12:41:36+08:00,fix(todos): preserve ambiguous update receipt identity,6284,32,8
+eb834fc7085cf3aca5ef83397f3a76514c70d0c7,2026-10-12T12:43:16+08:00,fix(authority): publish verified File archive pages atomically,6288,112,35
+d03863fd0048f57f6dc878e7dc464b17f8d862a1,2026-10-12T12:58:53+08:00,refactor(todos): route production consumers to concrete owners (#6280),6280,6,6
+dbe812bbbc73092878bd79ca571cc085b27f70c5,2026-10-12T16:43:08+08:00,feat(workspace): compose Goal work and shared task inspection (#6255),6255,50,6
+81bb98500ee93c99b3ab185062e213f3ccdff22c,2026-10-12T16:47:21+08:00,fix(replan): qualify causal positions from history carrier order,6298,21,3
+7a315eff298a687cbff62f52cd60089702878e42,2026-10-12T16:47:21+08:00,feat(replan): add opt-in versioned structured stride control,6298,351,15
+02f242642c6ec0d804251e4fb7eacaead19b5c03,2026-10-12T18:57:58+08:00,fix(quota): retain receipt retries beside existing wait lanes,6299,24,8
+1e6cae19fb445bb3385874cf9f676b4d55e03205,2026-10-12T19:44:30+08:00,Merge pull request #5280 from LIHUA919/codex/explore-composition-write-gate,5280,771,40
+cfa530f61295faff7b819955e2c6bdb815482e30,2026-10-12T21:02:29+08:00,Merge pull request #4061 from cocolord/codex/scoped-wait-admission-v2-20260907,4061,491,275
+3af55c6461aa7d24118b62e515050bdae8768025,2026-10-12T21:05:25+08:00,Merge pull request #6311 from loopx-project/codex/legacy-monitor-failure-closeout,6311,27,5
+2e0d31a23fd09a8efaa16ac012fc072412a1d4b7,2026-10-13T01:58:52+08:00,Merge pull request #6251 from songoow/codex/typed-settlement-failures-20261012,6251,11,3
+6f2c21fd56a8489fa5cd48b3a8b647015fa8aa88,2026-10-13T01:59:50+08:00,Merge pull request #6268 from songoow/codex/typed-action-selection-20261012,6268,220,101
+110b7ca430518048fe839779032f7ddb45288bf8,2026-10-13T02:02:08+08:00,Merge pull request #6290 from songoow/codex/legacy-work-basis-20261012,6290,10,10
+71775542bc18f0b196b151204396f93c40cd8ad7,2026-10-13T11:37:51+08:00,Merge pull request #6331 from loopx-project/codex/monitor-target-replay-20261013,6331,48,2
+64bfb834365f240cfb5eabd5cac5f2ea4098bf2d,2026-10-13T11:40:12+08:00,Merge pull request #6325 from loopx-project/codex/monitor-unavailable-late-poll-20261013,6325,86,10
+156eee4c99166e663ede806905f6caa875b6c3e2,2026-10-13T11:42:20+08:00,fix(control-plane): reuse frontier counters and pin resource UTF-8,6347,3,12
+3a0e64d22b88b087d56196b7cfd8e64f6f860343,2026-10-13T11:43:21+08:00,Merge pull request #5890 from loopx-project/codex/l1-acceptance-journey-20261007,5890,10,1
+680cac6643b94d154ebdc43e9d4cffe87a292ef9,2026-10-13T11:44:36+08:00,Merge pull request #6343 from loopx-project/codex/collaboration-request-lifecycle-20261013,6343,63,19
+b0b2acffb8fea7d85b20dd4f0139c1ce0616e5a7,2026-10-13T11:46:55+08:00,fix(configuration-backup): preserve expected refusal diagnostics (#6342),6342,13,12
+806eb215f8a21e4ae6f51cd942112175ca3839b7,2026-10-13T15:34:41+08:00,Keep notice-only user actions nonblocking (#6327),6327,41,3
+95292e1ea436779423099a9ee55f4d12e241d6ce,2026-10-13T15:35:40+08:00,fix(control-plane): preserve guided settlement lifecycle (#6329),6329,7,6
+4e994b11f83103b99342a3b0e589a93d6b526f5d,2026-10-13T16:02:38+08:00,feat(stride): guide complete experiments with evidence-bound research actions (#6321),6321,323,119
+91b675dfca178db68d3527140272ffb263a3b319,2026-10-13T16:45:28+08:00,Merge pull request #6323 from loopx-project/codex/goal-amendment-stage3-20261012,6323,729,4
+4d4e6381c67da65c53c14781ce5b877ed5e412ce,2026-10-13T17:16:57+08:00,Merge pull request #6337 from loopx-project/codex/envelope-vision-obligations-20261012,6337,14,5
+f303fc65ba6b8964fabd5d2f1fa655ebe73fb825,2026-10-13T17:20:06+08:00,Merge pull request #6350 from loopx-project/codex/turn-host-original-capture-20261013,6350,129,0
+298998dc78acf9e0069314ab9a07f5e3fde10524,2026-10-13T17:26:23+08:00,Merge pull request #6360 from loopx-project/codex/team-plan-fenced-replay-20261013,6360,49,25
+fd4d203562b5a8d601f8168a7e99d567d3184d1d,2026-10-13T19:07:21+08:00,Merge pull request #6369 from loopx-project/codex/blocked-retry-status-20261011,6369,36,0
+eeabba945c0c612627cfc2506f77faf56b5bf29c,2026-10-13T19:08:04+08:00,Merge pull request #6371 from loopx-project/codex/canonical-record-copy-20261013,6371,9,3
+896fec6a52e29390994976569bf4af5e29190734,2026-10-13T19:26:01+08:00,Require a stride decision at every enabled periodic review (#6372),6372,125,28
+af3ed549ee2679ea18d1e1edd733c40dd4c652f8,2026-10-13T21:09:58+08:00,Merge pull request #5752 from jackie-cqz/feat/zcode-host-diagnostics,5752,44,16
+6165a729f80aef90cc93d69dfd67577a1712ae57,2026-10-13T22:14:37+08:00,Merge pull request #6376 from loopx-project/codex/unclaimed-quota-selection-20261013,6376,5,2
+4f593d26cd0b3b85a082a91d180fea7ab79460fd,2026-10-13T22:33:05+08:00,Merge pull request #6377 from songoow/codex/stride-effective-configuration-repair-20261013,6377,9,1
+a0fdb8f637a470f779f893548220bf42e894e288,2026-10-13T22:53:06+08:00,feat(direction): derive bounded same-agent material baselines (#6307),6307,270,0
+0073b97fde8ee0ed53a569d8b24ddae512618600,2026-10-13T23:14:09+08:00,Merge pull request #6379 from Jim-jimu/fix/explore-pagination-stride-refs,6379,65,1
+eb24e395055084c07387cfb0e2461a6030129040,2026-10-13T23:29:04+08:00,fix(control-plane): reuse canonical digest validators (#6382),6382,6,3
+cfe978ba8fd3875f543e7c8e3277231951a603f6,2026-10-13T23:40:33+08:00,Merge pull request #6373 from hhyykk/codex/explore-context-projection-perf,6373,12,7
+5c583259001dc81af08fcb838439c2b29ce0017f,2026-10-14T01:25:32+08:00,Merge pull request #6389 from loopx-project/codex/worktree-internal-symlinks-20261014,6389,53,12
+3dd3c550afecfa0c525a34e8744a3cf06774ac94,2026-10-14T03:27:43+08:00,Merge pull request #6388 from loopx-project/codex/python-ci-recovery-20261013,6388,13,36
+19c725e3fbf587b0d857863cd319e08ad0efe70c,2026-10-14T13:51:29+08:00,Merge pull request #6378 from loopx-project/codex/games-supervisor-legacy-actor,6378,67,9
+39bb523db42d6c6167f6b97efed3cf4cb348fd27,2026-10-14T14:26:47+08:00,Merge pull request #6397 from loopx-project/codex/goal-amendment-utf8,6397,1,1
+3d3f9e6a5ffe7317684ec725b23bfeb727b648cb,2026-10-14T14:28:36+08:00,Merge pull request #6305 from loopx-project/codex/research-checkpoint-continuation-20261012,6305,360,16
+3991b631ac1c682a37e60da2e55ed29c7aed1fca,2026-10-14T15:31:13+08:00,Merge pull request #6391 from loopx-project/codex/dated-wait-contract,6391,55,5
+70bc98198ce9e8c33e461cc41fe77243d713dcf0,2026-10-14T15:42:13+08:00,Merge pull request #6393 from loopx-project/codex/monitor-workspace-route-20261014,6393,7,1
+f5f4848e501fadce915ab9ccff783895838e7140,2026-10-14T17:38:15+08:00,Merge pull request #6338 from loopx-project/codex/goal-direction-runtime-20261013,6338,473,2
+5b8b12802f483bab78aff311a521ca49b5cacee1,2026-10-14T18:18:40+08:00,Merge pull request #4726 from wchwawa/feat/nokv-ladder-seed-routing,4726,35,5
+373f2fa12ad5cc525c3960c95685807110dc0c93,2026-10-14T18:19:19+08:00,Merge pull request #6392 from hhyykk/codex/runtime-listener-startup-diagnostic,6392,18,7
+b4603d8255de19d34a0b291b0f8cde106cbbbc6f,2026-10-14T19:49:31+08:00,Merge pull request #6394 from hhyykk/codex/loopx-self-opt-round2,6394,7,1
+15a2c43de428a04d904e48d1fe17e92624b39618,2026-10-14T21:17:18+08:00,Merge pull request #6408 from songoow/codex/frontier-summary-owner-20261014,6408,135,36
+210c2e5b6c5c26b4443a2e4f839304dd082c6569,2026-10-14T21:18:13+08:00,Merge pull request #6437 from loopx-project/codex/direction-source-utf8-20261014,6437,1,1
+7bf5f045141bda827d2912e52c47efe42c4ca7f2,2026-10-14T23:17:01+08:00,refine(stride): focus route reviews on goal headroom and full cost (#6440),6440,14,0
+f713e0f07c571a78a7c4405ab647ba41dbc492ba,2026-10-14T23:23:30+08:00,fix(checkpoint): qualify restored decisions and non-root capture (#6415),6415,68,2
+9b7b3c76df6954f550b349028f83fab2cfe169b7,2026-10-15T01:35:01+08:00,perf(todo): isolate CLI reads from mutation imports (#6443),6443,4,7
+f43732cd7deaefe574d39b8449e9d5fc2ee41543,2026-10-15T02:06:01+08:00,Merge pull request #6445 from loopx-project/codex/quota-explicit-selection-replan-20261015,6445,41,15
+f6ae5c76166efda2a7fdf9482945e631aeee58f8,2026-10-15T02:58:31+08:00,semantics: register delivery_turn_kind with its Python and TypeScript owners (#6427),6427,9,5
+9a776c1f6e6f676b6bfe058fbcfcf9d88bcca378,2026-10-15T03:36:56+08:00,Merge pull request #6455 from loopx-project/codex/checkpoint-digest-owner-20261015,6455,3,3
+3f9f5b3cc633437992c5f7bbf6bdd09560fd9791,2026-10-15T12:30:41+08:00,fix(quota): preserve gated successor replans (#6475),6475,80,11
+84eaa2805ef4d7b4e09d28a449538dd115119808,2026-10-15T12:31:36+08:00,fix(usage): preserve prerelease versions across usage channels (#6474),6474,10,5
+611fe3cc1b40eab74feeda3f2131484a0223906a,2026-10-15T12:37:03+08:00,fix(runtime): pin UTF-8 stdio in four shipped stdio hosts (#6472),6472,18,0
+65a70975761df24fb069772f5cb364aa79bd281a,2026-10-15T12:38:45+08:00,fix(runtime): supervise optional cache flush after draining effects (#6468),6468,122,22
+2fea5883a77c2ef8629e257331f2c3e419d958cd,2026-10-15T12:49:41+08:00,fix(operations): return transport-specific preflight recovery (#6459),6459,17,5
+e3169f437dd7169001c51dcfdee886d7e15e6460,2026-10-15T12:51:09+08:00,fix(checkpoint): preserve research continuation boundaries and explicit budgets (#6457),6457,30,6
+d56a963f3866ed792766233bd6112c789161b939,2026-10-15T12:53:52+08:00,fix(turn): record quota CAS failures as failed settlement (#6449),6449,34,5
+75a0abbad547ea108dc2e375dc753d97c161dc9f,2026-10-15T12:56:57+08:00,feat(agents): continue the peer directory past its row cap (#6422),6422,120,26
+d9a9ea48ee1da2a455574cc5372f15ba45195122,2026-10-15T14:21:13+08:00,feat(collaboration): reconcile request corrections with Goal effects (#6357),6357,1214,113
+f4e101d25c1deecc6da0d5d44231774d9e957eea,2026-10-15T14:27:00+08:00,feat(checkpoint): expose ordinary Goal capture and evidence continuation (#6486),6486,1343,0
+51832c59a698950c396e293a8165d07e0dfb12e2,2026-10-15T14:27:51+08:00,fix(quota): keep prior-turn recovery causally ordered (#6488),6488,15,2
+77b404b92743b05a726b2afe08707e0c82ad3595,2026-10-15T14:45:39+08:00,fix(release): wait for fixture runtimes and refresh contract smokes (#6497),6497,21,2
+403170eceb00a6784c7e64c53dc4b37dbfc6fa06,2026-10-15T16:03:13+08:00,Merge pull request #6466 from loopx-project/codex/dsh-native-context-20261015,6466,865,35
+544e9de7a7d0691e5a96fa359e9b87c5722598d4,2026-10-15T16:04:04+08:00,Merge pull request #6499 from loopx-project/codex/canary-owned-runtime-retirement-20261015,6499,43,1052
+7ca37c792f830a28e05d6956628c509af5a58af4,2026-10-15T16:28:05+08:00,Merge pull request #6483 from loopx-project/codex/pause-resume-heartbeat-boundaries-20261015,6483,158,38
+76cdb27da47b8d83c137f287318e1aa7bb847539,2026-10-15T16:28:35+08:00,Merge pull request #6279 from songoow/codex/inert-goal-recovery-20261012,6279,424,3
+f08ebf5128b21de9894ee19e30dd247bf116ee14,2026-10-15T16:51:15+08:00,fix(orchestration): align Codex child context adapter (#3660),3660,3,3
+1354384c545bb390a8bfda30bdd0d0d9d35dc4b3,2026-10-15T17:47:46+08:00,feat(explore): evolve questions within ordinary result writeback (#6507),6507,127,5
+08097c2acec9e7fdc438fef56b7479d73c7c1d65,2026-10-15T17:55:19+08:00,Merge pull request #6511 from hhyykk/codex/quota-planning-record-wire,6511,78,10
+d91f12e99bac3bdb821639c3e087b66c1417eb38,2026-10-15T18:28:44+08:00,fix(status): reconcile stale Goal projections automatically (#6513),6513,60,1
+369eda5f71a41062636c825b4d9b60f1ecbaf28c,2026-10-15T18:37:29+08:00,fix(stride): relate validation vetoes to goal impact (#6514),6514,4,0
+871c1004abca7463ff168d760919511ef2a9af98,2026-10-15T21:51:53+08:00,fix: retain autonomous replan decisions in stride followthrough (#6532),6532,34,8
+a27f4c042a13f319ad4b365f4e0ec65c38c073a8,2026-10-15T21:55:53+08:00,fix(architecture): restore module and semantic owner guards (#6530),6530,442,0
+af56c5f4fc6120957b0ae2808f5acae3b8e67882,2026-10-15T22:11:26+08:00,fix(quota): recover receipt-bound todos omitted from compact views (#6524),6524,46,0
+4ae2dcd3a959a0e269446d6a76c6da04062a20d5,2026-10-15T23:11:25+08:00,feat(acceptance): prepare owner-pinned delivery checks in the workbench (#6473),6473,638,29
+5017b0200074e3a5d3e488f3de1b43a905e65987,2026-10-15T23:11:54+08:00,fix(runtime): recover Windows lock creation and exact fixture cleanup (#6517),6517,23,11
+2abf983157f71153b7bc910a67aa8f7753fe9d9b,2026-10-15T23:12:14+08:00,feat(workspace): show a first-Goal home instead of a fresh-install health alert (#6527),6527,2,0
+c08e561d4a81e80a84ef299b6b1492f543378a42,2026-10-15T23:51:43+08:00,fix(replan): isolate original lifecycle recovery from later user gates,,4,2
+98d9291629678066aa7dc774753dd692fc626d90,2026-10-15T23:51:43+08:00,fix(quota): restore canonical sources for admitted lifecycle replans,,26,5
+9c6f4d4593d6216689a93d5998ed7e35f0493225,2026-10-15T23:51:51+08:00,fix(todos): default new work to P1 and preserve successor priority intent (#6539),6539,90,20
+6dedc24087c846f1834122ed3cb843cd606ca134,2026-10-16T00:22:58+08:00,fix: resume confirmed operations in the original agent Turn (#6543),6543,142,2
+7ed24c6c95f9b16f485e57a54d15893ac6079c2f,2026-10-16T02:04:14+08:00,fix(release): close 1.4.2 regression and UTF-8 gaps (#6559),6559,3,3
+a4f8de9dbe9dcf68050279fabf71b4dd9abdaa86,2026-10-16T03:20:06+08:00,fix(chat): stop owned background commands after completed answers (#6565),6565,9,1
+77d6b07fb65c7ddffe14f45549f97295aca995d6,2026-10-16T03:23:19+08:00,fix(release): preserve cycle observations and stable recovery fixtures (#6572),6572,3,1
+fbbe8a2c7a73d3355942783be606994b046ae755,2026-10-16T05:11:44+08:00,fix(chat): confirm scoped Todo proposals in original conversations (#6575),6575,10,1
+f899e7c3859fa429e28b2fa37e6a072f665fe4de,2026-10-16T05:51:30+08:00,fix(chat): freeze stop scope before native inventory (#6578),6578,5,0
+42f7422ca39e0cdf4f0c6977e545fba933370784,2026-10-16T11:42:42+08:00,refactor(quota): compose base admission decisions in TypeScript (#6596),6596,240,240
+dcff7e2d127b61384740550836bfaebec1aac316,2026-10-16T11:44:02+08:00,fix(runtime): retain cache-free supervision after flush failure (#6561),6561,20,19
+757107d62764f5986811e0b966ad22ca143e6eec,2026-10-16T11:45:03+08:00,feat(memory): isolate Agent bindings and verify their lifecycle (#6589),6589,137,7
+8a028eb872ce69bafb05e47141a1a3998fad953d,2026-10-16T11:51:04+08:00,"feat(checkpoint): retain source across reset, full recapture and continuation (#6581)",6581,95,5
+260b5e4fa6cd9720ed44a3d9715400c2792cdf6f,2026-10-16T11:55:43+08:00,Merge pull request #6583 from loopx-project/codex/sqlite-retained-utf8-bytes-20261016,6583,4,3
+99db6e3684356faf10003b2ffce5640691d75e38,2026-10-16T12:04:40+08:00,fix(checkpoint): flush captured members through update handles on Windows (#6566),6566,24,5
+2d103ec5b6d76a212fd1cb6b933669fd9e45c73c,2026-10-16T12:05:08+08:00,fix(runtime): pin the delegation preview worker's stdio to UTF-8 (#6558),6558,2,0
+ce27bdc2b4c02be75b59dc8037246f90d54c732e,2026-10-16T12:17:57+08:00,Add frozen-request references to owned operation hosts (#6579),6579,135,1
+a4483aaece5bc74ec3f969fd067229487022401b,2026-10-16T12:20:55+08:00,refactor(authority): retire legacy Markdown mutation callers (#6396),6396,2057,8452
+52df6455c915d6ed8aefe16972864cb933a912fe,2026-10-16T14:22:16+08:00,Merge pull request #6601 from loopx-project/codex/quota-checkpoint-selection-transport,6601,36,9
+b543d076995423544b0eeb1990d59d7480f48339,2026-10-16T14:47:29+08:00,Merge pull request #6615 from loopx-project/codex/replan-large-snapshot-20261016,6615,30,11
+98146bcac688e5d00cd14587e4e2a7a0c1ce2762,2026-10-16T15:31:45+08:00,fix(lease): reuse canonical cutoff for atomic claim transfer,6611,3,4
+dda6f7ef79b2f88bf66ec335c12f027b2e2976d9,2026-10-16T16:49:58+08:00,Stream scoped local authority migration backups (#6620),6620,459,88
+0bd62e95c1052c85bf140d5693c26c0a440f69a2,2026-10-16T17:38:15+08:00,fix(turn): reuse the canonical frozen-request digest matcher (#6623),6623,3,2
+7c8c47e16969f9806000de2725cb82fcb777d020,2026-10-16T19:23:01+08:00,Merge pull request #6641 from loopx-project/codex/checkpoint-main-delivery-20261016,6641,8,3
+6ae643f81b4bd41a082f424fb1e60b9bb0e0bad6,2026-10-16T20:27:19+08:00,fix(replan): preserve pending lifecycle across frontier changes (#6643),6643,49,19
+273cf6d1007ba21fd92ef446e0d5928f72bb8463,2026-10-16T20:30:55+08:00,fix(planning): preserve initial quality in shared delivery guidance (#6621),6621,51,2
+dfcb03e6d31361ab65d882e3294b9fdf92b39f6a,2026-10-16T20:31:32+08:00,Merge pull request #6619 from Duang777/codex/projection-envelope-global-reads,6619,47,5
+0844688b9656c2898bc21e5d9746be49da30f9f2,2026-10-16T21:28:39+08:00,fix(todos): simplify owner edits and pause/resume recovery (#6632),6632,140,32
+488e4438e0e51eca023ac3f5e690603120851b0c,2026-10-16T21:49:14+08:00,Merge pull request #6649 from loopx-project/codex/native-goal-replan-input-20261016,6649,19,15

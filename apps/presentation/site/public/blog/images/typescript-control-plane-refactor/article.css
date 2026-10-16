@@ -1,0 +1,17 @@
+/* Article-local additions to the shared editorial surface. */
+.ts-migration { --font-sans: "Geist", "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif; font-family: var(--font-sans); }
+.ts-migration .article-heading h1 { font-size: clamp(34px, 4.1vw, 52px); line-height: 1.18; }
+.ts-migration .prose img { display: block; max-width: 100%; height: auto; }
+.ts-migration .prose blockquote { border-left: 2px solid var(--blue); margin: 32px 0; padding-left: 24px; }
+.ts-migration .table-scroll { outline-offset: 5px; }
+.ts-migration .table-scroll table { min-width: 580px; }
+.ts-migration .figure-scroll { overflow: auto; border: 1px solid var(--border); border-radius: 12px; }
+.ts-migration .figure-scroll img { min-width: 720px; }
+.ts-migration .site-header .brand { flex-shrink: 0; }
+.ts-migration .site-header nav, .ts-migration .header-actions, .ts-migration .github { white-space: nowrap; }
+@media (max-width: 760px) {
+  .ts-migration .article-heading { padding-top: 24px; }
+  .ts-migration .article-heading h1 { font-size: 34px; }
+  .ts-migration .lead { font-size: 17px; }
+  .ts-migration .figure-scroll img { min-width: 660px; }
+}

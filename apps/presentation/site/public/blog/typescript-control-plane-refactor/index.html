@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#fafafa">
+<title>LoopX 2.0: Two Months of TypeScript Control-Plane Engineering · LoopX</title>
+<meta name="description" content="From an incremental migration proposal to complete transactions, shared authority, semantic checks, and retirement of old paths. How real callers and counterexamples changed the design.">
+<link rel="canonical" href="https://loopx-project.github.io/loopx/blog/typescript-control-plane-refactor/">
+<link rel="alternate" hreflang="en" href="https://loopx-project.github.io/loopx/blog/typescript-control-plane-refactor/"><link rel="alternate" hreflang="zh-CN" href="https://loopx-project.github.io/loopx/blog/zh/typescript-control-plane-refactor/"><link rel="alternate" hreflang="x-default" href="https://loopx-project.github.io/loopx/blog/typescript-control-plane-refactor/">
+<meta property="og:type" content="article"><meta property="og:site_name" content="LoopX"><meta property="og:locale" content="en_US"><meta property="og:title" content="LoopX 2.0: Two Months of TypeScript Control-Plane Engineering"><meta property="og:description" content="From an incremental migration proposal to complete transactions, shared authority, semantic checks, and retirement of old paths. How real callers and counterexamples changed the design."><meta property="og:url" content="https://loopx-project.github.io/loopx/blog/typescript-control-plane-refactor/"><meta name="twitter:card" content="summary"><meta name="twitter:title" content="LoopX 2.0: Two Months of TypeScript Control-Plane Engineering"><meta name="twitter:description" content="From an incremental migration proposal to complete transactions, shared authority, semantic checks, and retirement of old paths. How real callers and counterexamples changed the design."><link rel="icon" href="data:,">
+<link rel="stylesheet" href="../blog.css"><link rel="stylesheet" href="../images/typescript-control-plane-refactor/article.css">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"LoopX 2.0: Two Months of TypeScript Control-Plane Engineering","description":"From an incremental migration proposal to complete transactions, shared authority, semantic checks, and retirement of old paths. How real callers and counterexamples changed the design.","inLanguage":"en","datePublished":"2026-10-16","author":{"@type":"Person","name":"Ruiteng Huang","url":"https://github.com/huangruiteng"},"mainEntityOfPage":"https://loopx-project.github.io/loopx/blog/typescript-control-plane-refactor/"}</script>
+</head>
+<body class="ts-migration">
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header"><a class="brand" href="../../"><span class="product-mark" aria-hidden="true"><i></i><i></i></span>LoopX</a><nav aria-label="Primary navigation"><a href="../">Blog</a><a href="../../docs/book/en/">Docs</a></nav><div class="header-actions"><a class="language" href="../../blog/zh/typescript-control-plane-refactor/" lang="zh-CN" hreflang="zh-CN">中文</a><a class="github" href="https://github.com/loopx-project/loopx">GitHub ↗</a></div></header>
+<main id="main"><div class="article-heading"><a class="back" href="../">← All articles</a><p class="eyebrow">LoopX 2.0 · Engineering</p><h1>LoopX 2.0: Two Months of TypeScript Control-Plane Engineering</h1><p class="lead">From an incremental migration proposal to complete transactions, shared authority, semantic checks, and retirement of old paths. How real callers and counterexamples changed the design.</p><div class="byline"><a href="https://github.com/huangruiteng">Ruiteng Huang</a><span>·</span><time datetime="2026-10-16">October 16, 2026</time><span>·</span><span>LoopX creator</span></div></div>
+<div class="article-layout"><aside class="toc"><details open><summary>Contents</summary><nav aria-label="Article contents"><a href="#section-1">1. Reconstruct the history: the migration plan changed too</a><a href="#section-2">2. Core control-plane statistics across the full period</a><a href="#section-3">3. Start with the Effect Program: agree on what happened</a><a href="#section-4">4. Migrate a complete transaction: two calls can be right</a><a href="#section-5">5. Shared authority: separate domain rules from storage primitives</a><a href="#section-6">6. After SQLite: retained history needs a cost model</a><a href="#section-7">7. Song&#39;s Semantics: connect definition, production, and interpretation</a><a href="#section-8">8. Callers and defaults determine whether migration reaches users</a><a href="#section-9">9. Recover the original result while protecting current authority</a><a href="#section-10">10. CLI output budgets: protect decision semantics before compression</a><a href="#section-11">11. Final retirement: preserve credit and account for the deletions</a><a href="#section-12">12. Community contributions and the next step</a></nav></details></aside><article class="prose">
+<p>LoopX 2.0 is out. This is an account of the history and technical details behind its TypeScript refactor.</p>
+<p>The formal migration RFC merged on August 15. By the concentrated retirement of ordinary legacy writers in mid-October, the program had spanned roughly two months. Several tracks overlapped: transaction ownership, caller integration, shared authority, storage and history costs, Semantics, compatibility, and retirement.</p>
+<p>The final relay by three developers and their agents in <a href="https://github.com/loopx-project/loopx/pull/6396">#6396</a> depended on that earlier work. Earlier choices determined what could be deleted and what still had to recover afterward.</p>
+<p>Our new maintainer, <strong>Song (<a href="https://github.com/songoow">@songoow</a>)</strong>, has also been advancing the Semantics RFC, vocabulary convergence, production evidence, and checker fixes since mid-September. That track belongs alongside the transaction and storage story.</p>
+<h2 id="section-1">1. Reconstruct the history: the migration plan changed too</h2>
+<p>LoopX retains goals, tasks, evidence, and execution boundaries for long-running agents. Models propose routes. The control plane protects versions, execution authority, and state commits, then finds a valid recovery position after interruption.</p>
+<p>Much of the original implementation was Python. TypeScript hosts, Pi integration, and the dashboard already existed. A Python call to make a decision, followed by a TS host consuming the result, was a natural starting point. As the system grew, defaults, state interpretation, ordering, and persistence could become distributed across both runtimes.</p>
+<p>We wanted clear typed ownership of control-plane rules and contracts shared by the CLI, hosts, and App. The history developed through overlapping stages.</p>
+<div class="table-scroll" role="region" tabindex="0" aria-label="Scrollable technical comparison table"><table>
+<thead>
+<tr>
+<th>Period</th>
+<th>Main change</th>
+<th>Representative evidence</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>August 15</td>
+<td>Formal proposal for incremental migration over a process boundary; initially favors reads and projections</td>
+<td><a href="https://github.com/loopx-project/loopx/pull/3226">#3226</a></td>
+</tr>
+<tr>
+<td>August 21–22</td>
+<td>Effect Program cutover, followed by a pivot from leaf rules to complete transactions</td>
+<td><a href="https://github.com/loopx-project/loopx/pull/3416">#3416</a>, <a href="https://github.com/loopx-project/loopx/pull/3447">#3447</a></td>
+</tr>
+<tr>
+<td>Late August–early September</td>
+<td>Settlement, Todo, quota, lease, Vision, and monitor transactions migrate; shared authority develops in parallel</td>
+<td><a href="https://github.com/loopx-project/loopx/pull/3464">#3464</a>, <a href="https://github.com/loopx-project/loopx/pull/3798">#3798</a></td>
+</tr>
+<tr>
+<td>Early–mid September</td>
+<td>Integrate real callers, converge planning/read/provider-open rules, add optional SQLite</td>
+<td><a href="https://github.com/loopx-project/loopx/pull/4178">#4178</a>, <a href="https://github.com/loopx-project/loopx/pull/4317">#4317</a>, <a href="https://github.com/loopx-project/loopx/pull/4121">#4121</a></td>
+</tr>
+<tr>
+<td>From mid-September</td>
+<td>Song advances Semantics; storage work tackles checkpoints, deltas, writes, and replay cost</td>
+<td><a href="https://github.com/loopx-project/loopx/pull/4433">#4433</a>, <a href="https://github.com/loopx-project/loopx/pull/4408">#4408</a></td>
+</tr>
+<tr>
+<td>Late September</td>
+<td>Retire an unused Python authority prototype and experimental Todo event overlay, preserving real compatibility boundaries</td>
+<td><a href="https://github.com/loopx-project/loopx/pull/5105">#5105</a>, <a href="https://github.com/loopx-project/loopx/pull/5054">#5054</a></td>
+</tr>
+<tr>
+<td>Early–mid October</td>
+<td>Update new-Goal defaults, isolate ordinary old writers, converge production consumer routes</td>
+<td><a href="https://github.com/loopx-project/loopx/pull/5805">#5805</a>, <a href="https://github.com/loopx-project/loopx/pull/6104">#6104</a>, <a href="https://github.com/loopx-project/loopx/pull/6280">#6280</a></td>
+</tr>
+<tr>
+<td>Mid-October</td>
+<td>Concentrated retirement, followed by recovery, producer, and integration fixes</td>
+<td><a href="https://github.com/loopx-project/loopx/pull/6396">#6396</a></td>
+</tr>
+</tbody></table></div>
+<figure><div class="figure-scroll" tabindex="0" role="region" aria-label="Migration history: overlapping transaction, authority/storage, and Semantics tracks"><a href="../images/typescript-control-plane-refactor/timeline-en.svg" target="_blank" rel="noopener"><img src="../images/typescript-control-plane-refactor/timeline-en.svg" alt="Migration history: overlapping transaction, authority/storage, and Semantics tracks" width="1100" height="640" loading="lazy"></a></div><figcaption>Migration history: overlapping transaction, authority/storage, and Semantics tracks Scroll on narrow screens; open the image for full size.</figcaption></figure>
+<p>The original August proposal considered a read-first sequence and staged dual reads and writes. The accepted approach evolved toward Effect Programs first, then replacing complete transactions and deleting the old rules, with one production semantic owner. An early proposal&#39;s staging ideas should not be presented as the runtime architecture of 2.0.</p>
+<p>Plans can change usefully. The important record is why the route changed, which slices cut over, and which remained references or candidates. The maintained <a href="https://github.com/loopx-project/loopx/blob/488e4438e0e51eca023ac3f5e690603120851b0c/docs/architecture/rfcs/typescript-control-plane-migration-v0.md">TS RFC</a> retains those checkpoints.</p>
+<h2 id="section-2">2. Core control-plane statistics across the full period</h2>
+<p>The reproducible scope here is <strong><code>loopx/control_plane/**</code></strong>. App, benchmark, documentation, and test-suite directories outside it do not enter the core code counts. Internal testing/support tools inside this directory remain included.</p>
+<p>The baseline is <code>d1fe059</code>, immediately before the formal TS RFC. The endpoint is the October 16 snapshot <code>488e443</code>. The formal RFC to that endpoint spans roughly <strong>62 days</strong>, covering 63 calendar dates; 62 of those dates contain a core mainline commit. The <a href="https://github.com/loopx-project/loopx/compare/d1fe05932ac28690d393a38c78b4738ac12c78c0...488e4438e0e51eca023ac3f5e690603120851b0c">source comparison</a> fixes both versions.</p>
+<h3>Engineering activity over the whole period</h3>
+<div class="table-scroll" role="region" tabindex="0" aria-label="Scrollable technical comparison table"><table>
+<thead>
+<tr>
+<th>Metric</th>
+<th align="right">Core-directory cohort</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Mainline landing commits touching the directory, first-parent chain</td>
+<td align="right"><strong>1,144</strong></td>
+</tr>
+<tr>
+<td>Verifiably associated merged PRs, deduplicated by PR number</td>
+<td align="right"><strong>1,121</strong></td>
+</tr>
+<tr>
+<td>PR-author accounts in that cohort</td>
+<td align="right"><strong>56</strong></td>
+</tr>
+<tr>
+<td>Review records in the API snapshot</td>
+<td align="right"><strong>2,329</strong></td>
+</tr>
+<tr>
+<td>Conversation comments in the API snapshot, excluding inline review comments</td>
+<td align="right"><strong>1,631</strong></td>
+</tr>
+<tr>
+<td>Associated PRs with review records</td>
+<td align="right"><strong>1,031 / 1,121</strong></td>
+</tr>
+<tr>
+<td>Median PR creation-to-merge elapsed time</td>
+<td align="right"><strong>5.0 hours</strong></td>
+</tr>
+<tr>
+<td>P90 / P95 creation-to-merge elapsed time</td>
+<td align="right"><strong>25.4 / 45.0 hours</strong></td>
+</tr>
+</tbody></table></div>
+<p>The scope includes migration, new capabilities, fixes, and maintenance during the period. The 56 accounts include automation and shared accounts; they do not establish 56 people or agents. Review totals can include self-review, repeated reviews, and post-merge discussion. Merge elapsed time includes waiting and is not active engineering time.</p>
+<p>New maintainer Song is associated with <strong>53 PRs</strong> in this narrow directory cohort. His work in <code>loopx/semantics/</code> and other directories is not fully counted here. Concrete attribution still follows the contribution explanations and original PRs.</p>
+<h3>Source structure and cumulative churn</h3>
+<p>Physical line counts include comments and blank lines. File counts below include source files in the named language.</p>
+<div class="table-scroll" role="region" tabindex="0" aria-label="Scrollable technical comparison table"><table>
+<thead>
+<tr>
+<th>Core-directory source</th>
+<th align="right">Baseline</th>
+<th align="right">Evidence snapshot</th>
+<th align="right">Cumulative additions / deletions</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Python</td>
+<td align="right">256 files; 80,473 lines</td>
+<td align="right">471 files; 142,371 lines</td>
+<td align="right">+120,899 / −59,001 lines</td>
+</tr>
+<tr>
+<td>TypeScript</td>
+<td align="right">0 files; 0 lines</td>
+<td align="right">323 files; 87,268 lines</td>
+<td align="right">+104,769 / −17,501 lines</td>
+</tr>
+<tr>
+<td>Python + TypeScript</td>
+<td align="right">80,473 lines</td>
+<td align="right">229,639 lines</td>
+<td align="right"><strong>+225,668 / −76,502 lines</strong></td>
+</tr>
+</tbody></table></div>
+<p>TS represents <strong>38.0%</strong> of the endpoint&#39;s Python-plus-TS physical lines. That describes the directory&#39;s language structure. It does not establish that 38% of migration is complete: some old entrypoints were outside this directory, and the period includes code moving in, new capabilities, and testing support.</p>
+<figure><div class="figure-scroll" tabindex="0" role="region" aria-label="Python and TypeScript source stocks in the core control-plane directory"><a href="../images/typescript-control-plane-refactor/core-source-stock.svg" target="_blank" rel="noopener"><img src="../images/typescript-control-plane-refactor/core-source-stock.svg" alt="Python and TypeScript source stocks in the core control-plane directory" width="1100" height="640" loading="lazy"></a></div><figcaption>Python and TypeScript source stocks in the core control-plane directory Scroll on narrow screens; open the image for full size.</figcaption></figure>
+<p>Cumulative churn sums each mainline landing diff, so repeatedly editing a line counts repeatedly. Endpoint stocks describe only the two snapshots. The cumulative net, endpoint diff, and source-stock change were reconciled by language. The roughly <strong>302,000 line edits</strong> record engineering activity; they do not measure unique output, quality, or model productivity.</p>
+<h3>How the work continued over time</h3>
+<div class="table-scroll" role="region" tabindex="0" aria-label="Scrollable technical comparison table"><table>
+<thead>
+<tr>
+<th>Beijing dates, weekly buckets</th>
+<th align="right">Core mainline commits</th>
+<th align="right">Associated merged PRs</th>
+<th align="right">PR-author accounts that week</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>08-15—08-21</td>
+<td align="right">52</td>
+<td align="right">48</td>
+<td align="right">10</td>
+</tr>
+<tr>
+<td>08-22—08-28</td>
+<td align="right">87</td>
+<td align="right">86</td>
+<td align="right">14</td>
+</tr>
+<tr>
+<td>08-29—09-04</td>
+<td align="right">61</td>
+<td align="right">61</td>
+<td align="right">16</td>
+</tr>
+<tr>
+<td>09-05—09-11</td>
+<td align="right">92</td>
+<td align="right">92</td>
+<td align="right">14</td>
+</tr>
+<tr>
+<td>09-12—09-18</td>
+<td align="right">133</td>
+<td align="right">133</td>
+<td align="right">14</td>
+</tr>
+<tr>
+<td>09-19—09-25</td>
+<td align="right">150</td>
+<td align="right">147</td>
+<td align="right">10</td>
+</tr>
+<tr>
+<td>09-26—10-02</td>
+<td align="right">161</td>
+<td align="right">161</td>
+<td align="right">17</td>
+</tr>
+<tr>
+<td>10-03—10-09</td>
+<td align="right">216</td>
+<td align="right">214</td>
+<td align="right">12</td>
+</tr>
+<tr>
+<td>10-10—10-16</td>
+<td align="right">192</td>
+<td align="right">179</td>
+<td align="right">14</td>
+</tr>
+</tbody></table></div>
+<figure><div class="figure-scroll" tabindex="0" role="region" aria-label="Weekly associated merged PRs touching the core directory throughout the refactor period"><a href="../images/typescript-control-plane-refactor/core-weekly-prs.svg" target="_blank" rel="noopener"><img src="../images/typescript-control-plane-refactor/core-weekly-prs.svg" alt="Weekly associated merged PRs touching the core directory throughout the refactor period" width="1100" height="640" loading="lazy"></a></div><figcaption>Weekly associated merged PRs touching the core directory throughout the refactor period Scroll on narrow screens; open the image for full size.</figcaption></figure>
+<p>The first and last weeks cover only time inside the selected endpoints. PRs use merge time; mainline commits use commit time. These can differ, so the two columns need not correspond one-for-one within a week.</p>
+<p>By title prefix, the cohort contains <strong>658 <code>fix</code>, 208 <code>feat</code>, 137 <code>refactor</code>, and 28 <code>perf</code> PRs</strong>. The rest include validation, documentation, and titles without those prefixes. These are title categories, not a partition of pure migration effort.</p>
+<figure><div class="figure-scroll" tabindex="0" role="region" aria-label="PR title categories in the same core-directory cohort"><a href="../images/typescript-control-plane-refactor/core-work-types.svg" target="_blank" rel="noopener"><img src="../images/typescript-control-plane-refactor/core-work-types.svg" alt="PR title categories in the same core-directory cohort" width="1100" height="640" loading="lazy"></a></div><figcaption>PR title categories in the same core-directory cohort Scroll on narrow screens; open the image for full size.</figcaption></figure>
+<p>These numbers support explaining the mechanisms by stage. Moving a rule was followed by caller integration, semantic fixes, recovery validation, and retirement. The final #6396 is one concentrated slice within that process.</p>
+<h3>Reproduce the inventory</h3>
+<p>Public-safe <a href="../images/typescript-control-plane-refactor/core-pr-cohort.csv">PR records</a>, <a href="../images/typescript-control-plane-refactor/core-mainline-commits.csv">core mainline commits</a>, and <a href="../images/typescript-control-plane-refactor/core-statistics.json">metric JSON</a> accompany the draft. The PR cohort joins mainline commits touching the directory to GitHub merge metadata, counting each PR once. Two mainline commits have no verifiable merged-PR association; their commits and churn remain included.</p>
+<p>The research enumerated public PRs, then checked against mainline Git history. Direct reads supplemented 14 PR metadata records missed by search indexing. Source snapshots and processing scripts remain in the research materials. This inventory does not estimate tokens, model cost, CI compute, engineer-hours, or benchmark gains.</p>
+<h2 id="section-3">3. Start with the Effect Program: agree on what happened</h2>
+<p>The first bounded cutover was <a href="https://github.com/loopx-project/loopx/pull/3416">#3416</a> on August 21. TypeScript took ownership of the Effect Program, settlement algebra, Turn-journal interpretation, and a durable checkpoint effect.</p>
+<p>These boundaries fit together because recovery asks one connected question: which effects belong to this operation, which have committed, and what may happen next?</p>
+<p>A checkpoint involves more than writing JSON to a file. Operation identity, same-key exclusion, matching the previous content, atomic replacement, and durability ordering determine whether a retry can recognize the original result. Splitting the rules across runtimes makes the next recovery fix harder to locate.</p>
+<p>The cutover therefore moved internal effects and their rules into TS. Python retained compatibility calls and callback/provider boundaries. A managed local runtime starts on demand and exits when idle, with a private token and source fingerprint for lifecycle handling. Callers do not need to manage a separate daemon manually.</p>
+<p>The design also had a cost. The PR reported these measurements for the same historical checkpoint workload:</p>
+<div class="table-scroll" role="region" tabindex="0" aria-label="Scrollable technical comparison table"><table>
+<thead>
+<tr>
+<th>Path</th>
+<th>p50</th>
+<th>p95</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Previous checkpoint</td>
+<td>0.755 ms</td>
+<td>2.020 ms</td>
+</tr>
+<tr>
+<td>New durable checkpoint path</td>
+<td>12.597 ms</td>
+<td>18.610 ms</td>
+</tr>
+</tbody></table></div>
+<p>The new path added RPC and durability work. This records the cost of that first slice. It does not isolate language performance or describe today&#39;s complete CLI latency. Acknowledging the cost made it possible to assess whether later complete transactions removed more round trips and repeated interpretation.</p>
+<h2 id="section-4">4. Migrate a complete transaction: two calls can be right</h2>
+<p>On August 22, <a href="https://github.com/loopx-project/loopx/pull/3447">#3447</a> explicitly stopped flat leaf-helper migration. Adding a facade, DTO, and parity scaffolding for each function could make the production path longer while Python still owned composition.</p>
+<p>The new unit was an observable transaction. Turn settlement connects decoding, identity, the journal, pending effects, reduction, and closeout. Todo completion similarly connects admission, state, leases, continuation, and a commit receipt.</p>
+<figure><div class="figure-scroll" tabindex="0" role="region" aria-label="The responsibility boundary between a complete transaction and named external providers"><a href="../images/typescript-control-plane-refactor/transaction-en.svg" target="_blank" rel="noopener"><img src="../images/typescript-control-plane-refactor/transaction-en.svg" alt="The responsibility boundary between a complete transaction and named external providers" width="1100" height="640" loading="lazy"></a></div><figcaption>The responsibility boundary between a complete transaction and named external providers Scroll on narrow screens; open the image for full size.</figcaption></figure>
+<p><a href="https://github.com/loopx-project/loopx/pull/3464">#3464</a> replaced seven leaf runtime calls with the coarse <code>turn.settlement.reduce</code> contract. In that delivered slice:</p>
+<pre><code class="language-text">New provider work: TS preflight → Python provider / checkpoint → TS final reduction
+Existing replay:   TS reduction / original-result recovery
+</code></pre>
+<p>Two calls and one call describe new provider work and replay respectively. The responsibility diagram does not count every call in the complete CLI.</p>
+<p>Review caught an attractive but unsafe optimization: retaining only the final reduction. That saved a call, but malformed identity or journal state could be rejected only after an external provider had executed. The final design kept preflight. TS authorizes the exact pending effects; Python executes and checkpoints those effects before final reduction.</p>
+<p>A correct check in the wrong position can fail to protect the user. Its order relative to an effect matters.</p>
+<p>Later lease, Vision, monitor-poll, spend, and void slices followed the complete-transaction approach. Their migration economics must name the old rules removed, bridges added, happy and recovery crossings, scaffolding exit conditions, and correctness and latency through the full entrypoint. A net increase in code can be justified, but the extra code needs a purpose.</p>
+<h2 id="section-5">5. Shared authority: separate domain rules from storage primitives</h2>
+<p>In parallel, shared-authority work progressed from wchwawa&#39;s coordination core, aggregate/provider foundations, and recoverable references to the TS AuthorityStore in <a href="https://github.com/loopx-project/loopx/pull/3798">#3798</a>.</p>
+<p>Two responsibilities need distinct owners:</p>
+<ol>
+<li>The domain owner decides whether a transition is legal and who may execute it.</li>
+<li>The store provides conditional commit, durability, and proof readback.</li>
+</ol>
+<p>The current <a href="https://github.com/loopx-project/loopx/blob/488e4438e0e51eca023ac3f5e690603120851b0c/loopx/control_plane/coordination/authority_store.ts">AuthorityStore</a> exposes operations including <code>storeIdentity</code>, <code>loadAuthority</code>, <code>commitAuthority</code>, <code>readReceipt</code>, and <code>scanCommitted</code>. The store atomically protects the head, events, and receipts. A database adapter must not quietly become an independent owner of domain transitions.</p>
+<p>Several identities protect different boundaries:</p>
+<div class="table-scroll" role="region" tabindex="0" aria-label="Scrollable technical comparison table"><table>
+<thead>
+<tr>
+<th>Identity</th>
+<th>Boundary it protects</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>provider_revision</code></td>
+<td>A conditional provider commit; its representation can be opaque to domain callers</td>
+</tr>
+<tr>
+<td><code>authority_revision</code></td>
+<td>A version of domain authority state</td>
+</tr>
+<tr>
+<td><code>lease_epoch</code></td>
+<td>The generation of an execution grant, fencing an old executor</td>
+</tr>
+<tr>
+<td>Store identity / lineage</td>
+<td>Whether a read still belongs to the same authority history</td>
+</tr>
+<tr>
+<td>Operation identity / receipt</td>
+<td>Whether this is the same committed operation and what it originally returned</td>
+</tr>
+</tbody></table></div>
+<p>For example, a PostgreSQL connection may fail after COMMIT. The write may already be durable. A provider must distinguish missing, unavailable, failed, and ambiguous durability. A missing success response does not establish a missing commit. Reading the original operation&#39;s receipt is part of recovery. The <a href="https://github.com/loopx-project/loopx/pull/3807">PostgreSQL candidate</a> also retained its separate deployment and adoption boundaries.</p>
+<p>An earlier Python executor served reference and coverage purposes. The unused prototype was later deleted, while actual native File and SQLite paths became the corresponding qualification targets. Transitional references need an exit condition; they must not become a second production authority by accident.</p>
+<h2 id="section-6">6. After SQLite: retained history needs a cost model</h2>
+<p>LIHUA919&#39;s <a href="https://github.com/loopx-project/loopx/pull/4121">#4121</a> connected an optional SQLite provider to the existing TS authority contract. A transaction atomically commits the head, receipts, events, and outbox. Domain claim and lease semantics stay with their owner.</p>
+<p>Adding the database left three distinct engineering problems.</p>
+<p><strong>First, reading the current head should not scale with total retained history.</strong> <a href="https://github.com/loopx-project/loopx/pull/4408">#4408</a> replaced a full retained projection per transaction with verified periodic checkpoints and committed deltas. It converged codec ownership and added transactional, idempotent migration of the old format. Current reads, continuity recovery, and a full audit have different read scopes.</p>
+<p><strong>Second, measure writes correctly.</strong> <a href="https://github.com/loopx-project/loopx/pull/4778">#4778</a> separately observed logical write volume, cumulative WAL traffic within a window, and application-observed lock wait. Final database size cannot substitute for write-amplification measurement. A rehearsal also does not establish formal capacity or sustained-operation acceptance.</p>
+<p><strong>Third, object ownership during replay affects correctness.</strong> <a href="https://github.com/loopx-project/loopx/pull/4931">#4931</a> reduced copying, sorting, and encoding of unchanged subtrees, and stopped materializing unused full projections for receipt lookup. It also prevented a caller&#39;s mutation of a returned projection from poisoning the next replay basis. Persisted proof bytes remained unchanged.</p>
+<p>Some paths improved substantially. Large-state latency, scan cost, and memory still had gaps, and the PR retained the unmet targets. Those distinctions are more useful than a single performance-improvement label for every path.</p>
+<p>In October, <a href="https://github.com/loopx-project/loopx/pull/5805">#5805</a> changed unconfigured new-Goal defaults to canonical SQLite and hard leases. Existing Goals, explicit choices, and old operation retries retained their own contracts. A new default, migration of existing data, and retirement of old writers happened at different stages.</p>
+<h2 id="section-7">7. Song&#39;s Semantics: connect definition, production, and interpretation</h2>
+<p>Our new maintainer, <strong>Song (@songoow)</strong>, initiated and implemented the Semantics RFC, registry, and commit-path checks in <a href="https://github.com/loopx-project/loopx/pull/4433">#4433</a>, merged on September 15. He continued advancing convergence afterward. This track governs how concepts grow as the software changes.</p>
+<p>Cross-language migration readily creates duplicate knowledge. The same state can appear in a Python Enum, <code>Literal</code>, TS <code>as const</code>, a presentation layer, and a conditional branch. Even if the strings match today, one location may gain a value or change its interpretation tomorrow.</p>
+<p>The <a href="https://github.com/loopx-project/loopx/blob/488e4438e0e51eca023ac3f5e690603120851b0c/docs/architecture/rfcs/semantic-vocabulary-convergence-v0.md">Semantics RFC</a> checks traceable relationships: definition owner, value set, generated binding, producer, and interpreter or projection. Runtime rules remain with typed owners. The registry constrains and checks them without becoming another production rule source.</p>
+<h3>Four kinds of information in one field</h3>
+<p><a href="https://github.com/loopx-project/loopx/pull/4494">#4494</a> addressed a mixed <code>effective_action</code> field containing quota decisions, frontier actions, replay verdicts, and diagnostic error codes. Callers could not clearly identify the domain to interpret.</p>
+<p>The converged contract puts verdicts in <code>decision</code>, diagnostics in <code>error_code</code>, and restricts the root action to the registered, disjoint union of quota and frontier domains. Cross-runtime bindings are generated from an owner. Old v0 signed plans retain their historical meaning and representation, rather than being rewritten in a way that breaks original identity verification.</p>
+<p>The same work caught <code>skip</code> versus <code>quota_skip</code>. A consumer branch is not evidence that a producer emits the value. Checks must trace actual assignments and returns at supported sites, rather than counting string comparisons as production.</p>
+<h3>Counterexamples for the checker itself</h3>
+<p><a href="https://github.com/loopx-project/loopx/pull/4687">#4687</a> retained useful review counterexamples and fixed three confidently wrong answers: missed global rebinding, mutation after dictionary spread treated as the old initializer, and a shadowed <code>String</code> mistaken for the built-in conversion.</p>
+<p>False alarms and missed values have different consequences. A conservative candidate set may report an extra problem. Missing a real produced value can let an unregistered output through. Unsupported dynamic forms must preserve an unknown.</p>
+<p>The checks also need scan-coverage floors, so scanning fewer files cannot make the result green. Retiring an expanding committed inventory in favor of on-demand full-tree computation did not remove that obligation. Gaps outside supported forms remain explicit, and the <a href="https://github.com/loopx-project/loopx/issues/4447">tracking issue</a> remains part of the work.</p>
+<p>Generation and checking reduce synchronization mistakes. Their assumptions, coverage, and error direction still require review.</p>
+<h2 id="section-8">8. Callers and defaults determine whether migration reaches users</h2>
+<p>Complete transactions need real producers. In September, <a href="https://github.com/loopx-project/loopx/pull/4178">#4178</a> converged nonterminal planning updates around one authority snapshot and a TS transaction. It removed a Python route that synthesized Markdown, parsed it again, and performed target reads before the transaction.</p>
+<p>Omission, <code>null</code>, an empty value, and <code>false</code> each carry intent here. Dry-run must model that intent accurately. An unavailable selected provider must not trigger fallback elsewhere. <a href="https://github.com/loopx-project/loopx/pull/4279">#4279</a> later converged read classification and projection-delivery semantics. Some Python read ownership was deliberately retained. Clear ownership matters more than creating a second interpretation to pursue language purity.</p>
+<p>Defaults expose similar distinctions. Current priority regressions protect these cases:</p>
+<div class="table-scroll" role="region" tabindex="0" aria-label="Scrollable technical comparison table"><table>
+<thead>
+<tr>
+<th>Input or operation</th>
+<th>Expected behavior</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Create a new task, omit priority</td>
+<td>Apply the new-task P1 default</td>
+</tr>
+<tr>
+<td>Read an old task with no historical priority</td>
+<td>Preserve its historical meaning</td>
+</tr>
+<tr>
+<td>Replay the original creation operation</td>
+<td>Return the original result</td>
+</tr>
+<tr>
+<td>Edit only the text</td>
+<td>Preserve the existing priority</td>
+</tr>
+<tr>
+<td>Explicitly clear priority</td>
+<td>Clear it</td>
+</tr>
+<tr>
+<td>Structured declaration conflicts with an old text prefix</td>
+<td>Refuse with actionable context</td>
+</tr>
+</tbody></table></div>
+<p>The <a href="https://github.com/loopx-project/loopx/blob/488e4438e0e51eca023ac3f5e690603120851b0c/tests/control_plane_ts/todo_priority.test.ts">File and SQLite regressions</a> protect these cases. Applying new defaults after original-receipt recovery prevents an upgrade from making new decisions for history.</p>
+<p>The closing review found another caller gap. The TS core passed direct tests for metadata-only completion repair. The normal Python producer automatically attached defaults such as completion policy and auto-acquire. The core interpreted them as fresh work mixed into a historical repair. The actual File and SQLite entrypoints failed in both dry-run and execution. The <a href="https://github.com/loopx-project/loopx/pull/6396#pullrequestreview-5516847052">public counterexample</a> records this.</p>
+<p>That recovery gap also existed in the baseline, so it cannot all be attributed to the final contributor. The repair had to reach the normal producer while continuing to reject real changes to text, continuation, ownership, or validation. A correctly constructed typed request proves only that the inner boundary can handle it.</p>
+<h2 id="section-9">9. Recover the original result while protecting current authority</h2>
+<p>Recovery can confuse two points in time: whether the original operation was valid, and whether today&#39;s executor may continue changing state.</p>
+<p>Suppose a team-plan committed but its response was lost. After an upgrade, the caller retries the same operation ID under stricter admission rules. Rejecting it as fresh work first can hide the original success. A closing <a href="https://github.com/loopx-project/loopx/pull/6396#pullrequestreview-5514510958">recovery review</a> caught that problem.</p>
+<figure><div class="figure-scroll" tabindex="0" role="region" aria-label="Separating original-receipt recovery from current execution authority"><a href="../images/typescript-control-plane-refactor/replay-en.svg" target="_blank" rel="noopener"><img src="../images/typescript-control-plane-refactor/replay-en.svg" alt="Separating original-receipt recovery from current execution authority" width="1100" height="640" loading="lazy"></a></div><figcaption>Separating original-receipt recovery from current execution authority Scroll on narrow screens; open the image for full size.</figcaption></figure>
+<p>The current path decodes and locates the correct authority, then checks original identity, intent, and receipt. If it is the same committed operation, it recovers the original result. Work without a matching original result proceeds through current admission. The selected provider must still be available and its proof valid; failure cannot quietly redirect writes to Markdown.</p>
+<p>Returning the original result does not renew a lease, overwrite later commits, or revive a retired writer. Lease transfers, epoch changes, and subsequent state have their own protections.</p>
+<p>Types express the distinction too. Historical decoding still recognizes <code>legacy</code>; current fresh-execution handoff configuration accepts <code>soft_claim</code> and <code>hard_lease</code>. Reading an old record, recovering an original operation, and authorizing current execution each have independent conditions.</p>
+<p>An internal receipt also has a limited scope. If a remote external effect lacks a verifiable idempotent identity and readback, settling once in the control plane cannot establish that the remote effect executed exactly once. Uncertainty belongs at the boundary where it actually occurs.</p>
+<h2 id="section-10">10. CLI output budgets: protect decision semantics before compression</h2>
+<p>CLI language participates in an agent&#39;s decisions. This engineering constraint predates the final writer retirement and remained a validation boundary during migration.</p>
+<p>The <a href="https://github.com/loopx-project/loopx/blob/488e4438e0e51eca023ac3f5e690603120851b0c/docs/reference/contracts/interface-budget-contract.md">interface budget contract</a> examines:</p>
+<ul>
+<li>Actually printed stdout, alongside the in-memory payload.</li>
+<li>Distinct character, UTF-8 byte, line, and JSON-structure costs.</li>
+<li>Base and head on the same fixture, plus growth as Todos and history accumulate.</li>
+<li>Required fields, action signatures, semantic anchors, and explicit detail paths.</li>
+</ul>
+<p>Presentation reduction belongs after complete planning. Information omitted from display differs from information never read. Projection envelopes likewise separate observation time, service time, source coverage, and completeness. Serving a cached result again must not make its facts newer.</p>
+<p>Natural language requires clause-level review: obligations, ordering, evidence provenance, authority qualifiers, scope, continuation, and stop conditions. Removing a phrase such as “only when the original proof is valid” can change behavior even when every field remains.</p>
+<p>One bounded example removed JSON indentation and separator whitespace. On the same historical fixture of 36 Todos and 12 runs, output fell from 48,418 to 39,726 characters, about 18%, with the complete decoded payload unchanged. This establishes a presentation-size change. Tokens, cost, and agent outcomes need separate measurements.</p>
+<p>The budget protects an interface the consumer can use. Valuable guidance may justify increasing it with matched evidence. Dropping decision conditions to make a size test green damages the interface.</p>
+<h2 id="section-11">11. Final retirement: preserve credit and account for the deletions</h2>
+<p>Late-September work had already removed an unused authority prototype and the experimental Todo event overlay, dual-writer, and backfill. Old sources containing data received explicit preservation or refusal handling. This did not remove all event logging or the new authority&#39;s atomic events and receipts.</p>
+<p>October work further isolated ordinary Markdown writers and validated real subsequent writes without the old modules. Concentrated deletion became possible after consumer routes and replacement paths were connected.</p>
+<p><strong>Duang777</strong> led <a href="https://github.com/loopx-project/loopx/pull/6396">#6396</a>. <strong>Song</strong> and maintainer-side agents continued recovery, producer, and integration work along the original branch, preserving contribution history. This three-developer-and-agent relay was the closing phase of the two-month program.</p>
+<p>The final merge against its first parent gives the following diff, <strong>for this PR alone, including implementation and tests</strong>:</p>
+<div class="table-scroll" role="region" tabindex="0" aria-label="Scrollable technical comparison table"><table>
+<thead>
+<tr>
+<th>File group</th>
+<th align="right">Added</th>
+<th align="right">Deleted</th>
+<th align="right">Net change</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Python</td>
+<td align="right">10,938</td>
+<td align="right">25,235</td>
+<td align="right">−14,297</td>
+</tr>
+<tr>
+<td>TypeScript</td>
+<td align="right">2,547</td>
+<td align="right">5,116</td>
+<td align="right">−2,569</td>
+</tr>
+<tr>
+<td>Other</td>
+<td align="right">1,944</td>
+<td align="right">3,013</td>
+<td align="right">−1,069</td>
+</tr>
+<tr>
+<td>Total</td>
+<td align="right">15,429</td>
+<td align="right">33,364</td>
+<td align="right">−17,935</td>
+</tr>
+</tbody></table></div>
+<p>Many removed lines were old tests. Deleted test lines do not establish product capability; the important question is whether current entrypoints and independent counterexamples still protect the intended invariants. These counts describe the closing scope. They do not validate the whole migration.</p>
+<h2 id="section-12">12. Community contributions and the next step</h2>
+<p>Multiple contributors advanced this program. Representative work is listed by its concrete boundary so readers can follow the history.</p>
+<div class="table-scroll" role="region" tabindex="0" aria-label="Scrollable technical comparison table"><table>
+<thead>
+<tr>
+<th>Contributor</th>
+<th>Representative contribution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>New maintainer <a href="https://github.com/songoow">Song / @songoow</a></strong></td>
+<td><a href="https://github.com/loopx-project/loopx/pull/4433">Semantics RFC and checks</a>, <a href="https://github.com/loopx-project/loopx/pull/4494">action domains and producers</a>, <a href="https://github.com/loopx-project/loopx/pull/4687">scan counterexamples</a>, and continued semantic and recovery convergence</td>
+</tr>
+<tr>
+<td><a href="https://github.com/wchwawa">@wchwawa</a></td>
+<td><a href="https://github.com/loopx-project/loopx/pull/3410">Coordination core</a>, <a href="https://github.com/loopx-project/loopx/pull/3529">aggregate/provider foundations</a>, <a href="https://github.com/loopx-project/loopx/pull/3669">recoverable references</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/zigzagcai">@zigzagcai</a></td>
+<td><a href="https://github.com/loopx-project/loopx/pull/3674">Task-lease settlement transaction</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/Alicecooo">@Alicecooo</a></td>
+<td><a href="https://github.com/loopx-project/loopx/pull/3688">Turn outcome projection</a> and subsequent facade cleanup</td>
+</tr>
+<tr>
+<td><a href="https://github.com/hhyykk">@hhyykk</a></td>
+<td><a href="https://github.com/loopx-project/loopx/pull/3702">Native lease acquire</a>, <a href="https://github.com/loopx-project/loopx/pull/3720">Vision transaction</a>, scheduler, monitor, and later transaction composition</td>
+</tr>
+<tr>
+<td><a href="https://github.com/yuefengw">@yuefengw</a></td>
+<td><a href="https://github.com/loopx-project/loopx/pull/3806">Local lease lifecycle, fences, locks, and recovery</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/LIHUA919">@LIHUA919</a></td>
+<td><a href="https://github.com/loopx-project/loopx/pull/4121">SQLite provider</a>, <a href="https://github.com/loopx-project/loopx/pull/4778">write measurements</a>, <a href="https://github.com/loopx-project/loopx/pull/4931">owned-state replay</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/Duang777">@Duang777</a></td>
+<td>Earlier validation contributions and <a href="https://github.com/loopx-project/loopx/pull/6396">concentrated ordinary-writer retirement</a></td>
+</tr>
+</tbody></table></div>
+<p>These are representative contributions along the relevant tracks. Later Semantics convergence and the changed-diff advisory also include other community work; they should not all be attributed to one person.</p>
+<p>The acceptance questions I care about are practical: can a rule change be located in a clear owner? Can a real caller express the intended operation? Do checks precede effects? Does recovery preserve the original result and subsequent state? Have replaced rules left production? Can costs be measured at the real entrypoint?</p>
+<p>2.0 does not close every RFC goal. Retained Python transports and specialized providers have specific purposes. Broader native CLI coverage and sustained-operation qualification continue along their own validation paths. We also want capability and efficiency comparisons on harder general long-horizon benchmarks such as EdgeBench and LHTB, especially in a single session.</p>
+<p>I hope this refactor leaves a system that is easier to change, validate, and revert—and a working practice that keeps responding to counterexamples.</p>
+
+</article></div></main>
+<footer class="site-footer"><a class="brand" href="../../">LoopX</a><p>Keep work moving. Keep people in control.</p><a href="#main" aria-label="Back to top">↑</a></footer>
+<script>if(matchMedia('(max-width:768px)').matches)document.querySelector('.toc details')?.removeAttribute('open');</script>
+</body></html>
