@@ -625,3 +625,32 @@ def test_exported_report_survives_autocrlf_publication(tmp_path, trial, monkeypa
         return data
 
     _publish_and_recheck(tmp_path, build)
+
+
+@pytest.mark.parametrize("enabled", [None, False, True])
+def test_report_preserves_horizon_opt_in_and_historical_absence(trial, enabled):
+    runs, selection, output, _ = trial
+    for name in ("runtime-receipt", "worker-profile"):
+        path = runs / "run" / "case" / (name + ".json")
+        value = json.loads(path.read_text())
+        if enabled is not None:
+            value["planning_horizon_goal"] = enabled
+        write(path, value)
+    export(runs, selection, output, observed_at="2026-01-02T00:00:00+00:00")
+    config = json.loads((output / "settings/run.json").read_text())
+    for field in ("runner", "worker_profile"):
+        assert config[field].get("planning_horizon_goal") is enabled
+        assert ("planning_horizon_goal" in config[field]) is (enabled is not None)
+
+
+@pytest.mark.parametrize("receipt,profile", [(True, False), (True, None), ("true", "true"), (True, 1)])
+def test_report_rejects_unbound_horizon_setting(trial, receipt, profile):
+    runs, selection, output, _ = trial
+    for name, enabled in (("runtime-receipt", receipt), ("worker-profile", profile)):
+        path = runs / "run" / "case" / (name + ".json")
+        value = json.loads(path.read_text())
+        if enabled is not None:
+            value["planning_horizon_goal"] = enabled
+        write(path, value)
+    with pytest.raises(ValueError, match="planning_horizon_goal"):
+        export(runs, selection, output, observed_at="2026-01-02T00:00:00+00:00")

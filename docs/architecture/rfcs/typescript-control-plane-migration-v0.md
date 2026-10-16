@@ -4,7 +4,7 @@
 - Supersedes / closes: none
 - Proposed by: LoopX maintainers
 - Date: 2026-08-15
-- Last revised: 2026-10-15
+- Last revised: 2026-10-16
 - Scope: an incremental, replacement-first migration of the LoopX control-plane
   core from Python to TypeScript without maintaining two semantic
   implementations
@@ -31,52 +31,64 @@ T0–T4, not additional provider promotion or completed migration claims.
 
 <a id="current-delivery-frontier-2026-10-02"></a>
 
-## Current delivery frontier (2.0 candidate, 2026-10-15)
+## Current delivery frontier (post-merge, 2026-10-16)
 
-Contributor-led [#6396](https://github.com/loopx-project/loopx/pull/6396),
-at reviewed head `5d29213d3`, carries the C1/T4 normal-Markdown-writer cutoff
-and live `legacy` ownership-policy retirement. It incorporates the fork
-supplements and the valuable #6366 invariants and recovery checks documented in
-[the absorption map](../../reference/local-authority-provider-selection.md#retirement-proposal-reconciliation).
-The candidate removes the obsolete writer implementations and capture producers;
-canonical mutation, creation, team-plan, Monitor and lease consumers reuse their
-existing typed owners. Do not schedule those deletions again from the older
-writer inventory below. The additive 1.x line and an open 2.0 proposal remain
-different delivery baselines; this checkpoint does not claim a released cutoff.
-
-The next integration pairs `7c0215f26` with pinned main `77d6b07fb` through a
-normal two-parent merge. Keep `2.0.0a1` as the retirement candidate while
-carrying the compatible 1.4.2 fixes; preserving source bytes in a one-parent
-snapshot would lose the main ancestry needed for a reviewable upstream diff.
-Fresh canonical-create checks retain both structured P1 and its compatibility
-display, while original receipts keep their recorded intent. Retained outbox
-recovery uses the existing native delivery/drain counterexamples after producer
-removal. The released-lease cutover check moves to backed-up cold import on
-File/SQLite, preserving the complete terminal record, later canonical work and
-original-import replay without recreating a source writer. Later main revisions
-and installed Host adoption still require their own applicable evidence.
+Contributor-led [#6396](https://github.com/loopx-project/loopx/pull/6396) landed
+as `a4483aaece5bc74ec3f969fd067229487022401b`, with final PR head
+`404433aee47d6efd92f26202eddbef67831f1036`. Their complete trees match. The
+C1/T4 normal-Markdown-writer cutoff includes the fork supplements, the native
+Core-version repair and [valuable #6366 obligations](../../reference/local-authority-provider-selection.md#retirement-proposal-reconciliation).
+Canonical mutation, creation, team-plan, Monitor and lease consumers reuse
+existing typed owners. Ordinary writer and capture-producer deletion is
+implemented on main; do not derive another deletion task from older inventories.
+The compatible 1.4.2 release preceded this merge. The landed `2.0.0a1` source
+boundary is distinct from a released 2.0 cutoff or qualified default.
 
 New execution/configuration targets share `ExecutionHandoffMode`, derived from
 `EXECUTION_HANDOFF_MODES` (`soft_claim` / `hard_lease`). Historical `HandoffMode`
 and receipt codecs still recognize `legacy`. The typed policy owner refuses
 fresh legacy execution, acquire/maintenance and current-proof grants, including
-delegation launch/resume; exact historical receipt recovery, release and
-reviewed backup/plan/migrate remain supported. Storage conversion and ownership
-migration remain distinct. No active Goal is migrated by this proposal.
+delegation launch/resume; exact original-operation recovery, release and reviewed
+backed-up migration remain supported. File is still a canonical provider;
+storage conversion, policy migration and Goal-lifetime adoption are different
+operations. No active Goal is migrated by this checkpoint.
 
-Current work is candidate integration and adoption qualification, not another
-writer extraction: retain the compatible 1.x upgrade/backup/recovery route,
-finish the bounded reversible core-developer trial and affected real Host/App
-journeys, and keep formal D2 failures/missing evidence and release-default
-qualification open. Permanent Markdown document/display IO, historical readers
-and outstanding receipt/outbox disposition are retained obligations. A passing
-conversion drill does not establish natural adoption or Goal-instance retirement.
+[The post-merge evidence update](https://github.com/loopx-project/loopx/pull/6396#issuecomment-6208115093)
+separates executed revisions from the final combination: native repair source
+`bf8372b1e` and incorporated `286624b94` have the same complete tree; later main
+synchronizations match their automatic merge results, including #6597's native
+preview-recovery repair. Graph/tree equivalence does not execute the final
+combination. Prior approvals, real-backend results, installed artifacts and
+failed/untested cases retain their original revisions and applicability.
 
-Use the [current retirement ledger](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md#current-candidate-checkpoint)
-for that frontier. [Exact-head review](https://github.com/loopx-project/loopx/pull/6396#pullrequestreview-5535116423)
-and [combined-tree evidence](https://github.com/loopx-project/loopx/pull/6396#issuecomment-6195855339)
-retain their source revisions; they do not certify an untested later head/base,
-a completed installed cohort or all RFC acceptance.
+Follow the [existing R5 delivery sequence](loopx-overall-roadmap-v0.md#post-6396-delivery-plan):
+
+The [planned Agent transfer refinement](complete-state-recovery-v0.md#planned-agent-transfer)
+sets the proposed product priority: move work and continue it in the destination,
+with the necessary installed upgrade/admission companions below. Select TS
+changes from actual breaks in that whole journey; do not advance a language or
+capture-field series as a substitute. Source-available transfer and unavailable-
+source disaster recovery keep distinct qualification. This does not authorize
+either activation or claim that a transfer is implemented.
+
+1. Close T4/C1 and D1 adoption on pinned final-main source and normal installed
+   CLI/App/affected Host entrypoints: complete data, fresh and stale proofs,
+   original-operation retry, interruption, later writes and reversible migration.
+   Inspect retained transports by actual caller; native in-process adoption must
+   delete its obsolete crossing, rather than adding per-field bridges.
+2. Extend complete-recovery M2 capture evidence and M3 controlled adoption with
+   the existing Goal/provider/effect owners. Ordinary import and readable inert
+   backup are not Goal-lifetime or external-effect reactivation evidence.
+3. Continue the existing D2/D3 qualification separately: matched complete-command
+   costs, formal volume/elapsed evidence and supported release profiles. New-Goal
+   SQLite/hard-lease selection already exists in source; qualify that behavior
+   rather than rebuilding the selector or announcing an unqualified default.
+
+Permanent Markdown document/display IO, historical readers and outstanding
+receipt/outbox disposition remain obligations. Delete another adapter only with
+its last real caller or an explicit compatibility exit and affected real-path
+validation. Use the [retirement ledger](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md#current-candidate-checkpoint)
+for current ownership; the dated evidence below is not a new work queue.
 
 Checkpoint moved to the execution ledger: [1.x prerequisites through 2026-10-12](ledger/typescript-control-plane-migration-v0/2026-10-12-1x-prerequisites.md).
 

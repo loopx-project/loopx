@@ -39,6 +39,7 @@ class ChatConfigurationRequestMixin(
     def _configuration_get_routes(self) -> dict[str, Callable[[], None]]:
         return {
             attached_api.CODEX_ATTACHED_PATH: self._codex_attached_read,
+            attached_api.CODEX_ATTACHED_LIVE_PATH: self._codex_attached_live,
             request_api.REQUEST_CONTROL_PATH: self._request_control_read,
             preferences_api.SIDEBAR_GOAL_ORDER_PATH: self._sidebar_order_read,
             amendment_api.CHAT_GOAL_AMENDMENT_PATH: self._amendment_inspect,

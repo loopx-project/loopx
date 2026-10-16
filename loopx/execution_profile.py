@@ -154,6 +154,11 @@ def compact_execution_profile(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return profile
 
+    if "planning_horizon_goal" in value:
+        if not isinstance(value["planning_horizon_goal"], bool):
+            raise ValueError("planning_horizon_goal must be a boolean")
+        profile["planning_horizon_goal"] = value["planning_horizon_goal"]
+
     if "stride_strategy" in value:
         from .control_plane.work_items.stride_policy_codec import normalize_stride_strategy
         profile["stride_strategy"] = normalize_stride_strategy(value["stride_strategy"])
@@ -249,6 +254,8 @@ def apply_goal_execution_profile_change(
     clear_replan_after_effective_turns: bool = False,
     stride_strategy: str | None = None,
     clear_stride_strategy: bool = False,
+    planning_horizon_goal: bool | None = None,
+    clear_planning_horizon_goal: bool = False,
 ) -> None:
     if (
         clear_replan_after_completed_todos
@@ -264,10 +271,14 @@ def apply_goal_execution_profile_change(
         raise ValueError("choose one review cadence override or clear operation")
     if stride_strategy is not None and clear_stride_strategy:
         raise ValueError("choose a stride strategy override or clear operation")
+    if planning_horizon_goal is not None and clear_planning_horizon_goal:
+        raise ValueError("choose a planning horizon Goal override or clear operation")
     raw = goal.get("execution_profile")
     profile = dict(raw) if isinstance(raw, dict) else {}
     if (
-        stride_strategy is None
+        planning_horizon_goal is None
+        and not clear_planning_horizon_goal
+        and stride_strategy is None
         and not clear_stride_strategy
         and turn_granularity is None
         and replan_after_completed_todos is None
@@ -276,6 +287,10 @@ def apply_goal_execution_profile_change(
         and not (clear_replan_after_completed_todos and "replan_after_completed_todos" in profile)
     ):
         return
+    if clear_planning_horizon_goal:
+        profile.pop("planning_horizon_goal", None)
+    if planning_horizon_goal is not None:
+        profile["planning_horizon_goal"] = planning_horizon_goal
     if clear_stride_strategy:
         profile.pop("stride_strategy", None)
     if stride_strategy is not None:

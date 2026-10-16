@@ -67,6 +67,8 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
         root = Path(env["LOOPX_WAKE_LOG_DIR"]) / turn_id / "decisions"
         root.mkdir(mode=0o700, exist_ok=False)
         command += ["--decision-output-root", str(root)]
+        if env.get("LOOPX_TURN_ENVELOPE") == "1":
+            command += ["--turn-envelope"]
         if decision_handoff_socket is not None:
             command += ["--decision-handoff-socket", decision_handoff_socket]
     result = subprocess.run(
@@ -410,18 +412,12 @@ def run_once(env: dict[str, str]) -> dict:
             from benchmark.runtime.planning import render_planning_prompt, task_plan_packet
 
             planning_before = task_plan_packet(env, loopx_command(env))
-            body = render_planning_prompt(planning_before, env,
-                                          execution_reserve_seconds=PHASE_WORK_RESERVE_SECONDS)
+            body = render_planning_prompt(planning_before, env)
             (wake / "planning-input.json").write_text(body, encoding="utf-8")
             (wake / "planning-schema.json").write_text(json.dumps(planning_before["result_schema"]))
         elif execution.mode in {"heartbeat", "loopx-goal"}:
             body = heartbeat_body(env, turn_id, native_goal=execution.native_goal,
                                   decision_handoff_socket=checkpoint_wake.socket_path)
-            if checkpoint_wake.socket_path is not None and not execution.turn_envelope:
-                # The handoff socket enables TurnEnvelope capture without the
-                # explicit opt-in; the receipt records the effective setting.
-                receipt["turn_envelope"] = True
-                receipt["turn_envelope_source"] = "checkpoint_handoff"
         elif execution.mode == "plain":
             body = Path(env["LOOPX_TASK_DOC"]).read_text(encoding="utf-8")
         session_wake = None

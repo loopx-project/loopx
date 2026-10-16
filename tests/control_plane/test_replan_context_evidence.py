@@ -92,12 +92,12 @@ def test_goal_and_evidence_paths_survive_scoped_replan(
 
 
 def test_scoped_goal_keeps_original_text_without_public_filtering(tmp_path: Path) -> None:
-    from loopx.control_plane.work_items.replan_context_codec import _goal_facts
+    from loopx.control_plane.work_items.replan_context_codec import goal_context_facts
 
     registry = tmp_path / "registry.json"
     registry.write_text(json.dumps({"goals": [{"id": "evidence-goal",
         "objective": "Inspect access_key=synthetic-secret before continuing."}]}))
-    facts = _goal_facts({"registry": str(registry)}, "evidence-goal", None)
+    facts = goal_context_facts({"registry": str(registry)}, "evidence-goal", None)
     assert facts["registry_objective"] == "Inspect access_key=synthetic-secret before continuing."
 
 

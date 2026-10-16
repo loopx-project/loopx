@@ -34,6 +34,18 @@ def lifetime_root(registry_path: Path) -> Path:
     return registry_path.parent / ".loopx" / "lifecycle" / "goal-instance"
 
 
+def registration_journal_directory(registry_path: Path, goal_id: str) -> Path:
+    return lifetime_root(registry_path) / "journals" / alias_digest(goal_id)
+
+
+def recreation_journal_directory(registry_path: Path, goal_id: str) -> Path:
+    return lifetime_root(registry_path) / "recreations" / alias_digest(goal_id)
+
+
+def turn_settlement_directory(registry_path: Path, goal_id: str) -> Path:
+    return lifetime_root(registry_path) / "turn-settlement" / alias_digest(goal_id)
+
+
 def guard_path(registry_path: Path, goal_id: str) -> Path:
     return lifetime_root(registry_path) / "guards" / f"{alias_digest(goal_id)}.guard"
 

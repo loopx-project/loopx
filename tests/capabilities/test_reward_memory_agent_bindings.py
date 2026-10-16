@@ -282,11 +282,16 @@ def test_editor_readback_accepts_verified_activation_and_keeps_partial_write_fac
     assert handler.response["source_written"] is True and handler.response["readback_verified"] is False
 
 
-def test_app_stage_resolves_the_registered_file_when_projection_omits_private_path(tmp_path, capsys):
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_app_stage_resolves_the_registered_file_when_projection_omits_private_path(tmp_path, capsys, monkeypatch, provider):
     import sys
     from loopx.cli import main
     from loopx.capabilities.reward_memory.codex_app_outcome import stage_codex_app_turn_outcome_candidate
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
     from tests.capabilities.test_reward_memory_codex_app_outcome import _reflection
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry = fixture_registry(tmp_path)
     data = json.loads(registry.read_text())
     goal = data["goals"][0]
@@ -296,12 +301,19 @@ def test_app_stage_resolves_the_registered_file_when_projection_omits_private_pa
     registry.write_text(json.dumps(data))
     state = Path(goal["repo"]) / "STATE.md"
     state.write_text("# Active Goal State\n\n## Agent Todo\n")
+    initialize_canonical_authority(runtime, "binding-goal", build_todo_runtime_shadow_projection(
+        goal_id="binding-goal", handoff_mode="soft_claim", todos=[]), state_path=state, provider=provider)
     validator = [sys.executable, "-c", "import sys,json;r=json.load(sys.stdin);print(json.dumps({'schema_version':'reward_memory_reflection_validation_v0','status':'validated','reflection_digest':r['reflection_digest'],'evidence_refs':r['reflection']['evidence_refs']}))"]
-    assert main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", "todo", "add",
+    code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", "todo", "add",
         "--goal-id", "binding-goal", "--role", "agent", "--text", "Verify the registered source", "--claimed-by", "writer",
-        "--validation-command-json", json.dumps(validator)]) == 0
+        "--validation-command-json", json.dumps(validator)])
     added = json.loads(capsys.readouterr().out)
-    assert added["ok"]
+    assert code == 0 and added["ok"], added
+    canonical = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="binding-goal")
+    assert canonical is not None and len(canonical["todos"]) == 1
+    assert canonical["source_authority"] == ("sqlite_v0" if provider == "sqlite" else "file_v0")
+    assert canonical["todos"][0]["todo_id"] == added["todo_id"]
+    assert canonical["todos"][0]["completion_validation_required"] is True
     staged = stage_codex_app_turn_outcome_candidate(registry_path=registry, runtime_root=runtime, goal_id="binding-goal",
         agent_id="writer", todo_id=added["todo_id"], turn_instance_id="binding-source-test", effect_id="effect:binding-source",
         state_file=Path("."), validation_workspace=Path(goal["repo"]), reflection_json=_reflection(), observed_at="2026-10-16T00:00:00Z")

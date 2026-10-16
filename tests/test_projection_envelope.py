@@ -503,6 +503,8 @@ def test_global_risks_empty_contract_container_is_a_read_source(
             }
         ),
     ],
+    ids=["malformed-json", "array", "wrong-schema", "invalid-timestamp",
+         "invalid-continuation", "wrong-goal"],
 )
 def test_global_risks_discloses_unreadable_host_poll_receipts_and_recovers(
     tmp_path: Path,
@@ -561,6 +563,41 @@ def test_global_risks_discloses_unreadable_host_poll_receipts_and_recovers(
     assert _sources(recovered)["host_poll_receipts"]["unreadable_count"] == 0
     assert recovered["complete"] is True
     assert recovered["alert"] is False
+
+
+def test_receipt_case_collection_does_not_depend_on_the_collecting_process_clock(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    # Two serial collectors model the independent imports in xdist workers,
+    # without starting a second worker pool inside a running test shard.
+    (tmp_path / "receipt_collection_clock.py").write_text(
+        "import os\n"
+        "import loopx.control_plane.projection_envelope_facts as facts\n"
+        "def pytest_configure(config):\n"
+        "    facts.now_utc_iso = lambda: os.environ['LOOPX_RECEIPT_COLLECTION_CLOCK']\n",
+        encoding="utf-8",
+    )
+    target = (
+        "tests/test_projection_envelope.py::"
+        "test_global_risks_discloses_unreadable_host_poll_receipts_and_recovers"
+    )
+    collections = []
+    for clock in ("2026-01-01T00:00:00Z", "2026-01-01T00:00:01Z"):
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", target, "--collect-only", "-q",
+             "-o", "addopts=", "-p", "receipt_collection_clock"],
+            cwd=Path(__file__).resolve().parents[1],
+            env={**os.environ, "LOOPX_RECEIPT_COLLECTION_CLOCK": clock,
+                 "PYTHONPATH": os.pathsep.join((str(tmp_path), os.environ.get("PYTHONPATH", "")))},
+            capture_output=True, text=True, timeout=60,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        nodeids = [line for line in result.stdout.splitlines() if line.startswith(target + "[")]
+        assert len(nodeids) == len(set(nodeids)) == 6
+        collections.append(nodeids)
+    assert collections[0] == collections[1], "independent worker clocks changed collection identity"
 
 
 def test_real_cli_global_membership_failure_and_recovery(tmp_path):

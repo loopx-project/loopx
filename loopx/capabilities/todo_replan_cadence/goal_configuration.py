@@ -12,7 +12,7 @@ def configuration_summary(goal: Mapping[str, Any]) -> dict[str, Any] | None:
     profile = goal.get("execution_profile")
     if not isinstance(profile, Mapping):
         return None
-    strategy = {"stride_strategy": profile["stride_strategy"]} if "stride_strategy" in profile else {}
+    strategy = {key: profile[key] for key in ("stride_strategy", "planning_horizon_goal") if key in profile}
     if "replan_after_effective_turns" in profile:
         return {
             "count_unit": "effective_turns",

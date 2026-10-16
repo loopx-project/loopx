@@ -337,13 +337,13 @@ def migrate_legacy_state(
         target_payload.pop("registry_role", None)
         target_payload["goals"] = merge_goals(existing_goals, incoming_goals)
 
+        endpoints: dict[tuple[str, str], tuple[Path, str, dict[str, Any] | None, Path | None]] = {}
+        for source_goal, target_goal in selected_pairs:
+            old_id, new_id = str(source_goal["id"]), str(target_goal["id"])
+            endpoints[(str(legacy_runtime_root.resolve()), old_id)] = (legacy_runtime_root, old_id, source_goal, resolve_goal_state(source_goal.get("repo"), source_goal.get("state_file")))
+            endpoints[(str(target_runtime_root.resolve()), new_id)] = (target_runtime_root, new_id, find_registry_goal(existing_registry, new_id), resolve_goal_state(target_goal.get("repo"), target_goal.get("state_file")))
+        ordered = [endpoints[key] for key in sorted(endpoints)]
         if execute:
-            endpoints: dict[tuple[str, str], tuple[Path, str, dict[str, Any] | None, Path | None]] = {}
-            for source_goal, target_goal in selected_pairs:
-                old_id, new_id = str(source_goal["id"]), str(target_goal["id"])
-                endpoints[(str(legacy_runtime_root.resolve()), old_id)] = (legacy_runtime_root, old_id, source_goal, resolve_goal_state(source_goal.get("repo"), source_goal.get("state_file")))
-                endpoints[(str(target_runtime_root.resolve()), new_id)] = (target_runtime_root, new_id, find_registry_goal(existing_registry, new_id), resolve_goal_state(target_goal.get("repo"), target_goal.get("state_file")))
-            ordered = [endpoints[key] for key in sorted(endpoints)]
             for root, identity, _goal, _state in ordered:
                 locks.enter_context(exclusive_cross_runtime_file_lock(legacy_coordination_todo_lock_path(runtime_root=root, goal_id=identity), operation="state_migration_todo"))
             for state_path in sorted({entry[3].resolve() for entry in ordered if entry[3] is not None}, key=str):
@@ -355,12 +355,15 @@ def migrate_legacy_state(
                     locks.enter_context(exclusive_cross_runtime_file_lock(target, operation="state_migration_leases"))
                 for root, identity, _goal, _state in ordered:
                     locks.enter_context(exclusive_cross_runtime_file_lock(task_lease_lock_path(runtime_root=root, goal_id=identity), operation="state_migration_leases"))
-            for root, identity, goal, _state in ordered:
-                require_legacy_state_replacement_allowed(runtime_root=root, goal_id=identity, goal=goal)
-            previous_root = resolve_runtime_root(existing_registry, None, registry_path=target_registry_path)
-            if previous_root != target_runtime_root:
-                for previous_goal in registry_goals(existing_registry):
-                    require_legacy_state_replacement_allowed(runtime_root=previous_root, goal_id=str(previous_goal["id"]), goal=previous_goal)
+        # Preview uses the same read-only authority admission as execution. It
+        # must not advertise a legacy copy that cannot migrate the live source.
+        # Execution still rechecks these facts under its existing writer locks.
+        for root, identity, goal, _state in ordered:
+            require_legacy_state_replacement_allowed(runtime_root=root, goal_id=identity, goal=goal)
+        previous_root = resolve_runtime_root(existing_registry, None, registry_path=target_registry_path)
+        if previous_root != target_runtime_root:
+            for previous_goal in registry_goals(existing_registry):
+                require_legacy_state_replacement_allowed(runtime_root=previous_root, goal_id=str(previous_goal["id"]), goal=previous_goal)
 
         active_state_results = (
             copy_active_state_files(

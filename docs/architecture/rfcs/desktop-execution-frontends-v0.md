@@ -1040,8 +1040,14 @@ and Back/Forward and showing unbound or unsupported hosts explicitly. The
 ordinary Goal composer/executor is absent in this view. This first provider does
 not establish other-provider coverage or complete native activity/stream parity.
 See the [provider boundary and operation](../../integrations/session-runtime-control-plane-adapter.md#experimental-owner-local-codex-app-conversations).
+A bounded live-observation companion now follows the original Desktop owner's
+versioned snapshot/patch stream while the host is not observed idle. Supported
+unfinished visible messages/tools update in the same Agent reader, with paused
+history insertion and saved-record fallback. Exact owner/binding, revisions,
+private-content exclusion and bounded data remain enforced; no executor or
+approval authority is added. See the same provider operation guide for limits.
 This is an experimental provider proposal, not full Slice B acceptance:
-token deltas, busy-turn steering/queueing, approval callbacks, native live-send
+complete native event/token parity, busy-turn steering/queueing, approval callbacks, native live-send
 qualification, Windows transport and installed adoption remain separate gaps.
 Its bounded user task is following up with a specific Agent while reviewing
 Goal work. Confirmed input leaves the composer ready without a redundant

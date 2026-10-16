@@ -656,6 +656,23 @@ This documentation establishes neither implementation, an available analysis
 provider, evaluator calibration, installed behavior nor scientific benefit.
 Any new first-screen composition still needs its concrete preview approval.
 
+The current author candidate combines the scoped paginated history reader with
+a default record-time lens and optional relationship view. Reading thirds,
+density, source labels and explicit decisions remain presentation projections;
+repeated decisions and delayed backfills must survive phase selection. Packaged
+validation now reads three authorized real research checkpoints (Portfolio,
+Graph and Ad placement), selected for actual downstream restoration, with all
+315 original Explore records preserved. Complete retained trajectories and
+source/restore manifests are pinned externally; the
+[reproduction guide](../../../examples/personal-workspace-browser/research-history.md)
+records hashes, coverage and redactions. All three sources lack explicit edges
+and parent links; date or touch-target grouping does not fill that collection
+gap. Independent coincident-point cases qualify precise pointer/keyboard access,
+including refresh and narrow screens, without altering the real captures.
+This is partial V11 evidence, not installed delivery or a completed V12 service.
+The static Lark example discloses its route/decision excerpt limits; it does not
+qualify the complete interactive history journey.
+
 ## 12. Open decisions
 
 | # | Decision | Owner | Options | Recommendation | Needed before |

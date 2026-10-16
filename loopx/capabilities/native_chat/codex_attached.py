@@ -35,6 +35,10 @@ class DesktopUnavailable(RuntimeError):
     pass
 
 
+class DesktopProtocolError(DesktopUnavailable):
+    """This host shape cannot be observed safely; retry needs a new baseline."""
+
+
 class DesktopUncertain(RuntimeError):
     """A submitted input has no acknowledgement; never retry automatically."""
 
@@ -115,6 +119,19 @@ class DesktopClient:
             out.extend(chunk)
         return bytes(out)
 
+    def read_frame(self, *, limit: int = MAX_FRAME_BYTES) -> dict[str, Any]:
+        """Read one bounded frame; callers retain the ordinary RPC bound by default."""
+        length = struct.unpack("<I", self._take(4))[0]
+        if not 0 < length <= limit:
+            raise DesktopProtocolError("Desktop frame exceeds this reader's limit")
+        try:
+            value = json.loads(self._take(length))
+        except (ValueError, UnicodeError) as exc:
+            raise DesktopProtocolError("Desktop frame is not valid JSON") from exc
+        if not isinstance(value, dict):
+            raise DesktopProtocolError("Desktop frame has an unsupported shape")
+        return value
+
     def call(
         self,
         method: str,
@@ -138,12 +155,7 @@ class DesktopClient:
             }
         )
         for _ in range(128):
-            length = struct.unpack("<I", self._take(4))[0]
-            if not 0 < length <= MAX_FRAME_BYTES:
-                raise DesktopUnavailable("Desktop frame is unsupported")
-            value = json.loads(self._take(length))
-            if not isinstance(value, dict):
-                raise DesktopUnavailable("Desktop frame has an unsupported shape")
+            value = self.read_frame()
             if value.get("type") == "client-discovery-request":
                 self._send(
                     {

@@ -111,7 +111,7 @@ def replan_evidence_rows(runs: Iterable[Mapping[str, Any]], *, goal_id: str, age
     return rows
 
 
-def _goal_facts(status: Mapping[str, Any] | None, goal_id: str, acceptance: Mapping[str, Any] | None) -> dict[str, Any]:
+def goal_context_facts(status: Mapping[str, Any] | None, goal_id: str, acceptance: Mapping[str, Any] | None) -> dict[str, Any]:
     """Read existing Goal sources; source precedence belongs to TypeScript."""
     def goal_text(value: Any) -> str | None:
         if value is not None and not isinstance(value, str):
@@ -130,6 +130,8 @@ def _goal_facts(status: Mapping[str, Any] | None, goal_id: str, acceptance: Mapp
                 facts["goal_ref"] = {"goal_id": goal_id, "goal_instance_id": goal["goal_instance_id"]}
             facts["registry_objective"] = goal_text(goal.get("objective"))
             path = goal_state_path(goal)
+            if path:
+                facts["goal_read_action"] = "cat -- " + shlex.quote(str(path.resolve()))
             if path and path.exists():
                 state = path.read_text(encoding="utf-8")
                 metadata, _ = split_state_frontmatter(state)
@@ -177,7 +179,7 @@ def project_replan_context(
             **({"explore_context": explore_context} if explore_context is not None else {}),
             "evidence_ref": evidence_ref,
             "read_prefix": shlex.join(prefix),
-            "goal_facts": _goal_facts(source_status, goal_id, goal_acceptance_contract) if evidence_ref is None else {},
+            "goal_facts": goal_context_facts(source_status, goal_id, goal_acceptance_contract) if evidence_ref is None else {},
             "from_full_index": bool(source_status and source_status.get("registry") and source_status.get("runtime_root")),
         }, method="work_item.replan_context")
     except EffectRuntimeRejected as exc:

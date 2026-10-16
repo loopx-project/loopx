@@ -24,7 +24,38 @@
   [Chinese version](./shared-goal-authority-state-provider-v0.zh-CN.md) and this
   English version are semantic mirrors. A difference between them is a defect.
 
-## Current delivery frontier (2026-10-02)
+<a id="current-delivery-frontier-2026-10-02"></a>
+
+## Current delivery frontier (post-merge, 2026-10-16)
+
+[#6396](https://github.com/loopx-project/loopx/pull/6396) landed the deliberate
+2.0 normal-writer cutoff at `a4483aaec`. Canonical File/SQLite ownership and the
+historical import/recovery obligations remain; this is not retirement of File
+as a provider. New-Goal SQLite/hard-lease selection already exists in source,
+while installed adoption and released-default qualification remain separate.
+The [source-pinned evidence update](https://github.com/loopx-project/loopx/pull/6396#issuecomment-6208115093)
+does not certify the unexecuted final combination. Do not restart ordinary
+writer deletion or infer a new provider promotion from the merge.
+
+| Existing owner | Next useful delivery | Decisive exit |
+| --- | --- | --- |
+| D1 / TS T4-C1 | Final-main installed upgrade and reversible ordinary operation through existing CLI/App/Host owners | Full records/history/claims; stale or expired-but-unreleased execution refused; original-operation recovery preserves later writes and current provider; no Markdown fallback |
+| D2 | Attribute remaining matched complete-command and storage-growth gaps, then reconcile formal volume and elapsed qualification | Preserve frozen passed/failed/missing rows, current-release controls and Section 7.2 workload, recovery, headroom and platform evidence; unrelated changes do not restart valid elapsed evidence |
+| D3 | Make the supported release/default decision using Section 7.2 evidence | Recoverable installation, creation, migration and rollback on declared profiles; existing explicit providers remain pinned; no implicit migration of old Goals |
+
+Use [R5's shared delivery sequence](loopx-overall-roadmap-v0.md#post-6396-delivery-plan)
+for dependencies. Complete-recovery M2/M3 owns capture and controlled backup
+adoption; #5206 owns lifetime/old-writer/effect-drain gaps. Neither ordinary
+provider conversion nor copied history grants those owners' authority. A bounded
+recoverable cohort uses Section 7.2's own admission; it does not wait for every
+RFC or claim formal D2. This checkpoint starts no cohort, soak or promotion.
+
+The dated checkpoints below retain source-specific implementation and validation
+history; instructions to remove still-live writers describe those baselines.
+
+## Historical 1.x implementation context
+
+Dated records through 2026-10-12 follow; they retain their original source boundaries.
 
 At main `9b0486dc1`, #4931, #5251, #5395, #5417 and #5436 are merged.
 Do not recount their storage improvements or Python retirement as pending work.

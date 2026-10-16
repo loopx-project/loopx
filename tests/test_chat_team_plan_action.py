@@ -21,7 +21,13 @@ AGENT_ID = "agent-alpha"
 _PREVIEWS = itertools.count(1)
 
 
-def _fixture(tmp_path: Path, *, agents: tuple[str, ...] = (AGENT_ID,)):
+def _fixture(
+    tmp_path: Path,
+    *,
+    agents: tuple[str, ...] = (AGENT_ID,),
+    runtime_root: Path | None = None,
+):
+    runtime_root = runtime_root if runtime_root is not None else tmp_path / "runtime"
     project = tmp_path / "project"
     state_file = f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state_path = project / state_file
@@ -45,7 +51,7 @@ def _fixture(tmp_path: Path, *, agents: tuple[str, ...] = (AGENT_ID,)):
         json.dumps(
             {
                 "schema_version": "0.1",
-                "common_runtime_root": str(tmp_path / "runtime"),
+                "common_runtime_root": str(runtime_root),
                 "updated_at": "2026-01-01T00:00:00+00:00",
                 "goals": [
                     {
@@ -65,7 +71,7 @@ def _fixture(tmp_path: Path, *, agents: tuple[str, ...] = (AGENT_ID,)):
         encoding="utf-8",
     )
     initialize_canonical_authority(
-        tmp_path / "runtime",
+        runtime_root,
         GOAL_ID,
         build_todo_runtime_shadow_projection(
             goal_id=GOAL_ID,
@@ -75,7 +81,7 @@ def _fixture(tmp_path: Path, *, agents: tuple[str, ...] = (AGENT_ID,)):
         state_path=state_path,
     )
     service = ChatActionService(
-        store=ChatActionStore(tmp_path / "runtime" / "chat" / "actions"),
+        store=ChatActionStore(runtime_root / "chat" / "actions"),
         registry_path=registry_path,
     )
     return project, registry_path, service

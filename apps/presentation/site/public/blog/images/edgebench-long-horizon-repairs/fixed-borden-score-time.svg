@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 400" width="960" height="400" role="img" aria-labelledby="title description" font-family="Geist,-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Noto Sans CJK SC',sans-serif">
-<title id="title">Borden第二对：组合候选与原生official</title><desc id="description">每臂三次提交；历史最佳68.108与54.705，最后提交41.714与50.347。已中断，无正常终态；checkpoint关闭，envelope显式开启。</desc>
-<rect width="960" height="400" fill="#fafafa"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 436" width="960" height="436" role="img" aria-labelledby="title description" font-family="Geist,-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Noto Sans CJK SC',sans-serif">
+<title id="title">Borden第二对：组合候选与原生official</title><desc id="description">历史探索性运行，不代表 LoopX 官方评测或当前版本能力。每臂三次提交；历史最佳68.108与54.705，最后提交41.714与50.347。已中断，无正常终态；checkpoint关闭，envelope显式开启。</desc>
+<rect width="960" height="436" fill="#fafafa"/>
 <text x="24" y="31" font-size="20" text-anchor="start" fill="#171717">Borden第二对 · 分数越高越好</text>
 <line x1="80" x2="900" y1="284" y2="284" stroke="#e5e5e5"/>
 <text x="68" y="289" font-size="15" text-anchor="end" fill="#4d4d4d">0</text>
@@ -26,7 +26,7 @@
 <circle cx="757.98" cy="96.70" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
 <line x1="80" x2="103" y1="365" y2="365" stroke="#2a78d6" stroke-width="2.4"/>
 <circle cx="91.50" cy="365.00" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
-<text x="114" y="369" font-size="14" text-anchor="start" fill="#4d4d4d">组合修复版 LoopX   68.108</text>
+<text x="114" y="369" font-size="14" text-anchor="start" fill="#4d4d4d">历史组合 LoopX   68.108</text>
 <path d="M115.86,264.59 L447.16,133.56 L778.53,133.56" fill="none" stroke="#eb6834" stroke-width="2.4" stroke-linejoin="round"/>
 <rect x="112.46" y="261.19" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
 <rect x="443.76" y="130.16" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
@@ -34,4 +34,6 @@
 <line x1="440" x2="463" y1="365" y2="365" stroke="#eb6834" stroke-width="2.4"/>
 <rect x="448.10" y="361.60" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
 <text x="474" y="369" font-size="14" text-anchor="start" fill="#4d4d4d">原生 official   54.705</text>
+
+<text x="20" y="424" fill="#4d4d4d" font-size="12">历史中断运行；不代表 LoopX 官方或正式评测结论及当前版本能力。</text>
 </svg>

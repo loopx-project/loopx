@@ -42,6 +42,27 @@ def _result_rows(runtime_root, goal_id, registry_path):
     ]
 
 
+def _history_rows(runtime_root, goal_id):
+    """Adapt scoped canonical records without folding away earlier attempts.
+
+    This is transport adaptation, not a graph, progress or assessment owner.
+    In particular, do not expose arbitrary observation payloads or materialize
+    parent links as scientific supporting evidence.
+    """
+    fields = (
+        "schema_version", "event_id", "goal_id", "event_kind", "result_id",
+        "recorded_at", "title", "summary", "status", "node_kind",
+        "blocked_reason", "parent_id", "node_id", "from_node", "to_node",
+        "edge_type", "agent_id", "run_id", "evidence_refs", "supersedes", "confidence",
+    )
+    return [
+        {key: event[key] for key in fields if key in event}
+        for event in load_explore_result_events_strict(
+            explore_result_log_path(runtime_root, goal_id), goal_id=goal_id,
+        )
+    ]
+
+
 class ExploreResultsRequestMixin:
     def _explore_results(self):
         query = parse_qs(urlparse(self.path).query)
@@ -50,10 +71,16 @@ class ExploreResultsRequestMixin:
             runtime_root = self._goal_result_scope(goal_id)
             if runtime_root is None:
                 return
+            # Local HTTP view selection; canonical event vocabularies are unchanged.
+            view = query.get("view", ["findings"])[0]
+            if view not in {"findings", "history"}:
+                self._send_error("Unknown Explore view.", status=400)
+                return
             page = self.server.completed_todo_pages.page(
-                scope=("explore_results", goal_id),
+                scope=("explore_history" if view == "history" else "explore_results", goal_id),
                 cursor=query.get("cursor", [""])[0],
-                load=lambda: _result_rows(runtime_root, goal_id, self.server.registry_path),
+                load=lambda: _history_rows(runtime_root, goal_id) if view == "history" else
+                    _result_rows(runtime_root, goal_id, self.server.registry_path),
             )
             self._send_json({**page, "goal_id": goal_id})
         except ValueError as exc:

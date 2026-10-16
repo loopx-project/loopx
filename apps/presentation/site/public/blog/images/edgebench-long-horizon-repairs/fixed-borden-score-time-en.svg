@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 400" width="960" height="400" role="img" aria-labelledby="title description" font-family="Geist,-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Noto Sans CJK SC',sans-serif">
-<title id="title">Second Borden pair: combined candidate and native official</title><desc id="description">Three submitted reports per arm. Best-so-far scores 68.108 and 54.705; last submissions 41.714 and 50.347. Interrupted, no native finals; checkpoint disabled and envelope explicit.</desc>
-<rect width="960" height="400" fill="#fafafa"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 436" width="960" height="436" role="img" aria-labelledby="title description" font-family="Geist,-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Noto Sans CJK SC',sans-serif">
+<title id="title">Second Borden pair: combined candidate and native official</title><desc id="description">Historical exploratory runs, not official LoopX results or current capability. Three submitted reports per arm. Best-so-far scores 68.108 and 54.705; last submissions 41.714 and 50.347. Interrupted, no native finals; checkpoint disabled and envelope explicit.</desc>
+<rect width="960" height="436" fill="#fafafa"/>
 <text x="24" y="31" font-size="20" text-anchor="start" fill="#171717">Second Borden pair · higher is better</text>
 <line x1="80" x2="900" y1="284" y2="284" stroke="#e5e5e5"/>
 <text x="68" y="289" font-size="15" text-anchor="end" fill="#4d4d4d">0</text>
@@ -34,4 +34,6 @@
 <line x1="440" x2="463" y1="365" y2="365" stroke="#eb6834" stroke-width="2.4"/>
 <rect x="448.10" y="361.60" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
 <text x="474" y="369" font-size="14" text-anchor="start" fill="#4d4d4d">Native official   54.705</text>
+
+<text x="20" y="424" fill="#4d4d4d" font-size="12">Historical, interrupted runs; not official LoopX evaluation results or current capability.</text>
 </svg>

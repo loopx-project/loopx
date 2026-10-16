@@ -130,43 +130,98 @@ def fixture(tmp_path, *, uncertain=False, goal_id="sample-goal"):
             inputs = []
             stop = threading.Event()
 
-            def host():
-                while not stop.is_set():
+            peer_clients = {}
+            followers = set()
+            peer_lock = threading.Lock()
+            peer_threads = []
+            follow_events = []
+            live_state = {"id": THREAD, "turns": []}
+            live_revision = 0
+
+            def send_live(client, change, *, owner="original-owner", version=11):
+                with peer_clients[client]:
+                    emit(
+                        client,
+                        {
+                            "type": "broadcast",
+                            "method": "thread-stream-state-changed",
+                            "version": version,
+                            "sourceClientId": owner,
+                            "params": {
+                                "conversationId": THREAD,
+                                "hostId": "local",
+                                "change": change,
+                            },
+                        },
+                    )
+
+            def publish_live(change, *, owner="original-owner", version=11):
+                nonlocal live_state, live_revision
+                if change.get("type") == "snapshot":
+                    live_state = change["conversationState"]
+                live_revision = change["revision"]
+                with peer_lock:
+                    recipients = list(followers)
+                for client in recipients:
                     try:
-                        client, _ = listener.accept()
-                    except TimeoutError:
-                        continue
-                    except OSError:
-                        return
-                    with client:
-                        client.settimeout(2)
-                        try:
-                            while True:
+                        send_live(client, change, owner=owner, version=version)
+                    except (KeyError, OSError):
+                        pass
+
+            def serve_peer(client):
+                with client:
+                    client.settimeout(0.2)
+                    try:
+                        while not stop.is_set():
+                            try:
                                 message = frame(client)
-                                methods.append(message["method"])
-                                if message["method"] == "initialize":
-                                    result = {"clientId": "loopx-client"}
-                                elif message["method"] == "thread-owner-discovery":
-                                    result = {"supportsUntrustedAppInput": True}
-                                elif message["method"] == "thread-follower-start-turn":
-                                    inputs.append(message["params"])
-                                    assert message["targetClientId"] == "original-owner"
-                                    if uncertain:
-                                        break
-                                    append_message(
-                                        rollout,
-                                        "user",
-                                        message["params"]["turnStart"]["request"][
-                                            "input"
-                                        ][0]["text"],
+                            except TimeoutError:
+                                continue
+                            methods.append(message["method"])
+                            if message["method"] == "thread-stream-following-changed":
+                                assert message["version"] == 1
+                                assert message["targetClientIds"] == ["original-owner"]
+                                assert message["params"]["conversationId"] == THREAD
+                                assert message["params"]["hostId"] == "local"
+                                following = message["params"]["following"]
+                                follow_events.append(following)
+                                with peer_lock:
+                                    if following:
+                                        followers.add(client)
+                                    else:
+                                        followers.discard(client)
+                                if following:
+                                    send_live(
+                                        client,
+                                        {
+                                            "type": "snapshot",
+                                            "revision": live_revision,
+                                            "conversationState": live_state,
+                                        },
                                     )
-                                    result = {
-                                        "result": {
-                                            "turn": {"id": "original-native-turn"}
-                                        }
-                                    }
-                                else:
-                                    raise AssertionError("Unexpected host operation")
+                                continue
+                            if message["method"] == "initialize":
+                                result = {"clientId": "loopx-client"}
+                            elif message["method"] == "thread-owner-discovery":
+                                result = {"supportsUntrustedAppInput": True}
+                            elif message["method"] == "thread-follower-start-turn":
+                                inputs.append(message["params"])
+                                assert message["targetClientId"] == "original-owner"
+                                if uncertain:
+                                    break
+                                append_message(
+                                    rollout,
+                                    "user",
+                                    message["params"]["turnStart"]["request"]["input"][
+                                        0
+                                    ]["text"],
+                                )
+                                result = {
+                                    "result": {"turn": {"id": "original-native-turn"}}
+                                }
+                            else:
+                                raise AssertionError("Unexpected host operation")
+                            with peer_clients[client]:
                                 emit(
                                     client,
                                     {
@@ -177,8 +232,28 @@ def fixture(tmp_path, *, uncertain=False, goal_id="sample-goal"):
                                         "result": result,
                                     },
                                 )
-                        except (EOFError, TimeoutError, OSError):
-                            pass
+                    except (EOFError, OSError):
+                        pass
+                    finally:
+                        with peer_lock:
+                            followers.discard(client)
+                            peer_clients.pop(client, None)
+
+            def host():
+                while not stop.is_set():
+                    try:
+                        client, _ = listener.accept()
+                    except TimeoutError:
+                        continue
+                    except OSError:
+                        return
+                    with peer_lock:
+                        peer_clients[client] = threading.Lock()
+                    thread = threading.Thread(
+                        target=serve_peer, args=(client,), daemon=True
+                    )
+                    peer_threads.append(thread)
+                    thread.start()
 
             host_thread = threading.Thread(target=host, daemon=True)
             host_thread.start()
@@ -213,6 +288,8 @@ def fixture(tmp_path, *, uncertain=False, goal_id="sample-goal"):
                 return status, value
 
             request.server = server
+            request.publish_live = publish_live
+            request.follow_events = follow_events
             try:
                 yield request, rollout, methods, inputs, registry, home
             finally:
@@ -220,5 +297,14 @@ def fixture(tmp_path, *, uncertain=False, goal_id="sample-goal"):
                 server.server_close()
                 http_thread.join()
                 stop.set()
+                with peer_lock:
+                    clients = list(peer_clients)
+                for client in clients:
+                    try:
+                        client.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
                 listener.close()
+                for thread in peer_threads:
+                    thread.join(timeout=1)
                 host_thread.join(timeout=3)

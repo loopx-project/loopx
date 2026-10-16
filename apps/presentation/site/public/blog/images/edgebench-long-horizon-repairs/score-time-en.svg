@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 400" width="960" height="400" role="img" aria-labelledby="t d" font-family="Geist,-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,&quot;PingFang SC&quot;,&quot;Noto Sans CJK SC&quot;,sans-serif">
-<title id="t">Borden source inversion (higher is better) · Grid Turing robot (lower is better)</title><desc id="d">Each point is one submission the evaluator accepted; aligned by submission time, missing points are not filled.</desc>
-<rect width="960" height="400" fill="#fafafa"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 436" width="960" height="436" role="img" aria-labelledby="t d" font-family="Geist,-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,&quot;PingFang SC&quot;,&quot;Noto Sans CJK SC&quot;,sans-serif">
+<title id="t">Borden source inversion (higher is better) · Grid Turing robot (lower is better)</title><desc id="d">Historical exploratory runs, not official LoopX results or current capability. Each point is one submission the evaluator accepted; aligned by submission time, missing points are not filled.</desc>
+<rect width="960" height="436" fill="#fafafa"/>
 <text x="20" y="32" fill="#171717" font-size="15" font-weight="600">Borden source inversion (higher is better)</text>
 <line x1="76" x2="464" y1="304.0" y2="304.0" stroke="#ebebeb" stroke-width="1"/>
 <text x="68" y="308.0" fill="#8f8f8f" font-size="12" text-anchor="end">0</text>
@@ -41,7 +41,7 @@
 <circle cx="446.2" cy="125.6" r="5" fill="#fafafa"/><circle cx="446.2" cy="125.6" r="4" fill="#2a78d6"/>
 <text x="456.2" y="129.6" fill="#171717" font-size="12" font-weight="600">85.6</text>
 <text x="270.0" y="340" fill="#8f8f8f" font-size="12" text-anchor="middle">Minutes since trial start</text>
-<text x="192.4" y="279.0" fill="#4d4d4d" font-size="12">First feedback: native 13.6 min, LoopX 48.2 min</text>
+<text x="192.4" y="279.0" fill="#4d4d4d" font-size="12">First submission: native 13.6 min, LoopX 48.2 min</text>
 <text x="480" y="32" fill="#171717" font-size="15" font-weight="600">Grid Turing robot (lower is better)</text>
 <line x1="536" x2="924" y1="291.5" y2="291.5" stroke="#ebebeb" stroke-width="1"/>
 <text x="528" y="295.5" fill="#8f8f8f" font-size="12" text-anchor="end">1.8K</text>
@@ -90,4 +90,6 @@
 <text x="50" y="384" fill="#4d4d4d" font-size="13">LoopX heartbeat</text>
 <line x1="225" x2="247" y1="380" y2="380" stroke="#eb6834" stroke-width="2"/><circle cx="236" cy="380" r="4" fill="#eb6834"/>
 <text x="255" y="384" fill="#4d4d4d" font-size="13">Native Codex</text>
-<text x="940" y="384" fill="#8f8f8f" font-size="12" text-anchor="end">Each point is one submission the evaluator accepted; aligned by submission time, missing points are not filled.</text></svg>
+<text x="940" y="384" fill="#8f8f8f" font-size="12" text-anchor="end">Each point is one submission the evaluator accepted; aligned by submission time, missing points are not filled.</text>
+<text x="20" y="424" fill="#4d4d4d" font-size="12">Historical, interrupted runs; not official LoopX evaluation results or current capability.</text>
+</svg>

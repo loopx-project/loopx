@@ -324,6 +324,7 @@ function projectQuotaPlanningPacket(request: JsonObject): JsonObject {
       schema_version: PLANNING_HORIZON_REQUEST_SCHEMA_VERSION,
       planning_inventory: inventory,
       acceptance_gaps: request.acceptance_gaps,
+      ...(request.goal_facts === undefined ? {} : {goal_facts: request.goal_facts}),
     });
     if (horizon !== null) projected.planning_horizon = horizon;
   }

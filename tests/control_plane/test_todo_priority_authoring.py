@@ -75,6 +75,15 @@ def test_priority_authoring_round_trip(tmp_path, monkeypatch, provider):
     selected = cli("quota", "should-run", "--codex-app", "--agent-id", AGENT_ID,
         "--todo-id", ordinary["todo_id"], "--turn-instance-id", "priority-selection", "--scan-path", str(project))
     assert selected["should_run"] is True
+    gate = cli("todo", "add", "--role", "user", "--task-class", "user_gate",
+        "--blocks-agent", AGENT_ID, "--text", "Choose the blocking release option")
+    assert read(gate["todo_id"])["priority"] == "P0"
+    blocker = cli("todo", "add", "--role", "agent", "--task-class", "blocker",
+        "--text", "Record the blocked dependency")
+    assert read(blocker["todo_id"])["priority"] == "P0"
+    blocked = cli("todo", "add", "--role", "agent", "--status", "blocked",
+        "--text", "Wait for the required dependency")
+    assert read(blocked["todo_id"])["priority"] == "P0"
     cli("todo", "update", "--todo-id", todo_id, "--text", "Still explicitly unranked")
     assert read(todo_id).get("priority") is None
     create = ["todo", "add", "--role", "agent", "--text", "Default priority receipt",

@@ -213,12 +213,17 @@ CONSUMER_MODULES = (
 )
 
 # A consumer that hands `re` a pattern this file cannot fold. Folding reads
-# every construction except the declared marker reader, which is fenced below.
+# every construction except the declared readers, each fenced below.
 UNREADABLE_CONSUMER_CONSTRUCTIONS: dict[str, str] = {
     "loopx.capabilities.benchmark_toolkit.integrity": (
         "_marker_present matches an escaped caller-supplied filename/token inside "
         "command text with explicit basename boundaries; it does not validate a "
         "whole-value digest. Its sole dynamic regex is fenced to that reader."
+    ),
+    "loopx.control_plane.testing.cli_output_semantics": (
+        "authoring_input_observations matches an escaped, local literal instruction "
+        "inside a complete Markdown Todo line, not a whole-value digest. A focused "
+        "fence pins its sole unreadable call, surrounding grammar and literal input."
     ),
 }
 
@@ -1227,6 +1232,35 @@ def test_every_declared_unreadable_consumer_site_is_still_there() -> None:
             item for item in _module_of(dotted)["constructions"] if not item["readable"]
         ]
         assert unreadable, f"{dotted} has no unreadable construction left to declare"
+
+
+def test_cli_output_dynamic_prose_pattern_is_fenced_to_its_literal_question() -> None:
+    dotted = "loopx.control_plane.testing.cli_output_semantics"
+    module = importlib.import_module(dotted)
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+    reader = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                  and node.name == "authoring_input_observations")
+    calls = [node for node in ast.walk(reader) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+             and (node.func.value.id, node.func.attr) == ("re", "search")]
+    assert len(calls) == 1
+    unreadable = [site for site in _module_of(dotted)["constructions"] if not site["readable"]]
+    assert [site["line"] for site in unreadable] == [calls[0].lineno]
+    # Fixed surrounding Markdown grammar makes this a full prose observation,
+    # never a whole-value digest validator. The escaped middle must stay local
+    # literal text, not owner.pattern, a parameter or a provider's regex.
+    pattern = calls[0].args[0]
+    assert isinstance(pattern, ast.BinOp) and isinstance(pattern.op, ast.Add)
+    assert isinstance(pattern.right, ast.Constant) and pattern.right.value == "$"
+    assert isinstance(pattern.left, ast.BinOp) and isinstance(pattern.left.op, ast.Add)
+    assert isinstance(pattern.left.left, ast.Constant)
+    assert pattern.left.left.value == r"^3\. Todos: [^\n]*"
+    escaped = pattern.left.right
+    assert ast.unparse(escaped) == "re.escape(first_delivery_guidance)"
+    literal = next(node.value for node in reader.body if isinstance(node, ast.Assign)
+                   and any(isinstance(target, ast.Name) and target.id == "first_delivery_guidance"
+                           for target in node.targets))
+    assert isinstance(literal, ast.Constant) and isinstance(literal.value, str) and literal.value
 
 
 # --- layer 4: behaviour, per spelling and per surface -------------------------------------

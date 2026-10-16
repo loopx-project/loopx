@@ -182,11 +182,11 @@ def test_checkpoint_request_reaches_sforge_worker_without_changing_default_profi
 
 @pytest.mark.parametrize("explicit,trigger,expected", [
     (False, None, None),
-    (False, "fresh_replan", "checkpoint_handoff"),
+    (False, "fresh_replan", None),
     (True, None, "explicit"),
     (True, "fresh_replan", "explicit"),
 ])
-def test_sforge_profile_uses_validated_checkpoint_trigger(tmp_path, monkeypatch, explicit, trigger, expected):
+def test_sforge_profile_does_not_enable_envelope_for_checkpoint(tmp_path, monkeypatch, explicit, trigger, expected):
     from types import SimpleNamespace
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
@@ -462,7 +462,8 @@ def test_planned_sforge_entry_rejects_unsupported_profiles(profile, monkeypatch)
 
 
 @pytest.mark.parametrize("entry", ["seeded-todo", "loopx-planned"])
-def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, monkeypatch, entry):
+@pytest.mark.parametrize("horizon", [None, False, True])
+def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, monkeypatch, entry, horizon):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from sforge.harness.config import SForgeConfig
@@ -472,9 +473,11 @@ def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, 
         pass
     monkeypatch.setattr(BenchmarkCodex, "install", installed)
     worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
-                          profile="heartbeat-explore", cwd="/task", task_entry=entry)
+                          profile="heartbeat-explore", cwd="/task", task_entry=entry, planning_horizon_goal=horizon)
     worker.install_stop_hook(None, None, tmp_path, None)
     assert worker.runtime.execution.task_entry == entry
+    assert worker.runtime.planning_horizon_goal is horizon
+    assert worker.runtime.execution.turn_envelope is False
     worker.prepared = True  # Bootstrap is separately covered through real CLI fixtures.
     first = worker.format_run_cmd("/task.md")
     resumed = worker.format_run_cmd("/task.md", resume=True)
@@ -482,7 +485,10 @@ def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, 
     assert ("benchmark.runtime.sforge_entry" in first) is (entry == "loopx-planned")
     assert "test -f /opt/loopx-benchmark/control/phase-deadline ||" in first
     assert first.index("export LOOPX_PHASE_DEADLINE_EPOCH") < first.index("timeout --signal")
-    assert json.loads((tmp_path / "worker-profile.json").read_text())["task_entry"] == entry
+    profile = json.loads((tmp_path / "worker-profile.json").read_text())
+    assert profile["task_entry"] == entry
+    assert profile.get("planning_horizon_goal") is horizon
+    assert ("planning_horizon_goal" in profile) is (horizon is not None)
 @pytest.mark.parametrize('profile', ['heartbeat-resume', 'heartbeat-explore'])
 @pytest.mark.parametrize('enabled', [False, True])
 @pytest.mark.parametrize('cadence', [None, 2, 6])
@@ -656,6 +662,8 @@ def test_invalid_checkpoint_declaration_rejects_before_trial_registration(tmp_pa
 
 @pytest.mark.parametrize("cadence_args,field,count", [
     ([], "replan_after_effective_turns", 6),
+    (["--planning-horizon-goal"], "replan_after_effective_turns", 6),
+    (["--no-planning-horizon-goal"], "replan_after_effective_turns", 6),
     (["--replan-after-turns", "2"], "replan_after_effective_turns", 2),
     (["--replan-after-todos", "3"], "replan_after_completed_todos", 3),
 ])
@@ -693,6 +701,9 @@ def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(
         assert kwargs["timeout"] == kwargs["config"].agent_timeout == expected
         assert kwargs["eval_interval"] == interval
         agent = kwargs["agent"]
+        horizon = (True if "--planning-horizon-goal" in cadence_args else
+                   False if "--no-planning-horizon-goal" in cadence_args else None)
+        assert agent.planning_horizon_goal is horizon
         assert "total trial budget" not in agent.workspace_instructions
         assert agent.task_objective == "fixture task"
         assert agent.task_objective in agent.feedback_prompt
@@ -713,6 +724,10 @@ def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(
     assert receipt["timeout_seconds"] == expected
     assert receipt["eval_interval"] == interval
     assert receipt[field] == count
+    horizon = (True if "--planning-horizon-goal" in cadence_args else
+               False if "--no-planning-horizon-goal" in cadence_args else None)
+    assert receipt.get("planning_horizon_goal") is horizon
+    assert ("planning_horizon_goal" in receipt) is (horizon is not None)
     other = ("replan_after_completed_todos" if field == "replan_after_effective_turns"
              else "replan_after_effective_turns")
     assert other not in receipt

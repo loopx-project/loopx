@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 from runtime_retirement_diagnostics import (
-    failure_trace, file_state, observe_copied_runtime, trace_events,
+    failure_trace, file_state, observe_copied_runtime, reap_copied_runtime, trace_events,
 )
 
 from loopx.control_plane import effect_runtime
@@ -1400,7 +1400,8 @@ def test_runtime_drains_admitted_write_before_exit(
     cache_fault: str | None,
 ) -> None:
     """Socket lifetime must not define the lifetime of an accepted effect."""
-    root, captures = observe_copied_runtime(tmp_path, monkeypatch, request)
+    processes = []
+    root, captures = observe_copied_runtime(tmp_path, monkeypatch, request, processes=processes)
     if cache_fault:
         # Exercise cache failure even under an outer coverage/disabled-cache run,
         # using only this fixture's private cache rather than an inherited one.
@@ -1512,14 +1513,7 @@ def test_runtime_drains_admitted_write_before_exit(
         raise
     finally:
         lock_path.unlink(missing_ok=True)
-        cleanup_deadline = time.monotonic() + 3
-        while time.monotonic() < cleanup_deadline:
-            effect_runtime._reap_exited_runtime_child(info)
-            if not effect_runtime._pid_is_alive(original["pid"]):
-                break
-            time.sleep(0.025)
-        if effect_runtime._pid_is_alive(original["pid"]):
-            os.kill(int(original["pid"]), signal.SIGTERM)
+        reap_copied_runtime(processes, int(original["pid"]))
 
 
 @pytest.mark.parametrize("diagnostics_available", [True, False])

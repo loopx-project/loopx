@@ -127,7 +127,7 @@ export const replanCadenceScenario = {
         || converted.effective_configuration.configuration.count_unit !== "effective_turns") {
         throw new Error("JSON-to-form save substituted the product-default interval");
       }
-      await page.getByText("复盘周期沿用设备默认；步幅策略由本 Goal 设置。", { exact: true }).waitFor();
+      await page.getByText("复盘周期沿用设备默认；规划选项由本 Goal 设置。", { exact: true }).waitFor();
       await page.screenshot({ path: resolve(outputDir, "replan-cadence-json-form.png"), animations: "disabled" });
       if (JSON.stringify(converted.current) !== JSON.stringify({ stride_strategy: "evidence_conditioned_v1" })) {
         throw new Error("JSON-to-form strategy-only save pinned a cadence");
@@ -148,6 +148,33 @@ export const replanCadenceScenario = {
         await page.getByRole("combobox", { name: "目标 Goal", exact: true }).selectOption("multi-agent-projection");
         await page.getByRole("navigation", { name: "Goal 能力目录" }).getByRole("button", { name: /Goal 复盘与步幅/ }).click();
       }
+      // The same real configuration owner supports the independent horizon
+      // switch without pinning cadence or changing stride. Unchecked remains off.
+      const horizonGoal = page.getByLabel(/^在规划视野中显示 Goal/);
+      assert.equal(await horizonGoal.isChecked(), false);
+      await horizonGoal.check();
+      await page.getByRole("button", { name: "预览变更", exact: true }).click();
+      await applyGoalPreview();
+      await reopenGoalCadence();
+      assert.equal(await horizonGoal.isChecked(), true);
+      let horizonReadback = await readGoalCadence();
+      assert.equal(horizonReadback.current.planning_horizon_goal, true);
+      assert.equal(horizonReadback.current.stride_strategy, "evidence_conditioned_v1");
+      assert.equal(horizonReadback.current.count, undefined);
+      await page.screenshot({ path: resolve(outputDir, "planning-horizon-goal-enabled.png"), animations: "disabled" });
+      await horizonGoal.uncheck();
+      await page.getByRole("button", { name: "预览变更", exact: true }).click();
+      await applyGoalPreview();
+      await reopenGoalCadence();
+      assert.equal(await horizonGoal.isChecked(), false);
+      horizonReadback = await readGoalCadence();
+      assert.equal(horizonReadback.current.planning_horizon_goal, false);
+      // Restore the sparse pre-existing scenario before its cadence transitions.
+      await page.getByRole("button", { name: "编辑 JSON", exact: true }).click();
+      await page.locator("#goal-configuration-json").fill(JSON.stringify({stride_strategy: "evidence_conditioned_v1"}));
+      await page.getByRole("button", { name: "返回表单", exact: true }).click();
+      await page.getByRole("button", { name: "预览变更", exact: true }).click();
+      await applyGoalPreview();
       await changeMachineCount(4);
       if ((await readGoalCadence()).effective_configuration.configuration.count !== 4) {
         throw new Error("Strategy-only Goal did not follow a later machine policy");
@@ -187,6 +214,7 @@ export const replanCadenceScenario = {
       await delayedReadback.started;
       assert.equal(await count.isDisabled(), true, "A committed write must keep the editor closed until its readback settles");
       assert.equal(await strategy.isDisabled(), true);
+      assert.equal(await horizonGoal.isDisabled(), true);
       assert.equal(await page.getByRole("button", { name: "编辑 JSON", exact: true }).isDisabled(), true);
       assert.equal(await page.getByRole("button", { name: "预览变更", exact: true }).isDisabled(), true);
       const goalCatalog = page.getByRole("navigation", { name: "Goal 能力目录" });
@@ -222,6 +250,8 @@ export const replanCadenceScenario = {
       await page.setViewportSize({ width: 390, height: 844 });
       await unit.focus();
       await page.keyboard.press("Tab");
+      await page.keyboard.press("Tab");
+      assert.equal(await horizonGoal.evaluate((element) => element === document.activeElement), true, "Horizon switch is keyboard reachable");
       await page.keyboard.press("Tab");
       if (!(await strategy.evaluate((element) => element === document.activeElement))) throw new Error("Strategy is not keyboard reachable");
       await page.screenshot({ path: resolve(outputDir, "replan-cadence-goal-mobile.png"), animations: "disabled" });

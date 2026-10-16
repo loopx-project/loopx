@@ -145,7 +145,63 @@ export async function validateBilingualBlog(blogDir) {
     }
   }
 
+  await validateEventClockLabels(blogDir);
   return { articleSlugs: englishSlugs };
+}
+
+// A primary chart annotation must name the same event clock the article
+// declares. These long-horizon scores are aligned to each submission, so a
+// figure must not assert a feedback-return latency the prose never claims, and
+// the measured numbers stay in both the chart and the article so a label edit
+// cannot silently drop the measurement.
+const EVENT_CLOCK_LABELS = [
+  {
+    slug: "edgebench-long-horizon-repairs",
+    directory: "",
+    figure: "images/edgebench-long-horizon-repairs/score-time-en.svg",
+    annotation: "First submission: native 13.6 min, LoopX 48.2 min",
+    rejected: "First feedback",
+  },
+  {
+    slug: "edgebench-long-horizon-repairs",
+    directory: "zh",
+    figure: "images/edgebench-long-horizon-repairs/score-time.svg",
+    annotation: "首次提交：原生 13.6 分钟，LoopX 48.2 分钟",
+    rejected: "首次反馈",
+  },
+];
+const EVENT_CLOCK_VALUES = ["13.6", "48.2"];
+
+async function validateEventClockLabels(blogDir) {
+  for (const contract of EVENT_CLOCK_LABELS) {
+    const figure = await readFile(resolve(blogDir, contract.figure), "utf8");
+    assertIncludes(
+      figure,
+      contract.annotation,
+      `Primary chart must name the declared event clock: ${contract.figure}`,
+    );
+    if (figure.includes(contract.rejected)) {
+      throw new Error(
+        `Primary chart must not assert a feedback clock: ${contract.figure}`,
+      );
+    }
+    const article = await readFile(
+      resolve(blogDir, contract.directory, contract.slug, "index.html"),
+      "utf8",
+    );
+    for (const value of EVENT_CLOCK_VALUES) {
+      assertIncludes(
+        figure,
+        value,
+        `Primary chart must keep its measured value: ${contract.figure} ${value}`,
+      );
+      assertIncludes(
+        article,
+        value,
+        `Article must state the same measured value as its chart: ${contract.slug} ${value}`,
+      );
+    }
+  }
 }
 
 // Minimal element model for the sorting module. It keeps only the two browser
@@ -220,6 +276,27 @@ async function assertPairedLinkRejected(blogDir, slug, anchor, message) {
   }
 }
 
+async function assertClockLabelRejected(blogDir, { figure, declared, regressed }, message) {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "loopx-blog-event-clock-"));
+  const fixtureBlog = join(temporaryRoot, "blog");
+  try {
+    await cp(blogDir, fixtureBlog, { recursive: true });
+    const figurePath = resolve(fixtureBlog, figure);
+    const source = await readFile(figurePath, "utf8");
+    if (!source.includes(declared)) {
+      throw new Error(`Could not locate the declared event clock in ${figure}`);
+    }
+    await writeFile(figurePath, source.replace(declared, regressed));
+    await rejects(
+      () => validateBilingualBlog(fixtureBlog),
+      /Primary chart (must name the declared event clock|must not assert a feedback clock)/,
+      message,
+    );
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+}
+
 const modulePath = fileURLToPath(import.meta.url);
 if (process.argv[1] && resolve(process.argv[1]) === modulePath) {
   const articleUrl = "https://loopx-project.github.io/loopx/blog/example/";
@@ -287,6 +364,24 @@ if (process.argv[1] && resolve(process.argv[1]) === modulePath) {
     pairedSlug,
     `<a href="../zh/another/" data-href="../zh/${pairedSlug}/" lang="zh-CN">中文</a>`,
     "A correct data-href must not hide an incorrect navigable href",
+  );
+  await assertClockLabelRejected(
+    blogDir,
+    {
+      figure: "images/edgebench-long-horizon-repairs/score-time-en.svg",
+      declared: "First submission: native 13.6 min, LoopX 48.2 min",
+      regressed: "First feedback: native 13.6 min, LoopX 48.2 min",
+    },
+    "An English chart that restores the feedback clock must fail the paired label check",
+  );
+  await assertClockLabelRejected(
+    blogDir,
+    {
+      figure: "images/edgebench-long-horizon-repairs/score-time.svg",
+      declared: "首次提交：原生 13.6 分钟，LoopX 48.2 分钟",
+      regressed: "首次反馈：原生 13.6 分钟，LoopX 48.2 分钟",
+    },
+    "中文主图恢复反馈口径也必须被配对标签检查拦下",
   );
   console.log(`blog-bilingual-index-smoke: ok (${articleSlugs.length} paired articles)`);
 }

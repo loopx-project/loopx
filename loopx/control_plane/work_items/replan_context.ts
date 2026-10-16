@@ -91,7 +91,7 @@ function evidenceFactsKey(row: JsonObject): string {
   return digest(facts);
 }
 
-function coreGoal(value: unknown): JsonObject {
+export function projectCoreGoal(value: unknown): JsonObject {
   const facts = value == null ? {} : requireJsonObject(value, "goal_facts");
   const active = facts.active_state_objective;
   const registered = facts.registry_objective;
@@ -102,7 +102,10 @@ function coreGoal(value: unknown): JsonObject {
   const acceptance = facts.acceptance_contract == null ? null
     : requireJsonObject(facts.acceptance_contract, "goal_acceptance_contract");
   return {objective, objective_source: active ? "active_state" : registered ? "registry" : null,
-    objective_missing: objective === null, acceptance_contract: acceptance};
+    objective_missing: objective === null, acceptance_contract: acceptance,
+    ...(facts.goal_read_action == null ? {} : {
+      read_action: requireNonEmptyString(facts.goal_read_action, "goal_facts.goal_read_action"),
+    })};
 }
 
 /** Qualify recorded bindings using the settlement owner, without settling work.
@@ -388,7 +391,7 @@ export function projectReplanContext(value: unknown): JsonObject {
   const selectedCoverage = new Set(chosen.flatMap(({row}) => row.progress_observation
     ? [String((row.progress_observation as JsonObject).fingerprint)] : []));
   const ledger = [...coverage].filter(([key]) => selectedCoverage.has(key)).map(([, value]) => value);
-  const core = coreGoal(request.goal_facts);
+  const core = projectCoreGoal(request.goal_facts);
   const strideStrategy = normalizeStrideStrategy(request.stride_strategy);
   const exploreBasis = strideStrategy !== "off" ? projectStrideExploreBasis(request.explore_context, goal, agent) : null;
   const followthrough = agent && strideStrategy !== "off"

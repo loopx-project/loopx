@@ -1,10 +1,11 @@
-"""Failure-only observations for copied runtime drain and retirement fixtures."""
+"""Owned child cleanup and failure observations for copied runtime fixtures."""
 from __future__ import annotations
 
 import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 
 from loopx.control_plane import effect_runtime
 
@@ -88,7 +89,9 @@ def instrument_copied_runtime(root: Path) -> None:
     errors.write_text(text)
 
 
-def observe_copied_runtime(tmp_path: Path, monkeypatch, request) -> tuple[Path, list[int]]:
+def observe_copied_runtime(
+    tmp_path: Path, monkeypatch, request, *, processes: list[subprocess.Popen] | None = None,
+) -> tuple[Path, list[int]]:
     """Reuse the isolated source copy and retain stderr until failure readback."""
     source_root = effect_runtime._control_plane_root()
     root = tmp_path / "control_plane"
@@ -111,11 +114,29 @@ def observe_copied_runtime(tmp_path: Path, monkeypatch, request) -> tuple[Path, 
 
     def capture_stderr(args, *positional, **options):
         retained_stderr(args, options, root, captures)
-        return popen(args, *positional, **options)
+        process = popen(args, *positional, **options)
+        if processes is not None and str(root / "effect_runtime_server.ts") in args:
+            processes.append(process)
+        return process
 
     monkeypatch.setattr(effect_runtime.subprocess, "Popen", capture_stderr)
     monkeypatch.setattr(effect_runtime, "_control_plane_root", lambda: root)
     return root, captures
+
+
+def reap_copied_runtime(processes: list[subprocess.Popen], pid: int) -> None:
+    """Dispose only the captured child; PID liveness cannot prove ownership."""
+    matches = [process for process in processes if process.pid == pid]
+    assert len(matches) == 1, "fixture must own exactly one matching runtime child"
+    process = matches[0]
+    try:
+        process.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        # Popen retains the Windows process handle and handles exit racing
+        # termination. Reaping also prevents a later PID from being mistaken
+        # for this child. Real termination/wait errors still fail the fixture.
+        process.terminate()
+        process.wait(timeout=3)
 
 
 def trace_events(raw: bytes) -> list[dict]:

@@ -54,6 +54,12 @@
 .attached-conversation-messages summary > time {margin-left: 8px;}
 .attached-tool-metadata {font-size: var(--text-caption); margin-top: 8px;}
 .attached-conversation-messages .attached-tool-source {font-size: var(--text-caption);}
+.attached-conversation-messages strong:has(> .attached-activity-mark) {display: inline-flex; align-items: center; gap: 8px;}
+.attached-activity-mark {position: relative; display: inline-block; flex: 0 0 12px; width: 12px; height: 12px; border: 1px solid var(--pw-muted); border-radius: 50%; color: var(--pw-blue-ink);}
+.attached-activity-mark[data-active] {border-color: color-mix(in srgb, currentColor 28%, transparent);}
+.attached-activity-mark[data-active]::before {content: ""; position: absolute; inset: 3px; border-radius: 50%; background: currentColor;}
+.attached-activity-mark[data-active]::after {content: ""; position: absolute; inset: -1px; border: 1px solid transparent; border-top-color: currentColor; border-radius: 50%; animation: pw-spin 1s linear infinite;}
+@media (prefers-reduced-motion: reduce) {.attached-activity-mark[data-active]::after {animation: none;}}
 @media (max-width: 640px) {
   .goal-agent-work-page form {flex-wrap: wrap;}
   .goal-agent-work-page form label {flex-basis: 100%;}

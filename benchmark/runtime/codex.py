@@ -67,19 +67,10 @@ class Execution:
         return self.mode in {"native-goal", "loopx-goal"}
 
 
-def turn_envelope_receipt(*, explicit: bool, mode: str,
-                          checkpoint_request: dict | None = None) -> dict:
-    """Project known configuration; a guest path alone proves no activation.
-
-    Callers pass the existing parser's validated declaration. Actual wake
-    receipts still own whether a handoff socket was successfully established.
-    These source labels remain local derived receipt values, not admission.
-    """
+def turn_envelope_receipt(*, explicit: bool) -> dict:
+    """Record only the explicit display opt-in; checkpoint capture is independent."""
     if explicit:
         return {"turn_envelope": True, "turn_envelope_source": "explicit"}
-    if mode == "heartbeat" and checkpoint_request is not None and (
-            checkpoint_request.get("trigger") == "fresh_replan"):
-        return {"turn_envelope": True, "turn_envelope_source": "checkpoint_handoff"}
     return {}
 
 

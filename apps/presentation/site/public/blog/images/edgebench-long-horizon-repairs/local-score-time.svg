@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 990" width="960" height="990" role="img" aria-labelledby="title description" font-family="Geist,-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Noto Sans CJK SC',sans-serif">
-<title id="title">本地90分钟历史最佳分曲线</title><desc id="description">13条有评分运行中的71次提交。点为提交时刻对应的历史最佳分，各题独立刻度；无拟合或置信带，两条运行缺正常终态。</desc>
-<rect width="960" height="990" fill="#fafafa"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 1026" width="960" height="1026" role="img" aria-labelledby="title description" font-family="Geist,-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Noto Sans CJK SC',sans-serif">
+<title id="title">本地90分钟历史最佳分曲线</title><desc id="description">历史探索性运行，不代表 LoopX 官方评测或当前版本能力。13条有评分运行中的71次提交。点为提交时刻对应的历史最佳分，各题独立刻度；无拟合或置信带，两条运行缺正常终态。</desc>
+<rect width="960" height="1026" fill="#fafafa"/>
 <text x="24" y="30" font-size="19" text-anchor="start" fill="#171717">本地90分钟预算 · 截至该次提交的最佳分 · 越高越好</text>
 <text x="24" y="65" font-size="17" text-anchor="start" fill="#171717">(a) Borden 源反演</text>
 <line x1="60" x2="425" y1="228.00" y2="228.00" stroke="#e5e5e5"/>
@@ -28,7 +28,7 @@
 <circle cx="379.29" cy="102.65" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
 <line x1="60" x2="83" y1="281" y2="281" stroke="#2a78d6" stroke-width="2.4"/>
 <circle cx="71.50" cy="281.00" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
-<text x="94" y="285" font-size="14" text-anchor="start" fill="#4d4d4d">组合修复版 LoopX   109.000 ‡</text>
+<text x="94" y="285" font-size="14" text-anchor="start" fill="#4d4d4d">历史组合 LoopX   109.000 ‡</text>
 <path d="M75.58,219.94 L136.58,167.31 L198.18,167.31 L260.01,152.79 L321.88,147.98 L400.59,147.98" fill="none" stroke="#eb6834" stroke-width="2.4" stroke-linejoin="round"/>
 <rect x="72.18" y="216.54" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
 <rect x="133.18" y="163.91" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
@@ -63,7 +63,7 @@
 <circle cx="867.30" cy="130.56" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
 <line x1="540" x2="563" y1="281" y2="281" stroke="#2a78d6" stroke-width="2.4"/>
 <circle cx="551.50" cy="281.00" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
-<text x="574" y="285" font-size="14" text-anchor="start" fill="#4d4d4d">组合修复版 LoopX   24.714</text>
+<text x="574" y="285" font-size="14" text-anchor="start" fill="#4d4d4d">历史组合 LoopX   24.714</text>
 <path d="M551.33,193.19 L614.71,143.37 L676.00,143.37 L738.29,143.37 L808.00,115.15 L872.75,115.15" fill="none" stroke="#eb6834" stroke-width="2.4" stroke-linejoin="round"/>
 <rect x="547.93" y="189.79" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
 <rect x="611.31" y="139.97" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
@@ -104,7 +104,7 @@
 <circle cx="379.90" cy="433.69" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
 <line x1="60" x2="83" y1="601.00" y2="601.00" stroke="#2a78d6" stroke-width="2.4"/>
 <circle cx="71.50" cy="601.00" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
-<text x="94" y="605.00" font-size="14" text-anchor="start" fill="#4d4d4d">组合修复版 LoopX   26.506</text>
+<text x="94" y="605.00" font-size="14" text-anchor="start" fill="#4d4d4d">历史组合 LoopX   26.506</text>
 <path d="M92.51,465.70 L161.46,448.98 L231.82,437.40 L293.62,433.30 L355.21,433.30" fill="none" stroke="#eb6834" stroke-width="2.4" stroke-linejoin="round"/>
 <rect x="89.11" y="462.30" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
 <rect x="158.06" y="445.58" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
@@ -146,7 +146,7 @@
 <circle cx="863.69" cy="465.73" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
 <line x1="540" x2="563" y1="601.00" y2="601.00" stroke="#2a78d6" stroke-width="2.4"/>
 <circle cx="551.50" cy="601.00" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
-<text x="574" y="605.00" font-size="14" text-anchor="start" fill="#4d4d4d">组合修复版 LoopX   22.655</text>
+<text x="574" y="605.00" font-size="14" text-anchor="start" fill="#4d4d4d">历史组合 LoopX   22.655</text>
 <path d="M579.50,479.27 L642.52,446.73 L710.79,444.30 L772.84,444.30 L835.34,444.30 L903.84,444.30" fill="none" stroke="#eb6834" stroke-width="2.4" stroke-linejoin="round"/>
 <rect x="576.10" y="475.87" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
 <rect x="639.12" y="443.33" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
@@ -191,7 +191,7 @@
 <circle cx="378.96" cy="834.61" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
 <line x1="60" x2="83" y1="921.00" y2="921.00" stroke="#2a78d6" stroke-width="2.4"/>
 <circle cx="71.50" cy="921.00" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
-<text x="94" y="925.00" font-size="14" text-anchor="start" fill="#4d4d4d">组合修复版 LoopX   7.743</text>
+<text x="94" y="925.00" font-size="14" text-anchor="start" fill="#4d4d4d">历史组合 LoopX   7.743</text>
 <path d="M78.03,780.48 L142.70,780.48 L211.06,780.48 L280.90,758.36 L349.12,753.58 L422.81,753.58" fill="none" stroke="#eb6834" stroke-width="2.4" stroke-linejoin="round"/>
 <rect x="74.63" y="777.08" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
 <rect x="139.30" y="777.08" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
@@ -212,4 +212,6 @@
 <text x="514" y="879.00" font-size="15" text-anchor="start" fill="#4d4d4d">‡ 109分包含聚合反馈反推。</text>
 <text x="514" y="901.00" font-size="15" text-anchor="start" fill="#4d4d4d">使用早期组合版本；</text>
 <text x="514" y="923.00" font-size="15" text-anchor="start" fill="#4d4d4d">不能作为当前修复头的实测。</text>
+
+<text x="20" y="1014" fill="#4d4d4d" font-size="12">历史探索性运行；不代表 LoopX 官方评测或当前能力。feedback-first 已撤回（#6612）。</text>
 </svg>

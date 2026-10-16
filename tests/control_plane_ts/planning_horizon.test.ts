@@ -58,8 +58,30 @@ function request(overrides: Record<string, unknown> = {}) {
       source_context_todo_count: legacy.source_context_todo_count,
     }),
     acceptance_gaps: legacy.acceptance_gaps,
+    ...(overrides.goal_facts === undefined ? {} : {goal_facts: overrides.goal_facts}),
   };
 }
+
+test("one local task still carries the original Goal and separately scoped acceptance", () => {
+  const objective = "Deliver the whole accepted outcome. ".repeat(20) + "Preserve the final constraint.";
+  const result = projectQuotaPlanningHorizon(request({goal_facts: {
+    active_state_objective: objective,
+    registry_objective: "Older registered objective",
+    goal_read_action: "cat -- 'source with spaces/ACTIVE_GOAL_STATE.md'",
+    acceptance_contract: {objective: "Validate this slice only", scope: {kind: "selected_work"}},
+  }}));
+  assert.deepEqual(result?.core_goal, {
+    objective, objective_source: "active_state", objective_missing: false,
+    read_action: "cat -- 'source with spaces/ACTIVE_GOAL_STATE.md'",
+    acceptance_contract: {objective: "Validate this slice only", scope: {kind: "selected_work"}},
+  });
+  assert.equal(result?.selected_todo_id, "todo_regression_gate");
+  assert.equal((result?.selection_contract as Record<string, unknown>).horizon_changes_selection, false);
+  assert.throws(() => projectQuotaPlanningHorizon(request({goal_facts: {active_state_objective: 42}})));
+  assert.deepEqual(projectQuotaPlanningHorizon(request({goal_facts: {}}))?.core_goal, {
+    objective: null, objective_source: null, objective_missing: true, acceptance_contract: null,
+  });
+});
 
 test("planning horizon preserves the typed strategic chain around local selected work", () => {
   const facts = todo("todo_facts_source", 1, "P0", {

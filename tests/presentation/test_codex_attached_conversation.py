@@ -667,3 +667,472 @@ def test_native_tool_text_blocks_are_readable_and_content_pages_are_lossless(tmp
         },
     )
     assert history.read_messages(path)["messages"][-1]["redacted"] is True
+
+
+def live_snapshot(*, revision=1, text="Checking the original work"):
+    return {
+        "type": "snapshot",
+        "revision": revision,
+        "conversationState": {
+            "id": THREAD,
+            "params": {"instructions": "HIDDEN CONFIGURATION"},
+            "turnHistory": {
+                "kind": "canonical",
+                "history": {
+                    "entitiesByKey": {
+                        "older": {
+                            "turnId": "old",
+                            "status": "completed",
+                            "items": [
+                                {
+                                    "type": "commandExecution",
+                                    "id": "old-tool",
+                                    "aggregatedOutput": "OLD PRIVATE OUTPUT" * 10000,
+                                }
+                            ],
+                            "completedItemIds": [],
+                        },
+                        "current": {
+                            "turnId": "live-turn",
+                            "status": "inProgress",
+                            "items": [
+                                {
+                                    "type": "userMessage",
+                                    "id": "user",
+                                    "content": "NOT A DELIVERY RECEIPT",
+                                },
+                                {
+                                    "type": "reasoning",
+                                    "id": "hidden",
+                                    "content": "HIDDEN REASONING",
+                                },
+                                {
+                                    "type": "agentMessage",
+                                    "id": "answer",
+                                    "phase": "commentary",
+                                    "text": text,
+                                },
+                                {
+                                    "type": "commandExecution",
+                                    "id": "command",
+                                    "status": "inProgress",
+                                    "command": "check-artifact",
+                                    "aggregatedOutput": "first line",
+                                    "exitCode": None,
+                                },
+                            ],
+                            "completedItemIds": [],
+                        },
+                    }
+                },
+            },
+        },
+    }
+
+
+def test_live_projection_preserves_visible_work_and_compacts_private_history():
+    from loopx.capabilities.native_chat.codex_stream import LiveView
+
+    view = LiveView(THREAD)
+    packet = view.accept(live_snapshot())
+    assert [row["role"] for row in packet["records"]] == ["assistant", "tool"]
+    assert packet["records"][0]["text"] == "Checking the original work"
+    assert json.loads(packet["records"][1]["text"])["aggregatedOutput"] == "first line"
+    retained = json.dumps(view.turns)
+    assert len(retained) < 3000
+    for forbidden in [
+        "HIDDEN CONFIGURATION",
+        "HIDDEN REASONING",
+        "OLD PRIVATE OUTPUT",
+        "NOT A DELIVERY RECEIPT",
+    ]:
+        assert forbidden not in retained
+        assert forbidden not in json.dumps(packet)
+
+
+def test_live_patches_keep_identity_and_retire_completed_work():
+    from loopx.capabilities.native_chat.codex_stream import LiveView
+
+    view = LiveView(THREAD)
+    original = view.accept(live_snapshot())["records"][0]["id"]
+    packet = view.accept(
+        {
+            "type": "patches",
+            "baseRevision": 1,
+            "revision": 2,
+            "patches": [
+                {
+                    "op": "replace",
+                    "path": [
+                        "turnHistory",
+                        "history",
+                        "entitiesByKey",
+                        "current",
+                        "items",
+                        2,
+                        "text",
+                    ],
+                    "value": "Checking the original work — updated live",
+                },
+            ],
+        }
+    )
+    assert packet["records"][0]["id"] == original
+    assert packet["records"][0]["text"].endswith("updated live")
+    packet = view.accept(
+        {
+            "type": "patches",
+            "baseRevision": 2,
+            "revision": 3,
+            "patches": [
+                {
+                    "op": "add",
+                    "path": [
+                        "turnHistory",
+                        "history",
+                        "entitiesByKey",
+                        "current",
+                        "completedItemIds",
+                        0,
+                    ],
+                    "value": "answer",
+                },
+                {
+                    "op": "replace",
+                    "path": [
+                        "turnHistory",
+                        "history",
+                        "entitiesByKey",
+                        "current",
+                        "items",
+                        3,
+                        "status",
+                    ],
+                    "value": "completed",
+                },
+            ],
+        }
+    )
+    assert packet["records"] == []
+
+
+def test_live_native_completion_map_keeps_false_entries_and_accepts_patches():
+    from loopx.capabilities.native_chat.codex_stream import LiveView
+
+    snapshot = live_snapshot()
+    snapshot["conversationState"]["turnHistory"]["history"]["entitiesByKey"]["current"][
+        "completedItemIds"
+    ] = {"answer": False, "command": False}
+    view = LiveView(THREAD)
+    assert len(view.accept(snapshot)["records"]) == 2
+    packet = view.accept(
+        {
+            "type": "patches",
+            "baseRevision": 1,
+            "revision": 2,
+            "patches": [
+                {
+                    "op": "replace",
+                    "path": [
+                        "turnHistory",
+                        "history",
+                        "entitiesByKey",
+                        "current",
+                        "completedItemIds",
+                        "answer",
+                    ],
+                    "value": True,
+                }
+            ],
+        }
+    )
+    assert [row["role"] for row in packet["records"]] == ["tool"]
+
+
+@pytest.mark.parametrize("history", [None, [], "invalid"])
+def test_live_malformed_canonical_history_fails_with_a_provider_error(history):
+    from loopx.capabilities.native_chat.codex_stream import LiveView
+
+    snapshot = live_snapshot()
+    snapshot["conversationState"]["turnHistory"]["history"] = history
+    with pytest.raises(provider.DesktopUnavailable):
+        LiveView(THREAD).accept(snapshot)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"type": "patches", "baseRevision": 0, "revision": 2, "patches": []},
+        {"type": "patches", "baseRevision": 1, "revision": 1, "patches": []},
+        {"type": "patches", "baseRevision": 1, "revision": True, "patches": []},
+        {"type": "patches", "baseRevision": True, "revision": 2, "patches": []},
+        {
+            "type": "patches",
+            "baseRevision": 1,
+            "revision": 2,
+            "patches": [
+                {
+                    "op": "replace",
+                    "path": [
+                        "turnHistory",
+                        "history",
+                        "entitiesByKey",
+                        "current",
+                        "items",
+                        -1,
+                        "text",
+                    ],
+                    "value": "wrong item",
+                }
+            ],
+        },
+        {
+            "type": "patches",
+            "baseRevision": 1,
+            "revision": 2,
+            "patches": [{"op": "replace", "path": ["turnHistory"], "value": {}}],
+        },
+        {
+            "type": "patches",
+            "baseRevision": 1,
+            "revision": 2,
+            "patches": [
+                {"op": "replace", "path": ["turnHistory", "history"], "value": {}}
+            ],
+        },
+    ],
+)
+def test_live_discontinuities_fail_closed(change):
+    from loopx.capabilities.native_chat.codex_stream import LiveView
+
+    view = LiveView(THREAD)
+    view.accept(live_snapshot())
+    with pytest.raises(provider.DesktopUnavailable):
+        view.accept(change)
+
+
+def test_live_redaction_and_overflow_never_become_partial_content():
+    from loopx.capabilities.native_chat.codex_stream import FIELD_BYTES, LiveView
+
+    view = LiveView(THREAD)
+    secret = "api_key=sk-" + "a" * 40
+    packet = view.accept(live_snapshot(text=secret))
+    assert packet["records"][0]["redacted"] is True
+    assert secret not in json.dumps(packet)
+    packet = view.accept(live_snapshot(revision=2, text="x" * FIELD_BYTES))
+    assert packet["records"][0]["unavailable"] == "live_field_limit"
+    assert packet["records"][0]["text"] == ""
+    assert packet["records"][0]["truncated"] is False
+    with pytest.raises(provider.DesktopUnavailable):
+        wrong = live_snapshot(revision=3)
+        wrong["conversationState"]["id"] = "another-thread"
+        view.accept(wrong)
+
+
+def test_live_mcp_metadata_and_unknown_phase_stay_private():
+    from loopx.capabilities.native_chat.codex_stream import LiveView
+
+    snapshot = live_snapshot()
+    items = snapshot["conversationState"]["turnHistory"]["history"]["entitiesByKey"][
+        "current"
+    ]["items"]
+    items[2]["phase"] = "analysis"
+    items.append(
+        {
+            "type": "mcpToolCall",
+            "id": "mcp",
+            "status": "inProgress",
+            "tool": "check",
+            "server": "local",
+            "arguments": {"artifact": "sample"},
+            "appContext": "HIDDEN APP CONTEXT",
+            "result": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "visible output",
+                        "annotations": "HIDDEN METADATA",
+                    }
+                ],
+                "_meta": "HIDDEN METADATA",
+            },
+        }
+    )
+    packet = LiveView(THREAD).accept(snapshot)
+    assert [r["role"] for r in packet["records"]] == ["tool", "tool"]
+    assert "visible output" in json.dumps(packet)
+    assert "HIDDEN" not in json.dumps(packet)
+    assert "Checking the original work" not in json.dumps(packet)
+
+
+@pytest.mark.parametrize("fault", ["revision", "owner", "version"])
+def test_live_http_uses_original_owner_and_unsubscribes_without_input(tmp_path, fault):
+    import http.client
+    import time
+
+    with fixture(tmp_path) as (request, rollout, methods, inputs, registry, _home):
+        _, query = target(request)
+        before = (registry.read_bytes(), rollout.read_bytes())
+        client = http.client.HTTPConnection(*request.server.server_address, timeout=3)
+        client.request("GET", "/api/chat/codex-attached/live" + query)
+        response = client.getresponse()
+        assert response.status == 200
+        assert response.getheader("Content-Type").startswith("text/event-stream")
+
+        def next_packet():
+            for _ in range(100):
+                line = response.readline()
+                if line.startswith(b"data: "):
+                    return json.loads(line[6:])
+                assert line, "Live stream ended without a packet"
+            raise AssertionError("No bounded live packet")
+
+        try:
+            assert next_packet()["records"] == []
+            request.publish_live(live_snapshot())
+            assert next_packet()["records"][0]["text"] == "Checking the original work"
+            status, saved = request(query=query)
+            assert status == 200
+            assert all(
+                row.get("text") != "Checking the original work"
+                for row in saved["messages"]
+            )
+            # A gap ends this baseline; it must not project its unverified value.
+            request.publish_live(
+                {
+                    "type": "patches",
+                    "baseRevision": 0 if fault == "revision" else 1,
+                    "revision": 3,
+                    "patches": [],
+                },
+                owner="different-owner" if fault == "owner" else "original-owner",
+                version=10 if fault == "version" else 11,
+            )
+            assert next_packet() == {"kind": "unavailable", "retry": False}
+        finally:
+            response.close()
+            client.close()
+        until = time.monotonic() + 2
+        while (
+            not request.follow_events or request.follow_events[-1] is not False
+        ) and time.monotonic() < until:
+            time.sleep(0.01)
+        assert request.follow_events == [True, False]
+        assert inputs == []
+        assert "thread-follower-start-turn" not in methods
+        assert (registry.read_bytes(), rollout.read_bytes()) == before
+
+
+def test_live_http_rejects_unbound_origin_and_runtime_options(tmp_path):
+    with fixture(tmp_path) as (request, _rollout, methods, inputs, _registry, _home):
+        _, query = target(request)
+        before = list(methods)
+        for wrong in [
+            query + "&thread_id=arbitrary-thread",
+            query.replace("agent_id=worker", "agent_id=unbound"),
+        ]:
+            status, _ = request(query=wrong, path="/api/chat/codex-attached/live")
+            assert status == 409
+        status, _ = request(
+            query=query,
+            origin="https://example.com",
+            path="/api/chat/codex-attached/live",
+        )
+        assert status == 403
+        assert methods == before
+        assert inputs == []
+
+
+def test_live_transient_connection_loss_allows_reconnect_without_input(
+    tmp_path, monkeypatch
+):
+    import http.client
+    from loopx.presentation import codex_attached_api
+
+    def disconnected(*_args):
+        raise provider.DesktopUnavailable("Original owner disconnected")
+        yield  # A transport failure while advancing the observation generator.
+
+    with fixture(tmp_path) as (request, _rollout, _methods, inputs, _registry, _home):
+        _, query = target(request)
+        monkeypatch.setattr(codex_attached_api, "observations", disconnected)
+        client = http.client.HTTPConnection(*request.server.server_address, timeout=3)
+        try:
+            client.request("GET", "/api/chat/codex-attached/live" + query)
+            response = client.getresponse()
+            assert response.status == 200
+            packets = [
+                json.loads(line[6:])
+                for line in response.read().splitlines()
+                if line.startswith(b"data: ")
+            ]
+            assert packets == [{"kind": "unavailable", "retry": True}]
+            assert inputs == []
+        finally:
+            client.close()
+
+
+def test_live_departing_reader_unsubscribes_during_continuous_unchanged_updates(
+    tmp_path,
+):
+    import socket
+    import time
+
+    with fixture(tmp_path) as (request, _rollout, _methods, inputs, _registry, _home):
+        _, query = target(request)
+        client = socket.create_connection(request.server.server_address, timeout=3)
+        host, port = request.server.server_address
+        client.sendall(
+            f"GET /api/chat/codex-attached/live{query} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n".encode()
+        )
+        body = b""
+        while b"data: " not in body:
+            body += client.recv(4096)
+        client.shutdown(socket.SHUT_RDWR)
+        client.close()
+        # No visible change and no idle gap: neither is permission to retain a
+        # native subscription after its HTTP reader leaves.
+        for revision in range(1, 51):
+            request.publish_live(
+                {
+                    "type": "patches",
+                    "baseRevision": revision - 1,
+                    "revision": revision,
+                    "patches": [
+                        {
+                            "op": "replace",
+                            "path": ["latestTokenUsageInfo"],
+                            "value": revision,
+                        }
+                    ],
+                }
+            )
+            time.sleep(0.04)
+            if request.follow_events[-1] is False:
+                break
+        assert request.follow_events == [True, False]
+        assert inputs == []
+
+
+def test_live_frame_budget_does_not_change_rpc_bound(monkeypatch, tmp_path):
+    import struct
+    from loopx.capabilities.native_chat.codex_stream import STREAM_FRAME_BYTES
+
+    client = provider.DesktopClient(tmp_path)
+    reads = []
+    announced = provider.MAX_FRAME_BYTES + 1
+
+    def take(size):
+        reads.append(size)
+        assert size == 4, "An oversized frame body must not be allocated"
+        return struct.pack("<I", announced)
+
+    monkeypatch.setattr(client, "_take", take)
+    with pytest.raises(provider.DesktopUnavailable):
+        client.read_frame()
+    assert reads == [4]
+    reads.clear()
+    announced = STREAM_FRAME_BYTES + 1
+    with pytest.raises(provider.DesktopUnavailable):
+        client.read_frame(limit=STREAM_FRAME_BYTES)
+    assert reads == [4]

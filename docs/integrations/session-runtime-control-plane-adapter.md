@@ -181,8 +181,43 @@ event parity. Credential-shaped content is withheld through the shared detector;
 that detector is not a guarantee of identifying every possible secret.
 
 Original content remains private to the local owner. One-second observation of
-saved records is **not token streaming**. History is neither copied into LoopX
-run history nor made available to a shared sink. Stable Agent routing is shared
+saved records is **not token streaming**. When the original host is connected and
+not observed idle, the Agent page also subscribes to that exact owner's live
+state. Unfinished visible assistant text and supported tool work update in place;
+they are labelled as live observations. Looking back freezes insertion until
+**Back to latest**. Completion removes the transient row; saved history remains
+the durable reader and the place to continue long output. Neither observed work
+nor its completion establishes Goal acceptance or a delivery receipt.
+
+Current visible messages and tools carry a small activity glyph rather than a
+repeated live-observation banner. It moves only for supported work observed in
+the original active Turn while following the live tail. Looking back makes the
+glyph still; completion, disconnection and switching Agents stop it. Reduced
+motion keeps the readable glyph and accessible state label without rotation.
+Source/update details are available on the Codex App label; input availability
+and failures remain visible. This treatment does not imply token streaming.
+
+Live observation sends only the versioned following/unfollowing broadcasts. It
+never starts, resumes, steers or interrupts a Turn, loads complete history, or
+answers approvals. It rejects another owner/thread, unsupported versions and
+revision gaps, and rechecks the current binding before exposing updates. Leaving
+the page closes the subscription. Reasoning, user input, model/configuration
+metadata and unrecognized items do not enter this live projection. The existing
+credential detector still applies; it cannot identify every possible secret.
+
+The live reader has a separate 64 MiB frame bound, retains only compact current
+Turn content, and limits the browser projection to 32 rows / 256 KiB. Ordinary
+RPC/input bounds are unchanged. At most two live readers run per presentation
+process. Unsupported, over-limit or discontinuous live observations fall back to
+the saved-record reader with an explicit notice. Oversized live fields are
+withheld; after persistence the existing history/detail path remains available.
+Transient disconnections reconnect automatically; unsupported protocol/baseline
+shapes stop the live reader until the Agent view is reopened.
+These limits and private Desktop protocol compatibility remain coverage gaps.
+This adds observation, not native-input, approval or installed-host qualification.
+
+History is neither copied into LoopX run history nor made available to a shared
+sink. Stable Agent routing is shared
 by the Goal directory; other providers and native approval/stream parity remain
 within the working-session acceptance. The Codex provider does not close those gaps.
 

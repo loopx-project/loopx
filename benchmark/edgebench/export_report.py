@@ -254,6 +254,11 @@ def export(runs_root: Path, selection: list, output: Path, *, observed_at: str):
         if row.get("runner_revision") != receipt["runner_commit"]:
             raise ValueError("Board and runner revision disagree")
         _validate_feedback_payload(receipt, profile)
+        if receipt.get("planning_horizon_goal") != profile.get("planning_horizon_goal"):
+            raise ValueError("Profile disagrees with runtime: planning_horizon_goal")
+        for source in (receipt, profile):
+            if "planning_horizon_goal" in source and not isinstance(source["planning_horizon_goal"], bool):
+                raise ValueError("planning_horizon_goal must be a boolean")
         if receipt.get("stride_strategy") != profile.get("stride_strategy"):
             raise ValueError("Profile disagrees with runtime: stride_strategy")
         if "stride_strategy" in receipt:
@@ -329,6 +334,9 @@ def export(runs_root: Path, selection: list, output: Path, *, observed_at: str):
         if "feedback_payload" in receipt:
             config["runner"]["feedback_payload"] = receipt["feedback_payload"]
             config["worker_profile"]["feedback_payload"] = profile["feedback_payload"]
+        if "planning_horizon_goal" in receipt:
+            config["runner"]["planning_horizon_goal"] = receipt["planning_horizon_goal"]
+            config["worker_profile"]["planning_horizon_goal"] = profile["planning_horizon_goal"]
         if "stride_strategy" in receipt:
             config["runner"]["stride_strategy"] = receipt["stride_strategy"]
             config["worker_profile"]["stride_strategy"] = profile["stride_strategy"]

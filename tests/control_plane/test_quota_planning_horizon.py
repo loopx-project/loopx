@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import json
+from pathlib import Path
+import shlex
+import subprocess
+import pytest
 from typing import Any
 
 from pytest import MonkeyPatch
@@ -93,7 +98,7 @@ def test_default_quota_and_turn_envelope_expose_one_bounded_planning_horizon() -
     assert envelope["compaction"]["envelope_json_bytes"] <= 8_192
 
 
-def test_single_selected_todo_does_not_add_a_redundant_horizon() -> None:
+def test_snapshot_without_goal_sources_does_not_add_a_redundant_horizon() -> None:
     selected = quota_todo_item(
         todo_id="todo_only_work",
         index=1,
@@ -121,7 +126,7 @@ def test_single_selected_todo_does_not_add_a_redundant_horizon() -> None:
     assert "planning_horizon" not in packet
 
 
-def test_flat_runnable_backlog_stays_in_action_portfolio_without_horizon() -> None:
+def test_snapshot_flat_backlog_stays_in_action_portfolio_without_horizon() -> None:
     items = [
         quota_todo_item(
             todo_id=f"todo_flat_{index:03d}",
@@ -151,6 +156,93 @@ def test_flat_runnable_backlog_stays_in_action_portfolio_without_horizon() -> No
 
     assert packet["action_portfolio"]["primary"]["todo_id"] == items[0]["todo_id"]
     assert "planning_horizon" not in packet
+
+
+def test_preselection_horizon_and_replan_share_current_goal_sources(tmp_path: Path) -> None:
+    from loopx.control_plane.work_items.replan_context_codec import project_replan_context
+
+    project = tmp_path / "project with spaces"
+    project.mkdir()
+    state = project / "ACTIVE_GOAL_STATE.md"
+    objective = "Deliver the complete useful outcome. " + "Retain original constraints. " * 20 + "Final priority: accuracy."
+    state.write_text("# Goal\n\n## Objective\n> " + objective + "\n\n## Agent Todo\n- Read the local report.\n")
+    runtime = tmp_path / "runtime"
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
+        "id": GOAL_ID, "repo": str(project), "state_file": state.name,
+        "objective": "Registered fallback", "status": "active-read-only", "domain": "fixture",
+    }]}))
+    status = planning_horizon_strategic_context_status()
+    status.update(registry=str(registry), runtime_root=str(runtime))
+    status["attention_queue"]["items"][0]["project_asset"]["execution_profile"] = {"planning_horizon_goal": True}
+    def read_packet():
+        return build_quota_should_run(status, goal_id=GOAL_ID, agent_id=AGENT_ID,
+                                     turn_instance_id="turn-goal-horizon")
+
+    original = read_packet()
+    horizon = original["planning_horizon"]["core_goal"]
+    assert horizon["objective"] == objective
+    assert horizon["objective_source"] == "active_state"
+    assert horizon["objective_missing"] is False
+    assert horizon == project_replan_context(
+        goal_id=GOAL_ID, agent_id=AGENT_ID, runs=(), source_status=status,
+    )["core_goal"]
+    readback = subprocess.run(shlex.split(horizon["read_action"]), capture_output=True, text=True, check=True)
+    assert readback.stdout == state.read_text()
+    assert original["planning_horizon"]["selection_contract"]["horizon_changes_selection"] is False
+    envelope = build_turn_envelope(original)
+    assert envelope["action"]["planning_horizon"]["core_goal"] == horizon
+
+    state.write_text("# Goal\n\n## Objective\n> Current owner-corrected objective.\n")
+    corrected = read_packet()
+    assert corrected["planning_horizon"]["core_goal"]["objective"] == "Current owner-corrected objective."
+    assert corrected["selected_todo"] == original["selected_todo"]
+    assert corrected.get("action_portfolio") == original.get("action_portfolio")
+    assert corrected["should_run"] == original["should_run"]
+    assert corrected["interaction_contract"] == original["interaction_contract"]
+    assert quota_action_signature_document(corrected) != quota_action_signature_document(original)
+    state.write_text("# Goal\n")
+    fallback = read_packet()
+    assert fallback["planning_horizon"]["core_goal"]["objective"] == "Registered fallback"
+    assert fallback["planning_horizon"]["core_goal"]["objective_source"] == "registry"
+    registry_data = json.loads(registry.read_text())
+    registry_data["goals"][0].pop("objective")
+    registry.write_text(json.dumps(registry_data))
+    missing = read_packet()
+    assert missing["planning_horizon"]["core_goal"]["objective_missing"] is True
+    assert missing["planning_horizon"]["core_goal"]["objective"] is None
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_real_cli_exposes_goal_before_selection_without_granting_delivery(tmp_path, monkeypatch, provider):
+    from test_replan_successor_guard_reentry import _fixture, AGENT, GOAL
+
+    call, runtime, index = _fixture(tmp_path, monkeypatch, provider, future_monitor=False)
+    index.write_text("")
+    call("configure-goal", "--goal-id", GOAL, "--execution-planning-horizon-goal", "--execute")
+    for number in range(2):
+        call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
+             "--text", f"Validate independent source {number}.", "--task-class", "advancement_task",
+             "--action-kind", "validate")
+    args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT)
+    before = call(*args, "--turn-instance-id", "turn-goal-selection")
+    core = before["planning_horizon"]["core_goal"]
+    assert core["objective"] == "Deliver the independently accepted source outcome."
+    assert core["objective_source"] == "active_state"
+    assert before["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    assert before["interaction_contract"]["cli_channel"]["selection_required"] is True
+    assert "settlement_identity" not in before["heartbeat_receipt"]
+    state = tmp_path / "project/ACTIVE_GOAL_STATE.md"
+    assert subprocess.check_output(shlex.split(core["read_action"]), text=True) == state.read_text()
+    assert build_turn_envelope(before)["action"]["planning_horizon"]["core_goal"] == core
+    state.write_text(state.read_text().replace(
+        "Deliver the independently accepted source outcome.", "Deliver the corrected whole outcome."))
+    corrected = call(*args, "--turn-instance-id", "turn-goal-corrected")
+    assert corrected["planning_horizon"]["core_goal"]["objective"] == "Deliver the corrected whole outcome."
+    assert corrected["action_portfolio"] == before["action_portfolio"]
+    assert corrected["selected_todo"] == before["selected_todo"]
+    assert corrected["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    assert not index.read_text()
 
 
 def test_agent_todo_detail_expands_claim_semantics_from_the_shared_inventory() -> None:
@@ -312,3 +404,19 @@ def test_task_graph_reads_deferred_nodes_from_the_shared_planning_source() -> No
         for todo_id in node["refs"].get("todo_ids", [])
     }
     assert deferred["todo_id"] in todo_ids
+
+
+@pytest.mark.parametrize("enabled", [False, None])
+def test_disabled_goal_projection_does_not_read_goal_sources(monkeypatch, enabled):
+    from loopx.control_plane.work_items import replan_context_codec
+    def forbidden(*args, **kwargs):
+        raise AssertionError("disabled horizon must not load Goal documents")
+    monkeypatch.setattr(replan_context_codec, "goal_context_facts", forbidden)
+    status = planning_horizon_strategic_context_status()
+    status["registry"] = "/unreadable/registry.json"
+    if enabled is not None:
+        status["attention_queue"]["items"][0]["project_asset"]["execution_profile"] = {"planning_horizon_goal": enabled}
+    packet = build_quota_should_run(status, goal_id=GOAL_ID, agent_id=AGENT_ID,
+                                   turn_instance_id="horizon-default-off")
+    assert "core_goal" not in packet["planning_horizon"]
+    assert packet["planning_horizon"]["selection_contract"]["horizon_changes_selection"] is False

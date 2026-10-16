@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 400" width="960" height="400" role="img" aria-labelledby="t d" font-family="Geist,-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,&quot;PingFang SC&quot;,&quot;Noto Sans CJK SC&quot;,sans-serif">
-<title id="t">Borden 源反演（分数越高越好） · Grid 图灵机器人（分数越低越好）</title><desc id="d">每个点是一次被评分器接受的提交；曲线按提交时刻对齐，不填补缺失点。</desc>
-<rect width="960" height="400" fill="#fafafa"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 436" width="960" height="436" role="img" aria-labelledby="t d" font-family="Geist,-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,&quot;PingFang SC&quot;,&quot;Noto Sans CJK SC&quot;,sans-serif">
+<title id="t">Borden 源反演（分数越高越好） · Grid 图灵机器人（分数越低越好）</title><desc id="d">历史探索性运行，不代表 LoopX 官方评测或当前版本能力。每个点是一次被评分器接受的提交；曲线按提交时刻对齐，不填补缺失点。</desc>
+<rect width="960" height="436" fill="#fafafa"/>
 <text x="20" y="32" fill="#171717" font-size="15" font-weight="600">Borden 源反演（分数越高越好）</text>
 <line x1="76" x2="464" y1="304.0" y2="304.0" stroke="#ebebeb" stroke-width="1"/>
 <text x="68" y="308.0" fill="#8f8f8f" font-size="12" text-anchor="end">0</text>
@@ -41,7 +41,7 @@
 <circle cx="446.2" cy="125.6" r="5" fill="#fafafa"/><circle cx="446.2" cy="125.6" r="4" fill="#2a78d6"/>
 <text x="456.2" y="129.6" fill="#171717" font-size="12" font-weight="600">85.6</text>
 <text x="270.0" y="340" fill="#8f8f8f" font-size="12" text-anchor="middle">自试验开始的分钟数</text>
-<text x="192.4" y="279.0" fill="#4d4d4d" font-size="12">首次反馈：原生 13.6 分钟，LoopX 48.2 分钟</text>
+<text x="192.4" y="279.0" fill="#4d4d4d" font-size="12">首次提交：原生 13.6 分钟，LoopX 48.2 分钟</text>
 <text x="480" y="32" fill="#171717" font-size="15" font-weight="600">Grid 图灵机器人（分数越低越好）</text>
 <line x1="536" x2="924" y1="291.5" y2="291.5" stroke="#ebebeb" stroke-width="1"/>
 <text x="528" y="295.5" fill="#8f8f8f" font-size="12" text-anchor="end">1.8K</text>
@@ -90,4 +90,6 @@
 <text x="50" y="384" fill="#4d4d4d" font-size="13">LoopX heartbeat</text>
 <line x1="225" x2="247" y1="380" y2="380" stroke="#eb6834" stroke-width="2"/><circle cx="236" cy="380" r="4" fill="#eb6834"/>
 <text x="255" y="384" fill="#4d4d4d" font-size="13">原生 Codex</text>
-<text x="940" y="384" fill="#8f8f8f" font-size="12" text-anchor="end">每个点是一次被评分器接受的提交；曲线按提交时刻对齐，不填补缺失点。</text></svg>
+<text x="940" y="384" fill="#8f8f8f" font-size="12" text-anchor="end">每个点是一次被评分器接受的提交；曲线按提交时刻对齐，不填补缺失点。</text>
+<text x="20" y="424" fill="#4d4d4d" font-size="12">历史中断运行；不代表 LoopX 官方或正式评测结论及当前版本能力。</text>
+</svg>

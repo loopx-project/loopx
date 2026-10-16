@@ -951,6 +951,16 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
       status: 200,
     });
   });
+  // Real status fixtures advertise this same-origin reader too. Keep the
+  // default empty extension inventory inside the fixture rather than reading
+  // an unrelated installed service. Research scenarios replace this route
+  // with their published surfaces or explicitly isolated native owner.
+  await page.route("**/extension-presentation-surfaces", route => route.fulfill({json: {
+    ok: true, presentation_surfaces: {
+      schema_version: "extension_presentation_surfaces_v0", count: 0,
+      ready_count: 0, review_due_count: 0, empty_count: 0, invalid_count: 0, items: [],
+    },
+  }}));
   const sidebarOrders = new Map();
   await page.route("**/api/chat/**", async (route) => {
     const request = route.request();

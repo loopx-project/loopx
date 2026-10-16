@@ -444,6 +444,26 @@ other replan reasons may trigger sooner. Both runtime and worker-profile receipt
 record the resolved cadence. Only newly launched attempts use the new default;
 keep existing runs and archived settings pinned.
 
+### Optional Goal in the planning horizon
+
+For `heartbeat-resume` and `heartbeat-explore`, add `--planning-horizon-goal`
+to include the full same-source original Goal and acceptance in preselection
+planning context. `--no-planning-horizon-goal` explicitly disables it. Omission
+retains the ordinary disabled treatment. Plain and native-Goal workers reject
+this setting. It does not enable stride, Explore or TurnEnvelope.
+
+The adapter writes the shared `execution_profile.planning_horizon_goal` through
+`configure-goal`, checks the effective readback before work, and records an
+explicit setting in both worker profile and runtime receipt. Restore follows
+the same path: an explicit true/false overrides the donor setting. An omitted
+setting encountering an enabled donor fails the readback instead of silently
+labeling the run off. Historical receipts without this field remain absent;
+report export rejects mismatched or malformed settings.
+
+Compare on/off from the same qualified pre-replan checkpoint with equal remaining
+budget, source and other settings. Input fidelity does not establish better
+research or scores. See the [shared Goal configuration and rollback](../../docs/reference/protocols/quota-planning-horizon-v0.md#enable-read-back-and-disable).
+
 ### Optional structured stride strategy
 
 Add `--stride-strategy evidence_conditioned_v1` to a new `heartbeat-resume`

@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
 from loopx.state_migration import migrate_legacy_state, render_state_migration_markdown
+from loopx.control_plane.coordination.legacy_writer_fence import LegacyCoordinationWriterFenced
 
 
 OLD_GOAL_ID = "legacy-goal"
@@ -146,3 +149,92 @@ def test_migration_preserves_old_store_without_reseeding_retired_lineage(tmp_pat
         assert json.loads(lease.read_text())["goal_id"] == NEW_GOAL_ID
     else:
         assert not paths["target_registry"].exists()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("endpoint", ["source", "target", "previous_runtime"])
+def test_preview_refuses_canonical_endpoints_without_copying(
+    tmp_path: Path, monkeypatch, provider: str, endpoint: str,
+) -> None:
+    from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    paths = _migration_fixture(tmp_path)
+    runtime, goal_id, state = paths["legacy_runtime"], OLD_GOAL_ID, paths["source_repo"] / "ACTIVE_GOAL_STATE.md"
+    if endpoint != "source":
+        runtime = paths["target_runtime"] if endpoint == "target" else tmp_path / "previous-runtime"
+        goal_id = NEW_GOAL_ID if endpoint == "target" else "retained-goal"
+        state = paths["target_repo"] / "RETAINED_STATE.md"
+        state.write_text("# Existing destination work\n")
+        paths["target_registry"].write_text(json.dumps({
+            "schema_version": 1, "common_runtime_root": str(runtime),
+            "goals": [{"id": goal_id, "repo": str(paths["target_repo"]), "state_file": state.name}],
+        }))
+    initialize_canonical_authority(runtime, goal_id, {"goal_id": goal_id, "retained": True},
+                                   state_path=state, provider=provider)
+    # The preview's validity must come from the real selected authority/fence,
+    # not from recognizing a particular registry spelling or a copied label.
+    def retained_files() -> dict[str, bytes]:
+        # The shared Effect transport may start a helper in the test's TMPDIR.
+        # Compare every source/target file, not that unrelated helper locator.
+        roots = [*paths.values(), tmp_path / "previous-runtime"]
+        return {str(path.relative_to(tmp_path)): path.read_bytes()
+                for root in roots for path in ([root] if root.is_file() else root.rglob("*"))
+                if path.is_file()}
+
+    before = retained_files()
+    with pytest.raises(LegacyCoordinationWriterFenced):
+        _migrate(paths, execute=False)
+    assert retained_files() == before
+    assert not (paths["target_repo"] / "ACTIVE_GOAL_STATE.md").exists()
+
+
+def test_execute_rechecks_authority_after_an_eligible_preview(tmp_path: Path, monkeypatch) -> None:
+    from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    paths = _migration_fixture(tmp_path)
+    assert _migrate(paths, execute=False)["ok"] is True
+    state = paths["source_repo"] / "ACTIVE_GOAL_STATE.md"
+    initialize_canonical_authority(paths["legacy_runtime"], OLD_GOAL_ID,
+        {"goal_id": OLD_GOAL_ID, "retained": True}, state_path=state)
+    before = state.read_bytes()
+    with pytest.raises(LegacyCoordinationWriterFenced):
+        _migrate(paths, execute=True)
+    assert state.read_bytes() == before
+    assert not (paths["target_repo"] / state.name).exists()
+    assert not paths["target_registry"].exists()
+    assert not (paths["target_runtime"] / "authority").exists()
+
+
+@pytest.mark.parametrize("provider", [None, "file", "sqlite"])
+def test_public_migration_preview_reports_actual_source_eligibility(
+    tmp_path: Path, monkeypatch, provider: str | None,
+) -> None:
+    from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    paths = _migration_fixture(tmp_path)
+    if provider is not None:
+        initialize_canonical_authority(paths["legacy_runtime"], OLD_GOAL_ID,
+            {"goal_id": OLD_GOAL_ID, "retained": True},
+            state_path=paths["source_repo"] / "ACTIVE_GOAL_STATE.md", provider=provider)
+    command = [sys.executable, "-I", "-m", "loopx.cli", "--format", "json",
+        "--registry", str(paths["target_registry"]), "migrate-state",
+        "--legacy-registry", str(paths["legacy_registry"]),
+        "--legacy-runtime-root", str(paths["legacy_runtime"]),
+        "--target-runtime-root", str(paths["target_runtime"]), "--goal-id", OLD_GOAL_ID,
+        "--goal-id-map", f"{OLD_GOAL_ID}={NEW_GOAL_ID}",
+        "--path-map", f"{paths['source_repo']}={paths['target_repo']}",
+        "--copy-active-state", "--copy-runtime"]
+    child = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    result = json.loads(child.stdout)
+    assert result["dry_run"] is True
+    assert result["ok"] is (provider is None), result
+    assert child.returncode == (0 if provider is None else 1)
+    if provider is not None:
+        assert result["write_check"]["status"] == "blocked"
+        assert result["error_code"] == result["write_check"]["reason_code"]
+    assert not paths["target_registry"].exists()
+    assert not (paths["target_repo"] / "ACTIVE_GOAL_STATE.md").exists()
+    assert not paths["target_runtime"].exists()

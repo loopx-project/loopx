@@ -54,7 +54,7 @@ def lease(**overrides: object) -> LeaseSnapshot:
 
 def snapshot(**overrides: object) -> CoordinationSnapshot:
     values: dict[str, object] = {
-        "handoff_mode": HandoffMode.LEGACY,
+        "handoff_mode": HandoffMode.SOFT_CLAIM,
         "registered_agents": (AGENT_A, AGENT_B, ORCHESTRATOR),
         "todo": todo(),
     }
@@ -124,11 +124,18 @@ def test_missing_todo_is_a_typed_refusal_before_actor_admission(mode, action):
     "holder",
     [None, lease(active=False, status="expired"), lease(active=False, status="released"), lease()],
 )
-def test_snapshot_guard_keeps_claim_neutral_edits_and_holder_state(mode, holder):
+def test_snapshot_guard_preserves_current_mode_edits_and_rejects_retired_mode(mode, holder):
     state = snapshot(handoff_mode=mode, lease=holder)
     result = decide(
         state, TodoMutationCommand(action=TodoAction.UPDATE, actor_agent_id=AGENT_A)
     )
+    if mode is HandoffMode.LEGACY:
+        assert result.outcome is DecisionOutcome.REJECTED
+        assert result.code == "handoff_mode_retired"
+        assert result.next_snapshot is None
+        assert result.authority_mode is None
+        assert result.lease_fence is LeaseFence.NOT_REQUIRED
+        return
     assert result.outcome is DecisionOutcome.APPLY
     assert result.next_snapshot.todo == state.todo
     assert result.next_snapshot.lease == holder
@@ -148,7 +155,13 @@ def test_update_authority_keeps_claim_neutral_edits_separate_from_ownership(
         ownership_mutation=ownership,
     )
     result = decide(state, command)
-    if mode is HandoffMode.HARD_LEASE and ownership:
+    if mode is HandoffMode.LEGACY:
+        assert result.outcome is DecisionOutcome.REJECTED
+        assert result.code == "handoff_mode_retired"
+        assert result.next_snapshot is None
+        assert result.authority_mode is None
+    elif mode is HandoffMode.HARD_LEASE and ownership:
+        assert result.outcome is DecisionOutcome.REJECTED
         assert result.code == "handoff_mode_requires_lease"
         assert result.next_snapshot is None
     else:
@@ -296,7 +309,8 @@ def test_exact_user_gate_override_requires_the_exact_linked_scope() -> None:
 @pytest.mark.parametrize(
     ("mode", "current_lease", "expected", "gate"),
     [
-        (HandoffMode.LEGACY, None, DecisionOutcome.APPLY, OwnershipGate.NOT_REQUIRED),
+        (HandoffMode.LEGACY, None, DecisionOutcome.REJECTED, OwnershipGate.NOT_REQUIRED),
+        (HandoffMode.LEGACY, lease(), DecisionOutcome.REJECTED, OwnershipGate.NOT_REQUIRED),
         (
             HandoffMode.SOFT_CLAIM,
             None,
@@ -317,7 +331,7 @@ def test_exact_user_gate_override_requires_the_exact_linked_scope() -> None:
         ),
     ],
 )
-def test_ownership_handoff_preserves_the_three_modes(
+def test_ownership_handoff_accepts_current_modes_and_rejects_retired_mode(
     mode: HandoffMode,
     current_lease: LeaseSnapshot | None,
     expected: DecisionOutcome,
@@ -326,6 +340,10 @@ def test_ownership_handoff_preserves_the_three_modes(
     plan = decide(snapshot(handoff_mode=mode, lease=current_lease), claim())
     assert plan.outcome is expected
     assert plan.ownership_gate is gate
+    if mode is HandoffMode.LEGACY:
+        assert plan.code == "handoff_mode_retired"
+        assert plan.next_snapshot is None
+        assert plan.authority_mode is None
 
 
 def test_delegated_hard_lease_ownership_change_uses_the_only_override() -> None:
@@ -356,9 +374,20 @@ def test_delegated_hard_lease_ownership_change_uses_the_only_override() -> None:
 
 @pytest.mark.parametrize("action", [TodoAction.COMPLETE, TodoAction.SUPERSEDE])
 def test_terminal_verbs_share_one_lease_fence(action: TodoAction) -> None:
-    legacy = decide(snapshot(), terminal(action))
-    assert legacy.outcome is DecisionOutcome.APPLY
-    assert legacy.lease_fence is LeaseFence.NOT_REQUIRED
+    soft = decide(snapshot(), terminal(action))
+    assert soft.outcome is DecisionOutcome.APPLY
+    assert soft.lease_fence is LeaseFence.NOT_REQUIRED
+
+    for current_lease in (None, lease()):
+        retired = decide(
+            snapshot(handoff_mode=HandoffMode.LEGACY, lease=current_lease),
+            terminal(action),
+        )
+        assert retired.outcome is DecisionOutcome.REJECTED
+        assert retired.code == "handoff_mode_retired"
+        assert retired.next_snapshot is None
+        assert retired.authority_mode is None
+        assert retired.lease_fence is LeaseFence.NOT_REQUIRED
 
     hard_missing = decide(
         snapshot(handoff_mode=HandoffMode.HARD_LEASE),

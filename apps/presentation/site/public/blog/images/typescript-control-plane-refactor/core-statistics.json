@@ -1,0 +1,239 @@
+{
+  "scope": "loopx/control_plane/**",
+  "base": "d1fe05932ac28690d393a38c78b4738ac12c78c0",
+  "end": "488e4438e0e51eca023ac3f5e690603120851b0c",
+  "formal_start": "2026-08-15T21:04:50+08:00",
+  "end_time": "2026-10-16T21:49:14+08:00",
+  "elapsed_days": 62,
+  "calendar_dates": 63,
+  "active_mainline_dates": 62,
+  "first_parent_landings": 1144,
+  "associated_merged_prs": 1121,
+  "author_accounts": 56,
+  "authors": {
+    "huangruiteng": 563,
+    "loopx-agent": 221,
+    "Duang777": 73,
+    "songoow": 53,
+    "hhyykk": 25,
+    "mikamikasuki": 20,
+    "LIHUA919": 19,
+    "wchwawa": 16,
+    "now-ing": 16,
+    "cocolord": 11,
+    "jackie-cqz": 9,
+    "yuefengw": 7,
+    "JasonBuildAI": 7,
+    "NIU-123370": 6,
+    "Jim-jimu": 6,
+    "karenchuu": 6,
+    "ObVious55": 3,
+    "steven-kid": 3,
+    "xyx2002OvO": 3,
+    "vlean": 3,
+    "yilin-succeed": 3,
+    "JunZ-Leo": 3,
+    "kokokoXUY": 3,
+    "sakurahello1": 3,
+    "rootkiller6788": 2,
+    "Alicecooo": 2,
+    "xiaods": 2,
+    "huashuai": 2,
+    "BigDataDZ": 2,
+    "GZY-SUPER-HACKER": 2,
+    "gcl-coder": 2,
+    "yixuanchen189756-source": 1,
+    "AetherX-Technologies": 1,
+    "maxliux5": 1,
+    "Ray0907": 1,
+    "wujc12": 1,
+    "bubble66": 1,
+    "hua03": 1,
+    "zyaiire": 1,
+    "zigzagcai": 1,
+    "Danceiny": 1,
+    "lavapapa": 1,
+    "liubf21": 1,
+    "KevinBarrus": 1,
+    "KashiwaByte": 1,
+    "ehz0ah": 1,
+    "Yue021130": 1,
+    "fengyin-solo": 1,
+    "YZJF": 1,
+    "hahahahahayesyeseys": 1,
+    "hhe48203-ctrl": 1,
+    "sundevilyang": 1,
+    "catwithtudou": 1,
+    "Inference1": 1,
+    "Hsuehtan": 1,
+    "ikunikun1145": 1
+  },
+  "title_prefixes": {
+    "fix": 658,
+    "feat": 208,
+    "refactor": 137,
+    "other": 72,
+    "perf": 28,
+    "test": 10,
+    "docs": 4,
+    "chore": 3,
+    "ci": 1
+  },
+  "churn": {
+    "TypeScript": {
+      "additions": 104769,
+      "deletions": 17501,
+      "unique_paths": 334,
+      "net": 87268
+    },
+    "Python": {
+      "additions": 120899,
+      "deletions": 59001,
+      "unique_paths": 461,
+      "net": 61898
+    },
+    "Other": {
+      "additions": 953,
+      "deletions": 24,
+      "unique_paths": 7,
+      "net": 929
+    }
+  },
+  "source_inventory": {
+    "start": {
+      "Python": {
+        "files": 256,
+        "physical_lines": 80473,
+        "generated_or_declaration_lines": 0
+      }
+    },
+    "end": {
+      "Python": {
+        "files": 471,
+        "physical_lines": 142371,
+        "generated_or_declaration_lines": 0
+      },
+      "TypeScript": {
+        "files": 323,
+        "physical_lines": 87268,
+        "generated_or_declaration_lines": 0
+      },
+      "Markdown": {
+        "files": 1,
+        "physical_lines": 119,
+        "generated_or_declaration_lines": 0
+      }
+    }
+  },
+  "typescript_share_py_ts_end": 0.3800225571440391,
+  "weekly": [
+    {
+      "start": "2026-08-15",
+      "end": "2026-08-21",
+      "commits": 52,
+      "prs": 48,
+      "author_accounts": 10,
+      "additions": 11629,
+      "deletions": 2780
+    },
+    {
+      "start": "2026-08-22",
+      "end": "2026-08-28",
+      "commits": 87,
+      "prs": 86,
+      "author_accounts": 14,
+      "additions": 30045,
+      "deletions": 9449
+    },
+    {
+      "start": "2026-08-29",
+      "end": "2026-09-04",
+      "commits": 61,
+      "prs": 61,
+      "author_accounts": 16,
+      "additions": 37256,
+      "deletions": 8441
+    },
+    {
+      "start": "2026-09-05",
+      "end": "2026-09-11",
+      "commits": 92,
+      "prs": 92,
+      "author_accounts": 14,
+      "additions": 31933,
+      "deletions": 10033
+    },
+    {
+      "start": "2026-09-12",
+      "end": "2026-09-18",
+      "commits": 133,
+      "prs": 133,
+      "author_accounts": 14,
+      "additions": 24880,
+      "deletions": 7988
+    },
+    {
+      "start": "2026-09-19",
+      "end": "2026-09-25",
+      "commits": 150,
+      "prs": 147,
+      "author_accounts": 10,
+      "additions": 25809,
+      "deletions": 9094
+    },
+    {
+      "start": "2026-09-26",
+      "end": "2026-10-02",
+      "commits": 161,
+      "prs": 161,
+      "author_accounts": 17,
+      "additions": 22381,
+      "deletions": 9416
+    },
+    {
+      "start": "2026-10-03",
+      "end": "2026-10-09",
+      "commits": 216,
+      "prs": 214,
+      "author_accounts": 12,
+      "additions": 17810,
+      "deletions": 5393
+    },
+    {
+      "start": "2026-10-10",
+      "end": "2026-10-16",
+      "commits": 192,
+      "prs": 179,
+      "author_accounts": 14,
+      "additions": 23925,
+      "deletions": 13908
+    }
+  ],
+  "pr_collaboration_as_of_query": {
+    "reviews": 2329,
+    "conversation_comments": 1631,
+    "prs_with_review_records": 1031,
+    "merge_cycle_hours_median": 4.9944444444444445,
+    "merge_cycle_hours_p90": 25.413888888888888,
+    "merge_cycle_hours_p95": 44.98888888888889,
+    "largest_cycle_hours": 1201.5297222222223
+  },
+  "validation": {
+    "endpoint_net_equals_first_parent_sum": true,
+    "source_stock_delta_equals_code_net": true,
+    "search_index_gaps_repaired_by_direct_reads": 14,
+    "all_selected_prs_merged_and_reachable": true
+  },
+  "limitations": [
+    "Directory scope includes internal testing/support modules and code moved in from outside this directory.",
+    "Counts include migration, new capabilities, fixes and maintenance; they do not identify pure refactoring effort.",
+    "Author accounts are not a count of people, agents or sessions.",
+    "Review/comment totals are as of API observation, can include post-merge records and exclude inline review comments.",
+    "Merge cycle is created-to-merged elapsed time, not active engineering hours.",
+    "Cumulative churn counts repeated edits; it is not unique code produced or a quality/efficiency measure.",
+    "No token, money, CI compute, engineer-hour or model-effectiveness measurement is available from this inventory."
+  ],
+  "method_version": 1,
+  "unattributed_mainline_commit_count": 2,
+  "api_observation_date": "2026-10-16"
+}

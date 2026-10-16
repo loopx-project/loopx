@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#fafafa">
+<title>LoopX 2.0：两个月的 TypeScript 控制面重构 · LoopX</title>
+<meta name="description" content="从最初的渐进迁移方案，到完整事务、共享权威、语义约束和旧路径退役。记录方案怎样被真实调用与反例修正。">
+<link rel="canonical" href="https://loopx-project.github.io/loopx/blog/zh/typescript-control-plane-refactor/">
+<link rel="alternate" hreflang="en" href="https://loopx-project.github.io/loopx/blog/typescript-control-plane-refactor/"><link rel="alternate" hreflang="zh-CN" href="https://loopx-project.github.io/loopx/blog/zh/typescript-control-plane-refactor/"><link rel="alternate" hreflang="x-default" href="https://loopx-project.github.io/loopx/blog/typescript-control-plane-refactor/">
+<meta property="og:type" content="article"><meta property="og:site_name" content="LoopX"><meta property="og:locale" content="zh_CN"><meta property="og:title" content="LoopX 2.0：两个月的 TypeScript 控制面重构"><meta property="og:description" content="从最初的渐进迁移方案，到完整事务、共享权威、语义约束和旧路径退役。记录方案怎样被真实调用与反例修正。"><meta property="og:url" content="https://loopx-project.github.io/loopx/blog/zh/typescript-control-plane-refactor/"><meta name="twitter:card" content="summary"><meta name="twitter:title" content="LoopX 2.0：两个月的 TypeScript 控制面重构"><meta name="twitter:description" content="从最初的渐进迁移方案，到完整事务、共享权威、语义约束和旧路径退役。记录方案怎样被真实调用与反例修正。"><link rel="icon" href="data:,">
+<link rel="stylesheet" href="../../blog.css"><link rel="stylesheet" href="../../images/typescript-control-plane-refactor/article.css">
+</head>
+<body class="ts-migration">
+<a class="skip-link" href="#main">跳至正文</a>
+<header class="site-header"><a class="brand" href="../../../?lang=zh"><span class="product-mark" aria-hidden="true"><i></i><i></i></span>LoopX</a><nav aria-label="主导航"><a href="../">Blog</a><a href="../../../docs/book/">文档</a></nav><div class="header-actions"><a class="language" href="../../../blog/typescript-control-plane-refactor/" lang="en" hreflang="en">EN</a><a class="github" href="https://github.com/loopx-project/loopx">GitHub ↗</a></div></header>
+<main id="main"><div class="article-heading"><a class="back" href="../">← 全部文章</a><p class="eyebrow">LoopX 2.0 · Engineering</p><h1>LoopX 2.0：两个月的 TypeScript 控制面重构</h1><p class="lead">从最初的渐进迁移方案，到完整事务、共享权威、语义约束和旧路径退役。记录方案怎样被真实调用与反例修正。</p><div class="byline"><a href="https://github.com/huangruiteng">Ruiteng Huang</a><span>·</span><time datetime="2026-10-16">2026 年 10 月 16 日</time><span>·</span><span>LoopX creator</span></div></div>
+<div class="article-layout"><aside class="toc"><div class="desktop-contents"><p class="toc-caption">本文目录</p><nav aria-label="文章目录"><a href="#section-1">1. 先还原历史：迁移方案本身也在变化</a><a href="#section-2">2. 只统计核心 control plane：研发规模与代码变化</a><a href="#section-3">3. Effect Program 先行：先统一“做过什么”</a><a href="#section-4">4. 迁移完整事务：一次少到两次，也可能是正确答案</a><a href="#section-5">5. 共享权威：领域规则和存储原语分别归属</a><a href="#section-6">6. SQLite 之后：长程历史也要有成本模型</a><a href="#section-7">7. Song 的 Semantics：定义、生产、解释要接起来</a><a href="#section-8">8. 调用方和默认值，决定迁移能否到用户手上</a><a href="#section-9">9. 恢复原结果，同时保护当前执行权</a><a href="#section-10">10. CLI 输出约束：压缩前先保护决策语义</a><a href="#section-11">11. 最后退役：保留贡献，核对删除的究竟是什么</a><a href="#section-12">12. 社区贡献与下一步</a></nav></div><details class="mobile-contents"><summary>本文目录</summary><nav aria-label="文章目录"><a href="#section-1">1. 先还原历史：迁移方案本身也在变化</a><a href="#section-2">2. 只统计核心 control plane：研发规模与代码变化</a><a href="#section-3">3. Effect Program 先行：先统一“做过什么”</a><a href="#section-4">4. 迁移完整事务：一次少到两次，也可能是正确答案</a><a href="#section-5">5. 共享权威：领域规则和存储原语分别归属</a><a href="#section-6">6. SQLite 之后：长程历史也要有成本模型</a><a href="#section-7">7. Song 的 Semantics：定义、生产、解释要接起来</a><a href="#section-8">8. 调用方和默认值，决定迁移能否到用户手上</a><a href="#section-9">9. 恢复原结果，同时保护当前执行权</a><a href="#section-10">10. CLI 输出约束：压缩前先保护决策语义</a><a href="#section-11">11. 最后退役：保留贡献，核对删除的究竟是什么</a><a href="#section-12">12. 社区贡献与下一步</a></nav></details></aside><article class="prose">
+<p>LoopX 2.0 发布了。借这个节点，我想把 TypeScript 重构的历史和技术细节整理出来。</p>
+<p>正式迁移 RFC 在 8 月 15 日合入。到 10 月中旬集中清理普通旧 writer，这项工程已经跨了差不多两个月。它有多条并行线：事务规则迁移、调用方收敛、共享权威、存储与历史成本、Semantics，以及后续兼容与退役。</p>
+<p>最后 3 位开发者与各自 Agent 接力的 <a href="https://github.com/loopx-project/loopx/pull/6396">#6396</a>，是这些工作累积后的一次集中收尾。前面的选择和转折，决定了最后能删什么，以及删掉以后还能恢复什么。</p>
+<p>其中，新 maintainer <strong>Song（<a href="https://github.com/songoow">@songoow</a>）</strong> 从 9 月中旬持续推进 Semantics RFC、词表收敛、生产证据和检查器修复。这部分也值得与事务、存储放在一起讲。</p>
+<h2 id="section-1">1. 先还原历史：迁移方案本身也在变化</h2>
+<p>LoopX 保存长程 Agent 的目标、任务、证据与执行边界。模型可以提出新路线，控制面要保护版本、执行权和状态提交，并在中断后找到正确的恢复位置。</p>
+<p>最初的大量实现是 Python，TS 的宿主、Pi 集成与 dashboard 已经存在。通过一次 Python 调用来做决策，再把结果接回 TS，是自然的起点。随着规则增多，默认值、状态解释、调用顺序和持久化也可能分散在两边。</p>
+<p>我们希望这些控制面规则有清楚的 typed owner，同时让 CLI、宿主和 App 共享合同。实际过程可以分成以下几个互相重叠的阶段。</p>
+<div class="table-scroll" role="region" tabindex="0" aria-label="可横向滚动的技术对照表"><table>
+<thead>
+<tr>
+<th>时间</th>
+<th>主要变化</th>
+<th>代表证据</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>8 月 15 日</td>
+<td>正式提出进程边界上的渐进迁移，初稿偏向先做 read/projection</td>
+<td><a href="https://github.com/loopx-project/loopx/pull/3226">#3226</a></td>
+</tr>
+<tr>
+<td>8 月 21–22 日</td>
+<td>先切 Effect Program，再从叶子规则试点转向完整事务</td>
+<td><a href="https://github.com/loopx-project/loopx/pull/3416">#3416</a>、<a href="https://github.com/loopx-project/loopx/pull/3447">#3447</a></td>
+</tr>
+<tr>
+<td>8 月下旬–9 月上旬</td>
+<td>settlement、Todo、quota、lease、Vision、monitor 等事务逐步切换；共享权威并行发展</td>
+<td><a href="https://github.com/loopx-project/loopx/pull/3464">#3464</a>、<a href="https://github.com/loopx-project/loopx/pull/3798">#3798</a></td>
+</tr>
+<tr>
+<td>9 月上中旬</td>
+<td>接真实调用方，收敛规划、读取与 provider 打开规则；接入可选 SQLite</td>
+<td><a href="https://github.com/loopx-project/loopx/pull/4178">#4178</a>、<a href="https://github.com/loopx-project/loopx/pull/4317">#4317</a>、<a href="https://github.com/loopx-project/loopx/pull/4121">#4121</a></td>
+</tr>
+<tr>
+<td>9 月中旬起</td>
+<td>Song 推进 Semantics；存储线处理 checkpoint、delta、写入与 replay 成本</td>
+<td><a href="https://github.com/loopx-project/loopx/pull/4433">#4433</a>、<a href="https://github.com/loopx-project/loopx/pull/4408">#4408</a></td>
+</tr>
+<tr>
+<td>9 月下旬</td>
+<td>退役未使用的 Python authority prototype 和实验性 Todo event overlay；保留真实兼容边界</td>
+<td><a href="https://github.com/loopx-project/loopx/pull/5105">#5105</a>、<a href="https://github.com/loopx-project/loopx/pull/5054">#5054</a></td>
+</tr>
+<tr>
+<td>10 月上中旬</td>
+<td>新建默认值更新，普通旧 writer 隔离，实际 consumer 路由收敛</td>
+<td><a href="https://github.com/loopx-project/loopx/pull/5805">#5805</a>、<a href="https://github.com/loopx-project/loopx/pull/6104">#6104</a>、<a href="https://github.com/loopx-project/loopx/pull/6280">#6280</a></td>
+</tr>
+<tr>
+<td>10 月中旬</td>
+<td>集中退役普通旧写入路径，继续修恢复、producer 与集成反例</td>
+<td><a href="https://github.com/loopx-project/loopx/pull/6396">#6396</a></td>
+</tr>
+</tbody></table></div>
+<figure><div class="figure-scroll" tabindex="0" role="region" aria-label="迁移历史：事务、权威与存储、Semantics 三条线交错推进"><a href="../../images/typescript-control-plane-refactor/timeline-zh.svg" target="_blank" rel="noopener"><img src="../../images/typescript-control-plane-refactor/timeline-zh.svg" alt="迁移历史：事务、权威与存储、Semantics 三条线交错推进" width="1100" height="640" loading="lazy"></a></div><figcaption>迁移历史：事务、权威与存储、Semantics 三条线交错推进 窄屏可横向滚动；点击查看原图。</figcaption></figure>
+<p>8 月原始提案考虑过 read-first 和分阶段 dual-read/dual-write。后来接受的方案改为 Effect Program 先行，再按完整事务替换、删除旧规则，生产路径只有一个语义 owner。最初提案中的阶段设想，不能直接当成 2.0 的运行时设计。</p>
+<p>这种变化很正常。重要的是把为什么改路线、已经切到哪里、哪些仍是 reference 或候选写清楚。当前维护中的 <a href="https://github.com/loopx-project/loopx/blob/488e4438e0e51eca023ac3f5e690603120851b0c/docs/architecture/rfcs/typescript-control-plane-migration-v0.zh-CN.md">TS RFC</a> 记录了这些检查点。</p>
+<h2 id="section-2">2. 只统计核心 control plane：研发规模与代码变化</h2>
+<p>为了把整段工程的规模说清楚，这里固定一个可复算的窄范围：<strong><code>loopx/control_plane/**</code></strong>。其他目录的 App、benchmark、文档、测试套件不计入核心代码量。这个目录自身的测试支持工具仍在目录口径内。</p>
+<p>基线是正式 TS RFC 合入前的 <code>d1fe059</code>，终点是 10 月 16 日的 <code>488e443</code>。从正式 RFC 到终点约 <strong>62 天</strong>，跨 63 个日历日期；其中 62 个日期有核心目录的主干提交。<a href="https://github.com/loopx-project/loopx/compare/d1fe05932ac28690d393a38c78b4738ac12c78c0...488e4438e0e51eca023ac3f5e690603120851b0c">起止源码对照</a>可以复查版本。</p>
+<h3>整个周期的研发活动</h3>
+<div class="table-scroll" role="region" tabindex="0" aria-label="可横向滚动的技术对照表"><table>
+<thead>
+<tr>
+<th>指标</th>
+<th align="right">核心目录口径</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触及核心目录的主干落地提交，按第一父链去重</td>
+<td align="right"><strong>1,144</strong></td>
+</tr>
+<tr>
+<td>可核验关联的已合并 PR，按 PR 编号去重</td>
+<td align="right"><strong>1,121</strong></td>
+</tr>
+<tr>
+<td>这些 PR 的作者账号</td>
+<td align="right"><strong>56</strong></td>
+</tr>
+<tr>
+<td>本次 API 快照中的 review 记录</td>
+<td align="right"><strong>2,329</strong></td>
+</tr>
+<tr>
+<td>本次 API 快照中的会话评论，不含行内 review comments</td>
+<td align="right"><strong>1,631</strong></td>
+</tr>
+<tr>
+<td>有 review 记录的关联 PR</td>
+<td align="right"><strong>1,031 / 1,121</strong></td>
+</tr>
+<tr>
+<td>PR 创建至合并的中位历时</td>
+<td align="right"><strong>5.0 小时</strong></td>
+</tr>
+<tr>
+<td>PR 创建至合并的 P90 / P95 历时</td>
+<td align="right"><strong>25.4 / 45.0 小时</strong></td>
+</tr>
+</tbody></table></div>
+<p>这组范围包含同期的迁移、新能力、修复与维护。56 是 GitHub 账号数，其中有自动化与共享账号；它不等于 56 个人或 56 个 Agent。review 数也包含自审、重复审查等记录，部分讨论发生在合并后。合并历时包含等待，不能换算成有效研发工时。</p>
+<p>新 maintainer Song 在这个窄目录口径下关联 <strong>53 个 PR</strong>。他在 <code>loopx/semantics/</code> 等目录的贡献没有全部进入这个数，具体技术归属仍以本文的贡献说明和原 PR 为准。</p>
+<h3>代码结构与累计变化量</h3>
+<p>下表按物理行统计，包含注释和空行；列出的文件量只计相应语言源码。</p>
+<div class="table-scroll" role="region" tabindex="0" aria-label="可横向滚动的技术对照表"><table>
+<thead>
+<tr>
+<th>核心目录源码</th>
+<th align="right">基线</th>
+<th align="right">取证终点</th>
+<th align="right">期间累计新增 / 删除</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Python</td>
+<td align="right">256 个文件；80,473 行</td>
+<td align="right">471 个文件；142,371 行</td>
+<td align="right">+120,899 / −59,001 行</td>
+</tr>
+<tr>
+<td>TypeScript</td>
+<td align="right">0 个文件；0 行</td>
+<td align="right">323 个文件；87,268 行</td>
+<td align="right">+104,769 / −17,501 行</td>
+</tr>
+<tr>
+<td>Python + TypeScript</td>
+<td align="right">80,473 行</td>
+<td align="right">229,639 行</td>
+<td align="right"><strong>+225,668 / −76,502 行</strong></td>
+</tr>
+</tbody></table></div>
+<p>TS 占终点这两种语言源码物理行数的 <strong>38.0%</strong>。这是目录里的语言结构，不能当作“38% 的控制面已完成迁移”：一部分旧入口本来就在目录外，迁移中也有模块归位、新能力与测试支持代码进入。</p>
+<figure><div class="figure-scroll" tabindex="0" role="region" aria-label="核心 control plane 的 Python 与 TypeScript 源码存量变化"><a href="../../images/typescript-control-plane-refactor/core-source-stock.svg" target="_blank" rel="noopener"><img src="../../images/typescript-control-plane-refactor/core-source-stock.svg" alt="核心 control plane 的 Python 与 TypeScript 源码存量变化" width="1100" height="640" loading="lazy"></a></div><figcaption>核心 control plane 的 Python 与 TypeScript 源码存量变化 窄屏可横向滚动；点击查看原图。</figcaption></figure>
+<p>累计新增和删除按主干每次落地差分相加，同一行反复修改会重复计数；两端存量只看各自快照。本次将累计净变化与端点差分、源码存量变化逐项对齐。这里能看到约 <strong>30.2 万行次</strong>的 Python/TS 改动，不能据此计算独立产出、质量或模型生产率。</p>
+<h3>节奏：这段工程怎样持续推进</h3>
+<div class="table-scroll" role="region" tabindex="0" aria-label="可横向滚动的技术对照表"><table>
+<thead>
+<tr>
+<th>北京日期，按周分桶</th>
+<th align="right">核心主干提交</th>
+<th align="right">关联合并 PR</th>
+<th align="right">当周 PR 作者账号</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>08-15—08-21</td>
+<td align="right">52</td>
+<td align="right">48</td>
+<td align="right">10</td>
+</tr>
+<tr>
+<td>08-22—08-28</td>
+<td align="right">87</td>
+<td align="right">86</td>
+<td align="right">14</td>
+</tr>
+<tr>
+<td>08-29—09-04</td>
+<td align="right">61</td>
+<td align="right">61</td>
+<td align="right">16</td>
+</tr>
+<tr>
+<td>09-05—09-11</td>
+<td align="right">92</td>
+<td align="right">92</td>
+<td align="right">14</td>
+</tr>
+<tr>
+<td>09-12—09-18</td>
+<td align="right">133</td>
+<td align="right">133</td>
+<td align="right">14</td>
+</tr>
+<tr>
+<td>09-19—09-25</td>
+<td align="right">150</td>
+<td align="right">147</td>
+<td align="right">10</td>
+</tr>
+<tr>
+<td>09-26—10-02</td>
+<td align="right">161</td>
+<td align="right">161</td>
+<td align="right">17</td>
+</tr>
+<tr>
+<td>10-03—10-09</td>
+<td align="right">216</td>
+<td align="right">214</td>
+<td align="right">12</td>
+</tr>
+<tr>
+<td>10-10—10-16</td>
+<td align="right">192</td>
+<td align="right">179</td>
+<td align="right">14</td>
+</tr>
+</tbody></table></div>
+<figure><div class="figure-scroll" tabindex="0" role="region" aria-label="整个重构期间，触及核心目录的关联合并 PR 按周分布"><a href="../../images/typescript-control-plane-refactor/core-weekly-prs.svg" target="_blank" rel="noopener"><img src="../../images/typescript-control-plane-refactor/core-weekly-prs.svg" alt="整个重构期间，触及核心目录的关联合并 PR 按周分布" width="1100" height="640" loading="lazy"></a></div><figcaption>整个重构期间，触及核心目录的关联合并 PR 按周分布 窄屏可横向滚动；点击查看原图。</figcaption></figure>
+<p>首末周只覆盖统计起止时间以内的部分。周内按合并时间计 PR、按提交时间计主干提交，两种时间可能不同，因此不要把两个数逐行当成一一对应。</p>
+<p>再按标题前缀观察，<code>fix</code> 为 <strong>658</strong>，<code>feat</code> 为 <strong>208</strong>，<code>refactor</code> 为 <strong>137</strong>，<code>perf</code> 为 <strong>28</strong>，其他为验证、文档或未按这些前缀命名的工作。它们是标题分类，不能把其中某一类当作全部迁移工作。</p>
+<figure><div class="figure-scroll" tabindex="0" role="region" aria-label="同一核心目录 PR 集合的标题类别分布"><a href="../../images/typescript-control-plane-refactor/core-work-types.svg" target="_blank" rel="noopener"><img src="../../images/typescript-control-plane-refactor/core-work-types.svg" alt="同一核心目录 PR 集合的标题类别分布" width="1100" height="640" loading="lazy"></a></div><figcaption>同一核心目录 PR 集合的标题类别分布 窄屏可横向滚动；点击查看原图。</figcaption></figure>
+<p>这些数据让我更愿意把后面的机制按阶段讲：规则搬迁之后，还有调用方接入、语义修复、恢复验证和旧路径退役。最后的 #6396 是整个过程中的一个集中切片。</p>
+<h3>统计如何复查</h3>
+<p>公开安全的<a href="../../images/typescript-control-plane-refactor/core-pr-cohort.csv">PR 清单</a>、<a href="../../images/typescript-control-plane-refactor/core-mainline-commits.csv">核心主干提交清单</a>和<a href="../../images/typescript-control-plane-refactor/core-statistics.json">指标 JSON</a>随稿提供。PR 集合来自触及该目录的主干提交与 GitHub 合并元数据的对应关系；同一 PR 只计一次。2 次主干提交没有可核验的合并 PR 对应，仍计入提交和代码变化量。</p>
+<p>取证中先枚举公开 PR，再用 Git 主干反查；直接读取补齐了搜索索引漏掉的 14 个 PR 元数据。源数据与处理脚本保留在本次调研材料中。没有从这份盘点推算 token、模型费用、CI 算力、研发工时或 benchmark 收益。</p>
+<h2 id="section-3">3. Effect Program 先行：先统一“做过什么”</h2>
+<p>第一次有界切换发生在 8 月 21 日的 <a href="https://github.com/loopx-project/loopx/pull/3416">#3416</a>。TS 接下 Effect Program、settlement algebra、Turn journal 的解释，以及持久 checkpoint effect。</p>
+<p>这组边界之所以连在一起，是因为恢复要回答同一个问题：这笔工作有哪些 effect，哪些已经发生，下一个合法动作是什么？</p>
+<p>一个 checkpoint 不能只是“把 JSON 写回文件”。操作身份、同键互斥、旧内容匹配、原子替换与持久化顺序，都影响重试能否识别原结果。把这些规则拆在多个运行时，下一次修恢复就要同时追几份实现。</p>
+<p>因此这次切换把内部 effect 及其规则交给 TS。Python 保留兼容调用和 callback/provider 边界。托管的本地 runtime 按需启动、空闲退出，使用私有 token 与源码指纹处理生命周期；调用者不必手工管理一套 daemon。</p>
+<p>这项设计也有成本。PR 中同一历史 checkpoint 工作负载的测量如下：</p>
+<div class="table-scroll" role="region" tabindex="0" aria-label="可横向滚动的技术对照表"><table>
+<thead>
+<tr>
+<th>路径</th>
+<th>p50</th>
+<th>p95</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>旧 checkpoint</td>
+<td>0.755 ms</td>
+<td>2.020 ms</td>
+</tr>
+<tr>
+<td>新的持久 checkpoint 路径</td>
+<td>12.597 ms</td>
+<td>18.610 ms</td>
+</tr>
+</tbody></table></div>
+<p>新路径增加了 RPC 与 durability 工作。这个比较说明第一次切换付出了什么，不能推导“TS 比 Python 慢”或今天整个 CLI 的延迟。先承认成本，才有条件检查后续完整事务是否消除了更多往返和重复判断。</p>
+<h2 id="section-4">4. 迁移完整事务：一次少到两次，也可能是正确答案</h2>
+<p>8 月 22 日的 <a href="https://github.com/loopx-project/loopx/pull/3447">#3447</a> 明确停止继续平铺叶子 helper。原因很实际：每搬一个函数都加 facade、DTO 和 parity 脚手架，Python 仍决定组合顺序，生产链反而变长。</p>
+<p>新的单位是一笔可观察事务。比如 Turn settlement，需要把输入解码、身份、journal、待执行 effect、结果归约和 closeout 放到一个 owner 下。Todo completion 同样牵动准入、状态、lease、continuation 和提交回执。</p>
+<figure><div class="figure-scroll" tabindex="0" role="region" aria-label="完整事务与具名外部 provider 的职责边界"><a href="../../images/typescript-control-plane-refactor/transaction-zh.svg" target="_blank" rel="noopener"><img src="../../images/typescript-control-plane-refactor/transaction-zh.svg" alt="完整事务与具名外部 provider 的职责边界" width="1100" height="640" loading="lazy"></a></div><figcaption>完整事务与具名外部 provider 的职责边界 窄屏可横向滚动；点击查看原图。</figcaption></figure>
+<p><a href="https://github.com/loopx-project/loopx/pull/3464">#3464</a> 把 settlement 的 7 次叶子 runtime 调用收敛成粗粒度 <code>turn.settlement.reduce</code>。已交付切片中的路径是：</p>
+<pre><code class="language-text">新 provider 工作：TS preflight → Python provider / checkpoint → TS final reduction
+原结果重放：     TS reduction / 原结果恢复
+</code></pre>
+<p>两次与一次，分别对应有新 provider 工作和重放。图中的职责也不代表整个 CLI 只会发生这些调用。</p>
+<p>评审曾发现一个有诱惑力的错误优化：只保留最后一次 reduction。这样调用更少，但畸形身份或 journal 可能直到外部 provider 执行之后才被拒绝。最终保留 preflight，由 TS 先授权准确的待执行 effect，Python 只执行这些 effect，再返回最终归约。</p>
+<p>这个负例让我更看重“检查放在什么位置”。一个正确判断，如果发生在不可逆 effect 之后，也可能保护不了用户。</p>
+<p>后续 task lease、Vision、monitor-poll、spend/void 等切片也沿完整事务推进。迁移账本需要记录：旧规则删了什么；新 bridge 加了什么；happy/recovery path 跨几次运行时；哪些脚手架可以退役；完整入口的正确性和延迟怎样。代码净增可以有理由，但要说清楚多出的代码承担什么。</p>
+<h2 id="section-5">5. 共享权威：领域规则和存储原语分别归属</h2>
+<p>事务迁移时，共享权威也在发展。从 wchwawa 推进的协调核心、aggregate/provider 与可恢复 reference，到 <a href="https://github.com/loopx-project/loopx/pull/3798">#3798</a> 的 TS AuthorityStore，逐渐收敛出一个 provider-neutral 的持久化合同。</p>
+<p>这里的关键是把两类问题分开：</p>
+<ol>
+<li>领域 owner 判断一次状态迁移是否合法、谁有执行权。</li>
+<li>store 保证条件提交、持久化结果与证明的读取。</li>
+</ol>
+<p>当前 <a href="https://github.com/loopx-project/loopx/blob/488e4438e0e51eca023ac3f5e690603120851b0c/loopx/control_plane/coordination/authority_store.ts">AuthorityStore</a> 提供 <code>storeIdentity</code>、<code>loadAuthority</code>、<code>commitAuthority</code>、<code>readReceipt</code>、<code>scanCommitted</code> 等操作。store 原子地保护 head、事件和回执；领域规则不能悄悄移进某个数据库 adapter。</p>
+<p>几种版本必须分别解释：</p>
+<div class="table-scroll" role="region" tabindex="0" aria-label="可横向滚动的技术对照表"><table>
+<thead>
+<tr>
+<th>标识</th>
+<th>保护的边界</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>provider_revision</code></td>
+<td>provider 上的一次条件提交；其表示对领域调用方可以不透明</td>
+</tr>
+<tr>
+<td><code>authority_revision</code></td>
+<td>领域权威状态的版本</td>
+</tr>
+<tr>
+<td><code>lease_epoch</code></td>
+<td>一轮执行权的代际，防止旧 executor 继续写</td>
+</tr>
+<tr>
+<td>store identity / lineage</td>
+<td>当前读取的是否仍是同一条权威历史</td>
+</tr>
+<tr>
+<td>operation identity / receipt</td>
+<td>是否为同一笔已生效操作，原结果是什么</td>
+</tr>
+</tbody></table></div>
+<p>例如 PostgreSQL 在 COMMIT 后断连，结果可能已经持久化。provider 必须区分 missing、unavailable、failed 与 ambiguous durability。不能因为客户端没有收到成功，就当成没有提交。后续按原操作身份查 receipt，才有机会安全恢复。<a href="https://github.com/loopx-project/loopx/pull/3807">PostgreSQL candidate 的边界</a> 也明确保留了部署与采用资格。</p>
+<p>早期 Python executor 有 reference/coverage 作用，后来未使用的 prototype 被删除；实际 native File/SQLite 路径成为对应资格验证对象。保留过渡实现有期限，不能让 reference 悄悄变成第二套生产权威。</p>
+<h2 id="section-6">6. SQLite 之后：长程历史也要有成本模型</h2>
+<p>LIHUA919 的 <a href="https://github.com/loopx-project/loopx/pull/4121">#4121</a> 把可选 SQLite provider 接到既有 TS authority 合同。一次事务原子提交 head、receipts、events 和 outbox；claim/lease 的领域语义仍从原 owner 来。</p>
+<p>接入数据库以后，还有三个不同的工程问题。</p>
+<p><strong>第一，当前 head 的成本不能跟总历史一起长。</strong> <a href="https://github.com/loopx-project/loopx/pull/4408">#4408</a> 把每次保留完整 projection 改为经过验证的周期 checkpoint 与已提交 delta，收敛 codec owner，提供事务性、幂等的旧格式迁移。当前读取、恢复连续性和完整审计有不同的读取范围。</p>
+<p><strong>第二，写入量要测对。</strong> <a href="https://github.com/loopx-project/loopx/pull/4778">#4778</a> 分别观察 logical write volume、窗口内累计 WAL 流量和应用观察到的锁等待。最终数据库文件多大，不能替代写放大测量；一次 rehearsal 也不能直接叫容量或持续运行验收。</p>
+<p><strong>第三，replay 的对象所有权会影响正确性。</strong> <a href="https://github.com/loopx-project/loopx/pull/4931">#4931</a> 减少未改变子树的复制、排序、编码，以及 receipt lookup 中无用的完整 projection 构造。同时保证返回给调用方的对象被修改后，不会污染下一次 replay 的内部基础状态；持久证明字节也保持不变。</p>
+<p>这轮优化在一些路径上有明显收益，但大状态、扫描延迟和内存成本仍有缺口，PR 保留了未达到的目标。把这些差异留下，比给所有路径写一个统一“性能提升”更有用。</p>
+<p>10 月的 <a href="https://github.com/loopx-project/loopx/pull/5805">#5805</a> 又更新了未配置的新建 Goal 默认值，选择 canonical SQLite 与 hard lease。已有 Goal、显式选择和旧 operation retry 继续遵守各自合同。新建默认值、旧数据迁移、旧 writer 退役，是三件发生在不同阶段的事。</p>
+<h2 id="section-7">7. Song 的 Semantics：定义、生产、解释要接起来</h2>
+<p>新 maintainer <strong>Song（@songoow）</strong> 从 9 月 15 日的 <a href="https://github.com/loopx-project/loopx/pull/4433">#4433</a> 发起并实现 Semantics RFC、registry 和提交路径检查，之后持续推进收敛。这条线让我们开始系统约束“概念怎样增长”。</p>
+<p>跨语言迁移很容易产生重复知识：同名状态在 Python Enum、<code>Literal</code>、TS <code>as const</code>、展示层和判断分支中各出现一次。即使今天字符串一样，明天也可能有一处多加了值或换了解释。</p>
+<p><a href="https://github.com/loopx-project/loopx/blob/488e4438e0e51eca023ac3f5e690603120851b0c/docs/architecture/rfcs/semantic-vocabulary-convergence-v0.zh-CN.md">Semantics RFC</a> 将检查拆为可追溯关系：定义 owner、值域、生成绑定、producer、interpreter/projection。运行时从类型化 owner 取规则，登记表做约束与检查，不成为线上规则的另一个来源。</p>
+<h3>一个字段混入四种东西</h3>
+<p><a href="https://github.com/loopx-project/loopx/pull/4494">#4494</a> 处理过 <code>effective_action</code> 的混用：quota 决策、frontier 动作、replay 判决和诊断错误码放在同一字段，调用方难以知道该按哪套域解释。</p>
+<p>收敛后，判决放 <code>decision</code>，诊断放 <code>error_code</code>，根动作限定为已登记且不相交的 quota/frontier 并集。跨运行时绑定从 owner 生成；旧 v0 签名计划保留原字节语义，避免改写历史导致原身份核验失败。</p>
+<p>同一改动还抓到 <code>skip</code>/<code>quota_skip</code>：消费分支存在，不能证明 producer 会输出那个值。需要追到支持位点上的真实赋值与返回，而不是把比较字符串也算作生产证据。</p>
+<h3>检查器也需要能推翻自己的反例</h3>
+<p><a href="https://github.com/loopx-project/loopx/pull/4687">#4687</a> 保留了评审中有价值的反例，修复三种“自信地答错”：全局重绑定被漏掉，字典 spread 后修改仍被当成旧初始化值，遮蔽的 <code>String</code> 被误认成内建转换。</p>
+<p>这里误报与漏报的代价不同。保守扩大候选值可能多报一个问题；漏掉真实生产值，会让未登记输出通过检查。没有把握的动态形式应留下 unknown。</p>
+<p>检查还要有扫描覆盖下限，不能靠少扫文件过线。后来删除持续膨胀的已提交 inventory，改成按需计算全树清单，也没有取消这个义务。当前支持形式之外仍有缺口，<a href="https://github.com/loopx-project/loopx/issues/4447">跟踪 issue</a> 继续保留。</p>
+<p>这项工作让我很认同一个实践：自动生成和自动检查，可以减少同步错误；它们自己的前提、覆盖和错误方向，也需要被审查。</p>
+<h2 id="section-8">8. 调用方和默认值，决定迁移能否到用户手上</h2>
+<p>完整事务需要真实 producer 接入。9 月的 <a href="https://github.com/loopx-project/loopx/pull/4178">#4178</a> 将非终态规划更新收敛到一个权威快照与 TS transaction，删除 Python 合成 Markdown、再解析和事务前 target 读取的绕路。</p>
+<p>省略、<code>null</code>、空值、<code>false</code> 在这一层都有含义。dry-run 要准确模拟，不能因为选定 provider 不可用就回退别处。随后 <a href="https://github.com/loopx-project/loopx/pull/4279">#4279</a> 也收敛了读取分类与投影交付语义；部分 Python read owner 被有意保留。一个 owner 是否清楚，比为了语言纯度再造一份解释更重要。</p>
+<p>新建默认值是另一个例子。当前 priority 回归保护以下区别：</p>
+<div class="table-scroll" role="region" tabindex="0" aria-label="可横向滚动的技术对照表"><table>
+<thead>
+<tr>
+<th>输入或操作</th>
+<th>预期行为</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>新建任务，省略 priority</td>
+<td>使用新建默认 P1</td>
+</tr>
+<tr>
+<td>读取旧任务，历史上没有 priority</td>
+<td>保留历史含义</td>
+</tr>
+<tr>
+<td>重放原创建 operation</td>
+<td>返回原结果</td>
+</tr>
+<tr>
+<td>只修改正文</td>
+<td>保留已有 priority</td>
+</tr>
+<tr>
+<td>显式清空</td>
+<td>确实清空</td>
+</tr>
+<tr>
+<td>结构化声明与旧正文前缀冲突</td>
+<td>拒绝并给出修正上下文</td>
+</tr>
+</tbody></table></div>
+<p>这些区别由 <a href="https://github.com/loopx-project/loopx/blob/488e4438e0e51eca023ac3f5e690603120851b0c/tests/control_plane_ts/todo_priority.test.ts">File/SQLite 回归</a> 保护。把“新建默认值”放在原回执恢复之后，才能避免升级替历史做决定。</p>
+<p>最后一轮评审还发现：TS 核心的 metadata-only completion repair 可以通过直接测试，普通 Python producer 却会自动带上 completion policy 和 auto-acquire 等默认参数，被核心视为混入了新工作，导致 File/SQLite、dry-run/执行的实际入口都失败。<a href="https://github.com/loopx-project/loopx/pull/6396#pullrequestreview-5516847052">公开反例</a> 记录了这一点。</p>
+<p>这个恢复缺口在基线也存在，不能全部归因给最后的贡献者。修复要走到普通调用方，同时继续拒绝真正的新正文、continuation、所有权或验证修改。直接构造正确 typed request，仅证明内层会处理它。</p>
+<h2 id="section-9">9. 恢复原结果，同时保护当前执行权</h2>
+<p>恢复最容易混淆两个时间点：原操作当时合法，现在的执行者是否还能继续改状态。</p>
+<p>设想一次 team-plan 已经提交，响应丢了。升级后，调用者拿原 operation ID 重试，新准入规则却变严了。若先按新操作拒绝，就会把原成功结果挡住。最后的 <a href="https://github.com/loopx-project/loopx/pull/6396#pullrequestreview-5514510958">恢复评审</a> 抓到了这个问题。</p>
+<figure><div class="figure-scroll" tabindex="0" role="region" aria-label="原回执恢复与当前执行权的分离"><a href="../../images/typescript-control-plane-refactor/replay-zh.svg" target="_blank" rel="noopener"><img src="../../images/typescript-control-plane-refactor/replay-zh.svg" alt="原回执恢复与当前执行权的分离" width="1100" height="640" loading="lazy"></a></div><figcaption>原回执恢复与当前执行权的分离 窄屏可横向滚动；点击查看原图。</figcaption></figure>
+<p>当前路径先解码并定位正确权威，核验原身份、意图与回执。确属同一笔已生效操作，就恢复原结果；无匹配原结果的工作，再走当前准入。选定 provider 的可用性与证明仍需要成立，不能在故障后偷偷换到 Markdown。</p>
+<p>返回原结果不会续租，不会覆盖后来提交，也不会复活旧 writer。租约转交、epoch 改变和后续状态，都有自己的保护。</p>
+<p>类型也表达这种区别：历史解码仍认识 <code>legacy</code>，当前新执行的 handoff 配置只接受 <code>soft_claim</code> 与 <code>hard_lease</code>。旧记录可读、原操作可恢复、当前执行获准，各自有独立条件。</p>
+<p>内部回执保护的范围也有限。一次外部远端 effect 若没有可核验的幂等身份与回读，不能只凭控制面只结算一次，就宣称远端恰好执行一次。unknown 应在它实际发生的边界上保留。</p>
+<h2 id="section-10">10. CLI 输出约束：压缩前先保护决策语义</h2>
+<p>对 Agent 来说，CLI 的文字会参与决策。这项工程约束早于最后的 writer 退役，在迁移中继续作为验证边界。</p>
+<p><a href="https://github.com/loopx-project/loopx/blob/488e4438e0e51eca023ac3f5e690603120851b0c/docs/reference/contracts/interface-budget-contract.md">接口预算合同</a> 关注：</p>
+<ul>
+<li>实际打印的 stdout，而不只是内存里的 payload；</li>
+<li>字符、UTF-8 字节、行数和 JSON 结构的不同成本；</li>
+<li>同一 fixture 的 base/head，以及 Todo、history 增长时的斜率；</li>
+<li>必需字段、action signature、语义锚点和明确的 detail 路径。</li>
+</ul>
+<p>展示压缩应在完整规划之后发生。少展示了什么，要与根本没读到什么区分开。projection envelope 也分别表达观测时间、服务时间、来源覆盖和完整性；缓存重新返回，不能给旧事实刷新时间戳。</p>
+<p>自然语言还需要逐条看：义务、顺序、证据来源、权限限定、适用范围、继续和停止条件。删除一句“仅在原证明成立时”可能比改一个字段更影响行为。</p>
+<p>一个有界实例是去掉 JSON 缩进与分隔空白。在同一历史 fixture 的 36 个 Todo、12 条 run 上，输出从 48,418 降到 39,726 字符，完整 payload 解码保持一致，字符数减少约 18%。它证明展示体积变化；token、费用和 Agent 效果需要另测。</p>
+<p>预算保护的是消费者能用的接口。新增指导确实有用，可以带同条件证据提高预算；为了变绿而删掉决定所需的条件，反而损坏接口。</p>
+<h2 id="section-11">11. 最后退役：保留贡献，核对删除的究竟是什么</h2>
+<p>9 月下旬已经删除了未使用的 authority prototype，以及实验性 Todo event overlay、dual-writer 和 backfill；其中有数据的旧来源有显式保留或拒绝处理。这里没有删除所有 event logging，也没有取消新 authority 的原子事件与回执。</p>
+<p>10 月继续隔离普通 Markdown writer，验证模块不在时真实后续写入仍走正确 owner。等 consumer 路由与替代路径接上，才具备集中删除的条件。</p>
+<p><a href="https://github.com/loopx-project/loopx/pull/6396">#6396</a> 由 <strong>Duang777</strong> 主导，<strong>Song</strong> 和维护侧 Agent 接力补恢复、producer 与集成，沿原分支保留贡献历史。这一轮 3 位开发者与 Agent 的接力，是整个两个月工程的收尾阶段。</p>
+<p>最终合并提交相对首个父提交的 diff 如下，<strong>只统计这个 PR，包含实现与测试</strong>：</p>
+<div class="table-scroll" role="region" tabindex="0" aria-label="可横向滚动的技术对照表"><table>
+<thead>
+<tr>
+<th>文件范围</th>
+<th align="right">新增</th>
+<th align="right">删除</th>
+<th align="right">净变化</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Python</td>
+<td align="right">10,938</td>
+<td align="right">25,235</td>
+<td align="right">−14,297</td>
+</tr>
+<tr>
+<td>TypeScript</td>
+<td align="right">2,547</td>
+<td align="right">5,116</td>
+<td align="right">−2,569</td>
+</tr>
+<tr>
+<td>其他</td>
+<td align="right">1,944</td>
+<td align="right">3,013</td>
+<td align="right">−1,069</td>
+</tr>
+<tr>
+<td>合计</td>
+<td align="right">15,429</td>
+<td align="right">33,364</td>
+<td align="right">−17,935</td>
+</tr>
+</tbody></table></div>
+<p>大部分删除也包括旧测试。不能把被删测试行当成业务能力；应继续核对原来保护的 invariant 是否由现有入口和独立反例接住。这里的数字用于说明收尾范围，不能替代整个迁移的结果验证。</p>
+<h2 id="section-12">12. 社区贡献与下一步</h2>
+<p>这项工程有多位贡献者逐步推进。下面按具体边界列出代表工作，便于继续读历史。</p>
+<div class="table-scroll" role="region" tabindex="0" aria-label="可横向滚动的技术对照表"><table>
+<thead>
+<tr>
+<th>贡献者</th>
+<th>代表贡献</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>新 maintainer <a href="https://github.com/songoow">Song / @songoow</a></strong></td>
+<td><a href="https://github.com/loopx-project/loopx/pull/4433">Semantics RFC 与检查</a>、<a href="https://github.com/loopx-project/loopx/pull/4494">动作域与 producer</a>、<a href="https://github.com/loopx-project/loopx/pull/4687">扫描反例修复</a>，以及后续语义和恢复收敛</td>
+</tr>
+<tr>
+<td><a href="https://github.com/wchwawa">@wchwawa</a></td>
+<td><a href="https://github.com/loopx-project/loopx/pull/3410">协调核心</a>、<a href="https://github.com/loopx-project/loopx/pull/3529">aggregate/provider 基础</a>、<a href="https://github.com/loopx-project/loopx/pull/3669">可恢复 reference</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/zigzagcai">@zigzagcai</a></td>
+<td><a href="https://github.com/loopx-project/loopx/pull/3674">task-lease settlement transaction</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/Alicecooo">@Alicecooo</a></td>
+<td><a href="https://github.com/loopx-project/loopx/pull/3688">Turn outcome projection</a> 与后续 facade 清理</td>
+</tr>
+<tr>
+<td><a href="https://github.com/hhyykk">@hhyykk</a></td>
+<td><a href="https://github.com/loopx-project/loopx/pull/3702">native lease acquire</a>、<a href="https://github.com/loopx-project/loopx/pull/3720">Vision transaction</a>、scheduler、monitor 与后续事务组合</td>
+</tr>
+<tr>
+<td><a href="https://github.com/yuefengw">@yuefengw</a></td>
+<td><a href="https://github.com/loopx-project/loopx/pull/3806">本地 lease lifecycle、fence 与锁/恢复</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/LIHUA919">@LIHUA919</a></td>
+<td><a href="https://github.com/loopx-project/loopx/pull/4121">SQLite provider</a>、<a href="https://github.com/loopx-project/loopx/pull/4778">写入测量</a>、<a href="https://github.com/loopx-project/loopx/pull/4931">owned-state replay</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/Duang777">@Duang777</a></td>
+<td>早期验证贡献，以及 <a href="https://github.com/loopx-project/loopx/pull/6396">普通旧 writer 集中退役</a></td>
+</tr>
+</tbody></table></div>
+<p>这些只是相关主线的代表工作。Semantics 的后续收敛、diff advisory 等也有其他社区贡献，不能全部归给同一个人。</p>
+<p>回看这次过程，我更在意的验收是：一次规则修改能否定位到清楚的 owner；实际调用者能否表达正确意图；副作用前是否检查；恢复能否保留原结果和后来状态；旧规则是否退出生产；成本是否在真实入口上可测。</p>
+<p>2.0 也没有把所有 RFC 目标画上句号。保留的 Python transport 与专业 provider 有明确用途，更广的 native CLI、持续运行资格继续按各自路径验证。工程闭环更清楚以后，我们还要在 EdgeBench、LHTB 这类通用长程 benchmark 上做能力与效率对照，尤其是 single session。</p>
+<p>我希望这次重构留下的，是下一轮修改更容易定位、验证和回滚的系统，以及遇到反例时愿意继续修正的工作方式。</p>
+
+</article></div></main>
+<footer class="site-footer"><a class="brand" href="../../../">LoopX</a><p>让工作持续推进，让判断由人掌握。</p><a href="#main" aria-label="返回开头">↑</a></footer>
+</body></html>

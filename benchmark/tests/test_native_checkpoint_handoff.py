@@ -529,8 +529,9 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
         result = run_once({**env, "LOOPX_CHECKPOINT_REQUEST": str(request)})
         assert result["ok"] and result["checkpoint"]["captured"], result
         assert "turn_envelope" not in prior and "turn_envelope_source" not in prior
-        assert result["turn_envelope"] is True
-        assert result["turn_envelope_source"] == "checkpoint_handoff"
+        assert "turn_envelope" not in result and "turn_envelope_source" not in result
+        assert 'Use TurnEnvelope:' not in json.dumps(requests[13])
+        assert 'interaction_contract' in guards[0] and 'action_signature' not in guards[0]
         assert result["checkpoint"]["phase"] == "before_replan"
         assert result["checkpoint"]["source_turn_id"] == prior["turn_id"]
         assert result["session"]["session_id"] == prior["session"]["session_id"]
@@ -699,17 +700,28 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
                    LOOPX_CODEX_HOME=str(tmp_path / "worker-home"), LOOPX_SHARED_SKILLS=str(skills),
                    MODEL_NAME="fixture", REASONING_EFFORT="high", OPENAI_BASE_URL=base_url,
                    OPENAI_API_KEY="synthetic-local-only", LOOPX_CODEX_TURN_TIMEOUT_SEC="60")
+        deadline = str(time.time() + 600)
+        env["LOOPX_PHASE_DEADLINE_EPOCH"] = deadline
         if capture != "off":
             env["LOOPX_CHECKPOINT_REQUEST"] = str(request)
         result = run_once(env)
         assert result["ok"] and not result["timed_out"], result
         assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+        # Checkpoint preloading keeps the existing heartbeat contract without
+        # injecting a Host countdown or runtime guidance.
+        worker_input = next(t for t in texts(requests[1]) if "quota should-run" in t and "```sh" in t)
+        assert deadline not in worker_input
+        assert "Absolute phase deadline" not in worker_input
+        assert "Current wake execution limit" not in worker_input
+        assert "The Host enforces runtime limits externally" not in worker_input
         if capture == "off":
             assert "checkpoint_handoffs" not in result
             assert "--decision-handoff-socket" not in guards[0]
             assert not list(logs.glob("*/decisions"))
             return
         assert len(result["checkpoint_handoffs"]) == 1
+        assert '--turn-envelope' not in shlex.split(guards[0])
+        assert 'turn_envelope' not in result and 'turn_envelope_source' not in result
         event = result["checkpoint_handoffs"][0]
         if json.loads(request.read_text())["native_session"] and sys.platform == "darwin":
             # Unsupported native interruption is refused before any signal;
@@ -739,6 +751,7 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
                 native = manifest["point_metadata"]["native_session"]
                 assert "completed_turn_id" not in native
                 assert native["interrupted_guard"]["native_call_id"] == "call_midwake"
+                assert native["interrupted_guard"]["turn_envelope"] is False
                 assert native["interrupted_guard"]["decision_sha256"] == event["decision_sha256"]
                 # Reconstruct the earlier captured store after the source has
                 # already continued. Fixed guest paths require an isolated home;

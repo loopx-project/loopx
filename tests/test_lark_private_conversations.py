@@ -71,10 +71,13 @@ class Provider:
         elif "api" in args and "GET" in args:
             path = args[args.index("GET") + 1]
             assert path.startswith("/open-apis/im/v1/messages/")
-            message = dict(self.messages[path.rsplit("/", 1)[-1]])
-            if message.get("msg_type") == "text" and "content" in message and "body" not in message:
-                message["body"] = {"content": json.dumps({"text": message.pop("content")})}
-            data = {"code": 0, "data": {"items": [message]}}
+            ids = (json.loads(args[args.index("--params") + 1])["message_ids"]
+                   if path.endswith("/mget") else [path.rsplit("/", 1)[-1]])
+            messages = [dict(self.messages[ref]) for ref in ids]
+            for message in messages:
+                if message.get("msg_type") == "text" and "content" in message and "body" not in message:
+                    message["body"] = {"content": json.dumps({"text": message.pop("content")})}
+            data = {"code": 0, "data": {"items": messages}}
         elif "+messages-mget" in args:
             ref = args[args.index("--message-ids") + 1]
             message = self.messages[ref]
@@ -1142,6 +1145,146 @@ def test_group_outbound_source_verification_reads_fresh_envelopes_without_displa
         assert not provider.writes
     finally:
         runtime.close()
+
+
+@pytest.fixture
+def completed_group_stop(ordinary):  # noqa: F811
+    _, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("batch-root", "wait for interrupt")
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        request = transport.core.pending()[0]
+        deadline = time.monotonic() + 5
+        while runtime.store.load_turn(request["session_id"], request["turn_id"])["status"] != "running":
+            assert time.monotonic() < deadline
+            time.sleep(.01)
+        event = provider.topic("batch-stop", "/stop", root=root["message_id"])
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        assert runtime.wait_for_turn(session_id=request["session_id"],
+            turn_id=request["turn_id"], timeout_sec=5)["status"] == "interrupted"
+        record = next(json.loads(p.read_text()) for p in transport.root.glob("*.json")
+                      if json.loads(p.read_text())["event"]["message_id"] == event["message_id"])
+        assert transport.core.read_request(record["request_ref"])["target_recorded"]
+        provider.calls.clear()
+        yield runtime, provider, transport, root, event, record
+    finally:
+        runtime.close()
+
+
+def test_completed_stop_batches_only_its_core_bound_source_and_root(completed_group_stop):
+    _, provider, transport, root, event, record = completed_group_stop
+    assert transport._source_verified(record)
+    calls = [a for a in provider.calls if "GET" in a]
+    assert len(calls) == 1 and calls[0][calls[0].index("GET") + 1].endswith("/mget")
+    assert json.loads(calls[0][calls[0].index("--params") + 1]) == {
+        "message_ids": [event["message_id"], root["message_id"]]}
+    assert sum("auth" in a for a in provider.calls) == 2
+    provider.messages[root["message_id"]]["mentions"] = []
+    assert not transport._source_verified(record)  # Re-read, never cache the old root.
+    assert not provider.writes and not provider.reaction_creates
+
+
+@pytest.mark.parametrize("field,value", [("target_recorded", False), ("command", "status"),
+    ("status", "prepared"), ("binding_id", "other"), ("source", {}), ("request_ref", "other")])
+def test_completed_stop_batch_requires_the_persisted_core_proof(completed_group_stop, field, value):
+    _, provider, transport, _, _, record = completed_group_stop
+    path = transport.core.root / f"{record['request_ref']}.json"
+    native = json.loads(path.read_text())
+    path.write_text(json.dumps({**native, field: value}))
+    transport._source_verified(record)
+    assert not any("GET" in a and a[a.index("GET") + 1].endswith("/mget") for a in provider.calls)
+    assert not provider.writes and not provider.reaction_creates
+
+
+@pytest.mark.parametrize("change", ["sender", "chat", "type", "root", "parent", "thread",
+    "mention", "root_sender", "root_parent", "root_chat", "app", "bot", "revoke"])
+def test_completed_stop_batch_retains_source_and_grant_fences(completed_group_stop, change):
+    _, provider, transport, root, event, record = completed_group_stop
+    message, original = provider.messages[event["message_id"]], provider.messages[root["message_id"]]
+    if change in {"sender", "chat", "type", "root", "parent", "thread"}:
+        field, value = {"sender": ("sender", {"id": "ou_other", "sender_type": "user"}),
+            "chat": ("chat_id", "oc_other"), "type": ("msg_type", "image"),
+            "root": ("root_id", "om_other"), "parent": ("parent_id", "om_other"),
+            "thread": ("thread_id", "omt_other")}[change]
+        message[field] = value
+    elif change == "mention":
+        original["mentions"] = []
+    elif change == "root_sender":
+        original["sender"] = {"id": "ou_other", "sender_type": "app"}
+    elif change == "root_parent":
+        original["parent_id"] = "om_other"
+    elif change == "root_chat":
+        original["chat_id"] = "oc_other"
+    elif change == "app":
+        provider.profile_apps["notes-app"] = "cli_other"
+    elif change == "bot":
+        provider.bot_ready = False
+    else:
+        transport.bindings.disconnect(record["binding_id"], expected_revision=transport.bindings.read()["revision"])
+    assert not transport._source_verified(record)
+    assert not provider.writes and not provider.reaction_creates
+
+
+@pytest.mark.parametrize("failure", ["missing", "duplicate", "extra", "error", "unavailable", "bad_id"])
+def test_completed_stop_batch_rejects_partial_or_ambiguous_results(completed_group_stop, failure):
+    _, provider, transport, _, _, record = completed_group_stop
+    def runner(args, cwd=None, timeout=None):
+        result = provider(args, cwd, timeout)
+        if "GET" in args and args[args.index("GET") + 1].endswith("/mget"):
+            data = json.loads(result["stdout"])
+            items = data["data"]["items"]
+            if failure == "missing":
+                items.pop()
+            elif failure == "duplicate":
+                items[1] = items[0]
+            elif failure == "extra":
+                items.append({"message_id": "om_unrequested"})
+            elif failure == "error":
+                data["code"] = 999
+            elif failure == "bad_id":
+                items[0]["message_id"] = []
+            else:
+                result["returncode"] = 1
+            result["stdout"] = json.dumps(data)
+        return result
+    transport.runner = runner
+    assert not transport._source_verified(record)
+    assert not provider.writes and not provider.reaction_creates
+
+
+@pytest.mark.parametrize("identity_fails", [False, True])
+def test_completed_stop_batch_joins_a_separate_fresh_identity(completed_group_stop, monkeypatch, identity_fails):
+    _, provider, transport, _, _, record = completed_group_stop
+    started, observed, release = threading.Event(), threading.Event(), threading.Event()
+    original_sources, original_observe = transport._completed_stop_sources, transport.bindings.observe
+    observations = []
+
+    def sources(*args):
+        started.set()
+        assert release.wait(3)
+        return original_sources(*args)
+
+    def observe(*args, **kwargs):
+        observations.append(True)
+        if len(observations) == 2:
+            assert started.wait(2)
+            observed.set()
+            if identity_fails:
+                raise ValueError("fresh App observation unavailable")
+        return original_observe(*args, **kwargs)
+
+    monkeypatch.setattr(transport, "_completed_stop_sources", sources)
+    monkeypatch.setattr(transport.bindings, "observe", observe)
+    with ThreadPoolExecutor(max_workers=1) as caller:
+        pending = caller.submit(transport._source_verified, record)
+        try:
+            assert started.wait(2) and observed.wait(2)
+            assert not pending.done()
+        finally:
+            release.set()
+        assert pending.result(timeout=3) is not identity_fails
+    assert len(observations) == 2
+    assert not provider.writes and not provider.reaction_creates
 
 
 @pytest.mark.parametrize("followup", [False, True])

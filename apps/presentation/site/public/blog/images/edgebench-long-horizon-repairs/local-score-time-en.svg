@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 990" width="960" height="990" role="img" aria-labelledby="title description" font-family="Geist,-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Noto Sans CJK SC',sans-serif">
-<title id="title">Local 90-minute best-score trajectories</title><desc id="description">71 scalar observations from 13 scored runs. Lines connect best-so-far scores at submission timestamps. Independent task scales; no fit or confidence bands. Two runs lack native final results.</desc>
-<rect width="960" height="990" fill="#fafafa"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 1026" width="960" height="1026" role="img" aria-labelledby="title description" font-family="Geist,-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Noto Sans CJK SC',sans-serif">
+<title id="title">Local 90-minute best-score trajectories</title><desc id="description">Historical exploratory runs, not official LoopX results or current capability. 71 scalar observations from 13 scored runs. Lines connect best-so-far scores at submission timestamps. Independent task scales; no fit or confidence bands. Two runs lack native final results.</desc>
+<rect width="960" height="1026" fill="#fafafa"/>
 <text x="24" y="30" font-size="19" text-anchor="start" fill="#171717">90-minute local budget · best score so far · higher is better</text>
 <text x="24" y="65" font-size="17" text-anchor="start" fill="#171717">(a) Borden source inversion</text>
 <line x1="60" x2="425" y1="228.00" y2="228.00" stroke="#e5e5e5"/>
@@ -213,4 +213,6 @@
 <text x="514" y="901.00" font-size="15" text-anchor="start" fill="#4d4d4d">‡ 109 uses aggregate feedback inversion.</text>
 <text x="514" y="923.00" font-size="15" text-anchor="start" fill="#4d4d4d">Historical combined revisions only;</text>
 <text x="514" y="945.00" font-size="15" text-anchor="start" fill="#4d4d4d">not a test of the current repair head.</text>
+
+<text x="20" y="1014" fill="#4d4d4d" font-size="12">Historical runs; not official LoopX results or current capability. feedback-first was withdrawn (#6612).</text>
 </svg>

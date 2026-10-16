@@ -51,6 +51,8 @@ with (
             patch.object(provider, "sys", SimpleNamespace(platform="darwin"))
         )
         fail_next_open = False
+        live_revision = 0
+        live_updates = 0
         body_fault = None
 
         def open_spy(argv, **options):
@@ -77,6 +79,8 @@ with (
                     self._send_json({"ok": True, "count": len(launches)})
                 elif self.path == "/fixture/inputs":
                     self._send_json({"ok": True, "count": len(_inputs)})
+                elif self.path == "/fixture/following":
+                    self._send_json({"events": request.follow_events})
                 elif (body_fault and self.path.startswith("/api/chat/codex-attached?")
                       and "agent_id=" not in self.path):
                     # Headers first, then a body that never completes: the client
@@ -97,7 +101,7 @@ with (
                     super().do_GET()
 
             def do_POST(self):
-                global fail_next_open, body_fault
+                global fail_next_open, live_revision, live_updates, body_fault
                 if self.path in {
                     "/fixture/discovery-body-timeout",
                     "/fixture/discovery-body-drop",
@@ -218,6 +222,86 @@ with (
                         "thread_id"
                     ] = "22222222-2222-4222-8222-222222222222"
                     registry.write_text(json.dumps(value))
+                    self._send_json({"ok": True})
+                elif self.path in {
+                    "/fixture/live-start",
+                    "/fixture/live-update",
+                    "/fixture/live-finish",
+                }:
+                    live_revision += 1
+                    finished = self.path == "/fixture/live-finish"
+                    if self.path == "/fixture/live-start":
+                        text = "原宿主实时草稿"
+                    elif self.path == "/fixture/live-update":
+                        # Distinct drafts let the browser regression tell a stale
+                        # frozen projection from the newer buffered one.
+                        live_updates += 1
+                        text = (
+                            "原宿主实时草稿，已持续更新。"
+                            if live_updates == 1
+                            else f"原宿主实时草稿，已持续更新 {live_updates}。"
+                        )
+                    else:
+                        text = "原宿主实时草稿，已持续更新。"
+                    if self.path == "/fixture/live-start" or finished:
+                        with rollout.open("a") as stream:
+                            stream.write(
+                                json.dumps(
+                                    {
+                                        "type": "event_msg",
+                                        "timestamp": "2026-01-01T00:00:05Z"
+                                        if finished
+                                        else "2026-01-01T00:00:04Z",
+                                        "payload": {
+                                            "type": "task_complete"
+                                            if finished
+                                            else "task_started"
+                                        },
+                                    }
+                                )
+                                + "\n"
+                            )
+                    if finished:
+                        append_message(rollout, "assistant", text)
+                    request.publish_live(
+                        {
+                            "type": "snapshot",
+                            "revision": live_revision,
+                            "conversationState": {
+                                "id": "11111111-1111-4111-8111-111111111111",
+                                "turns": [
+                                    {
+                                        "turnId": "live-example",
+                                        "status": "completed"
+                                        if finished
+                                        else "inProgress",
+                                        "completedItemIds": [],
+                                        "items": [
+                                            {
+                                                "id": "live-answer",
+                                                "type": "agentMessage",
+                                                "phase": "commentary",
+                                                "text": text,
+                                            },
+                                            {
+                                                "id": "hidden-reasoning",
+                                                "type": "reasoning",
+                                                "content": "HIDDEN REASONING MUST NOT APPEAR",
+                                            },
+                                            {
+                                                "id": "live-tool",
+                                                "type": "mcpToolCall",
+                                                "status": "inProgress",
+                                                "server": "synthetic",
+                                                "tool": "verify_artifact",
+                                                "arguments": {"artifact": "release candidate"},
+                                            },
+                                        ],
+                                    }
+                                ],
+                            },
+                        }
+                    )
                     self._send_json({"ok": True})
                 elif self.path == "/fixture/fail-open":
                     fail_next_open = True

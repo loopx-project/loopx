@@ -44,6 +44,25 @@ try {
     }
     const notesLabel = locale === "en" ? "Notes" : "备注";
     const evidenceLabel = locale === "en" ? "Evidence" : "证据";
+    // Canonical deferred records may retain done=true; legacy completed records
+    // may omit status. The real adapter and inspector must distinguish them.
+    for (const [fields, completed, resumable] of [
+      [{done: true}, true, false],
+      [{done: true, status: "done"}, true, false],
+      [{done: true, status: "deferred"}, false, true],
+      [{done: false, status: "blocked"}, false, true],
+    ]) {
+      const source = todoItemSchema.parse({todo_id: "retained-task", text: "Read retained work", ...fields});
+      const todo = workspaceAgentTodoFromItem(source, "fallback-id");
+      const drawer = render(ContextDrawer, {agents: [], callbacks: {}, onClose() {}, selection: {
+        kind: "todo", item: {...todo, goalId: "test-goal", goalTitle: "Test Goal"},
+      }});
+      assert.equal(drawer.includes("personal-task-completed-note"), completed, "Completed history remains read-only");
+      assert.equal(drawer.includes("personal-task-inspector-actions"), !completed, "Completed records never expose new mutations");
+      assert.equal(drawer.includes(locale === "en" ? "Resume task" : "恢复任务"), resumable,
+        "Only explicitly paused work offers resume");
+      assert.equal(source.done, fields.done, "Presentation never rewrites the recorded lifecycle");
+    }
     for (const invalid of [null, "dependency_cycle"]) {
       const source = todoItemSchema.parse({todo_id: "todo_cycle", text: "Review dependent work", done: false,
         status: "open", resume_when: "todo_done:todo_peer", resume_ready: false,

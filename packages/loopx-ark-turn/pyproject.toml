@@ -9,7 +9,7 @@ description = "Optional Ark Managed Agent host for independently validated LoopX
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
-dependencies = ["arkruntime[mcp]>=0.8.0,<0.9", "mcp==1.28.1"]
+dependencies = ["arkruntime[mcp]>=0.8.0,<0.9", "mcp==1.30.0"]
 
 [project.scripts]
 loopx-ark-turn = "loopx_ark_turn.cli:main"

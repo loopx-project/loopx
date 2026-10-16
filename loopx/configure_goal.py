@@ -440,6 +440,8 @@ def configure_goal(
     execution_replan_after_turns: int | None = None,
     execution_stride_strategy: str | None = None,
     clear_execution_stride_strategy: bool = False,
+    execution_planning_horizon_goal: bool | None = None,
+    clear_execution_planning_horizon_goal: bool = False,
     clear_execution_replan_after_turns: bool = False,
     clear_execution_replan_after_todos: bool = False,
     self_repair_enabled: bool | None = None,
@@ -833,6 +835,8 @@ def configure_goal(
         replan_after_completed_todos=execution_replan_after_todos,
         replan_after_effective_turns=execution_replan_after_turns,
         stride_strategy=execution_stride_strategy, clear_stride_strategy=clear_execution_stride_strategy,
+        planning_horizon_goal=execution_planning_horizon_goal,
+        clear_planning_horizon_goal=clear_execution_planning_horizon_goal,
         clear_replan_after_effective_turns=clear_execution_replan_after_turns,
         clear_replan_after_completed_todos=clear_execution_replan_after_todos,
     )

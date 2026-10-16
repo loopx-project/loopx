@@ -84,6 +84,21 @@ export function sameLeaseCheckout(left: unknown, right: unknown): boolean {
     a.worktree === b.worktree;
 }
 
+/** The platform's OS-installation identity for worktree isolation; unsupported hosts stay fail-closed. */
+async function machineIdentity(): Promise<string | undefined> {
+  if (platform() === "darwin") {
+    return /"IOPlatformUUID"\s*=\s*"([^"]+)"/u.exec((await run("ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], {timeout: 5000})).stdout)?.[1];
+  }
+  if (platform() === "linux") return (await readFile("/etc/machine-id", "utf8")).trim();
+  if (platform() === "win32") {
+    // MachineGuid is the Windows analog of /etc/machine-id: this OS
+    // installation's identity, not a user-changeable computer name.
+    return /MachineGuid\s+REG_SZ\s+([0-9a-fA-F-]{36})/u.exec((await run("reg",
+      ["query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid"], {timeout: 5000})).stdout)?.[1];
+  }
+  return undefined;
+}
+
 export async function observeLeaseWorktree(path: string, overlaps: (path: string) => boolean): Promise<LeaseWorkspace> {
   if (!isAbsolute(path)) throw new LeaseWorktreeObservationError("worktree observation requires an absolute caller path");
   const cwd = await realpath(path);
@@ -132,9 +147,7 @@ export async function observeLeaseWorktree(path: string, overlaps: (path: string
   // Private local paths are not persisted. Filesystem inode identity collapses
   // symlink/case aliases; a recreated directory gets a new identity.
   const key = async (p: string) => {const s = await stat(p); return digest(`${s.dev}:${s.ino}`);};
-  const machine = platform() === "darwin"
-    ? /"IOPlatformUUID"\s*=\s*"([^"]+)"/u.exec((await run("ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], {timeout: 5000})).stdout)?.[1]
-    : platform() === "linux" ? (await readFile("/etc/machine-id", "utf8")).trim() : null;
+  const machine = await machineIdentity();
   if (!machine) throw new LeaseWorktreeObservationError("host identity unavailable for worktree isolation");
   return {host: digest(machine), common_directory: await key(common), worktree: await key(root), repository};
 }

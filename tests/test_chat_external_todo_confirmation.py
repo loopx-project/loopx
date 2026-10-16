@@ -4,16 +4,19 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from loopx.control_plane.coordination.local_authority import (
+    read_canonical_todos_if_promoted,
+)
 from test_chat_team_plan_action import GOAL_ID, _fixture, _todos
 from test_native_steward_private import finish, steward  # noqa: F401
 
 
 def prepare(components, tmp_path, monkeypatch, *, goal_id=GOAL_ID):
     store, runtime, provider, transport, binding, capture, _ = components
-    project, registry, _ = _fixture(tmp_path / "canonical")
-    payload = json.loads(registry.read_text())
-    payload["common_runtime_root"] = str(store.root.parent)
-    runtime.registry_path.write_text(json.dumps(payload))
+    project, registry, _ = _fixture(
+        tmp_path / "canonical", runtime_root=store.root.parent
+    )
+    runtime.registry_path.write_text(registry.read_text())
     response = {"schema_version": "loopx_chat_agent_response_v0", "message": "待办预览；尚未写入。",
         "proposals": [{"kind": "todo", "goal_id": goal_id, "text": "Add reader comments later",
                        "priority": "P2", "rationale": "Record the request without starting implementation."}],
@@ -47,6 +50,15 @@ def test_original_owner_can_confirm_todo_once_without_creating_a_goal_or_executi
     assert applied["status"] == "applied", transport.core.pending()
     assert applied["receipt"]["resource_ids"]["goal_id"] == GOAL_ID
     assert _todos(project).count("Add reader comments later") == 1
+    canonical = read_canonical_todos_if_promoted(
+        runtime_root=store.root.parent, goal_id=GOAL_ID
+    )
+    assert canonical is not None
+    assert len(canonical["todos"]) == 1
+    recorded = canonical["todos"][0]
+    assert recorded["todo_id"] == applied["receipt"]["resource_ids"]["todo_id"]
+    assert recorded["title"] == "Add reader comments later"
+    assert recorded["priority"] == "P2"
     assert len(store.list_sessions()) == sessions_before
     assert len(json.loads(runtime.registry_path.read_text())["goals"]) == 1
     assert not capture.exists() or "thread/goal/set" not in capture.read_text()
@@ -54,6 +66,9 @@ def test_original_owner_can_confirm_todo_once_without_creating_a_goal_or_executi
     transport.admit("steward-app", confirm)
     transport.reconcile()
     assert provider.writes == writes and _todos(project).count("Add reader comments later") == 1
+    assert read_canonical_todos_if_promoted(
+        runtime_root=store.root.parent, goal_id=GOAL_ID
+    )["todos"] == canonical["todos"]
     assert transport.core.read_request(original["request_ref"])["session_id"] == original["session_id"]
 
 

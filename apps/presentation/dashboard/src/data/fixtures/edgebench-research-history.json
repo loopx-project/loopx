@@ -1,0 +1,1952 @@
+{
+  "description": "Unchanged Explore history from a real, sealed research checkpoint later restored by follow-up experiments. Original text, timestamps, identities and references; no invented relationships.",
+  "source_sha256": "b876dd7660e0aab19db717f60e86865494a74b8fa27b42a5a67ee295ef524397",
+  "source_bytes": 104922,
+  "goal_id": "portfolio-warm-on-20261015-01",
+  "display_name": "Portfolio · 近期研究 checkpoint",
+  "provenance": {
+    "case_id": "portfolio_risk_calibration",
+    "source_run_id": "portfolio-warm-stride-on-20261015-01",
+    "checkpoint_id": "7fa63b57b1d3472496ed917d3acdba91",
+    "checkpoint_sha256": "2a05eea1753ea269bcfdfcf14cc5a4fc796bfad735d1adf0e99d889343ea1313",
+    "captured_at": "2026-10-15T13:45:34.711371+00:00",
+    "captured_native_turns": 58,
+    "selection": "Use Portfolio58-turn pre-replan point after its full real receiver passed; newer65-turn point timed out on repeated native thread/turns/list during fresh preparation. Select by recovery quality, not score. Preserve newer-point failure evidence.",
+    "restored_by": [
+      "portfolio-replan-fresh-20261016-02",
+      "portfolio-replan-retained-20261016-02"
+    ],
+    "redactions": [],
+    "claim_scope": "diagnostic_only",
+    "score_countable": false,
+    "trajectory_publication": {
+      "status": "uploaded",
+      "repository": "https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015",
+      "revision": "c858f51021dc1c1cf08263f9c04b692a5e29b40b",
+      "archive": "portfolio_risk_calibration.zip",
+      "archive_sha256": "fabc92479269b5f08eac0ee10f4a89aba4f75efef27f06e2b6b6d981d4bb4612"
+    },
+    "boundary": "Captured Explore knowledge only; original native execution state, credentials, evaluator and models are not imported."
+  },
+  "source_counts": {
+    "event_count": 76,
+    "event_kinds": {
+      "node": 38,
+      "finding": 38
+    },
+    "node_kinds": {
+      "question": 38
+    },
+    "statuses": {
+      "open": 32,
+      "refuted": 32,
+      "confirmed": 6,
+      "resolved": 6
+    },
+    "first_recorded_at": "2026-10-14T20:30:26+00:00",
+    "last_recorded_at": "2026-10-15T13:44:53+00:00",
+    "edge_count": 0,
+    "parent_records": 0
+  },
+  "events": [
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "8e2fabc9b15a87f1",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T20:30:26+00:00",
+      "result_id": "question_97e36b6161239743d643c33214e574370f75f5e9b470341790869ed4c4800a83",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:8e17428b37a871b8",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Public2024 cold start; forecast-v4; one-session variance QP; inertia0/0.00025/0.0005/0.001; exact fees/caps.",
+      "title": "Do the tested cost-gated one-session executions improve the frozen forecast strategy?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "c595691adcd20d3f",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:opportunity-cost-gates"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_97e36b6161239743d643c33214e574370f75f5e9b470341790869ed4c4800a83",
+      "recorded_at": "2026-10-14T20:30:26+00:00",
+      "result_id": "finding_3cca24bb14a9ed88c330629d36574282fa05ea255c47319caf58042f4ecf5f22",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:48c383ed164d960e",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 3bd3bcab016b03ff1b46c6f0ad7238f1d86a022f9953fcf79893b647f2e6cfc3 Applicability: Public2024 cold start; forecast-v4; one-session variance QP; inertia0/0.00025/0.0005/0.001; exact fees/caps. Observation: Public2024 control Sharpe3.30/turnover145%; daily trials1.53-2.99/199-719%, with ledger, caps and model clocks valid. Chronological comparisons support retaining the existing risk/prior settings. Interpretation: Outcome: continue retained: - Forecast-v4, exact ledger and risk clocks; native incumbent and open validation Todo. stopped: - Tested daily opportunities and direct-Sharpe defaults; additional trend-risk rule.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do the tested cost-gated one-session executions improve the frozen forecast strategy?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "8863964644ccf55c",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T20:54:55+00:00",
+      "result_id": "question_1ae72ed2059bc3f1b2812396832d04b3707791e72cd99cca5c2b01157ae13383",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:3f7a8fdd1434c64e",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Public2022-2024 cold starts; per-ETF ridge100; recent2yr/EWMA252; signal0.4; V3/V4 cost policies.",
+      "title": "Do recent training windows improve robust forecast portfolio Sharpe?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "f9133a99774fbf96",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:forecast-recency"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_1ae72ed2059bc3f1b2812396832d04b3707791e72cd99cca5c2b01157ae13383",
+      "recorded_at": "2026-10-14T20:54:55+00:00",
+      "result_id": "finding_1ad4affdeb26e0b2eb765c6f051ca32c1b02aae69a9c868f64954f8abba0def9",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:19d84bac4c37ff14",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 3e0f74241be0f443dffe39ce3e6d3ccf0fc388991d6340fd4db23990673f811e Applicability: Public2022-2024 cold starts; per-ETF ridge100; recent2yr/EWMA252; signal0.4; V3/V4 cost policies. Observation: Three-fold mean Sharpe falls under both cost policies: expanding1.48/1.89,recent0.71/1.05,EWMA1.22/1.42.30 valid cases; production unchanged. Interpretation: Outcome: continue retained: - Native-best V3, exact ledgers/costs/clocks; full acceptance. stopped: - Tested two-year/EWMA252 ridge and price-trend defaults.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do recent training windows improve robust forecast portfolio Sharpe?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "3f0efb61862a9c31",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T21:37:18+00:00",
+      "result_id": "question_1cc6be5c16dc8e983dc2689711a727f15ccd08583cbdd2f3d5061437b63b2803",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:62f2fa63ac7c994a",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Public2020-24 cold starts; ridge100 fit only earlier years; gamma40, decay60, blend0.4, V4 execution; original costs/caps.",
+      "title": "Do5/20-session return targets raise fivefold mean portfolio Sharpe under decay-v6?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "12f6fbeb6263e35a",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:forecast-horizons"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_1cc6be5c16dc8e983dc2689711a727f15ccd08583cbdd2f3d5061437b63b2803",
+      "recorded_at": "2026-10-14T21:37:18+00:00",
+      "result_id": "finding_b862f54f096483725e319ddf9e8d1c4900c868221f7a098813b843d5444194b1",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:5a87324c027c48ec",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: fc66847579409493603bdfef855d366f3ec3ecc76c1073788bcb958120a49dac Applicability: Public2020-24 cold starts; ridge100 fit only earlier years; gamma40, decay60, blend0.4, V4 execution; original costs/caps. Observation: Mean Sharpe falls from1.77 at horizon1 to1.20/1.33 at5/20; worst0.49 to-0.12/0.21. Ten strategies pass ledgers, caps, events and exact80-session prefixes. Interpretation: Retain horizon1 within this recipe. Some individual folds improve; this is scoped negative mean-Sharpe evidence, not a native or universal result.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do5/20-session return targets raise fivefold mean portfolio Sharpe under decay-v6?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "1325576bc92a9f8d",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T22:01:12+00:00",
+      "result_id": "question_ea37a63eb08965f37555551f29baa50def325120ac37c52d72fd8d520ceec352",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:eb5f893ca9c35a5a",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Public2020-24 cold starts; V3 gamma40; earlier-year winsorized means, HAC20, global/class pooling; original costs/risk/hedges.",
+      "title": "Do the tested uncertainty-weighted priors beat the fixed-half blend on fivefold mean and worst Sharpe?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "7ca24279d09e4809",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:uncertain-priors"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_ea37a63eb08965f37555551f29baa50def325120ac37c52d72fd8d520ceec352",
+      "recorded_at": "2026-10-14T22:01:12+00:00",
+      "result_id": "finding_99c1d552520eda88c201f286543b0bf05fd7e6fd2834a3575458d9a2b739d952",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:c6c7ee8a5291e92f",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 38861559af1b30cf9700f45d7dd9966e3f18b041d5d1fe0652b80c5e39c4cc6c Applicability: Public2020-24 cold starts; V3 gamma40; earlier-year winsorized means, HAC20, global/class pooling; original costs/risk/hedges. Observation: HAC20 global/class priors yield mean/worst Sharpe1.313/0.247 and1.333/0.052 vs fixed-half1.394/0.402. All20 ledgers/caps/events/prefixes pass. V7 passes three suites; mean return falls0.41pp vs V3. No native transfer claim. Interpretation: Outcome: replan retained: - Native-best V3 and all original costs, clocks, caps, risk, shorts and target priorities. changed: - Prepared fixed-half V7 separately; investigate which class drives its modest public benefit. stopped: - Adopting the two tested uncertainty-weighted prior estimators.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do the tested uncertainty-weighted priors beat the fixed-half blend on fivefold mean and worst Sharpe?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "8b98f6b538f5c94d",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T22:08:36+00:00",
+      "result_id": "question_661547742b965975f7ee06c77f08526c26486792b08e869718518eeeca9e588b",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:babb66b2893d9be6",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Public2020-24 cold starts; V3; negative20-session equity mean gates50% shrinkage, with/without Commodity half; earlier-year priors and original costs/clocks.",
+      "title": "Does tested conditional equity-prior shrinkage beat fixed-half mean and worst Sharpe?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "17027503bda9eb5c",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:class-prior-followup"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_661547742b965975f7ee06c77f08526c26486792b08e869718518eeeca9e588b",
+      "recorded_at": "2026-10-14T22:08:36+00:00",
+      "result_id": "finding_51ab57b26c0b7207894b75da767467ec30bf38a5d7adc76d86d895cc982eecb1",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:019e8610fecfa0a0",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: d1c692b810ae55a1b46847417a3bb7ae19da7e733a66209ad510df01f590c59f Applicability: Public2020-24 cold starts; V3; negative20-session equity mean gates50% shrinkage, with/without Commodity half; earlier-year priors and original costs/clocks. Observation: Conditional rules yield mean/worst Sharpe1.316/-0.131 or1.337/-0.038 vs fixed-half1.394/0.402. Ninety strategies pass contracts/prefixes. V7 gain is mostly2022 equity shrinkage; other-year mean gain is negative. No native conclusion. Interpretation: Outcome: continue retained: - Native-best V3, exact V7 and all original costs, risk, hedge, causal and performance requirements. changed: - Investigate opening exposure versus later shrinkage; recognize fragile V7 local support. stopped: - Adopting the tested negative20-session conditional-prior rules.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does tested conditional equity-prior shrinkage beat fixed-half mean and worst Sharpe?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "270e1bf6a8522a5a",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T22:14:27+00:00",
+      "result_id": "question_9394687904fa9a731906bfb317764b85afdc6b0fe6c1abb99fb96b275aacac5f",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:d2e6708e60b47ae9",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Public2020-24 cold starts; V3 risk/hedge/cost rules; earlier-year priors; fixed20-session opening/later half-blend factorial.",
+      "title": "Does opening shrinkage dominate V7 fivefold mean Sharpe benefit?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "7bed4c73953ae985",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:prior-windows"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_9394687904fa9a731906bfb317764b85afdc6b0fe6c1abb99fb96b275aacac5f",
+      "recorded_at": "2026-10-14T22:14:27+00:00",
+      "result_id": "finding_f65d6147cd606e3144efc113b0d3f1dc2aedb6c1f3a3d94f03070569f3917dcf",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:7846d33c5bd58bcc",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 491df0a2eb51d28abf42c4e1ef25262b88deda30641e04f3753409bd68e2a34c Applicability: Public2020-24 cold starts; V3 risk/hedge/cost rules; earlier-year priors; fixed20-session opening/later half-blend factorial. Observation: Mean opening/later Sharpe effects are-0.036/+0.116. Delayed V8 beats V3 in4/5 years with mean1.426, return2.93%, turnover114.6%; worst0.080 trails V7=0.402. All20 comparisons and V8 three suites pass. No native transfer claim. Interpretation: Outcome: replan retained: - Native-best V3, exact V7 and all original costs, risk, hedge, causal and performance targets. changed: - Qualified exact V8 separately; prioritize cold-start robustness evidence over more prior tuning. stopped: - Treating opening shrinkage as the chief fivefold mean Sharpe benefit.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does opening shrinkage dominate V7 fivefold mean Sharpe benefit?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "564a6f8df4105d14",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T22:21:13+00:00",
+      "result_id": "question_aac0a391ac54367e29a0ab57c007762d64dc98d5b021f1dac88c55e8716c3a64",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:3aaa020bd9f87035",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Seventeen public242-session starts2020Q1..2024Q1; exact V3/V7/V8; priors fit before start year; original costs/caps/risk.",
+      "title": "Does V8 exceed V7 mean and worst Sharpe on the quarterly cold starts?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "774a4d8f0c556de5",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:quarterly-cold-starts"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_aac0a391ac54367e29a0ab57c007762d64dc98d5b021f1dac88c55e8716c3a64",
+      "recorded_at": "2026-10-14T22:21:13+00:00",
+      "result_id": "finding_f42022e6f57f2aab86aaaf92b3bf968a0d7b5f5545204f2576522345f4ce7194",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:13f19423d407a5ca",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 0ba8f2b7ed7d726b1df2ee7362195163860c2a1becffbca90c5defcb242a2da7 Applicability: Seventeen public242-session starts2020Q1..2024Q1; exact V3/V7/V8; priors fit before start year; original costs/caps/risk. Observation: V7 mean/worst Sharpe1.506/0.031 exceeds V8=1.450/-0.229 across17 overlapping242-session starts. V8 wins8/17 vs V7, retains more return and better reported-VaR range coverage. All51 ledgers/caps/events/prefixes pass. No native transfer claim. Interpretation: Outcome: replan retained: - Native-best V3, exact V7/V8 and all original costs, risk, short, causal and performance requirements. changed: - Prioritized V7 for next eligible evaluation; preserve V8 as an alternative with different tradeoffs. stopped: - Assuming V8 mean-Sharpe superiority from January-only folds.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does V8 exceed V7 mean and worst Sharpe on the quarterly cold starts?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "ef2c0279ff7d432b",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T22:29:36+00:00",
+      "result_id": "question_b95b950c28c113a5fb96a3526d034e840a4c6ab9fa2d74c24189bb77aed436a5",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:675ab2db4134469f",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "17 public242-session quarterly starts; prior weights, samplecov60, normal95%, rounding6; ridges1e-8/1e-10 and missing/zero first-return conventions.",
+      "title": "Does V7 improve3-7% proxy coverage over V3 under all four declared definitions?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "fce9a9ac3b680633",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:public-var-proxy"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_b95b950c28c113a5fb96a3526d034e840a4c6ab9fa2d74c24189bb77aed436a5",
+      "recorded_at": "2026-10-14T22:29:36+00:00",
+      "result_id": "finding_bd77c5591f823c1c4036f21130b539a6e1f81a4284d7fac8359f8d3088bfe9ad",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:fd458d83057f4995",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: 48d87fe77cc2e8e74b6ea3d61165f0450146238737ac0f98f111ad44aa44c9a1 Applicability: 17 public242-session quarterly starts; prior weights, samplecov60, normal95%, rounding6; ridges1e-8/1e-10 and missing/zero first-return conventions. Observation: Public3-7% proxy coverage is V7=16/17 vs V3=14/17 and V8=17/17 under all four declared definitions. All51 replay/causal/cost checks pass. Server history has four completed submissions, best17.24. Exact V7 attempt is prepared, not submitted. Interpretation: Outcome: continue retained: - Native-best V3, exact V7/V8 and every original target, cost, risk, hedge and causal contract. changed: - Prepared V7 one-shot ID retention; investigate online forecast adaptation before eligibility.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does V7 improve3-7% proxy coverage over V3 under all four declared definitions?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "8371089e0544c41b",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T22:42:26+00:00",
+      "result_id": "question_1048561881782711f80a6e1ee7dd4329ecca6a1273dcc5c453b2dd877fc84712",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:0b739c89cc4b69d9",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Public2020-24 cold starts; frozen8-feature V4 prior, ridge100 EWLS corrections with60-session half-life, completed targets clipped+-3; same V4 costs/risk/constraints.",
+      "title": "Does the tested online coefficient updater improve fivefold mean and worst Sharpe over frozen forecasts?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "0a62dd2c63cfd324",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:online-coefficients"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_1048561881782711f80a6e1ee7dd4329ecca6a1273dcc5c453b2dd877fc84712",
+      "recorded_at": "2026-10-14T22:42:26+00:00",
+      "result_id": "finding_94a0f92d2342af661f0d634edacb7554dd9a731c99fb028d98c0366ee93525e7",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:d855d9936cddcb35",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: fcb61f195190501ca7a0bafb1ca1582228098c1d26636504083e0538e2ebf255 Applicability: Public2020-24 cold starts; frozen8-feature V4 prior, ridge100 EWLS corrections with60-session half-life, completed targets clipped+-3; same V4 costs/risk/constraints. Observation: Online EWLS mean/worst Sharpe1.727/0.124 trails frozen1.821/0.441; turnover146% vs156%. All10 physical cases and prefixes pass; matched controls repeat exactly. Interpretation: Outcome: continue retained: - Native-best V3, exact V7/V8 and all original acceptance. stopped: - Adopting the tested ridge100/half-life60 online coefficient updater.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does the tested online coefficient updater improve fivefold mean and worst Sharpe over frozen forecasts?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "b63bc6cb0901c0b9",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T22:49:24+00:00",
+      "result_id": "question_2ba2bdeeca0da1fa1b56ae44d1fe9ee00cf84f3f07276d9752cdb63461989486",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:9951c915ce90d10a",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Exact prior-v7 versus risk-v3 on the same task: native submissions b36facd55fbf/3b4ab368dff2; score-first selection.",
+      "title": "Does exact V7 exceed retained V3 on native score?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "d385b756d9c547c5",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:native-v7-adoption"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_2ba2bdeeca0da1fa1b56ae44d1fe9ee00cf84f3f07276d9752cdb63461989486",
+      "recorded_at": "2026-10-14T22:49:24+00:00",
+      "result_id": "finding_3ceec468e2f64be66172090b00f08d76482ff40070b458b7a3ab546cc1d616d7",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:bb801afd94ed7bec",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: 0a805547afcc26cc5e5bd2b6b88697749758df850d0eb6bba6da39c3b97865be Applicability: Exact prior-v7 versus risk-v3 on the same task: native submissions b36facd55fbf/3b4ab368dff2; score-first selection. Observation: V7 score20.53 exceeds V3=17.24, but Sharpe/excess regress. Public V7 class allocation explains-15.15pp, selection+0.75pp and costs-0.69pp of excess; signed equity exposure averages-1.72%. Interpretation: Outcome: replan retained: - Exact V3/V7/V8 checkpoints, original priority targets and all physical/causal constraints. changed: - Adopted exact V7 by native score-first policy. - Investigate allocation exposure with a matched objective intervention.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does exact V7 exceed retained V3 on native score?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "aa35a878a0328b1b",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T22:56:44+00:00",
+      "result_id": "question_8888aa6d82f796d2ed32a7210e159ce5d12a2ab37b561151f1b8e0cc64b3b020",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:0d710684645ddc49",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Public2020-24 cold starts; V7 prior/risk/cost rules, gamma40; penalty gamma*equity-class variance*(net equity-0.10)^2; one unconditional target.",
+      "title": "Does the fixed0.10 soft net-equity objective improve V7 fivefold mean and worst Sharpe?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "389eedde0dbaa4e1",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:soft-equity-objective"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_8888aa6d82f796d2ed32a7210e159ce5d12a2ab37b561151f1b8e0cc64b3b020",
+      "recorded_at": "2026-10-14T22:56:44+00:00",
+      "result_id": "finding_cc5357649f60ab011a23d909989a58d994f3ec112f53057e4781bd1bd633180a",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:672571aca5531184",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 570e3494e0154d41fcfba64b35f61c70086b49235c904f5206c728c8ef69dfb8 Applicability: Public2020-24 cold starts; V7 prior/risk/cost rules, gamma40; penalty gamma*equity-class variance*(net equity-0.10)^2; one unconditional target. Observation: Soft target raises mean return2.67% to2.97% and net equity2.1% to7.3%, but mean/worst Sharpe1.384/-0.001 trail V7=1.394/0.402. All10 physical/prefix checks pass; disabled controls match unmodified V7. Interpretation: Outcome: continue retained: - Exact native-best V7, V3/V8 checkpoints and all original targets/constraints. stopped: - Adopting the tested unconditional0.10 equity soft target.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does the fixed0.10 soft net-equity objective improve V7 fivefold mean and worst Sharpe?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "9bc2eb472164b2dc",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T23:03:48+00:00",
+      "result_id": "question_959c8a5d07c0f5390c238f97e60d1e99680a095e383b0f5f06864cfb217c2e1f",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:70e2806656ed9579",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Public2020-24 cold starts; gamma40/V7 rules;0.10 soft target after20 observations only if trailing60-session Equity mean is positive; same costs/risk/event clocks.",
+      "title": "Does the tested trend-conditioned equity objective improve both V7 fivefold mean and worst Sharpe?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "d41adc9292ff0419",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:conditional-equity-objective"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_959c8a5d07c0f5390c238f97e60d1e99680a095e383b0f5f06864cfb217c2e1f",
+      "recorded_at": "2026-10-14T23:03:48+00:00",
+      "result_id": "finding_e66773b72a056f22316cb2daf23ddfbe22d1ad68fa4a59a71383283578eb0284",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:276a62106c8860b6",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 3ea1a36b6a08367bba5411717d366adbf43180ec693fb84157e461ad403d62fd Applicability: Public2020-24 cold starts; gamma40/V7 rules;0.10 soft target after20 observations only if trailing60-session Equity mean is positive; same costs/risk/event clocks. Observation: Conditional mean/worst Sharpe1.431/0.164 versus V7=1.394/0.402 and unconditional1.384/-0.001.2024 dominates gains; all15 physical/policy prefixes pass and controls reproduce exactly. Interpretation: Outcome: continue retained: - Exact native-best V7, V3/V8, both prototypes and all original constraints/targets. changed: - Preserved conditional prototype; require broader start-date evidence before integration.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does the tested trend-conditioned equity objective improve both V7 fivefold mean and worst Sharpe?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "ef80a49649bcead6",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T23:10:54+00:00",
+      "result_id": "question_83fbf99da875487b456b4e30b55e3ae6b6afd003ebf1510dc3feb91bbcdeea24",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:0ab90e890df5a57f",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Public17 matched242-session starts2020Q1..2024Q1; earlier-year priors; unchanged20/60 positive-trend0.10 soft target and V7 risk/cost/short rules.",
+      "title": "Does the fixed conditional objective improve V7 mean and worst Sharpe on17 quarterly cold starts?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "e059a7984eed298d",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:conditional-quarterly-starts"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_83fbf99da875487b456b4e30b55e3ae6b6afd003ebf1510dc3feb91bbcdeea24",
+      "recorded_at": "2026-10-14T23:10:54+00:00",
+      "result_id": "finding_0b5bf181cb7cc89b92e287930db16c22d3afce7eccd7edd375407e1cf1c93c35",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:dca4262e34a8b727",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 22c6df4ab8b542dac51874fa75995f95b254ccaa2ca374d0c31b600ed40d1b27 Applicability: Public17 matched242-session starts2020Q1..2024Q1; earlier-year priors; unchanged20/60 positive-trend0.10 soft target and V7 risk/cost/short rules. Observation: Across17 overlapping starts, conditional wins7; mean/worst Sharpe1.492/-0.171 versus V7=1.506/0.031. Mean return/year-balanced Sharpe improve. All34 physical and policy prefixes pass. Interpretation: Outcome: replan retained: - Native-best V7, V3/V8, both objective prototypes and original acceptance. changed: - Test ETF-selection alpha with fixed zero-sum relative-return adjustments. stopped: - Preferring the conditional objective from January-only gains or tuning more exposure gates.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does the fixed conditional objective improve V7 mean and worst Sharpe on17 quarterly cold starts?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "918f2e760df20b54",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T23:18:44+00:00",
+      "result_id": "question_408c184bfc320a896f3449314bcb25d39d92bd0e09f5570ed3de930df1a344c5",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:516971a15df92fc7",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Public2020-24 cold starts; fixed last20 nonhedge Equity mean, demeaned, coefficient+/-0.25, uniform maxabs0.0005 cap after20 observations; V7 risk/cost/short rules.",
+      "title": "Does either fixed within-Equity relative-return signal improve both V7 fivefold mean and worst Sharpe?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "25a1bcc2c66bc4b9",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:relative-equity-signals"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_408c184bfc320a896f3449314bcb25d39d92bd0e09f5570ed3de930df1a344c5",
+      "recorded_at": "2026-10-14T23:18:44+00:00",
+      "result_id": "finding_0f1bb30d6070787f07ff67c502db99c29c235c0984047695bfce7b886a322399",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:d0954ae997fcea73",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 66c351c9c276a3b64f06a7d824709dd6eb9f5f3f363cfc00ead444b9d7ec7058 Applicability: Public2020-24 cold starts; fixed last20 nonhedge Equity mean, demeaned, coefficient+/-0.25, uniform maxabs0.0005 cap after20 observations; V7 risk/cost/short rules. Observation: Fivefold mean/worst Sharpe: V7=1.394/0.402; momentum=1.256/0.096; reversal=1.409/0.277. Both improve selection attribution but raise costs/exposure; reversal gains rely on2024. All15 physical and exact80 prefixes pass. Interpretation: Outcome: replan retained: - Native-best V7, earlier checkpoints/prototypes and every original target. changed: - Test fixed frozen-forecast/prior-shrinkage complementarity under V7 execution. stopped: - Adopting either tested relative-return signal or tuning its coefficients.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does either fixed within-Equity relative-return signal improve both V7 fivefold mean and worst Sharpe?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "080537eda2dff2b1",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T23:33:39+00:00",
+      "result_id": "question_ed894b182109bf3ea0537dc3bfbaba71f1fc770f4e67c098215f16703eaa49b5",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:34d2628a9ff5f1a1",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Public17 overlapping242-session starts2020Q1..2024Q1; prior-year fits, prior blend0.5/forecast0.4, retained V4 inertia0.02/deadband0.004, original V7 risk/cost/short rules.",
+      "title": "Does the fixed half-prior/frozen-forecast hybrid improve V7 mean and worst Sharpe on17 quarterly starts?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "006c7e6fc05bd2f1",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:forecast-prior-quarterly"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_ed894b182109bf3ea0537dc3bfbaba71f1fc770f4e67c098215f16703eaa49b5",
+      "recorded_at": "2026-10-14T23:33:39+00:00",
+      "result_id": "finding_8e4e10c724f49596f550483f43f70a6e6dc44dfe2a7077ba03148129beab6ac0",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:6bed98eb08064560",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 4028d3b91604cc3e5ce5391d9bb93db254c2cbfbea6ab0caf155aed57335b4ff Applicability: Public17 overlapping242-session starts2020Q1..2024Q1; prior-year fits, prior blend0.5/forecast0.4, retained V4 inertia0.02/deadband0.004, original V7 risk/cost/short rules. Observation: All91 paths/prefixes pass. V4-execution hybrid fivefold mean/worst Sharpe1.822/0.567 improves V7;17-start1.364/-0.351 trails V7=1.506/0.031 with160% turnover. Return/year-balanced gains remain. Interpretation: Outcome: replan retained: - Native-best V7, other checkpoints/prototypes, mixed benefits and original acceptance. changed: - Test additional lagged macro information versus the frozen price-only model. stopped: - Qualifying this fixed hybrid from January-only gains or tuning its prior/execution parameters.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does the fixed half-prior/frozen-forecast hybrid improve V7 mean and worst Sharpe on17 quarterly starts?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "909feb8b967bc20b",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-14T23:52:28+00:00",
+      "result_id": "question_01e1865e170a1fcdc8a5dd3274b7c347b466d9515dd2c7bd3b00e6bab44943a8",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:60ee58ae66b21b8c",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Exact retained macro-v9 manifest0f5d8101adf52156 and sourcece3a11b856ee3f31; native agent-6/cf4c5340f9ac versus agent-5/b36facd55fbf; score_first/maximize.",
+      "title": "Does exact macro-v9 improve native score beyond V7=20.53 in the evaluated round?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "938577e7c83b2a77",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:native-macro-v9"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_01e1865e170a1fcdc8a5dd3274b7c347b466d9515dd2c7bd3b00e6bab44943a8",
+      "recorded_at": "2026-10-14T23:52:28+00:00",
+      "result_id": "finding_5b6717a721136e001cd0cd18d38ac167431bbe265445e669bac92c72d990aef2",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:765d06d035e689db",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 3b401dd4047d2db548e3bb1349c526accb61fe3672d2bc3a91bc7324c8ac8893 Applicability: Exact retained macro-v9 manifest0f5d8101adf52156 and sourcece3a11b856ee3f31; native agent-6/cf4c5340f9ac versus agent-5/b36facd55fbf; score_first/maximize. Observation: 83 local paths/prefixes and standalone3 suites pass; macro beats local price/neutral mean and worst Sharpe. Exact native cf4c5340f9ac scores13.84 versus V7=20.53, Sharpe1.0882; V7 trio restored. Interpretation: Outcome: replan retained: - V7 best, exact macro-v9, local mixed benefits and every original target. changed: - Test risk-appetite allocation under V7 fixed priors rather than another forecast revision. stopped: - Resubmitting completed macro-v9 or inferring native success from public macro gains.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does exact macro-v9 improve native score beyond V7=20.53 in the evaluated round?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "08511e6fbe370d9f",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T00:01:32+00:00",
+      "result_id": "question_bc655ef1e0aabbdeb47880301f56b0824b84088dc51be6bdbb318e41f8cf4e44",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:290a7057c0e8616b",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Public2020-24 cold starts; preyear frozen half-priors, volatility0.07, V7 cost/risk/short rules. Gamma20/40 only; earlier V6 evidence has different forecasts.",
+      "title": "Does gamma20 improve both fivefold mean and worst Sharpe over gamma40 under fixed V7?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "16dfbc3c16dd9813",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:v7-risk-appetite",
+        "evidence:v7-risk-stress"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_bc655ef1e0aabbdeb47880301f56b0824b84088dc51be6bdbb318e41f8cf4e44",
+      "recorded_at": "2026-10-15T00:01:32+00:00",
+      "result_id": "finding_a1f9ccc9130fa926cefba8b9725fda31a0b9fab51ff3b1d7e90bafd1003dbc6b",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:ada7a43ecefa49d3",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: ce2834c44c32844317518c3bc21518005ecbe74d4d221c6bd6c868783c2ace7a Applicability: Public2020-24 cold starts; preyear frozen half-priors, volatility0.07, V7 cost/risk/short rules. Gamma20/40 only; earlier V6 evidence has different forecasts. Observation: Gamma20 loses Sharpe5/5; mean1.394->1.038,worst0.402->-0.631,turnover110%->125%,return+0.35pp.22 paths/11 controls pass; nine detectors pass but no5pp drawdown bonus. Interpretation: Outcome: replan retained: - Exact best V7, scoped return gain, all earlier evidence and original acceptance. changed: - Test fixed CSI500 hedge under V7 priors; earlier hedge study used V4 forecasts. stopped: - Qualifying gamma20 or increasing budget based only on unused capacity.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does gamma20 improve both fivefold mean and worst Sharpe over gamma40 under fixed V7?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "1b5f77563588ee06",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T00:07:40+00:00",
+      "result_id": "question_ac953d00faecbc4d5b4d0e80b29a29347e5339f11bc742649f001445bdfb469b",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:3a06fe96c2411cb4",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "17 public242-session starts2020Q1..2024Q1; preyear frozen half-priors,gamma40,volatility0.07,original risk/cost/short/cap/event rules. Only CSI300 versus CSI500 hedge identity changes.",
+      "title": "Does fixed CSI500 improve both V7 mean and worst Sharpe on17 public quarterly starts?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "cece591af401e092",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:v7-hedge-comparison",
+        "evidence:v7-hedge-quarterly"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_ac953d00faecbc4d5b4d0e80b29a29347e5339f11bc742649f001445bdfb469b",
+      "recorded_at": "2026-10-15T00:07:40+00:00",
+      "result_id": "finding_3e1a62f27991d866708fc02bebd339333bd99eea19eea362620535bc3c208abe",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:e633e8634c6e71e5",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: a8a2e4e6c34025451fa350ccc4f7ffcb744118fa63d34d64c79e275c576f608b Applicability: 17 public242-session starts2020Q1..2024Q1; preyear frozen half-priors,gamma40,volatility0.07,original risk/cost/short/cap/event rules. Only CSI300 versus CSI500 hedge identity changes. Observation: 44 paths/prefixes and44 engine controls pass. CSI500 wins4/17,mean/worst Sharpe1.068/-0.362 versus1.506/0.031; turnover/reported VaR coverage improves,2024 Sharpe2.81. Exact V7 unchanged. Interpretation: Outcome: replan retained: - V7=20.53, original targets, scoped static-hedge counterevidence and mixed benefits. changed: - Test cost-aware two-hedge selection at existing decisions using current V7 utility and costs. stopped: - Qualifying static CSI500 from2024 gains or treating fixed-hedge losses as a ban on all selectors.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does fixed CSI500 improve both V7 mean and worst Sharpe on17 public quarterly starts?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "e37687eca63ebb83",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T00:20:23+00:00",
+      "result_id": "question_c19beeed81a9643ac738bb8f29c8b655ba7ba956debf2cfe97ff4c4fd96eb791",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:aec6b1f55c2d3d13",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "17 public242-session starts2020Q1..2024Q1,preyear half-priors,gamma40,budget0.07. CSI300/CSI500 sign patterns ranked by existing utility/costs at existing decisions; original rules.",
+      "title": "Does the fixed two-hedge cost-aware selector improve V7 mean and worst Sharpe on17 public starts?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "fa295859c068e014",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:discrete-hedge-quarterly",
+        "evidence:discrete-v10-qualified"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_c19beeed81a9643ac738bb8f29c8b655ba7ba956debf2cfe97ff4c4fd96eb791",
+      "recorded_at": "2026-10-15T00:20:23+00:00",
+      "result_id": "finding_d5879bc9e7b295a95403787f52f480123c1bc95123887a62d36be64931b1a71d",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:4fb2ff2b8ccebbcc",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: ddc222c0bddd0747948538b9480ac17c68a7ed25f1811217de744558ba736db8 Applicability: 17 public242-session starts2020Q1..2024Q1,preyear half-priors,gamma40,budget0.07. CSI300/CSI500 sign patterns ranked by existing utility/costs at existing decisions; original rules. Observation: 66 paths/prefixes pass.17-start mean/worst Sharpe1.586/0.076 versus1.506/0.031; turnover coverage11/17 versus12/17. Standalone3 suites pass with one explicit eligible-hedge assertion adaptation; v10 staged. Interpretation: Outcome: continue retained: - Original acceptance, exact V7 native-best20.53, static-hedge counterevidence and fixed utility/cost selector. changed: - Qualified/staged exact discrete-v10 and prepared a separate guarded native attempt; no request during cooldown.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does the fixed two-hedge cost-aware selector improve V7 mean and worst Sharpe on17 public starts?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "71f941afb4d8bcef",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T00:31:48+00:00",
+      "result_id": "question_b36d4a0da1e91c3455f1e8ff7feb1be590fbba106b273644c995a2eb88685566",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:ed5f87790ade2cd3",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Source7b13935d4d11b197; synthetic seed4401,opposite Equity trends +/-0.006 or0.0005 in60/100-return blocks,302/402 sessions. Original rules unchanged; no market/native claim.",
+      "title": "Does exact discrete-v10 keep drawdown within4% in all four declared alternating-Equity stress scenarios?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "da40f503201060e9",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:discrete-switch-stress",
+        "evidence:discrete-switch-latency",
+        "evidence:discrete-opening-ablation"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_b36d4a0da1e91c3455f1e8ff7feb1be590fbba106b273644c995a2eb88685566",
+      "recorded_at": "2026-10-15T00:31:48+00:00",
+      "result_id": "finding_15dc82c727b76c0d282fc64101d0e4c449d8c924e37261476466d7718d2a32a3",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:fc584caca307ec19",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: bb28cbdc0574a71ef42e9e7e226b56fc21085e223b83749ec3889d14ca763d14 Applicability: Source7b13935d4d11b197; synthetic seed4401,opposite Equity trends +/-0.006 or0.0005 in60/100-return blocks,302/402 sessions. Original rules unchanged; no market/native claim. Observation: 12 paths/24 prefixes/12 controls/future tests pass;12 paid switches/24 crossings.60-block DD31.36/32.16%,median lag59. Public frozen-opening worst Sharpe-0.362 versus full0.076; disabling switches loses robustness. Interpretation: Outcome: replan retained: - Exact staged v10, native-best V7=20.53, public gains, adverse results and original acceptance. changed: - Test opening identity/training-prior sensitivity; preserve financial stress losses. stopped: - Treating passed caps, ledgers or positive expected utility as drawdown evidence.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does exact discrete-v10 keep drawdown within4% in all four declared alternating-Equity stress scenarios?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "418ddee48450c832",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T07:35:54+00:00",
+      "result_id": "question_edb3e4393eec7be85575488c425591798428d02dbce6b0f5180978b8545ce540",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:a045a0ac832f3ee0",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Destination agent-7/51cae2f5712c exact source7b13935d4d11b197 and manifestc2c8a610e411af76; versus retained agent-5/1c3facc64838, score_first/maximize.",
+      "title": "Does exact discrete-v10 exceed retained V7 native score20.53 in this destination round?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "242a09e69f4d0f81",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:native-v10-destination"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_edb3e4393eec7be85575488c425591798428d02dbce6b0f5180978b8545ce540",
+      "recorded_at": "2026-10-15T07:35:54+00:00",
+      "result_id": "finding_88365c364ce3fede567b6416868c1c45e337e23e7948b1a98da48482db8eef8f",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:f00c9cd6e2859e12",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: c2c8a610e411af76113ac29ea76699c8247cb88faf84b6d031b14aac27e4877e Applicability: Destination agent-7/51cae2f5712c exact source7b13935d4d11b197 and manifestc2c8a610e411af76; versus retained agent-5/1c3facc64838, score_first/maximize. Observation: Exact destination V10/51cae2f5712c scores11.43<20.53; Sharpe1.1194,DD1.46%,excess-22.97%,VaR4.1/3.3%,turnover112%. History has7 completed runs; matched current hashes permitted exact V7 restoration. Native1/1 is parseability. Interpretation: Outcome: replan retained: - Exact V7/V10 checkpoints, original priorities and scoped public/synthetic counterevidence. changed: - Restored V7 and reconciled destination IDs/cooldown; investigate prior-driven allocation and hedge-choice interaction. stopped: - Resubmitting completed V10 or treating its public gains as native adoption.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does exact discrete-v10 exceed retained V7 native score20.53 in this destination round?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "f96c803a41bf1735",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T07:44:44+00:00",
+      "result_id": "question_f23ee48558b6102579c8d59429b7d4d00fac90c6989727904c463fbf28aa5ad5",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:96c8f6da83b26a02",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "2020-2024 public full-year cold starts; preyear priors,blend0/0.5 crossed with fixedCSI300/dynamic2hedges; exact V7/V10 rules. No native-trajectory explanation or transfer claim.",
+      "title": "Do frozen trained asset priors change V10 opening hedge choice on the five matched public cold starts?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "0023a414ae15a384",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:prior-hedge-factorial"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_f23ee48558b6102579c8d59429b7d4d00fac90c6989727904c463fbf28aa5ad5",
+      "recorded_at": "2026-10-15T07:44:44+00:00",
+      "result_id": "finding_a0e1ca20f5a88621f5aecf93362e753fb2432073e0d662170def18239f40b2b0",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:f51db6ccd4bb2537",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: 5d2e4b876209c17f742c08c8b0616ca4dfc81e955756e6f6c6ae392033dca9e7 Applicability: 2020-2024 public full-year cold starts; preyear priors,blend0/0.5 crossed with fixedCSI300/dynamic2hedges; exact V7/V10 rules. No native-trajectory explanation or transfer claim. Observation: 20 paths/20 prefixes/20 source controls pass. Removing trained priors changes opening hedge3/5, eliminates switches; class dynamic equals fixed decisions/costs/metrics. Class mean/worst Sharpe1.437/0.384 vs V71.394/0.402 and V101.661/0.473; return2.24% vs2.67/3.69%. Interpretation: Outcome: replan retained: - Exact V7 best20.53, rejected V10 and all original acceptance plus scoped public/native/synthetic evidence. changed: - Test selector-only prior centring; keep allocation forecasts to isolate choice effects from lost return carry. stopped: - Broadening identical class-only selectors or adopting them from mean Sharpe/turnover alone.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do frozen trained asset priors change V10 opening hedge choice on the five matched public cold starts?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "1f937d80d6149a6a",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T07:56:30+00:00",
+      "result_id": "question_5f989e01fce1c10353f133f2935b0743e381400bee5aa4a4fc197d78acce2289",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:1f7eda55bac13dd7",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Strictly preyear frozen priors;2020-2024 public full-year cold starts; original allocation forecasts/solves/risk/cost/cap/event/short rules. This is development evidence, not hidden-native causation.",
+      "title": "Does centring only learned Equity prior dispersion in hedge ranking improve both mean and worst Sharpe over fixed V7 on five matched public cold starts?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "8265777fe4c84e7f",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:selector-prior-ranking"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_5f989e01fce1c10353f133f2935b0743e381400bee5aa4a4fc197d78acce2289",
+      "recorded_at": "2026-10-15T07:56:30+00:00",
+      "result_id": "finding_e5e315790f703c9c287bee4a3f79d35cbe1b09db0df560c6a9fdd7df874a759a",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:2647f611090075b6",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 044f9e78c1c4898760649a131eed485d69ee63b06704c0d8860c6955f267e231 Applicability: Strictly preyear frozen priors;2020-2024 public full-year cold starts; original allocation forecasts/solves/risk/cost/cap/event/short rules. This is development evidence, not hidden-native causation. Observation: Correction reaches181 decisions;3 same-input choices change, opening3/5. All362 candidate solves match V10. Every alternative admissible; none clears net epsilon. Centred holdings/costs/metrics equal V7 in5/5: mean/worst Sharpe1.394/0.402,excess-4.32%. Interpretation: Outcome: replan retained: - Exact V7 best20.53, all original acceptance and scoped public/native/synthetic counterevidence. changed: - Test initial covariance independence separately: fixed within-Equity/Bond correlation0.5, original updates thereafter. stopped: - Staging or broadening centred hedge ranking that reproduces V7; no native request.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does centring only learned Equity prior dispersion in hedge ranking improve both mean and worst Sharpe over fixed V7 on five matched public cold starts?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "c188bd217d91cc0a",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T08:05:41+00:00",
+      "result_id": "question_9a33ea3df2082ee263e197f5052a1b49a43127fad3fff6d905d71a900832c7a1",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:565f1211f1637a44",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Public2020-24 full-year cold starts; preyear priors; only initial within-Equity/Bond correlation0.5. Original V7 updates/rules; development evidence, no native-transfer claim.",
+      "title": "Does the fixed within-Equity/Bond correlation0.5 initial covariance improve both fivefold mean and worst Sharpe over exact V7 diagonal initialization?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "7c2568e23e576efb",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:initial-class-covariance"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_9a33ea3df2082ee263e197f5052a1b49a43127fad3fff6d905d71a900832c7a1",
+      "recorded_at": "2026-10-15T08:05:41+00:00",
+      "result_id": "finding_8dbbb512a17f15005983d79d46acf9c422c38ab6adf53609dc53d72d73f512c4",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:21cdb3f7bbbf4465",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 19747d718074cca02bfb2d4422edc542bb0e7f9f9a8c70064de75a0edc514703 Applicability: Public2020-24 full-year cold starts; preyear priors; only initial within-Equity/Bond correlation0.5. Original V7 updates/rules; development evidence, no native-transfer claim. Observation: 10 paths/prefixes and10 controls pass. Openings change5/5; empirical covariance identical after8-13 sessions. Mean/worst Sharpe1.492/0.368 vs1.394/0.402;return+0.24pp.147/176 later targets differ L1>0.001. No joint robustness gain. Interpretation: Outcome: replan retained: - Exact V7 best20.53, all original targets and scoped public/native/synthetic evidence, including mean-only gain. changed: - Probe one scheduled session20 inertia reset under original V7; do not combine rejected covariance alternative. stopped: - Quarterly expansion, correlation tuning or adoption based on mean Sharpe alone.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does the fixed within-Equity/Bond correlation0.5 initial covariance improve both fivefold mean and worst Sharpe over exact V7 diagonal initialization?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "bb11fc4464d81877",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T08:13:33+00:00",
+      "result_id": "question_7215707a00b3c51f85c9e29604db61170893a1e9fe20c5c78866ec1cc63e6b8d",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:450f9f7a26157980",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Public2020-24 full-year cold starts; preyear priors; original V7 except one session20 soft-penalty reset. Real costs/risk/forecasts unchanged. Development evidence, no native claim.",
+      "title": "Does one session20 soft-inertia reset improve both fivefold mean and worst Sharpe over exact V7?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "52b351d10089fd65",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:session20-inertia"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_7215707a00b3c51f85c9e29604db61170893a1e9fe20c5c78866ec1cc63e6b8d",
+      "recorded_at": "2026-10-15T08:13:33+00:00",
+      "result_id": "finding_9716fdac38ea4e5041b6eb116cec01ff37293914ffa572df6cd9550a2bb7aa12",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:e8c86c390747824c",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: e26d7b0da2354e23dfc295b3c141aea8443968609b3be3daa4c92b97755ee52a Applicability: Public2020-24 full-year cold starts; preyear priors; original V7 except one session20 soft-penalty reset. Real costs/risk/forecasts unchanged. Development evidence, no native claim. Observation: 10 paths/20 prefixes/10 controls pass; reset once20 and restoration verified. All5 solves succeed; targets change L1 0.051-0.207. Sharpe loses4/5;mean/worst1.244/0.279 vs1.394/0.402,turnover114%vs110%. Worst DD and VaR coverage improve. Interpretation: Outcome: replan retained: - Exact V7 best20.53, original targets and scoped public/native/synthetic evidence plus reset risk benefits. changed: - Test portfolio objective under V7 half-priors; earlier failed ratio test used V4 forecasts. Keep original execution. stopped: - Broadening, staging or adopting the session20 reset; global inertia changes inferred from it.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does one session20 soft-inertia reset improve both fivefold mean and worst Sharpe over exact V7?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "6254feab612ea2ef",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T08:23:05+00:00",
+      "result_id": "question_92aebbc5fd2ab781e9f6d4d811a0fecbb94eef298371f9e2b8da20adb8dd9bf4",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:c27682b382818d0e",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Public2020-24 full-year cold starts; preyear priors; exact V7 variance versus existing net-Sharpe mode,vol0.07 and original costs/risk/execution. Development evidence, no native claim.",
+      "title": "Does the existing net-Sharpe objective improve both fivefold mean and worst Sharpe over V7 variance utility under identical half-trained forecasts?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "d9637d41e112bc99",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:v7-objective"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_92aebbc5fd2ab781e9f6d4d811a0fecbb94eef298371f9e2b8da20adb8dd9bf4",
+      "recorded_at": "2026-10-15T08:23:05+00:00",
+      "result_id": "finding_a104132402a03d9f59d26a5febef8b3f6268b902caa4ddab127e05780c836e84",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:4573beff95ca661a",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 4b2c7f92a1f7f32d25e456096cc3613ea6b1653c7957c5aeffc610c72be3b41c Applicability: Public2020-24 full-year cold starts; preyear priors; exact V7 variance versus existing net-Sharpe mode,vol0.07 and original costs/risk/execution. Development evidence, no native claim. Observation: 10 paths/20 prefixes/15 controls pass. Ratio active181 decisions;60 gradient points pass,max error1e-9.8 feasible solver warnings,no fallback; converged2023 also loses. Sharpe loses5/5;mean/worst0.777/-1.066,DD4.84%,turnover147%. Interpretation: Outcome: replan retained: - Exact V7 best20.53, original targets, scoped ratio return/VaR gains and all public/native/synthetic evidence. changed: - Test causal downside penalty at fixed gamma40; retain independent original covariance budget and execution. stopped: - Broadening/adopting existing ratio or attributing all financial losses to solver warnings.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does the existing net-Sharpe objective improve both fivefold mean and worst Sharpe over V7 variance utility under identical half-trained forecasts?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "487628a4d2710ada",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T08:50:16+00:00",
+      "result_id": "question_dd6024c6c360a95a1db517b94bbf3ec6a518a6ece07dea73e9742615db70063c",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:3b00e2ac722626b8",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Public2020-24 preyear cold starts; exact V7 except fixed2x raw portfolio semivariance after20 returns. Original covariance limits/costs/execution. Development evidence; no native claim.",
+      "title": "Does fixed2x causal portfolio-semivariance improve both fivefold mean and worst Sharpe over exact V7 variance utility?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "03c77f9ba43af2fe",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:v7-downside-objective"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_dd6024c6c360a95a1db517b94bbf3ec6a518a6ece07dea73e9742615db70063c",
+      "recorded_at": "2026-10-15T08:50:16+00:00",
+      "result_id": "finding_0c6018958340a868e1e56902db891bb0ca960078be7405de697c1e998b147c83",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:447a55820c6f2505",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 3faeec6c973cb470e1a90944542628b8a275b43b094511e069354cf0fe0a64cd Applicability: Public2020-24 preyear cold starts; exact V7 except fixed2x raw portfolio semivariance after20 returns. Original covariance limits/costs/execution. Development evidence; no native claim. Observation: 10 paths/20 prefixes/15 controls pass;165 live downside decisions,60 gradient points pass. Mean/worst Sharpe1.200/0.527 vs1.394/0.402; all solves feasible/successful. Return/DD/VaR gains,turnover121%. Interpretation: Outcome: replan retained: - V7 best20.53, all original acceptance and scoped counterevidence, including downside worst-Sharpe/return/DD/VaR gains. changed: - Diagnose actual V7 forecast components and forward-horizon skill before choosing another return model. stopped: - Broader folds, staging or adoption of fixed downside penalty; risk-only gains treated as closing the alpha gap.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does fixed2x causal portfolio-semivariance improve both fivefold mean and worst Sharpe over exact V7 variance utility?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "71989954a6eaaf9b",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T09:03:20+00:00",
+      "result_id": "question_ca700debf231402e8c6a8831b96c308b668d26246a606a02a6e76b50d9475671",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:bcdb685eca377caf",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Public2020-24 preyear V7 cold starts; actual decisions, forward1/5/20 labels and zero/constant-prior references. Overlapping development data; labels diagnostic only, no native/alpha claim.",
+      "title": "Does live V7 mu improve five-session forecast MSE over its constant half-prior reference at actual decisions in five preyear cold starts?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "3a6aa815043484ed",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:v7-forecast-information"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_ca700debf231402e8c6a8831b96c308b668d26246a606a02a6e76b50d9475671",
+      "recorded_at": "2026-10-15T09:03:20+00:00",
+      "result_id": "finding_3591374468b32d7e30f15f3110f1e1003e186279ae0ccaffc68a2d6907959715",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:f8579491a239a35c",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 64b3741c3ee816db79f83ae0020df8c9c99fb8121bd069f6d52554d5aaa75696 Applicability: Public2020-24 preyear V7 cold starts; actual decisions, forward1/5/20 labels and zero/constant-prior references. Overlapping development data; labels diagnostic only, no native/alpha claim. Observation: 181 mu vectors,180/174/171 labels at1/5/20; all causal/source/arithmetic controls pass.5-close MSE loses to prior5/5;20-close IC negative5/5.1-close IC positive5/5; portfolio/class evidence mixed. V7 financial gap unchanged. Interpretation: Outcome: replan retained: - V7 best20.53, original acceptance, scoped mixed forecast/downside and all native/synthetic counterevidence. changed: - Test constant-half-prior mu, removing only rolling empirical update while retaining risk/hedge adaptation. stopped: - Treating pooled MSE, gross frozen-weight labels or next-day IC as proof of executable native alpha.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does live V7 mu improve five-session forecast MSE over its constant half-prior reference at actual decisions in five preyear cold starts?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "1f90ee854156bc50",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T09:11:37+00:00",
+      "result_id": "question_9b7b2bffecdc57c8e49d9795723d616fe22cc25f3fd04edc0494a9254bc3e7df",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:bad67cf3c24831d0",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Public2020-24 preyear cold starts; exact V7 versus constant half-prior mu only. Original risk/hedge adaptation,costs,execution. Development evidence; no native claim.",
+      "title": "Does constant-half-prior mu improve both fivefold mean and worst Sharpe over exact V7 while preserving original risk and execution?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "7044d0c6f6493404",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:v7-constant-prior"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_9b7b2bffecdc57c8e49d9795723d616fe22cc25f3fd04edc0494a9254bc3e7df",
+      "recorded_at": "2026-10-15T09:11:37+00:00",
+      "result_id": "finding_62e4436a9ba2b30fbc2d8765a026e1285aa601f7120e1187966382fd50b7c52d",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:82cede1bc8b787be",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 36a170bfddec82a42e0a797ad8a47da5831c16c87dbc5629e1974a903392bf7e Applicability: Public2020-24 preyear cold starts; exact V7 versus constant half-prior mu only. Original risk/hedge adaptation,costs,execution. Development evidence; no native claim. Observation: 10 paths/20 prefixes/15 controls pass;176 mu/target changes,60 gradient points,all solves succeed. Sharpe wins4/5;mean/worst1.476/0.306 vs1.394/0.402. Cost/DD gains,VaR coverage3/5vs4/5;2022 Equity selection/allocation decline. Interpretation: Outcome: replan retained: - V7 best20.53, original acceptance, constant-mu alternate benefits and all scoped diagnostic/native/synthetic evidence. changed: - Separate Equity and non-Equity empirical-mu channels in one fixed2x2 with exact retained endpoints. stopped: - Quarterly expansion or adoption of whole-vector freezing; MSE gains assumed to prove robust trading gains.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does constant-half-prior mu improve both fivefold mean and worst Sharpe over exact V7 while preserving original risk and execution?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "b5cbcf7e0724a81f",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T09:21:50+00:00",
+      "result_id": "question_39ed97bf465e61b6c2923a2a1fb00ab1dc705f49bd9b4b2208cf814a46625b4d",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:45f12aa0f23e7350",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Public2020-24 preyear V7 cold starts; fixed2x2 Equity/non-Equity mu freezing. Original risk/hedge/cost/execution rules and exact retained endpoints. Development data; no native claim.",
+      "title": "Does either mixed Equity/non-Equity mu-freezing policy improve both fivefold mean and worst Sharpe over exact V7?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "6ed509fa9803bf5a",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:v7-mu-class-factorial"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_39ed97bf465e61b6c2923a2a1fb00ab1dc705f49bd9b4b2208cf814a46625b4d",
+      "recorded_at": "2026-10-15T09:21:50+00:00",
+      "result_id": "finding_b30a9e4859f89d385db48c952b785f183f81d2725fa31611cd26f89d7e67fc05",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:7f6877e6cc62ed6c",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 551471a17384b18f0b30ccd4726e4bb8359416755b4dfb6359878d86f908e41a Applicability: Public2020-24 preyear V7 cold starts; fixed2x2 Equity/non-Equity mu freezing. Original risk/hedge/cost/execution rules and exact retained endpoints. Development data; no native claim. Observation: 20 paths/40 prefixes/40 controls pass,120 gradient points;all724 solves succeed. Mixed mean/worst1.452/0.310 and1.409/0.379 vs1.394/0.402; neither repairs worst. Both retained endpoints exact.7 native results still best20.53. Interpretation: Outcome: replan retained: - V7 best20.53,original targets,full-constant mean/cost/DD benefits,worst/VaR risks and all scoped counterevidence. changed: - Qualify exact full-constant alternate for one separately admitted native transfer/adoption decision. stopped: - Mixed-arm broadening/adoption and further class partitions without new evidence; every-proxy native prerequisite.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does either mixed Equity/non-Equity mu-freezing policy improve both fivefold mean and worst Sharpe over exact V7?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "f0eebcd9c195b0f7",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T09:40:31+00:00",
+      "result_id": "question_107c793317d53b730d16dfec013da20634939deaeb40a24932419c765b7233be",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:77572e96d6adbc90",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "One destination-native evaluation,agent8,exact V7 with constant half-prior mu and truthful metadata. Original risk/execution/cost rules; public/synthetic qualification. No broad generalization.",
+      "title": "Do the retained constant-prior policy public mean-Sharpe/cost gains improve destination-native score over exact V7?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "e8f04bb7aaa79b1f",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:native-constant-prior"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_107c793317d53b730d16dfec013da20634939deaeb40a24932419c765b7233be",
+      "recorded_at": "2026-10-15T09:40:31+00:00",
+      "result_id": "finding_61173c40662498b792a132cf0aeb5fefbc6cf47c13a3fc540ff1fbc71223c546",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:30cc240ae6d9425f",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 0a253e0b2f538ab7db35ca5a6686cb74ad5c3c7c87bc4f7686d7498ecc706775 Applicability: One destination-native evaluation,agent8,exact V7 with constant half-prior mu and truthful metadata. Original risk/execution/cost rules; public/synthetic qualification. No broad generalization. Observation: One accepted agent8 completed10.65<20.53;Sharpe0.423vs1.373,excess-24.57%vs-22.64%,independent VaR2.9%vs4.5%. Source/ID matched;exact V7 restored;ledger/events pass. Public/CLI/causal qualification all passed. Interpretation: Outcome: replan retained: - V7 best20.53,original targets,constant public benefits/native losses and all scoped public/synthetic counterevidence. changed: - Diagnose rolling forecast value under controlled persistence/reversion/noise before choosing a new estimator. stopped: - Adoption/repeated native evaluation of this exact constant source;local MSE or mean-Sharpe gains treated as transfer.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do the retained constant-prior policy public mean-Sharpe/cost gains improve destination-native score over exact V7?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "26169297b0911a7f",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T09:56:08+00:00",
+      "result_id": "question_022b481ae43ce82d0f9f9df18f36ea80665d98a74ec15383a4f13c90a28fb02d",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:883934e0478236db",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "open",
+      "summary": "Synthetic360-session paths;seeds4901-4903,3 declared drift/AR1/noise families and shared vol break. Exact V7 versus constant mu,embedded priors,original risk/cost/execution. No transfer claim.",
+      "title": "Does exact V7 rolling mu improve full-cost mean and worst Sharpe over constant prior in the declared persistent,reverting and noise regimes?"
+    },
+    {
+      "agent_id": "checkpoint-source-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "6e3c41e99b9ba229",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:v7-forecast-regimes"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_022b481ae43ce82d0f9f9df18f36ea80665d98a74ec15383a4f13c90a28fb02d",
+      "recorded_at": "2026-10-15T09:56:08+00:00",
+      "result_id": "finding_c04cd15aed0fce2842758adbb921ded2d64ab7802031deedf1db80b4c78a95df",
+      "run_id": "checkpoint:0250eb37566b03c22e770f7bf4ef594c895f75aae11b21055a1e093b242613a3:ac3a249a29977970",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: b3b013aa64c85042e74eed7b4b3170d989b0f3233676d0b890563bf1384ebc25 Applicability: Synthetic360-session paths;seeds4901-4903,3 declared drift/AR1/noise families and shared vol break. Exact V7 versus constant mu,embedded priors,original risk/cost/execution. No transfer claim. Observation: Constant wins8/9;all3 family mean/worst gains. Live class mu never negative in6 persistent cases;empirical sign lags12-80. Pooled20-close MSE wins3/3 persistent,target-weighted1/3. Hard controls pass;constant native10.65 remains below20.53. Interpretation: Outcome: replan retained: - Exact V7 best20.53,original targets,constant public benefits/native loss and all scoped counterevidence. changed: - Test one observed class-change statistic before replacing class mu mean;retain V7 within-class information. stopped: - Synthetic/pooled-MSE gains treated as native transfer;blanket empirical unshrinking or repeated constant evaluation.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does exact V7 rolling mu improve full-cost mean and worst Sharpe over constant prior in the declared persistent,reverting and noise regimes?"
+    },
+    {
+      "agent_id": "warm-on-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "1bc083df106f349d",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T12:39:46+00:00",
+      "result_id": "question_9194c07558f954c04f0be08afd2a4bd91bf73092d8cac9a1d5eeca8dbec4bed3",
+      "run_id": "explore-result:56eac0ebfd19493719de8264bed9381d98025f040a3c6efa3ae454f22fdf2fda",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "resolved",
+      "summary": "Exact V7;9 fixed synthetic seed/family cases plus5 preyear public2020-24 starts. Last20/prior40 class contrast,global60-mean HAC5,3-SE gate;original costs/risk/execution. No transfer claim.",
+      "title": "Does the frozen whole-window HAC5 3-SE class-change rule materially change forecasts or targets on the declared synthetic/public cases?"
+    },
+    {
+      "agent_id": "warm-on-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "93d01535b271057f",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:v7-class-change"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_9194c07558f954c04f0be08afd2a4bd91bf73092d8cac9a1d5eeca8dbec4bed3",
+      "recorded_at": "2026-10-15T12:39:46+00:00",
+      "result_id": "finding_56eac0ebfd19493719de8264bed9381d98025f040a3c6efa3ae454f22fdf2fda",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 8a7247163023a5f0dc4fb65a1b6dcc972fa124fb9ddf7cb56dfdf76f6ed53d22 Applicability: Exact V7;9 fixed synthetic seed/family cases plus5 preyear public2020-24 starts. Last20/prior40 class contrast,global60-mean HAC5,3-SE gate;original costs/risk/execution. No transfer claim. Observation: 37 paths/74 prefixes/51 controls pass,1400 solves. Gate inactive14/14;max|z|2.97065;all full paths equal V7. Power fixture changes1 mu/2 targets. Separate-window residual statistics yield18 diagnostic triggers;no executable financial claim. Interpretation: Outcome: replan retained: - Exact V7 best20.53,original targets,frozen failed activation and all scoped public/native/synthetic evidence. changed: - Test one separate-window residual covariance estimate with the same3-SE threshold and original execution. stopped: - Broadening or submitting inactive whole-window rule;posthoc threshold tuning or relabeling earlier failure.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does the frozen whole-window HAC5 3-SE class-change rule materially change forecasts or targets on the declared synthetic/public cases?"
+    },
+    {
+      "agent_id": "warm-on-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "2e430be1514df7ec",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T12:51:21+00:00",
+      "result_id": "question_f2faa5b71c698e1743b53e7e525983d525e8a668436023d43a48f1f803aaa312",
+      "run_id": "explore-result:a7eab7e4c66dbfc80cdfa54695fd2bdd24f66d6742fc304219a104a23d498de5",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "resolved",
+      "summary": "Exact V7;9 fixed synthetic cases and5 preyear public2020-24 starts. Two-window residual covariance change;3-SE/SE>0,mu replacement,cost/risk/execution fixed. No transfer claim.",
+      "title": "Does separately centered HAC5 covariance make the frozen class-change rule useful without costly false mean-shift alarms?"
+    },
+    {
+      "agent_id": "warm-on-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "285cff5baa78c5db",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:v7-class-change-residual"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_f2faa5b71c698e1743b53e7e525983d525e8a668436023d43a48f1f803aaa312",
+      "recorded_at": "2026-10-15T12:51:21+00:00",
+      "result_id": "finding_a7eab7e4c66dbfc80cdfa54695fd2bdd24f66d6742fc304219a104a23d498de5",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 84c0e24e5de93af8f4fbf4aec835708eab2ebd47c9c9701ac75273be01f94a1f Applicability: Exact V7;9 fixed synthetic cases and5 preyear public2020-24 starts. Two-window residual covariance change;3-SE/SE>0,mu replacement,cost/risk/execution fixed. No transfer claim. Observation: 18 triggers,13 diagnostic false alarms;14 paths/28 prefixes/28 controls pass. Persistent mean/worstSharpe improves;noise4901 loses0.3963. Public5 unchanged;negative Commodity shifts missed3/3. Exact zero-SE step missed;decimal roundoff may trigger. Interpretation: Outcome: replan retained: - Exact V7 best20.53,original targets,drift gains and scoped public/native/synthetic/failed-activation evidence. changed: - Isolate all18 observed trigger effects with matched omission replays before another mechanism or qualification. stopped: - Treating activation or pooled drift gains as native transfer;threshold tuning or hiding false alarms/zero-SE misses.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does separately centered HAC5 covariance make the frozen class-change rule useful without costly false mean-shift alarms?"
+    },
+    {
+      "agent_id": "warm-on-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "dcc5fc816860a67c",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T13:03:03+00:00",
+      "result_id": "question_9105953156691ba4b5f3cc0cf55b87bfa6801ef6d012b59a47f4f1e4fdd2ae2a",
+      "run_id": "explore-result:7e29eb5e036b2a97a9353ca235a4c9c1971ae91cd2e843dec881f08fb25812df",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "resolved",
+      "summary": "All18 raw60-hash/class interventions on9 fixed synthetic cases. Omit one class replacement;other signals,risk,cost/gate/execution fixed. Conditional path effects;no transfer claim.",
+      "title": "Do matched omission replays show helpful,harmful and physically inactive class-change trigger effects under fixed execution?"
+    },
+    {
+      "agent_id": "warm-on-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "b5f29e1efc4f32d0",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:v7-class-trigger-effects"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_9105953156691ba4b5f3cc0cf55b87bfa6801ef6d012b59a47f4f1e4fdd2ae2a",
+      "recorded_at": "2026-10-15T13:03:03+00:00",
+      "result_id": "finding_7e29eb5e036b2a97a9353ca235a4c9c1971ae91cd2e843dec881f08fb25812df",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: 36b203de0106da185ef8b20d20a7c36adec195156eb984116ebd50c39ab48294 Applicability: All18 raw60-hash/class interventions on9 fixed synthetic cases. Omit one class replacement;other signals,risk,cost/gate/execution fixed. Conditional path effects;no transfer claim. Observation: 18 matched omissions pass;9 helpful,2 harmful,7 physically inactive. False alarms split4/2/7;all5 drift-window effects helpful.1011 solves and36 omission gradients pass. Large effects reconcile to holdings PnL;rounding/gate effects retained. Interpretation: Outcome: replan retained: - Exact V7 best20.53,original targets,residual drift gains/noise loss,zero-SE misses and all scoped counterevidence. changed: - Qualify one frozen standalone residual candidate for native score-first evidence despite mixed local proxies. stopped: - Retrospective latent-label filters,additive omission attribution,threshold tuning or synthetic gains as transfer proof.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do matched omission replays show helpful,harmful and physically inactive class-change trigger effects under fixed execution?"
+    },
+    {
+      "agent_id": "warm-on-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "f87f5bfb17221c33",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T13:15:46+00:00",
+      "result_id": "question_2fcabf74248ba327a22e5c13ca3b7476e36c4a453512dc2c21132052aa7c1178",
+      "run_id": "explore-result:8f608b5540f1cf3add50ddb39ec712c55ee162181b20518137383722464e4a77",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "resolved",
+      "summary": "One destination-native agent9 evaluation563accd27791,source16a2ee7c938b. Original risk/cost/execution;14 matched source paths and strict CLI qualified. Published feedback only;no generalization claim.",
+      "title": "Does the frozen separate-residual HAC5 class-change candidate improve destination-native score over exact V7?"
+    },
+    {
+      "agent_id": "warm-on-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "aa8f65feb4b42722",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:native-class-change-residual"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_2fcabf74248ba327a22e5c13ca3b7476e36c4a453512dc2c21132052aa7c1178",
+      "recorded_at": "2026-10-15T13:15:46+00:00",
+      "result_id": "finding_8f608b5540f1cf3add50ddb39ec712c55ee162181b20518137383722464e4a77",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: 16a2ee7c938bf5aa8be7c7295b0d7e257880600497530f97f49d85be8122683e Applicability: One destination-native agent9 evaluation563accd27791,source16a2ee7c938b. Original risk/cost/execution;14 matched source paths and strict CLI qualified. Published feedback only;no generalization claim. Observation: Accepted563accd27791/agent9 ties20.53 with same published financial metrics.14 standalone paths/strict CLI qualify;exact submitted checkpoint compared before V7 restore,ledger passes. Hidden activation/full-path equality unknown;original targets open. Interpretation: Outcome: replan retained: - Exact V7 best20.53,residual drift gains/noise loss/native tie,constant10.65 and all original targets/counterevidence. changed: - Test benchmark-relative variance preference with V7 mu and original absolute budget,gate/cost/execution controls. stopped: - Adoption/repeated evaluation of this tied source;native endpoint equality treated as hidden trace equivalence.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does the frozen separate-residual HAC5 class-change candidate improve destination-native score over exact V7?"
+    },
+    {
+      "agent_id": "warm-on-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "ff71a0106ff21251",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T13:31:03+00:00",
+      "result_id": "question_e47b818223d553141128adcfb9b00e91eb0f2a640c3bb2d37942a3f114344ba6",
+      "run_id": "explore-result:479092931a1b0bcd2984201a9542d9e6a629bc133bd4f6deedcaf1d18d795f53",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "resolved",
+      "summary": "Exact V7 mu/risk/cost/execution;fixed60/30/10 anchor.9 synthetic cases and5 preyear public2020-24 starts.14 paths with source/disabled/prefix controls. No native transfer claim.",
+      "title": "Does replacing absolute variance preference with benchmark-relative variance improve full-cost public Sharpe robustness under the original absolute budget?"
+    },
+    {
+      "agent_id": "warm-on-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "49f896a31b1b0ebe",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:v7-benchmark-risk"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_e47b818223d553141128adcfb9b00e91eb0f2a640c3bb2d37942a3f114344ba6",
+      "recorded_at": "2026-10-15T13:31:03+00:00",
+      "result_id": "finding_479092931a1b0bcd2984201a9542d9e6a629bc133bd4f6deedcaf1d18d795f53",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "refuted",
+      "summary": "Input revision: a0bf2614e571e0b7c6d427aedc7ef1a5415121e565f7748811e453c938337d4f Applicability: Exact V7 mu/risk/cost/execution;fixed60/30/10 anchor.9 synthetic cases and5 preyear public2020-24 starts.14 paths with source/disabled/prefix controls. No native transfer claim. Observation: 14 paths/28 prefixes/28 controls pass;527 solves,1054 checks,27 feasible warnings. Synthetic9/9 improve;public1/5,mean/worst0.656/-0.666,turnover213%,DD5.56%. Opening exposure and ongoing targets both change;rare repairs alone cannot explain turnover. Interpretation: Outcome: replan retained: - Exact V7 best20.53,original targets,benchmark synthetic/return gains and scoped public/native/cost counterevidence. changed: - Use fixed opening/continuation2x2 ablations to locate preference effects before changing coefficients or solver. stopped: - Immediate promotion before staged effects are understood;blaming all losses on repairs/warnings without controls.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does replacing absolute variance preference with benchmark-relative variance improve full-cost public Sharpe robustness under the original absolute budget?"
+    },
+    {
+      "agent_id": "warm-on-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "78ff7038c5892871",
+      "event_kind": "node",
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_kind": "question",
+      "recorded_at": "2026-10-15T13:44:53+00:00",
+      "result_id": "question_cf25eae8558040c086d11abacd1093662881bf06ab3e98e6ad81b4563183ef9c",
+      "run_id": "explore-result:a55f92771a6525c3c6d61ea4166fda004c74e8c1679ebab488716fee9da35097",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "resolved",
+      "summary": "Fixed14 cases:9 synthetic and5 preyear public2020-24.2 staged arms;28 paths/56 prefixes/source and28 endpoint controls. Original coefficients,mu,absolute budget,costs and events. No transfer claim.",
+      "title": "Do matched timing interventions distinguish opening effects from ongoing benchmark-preference losses under unchanged V7 risk and execution?"
+    },
+    {
+      "agent_id": "warm-on-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "03502c447ba623b8",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:v7-benchmark-risk-timing"
+      ],
+      "goal_id": "portfolio-warm-on-20261015-01",
+      "node_id": "question_cf25eae8558040c086d11abacd1093662881bf06ab3e98e6ad81b4563183ef9c",
+      "recorded_at": "2026-10-15T13:44:53+00:00",
+      "result_id": "finding_a55f92771a6525c3c6d61ea4166fda004c74e8c1679ebab488716fee9da35097",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: 78573e5951013eae0b334e9c609ad78e1a77b74a0141433da9cbc0072099403c Applicability: Fixed14 cases:9 synthetic and5 preyear public2020-24.2 staged arms;28 paths/56 prefixes/source and28 endpoint controls. Original coefficients,mu,absolute budget,costs and events. No transfer claim. Observation: 28 paths pass:ongoing preference loses public4/5 from V7 opening,turnover219%;opening loses3/5,negative worstSharpe. Conditional interactions/sign changes preclude an opening-only explanation or additive effects. Ongoing allocation improves but selection worsens. Interpretation: Outcome: replan retained: - V7 best20.53,original targets,all timing/full-preference synthetic gains and public/native/cost counterevidence. changed: - Test removal of within-class covariance-bonus heterogeneity;keep class-common preference and original decisions. stopped: - Opening-only schedule promotion;assigning losses solely to opening,warnings or independent additive effects.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Do matched timing interventions distinguish opening effects from ongoing benchmark-preference losses under unchanged V7 risk and execution?"
+    }
+  ]
+}

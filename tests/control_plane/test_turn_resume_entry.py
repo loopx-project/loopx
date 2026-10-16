@@ -15,8 +15,6 @@ from loopx.cli import main
 from loopx.control_plane import effect_runtime
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
-from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
 from tests.test_loopx_turn_driver import (
     _completion_host_and_validation_scripts,
     _turn_run_once_completion_argv,
@@ -47,13 +45,7 @@ def _invoke(argv):
 
 
 def _committed_turn(root, provider):
-    project, runtime, registry = _write_live_fixture(root)
-    state = project / ".codex/goals" / GOAL / "ACTIVE_GOAL_STATE.md"
-    todos = parse_active_state_todos(state.read_text(), item_limit=None)["agent_todos"]["items"]
-    initialize_canonical_authority(
-        runtime, GOAL, build_todo_runtime_shadow_projection(goal_id=GOAL, todos=todos, handoff_mode="soft_claim"),
-        state_path=state, provider=provider,
-    )
+    project, runtime, registry = _write_live_fixture(root, provider=provider)
     host, validator = _completion_host_and_validation_scripts()
     host = host.replace("request = json.load(sys.stdin)",
         'request = json.load(sys.stdin)\npathlib.Path("host-calls").open("a").write("host\\n")')
@@ -108,6 +100,7 @@ def test_committed_replay_survives_frontier_growth_beyond_fresh_request_limit(tm
     assert ledger.read_bytes() == original_ledger
     source = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL)
     assert source is not None
+    assert source["source_authority"] == ("sqlite_v0" if provider == "sqlite" else "file_v0")
     assert len(source["todos"]) == 2001
     assert next(todo for todo in source["todos"] if todo["todo_id"] == "todo_fixture0001")["status"] == "done"
 
