@@ -1763,6 +1763,7 @@ def serve_chat(
         chat_store=server.chat_store,
         runtime_controller=server.runtime_controller,
         workspace_roots=resolved_scan_roots,
+        runtime_root_override=server.runtime_root_override,
     )
     private_transport.core.actions = server.action_service
     # An admitted steward team preview is projected into the typed action store,

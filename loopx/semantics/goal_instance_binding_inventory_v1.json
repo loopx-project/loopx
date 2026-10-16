@@ -121,7 +121,6 @@
       "content_digest_signal": "outbox entry source digest",
       "observed_reference": "goal_id + goal_instance_id",
       "producer_sites": [
-        "loopx/control_plane/coordination/local_authority_shadow_outbox.ts::beginLeaseOutboxEntry",
         "loopx/control_plane/todos/handoff_note.py::attach_todo_handoff_note"
       ],
       "consumer_sites": [

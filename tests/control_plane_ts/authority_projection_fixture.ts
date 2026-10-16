@@ -76,6 +76,9 @@ export function authorityProjectionFixture(
   const normalizedLeases = leases.map(lease => structuredClone(lease)).sort((left, right) =>
     authorityUnicodeCompare(String(left.todo_id), String(right.todo_id)));
   return canonicalAuthorityObject({
+    // Normal fixture work uses a current policy; legacy wire format is a
+    // separate axis. Migration/history tests must explicitly request legacy mode.
+    handoff_mode: "soft_claim",
     ...structuredClone(extras),
     goal_id: goalId,
     todos: normalizedTodos,

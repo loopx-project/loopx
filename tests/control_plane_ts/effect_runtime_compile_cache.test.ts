@@ -204,13 +204,17 @@ for (const fault of ["healthy", "blocked", "throws", "worker", "disabled"]) {
     } else {
       // Windows reports TerminateProcess as a numeric exit; POSIX names SIGKILL.
       assert.ok(result.signal === "SIGKILL" || (process.platform === "win32" && result.code !== 0));
+      if (fault !== "worker") {
+        assert.deepEqual(cacheFiles(join(root, "compile-cache")), [],
+          "failed optional persistence must not re-enter the main environment's native exit flush");
+      }
     }
   });
 }
 
-for (const fault of ["blocked", "late"]) {
+for (const fault of ["blocked", "late", "throws"]) {
   test(`cache watchdog respects the locator fence and replacement after ${fault} flush`, { timeout: 10_000 }, async t => {
-    const { infoPath, start } = retirementFixture(t, fault);
+    const { root, infoPath, start } = retirementFixture(t, fault);
     const lock = infoPath + ".ts-effect.lock";
     writeFileSync(lock, JSON.stringify({ pid: process.pid, token: "fixture-locator-holder" }));
     const run = start();
@@ -228,5 +232,7 @@ for (const fault of ["blocked", "late"]) {
     await run.exited;
     assert.equal(run.output(), "");
     assert.deepEqual(JSON.parse(readFileSync(infoPath, "utf8")), replacement);
+    assert.deepEqual(cacheFiles(join(root, "compile-cache")), [],
+      "fenced retirement must still bypass the main environment's native cache flush");
   });
 }

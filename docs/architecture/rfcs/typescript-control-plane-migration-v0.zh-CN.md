@@ -4,7 +4,7 @@
 - 替代 / 关闭：无
 - Proposed by：LoopX maintainers
 - Date：2026-08-15
-- Last revised：2026-10-07
+- Last revised：2026-10-15
 - Scope：LoopX 控制面核心从 Python 到 TypeScript 的增量、replacement-first
   迁移；不长期维护两份语义实现
 - Tracking issue：[#3225](https://github.com/loopx-project/loopx/issues/3225)
@@ -29,7 +29,48 @@ R1–R3 的 TS 消费者包括 App 产品路径，不只 CLI 结算。
 
 <a id="当前交付边界2026-10-02"></a>
 
-## 当前交付边界（2026-10-07）
+## 当前交付边界（2.0 候选，2026-10-15）
+
+贡献者主导的 [#6396](https://github.com/loopx-project/loopx/pull/6396)，
+已评审 head `5d29213d3`，承接 C1/T4 普通 Markdown writer 截止与 live `legacy`
+所有权策略退役，已纳入 fork 补缺及 #6366 中有价值的不变量和恢复检查，见
+[吸收清单](../../reference/local-authority-provider-selection.md#retirement-proposal-reconciliation)。
+候选已删除废弃 writer 实现及 capture producer；canonical mutation、创建、
+team-plan、Monitor 和 lease 消费者复用既有 typed owner。不能根据下方旧清单
+再次派生同样的删除工作。兼容的 1.x 线和仍开放的 2.0 提案是不同交付基线；
+本 checkpoint 不宣称截止行为已发布。
+
+后续整合以正常双亲 merge 连接 `7c0215f26` 与冻结主干 `77d6b07fb`。
+吸收兼容的 1.4.2 修复时保留退役候选 `2.0.0a1`；仅保留相同源码的单亲
+snapshot 会丢失主干祖先关系，破坏上游 diff 的可评审性。新 canonical 创建
+同时保留结构化 P1 和兼容显示，原回执仍保持记录时的意图。producer 删除后，
+历史 outbox 恢复复用既有 native delivery／drain 反例；已释放 lease 的 cutover
+检查迁到有备份的 File／SQLite cold import，保留完整终态记录、后续 canonical
+工作与原导入回执重放，不重建 source writer。后续主干 revision 和安装后的
+Host 采用仍需分别验证其适用证据。
+
+新执行／配置目标统一使用 `ExecutionHandoffMode`，从既有
+`EXECUTION_HANDOFF_MODES`（`soft_claim`／`hard_lease`）派生；历史 `HandoffMode`
+及回执 codec 仍识别 `legacy`。typed 策略 owner 拒绝 fresh legacy 执行、
+acquire／维护及当前 proof 授权，包括 delegation 启动／恢复；历史原回执恢复、
+精确 release 与有备份的 plan／migrate 保留。存储转换和所有权迁移仍是不同操作；
+提案不自动迁移任何活跃 Goal。
+
+当前工作是候选集成与采用验证，不是再做 writer extraction：保留兼容 1.x 的
+升级／备份／恢复路线，完成有界可回退核心开发者试用及受影响的真实 Host／App
+旅程，保持正式 D2 的失败／缺失证据与发布默认资格开放。永久 Markdown 文档／
+显示 IO、历史 reader 及未完成的 receipt／outbox 处置仍需保留。转换演练通过
+不代表自然采用或 Goal-instance 退役完成。
+
+后续以[当前退役 ledger](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.zh-CN.md#current-candidate-checkpoint)
+为准。[精确 head 评审](https://github.com/loopx-project/loopx/pull/6396#pullrequestreview-5535116423)
+和[组合 tree 证据](https://github.com/loopx-project/loopx/pull/6396#issuecomment-6195855339)
+各自保留源码 revision，不认证未验证的后续 head／base、安装 cohort 或全部 RFC 验收。
+
+### 历史 1.x 前置 checkpoint（截至 2026-10-12）
+
+以下记录解释具名源码上的前置条件与验证。“writer 仍可达”及“下一次截止”
+描述当时的 1.x 基线，不是上方候选仍未实现的工作。
 
 按 main `06b6caa07` 复核，#5413/#5466/#5283，以及创建、Host 停止、UI 历史
 相关 owner #5500/#5805/#5308/#5398 均已合并。复用各自已交付的边界，不重开
@@ -1026,6 +1067,21 @@ T3/D1 reader，未完成全部 Todo writer、retention/compaction 或 promotion�
 **Canonical claim 争抢。** TS claim 命令现在对明确的 provider revision CAS 拒绝最多重试两次，保持同一 operation 与 lease key；每次重新读取回执和完整权威，复核来源注册、Todo 资格、acceptance 和 lease 写范围。显式 provider revision 或 transfer grant 保持固定，写入结果不明确时沿用回执恢复。独立认领可以同时完成，同 Todo 或重叠写范围仍只接受一方。这让 canonical writer 采用 shared-authority 冲突契约，不预留推荐项、不改变本机 writer 串行化，也不证明持续多主机吞吐。CLI claim 调用方继承该行为，frontend／Lark 动作契约不变。
 
 **Scoped gate 动作回读。** 最终 quota 包在选择、能力、workspace、回执及通知决策之后，通过 TS quota 规则投影 scoped User gate/action override。可选 `selected_action` 只在 interaction 允许交付时取最终选中 Todo 的文字；待选择、修复和已结算包省略该字段。准入诊断与回执身份保留。这修正 peer gate 场景的 CLI JSON 误导，不代表剩余 route／primary-action builder 已迁移、推荐已成为预留，或 T3/D1–D3 已完成。
+
+**基础配额准入组合。** `quota/run_decision.ts` 现在统一按顺序组合能力、workspace、
+automation、replan、终态、inbox 和协调者覆盖规则，生成基础运行决定。Python 分类器
+及其两个动作 helper 已退役；原有公共适配器只发一次粗粒度 native 请求。Goal 终态
+证据和 peer 作用域事实暂由既有 owner 提供；共享 Goal 来源投影与所有调用方一起
+迁移后退役。CLI/Host 调用方直接使用类型化内核后，Python 公共函数、dataclass
+及诊断 codec 退役。最终实现全部由 TypeScript 持有，不设 Python 规则回退。
+适配器传递有界事实及诊断字符串，再应用
+类型化配额补丁，不让来源数值或元数据经历 JSON 往返转换。回执绑定覆盖、后续
+route/action builder 和 effect 权限保留各自 owner。沿用既有 effective-action
+词表及生成的 TS binding；canonical Python enum 等独立契约 owner 切换后退役。
+TS 生产者验证器通过共享 guard fixture 执行真实 TS 分类器，并拒绝规则变更或
+仅枚举 owner 的替代结果。这交付一个基础准入消费者的实现及语义一致性；完整 CLI
+出现 p95 回退，性能验收保留 owner 复核门禁。整 Goal 迁移及 provider／默认配置
+资格仍待完成。
 
 **长历史传输边界。** Replan 历史仍由一个 TS owner 决策。小请求保留 inline
 codec；较大的完整事实快照通过私有临时文件和摘要绑定的引用传递。同一 reducer

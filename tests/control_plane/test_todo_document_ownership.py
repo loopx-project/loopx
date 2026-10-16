@@ -7,6 +7,13 @@ import sys
 
 import pytest
 
+from canonical_authority_fixture import initialize_canonical_authority
+from loopx.control_plane.coordination.local_authority import (
+    read_canonical_todos_if_promoted,
+)
+from loopx.control_plane.coordination.runtime_shadow import (
+    build_todo_runtime_shadow_projection,
+)
 from loopx.control_plane.todos.active_state_editing import section_bounds, archive_section_bounds
 from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
 from loopx.control_plane.todos.machine_section_projection import render_canonical_todo_sections, inspect_todo_section_projection
@@ -68,24 +75,88 @@ def test_projection_diagnostics_ignore_markers_inside_examples():
     assert {row["revision"] for row in inspected["sections"]} == {"actual:1"}
 
 
-def test_public_legacy_update_targets_real_section_and_preserves_example(tmp_path):
+def test_canonical_update_projects_real_section_and_preserves_example(tmp_path):
     state, registry = tmp_path / "state.md", tmp_path / "registry.json"
+    runtime = tmp_path / "runtime"
     example = "```markdown\n" + EXAMPLE + "```\n"
     state.write_text(document(example, False))
-    registry.write_text(json.dumps({"common_runtime_root": str(tmp_path / "runtime"), "goals": [{
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
         "id": "document-goal", "repo": str(tmp_path), "state_file": state.name,
         "coordination": {"registered_agents": ["agent-a"]},
     }]}))
-    def cli(todo_id):
-        return subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry), "--format", "json",
-            "todo", "update", "--goal-id", "document-goal", "--role", "agent", "--agent-id", "agent-a",
-            "--todo-id", todo_id, "--text", "Updated actual task"], capture_output=True, text=True, timeout=90)
+    active, _, _ = parse_todo_source(state.read_text(encoding="utf-8"))
+    initialize_canonical_authority(
+        runtime,
+        "document-goal",
+        build_todo_runtime_shadow_projection(
+            goal_id="document-goal",
+            todos=[
+                {
+                    "schema_version": "todo_item_v0",
+                    "task_class": "advancement_task",
+                    **record,
+                }
+                for record in active["agent"]
+            ],
+            handoff_mode="soft_claim",
+        ),
+        state_path=state,
+    )
+
+    def cli(*arguments):
+        return subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "loopx.cli",
+                "--registry",
+                str(registry),
+                "--format",
+                "json",
+                "todo",
+                *arguments,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+
     before = state.read_bytes()
-    rejected = cli("todo_example")
+    rejected = cli(
+        "update",
+        "--goal-id",
+        "document-goal",
+        "--role",
+        "agent",
+        "--agent-id",
+        "agent-a",
+        "--todo-id",
+        "todo_example",
+        "--text",
+        "Updated actual task",
+    )
     assert rejected.returncode == 1, rejected.stdout + rejected.stderr
     assert state.read_bytes() == before
-    updated = cli("todo_real")
+    updated = cli(
+        "update",
+        "--goal-id",
+        "document-goal",
+        "--role",
+        "agent",
+        "--agent-id",
+        "agent-a",
+        "--todo-id",
+        "todo_real",
+        "--text",
+        "Updated actual task",
+    )
     assert updated.returncode == 0, updated.stdout + updated.stderr
+    projection = read_canonical_todos_if_promoted(
+        runtime_root=runtime,
+        goal_id="document-goal",
+    )
+    assert projection is not None
+    assert projection["todos"][0]["text"] == "Updated actual task"
     assert example in state.read_text()
     assert "Updated actual task" in state.read_text()
 

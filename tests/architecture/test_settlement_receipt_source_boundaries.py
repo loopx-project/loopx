@@ -274,21 +274,39 @@ def test_external_failure_envelope_survives_ts_and_python_decoders(kind):
 
 
 def test_native_lease_permission_denial_is_a_real_source_without_a_write(tmp_path):
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.coordination_state_contract_generated import (
+        TASK_LEASE_CANONICAL_ACQUIRE_REQUEST_SCHEMA,
+    )
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.todos.todo_summary import canonical_todo_read_record, structured_todo_item
+
     source = tmp_path / "authority.json"
     source.write_text("isolated-authority-v1")
     runtime = tmp_path / "runtime"
+    initialize_canonical_authority(
+        runtime, "witness-goal",
+        build_todo_runtime_shadow_projection(
+            goal_id="witness-goal", handoff_mode="hard_lease",
+            todos=[canonical_todo_read_record(structured_todo_item({
+                    "todo_id": "todo_witness", "role": "agent", "status": "open",
+                    "text": "Validate the permission boundary.", "task_class": "advancement_task",
+                    "claimed_by": None, "excluded_agents": ["witness-agent"]},
+                    role="agent", source_section="Agent Todo"))],
+        ),
+        state_path=source,
+    )
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="witness-goal", include_leases=True)
+    assert before is not None and before["leases"] == []
     request = {
-        "schema_version": "loopx_task_lease_acquire_native_v0",
+        "schema_version": TASK_LEASE_CANONICAL_ACQUIRE_REQUEST_SCHEMA,
         "runtime_root": str(runtime), "goal_id": "witness-goal",
         "todo_id": "todo_witness", "owner": "witness-agent",
         "idempotency_key": "witness-turn", "ttl_seconds": 120,
         "write_scopes": [], "expected_version": None,
         "authority": {
-            "handoff_mode": "legacy",
             "registered_agent_candidates": [["witness-agent"]],
-            "todos": [{"todo_id": "todo_witness", "status": "open",
-                       "claimed_by": None, "excluded_agents": ["witness-agent"]}],
-            "todo_projection_error": None,
             "source_receipts": [{"source_id": "authority", "path": str(source),
                                  "state": "file", "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}],
         },
@@ -297,11 +315,18 @@ def test_native_lease_permission_denial_is_a_real_source_without_a_write(tmp_pat
     bridged = effect_runtime_result("task_lease.acquire.native", request)
     assert bridged == direct
     assert direct["ok"] is False
+    assert direct["source_authority"] == "file_v0"
+    assert direct["decision_read_from_provider"] is True
+    assert direct["legacy_fallback_used"] is False
     # Lease settlement summaries have their own wire shape (step, not step_kind).
     assert direct["settlement"]["receipts"] == []
     assert direct["settlement"]["failure"] == {
         "step": "validation", "kind": "permission_denied", "code": "owner_excluded_from_todo",
     }
+    after = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="witness-goal", include_leases=True)
+    assert after is not None
+    for field in ("provider_revision", "todos", "leases"):
+        assert after[field] == before[field]
     assert not list(runtime.rglob("task-leases/*.json"))
 
 

@@ -12,6 +12,10 @@ from test_todo_decision_scope_lifecycle import (
 )
 from loopx.chat_action_store import ChatActionStore
 from loopx.chat_actions import ChatActionService, ProtectedActionGate
+from loopx.control_plane.coordination.coordination_state_contract import (
+    TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION,
+    TODO_DOMAIN_RECORD_FIELDS,
+)
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.todos import add_goal_todo, list_goal_todos
 
@@ -23,16 +27,20 @@ def _goal(tmp_path: Path, monkeypatch, provider: str, handoff_mode: str = "soft_
     _, state, registry = _write_fixture(tmp_path)
     config = json.loads(registry.read_text())
     config["common_runtime_root"] = str(tmp_path / "runtime")
+    config["goals"][0]["coordination"]["handoff_mode"] = handoff_mode
     registry.write_text(json.dumps(config))
+    projection = build_todo_runtime_shadow_projection(
+        goal_id=GOAL_ID, handoff_mode=handoff_mode, todos=[],
+    )
+    projection["todo_read_model"] = {
+        **projection["todo_read_model"],
+        "schema_version": TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION,
+        "contract_fields": list(TODO_DOMAIN_RECORD_FIELDS),
+    }
+    initialize_canonical_authority(
+        tmp_path / "runtime", GOAL_ID, projection, state_path=state, provider=provider,
+    )
     target, gate = _add_target_and_gate(registry, required_scopes=[PUBLISH_SCOPE], target_status="blocked")
-    if provider != "legacy":
-        config["goals"][0]["coordination"]["handoff_mode"] = handoff_mode
-        registry.write_text(json.dumps(config))
-        projection = build_todo_runtime_shadow_projection(
-            goal_id=GOAL_ID, handoff_mode=handoff_mode,
-            todos=list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"])
-        initialize_canonical_authority(tmp_path / "runtime", GOAL_ID, projection,
-                                       state_path=state, provider=provider)
     service = ChatActionService(store=ChatActionStore(tmp_path / "actions"), registry_path=registry)
     return registry, service, target["todo_id"], gate["todo_id"]
 
@@ -51,15 +59,14 @@ def _rows(registry: Path) -> dict[str, dict]:
 
 
 @pytest.mark.parametrize(("provider", "handoff_mode"),
-                         [("legacy", "soft_claim"), ("file", "hard_lease"), ("sqlite", "soft_claim")])
+                         [("file", "hard_lease"), ("sqlite", "soft_claim")])
 @pytest.mark.parametrize("decision", ["approve", "reject", "cancel"])
 def test_app_decision_commits_through_user_completion(tmp_path, monkeypatch, provider, handoff_mode, decision):
     registry, service, target_id, gate_id = _goal(tmp_path, monkeypatch, provider, handoff_mode)
     proposal = _preview(service, gate_id, decision)
     assert proposal["status"] == "preview_ready"
     basis = proposal.get("canonical_update_basis")
-    assert (basis or {}).get("schema_version") == (
-        None if provider == "legacy" else "loopx_chat_canonical_terminal_basis_v0")
+    assert (basis or {}).get("schema_version") == "loopx_chat_canonical_terminal_basis_v0"
     assert _rows(registry)[gate_id]["status"] != "done", "preview must not write"
 
     applied = service.apply(proposal["proposal_id"])["proposal"]
@@ -75,7 +82,7 @@ def test_app_decision_commits_through_user_completion(tmp_path, monkeypatch, pro
     assert _rows(registry) == rows
 
 
-@pytest.mark.parametrize("provider", ["legacy", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_changed_goal_turns_decision_stale_without_writing(tmp_path, monkeypatch, provider):
     registry, service, target_id, gate_id = _goal(tmp_path, monkeypatch, provider)
     proposal = _preview(service, gate_id, "approve")

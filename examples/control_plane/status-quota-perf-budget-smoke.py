@@ -14,6 +14,11 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
+
 GOAL_ID = "status-quota-perf-budget-fixture"
 AGENT_ID = "codex-main-control"
 IGNORED_FILE_COUNT = 1_200
@@ -22,7 +27,7 @@ QUOTA_BUDGET_SECONDS = 3.5
 PRIVATE_DOC_MARKER = "https://" + "la" + "rk" + "office.example/doc"
 
 
-def write_fixture(root: Path) -> tuple[Path, Path, Path]:
+def write_fixture(root: Path, *, import_authority: bool = True) -> tuple[Path, Path, Path]:
     project = root / "project"
     runtime = root / "runtime"
     state_rel = f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
@@ -40,7 +45,12 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
         "## Objective\n\n"
         "Keep status and quota hot paths fast without skipping public scans.\n\n"
         "## Next Action\n\n"
-        "- Validate the selected hot-path budget todo.\n",
+        "- Validate the selected hot-path budget todo.\n\n"
+        "## Agent Todo\n\n"
+        + ("" if import_authority else
+           "- [ ] Inspect the historical status budget fixture.\n"
+           f"  <!-- loopx:todo todo_id=todo_historical_budget status=open "
+           f"task_class=advancement_task claimed_by={AGENT_ID} -->\n"),
         encoding="utf-8",
     )
     public_doc.write_text("Public smoke fixture for status/quota perf budgets.\n", encoding="utf-8")
@@ -90,6 +100,8 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
         + "\n",
         encoding="utf-8",
     )
+    if import_authority:
+        import_fixture_authority(registry_path, GOAL_ID)
     return registry_path, project, public_doc
 
 
@@ -230,10 +242,23 @@ def main() -> int:
         )
         state_text = state_file.read_text(encoding="utf-8")
         assert " status=open " in state_text, state_text
-        state_file.write_text(
-            state_text.replace(" status=open ", " status=stuck ", 1),
-            encoding="utf-8",
-        )
+        before, _ = run_cli(registry_path, "todo", "list", "--goal-id", GOAL_ID)
+        tampered = state_text.replace(" status=open ", " status=stuck ", 1)
+        state_file.write_text(tampered, encoding="utf-8")
+        after, _ = run_cli(registry_path, "todo", "list", "--goal-id", GOAL_ID)
+        assert after["todos"] == before["todos"], after
+        assert after["authority_read"]["provider_revision"] == before["authority_read"]["provider_revision"], after
+        assert after["authority_read"]["legacy_fallback_used"] is False, after
+        assert state_file.read_text(encoding="utf-8") == tampered
+
+        # Malformed historical source still has a read-only diagnostic/budget
+        # contract. It cannot act as the authority of the imported fixture.
+        registry_path, project, public_doc = write_fixture(root / "legacy-inspection", import_authority=False)
+        state_file = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
+        state_text = state_file.read_text(encoding="utf-8")
+        assert " status=open " in state_text, state_text
+        state_file.write_text(state_text.replace(" status=open ", " status=stuck ", 1), encoding="utf-8")
+        legacy_source = state_file.read_bytes()
 
         (
             malformed_status_payload,
@@ -308,6 +333,7 @@ def main() -> int:
             QUOTA_BUDGET_SECONDS,
             "malformed_state",
         )
+        assert state_file.read_bytes() == legacy_source
 
         print(
             "status_quota_perf_budget: "

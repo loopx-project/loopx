@@ -27,6 +27,11 @@ def canonical_mode(tmp_path, monkeypatch, request):
         result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
             "--format", "json", "handoff-mode", *args, "--goal-id", "mode-goal"],
             capture_output=True, text=True, timeout=90)
+        if result.returncode:
+            # Keep the complete native refusal in pytest's captured output;
+            # an assertion's abbreviated dictionary cannot diagnose a failure.
+            print(f"handoff-mode {args!r} exited {result.returncode}\n"
+                  f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
         assert result.stdout, result.stderr
         return result.returncode, json.loads(result.stdout)
     return state, runtime, cli
@@ -228,3 +233,94 @@ def test_provider_failure_is_not_a_legacy_fallback(canonical_mode, monkeypatch):
         provider_handoff_mode.set_canonical_handoff_mode(runtime_root=runtime, goal_id="mode-goal",
             mode="hard_lease", operation_id="unavailable", dry_run=False)
     assert state.read_bytes() == before
+
+
+def test_retired_policy_requires_release_and_reviewed_migration_before_execution(canonical_mode):
+    state, runtime, cli = canonical_mode
+    from datetime import datetime, timedelta, timezone
+    from loopx.todos import add_goal_todo
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+
+    registry = runtime.parent / "registry.json"
+    todo = add_goal_todo(registry_path=registry, goal_id="mode-goal", role="agent",
+                         text="Preserve imported ownership", claimed_by="agent-a",
+                         task_class="advancement_task", note="Retain original metadata")
+    # Imported historical facts are installed directly in this isolated test
+    # provider. No current business writer or new legacy lease grant produces them.
+    at = datetime.now(timezone.utc).replace(microsecond=0)
+    lease = {"schema_version": "task_lease_v0", "goal_id": "mode-goal", "todo_id": todo["todo_id"],
+             "owner": "agent-a", "idempotency_key": "imported-execution", "version": 4, "lease_epoch": 2,
+             "status": "active", "write_scopes": [], "acquire_ttl_seconds": 600,
+             "acquired_at": (at - timedelta(seconds=30)).isoformat(), "updated_at": at.isoformat(),
+             "expires_at": (at + timedelta(seconds=600)).isoformat()}
+    coordination = Path(__file__).resolve().parents[2] / "loopx/control_plane/coordination"
+    script = f"""
+      import {{openLocalAuthorityStore}} from {json.dumps((coordination / 'local_authority_provider.ts').as_uri())};
+      const store = await openLocalAuthorityStore(process.argv[1], 'mode-goal');
+      const before = await store.loadAuthority();
+      if (before.status !== 'loaded') throw new Error(JSON.stringify(before));
+      const result = await store.commitAuthority({{operation_id: 'imported-policy-fixture',
+        expected_provider_revision: before.provider_revision, next_projection: {{...before.head,
+          handoff_mode: 'legacy', leases: [{json.dumps(lease)}]}}, events: [], receipts: []}});
+      if (result.status !== 'applied') throw new Error(JSON.stringify(result));
+    """
+    seeded = subprocess.run(["node", "--no-warnings", "--experimental-strip-types", "--input-type=module",
+                             "-e", script, str(runtime)], capture_output=True, text=True, timeout=45)
+    assert seeded.returncode == 0, seeded.stderr
+
+    def read():
+        return read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="mode-goal", include_leases=True)
+
+    def work(*args, expected_exit=0):
+        child = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry), "--format", "json",
+            *args, "--goal-id", "mode-goal", "--todo-id", todo["todo_id"]], capture_output=True, text=True, timeout=90)
+        assert child.returncode == expected_exit, child.stdout + child.stderr
+        return json.loads(child.stdout)
+
+    before = read()
+    inspected = work("task-lease", "inspect")
+    assert inspected["active"] is False
+    assert inspected["executor_constraint"]["reason"] == "handoff_mode_retired"
+    assert inspected["lease"] == lease
+    for args in [
+        ("todo", "claim", "--agent-id", "agent-a", "--claimed-by", "agent-a"),
+        ("todo", "update", "--agent-id", "agent-a", "--note", "Unreviewed work"),
+        ("todo", "complete", "--agent-id", "agent-a", "--no-follow-up", "--note", "Bounded completion"),
+        ("todo", "update", "--agent-id", "agent-a", "--note", "Old proof cannot authorize",
+         "--task-lease-idempotency-key", "imported-execution", "--task-lease-expected-version", "4"),
+    ]:
+        refused = work(*args, expected_exit=1)
+        assert (refused.get("error_code") or refused.get("reason_code")) == "handoff_mode_retired", refused
+        assert read() == before
+    released = work("task-lease", "release", "--owner", "agent-a", "--idempotency-key", "imported-execution",
+                    "--expected-version", "4")
+    assert released["released"] is True
+    retained = read()
+    assert retained["handoff_mode"] == "legacy" and retained["todos"] == before["todos"]
+    assert retained["leases"][0]["status"] == "released"
+    assert retained["leases"][0]["version"] == 4 and retained["leases"][0]["lease_epoch"] == 2
+    plan = runtime.parent / "retired-policy-upgrade.json"
+    code, planned = cli("plan-migration", "--mode", "hard_lease", "--plan", str(plan))
+    assert code == 0 and planned["status"] == "planned", planned
+    assert read() == retained
+    digest = planned["plan_sha256"]
+    code, applied = cli("migrate", "--plan", str(plan), "--plan-sha256", digest, "--execute")
+    assert code == 0 and applied["status"] == "applied", applied
+    assert applied["execution_authority_granted"] is False
+    assert Path(applied["backup_path"]).is_file()
+    migrated = read()
+    assert migrated["handoff_mode"] == "hard_lease"
+    assert migrated["todos"] == retained["todos"] and migrated["leases"] == retained["leases"]
+    acquired = work("task-lease", "acquire", "--owner", "agent-a", "--idempotency-key", "new-execution",
+                    "--expected-version", "4", "--ttl-seconds", "600")
+    assert acquired["acquired"] is True and acquired["lease"]["version"] == 5
+    assert acquired["lease"]["lease_epoch"] == 3
+    assert work("todo", "update", "--agent-id", "agent-a", "--note", "Reviewed current work",
+                "--task-lease-idempotency-key", "new-execution", "--task-lease-expected-version", "5")["ok"] is True
+    later = read()
+    code, replay = cli("migrate", "--plan", str(plan), "--plan-sha256", digest, "--execute")
+    assert code == 0 and replay["status"] == "replayed", replay
+    assert read() == later, "historical migration cannot overwrite later execution"
+    assert work("task-lease", "release", "--owner", "agent-a", "--idempotency-key", "new-execution",
+                "--expected-version", "5")["released"] is True
+    assert state.exists()

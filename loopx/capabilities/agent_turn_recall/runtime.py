@@ -298,6 +298,7 @@ def run_configured_agent_turn_recall(
             agent_id=agent_id,
         )
         if previous and previous.get("turn_recall_id") == situation["turn_recall_id"]
+        and previous.get("binding_revision") == experiment_status.get("binding_revision")
         else None
     )
     if deduplicated is not None:
@@ -348,6 +349,7 @@ def run_configured_agent_turn_recall(
             "provider_call_count": result.get("provider_call_count"),
             "context": result.get("context"),
             "observed_at": effective_observed_at,
+            **({"binding_revision": experiment_status["binding_revision"]} if experiment_status.get("binding_revision") else {}),
         },
     )
     result["same_turn_receipt_written"] = True

@@ -8,16 +8,15 @@ import {decodeTaskLeaseProof} from "./task_lease_proof.ts";
 import {COORDINATION_TODO_ARCHIVE_RESULT_SCHEMA} from "./todo_archive.ts";
 import {readCoordinationOwnership} from "./ownership_observation.ts";
 import {executeTodoContinuation} from "./todo_continuation.ts";
-import {withCanonicalWriter} from "./local_authority_write.ts";
+import {canonicalWriteRouteFailure, withCanonicalWriter} from "./local_authority_write.ts";
 import { ShadowManagementError, withShadowMaintenanceLock } from "./shadow_management.ts";
 import { isAbsolute, join } from "node:path";
 import {readFile, realpath} from "node:fs/promises";
 import {createHash} from "node:crypto";
 
 import type { JsonObject } from "../effect_program.ts";
-import {decodeMonitorPollObservation} from "../todos/monitor_metadata.ts";
 import {decodeCompletionValidationRevision} from "../todos/completion_validation_revision.ts";
-import {executeCoordinationMonitorPoll, COORDINATION_MONITOR_POLL_REQUEST_SCHEMA, COORDINATION_LEASED_MONITOR_POLL_REQUEST_SCHEMA, COORDINATION_WITNESSED_MONITOR_POLL_REQUEST_SCHEMA, COORDINATION_GUARDED_MONITOR_POLL_REQUEST_SCHEMA,
+import {executeCoordinationMonitorPoll, COORDINATION_MONITOR_POLL_REQUEST_SCHEMA, COORDINATION_LEASED_MONITOR_POLL_REQUEST_SCHEMA, COORDINATION_WITNESSED_MONITOR_POLL_REQUEST_SCHEMA, COORDINATION_GUARDED_MONITOR_POLL_REQUEST_SCHEMA, COORDINATION_MONITOR_RECEIPT_ONLY_REQUEST_SCHEMA,
   COORDINATION_MONITOR_POLL_RESULT_SCHEMA} from "./todo_monitor_poll.ts";
 import { requireJsonObject, requireBoolean } from "../runtime_decode.ts";
 import {
@@ -447,22 +446,23 @@ export async function pollLocalCoordinationMonitor(value: unknown,
   const evidence = {source_authority: "file_v0", decision_read_from_provider: true, legacy_fallback_used: false};
   try {
     const input = requireJsonObject(value, "local Monitor poll request");
+    const receiptOnly = input.schema_version === COORDINATION_MONITOR_RECEIPT_ONLY_REQUEST_SCHEMA;
     if (input.schema_version !== COORDINATION_MONITOR_POLL_REQUEST_SCHEMA &&
         input.schema_version !== COORDINATION_LEASED_MONITOR_POLL_REQUEST_SCHEMA &&
         input.schema_version !== COORDINATION_WITNESSED_MONITOR_POLL_REQUEST_SCHEMA &&
-        input.schema_version !== COORDINATION_GUARDED_MONITOR_POLL_REQUEST_SCHEMA) throw new TypeError("Monitor poll schema mismatch");
+        input.schema_version !== COORDINATION_GUARDED_MONITOR_POLL_REQUEST_SCHEMA && !receiptOnly) throw new TypeError("Monitor poll schema mismatch");
     if (input.lease_proof != null && input.schema_version === COORDINATION_MONITOR_POLL_REQUEST_SCHEMA) {
       throw new TypeError("lease-backed Monitor poll requires request v1");
     }
     if (input.schema_version === COORDINATION_GUARDED_MONITOR_POLL_REQUEST_SCHEMA && input.gate_scope_guard !== true) {
       throw new TypeError("guarded Monitor request v3 requires gate_scope_guard=true");
     }
-    if (input.gate_scope_guard === true && input.schema_version !== COORDINATION_GUARDED_MONITOR_POLL_REQUEST_SCHEMA) {
+    if (input.gate_scope_guard === true && input.schema_version !== COORDINATION_GUARDED_MONITOR_POLL_REQUEST_SCHEMA && !receiptOnly) {
       throw new TypeError("commit-head Monitor gate scope requires request v3");
     }
     const authoritySourcesCurrent = registryAuthoritySourceCheck(input,
       input.schema_version === COORDINATION_WITNESSED_MONITOR_POLL_REQUEST_SCHEMA ||
-      input.schema_version === COORDINATION_GUARDED_MONITOR_POLL_REQUEST_SCHEMA);
+      input.schema_version === COORDINATION_GUARDED_MONITOR_POLL_REQUEST_SCHEMA || receiptOnly);
     const proof = decodeTaskLeaseProof(input.lease_proof);
     if (input.schema_version === COORDINATION_LEASED_MONITOR_POLL_REQUEST_SCHEMA && !proof) {
       throw new TypeError("Monitor poll request v1 requires lease_proof");
@@ -478,17 +478,18 @@ export async function pollLocalCoordinationMonitor(value: unknown,
         goal_id: goalId, operation_id: requireAuthorityStoreId(input.operation_id, "operation id"),
         actor_agent_id: input.actor_agent_id == null ? null : claimAgentValue(input.actor_agent_id, "actor_agent_id"),
         registered_agents: registered, dry_run: input.dry_run as boolean,
+        receipt_only: receiptOnly,
         observation: requireJsonObject(input.observation, "Monitor observation"),
         intent: requireJsonObject(input.intent, "Monitor successor intent"),
         lease_proof: proof, gate_scope_guard: input.gate_scope_guard == null ? false :
           requireBoolean(input.gate_scope_guard, "gate_scope_guard"), now: new Date(),
       }, authoritySourcesCurrent), ...evidence};
-    });
+    }, {businessWrite: "monitor_poll"});
   } catch (error) {
     return {schema_version: COORDINATION_MONITOR_POLL_RESULT_SCHEMA, status: "failed", changed: false,
       reason_code: error instanceof ShadowManagementError ? error.reason_code : "invalid_local_monitor_poll_request",
       reason: error instanceof Error ? error.message : String(error), ...evidence,
-      ...localAuthorityOpenFailure(error)};
+      ...localAuthorityOpenFailure(error), ...canonicalWriteRouteFailure(error)};
   }
 }
 
@@ -1084,7 +1085,7 @@ export async function claimLocalCoordinationTodo(
         decision_read_from_provider: true,
         legacy_fallback_used: false,
       };
-    });
+    }, {businessWrite: "todo_claim"});
   } catch (error) {
     return {
       schema_version: COORDINATION_TODO_CLAIM_RESULT_SCHEMA,
@@ -1095,6 +1096,7 @@ export async function claimLocalCoordinationTodo(
       decision_read_from_provider: true,
       legacy_fallback_used: false,
       ...localAuthorityOpenFailure(error),
+      ...canonicalWriteRouteFailure(error),
     };
   }
 }
@@ -1155,7 +1157,7 @@ export async function createLocalCoordinationTodo(
         ...result,
         ...providerEvidence,
       };
-    });
+    }, {businessWrite: "todo_create"});
   } catch (error) {
     return {
       schema_version: COORDINATION_TODO_CREATE_RESULT_SCHEMA,
@@ -1164,6 +1166,7 @@ export async function createLocalCoordinationTodo(
       reason: error instanceof Error ? error.message : "invalid Todo create request",
       ...providerEvidence,
       ...localAuthorityOpenFailure(error),
+      ...canonicalWriteRouteFailure(error),
     };
   }
 }
@@ -1249,7 +1252,12 @@ export async function updateLocalCoordinationTodo(
         lease_expected_version: optionalNonNegativeSafeInteger(input.lease_expected_version, "lease_expected_version"),
         patch: requireJsonObject(input.patch, "Todo update patch"),
         planning_intent: planningIntent,
-        ...(observationUpdate ? {monitor_observation: decodeMonitorPollObservation(input.monitor_observation)} : {}),
+        ...(observationUpdate ? {
+          monitor_observation: requireJsonObject(
+            input.monitor_observation,
+            "Monitor observation",
+          ),
+        } : {}),
         ...(completionUpdate ? {completion: requireJsonObject(input.completion, "Todo completion payload")} : {}),
         ...(validationRevisionUpdate ? {completion_validation_revision:
           decodeCompletionValidationRevision(input.completion_validation_revision)} : {}),
@@ -1257,13 +1265,14 @@ export async function updateLocalCoordinationTodo(
         dry_run: input.dry_run as boolean,
         now: claimObservedAt(input.observed_at),
       }, authoritySourcesCurrent), ...providerEvidence};
-    });
+    }, {businessWrite: "todo_update"});
   } catch (error) {
     return {schema_version: COORDINATION_TODO_UPDATE_RESULT_SCHEMA, status: "failed",
       changed: false, reason_code: error instanceof ShadowManagementError ? error.reason_code : "invalid_local_coordination_todo_update_request",
       reason: error instanceof Error ? error.message : "invalid Todo update request",
       ...providerEvidence,
       ...localAuthorityOpenFailure(error),
+      ...canonicalWriteRouteFailure(error),
     };
   }
 }
@@ -1373,7 +1382,7 @@ export async function terminalLifecycleLocalCoordinationTodo(
       }, async () => await authoritySourcesCurrent() && researchEvidence.current(),
         researchEvidence.qualify, request => verifyReentrySettlement(root, request)), ...providerEvidence};
       } finally {await researchEvidence.close();}
-    });
+    }, {businessWrite: "todo_terminal"});
   } catch (error) {
     return {schema_version: COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA,
       status: "failed", changed: false,
@@ -1382,6 +1391,7 @@ export async function terminalLifecycleLocalCoordinationTodo(
       reason: error instanceof Error ? error.message : "invalid local Todo terminal request",
       ...providerEvidence,
       ...localAuthorityOpenFailure(error),
+      ...canonicalWriteRouteFailure(error),
     };
   }
 }
@@ -1424,7 +1434,7 @@ export async function archiveLocalCoordinationTodos(
         dry_run: input.dry_run as boolean,
         now,
       }), ...providerEvidence};
-    });
+    }, {businessWrite: "todo_archive"});
   } catch (error) {
     return {schema_version: COORDINATION_TODO_ARCHIVE_RESULT_SCHEMA,
       status: "failed", changed: false,
@@ -1433,6 +1443,7 @@ export async function archiveLocalCoordinationTodos(
       reason: error instanceof Error ? error.message : "invalid local Todo archive request",
       ...providerEvidence,
       ...localAuthorityOpenFailure(error),
+      ...canonicalWriteRouteFailure(error),
     };
   }
 }
@@ -1454,7 +1465,7 @@ export async function acknowledgeLocalCoordinationTodoArchive(
     return await withCanonicalWriter(root, goalId, false, async () => {
       const store = await openRuntimeStore(root, goalId, dependencies);
       return acknowledgeLocalArchiveAttempt(store, root, goalId, role, operationId);
-    });
+    }, {businessWrite: "todo_archive"});
   } catch (error) {
     return {
       schema_version: LOCAL_TODO_ARCHIVE_ACK_RESULT_SCHEMA,
@@ -1463,6 +1474,7 @@ export async function acknowledgeLocalCoordinationTodoArchive(
         "invalid_local_coordination_todo_archive_ack_request",
       reason: error instanceof Error ? error.message : "invalid archive acknowledgement",
       ...localAuthorityOpenFailure(error),
+      ...canonicalWriteRouteFailure(error),
     };
   }
 }
@@ -1480,17 +1492,13 @@ export async function continueLocalTodo(
     return await withCanonicalWriter(root, goalId, false, async () => {
       const store = await openRuntimeStore(root, goalId, dependencies);
       evidence.source_authority = sourceAuthorityFor(store);
-      const fence = await loadLegacyCoordinationWriterFence(root, goalId);
-      if (fence.status !== "loaded") return {ok: false, status: "rejected",
-        reason_code: "continuation_requires_canonical_authority",
-        reason: "Use an explicitly promoted canonical authority; this command never promotes or falls back to Markdown"};
       return {...await executeTodoContinuation(store, input), ...evidence};
-    });
+    }, {businessWrite: "todo_update"});
   } catch (error) {
     return {ok: false, status: "failed",
       reason_code: error instanceof ShadowManagementError ? error.reason_code : "invalid_continuation_request",
       reason: error instanceof Error ? error.message : "Invalid continuation request", ...evidence,
-      ...localAuthorityOpenFailure(error)};
+      ...localAuthorityOpenFailure(error), ...canonicalWriteRouteFailure(error)};
   }
 }
 

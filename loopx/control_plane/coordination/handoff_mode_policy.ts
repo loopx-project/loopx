@@ -1,12 +1,20 @@
-/** One quiescence rule for the legacy adapter and canonical mode transaction. */
+/** One policy owner: two current execution modes, historical mode decoding and migration. */
 import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject, requireStringArray, requireStringLiteral} from "../runtime_decode.ts";
 
 import {HANDOFF_MODES, type HandoffMode} from "./handoff_mode_vocabulary.ts";
-export {HANDOFF_MODES, EXECUTION_HANDOFF_MODES, type HandoffMode} from "./handoff_mode_vocabulary.ts";
+export {HANDOFF_MODES, EXECUTION_HANDOFF_MODES, type HandoffMode, type ExecutionHandoffMode} from "./handoff_mode_vocabulary.ts";
 export const HANDOFF_MODE_PLAN_SCHEMA = "loopx_handoff_mode_plan_request_v0";
 
 import type {PersistedHandoffMode} from "./handoff_mode_facts.ts";
+
+export const HANDOFF_MODE_RETIRED_REASON = "Legacy ownership is historical only. Release retained execution, then review handoff-mode plan-migration/migrate to soft_claim or hard_lease; policy migration does not require another storage promotion.";
+
+/** Historical mode is readable and releasable, never present-tense execution.
+ * Receipt recovery runs before fresh admission; readback must not turn it into a grant. */
+export function retiredHandoffModeRejection(mode: unknown): "handoff_mode_retired" | null {
+  return mode === "legacy" ? "handoff_mode_retired" : null;
+}
 
 export function decideHandoffMode(previous: PersistedHandoffMode, requested: HandoffMode,
   claims: number, leases: number): JsonObject {

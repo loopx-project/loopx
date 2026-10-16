@@ -3,14 +3,20 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 import subprocess
 
 import pytest
 
+from loopx.control_plane.coordination.authority_source_capture import (
+    build_runtime_shadow_source_snapshot,
+)
 from shadow_e2e_fixture import workspace
 from test_canonical_todo_writer_isolation import (
     isolated_todo_distribution, retirement_wheel,  # noqa: F401,F811
 )
+
+REPO = Path(__file__).resolve().parents[2]
 
 
 def _bytes(root: Path):
@@ -18,20 +24,108 @@ def _bytes(root: Path):
             for path in root.rglob("*") if path.is_file() and path.suffix != ".lock"}
 
 
-@pytest.mark.parametrize("producers_present", [True, False], ids=["present", "absent"])
+def _seed_historical_shadow_transactions(
+    runtime: Path,
+    state: Path,
+    partitions: list[dict[str, object]],
+) -> None:
+    node = shutil.which("node")
+    assert node is not None
+    script = """
+import {pathToFileURL} from "node:url";
+import {join} from "node:path";
+import {readFileSync} from "node:fs";
+const [storePath, shadowPath, fixturePath, root, statePath] = process.argv.slice(1);
+const {FileAuthorityStore} = await import(pathToFileURL(storePath).href);
+const {commitLocalAuthorityShadowEntry} = await import(pathToFileURL(shadowPath).href);
+const {pendingEntry, settleFiles} = await import(pathToFileURL(fixturePath).href);
+const store = new FileAuthorityStore(join(root, "authority-shadow", "file-v0"), "goal-a",
+  {existingOnly: true});
+const loaded = await store.loadAuthority();
+if (loaded.status !== "loaded") throw new Error(`shadow bootstrap missing: ${JSON.stringify(loaded)}`);
+const fixture = {root, statePath, store, baseline: loaded.head};
+const partitions = JSON.parse(readFileSync(0, "utf8"));
+for (const [index, partition] of partitions.entries()) {
+  const seq = index + 1;
+  const request = await pendingEntry(fixture, seq, partition);
+  const result = await commitLocalAuthorityShadowEntry(request);
+  if (result.outcome !== "delivered") {
+    throw new Error(`historical shadow seed failed: ${JSON.stringify(result)}`);
+  }
+  await settleFiles(fixture, request, result);
+}
+"""
+    result = subprocess.run(
+        [
+            node,
+            "--no-warnings",
+            "--experimental-strip-types",
+            "--input-type=module",
+            "-e",
+            script,
+            str(REPO / "loopx/control_plane/coordination/file_authority_store.ts"),
+            str(REPO / "loopx/control_plane/coordination/local_authority_shadow.ts"),
+            str(REPO / "tests/control_plane_ts/shadow_file_fixture.ts"),
+            str(runtime),
+            str(state),
+        ],
+        cwd=REPO,
+        input=json.dumps(partitions),
+        capture_output=True,
+        text=True,
+        timeout=45,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("bridges_present", [True, False], ids=["present", "absent"])
 def test_complete_shadow_observation_without_producers(
-    tmp_path, isolated_todo_distribution, producers_present,  # noqa: F811 -- imported pytest fixture
+    tmp_path, isolated_todo_distribution, bridges_present,  # noqa: F811 -- imported pytest fixture
 ):
     package, command = isolated_todo_distribution
     w = workspace(tmp_path / "shadow", bootstrap=False)
+    registry = json.loads(w.registry.read_text())
+    registry["goals"][0]["id"] = "goal-a"
+    w.registry.write_text(json.dumps(registry))
+    w.goal = "goal-a"
+    todo_id = "todo_observed"
+    header = (
+        "---\ngoal_id: goal-a\nhandoff_mode: hard_lease\n"
+        "updated_at: 2026-09-01T00:00:00+00:00\n---\n\n## Agent Todo\n\n"
+    )
+    records = [
+        ("Preserve the original source work", todo_id),
+        ("Second source mutation", "todo_second"),
+        ("Third source mutation", "todo_third"),
+    ]
+    w.state.write_text(header, encoding="utf-8")
     w.command, w.cwd, w.package = tuple(command), tmp_path, package
     assert w.cli("coordination-shadow", "bootstrap", "--execute")["bootstrap"]["status"] == "applied"
-    todo_id = w.add("Preserve the original source work")["todo_id"]
-    w.add("Second source mutation")
-    w.add("Third source mutation")
-    if not producers_present:
-        for name in ("runtime_shadow", "runtime_shadow_writer_adapter",
-                     "local_authority_shadow_adapter", "local_authority_shadow_outbox"):
+    partitions = []
+    body = header
+    for text, record_id in records:
+        body += (
+            f"- [ ] {text}\n"
+            f"  <!-- loopx:todo todo_id={record_id} role=agent "
+            "task_class=advancement_task -->\n"
+        )
+        w.state.write_text(body, encoding="utf-8")
+        projection, _snapshot = build_runtime_shadow_source_snapshot(
+            goal=registry["goals"][0],
+            runtime_root=w.runtime,
+            state_path=w.state,
+            registry_path=w.registry,
+        )
+        partitions.append({
+            "handoff_mode": projection["handoff_mode"],
+            "todos": projection["todos"],
+        })
+    source = w.state.read_bytes()
+    _seed_historical_shadow_transactions(w.runtime, w.state, partitions)
+    w.state.write_bytes(source)
+    if not bridges_present:
+        for name in ("runtime_shadow", "local_authority_shadow_adapter",
+                     "local_authority_shadow_outbox"):
             (package / f"control_plane/coordination/{name}.py").unlink()
         check = subprocess.run([command[0], "-S", "-c",
             "import importlib.util; assert importlib.util.find_spec("

@@ -173,9 +173,9 @@ may remain a historical relation without being reported as open agent work.
 Original-operation replay returns the originally accepted completion policy,
 including receipts written by earlier releases, without rewriting it against
 today's head. Current Todo reads show subsequent changes independently. The
-unpromoted Markdown writer retains its source-backed compatibility path; this
-change does not require migration or retire that writer. Rollback restores the
-earlier adapter and transaction together; no stored format migration is needed.
+2.0 command requires canonical authority; an unmigrated Goal must use the
+reviewed backup-and-migrate path before a new terminal write. Historical
+receipts remain readable without rewriting their stored format.
 
 ## Retiring an original Turn with an existing successor
 

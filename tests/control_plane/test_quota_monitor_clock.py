@@ -13,7 +13,6 @@ from loopx.control_plane.testing.canary_harness import write_fixture_registry, r
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from loopx.control_plane.todos import quota_selection
 from loopx.control_plane.todos.quota_summary import summarize_user_todos_for_quota
-from loopx.todos import list_goal_todos
 from tests.control_plane.test_monitor_followthrough_contract import (
     AGENT_ID, GOAL_ID, _add_monitor, _write_fixture,
 )
@@ -94,7 +93,7 @@ def test_gap_presentation_order_does_not_inherit_claim_or_profile_order() -> Non
     assert result["monitor_schedule_gap_items"][0]["todo_id"] == "todo_unclaimed"
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_public_quota_gap_count_uses_real_full_source_without_writing_it(tmp_path, monkeypatch, provider) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
@@ -110,13 +109,12 @@ def test_public_quota_gap_count_uses_real_full_source_without_writing_it(tmp_pat
     write_fixture_registry(project=tmp_path, runtime_root=runtime, registry_path=registry,
         goal_id="goal-a", domain="monitor-clock", adapter_kind="generic_project_goal_v0",
         state_file=str(state), registered_agents=["agent-a", "agent-b"], quota_allowed_slots=None)
-    if provider != "legacy":
-        goal = json.loads(registry.read_text())["goals"][0]
-        fields = parse_active_state_todos(state.read_text(), goal=goal, item_limit=None)
-        projection = build_todo_runtime_shadow_projection(goal_id="goal-a", todos=fields["agent_todos"]["items"],
-                                                         handoff_mode="soft_claim")
-        initialize_canonical_authority(runtime, "goal-a", projection, state_path=state, provider=provider)
-        state.unlink()
+    goal = json.loads(registry.read_text())["goals"][0]
+    fields = parse_active_state_todos(state.read_text(), goal=goal, item_limit=None)
+    projection = build_todo_runtime_shadow_projection(goal_id="goal-a", todos=fields["agent_todos"]["items"],
+                                                     handoff_mode="soft_claim")
+    initialize_canonical_authority(runtime, "goal-a", projection, state_path=state, provider=provider)
+    state.unlink()
     before = state.read_bytes() if state.exists() else None
     code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
         "--include-detail", "agent-todos", "--scan-path", str(tmp_path), registry_path=registry, runtime_root=runtime)
@@ -144,12 +142,12 @@ def test_missing_typed_quota_owner_cannot_reactivate_python_monitor_rules(monkey
     assert source == before
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_cli_due_order_and_successive_turns_preserve_exact_poll_settlement(
     tmp_path, monkeypatch, provider,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, runtime, state = _write_fixture(tmp_path)
+    registry, runtime, state = _write_fixture(tmp_path, provider=provider)
     # Deliberately create out of deadline order, so display order cannot
     # accidentally satisfy the independently specified scheduling oracle.
     monitors = [
@@ -160,13 +158,7 @@ def test_cli_due_order_and_successive_turns_preserve_exact_poll_settlement(
         _add_monitor(registry, text="[P1] Observe middle target", target_key="middle",
                      next_due_at="2001-01-01T00:00:00Z"),
     ]
-    if provider != "legacy":
-        rows = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
-        projection = build_todo_runtime_shadow_projection(
-            goal_id=GOAL_ID, todos=rows, handoff_mode="soft_claim")
-        initialize_canonical_authority(runtime, GOAL_ID, projection,
-                                       state_path=state, provider=provider)
-        state.unlink()  # Canonical authority, not a stale Markdown fallback.
+    state.unlink()  # Canonical authority, not a stale Markdown fallback.
 
     def call(*args):
         code, result = run_json_cli_result(
@@ -177,6 +169,12 @@ def test_cli_due_order_and_successive_turns_preserve_exact_poll_settlement(
     scope = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
              "--runtime-profile", "codex_app_ssh_goal"]
     expected = [monitors[1], monitors[2], monitors[0]]
+    expected_targets = ["oldest", "middle", "recent"]
+    expected_due_at = {
+        monitors[0]["todo_id"]: "2002-01-01T00:00:00Z",
+        monitors[1]["todo_id"]: "2000-01-01T00:00:00Z",
+        monitors[2]["todo_id"]: "2001-01-01T00:00:00Z",
+    }
     previous_guard = None
     for ordinal, item in enumerate(expected):
         turn = f"monitor-order-{ordinal}"
@@ -191,7 +189,7 @@ def test_cli_due_order_and_successive_turns_preserve_exact_poll_settlement(
         if previous_guard:
             assert call(*previous_guard)["should_run"] is False
         poll = ["quota", "monitor-poll", *scope, "--turn-instance-id", turn,
-                "--todo-id", item["todo_id"], "--target-key", item["target_key"],
+                "--todo-id", item["todo_id"], "--target-key", expected_targets[ordinal],
                 "--result-hash", f"checked-{ordinal}",
                 "--next-due-at", "2099-01-01T00:00:00Z", "--execute"]
         settled = call(*poll)
@@ -205,7 +203,7 @@ def test_cli_due_order_and_successive_turns_preserve_exact_poll_settlement(
         records = call("todo", "list", "--goal-id", GOAL_ID, "--role", "agent")["todos"]
         by_id = {row["todo_id"]: row for row in records}
         for unpolled in expected[ordinal + 1:]:
-            assert by_id[unpolled["todo_id"]]["next_due_at"] == unpolled["next_due_at"]
+            assert by_id[unpolled["todo_id"]]["next_due_at"] == expected_due_at[unpolled["todo_id"]]
             assert not by_id[unpolled["todo_id"]].get("last_checked_at")
         previous_guard = guard
     events = [json.loads(line) for line in

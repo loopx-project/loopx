@@ -8,9 +8,7 @@ TypeScript transaction is the sole owner of lifecycle admission and writes.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Iterable, Mapping
-from functools import wraps
-from inspect import signature
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +18,7 @@ from ..coordination.local_authority import (
     LocalCoordinationAuthorityRejection,
     LocalCoordinationAuthorityUnavailable,
     read_canonical_todos_if_promoted,
+    require_canonical_authority,
 )
 from ...paths import effective_runtime_root
 from ..effect_runtime import (
@@ -47,9 +46,6 @@ _ARCHIVE_ACK_REQUEST_SCHEMA = "loopx_local_coordination_todo_archive_ack_request
 _ACCEPTED = {"applied", "recovered", "replayed", "no_change", "planned"}
 
 
-TodoMutation = Callable[..., dict[str, Any]]
-
-
 def _non_negative_integer(value: Any, label: str, *, optional: bool) -> int | None:
     if value is None and optional:
         return None
@@ -60,7 +56,7 @@ def _non_negative_integer(value: Any, label: str, *, optional: bool) -> int | No
     return result
 
 
-def _route_terminal_call(command: str, call: Mapping[str, Any]) -> dict[str, Any] | None:
+def route_terminal_call(command: str, call: Mapping[str, Any]) -> dict[str, Any]:
     registry_path = Path(call["registry_path"])
     goal_id = str(call["goal_id"])
     runtime_root = effective_runtime_root(registry_path, call.get("runtime_root_arg"))
@@ -78,10 +74,10 @@ def _route_terminal_call(command: str, call: Mapping[str, Any]) -> dict[str, Any
             project=call.get("project"),
             state_file=call.get("state_file"),
             # Canonical archive can recover its display after committing or
-            # replaying. The legacy fallback still requires an existing file.
+            # replaying, so a missing projection file is not admission.
             require_existing=False,
         )
-        return archive_canonical_todos_if_promoted(
+        result = archive_canonical_todos_if_promoted(
             registry_path=registry_path,
             runtime_root=runtime_root,
             goal_id=goal_id,
@@ -91,6 +87,9 @@ def _route_terminal_call(command: str, call: Mapping[str, Any]) -> dict[str, Any
             project=project,
             state_file=state_file,
         )
+        if result is None:
+            require_canonical_authority(goal_id=goal_id, operation="todo_archive")
+        return result
 
     next_agent_todo = call.get("next_agent_todo")
     if call.get("next_task_repository") and not next_agent_todo:
@@ -107,7 +106,7 @@ def _route_terminal_call(command: str, call: Mapping[str, Any]) -> dict[str, Any
         require_existing=False,
     )
     complete = command == "complete"
-    return terminal_canonical_todo_if_promoted(
+    result = terminal_canonical_todo_if_promoted(
         registry_path=registry_path,
         runtime_root=runtime_root,
         goal_id=goal_id,
@@ -159,30 +158,9 @@ def _route_terminal_call(command: str, call: Mapping[str, Any]) -> dict[str, Any
         project=project,
         state_file=state_file,
     )
-
-
-def provider_first_terminal_lifecycle(command: str) -> Callable[[TodoMutation], TodoMutation]:
-    """Route the public facade through canonical authority before legacy fallback."""
-    if command not in {"complete", "supersede", "archive"}:
-        raise ValueError(f"unsupported terminal lifecycle command: {command}")
-
-    def decorate(legacy: TodoMutation) -> TodoMutation:
-        call_signature = signature(legacy)
-
-        @wraps(legacy)
-        def routed(*args: Any, **kwargs: Any) -> dict[str, Any]:
-            bound = call_signature.bind(*args, **kwargs)
-            bound.apply_defaults()
-            result = _route_terminal_call(command, bound.arguments)
-            if result is None and bound.arguments.get("terminal_review_basis") is not None:
-                raise ValueError("Reviewed canonical completion cannot fall back to legacy authority; regenerate preview")
-            if result is None and bound.arguments.get("completion_result_file") is not None:
-                raise ValueError("Completion results require promoted canonical Todo authority")
-            return result if result is not None else legacy(*args, **kwargs)
-
-        return routed
-
-    return decorate
+    if result is None:
+        require_canonical_authority(goal_id=goal_id, operation="todo_terminal")
+    return result
 
 
 def _todo_by_id(
@@ -634,6 +612,6 @@ def archive_canonical_todos_if_promoted(
 
 __all__ = [
     "archive_canonical_todos_if_promoted",
-    "provider_first_terminal_lifecycle",
+    "route_terminal_call",
     "terminal_canonical_todo_if_promoted",
 ]

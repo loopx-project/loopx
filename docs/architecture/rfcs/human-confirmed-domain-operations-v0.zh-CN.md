@@ -514,3 +514,10 @@ DSH 传输交付须复用既有 operation 和 Turn owner：
 
 这是必需的 adapter 前沿，不是已交付的 DSH 执行 grant。金融预检和场所证据
 继续由 Finance 拥有；其只读 checker 不认证操作 actor、不预留资金或提交订单。
+
+可选的[冻结请求准备传输](../../reference/local-delegation.md#freeze-an-operator-authored-operation-request)
+移除模型逐字复制 operator 已冻结条款的步骤。调用内 locator 只在原生调用
+鉴权之后解析，再复用既有 prepare 准入、executor/受众注入和唯一规范提案
+owner；SDK 严格 JSON 解析与 DSH 原始参数配对不变。这一有界 CLI/adapter
+实现不等于真实本人确认、自动回调资格、原卡结果回执或金融效用；前端 grant/
+文件编辑仍待交付。

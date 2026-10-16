@@ -13,6 +13,17 @@ class CloseoutQueryUnavailableError(RuntimeError):
     diagnostic_code = "closeout_query_unavailable"
 
 
+class QuotaDecisionTransportError(RuntimeError):
+    """The guard already ran; its private capture or Host handoff did not finish.
+
+    This is never a collection failure: the Turn receipt may be durable and the
+    original decision may already be saved. Callers read that evidence instead
+    of rerunning the guard.
+    """
+
+    error_code = "quota_decision_transport_failed"
+
+
 class QuotaCommandValidationError(ValueError):
     """Public-safe diagnostic for an invalid ``loopx quota`` invocation."""
 
@@ -210,7 +221,7 @@ class QuotaActionSelectionConflictError(RuntimeError):
 def quota_error_code(exc: BaseException) -> str:
     if isinstance(exc, EffectRuntimeHostPermissionError):
         return "quota_runtime_permission_denied"
-    if isinstance(exc, CloseoutQueryUnavailableError):
+    if isinstance(exc, (CloseoutQueryUnavailableError, QuotaDecisionTransportError)):
         return exc.error_code
     if isinstance(exc, json.JSONDecodeError):
         return "quota_state_invalid_json"

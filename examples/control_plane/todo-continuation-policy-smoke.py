@@ -13,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from loopx.control_plane.testing.canary_harness import (  # noqa: E402
+    import_fixture_authority,
     run_json_cli,
     run_json_cli_result,
     write_fixture_registry,
@@ -50,6 +51,7 @@ def write_fixture(root: Path) -> tuple[Path, Path]:
         registered_agents=[PEER_ALPHA, PEER_BETA],
         quota_allowed_slots=None,
     )
+    import_fixture_authority(registry_path, GOAL_ID)
     return registry_path, state_file
 
 
@@ -165,7 +167,7 @@ def main() -> int:
             registry_path=registry_path,
         )
         assert returncode == 1, rejected
-        assert "cannot also appear in next_excluded_agents" in rejected["error"]
+        assert "cannot also appear in excluded_agents" in rejected["error"]
         assert agent_todo(state_file, conflict["todo_id"])["status"] == "open"
 
         missing_evidence = add_todo(registry_path, "Require self-merge evidence.")

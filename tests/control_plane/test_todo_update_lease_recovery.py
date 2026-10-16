@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -15,8 +16,8 @@ from loopx.control_plane.todos.markdown import render_todo_markdown
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("mode", ["legacy", "hard_lease"])
-def test_released_lease_recovery_through_public_cli(tmp_path: Path, monkeypatch, provider: str, mode: str) -> None:
+def test_hard_lease_recovery_through_public_cli(tmp_path: Path, monkeypatch, provider: str) -> None:
+    mode = "hard_lease"
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     runtime = tmp_path / "runtime"
     state = tmp_path / "ACTIVE_GOAL_STATE.md"
@@ -92,6 +93,64 @@ def test_released_lease_recovery_through_public_cli(tmp_path: Path, monkeypatch,
     assert registry.read_bytes() == registry_bytes
     # Successful publication may materialize a derived display; it is not an input.
     assert "Recovered edit" in state.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_legacy_history_remains_readable_and_releasable_without_execution(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    runtime, state, registry = tmp_path / "runtime", tmp_path / "state.md", tmp_path / "registry.json"
+    state.write_text("# Retained legacy display\n")
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
+        "id": "legacy-history", "repo": str(tmp_path), "state_file": state.name,
+        "coordination": {"registered_agents": ["agent-a"]},
+    }]}))
+    now = datetime.now(UTC).replace(microsecond=0)
+    lease = {"schema_version": "task_lease_v0", "goal_id": "legacy-history", "todo_id": "todo_history",
+             "owner": "agent-a", "idempotency_key": "historical-execution", "version": 3, "lease_epoch": 2,
+             "status": "active", "write_scopes": [], "acquire_ttl_seconds": 600,
+             "acquired_at": now.isoformat(), "updated_at": now.isoformat(),
+             "expires_at": (now + timedelta(minutes=10)).isoformat()}
+    projection = build_todo_runtime_shadow_projection(goal_id="legacy-history", handoff_mode="legacy", todos=[{
+        "schema_version": "todo_item_v0", "source_section": "Agent Todo", "index": 1,
+        "todo_id": "todo_history", "text": "Retained task", "role": "agent", "status": "open",
+        "done": False, "archive_state": "active", "claimed_by": "agent-a", "task_class": "advancement_task",
+    }])
+    projection["leases"] = [lease]
+    initialize_canonical_authority(runtime, "legacy-history", projection, state_path=state, provider=provider)
+    registry_bytes, display_bytes = registry.read_bytes(), state.read_bytes()
+
+    def cli(*args, ok=True):
+        child = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json",
+            "--registry", str(registry), "--runtime-root", str(runtime), *args,
+            "--goal-id", "legacy-history", "--todo-id", "todo_history"],
+            capture_output=True, text=True, timeout=45)
+        assert (child.returncode == 0) is ok, child.stdout + child.stderr
+        return json.loads(child.stdout)
+
+    def snapshot():
+        return read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="legacy-history", include_leases=True)
+
+    before = snapshot()
+    inspected = cli("task-lease", "inspect")
+    assert inspected["active"] is False and inspected["lease"] == lease
+    rejected = cli("task-lease", "acquire", "--owner", "agent-a", "--idempotency-key", "new-execution",
+                   "--expected-version", "3", ok=False)
+    assert rejected["error_code"] == "handoff_mode_retired"
+    rejected = cli("todo", "update", "--agent-id", "agent-a", "--note", "Forbidden execution",
+                   "--task-lease-idempotency-key", "historical-execution", "--task-lease-expected-version", "3", ok=False)
+    assert rejected["error_code"] == "handoff_mode_retired"
+    assert snapshot() == before
+    release = ("task-lease", "release", "--owner", "agent-a", "--idempotency-key", "historical-execution",
+               "--expected-version", "3")
+    released = cli(*release)
+    assert released["lease"]["status"] == "released"
+    assert released["lease"]["version"] == 3 and released["lease"]["lease_epoch"] == 2
+    after = snapshot()
+    assert after["todos"] == before["todos"]
+    assert cli(*release)["original_receipt"] == released["original_receipt"]
+    assert snapshot() == after
+    assert cli("task-lease", "inspect")["active"] is False
+    assert registry.read_bytes() == registry_bytes and state.read_bytes() == display_bytes
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

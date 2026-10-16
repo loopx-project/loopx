@@ -19,6 +19,10 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
+
 GOAL_ID = "loopx-chat-server-smoke"
 SECOND_GOAL_ID = "loopx-chat-server-second-goal"
 TODO_TEXT = "[P0] Implement the approved Goal Studio review card."
@@ -169,6 +173,8 @@ def write_fixture(root: Path) -> tuple[Path, Path]:
         + "\n",
         encoding="utf-8",
     )
+    for goal_id in (GOAL_ID, SECOND_GOAL_ID):
+        import_fixture_authority(registry, goal_id)
     return registry, state_file
 
 

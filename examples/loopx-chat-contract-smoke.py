@@ -19,13 +19,16 @@ from loopx.chat import (  # noqa: E402
     build_todo_review_preview,
     parse_agent_response,
 )
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
+from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted  # noqa: E402
+from loopx.control_plane.todos.provider_projection import project_current_canonical_todos  # noqa: E402
 
 
 GOAL_ID = "loopx-chat-contract-smoke"
 TODO_TEXT = "[P0] Add a reviewable Goal Studio interaction."
 
 
-def write_fixture(root: Path) -> tuple[Path, Path, Path]:
+def write_fixture(root: Path, *, todo_anchor: bool = True) -> tuple[Path, Path, Path]:
     project = root / "project"
     runtime = root / "runtime"
     state_file = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
@@ -39,7 +42,7 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
         "## Objective\n\n"
         "Keep LoopX Chat reviewable.\n\n"
         "## Next Action\n\n"
-        "- Review the next bounded proposal.\n",
+        "- Review the next bounded proposal.\n" + ("\n## Agent Todo\n" if todo_anchor else ""),
         encoding="utf-8",
     )
     registry_path = project / ".loopx" / "registry.json"
@@ -69,6 +72,7 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
         + "\n",
         encoding="utf-8",
     )
+    import_fixture_authority(registry_path, GOAL_ID)
     return registry_path, state_file, project
 
 
@@ -174,6 +178,7 @@ def main() -> None:
         assert "tool narration" not in malformed["message"], malformed
 
         original = state_file.read_text(encoding="utf-8")
+        authority_before = read_canonical_todos_if_promoted(runtime_root=root / "runtime", goal_id=GOAL_ID)
         preview = build_todo_review_preview(
             registry_path=registry_path,
             goal_id=GOAL_ID,
@@ -191,6 +196,7 @@ def main() -> None:
             "action_kind": "loopx_chat_proposal",
         }, preview
         assert state_file.read_text(encoding="utf-8") == original
+        assert read_canonical_todos_if_promoted(runtime_root=root / "runtime", goal_id=GOAL_ID) == authority_before
         assert "state_file" not in json.dumps(preview), preview
         assert "project" not in json.dumps(preview), preview
 
@@ -213,6 +219,8 @@ def main() -> None:
             assert str(project) not in json.dumps(no_write_receipt), no_write_receipt
         else:
             raise AssertionError("stale preview must be rejected")
+        assert state_file.read_text(encoding="utf-8") == original
+        assert read_canonical_todos_if_promoted(runtime_root=root / "runtime", goal_id=GOAL_ID) == authority_before
 
         applied = apply_todo_review_preview(
             registry_path=registry_path,
@@ -222,7 +230,15 @@ def main() -> None:
         )
         assert applied["ok"] is True, applied
         assert applied["applied"] is True, applied
-        assert applied["todo"]["todo_id"] == preview["todo"]["todo_id"], applied
+        # Canonical creation allocates its id at commit; preview locks the
+        # intent and provider revision, not a dry-run's provisional id.
+        for field in ("goal_id", "text", "status", "task_class", "action_kind"):
+            assert applied["todo"][field] == preview["todo"][field], applied
+        committed = read_canonical_todos_if_promoted(runtime_root=root / "runtime", goal_id=GOAL_ID)
+        assert committed["decision_read_from_provider"] is True and committed["legacy_fallback_used"] is False
+        assert len(committed["todos"]) == 1, committed
+        assert committed["todos"][0]["todo_id"] == applied["todo"]["todo_id"], committed
+        assert committed["todos"][0]["text"] == TODO_TEXT, committed
         receipt = applied["receipt"]
         assert receipt["schema_version"] == "loopx_chat_todo_receipt_v0", receipt
         assert receipt["receipt_id"], receipt
@@ -235,6 +251,14 @@ def main() -> None:
         assert receipt["preview_revision"], receipt
         assert str(project) not in json.dumps(receipt), receipt
         assert state_file.read_text(encoding="utf-8").count(TODO_TEXT) == 1
+
+        # Display edits cannot replace the committed record or create a
+        # duplicate. Restore the document before another explicit write.
+        display = state_file.read_text(encoding="utf-8")
+        state_file.write_text(display.replace(TODO_TEXT, "Spoofed display proposal"), encoding="utf-8")
+        assert read_canonical_todos_if_promoted(runtime_root=root / "runtime", goal_id=GOAL_ID) == committed
+
+        state_file.write_text(display, encoding="utf-8")
 
         retry_preview = build_todo_review_preview(
             registry_path=registry_path,
@@ -254,6 +278,37 @@ def main() -> None:
         assert retry_receipt["already_exists"] is True, retry_receipt
         assert retry_receipt["todo_id"] == receipt["todo_id"], retry_receipt
         assert state_file.read_text(encoding="utf-8").count(TODO_TEXT) == 1
+        assert read_canonical_todos_if_promoted(runtime_root=root / "runtime", goal_id=GOAL_ID) == committed
+
+        # An anchorless historical document is retained as a separate display
+        # recovery case. A successful canonical commit cannot repair its prose
+        # implicitly or turn display failure into a second business write.
+        recovery_root = root / "display-recovery"
+        recovery_registry, recovery_state, _ = write_fixture(recovery_root, todo_anchor=False)
+        original_narrative = recovery_state.read_text(encoding="utf-8")
+        recovery_preview = build_todo_review_preview(registry_path=recovery_registry, goal_id=GOAL_ID, text=TODO_TEXT)
+        recovery_applied = apply_todo_review_preview(registry_path=recovery_registry, goal_id=GOAL_ID,
+                                                   text=TODO_TEXT, preview_id=recovery_preview["preview_id"])
+        assert recovery_applied["applied"] is True, recovery_applied
+        assert recovery_state.read_text(encoding="utf-8") == original_narrative
+        accepted = read_canonical_todos_if_promoted(runtime_root=recovery_root / "runtime", goal_id=GOAL_ID)
+        assert len(accepted["todos"]) == 1, accepted
+        try:
+            project_current_canonical_todos(registry_path=recovery_registry,
+                                            runtime_root=recovery_root / "runtime", goal_id=GOAL_ID)
+        except ValueError as error:
+            assert "no projection anchor" in str(error), error
+        else:
+            raise AssertionError("an anchorless document must refuse implicit projection")
+        assert recovery_state.read_text(encoding="utf-8") == original_narrative
+        recovery_state.write_text(original_narrative + "\n## Agent Todo\n", encoding="utf-8")
+        delivered = project_current_canonical_todos(registry_path=recovery_registry,
+            runtime_root=recovery_root / "runtime", goal_id=GOAL_ID,
+            expected_provider_revision=accepted["provider_revision"])
+        assert delivered["status"] == "delivered" and delivered["narrative_preserved"] is True, delivered
+        assert recovery_state.read_text(encoding="utf-8").startswith(original_narrative)
+        assert recovery_state.read_text(encoding="utf-8").count(TODO_TEXT) == 1
+        assert read_canonical_todos_if_promoted(runtime_root=recovery_root / "runtime", goal_id=GOAL_ID) == accepted
 
     print("loopx-chat-contract-smoke: ok")
 

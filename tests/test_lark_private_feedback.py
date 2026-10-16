@@ -19,6 +19,74 @@ def active(store, row):
 
 
 @pytest.mark.parametrize('group', [False, True])
+@pytest.mark.parametrize('feedback', ['enabled', 'disabled', 'unavailable'])
+def test_first_durable_queued_turn_does_not_claim_a_previous_request(ordinary, monkeypatch, group, feedback):  # noqa: F811
+    store, runtime, provider, transport = (connect_group if group else connect)(ordinary)
+    resume = runtime.resume_session_queue
+    # Hold only the execution effect. Admission, its durable native queue and
+    # the provider reply/recovery path remain the production implementations.
+    monkeypatch.setattr(runtime, 'resume_session_queue', lambda **kwargs: None)
+    transport.reaction_feedback = feedback != 'disabled'
+    provider.fail_reaction_create = feedback == 'unavailable'
+    try:
+        event = (provider.topic('first_queued', 'ordinary work') if group else
+                 provider.event('notes-app', 'first_queued', 'ordinary work'))
+        assert transport.admit('notes-app', event)['status'] == 'durably_accepted'
+        row = transport.core.pending()[0]
+        sid, tid = row['session_id'], row['turn_id']
+        assert store.load_session(sid)['active_turn_id'] is None
+        assert [turn['turn_id'] for turn in store.queued_turns(sid)] == [tid]
+        assert len(store.list_sessions()) == 1
+        transport.reconcile()
+        # The first Turn really is queued; this alone cannot establish a
+        # preceding request. The notice must not invent one, even without Get.
+        assert len(provider.writes) == 1
+        notice = provider.writes[0][1]
+        assert '前一条' not in notice
+        assert '排队' in notice
+        path = transport.root / f"{row['request_ref']}.json"
+        assert json.loads(path.read_text())['deliveries']['admission']['verified'] is True
+        before = list(provider.writes)
+        transport.reconcile()
+        assert provider.writes == before
+        monkeypatch.setattr(runtime, 'resume_session_queue', resume)
+        transport.core.recover(request_ref=row['request_ref'])
+        assert runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)['status'] == 'completed'
+        transport.reconcile()
+        assert provider.writes.count(('notes-app', 'Runtime response.')) == 1
+        assert transport.core.read_request(row['request_ref'])['delivery_verified'] is True
+        assert store.load_session(sid)['active_turn_id'] is None
+        assert len(store.list_sessions()) == 1
+        if group:
+            assert all(root == event['message_id'] for _, root, _ in provider.topic_writes)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize('group', [False, True])
+def test_queued_notice_recovery_keeps_its_existing_exact_intent(ordinary, monkeypatch, group):  # noqa: F811
+    _, runtime, provider, transport = (connect_group if group else connect)(ordinary)
+    monkeypatch.setattr(runtime, 'resume_session_queue', lambda **kwargs: None)
+    try:
+        event = (provider.topic('old_queued_notice', 'ordinary work') if group else
+                 provider.event('notes-app', 'old_queued_notice', 'ordinary work'))
+        transport.admit('notes-app', event)
+        row = transport.core.pending()[0]
+        path = transport.root / f"{row['request_ref']}.json"
+        record = json.loads(path.read_text())
+        legacy = '正在处理前一条，这条已排队。'
+        record['deliveries']['admission'] = {'text': legacy}
+        path.write_text(json.dumps(record))
+        transport.reconcile()
+        assert provider.writes == [('notes-app', legacy)]
+        transport.reconcile()
+        assert provider.writes == [('notes-app', legacy)]
+        assert json.loads(path.read_text())['deliveries']['admission']['verified'] is True
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize('group', [False, True])
 def test_durable_admission_feedback_precedes_blocked_execution_recovery(ordinary, monkeypatch, group):  # noqa: F811
     store, runtime, provider, transport = (connect_group if group else connect)(ordinary)
     entered, received, release = threading.Event(), threading.Event(), threading.Event()
@@ -263,7 +331,7 @@ def test_default_feedback_tracks_queue_execution_stop_and_app_isolation(ordinary
         assert ('notes-app', slow['message_id'], 'OnIt') in provider.reaction_creates
         assert ('notes-app', queued['message_id'], 'Get') in provider.reaction_creates
         assert ('notes-app', queued['message_id'], 'OnIt') not in provider.reaction_creates
-        assert provider.writes == [('notes-app', '正在处理前一条，这条已排队。'),
+        assert provider.writes == [('notes-app', '已收到，这条已排队。'),
                                    ('notes-app', '⏳ **已开始处理**')]
         assert any(row[1:] == (slow['message_id'], 'OnIt') for row in provider.reactions.values())
         # A new provider instance reuses durable receipts, not in-memory emoji state.

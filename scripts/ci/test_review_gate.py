@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -37,6 +38,16 @@ def needs(kind="full", *, presentation=False, jobs=JOB_OUTPUT):
 
 
 class GateTests(unittest.TestCase):
+    def test_real_aggregate_entrypoints_do_not_need_the_classification_yaml_parser(self):
+        script = Path(__file__).with_name("review_gate.py")
+        for command, jobs in (("verify", JOB_OUTPUT), ("verify-core", CHECK_OUTPUT)):
+            with self.subTest(command=command):
+                result = subprocess.run([sys.executable, "-S", str(script), command],
+                    env={**os.environ, "PYTHONPATH": "", "NEEDS_JSON": json.dumps(needs(jobs=jobs))},
+                    capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("qualification complete", result.stdout)
+
     def test_closed_pr_cancels_same_lane_and_skips_qualification(self):
         workflow = yaml.load(
             (Path(__file__).resolve().parents[2] / ".github/workflows/python-tests.yml").read_text(),

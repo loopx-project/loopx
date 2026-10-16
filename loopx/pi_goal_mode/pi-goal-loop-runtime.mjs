@@ -121,6 +121,9 @@ function bindingDefaults(directory) {
     taskBody: "",
     autoResume: true,
     terminal: false,
+    // Why the loop stopped auto-resuming: "" (armed), "user_prompt", or
+    // "aborted". A later /loopx resume clears it again.
+    pauseReason: "",
     generation: 0,
     schedulerToken: "",
     unchangedPolls: 0,
@@ -1082,6 +1085,12 @@ export function createGoalLoop(options) {
       if (!binding || binding.terminal || binding.autoResume === false) return
       await evaluateIdle(key)
     },
+    // Every prompt that is not this loop's own injected task body is treated as
+    // the owner taking the wheel, and the pause records why it happened. The
+    // loop's own turns are recognized through lastInjectedPrompt; no other event
+    // is used to infer a prompt's origin, because Pi compacts before it emits
+    // before_agent_start for a submitted prompt, so a preceding session_compact
+    // says nothing about who submitted that prompt.
     async userPrompt(key, prompt) {
       if (disposed) return
       const instanceEpoch = epoch
@@ -1097,10 +1106,22 @@ export function createGoalLoop(options) {
       if (!binding || binding.terminal) return
       if (String(prompt || "") !== binding.lastInjectedPrompt) {
         const expected = { generation: binding.generation || 0, goalId: binding.goalId }
-        const committed = await services.store.write(key, { autoResume: false, generation: (binding.generation || 0) + 1 }, expected)
+        const committed = await services.store.write(
+          key,
+          {
+            autoResume: false,
+            generation: (binding.generation || 0) + 1,
+            pauseReason: "user_prompt",
+          },
+          expected,
+        )
         if (!committed) return
         if (disposed || epoch !== instanceEpoch) return
         cancelScheduled(key)
+        services.notify(
+          `LoopX goal ${committed.goalId} auto-continuation paused by user input; run /loopx resume to continue.`,
+          "info",
+        )
       }
     },
     async interrupt(key) {
@@ -1117,7 +1138,11 @@ export function createGoalLoop(options) {
       if (disposed || epoch !== instanceEpoch) return null
       if (!binding || binding.terminal) return binding
       const expected = { generation: binding.generation || 0, goalId: binding.goalId }
-      const committed = await services.store.write(key, { autoResume: false, generation: (binding.generation || 0) + 1 }, expected)
+      const committed = await services.store.write(
+        key,
+        { autoResume: false, generation: (binding.generation || 0) + 1, pauseReason: "aborted" },
+        expected,
+      )
       if (!committed || disposed || epoch !== instanceEpoch) return committed
       cancelScheduled(key)
       services.notify(
@@ -1133,7 +1158,12 @@ export function createGoalLoop(options) {
       const current = await services.store.read(key)
       if (!current || disposed) return null
       const binding = await services.store.write(key,
-        { autoResume: true, terminal: false, generation: (current.generation || 0) + 1 },
+        {
+          autoResume: true,
+          terminal: false,
+          generation: (current.generation || 0) + 1,
+          pauseReason: "",
+        },
         { generation: current.generation || 0, goalId: current.goalId })
       if (!binding) return null
       if (disposed) return null

@@ -6,12 +6,11 @@ from pathlib import Path
 from loopx.capabilities.periodic_report.pending_intent import (
     pending_periodic_report_intents,
 )
+from loopx.todos import add_goal_todo
 from settlement_capability_dispatch_fixture import (
     AGENT_ID,
     COMPLETED_TODO,
-    GATED_TODO,
     GOAL_ID,
-    PLAIN_TODO,
     complete_todo_via_cli,
 )
 
@@ -35,24 +34,26 @@ def _write_unclaimed_frontier_state(project: Path) -> None:
     )
 
 
-def _claim_gated_successors(project: Path) -> None:
+def _claim_gated_successors(registry: Path) -> None:
     """Evolve durable state after the dispatch, as the next Turn would."""
 
-    project.joinpath("goal.md").write_text(
-        f"""# Goal
-
-## User Todo
-
-## Agent Todo
-
-- [x] Ship the localized weekly report slice.
-  <!-- loopx:todo todo_id={COMPLETED_TODO} status=done task_class=advancement_task claimed_by={AGENT_ID} continuation_policy=same_agent_non_delivery updated_at=2026-08-30T10:30:00Z -->
-- [ ] Re-run the outbound channel sync after network capacity returns.
-  <!-- loopx:todo todo_id={GATED_TODO} status=open task_class=advancement_task claimed_by={AGENT_ID} action_kind=gated_work resume_when=capacity_available:network -->
-- [ ] Outline the follow-up frontier analysis.
-  <!-- loopx:todo todo_id={PLAIN_TODO} status=open task_class=advancement_task claimed_by={AGENT_ID} -->
-""",
-        encoding="utf-8",
+    add_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        role="agent",
+        text="Re-run the outbound channel sync after network capacity returns.",
+        task_class="advancement_task",
+        claimed_by=AGENT_ID,
+        action_kind="gated_work",
+        resume_when="capacity_available:network",
+    )
+    add_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        role="agent",
+        text="Outline the follow-up frontier analysis.",
+        task_class="advancement_task",
+        claimed_by=AGENT_ID,
     )
 
 
@@ -105,15 +106,6 @@ def test_later_todo_completion_without_capabilities_does_not_replay_milestone(
 def test_post_writeback_frontier_and_progress_share_one_canonical_snapshot(
     tmp_path, monkeypatch
 ):
-    from tests.control_plane.canonical_authority_fixture import (
-        initialize_canonical_authority,
-    )
-    from loopx.control_plane.coordination.runtime_shadow import (
-        build_todo_runtime_shadow_projection,
-    )
-    from loopx.control_plane.todos.active_state_todo_parser import (
-        parse_active_state_todos,
-    )
     from loopx.capabilities.periodic_report.post_writeback_hook import (
         build_periodic_report_post_writeback_projection,
     )
@@ -124,15 +116,8 @@ def test_post_writeback_frontier_and_progress_share_one_canonical_snapshot(
         journal_capabilities=["network"],
         write_state=_write_unclaimed_frontier_state,
     )
-    _claim_gated_successors(registry.parent)
+    _claim_gated_successors(registry)
     state = registry.parent / "goal.md"
-    records = parse_active_state_todos(state.read_text(), item_limit=None)[
-        "agent_todos"
-    ]["items"]
-    source = build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID, todos=records, handoff_mode="soft_claim"
-    )
-    initialize_canonical_authority(runtime, GOAL_ID, source, state_path=state)
     state.unlink()
     reads = []
     original = todo_source.read_canonical_todos_if_promoted

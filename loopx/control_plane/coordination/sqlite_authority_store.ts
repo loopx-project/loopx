@@ -673,11 +673,12 @@ export class SqliteAuthorityStore implements AuthorityStore {
         return {status: "failed", reason_code: "provider_read_unavailable", reason: "SQLite authority database is empty"};
       }
       const counted = db.prepare("SELECT COUNT(*) AS count FROM commits").get();
+      // SQLite length(TEXT) counts characters, not the encoded JSON bytes.
       const retained = db.prepare(`SELECT
         (SELECT COUNT(*) FROM checkpoints) AS checkpoints,
-        (SELECT COALESCE(SUM(length(projection)), 0) FROM checkpoints) AS projection_bytes,
-        (SELECT COALESCE(SUM(length(delta)), 0) FROM commits) AS delta_bytes,
-        (SELECT COALESCE(SUM(length(events) + length(receipts)), 0) FROM commits) AS payload_bytes`).get();
+        (SELECT COALESCE(SUM(length(CAST(projection AS BLOB))), 0) FROM checkpoints) AS projection_bytes,
+        (SELECT COALESCE(SUM(length(CAST(delta AS BLOB))), 0) FROM commits) AS delta_bytes,
+        (SELECT COALESCE(SUM(length(CAST(events AS BLOB)) + length(CAST(receipts AS BLOB))), 0) FROM commits) AS payload_bytes`).get();
       const cursor = head.state.cursor;
       return {
         schema_version: "loopx_sqlite_authority_bounded_profile_v0",

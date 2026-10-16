@@ -6,7 +6,7 @@ from uuid import uuid4
 from ..coordination.local_authority import (
     LOCAL_AUTHORITY_SOURCES, LocalCoordinationAuthorityRejection,
     LocalCoordinationAuthorityUnavailable,
-    local_authority_is_promoted, read_canonical_todos_if_promoted,
+    raise_canonical_write_failure, read_canonical_todos_if_promoted,
 )
 from ..effect_runtime import (
     CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
@@ -24,9 +24,7 @@ def read_canonical_handoff_mode(*, runtime_root: Path, goal_id: str) -> dict[str
 
 
 def set_canonical_handoff_mode(*, runtime_root: Path, goal_id: str, mode: str,
-                               operation_id: str | None, dry_run: bool) -> dict[str, Any] | None:
-    if not local_authority_is_promoted(runtime_root=runtime_root, goal_id=goal_id):
-        return None
+                               operation_id: str | None, dry_run: bool) -> dict[str, Any]:
     result = effect_runtime_result("coordination.local_authority.handoff_mode_set", {
         "schema_version": "loopx_coordination_handoff_mode_set_request_v0",
         "runtime_root": str(runtime_root.expanduser().resolve()), "goal_id": goal_id,
@@ -37,6 +35,11 @@ def set_canonical_handoff_mode(*, runtime_root: Path, goal_id: str, mode: str,
         or result.get("source_authority") not in LOCAL_AUTHORITY_SOURCES
         or result.get("decision_read_from_provider") is not True or result.get("legacy_fallback_used") is not False):
         payload = result if isinstance(result, dict) else {}
+        raise_canonical_write_failure(
+            payload,
+            goal_id=goal_id,
+            operation="handoff_mode_set",
+        )
         if payload.get("status") == "failed" and payload.get("failure_kind") == "decision_rejection":
             raise LocalCoordinationAuthorityRejection(
                 str(payload.get("reason") or "canonical handoff mode request was rejected"),

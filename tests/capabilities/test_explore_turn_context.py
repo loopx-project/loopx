@@ -23,6 +23,9 @@ from loopx.control_plane.effect_runtime import (
     effect_runtime_result,
     EffectRuntimeRejected,
 )
+from loopx.control_plane.coordination.goal_storage_initialization import (
+    initialize_goal_storage_target,
+)
 from loopx.explore_graph import compact_explore_graph_policy
 from loopx.todos import add_goal_todo
 
@@ -38,10 +41,18 @@ def registry(tmp_path, *, graph=False, planning=False):
                 "goals": [
                     {
                         "id": "research",
+                        "creation_operation_id": "goal-create:research",
                         "status": "active",
                         "repo": str(tmp_path),
                         "state_file": "goal.md",
-                        "coordination": {"registered_agents": ["worker"]},
+                        "coordination": {
+                            "registered_agents": ["worker"],
+                            "storage_target": {
+                                "schema_version": "loopx_new_goal_storage_target_v1",
+                                "provider": "file",
+                                "handoff_mode": "soft_claim",
+                            },
+                        },
                         "explore_graph": {"enabled": graph},
                         "spawn_policy": {
                             "allowed": False,
@@ -52,6 +63,14 @@ def registry(tmp_path, *, graph=False, planning=False):
             }
         )
     )
+    goal = json.loads(path.read_text(encoding="utf-8"))["goals"][0]
+    initialized = initialize_goal_storage_target(
+        tmp_path / "runtime",
+        goal,
+        registry_path=path,
+    )
+    assert initialized["authority_initialized"] is True
+    assert initialized["legacy_fallback_used"] is False
     return path
 
 

@@ -448,6 +448,8 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
     failNextStatusRequest: false,
     /** When set, every status read answers this HTTP status until cleared: a source that cannot be projected. */
     statusFailure: null,
+    /** When set, replaces the capabilities adapters list: the runtimes this host reports. */
+    runtimeAgentsOverride: null,
     freezeGoalSubagentStatusProjection: false,
     goalSubagentConfigurationEnabled,
     goalActivationStates: new Map([
@@ -498,6 +500,7 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
     hostThreadActivity: {},
     /** Scenario hook applied to every status payload after the shared fixture rules. */
     transformStatus: null,
+    directoryContract: null,
     answerForMessage: null,
     loopxModeRequests: [],
     get larkConnections() { return runtime.larkConnections; },
@@ -523,6 +526,8 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
         goals: [...state.goalActivationStates.entries()].map(([id, activation_state]) => ({
           activation_state, display_name: registeredNames.get(id) ?? id, id, registry_member: true,
         })),
+        // The real service states its source facts here too (a missing registry is a warning).
+        contract: state.directoryContract ?? { ok: true, summary: { errors: 0, warnings: 0, checks: 0 }, errors: [], warnings: [], checks: [] },
       }, status: 200 });
       return;
     }
@@ -1593,7 +1598,7 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
         ...(state.goalSubagentConfigurationEnabled ? { goal_subagent_configuration: "preview_locked" } : {}),
         goal_id: null, streaming: true, resume: true, interrupt: true, typed_actions: true,
         action_kinds: ["goal.create", "goal.lifecycle", "agent.bind", "heartbeat.bind", "monitor.create", "run.correct"],
-        adapters: [
+        adapters: state.runtimeAgentsOverride ?? [
           { agent_id: "codex", display_name: "Codex", adapter_kind: "codex_app_server", available: true, streaming: true, resume: true, interrupt: true },
           { agent_id: "claude-code", display_name: "Claude Code", adapter_kind: "claude_code_cli", available: true, streaming: true, resume: true, interrupt: true },
           { agent_id: "offline-agent", display_name: "Offline Agent", adapter_kind: "acp", available: false, streaming: false, resume: false, interrupt: false },

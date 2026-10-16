@@ -778,6 +778,27 @@ def test_todo_update_validation_accepts_a_validator_revision() -> None:
             "--no-follow-up requires --note or --evidence",
         ),
         (
+            [
+                "--todo-id",
+                "todo_example",
+                "--completion-identity-key",
+                "local_completion_example",
+            ],
+            "--completion-identity-key is only valid with --no-follow-up",
+        ),
+        (
+            [
+                "--todo-id",
+                "todo_example",
+                "--completion-identity-key",
+                "local_completion_example",
+                "--no-follow-up",
+                "--evidence",
+                "replacement evidence",
+            ],
+            "--completion-identity-key reentry preserves the original note and evidence",
+        ),
+        (
             ["--todo-id", "todo_example", "--continuation-policy", "same_agent_non_delivery"],
             "todo complete does not update --continuation-policy; use todo update first",
         ),

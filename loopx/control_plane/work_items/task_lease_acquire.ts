@@ -1,23 +1,20 @@
+import {HANDOFF_MODES, type HandoffMode} from "../coordination/handoff_mode_vocabulary.ts";
 import {LeaseWorktreeObservationError, observeLeaseWorktree, type LeaseWorkspace} from "./task_lease_workspace.ts";
 import {isCanonicalTodoId} from "../todos/identity.ts";
 import {executeCanonicalTaskLeaseAcquire} from "../coordination/task_lease_acquire.ts";
 import {withCanonicalTaskLeaseAuthority} from "./canonical_task_lease_lifecycle.ts";
-import {evaluateTaskLeaseWriteScopesOverlap, evaluateTaskLeaseAcquireDecision, materializeTaskLeaseAcquire, type AcquireDecisionOtherLease} from "./task_lease_acquire_decision.ts";
-import {leaseOwnerRejection as ownerRejection} from "./task_lease_eligibility.ts";
-import { ShadowManagementError, requireShadowPrimaryWriteAllowed } from "../coordination/shadow_management.ts";
+import {evaluateTaskLeaseWriteScopesOverlap} from "./task_lease_acquire_decision.ts";
+import { ShadowManagementError } from "../coordination/shadow_management.ts";
 import { parseIsoTimestamp } from "../runtime_timestamp.ts";
-import { LegacyCoordinationWriteError, requireLegacyCoordinationPrimaryWriteAllowed } from "../coordination/legacy_writer_fence.ts";
 import { createHash } from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
   EffectRuntimeLockTimeoutError,
   EffectRuntimeRequestError,
 } from "../effect_runtime_errors.ts";
-import { atomicWriteJson, withFileMutationLock } from "../effect_runtime_io.ts";
 import {
-  legacyCoordinationLeaseLockPath,
   taskLeaseLockPath,
 } from "../coordination/legacy_writer_lock_paths.ts";
 import {
@@ -26,7 +23,6 @@ import {
 } from "../effect_program.ts";
 import { requireJsonObject } from "../runtime_decode.ts";
 import {
-  beginLeaseOutboxEntry,
   decodeLocalAuthorityShadowBinding,
   type LocalAuthorityShadowBinding,
 } from "../coordination/local_authority_shadow_outbox.ts";
@@ -391,16 +387,16 @@ export function decodeTaskLeaseAuthority(value: unknown): AuthorityFacts {
   };
 }
 
-export function normalizeHandoffMode(value: unknown): string {
+export function normalizeHandoffMode(value: unknown): HandoffMode {
   const mode = compact(value) || "legacy";
-  if (!new Set(["legacy", "soft_claim", "hard_lease"]).has(mode)) {
+  if (!HANDOFF_MODES.some(candidate => candidate === mode)) {
     throw new TaskLeaseAcquireError(
       `unsupported handoff_mode '${mode}'; expected one of: legacy, soft_claim, hard_lease`,
       "invalid_handoff_mode",
-      { handoff_mode: mode, supported: ["legacy", "soft_claim", "hard_lease"] },
+      { handoff_mode: mode, supported: [...HANDOFF_MODES] },
     );
   }
-  return mode;
+  return mode as HandoffMode;
 }
 
 function decodeRequest(value: unknown): AcquireRequest {
@@ -582,35 +578,6 @@ export function utcIsoformat(value: Date): string {
   return value.toISOString().replace(/\.\d{3}Z$/u, "Z");
 }
 
-function ownerFailure(
-  code: string,
-  request: AcquireRequest,
-  todo: TodoFact | undefined,
-): TaskLeaseAcquireError {
-  let message: string;
-  const detail: JsonObject = { effective: false, reason: code };
-  if (code === "todo_not_found") {
-    message = "todo is missing from the canonical projection";
-  } else if (code === "todo_not_open") {
-    detail.todo_status = todo?.status || "unknown";
-    message = `task lease requires an open todo; '${request.todo_id}' is '${detail.todo_status}'`;
-  } else if (code === "owner_excluded_from_todo") {
-    detail.excluded_agents = [...(todo?.excluded_agents ?? [])];
-    message = `task lease owner '${request.owner}' is excluded from todo '${request.todo_id}'`;
-  } else if (code === "owner_conflicts_with_claim") {
-    detail.claimed_by = todo?.claimed_by ?? null;
-    message = `task lease owner '${request.owner}' conflicts with todo claim '${todo?.claimed_by}'`;
-  } else {
-    message = `task lease owner '${request.owner}' is not registered for goal '${request.goal_id}'`;
-  }
-  return new TaskLeaseAcquireError(message, code, {
-    goal_id: request.goal_id,
-    todo_id: request.todo_id,
-    owner: request.owner,
-    ...detail,
-  });
-}
-
 async function currentSourceReceipt(receipt: SourceReceipt): Promise<SourceReceipt> {
   try {
     const bytes = await readFile(receipt.path);
@@ -645,132 +612,6 @@ export async function revalidateAuthoritySources(receipts: readonly SourceReceip
       { changed_sources: changed },
     );
   }
-}
-
-async function leaseFiles(directory: string): Promise<string[]> {
-  try {
-    return (await readdir(directory))
-      .filter((name) => /^todo_[a-z0-9_-]{3,64}\.json$/u.test(name))
-      .sort((left, right) => left.localeCompare(right))
-      .map((name) => join(directory, name));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
-}
-
-function conflictPayload(
-  lease: LeaseRecord,
-  path: string,
-): JsonObject {
-  return {
-    todo_id: lease.todo_id ?? null,
-    owner: lease.owner ?? null,
-    expires_at: lease.expires_at ?? null,
-    version: lease.version ?? null,
-    lease_epoch: leaseEpoch(lease),
-    write_scopes: lease.write_scopes || [],
-    lease_path: path,
-  };
-}
-
-async function otherLeaseFacts(
-  request: AcquireRequest,
-  at: Date,
-): Promise<Array<{ decision: AcquireDecisionOtherLease; payload: JsonObject }>> {
-  const facts: Array<{ decision: AcquireDecisionOtherLease; payload: JsonObject }> = [];
-  for (const path of await leaseFiles(taskLeaseDirectory(request))) {
-    const lease = await readLease(path);
-    if (!leaseIsActive(lease, at) || lease === null) continue;
-    const leaseTodoId = normalizeTodoId(lease.todo_id, "lease.todo_id");
-    if (leaseTodoId === request.todo_id) continue;
-    const leaseOwner = normalizeAgent(lease.owner);
-    const effective = ownerRejection(
-        request.authority.todos.get(leaseTodoId),
-        leaseOwner,
-        request.authority.registered_agents,
-      ) === null;
-    facts.push({
-      decision: {
-        todo_id: leaseTodoId,
-        active: true,
-        effective,
-        write_scopes: normalizeWriteScopes(lease.write_scopes),
-      },
-      payload: conflictPayload(lease, path),
-    });
-  }
-  return facts;
-}
-
-function transitionError(
-  code: string,
-  request: AcquireRequest,
-  lease: LeaseRecord | null,
-  leasePath: string,
-  conflicts: readonly JsonObject[] = [],
-  idempotencyReuseKind: "retired" | "acquire_parameters" = "acquire_parameters",
-): TaskLeaseAcquireError {
-  if (code === "handoff_mode_forbids_lease") {
-    return new TaskLeaseAcquireError(
-      "goal handoff mode 'soft_claim' forbids task lease acquire; " +
-        "release and inspect remain available for legacy leftovers",
-      code,
-      {
-        goal_id: request.goal_id,
-        todo_id: request.todo_id,
-        action: "acquire",
-        handoff_mode: request.authority.handoff_mode,
-      },
-    );
-  }
-  if (code === "version_mismatch") {
-    const actual = leaseVersion(lease);
-    return new TaskLeaseAcquireError(
-      `lease version mismatch: expected ${request.expected_version}, got ${actual}`,
-      code,
-      { expected_version: request.expected_version, actual_version: actual },
-    );
-  }
-  if (code === "idempotency_key_reuse") {
-    if (idempotencyReuseKind === "retired") {
-      return new TaskLeaseAcquireError(
-        "idempotency key belongs to an expired or released lease generation; " +
-          "a new execution must use a new key",
-        code,
-        { lease, lease_path: leasePath },
-      );
-    }
-    return new TaskLeaseAcquireError(
-      "idempotency key was reused with different acquire parameters",
-      code,
-      {
-        lease,
-        lease_path: leasePath,
-        requested_write_scopes: [...request.write_scopes],
-        requested_ttl_seconds: request.ttl_seconds,
-      },
-    );
-  }
-  if (code === "todo_lease_conflict") {
-    return new TaskLeaseAcquireError(
-      "todo already has an active lease",
-      code,
-      { lease, lease_path: leasePath },
-    );
-  }
-  if (code === "write_scope_conflict") {
-    return new TaskLeaseAcquireError(
-      "write scope overlaps another active task lease",
-      code,
-      { conflicts: [...conflicts] },
-    );
-  }
-  return new TaskLeaseAcquireError(
-    `task lease acquire rejected by authority core: ${code}`,
-    code,
-    { lease, lease_path: leasePath },
-  );
 }
 
 function successEnvelope(
@@ -834,15 +675,6 @@ function failureKind(code: string): string {
   return "writeback_rejected";
 }
 
-/**
- * A fenced legacy writer is a terminal permission decision taken by the
- * promoted authority before this verb's first side effect: no settlement step
- * ran, so no receipt exists and the rejection is a validation-stage denial.
- */
-function fencedFailure(error: LegacyCoordinationWriteError): TaskLeaseFailure {
-  return { code: error.code, message: error.message, payload: error.payload, stage: "validation", kind: "permission_denied" };
-}
-
 function failureEnvelope(
   failure: TaskLeaseFailure,
   context: ExecutionContext,
@@ -871,17 +703,6 @@ function failureEnvelope(
   };
 }
 
-function validateAcquireAuthority(request: AcquireRequest): TodoFact | null {
-  if (request.authority.todo_projection_error !== null) {
-    throw new TaskLeaseAcquireError(
-      request.authority.todo_projection_error.message,
-      request.authority.todo_projection_error.code,
-      request.authority.todo_projection_error.payload,
-    );
-  }
-  return request.authority.todos.get(request.todo_id) ?? null;
-}
-
 function acquireEffectId(request: AcquireRequest): string {
   return settlementIdentity({
     goal_id: request.goal_id,
@@ -889,131 +710,6 @@ function acquireEffectId(request: AcquireRequest): string {
     todo_id: request.todo_id,
     turn_instance_id: request.idempotency_key,
   }).effect_id;
-}
-
-async function commitAcquire(
-  request: AcquireRequest,
-  dependencies: TaskLeaseAcquireDependencies,
-): Promise<TaskLeaseAcquireEnvelope> {
-  const at = (dependencies.now ?? (() => new Date()))();
-  if (Number.isNaN(at.valueOf())) {
-    throw new EffectRuntimeRequestError("task-lease acquire clock returned an invalid date");
-  }
-  await revalidateAuthoritySources(request.authority.source_receipts);
-  const todo = validateAcquireAuthority(request);
-
-  const leasePath = taskLeasePath(request);
-  const existing = await readLease(leasePath);
-  const version = leaseVersion(existing);
-  const epoch = leaseEpoch(existing);
-  const active = leaseIsActive(existing, at);
-  const otherLeases = await otherLeaseFacts(request, at);
-  const decision = evaluateTaskLeaseAcquireDecision({
-    handoff_mode: request.authority.handoff_mode,
-    registered_agents: [...request.authority.registered_agents],
-    todo,
-    lease: existing === null
-      ? null
-      : {
-        present: true,
-        active,
-        status: typeof existing.status === "string" ? existing.status : null,
-        owner: normalizeAgent(existing.owner),
-        idempotency_key: typeof existing.idempotency_key === "string"
-          ? existing.idempotency_key
-          : null,
-        version,
-        lease_epoch: epoch,
-        write_scopes: normalizeWriteScopes(existing.write_scopes),
-        acquire_ttl_seconds: leaseInteger(existing, "acquire_ttl_seconds"),
-      },
-    other_leases: otherLeases.map((item) => item.decision),
-    command: {
-      owner: request.owner,
-      idempotency_key: request.idempotency_key,
-      ttl_seconds: request.ttl_seconds,
-      write_scopes: [...request.write_scopes],
-      expected_version: request.expected_version,
-    },
-  });
-  if (decision.outcome === "no_change") {
-    if (existing === null) {
-      throw new EffectRuntimeRequestError(
-        "task-lease acquire decision returned replay without an existing lease",
-      );
-    }
-    return successEnvelope(
-      request,
-      existing,
-      leasePath,
-      acquireEffectId(request),
-      true,
-    );
-  }
-  if (decision.outcome !== "apply") {
-    if (PERMISSION_DENIED_CODES.has(decision.code)) {
-      throw ownerFailure(decision.code, request, todo ?? undefined);
-    }
-    const conflicts = decision.conflict_indexes.map((index) => {
-      const fact = otherLeases[index];
-      if (fact === undefined) {
-        throw new EffectRuntimeRequestError(
-          "task-lease acquire decision returned an invalid conflict index",
-        );
-      }
-      return fact.payload;
-    });
-    throw transitionError(
-      decision.code,
-      request,
-      existing,
-      leasePath,
-      conflicts,
-      active ? "acquire_parameters" : "retired",
-    );
-  }
-  if (decision.next_lease === null) {
-    throw new EffectRuntimeRequestError(
-      "task-lease acquire decision returned apply without next_lease",
-    );
-  }
-
-  const lease = materializeTaskLeaseAcquire(request, request, decision, at);
-  await dependencies.beforeWrite?.(lease);
-  await revalidateAuthoritySources(request.authority.source_receipts);
-  const captureRequired = request.runtime_shadow !== null ||
-    await requireShadowPrimaryWriteAllowed(request.runtime_root, request.goal_id) !== null;
-  const shadowCapture = !captureRequired
-    ? null
-    : await beginLeaseOutboxEntry({
-      runtime_root: request.runtime_root,
-      goal_id: request.goal_id,
-      lease_directory: taskLeaseDirectory(request),
-      write_class: "task_lease_acquire",
-      operation_id: request.idempotency_key,
-      previous_lease: existing,
-      planned_lease: lease,
-      active_todo_ids: [...request.authority.todos.keys()],
-      goal_ref: request.runtime_shadow !== null && "goal_ref" in request.runtime_shadow
-        ? request.runtime_shadow.goal_ref
-        : undefined,
-    });
-  if (shadowCapture?.failure && await requireShadowPrimaryWriteAllowed(request.runtime_root, request.goal_id) !== null) {
-    throw new ShadowManagementError("shadow_capture_prepare_failed", "durable shadow preparation failed; the primary lease was not changed");
-  }
-  await atomicWriteJson(leasePath, lease);
-  await shadowCapture?.commit();
-  const response = successEnvelope(request, lease, leasePath, acquireEffectId(request), false);
-  if (shadowCapture !== null) {
-    response.coordination_runtime_shadow_capture = {
-      entry_id: shadowCapture.entry_id,
-      seq: shadowCapture.seq,
-      source_bytes_digest: shadowCapture.source_bytes_digest,
-      failure: shadowCapture.failure,
-      skipped_reason: shadowCapture.skipped_reason,
-    };
-  }
-  return response;
 }
 
 export async function executeTaskLeaseAcquire(
@@ -1033,7 +729,7 @@ export async function executeTaskLeaseAcquire(
         ? error.message : "cannot verify independent Git worktree and origin for --write-worktree", "invalid_worktree_lease_request"); }
     }
   } catch (error) {
-    if (error instanceof TaskLeaseAcquireError || error instanceof ShadowManagementError || error instanceof LegacyCoordinationWriteError) {
+    if (error instanceof TaskLeaseAcquireError || error instanceof ShadowManagementError) {
       return failureEnvelope(
         { code: error.code, message: error.message, payload: error.payload },
         context,
@@ -1043,39 +739,46 @@ export async function executeTaskLeaseAcquire(
   }
 
   try {
-    if (request.canonical) {
-      const result = await withCanonicalTaskLeaseAuthority({...request, operation: "acquire"}, {
-        ...dependencies, now: dependencies.now ?? (() => new Date()),
-      }, async (store, guards) => {
-        await guards.revalidate();
-        return await executeCanonicalTaskLeaseAcquire(store, {...request,
-          registered_agents: request.authority.registered_agents, now: (dependencies.now ?? (() => new Date()))()}, guards.beforeCommit);
-      });
-      if (["applied", "no_change", "replayed", "recovered"].includes(String(result.status))) {
-        const idempotent = result.status !== "applied";
-        const envelope = successEnvelope(request, result.lease as LeaseRecord, "", acquireEffectId(request), idempotent);
-        delete envelope.lease_path;
-        return {...result, ...envelope, acquired: !idempotent && result.changed === true};
-      }
-      const envelope = failureEnvelope({code: String(result.reason_code ?? result.conflict_kind ?? "canonical_acquire_failed"),
-        message: String(result.reason ?? "canonical acquisition failed; inspect before retrying"),
-        kind: result.reason_code === "legacy_writer_fence_read_failed" ? "permission_denied" : undefined,
-        payload: result, stage: result.failure_stage === "durable_writeback" ? "durable_writeback" : "validation"}, context);
+    if (!request.canonical) {
+      return failureEnvelope({
+        code: "canonical_authority_required",
+        message: "Canonical authority is required; back up and migrate this Goal before acquiring a task lease",
+        kind: "permission_denied",
+        stage: "validation",
+        payload: {
+          goal_id: request.goal_id,
+          operation: "task_lease_acquire",
+          write_admitted: false,
+          decision_read_from_provider: false,
+          legacy_fallback_used: false,
+          recovery: {
+            action: "migrate_goal_authority",
+            backup_required: true,
+          },
+        },
+      }, context);
+    }
+    const result = await withCanonicalTaskLeaseAuthority({...request, operation: "acquire"}, {
+      ...dependencies, now: dependencies.now ?? (() => new Date()),
+    }, async (store, guards) => {
+      await guards.revalidate();
+      return await executeCanonicalTaskLeaseAcquire(store, {...request,
+        registered_agents: request.authority.registered_agents, now: (dependencies.now ?? (() => new Date()))()}, guards.beforeCommit);
+    });
+    if (["applied", "no_change", "replayed", "recovered"].includes(String(result.status))) {
+      const idempotent = result.status !== "applied";
+      const envelope = successEnvelope(request, result.lease as LeaseRecord, "", acquireEffectId(request), idempotent);
       delete envelope.lease_path;
-      // Keep the public acquire schema even when the inner command has diagnostics.
-      return {...envelope, schema_version: TASK_LEASE_SCHEMA_VERSION};
+      return {...result, ...envelope, acquired: !idempotent && result.changed === true};
     }
-    return await withFileMutationLock(
-      legacyCoordinationLeaseLockPath(request.runtime_root, request.goal_id),
-      () => withFileMutationLock(taskLeaseLockPath(request), async () => {
-        await requireLegacyCoordinationPrimaryWriteAllowed(request.runtime_root, request.goal_id);
-        return await commitAcquire(request, dependencies);
-      }),
-    );
+    const envelope = failureEnvelope({code: String(result.reason_code ?? result.conflict_kind ?? "canonical_acquire_failed"),
+      message: String(result.reason ?? "canonical acquisition failed; inspect before retrying"),
+      kind: result.reason_code === "legacy_writer_fence_read_failed" ? "permission_denied" : undefined,
+      payload: result, stage: result.failure_stage === "durable_writeback" ? "durable_writeback" : "validation"}, context);
+    delete envelope.lease_path;
+    // Keep the public acquire schema even when the inner command has diagnostics.
+    return {...envelope, schema_version: TASK_LEASE_SCHEMA_VERSION};
   } catch (error) {
-    if (error instanceof LegacyCoordinationWriteError) {
-      return failureEnvelope(fencedFailure(error), context);
-    }
     if (error instanceof TaskLeaseAcquireError || error instanceof ShadowManagementError) {
       return failureEnvelope(
         { code: error.code, message: error.message, payload: error.payload },

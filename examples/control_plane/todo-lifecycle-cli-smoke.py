@@ -112,10 +112,10 @@ def assert_peer_monitor_no_followup() -> None:
             "--no-follow-up",
         )
         assert side_monitor_completed["changed"] is True, side_monitor_completed
-        assert side_monitor_completed["self_merged"] is False, (
+        assert side_monitor_completed["completion_policy"]["self_merged"] is False, (
             side_monitor_completed
         )
-        assert side_monitor_completed["no_followup"] is True, side_monitor_completed
+        assert side_monitor_completed["completion_continuation"] == "no_followup", side_monitor_completed
         monitor_item = next(
             item for item in parsed_items(state_file) if item["todo_id"] == side_monitor_id
         )
@@ -166,7 +166,7 @@ def assert_peer_monitor_no_followup() -> None:
             "--no-follow-up",
         )
         assert write_monitor_completed["changed"] is True, write_monitor_completed
-        assert write_monitor_completed["no_followup"] is True, write_monitor_completed
+        assert write_monitor_completed["completion_continuation"] == "no_followup", write_monitor_completed
         write_monitor_item = next(
             item
             for item in parsed_items(state_file)
@@ -189,6 +189,8 @@ def assert_open_parent_successor_advisory() -> None:
             "agent",
             "--text",
             "Split a bounded aggregate into explicit successor work.",
+            "--task-class",
+            "advancement_task",
             "--claimed-by",
             "codex-main-control",
         )
@@ -202,6 +204,8 @@ def assert_open_parent_successor_advisory() -> None:
             "agent",
             "--text",
             "Execute the first explicit successor slice.",
+            "--task-class",
+            "advancement_task",
             "--claimed-by",
             "codex-side-bypass",
         )
@@ -219,16 +223,16 @@ def assert_open_parent_successor_advisory() -> None:
             "--successor-todo-id",
             successor["todo_id"],
         )
-        advisory = linked["parent_successor_advisory"]
-        assert linked["status"] == "open", linked
-        assert advisory["reason_code"] == (
-            "open_parent_remains_runnable_after_successor_link"
-        ), advisory
-        assert advisory["successor_semantics"] == "lineage_only", advisory
-        assert advisory["parent_remains_quota_runnable"] is True, advisory
-        assert advisory["automatic_transition_applied"] is False, advisory
-        assert advisory["authoring_decision_required"] is True, advisory
-        assert advisory["successor_todo_ids"] == [successor["todo_id"]], advisory
+        assert linked["status"] == "applied", linked
+        parent_read = run_cli(registry_path, "todo", "list", "--goal-id", GOAL_ID,
+                              "--todo-id", parent["todo_id"])["todo"]
+        assert parent_read["status"] == "open", parent_read
+        assert parent_read["successor_todo_ids"] == [successor["todo_id"]], parent_read
+        quota = run_cli(registry_path, "quota", "should-run", "--goal-id", GOAL_ID,
+                        "--agent-id", "codex-main-control")
+        # Linking records lineage; only an explicit lifecycle command changes
+        # the parent's availability in the actual canonical quota consumer.
+        assert quota["agent_lane_next_action"]["todo_id"] == parent["todo_id"], quota
 
         explicitly_deferred = run_cli(
             registry_path,
@@ -247,8 +251,12 @@ def assert_open_parent_successor_advisory() -> None:
             "--successor-todo-id",
             successor["todo_id"],
         )
-        assert explicitly_deferred["status"] == "deferred", explicitly_deferred
-        assert "parent_successor_advisory" not in explicitly_deferred, explicitly_deferred
+        assert explicitly_deferred["status"] == "applied", explicitly_deferred
+        deferred = run_cli(registry_path, "todo", "list", "--goal-id", GOAL_ID,
+                           "--todo-id", parent["todo_id"])["todo"]
+        assert deferred["status"] == "deferred", deferred
+        assert deferred["resume_when"] == f"todo_done:{successor['todo_id']}", deferred
+
 
 
 def assert_nonblocking_review_continuation() -> None:
@@ -427,8 +435,7 @@ def main() -> int:
         assert archive_open["moved_count"] == 0, archive_open
         assert any(item["todo_id"] == run_todo_id and not item["done"] for item in parsed_items(state_file))
 
-        completed = run_cli(
-            registry_path,
+        completion_args = (
             "todo",
             "complete",
             "--goal-id",
@@ -448,8 +455,9 @@ def main() -> int:
             "--next-action-kind",
             "rebuild_score",
         )
+        completed = run_cli(registry_path, *completion_args)
         assert completed["changed"] is True, completed
-        assert completed["next_todos"][0]["added"] is True, completed
+        assert completed["next_todos"][0]["status"] == "open", completed
         rebuild_todo_id = completed["next_todos"][0]["todo_id"]
         assert completed["successor_todo_ids"] == [rebuild_todo_id], completed
         items = parsed_items(state_file)
@@ -519,7 +527,7 @@ def main() -> int:
             "--self-merged",
         )
         assert side_self_merged["changed"] is True, side_self_merged
-        assert side_self_merged["self_merged"] is True, side_self_merged
+        assert side_self_merged["completion_policy"]["self_merged"] is True, side_self_merged
         assert side_self_merged["next_todos"] == [], side_self_merged
 
         side_continuation_added = run_cli(
@@ -563,7 +571,7 @@ def main() -> int:
             "contract_refine",
         )
         assert side_continuation_completed["changed"] is True, side_continuation_completed
-        assert side_continuation_completed["self_merged"] is True, side_continuation_completed
+        assert side_continuation_completed["completion_policy"]["self_merged"] is True, side_continuation_completed
         assert side_continuation_completed["next_todos"][0]["claimed_by"] == "codex-side-bypass", (
             side_continuation_completed
         )
@@ -639,7 +647,7 @@ def main() -> int:
             "--next-excluded-agent",
             "codex-side-bypass",
         )
-        assert "cannot also appear in next_excluded_agents" in (
+        assert "cannot also appear in excluded_agents" in (
             side_review_claim_error["error"]
         ), side_review_claim_error
 
@@ -677,7 +685,7 @@ def main() -> int:
         assert side_completed["changed"] is True, side_completed
         review_todo_id = side_completed["next_todos"][0]["todo_id"]
         assert side_completed["next_todos"][0]["claimed_by"] == "codex-main-control", side_completed
-        assert side_completed["next_todos"][0]["blocks_agent"] is None, side_completed
+        assert side_completed["next_todos"][0].get("blocks_agent") is None, side_completed
         assert side_completed["next_todos"][0]["excluded_agents"] == ["codex-side-bypass"], side_completed
         assert side_completed["next_todos"][0]["task_repository"] == (
             SUCCESSOR_REPOSITORY
@@ -706,24 +714,15 @@ def main() -> int:
         assert review_item.get("updated_at"), review_item
         assert side_completed["next_todos"][0].get("updated_at") == review_item["updated_at"], side_completed
 
-        repeated = run_cli(
-            registry_path,
-            "todo",
-            "complete",
-            "--goal-id",
-            GOAL_ID,
-            "--todo-id",
-            run_todo_id,
-            "--agent-id",
-            "codex-main-control",
-            "--evidence",
-            "fresh-repeat-result-ready",
-            "--next-agent-todo",
-            REBUILD_TODO,
-            "--next-action-kind",
-            "rebuild_score",
+        before_retry = state_file.read_bytes()
+        conflicting_retry = run_cli_error(
+            registry_path, *completion_args, "--next-action-kind", "different_action",
         )
+        assert conflicting_retry["error_code"] == "coordination_operation_identity_mismatch", conflicting_retry
+        assert state_file.read_bytes() == before_retry
+        repeated = run_cli(registry_path, *completion_args)
         assert repeated["changed"] is False, repeated
+        assert state_file.read_bytes() == before_retry
         assert state_file.read_text(encoding="utf-8").count(REBUILD_TODO) == 1
 
         supersede_claimed_by_error = run_cli_error(

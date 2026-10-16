@@ -239,6 +239,108 @@ def build_goal_workspace(
     )
 
 
+def build_canonical_file_workspace(root: Path, *, goal_id: str) -> GoalWorkspace:
+    """Create a new Goal through the public CLI with File as its authority."""
+
+    repo = root / goal_id
+    repo.mkdir()
+    runtime_root = root / f"{goal_id}-runtime"
+    home = root / f"{goal_id}-home"
+    home.mkdir()
+    registry_path = root / f"{goal_id}-registry.json"
+    provisional = GoalWorkspace(
+        goal_id=goal_id,
+        root=root,
+        repo=repo,
+        registry_path=registry_path,
+        state_path=repo / "ACTIVE_GOAL_STATE.md",
+        runtime_root=runtime_root,
+        home=home,
+        runtime_root_binding="cli_override",
+        registry_runtime_root=runtime_root,
+    )
+    defaults_path = root / f"{goal_id}-storage-defaults.json"
+    defaults_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "loopx_goal_storage_defaults_v1",
+                "new_goal_provider": "file",
+                "canonical_creation": True,
+                "new_goal_handoff_mode": "hard_lease",
+            }
+        ),
+        encoding="utf-8",
+    )
+    preview = run_cli(
+        provisional,
+        "machine-config",
+        "preview",
+        "--namespace",
+        "goal_storage",
+        "--config-json",
+        str(defaults_path),
+    )
+    plan_revision = preview.get("plan_revision")
+    if not isinstance(plan_revision, str) or not plan_revision:
+        raise AssertionError("goal storage preview omitted its plan revision")
+    run_cli(
+        provisional,
+        "machine-config",
+        "apply",
+        "--namespace",
+        "goal_storage",
+        "--config-json",
+        str(defaults_path),
+        "--expected-plan-revision",
+        plan_revision,
+        "--execute",
+    )
+    created = run_cli(
+        provisional,
+        "bootstrap",
+        "--project",
+        str(repo),
+        "--goal-id",
+        goal_id,
+        "--objective",
+        "Qualify canonical File authority through the public CLI.",
+        "--no-global-sync",
+    )
+    selection = created.get("storage_selection")
+    if not isinstance(selection, dict) or (
+        selection.get("provider") != "file"
+        or selection.get("authority_initialized") is not True
+        or selection.get("legacy_fallback_used") is not False
+    ):
+        raise AssertionError("bootstrap did not initialize canonical File authority")
+    state_value = created.get("state_file")
+    if not isinstance(state_value, str) or not state_value:
+        raise AssertionError("bootstrap omitted the canonical projection path")
+    workspace = GoalWorkspace(
+        goal_id=goal_id,
+        root=root,
+        repo=repo,
+        registry_path=registry_path,
+        state_path=Path(state_value),
+        runtime_root=runtime_root,
+        home=home,
+        runtime_root_binding="cli_override",
+        registry_runtime_root=runtime_root,
+    )
+    run_cli(
+        workspace,
+        "configure-goal",
+        "--goal-id",
+        goal_id,
+        "--registered-agent",
+        "agent-a",
+        "--registered-agent",
+        "agent-b",
+        "--execute",
+    )
+    return workspace
+
+
 def build_legacy_migration_source(
     root: Path,
     *,
@@ -534,6 +636,7 @@ __all__ = [
     "RUNTIME_ROOT_BINDINGS",
     "TS_READBACK_PROBE",
     "TapSummary",
+    "build_canonical_file_workspace",
     "build_goal_workspace",
     "build_legacy_migration_source",
     "cli_command",

@@ -994,6 +994,30 @@ stable release, stable scheduler/harness, matched starting state, repeated arms,
 declared stopping rules, and separation between model variance and
 control-plane failures.
 
+### Research episodes and human-readable progress (proposed)
+
+The [benchmark measurement refinement](long-horizon-harness-benchmark-research-program-v0.md#evidence-based-episode-evaluation-proposed-refinement)
+defines a proposed analysis unit across Turns and separates native outcomes,
+information, discrimination, actual adoption, repetition, costs and coverage.
+Episode grouping and semantic judge output remain read-only annotations: they
+cannot create legal Explore edges, close a composition gap, accept an experiment,
+change a runnable frontier or discharge a replan obligation. Reuse the existing
+typed evidence/relationship and result-adoption owners in §7 and §11.5.
+
+Missing metadata or a subsequent adoption opportunity remains unknown, not
+negative progress. A supported negative result can narrow a specific next
+experiment without ruling out an entire method family. Source-version checks
+and observed receiver adoption are separate facts; neither time adjacency nor
+a summary supplies a causal link. Product receives only authorized safe
+projections; hidden evaluator analysis requires both solver termination and
+completed scoring and never becomes solver feedback.
+
+The [product reading journey](../../product/use-cases/auto-research/long-horizon-progress-design.md)
+reuses the Goal/Live Team presentation owners. Scientific segmentation and judge
+calibration, packaged evidence reading, and comprehension each need their own
+acceptance. This design advances none of the implementation milestones below
+and adds no automatic evaluation, intervention, graph authority or study cells.
+
 ## 16. Milestones
 
 | Milestone | Deliverable | Promotion gate | Status |

@@ -21,7 +21,7 @@ from ...capabilities.periodic_report.incremental import (
 from ...capabilities.periodic_report.machine_defaults import (
     build_periodic_report_delivery_authority,
     normalize_periodic_report_delivery_authority,
-    resolve_goal_periodic_report_subscription,
+    resolve_active_goal_periodic_report_subscription,
 )
 from ...capabilities.periodic_report.machine_store import (
     read_periodic_report_machine_defaults,
@@ -195,11 +195,11 @@ def _resolved_goal_channel_binding(
 ) -> dict[str, Any]:
     registry = load_registry(registry_path)
     goal = goal_from_registry(registry, goal_id)
-    subscription = resolve_goal_periodic_report_subscription(
+    subscription = resolve_active_goal_periodic_report_subscription(
         goal,
         read_periodic_report_machine_defaults(runtime_root),
     )
-    if subscription.get("enabled") is not True:
+    if subscription is None:
         raise ValueError("periodic report delivery subscription is disabled")
     current_authority = build_periodic_report_delivery_authority(subscription)
     if current_authority != dict(expected_authority):

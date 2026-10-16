@@ -12,6 +12,10 @@ import {openLocalAuthorityStore, localAuthorityOpenFailure, requireLocalAuthorit
 import {type AuthoritySourceCheck, uncheckedAuthoritySource} from "../coordination/authority_source.ts";
 import {legacyCoordinationTodoLockPath} from "../coordination/legacy_writer_lock_paths.ts";
 import {requireShadowPrimaryWriteAllowed, shadowMaintenanceLockPath} from "../coordination/shadow_management.ts";
+import {
+  canonicalWriteRouteFailure,
+  requireCanonicalBusinessWrite,
+} from "../coordination/local_authority_write.ts";
 import {claimFileMutationLock, mutationLockOwner, releaseFileMutationLock,
   releaseFileMutationLockClaim, type FileMutationLockClaim} from "../effect_runtime_io.ts";
 import {planTeamTransaction, replayTeamTransaction, teamTransactionIdentity, TEAM_TRANSACTION_SCHEMA} from "./team_plan.ts";
@@ -86,12 +90,16 @@ export async function commitLocalTeamPlan(value: unknown): Promise<JsonObject> {
       if (owner?.token !== witness.token || owner.pid !== witness.pid) break;
       if (i === witnesses.length - 1) adopted = true;
     }
+    await requireShadowPrimaryWriteAllowed(root, goal);
+    await requireCanonicalBusinessWrite(root, goal, "team_plan");
     const store = await openLocalAuthorityStore(root, goal);
     const result = await commitTeamPlan(store, request, async () => {
       // Exact committed receipts replay before these admission checks. An
       // expired handoff may read history, but can never authorize a new write.
       if (!adopted) throw new EffectRuntimeRequestError("team plan source lock handoff expired; retry the original confirmation");
-      await requireShadowPrimaryWriteAllowed(root, goal);
+      // Unreadable display may recover an existing receipt, but cannot supply the
+      // Goal intent needed to admit a new plan, even if its absence was reviewed.
+      if (typeof source.state_sha256 !== "string") return false;
       const digest = async (path: string) => createHash("sha256").update(await readFile(path)).digest("hex");
       return await digest(registry) === source.registry_sha256 && await digest(state) === source.state_sha256;
     });
@@ -99,7 +107,8 @@ export async function commitLocalTeamPlan(value: unknown): Promise<JsonObject> {
       decision_read_from_provider: true, legacy_fallback_used: false};
   } catch (error) {
     return {status: "failed", reason_code: error instanceof EffectRuntimeRequestError ? error.code : "team_plan_commit_failed",
-      reason: error instanceof Error ? error.message : String(error), ...localAuthorityOpenFailure(error)};
+      reason: error instanceof Error ? error.message : String(error),
+      ...localAuthorityOpenFailure(error), ...canonicalWriteRouteFailure(error)};
   } finally {
     // Claims keep the source markers alive even after a requesting Python
     // process exits. The native effect releases the handed-off critical section.

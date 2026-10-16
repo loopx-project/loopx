@@ -55,12 +55,12 @@ NOKV_HELPER = (
 
 
 def _run_argv(
-    argv: list[str], stdin: bytes = b""
+    argv: list[str], stdin: bytes = b"", *, cwd: Path = REPO_ROOT
 ) -> subprocess.CompletedProcess[bytes]:
     environment = {**os.environ, "PYTHONIOENCODING": LOCALE_CODEC, "PYTHONUTF8": "0"}
     return subprocess.run(
         argv,
-        cwd=REPO_ROOT,
+        cwd=cwd,
         env=environment,
         input=stdin,
         capture_output=True,
@@ -296,3 +296,70 @@ def test_scan_cli_scan_root_writes_a_utf8_receipt(tmp_path: Path) -> None:
     assert result.returncode == 1, result.stderr.decode("utf-8", "replace")
     receipt = json.loads(result.stdout.decode("utf-8"))
     assert [hit["location"] for hit in receipt["hits"]] == [scanned.name]
+
+
+@pytest.mark.parametrize("name", [ODD_BYTES_NAME, EVEN_BYTES_NAME])
+def test_delegation_preview_worker_reads_the_binding_request(
+    tmp_path: Path, name: str
+) -> None:
+    """The worker must accept the workspace its caller named, not a re-encoded one.
+
+    `DelegationPreviewTransport` starts this worker with `[python, -P, -m]`
+    and writes each framed request as UTF-8, while the worker - unlike the four
+    hosts above - read its stdin through the host locale codec. A locale decode
+    makes the request's `--project` resolve to another path, so the worker's own
+    bound-work check rejects the request before the CLI ever runs.
+    """
+
+    workspace = tmp_path / f"Users-{name}" / "LoopX"
+    workspace.mkdir(parents=True)
+    registry = tmp_path / "registry.json"
+    registry.write_text("{}", encoding="utf-8")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+
+    result = _run_argv(
+        [
+            sys.executable,
+            "-P",
+            "-m",
+            "loopx.control_plane.collaboration.delegation_preview_worker",
+            "--registry",
+            str(registry),
+            "--runtime-root",
+            str(runtime),
+            "--goal-id",
+            "goal",
+            "--agent-id",
+            "agent",
+            "--todo-id",
+            "todo",
+        ],
+        _request_bytes(
+            {
+                "id": 1,
+                "argv": [
+                    "turn",
+                    "run-once",
+                    "--goal-id",
+                    "goal",
+                    "--agent-id",
+                    "agent",
+                    "--todo-id",
+                    "todo",
+                    "--project",
+                    str(workspace),
+                    "--scan-root",
+                    str(workspace),
+                ],
+            }
+        ),
+        cwd=workspace,
+    )
+
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    # An unpinned worker decodes the frame into different text and exits with
+    # the retarget refusal instead of answering the caller's request.
+    preview = json.loads(result.stdout.decode("utf-8"))
+    assert preview["kind"] == "preview" and preview["id"] == 1
+    assert preview["value"]["mode"] == "run_once"

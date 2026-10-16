@@ -12,6 +12,11 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
+
 GOAL_ID = "no-git-quota-fixture"
 AGENT_ID = "codex-benchmark-agent"
 
@@ -30,7 +35,8 @@ def write_fixture(root: Path) -> Path:
         "## Objective\n\n"
         "Solve this no-git fixture.\n\n"
         "## Next Action\n\n"
-        "- Pick the seeded todo.\n",
+        "- Pick the seeded todo.\n\n"
+        "## Agent Todo\n\n",
         encoding="utf-8",
     )
     registry_path.parent.mkdir(parents=True)
@@ -60,6 +66,7 @@ def write_fixture(root: Path) -> Path:
         + "\n",
         encoding="utf-8",
     )
+    import_fixture_authority(registry_path, GOAL_ID)
     return registry_path
 
 
@@ -100,6 +107,7 @@ def main() -> int:
             "Solve the no-git quota fixture.",
         )
         assert todo["ok"] is True, todo
+        before = run_cli(registry_path, "todo", "list", "--goal-id", GOAL_ID)
 
         no_git_bin = root / "no-git-bin"
         no_git_bin.mkdir()
@@ -119,6 +127,11 @@ def main() -> int:
         assert quota.get("status") != "quota_collection_failed", quota
         assert quota["should_run"] is True, quota
         assert quota["recommended_action"] == "[P1] Solve the no-git quota fixture.", quota
+        assert quota["selected_todo"]["todo_id"] == todo["todo_id"], quota
+        after = run_cli(registry_path, "todo", "list", "--goal-id", GOAL_ID, env=env)
+        assert after["todos"] == before["todos"], after
+        assert after["authority_read"]["provider_revision"] == before["authority_read"]["provider_revision"], after
+        assert after["authority_read"]["legacy_fallback_used"] is False, after
     return 0
 
 

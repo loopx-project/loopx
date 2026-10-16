@@ -1,9 +1,8 @@
-import {leaseOwnerRejection as ownerRejection} from "./task_lease_eligibility.ts";
 import {mutateCanonicalTaskLease} from "./canonical_task_lease_lifecycle.ts";
 import {taskLeaseStableValue as stableValue, taskLeaseDigest as digest,
   taskLeaseOperationIdentity as operationIdentity,
   taskLeaseOperationRequestDigest as operationRequestDigest} from "./task_lease_operation_identity.ts";
-import { ShadowManagementError, requireShadowPrimaryWriteAllowed } from "../coordination/shadow_management.ts";
+import { ShadowManagementError } from "../coordination/shadow_management.ts";
 import { LegacyCoordinationWriteError, requireLegacyCoordinationPrimaryWriteAllowed } from "../coordination/legacy_writer_fence.ts";
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
@@ -23,7 +22,6 @@ import {
   releaseFileMutationLock,
   releaseFileMutationLockClaim,
   withFileMutationLock,
-  type FileMutationLock,
   type FileMutationLockClaim,
 } from "../effect_runtime_io.ts";
 import {
@@ -45,28 +43,18 @@ import {
   normalizeOwner,
   normalizeTodoId,
   readLease,
-  revalidateAuthoritySources,
   TaskLeaseAcquireError,
   taskLeaseDirectory,
   taskLeaseLockPath,
   taskLeasePath,
-  utcIsoformat,
   type AuthorityFacts,
   type LeaseRecord,
-  type TodoFact,
-  type TodoFactField,
 } from "./task_lease_acquire.ts";
 import {
   decideTaskLeaseLifecycle,
-  materializeTaskLeaseLifecycle,
   releasedTaskLeaseRecord as releasedLease,
   type TaskLeaseLifecycleDecision,
-  type TaskLeaseLifecycleDecisionInput,
 } from "./task_lease_lifecycle_decision.ts";
-import {
-  beginLeaseOutboxEntry,
-  type LeaseOutboxCapture,
-} from "../coordination/local_authority_shadow_outbox.ts";
 import {decodeTaskLeaseLifecycleRequest, TaskLeaseLifecycleError, TASK_LEASE_LIFECYCLE_OPERATIONS,
   type LifecycleRequest, type CanonicalLifecycleRequest, type LifecycleErrorInfo, type LifecycleStage,
   type TaskLeaseLifecycleOperation} from "./task_lease_lifecycle_request.ts";
@@ -86,57 +74,6 @@ interface LifecycleDependencies {
   authorityProvider?: import("../coordination/local_authority_provider.ts").LocalAuthorityProviderDependencies;
 }
 
-
-async function captureLeaseWrite(
-  request: LifecycleRequest,
-  previous: LeaseRecord | null,
-  next: LeaseRecord,
-  writeClass: string,
-): Promise<Awaited<ReturnType<typeof beginLeaseOutboxEntry>> | null> {
-  if (request.runtime_shadow === null &&
-      await requireShadowPrimaryWriteAllowed(request.runtime_root, request.goal_id) === null) return null;
-  if (request.operation === "fence_close" && request.authority !== null) {
-    await revalidateAuthoritySources(request.authority.source_receipts);
-  }
-  const capture = await beginLeaseOutboxEntry({
-    runtime_root: request.runtime_root,
-    goal_id: request.goal_id,
-    lease_directory: taskLeaseDirectory(request),
-    write_class: writeClass,
-    operation_id: request.idempotency_key ?? request.fence_operation_id,
-    previous_lease: previous,
-    planned_lease: next,
-    // Lifecycle requests may omit authority facts; absent authority keeps the
-    // strict pre-existing capture instead of guessing a Todo graph.
-    active_todo_ids: request.authority === null
-      ? null
-      : [...request.authority.todos.keys()],
-    goal_ref: request.runtime_shadow !== null && "goal_ref" in request.runtime_shadow
-      ? request.runtime_shadow.goal_ref
-      : undefined,
-  });
-  if (capture.failure && await requireShadowPrimaryWriteAllowed(request.runtime_root, request.goal_id) !== null) {
-    throw new ShadowManagementError("shadow_capture_prepare_failed", "durable shadow preparation failed; the primary lease was not changed");
-  }
-  return capture;
-}
-
-function attachRuntimeShadowCapture(
-  response: JsonObject,
-  capture: LeaseOutboxCapture | null,
-): JsonObject {
-  if (capture === null) return response;
-  return {
-    ...response,
-    coordination_runtime_shadow_capture: {
-      entry_id: capture.entry_id,
-      seq: capture.seq,
-      source_bytes_digest: capture.source_bytes_digest,
-      failure: capture.failure,
-      skipped_reason: capture.skipped_reason,
-    },
-  };
-}
 
 function lifecycleNow(
   request: Pick<LifecycleRequest, "current_time">,
@@ -445,31 +382,6 @@ async function persistFenceReceipt(
     verify_response: verifyResponse,
   });
 }
-
-function fenceLockHandle(
-  request: LifecycleRequest,
-  token: string,
-): FileMutationLock {
-  const targetPath = lockPathFor(request);
-  return {
-    targetPath,
-    lockPath: `${targetPath}.ts-effect.lock`,
-    token,
-  };
-}
-
-async function adoptFenceReceiptLock(
-  request: LifecycleRequest,
-  receipt: FenceReceipt | null,
-): Promise<FileMutationLock | null> {
-  if (!receipt || receipt.state === "closed") return null;
-  const owner = await mutationLockOwner(lockPathFor(request));
-  if (!owner || owner.token !== receipt.lock_token) return null;
-  const expectedPid = request.owner_pid ?? process.pid;
-  if (owner.pid !== expectedPid || receipt.owner_pid !== expectedPid) return null;
-  return fenceLockHandle(request, receipt.lock_token);
-}
-
 
 async function findFenceReceiptByToken(
   request: LifecycleRequest,
@@ -921,79 +833,7 @@ function errorInfo(error: unknown, fallbackStage: LifecycleStage = "durable_writ
   };
 }
 
-function authorityTodo(
-  request: LifecycleRequest,
-): TodoFact | null {
-  if (request.authority?.todo_projection_error) {
-    const error = request.authority.todo_projection_error;
-    throw new TaskLeaseLifecycleError(
-      error.message,
-      error.code,
-      error.payload,
-      "validation",
-    );
-  }
-  const projected = request.authority?.todos.get(request.todo_id) ?? null;
-  if (request.todo && projected && !todoFactsMatch(request.todo, projected)) {
-    throw new TaskLeaseLifecycleError(
-      "caller todo snapshot disagrees with the canonical authority projection",
-      "authority_todo_mismatch",
-      { goal_id: request.goal_id, todo_id: request.todo_id },
-      "validation",
-    );
-  }
-  // The authority projection is the only authorization source.  A caller
-  // supplied Todo can elaborate it, but cannot create an otherwise missing
-  // row or override its state.
-  return projected;
-}
 
-function todoFactsMatch(left: TodoFact, right: TodoFact): boolean {
-  const provided = left.provided_fields;
-  // Lifecycle authority depends on the core identity/state fields.  They are
-  // required by the compact caller contract and remain strict even when an
-  // older producer omitted optional metadata.  The latter can be derived by
-  // the canonical projection, so absence is treated as "unspecified".
-  const matchesOptional = (field: TodoFactField, equal: boolean): boolean =>
-    provided === undefined || provided.includes(field) ? equal : true;
-  return left.todo_id === right.todo_id &&
-    left.status === right.status &&
-    left.claimed_by === right.claimed_by &&
-    JSON.stringify(left.excluded_agents) === JSON.stringify(right.excluded_agents) &&
-    matchesOptional("role", (left.role ?? null) === (right.role ?? null)) &&
-    matchesOptional("task_class", (left.task_class ?? null) === (right.task_class ?? null)) &&
-    matchesOptional("bound_agent", left.bound_agent === right.bound_agent) &&
-    matchesOptional("blocks_agent", left.blocks_agent === right.blocks_agent);
-}
-
-function ownerError(
-  request: LifecycleRequest,
-  code: string,
-  todo: TodoFact | null,
-  owner = request.owner,
-): TaskLeaseLifecycleError {
-  let message: string;
-  const payload: JsonObject = {
-    goal_id: request.goal_id,
-    todo_id: request.todo_id,
-    owner,
-    reason: code,
-  };
-  if (code === "todo_not_found") message = "todo is missing from the canonical projection";
-  else if (code === "todo_not_open") {
-    payload.todo_status = todo?.status || "unknown";
-    message = `task lease requires an open todo; '${request.todo_id}' is '${payload.todo_status}'`;
-  } else if (code === "owner_excluded_from_todo") {
-    payload.excluded_agents = [...(todo?.excluded_agents ?? [])];
-    message = `task lease owner '${owner}' is excluded from todo '${request.todo_id}'`;
-  } else if (code === "owner_conflicts_with_claim") {
-    payload.claimed_by = todo?.claimed_by ?? null;
-    message = `task lease owner '${owner}' conflicts with todo claim '${payload.claimed_by}'`;
-  } else {
-    message = `task lease owner '${owner}' is not registered for goal '${request.goal_id}'`;
-  }
-  return new TaskLeaseLifecycleError(message, code, payload, "validation");
-}
 
 function transitionError(
   request: LifecycleRequest,
@@ -1059,18 +899,6 @@ function plannedLeaseMatches(actual: LeaseRecord | null, planned: LeaseRecord | 
   return JSON.stringify(stableValue(actual)) === JSON.stringify(stableValue(planned));
 }
 
-function allowsUserGateAutoAcquire(
-  request: LifecycleRequest,
-  todo: TodoFact | null,
-): boolean {
-  return request.operation === "terminal_verify" &&
-    request.authority?.handoff_mode === "hard_lease" &&
-    !request.delegated_authority &&
-    request.allow_user_gate_auto_acquire &&
-    todo?.role === "user" &&
-    todo.task_class === "user_gate";
-}
-
 async function loadLeaseForRequest(
   request: LifecycleRequest,
   leasePath: string,
@@ -1099,23 +927,17 @@ async function persistOperationReceipt(
   });
 }
 
-function ordinaryDecision(
+function retainedReleaseDecision(
   request: LifecycleRequest,
   lease: LeaseRecord | null,
-  todo: TodoFact | null,
   at: Date,
 ): TaskLeaseLifecycleDecision {
-  const input: TaskLeaseLifecycleDecisionInput = {
+  return decideTaskLeaseLifecycle({
+    // Release preserves historical cleanup in every decoded mode. It neither
+    // reads Todo admission nor authorizes a fresh execution lease.
     handoff_mode: request.authority?.handoff_mode ?? "legacy",
-    registered_agents: request.authority?.registered_agents ?? [],
-    todo: todo === null
-      ? null
-      : {
-          todo_id: todo.todo_id,
-          status: todo.status,
-          claimed_by: todo.claimed_by,
-          excluded_agents: todo.excluded_agents,
-        },
+    registered_agents: [],
+    todo: null,
     lease: lease === null
       ? null
       : {
@@ -1126,33 +948,37 @@ function ordinaryDecision(
           idempotency_key: persistedKey(lease),
           version: leaseVersion(lease),
           lease_epoch: leaseEpoch(lease),
-          write_scopes: Array.isArray(lease.write_scopes)
-            ? lease.write_scopes.filter((scope): scope is string =>
-                typeof scope === "string"
-              )
-            : [],
-          // Lifecycle decisions do not depend on the original acquire TTL.
-          // Legacy records may carry an unrelated malformed value here; keep
-          // that compatibility field out of the decision instead of turning
-          // renew/release into a new validation surface.
-          acquire_ttl_seconds:
-            typeof lease.acquire_ttl_seconds === "number" &&
-              Number.isSafeInteger(lease.acquire_ttl_seconds) &&
-              lease.acquire_ttl_seconds >= 0
-              ? lease.acquire_ttl_seconds
-              : null,
+          write_scopes: [],
+          acquire_ttl_seconds: null,
         },
     command: {
-      operation: request.operation as "renew" | "transfer" | "release",
+      operation: "release",
       owner: request.owner!,
       idempotency_key: request.idempotency_key!,
       expected_version: request.expected_version,
-      ttl_seconds: request.ttl_seconds,
-      new_owner: request.new_owner,
-      new_idempotency_key: request.new_idempotency_key,
+      ttl_seconds: null,
+      new_owner: null,
+      new_idempotency_key: null,
     },
-  };
-  return decideTaskLeaseLifecycle(input);
+  });
+}
+
+function rejectFreshSourceLeaseOperation(request: LifecycleRequest): never {
+  throw new TaskLeaseLifecycleError(
+  "Canonical authority is required; back up and migrate this Goal before mutating a task lease",
+  "canonical_authority_required",
+  {
+    goal_id: request.goal_id,
+    operation: `task_lease_${request.operation}`,
+    write_admitted: false,
+    decision_read_from_provider: false,
+    legacy_fallback_used: false,
+    recovery: {
+      action: "migrate_goal_authority",
+      backup_required: true,
+    },
+  },
+);
 }
 
 async function ordinaryOperation(
@@ -1220,741 +1046,47 @@ async function ordinaryOperation(
     return replay;
   }
 
-  let todo: TodoFact | null = null;
+  // Prepared-with-matching-bytes and committed receipts above are recovery.
+  // A missing/ambiguous effect cannot be renewed or transferred after cutoff.
   if (request.operation !== "release") {
-    const authority = request.authority;
-    if (!authority) throw new TaskLeaseLifecycleError("authority is required", "authority_required");
-    await revalidateAuthoritySources(authority.source_receipts);
-    todo = authorityTodo(request);
+    rejectFreshSourceLeaseOperation(request);
   }
-  const decision = ordinaryDecision(request, existing, todo, at);
+
+  await requireLegacyCoordinationPrimaryWriteAllowed(request.runtime_root, request.goal_id);
+  const decision = retainedReleaseDecision(request, existing, at);
   if (decision.outcome === "conflict" || decision.outcome === "rejected") {
-    if (
-      decision.code === "todo_not_found" ||
-      decision.code === "todo_not_open" ||
-      decision.code === "owner_not_registered" ||
-      decision.code === "owner_excluded_from_todo" ||
-      decision.code === "owner_conflicts_with_claim"
-    ) {
-      const rejectedOwner = request.operation === "transfer" &&
-          decision.code === "owner_not_registered" &&
-          !request.authority?.registered_agents.includes(request.owner!)
-        ? request.owner
-        : request.operation === "transfer" ? request.new_owner : request.owner;
-      throw ownerError(request, decision.code, todo, rejectedOwner);
-    }
     throw transitionError(request, decision.code, existing, leasePath);
   }
 
-  if (request.operation === "release") {
-    if (decision.code === "lease_missing") {
-      return {
-        ok: true,
-        schema_version: "task_lease_v0",
-        action: "release",
-        released: false,
-        missing: true,
-        lease_path: leasePath,
-        ...(request.authority?.handoff_mode
-          ? { handoff_mode: request.authority.handoff_mode }
-          : {}),
-        settlement: lifecycleSettlement(request, "committed"),
-      };
-    }
-    if (decision.code === "lease_release_replay" && existing !== null) {
-      return responseForOrdinary(request, leasePath, existing, true, { released: true });
-    }
-    if (existing === null || decision.next_lease === null) {
-      throw transitionError(request, "invalid_lease_snapshot", existing, leasePath);
-    }
-    const next = releasedLease(existing, at);
-    const response = responseForOrdinary(request, leasePath, next, false, { released: true });
-    await persistOperationReceipt(request, "prepared", next, response);
-    await dependencies.beforeWrite?.(next);
-    const shadowCapture = await captureLeaseWrite(
-      request, existing, next, "task_lease_release",
-    );
-    await atomicWriteJson(leasePath, next);
-    await shadowCapture?.commit();
-    await persistOperationReceipt(request, "committed", next, response);
-    return attachRuntimeShadowCapture(response, shadowCapture);
+  if (decision.code === "lease_missing") {
+    return {
+      ok: true,
+      schema_version: "task_lease_v0",
+      action: "release",
+      released: false,
+      missing: true,
+      lease_path: leasePath,
+      ...(request.authority?.handoff_mode
+        ? { handoff_mode: request.authority.handoff_mode }
+        : {}),
+      settlement: lifecycleSettlement(request, "committed"),
+    };
+  }
+  if (decision.code === "lease_release_replay" && existing !== null) {
+    return responseForOrdinary(request, leasePath, existing, true, { released: true });
   }
   if (existing === null || decision.next_lease === null) {
     throw transitionError(request, "invalid_lease_snapshot", existing, leasePath);
   }
-  const next = materializeTaskLeaseLifecycle(existing, {
-    operation: request.operation as "renew" | "transfer", owner: request.owner!,
-    idempotency_key: request.idempotency_key!, expected_version: request.expected_version,
-    ttl_seconds: request.ttl_seconds, new_owner: request.new_owner,
-    new_idempotency_key: request.new_idempotency_key,
-  }, decision, at);
-  const response = responseForOrdinary(
-    request,
-    leasePath,
-    next,
-    false,
-    request.operation === "renew" ? { renewed: true } : { transferred: true },
-  );
+  const next = releasedLease(existing, at);
+  const response = responseForOrdinary(request, leasePath, next, false, { released: true });
   await persistOperationReceipt(request, "prepared", next, response);
   await dependencies.beforeWrite?.(next);
-  if (request.authority) await revalidateAuthoritySources(request.authority.source_receipts);
-  const shadowCapture = await captureLeaseWrite(
-    request, existing, next, `task_lease_${request.operation}`,
-  );
   await atomicWriteJson(leasePath, next);
-  await shadowCapture?.commit();
   await persistOperationReceipt(request, "committed", next, response);
-  return attachRuntimeShadowCapture(response, shadowCapture);
+  return response;
 }
 
-function fencePayload(
-  request: LifecycleRequest,
-  lease: LeaseRecord,
-  token: string,
-  autoAcquired = false,
-): JsonObject {
-  return {
-    schema_version: "task_lease_v0",
-    required: true,
-    active: true,
-    owner: request.owner,
-    version: leaseVersion(lease),
-    lease_epoch: leaseEpoch(lease),
-    execution_instance_verified: true,
-    lock_token: token,
-    fence_operation_id: fenceOperationId(request),
-    ...(autoAcquired ? { auto_acquired: true } : {}),
-  };
-}
-
-async function fenceVerify(
-  request: LifecycleRequest,
-  dependencies: LifecycleDependencies,
-): Promise<JsonObject> {
-  if (!request.authority) {
-    throw new TaskLeaseLifecycleError("authority is required for a fence", "authority_required");
-  }
-  const operationId = fenceOperationId(request);
-  const receiptPath = fenceReceiptPath(request, operationId);
-  let keep = false;
-  let recheckingClosedNoop = false;
-  let receipt = await readFenceReceipt(receiptPath, request);
-  let lock: FileMutationLock | null = null;
-  let lockClaim: FileMutationLockClaim | null = null;
-  try {
-    // A closed receipt is terminal only relative to the lease generation that
-    // produced it.  Inspect the current lease while holding the same goal
-    // lock before replaying it; otherwise an aborted close or a later acquire
-    // could turn an old required fence into a keyless success.
-    if (receipt?.state === "closed") {
-      // The receipt write is authoritative even if the original handler lost
-      // its response or failed during best-effort lock cleanup. Retire only
-      // this receipt's token before taking a fresh replay lock; an in-flight
-      // closer that already owns the token claim wins and keeps the lock.
-      await releaseFileMutationLock(
-        lockPathFor(request),
-        receipt.lock_token,
-        null,
-        true,
-      );
-      const replayLock = await acquireFileMutationLock(
-        lockPathFor(request),
-        request.owner_pid ?? process.pid,
-      );
-      try {
-        await revalidateAuthoritySources(request.authority.source_receipts);
-        const closedTodo = authorityTodo(request);
-        if (!closedTodo) {
-          throw new TaskLeaseLifecycleError(
-            "todo is missing from the canonical projection",
-            "todo_not_found",
-            { goal_id: request.goal_id, todo_id: request.todo_id },
-          );
-        }
-        // Preserve the holder gate's current mode boundary even though the
-        // receipt is terminal. A previous proof must not authorize a later
-        // soft-claim ownership mutation.
-        if (request.operation === "holder_verify" &&
-            request.authority.handoff_mode !== "hard_lease") {
-          throw new TaskLeaseLifecycleError(
-            "task-lease holder verification is only available in hard_lease handoff mode",
-            "handoff_mode_forbids_lease",
-            {
-              goal_id: request.goal_id,
-              todo_id: request.todo_id,
-              handoff_mode: request.authority.handoff_mode,
-            },
-          );
-        }
-        const verifiedOwner = receipt.fence_owner;
-        if (verifiedOwner !== null && (
-          !request.authority.registered_agents.includes(verifiedOwner) ||
-          closedTodo.excluded_agents.includes(verifiedOwner) ||
-          (closedTodo.claimed_by !== null &&
-            closedTodo.claimed_by !== verifiedOwner)
-        )) {
-          throw new TaskLeaseLifecycleError(
-            "task lease fence receipt owner no longer matches the canonical todo authority",
-            "authority_todo_mismatch",
-            { goal_id: request.goal_id, todo_id: request.todo_id, fence_owner: verifiedOwner },
-          );
-        }
-
-        const currentLease = await loadLeaseForRequest(
-          request,
-          leasePathFor(request),
-        );
-        const nonRequired = receipt.response?.required === false &&
-          receipt.response.active === false;
-        if (nonRequired) {
-          // A no-op receipt is replayable only while no lease record exists.
-          // If a lease was acquired after the no-op, run the normal fence
-          // rules again so hard-lease/CAS requirements cannot be bypassed.
-          if (
-            currentLease === null &&
-            (request.authority.handoff_mode !== "hard_lease" ||
-              request.delegated_authority)
-          ) {
-            const { lock_token: _retiredToken, ...publicReplay } = receipt.response!;
-            return {
-              ...publicReplay,
-              required: false,
-              active: false,
-              closed: true,
-              fence_operation_id: operationId,
-              idempotent: true,
-            };
-          }
-          if (currentLease === null &&
-              request.authority.handoff_mode === "hard_lease" &&
-              !request.delegated_authority) {
-            // Re-evaluate the stricter authority without replacing a valid
-            // legacy no-op receipt with a transient acquired receipt.  The
-            // same execution may return to legacy mode after a failed hard
-            // lease attempt and must still be able to replay its durable ACK.
-            throw new TaskLeaseLifecycleError(
-              "hard_lease handoff mode requires an effective task lease to complete this todo; acquire one with `loopx task-lease acquire`",
-              "handoff_mode_requires_lease",
-              {
-                goal_id: request.goal_id,
-                todo_id: request.todo_id,
-                handoff_mode: request.authority.handoff_mode,
-                lease_path: leasePathFor(request),
-              },
-              "validation",
-            );
-          }
-          // Keep the replay marker so the locked re-read below can continue
-          // with the normal lease/CAS checks instead of recursively replaying
-          // the same closed no-op receipt forever.
-          recheckingClosedNoop = currentLease !== null;
-          receipt = null;
-        } else {
-          const closeReleased = receipt.response?.action === "fence_close" &&
-            receipt.response.released === true;
-          const tupleMatches = currentLease !== null &&
-            receipt.lease !== null &&
-            fenceLeaseMatchesReceipt(currentLease, receipt);
-
-          if (closeReleased) {
-            // A committed close that released the lease is replayable only
-            // against the exact retired generation.  A missing or newer
-            // generation is an ABA/stale-fence conflict, never a no-op.
-            if (currentLease === null ||
-                currentLease.status !== "released" ||
-                !tupleMatches ||
-                !plannedLeaseMatches(currentLease, receipt.lease)) {
-              throw new TaskLeaseLifecycleError(
-                "closed task lease fence receipt does not match the current retired lease generation",
-                "fence_state_invalid",
-                {
-                  goal_id: request.goal_id,
-                  todo_id: request.todo_id,
-                  lease_path: leasePathFor(request),
-                  expected_version: receipt.fence_expected_version,
-                  expected_lease_epoch: receipt.fence_expected_lease_epoch,
-                  actual_version: currentLease ? leaseVersion(currentLease) : null,
-                  actual_lease_epoch: currentLease ? leaseEpoch(currentLease) : null,
-                },
-                "validation",
-              );
-            }
-            const original = receipt.verify_response ?? (
-              receipt.response?.action === request.operation ? receipt.response : null
-            );
-            if (!original) {
-              throw fenceReceiptError(
-                receiptPath,
-                "closed task lease fence receipt omitted its verification response",
-              );
-            }
-            const { lock_token: _retiredToken, ...publicReplay } = original;
-            return {
-              ...publicReplay,
-              required: false,
-              active: false,
-              closed: true,
-              fence_operation_id: operationId,
-              idempotent: true,
-            };
-          }
-
-          // An aborted/non-releasing close leaves the lease active.  It is
-          // safe to retry the verification under a newly acquired lock only
-          // when the same verified generation is still present.  A different
-          // generation must fail closed and force a fresh fence identity.
-          if (currentLease !== null &&
-              currentLease.status === "active" &&
-              tupleMatches) {
-            receipt = null;
-          } else {
-            throw new TaskLeaseLifecycleError(
-              "closed task lease fence receipt is stale or has no retryable lease generation",
-              "fence_state_invalid",
-              {
-                goal_id: request.goal_id,
-                todo_id: request.todo_id,
-                lease_path: leasePathFor(request),
-                expected_version: receipt.fence_expected_version,
-                expected_lease_epoch: receipt.fence_expected_lease_epoch,
-                actual_version: currentLease ? leaseVersion(currentLease) : null,
-                actual_lease_epoch: currentLease ? leaseEpoch(currentLease) : null,
-              },
-              "validation",
-            );
-          }
-        }
-      } finally {
-        await releaseFileMutationLock(
-          replayLock.targetPath,
-          replayLock.token,
-          null,
-          true,
-        );
-      }
-    }
-    const adoptedLock = await adoptFenceReceiptLock(request, receipt);
-    const acquiredFreshLock = adoptedLock === null;
-    lock = adoptedLock ?? await acquireFileMutationLock(
-      lockPathFor(request),
-      request.owner_pid ?? process.pid,
-    );
-    try {
-      lockClaim = await claimFileMutationLock(lock.targetPath, lock.token);
-    } catch (error) {
-      // An adopted lock belongs to the execution that published its receipt;
-      // if claiming it fails, leave that owner's lock untouched.
-      if (!acquiredFreshLock) lock = null;
-      throw error;
-    }
-    if (!lockClaim) {
-      if (acquiredFreshLock) {
-        await releaseFileMutationLock(lock.targetPath, lock.token, null, true);
-        lock = null;
-      } else {
-        // Another verifier currently owns the token claim. Do not release its
-        // adopted lock; report the contention to the caller instead.
-        lock = null;
-      }
-      throw new EffectRuntimeConflictError(
-        "task lease fence token is already being verified",
-        "fence_token_invalid",
-      );
-    }
-    // A token claim serializes operations that name this token, but it does
-    // not prove that the lock pathname still names the same token. The lock
-    // may have been closed and replaced between adoption and claim creation.
-    // Re-check ownership while holding the claim before trusting or writing
-    // any receipt state.
-    const claimedOwner = await mutationLockOwner(lock.targetPath);
-    if (!claimedOwner || claimedOwner.token !== lock.token) {
-      await releaseFileMutationLockClaim(lockClaim);
-      lockClaim = null;
-      if (acquiredFreshLock) {
-        await releaseFileMutationLock(lock.targetPath, lock.token, null, true);
-      }
-      lock = null;
-      throw new EffectRuntimeConflictError(
-        "task lease fence token is no longer held",
-        "fence_token_invalid",
-      );
-    }
-    // The first receipt read happened before lock acquisition or adoption.
-    // Re-read it while holding both the lock and its token claim so a verifier
-    // that waited behind another request cannot overwrite a held or closed
-    // receipt.
-    const lockedReceipt = await readFenceReceipt(receiptPath, request);
-    if (lockedReceipt?.state === "closed") {
-      // A closed receipt can be retried only for an aborted, non-releasing
-      // close whose exact active generation is still present. Otherwise
-      // leave it for the normal closed-replay validator below, which either
-      // returns the retired result or fails closed on an ABA transition.
-      const lockedLease = await loadLeaseForRequest(
-        request,
-        leasePathFor(request),
-      );
-      const retryableClosed = lockedReceipt.response?.action === "fence_close" &&
-        lockedReceipt.response.released !== true &&
-        lockedLease !== null &&
-        lockedLease.status === "active" &&
-        fenceLeaseMatchesReceipt(lockedLease, lockedReceipt);
-      const lockedNonRequired = lockedReceipt.response?.required === false &&
-        lockedReceipt.response.active === false;
-      if (!retryableClosed &&
-          !(recheckingClosedNoop && lockedNonRequired && lockedLease !== null)) {
-        receipt = lockedReceipt;
-        if (acquiredFreshLock) {
-          await releaseFileMutationLock(lock.targetPath, lock.token, lockClaim, true);
-        } else {
-          await releaseFileMutationLockClaim(lockClaim);
-        }
-        lockClaim = null;
-        lock = null;
-        return await fenceVerify(request, dependencies);
-      }
-      receipt = retryableClosed ? lockedReceipt : null;
-    } else {
-      receipt = lockedReceipt;
-    }
-    // Every legacy verify branch (held replay, holder verification, user-gate
-    // auto-acquire) persists a receipt; the promoted authority's fence is
-    // checked once here, before that first side effect.
-    await requireLegacyCoordinationPrimaryWriteAllowed(request.runtime_root, request.goal_id);
-    const initialTodo = authorityTodo(request);
-    // Publish the token before semantic validation. If the response is lost
-    // after acquisition, a retry can adopt this exact lock and finish the
-    // validation instead of waiting for a lock timeout.
-    if ((acquiredFreshLock && (!receipt || receipt.state === "acquired")) ||
-        !receipt) {
-      await persistFenceReceipt(request, "acquired", lock.token, {
-        operationId,
-        lease: null,
-        response: null,
-        ownerPid: request.owner_pid ?? process.pid,
-        fenceOwner: request.owner,
-        // Record the auto-acquire intent before the lease write. If the
-        // caller loses its response in the write window, a retry can
-        // identify the lease it already minted instead of acquiring a
-        // second one.
-        fenceIdempotencyKey: allowsUserGateAutoAcquire(request, initialTodo)
-          ? request.idempotency_key ?? `auto-${request.todo_id}`
-          : request.idempotency_key,
-        fenceExpectedVersion: request.expected_version,
-        base: receipt,
-      });
-      receipt = await readFenceReceipt(receiptPath, request);
-    }
-    if (!lock) {
-      throw new TaskLeaseLifecycleError(
-        "task lease fence lock could not be established",
-        "fence_lock_unavailable",
-      );
-    }
-    // Authority is part of the replay boundary.  A fence receipt is a
-    // durable execution record, not a bypass around the current canonical
-    // projection.  Re-read and revalidate it before returning any replay.
-    await revalidateAuthoritySources(request.authority.source_receipts);
-    const todo = authorityTodo(request);
-    if (!todo) {
-      throw new TaskLeaseLifecycleError(
-        "todo is missing from the canonical projection",
-        "todo_not_found",
-        { goal_id: request.goal_id, todo_id: request.todo_id },
-      );
-    }
-    const leasePath = leasePathFor(request);
-    const at = lifecycleNow(request, dependencies);
-    const rawLease = await readLease(leasePath);
-    let lease = rawLease === null
-      ? null
-      : validatePersistedLease(rawLease, request, leasePath);
-    const active = leaseIsActive(lease, at);
-    const effective = active && lease !== null && ownerRejection(
-      todo,
-      persistedOwner(lease),
-      request.authority.registered_agents,
-    ) === null;
-
-    if (receipt?.state === "held" && receipt.response) {
-      if (
-        lease &&
-        receipt.lease &&
-        plannedLeaseMatches(lease, receipt.lease) &&
-        (await mutationLockOwner(lockPathFor(request)))?.token === lock.token
-      ) {
-        const verifiedOwner = receipt.fence_owner ?? persistedOwner(lease);
-        if (!request.authority.registered_agents.includes(verifiedOwner) ||
-            todo.excluded_agents.includes(verifiedOwner) ||
-            (todo.claimed_by !== null && todo.claimed_by !== verifiedOwner)) {
-          throw new TaskLeaseLifecycleError(
-            "task lease fence receipt owner no longer matches the canonical todo authority",
-            "authority_todo_mismatch",
-            { goal_id: request.goal_id, todo_id: request.todo_id, fence_owner: verifiedOwner },
-          );
-        }
-        if (request.operation === "holder_verify") {
-          if (request.authority.handoff_mode !== "hard_lease" ||
-              request.owner !== verifiedOwner ||
-              !active ||
-              ownerRejection(
-                todo,
-                verifiedOwner,
-                request.authority.registered_agents,
-              ) !== null) {
-            throw new TaskLeaseLifecycleError(
-              "task lease holder verification authority no longer matches the canonical lease projection",
-              "authority_todo_mismatch",
-              { goal_id: request.goal_id, todo_id: request.todo_id, fence_owner: verifiedOwner },
-            );
-          }
-        } else if (!request.delegated_authority && (!active || !effective)) {
-          throw new TaskLeaseLifecycleError(
-            "task lease fence authority no longer permits this verification",
-            "handoff_mode_lease_claim_divergence",
-            { goal_id: request.goal_id, todo_id: request.todo_id, fence_owner: verifiedOwner },
-          );
-        }
-        keep = true;
-        const replayResponse = {
-          ...receipt.response,
-          lock_token: lock.token,
-          fence_operation_id: operationId,
-          idempotent: true,
-        };
-        // A held receipt can be replayed by a different caller process after
-        // the original owner PID is gone.  The fresh lock is the new
-        // transferable capability, so publish its token before returning it.
-        if (receipt.lock_token !== lock.token || receipt.owner_pid !== (request.owner_pid ?? process.pid)) {
-          await persistFenceReceipt(request, "held", lock.token, {
-            operationId,
-            lease,
-            response: replayResponse,
-            verifyResponse: replayResponse,
-            ownerPid: request.owner_pid ?? process.pid,
-            fenceOwner: verifiedOwner,
-            fenceIdempotencyKey: receipt.fence_idempotency_key,
-            fenceExpectedVersion: receipt.fence_expected_version,
-            fenceExpectedLeaseEpoch: receipt.fence_expected_lease_epoch,
-            base: receipt,
-          });
-        }
-        return replayResponse;
-      }
-    }
-    if (request.operation === "holder_verify") {
-      if (request.authority.handoff_mode !== "hard_lease") {
-        throw new TaskLeaseLifecycleError(
-          "task-lease holder verification is only available in hard_lease handoff mode",
-          "handoff_mode_forbids_lease",
-          { goal_id: request.goal_id, todo_id: request.todo_id, handoff_mode: request.authority.handoff_mode },
-        );
-      }
-      if (!request.owner) throw new TaskLeaseLifecycleError("hard_lease handoff mode requires an attributed actor for ownership changes; provide --agent-id", "handoff_mode_requires_lease", {}, "validation");
-      if (!active || !lease) {
-        throw new TaskLeaseLifecycleError(
-          "hard_lease handoff mode requires a time-active task lease before ownership of an existing todo can change; acquire one with `loopx task-lease acquire`",
-          "handoff_mode_requires_lease",
-          { goal_id: request.goal_id, todo_id: request.todo_id, reason: "no_active_lease", lease_path: leasePath },
-        );
-      }
-      if (persistedOwner(lease) !== request.owner) {
-        throw new TaskLeaseLifecycleError(
-          `hard_lease handoff mode: actor '${request.owner}' does not own the time-active task lease held by '${lease.owner}'`,
-          "handoff_mode_requires_lease",
-          { goal_id: request.goal_id, todo_id: request.todo_id, reason: "lease_owner_mismatch", lease_owner: lease.owner, lease_version: lease.version, lease_epoch: leaseEpoch(lease), expires_at: lease.expires_at, lease_path: leasePath },
-        );
-      }
-      const response = {
-        schema_version: "task_lease_v0",
-        checked: true,
-        active: true,
-        owner: persistedOwner(lease),
-        version: leaseVersion(lease),
-        lease_epoch: leaseEpoch(lease),
-        lock_token: lock.token,
-        fence_operation_id: operationId,
-      };
-      await persistFenceReceipt(request, "held", lock.token, {
-        operationId,
-        lease,
-        response,
-        ownerPid: request.owner_pid ?? process.pid,
-        fenceOwner: persistedOwner(lease),
-        fenceExpectedVersion: leaseVersion(lease),
-        fenceExpectedLeaseEpoch: leaseEpoch(lease),
-        base: receipt,
-      });
-      keep = true;
-      return response;
-    }
-
-    const explicitFence = request.idempotency_key !== null || request.expected_version !== null;
-    const autoAcquire = allowsUserGateAutoAcquire(request, todo);
-    if (autoAcquire && !effective && !active) {
-      if (!request.owner) {
-        throw new TaskLeaseLifecycleError("hard_lease handoff mode auto-acquire requires an attributed actor; provide --agent-id", "handoff_mode_requires_lease", { goal_id: request.goal_id, todo_id: request.todo_id, reason: "missing_actor", lease_path: leasePath });
-      }
-      const rejection = ownerRejection(todo, request.owner, request.authority.registered_agents);
-      if (rejection) throw ownerError(request, rejection, todo);
-      const now = utcIsoformat(at);
-      lease = {
-        schema_version: "task_lease_v0",
-        goal_id: request.goal_id,
-        todo_id: request.todo_id,
-        owner: request.owner,
-        idempotency_key: request.idempotency_key ?? `auto-${request.todo_id}`,
-        write_scopes: [],
-        acquire_ttl_seconds: 2700,
-        version: leaseVersion(lease) + 1,
-        lease_epoch: leaseEpoch(lease) + 1,
-        acquired_at: now,
-        updated_at: now,
-        expires_at: utcIsoformat(new Date(at.valueOf() + 2700 * 1_000)),
-        status: "active",
-      };
-      await dependencies.beforeWrite?.(lease);
-      await revalidateAuthoritySources(request.authority.source_receipts);
-      const shadowCapture = await captureLeaseWrite(
-        request, rawLease, lease, "task_lease_auto_acquire",
-      );
-      await atomicWriteJson(leasePath, lease);
-      await shadowCapture?.commit();
-      const response = fencePayload(
-        { ...request, owner: request.owner },
-        lease,
-        lock.token,
-        true,
-      );
-      await persistFenceReceipt(request, "held", lock.token, {
-        operationId,
-        lease,
-        response,
-        ownerPid: request.owner_pid ?? process.pid,
-        fenceOwner: request.owner,
-        fenceIdempotencyKey: lease.idempotency_key as string,
-        fenceExpectedVersion: leaseVersion(lease),
-        fenceExpectedLeaseEpoch: leaseEpoch(lease),
-        base: receipt,
-      });
-      keep = true;
-      return attachRuntimeShadowCapture(response, shadowCapture);
-    }
-    // A response can be lost after an auto-acquire write but before the
-    // receipt reaches the caller.  The durable fence receipt proves that the
-    // same execution instance already minted this lease, so recover it under
-    // the adopted lock instead of treating the active lease as a divergence.
-    const recoveredAutoAcquire = request.operation === "terminal_verify" &&
-      receipt?.state !== "closed" &&
-      receipt?.fence_idempotency_key === `auto-${request.todo_id}` &&
-      receipt?.fence_owner !== null &&
-      lease !== null &&
-      persistedOwner(lease) === receipt.fence_owner &&
-      persistedKey(lease) === receipt.fence_idempotency_key &&
-      lease.status === "active";
-    if (recoveredAutoAcquire) {
-      // Keep the narrowing explicit: `lease` is mutable in the surrounding
-      // validation flow, so TypeScript cannot retain the conjunction above.
-      if (lease === null || receipt === null) {
-        throw new TaskLeaseLifecycleError(
-          "task lease auto-acquire receipt is missing its lease snapshot",
-          "fence_state_invalid",
-        );
-      }
-      const response = fencePayload(
-        { ...request, owner: persistedOwner(lease) },
-        lease,
-        lock.token,
-        true,
-      );
-      await persistFenceReceipt(request, "held", lock.token, {
-        operationId,
-        lease,
-        response,
-        ownerPid: request.owner_pid ?? process.pid,
-        fenceOwner: persistedOwner(lease),
-        fenceIdempotencyKey: persistedKey(lease),
-        fenceExpectedVersion: leaseVersion(lease),
-        fenceExpectedLeaseEpoch: leaseEpoch(lease),
-        base: receipt,
-      });
-      keep = true;
-      return response;
-    }
-    if (!effective) {
-      if (request.authority.handoff_mode === "hard_lease" && !request.delegated_authority) {
-        throw new TaskLeaseLifecycleError(
-          active ? "hard_lease handoff mode found a time-active lease diverged from the todo projection; repair ownership (release or transfer the lease, or restore claimed_by) before completing." : "hard_lease handoff mode requires an effective task lease to complete this todo; acquire one with `loopx task-lease acquire`",
-          active ? "handoff_mode_lease_claim_divergence" : "handoff_mode_requires_lease",
-          { goal_id: request.goal_id, todo_id: request.todo_id, handoff_mode: request.authority.handoff_mode, lease_owner: lease?.owner, lease_version: lease?.version, lease_epoch: lease ? leaseEpoch(lease) : 0, expires_at: lease?.expires_at, lease_path: leasePath },
-        );
-      }
-      if (explicitFence && request.require_active_when_fence_supplied) {
-        throw new TaskLeaseLifecycleError("task lease fence was supplied but no effective lease is active", "lease_not_active", { goal_id: request.goal_id, todo_id: request.todo_id, lease_path: leasePath });
-      }
-      const response = {
-        schema_version: "task_lease_v0",
-        required: false,
-        active: false,
-        fence_operation_id: operationId,
-      };
-      await persistFenceReceipt(request, "closed", lock.token, {
-        operationId,
-        lease: null,
-        response,
-        ownerPid: request.owner_pid ?? process.pid,
-        base: receipt,
-      });
-      return response;
-    }
-    if (!lease) throw new TaskLeaseLifecycleError("task lease fence state is invalid", "invalid_lease_snapshot");
-    if (!request.idempotency_key) throw new TaskLeaseLifecycleError("todo has an active task lease; lifecycle mutation requires its idempotency key", "lease_fence_required", { goal_id: request.goal_id, todo_id: request.todo_id, lease_owner: lease.owner, lease_version: lease.version, lease_epoch: leaseEpoch(lease), lease_path: leasePath });
-    if (persistedOwner(lease) !== request.owner || persistedKey(lease) !== request.idempotency_key) throw new TaskLeaseLifecycleError("task lease owner or execution-instance key mismatch", "lease_cas_mismatch", { goal_id: request.goal_id, todo_id: request.todo_id, lease_owner: lease.owner, lease_version: leaseVersion(lease), lease_epoch: leaseEpoch(lease), actor_agent_id: request.owner, lease_path: leasePath });
-    if (request.expected_version === null) throw new TaskLeaseLifecycleError("task lease terminal fence requires the current lease version", "version_required", { action: "terminal_verify" });
-    if (leaseVersion(lease) !== request.expected_version) throw new TaskLeaseLifecycleError(`lease version mismatch: expected ${request.expected_version}, got ${leaseVersion(lease)}`, "version_mismatch", { expected_version: request.expected_version, actual_version: leaseVersion(lease) });
-    const response = fencePayload(request, lease, lock.token);
-    await persistFenceReceipt(request, "held", lock.token, {
-      operationId,
-      lease,
-      response,
-      ownerPid: request.owner_pid ?? process.pid,
-      fenceOwner: persistedOwner(lease),
-      fenceIdempotencyKey: persistedKey(lease),
-      fenceExpectedVersion: leaseVersion(lease),
-      fenceExpectedLeaseEpoch: leaseEpoch(lease),
-      base: receipt,
-    });
-    keep = true;
-    return response;
-  } finally {
-    // A non-required fence is still a lock-scoped read.  Release the native
-    // lock on every return and validation failure; only a returned held fence
-    // transfers ownership to the caller for a later fence_close.
-    if (lockClaim) {
-      if (!keep && lock) {
-        await releaseFileMutationLock(
-          lock.targetPath,
-          lock.token,
-          lockClaim,
-          true,
-        );
-        lockClaim = null;
-        lock = null;
-      } else {
-        try {
-          await releaseFileMutationLockClaim(lockClaim);
-        } catch {
-          // Claim cleanup is best effort; the owner PID/token remain
-          // reclaimable if this process is interrupted during cleanup.
-        }
-        lockClaim = null;
-      }
-    }
-    if (!keep && lock) {
-      await releaseFileMutationLock(lock.targetPath, lock.token, null, true);
-      lock = null;
-    }
-  }
-}
 
 async function replayClosedFenceClose(
   request: LifecycleRequest,
@@ -2177,7 +1309,6 @@ async function fenceClose(
     if (!claimedOwner || claimedOwner.token !== request.lock_token) {
       throw new EffectRuntimeConflictError("task lease fence token is no longer held", "fence_token_invalid");
     }
-    let shadowCapture: LeaseOutboxCapture | null = null;
     if (request.committed && request.release_lease) {
       await requireLegacyCoordinationPrimaryWriteAllowed(request.runtime_root, request.goal_id);
       const at = lifecycleNow(request, dependencies);
@@ -2252,11 +1383,7 @@ async function fenceClose(
       if (!alreadyReleased) {
         const next = releasedLease(lease, at);
         await dependencies.beforeWrite?.(next);
-        shadowCapture = await captureLeaseWrite(
-          request, lease, next, "task_lease_fence_close",
-        );
         await atomicWriteJson(leasePath, next);
-        await shadowCapture?.commit();
         released = true;
       }
     }
@@ -2282,7 +1409,7 @@ async function fenceClose(
       fenceExpectedLeaseEpoch: request.fence_expected_lease_epoch ?? receipt?.fence_expected_lease_epoch,
       closeRequestDigest: fenceCloseRequestDigest(request),
     });
-    return attachRuntimeShadowCapture(response, shadowCapture);
+    return response;
   } catch (error) {
     // A changed authority source is a retryable precondition, not a lost
     // fence: the lease write never ran and the caller still holds this token.
@@ -2354,24 +1481,24 @@ export async function executeTaskLeaseLifecycle(
     const request = decoded.request;
     if (request.operation === "fence_close") return await fenceClose(request, dependencies);
     if (request.operation === "terminal_verify" || request.operation === "holder_verify") {
-      const fence = await fenceVerify(request, dependencies);
-      const capture = fence.coordination_runtime_shadow_capture;
-      delete fence.coordination_runtime_shadow_capture;
-      return {
-        ok: true,
-        schema_version: "task_lease_v0",
-        action: request.operation,
-        fence,
-        settlement: lifecycleSettlement(request, "committed"),
-        ...(capture === undefined
-          ? {}
-          : { coordination_runtime_shadow_capture: capture }),
-      };
+      throw new TaskLeaseLifecycleError(
+        "Separate source-backed lease verification is retired; use the canonical Todo transaction",
+        "task_lease_verification_retired",
+        {
+          action: request.operation,
+          write_admitted: false,
+          legacy_fallback_used: false,
+        },
+      );
     }
+    // Presence only selects the recovery path. The existing owner re-reads the
+    // receipt and current lease under both locks; it never mints a fresh grant.
+    if (request.operation !== "release" && await readOperationReceipt(
+      operationReceiptPath(request), request, leasePathFor(request),
+    ) === null) rejectFreshSourceLeaseOperation(request);
     return await withFileMutationLock(
       legacyCoordinationLeaseLockPath(request.runtime_root, request.goal_id),
       () => withFileMutationLock(lockPathFor(request!), async () => {
-        await requireLegacyCoordinationPrimaryWriteAllowed(request!.runtime_root, request!.goal_id);
         return await ordinaryOperation(request!, dependencies);
       }),
     );

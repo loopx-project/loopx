@@ -73,7 +73,14 @@ def single_snapshot_page(result: dict, goal_id: str = "goal-a") -> dict:
     }
 
 
-def promoted_create_fixture(tmp_path: Path, *, provider: str = "file") -> tuple[Path, Path, Path]:
+def promoted_create_fixture(
+    tmp_path: Path,
+    *,
+    provider: str = "file",
+    goal_id: str = "goal-a",
+    handoff_mode: str = "soft_claim",
+    registered_agents: list[str] | None = None,
+) -> tuple[Path, Path, Path]:
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.coordination.coordination_state_contract import (
         TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION, TODO_DOMAIN_RECORD_FIELDS,
@@ -81,7 +88,7 @@ def promoted_create_fixture(tmp_path: Path, *, provider: str = "file") -> tuple[
 
     runtime_root = tmp_path / "runtime"
     project = tmp_path / "project"
-    state_file = project / ".codex/goals/goal-a/ACTIVE_GOAL_STATE.md"
+    state_file = project / f".codex/goals/{goal_id}/ACTIVE_GOAL_STATE.md"
     state_file.parent.mkdir(parents=True)
     state_file.write_text(
         "# Goal\n\n## User Todo / Owner Review Reading Queue\n\n"
@@ -96,10 +103,16 @@ def promoted_create_fixture(tmp_path: Path, *, provider: str = "file") -> tuple[
                 "common_runtime_root": str(runtime_root),
                 "goals": [
                     {
-                        "id": "goal-a",
+                        "id": goal_id,
                         "repo": str(project),
-                        "state_file": ".codex/goals/goal-a/ACTIVE_GOAL_STATE.md",
-                        "coordination": {"registered_agents": ["agent-a"]},
+                        "state_file": f".codex/goals/{goal_id}/ACTIVE_GOAL_STATE.md",
+                        "coordination": {
+                            "registered_agents": (
+                                registered_agents
+                                if registered_agents is not None
+                                else ["agent-a"]
+                            )
+                        },
                     }
                 ],
             }
@@ -107,7 +120,7 @@ def promoted_create_fixture(tmp_path: Path, *, provider: str = "file") -> tuple[
         encoding="utf-8",
     )
     projection = build_todo_runtime_shadow_projection(
-        goal_id="goal-a", todos=[], handoff_mode="soft_claim"
+        goal_id=goal_id, todos=[], handoff_mode=handoff_mode
     )
     projection["todo_read_model"] = {
         **projection["todo_read_model"],
@@ -115,6 +128,6 @@ def promoted_create_fixture(tmp_path: Path, *, provider: str = "file") -> tuple[
         "contract_fields": list(TODO_DOMAIN_RECORD_FIELDS),
     }
     initialize_canonical_authority(
-        runtime_root, "goal-a", projection, state_path=state_file, provider=provider
+        runtime_root, goal_id, projection, state_path=state_file, provider=provider
     )
     return registry_path, runtime_root, state_file

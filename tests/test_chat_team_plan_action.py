@@ -9,8 +9,12 @@ from pathlib import Path
 
 import pytest
 
+from control_plane.canonical_authority_fixture import initialize_canonical_authority
 from loopx.chat_action_store import ActionConflictError, ChatActionStore
 from loopx.chat_actions import ChatActionService
+from loopx.control_plane.coordination.runtime_shadow import (
+    build_todo_runtime_shadow_projection,
+)
 
 GOAL_ID = "team-plan-action-fixture"
 AGENT_ID = "agent-alpha"
@@ -59,6 +63,16 @@ def _fixture(tmp_path: Path, *, agents: tuple[str, ...] = (AGENT_ID,)):
             }
         ),
         encoding="utf-8",
+    )
+    initialize_canonical_authority(
+        tmp_path / "runtime",
+        GOAL_ID,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID,
+            todos=[],
+            handoff_mode="soft_claim",
+        ),
+        state_path=state_path,
     )
     service = ChatActionService(
         store=ChatActionStore(tmp_path / "runtime" / "chat" / "actions"),
@@ -411,16 +425,29 @@ def test_an_unchanged_objective_still_confirms_and_records_its_basis(
 
 def test_failed_batch_retries_same_card_without_partial_work(tmp_path: Path, monkeypatch) -> None:
     from loopx.control_plane.work_items import team_plan_adapter
+    from loopx.control_plane.coordination.local_authority import (
+        read_canonical_todos_if_promoted,
+    )
+
     project, _, service = _fixture(tmp_path)
     before = _todos(project)
     preview = _preview(service, _two_lane_plan())
-    def fail(*args, **kwargs):
-        raise OSError("batch unavailable")
-    monkeypatch.setattr(team_plan_adapter, "write_captured_todo_state", fail)
+    original_effect = team_plan_adapter.effect_runtime_result
+
+    def fail(method, request):
+        if method == "work_items.team_plan.commit":
+            raise OSError("batch unavailable")
+        return original_effect(method, request)
+
+    monkeypatch.setattr(team_plan_adapter, "effect_runtime_result", fail)
     failed = service.apply(preview["proposal_id"])["proposal"]
     assert failed["status"] == "failed"
     assert failed["failure"]["error_code"] == "team_plan_commit_failed"
     assert _todos(project) == before
+    assert read_canonical_todos_if_promoted(
+        runtime_root=project.parent / "runtime",
+        goal_id=GOAL_ID,
+    )["todos"] == []
     monkeypatch.undo()
     applied = service.apply(preview["proposal_id"])["proposal"]
     assert applied["status"] == "applied"
@@ -430,24 +457,36 @@ def test_failed_batch_retries_same_card_without_partial_work(tmp_path: Path, mon
 
 @pytest.mark.parametrize("has_gap", [False, True])
 def test_lost_response_recovers_original_commit_after_work_changes(tmp_path: Path, monkeypatch, has_gap: bool) -> None:
+    from loopx.control_plane.coordination.local_authority import (
+        read_canonical_todos_if_promoted,
+    )
     from loopx.control_plane.work_items import team_plan_adapter
+
     project, _, service = _fixture(tmp_path)
     plan = _two_lane_plan()
     if has_gap:
         plan["lanes"][1]["agent_id"] = "unregistered-agent"
     preview = _preview(service, plan)
-    real = team_plan_adapter.write_captured_todo_state
-    def lose_response(*args, **kwargs):
-        real(*args, **kwargs)
-        raise OSError("response lost after commit")
-    monkeypatch.setattr(team_plan_adapter, "write_captured_todo_state", lose_response)
+    original_effect = team_plan_adapter.effect_runtime_result
+
+    def lose_response(method, request):
+        result = original_effect(method, request)
+        if method == "work_items.team_plan.commit":
+            raise OSError("response lost after commit")
+        return result
+
+    monkeypatch.setattr(team_plan_adapter, "effect_runtime_result", lose_response)
     assert service.apply(preview["proposal_id"])["proposal"]["status"] == "failed"
-    assert _todos(project).count("loopx:todo ") == (1 if has_gap else 2)
+    committed = read_canonical_todos_if_promoted(
+        runtime_root=project.parent / "runtime",
+        goal_id=GOAL_ID,
+    )
+    assert len(committed["todos"]) == (1 if has_gap else 2)
+    assert _todos(project).count("loopx:todo ") == 0
     monkeypatch.undo()
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     # A receiver's later edit must survive historical commit recovery.
-    state.write_text(state.read_text().replace("Advance the intake contract", "Receiver revised the work"))
-    before = state.read_bytes()
+    state.write_text(state.read_text() + "\nReceiver revised the work.\n")
     recovered = service.apply(preview["proposal_id"])["proposal"]
     assert recovered["status"] == "applied"
     assert recovered["receipt"]["outcome"] == "team_plan_commit_recovered"
@@ -458,7 +497,12 @@ def test_lost_response_recovers_original_commit_after_work_changes(tmp_path: Pat
             "agent_id": "unregistered-agent",
             "reason_code": "agent_not_registered",
         }]
-    assert state.read_bytes() == before
+    assert "Receiver revised the work." in state.read_text()
+    assert _todos(project).count("loopx:todo ") == (1 if has_gap else 2)
+    assert read_canonical_todos_if_promoted(
+        runtime_root=project.parent / "runtime",
+        goal_id=GOAL_ID,
+    )["provider_revision"] == committed["provider_revision"]
 
 
 def test_equal_text_lanes_keep_distinct_identity_and_owner(tmp_path: Path) -> None:

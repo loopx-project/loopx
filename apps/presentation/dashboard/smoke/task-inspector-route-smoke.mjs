@@ -22,6 +22,21 @@ try {
       const menu = page.locator(".personal-mobile-menu");
       if (await menu.isVisible()) await menu.click();
       await page.locator(".personal-goal-link", { hasText: "Progress Projection" }).click();
+      const activeTab = page.locator('.personal-goal-tabs button[aria-current="page"]');
+      await activeTab.filter({ hasText: "概览" }).waitFor();
+      const goalLink = new URL(page.url());
+      goalLink.searchParams.delete("view");
+      await page.goto(goalLink.href, { waitUntil: "networkidle" });
+      await activeTab.filter({ hasText: "概览" }).waitFor();
+      await page.reload({ waitUntil: "networkidle" });
+      await activeTab.filter({ hasText: "概览" }).waitFor();
+      await page.screenshot({ path: resolve(outputDir, `goal-default-overview-${width}.png`), animations: "disabled" });
+      for (const [view, label] of [["conversation", "对话"], ["files", "成果"], ["tasks", "任务"]]) {
+        const explicitLink = new URL(goalLink);
+        explicitLink.searchParams.set("view", view);
+        await page.goto(explicitLink.href, { waitUntil: "networkidle" });
+        await activeTab.filter({ hasText: label }).waitFor();
+      }
       const opener = page.locator(".personal-task-card", { hasText: "Current Todo" }).locator(":scope > button");
       const drawer = page.getByRole("dialog", { name: "Todo 详情" });
       const scope = () => {
@@ -86,7 +101,7 @@ try {
       await workspace.close();
     }
   }
-  console.log("task-inspector-route: passed (packaged desktop/390px, keyboard/reduced motion, close/reload, Back/Forward, deliberate and unavailable deep links, no model or authority writes)");
+  console.log("task-inspector-route: passed (packaged desktop/390px, default overview and explicit view links, keyboard/reduced motion, close/reload, Back/Forward, deliberate and unavailable deep links, no model or authority writes)");
 } finally {
   await browser?.close();
   server?.kill("SIGTERM");

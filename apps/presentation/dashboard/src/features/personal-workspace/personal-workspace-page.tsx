@@ -89,7 +89,19 @@ import { ManagerBrief } from "./manager-brief";
 const WorkspaceSettingsPage = lazy(() => import("./workspace-settings-page").then((module) => ({ default: module.WorkspaceSettingsPage })));
 import { UsageStatisticsNotice } from "./usage-statistics-notice";
 import { readWorkspaceTheme, writeWorkspaceTheme, type WorkspaceTheme } from "./workspace-theme";
+import {
+  attentionNotificationContents,
+  attentionNotificationKey,
+  attentionNotificationSupport, notifiableAttention,
+  attentionPollIntervalMs,
+  newAttentionItems,
+  readAttentionNotificationPreference,
+  shouldNotifyAttention,
+  writeAttentionNotificationPreference,
+  type AttentionNotificationSupport,
+} from "./attention-notifications";
 import { compareProposalRecency } from "./proposal-recency";
+import { deriveRuntimeReadiness, runtimeRequirement, runtimeSetupGuideUrl, type RuntimeAgentReadiness, type RuntimeReadiness } from "./runtime-readiness";
 import { buildSeenMarker, compareSeenMarker, readSeenMarker, seenMarkerStorage, seenMarkerStorageKey, writeSeenMarker, type SeenMarkerInput, type SinceYouLookedDelta } from "./since-you-looked";
 import { deriveGoalSuggestions, type GoalSuggestion } from "./goal-suggestions";
 import { projectGoalAcceptanceCriteria } from "../../data/goal-acceptance-observation";
@@ -122,6 +134,30 @@ function activityTimeLabel(value: string | undefined, locale: string, t: Workspa
   return new Intl.DateTimeFormat(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(parsed);
 }
 
+function runtimeMissingLine(agent: RuntimeAgentReadiness, t: WorkspaceTranslate): string {
+  const requirement = runtimeRequirement(agent);
+  if (requirement.kind === "executable") return t("readiness.missingExecutable", { label: agent.label, name: requirement.name });
+  if (requirement.kind === "environment_variable") return t("readiness.missingEnvironment", { label: agent.label, name: requirement.name });
+  return requirement.reason ? t("readiness.missingOther", { label: agent.label, reason: requirement.reason }) : t("readiness.missingUnknown", { label: agent.label });
+}
+
+/** The home's in-place readiness notice: what is missing, where to set it up, and a re-check that reads back. */
+function RuntimeReadinessNotice({ readiness, rechecking, onRecheck }: { readiness: RuntimeReadiness; rechecking: boolean; onRecheck?: () => void }) {
+  const { t } = useWorkspaceI18n();
+  if (readiness.kind !== "none_available") return null;
+  return (
+    <section aria-labelledby="runtime-readiness-title" className="personal-runtime-readiness" data-testid="runtime-readiness" role="status">
+      <h2 id="runtime-readiness-title">{t("readiness.noneTitle")}</h2>
+      <p>{t("readiness.noneLead")}</p>
+      <ul>{readiness.missing.map((agent) => <li key={agent.agentId}>{runtimeMissingLine(agent, t)}</li>)}</ul>
+      <div className="personal-runtime-readiness-actions">
+        {onRecheck ? <button disabled={rechecking} onClick={onRecheck} type="button">{rechecking ? t("readiness.rechecking") : t("readiness.recheck")}</button> : null}
+        <a href={runtimeSetupGuideUrl} rel="noreferrer" target="_blank">{t("readiness.guide")}</a>
+      </div>
+    </section>
+  );
+}
+
 function ManagerHomeBoard({
   goals,
   onSelectGoal,
@@ -130,6 +166,9 @@ function ManagerHomeBoard({
   onboarding,
   onRequestGoalCreate,
   onSuggestRequest,
+  runtimeReadiness,
+  recheckingRuntimes,
+  onRecheckRuntimes,
   systemHealth,
   operations,
   onSelectOperation,
@@ -143,6 +182,9 @@ function ManagerHomeBoard({
   onboarding?: WorkspaceHomeOnboarding;
   onRequestGoalCreate?: () => void;
   onSuggestRequest?: (text: string) => void;
+  runtimeReadiness?: RuntimeReadiness;
+  recheckingRuntimes?: boolean;
+  onRecheckRuntimes?: () => void;
   systemHealth?: WorkspaceSystemHealth;
   operations: WorkspaceActionPreview[];
   onSelectOperation: (proposal: WorkspaceActionPreview) => void;
@@ -177,6 +219,7 @@ function ManagerHomeBoard({
   );
   return (
     <section aria-label={t("home.workspace")} className="personal-home-board">
+      {runtimeReadiness ? <RuntimeReadinessNotice readiness={runtimeReadiness} rechecking={recheckingRuntimes ?? false} onRecheck={onRecheckRuntimes} /> : null}
       {systemHealth && (!systemHealth.ok || systemHealth.issues.length > 0 || systemHealth.freshnessWarning) ? (
         <div className="personal-system-health-banner" role="alert">
           <div className="personal-system-health-header">
@@ -929,7 +972,7 @@ export function PersonalWorkspacePage({
   const [taskInspectorExpanded, setTaskInspectorExpanded] = useState(false);
   const [activeSessionRun, setActiveSessionRun] = useState<WorkspaceRun | null>(null);
   const [proposals, setProposals] = useState<Record<string, WorkspaceActionPreview>>({});
-  const [localView, setLocalView] = useState<WorkspaceGoalTab>(controlledGoalId ? "chat" : "overview");
+  const [localView, setLocalView] = useState<WorkspaceGoalTab>("overview");
   const selectedGoalTab = controlledView ?? localView;
   const agentWorkActive = Boolean(controlledGoalId === undefined ? localGoalId : controlledGoalId) && selectedGoalTab === "chat" && selectedWorkAgentId != null;
   const workReturn = useRef<{scope: string; agentId: string} | null>(null);
@@ -977,6 +1020,10 @@ export function PersonalWorkspacePage({
   const restoredProposalIdsRef = useRef(new Set<string>());
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [theme, setTheme] = useState<WorkspaceTheme>(readWorkspaceTheme);
+  const [attentionNotificationsEnabled, setAttentionNotificationsEnabled] = useState<boolean>(readAttentionNotificationPreference);
+  const [attentionNotificationSupportState, setAttentionNotificationSupportState] = useState<AttentionNotificationSupport>(() => attentionNotificationSupport());
+  // Keys seen since notifications were enabled; null until the first read seeds it.
+  const seenAttentionKeysRef = useRef<Set<string> | null>(null);
   const [goalContexts, setGoalContexts] = useState<Record<string, GoalRepositoryContext>>({});
   const [larkConnections, setLarkConnections] = useState<LarkGoalConnection[]>([]);
   const digestInitRef = useRef(false);
@@ -993,6 +1040,27 @@ export function PersonalWorkspacePage({
   const selectedGoalId = controlledGoalId === undefined ? localGoalId : controlledGoalId;
   const actionReadback = useTypedActionReadback(readOnly, selectedGoalId);
   const selectedAgentId = controlledAgentId ?? localAgentId;
+  // Only execution runtimes count: the read-only status projection answers
+  // questions but runs nothing, and the loading placeholder is not a fact.
+  const runtimeReadiness = useMemo(() => deriveRuntimeReadiness(agents
+    .filter((agent) => agent.adapterKind !== "status_projection" && agent.source !== "detecting")
+    .map((agent) => ({
+      agentId: agent.agentId, label: agent.label, available: agent.available,
+      unavailableReason: agent.unavailableReason ?? null, executable: agent.executable ?? null, environmentVariable: agent.environmentVariable ?? null,
+    })), selectedAgentId), [agents, selectedAgentId]);
+  // A re-check reads the runtime catalog again; the answer arrives as new agents.
+  const [recheckingRuntimes, setRecheckingRuntimes] = useState(false);
+  useEffect(() => { setRecheckingRuntimes(false); }, [agents]);
+  useEffect(() => {
+    if (!recheckingRuntimes) return;
+    const timer = window.setTimeout(() => setRecheckingRuntimes(false), 8_000);
+    return () => window.clearTimeout(timer);
+  }, [recheckingRuntimes]);
+  function recheckRuntimes() {
+    if (!callbacks.onRecheckRuntimes) return;
+    setRecheckingRuntimes(true);
+    callbacks.onRecheckRuntimes();
+  }
   const conversationKey = selectedWorkspaceRef
     ? conversationContextKey({ kind: "project", projectRef: selectedWorkspaceRef })
     : selectedGoalId ?? "manager";
@@ -2032,7 +2100,7 @@ export function PersonalWorkspacePage({
     onOpenOutput: drawerCallbacks.onOpenOutput,
   } : drawerCallbacks;
 
-  function selectGoal(goalId: string | null, view: WorkspaceGoalTab = goalId ? "tasks" : "overview") {
+  function selectGoal(goalId: string | null, view: WorkspaceGoalTab = "overview") {
     setLocalGoalId(goalId);
     setManagerConversationReceiptVisible(false);
     setGoalConversationReceiptVisible(false);
@@ -2051,6 +2119,52 @@ export function PersonalWorkspacePage({
   function updateTheme(next: WorkspaceTheme) {
     setTheme(next);
     writeWorkspaceTheme(next);
+  }
+
+  /**
+   * Turning notifications on asks the browser once, from this click, and
+   * only keeps the preference when the browser granted it. Items already
+   * waiting are seeded as seen so enabling never replays the current lane.
+   */
+  async function updateAttentionNotifications(enabled: boolean) {
+    if (!enabled) {
+      setAttentionNotificationsEnabled(false);
+      writeAttentionNotificationPreference(false);
+      seenAttentionKeysRef.current = null;
+      return;
+    }
+    let support = attentionNotificationSupport();
+    if (support === "default") {
+      try {
+        support = attentionNotificationSupport({ Notification: { permission: await Notification.requestPermission() } });
+      } catch {
+        support = "denied";
+      }
+    }
+    setAttentionNotificationSupportState(support);
+    if (support !== "granted") {
+      setAttentionNotificationsEnabled(false);
+      writeAttentionNotificationPreference(false);
+      return;
+    }
+    seenAttentionKeysRef.current = new Set(model.userTodos.map(attentionNotificationKey));
+    setAttentionNotificationsEnabled(true);
+    writeAttentionNotificationPreference(true);
+  }
+
+  // A notification opens its item in place. Selection is scoped to the
+  // current Goal, so an item in another Goal waits until that Goal is shown.
+  const [pendingNotificationItem, setPendingNotificationItem] = useState<WorkspaceAttention | null>(null);
+  useEffect(() => {
+    if (!pendingNotificationItem || pendingNotificationItem.goalId !== selectedGoalId) return;
+    setPendingNotificationItem(null);
+    setSelection({ kind: "attention", item: pendingNotificationItem });
+  }, [pendingNotificationItem, selectedGoalId]);
+  function openAttentionFromNotification(item: WorkspaceAttention) {
+    window.focus();
+    if (item.goalId === selectedGoalId) { setSelection({ kind: "attention", item }); return; }
+    setPendingNotificationItem(item);
+    selectGoal(item.goalId, "overview");
   }
 
   async function sendMessage(messageOverride?: string) {
@@ -2231,9 +2345,91 @@ export function PersonalWorkspacePage({
         onClose={closeSettings}
         onThemeChange={updateTheme}
         theme={theme}
+        attentionNotifications={readOnly ? undefined : { enabled: attentionNotificationsEnabled, support: attentionNotificationSupportState }}
+        onAttentionNotificationsChange={readOnly ? undefined : updateAttentionNotifications}
       />
     </Suspense>
   ) : null;
+
+  // The browser's answer can change outside this page (site settings). Read
+  // it back whenever the owner returns or opens settings, and when the
+  // permission owner reports a change, so a grant can be turned on from here
+  // and a revocation shows as what it is. Nothing here asks for permission.
+  useEffect(() => {
+    const readBack = () => setAttentionNotificationSupportState((current) => {
+      const support = attentionNotificationSupport();
+      return support === current ? current : support;
+    });
+    readBack();
+    window.addEventListener("focus", readBack);
+    document.addEventListener("visibilitychange", readBack);
+    let status: PermissionStatus | null = null;
+    try {
+      void navigator.permissions?.query({ name: "notifications" }).then((result) => { status = result; result.onchange = readBack; }).catch(() => {});
+    } catch {
+      // No permission owner to subscribe to; focus and settings still read back.
+    }
+    return () => {
+      window.removeEventListener("focus", readBack);
+      document.removeEventListener("visibilitychange", readBack);
+      if (status) status.onchange = null;
+    };
+  }, [settingsOpen]);
+  const attentionNotificationsActive = attentionNotificationsEnabled && attentionNotificationSupportState === "granted" && !readOnly;
+  const backgroundRefreshRef = useRef(callbacks.onBackgroundRefresh);
+  backgroundRefreshRef.current = callbacks.onBackgroundRefresh;
+  const openAttentionRef = useRef(openAttentionFromNotification);
+  openAttentionRef.current = openAttentionFromNotification;
+  // Background freshness: while notifications are on, re-read the workspace
+  // on a slow cadence so a decision raised elsewhere reaches this page.
+  useEffect(() => {
+    if (!attentionNotificationsActive || !backgroundRefreshRef.current) return;
+    let cancelled = false;
+    let timer = 0;
+    const schedule = () => {
+      timer = window.setTimeout(async () => {
+        try { await backgroundRefreshRef.current?.(); } catch { /* the next tick retries */ }
+        if (!cancelled) schedule();
+      }, attentionPollIntervalMs(document.hidden));
+    };
+    const onVisibility = () => { if (!document.hidden && !cancelled) { window.clearTimeout(timer); schedule(); } };
+    schedule();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => { cancelled = true; window.clearTimeout(timer); document.removeEventListener("visibilitychange", onVisibility); };
+  }, [attentionNotificationsActive]);
+  // The effect keys on the item identities, so a text or ordering change alone
+  // never re-notifies; the items are read through a ref for the same reason.
+  const attentionItemsRef = useRef(model.userTodos);
+  attentionItemsRef.current = model.userTodos;
+  const attentionKeySignature = model.userTodos.map(attentionNotificationKey).join("\n");
+  useEffect(() => {
+    if (!attentionNotificationsActive) { seenAttentionKeysRef.current = null; return; }
+    const items = attentionItemsRef.current;
+    const seen = seenAttentionKeysRef.current;
+    // Identities seen while on are kept for the whole activation: a partial
+    // read that omits an item must not turn its return into a new decision.
+    const remembered = seen ? new Set(seen) : new Set<string>();
+    for (const item of items) remembered.add(attentionNotificationKey(item));
+    seenAttentionKeysRef.current = remembered;
+    if (!seen) return;
+    // Every listed item is remembered, so an optional action that later turns
+    // blocking is not a new item; only an item first seen while it waits on
+    // the owner interrupts.
+    const fresh = notifiableAttention(newAttentionItems(seen, items));
+    if (!fresh.length || !shouldNotifyAttention({
+      enabled: true, support: attentionNotificationSupportState,
+      visible: document.visibilityState === "visible", focused: document.hasFocus(),
+    })) return;
+    for (const content of attentionNotificationContents(fresh, { fallbackTitle: "LoopX", more: (count) => t("notifications.attentionMore", { count }) })) {
+      try {
+        const notification = new Notification(content.title, { body: content.body, tag: content.tag });
+        const target = fresh.find((item) => attentionNotificationKey(item) === content.tag);
+        notification.onclick = () => { notification.close(); openAttentionRef.current(target ?? fresh[0]); };
+      } catch {
+        // A constructor the environment refuses is not a page error.
+      }
+    }
+  }, [attentionKeySignature, attentionNotificationsActive, attentionNotificationSupportState, t]);
 
   const composerSuggestions = !selectedWorkspaceRef && (!conversationOpen || !conversationMessages.length) ? <details className="personal-composer-tools" key={conversationKey} onKeyDown={(event) => {
     if (event.key !== "Escape") return;
@@ -2467,6 +2663,7 @@ export function PersonalWorkspacePage({
             ) : !managerChatOpen ? (
               <ManagerHomeBoard goals={workspaceGoals} onRetry={() => void callbacks.onRefresh?.("missing")} onRetrySource={() => void refreshWorkspace()} onSelectGoal={selectGoal} systemHealth={model.systemHealth}
                 onboarding={model.onboarding} onRequestGoalCreate={readOnly ? undefined : requestGoalCreate} onSuggestRequest={readOnly ? undefined : suggestReply}
+                runtimeReadiness={readOnly ? undefined : runtimeReadiness} recheckingRuntimes={recheckingRuntimes} onRecheckRuntimes={callbacks.onRecheckRuntimes ? recheckRuntimes : undefined}
                 operations={actionReadback.isError ? [] : homeOperations} onSelectOperation={proposal => setSelection({kind: "proposal", item: proposal})}
                 onViewAllOperations={() => setSelectedGoalTab("chat")} />
             ) : (
@@ -2569,6 +2766,14 @@ export function PersonalWorkspacePage({
               </figure>
             ))}</div> : null}
             {imageAttachmentError ? <p className="personal-composer-error" role="alert">{imageAttachmentError}</p> : null}
+            {!readOnly && (selectedGoal || managerChatOpen) && (runtimeReadiness.kind === "none_available" || runtimeReadiness.kind === "selected_unavailable") ? (
+              <p className="personal-composer-status personal-runtime-readiness-line" data-testid="runtime-readiness-line" role="status">
+                <span>{runtimeReadiness.kind === "none_available" ? t(agents.some((agent) => agent.adapterKind === "status_projection" && agent.available)
+                  ? "readiness.selectedUnavailableReadonly" : "readiness.selectedUnavailableNone") : t("readiness.selectedUnavailable", { label: runtimeReadiness.selected.label })}</span>
+                {callbacks.onRecheckRuntimes ? <button disabled={recheckingRuntimes} onClick={recheckRuntimes} type="button">{recheckingRuntimes ? t("readiness.rechecking") : t("readiness.recheck")}</button> : null}
+                <a href={runtimeSetupGuideUrl} rel="noreferrer" target="_blank">{t("readiness.guide")}</a>
+              </p>
+            ) : null}
             {conversationTurnRunning ? <p className="personal-composer-status" role="status">{steeringTurnId
               ? (locale === "zh-CN" ? "本轮进行中 · 发消息可调整当前工作" : "Turn in progress · send instructions to adjust this work")
               : t("composer.turnRunning")}</p> : null}

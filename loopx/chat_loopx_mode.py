@@ -1,7 +1,9 @@
 """Owner-local conversation control over native continuation and scoped delegation.
 
-The host binds the sender and execution configuration; models cannot select
-identities, commands or filesystem roots. Task acceptance remains with Delegations.
+The host binds the sender and worker execution configuration; models cannot
+select worker identities, commands or filesystem roots. A prepared delivery
+check is only a proposal for the existing local-owner acceptance action.
+Task acceptance remains with Delegations.
 """
 
 from __future__ import annotations
@@ -42,19 +44,26 @@ TOOL = {
     "are accepted and the consumer has that exact uses input. Reading alone is not adoption. "
     "Read/wait/resume use the original operation_id. Running is not failure; do not duplicate it. "
     "After context loss, action=operations recovers this requester's durable work. Follow "
-    "next_cursor for more; unavailable means reconcile, not redispatch. Action=inspect with binding_id checks the actual Turn/profile before new dispatch; unknown availability is not readiness.",
+    "next_cursor for more; unavailable means reconcile, not redispatch. Action=inspect with binding_id checks the actual Turn/profile before new dispatch; unknown availability is not readiness. "
+    "Action=prepare_check takes a stable operation_id and an acceptance document prepared from the owner's requested outcome and current task/file facts. "
+    "The host supplies the Goal and preparing Agent. It saves only a reviewable goal.acceptance.check proposal; it does not configure acceptance or run commands. "
+    "The local owner can use that plan beside the delivery in the workspace.",
     "inputSchema": {
         "type": "object",
         "additionalProperties": False,
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["bindings", "operations", "inspect", "start", "read", "wait", "resume", "revalidate", "adopt", "messages"],
+                "enum": ["bindings", "operations", "inspect", "start", "read", "wait", "resume", "revalidate", "adopt", "messages", "prepare_check"],
             },
             "binding_id": {"type": "string"},
             "operation_id": {"type": "string"},
             "consumer_operation_id": {"type": "string"},
             "brief": {"type": "object"},
+            "document": {
+                "type": "object",
+                "description": "Existing acceptance document: objective (string), non_goals (strings), scope ({kind: selected_work, todo_ids: existing advancement Todo ids} or {kind: all_advancement}), criteria (id, description, validation_argv string array, optional validation_timeout_seconds), bindings (todo_id, criterion_ids). Checks use the registered Goal workspace or its pinned oracle snapshot only after local-owner apply. Use known requirements and approved scope; do not invent an oracle or authorization.",
+            },
             "limit": {"type": "integer", "minimum": 1, "maximum": 50},
             "cursor": {"type": "string"},
         },
@@ -72,6 +81,9 @@ GUIDANCE = (
     "For task_failure, repair the original artifact or validation environment before action=revalidate; it reruns checks without Host work. "
     "When current_use.state=unavailable, repair the declared source or receiver input and read again; do not propagate those artifacts as current facts. Read action=messages between work steps for owner inbox additions. "
     "Do not claim the whole canonical Goal is complete. Keep independent analysis substantive. "
+    "When the owner requests delivery checks and prepare_check is advertised by your tool, prepare the existing acceptance document from the known intent, tasks and files; "
+    "do not ask the owner to assemble JSON or internal identifiers. Reuse stated criteria and scope, and ask only for an unresolved consequential fact or authority. "
+    "Use prepare_check to save the plan, then explain its purpose and command effect. Preparation never approves or executes it, and a check never establishes independent review or adoption. "
     "Before completing or blocking, return a self-contained report with substantive accepted findings, "
     "exact artifact hashes and remaining gaps; do not require readers to reconstruct earlier streamed replies. "
     "A missing report-writing grant must not prevent returning the complete analysis in this conversation. "
@@ -834,11 +846,14 @@ class ChatLoopXMode:
                 "operation_id",
                 "consumer_operation_id",
                 "brief",
+                "document",
                 "limit",
                 "cursor",
             }:
                 raise ValueError("invalid collaboration arguments")
             action = arguments.get("action")
+            if action != "prepare_check" and "document" in arguments:
+                raise ValueError("document is only valid for prepare_check")
             if action != "operations" and ("limit" in arguments or "cursor" in arguments):
                 raise ValueError("pagination is only valid for operations")
             if action == "operations" and set(arguments) - {"action", "limit", "cursor"}:
@@ -846,7 +861,34 @@ class ChatLoopXMode:
             if action != "adopt" and "consumer_operation_id" in arguments:
                 raise ValueError("consumer_operation_id is only valid for adopt")
             operation_id = arguments.get("operation_id", "")
-            if action == "messages":
+            if action == "prepare_check":
+                if (set(arguments) != {"action", "operation_id", "document"}
+                        or not isinstance(operation_id, str) or not operation_id.strip()
+                        or not isinstance(arguments["document"], dict)):
+                    raise ValueError("prepare_check requires only a stable operation_id and document")
+                from .control_plane.goals.acceptance_actions import prepare_acceptance_check
+                from .chat_action_store import ActionConflictError
+
+                try:
+                    result = prepare_acceptance_check(
+                        registry_path=self.controller.registry_path,
+                        runtime_root=str(self.store.root.parent), goal_id=current["goal_id"],
+                        agent_id=settings["agent_id"], document=arguments["document"],
+                        operation_id=operation_id, execute=True,
+                    )
+                except ActionConflictError:
+                    return {
+                        "ok": False,
+                        "error": "collaboration_request_rejected",
+                        "next_action": "Read the saved check plan and current Goal basis. Reuse its operation id only for an unchanged request; a new intent needs a new operation id.",
+                    }
+                except ValueError as exc:
+                    return {
+                        "ok": False,
+                        "error": "collaboration_request_rejected",
+                        "next_action": f"The acceptance owner rejected the document ({exc}). Check its objective, scope, criteria, bindings and current task/file facts against the acceptance document contract; do not change authority to make it pass.",
+                    }
+            elif action == "messages":
                 rows = [
                     r
                     for r in self.store.loopx_ingress(session_id)

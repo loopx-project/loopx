@@ -451,15 +451,15 @@
       "value_notes": {
         "agent_monitor_only": "The lane is monitor-only for this agent: not actionable by the agent, advancement work is the blocked scope, and the scheduler holds it in an agent-monitor wait.",
         "agent_workspace_repair": "Workspace repair is allowed, and it outranks self-repair: the agent workspace is repaired before any further delivery. It is an explicit typed REPAIR_ACTIONS member, so the route is repair_required.",
-        "automation_prompt_upgrade_required": "The installed automation prompt identity must be repaired first. It is one of the conditions that withholds autonomous_replan_decision_allowed, and the automation action is repair_automation_prompt_identity.",
+        "automation_prompt_upgrade_required": "The installed automation prompt identity must be repaired first. It is one of the conditions that withholds autonomous replan admission, and the automation action is repair_automation_prompt_identity.",
         "autonomous_replan_required": "An autonomous replan is required and its scope applies to this agent. It is one of REPLAN_ACTIONS, so the route is replan_required.",
-        "blocked_health": "Existing result of quota_effective_action; previously missed because the literal scan did not inspect declared return functions.",
-        "blocked_wait": "Existing result of quota_effective_action; previously missed because the literal scan did not inspect declared return functions.",
+        "blocked_health": "Existing result of quotaEffectiveAction; previously missed because the literal scan did not inspect declared return functions.",
+        "blocked_wait": "Existing result of quotaEffectiveAction; previously missed because the literal scan did not inspect declared return functions.",
         "boundary_projection_repair": "A required write scope is missing from the projected goal boundary; trigger required_write_scope_missing_from_goal_boundary.",
         "capability_bridge_repair": "Capability repair is allowed once workspace repair and self-repair are not; the capability bridge is repaired before delivery.",
         "control_plane_health_repair": "Control-plane health repair for an unavailable closeout query or a stall health blocker; recommended_mode repair_control_plane_health. One of the five self-repair spend actions that stand in for the generic control_plane_repair.",
         "control_plane_projection_repair": "Stall repair for a lane left waiting with no owner projection; trigger waiting_without_owner_projection.",
-        "control_plane_repair": "Existing result of quota_effective_action; previously missed because the literal scan did not inspect declared return functions.",
+        "control_plane_repair": "Existing result of quotaEffectiveAction; previously missed because the literal scan did not inspect declared return functions.",
         "coordinate_task_bundle": "Replaces normal_run when a ready task-orchestration contract makes this lane the coordinator: admitted or explicitly selected peer lanes are activated or resumed before its own worker-lane delivery.",
         "external_evidence_observe": "An external-evidence monitor requires a read-only observation before any quiet no-op.",
         "governed_capability_intent": "A governed capability intent is pending. It is the only action that routes to capability_action_required, and only when the intent projection matches the envelope goal and agent and names a command; a mismatch is a contract_error instead.",
@@ -468,25 +468,27 @@
         "lark_inbox_reply_due": "A direct Lark question, bot mention, or verified reply to the bot is pending a reply, and normal delivery is allowed for that reply.",
         "monitor_due": "A monitor poll is due; should_run and normal delivery follow the same monitor_due flag. Its not-due counterpart in the same branch is monitor_quiet_skip.",
         "monitor_quiet_skip": "A monitor poll that is not due. The scheduler maps it to a monitor wait, and it spends no quota.",
-        "normal_run": "Normal delivery is allowed; the first branch of quota_effective_action. With delivery_allowed and must_attempt set it routes to ready_for_host.",
-        "operator_gate_notify": "Existing result of quota_effective_action; previously missed because the literal scan did not inspect declared return functions.",
+        "normal_run": "Normal delivery is allowed; the first branch of quotaEffectiveAction. With delivery_allowed and must_attempt set it routes to ready_for_host.",
+        "operator_gate_notify": "Existing result of quotaEffectiveAction; previously missed because the literal scan did not inspect declared return functions.",
         "operator_inbox_material_review_due": "Captured operator-inbox material is pending bounded review, and normal delivery is allowed for that review.",
         "outcome_floor_recovery": "Normal delivery is refused but recovery delivery is allowed, through the quota safe bypass of kind outcome_floor_recovery.",
         "peer_coordination_blocked": "Peer coordination blocks this lane. The scheduler keeps a no-spend observer alive with bounded stateful backoff because peer readiness, coordinator configuration, reassignment, or local work can change asynchronously.",
-        "quota_skip": "The final fallback of quota_effective_action: no delivery is allowed, no repair applies, and no more specific blocked state matched.",
+        "quota_skip": "The final fallback of quotaEffectiveAction: no delivery is allowed, no repair applies, and no more specific blocked state matched.",
         "runtime_user_gate_projection_repair": "A runtime capability user-gate projection needs repair; recommended_mode repair_user_gate_projection, blocked scope user_gate_projection.",
         "scoped_user_gate_fallback": "A scoped user-gate fallback applies while replan decisions are not allowed. It replaces quota_skip, monitor_quiet_skip or an absent action, and obliges one non-gated fallback segment after the user-gate notice.",
         "state_projection_gap_repair": "A state-projection gap on a candidate that should run or must attempt; trigger state_projection_gap.",
         "terminal_no_followup": "The Goal is terminal with no follow-up. The controller reads it as the terminal_action partition, so with no prior receipt the disposition is terminal, and the scheduler stops.",
-        "throttled_skip": "Existing result of quota_effective_action; previously missed because the literal scan did not inspect declared return functions.",
+        "throttled_skip": "Existing result of quotaEffectiveAction; previously missed because the literal scan did not inspect declared return functions.",
         "todo_decision_scope_projection_repair": "A Todo user-gate scope is missing from the decision-scope projection; trigger user_gate_scope_projection_drift.",
         "unsettled_host_turn_recovery": "A host Turn is unsettled and must be recovered before anything else: the selected Todo and action portfolio are dropped, should_run is set, and normal, recovery and self-repair delivery are all refused."
       },
       "producers": [
         "loopx/control_plane/work_items/action_selection_contract.py::build_action_selection_recovery_fields",
-        "loopx/control_plane/quota/decision_summary.py::_task_orchestration_effective_action",
-        "loopx/control_plane/quota/decision_summary.py::quota_effective_action",
-        "loopx/control_plane/quota/decision_summary.py::resolve_quota_run_decision",
+        "loopx/control_plane/quota/run_decision.ts::taskOrchestrationEffectiveAction",
+        "loopx/control_plane/quota/run_decision.ts::quotaEffectiveAction",
+        "loopx/control_plane/quota/run_decision.ts::resolveQuotaRunDecision",
+        "loopx/control_plane/quota/run_decision.ts::applyGoalOverrides",
+        "loopx/control_plane/quota/run_decision.ts::applyInboxOverrides",
         "loopx/cli_commands/quota_failure_report.py::quota_failure_payload",
         "loopx/control_plane/quota/heartbeat_receipt.py::fail_heartbeat_receipt",
         "loopx/control_plane/quota/live_decision.py::_apply_pending_capability_intent_precedence",
@@ -506,14 +508,15 @@
       ],
       "compatibility_only": {},
       "return_producers": [
-        "loopx/control_plane/quota/decision_summary.py::quota_effective_action",
-        "loopx/control_plane/quota/decision_summary.py::_task_orchestration_effective_action"
+        "loopx/control_plane/quota/run_decision.ts::quotaEffectiveAction",
+        "loopx/control_plane/quota/run_decision.ts::taskOrchestrationEffectiveAction"
       ],
       "return_paths": {
-        "loopx/control_plane/quota/decision_summary.py::_task_orchestration_effective_action": [
+        "loopx/control_plane/quota/run_decision.ts::taskOrchestrationEffectiveAction": [
           0
         ]
-      }
+      },
+      "input_producer": "loopx/control_plane/quota/run_decision.ts::resolveQuotaRunDecision"
     },
     "settlement_step_kind": {
       "meaning": "Effect-program settlement step executed for one Turn.",

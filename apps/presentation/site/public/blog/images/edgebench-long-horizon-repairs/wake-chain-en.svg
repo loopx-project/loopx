@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 430" width="960" height="430" role="img" aria-labelledby="t" font-family="Geist,-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,&quot;PingFang SC&quot;,&quot;Noto Sans CJK SC&quot;,sans-serif">
+<title id="t">The review-point wake crash chain and its repair (#6601)</title><rect width="960" height="430" fill="#fafafa"/>
+<defs><marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#4d4d4d"/></marker></defs>
+<text x="20" y="32" fill="#171717" font-size="15" font-weight="600">The review-point wake crash chain and its repair (#6601)</text>
+<text x="20" y="66" fill="#8f8f8f" font-size="12" font-weight="600">Before</text>
+<rect x="20" y="76" width="137" height="142" rx="6" fill="#fff" stroke="#ebebeb"/>
+<text x="30" y="98" fill="#8f8f8f" font-size="11">1</text>
+<text x="30" y="118" fill="#171717" font-size="12">Host captures the</text>
+<text x="30" y="135" fill="#171717" font-size="12">checkpoint at a</text>
+<text x="30" y="152" fill="#171717" font-size="12">review point</text>
+<path d="M157,147.0 l16,0" stroke="#4d4d4d" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+<rect x="177" y="76" width="137" height="142" rx="6" fill="#fff" stroke="#ebebeb"/>
+<text x="187" y="98" fill="#8f8f8f" font-size="11">2</text>
+<text x="187" y="118" fill="#171717" font-size="12">Agent selects a</text>
+<text x="187" y="135" fill="#171717" font-size="12">Todo in the same</text>
+<text x="187" y="152" fill="#171717" font-size="12">Turn; inline guard</text>
+<text x="187" y="169" fill="#171717" font-size="12">reread</text>
+<path d="M314,147.0 l16,0" stroke="#4d4d4d" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+<rect x="334" y="76" width="137" height="142" rx="6" fill="#fff" stroke="#ebebeb"/>
+<text x="344" y="98" fill="#8f8f8f" font-size="11">3</text>
+<text x="344" y="118" fill="#171717" font-size="12">Receipt renders as</text>
+<text x="344" y="135" fill="#171717" font-size="12">upgraded</text>
+<path d="M471,147.0 l16,0" stroke="#4d4d4d" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+<rect x="491" y="76" width="137" height="142" rx="6" fill="#fff" stroke="#ebebeb"/>
+<text x="501" y="98" fill="#8f8f8f" font-size="11">4</text>
+<text x="501" y="118" fill="#171717" font-size="12">Selector accepts</text>
+<text x="501" y="135" fill="#171717" font-size="12">only committed /</text>
+<text x="501" y="152" fill="#171717" font-size="12">replayed; untyped</text>
+<text x="501" y="169" fill="#171717" font-size="12">error</text>
+<path d="M628,147.0 l16,0" stroke="#4d4d4d" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+<rect x="648" y="76" width="137" height="142" rx="6" fill="#fff" stroke="#ebebeb"/>
+<text x="658" y="98" fill="#8f8f8f" font-size="11">5</text>
+<text x="658" y="118" fill="#171717" font-size="12">Wake fails; CLI</text>
+<text x="658" y="135" fill="#171717" font-size="12">reports a</text>
+<text x="658" y="152" fill="#171717" font-size="12">collection</text>
+<text x="658" y="169" fill="#171717" font-size="12">failure and</text>
+<text x="658" y="186" fill="#171717" font-size="12">overwrites the</text>
+<text x="658" y="203" fill="#171717" font-size="12">saved decision</text>
+<path d="M785,147.0 l16,0" stroke="#4d4d4d" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+<rect x="805" y="76" width="137" height="142" rx="6" fill="#fff" stroke="#ebebeb"/>
+<text x="815" y="98" fill="#8f8f8f" font-size="11">6</text>
+<text x="815" y="118" fill="#171717" font-size="12">Next wake reuses</text>
+<text x="815" y="135" fill="#171717" font-size="12">the ended socket</text>
+<text x="815" y="152" fill="#171717" font-size="12">and fails again</text>
+<text x="20" y="258" fill="#8f8f8f" font-size="12" font-weight="600">After</text>
+<path d="M481,218 L481,264" stroke="#2a78d6" stroke-width="1.5" fill="none"/>
+<rect x="334" y="270" width="294" height="60" rx="6" fill="#fff" stroke="#2a78d6"/>
+<text x="344" y="294" fill="#171717" font-size="12">Admit upgraded as a receipt view; refusals</text>
+<text x="344" y="312" fill="#171717" font-size="12">keep their reason</text>
+<path d="M716,218 L716,264" stroke="#2a78d6" stroke-width="1.5" fill="none"/>
+<rect x="648" y="270" width="137" height="114" rx="6" fill="#fff" stroke="#2a78d6"/>
+<text x="658" y="294" fill="#171717" font-size="12">Transport</text>
+<text x="658" y="312" fill="#171717" font-size="12">failures after the</text>
+<text x="658" y="330" fill="#171717" font-size="12">guard return the</text>
+<text x="658" y="348" fill="#171717" font-size="12">committed receipt</text>
+<text x="658" y="366" fill="#171717" font-size="12">and saved decision</text>
+<path d="M874,218 L874,264" stroke="#2a78d6" stroke-width="1.5" fill="none"/>
+<rect x="805" y="270" width="137" height="78" rx="6" fill="#fff" stroke="#2a78d6"/>
+<text x="815" y="294" fill="#171717" font-size="12">A stale socket</text>
+<text x="815" y="312" fill="#171717" font-size="12">says: ended wake,</text>
+<text x="815" y="330" fill="#171717" font-size="12">no guard ran</text>
+</svg>

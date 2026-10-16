@@ -44,6 +44,29 @@ curl -fsS http://127.0.0.1:8767/status.json
 
 ---
 
+### 1.1 Agent 运行环境未就绪 / When no Agent runtime is ready
+
+![没有可用 Agent 运行环境时的管家总览](../assets/personal-workspace/runtime-readiness-none.png)
+
+LoopX 通过本机已安装的命令行工具驱动 Agent（Codex、Claude Code、Kiro CLI），或通过 API 密钥。
+如果这台机器上一个都没有就绪，管家总览会在顶部说明原因，逐项列出缺什么（未在 PATH 中找到的命令、
+未设置的环境变量），并提供「重新检查」和「安装指引」。安装并登录后点「重新检查」，页面重新读取
+服务的运行环境目录并回读结果；本页不会安装任何东西，也不授予任何权限。打开 Goal 对话时，如果选中的
+运行环境在本机不可用，输入框上方会给出同样的说明和重新检查。
+执行环境缺失不影响管家和 Goal 中的「仅查状态」：它保存原问题与状态回答，不启动 Agent。
+没有该选项的项目对话会明确拒绝未就绪的执行路线，并保留未发送的草稿。
+
+LoopX drives Agents through a command-line tool installed on this machine (Codex, Claude Code,
+Kiro CLI) or through an API key. When none is ready, the manager overview says so at the top,
+lists what each runtime needs (a command not found on PATH, an environment variable not set), and
+offers **Check again** and a **Setup guide** link. After installing and signing in, **Check again**
+re-reads the service's runtime catalog and reads the result back; the page installs nothing and
+grants nothing. In a Goal conversation, the same notice and re-check appear above the composer when
+the selected runtime is unavailable here.
+Missing execution runtimes do not disable **Status only** in manager and Goal conversations: it
+stores the original question and status answer without starting an Agent. A project conversation
+without that option refuses an unavailable execution route and retains the unsent draft.
+
 ## 🧭 2. 控制台核心架构
 
 ```mermaid
@@ -557,6 +580,29 @@ Goal 的 Topic 路由，不删除 Goal、Agent Session、历史 Todo 或其他 G
 ![野兽派 Brutal 主题](../assets/personal-workspace/guide_manager_brutal_theme.png)
 
 ---
+
+### 7.1 桌面通知 / Desktop notifications
+
+![设置 → 外观 → 桌面通知](../assets/personal-workspace/attention-notifications-settings.png)
+
+「设置 → 外观 → 桌面通知」是每个浏览器各自的开关，默认关闭。开启时浏览器会询问一次通知权限，
+只有允许后开关才会保持开启；页面会回读浏览器的答复（已允许、已拒绝、不支持）。开启后，页面
+每 30 秒在后台重新读取一次工作区（标签页隐藏时每 60 秒），当出现一条**新的、等你决定**的事项且你
+没有正看着这个页面时，发出一条桌面通知；点击通知会回到该 Goal 并打开这条事项。进展、运行和数量
+变化不会通知；开启当下已经在等你的事项也不会重复提醒；可选提醒（不阻塞 Agent 的用户操作）会列在
+工作区里，但不会打扰你。关闭开关后立即停止后台读取。如果浏览器曾拒绝通知，之后在站点设置里允许，
+回到本页面或打开设置时会重新读到允许，开关即可再次开启；反过来在站点设置里撤销，页面也会如实显示
+并停止后台读取。这只在本页面保持打开时生效，不是服务端推送，也不替代飞书等渠道通知。
+
+"Settings → Appearance → Desktop notifications" is a per-browser switch, off by default. Turning it
+on asks the browser for permission once and keeps the switch on only when granted; the page reads
+the browser's answer back (allowed, blocked, unsupported). While on, the page re-reads the workspace
+every 30 seconds in the background (60 seconds when the tab is hidden) and sends one desktop
+notification for each **new item that waits on you** while you are not looking at this page.
+Clicking the notification returns to that Goal and opens the item. Progress, runs and counts never
+notify, and items already waiting when you turn it on are not replayed. Turning it off stops the
+background reads. This works only while this page stays open; it is not a server push and does not
+replace channel notifications such as Lark. An optional reminder (a user action that does not block the Agent) is listed in the workspace but never interrupts you. If this browser once blocked notifications and you allow them in its site settings later, returning to this page or opening Settings reads the answer back and the switch can be turned on again; a permission revoked in the site settings shows as blocked and stops the background re-read.
 
 ## 🛡️ 8. 安全与不可逆操作保护
 

@@ -59,8 +59,13 @@ export const researchResultsScenario = {
     });
     const {page, api} = context;
     try {
+      assert.equal(indexes, 0, "Research must remain lazy in the directory before a Goal is opened");
+      assert.equal(reads, 0, "No Goal's research body is read from the directory");
       await page.locator(".personal-goal-link", {hasText: "Product Release"}).click();
-      assert.equal(indexes, 0, "Research must remain lazy outside the results tab");
+      const overviewResults = page.getByRole("region", {name: "研究成果", exact: true});
+      await overviewResults.getByText("123456789.1234567891 SYN", {exact: true}).waitFor();
+      assert.equal(indexes, 1, "The visible Goal overview Results reads its own research inventory");
+      assert.equal(reads, 1, "The overview reads only its inventory-bound research body");
       await page.getByRole("navigation", {name: "Goal 视图"}).getByRole("button", {name: "成果", exact: true}).click();
       const results = page.getByRole("region", {name: "研究成果", exact: true});
       await results.getByText("123456789.1234567891 SYN", {exact: true}).waitFor();
@@ -69,7 +74,8 @@ export const researchResultsScenario = {
       assert.match(await results.textContent(), /Source height unknown/);
       assert.match(await results.textContent(), /2026-01-15/);
       assert.match(await results.textContent(), /review_due/);
-      assert.equal(reads, 1);
+      assert.equal(indexes, 2, "Opening Files re-reads its research inventory");
+      assert.equal(reads, 2, "Files revalidates its inventory-bound research body");
       assert.equal(await results.getByTestId("research-detail-ref-hash").textContent(), projection.payload_sha256);
       await page.screenshot({path: resolve(outputDir, "research-results-desktop.png"), animations: "disabled"});
       await page.setViewportSize({width: 390, height: 844});

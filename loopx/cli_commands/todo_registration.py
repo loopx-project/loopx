@@ -93,7 +93,8 @@ def register_todo_command(
         help=(
             "For todo complete --no-follow-up lifecycle reentry, reuse the "
             "exact completion identity projected by LoopX. This is not a quota "
-            "turn id and cannot be combined with --turn-instance-id."
+            "turn id and cannot be combined with --turn-instance-id, --note, "
+            "or --evidence."
         ),
     )
     todo_parser.add_argument(
@@ -418,8 +419,9 @@ def register_todo_command(
         "--no-follow-up",
         action="store_true",
         help=(
-            "For todo update/complete, record a structured no-follow-up rationale "
-            "when a completed todo intentionally has no successor."
+            "For ordinary todo update/complete, record a structured no-follow-up "
+            "rationale when a completed todo intentionally has no successor. "
+            "Lifecycle reentry preserves the original completion prose."
         ),
     )
     register_todo_successor_creation_arguments(todo_parser)

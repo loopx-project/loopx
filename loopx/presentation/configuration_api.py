@@ -65,6 +65,7 @@ class ChatConfigurationRequestMixin(
             f"{storage_api.CHAT_GOAL_STORAGE_PATH}/preview": lambda: self._storage_update(action="plan-migration"),
             f"{storage_api.CHAT_GOAL_STORAGE_PATH}/apply": lambda: self._storage_update(action="migrate"),
             f"{storage_api.CHAT_GOAL_STORAGE_PATH}/recover": lambda: self._storage_update(action="migration-readback"),
+            f"{storage_api.CHAT_GOAL_STORAGE_PATH}/discard": self._storage_discard,
             f"{storage_api.CHAT_GOAL_STORAGE_PATH}/import/preview": lambda: self._storage_import(action="prepare"),
             f"{storage_api.CHAT_GOAL_STORAGE_PATH}/import/apply": lambda: self._storage_import(action="apply"),
             f"{storage_api.CHAT_GOAL_STORAGE_PATH}/import/recover": lambda: self._storage_import(action="readback"),

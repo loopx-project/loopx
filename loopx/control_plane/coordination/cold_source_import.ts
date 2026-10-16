@@ -4,7 +4,7 @@
  */
 import {createHash} from "node:crypto";
 import {createReadStream} from "node:fs";
-import {lstat, readFile, readdir} from "node:fs/promises";
+import {lstat, readFile, readdir, statfs} from "node:fs/promises";
 import {join, isAbsolute, relative, resolve} from "node:path";
 import type {JsonObject} from "../effect_program.ts";
 import {durableWriteJson} from "../effect_runtime_io.ts";
@@ -29,6 +29,18 @@ import {commitPromotionAndReadBack, readPromotionReceipt} from "./promotion_rece
 export const COLD_SOURCE_IMPORT_REQUEST_SCHEMA = "loopx_cold_source_import_request_v0";
 const PLAN_SCHEMA = "loopx_cold_source_import_plan_v0";
 const RESULT_SCHEMA = "loopx_cold_source_import_result_v0";
+const STREAMING_WITNESS_SCHEMA = "loopx_state_backup_source_witness_v1";
+const STREAMING_BACKUP_PROFILE = "local_authority_migration_v1";
+
+class ColdImportCapacityError extends Error {
+  readonly requiredBytes: number;
+  readonly availableBytes: number;
+  constructor(requiredBytes: number, availableBytes: number) {
+    super("cold_import_target_capacity");
+    this.requiredBytes = requiredBytes;
+    this.availableBytes = availableBytes;
+  }
+}
 
 function reject(code: string): never { throw new ShadowManagementError(code); }
 function digest(bytes: Buffer): string { return `sha256:${createHash("sha256").update(bytes).digest("hex")}`; }
@@ -49,6 +61,29 @@ async function optionalJson(path: string): Promise<JsonObject | null> {
 async function names(path: string): Promise<string[]> {
   try { return (await readdir(path)).sort(); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
+}
+
+async function requireTargetCapacity(root: string, plan: JsonObject,
+  projection: JsonObject): Promise<JsonObject> {
+  // Carrier, provider commit/readback and atomic staging may coexist. This is
+  // a resource preflight, not a fixed product ceiling.
+  const required = canonicalAuthorityBytes(plan).length
+    + canonicalAuthorityBytes(projection).length * 3 + 1024 * 1024;
+  let available: number;
+  try {
+    const filesystem = await statfs(root);
+    const availableValue = BigInt(filesystem.bavail) * BigInt(filesystem.bsize);
+    available = availableValue > BigInt(Number.MAX_SAFE_INTEGER)
+      ? Number.MAX_SAFE_INTEGER : Number(availableValue);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOSYS" || code === "ENOTSUP") {
+      return {status: "unavailable", required_bytes: required, available_bytes: null};
+    }
+    throw error;
+  }
+  if (available < required) throw new ColdImportCapacityError(required, available);
+  return {status: "sufficient", required_bytes: required, available_bytes: available};
 }
 
 /** Check every retained lease, including orphans and expired active records.
@@ -101,10 +136,24 @@ async function sourceWitness(request: ShadowRequest): Promise<JsonObject[]> {
  * It qualifies coordination-source bytes, not complete-state reactivation. */
 async function verifySourceBackup(value: unknown, root: string, sources: JsonObject[] = []): Promise<void> {
   const backup = requireJsonObject(value, "source backup");
-  if (!hasExactAuthorityKeys(backup, ["schema_version", "archive_path", "archive_sha256",
-      "manifest_path", "manifest_sha256", "included", "members"]) ||
-      backup.schema_version !== "loopx_state_backup_source_witness_v0" ||
-      !Array.isArray(backup.included) || !Array.isArray(backup.members)) reject("cold_import_backup_invalid");
+  const legacy = backup.schema_version === "loopx_state_backup_source_witness_v0";
+  const streaming = backup.schema_version === STREAMING_WITNESS_SCHEMA;
+  const fields = legacy
+    ? ["schema_version", "archive_path", "archive_sha256", "manifest_path", "manifest_sha256", "included", "members"]
+    : ["schema_version", "verification_profile", "capacity_policy", "backup_profile",
+      "archive_path", "archive_sha256", "archive_size_bytes", "logical_size_bytes",
+      "scanned_member_count", "workspace_peak_bytes", "manifest_path", "manifest_sha256",
+      "included", "members"];
+  if ((!legacy && !streaming) || !hasExactAuthorityKeys(backup, fields) ||
+      !Array.isArray(backup.included) || !Array.isArray(backup.members) ||
+      (streaming && (backup.verification_profile !== "trusted_local_authority_migration_v1"
+        || backup.capacity_policy !== "resource_bounded_without_fixed_total_byte_ceiling"
+        || !Number.isSafeInteger(backup.archive_size_bytes) || Number(backup.archive_size_bytes) < 0
+        || !Number.isSafeInteger(backup.logical_size_bytes) || Number(backup.logical_size_bytes) < 0
+        || !Number.isSafeInteger(backup.scanned_member_count) || Number(backup.scanned_member_count) < 1
+        || !Number.isSafeInteger(backup.workspace_peak_bytes) || Number(backup.workspace_peak_bytes) < 0))) {
+    reject("cold_import_backup_invalid");
+  }
   for (const kind of ["archive", "manifest"] as const) {
     const path = backup[`${kind}_path`];
     const expected = backup[`${kind}_sha256`];
@@ -116,7 +165,8 @@ async function verifySourceBackup(value: unknown, root: string, sources: JsonObj
     if (hash.digest("hex") !== expected) reject("cold_import_backup_changed");
   }
   const included = backup.included as JsonObject[];
-  if (!included.some(item => item.source_path === root)) reject("cold_import_backup_runtime_missing");
+  if (backup.backup_profile !== STREAMING_BACKUP_PROFILE
+      && !included.some(item => item.source_path === root)) reject("cold_import_backup_runtime_missing");
   const members = new Map<string, string>();
   for (const item of backup.members as JsonObject[]) {
     if (!hasExactAuthorityKeys(item, ["archive_path", "sha256"]) || typeof item.archive_path !== "string" ||
@@ -180,6 +230,7 @@ export async function executeColdSourceImport(value: unknown,
   dependencies: LocalAuthorityProviderDependencies = {}): Promise<JsonObject> {
   let fenced: boolean | null = null;
   let attempted = false;
+  let targetCapacityPreflight: JsonObject | null = null;
   try {
     const input = requireJsonObject(value, "cold source import request");
     const action = input.action;
@@ -237,6 +288,7 @@ export async function executeColdSourceImport(value: unknown,
           const plan = {schema_version: PLAN_SCHEMA, runtime_root: root, goal_id: goal, operation_id: operation,
             source, source_witness: witness, source_backup: input.source_backup, target_projection: migration.target_projection,
             target_provider: opened.provider, target_store_identity: targetIdentity.store_identity};
+          targetCapacityPreflight = await requireTargetCapacity(root, plan, migration.target_projection);
           const carrier = {plan, plan_sha256: canonicalAuthoritySha256(plan)};
           const existing = await optionalJson(path);
           if (existing !== null && !same(existing, carrier)) reject("cold_import_operation_conflict");
@@ -246,6 +298,7 @@ export async function executeColdSourceImport(value: unknown,
             plan_path: path, plan_sha256: carrier.plan_sha256, target_provider: opened.provider,
             source_inventory: sourceInventory(source.projection, goal), authority_changed: false,
             target_handoff_mode: targetMode, legacy_writer_fenced: false,
+            target_capacity_preflight: targetCapacityPreflight,
             execution_authority_granted: false, coordination_source_backup_verified: true, complete_goal_backup_verified: false};
         });
       }
@@ -297,6 +350,7 @@ export async function executeColdSourceImport(value: unknown,
         if (completed !== null) reject("cold_import_completed_authority_missing");
         if ((await store.loadAuthority()).status !== "missing") reject(original.reason_code);
         await verifySourceBackup(plan.source_backup, root, plan.source_witness as JsonObject[]);
+        targetCapacityPreflight = await requireTargetCapacity(root, plan, projection);
         attempted = true;
         const result = await commitPromotionAndReadBack(store, identity, projection,
           {...identity.receipt, schema_version: "loopx_cold_source_import_event_v0"});
@@ -329,14 +383,19 @@ export async function executeColdSourceImport(value: unknown,
         source_inventory: sourceInventory(source.projection, goal),
         executed: attempted,
         plan_sha256: raw.plan_sha256, target_provider: opened.provider, legacy_writer_fenced: true,
+        target_capacity_preflight: targetCapacityPreflight,
         stop_confirmation_source: "operator_attestation", execution_authority_granted: false,
         complete_goal_backup_verified: false, legacy_fallback_used: false};
     });
   } catch (error) {
     return {schema_version: RESULT_SCHEMA, ok: false, status: "failed", executed: attempted,
       authority_changed: attempted ? null : false, execution_authority_granted: false,
-      reason_code: error instanceof ShadowManagementError ? error.reason_code : "cold_import_unavailable",
+      reason_code: error instanceof ShadowManagementError ? error.reason_code
+        : error instanceof ColdImportCapacityError ? "cold_import_target_capacity" : "cold_import_unavailable",
       reason: error instanceof Error ? error.message : "cold import unavailable",
+      ...(error instanceof ColdImportCapacityError ? {
+        required_bytes: error.requiredBytes, available_bytes: error.availableBytes,
+      } : {}),
       legacy_writer_fenced: fenced, legacy_fallback_used: false, ...localAuthorityOpenFailure(error)};
   }
 }

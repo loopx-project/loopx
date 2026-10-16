@@ -1,7 +1,7 @@
 """Todo input transport shared by App and the compatibility facade.
 
-Canonical transactions remain owned by the existing typed provider adapters.
-Only an unpromoted operation loads its original Markdown writer.
+Canonical transactions remain owned by the typed provider adapters.
+Unmigrated Goals fail with the common migration-required result.
 """
 from __future__ import annotations
 
@@ -24,14 +24,11 @@ from .completion_validation_projection import completion_validation_declaration
 from . import monitor_metadata as todo_monitor_metadata
 from .text import plan_todo_priority
 from .authoring_scope import plan_todo_creation_scope
-from ..coordination.local_authority import (
-    claim_canonical_todo_if_promoted,
-    local_authority_is_promoted,
-)
+from ..coordination.local_authority import claim_canonical_todo_if_promoted
 from .provider_update import update_canonical_todo_if_promoted
 from .update_intent import build_canonical_update_intent
 from .provider_create import create_canonical_todo_if_promoted
-from .provider_terminal_lifecycle import provider_first_terminal_lifecycle
+from .provider_terminal_lifecycle import route_terminal_call
 from ...paths import effective_runtime_root
 from .completed_archive import (
     ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE,
@@ -81,8 +78,6 @@ def add_goal_todo(
     operation_id: str | None = None,
     expected_provider_revision: str | None = None,
 ) -> dict[str, Any]:
-    call = dict(locals())
-    call.pop("expected_provider_revision")
     shadow_runtime_root = effective_runtime_root(registry_path, runtime_root_arg)
     if role not in TODO_SECTION_HEADINGS:
         raise ValueError("todo role must be one of: user, agent")
@@ -153,7 +148,7 @@ def add_goal_todo(
     normalized_unblocks_todo_id = authoring_scope["unblocks_todo_id"]
     normalized_resume_when = authoring_scope["normalized_resume_when"]
     normalized_monitor_metadata = authoring_scope["monitor_metadata"]
-    canonical_create = create_canonical_todo_if_promoted(
+    return create_canonical_todo_if_promoted(
         operation_id=operation_id,
         expected_provider_revision=expected_provider_revision,
         registry_path=registry_path,
@@ -199,36 +194,6 @@ def add_goal_todo(
         state_file=state_file,
         dry_run=dry_run,
     )
-    if canonical_create is not None:
-        return canonical_create
-    if expected_provider_revision is not None:
-        raise ValueError("reviewed provider revision requires canonical authority")
-    if operation_id is not None:
-        raise ValueError("todo add --operation-id requires promoted canonical authority")
-    from .legacy_mutation import _add_goal_todo_legacy
-
-    # Canonical create applies the default only after checking its original
-    # receipt. Keep its transport intent stable across upgrades; legacy add has
-    # no operation receipt and uses the same typed creation policy here.
-    todo_text = str(plan_todo_priority({}, {"text": text,
-        **({"priority": priority} if priority is not None else {})}, create=True)["text"])
-    return _add_goal_todo_legacy(**call, _prepared={
-        "effective_agent_id": effective_agent_id,
-        "effective_blocks_agent": effective_blocks_agent,
-        "effective_bound_agent": effective_bound_agent,
-        "effective_claimed_by": effective_claimed_by,
-        "effective_excluded_agents": effective_excluded_agents,
-        "effective_goal_bound": effective_goal_bound,
-        "normalized_monitor_metadata": normalized_monitor_metadata,
-        "normalized_resume_when": normalized_resume_when,
-        "normalized_status": normalized_status,
-        "normalized_unblocks_todo_id": normalized_unblocks_todo_id,
-        "replan_obligation_id": replan_obligation_id,
-        "shadow_runtime_root": shadow_runtime_root,
-        "todo_text": todo_text,
-        "updated_at": updated_at,
-        "validation_argv": validation_argv,
-    })
 
 
 def _update_completion_validation_declaration(
@@ -347,7 +312,6 @@ def update_goal_todo(
     state_file: Path | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    call = dict(locals())
     if priority is not None and clear_priority:
         raise ValueError("provide either priority or clear_priority, not both")
     shadow_runtime_root = effective_runtime_root(registry_path, runtime_root_arg)
@@ -373,23 +337,14 @@ def update_goal_todo(
         raise ValueError(
             "todo update accepts either resume_when or clear_resume_when, not both"
         )
-    promoted_claim = claim_only and local_authority_is_promoted(
-        runtime_root=shadow_runtime_root, goal_id=goal_id
-    )
     if claim_operation_id is not None:
         if not claim_only:
             raise ValueError("claim_operation_id is supported only by todo claim")
-        if not promoted_claim:
-            raise ValueError("--claim-operation-id requires promoted canonical authority; no legacy write attempted")
     if task_lease_expected_version is not None and task_lease_idempotency_key is None:
         raise ValueError(
             "--task-lease-expected-version requires --task-lease-idempotency-key"
         )
-    if task_lease_idempotency_key is not None and claim_only and not promoted_claim:
-        raise ValueError(
-            "--task-lease-idempotency-key on todo claim requires promoted canonical authority; no legacy write attempted"
-        )
-    if promoted_claim:
+    if claim_only:
         unsupported_claim_values = (
             text, priority, clear_priority or None, status, note,
             validation_command, validation_command_json, validation_label,
@@ -414,7 +369,7 @@ def update_goal_todo(
                 "todo claim only accepts todo_id, claimed_by, agent_id, optional role, "
                 "project, state_file, and dry_run"
             )
-        canonical_claim = claim_canonical_todo_if_promoted(
+        return claim_canonical_todo_if_promoted(
             registry_path=registry_path,
             runtime_root=shadow_runtime_root,
             goal_id=goal_id,
@@ -429,8 +384,6 @@ def update_goal_todo(
             project=project,
             state_file=state_file,
         )
-        if canonical_claim is not None:
-            return canonical_claim
     # Translate the compatibility-sized CLI signature exactly once.  The
     # canonical transaction now owns ordinary role/binding/work-declaration
     # edits as well as text/note corrections. User completion is dispatched to
@@ -461,11 +414,10 @@ def update_goal_todo(
     if clear_priority:
         planning_intent["clear_priority"] = True
     monitor_intent = todo_monitor_metadata.monitor_metadata_intent(monitor_metadata)
-    # Promotion selects the authority, not Python's estimate of edit validity.
-    # The typed decoder must also reject empty/invalid edits without importing
-    # an unpromoted source writer. Unpromoted Goals retain their legacy route.
+    # The provider selects the authority and owns edit validity. The typed
+    # decoder also rejects empty or invalid edits without consulting Markdown.
     if not claim_only:
-        canonical_edit = update_canonical_todo_if_promoted(
+        return update_canonical_todo_if_promoted(
             registry_path=registry_path, runtime_root=shadow_runtime_root,
             goal_id=goal_id, todo_id=normalize_todo_id(todo_id) or todo_id,
             actor_agent_id=agent_id, role=role, text=text, note=note, dry_run=dry_run,
@@ -482,22 +434,8 @@ def update_goal_todo(
                 {"monitor_metadata": monitor_intent["metadata"]} if monitor_intent["metadata"] else {}
             )},
         )
-        if canonical_edit is not None:
-            return canonical_edit
-    if (update_operation_id is not None or update_expected_provider_revision is not None
-        or update_expected_registry_sha256 is not None) or (not claim_only and (
-        task_lease_idempotency_key is not None or task_lease_expected_version is not None
-    ) and not (monitor_intent["observation"] is not None and status is None)):
-        raise ValueError("update operation id and lease proof require a supported promoted update; no legacy write attempted")
-    from .legacy_mutation import _update_goal_todo_legacy
-
-    return _update_goal_todo_legacy(**call, _prepared={
-        "monitor_intent": monitor_intent,
-        "shadow_runtime_root": shadow_runtime_root,
-    })
 
 
-@provider_first_terminal_lifecycle("complete")
 def complete_goal_todo(
     *,
     registry_path: Path,
@@ -536,13 +474,9 @@ def complete_goal_todo(
     state_file: Path | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    call = dict(locals())
-    from .legacy_mutation import _complete_goal_todo_legacy
-
-    return _complete_goal_todo_legacy(**call)
+    return route_terminal_call("complete", locals())
 
 
-@provider_first_terminal_lifecycle("supersede")
 def supersede_goal_todo(
     *,
     registry_path: Path,
@@ -570,13 +504,9 @@ def supersede_goal_todo(
     state_file: Path | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    call = dict(locals())
-    from .legacy_mutation import _supersede_goal_todo_legacy
-
-    return _supersede_goal_todo_legacy(**call)
+    return route_terminal_call("supersede", locals())
 
 
-@provider_first_terminal_lifecycle("archive")
 def archive_completed_todos(
     *,
     registry_path: Path,
@@ -588,7 +518,4 @@ def archive_completed_todos(
     state_file: Path | None = None,
     dry_run: bool = True,
 ) -> dict[str, Any]:
-    call = dict(locals())
-    from .legacy_mutation import _archive_completed_todos_legacy
-
-    return _archive_completed_todos_legacy(**call)
+    return route_terminal_call("archive", locals())

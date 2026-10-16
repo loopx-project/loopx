@@ -535,8 +535,8 @@ observation 与它请求的独立 successor**。事务先校验 actor 注册、c
 
 这里的“原子”有明确边界：它不包含外部网络 poll、quota spend 或 Markdown/dashboard delivery。
 canonical commit 成功后，projection 仍可能处于 `pending`；outbox 只重试显示投影，
-`retry_business_mutation=false`，不能再次执行已经提交的 observation/successor。没有提升 authority 的
-Goal 仍走 legacy writer，因此这项保证不能外推成“整个 Goal 的所有状态已统一迁移”。
+`retry_business_mutation=false`，不能再次执行已经提交的 observation/successor。2.0 中未迁移
+Goal 返回 `canonical_authority_required`，必须先备份并迁移，之后才能执行新的 Monitor 写入。
 
 把 future `next_due_at` 当作 advancement frontier 是错误的：它只说明何时观察，不能替代“下一步
 怎样推进 Goal”。

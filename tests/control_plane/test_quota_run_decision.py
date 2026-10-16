@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from typing import Any
+from dataclasses import asdict
+import json
+from pathlib import Path
 
 import pytest
 
@@ -239,3 +242,56 @@ def test_inbox_admission_preserves_guard_and_source_priority(
     assert decision.replan_decision_allowed is False
     assert decision.state == "eligible"
     assert decision.quota == {"state": "eligible"}
+
+
+_RULE_CASES = json.loads((Path(__file__).parents[1] / "control_plane_ts" /
+    "fixtures/quota_run_decision.json").read_text())
+
+
+@pytest.mark.parametrize("case", _RULE_CASES["cases"], ids=lambda case: case["name"])
+def test_ordered_guard_contract(case: dict[str, Any]) -> None:
+    facts = {**_RULE_CASES["base_facts"], **case["facts"]}
+    quota = {"state": facts["state"], "focus_wait": facts["quota_focus_wait"]}
+    decision = _resolve(
+        **{key: facts[key] for key in (
+            "normal_delivery_allowed", "recovery_delivery_allowed", "self_repair_allowed",
+            "state", "reason", "capability_gate", "workspace_guard",
+            "automation_prompt_upgrade", "automation_prompt_upgrade_required",
+            "goal_health_ok", "inbox_reply_due", "inbox_material_review_due",
+            "task_orchestration_contract",
+        )},
+        quota=quota,
+        stall_self_repair={"effective_action": facts["repair_effective_action"]},
+        capability_monitor_fallback={"selected": True} if facts["capability_monitor_fallback"] else None,
+        replan_obligation={"required": True,
+            "agent_id": "agent-a" if facts["replan_applies"] else "other-agent"}
+            if facts["replan_required"] else None,
+        goal_frontier_projection=_terminal_projection() if facts["terminal_no_followup"] else None,
+    )
+    expected = {**_RULE_CASES["base_result"], **case["expected"]}
+    expected["quota"] = {**quota, **expected.pop("quota_patch")}
+    assert asdict(decision) == expected
+
+
+@pytest.mark.parametrize("terminal", [False, True])
+def test_quota_source_numbers_survive_guard_projection(terminal: bool) -> None:
+    quota = {"compute": 1.0, "spent_slots": 9007199254740993,
+             "nested": {"amount": 2.0}, "state": "eligible"}
+    before = json.dumps(quota, sort_keys=True)
+    decision = _resolve(quota=quota,
+        goal_frontier_projection=_terminal_projection() if terminal else None)
+    assert json.dumps(quota, sort_keys=True) == before
+    assert type(decision.quota["compute"]) is float
+    assert decision.quota["spent_slots"] == 9007199254740993
+    assert decision.quota["nested"] == {"amount": 2.0}
+    assert decision.quota["state"] == ("terminal_no_followup" if terminal else "eligible")
+
+
+@pytest.mark.parametrize("value,expected", [
+    (0, "agent workspace guard blocks delivery"),
+    ([1], "[1]"), ({"source": True}, "{'source': True}"), (" ", " "),
+])
+def test_legacy_guard_reason_codec_preserves_caller_text(value: Any, expected: str) -> None:
+    decision = _resolve(workspace_guard={"reason": value})
+    assert decision.reason == expected
+    assert decision.workspace_repair_allowed is True

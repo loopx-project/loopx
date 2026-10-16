@@ -516,9 +516,16 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         ),
     )
     configure_goal_parser.add_argument(
+        "--reward-memory-agent-id",
+        help=(
+            "Configure or disable only this registered Agent's independent binding. "
+            "Preserves shared and sibling bindings; do not combine with --reward-memory-agent."
+        ),
+    )
+    configure_goal_parser.add_argument(
         "--clear-reward-memory-config",
         action="store_true",
-        help="Disable the Reward Memory experiment and clear its agent allowlist.",
+        help="Disable only --reward-memory-agent-id when supplied; otherwise clear all Reward Memory bindings.",
     )
     configure_goal_parser.add_argument(
         "--execute",

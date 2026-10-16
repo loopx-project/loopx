@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loopx"
-version = "1.4.2"
+version = "2.0.0a1"
 description = "A Loop Engineering control plane for long-running agent goals (requires Node.js 22.22.3+)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -37,6 +37,7 @@ deepseek-harness = [
 ]
 test = [
   "distlib>=0.3.9,<1; sys_platform == 'win32'",
+  "docker==7.2.0",
   "resvg-py==0.5.0",
   "defusedxml==0.7.1",
   "pillow>=11,<13",
@@ -201,8 +202,6 @@ files = [
   "loopx/control_plane/testing/authority_e2e_fixtures.py",
   "loopx/control_plane/testing/authority_e2e_ladder.py",
   "loopx/control_plane/testing/authority_e2e_row_support.py",
-  "loopx/control_plane/testing/authority_e2e_rows_stage2c.py",
-  "loopx/control_plane/testing/authority_e2e_rows_stage2c2.py",
   "loopx/control_plane/work_items/delivery_batch_scale.py",
   "loopx/control_plane/work_items/delivery_outcome.py",
   "loopx/control_plane/work_items/lifecycle.py",

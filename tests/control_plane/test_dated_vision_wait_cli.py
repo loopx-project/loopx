@@ -169,12 +169,22 @@ def test_independent_work_is_not_silenced_by_scheduled_wait(tmp_path, isolated_e
 
 
 def test_bound_monitor_keeps_exact_turn_and_agent_fences(tmp_path, isolated_effect):
+    from canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
     registry, runtime, state = fixture(tmp_path)
     with state.open("a", encoding="utf-8") as output:
         output.write("\n- [ ] [P1-monitor] Observe a public result.\n"
                      f"  <!-- loopx:todo todo_id=todo_result_monitor status=open claimed_by={AGENT} "
                      "task_class=continuous_monitor action_kind=observe target_key=public-result "
                      "cadence=10m next_due_at=2026-01-01T00:00:00Z -->\n")
+    rc, listed = cli(registry, runtime, "todo", "list", "--goal-id", GOAL)
+    assert rc == 0, listed
+    initialize_canonical_authority(
+        runtime, GOAL,
+        build_todo_runtime_shadow_projection(goal_id=GOAL, todos=listed["todos"], handoff_mode="soft_claim"),
+        state_path=state,
+    )
     rc, guard = cli(registry, runtime, "quota", "should-run", "--codex-app",
                     "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", "bound-monitor")
     assert rc == 0, guard

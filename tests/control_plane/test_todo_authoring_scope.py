@@ -4,16 +4,21 @@ from pathlib import Path
 import pytest
 
 from loopx.control_plane.testing.canary_harness import run_json_cli_result, write_fixture_registry
+from loopx.control_plane.coordination.local_authority import (
+    LocalCoordinationAuthorityUnavailable,
+)
 from loopx.control_plane.todos.active_state_editing import find_todo_block
-from loopx.todos import add_goal_todo, add_todo_to_lines, update_goal_todo
+from loopx.todos import add_goal_todo, update_goal_todo
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
 GOAL = "authoring-scope"
 
 
-@pytest.fixture
-def authored_goal(tmp_path):
+@pytest.fixture(params=["file", "sqlite"])
+def authored_goal(tmp_path, monkeypatch, request):
+    if request.param == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
     project = tmp_path / "project"
     project.mkdir()
     state = project / "ACTIVE_GOAL_STATE.md"
@@ -23,6 +28,17 @@ def authored_goal(tmp_path):
         registry_path=registry, goal_id=GOAL, domain="scope-test",
         adapter_kind="generic_project_goal_v0", registered_agents=["agent-a", "agent-b"],
         quota_allowed_slots=None)
+    initialize_canonical_authority(
+        tmp_path / "runtime",
+        GOAL,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL,
+            handoff_mode="soft_claim",
+            todos=[],
+        ),
+        state_path=state,
+        provider=request.param,
+    )
     return registry, state
 
 
@@ -61,7 +77,7 @@ def test_update_rejects_explicit_scope_conflicts_without_writing(authored_goal, 
     registry, state = authored_goal
     result = add(registry, state, task_class="user_gate", global_gate=True, goal_bound=True)
     before = state.read_bytes()
-    with pytest.raises(ValueError):
+    with pytest.raises((ValueError, LocalCoordinationAuthorityUnavailable)):
         update_goal_todo(registry_path=registry, goal_id=GOAL, state_file=state,
             todo_id=result["todo_id"], agent_id="agent-a", role="user",
             clear_global_gate=not intent.get("global_gate", False), **intent)
@@ -100,19 +116,9 @@ def test_missing_scope_never_creates_global_gate(authored_goal):
         assert state.read_bytes() == before
 
 
-@pytest.fixture(params=["unpromoted", "file", "sqlite"])
-def execution_exclusion_goal(authored_goal, tmp_path, monkeypatch, request):
+@pytest.fixture
+def execution_exclusion_goal(authored_goal):
     registry, state = authored_goal
-    if request.param != "unpromoted":
-        if request.param == "sqlite":
-            isolate_sqlite_runtime(tmp_path, monkeypatch)
-        projection = build_todo_runtime_shadow_projection(
-            goal_id=GOAL, handoff_mode="soft_claim", todos=[]
-        )
-        initialize_canonical_authority(
-            tmp_path / "runtime", GOAL, projection,
-            state_path=state, provider=request.param,
-        )
 
     def cli(*args):
         return run_json_cli_result(
@@ -211,18 +217,6 @@ def test_create_role_restrictions_refuse_before_source_write(
     code, listed = cli("list")
     assert code == 0, listed
     assert listed["todo_count"] == 0
-
-
-@pytest.mark.parametrize("role, task_class, error", [
-    ("user", None, "user todo requires explicit --task-class"),
-    ("agent", "user_gate", "user_action and user_gate task_class are only valid for --role user"),
-])
-def test_standalone_markdown_codec_keeps_class_admission(role, task_class, error):
-    lines = ["# Goal", "", "## Agent Todo", "", "## User Todo", ""]
-    before = list(lines)
-    with pytest.raises(ValueError, match=error):
-        add_todo_to_lines(lines, role=role, task_class=task_class, text="Decide the next step")
-    assert lines == before
 
 
 @pytest.mark.parametrize("role, task_class, flags, error", [

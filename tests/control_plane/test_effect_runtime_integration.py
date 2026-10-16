@@ -713,6 +713,16 @@ def test_runtime_retirement_trace_filters_private_stderr() -> None:
     assert trace_events(raw) == [{"event": "lock_release_error", "pid": 12, "ms": 1, "code": "EPERM"}]
 
 
+@pytest.mark.parametrize("main_thread", [True, False, "private", 1])
+def test_runtime_retirement_trace_preserves_only_boolean_thread_identity(main_thread) -> None:
+    payload = {"event": "kill_enter", "main_thread": main_thread, "token": "private"}
+    raw = ("loopx_fixture_retirement:" + json.dumps(payload) + "\n").encode()
+    expected = {"event": "kill_enter"}
+    if type(main_thread) is bool:
+        expected["main_thread"] = main_thread
+    assert trace_events(raw) == [expected]
+
+
 @pytest.mark.parametrize("details,expected", [
     ({"code": "EISDIR", "syscall": "read", "errno": -21},
      {"code": "EISDIR", "syscall": "read", "errno": -21}),
@@ -1481,6 +1491,10 @@ def test_runtime_drains_admitted_write_before_exit(
                 time.sleep(0.025)
             assert not effect_runtime._pid_is_alive(original["pid"]), "retirement must release the runtime process"
             assert json.loads(journal_path.read_text(encoding="utf-8")) == journal
+            if cache_fault:
+                assert not any(path.is_file() for path in (runtime_dir / "compile-cache").rglob("*")), (
+                    "failed optional persistence must not re-enter the main environment's native exit flush"
+                )
             assert capsys.readouterr().out == "", "healthy drains must stay quiet"
     except Exception as error:
         try:

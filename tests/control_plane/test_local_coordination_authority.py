@@ -9,7 +9,7 @@ from threading import Barrier
 
 import pytest
 from canonical_authority_fixture import (
-    initialize_canonical_authority, single_snapshot_page,
+    initialize_canonical_authority, isolate_sqlite_runtime, single_snapshot_page,
     promoted_create_fixture as _promoted_create_fixture,
 )
 
@@ -37,8 +37,6 @@ from loopx.control_plane.todos import (
 )
 from loopx.control_plane.todos.active_state_editing import (
     TODO_SECTION_HEADINGS,
-    section_bounds,
-    todo_blocks,
 )
 from loopx.control_plane.todos.completion_validation_projection import (
     completion_validation_declaration_sha256,
@@ -943,10 +941,9 @@ def _seed_promoted_store(
             }
         ],
     )
-    # main's builder carries no handoff mode and the claim owner reads a missing
-    # mode as legacy; this branch's builder defaults to hard_lease, so seed the
-    # legacy mode explicitly unless a test asks for another one.
-    projection["handoff_mode"] = str(handoff_mode) if handoff_mode is not None else "legacy"
+    # Normal claim tests need a current policy; historical wire shape does not
+    # imply the retired ownership strategy. Explicit modes stay caller-owned.
+    projection["handoff_mode"] = str(handoff_mode) if handoff_mode is not None else "soft_claim"
     state_path = runtime_root / "ACTIVE_GOAL_STATE.md"
     if not state_path.exists():
         state_path.write_text(
@@ -1030,9 +1027,11 @@ def test_promoted_claim_protocol_failure_stays_infrastructure_outage(
     assert not isinstance(exc_info.value, LocalCoordinationAuthorityRejection)
 
 
-def test_promoted_claim_folds_agent_id_whitespace_like_legacy(tmp_path: Path) -> None:
+def test_canonical_claim_uses_public_agent_id_whitespace_normalization(
+    tmp_path: Path,
+) -> None:
     """Every Python whitespace character (including U+0085 NEL, U+001C..U+001F,
-    tabs, NBSP) in claimed_by must fold to '-' identically before and after promotion.
+    tabs, NBSP) in claimed_by must fold to '-' through the public normalizer.
     """
     from loopx.control_plane.todos.contract import normalize_todo_claimed_by
 
@@ -1594,9 +1593,14 @@ Continue provider-first delivery.
     assert "Continue provider-first delivery." in rendered
 
 
-def test_public_terminal_optional_prose_matches_before_and_after_promotion(
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_public_terminal_optional_prose_matches_canonical_providers(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
 ) -> None:
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
     cases = [
         ("note", None, None),
         ("note", "", None),
@@ -1615,7 +1619,7 @@ def test_public_terminal_optional_prose_matches_before_and_after_promotion(
         ("reason", " first\u0085  second ", "first second"),
     ]
 
-    def exercise(root: Path, *, promoted: bool) -> dict[str, object]:
+    def exercise(root: Path) -> dict[str, object]:
         runtime_root = root / "runtime"
         project = root / "project"
         state_file = project / "ACTIVE_GOAL_STATE.md"
@@ -1675,17 +1679,17 @@ def test_public_terminal_optional_prose_matches_before_and_after_promotion(
             ),
             encoding="utf-8",
         )
-        if promoted:
-            initialize_canonical_authority(
-                runtime_root,
-                "goal-a",
-                build_todo_runtime_shadow_projection(
-                    goal_id="goal-a",
-                    todos=records,
-                    handoff_mode="soft_claim",
-                ),
-                state_path=state_file,
-            )
+        initialize_canonical_authority(
+            runtime_root,
+            "goal-a",
+            build_todo_runtime_shadow_projection(
+                goal_id="goal-a",
+                todos=records,
+                handoff_mode="soft_claim",
+            ),
+            state_path=state_file,
+            provider=provider,
+        )
 
         for index, (field, value, _expected) in enumerate(cases, start=1):
             common = {
@@ -1708,44 +1712,36 @@ def test_public_terminal_optional_prose_matches_before_and_after_promotion(
                 )
                 assert result["completed"] is True
 
-        if promoted:
-            projection = read_canonical_todos_if_promoted(
-                runtime_root=runtime_root,
-                goal_id="goal-a",
-            )
-            assert projection is not None
-            todos = projection["todos"]
-        else:
-            lines = state_file.read_text(encoding="utf-8").splitlines()
-            bounds = section_bounds(lines, "agent")
-            assert bounds is not None
-            todos = todo_blocks(
-                lines,
-                bounds[0],
-                bounds[1],
-                role="agent",
-                source_section=bounds[2],
-            )
+        projection = read_canonical_todos_if_promoted(
+            runtime_root=runtime_root,
+            goal_id="goal-a",
+        )
+        assert projection is not None
+        todos = projection["todos"]
         by_id = {todo["todo_id"]: todo for todo in todos}
         return {
             f"{field}:{index}": by_id[f"todo_prose_{index:02d}"].get(field)
             for index, (field, _value, _expected) in enumerate(cases, start=1)
         }
 
-    legacy = exercise(tmp_path / "legacy", promoted=False)
-    canonical = exercise(tmp_path / "canonical", promoted=True)
+    canonical = exercise(tmp_path / provider)
     expected = {
         f"{field}:{index}": value
         for index, (field, _input, value) in enumerate(cases, start=1)
     }
-    assert legacy == expected
     assert canonical == expected
 
 
-def test_illegal_terminal_actor_is_a_domain_valueerror_before_and_after_promotion(
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_illegal_terminal_actor_is_rejected_by_canonical_provider(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
 ) -> None:
-    def rejected(root: Path, *, promoted: bool) -> ValueError:
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+
+    def rejected(root: Path) -> ValueError:
         runtime_root = root / "runtime"
         project = root / "project"
         state_file = project / "ACTIVE_GOAL_STATE.md"
@@ -1783,31 +1779,31 @@ def test_illegal_terminal_actor_is_a_domain_valueerror_before_and_after_promotio
             ),
             encoding="utf-8",
         )
-        if promoted:
-            initialize_canonical_authority(
-                runtime_root,
-                "goal-a",
-                build_todo_runtime_shadow_projection(
-                    goal_id="goal-a",
-                    handoff_mode="soft_claim",
-                    todos=[
-                        {
-                            "schema_version": "todo_item_v0",
-                            "index": 1,
-                            "done": False,
-                            "text": "Reject an illegal terminal actor",
-                            "todo_id": "todo_terminal_actor",
-                            "role": "agent",
-                            "status": "open",
-                            "archive_state": "active",
-                            "source_section": TODO_SECTION_HEADINGS["agent"],
-                            "task_class": "advancement_task",
-                            "claimed_by": "agent-a",
-                        }
-                    ],
-                ),
-                state_path=state_file,
-            )
+        initialize_canonical_authority(
+            runtime_root,
+            "goal-a",
+            build_todo_runtime_shadow_projection(
+                goal_id="goal-a",
+                handoff_mode="soft_claim",
+                todos=[
+                    {
+                        "schema_version": "todo_item_v0",
+                        "index": 1,
+                        "done": False,
+                        "text": "Reject an illegal terminal actor",
+                        "todo_id": "todo_terminal_actor",
+                        "role": "agent",
+                        "status": "open",
+                        "archive_state": "active",
+                        "source_section": TODO_SECTION_HEADINGS["agent"],
+                        "task_class": "advancement_task",
+                        "claimed_by": "agent-a",
+                    }
+                ],
+            ),
+            state_path=state_file,
+            provider=provider,
+        )
         with pytest.raises(ValueError) as exc_info:
             complete_goal_todo(
                 registry_path=registry_path,
@@ -1821,9 +1817,7 @@ def test_illegal_terminal_actor_is_a_domain_valueerror_before_and_after_promotio
             )
         return exc_info.value
 
-    legacy = rejected(tmp_path / "legacy", promoted=False)
-    canonical = rejected(tmp_path / "canonical", promoted=True)
-    assert not isinstance(legacy, LocalCoordinationAuthorityUnavailable)
+    canonical = rejected(tmp_path / provider)
     assert isinstance(canonical, LocalCoordinationAuthorityRejection)
     assert canonical.code == "actor_not_registered"
 

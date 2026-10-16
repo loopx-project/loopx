@@ -8,10 +8,9 @@ import sys
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
 from loopx.chat_action_store import ChatActionStore
 from loopx.chat_actions import ChatActionService
-from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.work_items.task_lease import acquire_task_lease, inspect_task_lease, release_task_lease
 from loopx.todos import add_goal_todo, list_goal_todos
 
@@ -19,25 +18,22 @@ from loopx.todos import add_goal_todo, list_goal_todos
 def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *,
             ttl_seconds: int = 600, validation: bool = False):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    state = tmp_path / "state.md"
-    state.write_text("# Goal\n\n## Agent Todo\n\n## Completed Work Archive\n")
-    runtime = tmp_path / "runtime"
-    registry = tmp_path / "registry.json"
-    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
-        "id": "goal-a", "repo": str(tmp_path), "state_file": state.name,
-        "coordination": {"registered_agents": ["agent-a", "agent-b"], "handoff_mode": "hard_lease"},
-    }]}))
+    # Create through the native owner after selecting an empty canonical store.
+    # The retired Markdown writer cannot bootstrap a completion-proof fixture.
+    registry, runtime, state = promoted_create_fixture(
+        tmp_path, provider=provider, handoff_mode="hard_lease",
+        registered_agents=["agent-a", "agent-b"],
+    )
     marker = tmp_path / "validation-count"
     command = shlex.join([sys.executable, "-c", "from pathlib import Path; "
         f"p=Path({str(marker)!r}); p.write_text(p.read_text()+'x' if p.exists() else 'x')"])
-    # These transport tests start with canonical authority; fixture creation
-    # must not depend on an unpromoted Markdown writer before the first lease.
-    initialize_canonical_authority(runtime, "goal-a",
-        build_todo_runtime_shadow_projection(goal_id="goal-a", todos=[], handoff_mode="hard_lease"),
-        state_path=state, provider=provider)
     todo_id = add_goal_todo(registry_path=registry, goal_id="goal-a", role="agent",
         text="Complete independently validated work", claimed_by="agent-a",
         validation_command=command if validation else None)["todo_id"]
+    readback = list_goal_todos(registry_path=registry, goal_id="goal-a")
+    assert readback["authority_read"]["source_authority"] == f"{provider}_v0"
+    assert readback["authority_read"]["decision_read_from_provider"] is True
+    assert readback["authority_read"]["legacy_fallback_used"] is False
     lease = acquire_task_lease(registry_path=registry, runtime_root=runtime, goal_id="goal-a",
         todo_id=todo_id, owner="agent-a", idempotency_key="original-execution",
         ttl_seconds=ttl_seconds, expected_version=0)["lease"]

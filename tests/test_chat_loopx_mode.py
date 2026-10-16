@@ -526,6 +526,27 @@ def test_pause_cannot_enable_mode_and_ordinary_turn_is_not_execution(mode):
     assert service.store.load_turn(sid, ordinary["turn_id"])["status"] == "queued"
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_preparation_is_advertised_only_in_explicit_loopx_toolset(mode, monkeypatch, enabled):
+    from loopx.chat_runtime import CodexAppServerAdapter
+
+    service, sid, repo, _, _ = mode
+    captured, adapter = [], object()
+    monkeypatch.setattr(CodexAppServerAdapter, "start", lambda **kw: captured.append(kw) or adapter)
+    assert service.controller._start_adapter(agent_id="codex", work_dir=repo,
+        goal_id="research", objective="Check the delivery", project_coordination=True,
+        loopx_tools=enabled) is adapter
+    tools = {tool["name"]: tool for tool in captured[0]["dynamic_tools"]}
+    assert "loopx_context_read" in tools
+    assert (TOOL["name"] in tools) is enabled
+    if enabled:
+        schema = tools[TOOL["name"]]["inputSchema"]
+        assert "prepare_check" in schema["properties"]["action"]["enum"]
+        assert "document" in schema["properties"]
+        assert not {"goal_id", "agent_id", "runtime_root"} & schema["properties"].keys()
+    assert not service.snapshot(sid)["enabled"]
+
+
 def test_owner_team_readback_is_configured_scoped_and_does_not_start_a_turn(mode):
     service, sid, _, settings, calls = mode
     with pytest.raises(ValueError):

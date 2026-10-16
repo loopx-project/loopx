@@ -98,6 +98,7 @@ def point(tmp_path):
 @pytest.mark.parametrize("change", [
     {"goal_id": "source-goal"}, {"agent_id": "source-agent"}, {"source_todo_id": "missing"},
     {"deadline_epoch": 1}, {"deadline_epoch": True}, {"normal_cadence": 0}, {"normal_cadence": True},
+    {"fresh_replan": "false"},
 ])
 def test_invalid_participant_rejects_before_workspace_or_authority_changes(point, change):
     start, workspace = point
@@ -163,7 +164,7 @@ def test_restore_replaces_image_files_preserves_modes_and_refuses_second_attempt
     start, workspace = point
     assert start.verify(str(workspace))
     (workspace / "stale-image-file").write_text("not captured")
-    declaration = {"root": str(start.root), "sha256": start.sha256}
+    declaration = {"root": str(start.root), "sha256": start.sha256, "deadline_epoch": start.deadline_epoch}
     warm.restore_workspace(declaration, workspace)
     assert not (workspace / "stale-image-file").exists()
     assert (workspace / "candidate").read_text() == "retained candidate"
@@ -241,7 +242,7 @@ def test_overlay_workspace_backup_survives_cross_device_rename(point, monkeypatc
     def cross_device(*args, **kwargs):
         raise OSError(errno.EXDEV, "overlay directory rename")
     monkeypatch.setattr("os.rename", cross_device)
-    warm.restore_workspace({"root": str(start.root), "sha256": start.sha256}, workspace)
+    warm.restore_workspace({"root": str(start.root), "sha256": start.sha256, "deadline_epoch": start.deadline_epoch}, workspace)
     backup = workspace.with_name("workspace.before-checkpoint")
     assert (backup / "image-only").read_text() == "original image"
     assert not (workspace / "image-only").exists()
@@ -322,7 +323,7 @@ def research_point(point, tmp_path, monkeypatch, request):
 def test_explicit_research_files_reproduce_the_retained_experiment(research_point):
     start, workspace, research = research_point
     assert start.verify(str(workspace))
-    warm.restore_workspace({"root": str(start.root), "sha256": start.sha256,
+    warm.restore_workspace({"root": str(start.root), "sha256": start.sha256, "deadline_epoch": start.deadline_epoch,
                             "research_component_ids": ["experiments"]}, workspace)
     scope = {}
     exec((research / "candidate.py").read_text(), scope)
@@ -332,13 +333,13 @@ def test_explicit_research_files_reproduce_the_retained_experiment(research_poin
     effect_runtime_result("runtime.checkpoint_artifacts", {"action": "verify", "root": str(start.root),
                                                           "expected_sha256": start.sha256})
     with pytest.raises(ValueError, match="already exists"):
-        warm.restore_workspace({"root": str(start.root), "sha256": start.sha256,
+        warm.restore_workspace({"root": str(start.root), "sha256": start.sha256, "deadline_epoch": start.deadline_epoch,
                                 "research_component_ids": ["experiments"]}, workspace)
 
 
 def test_unselected_research_files_remain_inert(research_point):
     start, workspace, research = research_point
-    warm.restore_workspace({"root": str(start.root), "sha256": start.sha256}, workspace)
+    warm.restore_workspace({"root": str(start.root), "sha256": start.sha256, "deadline_epoch": start.deadline_epoch}, workspace)
     assert not research.exists()
 
 
@@ -349,7 +350,7 @@ def test_invalid_research_selection_rejects_before_workspace_changes(research_po
     with pytest.raises(ValueError):
         replace(start, research_component_ids=selected).verify(str(workspace))
     with pytest.raises(ValueError):
-        warm.restore_workspace({"root": str(start.root), "sha256": start.sha256,
+        warm.restore_workspace({"root": str(start.root), "sha256": start.sha256, "deadline_epoch": start.deadline_epoch,
                                 "research_component_ids": selected}, workspace)
     assert (workspace / "candidate").read_text() == "retained candidate"
     assert not workspace.with_name("workspace.before-checkpoint").exists() and not research.exists()
@@ -374,7 +375,7 @@ def test_research_destination_conflicts_preserve_receiver(research_point, collis
             warm._check_research_destinations([("experiments", start.root, parent / "new-file")])
         return
     with pytest.raises(ValueError, match="already exists"):
-        warm.restore_workspace({"root": str(start.root), "sha256": start.sha256,
+        warm.restore_workspace({"root": str(start.root), "sha256": start.sha256, "deadline_epoch": start.deadline_epoch,
                                 "research_component_ids": ["experiments"]}, workspace)
     assert not workspace.with_name("workspace.before-checkpoint").exists()
     if collision == "file":
@@ -403,7 +404,7 @@ def test_research_copy_mismatch_is_an_unusable_attempt(research_point, monkeypat
         return result
     monkeypatch.setattr(shutil, "copytree", corrupt)
     with pytest.raises(ValueError, match="differ from the sealed"):
-        warm.restore_workspace({"root": str(start.root), "sha256": start.sha256,
+        warm.restore_workspace({"root": str(start.root), "sha256": start.sha256, "deadline_epoch": start.deadline_epoch,
                                 "research_component_ids": ["experiments"]}, workspace)
     assert workspace.with_name("workspace.before-checkpoint").is_dir()
 
@@ -425,21 +426,27 @@ def test_research_selection_survives_staging(research_point, monkeypatch, tmp_pa
     assert declaration["research_component_ids"] == ["experiments"]
 
 
-def test_research_option_without_warm_entry_rejects_before_registration(tmp_path):
+@pytest.mark.parametrize("options, error", [
+    (["--restore-research-component", "experiments"], "Research component restoration requires"),
+    (["--restore-fresh-after-replan"], "unrecognized arguments: --restore-fresh-after-replan"),
+    (["--restore-fresh-replan"], "Fresh context requires an explicit warm checkpoint continuation"),
+])
+def test_restore_options_reject_before_registration(tmp_path, capsys, options, error):
     pytest.importorskip("harbor")
     from benchmark.edgebench import run as entry
     with pytest.raises(SystemExit) as rejected:
         entry.main(["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
             "--run-id", "unadmitted", "--worker", "heartbeat-explore", "--model", "fixture",
             "--effort", "high", "--judge-url", "http://localhost:1",
-            "--restore-research-component", "experiments"])
+            *options])
     assert rejected.value.code == 2 and not list(tmp_path.iterdir())
+    assert error in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("research_point", ["file"], indirect=True)
 def test_standalone_research_file_keeps_bytes_and_mode(research_point):
     start, workspace, research = research_point
-    warm.restore_workspace({"root": str(start.root), "sha256": start.sha256,
+    warm.restore_workspace({"root": str(start.root), "sha256": start.sha256, "deadline_epoch": start.deadline_epoch,
                             "research_component_ids": ["experiments"]}, workspace)
     assert research.read_text() == "retained observations"
     assert research.stat().st_mode & 0o777 == 0o600
@@ -451,3 +458,94 @@ def test_workspace_backup_cannot_be_a_research_destination(research_point):
     metadata["worker_file_snapshot"]["components"][-1]["source_path"] = str(workspace.with_name("workspace.before-checkpoint"))
     with pytest.raises(ValueError, match="separate data"):
         warm._research_components(start.root, metadata, workspace, ("experiments",))
+
+
+@pytest.mark.parametrize('remaining, expected', [(600, 90), (12, 12)])
+def test_native_admission_full_history_allowance_uses_original_phase(monkeypatch, remaining, expected):
+    from loopx.hosts import codex_checkpoint
+    now = 1000
+    monkeypatch.setattr(warm, 'time', SimpleNamespace(time=lambda: now))
+    calls = []
+    def admit(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {'session_id': 'verified-native-fork'}
+    monkeypatch.setattr(codex_checkpoint, 'admit_native_checkpoint_session', admit)
+    declaration = {'root': '/point', 'sha256': 'a' * 64, 'config': '/config.toml',
+                   'deadline_epoch': now + remaining}
+    env = {'LOOPX_CODEX_SANDBOX': 'danger-full-access'}
+    assert warm.admit_warm_session(env, declaration)['session_id'] == 'verified-native-fork'
+    assert calls[0][1]['timeout'] == expected
+    assert declaration['deadline_epoch'] == now + remaining
+
+
+@pytest.mark.parametrize('deadline', [True, None, '1001', 1000, 999, 2 ** 53])
+def test_native_admission_rejects_expired_or_invalid_phase_before_io(monkeypatch, deadline):
+    from loopx.hosts import codex_checkpoint
+    monkeypatch.setattr(warm, 'time', SimpleNamespace(time=lambda: 1000))
+    monkeypatch.setattr(codex_checkpoint, 'admit_native_checkpoint_session',
+                        lambda *a, **k: pytest.fail('Native IO after invalid deadline'))
+    with pytest.raises(ValueError):
+        warm.admit_warm_session({}, {'deadline_epoch': deadline})
+
+
+def test_native_admission_cannot_return_success_after_original_phase(monkeypatch):
+    from loopx.hosts import codex_checkpoint
+    clock = [1000]
+    monkeypatch.setattr(warm, 'time', SimpleNamespace(time=lambda: clock[0]))
+    def admit(*args, **kwargs):
+        clock[0] = 1002
+        return {'session_id': 'too-late'}
+    monkeypatch.setattr(codex_checkpoint, 'admit_native_checkpoint_session', admit)
+    with pytest.raises(ValueError, match='allowance expired'):
+        warm.admit_warm_session({'LOOPX_CODEX_SANDBOX': 'danger-full-access'},
+            {'root': '/point', 'sha256': 'a' * 64, 'config': '/config.toml', 'deadline_epoch': 1001})
+
+
+@pytest.mark.parametrize("remaining, expected", [(600, 60), (7, 7)])
+def test_workspace_verification_uses_bounded_full_point_read(point, monkeypatch, remaining, expected):
+    start, workspace = point
+    monkeypatch.setattr(warm, "time", SimpleNamespace(time=lambda: 1000))
+    original = warm.effect_runtime_result
+    calls = []
+    def verify(method, params, **kwargs):
+        calls.append(kwargs["timeout"])
+        return original(method, params, **kwargs)
+    monkeypatch.setattr(warm, "effect_runtime_result", verify)
+    warm.restore_workspace({"root": str(start.root), "sha256": start.sha256,
+                            "deadline_epoch": 1000 + remaining}, workspace)
+    assert calls == [expected]
+    assert (workspace / "candidate").read_text() == "retained candidate"
+
+
+def test_expired_workspace_verification_preserves_image_before_mutation(point, monkeypatch):
+    start, workspace = point
+    clock = [1000]
+    monkeypatch.setattr(warm, "time", SimpleNamespace(time=lambda: clock[0]))
+    original = warm.effect_runtime_result
+    def verify(method, params, **kwargs):
+        result = original(method, params, **kwargs)
+        clock[0] = 1002
+        return result
+    monkeypatch.setattr(warm, "effect_runtime_result", verify)
+    with pytest.raises(ValueError, match="allowance expired"):
+        warm.restore_workspace({"root": str(start.root), "sha256": start.sha256,
+                                "deadline_epoch": 1001}, workspace)
+    assert not workspace.with_name("workspace.before-checkpoint").exists()
+    assert (workspace / "candidate").read_text() == "retained candidate"
+
+
+@pytest.mark.parametrize("legacy", [True, False, "false"])
+def test_removed_post_replan_declaration_rejects_before_native_effects(tmp_path, legacy):
+    from benchmark.runtime.checkpoint_session_refresh import prepare_session_refresh
+    declaration = tmp_path / "warm.json"
+    declaration.write_text(json.dumps({"fresh_after_replan": legacy, "fresh_replan": True}))
+    # No usable session: rejection must precede all native/session access.
+    with pytest.raises(ValueError, match="no longer supported"):
+        prepare_session_refresh({"LOOPX_WARM_START": str(declaration)}, None, tmp_path)
+
+
+def test_omitted_fresh_replan_keeps_default_native_history(tmp_path):
+    from benchmark.runtime.checkpoint_session_refresh import prepare_session_refresh
+    declaration = tmp_path / "warm.json"
+    declaration.write_text("{}")
+    assert prepare_session_refresh({"LOOPX_WARM_START": str(declaration)}, None, tmp_path) == ""

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from canonical_authority_fixture import isolate_sqlite_runtime
 from test_native_monitor_poll import _canonical
-from test_monitor_followthrough_contract import _write_fixture, _add_monitor, GOAL_ID, AGENT_ID
+from test_monitor_followthrough_contract import GOAL_ID, AGENT_ID
 from loopx.control_plane.scheduler.monitor_poll_writeback import write_monitor_poll_todo_state
 from loopx.control_plane.testing.canary_harness import run_json_cli
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
@@ -19,10 +19,6 @@ OBSERVATION_FIELDS = ("result_hash", "last_checked_at", "monitor_effect_id",
 
 
 def setup(tmp_path, provider):
-    if provider == "legacy":
-        registry, runtime, state = _write_fixture(tmp_path)
-        monitor = _add_monitor(registry, text="Observe public changes", target_key="public-watch", next_due_at="2000-01-01T00:00:00Z")
-        return registry, runtime, state, monitor
     return _canonical(tmp_path, provider=provider)
 
 
@@ -41,7 +37,7 @@ def _observe(registry, runtime, monitor, result_hash="observed-before-configurat
     return receipt
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_configuration_cli_and_clear_preserve_observation(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, runtime, state, monitor = setup(tmp_path, provider)
@@ -53,24 +49,21 @@ def test_configuration_cli_and_clear_preserve_observation(tmp_path, monkeypatch,
     assert before["monitor_effect_id"] == "configuration-observation"
     assert before["last_checked_at"]
     assert int(before["material_change_generation"]) >= 1
-    if provider != "legacy":
-        state.unlink()
+    state.unlink()
     args = ("todo", "update", "--goal-id", GOAL_ID, "--todo-id", monitor["todo_id"],
             "--agent-id", AGENT_ID, "--cadence", "2h", "--next-due-at", "2099-01-01T02:00:00Z")
-    identity = () if provider == "legacy" else ("--update-operation-id", "configuration-a")
+    identity = ("--update-operation-id", "configuration-a")
     run_json_cli(*args, *identity, "--dry-run", registry_path=registry, runtime_root=runtime)
-    if provider != "legacy":
-        assert not state.exists()
+    assert not state.exists()
     result = run_json_cli(*args, *identity, registry_path=registry, runtime_root=runtime)
     current = _row(registry, monitor["todo_id"])
     assert current["cadence"] == "2h"
     assert current["next_due_at"] == "2099-01-01T02:00:00Z"
     for field in OBSERVATION_FIELDS:
         assert current.get(field) == before.get(field), field
-    if provider != "legacy":
-        assert result["source_authority"] == ("file_v0" if provider == "file" else "sqlite_v0")
-        replay = run_json_cli(*args, *identity, registry_path=registry, runtime_root=runtime)
-        assert replay["status"] == "replayed"
+    assert result["source_authority"] == ("file_v0" if provider == "file" else "sqlite_v0")
+    replay = run_json_cli(*args, *identity, registry_path=registry, runtime_root=runtime)
+    assert replay["status"] == "replayed"
     # Clearing watch_only needs another retained bound, and an expiry-only edit
     # must keep the due time the explicit cadence edit pinned.
     update_goal_todo(registry_path=registry, runtime_root_arg=str(runtime), goal_id=GOAL_ID,
@@ -94,7 +87,7 @@ def test_configuration_cli_and_clear_preserve_observation(tmp_path, monkeypatch,
         assert recadenced.get(field) == before.get(field), field
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_route_identity_target_key_is_not_schedule_configuration(tmp_path, monkeypatch, provider):
     """A Monitor successor keeps its routing target without becoming a Monitor."""
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -137,7 +130,7 @@ def test_configuration_rejection_and_delivery_recovery(tmp_path, monkeypatch, pr
     assert replay["projection_delivery"] == "delivered"
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_observed_target_cannot_be_repurposed_by_configuration(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, runtime, _state, monitor = setup(tmp_path, provider)

@@ -29,6 +29,7 @@ from loopx.control_plane.scheduler.monitor_poll_writeback import (  # noqa: E402
     write_monitor_poll_todo_state,
 )
 from loopx.control_plane.testing.canary_harness import (  # noqa: E402
+    import_fixture_authority,
     read_run_index,
     run_json_cli,
     run_json_cli_result,
@@ -238,6 +239,7 @@ def write_fixture(
         registered_agents=[AGENT_ID],
         quota_allowed_slots=None,
     )
+    import_fixture_authority(registry_path, GOAL_ID)
     return registry_path, state_file
 
 
@@ -1167,6 +1169,8 @@ def assert_writeback_helper_preview_contract() -> None:
         assert resolved["todo_id"] == TODO_ID, resolved
         assert resolved["target_key"] == TARGET_KEY, resolved
         generated_at = "2026-01-01T00:05:00+00:00"
+        before = run_cli(registry_path, "todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
+        source = _state_file.read_bytes()
         preview = write_monitor_poll_todo_state(
             registry_path=registry_path,
             runtime_root=runtime_root_from_registry(registry_path),
@@ -1175,6 +1179,7 @@ def assert_writeback_helper_preview_contract() -> None:
             execute=False,
             todo_id=TODO_ID,
             result_hash="old",
+            agent_id=AGENT_ID,
         )
         assert preview["schema_version"] == "monitor_poll_todo_writeback_v0", preview
         assert preview["dry_run"] is True, preview
@@ -1187,6 +1192,22 @@ def assert_writeback_helper_preview_contract() -> None:
         assert preview["last_checked_at"] == generated_at, preview
         assert preview["next_due_at"] != "2026-01-01T00:00:00+00:00", preview
         assert preview["cadence"] == "15m", preview
+        for actor in (None, "codex-unregistered"):
+            try:
+                write_monitor_poll_todo_state(
+                    registry_path=registry_path,
+                    runtime_root=runtime_root_from_registry(registry_path),
+                    goal_id=GOAL_ID, generated_at=generated_at,
+                    execute=False, todo_id=TODO_ID, result_hash="old", agent_id=actor,
+                )
+            except ValueError as exc:
+                assert "registered actor" in str(exc), str(exc)
+            else:
+                raise AssertionError("Monitor preview admitted an undeclared actor")
+        after = run_cli(registry_path, "todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
+        assert after["todo"] == before["todo"], after
+        assert after["authority_read"]["provider_revision"] == before["authority_read"]["provider_revision"], after
+        assert _state_file.read_bytes() == source
 
 
 def assert_cli_monitor_poll_uses_should_run_lookback() -> None:

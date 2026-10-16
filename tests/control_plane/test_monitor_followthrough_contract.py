@@ -5,6 +5,13 @@ from pathlib import Path
 
 import pytest
 
+from canonical_authority_fixture import initialize_canonical_authority
+from loopx.control_plane.coordination.local_authority import (
+    CanonicalAuthorityRequired,
+)
+from loopx.control_plane.coordination.runtime_shadow import (
+    build_todo_runtime_shadow_projection,
+)
 from loopx.control_plane.scheduler.monitor_poll_writeback import (
     resolve_monitor_todo_item,
     write_monitor_poll_todo_state,
@@ -35,7 +42,13 @@ GOAL_ID = "monitor-followthrough-fixture"
 AGENT_ID = "codex-quality-qualification"
 
 
-def _write_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
+def _write_fixture(
+    tmp_path: Path,
+    *,
+    provider: str = "file",
+    canonical: bool = True,
+    handoff_mode: str = "soft_claim",
+) -> tuple[Path, Path, Path]:
     project = tmp_path / "project"
     runtime = tmp_path / "runtime"
     state = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
@@ -55,6 +68,18 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
         registered_agents=[AGENT_ID, "codex-main-control"],
         quota_allowed_slots=None,
     )
+    if canonical:
+        initialize_canonical_authority(
+            runtime,
+            GOAL_ID,
+            build_todo_runtime_shadow_projection(
+                goal_id=GOAL_ID,
+                todos=[],
+                handoff_mode=handoff_mode,
+            ),
+            state_path=state,
+            provider=provider,
+        )
     return registry, runtime, state
 
 
@@ -129,10 +154,15 @@ def test_todo_update_preserves_omitted_monitor_schedule_fields(tmp_path: Path) -
         runtime_root=runtime,
     )
 
-    assert updated["target_key"] == "public-release:42"
-    assert updated["cadence"] == "1h"
-    assert updated["next_due_at"] == "2099-01-01T00:00:00+00:00"
-    assert updated["watch_only"] == "true"
+    persisted = resolve_monitor_todo_item(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        todo_id=updated["todo_id"],
+    )
+    assert persisted["target_key"] == "public-release:42"
+    assert persisted["cadence"] == "1h"
+    assert persisted["next_due_at"] == "2099-01-01T00:00:00+00:00"
+    assert persisted["watch_only"] == "true"
 
 
 def test_monitor_resume_when_is_a_supported_bounded_policy(
@@ -150,14 +180,13 @@ def test_monitor_resume_when_is_a_supported_bounded_policy(
         resume_when="pr_merged:owner/repo#42",
         monitor_metadata={"target_key": "public-pr:42", "cadence": "1h"},
     )
-    assert bounded["resume_when"] == "pr_merged:owner/repo#42"
-    assert bounded["next_due_at"]
     persisted = resolve_monitor_todo_item(
         registry_path=registry,
         goal_id=GOAL_ID,
         todo_id=bounded["todo_id"],
     )
-    assert persisted["next_due_at"] == bounded["next_due_at"]
+    assert persisted["resume_when"] == "pr_merged:owner/repo#42"
+    assert persisted["next_due_at"]
 
     monitor = _add_monitor(
         registry,
@@ -171,7 +200,12 @@ def test_monitor_resume_when_is_a_supported_bounded_policy(
         agent_id=AGENT_ID,
         resume_when="pr_merged:owner/repo#42",
     )
-    assert updated["resume_when"] == "pr_merged:owner/repo#42"
+    persisted = resolve_monitor_todo_item(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        todo_id=updated["todo_id"],
+    )
+    assert persisted["resume_when"] == "pr_merged:owner/repo#42"
 
     assert monitor_todo_is_actionable_open(
         {
@@ -212,19 +246,20 @@ def test_todo_add_cli_materializes_cadence_only_monitor_due_time(
         runtime_root=runtime,
     )
 
-    assert added["cadence"] == "30m"
-    assert added["next_due_at"]
     persisted = resolve_monitor_todo_item(
         registry_path=registry,
         goal_id=GOAL_ID,
         todo_id=added["todo_id"],
     )
-    assert persisted["next_due_at"] == added["next_due_at"]
+    assert persisted["cadence"] == "30m"
+    assert persisted["next_due_at"]
     assert persisted["target_key"] == "public-dependency:cadence-only"
 
 
-def test_runtime_writeback_can_read_legacy_unbounded_monitor(tmp_path: Path) -> None:
-    registry, _runtime, state = _write_fixture(tmp_path)
+def test_runtime_writeback_rejects_unpromoted_legacy_monitor(
+    tmp_path: Path,
+) -> None:
+    registry, runtime, state = _write_fixture(tmp_path, canonical=False)
     state.write_text(
         state.read_text(encoding="utf-8")
         + "\n- [ ] [P2] Legacy public monitor.\n"
@@ -233,20 +268,21 @@ def test_runtime_writeback_can_read_legacy_unbounded_monitor(tmp_path: Path) -> 
         + "target_key=legacy-public cadence=1h -->\n",
         encoding="utf-8",
     )
+    before = state.read_bytes()
 
-    result = write_monitor_poll_todo_state(
-        registry_path=registry,
-        runtime_root=tmp_path / "runtime",
-        goal_id=GOAL_ID,
-        generated_at="2026-08-11T00:00:00Z",
-        execute=False,
-        todo_id="todo_legacy_monitor",
-        result_hash="unchanged",
-        agent_id=AGENT_ID,
-    )
+    with pytest.raises(CanonicalAuthorityRequired):
+        write_monitor_poll_todo_state(
+            registry_path=registry,
+            runtime_root=runtime,
+            goal_id=GOAL_ID,
+            generated_at="2026-08-11T00:00:00Z",
+            execute=False,
+            todo_id="todo_legacy_monitor",
+            result_hash="unchanged",
+            agent_id=AGENT_ID,
+        )
 
-    assert result is not None
-    assert result["todo_update"]["changed"] is True
+    assert state.read_bytes() == before
 
 
 def test_material_poll_reloads_status_and_projects_declared_successor(
@@ -1017,8 +1053,8 @@ def test_material_poll_user_action_does_not_block_existing_advancement(
     reminder = result["todo_writeback"]["next_todos"][0]
     assert reminder["task_class"] == "user_action"
     assert reminder["bound_agent"] == AGENT_ID
-    assert reminder["blocks_agent"] is None
-    assert reminder["unblocks_todo_id"] is None
+    assert reminder.get("blocks_agent") is None
+    assert reminder.get("unblocks_todo_id") is None
     assert result["after"]["selected_todo"]["todo_id"] == advancement["todo_id"]
 
 

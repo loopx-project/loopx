@@ -32,6 +32,7 @@ from .private_progress import ACTIVITY_UPDATE_INTERVAL_SEC, UPDATE_INTERVAL_SEC,
 # Conservative transport budget, not a claim about the provider's maximum.
 # Reserve edits for a final/closing notice; continue long Turns on a new draft.
 PROGRESS_EDIT_BUDGET = 12
+CHAT_CONTROL_COMMANDS = {"/status": "status", "/help": "help", "/new": "new", "/stop": "stop"}
 
 
 class LarkPrivateConversations:
@@ -123,18 +124,38 @@ class LarkPrivateConversations:
             if group:
                 # Both projections read this exact message under the same App.
                 # The root is read only after canonical ancestry checks below.
-                # Outbound provenance needs no display rendering. Admission
-                # retains that projection unchanged for text and media inputs.
+                # Outbound provenance needs no display rendering. Ordinary
+                # admission retains that projection for text and media inputs.
                 if render_content:
-                    # The fresh Bot identity and exact message projections
-                    # are independent reads. Join all three before checking
-                    # the root mention; Core still rechecks under its fences.
+                    # Admission already verified this exact App. Reuse only
+                    # that call's ephemeral observation; Core still rechecks
+                    # under its fences, and outbound verification stays fresh.
+                    observation = selected.get("observation")
+                    # An untrusted event hint only changes read scheduling.
+                    # Only authenticated provider text can select a control;
+                    # ordinary input still needs its display projection.
+                    control_hint = (event.get("message_type") == "text"
+                                    and isinstance(event.get("content"), str)
+                                    and event.get("content") in CHAT_CONTROL_COMMANDS)
                     with ThreadPoolExecutor(max_workers=3) as reads:
                         current = reads.submit(self._group_source_message, record["profile"], event["message_id"])
-                        display = reads.submit(rendered)
-                        identity = reads.submit(self.bindings.observe, record["profile"])
-                        canonical, result, observation = current.result(), display.result(), identity.result()
-                    message = _message(json_payload(result), event["message_id"])
+                        display = None if control_hint else reads.submit(rendered)
+                        identity = (reads.submit(self.bindings.observe, record["profile"])
+                                    if observation is None else None)
+                        canonical = current.result()
+                        if identity is not None:
+                            observation = identity.result()
+                        command_input = (self._group_text_command_input(canonical, observation)
+                            if control_hint and canonical is not None
+                            and canonical.get("msg_type", canonical.get("message_type")) == "text" else None)
+                        if (command_input in CHAT_CONTROL_COMMANDS
+                                and (not native or native.get("message") == command_input)):
+                            result, message = {"returncode": 0}, {**canonical, "content": command_input}
+                        else:
+                            # Older native requests may have frozen rendered
+                            # text. Keep their exact replay representation.
+                            result = display.result() if display is not None else rendered()
+                            message = _message(json_payload(result), event["message_id"])
                 else:
                     # Delivery still needs both fresh observations. Their IO
                     # is independent; join it before checking ancestry and @.
@@ -194,6 +215,8 @@ class LarkPrivateConversations:
                         return None
                     if message.get("msg_type", message.get("message_type")) == "text":
                         message["_command_input"] = self._group_text_command_input(message, observation)
+                        if not message["_command_input"]:
+                            return None  # A display rendering cannot supply missing canonical text.
                 return message
         except (KeyError, ValueError, OSError):
             pass
@@ -254,7 +277,7 @@ class LarkPrivateConversations:
         try:
             binding = self._binding(profile)
             source = lark_private_source(provider_ref=binding["provider_ref"], event=event)
-            selected = self.bindings.resolve(binding_id=binding["binding_id"], **source)
+            selected = self.bindings.resolve(binding_id=binding["binding_id"], **source, include_observation=True)
         except (KeyError, StopIteration, ValueError):
             return {"status": "audience_rejected"}
         request = identity_ref(binding["provider_ref"], event["message_id"])
@@ -324,8 +347,8 @@ class LarkPrivateConversations:
                 text, attachments = record.get("message", ""), record.get("attachments", [])
             command_input = private_message_caption(record["source_content"]) if attachments else text.strip()
             if binding.get("audience") == "group" and message_type == "text":
-                command_input = source_message.get("_command_input") or command_input
-            command = {"/status": "status", "/help": "help", "/new": "new", "/stop": "stop"}.get(command_input)
+                command_input = source_message["_command_input"]
+            command = CHAT_CONTROL_COMMANDS.get(command_input)
             if command_input == "/agents":
                 command = "agents"
             elif command_input == "/project":
@@ -709,6 +732,7 @@ class LarkPrivateConversations:
                 return 0
             config: Path | None = None
             selected: dict[str, Any] | None = None
+            control_receipt_first = False
 
             def inbox() -> Path:
                 nonlocal config
@@ -731,6 +755,8 @@ class LarkPrivateConversations:
                     record.update(status=native["status"], response=native.get("response"),
                                   commission_resources=native.get("commission_resources"),
                                   status_snapshot=native.get("status_snapshot"))
+                    control_receipt_first = (native["status"] == "command_completed"
+                                             and native.get("command") in CHAT_CONTROL_COMMANDS.values())
                 if record["status"] == "accepted":
                     native = self.core.read_request(record["request_ref"])
                     if native.get("agent_target"):
@@ -747,7 +773,9 @@ class LarkPrivateConversations:
                         if native.get("agent_target"):
                             admission = "已收到，等待原 Agent 宿主处理。/status 查看状态，/project 返回项目对话。"
                         elif turn and turn["status"] == "queued":
-                            admission = "正在处理前一条，这条已排队。"
+                            # A first Turn can also await its native claim;
+                            # queued alone does not prove a preceding request.
+                            admission = "已收到，这条已排队。"
                         elif (record.get("feedback", {}).get("received") or {}).get("ok") is not True:
                             admission = "已收到，正在处理。"
                     if admission:
@@ -778,13 +806,17 @@ class LarkPrivateConversations:
                         if turn["status"] == "completed":
                             response = self.core.todo_confirmation_reply(record["request_ref"], turn.get("response") or {})
                 else:
-                    if record["status"] != "rejected":
+                    if record["status"] != "rejected" and not control_receipt_first:
                         self._feedback(path, record, inbox=inbox)
                     response = (str(record.get("attachment_notice") or "")
                         or _command_text(str(record.get("response_code") or "")) or str(record.get("response") or ""))
                     if record.get("status_snapshot"):
                         response = _status_text(record["status_snapshot"], help_requested=native.get("command") == "help")
                 if self._deliver(path, record, "terminal", response, inbox=inbox):
+                    if control_receipt_first:
+                        # The verified result is the useful control receipt.
+                        # Preserve the usual idempotent reaction, after it.
+                        self._feedback(path, record, inbox=inbox)
                     resources = record.get("commission_resources") or {}
                     if resources.get("session_id") and resources.get("turn_id"):
                         first_turn = self.core.controller.store.load_turn(resources["session_id"], resources["turn_id"])

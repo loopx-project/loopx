@@ -18,6 +18,7 @@ from pathlib import Path
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
 from .checkpoint import _mark_replan_attempt, _participant_id, held_quota_decision, read_checkpoint_request
+from .checkpoint_handoff import CHECKPOINT_CAPTURE_SECONDS
 
 
 class CheckpointWake:
@@ -62,15 +63,16 @@ class CheckpointWake:
         return self.stack.__exit__(*args)
 
     def _first_replan(self, intent):
-        # The preflight verifies immutable source, current canonical review
-        # and completed native continuation before launching this wake. A
-        # mid-wake guard cannot bypass that shared restoration barrier.
+        # Preflight binds immutable source, current canonical review and a new
+        # completed native cursor. Capture itself must verify its full retained
+        # prefix and that cursor; a mid-wake guard cannot bypass either barrier.
         from loopx.control_plane.turn_driver.codex_sessions import load_codex_cli_session
         binding = load_codex_cli_session(Path(self.env["LOOPX_RUNTIME_ROOT"]), lineage={
             "goal_id": self.env["LOOPX_GOAL_ID"], "agent_id": self.env["LOOPX_AGENT_ID"]}, session_scope="agent")
         restored = bool(binding and binding.get("checkpoint_artifact_sha256"))
         gate = self.receipt.get("checkpoint_restore", {})
         if (not gate.get("capture_allowed", not restored) or
+                (restored and not gate.get("native_continuation_cursor")) or
                 intent.get("obligation_id") == gate.get("review_obligation_id")):
             return False
         if not intent["capture"] or not _mark_replan_attempt(
@@ -102,7 +104,8 @@ class CheckpointWake:
                     "decision_sha256": held["sha256"],
                     "capture_order": "after_native_interruption",
                     "writer_barrier": "owned_native_process_group_only"}
-        window = min(time.time() + 30, time.time() + deadline - time.monotonic())
+        capture_seconds = CHECKPOINT_CAPTURE_SECONDS if self.request.get("controller_handoff") else 30
+        window = min(time.time() + capture_seconds, time.time() + deadline - time.monotonic())
         if window <= time.time():
             raise TimeoutError("original wake budget expired before capture")
         components = list(self.request["components"])
@@ -120,8 +123,11 @@ class CheckpointWake:
         with ExitStack() as readers:
             if self.request.get("native_session"):
                 from loopx.hosts.codex_checkpoint import native_checkpoint_reader, native_session_checkpoint
+                from .checkpoint_continuation import restored_capture_history
                 from .checkpoint import native_binding_participant
                 components, source_wake = native_binding_participant(self.env, components, metadata)
+                native_options = restored_capture_history(self.env, self.receipt.get("checkpoint_restore"),
+                    session_id=self.receipt["session"]["session_id"])
                 guard = {"cli": self.env["LOOPX_CLI"], "workspace": self.env["LOOPX_PROJECT"],
                          "registry": self.env["LOOPX_REGISTRY"], "runtime_root": self.env["LOOPX_RUNTIME_ROOT"],
                          "goal_id": self.env["LOOPX_GOAL_ID"], "agent_id": self.env["LOOPX_AGENT_ID"],
@@ -130,7 +136,8 @@ class CheckpointWake:
                          "decision_sha256": held["sha256"]}
                 reader = readers.enter_context(native_checkpoint_reader(self.env, timeout=max(.1, window - time.time())))
                 native = native_session_checkpoint(self.env, self.receipt["session"]["session_id"],
-                    timeout=max(.1, window - time.time()), interrupted_guard=guard, transport=reader)
+                    timeout=max(.1, window - time.time()), interrupted_guard=guard, transport=reader,
+                    **native_options)
                 allocated = {}
                 for entry in native["components"]:
                     component_id = _participant_id(components, entry["id"])
@@ -145,8 +152,12 @@ class CheckpointWake:
                 "action": "probe", "components": components, "deadline_epoch_ms": window * 1000,
             }, timeout=max(.1, window - time.time()), retry_safe=False)
             if native is not None:
+                if restored_capture_history(self.env, self.receipt.get("checkpoint_restore"),
+                        session_id=self.receipt["session"]["session_id"]) != native_options:
+                    raise ValueError("restored capture source changed before sealing")
                 confirmed = native_session_checkpoint(self.env, self.receipt["session"]["session_id"],
-                    timeout=max(.1, window - time.time()), interrupted_guard=guard, transport=reader)
+                    timeout=max(.1, window - time.time()), interrupted_guard=guard, transport=reader,
+                    **native_options)
                 from .sessions import BenchmarkSessionWake
                 from .codex import Execution
                 confirmed_wake = BenchmarkSessionWake(self.env, Execution(context="resume",

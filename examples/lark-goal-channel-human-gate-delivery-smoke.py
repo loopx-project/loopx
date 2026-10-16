@@ -13,6 +13,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from loopx.extensions.bundled import bundled_extension_manifest
+from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+from loopx.control_plane.testing.canary_harness import import_fixture_authority
 from loopx.extensions.lark.goal_channel_contracts import (
     GOAL_CHANNEL_BINDING_SCHEMA_VERSION,
     read_goal_channel_binding,
@@ -296,12 +298,14 @@ def write_project(root: Path) -> tuple[Path, Path]:
     return registry_path, binding_path
 
 
-def main() -> None:
+def assert_gate_delivery(provider: str) -> None:
     with tempfile.TemporaryDirectory(prefix="loopx-goal-channel-human-gate-") as raw:
         registry_path, binding_path = write_project(Path(raw))
         bin_dir, fake_state_path = write_fake_lark_cli(Path(raw))
         project = registry_path.parent.parent
         runtime_root = Path(raw) / "runtime"
+        import_fixture_authority(registry_path, GOAL_ID, provider=provider)
+        before = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=GOAL_ID)
         first_refresh = run_refresh(
             registry_path=registry_path,
             runtime_root=runtime_root,
@@ -350,6 +354,11 @@ def main() -> None:
             == send_count
         )
         assert gate_update["changed"] is True, gate_update
+        after = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=GOAL_ID)
+        gate = next(row for row in after["todos"] if row["todo_id"] == GATE_TODO_ID)
+        assert "after reviewing the diff" in gate["text"], gate
+        assert gate["status"] == "open" and gate["task_class"] == "user_gate", gate
+        assert after["provider_revision"] != before["provider_revision"]
         assert third["status"] == "sent_verified", third
         third_key = third["notification"]["idempotency_key"]
         assert third_key != first_key
@@ -373,6 +382,11 @@ def main() -> None:
         assert str(Path(raw)) not in public_packet
 
     print("lark-goal-channel-human-gate-delivery-smoke ok")
+
+
+def main() -> None:
+    for provider in ("file", "sqlite"):
+        assert_gate_delivery(provider)
 
 
 if __name__ == "__main__":

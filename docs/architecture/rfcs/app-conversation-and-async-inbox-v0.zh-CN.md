@@ -37,6 +37,8 @@ Lark 页面选择一个非默认 App、当前可用工作区和宿主 executor�
 Turn FIFO 和确切 stop/new/status 目标。传输层保存独立的受理与最终投递意图，通过
 provider 读回确认回复；发生没有 receipt 的不确定写入时不盲目重发。两 App 复用
 现有服务及按 App 获取的 listener lease，不创建第二套队列、模型 runner 或隐藏 Goal。
+飞书排队提示只表达已观测的队列状态，不断言已有前一条请求正在运行：首个 Turn
+也可能等待原生 claim。恢复继续使用已持久化提示的原文与 provider intent。
 
 源码 canary 已验证打包页面的桌面/窄屏、撤权拒绝与恢复、慢会话期间另一 App 完成、
 后续消息持久排队、exact stop，以及重启后原会话恢复和已确认回复不重复发送。

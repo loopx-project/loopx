@@ -8,6 +8,7 @@ import argparse
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from ..capabilities.machine_configuration.goal_storage import new_goal_storage_target
 from ..control_plane.projects.registry import (
     PROJECT_KINDS,
     bind_session,
@@ -165,6 +166,7 @@ def handle_project_command(
                 stop_condition=args.stop_condition,
                 repository_bindings=args.repository,
                 external_locator_bindings=args.external_locator,
+                resolve_new_goal_storage_target=new_goal_storage_target,
                 goal_instance_profile=args.goal_instance_profile,
                 operation_id=args.operation_id,
                 registered_agents=getattr(args, "registered_agent", []),

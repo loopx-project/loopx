@@ -25,19 +25,19 @@ from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.chat_actions import ChatActionService
 from loopx.chat_action_store import ChatActionStore
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-from loopx.todos import add_goal_todo, list_goal_todos
+from loopx.todos import add_goal_todo
 r=pathlib.Path(sys.argv[1]); runtime=r/'runtime'; registry=r/'registry.json'; state=r/'state.md'
 state.write_text('---\\ngoal_id: product-release\\n---\\n\\n## Agent Todo\\n')
 agents=['codex-review','codex-delivery'] + (['codex'] if sys.argv[2]=='true' else [])
 registry.write_text(json.dumps({'common_runtime_root':str(runtime),'goals':[{'id':'product-release','repo':str(r),'state_file':'state.md','coordination':{'agent_model':'peer_v1','registered_agents':agents}}]}))
+config=json.loads(registry.read_text()); config['goals'][0]['coordination']['handoff_mode']='hard_lease'; registry.write_text(json.dumps(config))
+projection=build_todo_runtime_shadow_projection(goal_id='product-release',handoff_mode='hard_lease',todos=[])
+initialize_canonical_authority(runtime,'product-release',projection,state_path=state,provider='file')
 ids={}
 for operation in ['complete','cancel']:
-    target=add_goal_todo(registry_path=registry,goal_id='product-release',role='agent',text='Dependent '+operation,status='blocked',task_class='advancement_task',claimed_by='codex-delivery')
-    action=add_goal_todo(registry_path=registry,goal_id='product-release',role='user',text='Handle '+operation,task_class='user_action',bound_agent='codex-delivery',unblocks_todo_id=target['todo_id'])
+    target=add_goal_todo(registry_path=registry,goal_id='product-release',role='agent',text='Dependent '+operation,status='blocked',task_class='advancement_task',claimed_by='codex-delivery',operation_id='attention-user-action:'+operation+':target')
+    action=add_goal_todo(registry_path=registry,goal_id='product-release',role='user',text='Handle '+operation,task_class='user_action',bound_agent='codex-delivery',unblocks_todo_id=target['todo_id'],operation_id='attention-user-action:'+operation+':request')
     ids[operation]=[action['todo_id'],target['todo_id']]
-projection=build_todo_runtime_shadow_projection(goal_id='product-release',handoff_mode='hard_lease',todos=list_goal_todos(registry_path=registry,goal_id='product-release')['todos'])
-config=json.loads(registry.read_text()); config['goals'][0]['coordination']['handoff_mode']='hard_lease'; registry.write_text(json.dumps(config))
-initialize_canonical_authority(runtime,'product-release',projection,state_path=state,provider='file')
 s=ChatHTTPServer(('127.0.0.1',0),ChatRequestHandler)
 s.registry_path,s.runtime_root,s.runtime_root_override,s.verbose=registry,runtime,str(runtime),False
 s.selected_goal_id,s.scan_roots,s.limit='product-release',[],10
@@ -67,7 +67,7 @@ print(json.dumps({'port':s.server_port,'ids':ids}),flush=True); s.serve_forever(
     const previews = [];
     let applications = 0;
     context = await openWorkspacePage(browser, url, { beforeGoto: async (_api, page) => {
-      for (const pattern of ["**/status.json*", "**/api/actions**", "**/api/chat/todo/detail?*", "**/api/chat/completed-todos?*"]) {
+      for (const pattern of ["**/status.json*", "**/api/actions**", "**/api/chat/todo/detail?*", "**/api/chat/completed-todos?*", "**/extension-presentation-surfaces*", "**/extension-projection*"]) {
         await page.route(pattern, async route => {
           const request = route.request(), parsed = new URL(request.url());
           if (pattern === "**/status.json*" && parsed.pathname !== "/status.json") { await route.fallback(); return; }
@@ -89,7 +89,7 @@ print(json.dumps({'port':s.server_port,'ids':ids}),flush=True); s.serve_forever(
       await page.getByRole("button", { name: /LoopX 管家/ }).first().click();
       await page.getByTestId("personal-home-lane-needs_you").locator(".personal-home-goal-card").first().click();
       await page.getByRole("button", { name: /^任务$/ }).first().click();
-      await page.getByText(`Handle ${operation}`, { exact: true }).first().click();
+      await page.locator('[data-goal-panel="tasks"]:not([hidden])').getByText(`Handle ${operation}`, { exact: true }).click();
       if (operation === "cancel") await drawer.locator("summary", { hasText: "其他处理" }).click();
       await drawer.getByRole("button", { name: operation === "complete" ? "我已完成" : "不再需要", exact: true }).click();
       await page.locator('[data-context-kind="proposal"]').waitFor({ state: "visible" });
@@ -129,7 +129,7 @@ export const attentionUserActionScenario = {
       await page.getByRole("button", { name: /LoopX 管家/ }).first().click();
       await page.getByTestId("personal-home-lane-needs_you").locator(".personal-home-goal-card").first().click();
       await page.getByRole("button", { name: /^任务$/ }).first().click();
-      await page.getByText(text, { exact: true }).first().click();
+      await page.locator('[data-goal-panel="tasks"]:not([hidden])').getByText(text, { exact: true }).click();
       await drawer.getByText(text, { exact: true }).first().waitFor({ state: "visible" });
     }
     try {
@@ -158,7 +158,7 @@ export const attentionUserActionScenario = {
       await page.getByRole("button", { name: "查看更新后的 Goal" }).click();
       assert.equal(api.durableWriteCount, writesBefore + 1, "Confirmation writes exactly once");
       await page.getByRole("button", { name: /^任务$/ }).first().click();
-      await page.getByText(idlessText, { exact: true }).first().waitFor({ state: "visible" });
+      await page.locator('[data-goal-panel="tasks"]:not([hidden])').getByText(idlessText, { exact: true }).waitFor({ state: "visible" });
       assert.equal(await page.getByText(actionText, { exact: true }).count(), 0, "The completed request leaves needs-you on readback");
 
       // Without a stable todo_id the drawer explains why and offers the conversation instead.
@@ -192,7 +192,7 @@ export const attentionUserActionScenario = {
             assert.equal(preview.normalized_parameters.todo_id, "todo-browser-user-action");
           }],
         ]) {
-          await fresh.page.getByText(actionText, { exact: true }).first().click();
+          await fresh.page.locator('[data-goal-panel="tasks"]:not([hidden])').getByText(actionText, { exact: true }).click();
           await freshDrawer.locator("summary", { hasText: "其他处理" }).click();
           await freshDrawer.getByRole("button", { name: label, exact: true }).click();
           await fresh.page.locator('[data-context-kind="proposal"]').waitFor({ state: "visible" });

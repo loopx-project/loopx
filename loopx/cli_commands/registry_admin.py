@@ -571,6 +571,7 @@ def handle_registry_admin_command(
                 ),
                 reward_memory_config=args.reward_memory_config,
                 reward_memory_agents=args.reward_memory_agents,
+                reward_memory_agent_id=args.reward_memory_agent_id,
                 clear_reward_memory_config=bool(
                     args.clear_reward_memory_config
                 ),

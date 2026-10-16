@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Compare Monitor polling and observation updates on a read-only Goal snapshot.
+"""Compare current-policy Monitor recovery on a read-only Goal snapshot.
 
 Only disposable copies receive synthetic Monitor/lease records. The report is
 bounded and excludes source text, identifiers, paths and connection strings.
+The baseline must support the same Monitor recovery and authority format;
+this is a parity rehearsal, not an assertion that an older bug still exists.
 """
 from __future__ import annotations
 
@@ -43,7 +45,7 @@ const {PostgreSqlAuthorityService}=await moduleAt(input.repo,'coordination/postg
 const {selectLocalSqliteAuthority}=await moduleAt(input.repo,'coordination/local_authority_provider.ts');
 const {executeCanonicalTaskLeaseAcquire}=await moduleAt(input.repo,'coordination/task_lease_acquire.ts');
 const {coordinationTodoReadModel}=await moduleAt(input.repo,'coordination/coordination_projection.ts');
-const {canonicalAuthoritySha256: digest}=await moduleAt(input.repo,'coordination/authority_store_codec.ts');
+const {canonicalAuthoritySha256: digest,authorityUnicodeCompare}=await moduleAt(input.repo,'coordination/authority_store_codec.ts');
 const {engageLegacyCoordinationWriterFence}=await moduleAt(input.repo,'coordination/legacy_writer_fence.ts');
 const goal=input.goal_id, target='todo_monitor_rehearsal';
 const initial=structuredClone(input.projection);
@@ -52,9 +54,9 @@ initial.todos.push({schema_version:'todo_item_v0',todo_id:target,role:'agent',st
   text:'Observe isolated public changes',archive_state:'active',source_section:'Agent Todo',
   claimed_by:'agent-a',excluded_agents:[],task_class:'continuous_monitor',target_key:'isolated-watch',
   cadence:'1h',watch_only:'true',next_due_at:'2026-09-01T00:00:00Z'});
-initial.todos.sort((a,b)=>a.todo_id<b.todo_id?-1:a.todo_id>b.todo_id?1:0);
+initial.todos.sort((a,b)=>authorityUnicodeCompare(a.todo_id,b.todo_id));
 initial.todo_read_model=coordinationTodoReadModel(initial.todos,initial.todo_read_model.schema_version);
-initial.handoff_mode='legacy';
+initial.handoff_mode='soft_claim';
 const proof={idempotency_key:'monitor-rehearsal-execution',expected_version:3};
 const lease={schema_version:'task_lease_v0',goal_id:goal,todo_id:target,owner:'agent-a',
   idempotency_key:proof.idempotency_key,version:3,lease_epoch:2,status:'active',write_scopes:[],
@@ -98,6 +100,7 @@ try {
         expected_shadow_provider_revision:seed.provider_revision}})).status,'applied');
     await rm(display);
     const poll=arm==='baseline'?baseline:current;
+    const updateTodo=arm==='baseline'?baselineUpdate:update;
     const request={schema_version:'loopx_coordination_monitor_poll_request_v0',runtime_root:runtime,goal_id:goal,
       operation_id:'unchanged',actor_agent_id:'agent-a',registered_agents:['agent-a','agent-b'],dry_run:false,
       observation:{todo_id:target,generated_at:'2026-09-01T00:00:00Z',result_hash:'first',material_change:false},intent:{}};
@@ -105,7 +108,7 @@ try {
     assert.equal(firstPoll.status,'applied',JSON.stringify(firstPoll));
     const first=await store.loadAuthority(); assert.equal(first.status,'loaded'); compatible[arm]=first.head;
     assert.equal((await poll(request,dependencies)).status,'replayed');
-    const leased={...first.head,handoff_mode:'hard_lease',leases:[...first.head.leases,lease].sort((a,b)=>a.todo_id<b.todo_id?-1:a.todo_id>b.todo_id?1:0)};
+    const leased={...first.head,handoff_mode:'hard_lease',leases:[...first.head.leases,lease].sort((a,b)=>authorityUnicodeCompare(a.todo_id,b.todo_id))};
     assert.equal((await store.commitAuthority({operation_id:'seed-execution',expected_provider_revision:first.provider_revision,
       events:[],receipts:[],next_projection:leased})).status,'applied');
     const before=await store.loadAuthority();
@@ -152,17 +155,11 @@ try {
       planning_intent:{status:'open',no_followup:false},monitor_observation:{generated_at:'2030-01-01T00:00:00Z',
         result_hash:'second',material_change:true,monitor_effect_id:'reactivate',cadence:'1h'}};
     const closed=await store.loadAuthority();
-    if(arm==='baseline') {
-      const unsupported=await baselineUpdate(observation,dependencies);
-      assert.equal(unsupported.status,'failed'); assert.equal(unsupported.reason_code,'monitor_reactivation_lease_transition_required');
-      assert.deepEqual(await store.loadAuthority(),closed);
-      report[arm]={poll_parity:true,retained_lease_reactivation:'rejected_no_write'}; continue;
-    }
-    assert.equal((await update({...observation,dry_run:true},dependencies)).status,'planned');
+    assert.equal((await updateTodo({...observation,dry_run:true},dependencies)).status,'planned');
     assert.deepEqual(await store.loadAuthority(),closed);
-    assert.equal((await update({...observation,patch:{text:'mixed edit'}},dependencies)).status,'failed');
+    assert.equal((await updateTodo({...observation,patch:{text:'mixed edit'}},dependencies)).status,'failed');
     assert.deepEqual(await store.loadAuthority(),closed);
-    const resumed=await update(observation,dependencies); assert.equal(resumed.status,'applied',JSON.stringify(resumed));
+    const resumed=await updateTodo(observation,dependencies); assert.equal(resumed.status,'applied',JSON.stringify(resumed));
     assert.equal(resumed.monitor_poll_transition.material_change_generation,2);
     const afterResume=await store.loadAuthority(); assert.equal(afterResume.status,'loaded');
     const resumedTodo=afterResume.head.todos.find(t=>t.todo_id===target);
@@ -177,7 +174,7 @@ try {
     assert.equal(fresh.status,'applied',JSON.stringify(fresh));
     assert.equal(fresh.lease.version,4); assert.equal(fresh.lease.lease_epoch,3);
     const acquired=await store.loadAuthority();
-    assert.equal((await update(observation,dependencies)).status,'replayed');
+    assert.equal((await updateTodo(observation,dependencies)).status,'replayed');
     assert.deepEqual(await store.loadAuthority(),acquired,'historical replay cannot release the fresh execution');
     assert.deepEqual(afterResume.head.todos.filter(t=>input.projection.todos.some(old=>old.todo_id===t.todo_id)),input.projection.todos);
     const closedAgain=afterResume.head.todos.map(t=>t.todo_id===target?{...t,status:'done',done:true,completed_at:'2030-01-01T01:00:00Z'}:t);
@@ -185,15 +182,15 @@ try {
       events:[],receipts:[],next_projection:{...acquired.head,todos:closedAgain,
         todo_read_model:coordinationTodoReadModel(closedAgain,afterResume.head.todo_read_model.schema_version)}});
     const final=await store.loadAuthority();
-    assert.equal((await update(observation,dependencies)).status,'replayed');
-    assert.equal((await update({...observation,operation_id:'stale-new-id'},dependencies)).status,'failed');
+    assert.equal((await updateTodo(observation,dependencies)).status,'replayed');
+    assert.equal((await updateTodo({...observation,operation_id:'stale-new-id'},dependencies)).status,'failed');
     assert.deepEqual(await store.loadAuthority(),final);
     heads[arm]=final.head;
     report[arm]={poll_parity:true,retained_lease_reactivation:'applied',fresh_execution_epoch:3,same_hash_reactivation_generation:2,
       historical_replay_keeps_completion:true,stale_observation:'rejected',non_target_unchanged:true};
   }
   for(const arm of ['file','sqlite','postgresql']) assert.deepEqual(compatible[arm],compatible.baseline);
-  assert.deepEqual(heads.file,heads.sqlite); assert.deepEqual(heads.file,heads.postgresql);
+  for(const arm of ['file','sqlite','postgresql']) assert.deepEqual(heads[arm],heads.baseline);
   process.stdout.write(JSON.stringify({schema_version:'authority_monitor_rehearsal_v0',
     source_todos:input.projection.todos.length,source_leases:input.projection.leases.length,
     compatible_head_sha256:digest(compatible.baseline),final_head_sha256:digest(heads.file),
@@ -227,7 +224,7 @@ def main() -> int:
     goal = next(g for g in registry["goals"] if g["id"] == args.goal_id)
     runtime = resolve_runtime_root(registry, None, registry_path=registry_path)
     _, _, state = resolve_goal_state(registry=registry, goal_id=args.goal_id, project_override=None, state_file_override=None)
-    projection, snapshot = build_runtime_shadow_source_snapshot(goal=goal, runtime_root=runtime, state_path=state, registry_path=registry_path)
+    projection, snapshot = build_runtime_shadow_source_snapshot(goal=goal, runtime_root=runtime, state_path=state, registry_path=registry_path, include_all_archived_todos=True)
     source_digest = hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
     child = subprocess.run(["node", "--no-warnings", "--experimental-sqlite", "--experimental-strip-types", "--input-type=module", "-e", NODE_REHEARSAL],
         input=json.dumps({"repo": str(REPOSITORY), "baseline_repo": str(baseline), "goal_id": args.goal_id, "projection": projection}),
@@ -239,7 +236,7 @@ def main() -> int:
             with os.fdopen(descriptor, "w") as stream:
                 stream.write(child.stderr)
         raise SystemExit(f"isolated Monitor rehearsal failed (exit {child.returncode}); no qualification; diagnostics stay private")
-    after_projection, after_snapshot = build_runtime_shadow_source_snapshot(goal=goal, runtime_root=runtime, state_path=state, registry_path=registry_path)
+    after_projection, after_snapshot = build_runtime_shadow_source_snapshot(goal=goal, runtime_root=runtime, state_path=state, registry_path=registry_path, include_all_archived_todos=True)
     if projection != after_projection or snapshot != after_snapshot or registry_path.read_bytes() != registry_bytes:
         raise SystemExit("live source changed during rehearsal; rerun from a stable snapshot")
     result = json.loads(child.stdout)

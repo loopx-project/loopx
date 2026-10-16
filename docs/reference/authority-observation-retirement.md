@@ -3,9 +3,11 @@
 The `coordination.authority_shadow` / `file_one_way` observer is retired.
 Todo, handoff-mode and task-lease writes no longer re-read the Goal after commit
 or create a second observation store. Their primary semantics are unchanged.
-The transaction-bound `coordination.runtime_shadow` outbox remains the only
-writable shadow lineage; its existing bootstrap, source locks, byte witnesses,
-recovery and promotion checks remain mandatory.
+The retained `coordination.runtime_shadow` files are pre-cutoff migration and
+recovery evidence. Normal 2.0 writes require canonical authority and no longer
+feed a Markdown shadow lineage. Existing bootstrap, source locks, byte
+witnesses, recovery and promotion checks remain available for reviewed import
+and interrupted-operation recovery.
 
 This is an intentional behavior change for Goals that opted into the old
 observer. Unconfigured Goals remain default-off. A retained old setting is
@@ -94,12 +96,10 @@ Bootstrap, rollback and promotion still load their supported management adapter;
 this reader exit grants no writer cutoff, import or promotion authority.
 
 The retained Python filesystem codecs preserve the existing wire and errors;
-candidate proof and drain effects remain in their TypeScript owners. Supported
-unpromoted writes and `authority-shadow drain` still need their current producer
-and orchestration modules. This separation permits eventual producer retirement
-without discarding historical readback, but does not itself authorize deletion
-or disposition of pending originals. Code rollback restores the previous import
-layout without changing data or restoring retired write authority.
+candidate proof and drain effects remain in their TypeScript owners. Historical
+outbox drain and disposition retain their orchestration modules without
+reopening a business writer. Pending originals still require explicit
+reconciliation; historical readback does not authorize deletion.
 
 ## Why two matching reads were not a capture guarantee
 

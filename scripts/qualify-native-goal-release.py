@@ -22,6 +22,24 @@ AGENT = "worker-a"
 TODOS = {"todo_reducer", "todo_cli"}
 
 
+def _default_active_state() -> str:
+    return (
+        '---\nstatus: active-read-only\nowner_mode: goal\n'
+        'objective: "Deliver the finite local ledger specification."\n---\n\n'
+        '# Ledger\n\n## Objective\n\nDeliver and validate TASK.md.\n\n'
+        '## Next Action\n\nImplement the reducer, then the CLI.\n\n'
+        '## User Todo\n\n## Agent Todo\n\n'
+        '- [ ] [P1] Implement and validate the TASK.md reducer.\n'
+        '  <!-- loopx:todo todo_id=todo_reducer status=open task_class=advancement_task '
+        'action_kind=implement claimed_by=worker-a task_repository=git:example.com/ledger '
+        'required_capabilities=filesystem_write -->\n'
+        '- [ ] [P1] Implement the CLI, verify full acceptance and close this finite Goal.\n'
+        '  <!-- loopx:todo todo_id=todo_cli status=open task_class=advancement_task '
+        'action_kind=implement claimed_by=worker-a resume_when=todo_done:todo_reducer '
+        'task_repository=git:example.com/ledger required_capabilities=filesystem_write -->\n'
+    )
+
+
 def host_environment(root: Path, launcher: Path) -> dict[str, str]:
     """Explicit transport/tool environment; never clone the operator's environment."""
     home, temporary = root / "home", root / "tmp"
@@ -83,7 +101,11 @@ def prerequisite_failure(codex: str) -> str | None:
     return None
 
 
-def setup(root: Path) -> tuple[Path, Path, Path]:
+def setup(
+    root: Path,
+    *,
+    active_state_text: str | None = None,
+) -> tuple[Path, Path, Path]:
     # Reuse the existing real CLI fixture, not an alternate registry contract.
     spec = importlib.util.spec_from_file_location(
         "heartbeat_fixture", REPO / "examples/control_plane/heartbeat-quota-flow-smoke.py",
@@ -99,19 +121,7 @@ def setup(root: Path) -> tuple[Path, Path, Path]:
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "registry.global.json").write_text(json.dumps(config))
     (project / "ACTIVE_GOAL_STATE.md").write_text(
-        '---\nstatus: active-read-only\nowner_mode: goal\n'
-        'objective: "Deliver the finite local ledger specification."\n---\n\n'
-        '# Ledger\n\n## Objective\n\nDeliver and validate TASK.md.\n\n'
-        '## Next Action\n\nImplement the reducer, then the CLI.\n\n'
-        '## User Todo\n\n## Agent Todo\n\n'
-        '- [ ] [P1] Implement and validate the TASK.md reducer.\n'
-        '  <!-- loopx:todo todo_id=todo_reducer status=open task_class=advancement_task '
-        'action_kind=implement claimed_by=worker-a task_repository=git:example.com/ledger '
-        'required_capabilities=filesystem_write -->\n'
-        '- [ ] [P1] Implement the CLI, verify full acceptance and close this finite Goal.\n'
-        '  <!-- loopx:todo todo_id=todo_cli status=open task_class=advancement_task '
-        'action_kind=implement claimed_by=worker-a resume_when=todo_done:todo_reducer '
-        'task_repository=git:example.com/ledger required_capabilities=filesystem_write -->\n',
+        active_state_text if active_state_text is not None else _default_active_state(),
         encoding="utf-8",
     )
     shutil.copyfile(FIXTURE / "TASK.md", project / "TASK.md")
@@ -128,6 +138,54 @@ def setup(root: Path) -> tuple[Path, Path, Path]:
     for args in (("init", "-q"), ("remote", "add", "origin", "https://example.com/ledger.git"),
                  ("add", "TASK.md"), ("commit", "-qm", "Initialize synthetic acceptance")):
         subprocess.run([*git, *args], check=True, capture_output=True, timeout=30)
+    from loopx.state_backup import build_state_backup_plan, execute_state_backup_plan
+
+    backup = execute_state_backup_plan(
+        build_state_backup_plan(
+            project=project,
+            runtime_root=runtime,
+            output_dir=root / "backups",
+            backup_id="release-goal-source",
+            include_automations=False,
+            include_skills=False,
+            include_registry_projects=False,
+            registry_path=registry,
+        )
+    )
+    if backup.get("ok") is not True:
+        raise RuntimeError("release fixture source backup failed")
+    prepared = cli(
+        launcher,
+        "coordination-shadow",
+        "prepare-import",
+        "--goal-id",
+        GOAL,
+        "--operation-id",
+        "release-goal-source",
+        "--backup-manifest",
+        str(backup["manifest_path"]),
+        "--provider",
+        "file",
+        "--target-handoff-mode",
+        "soft_claim",
+    )["cold_import"]
+    if prepared.get("status") != "prepared":
+        raise RuntimeError("release fixture import plan failed")
+    applied = cli(
+        launcher,
+        "coordination-shadow",
+        "apply-import",
+        "--goal-id",
+        GOAL,
+        "--operation-id",
+        "release-goal-source",
+        "--plan-sha256",
+        str(prepared["plan_sha256"]),
+        "--writers-stopped",
+        "--execute",
+    )["cold_import"]
+    if applied.get("status") not in {"applied", "replayed"}:
+        raise RuntimeError("release fixture canonical import failed")
     return project, runtime, launcher
 
 

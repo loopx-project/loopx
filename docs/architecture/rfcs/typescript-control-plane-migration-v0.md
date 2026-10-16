@@ -4,7 +4,7 @@
 - Supersedes / closes: none
 - Proposed by: LoopX maintainers
 - Date: 2026-08-15
-- Last revised: 2026-10-07
+- Last revised: 2026-10-15
 - Scope: an incremental, replacement-first migration of the LoopX control-plane
   core from Python to TypeScript without maintaining two semantic
   implementations
@@ -31,7 +31,58 @@ T0–T4, not additional provider promotion or completed migration claims.
 
 <a id="current-delivery-frontier-2026-10-02"></a>
 
-## Current delivery frontier (2026-10-12)
+## Current delivery frontier (2.0 candidate, 2026-10-15)
+
+Contributor-led [#6396](https://github.com/loopx-project/loopx/pull/6396),
+at reviewed head `5d29213d3`, carries the C1/T4 normal-Markdown-writer cutoff
+and live `legacy` ownership-policy retirement. It incorporates the fork
+supplements and the valuable #6366 invariants and recovery checks documented in
+[the absorption map](../../reference/local-authority-provider-selection.md#retirement-proposal-reconciliation).
+The candidate removes the obsolete writer implementations and capture producers;
+canonical mutation, creation, team-plan, Monitor and lease consumers reuse their
+existing typed owners. Do not schedule those deletions again from the older
+writer inventory below. The additive 1.x line and an open 2.0 proposal remain
+different delivery baselines; this checkpoint does not claim a released cutoff.
+
+The next integration pairs `7c0215f26` with pinned main `77d6b07fb` through a
+normal two-parent merge. Keep `2.0.0a1` as the retirement candidate while
+carrying the compatible 1.4.2 fixes; preserving source bytes in a one-parent
+snapshot would lose the main ancestry needed for a reviewable upstream diff.
+Fresh canonical-create checks retain both structured P1 and its compatibility
+display, while original receipts keep their recorded intent. Retained outbox
+recovery uses the existing native delivery/drain counterexamples after producer
+removal. The released-lease cutover check moves to backed-up cold import on
+File/SQLite, preserving the complete terminal record, later canonical work and
+original-import replay without recreating a source writer. Later main revisions
+and installed Host adoption still require their own applicable evidence.
+
+New execution/configuration targets share `ExecutionHandoffMode`, derived from
+`EXECUTION_HANDOFF_MODES` (`soft_claim` / `hard_lease`). Historical `HandoffMode`
+and receipt codecs still recognize `legacy`. The typed policy owner refuses
+fresh legacy execution, acquire/maintenance and current-proof grants, including
+delegation launch/resume; exact historical receipt recovery, release and
+reviewed backup/plan/migrate remain supported. Storage conversion and ownership
+migration remain distinct. No active Goal is migrated by this proposal.
+
+Current work is candidate integration and adoption qualification, not another
+writer extraction: retain the compatible 1.x upgrade/backup/recovery route,
+finish the bounded reversible core-developer trial and affected real Host/App
+journeys, and keep formal D2 failures/missing evidence and release-default
+qualification open. Permanent Markdown document/display IO, historical readers
+and outstanding receipt/outbox disposition are retained obligations. A passing
+conversion drill does not establish natural adoption or Goal-instance retirement.
+
+Use the [current retirement ledger](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md#current-candidate-checkpoint)
+for that frontier. [Exact-head review](https://github.com/loopx-project/loopx/pull/6396#pullrequestreview-5535116423)
+and [combined-tree evidence](https://github.com/loopx-project/loopx/pull/6396#issuecomment-6195855339)
+retain their source revisions; they do not certify an untested later head/base,
+a completed installed cohort or all RFC acceptance.
+
+### Historical 1.x prerequisite checkpoints (through 2026-10-12)
+
+The following records explain the prerequisites and validation at their named
+sources. Their references to reachable writers and a “next” cutoff describe
+that 1.x baseline, not remaining implementation work in the candidate above.
 
 Rechecked at main `38cb407ed`: #5413/#5466/#5283 and the affected creation,
 Host-stop and UI-history owners #5500/#5805/#5308/#5398 are merged. Reuse
@@ -1536,16 +1587,44 @@ and receipt identity remain intact. This corrects misleading CLI JSON readback
 for peer-scoped gates; it does not migrate the remaining route or primary-action
 builders, reserve recommendations, or complete T3/D1–D3.
 
+**Base quota admission composition.** `quota/run_decision.ts` now owns the
+ordered capability, workspace, automation, replan, terminal, inbox and coordinator
+overlays that produce the base run decision. The Python classifier and its two
+action helpers are retired; the existing public adapter makes one coarse native
+request. Goal terminal evidence and peer-scope facts retain their existing owners
+as a transition. Their exit requires migrating the shared Goal source projection
+and all its callers together. The Python public function, dataclass and diagnostic
+codec retire when CLI/Host callers use the typed kernel directly. The target is
+TypeScript ownership throughout, with no Python rule fallback.
+The adapter transports bounded facts and diagnostic strings, then applies the
+typed quota patch without round-tripping source numbers or metadata. Receipt-bound
+overlays, later route/action builders and effect authority retain their owners.
+The existing effective-action vocabulary and generated TS binding are reused;
+its canonical Python enum remains until a separate contract-owner cutover.
+The TypeScript producer witness executes the real typed classifier against shared guard fixtures and rejects a
+changed rule or an enum-only substitute. This delivers the implementation and
+semantic parity for one base-admission consumer. Full-CLI performance acceptance
+is held for owner review after a p95 regression; whole-Goal migration and
+provider/default qualification remain open.
+
 **Long-history transport boundary.** Replan history still has one TS decision
 owner. Small requests retain the inline codec; larger complete fact snapshots
 travel through a private, digest-bound local file reference. The same reducer
 checks all rows, lane-scoped ACKs and retry identities; neither the RPC budget
 nor a display window permits history truncation. Missing, altered or malformed
 snapshots fail before a decision, and the adapter removes temporary files on
-return or rejection. This repairs a T3/S2 settlement blocker and supplies S7/R7
+return or rejection. The replan semantic projection also uses the existing
+same-UID, digest-bound request/response snapshot channel for complete lifecycle
+and receipt-recovery facts. Its callers share one transport adapter; lifecycle,
+stride and receipt decisions remain in the same TypeScript owner. Ordinary RPCs
+retain their 2 MiB limit and local snapshots retain their 64 MiB bound. File/SQLite
+CLI recovery covers full facts above the wire budget, later independent work and
+user gates, durable refresh and replay, and exactly one quota debit. This repairs
+a T3/S2 settlement blocker and supplies S7/R7
 wire-growth evidence; it does not make full-history parsing constant-memory or
-qualify distributed execution. Cursor/checkpoint reduction remains a measured
-follow-up with complete-source parity, not a second Python policy. See the
+qualify installed-host adoption or distributed execution. Cursor/checkpoint
+reduction remains a measured follow-up with complete-source parity, not a second
+Python policy. See the
 [history decision evidence](ledger/typescript-control-plane-migration-v0/2026-09-22-replan-history-policy.md).
 
 **Checkpoint read-context transport.** A long-lived Goal can exceed the Effect

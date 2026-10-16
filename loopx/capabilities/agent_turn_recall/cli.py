@@ -233,6 +233,7 @@ def handle_agent_turn_recall_command(
                 )
                 if previous
                 and previous.get("turn_recall_id") == situation["turn_recall_id"]
+                and previous.get("binding_revision") == experiment_status.get("binding_revision")
                 else None
             )
             if deduplicated is not None:
@@ -287,6 +288,7 @@ def handle_agent_turn_recall_command(
                             ),
                             "source_status": payload.get("status"),
                             "context": payload.get("context"),
+                            **({"binding_revision": experiment_status["binding_revision"]} if experiment_status.get("binding_revision") else {}),
                         },
                     )
                     payload["same_turn_receipt_written"] = True

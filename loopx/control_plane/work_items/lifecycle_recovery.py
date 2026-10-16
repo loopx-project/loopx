@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from ..effect_runtime import effect_runtime_result
+from .replan_semantics_codec import project_replan_semantics
 
 
 def receipt_bound_lifecycle_candidate(
@@ -15,7 +15,7 @@ def receipt_bound_lifecycle_candidate(
     items: list[dict[str, Any]],
     derive: Callable[[dict[str, Any]], dict[str, Any] | None],
 ) -> dict[str, Any] | None:
-    facts = effect_runtime_result("work_item.replan_semantics.project", {
+    facts = project_replan_semantics({
         "operation": "lifecycle_source", "guard_recorded_at": guard_recorded_at,
         "agent_id": agent_id, "items": items,
     })
@@ -26,7 +26,7 @@ def receipt_bound_lifecycle_candidate(
                      "completed_without_successor_count": len(gaps)})
     if not source or source.get("obligation_id") != selected_obligation_id:
         return None
-    result = effect_runtime_result("work_item.replan_semantics.project", {
+    result = project_replan_semantics({
         "operation": "lifecycle_obligation", "obligation": source,
         "selected_obligation_id": selected_obligation_id,
         "guard_recorded_at": guard_recorded_at, "agent_id": agent_id, "items": items,

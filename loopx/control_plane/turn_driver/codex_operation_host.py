@@ -40,6 +40,9 @@ from .codex_sessions import (
 from ...extensions.codex_native_child import native_child_observer
 from .executor import LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION
 from .host_failure import BuiltInHostError
+from .operation_requests import (
+    BoundOperationRequest, operation_request_source, request_reference_instruction,
+)
 
 TRANSPORT = "app-server-operation-tools-v0"
 REVISION = "managed-turn-handoff-v0"
@@ -84,6 +87,7 @@ def operation_tool_handler(
     source_route: Mapping[str, str] | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
     host: str = "codex-cli",
+    frozen_request: BoundOperationRequest | None = None,
 ):
     """Private closure installed only on a process owned by the Turn driver.
 
@@ -141,6 +145,8 @@ def operation_tool_handler(
                     "executor": executor,
                     "authority": "approval_and_first_consumption_required",
                     "external_write_performed": False,
+                    **({"prepared_request": {"ref": frozen_request.ref}}
+                       if frozen_request is not None else {}),
                 }
             if action == "pending":
                 with collaboration_goal_scope(
@@ -169,7 +175,8 @@ def operation_tool_handler(
                         ),
                     }
             if action == "prepare":
-                request = dict(arguments["request"])
+                request = (frozen_request.resolve(arguments["request"])
+                           if frozen_request is not None else dict(arguments["request"]))
                 terms = dict(request.get("normalized_parameters") or {})
                 if "source_route" in terms and terms["source_route"] != source_route:
                     raise ValueError("the model cannot retarget the host-selected return audience")
@@ -254,6 +261,8 @@ def run_codex_operation_host(
     timeout_seconds: float | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
     confirmed_operation_id: str | None = None,
+    operation_request_file: Path | None = None,
+    operation_request_sha256: str | None = None,
 ) -> dict[str, Any]:
     if request.get("schema_version") != LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION:
         raise ValueError("unsupported LoopX Turn host request schema")
@@ -267,6 +276,7 @@ def run_codex_operation_host(
     if not all(lineage.values()):
         raise ValueError("managed operation tools require a Todo-bound Turn")
     mcp_server = normalize_codex_stdio_mcp_server(mcp_server)
+    request_source = operation_request_source(operation_request_file, operation_request_sha256)
     resolved_bin = shutil.which(codex_bin)
     if not resolved_bin:
         raise ValueError("Codex executable is unavailable")
@@ -284,6 +294,8 @@ def run_codex_operation_host(
         "codex_binary_digest": binary_digest,
         "mcp_server": mcp_server,
     }
+    if request_source is not None:
+        profile["operation_request"] = request_source.profile(source_route)
     profile_digest = hashlib.sha256(
         json.dumps(profile, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -398,6 +410,9 @@ def run_codex_operation_host(
             reasoning_effort=reasoning_effort,
             source_route=source_route,
             goal_admission=goal_admission,
+            frozen_request=(request_source.bind(request, lineage=lineage,
+                session_id=session.thread_id, profile_digest=profile_digest)
+                if request_source is not None else None),
         )
         route = {**lineage, "host_surface": "loopx-managed-codex",
                  "thread_id": session.thread_id, "profile_digest": profile_digest}
@@ -465,6 +480,7 @@ def run_codex_operation_host(
             "Only domain/external effects require the first successful consume receipt with execution_allowed=true. "
             "Preparation or waiting for human confirmation is not task completion. Report outcomes only with original execution evidence. "
             "Already consumed/unknown effects require evidence reconciliation, never retry. Never treat final-answer prose as an outcome receipt."
+            + request_reference_instruction(request_source is not None)
             + ("\nCanonical confirmed operation continuations for this exact binding: "
                + json.dumps(continuations, sort_keys=True)
                + ". Inspect these locators through loopx_operation and consume once before any effect."

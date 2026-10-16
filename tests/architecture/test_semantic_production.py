@@ -249,6 +249,7 @@ def test_real_effect_adapters_are_observed_as_unresolved_passthrough():
     from loopx.semantics.inventory import load_sources
 
     v = json.loads((ROOT / 'loopx/semantics/vocabulary_v0.json').read_text(encoding='utf-8'))['vocabularies']['effective_action']
+    v.pop('input_producer', None)  # Isolate static adapter evidence from the executed classifier witness.
     paths = {'loopx/control_plane/effect_program.py', 'loopx/control_plane/effect_program.ts'}
     owner = v['owners']['python'].split('::')[0]
     sources = [source for source in load_sources(ROOT) if source.path in paths | {owner}]

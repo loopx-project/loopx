@@ -510,6 +510,7 @@ def run_configured_turn_outcome_ingest(
                 "agent_id": agent_id,
                 "source_event_id": source_event_id,
                 "turn_key": turn_key,
+                "binding_revision": experiment_status.get("binding_revision"),
             }.items()
         ):
             return _base(
@@ -590,6 +591,7 @@ def run_configured_turn_outcome_ingest(
         "agent_id": agent_id,
         "turn_key": turn_key,
         "source_event_id": source_event_id,
+        **({"binding_revision": experiment_status["binding_revision"]} if experiment_status.get("binding_revision") else {}),
         "surface_id": surface_id,
         "reflection": reflection,
         "reflection_validation": reflection_validation,
@@ -732,6 +734,7 @@ def reconcile_pending_turn_outcome_ingests(
     ).parent
     if not directory.is_dir():
         return base | {"status": "empty"}
+    pending_count = 0
     pending: list[tuple[Path, dict[str, Any]]] = []
     for path in sorted(directory.glob("*.json")):
         value = _load_sidecar(path)
@@ -741,7 +744,12 @@ def reconcile_pending_turn_outcome_ingests(
             and value.get("agent_id") == agent_id
             and value.get("status") == "pending"
         ):
-            pending.append((path, value))
+            pending_count += 1
+            # Retain ambiguous journals for their original route, but do not
+            # let them consume a replacement binding's bounded retry slots.
+            # Direct replay still checks the full identity before any write.
+            if value.get("binding_revision") == experiment_status.get("binding_revision"):
+                pending.append((path, value))
     receipts: list[dict[str, Any]] = []
     effective_observed_at = observed_at or datetime.now(timezone.utc).isoformat()
     for path, value in pending[:limit]:
@@ -796,7 +804,7 @@ def reconcile_pending_turn_outcome_ingests(
         receipts.append(receipt)
     return base | {
         "status": "completed" if receipts else "empty",
-        "pending_count": len(pending),
+        "pending_count": pending_count,
         "attempted_count": len(receipts),
         "completed_count": sum(
             receipt.get("reconciliation_state") == "completed" for receipt in receipts

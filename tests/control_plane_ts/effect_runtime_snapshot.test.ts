@@ -6,6 +6,7 @@ import {join} from "node:path";
 import {test} from "node:test";
 import {
   openPrivateResponseSink, readPrivateJsonSnapshot, writePrivateResponse,
+  MAX_LOCAL_SNAPSHOT_BYTES,
 } from "../../loopx/control_plane/effect_runtime_snapshot.ts";
 
 test("local snapshot accepts exact private bytes and rejects altered or unsafe references", async () => {
@@ -20,6 +21,8 @@ test("local snapshot accepts exact private bytes and rejects altered or unsafe r
     await assert.rejects(readPrivateJsonSnapshot({...ref, sha256: "0".repeat(64)}),
       /snapshot unavailable or invalid/);
     await assert.rejects(readPrivateJsonSnapshot({...ref, byte_count: bytes.length - 1}),
+      /snapshot unavailable or invalid/);
+    await assert.rejects(readPrivateJsonSnapshot({...ref, byte_count: MAX_LOCAL_SNAPSHOT_BYTES + 1}),
       /snapshot unavailable or invalid/);
     // Windows has no POSIX mode denial: the private-mode rejection is only
     // observable where process.getuid exists.

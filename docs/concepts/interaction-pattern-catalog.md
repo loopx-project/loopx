@@ -2756,15 +2756,11 @@ flowchart TD
 
 **Validation**
 
-- `tests/control_plane/test_local_authority_shadow_cli_e2e.py` runs the real CLI
-  upgrade journey: `:10` proves a retained retired setting can neither enable
-  capture nor satisfy a bootstrap, `:20` asserts the rejection names
-  `local_authority_shadow_retired`, and `:25` asserts status still reads
-  `retired`.
-- `tests/control_plane/test_local_authority_shadow_config.py` pins both halves:
-  `:49` a retired enable rejects without rewriting the registry (dry-run and
-  execute), `:58` clearing preserves runtime configuration and peer
-  registration.
+- `tests/control_plane/test_local_authority_shadow_config.py` exercises the real
+  `configure-goal` CLI. Retired activation returns
+  `local_authority_shadow_retired`, leaves the registry unchanged and exposes
+  no enable action. Clearing the retired key preserves peer registration and
+  only enables runtime configuration when the caller requests it explicitly.
 - `tests/control_plane/test_state_migration_authority_shadow.py` keeps
   `migrate-state` reporting retirement instead of seeding it, and
   `tests/control_plane_ts/local_authority_shadow.test.ts` keeps the old RPC

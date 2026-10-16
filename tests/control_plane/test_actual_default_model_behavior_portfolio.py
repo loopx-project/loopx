@@ -74,6 +74,7 @@ from loopx.control_plane.testing.selected_todo_tool_behavior import (
     _build_fixture as _build_selected_fixture,
 )
 from loopx.control_plane.testing.terminal_settlement_tool_behavior import (
+    TERMINAL_SETTLEMENT_FIXTURE_TODO_ID,
     DoubaoTerminalSettlementToolBehaviorActor,
 )
 from loopx.quota import build_quota_should_run
@@ -460,7 +461,7 @@ def _capability_monitor_repair_actor(_: str) -> dict[str, Any]:
 def _terminal_settlement_actor(_: str) -> dict[str, Any]:
     return _passing_tool_receipt(
         "terminal_settlement_tool_behavior_receipt_v0",
-        selected_todo_id="todo_terminal001",
+        selected_todo_id=TERMINAL_SETTLEMENT_FIXTURE_TODO_ID,
         user_action_required=False,
         delivery_allowed=True,
         terminal_order_observed=True,

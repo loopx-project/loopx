@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -453,12 +454,27 @@ def assert_pr_release_and_refactor_profiles_select() -> None:
     status_wide_commands = [
         check["command"] for check in status_wide_profiles["status-read-path"]["checks"]
     ]
-    assert "python3 examples/control_plane/run-compaction-readmodel-smoke.py" in status_wide_commands, (
+    assert "python3 examples/control_plane/run-history-readmodel-smoke.py" in status_wide_commands, (
         status_wide_payload
     )
     assert "python3 examples/control_plane/goal-channel-readmodel-smoke.py" in status_wide_commands, (
         status_wide_payload
     )
+
+    # A bounded default plan can hide a deleted script later in the profile.
+    status_complete_payload = build_catalog_canary_plan(
+        profiles=["status-read-path"],
+        include_deep_checks=True,
+        max_checks_per_profile=100,
+    )
+    assert [profile["id"] for profile in status_complete_payload["domain_profiles"]] == [
+        "status-read-path"
+    ], status_complete_payload
+    for profile in status_complete_payload["domain_profiles"]:
+        for check in profile["checks"]:
+            command = shlex.split(check["command"])
+            assert command[0] == "python3", check
+            assert (REPO_ROOT / command[1]).is_file(), check
 
     status_cache_payload = build_catalog_canary_plan(
         changed_files=["loopx/control_plane/runtime/status_projection_cache.py"],

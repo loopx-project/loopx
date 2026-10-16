@@ -254,6 +254,14 @@ def register_turn_commands(
         help="Registered return audience {host_surface,thread_id} for operation proposals. Required when this Agent has several source routes; not executor authentication or execution permission.",
     )
     run_once.add_argument(
+        "--operation-request-file",
+        help="Operator-frozen operation request file. Requires its SHA-256 and an owned operation transport; the model receives only an invocation-bound locator. Not approval or execution permission.",
+    )
+    run_once.add_argument(
+        "--operation-request-sha256",
+        help="Exact lowercase SHA-256 of --operation-request-file bytes; rechecked after native call authentication before canonical prepare.",
+    )
+    run_once.add_argument(
         "--codex-reasoning-effort",
         choices=list(REASONING_EFFORTS),
         help=(

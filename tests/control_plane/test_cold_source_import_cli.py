@@ -6,12 +6,15 @@ of their remaining callers, or full Goal history recovery.
 """
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tarfile
 
 import pytest
 
@@ -40,7 +43,7 @@ def canonical_todos(runtime, receiver, env, cwd):
     return result
 
 
-def workspace(tmp_path, monkeypatch, *, storage_target=None):
+def workspace(tmp_path, monkeypatch, *, storage_target=None, retained_lease=None):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime = tmp_path / "project", tmp_path / "runtime"
     registry = project / ".loopx/registry.json"
@@ -59,6 +62,15 @@ def workspace(tmp_path, monkeypatch, *, storage_target=None):
         goal["coordination"]["storage_target"] = storage_target
     registry.write_text(json.dumps({"schema_version": 1, "common_runtime_root": str(runtime), "goals": [goal]}))
     runtime.mkdir()
+    if retained_lease is not None:
+        # A completed Task may remain in the current graph. Archived Tasks are
+        # separate historical records and do not retain live lease edges.
+        state.write_text(state.read_text().replace("## Completed Work Archive",
+            f'- [x] Retained completed work\n  <!-- loopx:todo todo_id={retained_lease["todo_id"]} '
+            'role=agent status=done task_class=advancement_task -->\n\n## Completed Work Archive'))
+        lease_path = runtime / "goals/cold/task-leases" / f"{retained_lease['todo_id']}.json"
+        lease_path.parent.mkdir(parents=True)
+        lease_path.write_text(json.dumps(retained_lease, indent=2))
     backup = execute_state_backup_plan(build_state_backup_plan(project=project, runtime_root=runtime,
         output_dir=tmp_path / "backups", backup_id="cold-original", include_automations=False,
         include_skills=False, include_registry_projects=False, registry_path=registry))
@@ -80,84 +92,6 @@ def workspace(tmp_path, monkeypatch, *, storage_target=None):
         return json.loads(child.stdout) if output_format == "json" else child.stdout
 
     return cli, state, backup, body, runtime, receiver, env
-
-
-@pytest.mark.parametrize("old_producers_present", [True, False])
-@pytest.mark.parametrize("configuration", ["absent", "disabled", "retired"])
-def test_unpromoted_default_off_lease_lifecycle_without_shadow_producers(
-    tmp_path, monkeypatch, old_producers_present, configuration,
-):
-    _, state, _, _, runtime, receiver, env = workspace(tmp_path, monkeypatch)
-    registry = tmp_path / "project/.loopx/registry.json"
-    data = json.loads(registry.read_text())
-    coordination = data["goals"][0]["coordination"]
-    coordination["registered_agents"] = ["agent-a", "agent-b"]
-    if configuration == "disabled":
-        coordination["runtime_shadow"] = {
-            "schema_version": "loopx_coordination_runtime_shadow_config_v0",
-            "enabled": False, "provider": "file_v0",
-        }
-    elif configuration == "retired":
-        coordination["authority_shadow"] = {
-            "schema_version": "loopx_local_authority_shadow_config_v0",
-            "mode": "file_one_way",
-        }
-    registry.write_text(json.dumps(data))
-    state.write_text(state.read_text().replace("handoff_mode: legacy", "handoff_mode: hard_lease")
-                     .replace(" claimed_by=agent-a", ""))
-    original_state, original_registry = state.read_bytes(), registry.read_bytes()
-    if not old_producers_present:
-        for name in ("runtime_shadow.py", "runtime_shadow_writer_adapter.py",
-                     "local_authority_shadow_adapter.py", "local_authority_shadow_outbox.py"):
-            (receiver / "loopx/control_plane/coordination" / name).unlink()
-
-    def lease(action, *args, owner="agent-a", key="original", success=True):
-        child = subprocess.run([sys.executable, "-c",
-            "import loopx,runpy,sys; print(loopx.__file__,file=sys.stderr); runpy.run_module('loopx.cli',run_name='__main__')",
-            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
-            "task-lease", action, "--goal-id", "cold", "--todo-id", "todo_current",
-            "--owner", owner, "--idempotency-key", key, *map(str, args)],
-            cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
-        assert str(receiver / "loopx/__init__.py") in child.stderr
-        assert "Traceback" not in child.stderr, child.stderr
-        assert (child.returncode == 0) is success, child.stdout + child.stderr
-        result = json.loads(child.stdout)
-        assert "coordination_runtime_shadow_capture" not in result
-        assert "coordination_runtime_shadow" not in result
-        assert state.read_bytes() == original_state
-        assert registry.read_bytes() == original_registry
-        assert not (runtime / "authority-shadow").exists()
-        assert not any(path.is_file() for path in (runtime / "authority-transition").rglob("*"))
-        return result
-
-    acquired = lease("acquire", "--ttl-seconds", 120, "--write-scope", "docs/**")
-    assert acquired["acquired"] is True
-    version = acquired["lease"]["version"]
-    path = Path(acquired["lease_path"])
-    original_lease = path.read_bytes()
-    replay = lease("acquire", "--ttl-seconds", 120, "--write-scope", "docs/**")
-    assert replay["idempotent"] is True and replay["lease"] == acquired["lease"]
-    assert path.read_bytes() == original_lease
-    rejected = lease("renew", "--expected-version", version + 1, "--ttl-seconds", 180, success=False)
-    assert rejected["error_code"] == "version_mismatch"
-    assert path.read_bytes() == original_lease
-    renewed = lease("renew", "--expected-version", version, "--ttl-seconds", 180)
-    assert renewed["lease"]["version"] == version + 1
-    assert renewed["lease"]["lease_epoch"] == acquired["lease"]["lease_epoch"]
-    transferred = lease("transfer", "--expected-version", version + 1,
-                        "--new-owner", "agent-b", "--new-idempotency-key", "receiver",
-                        "--ttl-seconds", 180)
-    assert transferred["lease"]["owner"] == "agent-b"
-    assert transferred["lease"]["version"] == version + 2
-    assert transferred["lease"]["lease_epoch"] == acquired["lease"]["lease_epoch"] + 1
-    released = lease("release", "--expected-version", version + 2, owner="agent-b", key="receiver")
-    assert released["released"] is True and released["lease"]["status"] == "released"
-    assert released["lease"]["write_scopes"] == ["docs/**"]
-    assert released["lease"]["lease_epoch"] == transferred["lease"]["lease_epoch"]
-    retained = path.read_bytes()
-    assert lease("release", "--expected-version", version + 2,
-                 owner="agent-b", key="receiver")["idempotent"] is True
-    assert path.read_bytes() == retained
 
 
 def test_coordination_command_help_and_rejections_match_full_cli(tmp_path):
@@ -202,17 +136,89 @@ print(json.dumps({{'package': loopx.__file__, 'observations': observations}}))
     assert all(row[0] == 2 for row in observations[0][5:])
 
 
-@pytest.mark.parametrize("old_producers_present", [True, False])
+def test_prepare_without_manifest_copies_only_selected_authority_state(tmp_path, monkeypatch):
+    cli, _, _, _, runtime, _, _ = workspace(tmp_path, monkeypatch)
+    project = tmp_path / "project"
+    research = project / ".loopx/research"
+    research.mkdir(parents=True)
+    retained = research / "benchmark-output.bin"
+    retained.write_bytes(b"unrelated experiment artifact")
+    cache = runtime / "benchmark-cache/model-output.bin"
+    cache.parent.mkdir(parents=True)
+    cache.write_bytes(b"unrelated runtime cache")
+
+    prepared = cli("prepare-import", "--provider", "file",
+        "--target-handoff-mode", "hard_lease")["cold_import"]
+    assert prepared["status"] == "prepared"
+    assert prepared["target_capacity_preflight"]["status"] == "sufficient"
+    assert prepared["target_capacity_preflight"]["available_bytes"] >= (
+        prepared["target_capacity_preflight"]["required_bytes"])
+    carrier = json.loads(Path(prepared["plan_path"]).read_text())
+    witness = carrier["plan"]["source_backup"]
+    assert witness["backup_profile"] == "local_authority_migration_v1"
+    manifest = json.loads(Path(witness["manifest_path"]).read_text())
+    assert manifest["configuration_goal_ids"] == ["cold"]
+    selected = {Path(row["source_path"]) for row in manifest["included"]}
+    assert project / ".loopx/registry.json" in selected
+    assert project / ".loopx" not in selected
+    assert runtime not in selected
+    with tarfile.open(witness["archive_path"]) as archive:
+        names = {member.name for member in archive}
+    assert not any("research" in name or "benchmark-cache" in name for name in names)
+    assert retained.read_bytes() == b"unrelated experiment artifact"
+    assert cache.read_bytes() == b"unrelated runtime cache"
+
+    replay = cli("prepare-import", "--provider", "file",
+        "--target-handoff-mode", "hard_lease")["cold_import"]
+    assert replay["plan_sha256"] == prepared["plan_sha256"]
+    assert replay["plan_path"] == prepared["plan_path"]
+
+
+@pytest.mark.parametrize("names", [("A.txt", "a.txt"), ("caf\u00e9.txt", "cafe\u0301.txt")])
+def test_prepare_accepts_complete_backup_with_distinct_unrelated_names(tmp_path, monkeypatch, names):
+    cli, _, backup, _, _, _, _ = workspace(tmp_path, monkeypatch)
+    archive_path, manifest_path = Path(backup["archive_path"]), Path(backup["manifest_path"])
+    manifest = json.loads(manifest_path.read_text())
+    extras = [(f"runtime-root/unrelated/{name}", name.encode()) for name in names]
+    manifest["execution"]["file_members"].extend({
+        "archive_path": path, "size_bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    } for path, data in extras)
+    embedded = json.loads(json.dumps(manifest))
+    embedded["execution"].update(archive_sha256=None, archive_size_bytes=None)
+    replacement = archive_path.with_suffix(".staged")
+    with tarfile.open(archive_path, "r:gz") as source, tarfile.open(replacement, "w:gz") as destination:
+        for member in source:
+            if member.name == "manifest.json":
+                data = json.dumps(embedded).encode()
+                member.size = len(data)
+                destination.addfile(member, io.BytesIO(data))
+            elif member.isfile():
+                with source.extractfile(member) as content:
+                    destination.addfile(member, content)
+            else:
+                destination.addfile(member)
+        for path, data in extras:
+            member = tarfile.TarInfo(path)
+            member.size = len(data)
+            destination.addfile(member, io.BytesIO(data))
+    replacement.replace(archive_path)
+    manifest["execution"].update(
+        archive_sha256=hashlib.sha256(archive_path.read_bytes()).hexdigest(),
+        archive_size_bytes=archive_path.stat().st_size)
+    manifest_path.write_text(json.dumps(manifest))
+    prepared = cli("prepare-import", "--backup-manifest", manifest_path,
+        "--provider", "file", "--target-handoff-mode", "hard_lease")["cold_import"]
+    assert prepared["status"] == "prepared"
+    assert prepared["execution_authority_granted"] is False
+
+
 @pytest.mark.parametrize("readback_present", [True, False])
 def test_unconfigured_shadow_inspection_matches_full_cli_without_import(
-    tmp_path, monkeypatch, old_producers_present, readback_present, isolated_todo_distribution,  # noqa: F811 -- shared fixture
+    tmp_path, monkeypatch, readback_present, isolated_todo_distribution,  # noqa: F811 -- shared fixture
 ):
     monkeypatch.setenv("LOOPX_COLD_IMPORT_PACKAGE", str(isolated_todo_distribution[0]))
     _, state, _, _, runtime, receiver, env = workspace(tmp_path, monkeypatch)
-    if not old_producers_present:
-        for name in ("runtime_shadow.py", "runtime_shadow_writer_adapter.py",
-                     "local_authority_shadow_adapter.py", "local_authority_shadow_outbox.py"):
-            (receiver / "loopx/control_plane/coordination" / name).unlink()
     if not readback_present:
         (receiver / "loopx/control_plane/coordination/local_authority_shadow_readback.py").unlink()
     registry = tmp_path / "project/.loopx/registry.json"
@@ -283,17 +289,16 @@ def test_explicit_shadow_action_uses_only_its_required_modules_without_writing(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("old_producers_present", [True, False])
+@pytest.mark.parametrize("source_modules_present", [True, False])
 def test_cold_cli_import_and_source_free_original_recovery(
-    tmp_path, monkeypatch, provider, old_producers_present,
+    tmp_path, monkeypatch, provider, source_modules_present,
 ):
     cli, state, backup, body, runtime, receiver, env = workspace(tmp_path, monkeypatch)
-    if not old_producers_present:
-        for path in ("todos.py", "bootstrap.py", "control_plane/coordination/runtime_shadow_writer_adapter.py",
+    if not source_modules_present:
+        for path in ("todos.py", "bootstrap.py",
                      "control_plane/coordination/local_authority_shadow_outbox.py",
                      "control_plane/coordination/runtime_shadow.py",
-                     "control_plane/coordination/local_authority_shadow_adapter.py",
-                     "control_plane/todos/legacy_mutation.py", "control_plane/todos/line_update.py"):
+                     "control_plane/coordination/local_authority_shadow_adapter.py"):
             (receiver / "loopx" / path).unlink()
     original = state.read_bytes()
     prepared = cli("prepare-import", "--backup-manifest", backup["manifest_path"],
@@ -324,18 +329,16 @@ def test_cold_cli_import_and_source_free_original_recovery(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("old_producers_present", [True, False])
+@pytest.mark.parametrize("bridge_modules_present", [True, False])
 @pytest.mark.parametrize("old_target", [False, True], ids=["no-creation-target", "v0-opposite-target"])
 def test_cold_import_recovery_preserves_later_canonical_writes(
-    tmp_path, monkeypatch, provider, old_producers_present, old_target,
+    tmp_path, monkeypatch, provider, bridge_modules_present, old_target,
 ):
     target = ({"schema_version": "loopx_new_goal_storage_target_v0",
         "provider": "sqlite" if provider == "file" else "file"} if old_target else None)
     cli, state, backup, body, runtime, receiver, env = workspace(tmp_path, monkeypatch, storage_target=target)
-    if not old_producers_present:
-        for path in ("control_plane/todos/legacy_mutation.py", "control_plane/todos/line_update.py",
-                     "control_plane/coordination/runtime_shadow.py",
-                     "control_plane/coordination/runtime_shadow_writer_adapter.py",
+    if not bridge_modules_present:
+        for path in ("control_plane/coordination/runtime_shadow.py",
                      "control_plane/coordination/local_authority_shadow_adapter.py",
                      "control_plane/coordination/local_authority_shadow_outbox.py"):
             (receiver / "loopx" / path).unlink()
@@ -462,6 +465,49 @@ def test_cold_import_recovery_preserves_later_canonical_writes(
     assert current["todos"] == after["todos"]
     assert canonical_todos(runtime, receiver, env, tmp_path) == complete_after
     assert current["authority_read"]["provider_revision"] == after["authority_read"]["provider_revision"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_cold_import_preserves_terminal_lease_and_later_work_on_original_recovery(
+    tmp_path, monkeypatch, provider, isolated_todo_distribution,  # noqa: F811 -- shared fixture
+):
+    # Released history is inert input. Never revive an ordinary source writer
+    # to generate the migration fixture in the canonical-only distribution.
+    monkeypatch.setenv("LOOPX_COLD_IMPORT_PACKAGE", str(isolated_todo_distribution[0]))
+    expected = {
+        "schema_version": "task_lease_v0", "goal_id": "cold", "todo_id": "todo_terminal",
+        "owner": "agent-a", "version": 2, "lease_epoch": 1, "status": "released",
+        "released_at": "2026-09-01T00:00:00Z", "idempotency_key": "retained-identity",
+        "future_extension": {"missing_value": None, "flag": False},
+    }
+    cli, state, backup, _, runtime, receiver, env = workspace(
+        tmp_path, monkeypatch, retained_lease=expected)
+    lease_path = runtime / "goals/cold/task-leases/todo_terminal.json"
+    original = lease_path.read_bytes()
+    plan = cli("prepare-import", "--backup-manifest", backup["manifest_path"],
+        "--provider", provider, "--target-handoff-mode", "hard_lease")["cold_import"]
+    imported = cli("apply-import", "--plan-sha256", plan["plan_sha256"],
+        "--writers-stopped", "--execute")["cold_import"]
+    assert imported["status"] == "applied" and imported["execution_authority_granted"] is False
+    assert canonical_todos(runtime, receiver, env, tmp_path)["leases"] == [expected]
+    added = subprocess.run([sys.executable, "-S", "-m", "loopx.cli", "--format", "json",
+        "--registry", str(tmp_path / "project/.loopx/registry.json"), "--runtime-root", str(runtime),
+        "todo", "add", "--goal-id", "cold", "--role", "agent",
+        "--text", "Later canonical work must survive recovery", "--operation-id", "later-terminal-import"],
+        cwd=tmp_path, env={**env, "PYTHONPATH": os.pathsep.join([str(receiver), os.environ["PYTHONPATH"]])},
+        capture_output=True, text=True, timeout=60)
+    assert added.returncode == 0, added.stdout + added.stderr
+    later_id = json.loads(added.stdout)["todo_id"]
+    before = canonical_todos(runtime, receiver, env, tmp_path)
+    later = next(row for row in before["todos"] if row["todo_id"] == later_id)
+    assert (later["text"], later["priority"]) == ("[P1] Later canonical work must survive recovery", "P1")
+    state.unlink()
+    for _ in range(2):
+        recovered = cli("recover-import", "--plan-sha256", plan["plan_sha256"], "--execute")["cold_import"]
+        assert recovered["status"] == "replayed"
+        assert canonical_todos(runtime, receiver, env, tmp_path) == before
+        assert lease_path.read_bytes() == original
+        assert not state.exists()
 
 
 @pytest.mark.parametrize("artifact", ["archive_path", "manifest_path"])

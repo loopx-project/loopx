@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 400" width="960" height="400" role="img" aria-labelledby="t d" font-family="Geist,-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,&quot;PingFang SC&quot;,&quot;Noto Sans CJK SC&quot;,sans-serif">
+<title id="t">Borden 源反演（分数越高越好） · Grid 图灵机器人（分数越低越好）</title><desc id="d">每个点是一次被评分器接受的提交；曲线按提交时刻对齐，不填补缺失点。</desc>
+<rect width="960" height="400" fill="#fafafa"/>
+<text x="20" y="32" fill="#171717" font-size="15" font-weight="600">Borden 源反演（分数越高越好）</text>
+<line x1="76" x2="464" y1="304.0" y2="304.0" stroke="#ebebeb" stroke-width="1"/>
+<text x="68" y="308.0" fill="#8f8f8f" font-size="12" text-anchor="end">0</text>
+<line x1="76" x2="464" y1="241.5" y2="241.5" stroke="#ebebeb" stroke-width="1"/>
+<text x="68" y="245.5" fill="#8f8f8f" font-size="12" text-anchor="end">30</text>
+<line x1="76" x2="464" y1="179.0" y2="179.0" stroke="#ebebeb" stroke-width="1"/>
+<text x="68" y="183.0" fill="#8f8f8f" font-size="12" text-anchor="end">60</text>
+<line x1="76" x2="464" y1="116.5" y2="116.5" stroke="#ebebeb" stroke-width="1"/>
+<text x="68" y="120.5" fill="#8f8f8f" font-size="12" text-anchor="end">90</text>
+<line x1="76" x2="464" y1="54.0" y2="54.0" stroke="#ebebeb" stroke-width="1"/>
+<text x="68" y="58.0" fill="#8f8f8f" font-size="12" text-anchor="end">120</text>
+<text x="76.0" y="322" fill="#8f8f8f" font-size="12" text-anchor="middle">0</text>
+<text x="137.3" y="322" fill="#8f8f8f" font-size="12" text-anchor="middle">120</text>
+<text x="198.5" y="322" fill="#8f8f8f" font-size="12" text-anchor="middle">240</text>
+<text x="259.8" y="322" fill="#8f8f8f" font-size="12" text-anchor="middle">360</text>
+<text x="321.1" y="322" fill="#8f8f8f" font-size="12" text-anchor="middle">480</text>
+<text x="382.3" y="322" fill="#8f8f8f" font-size="12" text-anchor="middle">600</text>
+<text x="443.6" y="322" fill="#8f8f8f" font-size="12" text-anchor="middle">720</text>
+<line x1="76" x2="464" y1="304" y2="304" stroke="#ebebeb" stroke-width="1"/>
+<path d="M82.9,289.3 L113.8,201.0 L144.5,180.8 L175.3,76.9" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="82.9" cy="289.3" r="5" fill="#fafafa"/><circle cx="82.9" cy="289.3" r="4" fill="#eb6834"/>
+<circle cx="113.8" cy="201.0" r="5" fill="#fafafa"/><circle cx="113.8" cy="201.0" r="4" fill="#eb6834"/>
+<circle cx="144.5" cy="180.8" r="5" fill="#fafafa"/><circle cx="144.5" cy="180.8" r="4" fill="#eb6834"/>
+<circle cx="175.3" cy="76.9" r="5" fill="#fafafa"/><circle cx="175.3" cy="76.9" r="4" fill="#eb6834"/>
+<text x="185.3" y="80.9" fill="#171717" font-size="12" font-weight="600">109.0</text>
+<path d="M100.6,289.0 L132.2,289.0 L164.6,180.4 L195.5,204.4 L227.0,170.2 L258.4,149.5 L289.5,136.4 L320.4,140.8 L351.8,136.4 L383.0,142.0 L414.7,129.8 L446.2,125.6" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="100.6" cy="289.0" r="5" fill="#fafafa"/><circle cx="100.6" cy="289.0" r="4" fill="#2a78d6"/>
+<circle cx="132.2" cy="289.0" r="5" fill="#fafafa"/><circle cx="132.2" cy="289.0" r="4" fill="#2a78d6"/>
+<circle cx="164.6" cy="180.4" r="5" fill="#fafafa"/><circle cx="164.6" cy="180.4" r="4" fill="#2a78d6"/>
+<circle cx="195.5" cy="204.4" r="5" fill="#fafafa"/><circle cx="195.5" cy="204.4" r="4" fill="#2a78d6"/>
+<circle cx="227.0" cy="170.2" r="5" fill="#fafafa"/><circle cx="227.0" cy="170.2" r="4" fill="#2a78d6"/>
+<circle cx="258.4" cy="149.5" r="5" fill="#fafafa"/><circle cx="258.4" cy="149.5" r="4" fill="#2a78d6"/>
+<circle cx="289.5" cy="136.4" r="5" fill="#fafafa"/><circle cx="289.5" cy="136.4" r="4" fill="#2a78d6"/>
+<circle cx="320.4" cy="140.8" r="5" fill="#fafafa"/><circle cx="320.4" cy="140.8" r="4" fill="#2a78d6"/>
+<circle cx="351.8" cy="136.4" r="5" fill="#fafafa"/><circle cx="351.8" cy="136.4" r="4" fill="#2a78d6"/>
+<circle cx="383.0" cy="142.0" r="5" fill="#fafafa"/><circle cx="383.0" cy="142.0" r="4" fill="#2a78d6"/>
+<circle cx="414.7" cy="129.8" r="5" fill="#fafafa"/><circle cx="414.7" cy="129.8" r="4" fill="#2a78d6"/>
+<circle cx="446.2" cy="125.6" r="5" fill="#fafafa"/><circle cx="446.2" cy="125.6" r="4" fill="#2a78d6"/>
+<text x="456.2" y="129.6" fill="#171717" font-size="12" font-weight="600">85.6</text>
+<text x="270.0" y="340" fill="#8f8f8f" font-size="12" text-anchor="middle">自试验开始的分钟数</text>
+<text x="192.4" y="279.0" fill="#4d4d4d" font-size="12">首次反馈：原生 13.6 分钟，LoopX 48.2 分钟</text>
+<text x="480" y="32" fill="#171717" font-size="15" font-weight="600">Grid 图灵机器人（分数越低越好）</text>
+<line x1="536" x2="924" y1="291.5" y2="291.5" stroke="#ebebeb" stroke-width="1"/>
+<text x="528" y="295.5" fill="#8f8f8f" font-size="12" text-anchor="end">1.8K</text>
+<line x1="536" x2="924" y1="229.0" y2="229.0" stroke="#ebebeb" stroke-width="1"/>
+<text x="528" y="233.0" fill="#8f8f8f" font-size="12" text-anchor="end">2.3K</text>
+<line x1="536" x2="924" y1="166.5" y2="166.5" stroke="#ebebeb" stroke-width="1"/>
+<text x="528" y="170.5" fill="#8f8f8f" font-size="12" text-anchor="end">2.8K</text>
+<line x1="536" x2="924" y1="104.0" y2="104.0" stroke="#ebebeb" stroke-width="1"/>
+<text x="528" y="108.0" fill="#8f8f8f" font-size="12" text-anchor="end">3.3K</text>
+<text x="536.0" y="322" fill="#8f8f8f" font-size="12" text-anchor="middle">0</text>
+<text x="602.5" y="322" fill="#8f8f8f" font-size="12" text-anchor="middle">120</text>
+<text x="669.0" y="322" fill="#8f8f8f" font-size="12" text-anchor="middle">240</text>
+<text x="735.5" y="322" fill="#8f8f8f" font-size="12" text-anchor="middle">360</text>
+<text x="802.1" y="322" fill="#8f8f8f" font-size="12" text-anchor="middle">480</text>
+<text x="868.6" y="322" fill="#8f8f8f" font-size="12" text-anchor="middle">600</text>
+<line x1="536" x2="924" y1="304" y2="304" stroke="#ebebeb" stroke-width="1"/>
+<path d="M547.7,234.0 L582.4,243.8 L616.6,261.8 L650.3,269.9 L687.0,274.0 L720.8,281.8 L755.4,277.4 L793.4,279.4 L827.8,279.5 L861.4,286.0 L895.0,292.6" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="547.7" cy="234.0" r="5" fill="#fafafa"/><circle cx="547.7" cy="234.0" r="4" fill="#eb6834"/>
+<circle cx="582.4" cy="243.8" r="5" fill="#fafafa"/><circle cx="582.4" cy="243.8" r="4" fill="#eb6834"/>
+<circle cx="616.6" cy="261.8" r="5" fill="#fafafa"/><circle cx="616.6" cy="261.8" r="4" fill="#eb6834"/>
+<circle cx="650.3" cy="269.9" r="5" fill="#fafafa"/><circle cx="650.3" cy="269.9" r="4" fill="#eb6834"/>
+<circle cx="687.0" cy="274.0" r="5" fill="#fafafa"/><circle cx="687.0" cy="274.0" r="4" fill="#eb6834"/>
+<circle cx="720.8" cy="281.8" r="5" fill="#fafafa"/><circle cx="720.8" cy="281.8" r="4" fill="#eb6834"/>
+<circle cx="755.4" cy="277.4" r="5" fill="#fafafa"/><circle cx="755.4" cy="277.4" r="4" fill="#eb6834"/>
+<circle cx="793.4" cy="279.4" r="5" fill="#fafafa"/><circle cx="793.4" cy="279.4" r="4" fill="#eb6834"/>
+<circle cx="827.8" cy="279.5" r="5" fill="#fafafa"/><circle cx="827.8" cy="279.5" r="4" fill="#eb6834"/>
+<circle cx="861.4" cy="286.0" r="5" fill="#fafafa"/><circle cx="861.4" cy="286.0" r="4" fill="#eb6834"/>
+<circle cx="895.0" cy="292.6" r="5" fill="#fafafa"/><circle cx="895.0" cy="292.6" r="4" fill="#eb6834"/>
+<text x="905.0" y="296.6" fill="#171717" font-size="12" font-weight="600">1791</text>
+<path d="M542.5,67.4 L582.9,257.1 L616.6,260.2 L650.0,260.6 L684.4,261.1 L717.8,261.0 L751.2,261.4 L792.1,261.6 L825.4,261.4 L864.0,261.5 L897.4,261.6" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="542.5" cy="67.4" r="5" fill="#fafafa"/><circle cx="542.5" cy="67.4" r="4" fill="#2a78d6"/>
+<circle cx="582.9" cy="257.1" r="5" fill="#fafafa"/><circle cx="582.9" cy="257.1" r="4" fill="#2a78d6"/>
+<circle cx="616.6" cy="260.2" r="5" fill="#fafafa"/><circle cx="616.6" cy="260.2" r="4" fill="#2a78d6"/>
+<circle cx="650.0" cy="260.6" r="5" fill="#fafafa"/><circle cx="650.0" cy="260.6" r="4" fill="#2a78d6"/>
+<circle cx="684.4" cy="261.1" r="5" fill="#fafafa"/><circle cx="684.4" cy="261.1" r="4" fill="#2a78d6"/>
+<circle cx="717.8" cy="261.0" r="5" fill="#fafafa"/><circle cx="717.8" cy="261.0" r="4" fill="#2a78d6"/>
+<circle cx="751.2" cy="261.4" r="5" fill="#fafafa"/><circle cx="751.2" cy="261.4" r="4" fill="#2a78d6"/>
+<circle cx="792.1" cy="261.6" r="5" fill="#fafafa"/><circle cx="792.1" cy="261.6" r="4" fill="#2a78d6"/>
+<circle cx="825.4" cy="261.4" r="5" fill="#fafafa"/><circle cx="825.4" cy="261.4" r="4" fill="#2a78d6"/>
+<circle cx="864.0" cy="261.5" r="5" fill="#fafafa"/><circle cx="864.0" cy="261.5" r="4" fill="#2a78d6"/>
+<circle cx="897.4" cy="261.6" r="5" fill="#fafafa"/><circle cx="897.4" cy="261.6" r="4" fill="#2a78d6"/>
+<text x="907.4" y="265.6" fill="#171717" font-size="12" font-weight="600">2039</text>
+<text x="730.0" y="340" fill="#8f8f8f" font-size="12" text-anchor="middle">自试验开始的分钟数</text>
+<text x="590.3" y="159.0" fill="#4d4d4d" font-size="12">2075 → 2039：9.5 小时内下降不足 2%</text>
+<line x1="20" x2="42" y1="380" y2="380" stroke="#2a78d6" stroke-width="2"/><circle cx="31" cy="380" r="4" fill="#2a78d6"/>
+<text x="50" y="384" fill="#4d4d4d" font-size="13">LoopX heartbeat</text>
+<line x1="225" x2="247" y1="380" y2="380" stroke="#eb6834" stroke-width="2"/><circle cx="236" cy="380" r="4" fill="#eb6834"/>
+<text x="255" y="384" fill="#4d4d4d" font-size="13">原生 Codex</text>
+<text x="940" y="384" fill="#8f8f8f" font-size="12" text-anchor="end">每个点是一次被评分器接受的提交；曲线按提交时刻对齐，不填补缺失点。</text></svg>

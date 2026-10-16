@@ -109,7 +109,8 @@ export type ChatRouteCandidate = {
   available: boolean;
 };
 
-export function selectAvailableChatAgent<T extends ChatRouteCandidate>(
+/** Prefer an executable route; keep an unavailable candidate for diagnosis when none can run. */
+export function selectChatAgent<T extends ChatRouteCandidate>(
   options: T[],
   preferredAgentId: string | undefined,
   defaultAgentId: string,
@@ -118,9 +119,12 @@ export function selectAvailableChatAgent<T extends ChatRouteCandidate>(
     option.agentId === preferredAgentId && option.available
   ) ?? options.find((option) =>
     option.agentId === defaultAgentId && option.available
-  ) ?? options.find((option) => option.available);
+  ) ?? options.find((option) => option.available)
+    ?? options.find((option) => option.agentId === preferredAgentId)
+    ?? options.find((option) => option.agentId === defaultAgentId)
+    ?? options[0];
   if (!selected) {
-    throw new Error("Chat requires at least one available route");
+    throw new Error("Chat requires at least one route");
   }
   return selected;
 }

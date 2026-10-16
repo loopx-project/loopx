@@ -11,22 +11,6 @@ from .contract import normalize_todo_metadata_for_write
 TODO_SUCCESSOR_DERIVATION_REQUEST_SCHEMA = "loopx_todo_successor_derivation_request_v0"
 TODO_SUCCESSOR_DERIVATION_RESULT_SCHEMA = "loopx_todo_successor_derivation_result_v0"
 
-_SUCCESSOR_ADD_FIELDS = (
-    "role",
-    "text",
-    "task_class",
-    "action_kind",
-    "capability_binding_ref",
-    "task_repository",
-    "continuation_policy",
-    "required_capabilities",
-    "claimed_by",
-    "bound_agent",
-    "blocks_agent",
-    "excluded_agents",
-    "unblocks_todo_id",
-)
-
 
 def build_successor_intents(
     *,
@@ -118,18 +102,7 @@ def derive_successor_proposals(
     return proposals
 
 
-def successor_add_kwargs(proposal: Mapping[str, Any]) -> dict[str, Any]:
-    """Adapt one typed proposal to the legacy Markdown writer arguments."""
-
-    return {
-        field: proposal[field]
-        for field in _SUCCESSOR_ADD_FIELDS
-        if field in proposal
-    }
-
-
 __all__ = [
     "build_successor_intents",
     "derive_successor_proposals",
-    "successor_add_kwargs",
 ]

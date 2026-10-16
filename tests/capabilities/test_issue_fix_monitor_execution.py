@@ -24,7 +24,7 @@ def scenario(tmp_path, monkeypatch, provider):
     return arguments, monitor, state
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_hard_lease_membership_observation_releases_only_its_execution(tmp_path, monkeypatch, provider):
     args, before, state = scenario(tmp_path, monkeypatch, provider)
     result = materialization.materialize_issue_fix_grouped_monitors(**args, generated_at="2030-01-01T01:00:00Z")
@@ -39,7 +39,7 @@ def test_hard_lease_membership_observation_releases_only_its_execution(tmp_path,
     assert snapshot == state.read_bytes()
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_another_execution_even_for_same_actor_is_not_borrowed(tmp_path, monkeypatch, provider):
     args, monitor, state = scenario(tmp_path, monkeypatch, provider)
     acquired = acquire_task_lease(registry_path=args["registry_path"], runtime_root=tmp_path,
@@ -52,7 +52,7 @@ def test_another_execution_even_for_same_actor_is_not_borrowed(tmp_path, monkeyp
         goal_id=GOAL_ID, todo_id=monitor["todo_id"])["lease"] == acquired["lease"]
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_retry_after_interrupted_acquisition_recovers_its_own_attempt(tmp_path, monkeypatch, provider):
     args, monitor, _ = scenario(tmp_path, monkeypatch, provider)
     original = materialization.acquire_task_lease
@@ -75,7 +75,7 @@ def test_retry_after_interrupted_acquisition_recovers_its_own_attempt(tmp_path, 
     assert lease_after["status"] == "released"
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_retry_recovers_its_own_attempt_despite_reordered_ledger(tmp_path, monkeypatch, provider):
     """The attempt identity is the reconciliation subject, not the row order."""
     args, monitor, _ = scenario(tmp_path, monkeypatch, provider)
@@ -131,7 +131,7 @@ def test_attempt_decision_ignores_only_the_observation_clock():
         assert materialization._decision_signature(changed) != materialization._decision_signature(step)
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_failed_write_cleans_attempt_and_identical_retry_can_acquire_again(tmp_path, monkeypatch, provider):
     args, monitor, _ = scenario(tmp_path, monkeypatch, provider)
     original = materialization.update_goal_todo
@@ -147,7 +147,7 @@ def test_failed_write_cleans_attempt_and_identical_retry_can_acquire_again(tmp_p
     assert materialization.materialize_issue_fix_grouped_monitors(**args, generated_at="2030-01-01T01:00:00Z")["write_performed"]
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_missing_or_stale_ledger_never_means_empty_current_work(tmp_path, monkeypatch, provider):
     args, monitor, state = scenario(tmp_path, monkeypatch, provider)
     before = state.read_bytes()

@@ -550,6 +550,21 @@ point. Full-state capture additionally requires the controller writer barrier
 below. Capturing that point does not admit a destination session or prove useful
 continued research.
 
+On a restored conversation, both hooks still require an accepted current-Goal
+semantic replan citing the source checkpoint and a new completed native
+continuation. With `"native_session": true`, preflight reads only the latest
+Turn's identity/status (`itemsView: "notLoaded"`), after checking the bound native
+session and workspace. This provisional cursor admits a capture attempt; it does
+not certify the retained history. Both full native observations during capture
+must verify the retained history prefix and this completed continuation before
+sealing. After the explicitly bound initial context reset, that prefix is empty;
+the checkpoint/review/new-session binding remains required, and a new completed
+native Turn is still mandatory. Neither an absent prefix declaration nor a
+semantic-only review can replace those checks. A changed checkpoint/session, missing cursor or altered prefix fails
+capture. Preparation and declarations without native capture keep full-history
+preflight. Canonical review, first-boundary deduplication, current authority and
+the default-off path keep their existing rules.
+
 ### Controller-only native capsule transport
 
 The read-only participant above does **not** implement the newer native capsule
@@ -609,6 +624,14 @@ collide with the automatic native capsule name. Neither Docker access nor judge
 administration is passed into the solver. Omit this command to retain ordinary
 capture behavior; there is no automatic activation or retention policy.
 
+The export destination's filesystem also holds each raw Docker archive while
+its members are extracted. Provision space for the raw transfer, extracted
+participants and sealing copies; moving the destination does not reduce those
+bytes or extend the capture deadline. The archive spool uses the private export
+staging directory instead of ambient temporary storage. If that filesystem fills,
+capture still fails and runs its existing reader/barrier cleanup without publishing an
+outer artifact; it does not retry on another volume or substitute a later point.
+
 The container must initially be running and unpaused. Cancellation, failed file
 reads, rejected native capture and a lost pause response attempt to release only
 this operation's barrier. Failure to resume the worker is reported and publishes
@@ -650,6 +673,16 @@ and remaining Host phase. It releases the barrier before publishing a private re
 the source continues from the original packet and deadline. Optional capture
 failure records a missed point, never a later replacement or a new model/eval budget.
 A barrier that cannot be released remains an explicit controller recovery problem.
+
+The explicitly enabled full controller capture hooks now share a 90-second window for complete
+native/research preparation, stability checks and live-source capture (previously
+30 seconds). Both hooks cap it by the original trial phase; the controller keeps
+that same absolute deadline. After releasing the source, it may spend up to 30
+more seconds sealing its immutable exports, also within the original phase. This
+allowance changes neither the trial budget nor cooldown, completeness or retry
+rules. A missed point remains missed; direct controller commands retain their
+caller-supplied timeout, and other capture declarations keep their 30-second
+window. Capture remains off unless explicitly enabled.
 
 A real native CLI/worker plus isolated Docker/native-HTTP qualification covers the
 mid-wake path, complete canonical context, conserved evaluator opportunity and
@@ -718,6 +751,31 @@ files remain historical: current authority uses a fresh external registry/runtim
 and the old Goal cannot be admitted through it. Only the model
 response stream and grading/backend fixtures are synthetic; the native CLI,
 canonical SQLite authority, worker, supervisor and capsule transport are real.
+The retained-history recapture variant keeps the controller and its bank outside
+every guest mount. It performs and settles actual candidate work, reaches a genuinely
+new due replan, and captures research, new native history, code, incumbent,
+opportunity and the original phase through the real controller barrier. Another
+isolated receiver restores that newly sealed point and performs actual work.
+`recapture.log` and `grandreceiver.log` retain those assertions. The synthetic service
+uses host networking only for this controller-backed variant; its public worker
+registration enters the guest, while the controller configuration and bank do not.
+
+To reuse an already sealed **synthetic qualification** point, append
+`--reuse-point /private/sealed-point --captured-config /private/captured-config.toml`
+to the command above. The matching configuration digest and every source member
+are verified; the original source test is explicitly not counted as passed.
+This avoids replaying the six source work wakes. For an independently selected
+compatible integration, also pass `--provider-revision EXACT_COMMIT` with its
+`--provider-source` checkout; the declared pin must match the clean source.
+The default remains the documented compatibility revision. A capsule remains
+bound to the captured native provider's complete source fingerprint: selecting
+a different provider revision can correctly refuse restore. Generate and qualify
+a new source at that revision; never rewrite an older capsule or relax its fence.
+The parent wait covers the synthetic fixture's original phase plus cleanup;
+capture deadlines and worker phase checks remain unchanged. All receiver work still runs;
+this option neither admits a real study cell nor turns an earlier source failure
+into a pass. Output must remain fresh, physical and outside every source checkout.
+
 Check `result.json`, `source.log`, `ordinary.log` and `stride.log` in the private
 output directory; failure is an error, including missing prerequisites, and a
 skipped test cannot produce a passed receipt. A second attempt needs a new output
@@ -800,6 +858,11 @@ controller 保管，不能放进 worker；0600 不能证明隔离。原生 owner
 已用轮次和剩余冷却，生成新注册；完整研究接续仍需联合会话、LoopX 新权限、
 原点剩余总预算及 replan 前决策边界。此切片不启动研究、不证明收益，也不改历史源。
 
+Docker 原始归档在显式导出目标的文件系统中暂存，再解包到该私有 staging 目录，
+不再依赖环境默认的临时卷。目标容量仍须覆盖原始传输、已解包参与者及封存副本；
+改变目标位置不会减少这些字节或延长捕获截止时间。目标卷空间不足仍明确失败、
+执行现有 reader/barrier 清理且不发布外层产物，不自动换卷重试或用稍后状态替代原点。
+
 这是研究 checkpoint 的开发前置切片。EdgeBench CLI 的显式
 `--checkpoint-request` 会把 host JSON 原文安全放入 heartbeat worker，并在
 runtime receipt 绑定摘要；programmatic adapter 也可指定已放入 guest 的请求
@@ -828,6 +891,14 @@ Host 预检已提交 fresh replan，但尚待 Agent 选择工作时，仍可在�
 settlement identity，也不授予选择前的交付权限。源边界仍须来自上轮已结算的成功工作；
 已选 guard 的原结算身份检查保持。
 
+恢复会话的两处 hook 仍须先有引用源 checkpoint 的当前 Goal 已接受语义 replan，
+以及新的已完成原生接续。显式 `"native_session": true` 时，预检核对绑定的
+session/workspace，并仅读取最新 Turn 的身份/状态、不加载 items。此临时 cursor
+只准入一次捕获尝试，不证明完整历史；实际捕获的两次完整原生观测均须在封存前
+核验原历史前缀及该已完成接续。checkpoint/session 变化、cursor 缺失或前缀变化
+都拒绝捕获。准备验收及不捕获 native 的声明保持完整历史预检；canonical review、
+首边界去重、当前权限和默认关闭路径保持原规则。
+
 运行中出现的 fresh replan 可通过显式交接捕获。完整捕获需同时声明
 `controller_handoff`、`native_session`、`loopx_state`、`evaluation_opportunity`
 为 true，使用 `fresh_replan`，并在 host CLI 提供 `--checkpoint-controller-file`。
@@ -836,6 +907,12 @@ worker 保留原 guard，controller 暂停全部容器写入者，核对仍有�
 文件 witness，再封存原生评测机会、incumbent 及剩余预算。源变化、过期或失去
 交接会拒绝；可恢复的捕获失败不取消原研究，也不得改用稍后的状态。解除暂停后，
 源会话继续使用原 packet 和 deadline。
+显式开启的两处完整 controller 捕获 hook 共用 90 秒窗口（原为 30 秒），覆盖完整原生/研究上下文
+准备、一致性复核与 live-source 捕获，并受原试验 phase 截止时间约束。controller
+沿用同一个绝对截止时间；解除暂停后，只能在原 phase 内再用至多 30 秒封存静态副本。
+这不增加试验预算、冷却或机会，不改变完整性及首次尝试规则；丢失的点仍不能补记，
+直接 controller 命令仍受调用者给定的 timeout 约束，其他捕获声明保持 30 秒窗口。
+未显式开启时仍不捕获。
 自动 supervisor 的准备截止时间仍约束暂停、文件导出及原生捕获。成功解除暂停后，
 controller 只对自己持有的静态导出副本继续校验、封存，使用已捕获的原 Host phase
 截止时间；该截止时间同时传给类型化产物 owner，过期不能发布。源可以继续工作，
@@ -886,7 +963,23 @@ Warm verification hashes the complete checkpoint with a read window of up to
 60 seconds, capped by the original execution deadline. It rejects a read that
 finishes after that deadline. The launcher reuses this verified metadata before
 native registration; subsequent participant checks still verify the retained
-bytes. This read window grants no extra execution time.
+bytes. Workspace restoration uses the same bounded full-artifact read allowance.
+Native conversation admission and fresh-replan revalidation allow up to 90 seconds
+per read, capped by the original phase deadline, while preserving full-history,
+cursor and identity checks. Core research-context adoption also gives complete
+artifact and native-history reads up to 90 seconds each (previously the generic
+10-second artifact RPC and 30-second native read defaults). Warm preparation
+passes its original phase deadline through adoption; expiration rejects the next
+write, and uncertain prior writes must replay their original operation. Ordinary
+Core callers remain lease-governed and may supply an absolute adoption deadline.
+These allowances grant no extra execution time and
+do not establish sustained performance for growing checkpoints.
+
+Concurrent receivers importing the same native point serialize bank publication
+with a bounded per-point lock. Each receiver still obtains its own native run and
+credentials; an existing bank member must match the sealed bytes. Conflicting or
+partial members fail closed. A lock timeout leaves the attempt for inspection;
+it does not authorize reusing a failed trial directory.
 
 Both comparison arms first settle actual preparation at cadence one and consume
 the retained decision through a current semantic replan. The existing joint
@@ -894,6 +987,40 @@ continuation gate must accept that replan before the declared normal cadence
 returns. Preparation and context-reading cost belong in the comparison. Omit all
 restore flags for the unchanged cold entry; never reuse an ambiguous trial
 folder as a new attempt.
+
+To test a new decision from the same pre-replan state, use
+`--restore-fresh-replan`. The point must contain a verified pending replan packet.
+The first destination model call starts a fresh native conversation, before
+preparation and the first current-Goal replan. It reads the original task,
+retained research evidence, code and incumbent; no post-checkpoint decision or
+old native message prefix is supplied. Preparation remains charged work, and
+capture remains closed until the ordinary current review/settlement gate passes.
+Omit the flag for retained-history continuation. Change treatments only in a new attempt; the
+same checkpoint budget, opportunities and cooldown remain binding.
+
+同一个决策前 checkpoint 的重新决策实验使用 `--restore-fresh-replan`：首次模型调用
+就在 fresh 原生会话中准备并完成当前目标的 replan，读取原任务、研究证据、代码和最佳
+候选，不预置 checkpoint 之后的决定或旧原生消息前缀。准备成本仍计入原预算，后续捕获
+仍须通过当前复盘和结算校验。省略该选项保持历史接续。
+必须用新 attempt 改变处理方式，不能重置预算、机会或冷却。
+
+Warm continuation preserves the admitted native conversation across the current
+replan and subsequent work. The post-replan context-reset option
+`--restore-fresh-after-replan` has been removed; supplying it is a CLI error
+before trial creation or native registration. The joined qualification retains full controller-backed
+recapture and actual work in another isolated receiver, using the complete
+retained native history. Controller configuration and bank stay outside guest
+mounts. Scripted model and grader responses qualify the mechanical chain;
+research benefit and sustained growing-point reliability remain unproven.
+This is a benchmark operator transport; the generic packaged restore UI remains
+an open acceptance boundary.
+
+暖恢复在当前 replan 及后续工作中保留已准入的原生会话。复盘后清空上下文的选项
+已删除；旧参数会在创建 trial 或原生注册前作为未知参数拒绝。联合资格仍覆盖
+controller 完整再捕获及另一隔离接收端的实际工作，并使用完整保留的原生历史。
+controller 配置和 bank 不进入 guest 挂载。脚本模型与 grader 只验证机械链路，
+研究收益及 checkpoint 持续增大时的可靠性仍未证明。该入口属于 benchmark
+操作者传输，通用打包 restore UI 仍须另验收。
 
 Research files outside the task workspace need explicit capture **and** explicit
 receiver selection. Add each required directory or file to the source checkpoint

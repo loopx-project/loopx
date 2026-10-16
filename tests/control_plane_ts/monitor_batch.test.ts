@@ -1,173 +1,280 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
-import {EffectRuntimeRequestError} from "../../loopx/control_plane/effect_runtime_errors.ts";
-import {planLegacyMonitorBatch, planMonitorBatch, MONITOR_BATCH_PLAN_REQUEST_SCHEMA} from "../../loopx/control_plane/scheduler/monitor_batch.ts";
 
-function request(): JsonObject {
-  return {schema_version: MONITOR_BATCH_PLAN_REQUEST_SCHEMA, legacy_batch_version: 1,
-    goal_id: "goal-a", operation_id: "effect-a", actor_agent_id: "agent-a",
-    registered_agents: ["agent-a"], dry_run: false, gate_scope_guard: false,
-    observation: {todo_id: "todo_watch", target_key: "watch-a", generated_at: "2026-09-01T00:00:00Z",
-      result_hash: "result-a", material_change: true},
-    intent: {next_agent_todo: "Deliver observed result", next_action_kind: "implementation"},
-    todos: [{todo_id: "todo_watch", role: "agent", status: "open", done: false,
-      archive_state: "active", text: "Observe change", task_class: "continuous_monitor",
-      target_key: "watch-a", cadence: "1h"}]};
+import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
+import {
+  canonicalAuthorityObject,
+  canonicalAuthorityObjectList,
+} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
+import {
+  type MonitorBatchInput,
+  MONITOR_BATCH_PLAN_REQUEST_SCHEMA,
+  MONITOR_BATCH_RECEIPT_SCHEMA,
+  monitorPollRequestHash,
+  planMonitorBatch,
+  replayLegacyMonitorBatch,
+} from "../../loopx/control_plane/scheduler/monitor_batch.ts";
+
+function request(intent: JsonObject = {
+  next_agent_todo: "Deliver observed result",
+  next_action_kind: "implementation",
+}): MonitorBatchInput {
+  return {
+    goal_id: "goal-a",
+    operation_id: "effect-a",
+    actor_agent_id: "agent-a",
+    registered_agents: ["agent-a"],
+    dry_run: false,
+    gate_scope_guard: false,
+    observation: {
+      todo_id: "todo_watch",
+      target_key: "watch-a",
+      generated_at: "2026-09-01T00:00:00Z",
+      result_hash: "result-a",
+      material_change: true,
+    },
+    intent,
+    todos: [{
+      todo_id: "todo_watch",
+      role: "agent",
+      status: "open",
+      done: false,
+      archive_state: "active",
+      text: "Observe change",
+      task_class: "continuous_monitor",
+      target_key: "watch-a",
+      cadence: "1h",
+    }],
+  };
 }
 
-test("legacy batch plans Monitor and successors together with durable identities", () => {
-  const plan = planLegacyMonitorBatch(request());
-  assert.equal(plan.replayed, false);
-  const mutations = plan.mutations as {kind: string; todo: JsonObject}[];
-  assert.equal(mutations.length, 2);
-  assert.equal(mutations[0]?.todo.monitor_effect_id, "effect-a");
-  const writeback = plan.writeback as JsonObject;
-  assert.deepEqual((writeback.next_todos as JsonObject[]).map(todo => todo.todo_id),
-    [mutations[1]?.todo.todo_id]);
-  assert.equal((plan.receipt as JsonObject).writeback, writeback);
-});
+function historicalReceipt(input: MonitorBatchInput): JsonObject {
+  const successors: JsonObject[] = [];
+  const summaries: JsonObject[] = [];
+  if (typeof input.intent.next_agent_todo === "string" &&
+      input.intent.next_agent_todo.trim()) {
+    successors.push({
+      todo_id: "todo_historical_agent",
+      role: "agent",
+      todo: input.intent.next_agent_todo,
+    });
+    summaries.push({todo_id: "todo_historical_agent", role: "agent"});
+  }
+  if (typeof input.intent.next_user_todo === "string" &&
+      input.intent.next_user_todo.trim()) {
+    successors.push({
+      todo_id: "todo_historical_user",
+      role: "user",
+      todo: input.intent.next_user_todo,
+    });
+    summaries.push({todo_id: "todo_historical_user", role: "user"});
+  }
+  return {
+    schema_version: MONITOR_BATCH_RECEIPT_SCHEMA,
+    goal_id: input.goal_id,
+    operation_id: input.operation_id,
+    request_sha256: monitorPollRequestHash(input),
+    writeback: {
+      schema_version: "monitor_poll_todo_writeback_v0",
+      dry_run: input.dry_run,
+      goal_id: input.goal_id,
+      todo_id: input.observation.todo_id,
+      monitor_effect_id: input.operation_id,
+      result_hash: input.observation.result_hash,
+      material_change: input.observation.material_change,
+      last_checked_at: input.observation.generated_at,
+      todo_update: {ok: true},
+      next_todos: successors,
+      successor_receipts: summaries,
+      provider_replayed: false,
+    },
+  };
+}
 
-test("legacy Monitor routes an explicit successor claim to a registered peer; canonical remains actor-owned", () => {
-  const source = {...request(), registered_agents: ["agent-a", "agent-b"],
-    intent: {...(request().intent as JsonObject), next_claimed_by: "agent-b"}};
-  const planned = planLegacyMonitorBatch(source);
-  const successor = (planned.mutations as {todo: JsonObject}[])[1]!.todo;
-  assert.equal(successor.claimed_by, "agent-b");
-  assert.equal(successor.created_by, "agent-a");
-  assert.equal(successor.last_actor_agent_id, "agent-a");
-  assert.throws(() => planMonitorBatch(source as never), /actor to match owner/);
-  const unknown = {...source, intent: {...source.intent, next_claimed_by: "unregistered"}};
-  assert.throws(() => planLegacyMonitorBatch(unknown),
-    (error: unknown) => error instanceof EffectRuntimeRequestError &&
-      error.kind === "request_rejected" && /claim owner is not registered/.test(error.message));
-  const internal = new Error("synthetic internal failure");
-  const broken = {...source};
-  Object.defineProperty(broken, "todos", {get() {throw internal;}});
-  assert.throws(() => planLegacyMonitorBatch(broken), error => error === internal);
-});
+function replay(input: MonitorBatchInput, receipt = historicalReceipt(input)):
+    JsonObject {
+  return replayLegacyMonitorBatch({
+    schema_version: MONITOR_BATCH_PLAN_REQUEST_SCHEMA,
+    ...input,
+    previous_receipt: receipt,
+  });
+}
 
-test("receipt replays before current target and gate checks", () => {
-  const first = planLegacyMonitorBatch(request());
-  const replay = {...request(), previous_receipt: first.receipt, legacy_batch_version: null,
-    todos: [{todo_id: "todo_watch", role: "agent", status: "done", archive_state: "archive",
-      task_class: "continuous_monitor", monitor_effect_id: "effect-a", target_key: "renamed"}],
-    gate_scope_guard: true};
-  const result = planLegacyMonitorBatch(replay);
+test("historical receipt replay returns no mutations and ignores current source state", () => {
+  const input = request();
+  const result = replay({...input, registered_agents: [], todos: [null]});
+  const writeback = canonicalAuthorityObject(
+    result.writeback,
+    "historical replay writeback",
+  );
+  const receiptWriteback = canonicalAuthorityObject(
+    historicalReceipt(input).writeback,
+    "historical receipt writeback",
+  );
   assert.equal(result.replayed, true);
   assert.deepEqual(result.mutations, []);
-  assert.equal((result.writeback as JsonObject).provider_replayed, true);
-  assert.deepEqual((result.writeback as JsonObject).next_todos, (first.writeback as JsonObject).next_todos);
-  assert.equal(planLegacyMonitorBatch({...replay, todos: [null]}).replayed, true);
+  assert.equal(writeback.provider_replayed, true);
+  assert.deepEqual(
+    writeback.next_todos,
+    receiptWriteback.next_todos,
+  );
 });
 
-test("receipt replay uses the same Python whitespace semantics as successor planning", () => {
-  const source = {...request(), intent: {next_agent_todo: "\u0085"}};
-  const first = planLegacyMonitorBatch(source);
-  assert.deepEqual((first.writeback as JsonObject).next_todos, []);
-  const retry = planLegacyMonitorBatch({...source, previous_receipt: first.receipt});
-  assert.equal(retry.replayed, true);
-  assert.deepEqual((retry.writeback as JsonObject).next_todos, []);
+test("historical replay requires an immutable receipt", () => {
+  const input = request();
+  assert.throws(
+    () => replayLegacyMonitorBatch({
+      schema_version: MONITOR_BATCH_PLAN_REQUEST_SCHEMA,
+      ...input,
+    }),
+    /requires an immutable previous receipt/,
+  );
 });
 
-test("changed intent, malformed receipt, and missing receipt fail closed", () => {
-  const first = planLegacyMonitorBatch(request());
-  assert.throws(() => planLegacyMonitorBatch({...request(), previous_receipt: first.receipt,
-    intent: {next_agent_todo: "Changed", next_action_kind: "implementation"}}), /request mismatch/);
-  assert.throws(() => planLegacyMonitorBatch({...request(), previous_receipt: {
-    ...(first.receipt as JsonObject), writeback: {...(first.writeback as JsonObject),
-      next_todos: [{}]}}}),
-  /successor identity/);
-  assert.throws(() => planLegacyMonitorBatch({...request(), todos: [{
-    ...(request().todos as JsonObject[])[0], monitor_effect_id: "effect-a"}]}), /without its batch receipt/);
-  assert.throws(() => planLegacyMonitorBatch({...request(), legacy_batch_version: null}), /needs reconciliation/);
+test("changed intent and malformed receipt fail closed", () => {
+  const input = request();
+  const receipt = historicalReceipt(input);
+  assert.throws(
+    () => replay({
+      ...input,
+      intent: {
+        next_agent_todo: "Changed",
+        next_action_kind: "implementation",
+      },
+    }, receipt),
+    /request mismatch/,
+  );
+  const writeback = canonicalAuthorityObject(
+    receipt.writeback,
+    "historical receipt writeback",
+  );
+  assert.throws(
+    () => replay(input, {
+      ...receipt,
+      writeback: {...writeback, next_todos: [{}]},
+    }),
+    /successor identity/,
+  );
 });
 
-test("legacy receipt cannot drop, duplicate, or relabel requested successors", () => {
-  const both = {...request(), intent: {...(request().intent as JsonObject),
-    next_user_todo: "Approve observed result", next_user_task_class: "user_action"}};
-  const first = planLegacyMonitorBatch(both);
-  const writeback = first.writeback as JsonObject;
-  const next = writeback.next_todos as JsonObject[];
-  const summaries = writeback.successor_receipts as JsonObject[];
-  const replay = (changes: JsonObject) => planLegacyMonitorBatch({...both,
-    previous_receipt: {...(first.receipt as JsonObject), writeback: {...writeback, ...changes}}});
-  assert.throws(() => replay({next_todos: [], successor_receipts: []}), /malformed/);
-  assert.throws(() => replay({next_todos: [next[0], {...next[1], role: "agent"}]}), /successor identity/);
-  assert.throws(() => replay({next_todos: [next[0], {...next[1], todo_id: next[0].todo_id}],
-    successor_receipts: [summaries[0], {...summaries[1], todo_id: next[0].todo_id}]}), /successor identity/);
+test("historical receipt cannot drop, duplicate, or relabel requested successors", () => {
+  const input = request({
+    next_agent_todo: "Deliver observed result",
+    next_action_kind: "implementation",
+    next_user_todo: "Approve observed result",
+    next_user_task_class: "user_action",
+  });
+  const receipt = historicalReceipt(input);
+  const writeback = canonicalAuthorityObject(
+    receipt.writeback,
+    "historical receipt writeback",
+  );
+  const next = canonicalAuthorityObjectList(
+    writeback.next_todos,
+    "historical successors",
+  );
+  const summaries = canonicalAuthorityObjectList(
+    writeback.successor_receipts,
+    "historical successor summaries",
+  );
+  const withWriteback = (changes: JsonObject): JsonObject => ({
+    ...receipt,
+    writeback: {...writeback, ...changes},
+  });
+  assert.throws(
+    () => replay(input, withWriteback({next_todos: [], successor_receipts: []})),
+    /malformed/,
+  );
+  assert.throws(
+    () => replay(input, withWriteback({
+      next_todos: [next[0], {...next[1], role: "agent"}],
+    })),
+    /successor identity/,
+  );
+  assert.throws(
+    () => replay(input, withWriteback({
+      next_todos: [next[0], {...next[1], todo_id: next[0].todo_id}],
+      successor_receipts: [
+        summaries[0],
+        {...summaries[1], todo_id: next[0].todo_id},
+      ],
+    })),
+    /successor identity/,
+  );
 });
 
-test("shared fresh planner does not apply legacy receipt policy to canonical state", () => {
+test("receipt replay uses the retained Python whitespace semantics", () => {
+  const input = request({next_agent_todo: "\u0085"});
+  const receipt = historicalReceipt(input);
+  const historicalWriteback = canonicalAuthorityObject(
+    receipt.writeback,
+    "historical receipt writeback",
+  );
+  const result = replay(input, {
+    ...receipt,
+    writeback: {
+      ...historicalWriteback,
+      next_todos: [],
+      successor_receipts: [],
+    },
+  });
+  const writeback = canonicalAuthorityObject(
+    result.writeback,
+    "historical replay writeback",
+  );
+  assert.deepEqual(writeback.next_todos, []);
+});
+
+test("canonical fresh planning remains actor-owned", () => {
+  const input = request();
+  const first = planMonitorBatch(input);
+  assert.equal(first.mutations.length, 2);
+  assert.equal(first.writeback.monitor_effect_id, "effect-a");
+  assert.equal("receipt" in first, false);
+
+  const peer = request({
+    ...input.intent,
+    next_claimed_by: "agent-b",
+  });
+  peer.registered_agents = ["agent-a", "agent-b"];
+  assert.throws(
+    () => planMonitorBatch(peer),
+    /actor to match owner/,
+  );
+});
+
+
+test("canonical monitor discoveries default independently and accept per-role priorities", () => {
   const source = request();
-  const unchanged = {...source, intent: {}, observation: {
-    ...(source.observation as JsonObject), material_change: false}};
-  const first = planMonitorBatch(unchanged);
-  const planned = planMonitorBatch({...unchanged, todos: [first.mutations[0].todo]});
-  assert.equal(planned.writeback.monitor_effect_id, "effect-a");
-  assert.equal((planned.mutations as JsonObject[]).length, 1);
-  assert.equal("receipt" in planned, false);
-});
-
-test("legacy successor reuses a semantic duplicate with omitted empty capabilities", () => {
-  const source = request();
-  const fresh = planLegacyMonitorBatch(source);
-  const candidate = (fresh.mutations as {todo: JsonObject}[])[1]?.todo;
-  assert.ok(candidate);
-  const {required_capabilities: _omitted, ...existing} = candidate;
-  const duplicate = {...existing, todo_id: "todo_existing_successor"};
-  const todos = [...(source.todos as JsonObject[]), duplicate];
-  const replay = planLegacyMonitorBatch({...source, todos});
-  assert.equal((replay.mutations as JsonObject[]).length, 1);
-  assert.equal(((replay.writeback as JsonObject).next_todos as JsonObject[])[0]?.todo_id,
-    "todo_existing_successor");
-
-  assert.throws(() => planLegacyMonitorBatch({...source, todos: [
-    (source.todos as JsonObject[])[0], {...duplicate, action_kind: "different"}]}),
-  /different action_kind/);
-  const {unblocks_todo_id: _missing, ...missingLink} = duplicate;
-  assert.throws(() => planLegacyMonitorBatch({...source, todos: [
-    (source.todos as JsonObject[])[0], missingLink]}),
-  /different unblocks_todo_id/);
-});
-
-
-test("monitor discoveries default independently and accept per-role priorities", () => {
-  const source = request();
-  source.todos = (source.todos as JsonObject[]).map(todo => ({...todo, priority: "P0"}));
+  source.todos = source.todos.map(todo => ({...todo, priority: "P0"}));
   for (const [extra, expected] of [
     [{}, ["P1", "P1"]],
     [{next_agent_priority: "P0", next_user_priority: "P3"}, ["P0", "P3"]],
   ] as const) {
-    const input = {...source, intent: {...(source.intent as JsonObject),
+    const input = {...source, intent: {...source.intent,
       next_user_todo: "Review result", next_user_task_class: "user_action", ...extra}};
-    const first = planLegacyMonitorBatch(input);
-    const writeback = first.writeback as JsonObject;
+    const first = planMonitorBatch(input);
+    const writeback = first.writeback;
     assert.deepEqual((writeback.next_todos as JsonObject[]).map(todo => todo.priority), expected);
     assert.deepEqual((writeback.successor_receipts as JsonObject[]).map(todo => todo.priority), expected);
-    const retry = planLegacyMonitorBatch({...input, previous_receipt: first.receipt});
-    assert.equal(retry.replayed, true);
-    assert.deepEqual(retry.mutations, []);
-    assert.throws(() => planLegacyMonitorBatch({...input, previous_receipt: first.receipt,
-      intent: {...input.intent, next_agent_priority: "P4"}}), /request mismatch/);
   }
   for (const extra of [{next_agent_priority: "P5"}, {next_user_priority: "P0"},
     {next_agent_priority: "P0", next_agent_todo: "[P1] Conflict"}]) {
-    assert.throws(() => planLegacyMonitorBatch({...source, intent: {...(source.intent as JsonObject), ...extra}}));
+    assert.throws(() => planMonitorBatch({...source, intent: {...source.intent, ...extra}}));
   }
 });
 
 test("historical unranked monitor receipts replay without applying the new default", () => {
-  const first = planLegacyMonitorBatch(request());
-  const receipt = structuredClone(first.receipt) as JsonObject;
-  const writeback = receipt.writeback as JsonObject;
-  for (const todo of writeback.next_todos as JsonObject[]) {
-    todo.text = todo.todo = "Deliver observed result";
-    delete todo.priority; delete todo.title;
+  const input = request();
+  const receipt = historicalReceipt(input);
+  const result = replay({...input, todos: []}, receipt);
+  assert.equal(result.replayed, true);
+  assert.deepEqual(result.mutations, []);
+  const writeback = result.writeback as JsonObject;
+  assert.equal((writeback.next_todos as JsonObject[])[0].priority, undefined);
+  assert.equal((writeback.next_todos as JsonObject[])[0].todo, "Deliver observed result");
+  for (const intent of [{...input.intent, next_agent_priority: "P0"},
+    {...input.intent, next_user_priority: "P3"}]) {
+    assert.throws(() => replay({...input, intent}, receipt), /request mismatch/);
   }
-  for (const todo of writeback.successor_receipts as JsonObject[]) delete todo.priority;
-  const replay = planLegacyMonitorBatch({...request(), previous_receipt: receipt, todos: []});
-  assert.equal(replay.replayed, true);
-  assert.deepEqual(replay.mutations, []);
-  assert.equal(((replay.writeback as JsonObject).next_todos as JsonObject[])[0].priority, undefined);
 });

@@ -47,9 +47,7 @@ from ..goal_vision_policy import (
     completed_todo_replan_threshold,
     goal_vision_repeats_advancement_until_closed,
 )
-from ..goal_vision_state import (
-    goal_vision_state_is_closed,
-)
+from ..goal_vision_state import goal_vision_state_is_closed
 from ..goal_vision_read_model import (
     VISION_ACCEPTANCE_GAP_TRIGGER as VISION_ACCEPTANCE_GAP_TRIGGER,
     VISION_SUCCESSOR_GAP_TRIGGER as VISION_SUCCESSOR_GAP_TRIGGER,
@@ -63,7 +61,7 @@ from .acceptance import (
     GOAL_ACCEPTANCE_HOLD_TRIGGERS,
     acceptance_gaps_from_held_goal_binding,
 )
-from ...effect_runtime import effect_runtime_result
+from ...work_items.replan_semantics_codec import project_replan_semantics
 from .ack_policy import (
     attach_rejected_replan_feedback,
     autonomous_replan_ack_satisfies_obligation,
@@ -77,20 +75,15 @@ from .fallback_source import (
     declared_fallback_gap_from_agent_vision,
     parse_fallback_declarations,  # noqa: F401
 )
-from .long_todo_chain import (
-    LONG_TODO_CHAIN_TRIGGER,
-    evaluate_long_todo_chain,
-)
+from .long_todo_chain import LONG_TODO_CHAIN_TRIGGER, evaluate_long_todo_chain
 from .replan_rules import (
     GoalFrontierReplanFacts,
     GoalFrontierReplanRule,
     select_goal_frontier_replan_rule,
 )
 from .semantic_history import (
-    latest_agent_vision_from_runs as latest_agent_vision_from_runs,
-)
-from .semantic_history import (
     _latest_runs_for_goal,
+    latest_agent_vision_from_runs as latest_agent_vision_from_runs,
     latest_agent_vision_from_status_payload,
     latest_autonomous_replan_ack_from_status_payload,
     latest_missing_vision_checkpoint_from_status_payload,
@@ -210,28 +203,6 @@ def align_autonomous_replan_guidance_with_acceptance_policy(
         "coverage_backed_no_followup",
     ]
     return aligned
-
-
-def autonomous_replan_decision_allowed(
-    *,
-    replan_obligation: dict[str, Any] | None,
-    plan_ok: bool,
-    workspace_blocked: bool,
-    automation_prompt_upgrade_required: bool,
-    agent_id: str | None = None,
-    registered_agent_ids: list[str] | None = None,
-) -> bool:
-    return bool(
-        autonomous_replan_is_required(replan_obligation)
-        and autonomous_replan_scope_decision(
-            replan_obligation,
-            agent_id=agent_id,
-            registered_agent_ids=registered_agent_ids,
-        ).get("applies")
-        and plan_ok
-        and not workspace_blocked
-        and not automation_prompt_upgrade_required
-    )
 
 
 def _normalize_replan_agent_id(value: Any) -> str | None:
@@ -953,7 +924,7 @@ def _vision_gap_acknowledged(
             )
         ):
             return False
-    return effect_runtime_result("work_item.replan_semantics.project", {
+    return project_replan_semantics({
         "operation": "vision_ack",
         "acceptance_gaps": acceptance_gaps,
         "ack": latest_replan_ack,

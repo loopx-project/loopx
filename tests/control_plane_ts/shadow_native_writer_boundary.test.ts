@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import fs, { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, {type TestContext} from "node:test";
+import {syncBuiltinESMExports} from "node:module";
 import { atomicWriteJson } from "../../loopx/control_plane/effect_runtime_io.ts";
 import { withCanonicalWriter } from "../../loopx/control_plane/coordination/local_authority_write.ts";
 import {
@@ -76,6 +76,15 @@ for (const [name, invoke, schema, requestFields] of [
   test(`promoted ${name} waits behind the bootstrap and rollback maintenance lock`, async (t) => {
     const root = await mkdtemp(join(tmpdir(), "loopx-native-maintenance-race-"));
     t.after(() => rm(root, {recursive: true, force: true}));
+    await atomicWriteJson(legacyCoordinationWriterFencePath(root, "goal-a"), {
+      schema_version: "loopx_legacy_coordination_writer_fence_v0",
+      state: "engaged",
+      goal_id: "goal-a",
+      fence_id: "maintenance-race",
+      source_version: "source-a",
+      source_projection_sha256: "a".repeat(64),
+      expected_shadow_provider_revision: "file:1:aaaaaaaaaaaaaaaaaaaaaaaa",
+    });
     let opened = 0;
     let completed = false;
     let pending: Promise<Record<string, unknown>> | undefined;
@@ -105,6 +114,35 @@ import { engageLegacyCoordinationWriterFence, legacyCoordinationTodoLockPath, le
 import { taskLeaseLockPath } from "../../loopx/control_plane/work_items/task_lease_acquire.ts";
 import { withFileMutationLock } from "../../loopx/control_plane/effect_runtime_io.ts";
 import { access } from "node:fs/promises";
+
+test("normal canonical writes reject unpromoted execute and dry-run before provider open", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-canonical-cutoff-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  for (const dry_run of [false, true]) {
+    let opened = 0;
+    const result = await createLocalCoordinationTodo({
+      schema_version: LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA,
+      runtime_root: root,
+      goal_id: "goal-a",
+      registered_agents: [],
+      dry_run,
+    }, {
+      createStore: () => {
+        opened++;
+        throw new Error("provider touched");
+      },
+    });
+    assert.equal(result.reason_code, "canonical_authority_required");
+    assert.equal(result.write_admitted, false);
+    assert.equal(result.decision_read_from_provider, false);
+    assert.equal(result.legacy_fallback_used, false);
+    assert.deepEqual(result.recovery, {
+      action: "migrate_goal_authority",
+      backup_required: true,
+    });
+    assert.equal(opened, 0);
+  }
+});
 
 test("a canonical writer waits for a slow file-v0 critical section without losing the fence", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "loopx-canonical-long-writer-"));
@@ -155,23 +193,70 @@ test("fence engagement refuses malformed durable maintenance before publishing",
   await assert.rejects(access(legacyCoordinationWriterFencePath(root, "goal-a")));
 });
 
-for (const kind of ["todo", "state", "lease"] as const) {
-  test(`fence engagement waits for an existing ${kind} writer before publication`, async (t) => {
-    const root = await mkdtemp(join(tmpdir(), "loopx-fence-lock-"));
-    t.after(() => rm(root, {recursive: true, force: true}));
-    const statePath = join(root, "ACTIVE_GOAL_STATE.md");
-    await writeFile(statePath, "---\ngoal_id: goal-a\n---\n");
-    const lock = kind === "todo" ? legacyCoordinationTodoLockPath(root, "goal-a") : kind === "state" ? statePath : taskLeaseLockPath({runtime_root: root, goal_id: "goal-a"});
-    let pending: Promise<Record<string, unknown>> | undefined;
-    let completed = false;
-    await withFileMutationLock(lock, async () => {
-      pending = engageLegacyCoordinationWriterFence(fenceRequest(root)).then((result) => {completed = true; return result;});
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      assert.equal(completed, false, "the fence must not pass an active primary writer");
-      await assert.rejects(access(legacyCoordinationWriterFencePath(root, "goal-a")));
+// Observe a real failed exclusive open, rather than assuming an operation has
+// reached its lock after a wall-clock sleep. Slow startup must not let a broken
+// lock path pass before the test releases the primary writer.
+async function whileWriterContended(
+  t: TestContext, target: string, invoke: () => Promise<Record<string, unknown>>,
+  checkBlocked: () => Promise<void>,
+): Promise<Record<string, unknown>> {
+  let pending: Promise<Record<string, unknown>> | undefined;
+  try {
+    await withFileMutationLock(target, async () => {
+      const heldPath = await fs.realpath(`${target}.ts-effect.lock`);
+      let observed!: () => void;
+      const contention = new Promise<void>(resolve => { observed = resolve; });
+      const originalOpen = fs.open;
+      const probe = t.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+        try {
+          return await originalOpen(...args);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "EEXIST" &&
+              await fs.realpath(String(args[0])) === heldPath) observed();
+          throw error;
+        }
+      });
+      syncBuiltinESMExports();
+      try {
+        pending = invoke();
+        const first = await Promise.race([
+          contention.then(() => "contended"),
+          pending.then(() => "completed"),
+        ]);
+        assert.equal(first, "contended", "the fence must encounter the active primary writer lock");
+        await checkBlocked();
+      } finally {
+        probe.mock.restore();
+        syncBuiltinESMExports();
+      }
     });
-    assert.equal((await pending)!.status, "applied");
-  });
+    return await pending!;
+  } finally {
+    // The real holder is released even after a failed assertion. Drain the
+    // operation before fixture cleanup, preserving the original test failure.
+    await pending?.catch(() => undefined);
+  }
+}
+
+for (const kind of ["todo", "state", "lease"] as const) {
+  for (const startupDelay of [0, 200]) {
+    const suffix = startupDelay ? " after delayed startup" : "";
+    test(`fence engagement waits for an existing ${kind} writer before publication${suffix}`, {timeout: 10_000}, async (t) => {
+      const root = await mkdtemp(join(tmpdir(), "loopx-fence-lock-"));
+      t.after(() => rm(root, {recursive: true, force: true}));
+      const statePath = join(root, "ACTIVE_GOAL_STATE.md");
+      await writeFile(statePath, "---\ngoal_id: goal-a\n---\n");
+      const lock = kind === "todo" ? legacyCoordinationTodoLockPath(root, "goal-a") : kind === "state" ? statePath : taskLeaseLockPath({runtime_root: root, goal_id: "goal-a"});
+      const result = await whileWriterContended(t, lock,
+        async () => {
+          if (startupDelay) await new Promise(resolve => setTimeout(resolve, startupDelay));
+          return engageLegacyCoordinationWriterFence(fenceRequest(root));
+        },
+        async () => { await assert.rejects(access(legacyCoordinationWriterFencePath(root, "goal-a"))); });
+      assert.equal(result.status, "applied");
+      assert.equal(JSON.parse(await readFile(legacyCoordinationWriterFencePath(root, "goal-a"), "utf8")).fence_id, "fence-a");
+    });
+  }
 }
 
 test("fence engagement requires the actual source state path", async (t) => {
@@ -186,8 +271,6 @@ test("fence engagement requires the actual source state path", async (t) => {
 });
 
 import { fixture as bootstrapFixture } from "./shadow_file_fixture.ts";
-import { executeTaskLeaseAcquire, TASK_LEASE_ACQUIRE_REQUEST_SCHEMA_VERSION } from "../../loopx/control_plane/work_items/task_lease_acquire.ts";
-import { executeTaskLeaseLifecycle, TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA_VERSION } from "../../loopx/control_plane/work_items/task_lease_lifecycle.ts";
 import { readFile, writeFile } from "node:fs/promises";
 
 test("managed fence engagement rejects a different existing source file", async (t) => {
@@ -198,34 +281,4 @@ test("managed fence engagement rejects a different existing source file", async 
   assert.equal(result.status, "failed");
   assert.equal(result.reason_code, "shadow_source_state_path_mismatch");
   await assert.rejects(access(legacyCoordinationWriterFencePath(f.root, "goal-a")));
-});
-
-test("active native lease requires durable prepare even without a caller capture hint", async (t) => {
-  const f = await bootstrapFixture(t);
-  const part = join(f.root, "authority-shadow", "outbox", "goal-a", "leases");
-  await writeFile(part, "prepare unavailable");
-  const authority = {handoff_mode: "hard_lease", registered_agent_candidates: [["agent-a"]],
-    todos: [{todo_id: "todo_one", status: "open", claimed_by: null, excluded_agents: []}],
-    todo_projection_error: null, source_receipts: [{source_id: "state", path: f.statePath, state: "file",
-      sha256: createHash("sha256").update(await readFile(f.statePath)).digest("hex")}]};
-  const request = {schema_version: TASK_LEASE_ACQUIRE_REQUEST_SCHEMA_VERSION, runtime_root: f.root,
-    goal_id: "goal-a", todo_id: "todo_one", owner: "agent-a", idempotency_key: "lease-a",
-    ttl_seconds: 600, write_scopes: [], expected_version: null, authority};
-  const held = await executeTaskLeaseAcquire(request);
-  assert.equal(held.ok, false);
-  assert.equal(held.error_code, "shadow_capture_prepare_failed", JSON.stringify(held));
-  const leasePath = join(f.root, "goals", "goal-a", "task-leases", "todo_one.json");
-  await assert.rejects(access(leasePath));
-  await rm(part);
-  const applied = await executeTaskLeaseAcquire(request);
-  assert.equal(applied.ok, true, JSON.stringify(applied));
-  assert.equal(typeof (applied.coordination_runtime_shadow_capture as Record<string, unknown>).entry_id, "string");
-  const before = await readFile(leasePath, "utf8");
-  await atomicWriteJson(join(part, "drain-cursor.json"), {});
-  const released = await executeTaskLeaseLifecycle({schema_version: TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA_VERSION,
-    operation: "release", runtime_root: f.root, goal_id: "goal-a", todo_id: "todo_one",
-    owner: "agent-a", idempotency_key: "lease-a", expected_version: 1, authority});
-  assert.equal(released.ok, false);
-  assert.equal(released.error_code, "shadow_capture_prepare_failed", JSON.stringify(released));
-  assert.equal(await readFile(leasePath, "utf8"), before);
 });

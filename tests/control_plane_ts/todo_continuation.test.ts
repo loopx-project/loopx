@@ -121,7 +121,7 @@ test("real Python CLI source/target processes use the file backend and do not au
     return JSON.parse(run.stdout);
   };
   const unavailable = cli("inspect", "source");
-  assert.equal(unavailable.reason_code, "continuation_requires_canonical_authority", JSON.stringify(unavailable));
+  assert.equal(unavailable.reason_code, "canonical_authority_required", JSON.stringify(unavailable));
   // Isolated synthetic promoted state; no active owner goal is touched.
   const statePath = join(f.root, "ACTIVE_GOAL_STATE.md");
   await writeFile(statePath, "---\ngoal_id: goal-a\n---\n");

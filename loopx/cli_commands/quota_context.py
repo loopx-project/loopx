@@ -5,8 +5,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..control_plane.scheduler.provider_monitor_poll import (
-    require_monitor_poll_source_available,
+from ..control_plane.coordination.local_authority import (
+    read_canonical_todos_if_promoted,
 )
 from ..control_plane.quota.error_codes import QuotaCommandValidationError
 from ..control_plane.runtime.status_projection_cache import (
@@ -291,9 +291,10 @@ def prepare_quota_command_context(
         runtime_root_override=runtime_root_arg,
     )
     if command == "monitor-poll" and args.execute and (args.todo_id or args.target_key):
-        # Canonical availability precedes unrelated status/quota preparation.
-        # The eventual transaction repeats its fence check under the writer lock.
-        require_monitor_poll_source_available(
+        # A selected provider outage precedes unrelated status preparation.
+        # An unmigrated source may still recover its original quota transaction;
+        # fresh-work admission remains inside that transaction's source lock.
+        read_canonical_todos_if_promoted(
             runtime_root=runtime_root, goal_id=args.goal_id,
         )
     # Observation commands use the same scoped collector/cache as execution

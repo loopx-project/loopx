@@ -94,11 +94,19 @@ export const goalWorkspaceM2Scenario = {
       await page.setViewportSize({width:390,height:844});
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
       await page.screenshot({path:resolve(outputDir,'goal-workspace-m2-mobile.png'),animations:'disabled'});
-      const direction = page.locator(".goal-direction-content");
-      await direction.waitFor({state:"hidden"});
-      await page.getByRole("button",{name:"展开目标与条件",exact:true}).click();
-      await direction.waitFor({state:"visible"});
-      await page.getByRole("button",{name:"收起目标与条件",exact:true}).click();
+      // An enabled contract uses the native acceptance disclosure; the
+      // fallback direction button only exists without a contract or plan.
+      const inspection = page.locator(".goal-overview .delivery-check-inspection");
+      const criteria = inspection.locator(".goal-overview-criteria");
+      await page.locator(".goal-overview-objective").waitFor({state:"visible"});
+      await criteria.waitFor({state:"hidden"});
+      const summary = inspection.locator(":scope > summary");
+      await summary.focus(); await page.keyboard.press("Enter");
+      await criteria.waitFor({state:"visible"});
+      assert.equal(await inspection.evaluate(node => node.open), true);
+      await page.keyboard.press("Enter");
+      await criteria.waitFor({state:"hidden"});
+      assert.equal(await inspection.evaluate(node => node.open), false);
       const railTrigger = page.getByRole("button",{name:"打开全部工作",exact:true});
       await railTrigger.focus(); await page.keyboard.press("Enter");
       const railDialog = page.getByRole("dialog",{name:"全部工作",exact:true});

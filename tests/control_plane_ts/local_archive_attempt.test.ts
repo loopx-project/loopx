@@ -20,6 +20,7 @@ import {
 } from "../../loopx/control_plane/coordination/local_authority_runtime.ts";
 import { shadowManagementDirectory } from "../../loopx/control_plane/coordination/shadow_management.ts";
 import { executeCoordinationTodoArchiveCompleted } from "../../loopx/control_plane/coordination/todo_archive.ts";
+import { engageFence, promotionRequest } from "./local_promotion_fixture.ts";
 
 function todo(id: string): JsonObject {
   return {schema_version: "todo_item_v0", todo_id: id, role: "agent",
@@ -32,15 +33,18 @@ async function fixture(t: test.TestContext) {
   t.after(() => rm(root, {recursive: true, force: true}));
   const store = new FileAuthorityStore(join(root, "authority", "file-v0"), "goal-a");
   const todos = [todo("done-a"), todo("done-b")];
+  const projection = {goal_id: "goal-a", handoff_mode: "soft_claim", todos, leases: [],
+    todo_read_model: {schema_version: TODO_CANONICAL_READ_RECORD_SCHEMA,
+      todo_count: todos.length, records_sha256: canonicalAuthoritySha256(todos),
+      contract_fields: [...TODO_CANONICAL_READ_RECORD_FIELDS]}};
   const seed = await store.commitAuthority({
     operation_id: "seed", expected_provider_revision: null, events: [], receipts: [],
-    next_projection: {goal_id: "goal-a", handoff_mode: "soft_claim", todos, leases: [],
-      todo_read_model: {schema_version: TODO_CANONICAL_READ_RECORD_SCHEMA,
-        todo_count: todos.length, records_sha256: canonicalAuthoritySha256(todos),
-        contract_fields: [...TODO_CANONICAL_READ_RECORD_FIELDS]}},
+    next_projection: projection,
   });
   assert.equal(seed.status, "applied");
   if (seed.status !== "applied") throw new Error("fixture initialization failed");
+  await writeFile(join(root, "ACTIVE_GOAL_STATE.md"), "# Synthetic archive source\n");
+  await engageFence(promotionRequest(root, projection, seed.provider_revision));
   const request = {schema_version: LOCAL_COORDINATION_TODO_ARCHIVE_REQUEST_SCHEMA,
     runtime_root: root, goal_id: "goal-a", role: "agent", max_active_done: 0,
     operation_id: "archive-a", expected_provider_revision: seed.provider_revision,

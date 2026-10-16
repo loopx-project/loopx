@@ -170,9 +170,68 @@ def test_checkpoint_request_reaches_sforge_worker_without_changing_default_profi
     profile = json.loads((tmp_path / "worker-profile.json").read_text())
     assert env.get("LOOPX_CHECKPOINT_REQUEST") == capture_path
     assert ("checkpoint_capture_enabled" in profile) is (capture_path is not None)
+    # A guest path is configuration, not evidence of a fresh-replan trigger.
+    # Actual implicit activation is still recorded by the worker's wake.
+    assert "turn_envelope" not in profile
+    assert "turn_envelope_source" not in profile
+    assert "LOOPX_TURN_ENVELOPE" not in env
     assert profile.get("checkpoint_capture_enabled") is (True if capture_path else None)
     with pytest.raises(ValueError, match="checkpoint_request_path"):
         SForgeWorker(config, profile="official", cwd="/task", checkpoint_request_path="/control/request.json")
+
+
+@pytest.mark.parametrize("explicit,trigger,expected", [
+    (False, None, None),
+    (False, "fresh_replan", "checkpoint_handoff"),
+    (True, None, "explicit"),
+    (True, "fresh_replan", "explicit"),
+])
+def test_sforge_profile_uses_validated_checkpoint_trigger(tmp_path, monkeypatch, explicit, trigger, expected):
+    from types import SimpleNamespace
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+    async def installed(self, environment):
+        pass
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    declaration = {"destination": "/logs/agent/checkpoints",
+        "components": [{"id": "workspace", "source_path": "/task"}], "point_metadata": {}}
+    if trigger is not None:
+        declaration["trigger"] = trigger
+    backend = SimpleNamespace(copy_to_container=lambda *args: None,
+        exec_run=lambda *args, **kwargs: SimpleNamespace(exit_code=0))
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile="heartbeat-resume", cwd="/task", turn_envelope=explicit,
+        checkpoint_request=json.dumps(declaration).encode())
+    worker.install_stop_hook(backend, None, tmp_path, None)
+    profile = json.loads((tmp_path / "worker-profile.json").read_text())
+    assert profile.get("turn_envelope_source") == expected
+    assert profile.get("turn_envelope") is (True if expected else None)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_native_goal_continue_is_a_native_goal_opt_in(tmp_path, monkeypatch, enabled):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+    async def installed(self, environment):
+        pass
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    config = SForgeConfig(agent_model="fixture", agent_effort="xhigh")
+    worker = SForgeWorker(config, profile="native-goal", cwd="/task", native_goal_continue=enabled)
+    worker.install_stop_hook(None, None, tmp_path, None)
+    env = worker.runtime._worker_env(cwd="/task")
+    profile = json.loads((tmp_path / "worker-profile.json").read_text())
+    assert env.get("LOOPX_NATIVE_GOAL_CONTINUE") == ("1" if enabled else None)
+    assert profile.get("native_goal_continue") is (True if enabled else None)
+    with pytest.raises(ValueError, match="native-goal"):
+        SForgeWorker(config, profile="heartbeat-resume", cwd="/task", native_goal_continue=True)
+    with pytest.raises(ValueError, match="boolean"):
+        SForgeWorker(config, profile="native-goal", cwd="/task", native_goal_continue="1")
 
 
 @pytest.mark.parametrize("profile,total,expected", [

@@ -115,3 +115,23 @@
 .goal-overview-agent-note p { margin-top: 8px; }
 
 .goal-overview-current { font-size: var(--text-lead); line-height: var(--leading-lead); font-weight: 500; }
+
+/* The existing check controller is part of the brief, never a second hero. */
+.goal-overview .delivery-acceptance-contract.is-overview { border: 0; border-radius: 0; background: transparent; }
+.goal-overview .delivery-acceptance-contract.is-overview > .delivery-acceptance-content { padding: 0; gap: 12px; }
+.goal-overview .is-overview .delivery-check-heading h3 { color: var(--pw-muted); font-size: var(--text-caption); font-weight: 500; line-height: var(--leading-caption); }
+.goal-overview .is-overview .delivery-check-heading .goal-overview-objective { color: var(--pw-text); }
+.goal-overview .is-overview .delivery-check-primary { min-height: 44px; }
+.goal-overview .is-overview .delivery-check-primary:not(.is-prepared) { background: transparent; color: var(--pw-text); }
+.goal-overview .is-overview .goal-overview-criteria { padding: 0; }
+.goal-overview .is-overview .delivery-check-result .goal-overview-criteria { gap: 0; }
+.goal-overview .is-overview .delivery-check-result { gap: 8px; }
+.goal-overview .is-overview .delivery-check-result > p:first-child { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
+.goal-overview .is-overview :is(.delivery-check-result, .delivery-check-plan) > details, .goal-overview .is-overview .delivery-check-advanced { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
+.goal-overview .is-overview summary { padding: 8px 0; font-weight: 400; }
+.goal-overview .is-overview .delivery-check-summary .goal-overview-progress { display: inline-flex; width: calc(100% - 1.25em); max-width: 100%; margin: 0; }
+
+@media (max-width: 640px) {
+  .goal-overview .is-overview .goal-overview-criteria li { grid-template-columns: 16px minmax(0, 1fr); }
+  .goal-overview .is-overview .goal-overview-criteria small { grid-column: 2; }
+}

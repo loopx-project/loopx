@@ -671,3 +671,12 @@ The DSH transport delivery must reuse the existing operation and Turn owners:
 This is a required adapter frontier, not a shipped DSH execution grant. Finance
 continues to own financial preflight and venue evidence; its read-only checkers
 do not authenticate an operation actor, reserve funds or submit an order.
+
+The optional [frozen request preparation transport](../../reference/local-delegation.md#freeze-an-operator-authored-operation-request)
+removes model-authored copying of operator-frozen terms. An invocation-bound
+locator resolves only after native call authentication, then reuses the existing
+prepare admission, executor/audience injection and canonical proposal owner.
+Strict SDK JSON parsing and DSH original-argument pairing remain unchanged.
+This bounded CLI/adapter implementation is not genuine human confirmation,
+automatic callback qualification, an original-card result receipt or financial
+utility; frontend grant/file editing remains open.

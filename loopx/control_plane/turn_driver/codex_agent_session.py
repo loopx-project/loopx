@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 from typing import Any
@@ -78,6 +79,8 @@ class CodexAgentSession:
             if binding.get("operation_transport"):
                 raise ValueError("session requires its original managed transport")
         self.session_id = binding["session_id"] if binding else None
+        self.binding = binding
+        self.checkpoint_refresh = None
         self.receipt = receipt
         receipt["session"] = {
             "binding_scope": "agent",
@@ -108,17 +111,71 @@ class CodexAgentSession:
             self.receipt.update(ok=False, error_kind="session_identity_unconfirmed")
             raise RuntimeError("Codex did not confirm the expected session identity")
         observed = ids.pop()
-        self.admission.accept_result(
-            lambda: _store_codex_cli_session(
+        if self.checkpoint_refresh is not None:
+            from .codex_sessions import _replace_checkpoint_codex_session
+
+            self.admission.accept_result(lambda: _replace_checkpoint_codex_session(
+                self.root, lineage=self.lineage, expected=self.binding, session_id=observed,
+                refresh=self.checkpoint_refresh))
+            self.session_id = observed
+            self.checkpoint_refresh = None
+        else:
+            self.admission.accept_result(lambda: _store_codex_cli_session(
                 self.root,
                 lineage=self.lineage,
                 session_scope="agent",
                 session_id=observed,
                 goal_ref=self.goal_ref,
                 session_profile_digest=self.digest,
-            )
-        )
+            ))
         self.receipt["session"]["session_id"] = observed
+
+    def prepare_checkpoint_refresh(self, review_basis: dict | None, attempt: Path, stdout: Path,
+                                   *, pre_replan_basis: dict | None = None) -> None:
+        """Start once from a qualified checkpoint boundary; recover observed results.
+
+        An uncertain launch without a native identity remains unresolved. Never
+        dispatch another fresh conversation merely because its reply was lost.
+        The outer Host still serializes wakes and owns the explicit opt-in.
+        """
+        from loopx.file_lock import exclusive_file_lock
+
+        self.admission.require_current()
+        if any(not path.is_absolute() or path.resolve() != path for path in (attempt, stdout)):
+            raise ValueError("checkpoint context refresh requires physical absolute attempt/output paths")
+        if not self.binding or not self.binding.get("checkpoint_artifact_root"):
+            raise ValueError("checkpoint context refresh requires a source-bound conversation")
+        if (review_basis is None) == (pre_replan_basis is None):
+            raise ValueError("checkpoint refresh requires exactly one qualified boundary basis")
+        refresh = {"checkpoint_sha256": self.binding["checkpoint_artifact_sha256"],
+            "source_session_id": self.binding["session_id"],
+            **({"review_basis": review_basis} if review_basis is not None else
+               {"pre_replan_basis": pre_replan_basis})}
+        basis = {"binding": self.binding, "refresh": refresh}
+        with exclusive_file_lock(attempt):
+            if attempt.exists():
+                prior = json.loads(attempt.read_bytes())
+                if prior.get("basis") != basis:
+                    raise ValueError("checkpoint context refresh attempt source differs")
+                original_output = Path(prior["stdout"])
+                if not original_output.is_absolute() or original_output.resolve() != original_output:
+                    raise ValueError("checkpoint context refresh original output is redirected")
+                self.checkpoint_refresh = refresh
+                self.session_id = None
+                self.observe(original_output)
+                if self.session_id is None:
+                    raise ValueError("checkpoint context refresh outcome is unknown; inspect its original native output")
+                self.receipt["session"].update(action="resume", session_id=self.session_id)
+                return
+            attempt.parent.mkdir(parents=True, exist_ok=True)
+            descriptor = os.open(attempt, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "w") as stream:
+                json.dump({"basis": basis, "stdout": str(stdout)}, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+        self.checkpoint_refresh = refresh
+        self.session_id = None
+        self.receipt["session"].update(action="start_new", session_id=None)
 
     def _bind_verified_fork(self, session_id: str, source_profile_digest: str,
                             checkpoint_artifact_sha256: str, checkpoint_artifact_root: str) -> None:

@@ -1,4 +1,5 @@
 """Actual Chat entrypoint against a fenced FileAuthorityStore and projection IO."""
+import base64
 import hashlib
 import json
 import os
@@ -20,7 +21,10 @@ from loopx.control_plane.work_items.team_plan_adapter import team_plan_state_fin
 from loopx.control_plane.coordination.coordination_state_contract import (
     TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION, TODO_DOMAIN_RECORD_FIELDS,
 )
-from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+from loopx.control_plane.coordination.local_authority import (
+    CanonicalAuthorityRequired,
+    read_canonical_todos_if_promoted,
+)
 from loopx.control_plane.coordination.local_authority_shadow_projection import canonical_bytes
 from loopx.control_plane.todos import provider_projection
 
@@ -49,6 +53,63 @@ def canonical_team(tmp_path, request, monkeypatch):
     preview = service.preview({"action_kind": "team.plan", "summary": "Assign work", "context": {},
         "normalized_parameters": {"goal_id": "goal-a", "plan": plan}, "idempotency_key": "team-confirm"})
     return runtime, state, service, preview
+
+
+def test_unpromoted_team_plan_preview_requires_canonical_authority(tmp_path):
+    runtime = tmp_path / "runtime"
+    state = tmp_path / "state.md"
+    state.write_text("# Goal\n\n## Agent Todo\n\n")
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({
+        "common_runtime_root": str(runtime),
+        "goals": [{
+            "id": "goal-a",
+            "repo": str(tmp_path),
+            "state_file": state.name,
+            "coordination": {
+                "registered_agents": ["alpha"],
+                "agent_model": "peer_v1",
+            },
+        }],
+    }))
+    service = ChatActionService(
+        store=ChatActionStore(runtime / "chat/actions"),
+        registry_path=registry,
+    )
+    before = {
+        path: path.read_bytes()
+        for root in (tmp_path, runtime)
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(CanonicalAuthorityRequired) as error:
+        service.preview({
+            "action_kind": "team.plan",
+            "summary": "Assign work",
+            "context": {},
+            "normalized_parameters": {
+                "goal_id": "goal-a",
+                "plan": _agent_plan(),
+            },
+            "idempotency_key": "unpromoted-team-plan",
+        })
+
+    assert error.value.code == "canonical_authority_required"
+    assert error.value.payload["operation"] == "team_plan"
+    assert error.value.payload["write_admitted"] is False
+    assert error.value.payload["decision_read_from_provider"] is False
+    assert error.value.payload["legacy_fallback_used"] is False
+    assert error.value.payload["recovery"] == {
+        "action": "migrate_goal_authority",
+        "backup_required": True,
+    }
+    assert {
+        path: path.read_bytes()
+        for root in (tmp_path, runtime)
+        for path in root.rglob("*")
+        if path.is_file()
+    } == before
 
 
 @pytest.mark.parametrize("source", ["state", "registry"])
@@ -254,6 +315,83 @@ def test_canonical_chat_commit_replays_after_projection_failure(canonical_team, 
     assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")["provider_revision"] == read["provider_revision"]
 
 
+@pytest.mark.parametrize("corrupt_display", [False, True])
+def test_canonical_team_replay_recovers_unavailable_display_without_recreating_work(canonical_team, corrupt_display):
+    from loopx.control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
+    from loopx.control_plane.work_items.team_plan_adapter import TeamPlanCommitError, settle_team_plan
+    from loopx.todos import add_goal_todo
+
+    runtime, state, service, preview = canonical_team
+    arguments = dict(registry_path=service.registry_path, goal_id="goal-a", agent_id=None,
+        proposal={**preview["normalized_parameters"]["plan"], "proposal_id": preview["proposal_id"]},
+        expected_state_fingerprint=preview["expected_state_fingerprint"], basis_agent_id="alpha")
+    committed = settle_team_plan(**arguments)
+    add_goal_todo(registry_path=service.registry_path, goal_id="goal-a", role="agent",
+                 text="Later canonical work", operation_id="later-team-work")
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
+    state.unlink()
+    if corrupt_display:
+        state.write_bytes(b"\xffunreadable display")
+
+    def assert_display_unchanged():
+        assert state.read_bytes() == b"\xffunreadable display" if corrupt_display else not state.exists()
+
+    for changed in ({"agent_id": "alpha"},
+                    {"proposal": {**arguments["proposal"], "objective": "Changed reviewed intent"}},
+                    {"expected_state_fingerprint": "different-reviewed-basis"}):
+        with pytest.raises(TeamPlanCommitError):
+            settle_team_plan(**{**arguments, **changed})
+        assert_display_unchanged()
+        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == before
+
+    backend = runtime / "authority" / before["source_authority"].replace("_", "-")
+    offline = backend.with_name(backend.name + "-offline")
+    backend.rename(offline)
+    try:
+        with pytest.raises(LocalCoordinationAuthorityUnavailable):
+            settle_team_plan(**arguments)
+        assert_display_unchanged()
+        assert not backend.exists()
+    finally:
+        offline.rename(backend)
+
+    if corrupt_display:
+        with pytest.raises(TeamPlanCommitError) as pending:
+            settle_team_plan(**arguments)
+        assert pending.value.code == "team_plan_projection_pending"
+        assert_display_unchanged()
+        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == before
+        state.unlink()
+    replay = settle_team_plan(**arguments)
+    assert replay["action"] == "reused"
+    assert replay["lane_todo_ids"] == committed["lane_todo_ids"]
+    assert replay["created_todo_ids"] == []
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == before
+    assert state.read_text().count("Same work") == 2
+    assert state.read_text().count("Later canonical work") == 1
+
+
+@pytest.mark.parametrize("corrupt_display", [False, True])
+def test_fresh_team_plan_cannot_use_unavailable_display_as_reviewed_source(canonical_team, corrupt_display):
+    from loopx.control_plane.work_items.team_plan_adapter import TeamPlanCommitError, settle_team_plan
+
+    runtime, state, service, preview = canonical_team
+    state.unlink()
+    if corrupt_display:
+        state.write_bytes(b"\xffunreadable display")
+    # Even a new fingerprint observing absence cannot replace the missing Goal intent.
+    missing_basis = team_plan_state_fingerprint(
+        registry_path=service.registry_path, goal_id="goal-a", basis_agent_id="alpha")
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
+    with pytest.raises(TeamPlanCommitError) as error:
+        settle_team_plan(registry_path=service.registry_path, goal_id="goal-a", agent_id=None,
+            proposal={**preview["normalized_parameters"]["plan"], "proposal_id": preview["proposal_id"]},
+            expected_state_fingerprint=missing_basis, basis_agent_id="alpha")
+    assert error.value.code == "team_plan_preview_stale"
+    assert state.read_bytes() == b"\xffunreadable display" if corrupt_display else not state.exists()
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == before
+
+
 def test_canonical_change_without_markdown_refresh_invalidates_preview(canonical_team):
     runtime, state, service, preview = canonical_team
     from loopx.todos import add_goal_todo
@@ -334,7 +472,9 @@ def _capture_free_chat(team, tmp_path):
     package = package_root / "loopx"
     shutil.copytree(Path(loopx.__file__).parent, package,
                     ignore=shutil.ignore_patterns("__pycache__"))
-    (package / "control_plane/coordination/runtime_shadow_writer_adapter.py").unlink()
+    assert not (
+        package / "control_plane/coordination/runtime_shadow_writer_adapter.py"
+    ).exists()
     script = r'''
 import json, sys
 from pathlib import Path
@@ -444,11 +584,10 @@ def test_capture_free_chat_recovers_committed_projection(canonical_team, capture
     assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")["provider_revision"] == committed["provider_revision"]
 
 
-@pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_capture_free_chat_preserves_pre_promotion_receipt(tmp_path, monkeypatch, provider):
-    """Imported history remains readable without recreating or overwriting work."""
-    from loopx.todos import list_goal_todos
-    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+@pytest.fixture
+def historical_team(tmp_path, monkeypatch):
+    """Persist the original typed receipt without calling a retired writer."""
+    from loopx.control_plane.effect_runtime import effect_runtime_result
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     runtime = tmp_path / "runtime"
@@ -460,138 +599,124 @@ def test_capture_free_chat_preserves_pre_promotion_receipt(tmp_path, monkeypatch
         "coordination": {"registered_agents": ["alpha"], "agent_model": "peer_v1"}}]}))
     service = ChatActionService(store=ChatActionStore(runtime / "chat/actions"), registry_path=registry)
     plan = _agent_plan()
-    preview = service.preview({"action_kind": "team.plan", "summary": "Assign work", "context": {},
-        "normalized_parameters": {"goal_id": "goal-a", "plan": plan}, "idempotency_key": "legacy-plan"})
-    applied = service.apply(preview["proposal_id"])["proposal"]
-    assert applied["status"] == "applied", applied
-    assert "loopx:team-plan:" in state.read_text()
-    rows = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
-    projection = build_todo_runtime_shadow_projection(goal_id="goal-a", todos=rows, handoff_mode="soft_claim")
-    initialize_canonical_authority(runtime, "goal-a", projection, state_path=state, provider=provider)
+    historical_basis = "historical-team-plan-basis"
+    preview = service.store.create_preview(
+        action_kind="team.plan", summary="Assign work",
+        normalized_parameters={"goal_id": "goal-a", "plan": plan}, context={},
+        expected_state_fingerprint=historical_basis,
+        permission_classification="owner_confirmation_required",
+        validation_evidence=[], available_transitions=["apply"],
+        idempotency_key="legacy-plan",
+    )
+    planned = effect_runtime_result("work_items.team_plan.plan", {
+        "goal_id": "goal-a",
+        "plan": {**plan, "proposal_id": preview["proposal_id"]},
+        "actor_agent_id": None,
+        "registered_agents": ["alpha"],
+        "supported_action_kinds": ["implement"],
+        "observed_at": "2026-09-01T00:00:00Z",
+        "expected_state_fingerprint": historical_basis,
+        "current_state_fingerprint": historical_basis,
+        "todos": [],
+    })
+    receipt = planned["receipt"]
+    marker_id = receipt["operation_id"].split(":", 1)[1]
+    encoded_receipt = base64.b64encode(
+        json.dumps(receipt, separators=(",", ":")).encode()
+    ).decode()
+    state.write_text(
+        f"# Goal\n\n<!-- loopx:team-plan:{marker_id} {encoded_receipt} -->\n\n"
+        "## Agent Todo\n\n"
+    )
+    return runtime, state, registry, service, preview, planned
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_capture_free_chat_preserves_pre_promotion_receipt(
+    historical_team, tmp_path, provider,
+):
+    """Original history is read-only before import and after newer writes."""
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
+    runtime, state, registry, service, preview, planned = historical_team
     invoke = _capture_free_chat((runtime, state, service, preview), tmp_path)
+    before_import = state.read_bytes()
+    recovered = invoke("historical")
+    assert recovered["action"] == "reused"
+    assert recovered["lane_todo_ids"] == planned["result"]["lane_todo_ids"]
+    assert state.read_bytes() == before_import
+    assert not (runtime / "authority").exists()
+
+    projection = build_todo_runtime_shadow_projection(
+        goal_id="goal-a", todos=planned["todos"], handoff_mode="soft_claim",
+    )
+    initialize_canonical_authority(runtime, "goal-a", projection, state_path=state, provider=provider)
     later = invoke("preview", text="New work after import")
-    assert invoke("apply", proposal=later["proposal_id"])["proposal"]["status"] == "applied"
+    later_apply = invoke("apply", proposal=later["proposal_id"])
+    assert later_apply["proposal"]["status"] == "applied", later_apply["proposal"].get("failure")
     current = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
     display = state.read_bytes()
     replay = invoke("historical")
     assert replay["action"] == "reused"
-    assert replay["lane_todo_ids"] == applied["receipt"]["resource_ids"]["lane_todo_ids"]
+    assert replay["lane_todo_ids"] == planned["result"]["lane_todo_ids"]
     assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == current
     assert state.read_bytes() == display
 
-    # Simulate promotion finishing after the first mode observation but before
-    # acquiring source locks; its selected backend subsequently goes offline.
+    # A selected but missing provider still refuses historical readback.
+    # Use the actual failed store, not a mocked unpromoted observation.
     from loopx.control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
     from loopx.control_plane.work_items import team_plan_adapter
-    read_authority = team_plan_adapter.read_canonical_todos_if_promoted
-    observed = []
-
-    def promotion_race(**kwargs):
-        observed.append(True)
-        return None if len(observed) == 1 else read_authority(**kwargs)
 
     backend = runtime / "authority" / current["source_authority"].replace("_", "-")
     offline = backend.with_name(backend.name + "-offline")
     backend.rename(offline)
     try:
-        with monkeypatch.context() as race:
-            race.setattr(team_plan_adapter, "read_canonical_todos_if_promoted", promotion_race)
-            saved = service.store.load(preview["proposal_id"])
-            with pytest.raises(LocalCoordinationAuthorityUnavailable):
-                team_plan_adapter.settle_team_plan(
-                    registry_path=registry, goal_id="goal-a", agent_id=None,
-                    proposal={**saved["normalized_parameters"]["plan"], "proposal_id": preview["proposal_id"]},
-                    expected_state_fingerprint=saved["expected_state_fingerprint"], basis_agent_id="alpha")
-            assert len(observed) == 2
+        saved = service.store.load(preview["proposal_id"])
+        with pytest.raises(LocalCoordinationAuthorityUnavailable):
+            team_plan_adapter.settle_team_plan(
+                registry_path=registry, goal_id="goal-a", agent_id=None,
+                proposal={**saved["normalized_parameters"]["plan"], "proposal_id": preview["proposal_id"]},
+                expected_state_fingerprint=saved["expected_state_fingerprint"], basis_agent_id="alpha")
         assert state.read_bytes() == display and not backend.exists()
     finally:
         offline.rename(backend)
     assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == current
 
 
-@pytest.mark.skipif(os.name != "posix", reason="real bootstrap crash barrier uses select on a pipe")
-def test_legacy_chat_replay_survives_interrupted_shadow_bootstrap(tmp_path, monkeypatch):
-    """A stopped writer must not strand an already-published plan receipt."""
-    import select
-    from loopx.control_plane.work_items import team_plan_adapter
-    from loopx.control_plane.coordination.runtime_shadow import build_runtime_shadow_source_snapshot
-    from loopx.control_plane.coordination.shadow_management import read_shadow_management_state
-    from loopx.control_plane.coordination.coordination_state_contract_generated import (
-        COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA,
-    )
+@pytest.mark.parametrize("conflict", ["actor", "intent", "basis"])
+def test_pre_cutoff_team_receipt_rejects_changed_identity(historical_team, conflict):
+    from loopx.control_plane.effect_runtime import EffectRuntimeRejected
+    from loopx.control_plane.work_items.team_plan_adapter import apply_team_plan
 
-    runtime = tmp_path / "runtime"
-    state = tmp_path / "state.md"
-    state.write_text("# Goal\n\n## Agent Todo\n\n")
-    goal = {"id": "goal-a", "repo": str(tmp_path), "state_file": "state.md",
-        "coordination": {"registered_agents": ["alpha"], "agent_model": "peer_v1"}}
-    registry = tmp_path / "registry.json"
-    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [goal]}))
-    service = ChatActionService(store=ChatActionStore(runtime / "chat/actions"), registry_path=registry)
-    preview = service.preview({"action_kind": "team.plan", "summary": "Assign work", "context": {},
-        "normalized_parameters": {"goal_id": "goal-a", "plan": _agent_plan()},
-        "idempotency_key": "lost-original-response"})
-    write = team_plan_adapter.write_captured_todo_state
+    runtime, state, registry, _service, preview, _planned = historical_team
+    plan = {**preview["normalized_parameters"]["plan"], "proposal_id": preview["proposal_id"]}
+    actor = "alpha" if conflict == "actor" else None
+    if conflict == "intent":
+        plan = {**plan, "objective": "Changed original intent"}
+    basis = "changed-basis" if conflict == "basis" else preview["expected_state_fingerprint"]
+    before = state.read_bytes()
+    with pytest.raises(EffectRuntimeRejected, match="identity mismatch"):
+        apply_team_plan(registry_path=registry, goal_id="goal-a", agent_id=actor,
+                        proposal=plan, expected_state_fingerprint=basis)
+    assert state.read_bytes() == before
+    assert not (runtime / "authority").exists()
 
-    def lose_response(*args, **kwargs):
-        write(*args, **kwargs)
-        raise OSError("response lost after publication")
 
-    with monkeypatch.context() as failed_response:
-        failed_response.setattr(team_plan_adapter, "write_captured_todo_state", lose_response)
-        assert service.apply(preview["proposal_id"])["proposal"]["status"] == "failed"
-    assert state.read_text().count("loopx:team-plan:") == 1
-    state.write_text(state.read_text() + "\nLater owner data must survive.\n")
-    original = state.read_bytes()
-    projection, snapshot = build_runtime_shadow_source_snapshot(
-        goal=goal, runtime_root=runtime, state_path=state, registry_path=registry)
-    request = {"schema_version": COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA,
-        "runtime_root": str(runtime), "goal_id": "goal-a", "operation_id": "bootstrap:plan-recovery",
-        "source_version": "source:before-crash", "projection": projection, "source_snapshot": snapshot}
-    repo = Path(__file__).resolve().parents[2]
-    child = subprocess.Popen(["node", "--no-warnings", "--experimental-strip-types",
-        str(repo / "tests/control_plane_ts/fixtures/shadow_management_crash_worker.ts"),
-        "bootstrap-public", json.dumps(request), "bootstrap_prepared"],
-        cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    try:
-        ready, _, _ = select.select([child.stdout], [], [], 15)
-        assert ready, "bootstrap did not reach its real filesystem barrier"
-        assert child.stdout.readline().strip() == "ready:bootstrap_prepared"
-    finally:
-        child.kill()
-        child.communicate(timeout=10)
-    pending = read_shadow_management_state(runtime, "goal-a")
-    assert pending["status"] == "bootstrapping"
-    # Restart from an isolated package with the old capture producer absent.
-    invoke = _capture_free_chat((runtime, state, service, preview), tmp_path)
-    replay = invoke("historical")
-    assert replay["action"] == "reused" and replay["created_todo_ids"] == []
-    recovered = service.apply(preview["proposal_id"])["proposal"]
-    assert recovered["status"] == "applied", recovered
-    assert replay["lane_todo_ids"] == recovered["receipt"]["resource_ids"]["lane_todo_ids"]
-    assert state.read_bytes() == original
-    assert read_shadow_management_state(runtime, "goal-a") == pending
+@pytest.mark.parametrize("history", ["missing", "malformed", "duplicate"])
+def test_pre_cutoff_team_receipt_never_recreates_work(historical_team, history):
+    from loopx.control_plane.work_items.team_plan_adapter import apply_team_plan
 
-    # Recovery is tied to the exact intent, actor and original reviewed basis.
-    saved = service.store.load(preview["proposal_id"])
-    original_plan = {**saved["normalized_parameters"]["plan"], "proposal_id": preview["proposal_id"]}
-    for changed in (
-        {"proposal": {**original_plan, "objective": "Changed intent"}},
-        {"agent_id": "alpha"},
-        {"expected_state_fingerprint": "different-basis"},
-    ):
-        with pytest.raises(team_plan_adapter.EffectRuntimeRejected, match="identity mismatch"):
-            team_plan_adapter.settle_team_plan(**{
-                "registry_path": registry, "goal_id": "goal-a", "agent_id": None,
-                "proposal": original_plan, "expected_state_fingerprint": saved["expected_state_fingerprint"],
-                "basis_agent_id": "alpha", **changed,
-            })
-        assert state.read_bytes() == original
-    # A different plan still needs normal admission; recovery cannot restart work.
-    fresh = service.preview({"action_kind": "team.plan", "summary": "New work", "context": {},
-        "normalized_parameters": {"goal_id": "goal-a", "plan": _agent_plan()},
-        "idempotency_key": "new-request-during-hold"})
-    refused = service.apply(fresh["proposal_id"])["proposal"]
-    assert refused["status"] == "failed", refused
-    assert state.read_bytes() == original
-    assert read_shadow_management_state(runtime, "goal-a") == pending
+    runtime, state, registry, _service, preview, _planned = historical_team
+    original = state.read_text()
+    marker = next(line for line in original.splitlines() if line.startswith("<!-- loopx:team-plan:"))
+    state.write_text(original.replace(marker, "") if history == "missing" else
+                     original.replace(marker, marker[:-4]) if history == "malformed" else
+                     original.replace(marker, marker + "\n" + marker))
+    before = state.read_bytes()
+    error, message = (CanonicalAuthorityRequired, "Canonical authority") if history == "missing" else (ValueError, "malformed" if history == "malformed" else "duplicate")
+    with pytest.raises(error, match=message):
+        apply_team_plan(registry_path=registry, goal_id="goal-a", agent_id=None,
+                        proposal={**preview["normalized_parameters"]["plan"], "proposal_id": preview["proposal_id"]},
+                        expected_state_fingerprint=preview["expected_state_fingerprint"])
+    assert state.read_bytes() == before
+    assert not (runtime / "authority").exists()

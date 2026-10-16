@@ -39,6 +39,15 @@ into a LoopX-governed visible goal loop.
   and fences an in-flight quota probe. For persistent sessions, the loop stays
   paused across Pi restarts until `/loopx resume` or a fresh goal activation
   explicitly re-arms it.
+- **Pause reasons** — every pause records why it happened in the binding:
+  `pauseReason: "user_prompt"` when a `before_agent_start` prompt was not the
+  loop's own injected task body, `"aborted"` after Escape, and `""` again once
+  `/loopx resume` re-arms the loop. Both pause paths report the pause in the UI
+  and the recorded reason is diagnostic only: it never decides continuation, and
+  the canonical `autoResume` flag stays the single authority. Prompt origin is not
+  inferred from another event: Pi compacts before it emits `before_agent_start`
+  for a submitted prompt, so a preceding `session_compact` does not prove that
+  the next prompt came from the host.
 
 ## Install / uninstall
 

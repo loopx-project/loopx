@@ -57,18 +57,6 @@ def test_sqlite_cli_private_evidence_refresh_and_original_turn_replay_spend_once
         assert code == 0, json.dumps(result, indent=2)
         return result
 
-    run(
-        "todo",
-        "claim",
-        "--goal-id",
-        GOAL_ID,
-        "--todo-id",
-        TODO_ID,
-        "--agent-id",
-        AGENT_ID,
-        "--claimed-by",
-        AGENT_ID,
-    )
     todos = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
     initialize_canonical_authority(
         runtime,
@@ -79,17 +67,6 @@ def test_sqlite_cli_private_evidence_refresh_and_original_turn_replay_spend_once
         state_path=state,
         provider="sqlite",
     )
-    binding = (
-        "--goal-id",
-        GOAL_ID,
-        "--todo-id",
-        TODO_ID,
-        "--agent-id",
-        AGENT_ID,
-        "--turn-instance-id",
-        TURN_ID,
-    )
-    run("quota", "should-run", "--codex-app", *binding, "--scan-path", str(project))
     run(
         "task-lease",
         "acquire",
@@ -102,6 +79,33 @@ def test_sqlite_cli_private_evidence_refresh_and_original_turn_replay_spend_once
         "--idempotency-key",
         "private-evidence-fixture",
     )
+    run(
+        "todo",
+        "claim",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        TODO_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--claimed-by",
+        AGENT_ID,
+        "--task-lease-idempotency-key",
+        "private-evidence-fixture",
+        "--task-lease-expected-version",
+        "1",
+    )
+    binding = (
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        TODO_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        TURN_ID,
+    )
+    run("quota", "should-run", "--codex-app", *binding, "--scan-path", str(project))
     refresh = (
         "refresh-state",
         *binding,

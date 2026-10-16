@@ -1378,13 +1378,33 @@ def test_todo_complete_survives_unreadable_periodic_report_machine_store(
                         "id": "goal-1",
                         "repo": str(tmp_path),
                         "state_file": "STATE.md",
-                        "agents": [{"id": "agent-a"}],
+                            "coordination": {
+                                "registered_agents": ["agent-a"],
+                                "agent_model": "peer_v1",
+                            },
                     }
                 ],
                 "common_runtime_root": str(runtime_root),
             }
         ),
         encoding="utf-8",
+    )
+    from canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import (
+        build_todo_runtime_shadow_projection,
+    )
+    from loopx.todos import list_goal_todos
+
+    todos = list_goal_todos(registry_path=registry_path, goal_id="goal-1")["todos"]
+    initialize_canonical_authority(
+        runtime_root,
+        "goal-1",
+        build_todo_runtime_shadow_projection(
+            goal_id="goal-1",
+            todos=todos,
+            handoff_mode="soft_claim",
+        ),
+        state_path=state,
     )
     _write_unreadable_periodic_report_machine_store(runtime_root)
 
@@ -1410,7 +1430,7 @@ def test_todo_complete_survives_unreadable_periodic_report_machine_store(
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
-    assert exit_code == 0
+    assert exit_code == 0, json.dumps(payload, indent=2)
     assert payload["ok"] is True
     assert payload["completed"] is True
 

@@ -35,7 +35,6 @@ from .control_plane.effect_runtime import (
     effect_runtime_request_scope, effect_runtime_result, EffectRuntimeRemoteError,
 )
 from .control_plane.coordination.local_authority import local_authority_is_promoted
-from .control_plane.todos.handoff_mode import show_goal_handoff_mode
 from .control_plane.turn_driver.journal_store import (
     load_turn_journal,
     turn_journal_path,
@@ -1558,20 +1557,16 @@ class Delegations:
     ) -> dict:
         """Acquire the promoted hard lease before worker or completion effects."""
 
-        if not local_authority_is_promoted(
-            runtime_root=self.root,
-            goal_id=self.goal_id,
-        ):
-            if row.get("task_lease", {}).get("required") is True:
-                raise ValueError("delegation canonical authority disappeared; reconcile the original execution")
-            row["task_lease"] = {"required": False, "handoff_mode": "legacy"}
-            self._fenced_write(path, row)
-            return row["task_lease"]
-        handoff_mode = show_goal_handoff_mode(
-            registry_path=self.registry,
-            runtime_root_arg=str(self.root),
-            goal_id=self.goal_id,
-        )["handoff_mode"]
+        from .control_plane.work_items.task_lease import inspect_task_lease
+
+        observed = inspect_task_lease(registry_path=self.registry, runtime_root=self.root,
+                                      goal_id=self.goal_id, todo_id=binding["todo_id"])
+        support = observed.get("execution_policy")
+        if not isinstance(support, dict) or type(support.get("supported")) is not bool:
+            raise RuntimeError("lease inspection omitted typed execution-policy support")
+        if not support["supported"]:
+            raise ValueError(str(support.get("reason") or "current execution policy is unavailable"))
+        handoff_mode = observed["handoff_mode"]
         if handoff_mode != "hard_lease":
             if row.get("task_lease", {}).get("required") is True:
                 raise ValueError("delegation authority mode changed; reconcile the original execution")
@@ -1730,9 +1725,10 @@ class Delegations:
                 self._write_delegation_bootstrap(row, binding)
                 self._acquire_delegation_lease(path, row, binding)
                 self._observe(path, row, "running")
-            if row.get("task_lease", {}).get("required") is True and "lease" not in row["task_lease"]:
-                # Upgrade a still-current operation record by replaying its
-                # original claim, not by inventing a replacement execution.
+            elif row["status"] == "running":
+                # Resumption rechecks typed policy support even for old records
+                # that said no lease was required. Hard mode replays its original
+                # claim proof; it cannot invent a replacement execution.
                 self._acquire_delegation_lease(path, row, binding)
             if row["status"] == "running":
                 self._raise_if_stop_requested(path)

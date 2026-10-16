@@ -47,7 +47,7 @@ def test_scope_uses_source_registry_and_canonical_todo_not_stale_shared_projecti
     from tests.control_plane.test_native_todo_planning_update import fixture, records
     from loopx.capabilities.explore.turn_context import explore_turn_context
 
-    source, _state = fixture(tmp_path, True, provider)
+    source, _state = fixture(tmp_path, provider)
     runtime = tmp_path / "runtime"
     config = json.loads(source.read_text())
     config["goals"][0]["explore_graph"] = {"enabled": True}
@@ -98,6 +98,11 @@ def test_scope_uses_source_registry_and_canonical_todo_not_stale_shared_projecti
 
 @pytest.mark.parametrize("case", ["unknown", "unlinked", "partial"])
 def test_real_cli_rejects_invalid_linked_capture_before_primary_commit_and_recovers(tmp_path, case):
+    from canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import (
+        build_todo_runtime_shadow_projection,
+    )
+    from loopx.todos import list_goal_todos
     from tests.control_plane.test_quota_settlement_cli import (
         _write_fixture, _run_cli, GOAL_ID, AGENT_ID, TODO_ID, TURN_ID,
     )
@@ -107,6 +112,16 @@ def test_real_cli_rejects_invalid_linked_capture_before_primary_commit_and_recov
     registry.write_text(json.dumps(config))
     binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
                "--turn-instance-id", TURN_ID)
+    todos = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
+    initialize_canonical_authority(
+        runtime,
+        GOAL_ID,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim"
+        ),
+        state_path=project / config["goals"][0]["state_file"],
+        provider="file",
+    )
     assert _run_cli(registry, runtime, "todo", "claim", "--claimed-by", AGENT_ID,
                     *binding[:-2], cwd=project)[0] == 0
     assert _run_cli(registry, runtime, "quota", "should-run", "--codex-app",

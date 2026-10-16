@@ -393,6 +393,78 @@ export function registerAuthorityStoreConformance(
   });
   registerCommandObservationConformance(providerName, factory);
   registerClaimAcquisitionProofConformance(providerName, factory);
+  test(`${providerName} imported legacy policy requires upgrade before new execution`, async t => {
+    const {store} = await factory(t);
+  const todo = {todo_id:"todo_work",role:"agent",status:"open",done:false,text:"Imported work",
+    archive_state:"active",claimed_by:null,task_class:"advancement_task"};
+  const lease = {schema_version:"task_lease_v0",goal_id:"goal-a",todo_id:"todo_work",owner:"agent-a",
+    idempotency_key:"old",version:1,lease_epoch:1,status:"active",write_scopes:[],acquire_ttl_seconds:600,
+    acquired_at:"2026-09-01T03:00:00Z",updated_at:"2026-09-01T03:00:00Z",expires_at:"2026-09-01T03:10:00Z"};
+  assert.equal((await store.commitAuthority({expected_provider_revision:null, operation_id:"seed",
+    next_projection:authorityProjectionFixture("goal-a",[todo],[lease],"native",{handoff_mode:"legacy"}),
+    events:[],receipts:[]})).status,"applied");
+  const command = {goal_id:"goal-a",todo_id:"todo_work",owner:"agent-a",idempotency_key:"old",
+    expected_version:1,ttl_seconds:600,write_scopes:[],registered_agents:["agent-a","agent-b"],now:new Date("2026-09-01T03:01:00Z")};
+  const before = await store.loadAuthority();
+  for (const operation of ["renew","transfer"] as const) {
+    const refused = await executeCanonicalTaskLeaseLifecycle(store,{...command,operation,
+      ...(operation === "transfer" ? {new_owner:"agent-b",new_idempotency_key:"new"} : {})});
+    assert.equal(refused.reason_code,"handoff_mode_retired");
+    assert.match(String(refused.reason),/handoff-mode plan-migration/);
+    assert.deepEqual(await store.loadAuthority(),before);
+  }
+  assert.equal((await executeCanonicalTaskLeaseLifecycle(store,{...command,operation:"release",ttl_seconds:null})).status,"applied");
+  const released = await store.loadAuthority();
+  const denied = await executeCanonicalTaskLeaseAcquire(store,{...command,idempotency_key:"new",expected_version:1});
+  assert.equal(denied.reason_code,"handoff_mode_retired");
+  assert.deepEqual(await store.loadAuthority(),released);
+  });
+
+  for (const operation of ["renew", "transfer"] as const) test(`${providerName} retired policy cannot replay acquisition or ${operation} as current proof`, async t => {
+    const {store} = await factory(t);
+    const todo = {todo_id: "todo_work", role: "agent", status: "open", done: false,
+      text: "Imported work", archive_state: "active", claimed_by: null, task_class: "advancement_task"};
+    assert.equal((await store.commitAuthority({expected_provider_revision: null, operation_id: "seed",
+      next_projection: authorityProjectionFixture("goal-a", [todo], [], "native", {handoff_mode: "hard_lease"}),
+      events: [], receipts: []})).status, "applied");
+    const command = {goal_id: "goal-a", todo_id: "todo_work", owner: "agent-a", idempotency_key: "original-execution",
+      expected_version: 0, ttl_seconds: 600, write_scopes: [], registered_agents: ["agent-a", "agent-b"],
+      now: new Date("2026-09-01T03:01:00Z")};
+    const accepted = await executeCanonicalTaskLeaseAcquire(store, command);
+    assert.equal(accepted.status, "applied", JSON.stringify(accepted));
+    const acquisitionOperation = String(accepted.operation_id);
+    const original = await store.readReceipt(acquisitionOperation);
+    const maintenance = {...command, operation, expected_version: 1,
+      ...(operation === "transfer" ? {new_owner: "agent-b", new_idempotency_key: "receiver-execution"} : {})};
+    const maintained = await executeCanonicalTaskLeaseLifecycle(store, maintenance);
+    assert.equal(maintained.status, "applied", JSON.stringify(maintained));
+    const originalMaintenance = await store.readReceipt(String(maintained.operation_id));
+    const current = await store.loadAuthority();
+    if (current.status !== "loaded") throw new Error("fixture unavailable");
+    assert.equal((await store.commitAuthority({expected_provider_revision: current.provider_revision,
+      operation_id: "imported-policy", next_projection: {...current.head, handoff_mode: "legacy"},
+      events: [], receipts: []})).status, "applied");
+    const before = await store.loadAuthority();
+    for (const replay of [command, {...command, idempotency_key: "fresh-execution", expected_version: 2}]) {
+      const refused = await executeCanonicalTaskLeaseAcquire(store, replay);
+      assert.equal(refused.status, "failed", JSON.stringify(refused));
+      assert.equal(refused.reason_code, "handoff_mode_retired");
+      assert.equal(refused.lease, undefined, "historical acceptance is not a current execution grant");
+      assert.deepEqual(await store.readReceipt(acquisitionOperation), original);
+      assert.deepEqual(await store.loadAuthority(), before);
+    }
+    const replayedMaintenance = await executeCanonicalTaskLeaseLifecycle(store, maintenance);
+    assert.equal(replayedMaintenance.reason_code, "handoff_mode_retired");
+    assert.equal(replayedMaintenance.lease, undefined);
+    assert.deepEqual(await store.readReceipt(String(maintained.operation_id)), originalMaintenance);
+    assert.deepEqual(await store.loadAuthority(), before);
+    const released = await executeCanonicalTaskLeaseLifecycle(store, {...command,
+      operation: "release", expected_version: 2, ttl_seconds: null,
+      ...(operation === "transfer" ? {owner: "agent-b", idempotency_key: "receiver-execution"} : {})});
+    assert.equal(released.status, "applied", JSON.stringify(released));
+    assert.deepEqual(await store.readReceipt(acquisitionOperation), original);
+  });
+
   registerClaimContentionConformance(providerName, factory);
   registerAuthorityScanConformance(providerName, factory);
   registerOwnershipObservationConformance(providerName, factory);
@@ -451,14 +523,14 @@ export function registerAuthorityStoreConformance(
     assert.equal((await executeCoordinationTodoArchiveCompleted(store, request)).status, "replayed");
   });
 
-  for (const native of [false, true]) test(`${providerName} conformance: lease-free legacy-mode Monitor observation and successor (${native ? "native" : "legacy"})`, async (t) => {
+  for (const native of [false, true]) test(`${providerName} conformance: lease-free soft-claim Monitor observation and successor (${native ? "native" : "legacy"})`, async (t) => {
     const {store, contender} = await factory(t);
     const goal = "goal-monitor";
     const fixture = productionScaleCoordinationFixture(goal, native ? "native" : "legacy");
     const projection = structuredClone(fixture.projection);
-    // A lease-free observation is legal in legacy mode. Hard mode now requires
+    // A lease-free observation is legal in soft_claim. Hard mode requires
     // current execution proof; its positive/negative cases have their own fixture.
-    projection.handoff_mode = "legacy";
+    projection.handoff_mode = "soft_claim";
     const records = projection.todos as Record<string, unknown>[];
     const monitor = records.find(todo => todo.task_class === "continuous_monitor" && todo.status !== "done" &&
       !(projection.leases as Record<string, unknown>[]).some(lease => lease.todo_id === todo.todo_id));
@@ -1030,20 +1102,24 @@ export function registerAuthorityStoreConformance(
     assert.deepEqual(await store.loadAuthority(), after);
   });
 
-  test(`${providerName} conformance: pre-upgrade terminal receipt recovers before current authority access`, async t => {
+  for (const delegated of [false, true]) test(`${providerName} conformance: original terminal receipt recovers before current authority access (delegated=${delegated})`, async t => {
     const {store} = await factory(t);
     const goalId = "goal-historical-terminal", turnKey = `${goalId}:agent-a:todo-terminal:original-turn`;
     const digest = createHash("sha256").update(
       `loopx-provider-terminal-operation-v0\0complete\0${goalId}\0todo-terminal\0${turnKey}`,
     ).digest("hex").slice(0, 32);
+    const projection = todoTerminalProjection(goalId);
+    // Delegate an idle soft-claim task; active lease fencing is an independent gate.
+    if (delegated) { projection.handoff_mode = "soft_claim"; projection.leases = []; }
     assert.equal((await store.commitAuthority({expected_provider_revision: null, operation_id: "seed-historical-terminal",
-      next_projection: todoTerminalProjection(goalId), events: [], receipts: []})).status, "applied");
+      next_projection: projection, events: [], receipts: []})).status, "applied");
     const request = {
       goal_id: goalId, todo_id: "todo-terminal", expected_role: "agent" as const,
-      command: "complete" as const, actor_agent_id: "agent-a", registered_agents: ["agent-a", "agent-b"],
-      lifecycle_grants: [], authority_reason: null, decision_outcome: null,
+      command: "complete" as const, actor_agent_id: delegated ? "agent-b" : "agent-a", registered_agents: ["agent-a", "agent-b"],
+      lifecycle_grants: delegated ? [{agent_id: "agent-b", actions: ["complete"], requires_reason: true}] : [],
+      authority_reason: delegated ? "Verified the original worker result" : null, decision_outcome: null,
       operation_identity: {kind: "explicit" as const, operation_id: `todo-terminal:${digest}`},
-      lease_idempotency_key: "terminal-lease", lease_expected_version: 1, allow_user_gate_auto_acquire: false,
+      lease_idempotency_key: delegated ? null : "terminal-lease", lease_expected_version: delegated ? null : 1, allow_user_gate_auto_acquire: false,
       requested_no_followup: true, requested_completion_turn_key: turnKey,
       requested_completion_identity_source: "turn_settlement" as const,
       linked_successor_todo_ids: [], successor_intents: [], note: null, evidence: "Declared check passed",
@@ -1054,6 +1130,16 @@ export function registerAuthorityStoreConformance(
     };
     const applied = await executeCoordinationTodoTerminalLifecycle(store, request);
     assert.equal(applied.status, "applied", JSON.stringify(applied));
+    const authority = applied.terminal_decision as JsonObject;
+    if (delegated) {
+      assert.equal(authority.authority_mode, "delegated_orchestration_override");
+      assert.equal(authority.authority_reason, request.authority_reason);
+      const original = applied.original_receipt as JsonObject;
+      assert.equal(((original.result as JsonObject).terminal_decision as JsonObject).authority_reason,
+        request.authority_reason);
+    } else {
+      assert.equal(Object.hasOwn(authority, "authority_reason"), false);
+    }
     const before = await store.loadAuthority();
     const historicalOnly = new Proxy(store, {get(target, key) {
       if (key === "loadAuthority" || key === "commitAuthority") return async () => {
@@ -1067,6 +1153,12 @@ export function registerAuthorityStoreConformance(
     }, async () => {throw new Error("historical recovery precedes current source authorization");});
     assert.equal(recovered.status, "replayed", JSON.stringify(recovered));
     assert.deepEqual(recovered.original_receipt, applied.original_receipt);
+    assert.deepEqual(recovered.terminal_decision, applied.terminal_decision);
+    if (delegated) {
+      const changed = await executeCoordinationTodoTerminalLifecycle(historicalOnly,
+        {...request, authority_reason: "Replacement justification"});
+      assert.equal(changed.reason_code, "coordination_operation_identity_mismatch");
+    }
     assert.deepEqual(await store.loadAuthority(), before);
     assert.equal((await store.readReceipt(`todo-terminal-closeout:${digest}`)).status, "missing");
   });

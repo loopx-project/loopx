@@ -338,7 +338,7 @@ def goal_boundary(
             registry_path=registry_path,
         )
     )
-    reward_memory = reward_memory_goal_policy(goal)
+    reward_memory = reward_memory_goal_policy(goal, agent_id=agent_id)
     if reward_memory["enabled"] and (
         agent_id is None or agent_id in reward_memory["enabled_agents"]
     ):

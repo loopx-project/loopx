@@ -6,6 +6,8 @@ import threading
 
 import pytest
 
+from test_chat_cold_source_import import cold_api, source_modules_present  # noqa: F401 - shared real-server fixtures
+
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.control_plane.coordination.local_authority import (
     read_canonical_todos_if_promoted,
@@ -24,12 +26,13 @@ from tests.control_plane.canonical_authority_fixture import (
 @pytest.fixture(params=["file", "sqlite"])
 def api(tmp_path, monkeypatch, request):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
+    provider, handoff_mode = request.param if isinstance(request.param, tuple) else (request.param, "hard_lease")
     runtime = tmp_path / "runtime"
     registry = tmp_path / "registry.json"
     rows = []
     for goal in ["example", "other"]:
         state = tmp_path / f"{goal}.md"
-        state.write_text("---\nhandoff_mode: legacy\n---\n\n## Agent Todo\n")
+        state.write_text(f"---\nhandoff_mode: {handoff_mode}\n---\n\n## Agent Todo\n")
         rows.append(
             {
                 "id": goal,
@@ -39,10 +42,10 @@ def api(tmp_path, monkeypatch, request):
             }
         )
         projection = build_todo_runtime_shadow_projection(
-            goal_id=goal, handoff_mode="legacy", todos=[]
+            goal_id=goal, handoff_mode=handoff_mode, todos=[]
         )
         initialize_canonical_authority(
-            runtime, goal, projection, state_path=state, provider=request.param
+            runtime, goal, projection, state_path=state, provider=provider
         )
     registry.write_text(
         json.dumps({"common_runtime_root": str(runtime), "goals": rows})
@@ -55,7 +58,7 @@ def api(tmp_path, monkeypatch, request):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    def call(action="", body=None, origin=None):
+    def call(action="", body=None, origin=None, goal="example"):
         connection = http.client.HTTPConnection(
             "127.0.0.1", server.server_port, timeout=90
         )
@@ -63,7 +66,7 @@ def api(tmp_path, monkeypatch, request):
         if origin:
             headers["Origin"] = origin
         path = "/api/chat/goal-storage" + (
-            f"/{action}" if action else "?goal_id=example"
+            f"/{action}" if action else f"?goal_id={goal}"
         )
         connection.request(
             "POST" if body is not None else "GET",
@@ -78,6 +81,22 @@ def api(tmp_path, monkeypatch, request):
         assert str(tmp_path) not in json.dumps(value)
         return response.status, value
 
+    def restart(selected_registry=registry, selected_runtime=runtime):
+        nonlocal server, thread
+        previous_port = server.server_port
+        server.shutdown()
+        thread.join(5)
+        server.server_close()
+        server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+        server.runtime_root = selected_runtime
+        server.registry_path = selected_registry
+        server.runtime_root_override = str(selected_runtime)
+        server.verbose = False
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        assert server.server_port != previous_port
+
+    call.restart = restart
     yield call, runtime, registry
     server.shutdown()
     thread.join(5)
@@ -98,6 +117,157 @@ def operate(call, plan, action="apply", **overrides):
 
 def read(runtime, goal="example"):
     return read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal, include_leases=True)
+
+
+def carrier(plan):
+    return {key: plan[key] for key in ("goal_id", "preview_id", "plan_sha256")}
+
+
+def test_pending_preview_survives_new_server_origin_without_applying(api):
+    call, runtime, _ = api
+    initial = call()[1]["current"]["provider"]
+    plan = preview(call, "sqlite" if initial == "file" else "file")
+    original = carrier(plan)
+    before = read(runtime)
+    call.restart()
+    code, current = call()
+    assert code == 200 and current["pending_preview"] == original
+    assert current["current"]["provider"] == initial and read(runtime) == before
+    assert operate(call, original, "recover")[0] == 200
+    assert read(runtime) == before, "restoring the editor must never apply its preview"
+
+
+def test_saved_preview_is_registry_and_goal_scoped(api, tmp_path):
+    call, runtime, registry = api
+    initial = call()[1]["current"]["provider"]
+    plan = preview(call, "sqlite" if initial == "file" else "file")
+    original = carrier(plan)
+    assert call(goal="other")[1].get("pending_preview") is None
+    other_registry = tmp_path / "another-registry.json"
+    other_registry.write_bytes(registry.read_bytes())
+    call.restart(other_registry)
+    assert call()[1].get("pending_preview") is None
+    call.restart(registry)
+    assert call()[1]["pending_preview"] == original
+    assert read(runtime)["todos"] == []
+
+
+def test_saved_preview_is_runtime_scoped(api, tmp_path):
+    call, runtime, _ = api
+    initial = call()[1]["current"]["provider"]
+    original = carrier(preview(call, "sqlite" if initial == "file" else "file"))
+    separate = tmp_path / "other-runtime"
+    initialize_canonical_authority(separate, "example",
+        build_todo_runtime_shadow_projection(goal_id="example", handoff_mode="legacy", todos=[]),
+        state_path=tmp_path / "example.md", provider=initial)
+    call.restart(selected_runtime=separate)
+    code, observed = call()
+    assert code == 200 and observed["pending_preview"] is None
+    call.restart()
+    assert call()[1]["pending_preview"] == original
+
+
+def test_pre_upgrade_cold_apply_retains_the_exact_original_intent(cold_api):  # noqa: F811 - imported pytest fixture
+    call, read_todos, state, _, runtime, _, _, _ = cold_api
+    code, plan = call("preview", {"goal_id": "cold", "provider": "sqlite", "handoff_mode": "hard_lease"})
+    assert code == 200 and plan["ok"], plan
+    original = {key: plan[key] for key in ("goal_id", "operation_id", "plan_sha256")}
+    # A preview prepared by a pre-journal server has only its original handle.
+    records = list((runtime / "chat" / "storage-previews").glob("*.json"))
+    assert len(records) == 1
+    records[0].unlink()
+    source = state.read_bytes()
+    code, applied = call("apply", {**original, "writers_stopped": True})
+    assert code == 200 and applied["status"] == "applied", applied
+    assert call()[1]["pending_preview"] == original
+    assert len(read_todos()["todos"]) == 2 and state.read_bytes() == source
+
+
+def test_discard_is_exact_and_old_clients_cannot_resurrect_a_preview(api):
+    call, runtime, _ = api
+    initial = call()[1]["current"]["provider"]
+    target = "sqlite" if initial == "file" else "file"
+    old = preview(call, target)
+    current = preview(call, target)
+    assert old["preview_id"] != current["preview_id"]
+    before = read(runtime)
+    assert operate(call, old, "discard")[0] == 409
+    assert operate(call, old)[0] == 409
+    assert call()[1]["pending_preview"] == carrier(current)
+    assert operate(call, old, "recover")[0] == 200
+    assert call()[1]["pending_preview"] == carrier(current)
+    assert operate(call, current, "discard")[0] == 200
+    call.restart()
+    assert call()[1]["pending_preview"] is None
+    assert operate(call, current, "recover")[0] == 200
+    assert call()[1]["pending_preview"] is None
+    assert operate(call, current)[0] == 409
+    assert read(runtime) == before
+
+
+def test_completed_preview_restart_retains_original_receipt_and_later_writes(api):
+    call, runtime, registry = api
+    initial = call()[1]["current"]["provider"]
+    plan = preview(call, "sqlite" if initial == "file" else "file")
+    assert operate(call, plan)[0] == 200
+    add_goal_todo(registry_path=registry, goal_id="example", role="agent",
+                  text="Acknowledged after cutover", claimed_by="agent-a")
+    written = read(runtime)
+    call.restart()
+    assert call()[1]["pending_preview"] == carrier(plan)
+    code, original = operate(call, plan, "recover")
+    assert code == 200 and original["recovery"]["phase"] == "completed"
+    assert operate(call, plan)[1]["status"] == "already_applied"
+    assert read(runtime) == written
+
+
+def test_original_browser_only_handle_remains_explicitly_recoverable(api):
+    call, runtime, _ = api
+    initial = call()[1]["current"]["provider"]
+    plan = preview(call, "sqlite" if initial == "file" else "file")
+    before = read(runtime)
+    # Pre-upgrade servers persisted immutable plans, without an editor record.
+    journal, = (runtime / "chat" / "storage-previews").glob("*.json")
+    journal.unlink()
+    call.restart()
+    assert call()[1]["pending_preview"] is None
+    assert operate(call, plan, "recover")[0] == 200
+    assert call()[1]["pending_preview"] == carrier(plan)
+    assert read(runtime) == before
+
+
+def test_corrupt_or_unsafe_editor_record_cannot_create_or_apply_new_intent(api, tmp_path):
+    call, runtime, _ = api
+    initial = call()[1]["current"]["provider"]
+    target = "sqlite" if initial == "file" else "file"
+    plan = preview(call, target)
+    journal, = (runtime / "chat" / "storage-previews").glob("*.json")
+    original = journal.read_bytes()
+    before = read(runtime)
+    for corrupted in [b"{broken", b"x" * 5000, json.dumps({"carrier": {
+            **carrier(plan), "goal_id": "other"}}).encode()]:
+        journal.write_bytes(corrupted)
+        assert call()[0] == 503
+        assert call("preview", {"goal_id": "example", "provider": target})[0] == 503
+        assert operate(call, plan)[0] == 503
+        assert operate(call, plan, "recover")[0] == 200
+        assert journal.read_bytes() == corrupted and read(runtime) == before
+    journal.write_bytes(original)
+    if hasattr(journal, "symlink_to"):
+        outside = tmp_path / "unrelated-record.json"
+        outside.write_bytes(original)
+        journal.unlink()
+        try:
+            journal.symlink_to(outside)
+        except OSError:  # Windows may require a separate symlink privilege.
+            journal.write_bytes(original)
+        else:
+            assert call()[0] == 503
+            assert operate(call, plan, "discard")[0] == 503
+            assert outside.read_bytes() == original and read(runtime) == before
+            journal.unlink()
+            journal.write_bytes(original)
+    assert call()[1]["pending_preview"] == carrier(plan)
 
 
 def test_storage_switch_retains_new_metadata_and_history_after_restart(api):
@@ -177,9 +347,34 @@ def test_no_automatic_migration_or_caller_paths_and_active_lease_rejected(api):
     import time
     time.sleep(1.1)
     leased = read(runtime)
+    from datetime import datetime, timezone
+    assert datetime.fromisoformat(acquired["lease"]["expires_at"]) <= datetime.now(timezone.utc)
+    assert leased["leases"][0]["status"] == "active", "Expiry does not settle retained execution"
     assert call()[1]["current"]["unsettled_lease_count"] == 1
     assert call("preview", {"goal_id": "example", "provider": target})[0] == 409
     assert read(runtime) == leased and call()[1]["current"]["provider"] == initial
+
+
+@pytest.mark.parametrize("api", [
+    pytest.param(("file", "legacy"), id="file-legacy"),
+    pytest.param(("sqlite", "legacy"), id="sqlite-legacy"),
+], indirect=True)
+def test_retired_policy_remains_inspectable_but_cannot_grant_host_execution(api):
+    from loopx.control_plane.work_items.task_lease import acquire_task_lease, TaskLeaseError
+
+    call, runtime, registry = api
+    initial = call()[1]["current"]["provider"]
+    task = add_goal_todo(registry_path=registry, goal_id="example", role="agent",
+                        text="Retained legacy ownership", claimed_by="agent-a")
+    before = read(runtime)
+    display = (runtime.parent / "example.md").read_bytes()
+    with pytest.raises(TaskLeaseError) as rejected:
+        acquire_task_lease(registry_path=registry, runtime_root=runtime, goal_id="example",
+            todo_id=task["todo_id"], owner="agent-a", idempotency_key="retired-host", ttl_seconds=60)
+    assert rejected.value.code == "handoff_mode_retired"
+    assert read(runtime) == before and before["leases"] == []
+    assert (runtime.parent / "example.md").read_bytes() == display
+    assert call()[1]["current"]["provider"] == initial
 
 
 def test_original_receipt_is_readable_when_live_provider_is_unavailable(api):
@@ -245,17 +440,23 @@ def test_a_preview_cannot_bypass_a_later_host_lease_and_requires_a_fresh_plan(ap
     assert read(runtime) == copied
 
 
-@pytest.fixture(params=[False, True], ids=["cold", "retained-capture"])
-def old_api(tmp_path, monkeypatch, request):
-    from tests.control_plane.test_cold_source_inspection import cold_workspace
+@pytest.fixture
+def old_api(tmp_path, monkeypatch):
     from tests.control_plane.shadow_e2e_fixture import workspace
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    ws = workspace(tmp_path) if request.param else cold_workspace(tmp_path)
-    if request.param:
-        ws.add("Private original history must stay on disk")
-        outbox = ws.runtime / "authority-shadow" / "outbox" / ws.goal / "todos"
-        (outbox / "original-unrecognized.json").write_bytes(b"{malformed original outbox")
+    ws = workspace(tmp_path, bootstrap=False)
+    registry = json.loads(ws.registry.read_text())
+    registry["goals"][0]["coordination"].pop("runtime_shadow")
+    ws.registry.write_text(json.dumps(registry))
+    ws.state.write_text(
+        "---\ngoal_id: goal-e2e\nhandoff_mode: soft_claim\n---\n"
+        "## Agent Todo\n- [ ] Keep active\n"
+        "  <!-- loopx:todo todo_id=todo_active role=agent status=open "
+        "claimed_by=agent-a -->\n"
+        "## Todo Archive\n- [x] Keep archived evidence\n"
+        "  <!-- loopx:todo todo_id=todo_archived role=agent status=done -->\n"
+    )
     directory = ws.runtime / "goals" / ws.goal / "task-leases"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "removed.json").write_text(json.dumps({
@@ -280,7 +481,7 @@ def old_api(tmp_path, monkeypatch, request):
         assert "old-work" not in encoded and "malformed original outbox" not in encoded
         return response.status, result
 
-    yield call, ws, request.param
+    yield call, ws, False
     server.shutdown()
     thread.join(5)
     server.server_close()
@@ -300,11 +501,12 @@ def test_registered_old_source_read_failure_is_unavailable_and_recovers(old_api)
 
 
 def test_old_source_http_inventory_keeps_history_and_does_not_grant_import(old_api):
-    from tests.control_plane.test_cold_source_inspection import capture_bytes
-
     call, ws, captured = old_api
-    before = capture_bytes(ws)
     source = ws.state.read_bytes(), ws.registry.read_bytes()
+    leases = {
+        path: path.read_bytes()
+        for path in (ws.runtime / "goals" / ws.goal / "task-leases").glob("*.json")
+    }
     for _ in range(2):
         code, result = call()
         assert code == 200 and result["ok"], result
@@ -319,8 +521,8 @@ def test_old_source_http_inventory_keeps_history_and_does_not_grant_import(old_a
         assert old["writer_stop_verified"] is old["outbox_reconciliation_verified"] is old["import_ready"] is False
         assert result["authority_changed"] is result["execution_authority_granted"] is False
         assert "outbox_review" not in json.dumps(result)
-    assert before == capture_bytes(ws)
     assert source == (ws.state.read_bytes(), ws.registry.read_bytes())
+    assert leases == {path: path.read_bytes() for path in leases}
     assert not (ws.runtime / "authority").exists()
 
 
