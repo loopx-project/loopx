@@ -21,7 +21,32 @@
 - 语言说明：[英文版](./shared-goal-authority-state-provider-v0.md)与本中文版互为
   语义镜像；两者不一致属于缺陷
 
-## 当前交付边界（2026-10-02）
+<a id="当前交付边界2026-10-02"></a>
+
+## 当前交付边界（合入后，2026-10-16）
+
+[#6396](https://github.com/loopx-project/loopx/pull/6396) 已在 `a4483aaec` 落地明确的
+2.0 普通 writer 截止。Canonical File／SQLite 归属和历史导入／恢复义务保留；
+这不等于退役 File provider。新 Goal 的 SQLite／hard-lease 源码选择已经存在，
+安装采用和发布默认资格仍分别验收。[具名源码证据记录](https://github.com/loopx-project/loopx/pull/6396#issuecomment-6208115093)
+不认证尚未执行的最终组合。不重做普通 writer 删除，也不从合入推导 provider 晋升。
+
+| 既有 owner | 下一有用交付 | 决定性出口 |
+| --- | --- | --- |
+| D1／TS T4-C1 | 通过既有 CLI／App／Host owner 验证最终主干的安装升级及可逆日常操作 | 完整记录／历史／claim；旧 proof 或过期未释放执行拒绝；原操作恢复保留后写和当前 provider；无 Markdown fallback |
+| D2 | 归因剩余同负载完整命令及存储增长缺口，再对账正式容量与经过时间资格 | 保留冻结 passed／failed／missing、当前 release 对照及 7.2 节负载、恢复、余量、平台证据；无关修改不重置有效经过时间证据 |
+| D3 | 依 7.2 节证据作受支持发布／默认决策 | 具名 profile 的可恢复安装、创建、迁移及回退；既有显式 provider 选择保持，不暗迁旧 Goal |
+
+依赖沿用 [R5 统一交付顺序](loopx-overall-roadmap-v0.zh-CN.md#post-6396-delivery-plan)。
+完整恢复 M2/M3 负责捕获及备份受控接纳，#5206 负责生命周期／旧 writer／effect drain
+缺口。普通 provider 转换和复制历史均不授予这些 owner 的权限。可恢复有界 cohort
+按 7.2 节自身准入，不等待全部 RFC，也不宣称正式 D2。本检查点不启动 cohort、soak
+或晋升。下方具名 checkpoint 保留当时实现和验证历史；“仍活跃 writer 待删除”描述
+对应旧基线。
+
+## 历史 1.x 实现背景
+
+下方保留截至 2026-10-12 的具名历史记录及各自原源码边界。
 
 按 main `9b0486dc1` 核对，#4931、#5251、#5395、#5417、#5436 已合并，
 不再把这些存储改进和 Python 退役重复记作待办。

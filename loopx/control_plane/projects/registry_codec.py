@@ -211,10 +211,28 @@ def decode_registry_snapshot(path: Path, raw_bytes: bytes) -> dict[str, Any]:
     return payload
 
 
-def load_registry(path: Path) -> dict[str, Any]:
+def load_registry(
+    path: Path, *, source_snapshots: dict[Path, bytes | None] | None = None,
+) -> dict[str, Any]:
     """Load a project registry or an object-only global registry."""
 
     expanded = path.expanduser()
+    if source_snapshots is not None:
+        # Capture callers must decode the same bytes that supply their IO
+        # witness. Retain absence too; rereading could conceal A -> B -> A.
+        route = expanded.absolute()
+        if route not in source_snapshots:
+            source = expanded.resolve()
+            if source not in source_snapshots:
+                try:
+                    source_snapshots[source] = source.read_bytes()
+                except FileNotFoundError:
+                    source_snapshots[source] = None
+            # Witness the invoked alias too. Its saved link can change while
+            # an independent copy of the original regular file still agrees.
+            source_snapshots[route] = source_snapshots[source]
+        raw = source_snapshots[route]
+        return {} if raw is None else decode_registry_snapshot(expanded, raw)
     if not expanded.exists():
         return {}
     return decode_registry_snapshot(expanded, expanded.read_bytes())

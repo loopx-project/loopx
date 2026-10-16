@@ -14,7 +14,7 @@ test("native observation never interprets a caller path relative to the worker",
 });
 
 test("observed Git origins use the Todo repository identity contract", {
-  skip: !["darwin", "linux"].includes(platform()),
+  skip: !["darwin", "linux", "win32"].includes(platform()),
 }, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "loopx-lease-origin-"));
   t.after(() => rm(temporary, {recursive: true, force: true}));
@@ -58,6 +58,8 @@ test("observed Git origins use the Todo repository identity contract", {
   }
 });
 
+// Creating file symlinks needs Developer Mode or administrator rights on
+// Windows; the machine-identity path is covered by the observation test above.
 test("normal executable file links preserve the declared independent checkout", {
   skip: !["darwin", "linux"].includes(platform()),
 }, async t => {

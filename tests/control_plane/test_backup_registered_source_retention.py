@@ -11,7 +11,10 @@ import pytest
 
 from loopx.control_plane.effect_runtime import restart_effect_runtime
 from loopx.state_backup import build_state_backup_plan, execute_state_backup_plan
-from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+from tests.control_plane.canonical_authority_fixture import (
+    isolate_sqlite_runtime,
+    promoted_create_fixture,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -138,3 +141,137 @@ def test_backup_retains_original_registry_outside_conventional_directories(tmp_p
     source = next(item for item in manifest["included"] if item["source_path"] == str(registry))
     with tarfile.open(result["archive_path"], "r:gz") as archive:
         assert archive.extractfile(source["archive_path"]).read() == original
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_source_loss_retains_source_owned_goal_document_and_lifetime(tmp_path, provider):
+    from loopx.control_plane.goals.source_session_registry_state import alias_digest, lifetime_root
+
+    original_registry, runtime, state = promoted_create_fixture(tmp_path, provider=provider)
+    project = state.parents[3]
+    document = project / "notes" / "GOAL.md"
+    document.parent.mkdir()
+    original_document = "# Original acceptance\n\nKeep the complete requirement 原文 🧭.\n".encode()
+    document.write_bytes(original_document)
+    wrong = project / "cached" / "WRONG.md"
+    wrong.parent.mkdir()
+    wrong.write_text("cached declaration is not the source-owned document")
+    source = tmp_path / "source-registry" / "registry.json"
+    source.parent.mkdir()
+    source_payload = json.loads(original_registry.read_text())
+    source_payload["goals"][0]["authority_sources"] = [
+        {"kind": "goal_doc", "path": "notes/GOAL.md", "role": "primary_goal_document"}]
+    source.write_text(json.dumps(source_payload))
+    cached = json.loads(source.read_text())
+    cached["registry_role"] = "global-local"
+    cached["goals"][0]["source_registry"] = str(source)
+    cached["goals"][0]["authority_sources"][0]["path"] = "cached/WRONG.md"
+    registry = runtime / "registry.global.json"
+    registry.write_text(json.dumps(cached))
+    lifetime = lifetime_root(source)
+    journal = b'{"historical_only":true,"unfinished_effect":"unknown"}\n'
+    journal_roots = [lifetime / family / alias_digest("goal-a")
+                     for family in ("journals", "recreations", "turn-settlement")]
+    for directory in journal_roots:
+        directory.mkdir(parents=True)
+        (directory / "retained.json").write_bytes(journal)
+    foreign = lifetime / "journals" / alias_digest("unregistered-goal")
+    foreign.mkdir(parents=True)
+    foreign_marker = b"private journal of an unregistered Goal"
+    (foreign / "foreign.json").write_bytes(foreign_marker)
+
+    def cli(*args):
+        result = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json",
+            *map(str, args)], capture_output=True, text=True, timeout=60)
+        assert result.returncode == 0, result.stdout + result.stderr
+        return json.loads(result.stdout)
+
+    cli("--registry", registry, "--runtime-root", runtime, "todo", "add", "--goal-id", "goal-a",
+        "--role", "agent", "--claimed-by", "agent-a", "--operation-id", "retained-work",
+        "--text", "An unfinished commitment with its original required document")
+    saved = cli("--registry", registry, "--runtime-root", runtime, "backup-state", "--project", project,
+        "--output-dir", tmp_path / "backups", "--backup-id", "retained-sources",
+        "--no-skills", "--no-automations", "--execute")
+    routes = {Path(row["source_path"]): row["archive_path"] for row in saved["included"]}
+    assert document.resolve() in routes, "source-owned primary Goal document was omitted"
+    assert all(directory.resolve() in routes for directory in journal_roots), \
+        "source-registry lifetime journals were omitted"
+    assert wrong.resolve() not in routes, "cached source declarations must not select material"
+    with tarfile.open(saved["archive_path"]) as archive:
+        assert archive.extractfile(routes[document.resolve()]).read() == original_document
+        for directory in journal_roots:
+            assert archive.extractfile(routes[directory.resolve()] + "/retained.json").read() == journal
+        assert not any(foreign_marker in archive.extractfile(member).read()
+                       for member in archive.getmembers() if member.isfile())
+    for path in (project, runtime, source.parent, original_registry):
+        path.rename(path.with_name("unavailable-" + path.name))
+    destination = tmp_path / "inert"
+    audit = cli("backup-state", "verify", "--archive", saved["archive_path"],
+        "--manifest", saved["manifest_path"], "--destination", destination, "--execute")
+    assert (destination / "data" / routes[document.resolve()]).read_bytes() == original_document
+    for directory in journal_roots:
+        assert (destination / "data" / routes[directory.resolve()] / "retained.json").read_bytes() == journal
+    work = next(row for row in audit["components"] if row["owner_kind"] == "coordination_authority")
+    assert work["state"] == "readable" and work["facts"]["todo_count"] == 1
+    assert audit["status"] == "held" and audit["capture_profile"] == "legacy_best_effort"
+    assert audit["activation_eligible"] is False and audit["execution_authority_granted"] is False
+
+
+@pytest.mark.parametrize("kind", ["outside", "escaping-link", "directory", "missing", "redacted", "extension"])
+def test_goal_document_retention_keeps_existing_material_boundary(tmp_path, kind):
+    project = tmp_path / "project"
+    registry = project / ".loopx" / "registry.json"
+    registry.parent.mkdir(parents=True)
+    runtime = tmp_path / "runtime"
+    forbidden = tmp_path / "unregistered.md"
+    marker = b"Unregistered content must not be discovered through metadata"
+    forbidden.write_bytes(marker)
+    document = project / "INPUT.md"
+    declaration = {"kind": "goal_doc", "path": "INPUT.md", "role": "primary_goal_document"}
+    if kind == "outside":
+        declaration["path"] = str(forbidden)
+    elif kind == "escaping-link":
+        if os.name == "nt":
+            pytest.skip("native Windows symlink privilege is not qualified")
+        document.symlink_to(forbidden)
+    elif kind == "directory":
+        document.mkdir()
+        (document / "secret.md").write_bytes(marker)
+    elif kind == "redacted":
+        declaration = {"source_kind": "doc", "source_ref_redacted": True,
+                       "source_ref_sha256": "a" * 64}
+    elif kind == "extension":
+        declaration = {"future_provider": {"path": str(forbidden)}}
+    state = project / "STATE.md"
+    state.write_text("# Goal\n")
+    registry.write_text(json.dumps({"goals": [{"id": "goal-a", "repo": str(project),
+        "state_file": "STATE.md", "authority_sources": [declaration]}]}))
+    saved = execute_state_backup_plan(build_state_backup_plan(project=project, runtime_root=runtime,
+        output_dir=tmp_path / "backups", backup_id="material-boundary", include_registry_projects=False,
+        include_skills=False, include_automations=False))
+    assert saved["ok"]
+    assert not any(row["key"].startswith("registry_goal_document:") for row in saved["included"])
+    if kind not in {"redacted", "extension"}:
+        assert any(row["key"].startswith("registry_goal_document:") for row in saved["missing"])
+    with tarfile.open(saved["archive_path"]) as archive:
+        assert not any(marker in archive.extractfile(member).read()
+                       for member in archive.getmembers() if member.isfile())
+    assert not (registry.parent / ".loopx" / "lifecycle").exists()
+
+
+def test_unavailable_global_source_never_uses_cached_goal_documents(tmp_path):
+    project, runtime = tmp_path / "project", tmp_path / "runtime"
+    project.mkdir()
+    runtime.mkdir()
+    cached = project / "CACHED.md"
+    cached.write_text("stale cached material")
+    (runtime / "registry.global.json").write_text(json.dumps({"registry_role": "global-local",
+        "goals": [{"id": "goal-a", "repo": str(project), "state_file": "STATE.md",
+                   "source_registry": str(tmp_path / "unavailable.json"),
+                   "authority_sources": [{"kind": "goal_doc", "path": "CACHED.md"}]}]}))
+    plan = build_state_backup_plan(project=project, runtime_root=runtime,
+        output_dir=tmp_path / "backups", include_skills=False, include_automations=False)
+    assert any(row["key"] == "registry_runtime:goal-a" for row in plan["missing"])
+    assert not any(row["key"].startswith(("registry_goal_document:", "registry_lifetime:"))
+                   for row in plan["included"])
+    assert str(cached) not in {row["source_path"] for row in plan["included"]}

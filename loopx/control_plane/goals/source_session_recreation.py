@@ -23,12 +23,11 @@ from ..runtime.time import now_local_iso
 from .acceptance import transition_goal_acceptance_lifecycle
 from .source_session_registry_state import (
     GOAL_INSTANCE_ID,
-    alias_digest,
     canonical_digest,
     current_goal_ref,
     exact_goal_ref,
     guard_path,
-    lifetime_root,
+    recreation_journal_directory,
     prior_operation_receipt,
     required_list,
     session_binding_records,
@@ -130,12 +129,7 @@ def _recreation_journal_path(
     operation_id: str,
 ) -> Path:
     operation_digest = hashlib.sha256(operation_id.encode("utf-8")).hexdigest()
-    return (
-        lifetime_root(registry_path)
-        / "recreations"
-        / alias_digest(goal_id)
-        / f"{operation_digest}.json"
-    )
+    return recreation_journal_directory(registry_path, goal_id) / f"{operation_digest}.json"
 
 
 def _read_recreation_journal(path: Path) -> dict[str, Any] | None:

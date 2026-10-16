@@ -8,7 +8,12 @@
 - Ownership: overall product outcomes, cross-domain dependencies, priorities and portfolio acceptance here; concrete rules in domain RFCs/stable protocols; execution state in canonical Todos.
 - Language: [中文版](loopx-overall-roadmap-v0.zh-CN.md) is the semantic mirror.
 
-**Local authority closeout checkpoint (2026-10-02).** R5/T4 use the [current validation → migration → deletion plan](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md#current-closeout-validation-migration-and-deletion-2026-10-02), rechecked at `9b0486dc1`. Close existing #5413/#5466/#5283, qualify one installed reversible candidate, then decide a bounded opt-in cohort separately from release-default admission. Canonical creation, legacy-policy migration and last-writer deletion have named exits; delete replaced Python owners with their last callers. R6 remains separate. No fixed remaining-PR count or historical test count certifies completion.
+**Local authority checkpoint (2026-10-16).** Contributor-led #6396 landed the
+2.0 normal-writer cutoff and absorbed recovery/native supplements. Continue
+[R5's post-merge sequence](#post-6396-delivery-plan): final-main installed
+qualification, complete-recovery/lifetime owner integration, and the separate
+D2/D3 evidence. Preserve source-pinned history and the compatible 1.4.2 route;
+no duplicate writer task, released-default claim or global RFC wait is implied.
 
 Conversational preparation from [PR #4376](https://github.com/loopx-project/loopx/pull/4376)
 is integrated under R1/GQ01 through the existing Chat draft and reviewed Goal
@@ -965,6 +970,43 @@ L3 checkpoint: standalone acquisition/takeover, atomic claim admission and maint
 - **Delivery:** qualify full-source reads, one-way Markdown projection, event/receipt retention, restart recovery, capacity and long-term cost on the selected local profile. Source failure cannot fall back to legacy. R1 cannot put large plan bodies into the coordination head.
 - **Exit:** use shared-authority Section 7.2's separate decisions for a bounded change, reversible opt-in cohort and released default. Each requires affected real CLI/backend and independent baseline/negative/recovery evidence at its own scope. Formal D2 retains applicable volume and at least ten-day evidence; a cohort need not wait for that certificate. D3 retains explicit cutover authority. This plan runs no soak or provider promotion.
 - **Rollback:** reviewed fenced export/import and schema-aware downgrade; replacing a binary cannot restore old write authority.
+
+<a id="post-6396-delivery-plan"></a>
+
+#### Post-merge delivery sequence (2026-10-16)
+
+[#6396](https://github.com/loopx-project/loopx/pull/6396) landed the 2.0 normal
+Markdown-writer and live-legacy execution cutoff at `a4483aaec`; final PR head
+`404433aee` has the same complete tree. Preserve Duang's contribution and the
+absorbed supplements. This closes that implementation family, not R5, an
+installed cohort or a released default. The [evidence update](https://github.com/loopx-project/loopx/pull/6396#issuecomment-6208115093)
+keeps earlier executed sources separate from the unexecuted final combination.
+The dated source checkpoints below must not regenerate completed writer work.
+
+| Existing milestone / priority | Next independently reviewable outcome | Acceptance and continuation |
+| --- | --- | --- |
+| T4/C1 + D1 · P1, first | Qualify one pinned final-main source and its normal installed CLI/App/affected local Host upgrade journey, including #6597 restart recovery | Compare complete active/archive records, claims, lease epochs, original receipts and later writes. Exercise expired-but-unreleased leases, stale preview/proof, unavailable provider and interrupted apply; rejection leaves state unchanged. Exit through reviewed migration preserving new writes. Reuse the installed repair evidence only after source/caller applicability checks. |
+| Complete recovery M2 → M3 · P1 | Declare capture consistency for one supported local profile, then recover one Goal whose source is unavailable and continue its unfinished work | Reuse manifest/registry/Goal/provider/session/effect owners. Freeze the decision-owner matrix and RPO/RTO before the drill; reconcile pending effects and destination identities. M1 inspection remains inert; M3 requires admitted owners, zero protected duplicate operations, visible holds and a separately accepted result at the initiating product entry. |
+| Goal lifetime M2–M5 / #5206 · P1 dependency only where exercised | Finish the selected profile's remaining old/warm-writer and effect-drain fences, then its orphan/retirement-recreation journey | A removed source writer does not exclude installed 1.x binaries or cached executors. Old A must not write, deliver, debit or settle same-alias B; B and unrelated work continue. Keep activation held until the profile's required owner rows pass; do not rebuild the shipped codec or source-session transaction. |
+| D2 · P1 alongside the relevant implementation | Explain the remaining complete-command/history-growth costs on matched File/SQLite workloads and reconcile formal volume/elapsed evidence | Separate caller/bridge, shared typed transaction and provider costs. Preserve current-release and pre-migration controls, frozen failures/missing axes, durability, recovery space and ten-day/volume requirements. Do not restart valid elapsed evidence for an unrelated change or launch a new soak from this plan. |
+| D3 · after its own evidence | Decide the supported release/default profile with usable upgrade, failure recovery and disable/rollback guidance | New-Goal SQLite/hard-lease selection already exists in source. Qualify it rather than adding a selector. Existing explicit providers stay pinned; an absent provider never selects Markdown. Release/platform support and maintainer authority remain separate. |
+
+These are the existing RFC milestones, not a new roadmap or global dependency
+chain. A reversible developer cohort uses shared-authority Section 7.2's own
+recoverable-installation gate; full-backup reactivation claims additionally need
+complete-recovery M3. Ordinary R1–R4 delivery on a supported profile does not wait
+for all lifetime, cloud or fleet work. Goal workspace/Settings/Task interactions
+render the same owners; human administration and Agent execution proof retain
+their distinct authority. Companions include real unavailable/retry/readback
+paths, not command-copy buttons or another UI decision engine.
+
+Continue future TS payoff work only on a demonstrated hot transaction: remove
+duplicate authority and the last obsolete crossing together, report complete
+caller/recovery behavior and end-to-end cost. Retain actual Python provider/OS
+IO, format readers and permanent document projection. No new framework,
+per-field bridge series, paid run, live migration or release is started here.
+
+#### Source-specific implementation evidence
 
 Cold-source inventory is now an explicit read-only CLI prerequisite through the
 same TS source/lease owners. It includes unreferenced archives and retained

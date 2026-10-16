@@ -95,9 +95,10 @@ if retained repository metadata differs for that physical checkout.
 Requests without a verified caller workspace retain ordinary exclusive scope
 checks, including against unknown legacy grants. Repository mismatch,
 redirected paths and a non-worktree root fail closed. Verified machine discovery
-currently supports macOS and Linux; other hosts retain ordinary leases. No
-workspace path or machine identifier is stored directly: only opaque digests
-and the existing public repository identity enter the private authority record.
+currently supports macOS, Linux and Windows; other hosts retain ordinary
+leases. No workspace path or machine identifier is stored directly: only
+opaque digests and the existing public repository identity enter the private
+authority record.
 
 Renewal preserves this identity. Acquire retries must use the same worktree,
 scopes and execution key; an alias resolving to the same worktree is valid.

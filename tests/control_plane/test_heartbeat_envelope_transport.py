@@ -2,7 +2,10 @@
 import json
 import os
 import shlex
+import socket
 import sys
+import tempfile
+import threading
 from pathlib import Path
 
 import pytest
@@ -17,15 +20,24 @@ from tests.control_plane.test_quota_settlement_cli import (
 )
 
 
-def test_renderer_disabled_parity_and_opt_in_scope(tmp_path):
+def test_capture_preserves_full_dispatcher_and_envelope_needs_explicit_opt_in(tmp_path):
     args = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_profile="generic_cli",
                 turn_instance_id=TURN_ID, thin=True)
     assert build_heartbeat_prompt(**args) == build_heartbeat_prompt(**args, decision_output_root=None)
-    payload = build_heartbeat_prompt(**args, decision_output_root=tmp_path)
+    ordinary = build_heartbeat_prompt(**args)
+    captured = build_heartbeat_prompt(**args, decision_output_root=tmp_path)
+    capture_args = ' --decision-output-root ' + shlex.quote(str(tmp_path))
+    assert captured['quota_guard_command'] == ordinary['quota_guard_command'] + capture_args
+    assert captured['task_body'].replace(capture_args, '') == ordinary['task_body']
+    assert '--turn-envelope' not in captured['quota_guard_command']
+    with pytest.raises(ValueError, match='capture root'):
+        build_heartbeat_prompt(**args, turn_envelope=True)
+    payload = build_heartbeat_prompt(**args, decision_output_root=tmp_path, turn_envelope=True)
     assert payload['interface_budget']['within_budget'], payload['interface_budget']
     assert '--turn-envelope --decision-output-root' in payload['quota_guard_command']
     assert 'writeback.settlement_plan.ordered_steps' in payload['task_body']
     assert '--decision-output-root' in payload['thin_prompt_command']
+    assert '--turn-envelope' in payload['thin_prompt_command']
     for overrides in (dict(turn_instance_id=None), dict(thin=False, full=True),
                       dict(runtime_profile='codex_app_ssh_goal')):
         with pytest.raises(ValueError):
@@ -40,8 +52,44 @@ def test_incompatible_worker_rejected(mode):
         Execution(mode=mode, turn_envelope=True)
 
 
+@pytest.fixture
+def private_handoff(request):
+    if not request.param:
+        yield None
+        return
+    if os.name != 'posix':
+        pytest.skip('Requires a private Unix socket')
+    with tempfile.TemporaryDirectory(prefix='hb-capture-', dir='/tmp') as directory:
+        endpoint = str(Path(directory).resolve() / 'host.sock')
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(endpoint)
+            listener.listen()
+            listener.settimeout(.1)
+            stopped = threading.Event()
+
+            def release():
+                while not stopped.is_set():
+                    try:
+                        channel, _ = listener.accept()
+                    except TimeoutError:
+                        continue
+                    with channel, channel.makefile('rb') as stream:
+                        message = json.loads(stream.readline())
+                        channel.sendall(json.dumps({'released': True, 'sha256': message['sha256']}).encode() + b'\n')
+
+            thread = threading.Thread(target=release, daemon=True)
+            thread.start()
+            try:
+                yield endpoint
+            finally:
+                stopped.set()
+                thread.join(timeout=5)
+                assert not thread.is_alive()
+
+
 @pytest.mark.parametrize('enabled', [False, True])
-def test_real_worker_generated_guard_selection_reentry_and_settle_once(tmp_path, enabled):
+@pytest.mark.parametrize('private_handoff', [False, True], indirect=True)
+def test_real_worker_generated_guard_selection_reentry_and_settle_once(tmp_path, enabled, private_handoff):
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
     logs = tmp_path / 'wake logs'
@@ -51,7 +99,7 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(tmp_path,
                LOOPX_REGISTRY=str(registry), LOOPX_RUNTIME_ROOT=str(runtime),
                LOOPX_PROJECT=str(project), LOOPX_GOAL_ID=GOAL_ID, LOOPX_AGENT_ID=AGENT_ID,
                LOOPX_WAKE_LOG_DIR=str(logs), LOOPX_TURN_ENVELOPE='1' if enabled else '0')
-    body = heartbeat_body(env, TURN_ID, native_goal=False)
+    body = heartbeat_body(env, TURN_ID, native_goal=False, decision_handoff_socket=private_handoff)
     # Execute the renderer's actual guard, preserving its route and flags.
     block = body.split('```sh\n', 1)[1].split('```', 1)[0]
     guard = next(line for line in block.splitlines() if 'quota should-run' in line)
@@ -62,18 +110,25 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(tmp_path,
     first = json.loads(result.stdout)
     assert result.returncode == 0, first
     root = logs / TURN_ID / 'decisions'
-    if enabled:
+    captured = enabled or private_handoff is not None
+    if captured:
         captures = list(root.glob('*/decision.json'))
         assert len(captures) == 1
         full = json.loads(captures[0].read_text())
-        assert first['action_signature']['matches']
-        detail = shlex.split(first['detail_ref']['full_decision'])
-        assert detail[:2] == ['cat', '--']  # Depends on the saved-detail reader contract.
-        receipts = _heartbeat_receipt_count(runtime, TURN_ID)
-        readback = subprocess.run(detail, env=env, cwd=project, capture_output=True,
-                                  text=True, check=True)
-        assert json.loads(readback.stdout) == full
-        assert _heartbeat_receipt_count(runtime, TURN_ID) == receipts
+        if enabled:
+            assert first['action_signature']['matches']
+            detail = shlex.split(first['detail_ref']['full_decision'])
+            assert detail[:2] == ['cat', '--']  # Depends on the saved-detail reader contract.
+            receipts = _heartbeat_receipt_count(runtime, TURN_ID)
+            readback = subprocess.run(detail, env=env, cwd=project, capture_output=True,
+                                      text=True, check=True)
+            assert json.loads(readback.stdout) == full
+            assert _heartbeat_receipt_count(runtime, TURN_ID) == receipts
+        else:
+            assert first['interaction_contract'] == full['interaction_contract']
+            assert 'action_signature' not in first and 'quota' in first
+            assert 'Use TurnEnvelope:' not in body
+            assert '--turn-envelope' not in argv
     else:
         assert not root.exists()
         full = first
@@ -82,13 +137,17 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(tmp_path,
         '{todo_id}', ALTERNATIVE_TODO_ID)
     rc, selected = _run_generated_cli(command, registry_path=registry)
     assert rc == 0, selected
-    if enabled:
+    if captured:
         paths = list(root.glob('*/decision.json'))
         assert len(paths) == 2
         assert json.loads(captures[0].read_text()) == full
         selected_full = json.loads(next(p for p in paths if p != captures[0]).read_text())
-        assert selected['action_signature']['matches']
-        assert selected['writeback']['settlement_plan'] == selected_full['interaction_contract']['cli_channel']['settlement_plan']
+        if enabled:
+            assert selected['action_signature']['matches']
+            assert selected['writeback']['settlement_plan'] == selected_full['interaction_contract']['cli_channel']['settlement_plan']
+        else:
+            assert selected['interaction_contract'] == selected_full['interaction_contract']
+            assert 'action_signature' not in selected
     else:
         selected_full = selected
     identity = selected_full['heartbeat_receipt']['settlement_identity']
@@ -98,7 +157,7 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(tmp_path,
     rc, replay = _run_generated_cli(command, registry_path=registry)
     assert rc == 0, replay
     assert _heartbeat_receipt_count(runtime, TURN_ID) == before
-    if enabled:
+    if captured:
         assert len(list(root.glob('*/decision.json'))) == 3
     rc, refresh = _run_cli(
         registry, runtime, 'refresh-state', '--goal-id', GOAL_ID, '--agent-id', AGENT_ID,
@@ -148,7 +207,8 @@ def test_renderer_retains_owned_handoff_without_enabling_it_by_default(tmp_path)
             for field in ('quota_guard_command', 'thin_prompt_command'):
                 argv = shlex.split(packet[field])
                 assert argv[argv.index('--decision-handoff-socket') + 1] == endpoint
-            assert '--decision-handoff-socket when present' in packet['task_body']
+                assert '--turn-envelope' not in argv
+            assert 'Use TurnEnvelope:' not in packet['task_body']
             with pytest.raises(ValueError, match='capture root'):
                 build_heartbeat_prompt(**args, decision_handoff_socket=endpoint)
     with pytest.raises(ValueError, match='invalid decision handoff socket'):

@@ -96,7 +96,8 @@ def test_observations_and_consumer_locks_do_not_claim_a_second_runtime(tmp_path,
     monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", source)
     monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", target)
     _write_json(target / "runtime/goals/observed/rollout-event-log.jsonl", {"event_kind": "validation"})
-    for relative in ["registry.global.json.lock", "lark-consumers/0123456789abcdef0123456789abcdef.lock",
+    for relative in ["registry.global.json.lock", "registry.global.json.lock.holder",
+                     "lark-consumers/0123456789abcdef0123456789abcdef.lock",
                      "runtime/goals/observed/rollout-event-log.jsonl.lock"]:
         path = target / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -160,7 +161,10 @@ def test_reparse_point_observations_are_not_ignored(tmp_path, monkeypatch, relat
 
 
 @pytest.mark.parametrize("relative", ["registry.global.json.lock",
-                                      "registry.global.json.ts-effect.lock"])
+                                      "registry.global.json.ts-effect.lock",
+                                      "registry.global.json.lock.holder",
+                                      "registry.global.json.lock.holder.json",
+                                      "registry.global.json.lock.incidents.jsonl"])
 def test_own_registry_locks_do_not_declare_a_second_authority(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relative: str,
 ) -> None:
@@ -170,6 +174,8 @@ def test_own_registry_locks_do_not_declare_a_second_authority(
     and the native effect runtime locks the same file too. On a fresh machine
     those locks are the only entries in the untouched legacy root, so treating
     them as state made the first configured Goal fail as a two-root conflict.
+    Windows keeps a released holder record beside the lock and a timeout
+    incident channel; both persist, so they must stay observations too.
     """
 
     source, target = tmp_path / "home" / ".codex" / "loopx", tmp_path / "home" / ".loopx"
@@ -178,6 +184,34 @@ def test_own_registry_locks_do_not_declare_a_second_authority(
     for root in (source, target):
         root.mkdir(parents=True)
         (root / relative).touch()
+    assert paths.default_runtime_route()["status"] == "fresh"
+    assert paths.select_default_runtime_root() == target
+
+
+def test_a_real_lock_round_trip_keeps_the_default_route_fresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The lock producer itself must leave an untouched route untouched.
+
+    ``exclusive_file_lock`` is the real writer behind Goal configuration and
+    the native effect runtime. On Windows it leaves a released holder record
+    beside the lock, so a fresh machine that locks every candidate registry
+    before the first write must still read as fresh afterwards.
+    """
+    from loopx.file_lock import exclusive_file_lock
+
+    source = tmp_path / "home" / ".codex" / "loopx"
+    target = tmp_path / "home" / ".loopx"
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", source)
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", target)
+    for root in (source, target):
+        root.mkdir(parents=True)
+    for root in (source, target):
+        with exclusive_file_lock(
+            root / "registry.global.json",
+            operation="configure_goal_with_global_sync",
+        ):
+            pass
     assert paths.default_runtime_route()["status"] == "fresh"
     assert paths.select_default_runtime_root() == target
 

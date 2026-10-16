@@ -54,7 +54,7 @@ def register_todo_command(
     todo_parser.add_argument("--goal-id", required=True, help="Goal id whose active state should receive the todo.")
     todo_parser.add_argument("--role", choices=["user", "agent"], help="Todo owner. Required for add; optional todo_id search scope for lifecycle commands. Defaults to agent for archive-completed.")
     todo_parser.add_argument("--text", help="Todo text. Required for add; keep it short and public-safe enough for local status.")
-    todo_parser.add_argument("--priority", choices=["P0", "P1", "P2", "P3", "P4"], help="Declare Todo priority independently of text; add defaults to P1, update omission retains the current value.")
+    todo_parser.add_argument("--priority", choices=["P0", "P1", "P2", "P3", "P4"], help="Declare Todo priority independently of text; add defaults blocking user_gate/blocker or status=blocked work to P0 and other work to P1. Update omission retains the current value.")
     todo_parser.add_argument("--clear-priority", action="store_true", help="For update, explicitly remove priority; cannot be combined with --priority.")
     todo_parser.add_argument("--todo-id", help="Structured todo id from status/quota, such as todo_ab12cd34ef56.")
     todo_parser.add_argument(
