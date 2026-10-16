@@ -4,8 +4,15 @@ An already promoted File or SQLite Goal runs `task-lease acquire`, `renew`,
 `transfer` and `release` through TS-owned provider transactions. Fresh execution
 and expired/ineffective-holder takeover now use the complete canonical head;
 previously standalone acquire still entered the fenced legacy file writer.
-Unpromoted Goals retain their legacy wire and transaction. A provider selector
-does not promote a Goal or grant execution authority.
+Unpromoted Goals retain historical lease inspection, exact release and original
+receipt recovery. Fresh acquire, renew and transfer require reviewed import and
+return `canonical_authority_required` with backup-and-migrate recovery, including
+`transfer --transfer-claim`. A provider selector does not promote a Goal or grant
+execution authority.
+
+> **2.0 cutoff:** the capture-isolation section below records the pre-cutoff
+> migration stage, not an available Markdown write route. Retained receipts,
+> lease cleanup and pending outbox recovery do not authorize new execution.
 
 For a new execution on an open, eligible Todo with no prior lease:
 
@@ -505,7 +512,10 @@ not replace [D2 capacity and continuity qualification](sqlite-authority-store.md
 
 已 promoted 的 File/SQLite Goal，其 acquire、renew、transfer、release 现在使用
 同一 provider opening/source fence 与 TS 规则；新领取和失效持有者接管不再进入
-旧文件 writer。旧 wire 与未 promoted 路径保留，选择 provider 不构成 promotion。
+旧文件 writer。未迁移 Goal 只保留历史租约检查、精确释放与原回执恢复；新领取、
+续约和转交（包括 `--transfer-claim`）统一返回 `canonical_authority_required`
+及备份后迁移提示。选择 provider 不构成 promotion，也不授予执行权。下方 capture
+隔离章节保留退役前阶段的历史，不代表 2.0 仍支持 Markdown 普通写入。
 
 新执行按上面的 acquire 命令领取；没有旧 lease 时 expected-version 为 0，否则
 用 inspect 的当前版本及新的 execution key。领取/接管同时增加 version 和 epoch，
