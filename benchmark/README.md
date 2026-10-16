@@ -970,9 +970,11 @@ continuation. Omission preserves the default. Disable it on a new attempt;
 do not change a frozen trial. It grants neither new work nor extra evaluation.
 Unknown launches recover only from the original captured native output; missing
 or ambiguous identities stop that route instead of creating another conversation.
-The joined qualification adds a synthetic fresh-context receiver, with original
-output recovery, actual two-candidate work, settlement and a later explicit
-partial capture. It does not certify research benefit or a new automatic replan.
+The joined qualification described above exercises original-output recovery,
+actual two-candidate work and settlement, then a new due review with full
+controller-backed capture and useful work in another isolated receiver. Scripted
+model and grader responses qualify this declared mechanical chain, not research
+benefit or sustained growing-point reliability.
 This is a benchmark operator transport; the generic packaged restore UI remains
 an open acceptance boundary.
 
@@ -993,9 +995,10 @@ Todo/Explore、代码、incumbent、累计时限、已用评测和冷却仍由�
 新会话输入不包含此前原生消息，源归档字节仍保留；这是独立实验因素。
 省略即保持默认，关闭须使用新 attempt，
 不热改冻结运行，也不增加执行或评测权限。未知启动只能读取原始原生输出来恢复，
-缺失或歧义身份会阻塞该路径，不能另建会话。联合资格测试覆盖合成接收端的原输出
-恢复、实际双候选工作、结算及后续显式 partial 捕获；这不证明研究收益或自动出现
-新 replan。该入口属于 benchmark 操作者传输，通用打包 restore UI 仍须另验收。
+缺失或歧义身份会阻塞该路径，不能另建会话。上述联合资格覆盖原输出恢复、实际
+双候选工作与结算，再经新的 due review 完整捕获，并由另一隔离接收端继续工作。
+脚本模型与 grader 只验证上述机械链路，不证明研究收益或 checkpoint 持续增大时
+的可靠性。该入口属于 benchmark 操作者传输，通用打包 restore UI 仍须另验收。
 
 Research files outside the task workspace need explicit capture **and** explicit
 receiver selection. Add each required directory or file to the source checkpoint

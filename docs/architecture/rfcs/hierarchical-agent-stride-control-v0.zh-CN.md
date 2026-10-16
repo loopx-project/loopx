@@ -987,9 +987,9 @@ pending 包与原生历史，不在每个工作 wake 重算大型代码/incumben
 证据使用、研究收益分开验收；此处理不授权新实验 cell 或热更新。
 
 联合资格须把手动 partial 产物与真实工作之后的新自动完整点分开。fresh-context
-receiver 保持既有 cadence，实际工作结算后到达新的 periodic review，通过真实
-controller/native opportunity barrier 封存当前研究、代码、原生历史和 phase，
-再由另一隔离 receiver 执行新工作。显式重置使用其有来源绑定的空原生前缀，
+receiver 在合成 profile 显式选定的 cadence 下，实际工作结算后到达新的 periodic
+review，通过真实 controller/native opportunity barrier 封存当前研究、代码、
+原生历史和 phase，再由另一隔离 receiver 执行新工作。显式重置使用其有来源绑定的空原生前缀，
 不能仍要求已丢弃的旧消息，也不能免除已完成 cursor、前后完整历史与来源观测。
 复用已核验合成源点只省去重新造源，不把此前 source 失败改为通过；所有 receiver
 仍须执行。通过后只关闭这项机械组合缺口，持续大点容量、安装前端和科研证据采用

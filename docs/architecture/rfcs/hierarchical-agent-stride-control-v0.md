@@ -1272,9 +1272,9 @@ remain separate; the treatment authorizes no new study cells or hot updates.
 
 The joined qualification must distinguish a manual partial artifact from a
 new automatic full point after useful destination work. The fresh-context
-receiver now retains the cadence long enough to reach that new periodic review,
-uses the actual controller/native opportunity barrier, and sends its newly
-sealed code/research/native/phase state into another isolated receiver for real
+receiver uses its synthetic profile's explicitly selected cadence to reach that
+new periodic review and the actual controller/native opportunity barrier to seal
+code/research/native/phase state, then sends that point to another isolated receiver for real
 work. Source-prefix verification uses the explicitly bound reset baseline rather
 than demanding native messages that this treatment discarded. The completed
 cursor and both full history/source observations remain mandatory. Reusing a
