@@ -41,6 +41,29 @@ recorded decision for the same question, sorts delayed backfills by record time,
 and preserves the source's wait/stop/no-change outcome instead of calling it
 continue. Missing times remain unplaced, not assigned to the first time bin.
 These are reading choices, not a new evaluator or evidence of scientific benefit.
+Record counts, density and source labels describe this capture, not outcome
+improvement. Automatic native-metric comparison is not implemented here: it
+requires the research producer's permitted, versioned measurements, scope and
+comparison basis. The reader does not extract scores from finding prose or
+compute a competing benchmark score.
+
+## Visual reading evidence
+
+Before this reader, the Overview offered the current folded findings without a
+whole recorded-history composition. The proposed ordinary journey opens the Goal
+to its full record-time lens; one optional selection opens grouped questions or
+inline evidence, and the relationship view remains optional. No additional owner
+statement, configuration, model call or execution approval is required to read.
+
+![Default record-time lens](../../docs/development/assets/research-history-timeline.png)
+
+![Optional relationship and inline evidence](../../docs/development/assets/research-history-detail.png)
+
+These are packaged UI captures over the rewritten history fixture. Execution and
+session warnings in the standalone preview describe its deliberate read-only
+boundary. They are not an installed App or an operational benchmark claim. The
+whole viewport keeps history and evidence together, compresses unlinked questions
+by UTC date, and leaves unrelated runtime diagnostics outside the history reader.
 
 ## Reproduce
 
