@@ -1045,6 +1045,7 @@ promotion 或修改 LoopX default。
 | 2026-08-16 | 以当前 DeepSWE pilot 驱动 LoopX benchmark capability 设计；legacy code/research 只作为复用候选，并加入结构化反作弊与 authority-parity qualification。 |
 | 2026-08-23 | 增加工程 readiness 阶梯与有界 delivery-slice 规则，将仓库建设与 C0--C4 研究主张分开跟踪。 |
 | 2026-08-25 | 把 StartupBench、LoopsBench 与 WideSearch 加入 benchmark primer 与集成计划，作为第二组互补 trio；每个 benchmark 必须在原生 metric space 报告，且 benchmark 材料不得进入可复用的 LoopX state。 |
+| 2026-10-16 | 将[反馈优先观察](../../../deprecate/benchmark-legacy/edgebench/feedback-first-observations-20261016.md)归入历史报告；运行器源码子集与配置投影修复仍属 E0/E1，混合处理、中断和进行中的观察不关闭 E2/E3，也不分离单一规划效应。通用 guard 重入放宽待受影响调用方独立验证。 |
 
 ## 18. 参考资料
 

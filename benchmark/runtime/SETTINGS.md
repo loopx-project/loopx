@@ -94,6 +94,24 @@ configuration unchanged.
 
 ## Readback and interpretation
 
+`--feedback-first` is an opt-in for new native-feedback, planned heartbeat
+trials. The first runnable Todo must obtain an accepted evaluation of a minimal
+valid candidate; subsequent planning uses that feedback to check model
+conventions before extended refinement. It changes planning order, not the
+native score, submission allowance, cooldown, total budget or authority.
+Omit the flag to keep the unchanged planning prompt. It does not enable
+TurnEnvelope or relax the product's guard re-entry obligations.
+
+TurnEnvelope projections reuse the validated checkpoint declaration. An explicit
+opt-in records `turn_envelope_source=explicit`; a known `fresh_replan` declaration
+for heartbeat records `checkpoint_handoff`. Omitting `trigger` means after-wake
+capture and does not imply TurnEnvelope. A programmatic guest path without
+declaration bytes records capture configuration only: it cannot prove a trigger.
+For the Harbor adapter, pass the same validated `checkpoint_request` bytes with
+their `checkpoint_request_path` when projecting that known configuration. SForge
+forwards the exact bytes it stages. The worker's individual wake receipt remains
+authoritative for an actual handoff socket, including declaration loss or failure.
+
 Inspect resolved runtime/profile receipts, installed source revisions and the
 first planning/seed checkpoint before scoring a treatment. Pin task, evaluator,
 images, model, effort, budget and sampling schedule. Retain missing points as
