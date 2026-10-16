@@ -68,6 +68,12 @@ jobs:
         run: |
           python -m unittest discover -s scripts/ci -p 'test_*.py'
           node --test scripts/ci/qualification_summary.test.ts
+      - name: Require paired RFC language changes
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python scripts/ci/rfc_bilingual.py --base "$BASE_SHA" --head "$HEAD_SHA"
       - name: Classify the exact pull-request change
         id: classify
         env:

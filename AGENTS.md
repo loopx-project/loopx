@@ -117,6 +117,22 @@ for the full DCO policy.
 Only skip this worktree/PR gate when the user explicitly says the change is
 local-only and must not be proposed for the repository.
 
+### Bilingual RFC Diff Gate
+
+For an existing English/Chinese RFC pair under `docs/architecture/rfcs/`,
+including its ledger entries, both files must change in the same PR. Check the
+staged files before committing:
+
+```bash
+python3 scripts/ci/rfc_bilingual.py --base origin/main --staged
+```
+
+The staged check includes earlier branch commits. Check a complete committed
+branch with `--base origin/main --head HEAD`. The check uses
+the merge base, covers paired deletion/renaming, and leaves legacy single-language
+files alone. CI runs it before documentation-only exemptions. Review the actual
+translation; this gate checks paired diffs, not semantic equivalence.
+
 For non-trivial repository changes, especially anything that touches benchmark
 adapters, smoke tests, public docs, or commit/push workflows, use the
 `git-split-commit-pr` workflow before staging:

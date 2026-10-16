@@ -96,6 +96,17 @@ failure leaves the generated files untouched.
   successor reciprocally names that predecessor in `Supersedes / closes`.
 
 
+## Bilingual changes
+
+Existing English/Chinese RFC pairs and their ledger entries must both have a
+diff in the same PR. Before committing, run
+`python3 scripts/ci/rfc_bilingual.py --base origin/main --staged` (including
+earlier branch commits); before submission, run
+`python3 scripts/ci/rfc_bilingual.py --base origin/main --head HEAD`.
+CI checks this before documentation-only exemptions. It compares from the merge
+base, includes paired deletion/renaming, and does not require translations for
+legacy single-language files. Paired diffs do not certify translation accuracy.
+
 ## Overall Product and Delivery Roadmap
 
 - [LoopX Overall Roadmap v0](loopx-overall-roadmap-v0.md)
