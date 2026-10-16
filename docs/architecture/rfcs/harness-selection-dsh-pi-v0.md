@@ -615,7 +615,7 @@ edits the same document through the existing revision-locked transaction; the
 channel readback adds `executor_endpoint_source: machine_configuration` plus the
 document's `status` and `configuration_revision`, so a machine decision can be
 told from a service-environment value without reading the store. The resolved
-endpoint, model, effort, policy, allocation reason, eligible pool and source
+endpoint, model, effort, policy, allocation reason, eligible endpoint pool and source
 revision are also persisted on the manager Session. A running Turn keeps its
 allocation. An owner edit to the same endpoint's model/effort takes effect at
 the next idle or accepted-queued Turn boundary: open the upstream adapter with

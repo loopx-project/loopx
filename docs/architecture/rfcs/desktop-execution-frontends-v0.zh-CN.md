@@ -841,7 +841,12 @@ App 更新仍能操作；在用户应用更新或有意选择其他恢复前，�
 executor。首个 provider 不证明其他 provider 覆盖或完整原生活动/stream 对等。详见
 [provider 边界与操作](../../integrations/session-runtime-control-plane-adapter.md#experimental-owner-local-codex-app-conversations)。
 
-这是实验 provider 提案，不代表完整切片 B 验收：token delta、忙碌 Turn steering/queueing、
+有界的实时观察伴随路径现沿原 Desktop owner 带版本的 snapshot/patch（视图快照与增量更新）流，在未观察到
+宿主空闲时，更新同一 Agent reader 中受支持、未完成的可见消息和工具。历史插入暂停及
+已保存记录回退仍保留。精确 owner/binding、revision、私有内容排除和数据有界约束继续
+生效，不新增 executor 或审批权限。限制仍见同一 provider 操作指南。
+
+这是实验 provider 提案，不代表完整切片 B 验收：完整原生事件/token 对等、忙碌 Turn steering/queueing、
 审批 callback、原生 live-send、Windows 传输与已安装采用仍分别待验。其有界用户任务是在
 查看 Goal 工作时跟进特定 Agent。已确认输入后 composer 立即可用，无冗余 ACK；被中断的
 回复从已有 receipt 恢复，不重复提交，真实不确定输入仍须先恢复再发送。

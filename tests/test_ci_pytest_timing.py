@@ -165,33 +165,111 @@ def test_stall_snapshot_requires_original_descriptor_only_when_enabled(tmp_path,
 
 
 @pytest.mark.parametrize("workers", [0, 2])
-def test_stall_snapshot_output_failure_preserves_native_test_results(tmp_path, workers):
+@pytest.mark.parametrize("communication_failure", [False, pytest.param(
+    True, marks=pytest.mark.skipif(os.name == "nt", reason="POSIX process-group cleanup of a live fault child"),
+)], ids=["spawn", "communication"])
+def test_stall_snapshot_output_failure_preserves_native_test_results(tmp_path, workers, communication_failure):
     (tmp_path / "conftest.py").write_text(
-        "import os, subprocess, sys\nfrom pathlib import Path\n"
-        "original_run = subprocess.run\n"
+        "import json, os, sys\nfrom pathlib import Path\n"
+        "from scripts.ci import pytest_timing as observer\n"
+        "original_popen = observer._STACK_POPEN\nwriters = []\n"
         "def broken_snapshot(command, *args, **kwargs):\n"
         "    if command[:3] == [sys.executable, '-I', '-S']:\n"
         "        Path('attempt-' + str(os.getpid())).touch()\n"
+        f"        if {communication_failure}:\n"
+        "            process = original_popen([*command[:-1], 'import time; time.sleep(30)'], *args, **kwargs)\n"
+        "            writers.append(process)\n"
+        "            def broken_communicate(*args, **kwargs): raise OSError('diagnostic pipe unavailable')\n"
+        "            process.communicate = broken_communicate\n"
+        "            return process\n"
         "        raise OSError('diagnostic output unavailable')\n"
-        "    return original_run(command, *args, **kwargs)\n"
-        "def pytest_configure(config): subprocess.run = broken_snapshot\n",
+        "    return original_popen(command, *args, **kwargs)\n"
+        "def pytest_configure(config): observer._STACK_POPEN = broken_snapshot\n"
+        "def pytest_sessionfinish(session):\n"
+        "    assert all(process.poll() is not None for process in writers)\n"
+        "    Path('writers-' + str(os.getpid()) + '.json').write_text(json.dumps([p.returncode for p in writers]))\n",
         encoding="utf-8")
     (tmp_path / "test_subject.py").write_text(
         "import time\n"
-        "def test_pass(): time.sleep(0.03)\n"
+        "def test_pass(): time.sleep(0.1)\n"
         "def test_fail():\n"
-        "    time.sleep(0.03)\n"
+        "    time.sleep(0.1)\n"
         "    assert False\n", encoding="utf-8")
     log = tmp_path / "io-failure.log"
     with log.open("w") as output:
-        result = subprocess.run(
+        process = subprocess.Popen(
             [sys.executable, "-m", "pytest", "-q", "-n", str(workers),
              "-p", "scripts.ci.pytest_timing", "--ci-stall-after=0.01"],
             cwd=tmp_path, env=environment(), stdout=output, stderr=subprocess.STDOUT,
-            timeout=30, check=False)
-    assert result.returncode == 1
+            start_new_session=os.name != "nt")
+        try:
+            assert process.wait(timeout=5) == 1
+        finally:
+            if process.poll() is None:
+                if os.name == "nt":
+                    process.kill()
+                else:
+                    os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=10)
     assert list(tmp_path.glob("attempt-*"))
+    writers = [code for path in tmp_path.glob("writers-*.json") for code in json.loads(path.read_text())]
+    assert len(writers) == (2 if communication_failure else 0)
+    assert all(code < 0 for code in writers)
     assert "LOOPX_PYTEST_STACK " not in log.read_text()
+    report = read_log(log)
+    assert report["execution_complete"] and report["pytest_exit_code"] == 1
+    assert report["selected_cases"] == report["finished_cases"] == 2
+
+
+@pytest.mark.parametrize("workers", [0, 2])
+@pytest.mark.parametrize("target", ["run", "Popen"])
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group cleanup of the failing baseline")
+def test_test_owned_subprocess_doubles_cannot_capture_diagnostic_writers(tmp_path, workers, target, enabled):
+    (tmp_path / "conftest.py").write_text(
+        "import subprocess, sys, threading, pytest\nfrom pathlib import Path\n"
+        "from scripts.ci import pytest_timing as observer\n"
+        "original_popen = subprocess.Popen\nwriters = []\n"
+        "def tracked_writer(*args, **kwargs):\n"
+        "    process = original_popen(*args, **kwargs)\n"
+        "    writers.append(process)\n"
+        "    return process\n"
+        "observer._STACK_POPEN = tracked_writer\n"
+        f"original = subprocess.{target}\n"
+        "def test_double(command, *args, **kwargs):\n"
+        "    if command[:3] == [sys.executable, '-I', '-S']:\n"
+        "        Path('shared-subprocess-entered').touch()\n"
+        "        threading.Event().wait(30)\n"
+        "        raise AssertionError('test double must not own diagnostic transport')\n"
+        "    return original(command, *args, **kwargs)\n"
+        f"def pytest_configure(config): subprocess.{target} = test_double\n"
+        "@pytest.hookimpl(wrapper=True, tryfirst=True)\n"
+        "def pytest_runtest_protocol(item):\n"
+        "    before = set(threading.enumerate())\n"
+        "    result = yield\n"
+        "    assert not any(isinstance(t, threading.Timer) and t not in before\n"
+        "                   for t in threading.enumerate())\n"
+        "    assert all(p.poll() is not None for p in writers)\n"
+        "    return result\n", encoding="utf-8")
+    (tmp_path / "test_subject.py").write_text(
+        "import time\n"
+        "def test_pass(): time.sleep(0.1)\n"
+        "def test_fail():\n    time.sleep(0.1)\n    assert False\n", encoding="utf-8")
+    log = tmp_path / "test-double.log"
+    with log.open("w") as output:
+        process = subprocess.Popen(
+            [sys.executable, "-m", "pytest", "-q", "-n", str(workers),
+             "-p", "scripts.ci.pytest_timing", "--ci-stall-after=" + str(0.01 if enabled else 0)],
+            cwd=tmp_path, env=environment(), stdout=output, stderr=subprocess.STDOUT,
+            start_new_session=True)
+        try:
+            assert process.wait(timeout=5) == 1
+        finally:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=10)
+    assert not (tmp_path / "shared-subprocess-entered").exists()
+    assert ("LOOPX_PYTEST_STACK " in log.read_text()) == enabled
     report = read_log(log)
     assert report["execution_complete"] and report["pytest_exit_code"] == 1
     assert report["selected_cases"] == report["finished_cases"] == 2
@@ -228,8 +306,9 @@ def unread_stderr_pipe():
 
 def track_stack_writers(tmp_path, *, child_deadline=True):
     (tmp_path / "conftest.py").write_text(
-        "import json, subprocess, sys\nfrom pathlib import Path\n"
-        "original_popen = subprocess.Popen\nwriters = []\n"
+        "import json, sys\nfrom pathlib import Path\n"
+        "from scripts.ci import pytest_timing as observer\n"
+        "original_popen = observer._STACK_POPEN\nwriters = []\n"
         "def tracked_popen(command, *args, **kwargs):\n"
         "    diagnostic = command[:3] == [sys.executable, '-I', '-S']\n"
         f"    if diagnostic and {not child_deadline}:\n"
@@ -239,7 +318,7 @@ def track_stack_writers(tmp_path, *, child_deadline=True):
         "        writers.append(process)\n"
         "        Path('writer.pid').write_text(str(process.pid))\n"
         "    return process\n"
-        "subprocess.Popen = tracked_popen\n"
+        "observer._STACK_POPEN = tracked_popen\n"
         "def pytest_sessionfinish(session):\n"
         "    assert all(process.poll() is not None for process in writers)\n"
         "    Path('writers.json').write_text(json.dumps([p.returncode for p in writers]))\n",

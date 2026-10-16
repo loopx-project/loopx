@@ -901,7 +901,7 @@ Stage 1 TS 合同显式区分读取失败：已证明 head `missing` 不同于�
 | 信任边界 | 受信任嵌入式 LoopX 进程 | LoopX authority 持有的 NoKV 凭证 | 经认证的 tenant 作用域服务角色，Agent 不接收数据库表凭证 |
 
 PostgreSQL 的 `commit_authority` 是一个事务：锁定或条件更新 scoped head、核验预期
-provider revision、分配下一 scoped cursor、写入 transaction/event/receipt、更新
+provider revision、分配下一 Goal 作用域 cursor、写入 transaction/event/receipt、更新
 projection head 后提交。任何写入前的连接失败是可证明的 `failed`；可能开始提交后的
 断连是 `ambiguous`，经唯一 operation 行与 receipt 读回对账。`READ COMMITTED` 配合
 显式 head 行锁/条件更新可以实现此合同；选择 `SERIALIZABLE` 是 adapter 决策，不能

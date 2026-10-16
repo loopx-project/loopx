@@ -1089,7 +1089,7 @@ primitives; the contract does not pretend they are interchangeable databases:
 
 For PostgreSQL, `commit_authority` is one transaction, not a series of
 independent repository calls: lock or conditionally update the scoped head,
-verify the expected provider revision, allocate the next scoped cursor, insert
+verify the expected provider revision, allocate the next Goal-scoped cursor, insert
 the committed transaction/events/receipts, update the projection head, and
 commit. A connection failure before any write is a proved `failed` result; a
 connection loss after commit may have started is `ambiguous` and is reconciled

@@ -293,6 +293,39 @@ to resume a modern Agent from a backup.
 这是预览行为变更；执行时仍在原锁内重验，成功预览不保证以后可写。该旧工具和
 隔离 `authority-archive restore` 都不能作为备份后恢复现代 Agent 执行的捷径。
 
+### Source stop, admission closure and lease drain
+
+These existing operations have different responsibilities. `goal-lifecycle`
+stop suspends automatic advancement; it preserves an already admitted Agent's
+lease and permits its authorized Todo writeback. It is not a quiescence receipt.
+Withdrawing registered source peers rejects their current Todo writes and fresh
+lease acquisitions, but does not release stored lease tuples. Lease inspection
+can therefore report `active: false` with `executor_constraint.reason` equal to
+`owner_not_registered` while the retained `lease.status` is still `active`.
+That effective constraint must not be mistaken for a drained lease: membership
+can be restored during recovery.
+
+The exact original owner/key/version can still release a lease after withdrawal.
+After that release, restoring membership does not revive its old execution proof.
+A planned-transfer operation must compose these owners, settle in-flight work
+and external effects, preserve their original receipts, and separately establish
+destination admission. Neither stop nor withdrawal certifies that a process has
+stopped or that an external effect has completed. The CLI/provider regression
+in `test_planned_transfer_source_boundary.py` checks these distinctions on File
+and SQLite, including a cold runtime; it does not qualify a complete transfer.
+This is an integration contract, not an instruction for users to stitch a
+migration together manually.
+
+中文：停止 Goal 只暂停自动推进，保留已获准 Agent 的租约和合法 Todo 回写，
+不证明源端已静止。撤回已注册 peer 会拒绝其当前回写和新租约申请，但不释放
+保存的租约；检查中的 `active: false` 可能只是 `owner_not_registered` 的有效性
+限制，原 `lease.status` 仍为 `active`，恢复成员资格可能重新使它有效。
+原 owner/key/version 在撤回后仍可精确释放租约，释放后的旧执行证明不会因重新
+注册而复活。迁移编排须组合这些 owner，排空在途工作、确认外部 effect 的实际
+结果、保存原 receipt，并另行完成目标准入。stop 或撤回都不证明进程已停止、
+外部操作已完成。File/SQLite 及冷启动回归只验证这些现有边界，不代表完整迁移
+已交付；这也不是要求用户手工拼接迁移步骤。
+
 ## Full-state recovery after cold import
 
 Keep the reviewed pre-import backup as well as a new full-state backup after

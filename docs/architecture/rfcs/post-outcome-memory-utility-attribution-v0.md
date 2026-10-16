@@ -415,7 +415,7 @@ This pilot closes no Stage 3/4 ranking or general review-quality qualification.
 The Agent-binding prerequisite uses the existing Reward Memory configuration
 owner: an optional exact Agent override preserves the legacy/shared route and
 every sibling, while disabled/invalid overrides fail closed. Configuration,
-runtime admission, same-Turn receipt reuse and pending-outcome reconciliation
+runtime admission, receipt reuse within the same Turn and pending-outcome reconciliation
 share the binding identity; bounded retries select the current route before
 applying the limit, retaining other routes' ambiguous journals unchanged.
 Provider writability and exact readback remain mandatory. The Goal settings

@@ -27,6 +27,9 @@ from scripts.ci.pytest_failure_context import exception_type_name, failure_conte
 
 PREFIX = "LOOPX_PYTEST_TIMING "
 _STACK_FD = pytest.StashKey[int]()
+# Tests may replace public subprocess helpers. The observer owns this transport;
+# subprocess.run would still resolve a test's replacement Popen at call time.
+_STACK_POPEN = subprocess.Popen
 _STACK_WRITE_PROGRAM = (
     "import os,sys,threading;"
     "deadline=threading.Timer(0.1,lambda:os._exit(0));"
@@ -62,13 +65,22 @@ def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, object, object
                 # A duplicate shares stderr's flags: never change them or
                 # write a potentially full pipe in this process. The isolated
                 # writer has its own exit deadline, even if pytest is killed;
-                # run's timeout also kills/reaps it before releasing this FD.
-                subprocess.run(
+                # The parent also kills/reaps it before releasing this FD.
+                with _STACK_POPEN(
                     [sys.executable, "-I", "-S", "-c", _STACK_WRITE_PROGRAM],
-                    input=("\n" + "\n".join(rows) + "\n").encode("utf-8", errors="backslashreplace"),
+                    stdin=subprocess.PIPE,
                     stdout=subprocess.DEVNULL, stderr=item.config.stash[_STACK_FD],
-                    timeout=0.5, check=False,
-                )
+                ) as writer:
+                    try:
+                        writer.communicate(
+                            ("\n" + "\n".join(rows) + "\n").encode("utf-8", errors="backslashreplace"),
+                            timeout=0.5,
+                        )
+                    finally:
+                        # Popen's context manager waits but does not kill on an
+                        # IO error. Stop our child before that unconditional reap.
+                        if writer.poll() is None:
+                            writer.kill()
             except (OSError, subprocess.TimeoutExpired):
                 # Optional diagnostics cannot replace pytest's result on IO failure.
                 pass

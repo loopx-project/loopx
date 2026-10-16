@@ -955,7 +955,7 @@ legacy-writer retirement and formal failed/missing D2 evidence remain intact.
 
 ### Runtime retirement drains admitted effects
 
-The shared TS Effect server now counts pending handlers independently of TCP
+The shared TS Effect server now counts admitted, unfinished request handlers independently of TCP
 connections. The idle window starts after the last handler and private response
 sink finish. Explicit shutdown stops accepting connections, waits for admitted
 effects (including disconnected clients), and then removes only its own locator.

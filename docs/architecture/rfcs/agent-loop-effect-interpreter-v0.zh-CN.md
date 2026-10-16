@@ -337,7 +337,7 @@ envelope 投影，Codex CLI 保持关闭隔离；这不代表安装态 heartbeat
 | 完整要求 | Agent channel 权威 work context 与剩余必读；有效 Todo、验收及 scoped User 义务，完整 Goal 保留渐进式全文读取 | 注册 reader 在两种传输中满足当前任务读取；来源失败会阻止依赖它的交付，真实模型采用和打包宿主旅程仍待验收 |
 | 能力拒绝 | 既有 quota `capability_gate_v0`；短包保留精确 `required`/`missing` 数组与源中历史字段 | 修复事实遗漏，不改变就绪策略或能力开启 |
 | 选择／claim／lease | selected Todo、action portfolio 及当前所属事务 | 短包归属不是新鲜 lease；保留捕获源并在所属写入入口复核 |
-| replan／Goal 收尾 | replan action packet 与既有 TS capsule 保留完整、有序 audit 步骤/指导、当前 judge 及证据与非证明条件 | 同一捕获的 File/SQLite 决策验证条款保留与签名突变；完整证据仍走有权限的详情。宿主/模型采用仍开放；Todo 完成不证明 Goal 完成 |
+| replan／Goal 收尾 | replan action packet 与既有 TS capsule 保留完整、有序 audit 步骤/指导、当前 judge（收尾评估） 及证据与非证明条件 | 同一捕获的 File/SQLite 决策验证条款保留与签名突变；完整证据仍走有权限的详情。宿主/模型采用仍开放；Todo 完成不证明 Goal 完成 |
 | 结算／scheduler | 完整 typed 结算计划及显式宿主调度投影；省略的调度 argv 引用同一捕获的完整决策 | 此投影退役未绑定的详情命令。实际宿主读回、过期写入拒绝与一次恢复仍待宿主采用验收 |
 | 可选 memory | 核验后的 boundary 参与事实及新鲜宿主绑定 | 关闭／recall／ingest／失效／provider 失败隔离持续保留；传输等价不是模型收益 |
 
@@ -347,7 +347,7 @@ envelope 投影，Codex CLI 保持关闭隔离；这不代表安装态 heartbeat
 结算另有覆盖，仍不证明安装态 App 收敛或模型成本。以下三项继续按各自验收保持
 未完成；这份核对不授权批量删除剩余 Python IO adapter。
 
-接续 audit 投影还保留每个有序 closeout 步骤和完整当前 judge。旧 capsule 在签名前就
+接续 audit 投影还保留每个有序 closeout 步骤和完整当前 judge（收尾评估）。旧 capsule 在签名前就
 遗漏这些字段，并把接续指导截成 48 字符。捕获的 File/SQLite 工作和 replan 路径现在
 保留这些条款，修改步骤、顺序或 judge 后拒绝签名等价。既有 8 KiB 诊断阈值不变，
 必需文本可以超出并警告。这只关闭传输遗漏，不代表三项收敛验收通过，也不授权退役仍

@@ -18,7 +18,7 @@ no duplicate writer task, released-default claim or global RFC wait is implied.
 Conversational preparation from [PR #4376](https://github.com/loopx-project/loopx/pull/4376)
 is integrated under R1/GQ01 through the existing Chat draft and reviewed Goal
 creation path; see the [absorption map](app-conversation-and-async-inbox-v0.md#conversational-goal-preparation-integrating-the-team-workspace-proposal).
-Its separate workspace/executor is not adopted. This entry improvement does not
+Its separate workspace/executor is not adopted. This draft-creation entry improvement does not
 close GQ01 execution/return or R2 small-team acceptance.
 
 **S2/S12 startup diagnostic checkpoint (2026-10-04)** moved to

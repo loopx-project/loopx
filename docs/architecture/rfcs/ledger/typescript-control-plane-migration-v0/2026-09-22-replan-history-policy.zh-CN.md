@@ -24,7 +24,7 @@ Python 保留历史解码、指纹及 obligation 呈现；删除被替代的触�
 
 Replan 证据消费者原先可能为工作及其 quota 扣记各重复一次相同接续。既有 TypeScript
 work-item owner 现使用限定作用域的 settlement 与 spend receipt 事实去重。Python
-传递身份及完整文本摘要，不分类资格。新增事实不进入公开行 hash，已投递的 history
+传递身份及完整文本摘要，不分类资格。新增事实不进入公开历史行 hash，已投递的 history
 reference 因此仍解析到原不可变记录。
 
 归约要求完整 Goal/Agent/Todo/Turn/effect 身份、实际类型化 progress observation 及

@@ -731,6 +731,8 @@ Each triggered snapshot uses an isolated same-interpreter writer with a 100ms
 self-exit deadline, plus a 500ms parent communication timeout with kill/reap.
 This bounds pipe backpressure without changing shared stderr flags or leaving
 a persistently blocked writer after pytest exits; native process startup can add latency.
+The observer retains its own process constructor, so test replacements of public
+`subprocess.run` or `subprocess.Popen` cannot capture its diagnostic writer.
 Snapshots may be dropped on IO failure or backpressure. Default `0` starts no
 observer timer or writer process; pytest's own results and reports remain authoritative.
 The reusable Sonar workflow consumes that same run's XML and never reruns
@@ -758,6 +760,8 @@ JUnit、coverage 或必过门禁。归属与测量边界见
 每次触发栈输出时，使用同解释器的隔离 writer，100ms 自行退出；父进程另设
 500ms 通信期限，超时则终止并回收。管道背压不会改变共享 stderr 标志或留下
 持续阻塞的 writer；原生进程启动仍可能增加延迟。IO 失败或背压时可丢弃栈输出。
+观察器保留自己的进程构造入口，测试替换公共 `subprocess.run` 或 `subprocess.Popen`
+不会接管诊断 writer。
 默认 `0` 不启动观察 timer 或 writer 进程；pytest 原生结果和报告仍是权威。
 Sonar 只复用同一次 run 的 XML，不重复测试、不跨 run 取产物。缺少 token 仍成功跳过
 Sonar，测试 job 不接收 Sonar secret。触发范围取原有两套 workflow 的并集；纯前端

@@ -91,7 +91,7 @@ App 间隔编辑器中，选定目标并明确保存已展示的前后值，就�
 | 附着式交互 / 手动会话 | 显式手动意图；其余门禁保留 | 记录原因；自动续跑不能冒充手动 |
 
 App 必须显示目标和实际 schedule、应用失败。不支持该间隔时，应挂起受影响自动化，不能缩短间隔。
-Codex App 的 ACK 命令必须在宿主更新后重新读取匹配的 heartbeat；请求的 RRULE 和 hint
+Codex App 的调度确认（ACK）命令必须在宿主更新后重新读取匹配的 heartbeat；请求的 RRULE 和 hint
 中的旧观察不能认证本次更新。类型化 scheduler commit 在迁移、身份重置或持久化前，拒绝
 缺失或不匹配的当前观察。console 原生 follow-up 与 Python 兼容适配器遵守同一边界。
 Unix 和 PowerShell launcher 的 Codex host-match ACK 也经该入口取得新鲜读回；其他生成的

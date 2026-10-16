@@ -52,7 +52,7 @@ source checks, event holds and active capture bindings do not change. The old
 settings entry is read-only in both languages; stale clients fail before writes.
 The old RPC is a typed rejection tombstone. Historical codecs and reads remain,
 but Python post-commit projection/retry and TS observation commit are deleted.
-State migration retains its response field with `retired/attempted=false`.
+State migration retains its response field with `outcome=retired` and `attempted=false`.
 
 Validation exercises public CLI replacement bootstrap, lease writes with old
 and absent settings, invalid-setting cleanup, retained-store readback, and

@@ -294,11 +294,26 @@ class LarkPrivateConversations:
                 return text[len(leading[0]["key"]):].strip()
         return text
 
-    def _inbox(self, record: dict[str, Any], *, observation: dict[str, Any] | None = None) -> Path:
+    def _inbox(self, record: dict[str, Any], *, observation: dict[str, Any] | None = None,
+               reuse_display_name: bool = False) -> Path:
+        scope = record["source"]["source_ref"]
+        if not isinstance(scope, str) or not re.fullmatch(r"[a-f0-9]{24}", scope):
+            raise ValueError("invalid private source scope")
+        path = self.runtime_root / ".loopx" / "config" / "private-chat" / f"{scope}.json"
+        if observation is None and reuse_display_name and path.exists():
+            try:
+                previous = _read_json(path)
+                reply = previous.get("reply") or {}
+                name = reply.get("bot_display_name")
+                if (previous.get("schema_version") == "lark_event_inbox_config_v0"
+                        and reply.get("sender_profile") == record["profile"]
+                        and reply.get("chat_id") == record["event"]["chat_id"]
+                        and isinstance(name, str) and name):
+                    observation = {"bot_display_name": name}
+            except (OSError, ValueError, AttributeError):
+                pass
         if observation is None:
             observation = self.bindings.observe(record["profile"])
-        scope = record["source"]["source_ref"]
-        path = self.runtime_root / ".loopx" / "config" / "private-chat" / f"{scope}.json"
         _atomic_write_json(path, {
             "schema_version": "lark_event_inbox_config_v0", "enabled": True,
             "inbox_dir": f".loopx/inbox/private-chat/{scope}", "capture_scope": "configured_chat_all",
@@ -781,18 +796,19 @@ class LarkPrivateConversations:
             def inbox() -> Path:
                 nonlocal config
                 if config is None:
-                    # The binding owner just verified this exact source. Only
-                    # reuse its presentation metadata; outbound provenance and
-                    # Core recovery/admission keep their own fresh checks.
-                    config = self._inbox(record, observation=selected["observation"] if selected else None)
+                    # A name supplies presentation metadata only; outbound
+                    # provenance and Core recovery/admission keep their own
+                    # fresh checks, including on the completed-stop path.
+                    config = self._inbox(record, observation=selected["observation"] if selected else None,
+                                         reuse_display_name=control_receipt_first and selected is None)
                 return config
 
             try:
-                selected = self.bindings.resolve(binding_id=record["binding_id"],
-                                                 include_observation=True, **record["source"])
                 if record["status"] in {"command_queued", "command_completed", "commission_running"}:
                     native = self.core.read_request(record["request_ref"])
                     if native["status"] == "command_queued":
+                        selected = self.bindings.resolve(binding_id=record["binding_id"],
+                                                         include_observation=True, **record["source"])
                         self._feedback(path, record, inbox=inbox)
                         self._deliver(path, record, "admission", native["response"], inbox=inbox)
                         return 0
@@ -801,6 +817,18 @@ class LarkPrivateConversations:
                                   status_snapshot=native.get("status_snapshot"))
                     control_receipt_first = (native["status"] == "command_completed"
                                              and native.get("command") in CHAT_CONTROL_COMMANDS.values())
+                # A completed group stop has no Core work left. Its existing
+                # Inbox name is presentation only; sending still runs both
+                # fresh binding/source observations in _source_verified. Do
+                # not put an extra metadata probe ahead of that receipt.
+                if not (control_receipt_first and native.get("command") == "stop"
+                        and native.get("target_recorded") is True
+                        and record["source"].get("group_human_message") is True
+                        and not record["deliveries"].get("terminal", {}).get("verified")
+                        and all(native.get(key) == record.get(key)
+                                for key in ("request_ref", "binding_id", "source"))):
+                    selected = self.bindings.resolve(binding_id=record["binding_id"],
+                                                     include_observation=True, **record["source"])
                 if record["status"] == "accepted":
                     native = self.core.read_request(record["request_ref"])
                     if native.get("agent_target"):
@@ -888,6 +916,13 @@ class LarkPrivateConversations:
                     record["status"] = "delivered"
                     _atomic_write_json(path, record)
                     return 1
+                if (control_receipt_first and selected is None
+                        and record["deliveries"].get("terminal", {}).get("blocker")
+                        == "lark_inbox_reply_sender_identity_mismatch"):
+                    # A renamed Bot can invalidate the presentation hint. No
+                    # send occurred; refresh only metadata for the next normal
+                    # reconcile, preserving any frozen provider attempt.
+                    self._inbox(record)
             except (KeyError, ValueError, OSError):
                 # Keep pending receipts available for actionable recovery.
                 return 0

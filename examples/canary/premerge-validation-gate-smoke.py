@@ -295,7 +295,11 @@ def assert_cli_premerge_reports_progress_by_default() -> None:
     assert payload["gate"]["status"] == "no_changes", payload
     assert payload["validation_summary"]["selected_check_count"] == 0, payload
     assert "[loopx canary] premerge start:" in completed.stderr, completed.stderr
-    assert "[loopx canary] start direct_checks 1/3:" in completed.stderr, completed.stderr
+    assert "[loopx canary] start direct_checks 1/" in completed.stderr, completed.stderr
+    assert any(
+        check["id"] == "rfc_bilingual_diff" and check["status"] == "passed"
+        for check in payload["direct_checks"]
+    ), payload
     assert "[loopx canary] start catalog_canaries" not in completed.stderr, completed.stderr
     assert "[loopx canary] premerge done:" in completed.stderr, completed.stderr
 

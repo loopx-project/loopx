@@ -281,6 +281,8 @@ export function createEffectRuntimeHandlers(
     ["todo.user_completion.plan", lazyHandler(() => import("./todos/user_completion.ts"), ({evaluateUserCompletion}) => evaluateUserCompletion)],
     ["agent.capability_gate.evaluate", lazyHandler(() => import("./agents/capability_gate.ts"), ({evaluateCapabilityGate}) => evaluateCapabilityGate)],
     ["agent.capability_memory", lazyHandler(() => import("./agents/capability_memory.ts"), ({agentCapabilityMemory}) => agentCapabilityMemory)],
+    ["benchmark.trajectory.prepare", lazyHandler(() => import("./capabilities/trajectory_assessment.ts"), ({prepareTrajectoryAssessment}) => prepareTrajectoryAssessment)],
+    ["benchmark.trajectory.qualify", lazyHandler(() => import("./capabilities/trajectory_assessment.ts"), ({qualifyTrajectoryAssessment}) => qualifyTrajectoryAssessment)],
     ["agent.preferences", lazyHandler(() => import("./capabilities/agent_preferences.ts"), ({agentPreferences}) => agentPreferences)],
     ["todo.archive.capture_dependencies", lazyHandler(() => Promise.all([import("./todos/archive_capture.ts"), import("./coordination/source_transfer.ts")]), ([{captureArchivedTodoDependencies}, {withCoordinationSourceTransfer}]) => withCoordinationSourceTransfer("todo.archive.capture_dependencies", captureArchivedTodoDependencies))],
     ["agent.supervisor.plan_append", lazyHandler(() => import("./agents/supervisor_event_append.ts"), ({planSupervisorEventAppend}) => planSupervisorEventAppend)],

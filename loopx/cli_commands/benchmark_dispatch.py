@@ -31,6 +31,11 @@ from .benchmark_study import (
     register_benchmark_study_commands,
 )
 
+from .benchmark_trajectory import (
+    handle_benchmark_trajectory_command,
+    register_benchmark_trajectory_commands,
+)
+
 AddSubcommandFormat = Callable[[argparse.ArgumentParser], None]
 OutputFormat = Callable[..., str]
 PrintPayload = Callable[..., None]
@@ -108,6 +113,7 @@ def register_benchmark_command_group(
         add_subcommand_format,
     )
     register_benchmark_study_commands(benchmark_sub, add_subcommand_format)
+    register_benchmark_trajectory_commands(benchmark_sub, add_subcommand_format)
 
 
 def handle_benchmark_command(
@@ -119,6 +125,11 @@ def handle_benchmark_command(
 ) -> int | None:
     if args.command != "benchmark":
         return None
+    handled = handle_benchmark_trajectory_command(
+        args, registry_path=registry_path, print_payload=print_payload, output_format=output_format,
+    )
+    if handled is not None:
+        return handled
     handled = handle_benchmark_continuation_command(
         args,
         print_payload=print_payload,

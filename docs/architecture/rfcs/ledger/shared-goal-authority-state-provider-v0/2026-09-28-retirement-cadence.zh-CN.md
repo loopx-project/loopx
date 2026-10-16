@@ -649,7 +649,7 @@ OS 缓存，未控制其他进程负载，不代表 p95、provider 对比或完�
 
 ### Runtime 退役须排空已准入效果
 
-共享 TS Effect server 现独立于 TCP 连接统计 pending handler；空闲窗口在最后一个
+共享 TS Effect server 现独立于 TCP 连接统计已准入、尚未完成的请求 handler；空闲窗口在最后一个
 handler 及私有 response sink 完成后才开始。显式 shutdown 停止接受连接，等待已准入
 效果（含断连调用方），最后只删除自己的 locator。认证、请求预算、原 receipt 与调用方
 恢复不变，不增加 provider 或 Python 决策 owner。

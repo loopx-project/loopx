@@ -471,7 +471,7 @@ journal 与配额语义；B 作为上游接口出现时的低成本替代；只�
 文档；通道回读新增 `executor_endpoint_source: machine_configuration` 以及该文档的
 `status` 与 `configuration_revision`，无需读取存储即可区分"机器决定"与"服务环境值"。
 
-解析后的 endpoint、model、effort、policy、分配原因、eligible pool 与来源 revision
+解析后的 endpoint、model、effort、policy、分配原因、候选端点池与来源 revision
 也持久化在 manager Session。运行中的 Turn 保留原分配。同 endpoint 的 model/effort
 修改在下一空闲或已接受的 queued Turn 边界采用：用新模型打开上游 adapter，按时间顺序
 保留完整可见历史和相同权限，启动成功后才持久化、投影新分配。模型或 context/tool

@@ -17,7 +17,7 @@
 [PR #4376](https://github.com/loopx-project/loopx/pull/4376) 的对话式准备已在 R1/GQ01
 下整合到既有 Chat draft 与已审阅 Goal 创建路径，见
 [吸收映射](app-conversation-and-async-inbox-v0.zh-CN.md#对话式目标准备吸收团队工作台提案)。
-没有采用其独立 workspace/executor；入口改进不代表 GQ01 执行/回传或 R2 小队验收完成。
+没有采用其独立 workspace/executor；草稿创建入口改进不代表 GQ01 执行/回传或 R2 小队验收完成。
 
 ## 1. 总目标与产品路线
 
