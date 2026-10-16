@@ -127,20 +127,23 @@ def test_synthetic_fixture_real_cli_projects_identity_reentry(tmp_path):
     assert len(actions) == 1 and "--turn-instance-id" in actions[0]
     assert "spend-slot" not in actions[0]
 
-    # Qualify the fixture's terminal shape without paying for a model run. A
-    # missing user section is not proof of zero user obligations.
+    # The Markdown file is only the display projection after migration. A
+    # direct edit cannot fabricate canonical completion or Goal terminality.
     state = project / "ACTIVE_GOAL_STATE.md"
     state.write_text(state.read_text().replace("- [ ]", "- [x]").replace(
         "status=open", "status=done no_followup=true",
     ))
-    terminal = runner.cli(launcher, "quota", "should-run", "--runtime-profile", "codex_cli",
-                          "--goal-id", runner.GOAL, "--agent-id", runner.AGENT)
-    assert terminal["should_run"] is False
-    assert terminal["interaction_contract"]["mode"] == "terminal_no_followup"
+    unchanged = runner.cli(launcher, "quota", "should-run", "--runtime-profile", "codex_cli",
+                           "--goal-id", runner.GOAL, "--agent-id", runner.AGENT)
+    assert unchanged["should_run"] is True
+    assert unchanged["selected_todo"]["todo_id"] == "todo_reducer"
+    assert unchanged["interaction_contract"]["mode"] != "terminal_no_followup"
 
     state.write_text(state.read_text().replace("## User Todo\n\n", ""))
     incomplete = runner.cli(launcher, "quota", "should-run", "--runtime-profile", "codex_cli",
                             "--goal-id", runner.GOAL, "--agent-id", runner.AGENT)
+    assert incomplete["should_run"] is True
+    assert incomplete["selected_todo"]["todo_id"] == "todo_reducer"
     assert incomplete["interaction_contract"]["mode"] != "terminal_no_followup"
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import shlex
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
@@ -15,11 +16,42 @@ from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _run_cli, _run_generated_cli,
     _spend_run_count, _write_fixture,
 )
+from loopx.todos import complete_goal_todo
 
 BODY = "[P1] " + "Retain the original requirements and verify the result. " * 24 + "TAIL: preserve cancellation."
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+def _initialize_authority(
+    runtime: Path,
+    registry: Path,
+    state: Path,
+    provider: str,
+) -> None:
+    goal = json.loads(registry.read_text())["goals"][0]
+    active, archived, _ = parse_todo_source(
+        state.read_text(),
+        goal=goal,
+        state_path=state,
+    )
+    rows = [
+        {"schema_version": "todo_item_v0", **row}
+        for row in [*active["agent"], *active["user"], *archived]
+    ]
+    initialize_canonical_authority(
+        runtime,
+        GOAL_ID,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID,
+            todos=rows,
+            handoff_mode="soft_claim",
+            leases=[],
+        ),
+        state_path=state,
+        provider=provider,
+    )
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("in_flight", [False, True])
 def test_projected_inputs_support_real_readback_writeback_and_one_debit(tmp_path, monkeypatch, provider, in_flight):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -27,14 +59,7 @@ def test_projected_inputs_support_real_readback_writeback_and_one_debit(tmp_path
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state.write_text(state.read_text().replace("[P1] Validate and settle the selected delivery.", BODY).replace(
         "action_kind=validate -->", f"action_kind=validate claimed_by={AGENT_ID} -->"))
-    if provider != "legacy":
-        goal = json.loads(registry.read_text())["goals"][0]
-        active, archived, _ = parse_todo_source(state.read_text(), goal=goal, state_path=state)
-        rows = [{"schema_version": "todo_item_v0", **row}
-                for row in [*active["agent"], *active["user"], *archived]]
-        initialize_canonical_authority(runtime, GOAL_ID, build_todo_runtime_shadow_projection(
-            goal_id=GOAL_ID, todos=rows, handoff_mode="legacy", leases=[]),
-            state_path=state, provider=provider)
+    _initialize_authority(runtime, registry, state, provider)
 
     def run(*args):
         return _run_cli(registry, runtime, *args, cwd=project)
@@ -104,10 +129,12 @@ def test_projected_inputs_support_real_readback_writeback_and_one_debit(tmp_path
     assert rc == 0 and final_todo["todo"]["status"] == ("open" if in_flight else "done")
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_todoless_periodic_review_uses_default_authoring_and_settles_once(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    _initialize_authority(runtime, registry, state, provider)
 
     def run(*args):
         return _run_cli(registry, runtime, *args, cwd=project)
@@ -127,21 +154,16 @@ def test_todoless_periodic_review_uses_default_authoring_and_settles_once(tmp_pa
     rc, spent = run("quota", "spend-slot", *binding, "--slots", "1", "--source", "heartbeat", "--execute")
     assert rc == 0 and _spend_run_count(runtime) == 1, spent
 
-    # Synthetic absence of runnable work; retain the real committed receipt.
-    # Initialize each authority from this fixture, never rewrite a live store.
-    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
-    state.write_text(state.read_text().replace(
-        "- [ ] [P1] Validate and settle the selected delivery.",
-        "- [x] [P1] Validate and settle the selected delivery.").replace(
-        f"todo_id={TODO_ID} status=open", f"todo_id={TODO_ID} status=done"))
-    if provider != "legacy":
-        goal = json.loads(registry.read_text())["goals"][0]
-        active, archived, _ = parse_todo_source(state.read_text(), goal=goal, state_path=state)
-        rows = [{"schema_version": "todo_item_v0", **row}
-                for row in [*active["agent"], *active["user"], *archived]]
-        initialize_canonical_authority(runtime, GOAL_ID, build_todo_runtime_shadow_projection(
-            goal_id=GOAL_ID, todos=rows, handoff_mode="legacy", leases=[]),
-            state_path=state, provider=provider)
+    # Synthetic absence of runnable work; retain the real committed receipt and
+    # close the selected Todo through the canonical public writer.
+    complete_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        todo_id=TODO_ID,
+        role="agent",
+        agent_id=AGENT_ID,
+        evidence="Synthetic fixture completion after receipt commit.",
+    )
 
     current = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                "--turn-instance-id", "periodic-without-todo", "--scan-path", str(project))

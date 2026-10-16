@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {mkdtemp, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
+import {DatabaseSync} from "node:sqlite";
 import test from "node:test";
 
 import {AUTHORITY_STATE_CHECKPOINT_INTERVAL} from
@@ -21,6 +22,49 @@ async function fixture(t: test.TestContext): Promise<SqliteAuthorityStore> {
   const directory = await mkdtemp(join(tmpdir(), "sqlite-bounded-"));
   t.after(() => rm(directory, {recursive: true, force: true}));
   return new SqliteAuthorityStore(directory, GOAL_ID);
+}
+
+for (const text of ["plain ASCII", "中文", "😀🛰️"]) {
+  test(`SQLite retained byte counts measure UTF-8 for ${JSON.stringify(text)}`, async t => {
+    const store = await fixture(t);
+    let revision: string | null = null;
+    for (let index = 1; index <= AUTHORITY_STATE_CHECKPOINT_INTERVAL + 1; index += 1) {
+      const applied = await store.commitAuthority({expected_provider_revision: revision,
+        operation_id: `byte-profile-${index}`, next_projection: {text, index},
+        events: [{text, index}], receipts: [{text, index}]});
+      assert.equal(applied.status, "applied", JSON.stringify(applied));
+      if (applied.status !== "applied") return;
+      revision = applied.provider_revision;
+    }
+    const before = await store.loadAuthority();
+    assert.equal(before.status, "loaded");
+    const original = await store.readReceipt("byte-profile-1");
+    assert.equal(original.status, "found");
+    const profile = await store.boundedProfile();
+    assert.equal(profile.status, "available", JSON.stringify(profile));
+    if (profile.status !== "available") return;
+    assert.equal(profile.checkpoints, 2);
+    // Measure the exact retained JSON independently of the profile's SQL
+    // aggregates. UTF-8 bytes differ from SQLite TEXT character counts.
+    const utf8Bytes = (value: unknown): number => {
+      assert.equal(typeof value, "string");
+      return Buffer.byteLength(value as string, "utf8");
+    };
+    const db = new DatabaseSync(store.path, {readOnly: true});
+    try {
+      const checkpoints = db.prepare("SELECT projection FROM checkpoints").all();
+      const commits = db.prepare("SELECT delta, events, receipts FROM commits").all();
+      assert.equal(profile.retained_projection_bytes,
+        checkpoints.reduce((total, row) => total + utf8Bytes(row.projection), 0));
+      assert.equal(profile.retained_delta_bytes,
+        commits.reduce((total, row) => total + utf8Bytes(row.delta), 0));
+      assert.equal(profile.retained_payload_bytes,
+        commits.reduce((total, row) => total + utf8Bytes(row.events) + utf8Bytes(row.receipts), 0));
+    } finally { db.close(); }
+    assert.deepEqual(await store.loadAuthority(), before);
+    assert.deepEqual(await store.readReceipt("byte-profile-1"), original);
+    assert.equal((await store.verifyAuthorityHistory()).status, "verified");
+  });
 }
 
 interface ReplayedHistory {

@@ -576,8 +576,9 @@ observation updates observation state and cadence without creating a delivery To
 “Atomic” has a precise boundary here: it excludes the external network poll, quota spend, and
 Markdown/dashboard delivery. After the canonical commit, projection delivery may still be `pending`; its
 outbox retries display projection only, with `retry_business_mutation=false`, and must not repeat the committed
-observation/successor mutation. Goals not promoted to shared authority still use the legacy writer, so this guarantee
-must not be generalized into “all Goal state has migrated to one store.”
+observation/successor mutation. In 2.0 an unmigrated Goal returns
+`canonical_authority_required`; it must be backed up and migrated before a new
+Monitor write.
 
 Treating a future `next_due_at` as an advancement frontier is wrong. It says when to observe, not how to
 advance the Goal.

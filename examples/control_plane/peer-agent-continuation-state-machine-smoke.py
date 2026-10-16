@@ -13,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from loopx.control_plane.testing.canary_harness import (  # noqa: E402
+    import_fixture_authority,
     run_json_cli,
     write_fixture_registry,
 )
@@ -80,6 +81,7 @@ def write_fixture(root: Path, *, include_review: bool = False) -> tuple[Path, Pa
         quota_allowed_slots=5,
         peer_independent_worktree_required=False,
     )
+    import_fixture_authority(registry_path, GOAL_ID)
     return project, runtime, registry_path
 
 
@@ -93,6 +95,7 @@ def should_run(project: Path, runtime: Path, registry_path: Path, agent_id: str)
         agent_id,
         "--scan-path",
         str(project),
+        "--host-surface", "generic_cli", "--scheduler-owner", "none", "--execution-mode", "interactive",
         registry_path=registry_path,
         runtime=runtime,
         cwd=project,
@@ -137,7 +140,7 @@ def assert_same_peer_continuation() -> None:
             runtime=runtime,
             cwd=project,
         )
-        assert completed["self_merged"] is True, completed
+        assert completed["completion_policy"]["self_merged"] is True, completed
         successor = completed["next_todos"][0]
         assert successor["claimed_by"] == PEER_ALPHA, successor
         second = should_run(project, runtime, registry_path, PEER_ALPHA)
@@ -168,8 +171,8 @@ def assert_review_is_action_semantics_over_generic_handoff() -> None:
             runtime=runtime,
             cwd=project,
         )
-        assert completed["self_merged"] is False, completed
-        assert completed["linked_successor_id"] == REVIEW_TODO_ID, completed
+        assert completed["completion_policy"]["self_merged"] is False, completed
+        assert completed["completion_policy"]["linked_successor_id"] == REVIEW_TODO_ID, completed
 
         beta = should_run(project, runtime, registry_path, PEER_BETA)
         assert beta["decision"] == "run", beta

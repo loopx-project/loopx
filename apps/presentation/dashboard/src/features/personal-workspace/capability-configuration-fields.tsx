@@ -66,7 +66,7 @@ function ConfigurationFieldControl({ copy, field, id, onChange, value, timezone 
       <label htmlFor={id}>
         <span>{label}</span>
         <select disabled={readOnly} id={id} onChange={onChange ? (event) => onChange(field.key, event.target.value) : undefined} value={typeof value === "string" ? value : ""}>
-          <option value="" />
+          <option value="">{copy[field.key]?.options?.[""] ?? ""}</option>
           {(field.options ?? []).map((option) => <option key={option} value={option}>{copy[field.key]?.options?.[option] ?? (field.key === "review_order" ? directionLabel(option) : option)}</option>)}
         </select>
       </label>

@@ -889,6 +889,23 @@ promotion。
 scheduler/harness、matched starting state、repeated arm、事先声明的 stopping
 rule，以及 model variance 与 control-plane failure 的分离。
 
+### 研究片段与面向人的进展阅读（提案）
+
+[benchmark 计量细化](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#基于证据的研究片段评估拟议细化)
+提出跨 Turn 的分析单位，分开原生结果、信息、判别力、实际采用、重复、成本与覆盖。
+片段分组和语义评估输出只是只读标注，不能创建合法 Explore 边、关闭 composition gap、
+接受实验、改变可执行 frontier 或解除 replan 义务。复用 §7 与 §11.5 已有 typed evidence/
+relationship 与 result-adoption owner。
+
+缺元数据或尚无后续采用机会保留未知，不判负向进展。有依据的负结果可收窄下一次具体
+实验，不能据此排除整个方法族。来源版本检查和接收方实际采用是不同事实；时间相邻或
+摘要不构成因果关联。产品只接收获准安全投影；隐藏 evaluator 分析须同时满足 solver
+终止且评分完成，不能成为 solver 反馈。
+
+[产品阅读旅程](../../product/use-cases/auto-research/long-horizon-progress-design.zh-CN.md)
+复用 Goal/团队实时工作区展示 owner。科学切分与评估器校准、打包证据阅读、用户理解各有
+独立验收。本设计不提高下列实现里程碑，不新增自动评估、干预、图权威或实验单元。
+
 ## 16. Milestone
 
 | Milestone | 交付物 | Promotion gate | 状态 |

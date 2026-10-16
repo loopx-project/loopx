@@ -4,7 +4,7 @@
  */
 import {createHash} from "node:crypto";
 import {createReadStream} from "node:fs";
-import {copyFile, lstat, mkdir, mkdtemp, open, readFile, readdir, rm} from "node:fs/promises";
+import {chmod, copyFile, lstat, mkdir, mkdtemp, open, readFile, readdir, rm} from "node:fs/promises";
 import {dirname, isAbsolute, join, resolve, sep} from "node:path";
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
@@ -13,7 +13,7 @@ import {snapshotSqliteDatabase} from "../coordination/sqlite_backup.ts";
 import {durableWriteJson, publishNewDirectory} from "../effect_runtime_io.ts";
 import {settlementIdentity} from "../effect_program.ts";
 import {normalizeHeartbeatReplanObligationId, normalizeHeartbeatTodoId} from "../quota/heartbeat_receipt_identity.ts";
-import {EffectRuntimeConflictError} from "../effect_runtime_errors.ts";
+import {EffectRuntimeConflictError, EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {EffectiveAction} from "../quota/effective_action.generated.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 
@@ -114,6 +114,28 @@ async function sqliteSidecar(path: string, suffixes: string[]): Promise<boolean>
   try {return (await lstat(database)).isFile() && await sqliteFile(database);}
   catch (error) {if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error;}
 }
+async function syncCopiedFile(path: string): Promise<void> {
+  const handle = await open(path, "r+");
+  try {await handle.sync();} finally {await handle.close();}
+}
+/** Flush a freshly copied checkpoint member through an updatable handle.
+ * copyFile preserves a read-only participant's mode, and Windows
+ * FlushFileBuffers rejects read-only handles, so a read-only copy grants owner
+ * access only to this staged copy for the durability sync and restores its
+ * mode before the caller witnesses or publishes it. POSIX syncs a read-only
+ * handle directly, but the update path covers both read-only cases.
+ */
+async function flushCopiedFile(path: string): Promise<void> {
+  try {await syncCopiedFile(path);}
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "EACCES" && code !== "EPERM") throw error;
+    const mode = (await lstat(path)).mode & 0o777;
+    await chmod(path, mode | 0o600);
+    try {await syncCopiedFile(path);}
+    finally {await chmod(path, mode);}
+  }
+}
 async function copyComponent(source: string, destination: string, snapshotDatabases = true): Promise<void> {
   const stat = await lstat(source);
   if (stat.isSymbolicLink()) throw new Error("checkpoint source became a symlink");
@@ -135,10 +157,7 @@ async function copyComponent(source: string, destination: string, snapshotDataba
     // SQLite's existing physical snapshot owner seals committed WAL contents.
     if (snapshotDatabases && await sqliteFile(source)) await snapshotSqliteDatabase(source, destination);
     else await copyFile(source, destination);
-    // copyFile preserves a read-only participant's mode. Syncing its bytes
-    // needs no write access; r+ fails for an ordinary non-root controller.
-    const handle = await open(destination, "r");
-    try {await handle.sync();} finally {await handle.close();}
+    await flushCopiedFile(destination);
   } else throw new Error("checkpoint source contains an unsupported file type");
 }
 function manifestBody(raw: unknown): JsonObject {
@@ -167,10 +186,16 @@ async function verify(root: string, expected: unknown): Promise<JsonObject> {
   return {ok: true, sha256: value.sha256, integrity_verified: true, research_point_qualified: false,
     execution_authority_granted: false, privacy_certified: false};
 }
+// Rendered statuses of this Turn's one durable heartbeat receipt: the first
+// guard, a no-write reread, or the selection hop that appended its binding.
+// A pending/failed/uncommitted view is not an admitted identity.
+const ADMITTED_RECEIPT_STATUSES: ReadonlySet<string> = new Set(["committed", "replayed", "upgraded"]);
 export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
   const request = requireJsonObject(value, "checkpoint artifacts request");
   if (request.action === "restore_capture") {
-    if (!hasExactAuthorityKeys(request, ["action", "checkpoint_sha256", "goal_id", "agent_id", "current_obligation_id", "review"])) {
+    if (!hasExactAuthorityKeys(request, ["action", "checkpoint_sha256", "goal_id", "agent_id", "current_obligation_id", "review",
+        ...(request.include_review_basis === undefined ? [] : ["include_review_basis"])]) ||
+        (request.include_review_basis !== undefined && typeof request.include_review_basis !== "boolean")) {
       throw new Error("checkpoint restored capture fields are invalid");
     }
     const sha = requireNonEmptyString(request.checkpoint_sha256, "restored checkpoint digest");
@@ -203,9 +228,17 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
       Array.isArray(path?.evidence_refs) && path.evidence_refs.includes(`checkpoint:${sha}`);
     return {capture_allowed: accepted, reason: accepted ? "restored_replan_completed" : "restored_replan_pending",
       ...(accepted ? {review_obligation_id: id} : {}),
+      ...(accepted && request.include_review_basis === true ? {review_basis: {
+        identity, obligation_id: id,
+        completed_decision: {agent_vision: run!.agent_vision, autonomous_replan_ack: ack},
+        decision_sha256: canonicalAuthoritySha256({agent_vision: run!.agent_vision, autonomous_replan_ack: ack}),
+      }} : {}),
       execution_authority_granted: false};
   }
   if (request.action === "select_replan") {
+    // Typed refusals keep their reason through the runtime boundary, so a
+    // refused handoff is diagnosable instead of an opaque internal failure.
+    const mismatch = () => new EffectRuntimeRequestError("checkpoint replan does not match the current admitted identity");
     if (!hasExactAuthorityKeys(request, ["action", "quota", "goal_id", "agent_id", "turn_instance_id"])) {
       throw new Error("checkpoint replan selection fields are invalid");
     }
@@ -213,7 +246,7 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
     const goal = requireNonEmptyString(request.goal_id, "checkpoint goal");
     const agent = requireNonEmptyString(request.agent_id, "checkpoint agent");
     const turn = requireNonEmptyString(request.turn_instance_id, "checkpoint Turn");
-    if (quota.ok !== true || quota.goal_id !== goal) throw new Error("checkpoint requires a matching current quota readback");
+    if (quota.ok !== true || quota.goal_id !== goal) throw new EffectRuntimeRequestError("checkpoint requires a matching current quota readback");
     if (quota.effective_action !== EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED) {
       return {capture: false, reason: "no_fresh_replan", execution_authority_granted: false};
     }
@@ -226,8 +259,8 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
     if (packet.schema_version !== "replan_action_packet_v0" ||
         typeof packet.decision !== "string" || packet.decision.trim() === "" ||
         (!settlementOnly && packet.decision !== "replan_required") ||
-        !id || (receipt.status !== "committed" && receipt.status !== "replayed") || receipt.turn_instance_id !== turn) {
-      throw new Error("checkpoint replan does not match the current admitted identity");
+        !id || !ADMITTED_RECEIPT_STATUSES.has(receipt.status as string) || receipt.turn_instance_id !== turn) {
+      throw mismatch();
     }
     const semanticReplan = normalizeHeartbeatReplanObligationId(receipt.semantic_replan_obligation_id);
     const closeoutPending = receipt.closeout_required === true;
@@ -238,7 +271,7 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
       const actor = requireJsonObject(quota.agent_identity, "checkpoint source Agent");
       requireNonEmptyString(receipt.event_id, "checkpoint committed guard event");
       if (actor.agent_id !== agent || actor.registered !== true || semanticReplan !== id) {
-        throw new Error("checkpoint replan does not match the current admitted identity");
+        throw mismatch();
       }
       return {capture: true, obligation_id: id, execution_authority_granted: false};
     }
@@ -249,7 +282,7 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
         identity.goal_id !== goal || identity.agent_id !== agent || identity.turn_instance_id !== turn ||
         identity.effect_id !== settlementIdentity({goal_id: goal, agent_id: agent, todo_id: todo,
           replan_obligation_id: boundReplan, turn_instance_id: turn}).effect_id) {
-      throw new Error("checkpoint replan does not match the current admitted identity");
+      throw mismatch();
     }
     // A replay can expose the next obligation while this Turn still owes its
     // original Todo settlement. Release that response to its writer; it is not
@@ -257,12 +290,12 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
     if (closeoutPending) return {capture: false, reason: "turn_closeout_pending", execution_authority_granted: false};
     if (settlementOnly) {
       if (semanticReplan !== id || (boundReplan !== null && boundReplan !== id)) {
-        throw new Error("checkpoint replan does not match the current admitted identity");
+        throw mismatch();
       }
       return {capture: false, reason: "turn_closeout_pending", execution_authority_granted: false};
     }
     if (todo ? boundReplan !== null || semanticReplan !== id : boundReplan !== id) {
-      throw new Error("checkpoint replan does not match the current admitted identity");
+      throw mismatch();
     }
     return {capture: true, obligation_id: id, settlement_effect_id: identity.effect_id,
       execution_authority_granted: false};

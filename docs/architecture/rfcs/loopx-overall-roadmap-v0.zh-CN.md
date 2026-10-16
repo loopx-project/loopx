@@ -73,6 +73,14 @@ managed 与 attached 的工作对话都应能持续在 LoopX 中进行：沿用�
 | **S12 发布、开发体验与社区治理 · P0 卫生/P1** | 安装、源码验证、扩展注册、DCO/PR、测试层级、contributor route 与双语文档已存在 | 从干净机器/发布包验一条首次工作和一次升级/回滚；host/OS 支持以 release contract 为准。缩短合理改动的定位、测试和 review 成本；公开精确 head、可重复 fixture、兼容窗口、维护者路由和贡献归属，退休重复协议及过时证据 |
 | **S13 采用、生态与商业可持续性 · P1 发现/P2 试点** | 公开 adoption loop、showcase、license/governance、observer-first 产品合同已存在；付费 PMF 未证明 | 先收集真实独立首次使用/重复使用/退出原因，做可复现案例和有固定预算/验收/回滚的试点；沉淀 reusable adapter 与交付手册。核算模型/计算/存储/支持成本及维护负担；满足重复需求后再决策商业托管边界、支持等级和分发，不承诺 SLA 或擅改开源条款 |
 
+**S5/S11 长程进展设计。** [研究计量细化](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#基于证据的研究片段评估拟议细化)
+与[产品阅读旅程](../../product/use-cases/auto-research/long-horizon-progress-design.zh-CN.md)
+把原生结果关联到研究片段、证据与实际采用。研究侧牵头方法、基线/窗口/成本口径及独立
+校准，产品侧细化既有 Goal/团队实时工作区中的共享选择。后续切片先做可复算证据绑定的
+只读分析，再交付含来源/访问/恢复及理解检查的一条打包证据阅读旅程。设计、科学资格、
+安装行为和因果收益分开。本提案不改变分线优先级、实验预算、冻结处理或评分规则，
+不阻塞其它合法实验准备或既有 L1/R2 旅程。
+
 ### RFC 之外的关键覆盖与 owning sources
 
 [执行、探索与纠偏集成指南](../long-running-execution-exploration-and-correction.zh-CN.md)

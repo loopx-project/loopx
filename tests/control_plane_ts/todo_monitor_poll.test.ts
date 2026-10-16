@@ -16,7 +16,7 @@ async function seeded(overrides: JsonObject = {}, extras: JsonObject[] = []) {
     status: "open", done: false, text: "Observe external progress", archive_state: "active",
     task_class: "continuous_monitor", target_key: "watch-a", cadence: "1h", ...overrides}, ...extras];
   await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
-    events: [], receipts: [], next_projection: {goal_id: "goal-a", todos: records, leases: [],
+    events: [], receipts: [], next_projection: {goal_id: "goal-a", handoff_mode: "soft_claim", todos: records, leases: [],
       todo_read_model: {schema_version: TODO_DOMAIN_READ_RECORD_SCHEMA, todo_count: records.length,
         records_sha256: canonicalAuthoritySha256(records), contract_fields: [...TODO_DOMAIN_RECORD_CONTRACT.fields]}}});
   const request = {goal_id: "goal-a", operation_id: "poll-a", actor_agent_id: "agent-a",
@@ -54,12 +54,35 @@ test("monitor and independent successor commit together, preview is inert, recei
   "coordination_operation_identity_mismatch");
 });
 
+test("receipt-only recovery preserves the original hash and never plans fresh work", async () => {
+  const {store, request} = await seeded();
+  const before = await store.loadAuthority();
+  let sourceChecks = 0;
+  const source = async () => {sourceChecks += 1; return false;};
+  const missing = await executeCoordinationMonitorPoll(store, {...request, receipt_only: true}, source);
+  assert.equal(missing.reason_code, "monitor_poll_original_receipt_required");
+  assert.equal(sourceChecks, 0);
+  assert.deepEqual(await store.loadAuthority(), before);
+  assert.equal((await store.readReceipt(request.operation_id)).status, "missing");
+  assert.equal((await executeCoordinationMonitorPoll(store, request)).status, "applied");
+  const after = await store.loadAuthority();
+  assert.equal((await executeCoordinationMonitorPoll(store, {...request, receipt_only: true}, source)).status, "replayed");
+  assert.equal((await executeCoordinationMonitorPoll(store, {...request, receipt_only: false})).status, "replayed");
+  const changed = await executeCoordinationMonitorPoll(store, {...request, receipt_only: true,
+    intent: {...request.intent, next_agent_todo: "A different operation"}}, source);
+  assert.equal(changed.reason_code, "coordination_operation_identity_mismatch");
+  assert.equal(sourceChecks, 0);
+  assert.deepEqual(await store.loadAuthority(), after);
+});
+
 test("invalid successor, inactive target, ownership and exclusion reject before any write", async () => {
   for (const overrides of [{status: "done", done: true}, {archive_state: "archive"},
     {claimed_by: "agent-b"}, {excluded_agents: ["agent-a"]}, {bound_agent: "agent-b"}]) {
     const {store, request} = await seeded(overrides);
     const before = await store.loadAuthority();
-    assert.equal((await executeCoordinationMonitorPoll(store, request)).status, "failed");
+    const rejected = await executeCoordinationMonitorPoll(store, request);
+    assert.equal(rejected.status, "failed");
+    assert.equal(rejected.failure_kind, "decision_rejection");
     assert.deepEqual(await store.loadAuthority(), before);
     assert.equal((await store.readReceipt(request.operation_id)).status, "missing");
   }
@@ -67,7 +90,9 @@ test("invalid successor, inactive target, ownership and exclusion reject before 
   const before = await store.loadAuthority();
   for (const intent of [{next_agent_todo: "Missing routing"},
     {...request.intent, next_claimed_by: "unknown"}]) {
-    assert.equal((await executeCoordinationMonitorPoll(store, {...request, intent})).status, "failed");
+    const rejected = await executeCoordinationMonitorPoll(store, {...request, intent});
+    assert.equal(rejected.status, "failed");
+    assert.equal(rejected.failure_kind, "decision_rejection");
     assert.deepEqual(await store.loadAuthority(), before);
   }
 });

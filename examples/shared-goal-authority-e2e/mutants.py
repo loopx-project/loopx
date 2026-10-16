@@ -7,7 +7,6 @@ syntax, process timeout, or setup failure. No live goal or checkout is edited.
 from __future__ import annotations
 
 import argparse
-import ast
 import difflib
 import hashlib
 import json
@@ -92,39 +91,6 @@ CASES = [
         '["advancement_task", "user_gate", "user_action", "blocker"].includes(String(condition.target_task_class))',
         'true')),),
          'tests/control_plane_ts/delivery_response.test.ts', 'exact dependency identity'),
-    Case('rollout_cwd_root', (('loopx/cli_rollout.py', replacement(
-        'resolve_runtime_root(registry, runtime_root_arg, registry_path=registry_path)',
-        'resolve_runtime_root(registry, runtime_root_arg)')),),
-         'tests/control_plane/test_shadow_observable_e2e.py::test_registry_relative_root_does_not_depend_on_callers_cwd[disabled]'),
-    Case('native_note_dropped', ((COORDINATION + 'todo_update_intent.ts', replacement(
-        '  const next: JsonObject = {...todo, ...input.patch};',
-        '  const next: JsonObject = {...todo, ...input.patch};\n  if ("note" in input.patch) next.note = todo.note;')),),
-         'tests/control_plane/test_shadow_observable_native_e2e.py::test_native_unclaimed_edit_and_explicit_note_clear[disabled]'),
-    Case('native_unclaimed_edit_rejected', ((COORDINATION + 'todo_lifecycle_decision.ts', replacement(
-        '  if (todo.claimed_by !== null && todo.claimed_by !== actor) return "claim_owner_mismatch";',
-        '  if (todo.claimed_by === null || todo.claimed_by !== actor) return "claim_owner_mismatch";')),),
-         'tests/control_plane/test_shadow_observable_native_e2e.py::test_native_unclaimed_edit_and_explicit_note_clear[disabled]'),
-    Case('native_diagnostic_truncated', ((COORDINATION + 'todo_update_admission.ts', replacement(
-        '? "Todo update cannot edit another claim owner\'s work"',
-        '? "Update rejected"')),),
-         'tests/control_plane/test_shadow_observable_native_e2e.py::test_canonical_argument_intent_and_atomic_claim[disabled]'),
-    Case('cursor_baseline_digest', ((COORDINATION + 'shadow_drain_plan.ts', replacement(
-        'last_partition_digest: partitionDigest(last, r.partition)',
-        'last_partition_digest: view.head_digest')),),
-         'tests/control_plane/test_shadow_cursor_recovery_e2e.py::test_abandoned_cursor_survives_all_consumers[2-0-todos]'),
-    Case('qualification_baseline_digest', ((COORDINATION + 'runtime_shadow.ts', replacement(
-        'const digest = marker === null ? null : (marker as JsonObject).partition_digest;',
-        'const digest = marker === null ? localAuthorityShadowHeadDigest(anchor.projection) : (marker as JsonObject).partition_digest;')),),
-         'tests/control_plane/test_shadow_cursor_recovery_e2e.py::test_abandoned_cursor_survives_all_consumers[2-0-leases]'),
-    Case('cursor_digest_unchecked', (
-        (COORDINATION + 'runtime_shadow.ts', replacement(
-            'if (digest !== cursor.last_partition_digest) throw new ShadowLineageError("outbox_cursor_unproved");',
-            '// DELIBERATE MUTANT: accept any syntactically valid cursor digest.')),
-        (COORDINATION + 'shadow_drain_plan.ts', replacement(
-            '      anchor.provider_revision === r.cursor.last_provider_revision &&\n'
-            '      partitionDigest(anchor, r.partition) === r.cursor.last_partition_digest,\n',
-            '      anchor.provider_revision === r.cursor.last_provider_revision,\n'))),
-         'tests/control_plane/test_shadow_cursor_recovery_e2e.py::test_forged_applied_digest_holds_every_consumer_without_rewriting_bytes[True-todos]'),
     Case('lineage', ((COORDINATION + 'local_authority_shadow.ts', replacement('  requireLineage(entry.capture_lineage_id === binding.capture_lineage_id, "stale_generation");', '  // DELIBERATE MUTANT: omit active lineage validation.')),),
          'tests/control_plane_ts/local_authority_shadow_outbox.test.ts', 'self-consistent foreign'),
     Case('previous_partition', ((COORDINATION + 'local_authority_shadow.ts', replacement('  requireLineage(request.entry.source.previous_partition_digest === digest, "source_partition_continuity_unproved");', '  // DELIBERATE MUTANT: omit previous partition proof.')),),
@@ -142,59 +108,6 @@ CASES = [
     Case('management_candidate_lineage', ((COORDINATION + "shadow_management.ts", replacement('candidate.capture_lineage_id !== expectedLineage', 'false')),),
          "tests/control_plane_ts/shadow_management.test.ts", 'rollback refuses a different valid candidate lineage'),
 ]
-
-PREPARED_WRITE = '''            durable_write_json(
-                self._directory / entry_file_name(seq, entry_id, "prepared"),
-                record,
-            )'''
-CASES.extend([
-    Case("receipt_bytes", ((COORDINATION + "shadow_drain_plan.ts", replacement(
-        "entry[key] === null || entry[key] === rc[key]",
-        "entry[key] === null || entry[key] === entry[key]")),),
-        "tests/control_plane/test_shadow_drain_adversarial.py::test_raw_residue_mismatch_preserves_every_file_before_any_cleanup"),
-    Case("cursor_regression", ((COORDINATION + "shadow_drain_plan.ts", replacement(
-        "{last_seq: history.size, last_entry_id: last.operation_id",
-        "{last_seq: 1, last_entry_id: last.operation_id")),),
-        "tests/control_plane/test_shadow_drain_e2e.py::test_public_primary_maps_one_to_one_to_receipts_and_replays_idempotently"),
-    Case("early_committed", ((COORDINATION + "local_authority_shadow_outbox.py", replacement(
-        PREPARED_WRITE, PREPARED_WRITE + '''
-            durable_write_json(
-                self._directory / entry_file_name(seq, entry_id, "committed"),
-                {"schema_version": OUTBOX_COMMIT_SCHEMA, "entry_id": entry_id,
-                 "capture_lineage_id": self._lineage_id, "committed_at": utc_now_text()},
-            )''')),),
-        "tests/control_plane/test_shadow_drain_e2e.py::test_primary_sigkill_preserves_complete_bytes_and_proves_before_marker[before_replace]"),
-])
-
-# Ladder parity-half rows (s2c2.*) drive the same lifecycle through the public
-# CLI; these mutants remove one operator-visible truth each and must turn the
-# corresponding row red.
-LADDER_ROW = "tests/control_plane/test_shared_goal_authority_e2e.py::test_ladder_row_passes_or_is_declared_unverified"
-CASES.extend([
-    Case("status_hides_prepared_only", ((COORDINATION + "local_authority_shadow_history.py", replacement(
-        '            "committed_pending": sum(1 for entry in entries if entry.is_committed),\n'
-        '            "prepared_only": sum(1 for entry in entries if not entry.is_committed),',
-        '            "committed_pending": len(entries),\n'
-        '            "prepared_only": 0,')),),
-        LADDER_ROW + "[s2c2.sigkill_between_primary_write_and_drain]"),
-    Case("qualification_ignores_drift", ((COORDINATION + "runtime_shadow.ts", replacement(
-        "const matched = localAuthorityShadowHeadDigest(request.projection) === localAuthorityShadowHeadDigest(lineage.head.head);",
-        "const matched = true;")),),
-        LADDER_ROW + "[s2c2.parity_divergent_detects_foreign_edit]"),
-    Case("replay_counted_as_delivery", ((COORDINATION + "shadow_drain.ts", replacement(
-        "result.no_op += Number(noOp === true); result.entries.push(summary); result.replayed++; consumed++;",
-        "result.no_op += Number(noOp === true); result.entries.push(summary); result.delivered++; consumed++;")),),
-        LADDER_ROW + "[s2c2.sigkill_mid_drain]"),
-])
-
-
-def remove_fence(source: str) -> str:
-    function = next(node for node in ast.parse(source).body
-                    if isinstance(node, ast.FunctionDef)
-                    and node.name == "require_legacy_coordination_write_allowed")
-    lines = source.splitlines(keepends=True)
-    return "".join(lines[:function.body[0].lineno - 1]) + "    return\n" + "".join(lines[function.end_lineno:])
-
 
 def typescript_exported_function_span(source: str, name: str) -> tuple[int, int]:
     """Bound one top-level exported function without depending on its successor."""
@@ -215,49 +128,19 @@ def remove_native_update_maintenance(source: str) -> str:
         "return await withCanonicalWriter(root, goalId, input.dry_run === true, async () => {",
         "return await (async () => {",
     )(function)
-    function = replacement("    });\n  } catch (error) {", "    })();\n  } catch (error) {")(function)
+    function = replacement(
+        '    }, {businessWrite: "todo_update"});\n  } catch (error) {',
+        "    })();\n  } catch (error) {",
+    )(function)
     return source[:start] + function + source[end:]
 
 
-def move_todo_guard_outside_lock(source: str) -> str:
-    function = next(node for node in ast.parse(source).body
-                    if isinstance(node, ast.FunctionDef)
-                    and node.name == "legacy_todo_write_transaction")
-    guards = [node for node in ast.walk(function) if isinstance(node, ast.If)
-              and isinstance(node.test, ast.UnaryOp) and isinstance(node.test.op, ast.Not)
-              and isinstance(node.test.operand, ast.Name) and node.test.operand.id == "dry_run"
-              and len(node.body) == 1 and not node.orelse
-              and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Call)
-              and isinstance(node.body[0].value.func, ast.Name)
-              and node.body[0].value.func.id == "require_legacy_todo_write_allowed"]
-    locks = [node for node in function.body if isinstance(node, ast.With)]
-    if len(guards) != 1 or len(locks) != 1 or guards[0] not in locks[0].body:
-        raise ValueError("guard locator drift; review lock protocol")
-    guard, lock = guards[0], locks[0]
-    lines = source.splitlines(keepends=True)
-    # Both race oracles exercise the same combined admission owner. Move its
-    # whole dry-run condition so the locked body remains executable.
-    segment = "".join(line[4:] for line in lines[guard.lineno - 1:guard.end_lineno])
-    return "".join(lines[:lock.lineno - 1]) + segment + "".join(
-        lines[lock.lineno - 1:guard.lineno - 1] + lines[guard.end_lineno:]
-    )
-
-
 WRITER_TEST = "tests/control_plane/test_shadow_writer_boundaries.py::"
-FENCE_TEST = WRITER_TEST + "test_cli_waiting_for_todo_mutex_rechecks_fence_after_engagement"
 CASES.extend([
     Case("management_result_binding", ((COORDINATION + "shadow_management.ts", replacement(
         "  await validateReplayResult(request, manifest, prior.result, state);",
         "  // DELIBERATE MUTANT: trust a cached result from another operation.")),),
          "tests/control_plane/test_shadow_management_variant_e2e.py::test_rollback_result_cannot_borrow_another_goals_archive_evidence[historical]"),
-    Case("cross_goal_source_guard", ((COORDINATION + "legacy_writer_fence.py", replacement(
-        "    resolved_source = state_file.resolve(strict=False)",
-        "    return  # DELIBERATE MUTANT: allow another goal to bypass source authority.\n    resolved_source = state_file.resolve(strict=False)")),),
-         "tests/control_plane/test_shadow_writer_variant_e2e.py::test_other_goal_cannot_write_a_protected_goal_source_via_state_override[active_capture]"),
-    Case("cleanup_hides_verified_commit", ((COORDINATION + "shadow_drain.ts", replacement(
-        "      if (plan.view !== null && typeof plan.view === \"object\") observe(plan.view as JsonObject);\n",
-        "")),),
-         "tests/control_plane/test_shadow_drain_adversarial.py::test_cleanup_permission_failure_reports_verified_commit_and_recovers[before_commit]"),
     Case("native_update_maintenance", ((COORDINATION + "local_authority_runtime.ts",
          remove_native_update_maintenance),),
          "tests/control_plane/test_shadow_native_todo_update_e2e.py::test_native_update_holds_before_primary_for_management[native-bootstrapping-cli]"),
@@ -265,12 +148,6 @@ CASES.extend([
         "movable.slice(0, moveCount)", "movable.slice(-moveCount)")),),
          "tests/control_plane_ts/todo_archive_selection.test.ts",
          "archive selection preserves imported order"),
-    Case("remove_fence", ((COORDINATION + "legacy_writer_fence.py", remove_fence),), FENCE_TEST),
-    Case("fence_outside_lock", ((COORDINATION + "legacy_writer_fence.py",
-         move_todo_guard_outside_lock),), FENCE_TEST),
-    Case("source_binding_outside_lock", ((COORDINATION + "legacy_writer_fence.py",
-         move_todo_guard_outside_lock),),
-         WRITER_TEST + "test_waiting_override_writer_rechecks_registry_binding_inside_shared_state_lock"),
     Case("remove_refresh_source_recheck", (("loopx/state_refresh.py", replacement(
         "            if normalized_next_action:",
         "            if False and normalized_next_action:  # DELIBERATE MUTANT: bypass source recheck.")),),
@@ -284,65 +161,15 @@ CASES.extend([
         'withFileMutationLock(statePath + ".mutant-unshared", () =>')),),
          "tests/control_plane_ts/shadow_native_writer_boundary.test.ts",
          "^fence engagement waits for an existing state writer before publication$"),
-    Case("remove_bound_state_path", ((COORDINATION + "legacy_writer_fence.py", replacement(
-        "if bound_source.resolve(strict=False) != state_file.resolve(strict=False):",
-        "if False:")),),
-         "tests/control_plane/test_shadow_drain_adversarial.py::test_state_file_override_cannot_attribute_an_unbound_source_to_active_lineage"),
-    Case("bootstrap_unregistered_root", ((COORDINATION + "runtime_shadow.ts", replacement(
-        "if (!await sameSourceRuntimeRoot(registeredRoot, request.runtime_root))",
-        "if (false)")),),
-         "tests/control_plane/test_runtime_shadow_bounded_e2e.py::test_controller_cannot_bind_the_registered_source_to_an_override_runtime_root"),
-    Case("bootstrap_unregistered_state", ((COORDINATION + "runtime_shadow.ts", replacement(
-        "if (resolve(String(snapshot.state_path)) !== resolve(String(snapshot.registered_state_path)))",
-        "if (false && resolve(String(snapshot.state_path)) !== resolve(String(snapshot.registered_state_path)))")),),
-         "tests/control_plane/test_runtime_shadow_bounded_e2e.py::test_controller_cannot_bind_an_alternate_state_file_before_or_after_bootstrap"),
-    Case("locale_dependent_lease_order", ((COORDINATION + "runtime_shadow.ts", replacement(
-        '''.sort((left, right) => {
-    if (left < right) return -1;
-    if (left > right) return 1;
-    return 0;
-  });''', ".sort((left, right) => left.localeCompare(right));")),),
-         "tests/control_plane/test_runtime_shadow_bounded_e2e.py::test_source_snapshot_preserves_inventory_without_projecting_orphan_leases"),
 ])
 
-# Restore both halves of the obsolete mirror: the public CLI hook and an actual
-# second FileAuthorityStore commit. A fabricated RPC result would prove nothing.
-MIRROR_HOOK = '''    if payload.get("ok") and payload.get("added") and not payload.get("dry_run"):
-        from ..control_plane.effect_runtime import effect_runtime_result as restored_mirror
-        restored_mirror("coordination.runtime_shadow.commit", {
-            "runtime_root": str(resolve_runtime_root(load_registry(registry_path), runtime_root_arg)),
-            "goal_id": args.goal_id, "operation_id": "restored-snapshot:" + payload["todo_id"],
-        })
-'''
-MIRROR_COMMIT = '''  const request = requireJsonObject(_value, "restored snapshot request");
-  const root = String(request.runtime_root); const goal = String(request.goal_id);
-  return await withShadowMaintenanceLock(root, goal, async () => {
-    const store = new FileAuthorityStore(join(root, "authority-shadow", "file-v0"), goal, { existingOnly: true });
-    const head = await store.loadAuthority();
-    if (head.status !== "loaded") throw new Error("restored mirror needs a real existing baseline");
-    const result = await store.commitAuthority({expected_provider_revision: head.provider_revision,
-      operation_id: String(request.operation_id), next_projection: head.head,
-      events: [{schema_version: "loopx_coordination_runtime_shadow_event_v0", event_kind: "todo_add"}],
-      receipts: [{schema_version: "loopx_coordination_runtime_shadow_receipt_v0", operation_id: request.operation_id}]});
-    return {...result};
-  });'''
-CASES.append(Case("duplicate_mirror", (
-    ("loopx/cli_commands/todo.py", replacement("    print_payload(\n        payload,\n",
-        MIRROR_HOOK + "    print_payload(\n        payload,\n")),
-    (COORDINATION + "runtime_shadow.ts", replacement(
-        '''  return { schema_version: COORDINATION_RUNTIME_SHADOW_RESULT_SCHEMA, status: "failed",
-    reason_code: "legacy_lineage_read_only", primary_writeback_preserved: true, decision_read_from_shadow: false };''',
-        MIRROR_COMMIT)),
-), "tests/control_plane/test_shadow_drain_e2e.py::test_public_mutation_has_no_second_snapshot_mirror"))
-
-# Fenced sibling-caller parity: each mutant is caught by exactly one parity row.
-# Promoted CLI acquisition now succeeds through canonical authority. Probe the
-# retained native legacy entrypoint for its fence diagnostic/envelope contract.
+# The retained exact-release path still observes the durable promotion fence.
 CASES.append(Case("native_fence_remediation_truncated", (
     (COORDINATION + "legacy_writer_fence.ts", replacement(
         'export const LEGACY_WRITER_FENCED_REMEDIATION =\n  "legacy coordination writer is fenced; use the promoted canonical authority ({authority_mode}) for goal {goal_id}; fence {fence_id}; the primary record was not changed";',
         'export const LEGACY_WRITER_FENCED_REMEDIATION =\n  "legacy coordination writer is fenced";')),
-), "tests/control_plane_ts/legacy_writer_fence_caller_parity.test.ts", pattern="^fence parity: ts-acquire-engaged$"))
+), "tests/control_plane_ts/task_lease_lifecycle.test.ts",
+   pattern="^exact legacy release honors an engaged promotion fence without writes$"))
 CASES.append(Case("python_fence_remediation_truncated", (
     (COORDINATION + "legacy_writer_fence.py", replacement(
         'LEGACY_WRITER_FENCED_REMEDIATION = (\n    "legacy coordination writer is fenced; use the promoted canonical authority "\n    "({authority_mode}) for goal {goal_id}; fence {fence_id}; "\n    "the primary record was not changed"\n)',
@@ -352,17 +179,15 @@ CASES.append(Case("fence_envelope_schema_leak", (
     (COORDINATION + "legacy_writer_fence.ts", replacement(
         "    this.payload = { write_check: writeCheck };",
         "    this.payload = writeCheck;")),
-), "tests/control_plane_ts/legacy_writer_fence_caller_parity.test.ts", pattern="^fence parity: ts-acquire-engaged$"))
-CASES.append(Case("fence_acquire_receipt_fabricated", (
-    ("loopx/control_plane/work_items/task_lease_acquire.ts", replacement(
-        '  return { code: error.code, message: error.message, payload: error.payload, stage: "validation", kind: "permission_denied" };',
-        '  return { code: error.code, message: error.message, payload: error.payload };')),
-), "tests/control_plane_ts/legacy_writer_fence_caller_parity.test.ts", pattern="^fence parity: ts-acquire-engaged$"))
+), "tests/control_plane_ts/task_lease_lifecycle.test.ts",
+   pattern="^exact legacy release honors an engaged promotion fence without writes$"))
 CASES.append(Case("lifecycle_fence_guard_skipped", (
     ("loopx/control_plane/work_items/task_lease_lifecycle.ts", replacement(
-        "        await requireLegacyCoordinationPrimaryWriteAllowed(request!.runtime_root, request!.goal_id);\n",
-        "")),
-), "tests/control_plane_ts/legacy_writer_fence_caller_parity.test.ts", pattern="^fence parity: ts-release-engaged$"))
+        "  await requireLegacyCoordinationPrimaryWriteAllowed(request.runtime_root, request.goal_id);\n"
+        "  const decision = retainedReleaseDecision(request, existing, at);",
+        "  const decision = retainedReleaseDecision(request, existing, at);")),
+), "tests/control_plane_ts/task_lease_lifecycle.test.ts",
+   pattern="^exact legacy release honors an engaged promotion fence without writes$"))
 
 
 def run(case: Case, directory: Path, log: Path) -> subprocess.CompletedProcess[str]:

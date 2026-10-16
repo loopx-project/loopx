@@ -9,6 +9,10 @@ import { installShowcaseWorkspace, openShowcaseGoal } from "./showcase-workspace
 // stays announced without becoming a banner.
 
 const workValue = (page) => page.getByTestId("goal-vitals").locator(".goal-vital").nth(1).locator(".goal-vital-value").innerText();
+const progressIsReadable = page => page.locator(".goal-overview-progress > span").first().evaluate(node => {
+  const rect = node.getBoundingClientRect();
+  return rect.height <= parseFloat(getComputedStyle(node).lineHeight) + 1 && node.scrollWidth <= node.clientWidth;
+});
 
 export const goalShowcaseScenario = {
   id: "goal-showcase",
@@ -23,6 +27,7 @@ export const goalShowcaseScenario = {
       assert.equal(await overview.getByRole("alert").count(), 0, "The showcase state has no region failure");
       assert.match(await page.locator(".goal-overview-objective").innerText(), /ledger API/);
       assert.match(await page.locator(".goal-overview-progress").innerText(), /2\/4/);
+      assert.ok(await progressIsReadable(page), "The short criterion count fits on one line, rather than being squeezed by its meter");
       assert.equal(await page.locator(".goal-criteria-meter i").count(), 4, "The meter has one segment per criterion");
       assert.equal(await page.locator(".goal-vital-dot.is-live").count(), 1, "A host-recorded open turn is the one live glyph");
       assert.equal(await workValue(page), "23/28");
@@ -98,6 +103,7 @@ export const goalShowcaseScenario = {
       await page.setViewportSize({ width: 1024, height: 768 });
       await page.screenshot({ path: resolve(outputDir, "goal-showcase-1024.png"), animations: "disabled" });
       await page.setViewportSize({ width: 390, height: 844 });
+      assert.ok(await progressIsReadable(page), "The phone criterion summary remains readable when details are folded");
       await page.screenshot({ path: resolve(outputDir, "goal-showcase-phone.png"), animations: "disabled" });
       const overflow = await page.getByTestId("goal-vitals").evaluate((strip) => strip.scrollWidth - strip.clientWidth);
       assert.ok(overflow <= 1, "The phone vitals fit without horizontal scrolling");

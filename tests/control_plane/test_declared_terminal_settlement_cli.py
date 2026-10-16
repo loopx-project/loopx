@@ -159,7 +159,7 @@ def test_declared_leased_completion_writeback_spend_terminal_and_replay(
     code, early_reentry = run("todo", "complete", "--goal-id", cli.GOAL_ID,
         "--todo-id", cli.TODO_ID, "--agent-id", cli.AGENT_ID,
         "--completion-identity-key", completed["completion_identity_key"],
-        "--no-follow-up", "--evidence", complete_args[-1])
+        "--no-follow-up")
     assert code == 1, early_reentry
     code, continuing_guard = run(*guard_args)
     assert code == 0, continuing_guard
@@ -194,7 +194,7 @@ def test_declared_leased_completion_writeback_spend_terminal_and_replay(
     terminal_args = (*complete_args, "--no-follow-up") if closeout_source == "turn" else (
         "todo", "complete", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID,
         "--agent-id", cli.AGENT_ID, "--completion-identity-key", completed["completion_identity_key"],
-        "--no-follow-up", "--evidence", complete_args[-1])
+        "--no-follow-up")
     code, terminal = run(*terminal_args)
     assert code == 0, terminal.get("error") or terminal.get("reason") or terminal
     assert terminal["completion_continuation"] == "no_followup"
@@ -296,7 +296,7 @@ def test_no_followup_transition_recovers_bound_review_through_writeback_and_sing
     assert len(admitted["autonomous_replan_obligation"]["triggers"]) == 1
     call("todo", "complete", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID,
          "--agent-id", cli.AGENT_ID, "--completion-identity-key", done["completion_identity_key"],
-         "--no-follow-up", "--evidence", "Original declared source check passed.")
+         "--no-follow-up")
     recovered = call(*guard)
     assert recovered["heartbeat_receipt"]["settlement_identity"] == identity
     assert recovered.get("selected_todo") is None

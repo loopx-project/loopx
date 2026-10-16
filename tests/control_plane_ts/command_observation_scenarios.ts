@@ -29,7 +29,7 @@ export async function commandObservationScenario(kind: CommandObservationCase, s
     task_class: "advancement_task", action_kind: "implement", status: "open", done: false,
     archive_state: "active", required_write_scopes: ["command-observation/**"]};
   let projection = authorityProjectionFixture(goal, [...f.projection.todos as JsonObject[], todo],
-    f.projection.leases as JsonObject[], schema, {handoff_mode: "legacy"});
+    f.projection.leases as JsonObject[], schema, {handoff_mode: "soft_claim"});
   const monitor = productionScaleLeasedMonitorFixture(goal, schema);
   const acquire = productionScaleLeaseAcquisitionFixture(goal, schema);
   const lifecycle = productionScaleLeaseLifecycleFixture(goal, schema);

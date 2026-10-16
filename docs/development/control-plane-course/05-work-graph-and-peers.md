@@ -217,11 +217,9 @@ if (rejection === "claim_owner_mismatch") {
 }
 ```
 
-这是同一 `authority` 决策中的片段，不是新的调用接口。未晋升源适配器
-`mutation_authority.py::authorize_todo_lifecycle_mutation` 仍在 owner mismatch 后
-读取并规范化 registry grant，再通过 `authority_core.decide` 调用同一 TS owner；
-canonical 事务也复用该 owner。Python facts、grant 校验和 receipt 投影保留，
-不再经由无人调用的单项 grant 查询。
+这是同一 `authority` 决策中的片段，不是新的调用接口。canonical 事务从 registry
+读取并规范化 grant，将 facts 交给 TS owner 统一决策。Python 只保留 registry facts
+与 grant 配置校验，不再暴露独立的 lifecycle mutation authorizer。
 
 这份 grant 有四个边界：
 

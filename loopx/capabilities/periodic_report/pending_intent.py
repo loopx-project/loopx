@@ -43,7 +43,7 @@ from .incremental import (
 )
 from .machine_defaults import (
     build_periodic_report_delivery_authority,
-    resolve_goal_periodic_report_subscription,
+    resolve_active_goal_periodic_report_subscription,
 )
 from .machine_store import read_periodic_report_machine_defaults
 from .cadence_journal import cadence_intent, cadence_journal_path, read_cadence_journal
@@ -231,13 +231,11 @@ def _active_delivery_subscription(
 
     registry = load_registry(registry_path)
     goal = find_registry_goal(registry, goal_id)
-    if not isinstance(goal, Mapping) or goal.get("status") in {"stopped", "paused", "archived"}:
-        return None
-    subscription = resolve_goal_periodic_report_subscription(
+    subscription = resolve_active_goal_periodic_report_subscription(
         goal,
         read_periodic_report_machine_defaults(runtime_root),
     )
-    return dict(subscription) if subscription.get("enabled") is True else None
+    return dict(subscription) if subscription is not None else None
 
 
 def _next_attempt_revision(

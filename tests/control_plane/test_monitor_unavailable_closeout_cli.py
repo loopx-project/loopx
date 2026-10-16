@@ -117,6 +117,13 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
                        "--target-key", "synthetic-source", "--result-hash", "synthetic-observed",
                        *lease_args,
                        "--execute")
+        if provider == "markdown":
+            assert rc == 1 and poll["error_code"] == "canonical_authority_required", poll
+            assert poll["write_admitted"] is False
+            assert poll["legacy_fallback_used"] is False
+            assert _classification_count(runtime, "quota_monitor_poll") == 0
+            assert _spend_run_count(runtime) == 0
+            return
         assert rc == 0 and poll["appended"] is True, poll
         rc, denied = cli(*refresh)
         assert rc != 0 and denied["appended"] is False, denied
@@ -171,16 +178,25 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
             poll_args += ("--material-change", "--next-agent-todo", "Inspect the source transition.",
                           "--next-action-kind", "validate")
         for execute in (True, False):
+            # Execution stops at the retired-writer boundary. A preview still
+            # evaluates the original settled-Turn admission without writing.
+            rejection_code = (
+                "canonical_authority_required" if provider == "markdown" and execute
+                else "monitor_poll_admission_rejected"
+            )
             rc, late = cli(*poll_args, *(("--execute",) if execute else ()))
             read_rc, current = cli("todo", "list", "--goal-id", GOAL_ID, "--todo-id", MONITOR_ID)
             replay_rc, frozen = cli(*refresh)
-            assert rc != 0 and late["error_code"] == "monitor_poll_admission_rejected", json.dumps({
+            assert rc != 0 and late["error_code"] == rejection_code, json.dumps({
                 "poll_rc": rc, "appended": late.get("appended"), "error_code": late.get("error_code"),
                 "observation_changed": read_rc == 0 and
                 {k: current["todo"].get(k) for k in OBSERVATION_FIELDS} != fields,
                 "refresh_rc": replay_rc, "refresh_error_code": frozen.get("error_code"),
             })
             assert read_rc == 0 and {k: current["todo"].get(k) for k in OBSERVATION_FIELDS} == fields
+            if provider == "markdown" and execute:
+                assert late["write_admitted"] is False
+                assert late["legacy_fallback_used"] is False
             assert replay_rc == 0 and frozen["idempotent_replay"] is True, frozen
             assert frozen["blocked_retry"] == wait
         if scenario == "late_nonmaterial":
@@ -197,7 +213,11 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
                 with monkeypatch.context() as context:
                     context.setattr(monitor_runtime, "_native_result", actor_metadata_request)
                     rc, actor_reply = cli(*poll_args, "--execute")
-                assert rc != 0 and actor_reply["error_code"] == "monitor_poll_admission_rejected", actor_reply
+                expected_error = (
+                    "canonical_authority_required" if provider == "markdown"
+                    else "monitor_poll_admission_rejected"
+                )
+                assert rc != 0 and actor_reply["error_code"] == expected_error, actor_reply
         rc, after_late = cli("todo", "list", "--goal-id", GOAL_ID)
         assert rc == 0, after_late
         monitor = next(todo for todo in after_late["todos"] if todo["todo_id"] == MONITOR_ID)
@@ -212,11 +232,20 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
         # a third identity would leave the already-admitted recovery unresolved.
         # Its advancement lane observes this due Monitor through the existing
         # auxiliary route, rather than selecting a Monitor as advancement work.
+        state_before_add = state.read_bytes()
         rc, independent = cli("todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
                               "--text", "Inspect an independent artifact.",
                               "--task-class", "advancement_task", "--claimed-by", AGENT_ID,
                               *(("--operation-id", f"fresh-independent-{provider}")
                                 if provider != "markdown" else ()))
+        if provider == "markdown":
+            assert rc == 1 and independent["error_code"] == "canonical_authority_required", independent
+            assert independent["write_admitted"] is False
+            assert independent["legacy_fallback_used"] is False
+            assert state.read_bytes() == state_before_add
+            assert _classification_count(runtime, "quota_monitor_poll") == 0
+            assert _spend_run_count(runtime) == 0
+            return
         assert rc == 0, independent
         rc, fresh_guard = cli("quota", "should-run", "--goal-id", GOAL_ID, "--codex-app",
                               "--agent-id", AGENT_ID, "--turn-instance-id", recovery_turn)
@@ -247,15 +276,25 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
 
     # A newly executable independent advancement belongs to the same recovery
     # host Turn after the original effect is closed, without a third identity.
-    if provider != "markdown":
-        rc, restored = cli("task-lease", "release", "--goal-id", GOAL_ID, "--todo-id", MONITOR_ID,
-                           "--owner", AGENT_ID, "--idempotency-key", f"unavailable-{provider}",
-                           "--expected-version", str(lease["lease"]["version"]))
-        assert rc == 0, restored
-    rc, successor = cli("todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
-                        "--text", "Inspect an independent public source.", "--task-class", "advancement_task",
-                        "--claimed-by", AGENT_ID,
-                        *(("--operation-id", f"independent-{provider}") if provider != "markdown" else ()))
+    successor_args = (
+        "todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
+        "--text", "Inspect an independent public source.",
+        "--task-class", "advancement_task", "--claimed-by", AGENT_ID,
+    )
+    if provider == "markdown":
+        state_before_add = state.read_bytes()
+        rc, successor = cli(*successor_args)
+        assert rc == 1 and successor["error_code"] == "canonical_authority_required", successor
+        assert successor["write_admitted"] is False
+        assert successor["legacy_fallback_used"] is False
+        assert state.read_bytes() == state_before_add
+        return
+
+    rc, restored = cli("task-lease", "release", "--goal-id", GOAL_ID, "--todo-id", MONITOR_ID,
+                       "--owner", AGENT_ID, "--idempotency-key", f"unavailable-{provider}",
+                       "--expected-version", str(lease["lease"]["version"]))
+    assert rc == 0, restored
+    rc, successor = cli(*successor_args, "--operation-id", f"independent-{provider}")
     assert rc == 0, successor
     rc, next_turn = cli("quota", "should-run", "--goal-id", GOAL_ID, "--codex-app",
                         "--agent-id", AGENT_ID, "--turn-instance-id", recovery_turn, *capabilities)

@@ -37,7 +37,11 @@ export function canonicalLeaseTodoFact(todo: JsonObject | undefined): TodoFact |
   if (!todo || todo.archive_state !== "active") return null;
   const excluded = todo.excluded_agents ?? [];
   if (!Array.isArray(excluded)) throw new AuthorityStoreProtocolError("Todo exclusions must be an array");
+  if (todo.task_class != null && typeof todo.task_class !== "string") {
+    throw new AuthorityStoreProtocolError("Todo task_class must be a string");
+  }
   return {todo_id: String(todo.todo_id), status: String(todo.status),
+    task_class: todo.task_class as string | null | undefined,
     task_repository: normalizeTodoRepository(todo.task_repository),
     claimed_by: todo.claimed_by == null ? null : normalizeTodoAgent(todo.claimed_by, "todo.claimed_by"),
     excluded_agents: excluded.map(value => normalizeTodoAgent(value, "todo.excluded_agents"))};

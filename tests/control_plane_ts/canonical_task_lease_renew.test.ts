@@ -108,12 +108,15 @@ for (const provider of ["file", "sqlite"] as const) {
       expected_version: 1, ttl_seconds: 600, write_scopes: ["src/**"], authority: request.authority};
   }
   const acquireNow = new Date("2026-09-13T10:11:00Z");
-  providerTest(`${provider} native acquisition ignores stale Todo/mode and preserves the legacy fence`, async t => {
+  providerTest(`${provider} legacy acquire wire requires canonical authority`, async t => {
     const {store, request, state} = await fixture(t, provider);
     const command = acquireRequest(request);
     const before = await store.loadAuthority();
     const legacy = await executeTaskLeaseAcquire({...command, schema_version: TASK_LEASE_ACQUIRE_REQUEST_SCHEMA}, {now: () => acquireNow});
-    assert.equal(legacy.error_code, "legacy_coordination_writer_fenced");
+    assert.equal(legacy.error_code, "canonical_authority_required");
+    assert.equal(legacy.write_admitted, false);
+    assert.equal(legacy.decision_read_from_provider, false);
+    assert.equal(legacy.legacy_fallback_used, false);
     assert.deepEqual(await store.loadAuthority(), before);
     const result = await executeTaskLeaseAcquire({...command, authority: {...command.authority,
       handoff_mode: "soft_claim", todos: []}}, {now: () => acquireNow});
@@ -130,7 +133,7 @@ for (const provider of ["file", "sqlite"] as const) {
       if (fault === "fence") await rm(legacyCoordinationWriterFencePath(runtime, goal));
       const result = await executeTaskLeaseAcquire(fault === "field" ? {...command, lock_token: "wrong-domain"} : command,
         {now: () => acquireNow, beforeWrite: fault === "source" ? async () => {await writeFile(state, "changed source");} : undefined});
-      assert.equal(result.error_code, {source: "authority_source_changed", fence: "canonical_acquire_fence_missing",
+      assert.equal(result.error_code, {source: "authority_source_changed", fence: "canonical_authority_required",
         field: "invalid_canonical_acquire_request"}[fault]);
       assert.deepEqual(await store.loadAuthority(), before);
     });
@@ -153,10 +156,13 @@ for (const provider of ["file", "sqlite"] as const) {
       assert.deepEqual(await store.loadAuthority(), final);
     });
   }
-  providerTest(`${provider} legacy wire requests remain fenced`, async t => {
+  providerTest(`${provider} legacy lifecycle wire requires canonical authority`, async t => {
     const {store, request} = await fixture(t, provider); const before = await store.loadAuthority();
     const result = await executeTaskLeaseLifecycle({...request, schema_version: TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA_VERSION}, {now: () => NOW});
-    assert.equal(result.error_code, "legacy_coordination_writer_fenced");
+    assert.equal(result.error_code, "canonical_authority_required");
+    assert.equal(result.write_admitted, false);
+    assert.equal(result.decision_read_from_provider, false);
+    assert.equal(result.legacy_fallback_used, false);
     assert.deepEqual(await store.loadAuthority(), before);
   });
   providerTest(`${provider} canonical renew uses the public lifecycle entrypoint without a legacy lease file`, async t => {
@@ -244,7 +250,7 @@ for (const provider of ["file", "sqlite"] as const) {
     const {store, request, runtime, goal} = await fixture(t, provider); const before = await store.loadAuthority();
     await writeFile(legacyCoordinationWriterFencePath(runtime, goal), "{");
     const result = await executeTaskLeaseLifecycle(request, {now: () => NOW});
-    assert.equal(result.ok, false); assert.equal(result.error_code, "legacy_writer_fence_read_failed");
+    assert.equal(result.ok, false); assert.equal(result.error_code, "canonical_authority_fence_invalid");
     assert.deepEqual(await store.loadAuthority(), before);
   });
   providerTest(`${provider} a canonical-only request cannot downgrade after losing its fence`, async t => {
@@ -253,7 +259,7 @@ for (const provider of ["file", "sqlite"] as const) {
     const legacyBytes = JSON.stringify(lease); await writeFile(legacyPath, legacyBytes);
     await rm(legacyCoordinationWriterFencePath(runtime, goal));
     const result = await executeTaskLeaseLifecycle({...request, schema_version: TASK_LEASE_CANONICAL_RENEW_REQUEST_SCHEMA}, {now: () => NOW});
-    assert.equal(result.ok, false); assert.equal(result.error_code, "canonical_renew_fence_missing");
+    assert.equal(result.ok, false); assert.equal(result.error_code, "canonical_authority_required");
     assert.deepEqual(await store.loadAuthority(), before);
     assert.equal(await import("node:fs/promises").then(fs => fs.readFile(legacyPath, "utf8")), legacyBytes);
   });
@@ -318,7 +324,7 @@ for (const provider of ["file", "sqlite"] as const) {
       const current = await store.loadAuthority();
       await rm(legacyCoordinationWriterFencePath(runtime, goal));
       const unfenced = await executeTaskLeaseLifecycle(command, {now: () => NOW});
-      assert.equal(unfenced.error_code, `canonical_${operation}_fence_missing`);
+      assert.equal(unfenced.error_code, "canonical_authority_required");
       assert.deepEqual(await store.loadAuthority(), current);
     });
     for (const boundary of ["before", "after"] as const) {

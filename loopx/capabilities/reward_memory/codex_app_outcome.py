@@ -9,6 +9,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from ...history import load_registry
+from ...materials import find_registry_goal, goal_state_path
+
 from ...control_plane.coordination.local_authority import (
     read_canonical_todos_if_promoted,
 )
@@ -135,6 +138,15 @@ def _validation_declaration(
     todo_id: str,
     state_file: Path,
 ) -> dict[str, Any] | None:
+    # Refresh projections intentionally omit private state paths. Resolve the
+    # declaration from this invocation's registered source, never the display
+    # projection or a default registry. Keep the explicit path for callers whose
+    # isolated registry has no matching Goal.
+    goal = find_registry_goal(load_registry(registry_path), goal_id)
+    if goal is not None:
+        registered_state = goal_state_path(goal)
+        if registered_state is not None:
+            state_file = registered_state
     canonical_todo, role = _canonical_todo(
         runtime_root=runtime_root,
         goal_id=goal_id,

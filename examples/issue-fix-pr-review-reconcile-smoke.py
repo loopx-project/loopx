@@ -24,9 +24,10 @@ from loopx.capabilities.issue_fix.pr_gate_reconcile import (  # noqa: E402
 from loopx.capabilities.issue_fix.pr_review_ack import (  # noqa: E402
     record_issue_fix_pr_review_ack,
 )
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
 from loopx.heartbeat_prequota import run_heartbeat_pre_quota  # noqa: E402
 from loopx.status import parse_active_state_todos  # noqa: E402
-from loopx.todos import update_goal_todo  # noqa: E402
+from loopx.todos import list_goal_todos, update_goal_todo  # noqa: E402
 
 
 PR_URL = "https://github.com/huangruiteng/loopx/pull/1716"
@@ -89,7 +90,7 @@ def reconcile_without_provider(
         )
 
 
-def main() -> int:
+def check_reconciliation(provider: str) -> None:
     with tempfile.TemporaryDirectory(
         prefix="loopx-issue-fix-pr-review-reconcile-"
     ) as tmpdir:
@@ -141,6 +142,8 @@ def main() -> int:
             "## Agent Todo\n\n",
             encoding="utf-8",
         )
+
+        import_fixture_authority(registry_path, "example-goal", provider=provider)
 
         missing = reconcile_without_provider(
             registry_path=registry_path,
@@ -330,7 +333,18 @@ def main() -> int:
         assert cli_payload["quota_spend_required"] is False, cli_payload
 
         assert todo(state_file, "todo_other_provider")["status"] == "open"
+        native = list_goal_todos(registry_path=registry_path, goal_id="example-goal")
+        assert native["authority_read"]["decision_read_from_provider"] is True, native
+        assert native["authority_read"]["legacy_fallback_used"] is False, native
+        rows = {item["todo_id"]: item for item in native["todos"]}
+        assert rows["todo_github_review"]["status"] == "done"
+        assert rows["todo_other_provider"]["status"] == "open"
 
+
+
+def main() -> int:
+    for provider in ("file", "sqlite"):
+        check_reconciliation(provider)
     print("issue-fix-pr-review-reconcile-smoke: ok")
     return 0
 

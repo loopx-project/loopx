@@ -945,7 +945,12 @@ periodic 策略复盘。匹配分支须声明相同的准备/频率迁移，并�
 恢复会话重新开启捕获须完成目标侧决策，换一个 Goal/Agent 或本地尚未见过的
 replan ID 都不够。模型前与 wake 中两处 hook 共用门槛：当前 Goal 的 canonical
 结算须接受一个语义 replan，其 Vision 证据引用 `checkpoint:<artifact-sha256>`，
-且目标原生历史已完成接续、保留原完整历史前缀。刚消费的义务本身仍不可捕获；
+且目标原生历史已完成接续、保留原完整历史前缀。声明含 native 参与方时，预检
+核对绑定的 workspace/session，只读最新 Turn、不加载 items；这个临时 cursor
+必须已完成且不属于保留的源 Turn，不能单凭它证明完整历史。实际捕获的两次
+观测都须在封存前核验原完整前缀及该已完成 cursor；source/session 变化、cursor
+缺失或前缀变化均拒绝捕获。准备验收及不含 native 参与方的声明保留完整历史
+预检。刚消费的义务本身仍不可捕获；
 后续真正的新节点才可捕获。重试、重启或准入回复丢失保留原 source-root/digest
 绑定。这是机器执行的捕获门槛，不增加执行或预算权限。
 
@@ -972,6 +977,23 @@ pending 包与原生历史，不在每个工作 wake 重算大型代码/incumben
 产物复制保留只读文件模式，同步复制的字节时不额外索取写权限。非 root 控制器
 捕获 `0444` 参与方此前失败，修复后通过；Git object store 是这类成员的常见来源。
 仅在 root 容器中验证不足以覆盖此 Host 边界。源权限和字节保持不变。
+
+显式暖 worker 的 `--restore-fresh-after-replan` 处理在替换原生上下文前复用同一
+当前语义复盘 owner，将原 checkpoint、前驱会话及本目标已完成决策绑定，并在新
+会话首次输入交付该决策，保持当前研究、代码和评测机会的 owner。普通替换仍不能
+继承来源。provider 在派发前记录原输出位置和源依据；未确认身份不能允许第二次
+启动。后续捕获必须观察新会话已完成的原生工作，并封存刷新链路。丢弃旧原生前缀
+是明确的信息损失，不是完整保留历史的接续。合成 receiver/捕获资格与真实模型
+证据使用、研究收益分开验收；此处理不授权新实验 cell 或热更新。
+
+联合资格须把手动 partial 产物与真实工作之后的新自动完整点分开。fresh-context
+receiver 在合成 profile 显式选定的 cadence 下，实际工作结算后到达新的 periodic
+review，通过真实 controller/native opportunity barrier 封存当前研究、代码、
+原生历史和 phase，再由另一隔离 receiver 执行新工作。显式重置使用其有来源绑定的空原生前缀，
+不能仍要求已丢弃的旧消息，也不能免除已完成 cursor、前后完整历史与来源观测。
+复用已核验合成源点只省去重新造源，不把此前 source 失败改为通过；所有 receiver
+仍须执行。通过后只关闭这项机械组合缺口，持续大点容量、安装前端和科研证据采用
+仍分开验收。
 
 inert verification unit 不授予执行权。目标侧使用新的实验/Host 身份，通过既有
 Goal/session/state admission 进入。历史租约、quota、timer、pending effect 和

@@ -54,6 +54,7 @@ from .selected_todo_tool_behavior import (
     SELECTED_TODO_TOOL_FIXTURE_ACTION_TEXT,
     SELECTED_TODO_TOOL_FIXTURE_TODO_ID,
 )
+from .terminal_settlement_tool_behavior import TERMINAL_SETTLEMENT_FIXTURE_TODO_ID
 from .replan_vision_closeout_behavior import required_vision_scenario_contract
 
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_PORTFOLIO_SCHEMA_VERSION = (
@@ -529,7 +530,7 @@ def _terminal_settlement_scenario_source() -> dict[str, Any]:
     payload = _turn_scenario_source(human_gate=False)
     payload["selected_todo"] = {
         **dict(payload["selected_todo"]),
-        "todo_id": "todo_terminal001",
+        "todo_id": TERMINAL_SETTLEMENT_FIXTURE_TODO_ID,
         "text": (
             "Read `fixture/settlement-proof.json`, verify the bounded delivery, "
             "then settle this final Todo from the quota-projected plan. "
@@ -910,7 +911,7 @@ def _validate_identity_scenario_contract(
     if spec.scenario_id == "turn_terminal_settlement":
         selected = dict(source_packet.get("selected_todo") or {})
         if not (
-            contract.get("selected_todo_id") == "todo_terminal001"
+            contract.get("selected_todo_id") == TERMINAL_SETTLEMENT_FIXTURE_TODO_ID
             and "settlement-proof.json" in str(selected.get("text") or "")
         ):
             raise ValueError(

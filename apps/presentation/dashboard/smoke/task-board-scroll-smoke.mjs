@@ -32,7 +32,7 @@ assert.match(
 );
 assert.match(
   styles,
-  /\.personal-channel-scroll:has\(\.personal-task-board\) \{ overflow: hidden; \}/,
+  /\.personal-channel-scroll\[data-active-goal-view="tasks"\]:has\(\.personal-task-board\) \{ overflow: hidden; \}/,
   "Desktop Tasks keeps the page chrome fixed while lanes scroll",
 );
 assert.match(
@@ -52,7 +52,7 @@ assert.match(
 );
 assert.match(
   styles,
-  /@media \(max-width: 720px\)[\s\S]*\.personal-channel-scroll:has\(\.personal-task-board\) \{ overflow-y: auto; \}[\s\S]*\.personal-task-lane-scroll,[^}]*\{[^}]*overflow: visible;/,
+  /@media \(max-width: 720px\)[\s\S]*\.personal-channel-scroll\[data-active-goal-view="tasks"\]:has\(\.personal-task-board\) \{ overflow-y: auto; \}[\s\S]*\.personal-task-lane-scroll,[^}]*\{[^}]*overflow: visible;/,
   "Narrow screens fall back to one page scroller instead of nested scroll traps",
 );
 assert.match(
@@ -137,12 +137,13 @@ async function main() {
     const url = `http://127.0.0.1:${port}/?statusUrl=/status.json`;
     await waitForHttp(url);
     browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage({ viewport: { width: 1512, height: 760 } });
+    const page = await browser.newPage({ locale: "zh-CN", viewport: { width: 1512, height: 760 } });
     const fixture = statusFixture();
     await page.route(`http://127.0.0.1:${port}/status.json**`, (route) => route.fulfill({ contentType: "application/json", json: fixture, status: 200 }));
     await page.route("**/api/**", (route) => route.fulfill({ contentType: "application/json", json: { ok: true }, status: 200 }));
     await page.goto(url, { waitUntil: "networkidle" });
     await page.locator(".personal-goal-link").filter({ hasText: "Task board scroll fixture" }).click();
+    await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Tasks|任务)$/ }).click();
 
     const lane = page.getByRole("region", { name: "待执行 / 进行中" });
     await lane.waitFor({ state: "visible" });

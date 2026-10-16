@@ -29,7 +29,7 @@ from test_quota_settlement_cli import (
 )
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("crowded", [False, True])
 def test_interrupted_binding_survives_new_due_successor(
     tmp_path: Path,
@@ -101,30 +101,29 @@ def test_interrupted_binding_survives_new_due_successor(
             )
         )
 
-    if provider != "legacy":
-        rc, listed = cli("todo", "list", "--goal-id", GOAL_ID, "--limit", "200")
-        assert rc == 0, listed
-        initialize_canonical_authority(
-            runtime,
-            GOAL_ID,
-            build_todo_runtime_shadow_projection(
-                goal_id=GOAL_ID,
-                todos=[
-                    canonical_todo_read_record(
-                        structured_todo_item(
-                            row,
-                            role="agent",
-                            source_section="Agent Todo",
-                        )
+    rc, listed = cli("todo", "list", "--goal-id", GOAL_ID, "--limit", "200")
+    assert rc == 0, listed
+    initialize_canonical_authority(
+        runtime,
+        GOAL_ID,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID,
+            todos=[
+                canonical_todo_read_record(
+                    structured_todo_item(
+                        row,
+                        role="agent",
+                        source_section="Agent Todo",
                     )
-                    for row in listed["todos"]
-                ],
-                handoff_mode="hard_lease",
-                leases=[],
-            ),
-            state_path=state,
-            provider=provider,
-        )
+                )
+                for row in listed["todos"]
+            ],
+            handoff_mode="hard_lease",
+            leases=[],
+        ),
+        state_path=state,
+        provider=provider,
+    )
 
     old_turn, new_turn = "interrupted-original", "current-after-interruption"
     old_binding = (
@@ -158,7 +157,8 @@ def test_interrupted_binding_survives_new_due_successor(
         GOAL_ID,
         "--role",
         "agent",
-        *(("--operation-id", "add-new-due-successor") if provider != "legacy" else ()),
+        "--operation-id",
+        "add-new-due-successor",
         "--text",
         "[P0] Evaluate the fixed deadline once runnable.",
         "--priority",
@@ -233,9 +233,6 @@ def test_interrupted_binding_survives_new_due_successor(
     assert peer["heartbeat_receipt"]["status"] == "not_committed"
     assert _spend_run_count(runtime) == 0
 
-    if provider == "legacy":
-        # A legacy writer has no promoted Turn-owned retry closeout.
-        return
     before = state.read_bytes()
     refresh_args = (
         "refresh-state",

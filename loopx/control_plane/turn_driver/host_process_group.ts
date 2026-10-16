@@ -7,6 +7,7 @@ const CLEANUP_DEADLINE_MS = 1000;
 
 /** Zombies cannot execute; an unknown/non-zombie state must remain live. */
 export function hasLiveGroupMembers(snapshot: string, pgid: number): boolean {
+  if (!snapshot.trim()) throw new Error("invalid managed Host process-group observation");
   let live = false;
   for (const line of snapshot.split("\n")) {
     if (!line.trim()) continue;
@@ -21,6 +22,8 @@ export function hasLiveGroupMembers(snapshot: string, pgid: number): boolean {
 export async function waitForProcessGroupStop(pgid: number): Promise<void> {
   const deadline = performance.now() + CLEANUP_DEADLINE_MS;
   while (true) {
+    const remaining = Math.ceil(deadline - performance.now());
+    if (remaining <= 0) throw new Error("managed Host process group did not stop before cleanup deadline");
     try { process.kill(-pgid, 0); }
     catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
@@ -29,8 +32,6 @@ export async function waitForProcessGroupStop(pgid: number): Promise<void> {
       // of death: require the same fresh state observation as a live group.
       if (code !== "EPERM") throw error;
     }
-    const remaining = Math.ceil(deadline - performance.now());
-    if (remaining <= 0) throw new Error("managed Host process group did not stop before cleanup deadline");
     // POSIX ps exposes only group/state, not argv or environment. Unlike PID
     // absence alone this also works with orphan zombies awaiting init's reap.
     const snapshot = await new Promise<string>((resolve, reject) => {
@@ -40,6 +41,9 @@ export async function waitForProcessGroupStop(pgid: number): Promise<void> {
           ? "managed Host process group did not stop before cleanup deadline"
           : "managed Host process-group observation failed", {cause: error})) : resolve(stdout));
     });
+    // A callback can arrive after the deadline even without an execFile error.
+    // Late or empty output must not turn a timed-out observation into absence.
+    if (performance.now() >= deadline) throw new Error("managed Host process group did not stop before cleanup deadline");
     if (!hasLiveGroupMembers(snapshot, pgid)) return;
     await delay(Math.min(10, Math.max(0, deadline - performance.now())));
   }

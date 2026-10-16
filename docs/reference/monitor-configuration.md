@@ -2,8 +2,9 @@
 
 `todo update` changes an existing Monitor's configuration. After whole-Goal
 promotion it uses the same TS planning/CAS/receipt owner as other supported
-Todo updates; it does not read Markdown as authority. Before promotion it
-uses the legacy writer and the same typed configuration policy.
+Todo updates; it does not read Markdown as authority. In 2.0 an unmigrated
+Goal returns `canonical_authority_required`; back up and migrate it before
+retrying the configuration write.
 
 ```sh
 loopx todo update --goal-id demo --todo-id todo_watch --agent-id agent-a \
@@ -82,10 +83,29 @@ timestamp parsing and provider IO remain live compatibility adapters.
 The internal planning request uses v3 for these clock facts while retaining v2
 route/handoff/closure behavior; existing v0/v1/v2 requests keep their input contracts.
 
+### Original observation recovery
+
+An unmigrated Goal may read its exact historical Monitor business receipt and
+finish an already admitted quota transaction. Missing business evidence never
+authorizes another observation or a new quota reservation. Fresh targeted
+mutation previews and execution still require canonical authority. A selected
+but unavailable provider must be restored; historical Markdown is no fallback.
+
+Canonical observation recovery can use internal request
+`loopx_coordination_monitor_poll_request_v4` when the display cannot be read.
+This schema is **receipt-only**: the existing typed Monitor owner validates the
+original identity and receipt, then returns it; an absent or malformed receipt
+cannot enter planning or commit. It grants no execution authority or lease.
+Older runtimes reject the new schema instead of ignoring a restrictive flag.
+Ordinary v0–v3 requests and the business receipt hash remain unchanged. Display
+delivery may still report pending when its source needs repair; recovery does
+not overwrite unreadable prose or drain historical capture work.
+
 ## 中文
 
-Monitor 配置修改复用 `todo update`。晋升后由 TS 在同一个 canonical revision 上
-校验并提交状态、事件和回执；晋升前保留 legacy writer，复用相同 typed 配置规则。
+Monitor 配置修改复用 `todo update`。TS 在同一个 canonical revision 上校验并提交
+状态、事件和回执；2.0 中未迁移 Goal 返回 `canonical_authority_required`，需先备份
+并迁移后再重试。
 上面的 CLI 给出了预览、带 operation ID 的执行和回读；operation ID 只适用于已
 晋升 Goal，修正或撤销使用新 ID，重试同一请求使用原 ID。
 
@@ -117,3 +137,11 @@ writeback 与 capability 准入保留。缺口数量先于展示截断；其 pri
 
 内部 planning request 用 v3 承载时钟事实，保留 v2 的 route／handoff／closure 规则；
 已有 v0／v1／v2 请求保持原输入合同。
+
+未迁移 Goal 可读取精确的旧 Monitor 业务回执并完成已准入的 quota 原事务；缺失
+业务证据时不能重做观察或新建 quota reservation。新的定向写入预览与执行仍须
+canonical authority；已选 provider 不可用时须恢复 provider，不能退回 Markdown。
+内部 observation 请求 `loopx_coordination_monitor_poll_request_v4` 仅用于原回执
+恢复，复用同一 typed owner 的身份与回执校验；没有合法原回执就不能规划或提交，
+也不授予执行权限或 lease。旧 runtime 拒绝该 schema；原 v0–v3 请求和业务回执
+hash 不变。损坏展示仍可报告 pending，恢复不会覆盖不可读正文或 drain 旧 capture。

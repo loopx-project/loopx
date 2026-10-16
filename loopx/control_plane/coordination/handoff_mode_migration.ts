@@ -11,7 +11,7 @@ import {AuthorityStoreProtocolError, canonicalAuthorityObject, canonicalAuthorit
 import {exportAuthorityArchive, verifyAuthorityArchive, type AuthorityArchiveSummary} from "./authority_archive.ts";
 import {syncAuthorityDirectory} from "./file_authority_store.ts";
 import {CoordinationCommandReceipt} from "./command_receipt.ts";
-import {HANDOFF_MODES, EXECUTION_HANDOFF_MODES} from "./handoff_mode_policy.ts";
+import {HANDOFF_MODES, EXECUTION_HANDOFF_MODES, type ExecutionHandoffMode} from "./handoff_mode_policy.ts";
 import {planHandoffPolicyMigration} from "./handoff_policy_migration.ts";
 import {normalizeRegisteredTodoAgents} from "./todo_agents.ts";
 
@@ -29,7 +29,7 @@ interface ReviewedPlan extends JsonObject {
   schema_version: typeof PLAN_SCHEMA;
   goal_id: string;
   runtime_root: string;
-  requested_mode: typeof EXECUTION_HANDOFF_MODES[number];
+  requested_mode: ExecutionHandoffMode;
   registered_agents: string[];
   source: JsonObject;
 }

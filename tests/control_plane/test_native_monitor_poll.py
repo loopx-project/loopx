@@ -6,24 +6,41 @@ import hashlib
 import json
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
-from test_monitor_followthrough_contract import _write_fixture, _add_monitor, GOAL_ID, AGENT_ID
+from test_monitor_followthrough_contract import _write_fixture, GOAL_ID, AGENT_ID
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.scheduler.monitor_poll_writeback import write_monitor_poll_todo_state
 from loopx.control_plane.testing.canary_harness import run_json_cli
-from loopx.todos import list_goal_todos
 
 
-def _canonical(tmp_path, native=False, provider="file", lease=None):
-    registry, runtime, state = _write_fixture(tmp_path)
-    monitor = _add_monitor(registry, text="Observe a public target", target_key="public-watch",
-        next_due_at="2000-01-01T00:00:00Z")
-    items = list_goal_todos(registry_path=registry, goal_id=GOAL_ID, role="agent")["todos"]
+def _canonical(
+    tmp_path,
+    native=False,
+    provider="file",
+    lease=None,
+    monitor_status="open",
+):
+    registry, runtime, state = _write_fixture(tmp_path, canonical=False)
+    monitor = {
+        "schema_version": "todo_item_v0",
+        "todo_id": "todo_public_watch",
+        "role": "agent",
+        "status": monitor_status,
+        "done": monitor_status == "done",
+        "text": "Observe a public target",
+        "task_class": "continuous_monitor",
+        "archive_state": "active",
+        "source_section": "Agent Todo",
+        "index": 1,
+        "claimed_by": AGENT_ID,
+        "target_key": "public-watch",
+        "cadence": "1h",
+        "next_due_at": "2000-01-01T00:00:00Z",
+        "watch_only": "true",
+    }
+    items = [monitor]
     leases = []
     if lease is not None:
-        for item in items:
-            if item["todo_id"] == monitor["todo_id"]:
-                item["claimed_by"] = AGENT_ID
         leases = [{"schema_version": "task_lease_v0", "goal_id": GOAL_ID,
             "todo_id": monitor["todo_id"], "owner": AGENT_ID, "write_scopes": [], **lease}]
     projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=items, leases=leases,

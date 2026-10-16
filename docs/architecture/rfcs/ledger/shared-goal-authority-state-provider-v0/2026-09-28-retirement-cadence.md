@@ -1,11 +1,33 @@
 # Local authority: retirement cadence after integration
 
-- Current plan: October 7, 2026, `06b6caa07`; historical audit: `ce3862e33`; adoption follow-up: `71525ab90`, September 28, 2026; [中文](2026-09-28-retirement-cadence.zh-CN.md).
+- Current candidate checkpoint: October 15, 2026, #6396 at `5d29213d3`; historical 1.x plan: October 7, 2026, `06b6caa07`; historical audit: `ce3862e33`; adoption follow-up: `71525ab90`, September 28, 2026; [中文](2026-09-28-retirement-cadence.zh-CN.md).
 - Owners: overall roadmap R3/R4/R5/R6; shared authority D1–D3; TS migration T0–T4.
 - This replaces the **current inventory/estimates** in the September 27 recovery
   and Host-supervision ledgers, not their historical validation results.
 
-## Reconciled baseline
+<a id="current-candidate-checkpoint"></a>
+
+## Current candidate checkpoint (2026-10-15)
+
+The C1/T4 deletion package is implemented in contributor-led
+[#6396](https://github.com/loopx-project/loopx/pull/6396) at reviewed head
+`5d29213d3`, including the fork supplements and
+[absorbed #6366 obligations](../../../../reference/local-authority-provider-selection.md#retirement-proposal-reconciliation).
+This is an open 2.0 candidate, not the released additive 1.x baseline.
+
+| Boundary | Candidate fact | Remaining work / retained obligation |
+| --- | --- | --- |
+| Ordinary Markdown mutation and capture producers | Obsolete writer implementations, including `todos/legacy_mutation.py`, `todos/line_update.py` and `runtime_shadow_writer_adapter.py`, are absent. Canonical creation/mutation, team-plan, Monitor and lease callers use existing typed owners. | Integrate and qualify the adopted source; do not create another writer-deletion task from the historical table. Keep permanent document/display IO and supported import/recovery. |
+| Ownership policy | Fresh execution/configuration targets are `soft_claim` / `hard_lease`; typed runtime admission and proof inspection reject live `legacy` execution. | Historical three-value decoding, original receipts, exact release and reviewed backed-up policy migration remain. Qualify real installed migration and affected Host/App consumers separately. |
+| Source and outbox recovery | Normal producer retirement does not erase prepared/committed history. | Preserve original receipt/cursor recovery and reconcile or explicitly disposition outstanding outboxes before removing their readers. Storage conversion does not complete ownership migration. |
+| Adoption and release | Exact-head review and selected combined-tree validation are recorded with source revisions in the PR. | The reversible core-developer trial, natural Host use, Goal-instance lifetime/recovery and formal D2/D3/default evidence keep their existing owners and open exits. Retain failed/missing rows; mocks, elapsed mixed-version use or a PR merge cannot replace them. |
+
+Use this table and the [TS current frontier](../../typescript-control-plane-migration-v0.md#current-delivery-frontier-2026-10-02)
+for new work. The dated records below preserve their original source-specific
+measurements and dependency decisions; claims that old writers are reachable
+refer to those earlier baselines and must not regenerate completed candidate work.
+
+## Historical reconciled baseline
 
 | Already merged | What no longer belongs in the remaining-work count |
 | --- | --- |
@@ -27,12 +49,12 @@ reimplementing them. Their scopes are dependencies only for affected callers;
 local default does not wait for unrelated cloud or hundred-Agent work.
 
 **File as the default store factory is not File as the default authority for
-all new/existing Goals.** Unpromoted Markdown writers remain reachable. Two
+all new/existing Goals.** At this historical baseline, unpromoted Markdown writers remained reachable. Two
 successful Goal migrations, or File↔SQLite transfer, do not prove their absence.
 No fixed “5–8 PRs remaining” is carried forward: below are named delivery and
 qualification boundaries, not a promise about defect count or merge count.
 
-## When and how to delete
+## Historical last-caller inventory and deletion rules
 
 | Boundary | Actual reachable code/caller | Earliest safe deletion and retained obligation |
 | --- | --- | --- |
@@ -126,9 +148,9 @@ C1, D2 and release-default adoption remain separate acceptance boundaries.
 
 <a id="current-closeout-validation-migration-and-deletion-2026-10-02"></a>
 
-## Current closeout: validation, migration and deletion (2026-10-07)
+## Historical closeout plan: validation, migration and deletion (2026-10-07)
 
-Rechecked against main `06b6caa07` and the linked merged PRs. This is the current
+Rechecked against main `06b6caa07` and the linked merged PRs. This was the
 execution plan for **R5 / D1–D3 / T0–T4**, replacing the previous A–D schedule;
 older measurements remain source-specific evidence. R6 is a separate successor.
 Storage format, authority selection and ownership policy are three distinct

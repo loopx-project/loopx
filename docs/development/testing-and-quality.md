@@ -409,20 +409,27 @@ Effect 后台进程；相同源码指纹可能让源码环境与已安装版本�
 The Effect server drains admitted handlers before retiring. With compilation
 caching enabled, its final synchronous cache flush has a one-second allowance,
 supervised by a worker in the same process. Healthy completion still persists
-the real Node cache before removing the locator. A blocked/failed flush or
-unavailable supervisor instead performs the same fenced, identity-checked
-locator cleanup and forcefully exits the already settled process, bypassing
-Node's automatic cache flush at exit. This may discard optional cache entries;
-it never authorizes abandoning an admitted effect. Cache-disabled execution
-uses ordinary cleanup without a worker. The allowance does not bound locator
+the real Node cache before removing the locator. A blocked or failed flush
+keeps that cache-disabled worker responsible for the same fenced, identity-checked
+locator cleanup and termination of the already settled process. Node invokes
+the calling environment's [native exit hooks even on self-`SIGKILL`](https://github.com/nodejs/node/blob/v24.21.0/src/node_process_methods.cc#L199-L205), so terminating
+the worker and killing from the main thread can re-enter cache persistence.
+The regression checks real cache files, not just the exit signal. If no supervisor
+can start, locator cleanup and main-thread termination remain best effort: that
+fallback cannot promise to bypass the native cache hook. Worker retirement may
+discard optional cache entries; it never authorizes abandoning an admitted effect.
+Cache-disabled execution uses ordinary cleanup without a worker. The allowance does not bound locator
 lock/storage waits or OS scheduling. Native platform qualification remains
 separate from injected-failure coverage; V8 CPU samples do not measure kernel IO.
 
 Effect 服务先排空已接纳的 handler，再退出。启用编译缓存时，同进程 worker
 监督最终同步写盘，给缓存一秒处理时间；正常完成仍先持久化真实 Node 缓存，
-再清理定位文件。写盘阻塞、失败或监督 worker 不可用时，复用同一锁和精确身份
-校验清理定位文件，然后强制终止已结算的进程，绕过 Node 退出时的自动缓存写盘。
-这可能丢弃可选缓存条目，不允许放弃已接纳的业务操作。关闭缓存时无需 worker，
+再清理定位文件。写盘阻塞或失败时，保留已就绪且关闭缓存的 worker，由它复用
+同一锁和精确身份校验清理定位文件，并终止已结算的进程。Node 自发 `SIGKILL`
+也先执行调用环境的原生退出钩子，因此先停 worker 再由主线程终止会重入缓存写盘；
+回归检查实际缓存文件，不能只检查退出信号。监督 worker 无法启动时，定位文件
+清理和主线程终止仍尽力执行，该回退不能保证绕过原生缓存钩子。Worker 退休可能
+丢弃可选缓存条目，不允许放弃已接纳的业务操作。关闭缓存时无需 worker，
 继续普通清理。一秒额度不涵盖定位文件锁、存储等待或操作系统调度；故障注入不能
 代替原生平台资格验证，V8 CPU 样本也不测量内核 IO。
 

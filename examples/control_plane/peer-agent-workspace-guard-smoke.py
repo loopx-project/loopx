@@ -12,6 +12,10 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
+
 GOAL_ID = "workspace-guard-canary"
 PEER_ALPHA = "codex-alpha"
 PEER_BETA = "codex-beta"
@@ -47,11 +51,12 @@ def run_cli(cwd: Path, *args: str, registry_path: Path, runtime: Path) -> dict:
             *args,
         ],
         cwd=cwd,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
         env=env,
     )
+    assert result.returncode == 0, result.stdout + result.stderr
     return json.loads(result.stdout)
 
 
@@ -155,6 +160,7 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path, Path, Path, Path]:
         + "\n",
         encoding="utf-8",
     )
+    import_fixture_authority(registry_path, GOAL_ID)
     return project, independent, task_project, task_independent, runtime, registry_path
 
 
@@ -176,7 +182,13 @@ def set_task_repository(project: Path, runtime: Path, registry_path: Path) -> No
         registry_path=registry_path,
         runtime=runtime,
     )
-    assert updated["task_repository"] == TASK_REPOSITORY, updated
+    assert updated["ok"] is True, updated
+    current = run_cli(
+        project, "todo", "list", "--goal-id", GOAL_ID,
+        "--todo-id", "todo_workspace_guard", registry_path=registry_path, runtime=runtime,
+    )
+    assert current["todo"]["task_repository"] == TASK_REPOSITORY, current
+    assert current["authority_read"]["legacy_fallback_used"] is False, current
 
 
 def should_run(
@@ -195,6 +207,7 @@ def should_run(
         PEER_ALPHA,
         "--scan-path",
         str(project),
+        "--host-surface", "generic_cli", "--scheduler-owner", "none", "--execution-mode", "interactive",
         registry_path=registry_path,
         runtime=runtime,
     )
@@ -271,6 +284,18 @@ def main() -> None:
         assert goal_worktree_guarded["workspace_guard"]["task_repository"] == (
             TASK_REPOSITORY
         ), goal_worktree_guarded
+        state_path = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
+        original_display = state_path.read_text(encoding="utf-8")
+        before = run_cli(project, "todo", "list", "--goal-id", GOAL_ID,
+                         registry_path=registry_path, runtime=runtime)
+        state_path.write_text(original_display.replace(TASK_REPOSITORY, PROJECT_REPOSITORY), encoding="utf-8")
+        spoofed = should_run(independent, project, runtime, registry_path)
+        assert spoofed["workspace_guard"]["task_repository"] == TASK_REPOSITORY, spoofed
+        after = run_cli(project, "todo", "list", "--goal-id", GOAL_ID,
+                        registry_path=registry_path, runtime=runtime)
+        assert after["authority_read"]["provider_revision"] == before["authority_read"]["provider_revision"]
+        assert after["todos"] == before["todos"]
+        state_path.write_text(original_display, encoding="utf-8")
 
         registry = json.loads(registry_path.read_text(encoding="utf-8"))
         registry["goals"][0].pop("workspace_guard_policy", None)
@@ -278,25 +303,24 @@ def main() -> None:
             json.dumps(registry, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        state_path = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
-        state_path.write_text(
-            "---\nstatus: active\nowner_mode: goal\n"
-            'objective: "Exercise selected-todo workspace routing."\n'
-            "updated_at: 2026-01-01T00:00:00+00:00\n---\n\n"
-            "# Selected Todo Workspace Guard Canary\n\n## Agent Todo\n\n"
-            "- [ ] [P0] Monitor one due repository lifecycle without repository writes.\n"
-            f"  <!-- loopx:todo todo_id=todo_due_monitor status=open "
-            f"task_class=continuous_monitor action_kind=monitor_repository_lifecycle "
-            f"task_repository={PROJECT_REPOSITORY} claimed_by={PEER_ALPHA} "
-            "target_key=repository-lifecycle cadence=30m "
-            "next_due_at=2020-01-01T00:00:00+00:00 "
-            "expires_at=2099-01-01T00:00:00+00:00 -->\n"
-            "- [ ] [P1] Repair a separate repository-writing control-plane task.\n"
-            f"  <!-- loopx:todo todo_id=todo_unrelated_repair status=open "
-            f"task_class=advancement_task action_kind=repair_workspace_route "
-            f"task_repository={TASK_REPOSITORY} required_write_scopes=loopx/** "
-            f"claimed_by={PEER_ALPHA} -->\n",
-            encoding="utf-8",
+        monitor = run_cli(
+            project, "todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
+            "--operation-id", "due-monitor",
+            "--text", "[P0] Monitor one due repository lifecycle without repository writes.",
+            "--task-class", "continuous_monitor", "--action-kind", "monitor_repository_lifecycle",
+            "--task-repository", PROJECT_REPOSITORY, "--claimed-by", PEER_ALPHA,
+            "--target-key", "repository-lifecycle", "--cadence", "30m",
+            "--next-due-at", "2020-01-01T00:00:00+00:00", "--expires-at", "2099-01-01T00:00:00+00:00",
+            registry_path=registry_path, runtime=runtime,
+        )
+        run_cli(
+            project, "todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
+            "--operation-id", "unrelated-repair",
+            "--text", "[P1] Repair a separate repository-writing control-plane task.",
+            "--task-class", "advancement_task", "--action-kind", "repair_workspace_route",
+            "--task-repository", TASK_REPOSITORY, "--required-write-scope", "loopx/**",
+            "--claimed-by", PEER_ALPHA,
+            registry_path=registry_path, runtime=runtime,
         )
 
         monitor_selected = should_run(project, project, runtime, registry_path)
@@ -304,7 +328,7 @@ def main() -> None:
         assert "workspace_guard" not in monitor_selected, monitor_selected
         assert "boundary_projection_gap" not in monitor_selected, monitor_selected
         assert monitor_selected["selected_todo"]["todo_id"] == (
-            "todo_due_monitor"
+            monitor["todo_id"]
         ), monitor_selected
         assert monitor_selected["selected_todo"]["task_repository"] == (
             PROJECT_REPOSITORY

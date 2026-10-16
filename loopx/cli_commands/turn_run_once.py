@@ -797,6 +797,9 @@ def execute_turn_run_once(
                         source_route=getattr(
                             args, "codex_operation_source_route_json", None
                         ),
+                        operation_request_file=(Path(args.operation_request_file)
+                            if getattr(args, "operation_request_file", None) else None),
+                        operation_request_sha256=getattr(args, "operation_request_sha256", None),
                         **options,
                     )
                 return run_codex_cli_host(request, registry_path=registry_path, **options)

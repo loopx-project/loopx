@@ -1,4 +1,6 @@
 mod bundled_runtime;
+#[cfg(target_os = "macos")]
+mod macos_update;
 mod maintenance;
 mod runtime_selection;
 mod service_endpoints;

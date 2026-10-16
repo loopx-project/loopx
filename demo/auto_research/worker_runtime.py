@@ -34,6 +34,9 @@ from loopx.control_plane.todos.contract import (
     normalize_todo_id,
 )
 from loopx.control_plane.todos.handoff_mode import HANDOFF_MODE_HARD_LEASE
+from loopx.control_plane.coordination.local_authority import (
+    LocalCoordinationAuthorityUnavailable, read_canonical_todos_if_promoted,
+)
 from loopx.control_plane.work_items.task_lease import (
     TaskLeaseError,
     acquire_task_lease,
@@ -388,28 +391,38 @@ def _maybe_add_role_successor_todos(
         action=action,
     )
     failure_continuation = decision_summary.get("failure_continuation")
-    if isinstance(failure_continuation, dict):
-        next_outcome = str(failure_continuation.get("next_outcome") or "")
-        successor_specs = [
-            spec
-            for spec in successor_specs
-            if spec.get("action_kind") == next_outcome
-        ]
     text_source_todo_id = None
     if isinstance(failure_continuation, dict):
-        text_source_todo_id = str(failure_continuation.get("source_todo_id") or "") or None
-    return apply_role_successor_todos(
-        registry_path=registry_path,
-        goal_id=goal_id,
-        source_todo_id=source_todo_id,
-        current_agent_id=agent_id,
-        role_id=role_id,
-        action=action,
-        successor_specs=successor_specs,
-        decision_summary=decision_summary,
-        execute=execute,
-        text_source_todo_id=text_source_todo_id,
-    )
+        next_outcome = str(failure_continuation.get("next_outcome") or "")
+        successor_specs = [spec for spec in successor_specs if spec.get("action_kind") == next_outcome]
+        source_todo_id = str(failure_continuation.get("source_todo_id") or "") or source_todo_id
+        text_source_todo_id = source_todo_id
+    def apply_binding(parent_id: str, *, revision: str | None = None) -> dict[str, object]:
+        return apply_role_successor_todos(registry_path=registry_path, goal_id=goal_id,
+            source_todo_id=parent_id, current_agent_id=agent_id, role_id=role_id,
+            action=action, successor_specs=successor_specs, decision_summary=decision_summary,
+            execute=execute, text_source_todo_id=text_source_todo_id,
+            expected_provider_revision=revision)
+
+    try:
+        return apply_binding(source_todo_id)
+    except LocalCoordinationAuthorityUnavailable as error:
+        if error.code != 'todo_semantic_duplicate_conflict' or text_source_todo_id is None:
+            raise
+        # Native create owns normalized title/intent matching. Qualify only its
+        # exact conflicting record, without rewriting a historical parent.
+        snapshot = read_canonical_todos_if_promoted(
+            runtime_root=runtime_root_from_registry(registry_path, None), goal_id=goal_id,
+        )
+        todos = {row['todo_id']: row for row in (snapshot or {}).get('todos', [])}
+        existing = todos.get(error.payload.get('todo_id'))
+        parent_id = existing.get('unblocks_todo_id') if existing else None
+        parent = todos.get(parent_id)
+        if not (parent and parent['role'] == 'agent' and parent.get('action_kind') in SUMMARY_ACTIONS
+                and parent.get('unblocks_todo_id') == text_source_todo_id):
+            raise
+        return apply_binding(parent_id, revision=snapshot['provider_revision'])
+
 
 
 def _executed_successor_todo_ids(successor_todos: dict[str, object]) -> list[str]:

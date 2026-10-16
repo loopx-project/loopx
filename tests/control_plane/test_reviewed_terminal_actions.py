@@ -24,15 +24,24 @@ def fixture(tmp_path: Path, provider: str, operation: str, *, validation: str | 
     registry.write_text(json.dumps({"schema_version": 1, "common_runtime_root": str(tmp_path / "runtime"),
         "goals": [{"id": "goal-a", "status": "active", "repo": str(project), "state_file": state.name,
                    "coordination": {"registered_agents": ["agent-a"]}}]}))
+    projection = build_todo_runtime_shadow_projection(
+        goal_id="goal-a",
+        todos=[],
+        handoff_mode="soft_claim",
+    )
+    initialize_canonical_authority(
+        tmp_path / "runtime",
+        "goal-a",
+        projection,
+        state_path=state,
+        provider=provider,
+    )
     monitor = operation == "stop"
     added = add_goal_todo(registry_path=registry, goal_id="goal-a", role="agent",
         text="Observe the supported release" if monitor else "Deliver the bounded result",
         task_class="continuous_monitor" if monitor else "advancement_task", claimed_by="agent-a",
         validation_command=validation,
         **({"monitor_metadata": {"target_key": "release-status", "cadence": "1d", "watch_only": "true"}} if monitor else {}))
-    todos = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
-    projection = build_todo_runtime_shadow_projection(goal_id="goal-a", todos=todos, handoff_mode="soft_claim")
-    initialize_canonical_authority(tmp_path / "runtime", "goal-a", projection, state_path=state, provider=provider)
     service = ChatActionService(store=ChatActionStore(tmp_path / "actions"), registry_path=registry)
     proposal = service.preview({"action_kind": "monitor.update" if monitor else "todo.update",
         "summary": "Close the reviewed work", "normalized_parameters": {"goal_id": "goal-a",

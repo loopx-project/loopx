@@ -25,10 +25,13 @@ def environment(tmp_path, monkeypatch):
     project.mkdir()
     config = runtime / "machine/configuration.json"
     config.parent.mkdir(parents=True)
-    def configure(provider, *, mode=None):
-        defaults = {"schema_version": "loopx_goal_storage_defaults_v0", "new_goal_provider": provider}
-        if mode is not None:
-            defaults.update(schema_version="loopx_goal_storage_defaults_v1", canonical_creation=True, new_goal_handoff_mode=mode)
+    def configure(provider, *, mode="hard_lease"):
+        defaults = {
+            "schema_version": "loopx_goal_storage_defaults_v1",
+            "new_goal_provider": provider,
+            "canonical_creation": True,
+            "new_goal_handoff_mode": mode,
+        }
         config.write_text(json.dumps({"schema_version": "loopx_machine_configuration_v0", "namespaces": {
             "goal_storage": defaults}}))
     def bootstrap(goal="first", *extra, expected_code=0):
@@ -107,16 +110,23 @@ def test_unconfigured_new_goal_defaults_to_canonical_sqlite_and_retains_later_wr
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_explicit_canonical_creation_disabled_remains_target_only(environment, provider):
-    _, bootstrap, _, _, runtime = environment
+def test_explicit_canonical_creation_disabled_is_rejected(environment, provider):
+    _, bootstrap, _, project, runtime = environment
     configuration = runtime / "machine/configuration.json"
     configuration.write_text(json.dumps({"schema_version": "loopx_machine_configuration_v0", "namespaces": {
         "goal_storage": {"schema_version": "loopx_goal_storage_defaults_v1", "new_goal_provider": provider,
                          "canonical_creation": False, "new_goal_handoff_mode": "soft_claim"}}}))
-    created = bootstrap()
-    assert created["storage_target"] == {"schema_version": "loopx_new_goal_storage_target_v0", "provider": provider}
-    assert created["storage_selection"]["promotion_performed"] is False
-    assert "authority_initialized" not in created["storage_selection"]
+    rejected = bootstrap(expected_code=1)
+    assert rejected["error_code"] == "canonical_authority_required"
+    assert rejected["operation"] == "goal_create"
+    assert rejected["write_admitted"] is False
+    assert rejected["decision_read_from_provider"] is False
+    assert rejected["legacy_fallback_used"] is False
+    assert rejected["recovery"] == {
+        "action": "migrate_goal_authority",
+        "backup_required": True,
+    }
+    assert not (project / ".loopx/registry.json").exists()
 
 
 @pytest.mark.parametrize("invalid_configuration", ["invalid_json", "invalid_namespace", "directory", "broken_symlink"])
@@ -233,19 +243,28 @@ def test_cli_creation_recovery_cannot_recreate_or_adopt_authority(environment, p
     assert not wrong_source.exists()
 
 
-def test_pending_creation_uses_frozen_intent_after_machine_default_changes(environment):
-    configure, bootstrap, marker, project, _ = environment
-    # Independently model the durable boundary: registry/state published, selector absent.
+def test_completed_canonical_creation_ignores_stale_v0_target(environment):
+    from loopx.control_plane.coordination.local_authority import (
+        read_canonical_todos_if_promoted,
+    )
+
+    configure, bootstrap, marker, project, runtime = environment
     configure("file")
     bootstrap()
+    before = read_canonical_todos_if_promoted(
+        runtime_root=runtime, goal_id="first", include_leases=True,
+    )
     registry = project / ".loopx/registry.json"
     data = json.loads(registry.read_text())
     data["goals"][0].setdefault("coordination", {})["storage_target"] = {
         "schema_version": "loopx_new_goal_storage_target_v0", "provider": "sqlite"}
     registry.write_text(json.dumps(data))
     configure("file")
-    assert bootstrap()["storage_selection"]["provider"] == "sqlite"
-    assert json.loads(marker().read_text())["provider"] == "sqlite"
+    assert bootstrap()["storage_selection"] is None
+    assert not marker().exists()
+    assert read_canonical_todos_if_promoted(
+        runtime_root=runtime, goal_id="first", include_leases=True,
+    ) == before
 
 
 @pytest.fixture
@@ -629,7 +648,7 @@ def test_app_creation_selects_server_configured_non_git_workspace(environment, a
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("relative_runtime", [False, True])
-@pytest.mark.parametrize("mode", [None, "soft_claim", "hard_lease"])
+@pytest.mark.parametrize("mode", ["soft_claim", "hard_lease"])
 def test_app_creation_retries_storage_before_reporting_success(environment, app, monkeypatch, provider, relative_runtime, mode):
     from loopx.control_plane.coordination import new_goal_storage_transport as goal_storage
     from loopx.todos import add_goal_todo
@@ -659,7 +678,11 @@ def test_app_creation_retries_storage_before_reporting_success(environment, app,
             return result
         return effect(method, payload)
 
-    monkeypatch.setattr(goal_storage, "effect_runtime_result", storage_effect)
+    monkeypatch.setattr(
+        goal_storage,
+        "effect_runtime_result",
+        storage_effect,
+    )
     code, preview = request("/api/actions/preview", {
         "action_kind": "goal.create", "summary": "Create a Goal",
         "normalized_parameters": {
@@ -698,14 +721,13 @@ def test_app_creation_retries_storage_before_reporting_success(environment, app,
         assert recovered["proposal"]["receipt"]["outcome"] == "goal_created"
         assert selections[-1]["provider"] == provider
         assert selections[-1]["promotion_performed"] is False
-        if mode is not None:
-            from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
-            source = read_canonical_todos_if_promoted(runtime_root=project.parent / "runtime", goal_id="recovery", include_leases=True)
-            assert source["handoff_mode"] == mode
-            assert len(source["todos"]) == 1
-            assert (source["todos"][0]["text"], source["todos"][0]["priority"]) == ("[P1] Verify recovery", "P1")
-            assert source["source_authority"] == f"{provider}_v0"
-            assert selections[-1]["authority_initialized"] is True
+        from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+        source = read_canonical_todos_if_promoted(runtime_root=project.parent / "runtime", goal_id="recovery", include_leases=True)
+        assert source["handoff_mode"] == mode
+        assert len(source["todos"]) == 1
+        assert (source["todos"][0]["text"], source["todos"][0]["priority"]) == ("[P1] Verify recovery", "P1")
+        assert source["source_authority"] == f"{provider}_v0"
+        assert selections[-1]["authority_initialized"] is True
         if provider == "sqlite":
             assert json.loads(marker("recovery").read_text())["provider"] == provider
         else:
@@ -713,7 +735,7 @@ def test_app_creation_retries_storage_before_reporting_success(environment, app,
         assert add.call_count == 1
         assert request(apply_path, {})[1]["proposal"]["receipt"] == recovered["proposal"]["receipt"]
         assert add.call_count == 1
-        assert len(selections) == (1 if mode is None else 2)
+        assert len(selections) == 2
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -803,7 +825,8 @@ def test_machine_editor_is_machine_only_and_configuration_rejects_activation():
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_created_target_is_used_by_reviewed_promotion(environment, provider):
+def test_created_target_is_canonical_and_rejects_legacy_bootstrap(environment, provider):
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
     from tests.control_plane.shadow_e2e_fixture import ShadowWorkspace
     configure, bootstrap, _, project, runtime = environment
     configure(provider)
@@ -813,21 +836,28 @@ def test_created_target_is_used_by_reviewed_promotion(environment, provider):
     ws = ShadowWorkspace(registry, runtime, state, "first")
     configured = ws.cli("configure-goal", "--coordination-runtime-shadow-file", "--execute")
     assert configured["ok"] is True
-    assert ws.cli("coordination-shadow", "bootstrap", "--execute")["bootstrap"]["status"] == "applied"
-    for n in range(3):
-        assert ws.add(f"Qualify creation target {n}")["ok"] is True
-    assert ws.drain(budget_seconds="60")["ok"] is True
-    assert bootstrap()["storage_selection"]["changed"] is False
-    preview = ws.cli("coordination-shadow", "promote", "--handoff-mode-migration", "preserve")
-    assert preview["promotion"]["status"] == "preview_ready", preview
-    plan = project / "reviewed.json"
-    plan.write_text(json.dumps(preview))
-    promoted = ws.cli("coordination-shadow", "promote", "--reviewed-plan", str(plan), "--execute")
-    assert promoted["promotion"]["canonical_authority"] == f"{provider}_v0", promoted
+    rejected = ws.cli("coordination-shadow", "bootstrap", "--execute", success=False)
+    assert rejected["bootstrap"]["status"] == "failed"
+    assert rejected["bootstrap"]["reason_code"] == "legacy_authority_already_promoted"
+    source = read_canonical_todos_if_promoted(
+        runtime_root=runtime,
+        goal_id="first",
+        include_leases=True,
+    )
+    assert source["source_authority"] == f"{provider}_v0"
+    reconnected = bootstrap()["storage_selection"]
+    assert reconnected["provider"] == provider
+    assert reconnected["authority_initialized"] is True
     created = ws.add("Continue on selected provider")
     assert ws.cli("todo", "list", "--todo-id", created["todo_id"])["authority_read"]["source_authority"] == f"{provider}_v0"
     # The initializer must not override a promoted selection. The separate legacy
     # bootstrap command still rejects a fenced Goal before reaching this helper.
     from loopx.control_plane.coordination.new_goal_storage_transport import initialize_goal_storage_target
     goal = json.loads(registry.read_text())["goals"][0]
-    assert initialize_goal_storage_target(runtime, goal)["status"] == "existing_authority_preserved"
+    replayed = initialize_goal_storage_target(
+        runtime,
+        goal,
+        registry_path=registry,
+    )
+    assert replayed["status"] == "replayed"
+    assert replayed["provider"] == provider

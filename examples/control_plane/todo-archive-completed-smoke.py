@@ -17,6 +17,7 @@ from loopx.control_plane.todos.completed_archive import (  # noqa: E402
     completed_todo_archive_warning,
     completed_todo_count,
 )
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
 from loopx.status import parse_active_state_todos  # noqa: E402
 
 GOAL_ID = "todo-archive-completed-goal"
@@ -47,6 +48,7 @@ def state_text() -> str:
         + "- [ ] [P2] Keep monitor work after completed items visible.\n\n"
         "## Completed Work Archive\n\n"
         "- [x] [P1] Previously archived completed work.\n"
+        "  <!-- loopx:todo todo_id=todo_previously_archived role=agent status=done task_class=advancement_task -->\n"
     )
 
 
@@ -80,7 +82,7 @@ def user_role_state_text() -> str:
     )
 
 
-def write_fixture(root: Path, *, text: str | None = None) -> tuple[Path, Path, Path]:
+def write_fixture(root: Path, *, text: str | None = None, import_authority: bool = True) -> tuple[Path, Path, Path]:
     project = root / "project"
     runtime = root / "runtime"
     state_file = ".codex/goals/todo-archive-completed-goal/ACTIVE_GOAL_STATE.md"
@@ -119,6 +121,8 @@ def write_fixture(root: Path, *, text: str | None = None) -> tuple[Path, Path, P
         + "\n",
         encoding="utf-8",
     )
+    if import_authority:
+        import_fixture_authority(registry_path, GOAL_ID)
     return registry_path, runtime, state_path
 
 
@@ -312,7 +316,7 @@ def main() -> int:
         assert updated.count("[P1] Completed implementation lane 1.") == 1
         assert updated.count("[P1] Completed implementation lane 2.") == 1
         assert "excluded_agents=codex-reviewer" in updated
-        assert "updated_at: 2026-01-01T00:00:00+00:00" not in updated
+        assert "updated_at: 2026-01-01T00:00:00+00:00" in updated
 
         status_after = run_cli(registry_path, runtime, "status")
         assert status_after["ok"] is True, status_after
@@ -438,8 +442,9 @@ def main() -> int:
         assert lineage_status["ok"] is True, lineage_status
         assert lineage_status["contract_errors"] == [], lineage_status
 
-        state_path.write_text(
-            archived_lineage
+        before_authority = run_cli(registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID)
+        invalid_rows = (
+            ""
             + "- [ ] [P1] Contradictory archived work item.\n"
             + "  <!-- loopx:todo todo_id=todo_archived_open status=done "
             + "task_class=advancement_task excluded_agents=codex-reviewer -->\n"
@@ -448,11 +453,24 @@ def main() -> int:
             + "task_class=advancement_task excluded_agents=codex-reviewer -->\n"
             + "- [x] [P1] Empty-status archived work item.\n"
             + "  <!-- loopx:todo todo_id=todo_archived_empty status= "
-            + "task_class=advancement_task excluded_agents=codex-reviewer -->\n",
-            encoding="utf-8",
+            + "task_class=advancement_task excluded_agents=codex-reviewer -->\n"
         )
+        state_path.write_text(archived_lineage + invalid_rows, encoding="utf-8")
         invalid_status = run_cli(registry_path, runtime, "status", check=False)
+        assert invalid_status["ok"] is True, invalid_status
+        after_authority = run_cli(registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID)
+        assert after_authority["todos"] == before_authority["todos"]
+        assert after_authority["authority_read"]["provider_revision"] == before_authority["authority_read"]["provider_revision"]
+        # These diagnostics still belong to explicit legacy source inspection,
+        # before import. Display text outside canonical regions grants no work.
+        source_registry, source_runtime, source_state = write_fixture(
+            Path(tmp) / "invalid-source", text=state_text() + invalid_rows,
+            import_authority=False,
+        )
+        before_source = source_state.read_bytes()
+        invalid_status = run_cli(source_registry, source_runtime, "status", check=False)
         assert invalid_status["ok"] is False, invalid_status
+        assert source_state.read_bytes() == before_source
         assert any(
             "todo_archived_open" in item and "executor exclusions" in item
             for item in invalid_status["contract_errors"]

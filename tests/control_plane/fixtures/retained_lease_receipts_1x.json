@@ -1,0 +1,431 @@
+{
+  "source_commit": "60d833b13c85135587b725013b247e827663ffb9",
+  "scenarios": {
+    "original": {
+      "request": {
+        "schema_version": "loopx_task_lease_acquire_native_v0",
+        "runtime_root": "$ROOT/runtime",
+        "goal_id": "goal-a",
+        "todo_id": "todo_target",
+        "owner": "agent-a",
+        "idempotency_key": "lease-a",
+        "ttl_seconds": 600,
+        "write_scopes": [],
+        "expected_version": null,
+        "authority": {
+          "handoff_mode": "hard_lease",
+          "registered_agent_candidates": [
+            [
+              "agent-a",
+              "agent-b"
+            ]
+          ],
+          "todos": [
+            {
+              "todo_id": "todo_target",
+              "status": "open",
+              "claimed_by": null,
+              "excluded_agents": []
+            }
+          ],
+          "todo_projection_error": null,
+          "source_receipts": [
+            {
+              "source_id": "authority",
+              "path": "$ROOT/authority.json",
+              "state": "file",
+              "sha256": "408c3ee0aef794f423d49ba8141f3492961aa68b354d03c37c455d072d7e32c3"
+            }
+          ]
+        }
+      },
+      "files": {
+        "goals/goal-a/task-leases/todo_target.json": {
+          "schema_version": "task_lease_v0",
+          "goal_id": "goal-a",
+          "todo_id": "todo_target",
+          "owner": "agent-a",
+          "idempotency_key": "lease-a",
+          "write_scopes": [],
+          "acquire_ttl_seconds": 600,
+          "version": 1,
+          "lease_epoch": 1,
+          "acquired_at": "2026-09-01T03:00:00Z",
+          "updated_at": "2026-09-01T03:00:00Z",
+          "expires_at": "2026-09-01T03:10:00Z",
+          "status": "active"
+        }
+      }
+    },
+    "renew": {
+      "request": {
+        "schema_version": "loopx_task_lease_lifecycle_native_v0",
+        "runtime_root": "$ROOT/runtime",
+        "goal_id": "goal-a",
+        "todo_id": "todo_target",
+        "owner": "agent-a",
+        "idempotency_key": "lease-a",
+        "ttl_seconds": 600,
+        "write_scopes": [],
+        "expected_version": 1,
+        "authority": {
+          "handoff_mode": "hard_lease",
+          "registered_agent_candidates": [
+            [
+              "agent-a",
+              "agent-b"
+            ]
+          ],
+          "todos": [
+            {
+              "todo_id": "todo_target",
+              "status": "open",
+              "claimed_by": null,
+              "excluded_agents": []
+            }
+          ],
+          "todo_projection_error": null,
+          "source_receipts": [
+            {
+              "source_id": "authority",
+              "path": "$ROOT/authority.json",
+              "state": "file",
+              "sha256": "408c3ee0aef794f423d49ba8141f3492961aa68b354d03c37c455d072d7e32c3"
+            }
+          ]
+        },
+        "operation": "renew",
+        "new_owner": null,
+        "new_idempotency_key": null,
+        "lock_token": null,
+        "committed": false,
+        "release_lease": false,
+        "fence_owner": null,
+        "fence_idempotency_key": null,
+        "fence_expected_version": null,
+        "fence_expected_lease_epoch": 1
+      },
+      "files": {
+        "goals/goal-a/task-leases/.lifecycle-operations/83642ecca0b109ad9c67ef641c43a3cf84dfcb1a156bfc012e7b975475926323.json": {
+          "schema_version": "task_lease_lifecycle_receipt_v0",
+          "operation_id": "83642ecca0b109ad9c67ef641c43a3cf84dfcb1a156bfc012e7b975475926323",
+          "request_digest": "3c064882fc370f6dbc79e8526f25162e4c893830cc9be7ae3e455067f5d1a2dc",
+          "state": "committed",
+          "planned_lease": {
+            "schema_version": "task_lease_v0",
+            "goal_id": "goal-a",
+            "todo_id": "todo_target",
+            "owner": "agent-a",
+            "idempotency_key": "lease-a",
+            "write_scopes": [],
+            "acquire_ttl_seconds": 600,
+            "version": 2,
+            "lease_epoch": 1,
+            "acquired_at": "2026-09-01T03:00:00Z",
+            "updated_at": "2026-09-01T03:01:00Z",
+            "expires_at": "2026-09-01T03:11:00Z",
+            "status": "active"
+          },
+          "response": {
+            "ok": true,
+            "schema_version": "task_lease_v0",
+            "action": "renew",
+            "renewed": true,
+            "lease": {
+              "schema_version": "task_lease_v0",
+              "goal_id": "goal-a",
+              "todo_id": "todo_target",
+              "owner": "agent-a",
+              "idempotency_key": "lease-a",
+              "write_scopes": [],
+              "acquire_ttl_seconds": 600,
+              "version": 2,
+              "lease_epoch": 1,
+              "acquired_at": "2026-09-01T03:00:00Z",
+              "updated_at": "2026-09-01T03:01:00Z",
+              "expires_at": "2026-09-01T03:11:00Z",
+              "status": "active"
+            },
+            "lease_path": "$ROOT/runtime/goals/goal-a/task-leases/todo_target.json",
+            "handoff_mode": "hard_lease",
+            "idempotent": false,
+            "settlement": {
+              "effect_id": "goal-a:agent-a:todo_target:lease-a",
+              "receipts": [
+                {
+                  "step": "validation",
+                  "status": "committed",
+                  "effect_id": "goal-a:agent-a:todo_target:lease-a"
+                },
+                {
+                  "step": "durable_writeback",
+                  "status": "committed",
+                  "effect_id": "goal-a:agent-a:todo_target:lease-a"
+                }
+              ]
+            }
+          }
+        },
+        "goals/goal-a/task-leases/todo_target.json": {
+          "schema_version": "task_lease_v0",
+          "goal_id": "goal-a",
+          "todo_id": "todo_target",
+          "owner": "agent-a",
+          "idempotency_key": "lease-a",
+          "write_scopes": [],
+          "acquire_ttl_seconds": 600,
+          "version": 2,
+          "lease_epoch": 1,
+          "acquired_at": "2026-09-01T03:00:00Z",
+          "updated_at": "2026-09-01T03:01:00Z",
+          "expires_at": "2026-09-01T03:11:00Z",
+          "status": "active"
+        }
+      }
+    },
+    "transfer": {
+      "request": {
+        "schema_version": "loopx_task_lease_lifecycle_native_v0",
+        "runtime_root": "$ROOT/runtime",
+        "goal_id": "goal-a",
+        "todo_id": "todo_target",
+        "owner": "agent-a",
+        "idempotency_key": "lease-a",
+        "ttl_seconds": 600,
+        "write_scopes": [],
+        "expected_version": 1,
+        "authority": {
+          "handoff_mode": "hard_lease",
+          "registered_agent_candidates": [
+            [
+              "agent-a",
+              "agent-b"
+            ]
+          ],
+          "todos": [
+            {
+              "todo_id": "todo_target",
+              "status": "open",
+              "claimed_by": null,
+              "excluded_agents": []
+            }
+          ],
+          "todo_projection_error": null,
+          "source_receipts": [
+            {
+              "source_id": "authority",
+              "path": "$ROOT/authority.json",
+              "state": "file",
+              "sha256": "408c3ee0aef794f423d49ba8141f3492961aa68b354d03c37c455d072d7e32c3"
+            }
+          ]
+        },
+        "operation": "transfer",
+        "new_owner": "agent-b",
+        "new_idempotency_key": "lease-b",
+        "lock_token": null,
+        "committed": false,
+        "release_lease": false,
+        "fence_owner": null,
+        "fence_idempotency_key": null,
+        "fence_expected_version": null,
+        "fence_expected_lease_epoch": 1
+      },
+      "files": {
+        "goals/goal-a/task-leases/.lifecycle-operations/993e3b79909ee83f0dfcb96ee676b54b7435f12f5dfb14b4a0c7151216e3a5c5.json": {
+          "schema_version": "task_lease_lifecycle_receipt_v0",
+          "operation_id": "993e3b79909ee83f0dfcb96ee676b54b7435f12f5dfb14b4a0c7151216e3a5c5",
+          "request_digest": "3e7bf5cde7d9499d77ecb7b29d003f935ea2a868c99e5703ede7e54513864219",
+          "state": "committed",
+          "planned_lease": {
+            "schema_version": "task_lease_v0",
+            "goal_id": "goal-a",
+            "todo_id": "todo_target",
+            "owner": "agent-b",
+            "idempotency_key": "lease-b",
+            "write_scopes": [],
+            "acquire_ttl_seconds": 600,
+            "version": 2,
+            "lease_epoch": 2,
+            "acquired_at": "2026-09-01T03:00:00Z",
+            "updated_at": "2026-09-01T03:01:00Z",
+            "expires_at": "2026-09-01T03:11:00Z",
+            "status": "active"
+          },
+          "response": {
+            "ok": true,
+            "schema_version": "task_lease_v0",
+            "action": "transfer",
+            "transferred": true,
+            "lease": {
+              "schema_version": "task_lease_v0",
+              "goal_id": "goal-a",
+              "todo_id": "todo_target",
+              "owner": "agent-b",
+              "idempotency_key": "lease-b",
+              "write_scopes": [],
+              "acquire_ttl_seconds": 600,
+              "version": 2,
+              "lease_epoch": 2,
+              "acquired_at": "2026-09-01T03:00:00Z",
+              "updated_at": "2026-09-01T03:01:00Z",
+              "expires_at": "2026-09-01T03:11:00Z",
+              "status": "active"
+            },
+            "lease_path": "$ROOT/runtime/goals/goal-a/task-leases/todo_target.json",
+            "handoff_mode": "hard_lease",
+            "idempotent": false,
+            "settlement": {
+              "effect_id": "goal-a:agent-a:todo_target:lease-a",
+              "receipts": [
+                {
+                  "step": "validation",
+                  "status": "committed",
+                  "effect_id": "goal-a:agent-a:todo_target:lease-a"
+                },
+                {
+                  "step": "durable_writeback",
+                  "status": "committed",
+                  "effect_id": "goal-a:agent-a:todo_target:lease-a"
+                }
+              ]
+            }
+          }
+        },
+        "goals/goal-a/task-leases/todo_target.json": {
+          "schema_version": "task_lease_v0",
+          "goal_id": "goal-a",
+          "todo_id": "todo_target",
+          "owner": "agent-b",
+          "idempotency_key": "lease-b",
+          "write_scopes": [],
+          "acquire_ttl_seconds": 600,
+          "version": 2,
+          "lease_epoch": 2,
+          "acquired_at": "2026-09-01T03:00:00Z",
+          "updated_at": "2026-09-01T03:01:00Z",
+          "expires_at": "2026-09-01T03:11:00Z",
+          "status": "active"
+        }
+      }
+    },
+    "terminal-held": {
+      "request": {
+        "schema_version": "loopx_task_lease_lifecycle_native_v0",
+        "runtime_root": "$ROOT/runtime",
+        "goal_id": "goal-a",
+        "todo_id": "todo_target",
+        "owner": "agent-a",
+        "idempotency_key": "lease-a",
+        "ttl_seconds": 600,
+        "write_scopes": [],
+        "expected_version": 1,
+        "authority": {
+          "handoff_mode": "hard_lease",
+          "registered_agent_candidates": [
+            [
+              "agent-a",
+              "agent-b"
+            ]
+          ],
+          "todos": [
+            {
+              "todo_id": "todo_target",
+              "status": "open",
+              "claimed_by": null,
+              "excluded_agents": []
+            }
+          ],
+          "todo_projection_error": null,
+          "source_receipts": [
+            {
+              "source_id": "authority",
+              "path": "$ROOT/authority.json",
+              "state": "file",
+              "sha256": "408c3ee0aef794f423d49ba8141f3492961aa68b354d03c37c455d072d7e32c3"
+            }
+          ]
+        },
+        "operation": "terminal_verify",
+        "new_owner": null,
+        "new_idempotency_key": null,
+        "lock_token": null,
+        "committed": false,
+        "release_lease": false,
+        "fence_owner": null,
+        "fence_idempotency_key": null,
+        "fence_expected_version": null,
+        "fence_expected_lease_epoch": 1
+      },
+      "files": {
+        "goals/goal-a/task-leases/.lifecycle-fences/ee58a5ed5a4df4e8c8657e727f47f305250bacddc13bf50d27819573e9ed080a.json": {
+          "schema_version": "task_lease_fence_receipt_v0",
+          "operation_id": "ee58a5ed5a4df4e8c8657e727f47f305250bacddc13bf50d27819573e9ed080a",
+          "request_digest": "0e4b9170ebc4555e5c8aeb5d7195db3e5ad2c61750f1a29597c5ea61a2433f5d",
+          "close_request_digest": null,
+          "state": "held",
+          "goal_id": "goal-a",
+          "todo_id": "todo_target",
+          "owner_pid": 54181,
+          "lock_token": "8ff0637e-8406-4215-b76c-0041b84d235e",
+          "fence_owner": "agent-a",
+          "fence_idempotency_key": "lease-a",
+          "fence_expected_version": 1,
+          "fence_expected_lease_epoch": 1,
+          "lease": {
+            "schema_version": "task_lease_v0",
+            "goal_id": "goal-a",
+            "todo_id": "todo_target",
+            "owner": "agent-a",
+            "idempotency_key": "lease-a",
+            "write_scopes": [],
+            "acquire_ttl_seconds": 600,
+            "version": 1,
+            "lease_epoch": 1,
+            "acquired_at": "2026-09-01T03:00:00Z",
+            "updated_at": "2026-09-01T03:00:00Z",
+            "expires_at": "2026-09-01T03:10:00Z",
+            "status": "active"
+          },
+          "response": {
+            "schema_version": "task_lease_v0",
+            "required": true,
+            "active": true,
+            "owner": "agent-a",
+            "version": 1,
+            "lease_epoch": 1,
+            "execution_instance_verified": true,
+            "lock_token": "8ff0637e-8406-4215-b76c-0041b84d235e",
+            "fence_operation_id": "ee58a5ed5a4df4e8c8657e727f47f305250bacddc13bf50d27819573e9ed080a"
+          },
+          "verify_response": {
+            "schema_version": "task_lease_v0",
+            "required": true,
+            "active": true,
+            "owner": "agent-a",
+            "version": 1,
+            "lease_epoch": 1,
+            "execution_instance_verified": true,
+            "lock_token": "8ff0637e-8406-4215-b76c-0041b84d235e",
+            "fence_operation_id": "ee58a5ed5a4df4e8c8657e727f47f305250bacddc13bf50d27819573e9ed080a"
+          }
+        },
+        "goals/goal-a/task-leases/todo_target.json": {
+          "schema_version": "task_lease_v0",
+          "goal_id": "goal-a",
+          "todo_id": "todo_target",
+          "owner": "agent-a",
+          "idempotency_key": "lease-a",
+          "write_scopes": [],
+          "acquire_ttl_seconds": 600,
+          "version": 1,
+          "lease_epoch": 1,
+          "acquired_at": "2026-09-01T03:00:00Z",
+          "updated_at": "2026-09-01T03:00:00Z",
+          "expires_at": "2026-09-01T03:10:00Z",
+          "status": "active"
+        }
+      }
+    }
+  }
+}

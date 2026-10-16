@@ -34,7 +34,7 @@ export const workspaceViewRecoveryScenario = {
       assert.equal(await active(managerTabs, "总览"), "page", "Forward restores the overview");
 
       await page.locator(".personal-goal-link").filter({ hasText: "Product Release" }).click();
-      assert.equal(await active(goalTabs, "任务"), "page", "Selecting a Goal keeps the existing task-first entry");
+      assert.equal(await active(goalTabs, "概览"), "page", "Selecting a Goal opens its overview");
       await goalTabs.getByRole("button", { name: "成果", exact: true }).click();
       await page.reload({ waitUntil: "networkidle" });
       assert.equal(await active(goalTabs, "成果"), "page", "The same route owner restores Goal views");

@@ -1,5 +1,6 @@
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
 import type { JsonObject } from "../effect_program.ts";
+import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {acceptanceWorkGuard} from "../goals/acceptance_contract.ts";
 import type { AuthorityStore, AuthorityStoreCommit } from "./authority_store.ts";
 import {
@@ -41,7 +42,13 @@ export const COORDINATION_TODO_OBSERVATION_UPDATE_REQUEST_SCHEMA =
 export const COORDINATION_TODO_VALIDATION_REVISION_REQUEST_SCHEMA =
   "loopx_local_coordination_todo_update_request_v5";
 export type {CoordinationTodoUpdateInput} from "./todo_update_intent.ts";
-import {normalizeTodoUpdateInput, prepareUpdatedTodo, type CoordinationTodoUpdateInput} from "./todo_update_intent.ts";
+import {
+  normalizeTodoUpdateEnvelope,
+  normalizeTodoUpdateInput,
+  prepareUpdatedTodo,
+  type CoordinationTodoUpdateInput,
+  type NormalizedCoordinationTodoUpdateInput,
+} from "./todo_update_intent.ts";
 import {executeCoordinationTodoTerminalLifecycle} from "./todo_terminal_lifecycle.ts";
 import {planCompletionValidationRevision} from "../todos/completion_validation_revision.ts";
 
@@ -49,9 +56,19 @@ export type CoordinationTodoUpdateResult = JsonObject & {
   readonly schema_version: typeof COORDINATION_TODO_UPDATE_RESULT_SCHEMA;
 };
 
-function failure(code: string, reason: string): CoordinationTodoUpdateResult {
+type CoordinationTodoUpdateFailureKind = "decision_rejection" | "protocol_failure";
+
+function failure(
+  code: string,
+  reason: string,
+  kind: CoordinationTodoUpdateFailureKind = "protocol_failure",
+): CoordinationTodoUpdateResult {
   return {schema_version: COORDINATION_TODO_UPDATE_RESULT_SCHEMA, status: "failed",
-    changed: false, reason_code: code, reason};
+    changed: false, failure_kind: kind, reason_code: code, reason};
+}
+
+function rejection(code: string, reason: string): CoordinationTodoUpdateResult {
+  return failure(code, reason, "decision_rejection");
 }
 
 function isFailure(value: JsonObject): value is CoordinationTodoUpdateResult {
@@ -63,7 +80,11 @@ function updateReceipt(input: CoordinationTodoUpdateInput, requestSha: string) {
   return new CoordinationCommandReceipt({result_schema: COORDINATION_TODO_UPDATE_RESULT_SCHEMA,
     identity: {schema_version: COORDINATION_TODO_UPDATE_RECEIPT_SCHEMA,
       operation_id: input.operation_id, goal_id: input.goal_id, todo_id: input.todo_id,
-      request_sha256: requestSha}, failure,
+      request_sha256: requestSha},
+    failure: (code, reason) => failure(code, reason,
+      code === "coordination_operation_identity_mismatch"
+        ? "decision_rejection"
+        : "protocol_failure"),
     decode(original) {
       if (typeof original.changed !== "boolean") throw new AuthorityStoreProtocolError("update receipt changed must be boolean");
       return {fields: {todo_id: input.todo_id, original_receipt: original,
@@ -110,7 +131,7 @@ function loadUpdateTarget(
     const projection = indexCoordinationProjection(head, input.goal_id);
     const found = projection.todos.get(input.todo_id);
     return found === undefined
-      ? failure("todo_not_found", "canonical Todo is missing")
+      ? rejection("todo_not_found", "canonical Todo is missing")
       : {todo: found, leases: projection.leases};
   } catch (error) {
     return failure("invalid_coordination_projection",
@@ -124,8 +145,8 @@ export async function executeCoordinationTodoUpdate(
   authoritySourcesCurrent: AuthoritySourceCheck = uncheckedAuthoritySource,
 ): Promise<CoordinationTodoUpdateResult> {
   let input: CoordinationTodoUpdateInput;
-  try { input = normalizeTodoUpdateInput(rawInput); } catch (error) {
-    return failure("invalid_coordination_todo_update",
+  try { input = normalizeTodoUpdateEnvelope(rawInput); } catch (error) {
+    return rejection("invalid_coordination_todo_update",
       error instanceof Error ? error.message : "invalid Todo update");
   }
   if (input.completion !== undefined) {
@@ -161,18 +182,21 @@ export async function executeCoordinationTodoUpdate(
   const receipt = updateReceipt(input, requestSha);
   const replay = await receipt.read(store);
   if (replay !== null) return replay;
-  const sourceChanged = () => failure(AUTHORITY_SOURCE_CHANGED.code, AUTHORITY_SOURCE_CHANGED.reason);
+  const sourceChanged = () => rejection(
+    AUTHORITY_SOURCE_CHANGED.code,
+    AUTHORITY_SOURCE_CHANGED.reason,
+  );
   if (!await authoritySourcesCurrent()) return sourceChanged();
   // Legacy single-agent callers historically omitted actor_agent_id for an
   // unowned Todo. Keep that narrow compatibility path, while retaining the
   // registered-actor requirement for multi-agent or explicitly-owned work.
   if (input.actor_agent_id === null) {
     if (input.registered_agents.length > 1) {
-      return failure("actor_not_registered", "Todo update requires a registered actor");
+      return rejection("actor_not_registered", "Todo update requires a registered actor");
     }
   } else if (input.registered_agents.length === 0 ||
       !input.registered_agents.includes(input.actor_agent_id)) {
-    return failure("actor_not_registered", "Todo update requires a registered actor");
+    return rejection("actor_not_registered", "Todo update requires a registered actor");
   }
   const observation = await receipt.observe(store);
   if (observation.kind === "receipt") return observation.result;
@@ -182,18 +206,25 @@ export async function executeCoordinationTodoUpdate(
   }
   if (input.expected_provider_revision !== undefined &&
       input.expected_provider_revision !== head.provider_revision) {
-    return failure("provider_revision_mismatch", "Current revision changed; inspect again before continuing");
+    return rejection("provider_revision_mismatch", "Current revision changed; inspect again before continuing");
   }
 
   const target = loadUpdateTarget(head.head, input);
   if (isFailure(target)) return target;
   const rejected = todoUpdateAdmissionRejection(head.head, target.todo, target.leases, input);
-  if (rejected !== null) return {...failure(rejected.code, rejected.reason),
+  if (rejected !== null) return {...rejection(rejected.code, rejected.reason),
     ...(rejected.handoff_mode === undefined ? {} : {handoff_mode: rejected.handoff_mode}),
     ...(rejected.recovery === undefined ? {} : {recovery: rejected.recovery})};
+  let normalizedInput: NormalizedCoordinationTodoUpdateInput;
   let prepared: ReturnType<typeof prepareUpdatedTodo>;
-  try { prepared = prepareUpdatedTodo(target.todo, input, head.head); }
-  catch (error) { return failure("invalid_coordination_todo_update",
+  try {
+    normalizedInput = normalizeTodoUpdateInput(input);
+    prepared = prepareUpdatedTodo(target.todo, normalizedInput, head.head);
+  }
+  catch (error) { return rejection(
+    error instanceof EffectRuntimeRequestError
+      ? error.code
+      : "invalid_coordination_todo_update",
     error instanceof Error ? error.message : "invalid updated Todo"); }
   let {next, changed, clearFields} = prepared;
   let completionValidationRevisionReceipt: JsonObject | null = null;
@@ -219,7 +250,7 @@ export async function executeCoordinationTodoUpdate(
       );
       canonicalTodoRecord(next, "updated Todo");
     } catch (error) {
-      return failure(
+      return rejection(
         "invalid_completion_validation_revision",
         error instanceof Error
           ? error.message
@@ -234,19 +265,28 @@ export async function executeCoordinationTodoUpdate(
     cycle = planMonitorCycleTransition({goal_id: input.goal_id, before: target.todo, after: next,
       lease: target.leases.get(input.todo_id), handoff_mode: head.head.handoff_mode, now: input.now});
     if ((head.head.handoff_mode === "hard_lease" || target.leases.has(input.todo_id)) &&
-        (isDeferredReopen(input, target.todo) || isOwnerDeferral(input, target.todo))) {
+        (isDeferredReopen(normalizedInput, target.todo) || isOwnerDeferral(normalizedInput, target.todo))) {
       deferredCycle = planDeferredLifecycle({goal_id: input.goal_id, before: target.todo, after: next,
         lease: target.leases.get(input.todo_id), now: input.now});
     }
-    if (head.head.handoff_mode === "hard_lease" && isBlockedLifecycleTransition(input, target.todo)) {
+    if (head.head.handoff_mode === "hard_lease" &&
+        isBlockedLifecycleTransition(normalizedInput, target.todo)) {
       blockedCycle = planBlockedLifecycleTransition({goal_id: input.goal_id, before: target.todo, after: next,
         lease: target.leases.get(input.todo_id), now: input.now});
     }
   } catch (error) {
-    return failure("invalid_coordination_projection", error instanceof Error ? error.message : "invalid retained lease");
+    return failure(
+      "invalid_coordination_projection",
+      error instanceof Error ? error.message : "invalid retained lease",
+      error instanceof EffectRuntimeRequestError
+        ? "decision_rejection"
+        : "protocol_failure",
+    );
   }
   const deferredTransition = deferredCycle?.transition == null ? {} : {
-    [isOwnerDeferral(input, target.todo) ? "deferred_transition" : "deferred_resume_transition"]: deferredCycle.transition,
+    [isOwnerDeferral(normalizedInput, target.todo)
+      ? "deferred_transition"
+      : "deferred_resume_transition"]: deferredCycle.transition,
   };
   const commit: AuthorityStoreCommit = changed ? prepareCoordinationProjectionCommit({
     goal_id: input.goal_id, operation_id: input.operation_id,
@@ -261,7 +301,7 @@ export async function executeCoordinationTodoUpdate(
   if (input.planning_intent?.claimed_by != null) {
     const acceptance = acceptanceWorkGuard(commit.next_projection, input.goal_id, input.todo_id);
     if (acceptance !== null && !acceptance.allowed) {
-      return {...failure(String(acceptance.reason_code), `${String(acceptance.reason)} Inspect Goal acceptance and ask the owner to configure or rebind this Todo.`),
+      return {...rejection(String(acceptance.reason_code), `${String(acceptance.reason)} Inspect Goal acceptance and ask the owner to configure or rebind this Todo.`),
         goal_acceptance_guard: acceptance};
     }
   }

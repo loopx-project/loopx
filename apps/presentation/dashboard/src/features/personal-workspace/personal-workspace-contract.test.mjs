@@ -600,6 +600,26 @@ for (const key of ["home.firstGoal.title", "home.firstGoal.lead", "home.firstGoa
   assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);
 }
 
+// Needs-you desktop notifications: a per-browser opt-in. Off by default, the
+// page neither asks for permission nor re-reads the workspace in the background.
+const attentionNotifications = source("./attention-notifications.ts");
+assert.match(attentionNotifications, /export function shouldNotifyAttention/, "Notification admission is one typed rule");
+assert.match(page, /const attentionNotificationsActive = attentionNotificationsEnabled && attentionNotificationSupportState === "granted" && !readOnly;/, "Polling and notifying share one activation predicate that includes read-only");
+assert.match(page, /if \(!attentionNotificationsActive \|\| !backgroundRefreshRef\.current\) return;/, "No background re-read unless notifications are active");
+assert.match(page, /Notification\.requestPermission\(\)/, "Permission is requested from the owner's toggle, not on load");
+assert.doesNotMatch(page.replace(/async function updateAttentionNotifications[\s\S]*?\n  }\n/, ""), /requestPermission/, "Only the toggle handler asks for permission");
+assert.match(page, /seenAttentionKeysRef\.current = new Set\(model\.userTodos\.map\(attentionNotificationKey\)\)/, "Enabling seeds every listed item so nothing already listed is replayed");
+assert.match(page, /const fresh = notifiableAttention\(newAttentionItems\(seen, items\)\);/, "Only an item first seen while it waits on the owner notifies; optional actions never do");
+assert.match(page, /const remembered = seen \? new Set\(seen\) : new Set<string>\(\);\s*for \(const item of items\) remembered\.add\(attentionNotificationKey\(item\)\);/, "Seen identities are kept for the activation lifetime; a partial read never forgets one");
+assert.doesNotMatch(page.slice(page.indexOf("const remembered = seen"), page.indexOf("const fresh = notifiableAttention")), /seenAttentionKeysRef\.current = keys/, "The seen set is never replaced by the current read");
+assert.match(attentionNotifications, /export function notifiableAttention[\s\S]*?items\.filter\(\(item\) => item\.blocking\)/, "Notifiable means the attention owner's blocking classification, never the whole list");
+assert.match(page, /window\.addEventListener\("focus", readBack\);[\s\S]*?document\.addEventListener\("visibilitychange", readBack\);[\s\S]*?navigator\.permissions\?\.query\(\{ name: "notifications" \}\)/, "The browser's permission answer is read back on return, on settings and on change");
+assert.doesNotMatch(page.slice(page.indexOf("const readBack = () =>"), page.indexOf("const attentionNotificationsActive")), /requestPermission|setAttentionNotificationsEnabled\(true\)/, "Reading the answer back never asks for permission or enables on its own");
+assert.match(dashboard, /onBackgroundRefresh=\{\(\) => loadFromUrl\([^\n]*\{ background: true, readScope: "all"/, "The background re-read keeps snapshots on screen and re-reads every Goal");
+for (const key of ["settings.attentionNotifications", "settings.attentionNotificationsToggle", "settings.attentionNotificationsDenied", "settings.attentionNotificationsUnsupported", "notifications.attentionMore"]) {
+  assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);
+}
+
 // Since you looked (RFC goal-workspace-surface §5.7): a browser-local marker
 // per source and Goal, typed counts and ids only, no cost, no service write;
 // the line appears only for a material delta. Mark seen acknowledges what is

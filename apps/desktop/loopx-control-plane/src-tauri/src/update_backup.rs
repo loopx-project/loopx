@@ -285,7 +285,7 @@ pub(crate) fn restore_verified_backup(
     Ok(())
 }
 
-fn replace_bundle(bundle: &Path, candidate: &Path, failed: &Path) -> Result<(), String> {
+pub(crate) fn replace_bundle(bundle: &Path, candidate: &Path, failed: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         // The staging directory is created beside the installed App, so both

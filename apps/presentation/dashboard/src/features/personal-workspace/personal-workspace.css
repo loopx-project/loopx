@@ -604,6 +604,8 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-settings-body > .personal-settings-header { min-width: 0; }
 .personal-settings-page *, .personal-settings-page *::before, .personal-settings-page *::after { box-sizing: border-box; }
 .personal-appearance-settings { max-width: 680px; }
+.personal-attention-notifications { display: grid; gap: 10px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--pw-line); }
+.personal-attention-notifications h3 { margin: 0; font-size: var(--text-body); line-height: var(--leading-body); font-weight: 600; }
 .personal-settings-choice-group { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
 .personal-settings-choice-group button { display: grid; grid-template-columns: 34px minmax(0, 1fr); align-items: center; gap: 10px; min-height: 60px; padding: 13px; border: 1px solid var(--pw-line); border-radius: 12px; background: #fff; color: inherit; cursor: pointer; text-align: left; }
 .personal-settings-choice-group button:hover { border-color: var(--pw-line-strong); box-shadow: 0 2px 8px rgb(30 28 20 / 6%); }

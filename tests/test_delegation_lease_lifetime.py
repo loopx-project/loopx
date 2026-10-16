@@ -435,3 +435,39 @@ def test_real_stop_leaves_a_newer_generation_alone(service, monkeypatch):
     assert receipt["stop"]["settled"]["lease"] == "not_owed"
     held = inspect(runner)["lease"]
     assert held["status"] == "active" and held["idempotency_key"] == "new-execution"
+
+
+@pytest.mark.parametrize("status", ["prepared", "running"])
+def test_retired_policy_blocks_original_delegation_before_host_launch(service, monkeypatch, status):
+    root, runner = service
+    monkeypatch.setattr(runner, "_spawn", lambda _: None)
+    operation_id = "retired-policy-" + status
+    runner.start("analysis", operation_id, brief())
+    path = runner.path(operation_id)
+    row = _read(path)
+    if status == "running":
+        row["status"] = status
+        row["task_lease"] = {"required": False, "handoff_mode": "legacy"}
+        runner._fenced_write(path, row)
+    # Original operation records may outlive a pre-cutoff ownership snapshot.
+    # Install those historical facts only in this disposable test provider.
+    program = """
+import {openLocalAuthorityStore} from "./loopx/control_plane/coordination/local_authority_provider.ts";
+const [root, goal] = process.argv.slice(1);
+const store = await openLocalAuthorityStore(root, goal);
+const state = await store.loadAuthority();
+const result = await store.commitAuthority({expected_provider_revision: state.provider_revision,
+ operation_id: "retained-policy-fixture", events: [], receipts: [],
+ next_projection: {...state.head, handoff_mode: "legacy"}});
+if (result.status !== "applied") throw new Error(JSON.stringify(result));
+"""
+    installed = subprocess.run(["node", "--no-warnings", "--experimental-sqlite", "--experimental-strip-types",
+        "--input-type=module", "-e", program, str(runner.root), runner.goal_id],
+        capture_output=True, text=True, timeout=30)
+    assert installed.returncode == 0, installed.stderr
+    before = read_canonical_todos_if_promoted(runtime_root=runner.root, goal_id=runner.goal_id, include_leases=True)
+    with pytest.raises(ValueError, match="historical only"):
+        runner._execute(path, row, runner.binding("analysis"))
+    assert not list(root.rglob("host-invocations")), "an old no-lease record must not start its model Host"
+    assert read_canonical_todos_if_promoted(runtime_root=runner.root, goal_id=runner.goal_id, include_leases=True) == before
+    assert _read(path)["status"] == status

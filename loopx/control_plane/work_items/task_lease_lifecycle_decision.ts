@@ -1,7 +1,9 @@
-import {leaseOwnerRejection as ownerRejection} from "./task_lease_eligibility.ts";
+import {HANDOFF_MODES} from "../coordination/handoff_mode_vocabulary.ts";
+import {retiredHandoffModeRejection} from "../coordination/handoff_mode_policy.ts";
+import {leaseOwnerRejection as ownerRejection, type LeaseEligibilityTodo} from "./task_lease_eligibility.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { type JsonObject } from "../effect_program.ts";
-import { requireJsonObject } from "../runtime_decode.ts";
+import { requireJsonObject, requireStringLiteral } from "../runtime_decode.ts";
 import {leaseEpoch, utcIsoformat, type LeaseRecord} from "./task_lease_acquire.ts";
 import {normalizeTodoRepository} from "../todos/work_requirements.ts";
 import {leaseWriteRepository, leaseRepositoryRejection} from "./task_lease_repository.ts";
@@ -19,12 +21,9 @@ export type TaskLeaseLifecycleDecisionOutcome =
   | "conflict"
   | "rejected";
 
-export interface TaskLeaseLifecycleDecisionTodo {
+export interface TaskLeaseLifecycleDecisionTodo extends LeaseEligibilityTodo {
   task_repository?: string | null;
   todo_id: string;
-  status: string;
-  claimed_by: string | null;
-  excluded_agents: readonly string[];
 }
 
 export interface TaskLeaseLifecycleDecisionLease {
@@ -129,6 +128,7 @@ function decodeTodo(value: unknown): TaskLeaseLifecycleDecisionTodo | null {
     todo_id: stringValue(todo.todo_id, "todo.todo_id"),
     task_repository: normalizeTodoRepository(todo.task_repository),
     status: stringValue(todo.status, "todo.status"),
+    task_class: nullableString(todo.task_class, "todo.task_class"),
     claimed_by: nullableString(todo.claimed_by, "todo.claimed_by"),
     excluded_agents: stringArray(todo.excluded_agents, "todo.excluded_agents"),
   };
@@ -164,7 +164,7 @@ function decodeInput(value: unknown): TaskLeaseLifecycleDecisionInput {
     "task lease lifecycle decision command",
   );
   return {
-    handoff_mode: stringValue(input.handoff_mode, "handoff_mode"),
+    handoff_mode: requireStringLiteral(input.handoff_mode, HANDOFF_MODES, "handoff_mode"),
     registered_agents: stringArray(
       input.registered_agents,
       "registered_agents",
@@ -266,6 +266,8 @@ export function decideTaskLeaseLifecycle(
       nextLease: { ...lease, active: false, status: "released" },
     });
   }
+  const retired = retiredHandoffModeRejection(input.handoff_mode);
+  if (retired !== null) return result("rejected", retired);
   if (lease === null || !lease.present || !lease.active) {
     return result("rejected", "lease_not_active");
   }

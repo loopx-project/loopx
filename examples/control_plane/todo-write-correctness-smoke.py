@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Smoke-test todo add/update dry-run write correctness packets."""
+"""Qualify canonical Todo previews, once-only commit, actor checks and CAS."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import subprocess
 import sys
@@ -15,11 +14,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.control_plane.runtime.local_state_write_correctness import (  # noqa: E402
-    shadow_validate_local_state_write_correctness_packet,
-)
 from loopx.control_plane.testing.canary_harness import (  # noqa: E402
+    import_fixture_authority,
     run_json_cli,
+    run_json_cli_result,
     write_fixture_registry,
 )
 
@@ -55,6 +53,7 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
         registered_agents=("codex-main-control", AGENT_ID),
         quota_allowed_slots=None,
     )
+    import_fixture_authority(registry_path, GOAL_ID)
     return registry_path, state_file, project
 
 
@@ -83,216 +82,70 @@ def run_cli(registry_path: Path, *args: str, as_json: bool = True) -> dict | str
     return result.stdout
 
 
-def assert_packet(
-    payload: dict,
-    *,
-    state_file: Path,
-    project: Path,
-    write_class: str,
-    todo_id: str,
-    claimed_by: str | None,
-) -> dict:
-    packet = payload.get("local_state_write_correctness")
-    assert isinstance(packet, dict), payload
-    assert packet["schema_version"] == "local_state_write_correctness_v0", packet
-    assert str(project) not in json.dumps(packet, ensure_ascii=False), packet
-
-    intent = packet["write_intent"]
-    assert intent["goal_id"] == GOAL_ID, packet
-    assert intent["writer_id"] == "loopx.todo", packet
-    assert intent["write_class"] == write_class, packet
-    assert intent["target_refs"]["state_file_ref"] == "registry.goal.state_file", packet
-    assert intent["target_refs"]["todo_id"] == todo_id, packet
-    assert intent["expected_revision"]["value"] == "sha256:" + hashlib.sha256(
-        state_file.read_text(encoding="utf-8").encode("utf-8")
-    ).hexdigest(), packet
-    assert intent["idempotency_key"].startswith(f"{GOAL_ID}:{write_class}:"), packet
-
-    assert packet["lock_boundary"] == {
-        "kind": "per_goal",
-        "lock_key": f"goal:{GOAL_ID}",
-        "narrower_lock_allowed": "per_todo_when_patch_is_single_todo_and_order_independent",
-    }, packet
-    assert packet["preview"]["mode"] == "dry_run", packet
-    assert packet["preview"]["non_destructive"] is True, packet
-    assert packet["preview"]["expected_write_scopes"] == ["active_state"], packet
-    assert packet["apply_result"]["status"] == "preview_only", packet
-    boundary = packet["projection"]["public_boundary"]
-    assert boundary == {
-        "raw_logs_copied": False,
-        "private_paths_copied": False,
-        "credentials_copied": False,
-        "production_action_authorized": False,
-    }, packet
-
-    if claimed_by:
-        assert intent["lease_ref"]["todo_id"] == todo_id, packet
-        assert intent["lease_ref"]["claimed_by"] == claimed_by, packet
-        assert packet["projection"]["lease_projection"] == {
-            "todo_id": todo_id,
-            "claimed_by": claimed_by,
-            "lease_state": "preview_only",
-        }, packet
-    else:
-        assert intent["lease_ref"] is None, packet
-        assert packet["projection"]["lease_projection"] is None, packet
-    return packet
-
-
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="loopx-todo-write-correctness-") as tmp:
-        registry_path, state_file, project = write_fixture(Path(tmp))
-        original = state_file.read_text(encoding="utf-8")
+        registry, state, project = write_fixture(Path(tmp))
 
-        add_dry_run = run_cli(
-            registry_path,
-            "todo",
-            "add",
-            "--goal-id",
-            GOAL_ID,
-            "--role",
-            "agent",
-            "--text",
-            TODO_TEXT,
-            "--claimed-by",
-            AGENT_ID,
-            "--dry-run",
-        )
-        add_dry_run_repeat = run_cli(
-            registry_path,
-            "todo",
-            "add",
-            "--goal-id",
-            GOAL_ID,
-            "--role",
-            "agent",
-            "--text",
-            TODO_TEXT,
-            "--claimed-by",
-            AGENT_ID,
-            "--dry-run",
-        )
-        assert add_dry_run["dry_run"] is True, add_dry_run
-        assert add_dry_run["added"] is True, add_dry_run
-        assert state_file.read_text(encoding="utf-8") == original
-        add_packet = assert_packet(
-            add_dry_run,
-            state_file=state_file,
-            project=project,
-            write_class="todo_add",
-            todo_id=add_dry_run["todo_id"],
-            claimed_by=AGENT_ID,
-        )
-        clean_shadow = shadow_validate_local_state_write_correctness_packet(
-            add_packet,
-            current_state_text=state_file.read_text(encoding="utf-8"),
-            observed_lease_ref=add_packet["write_intent"]["lease_ref"],
-        )
-        assert clean_shadow["apply_result"]["status"] == "preview_only", clean_shadow
-        assert clean_shadow["apply_result"]["conflict"] is None, clean_shadow
+        def readback() -> dict:
+            return run_cli(registry, "todo", "list", "--goal-id", GOAL_ID)
 
-        revision_conflict = shadow_validate_local_state_write_correctness_packet(
-            add_packet,
-            current_state_text=(
-                state_file.read_text(encoding="utf-8")
-                + "\n<!-- concurrent change -->\n"
-            ),
-        )
-        assert (
-            revision_conflict["apply_result"]["status"] == "revision_conflict"
-        ), revision_conflict
-        revision_conflict_detail = revision_conflict["apply_result"]["conflict"]
-        assert revision_conflict_detail["kind"] == "revision_conflict", revision_conflict
-        assert revision_conflict_detail["expected_revision"] == add_packet["write_intent"][
-            "expected_revision"
-        ], revision_conflict
-        assert revision_conflict_detail["current_revision"] != add_packet["write_intent"][
-            "expected_revision"
-        ], revision_conflict
-        assert state_file.read_text(encoding="utf-8") == original
+        def unchanged(before: dict, document: bytes) -> None:
+            after = readback()
+            assert after["todos"] == before["todos"], after
+            assert after["authority_read"] == before["authority_read"], after
+            assert state.read_bytes() == document
 
-        foreign_lease = dict(add_packet["write_intent"]["lease_ref"])
-        foreign_lease["claimed_by"] = "codex-main-control"
-        foreign_lease["lease_id"] = f"lease_{add_dry_run['todo_id']}_codex_main_control"
-        lease_conflict = shadow_validate_local_state_write_correctness_packet(
-            add_packet,
-            current_state_text=state_file.read_text(encoding="utf-8"),
-            observed_lease_ref=foreign_lease,
-        )
-        assert lease_conflict["apply_result"]["status"] == "lease_conflict", lease_conflict
-        lease_conflict_detail = lease_conflict["apply_result"]["conflict"]
-        assert lease_conflict_detail["kind"] == "lease_conflict", lease_conflict
-        assert lease_conflict_detail["expected_lease_ref"] == add_packet["write_intent"][
-            "lease_ref"
-        ], lease_conflict
-        assert lease_conflict_detail["observed_lease_ref"] == foreign_lease, lease_conflict
-        assert state_file.read_text(encoding="utf-8") == original
+        before, document = readback(), state.read_bytes()
+        create = ("todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
+                  "--text", TODO_TEXT, "--claimed-by", AGENT_ID,
+                  "--operation-id", "preview-create")
+        first = run_cli(registry, *create, "--dry-run")
+        repeat = run_cli(registry, *create, "--dry-run")
+        for planned in (first, repeat):
+            assert planned["status"] == "planned" and planned["dry_run"] is True, planned
+            assert planned["source_authority"] == "file_v0", planned
+            assert planned["decision_read_from_provider"] is True, planned
+            assert planned["legacy_fallback_used"] is False, planned
+            assert str(project) not in json.dumps(planned), planned
+        assert first["todo_id"] == repeat["todo_id"]
+        assert first["operation_id"] == repeat["operation_id"] == "preview-create"
+        unchanged(before, document)
+        # A preview must not consume the original operation or mint its receipt.
+        committed = run_cli(registry, *create)
+        assert committed["todo_id"] == first["todo_id"] and committed["status"] == "applied", committed
+        replay = run_cli(registry, *create)
+        assert replay["provider_revision"] == committed["provider_revision"], replay
+        assert len([t for t in readback()["todos"] if t["todo_id"] == first["todo_id"]]) == 1
 
-        repeat_packet = add_dry_run_repeat["local_state_write_correctness"]
-        assert (
-            add_packet["write_intent"]["idempotency_key"]
-            == repeat_packet["write_intent"]["idempotency_key"]
-        )
+        before, document = readback(), state.read_bytes()
+        update = ("todo", "update", "--goal-id", GOAL_ID, "--todo-id", first["todo_id"],
+                  "--agent-id", AGENT_ID, "--note", "Preview update without writing state.")
+        planned = run_cli(registry, *update, "--dry-run")
+        assert planned["status"] == "planned", planned
+        unchanged(before, document)
 
-        add_markdown = run_cli(
-            registry_path,
-            "todo",
-            "add",
-            "--goal-id",
-            GOAL_ID,
-            "--role",
-            "agent",
-            "--text",
-            TODO_TEXT,
-            "--dry-run",
-            as_json=False,
-        )
-        assert "## Local State Write Correctness" in add_markdown, add_markdown
-        assert "status: `preview_only`" in add_markdown, add_markdown
-
-        real_add = run_cli(
-            registry_path,
-            "todo",
-            "add",
-            "--goal-id",
-            GOAL_ID,
-            "--role",
-            "agent",
-            "--text",
-            TODO_TEXT,
-        )
-        assert real_add["dry_run"] is False, real_add
-        assert "local_state_write_correctness" not in real_add, real_add
-
-        update_dry_run = run_cli(
-            registry_path,
-            "todo",
-            "update",
-            "--goal-id",
-            GOAL_ID,
-            "--todo-id",
-            "todo_existing",
-            "--agent-id",
-            AGENT_ID,
-            "--claimed-by",
-            AGENT_ID,
-            "--note",
-            "Preview update without writing state.",
-            "--dry-run",
-        )
-        assert update_dry_run["dry_run"] is True, update_dry_run
-        assert update_dry_run["changed"] is True, update_dry_run
-        assert_packet(
-            update_dry_run,
-            state_file=state_file,
-            project=project,
-            write_class="todo_update",
-            todo_id="todo_existing",
-            claimed_by=AGENT_ID,
-        )
-        assert "Preview update without writing state." not in state_file.read_text(
-            encoding="utf-8"
-        )
+        # The provider revision, rather than editable Markdown bytes, owns CAS.
+        revision = before["authority_read"]["provider_revision"]
+        run_cli(registry, "todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
+                "--text", "A later independently committed Todo.")
+        before, document = readback(), state.read_bytes()
+        for dry_run in (("--dry-run",), ()):
+            code, stale = run_json_cli_result(
+                *update, "--update-operation-id", "stale-preview",
+                "--update-expected-provider-revision", revision, *dry_run,
+                registry_path=registry)
+            assert code == 1 and stale["error_code"] == "provider_revision_mismatch", stale
+            unchanged(before, document)
+            code, foreign = run_json_cli_result(
+                "todo", "update", "--goal-id", GOAL_ID, "--todo-id", first["todo_id"],
+                "--agent-id", "codex-main-control", "--note", "Foreign actor edit.",
+                *dry_run, registry_path=registry)
+            assert code == 1 and "claimed_by" in foreign["error"], foreign
+            unchanged(before, document)
+        applied = run_cli(registry, *update)
+        assert applied["status"] == "applied", applied
+        todo = next(t for t in readback()["todos"] if t["todo_id"] == first["todo_id"])
+        assert todo["note"] == "Preview update without writing state.", todo
 
     print("todo-write-correctness-smoke ok")
     return 0

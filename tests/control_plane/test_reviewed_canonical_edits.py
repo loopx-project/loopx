@@ -15,7 +15,7 @@ from test_native_todo_planning_update import fixture, records, update
 
 
 def service_fixture(tmp_path: Path, provider: str = "file"):
-    registry, state = fixture(tmp_path, True, provider)
+    registry, state = fixture(tmp_path, provider)
     service = ChatActionService(
         store=ChatActionStore(tmp_path / "actions"), registry_path=registry,
     )
@@ -185,20 +185,8 @@ def test_monitor_preview_and_apply_share_the_real_update(tmp_path, operation, pr
                          "normalized_parameters": {**parameters, "agent_id": "agent-b"}})
 
 
-def test_unpromoted_review_keeps_legacy_shape_and_freshness(tmp_path):
-    registry, state = fixture(tmp_path, False)
-    service = ChatActionService(store=ChatActionStore(tmp_path / "actions"), registry_path=registry)
-    proposal = preview(service)
-    assert "canonical_update_basis" not in proposal
-    state.write_text(state.read_text() + "\nOwner changed the source.\n")
-    before = state.read_bytes()
-    assert service.apply(proposal["proposal_id"])["proposal"]["status"] == "stale"
-    assert state.read_bytes() == before
-
-
-@pytest.mark.parametrize("promoted", [False, True])
-def test_update_basis_cannot_be_silently_discarded_by_claim(tmp_path, promoted):
-    registry, _state = fixture(tmp_path, promoted)
+def test_update_basis_cannot_be_silently_discarded_by_claim(tmp_path):
+    registry, _state = fixture(tmp_path)
     before = records(registry)
     with pytest.raises(ValueError, match="cannot be used for todo claim"):
         update_goal_todo(registry_path=registry, goal_id="goal-a", todo_id="todo_target",

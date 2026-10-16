@@ -25,6 +25,14 @@ ACTOR_AGENT = "codex-author"
 
 
 def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    from loopx.control_plane.coordination.runtime_shadow import (
+        build_todo_runtime_shadow_projection,
+    )
+    from loopx.todos import list_goal_todos
+    from tests.control_plane.canonical_authority_fixture import (
+        initialize_canonical_authority,
+    )
+
     project = tmp_path / "repo"
     state = project / "ACTIVE_GOAL_STATE.md"
     state.parent.mkdir(parents=True)
@@ -37,10 +45,12 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
         "## Agent Todo\n\n",
         encoding="utf-8",
     )
+    runtime = tmp_path / "runtime"
     registry = tmp_path / "registry.global.json"
     registry.write_text(
         json.dumps(
             {
+                "common_runtime_root": str(runtime),
                 "goals": [
                     {
                         "id": GOAL_ID,
@@ -57,6 +67,16 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
             }
         ),
         encoding="utf-8",
+    )
+    todos = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
+    initialize_canonical_authority(
+        runtime,
+        GOAL_ID,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim"
+        ),
+        state_path=state,
+        provider="file",
     )
     return registry, state
 
@@ -79,7 +99,7 @@ def _reconcile(registry: Path, state: Path, *, agent_id: str | None) -> dict:
     )
 
 
-def test_multi_agent_legacy_merge_gate_uses_attributed_actor(tmp_path: Path) -> None:
+def test_multi_agent_canonical_merge_gate_uses_attributed_actor(tmp_path: Path) -> None:
     registry, state = _write_fixture(tmp_path)
 
     result = _reconcile(registry, state, agent_id=ACTOR_AGENT)
@@ -87,22 +107,24 @@ def test_multi_agent_legacy_merge_gate_uses_attributed_actor(tmp_path: Path) -> 
     assert result["write_performed"] is True
     assert result["todo_completion"]["status"] == "done"
     assert result["todo_completion"]["mutation_authority"] == {
-        "schema_version": "todo_mutation_authority_v0",
-        "command": "complete",
-        "mode": "registered_peer_actor",
-        "actor_agent_id": ACTOR_AGENT,
-        "todo_id": "todo_merge_gate_2298",
-        "claim_owner": None,
-        "registered_agent_count": 2,
+        "schema_version": "loopx_coordination_todo_terminal_decision_result_v0",
+        "outcome": "apply",
+        "code": "terminal_transition",
+        "next_todo_status": "done",
+        "next_lease": None,
+        "lease_fence": "not_required",
+        "ownership_gate": "not_required",
+        "authority_mode": "registered_peer_actor",
+        "idempotent": False,
     }
     assert "status=done" in state.read_text(encoding="utf-8")
 
 
-def test_multi_agent_legacy_merge_gate_without_actor_is_atomic(tmp_path: Path) -> None:
+def test_multi_agent_canonical_merge_gate_without_actor_is_atomic(tmp_path: Path) -> None:
     registry, state = _write_fixture(tmp_path)
     before = state.read_text(encoding="utf-8")
 
-    with pytest.raises(ValueError, match="requires --agent-id"):
+    with pytest.raises(ValueError, match="actor_required"):
         _reconcile(registry, state, agent_id=None)
 
     assert state.read_text(encoding="utf-8") == before

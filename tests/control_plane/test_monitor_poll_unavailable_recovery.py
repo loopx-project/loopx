@@ -7,12 +7,19 @@ import sys
 from pathlib import Path
 
 import pytest
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
-from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.testing.canary_harness import read_run_index
-from loopx.todos import list_goal_todos
-from test_monitor_poll_transaction_recovery import _fixture, _cli, _poll_events, _quota_receipt, GOAL, AGENT, REPO
+from loopx.todos import update_goal_todo
+from monitor_poll_canonical_fixture import (
+    AGENT,
+    GOAL,
+    REPO,
+    _cli,
+    _fixture,
+    _poll_events,
+    _quota_receipt,
+)
 
 _ACTOR_POLL_WRAPPER = """
 import os, runpy, sys
@@ -48,17 +55,22 @@ def test_pending_poll_cannot_be_closed_as_unavailable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, material: bool, actor: str | None,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, runtime, state, monitor, poll = _fixture(tmp_path)
-    todos = list_goal_todos(registry_path=registry, goal_id=GOAL)['todos']
+    registry, runtime, _state, monitor, poll = _fixture(
+        tmp_path,
+        provider=provider,
+    )
     if actor is not None:
         data = json.loads(registry.read_text())
         data['goals'][0]['coordination']['registered_agents'].append(actor)
         registry.write_text(json.dumps(data))
-        for todo in todos:
-            if todo['todo_id'] == monitor:
-                todo['claimed_by'] = None
-    initialize_canonical_authority(runtime, GOAL, build_todo_runtime_shadow_projection(
-        goal_id=GOAL, todos=todos, handoff_mode='soft_claim'), state_path=state, provider=provider)
+        update_goal_todo(
+            registry_path=registry,
+            goal_id=GOAL,
+            todo_id=monitor,
+            clear_claim=True,
+            agent_id=AGENT,
+            update_operation_id="synthetic-monitor-clear-claim",
+        )
     if not material:
         args = list(poll)
         args.remove('--material-change')

@@ -65,8 +65,6 @@ def test_historic_facade_has_no_production_consumers():
 @pytest.fixture(params=[True, False], ids=["facade-present", "facade-absent"])
 def consumer_distribution(request, isolated_todo_distribution):  # noqa: F811
     package, command = isolated_todo_distribution
-    journeys._remove_source_todo_writers(package)
-    journeys._remove_monitor_source_modules(package)
     if not request.param:
         (package / "todos.py").unlink()
     probe = subprocess.run(
@@ -114,10 +112,84 @@ def test_once_only_settlement_uses_retained_owners(tmp_path, provider, consumer_
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("material_change", [False, True])
 def test_monitor_replay_uses_retained_owners(
-    tmp_path, request, provider, material_change, consumer_distribution,
+    tmp_path, provider, material_change, consumer_distribution,
 ):
-    journeys.test_monitor_recovery_with_source_writer_isolation(
-        tmp_path, request, provider, material_change, True, consumer_distribution)
+    from test_leased_monitor_poll import LEASE, PROOF
+    from test_monitor_followthrough_contract import GOAL_ID, AGENT_ID
+    from test_native_monitor_poll import _canonical
+
+    _package, command = consumer_distribution
+    registry, runtime, display, monitor = _canonical(
+        tmp_path, native=True, provider=provider, lease=LEASE,
+    )
+    display.unlink()
+
+    def cli(*args, succeeds=True):
+        result = subprocess.run(
+            [*command, "--format", "json",
+             "--registry", str(registry), "--runtime-root", str(runtime), *args],
+            cwd=tmp_path, capture_output=True, text=True, timeout=45,
+        )
+        assert (result.returncode == 0) is succeeds, result.stdout + result.stderr
+        return json.loads(result.stdout)
+
+    def current():
+        return cli("todo", "list", "--goal-id", GOAL_ID)
+
+    identity = [
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--runtime-profile", "generic_cli", "--turn-instance-id", "monitor-retirement",
+        "--available-capability", "network",
+        "--available-capability", "external_evidence_poll",
+    ]
+    guard = cli("quota", "should-run", *identity)
+    assert guard["selected_todo"]["todo_id"] == monitor["todo_id"]
+    before = current()
+    poll = [
+        "quota", "monitor-poll", *identity, "--todo-id", monitor["todo_id"],
+        "--result-hash", "observed-revision", "--use-current-task-lease", "--execute",
+    ]
+    if material_change:
+        poll += [
+            "--material-change", "--next-agent-todo", "Validate the observed revision",
+            "--next-action-kind", "validate",
+        ]
+
+    backend = runtime / "authority" / f"{provider}-v0"
+    offline = backend.with_name(backend.name + "-offline")
+    backend.rename(offline)
+    try:
+        failed = cli(*poll, succeeds=False)
+        assert failed["ok"] is False
+        assert not backend.exists() and not display.exists()
+    finally:
+        offline.rename(backend)
+    assert current()["todos"] == before["todos"]
+
+    committed = cli(*poll)
+    assert committed["todo_writeback"]["lease_proof"] == PROOF
+    assert committed["todo_writeback"]["material_change_generation"] == int(material_change)
+    after = current()
+    assert len(after["todos"]) == len(before["todos"]) + int(material_change)
+    observed = next(todo for todo in after["todos"] if todo["todo_id"] == monitor["todo_id"])
+    assert observed["result_hash"] == "observed-revision"
+    assert int(observed["consecutive_no_change"]) == int(not material_change)
+    assert display.exists()
+
+    assert cli(
+        "task-lease", "release", "--goal-id", GOAL_ID,
+        "--todo-id", monitor["todo_id"], "--owner", AGENT_ID,
+        "--idempotency-key", PROOF["idempotency_key"],
+        "--expected-version", str(PROOF["expected_version"]),
+    )["released"]
+    assert cli(*poll)["replayed"] is True
+    assert current()["todos"] == after["todos"]
+    rows = [
+        json.loads(line)
+        for line in (runtime / "goals" / GOAL_ID / "runs/index.jsonl").read_text().splitlines()
+    ]
+    assert sum(row.get("classification") == "quota_monitor_poll" for row in rows) == 1
+    assert all(row.get("classification") != "quota_slot_spend" for row in rows)
 
 
 def test_public_imports_keep_same_owners():

@@ -29,6 +29,7 @@ from test_quota_settlement_cli import (
     TODO_ID,
     _configure_completion_validation_todo,
     _configure_selectable_alternative,
+    _initialize_fixture_authority,
     _run_cli,
     _spend_run_count,
     _write_fixture,
@@ -78,6 +79,16 @@ def test_qualified_path_replan_settles_without_completing_validation_todo(
     project, runtime, registry = _write_fixture(tmp_path)
     state_path = _configure_completion_validation_todo(project)
     _configure_selectable_alternative(project)
+    _initialize_fixture_authority(project, runtime)
+    from loopx.control_plane.todos.provider_projection import (
+        project_current_canonical_todos,
+    )
+
+    project_current_canonical_todos(
+        registry_path=registry,
+        runtime_root=runtime,
+        goal_id=GOAL_ID,
+    )
     initial_state = state_path.read_text(encoding="utf-8")
     turn_id = "turn-validation-bearing-replan"
 

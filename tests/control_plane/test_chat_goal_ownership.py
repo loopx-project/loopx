@@ -229,6 +229,10 @@ def test_pending_lease_downgrade_rejected_even_after_clock_expiry(api):
         claimed_by="agent-a",
         task_class="advancement_task",
     )
+    # Migrate the historical policy through the real App owner before execution.
+    upgrade = preview(call, "hard_lease")
+    code, migrated = apply(call, upgrade)
+    assert code == 200 and migrated["ok"], migrated
     # Use the real acquire owner; an expired lease is not proof the host stopped.
     acquired = acquire_task_lease(
         registry_path=registry,

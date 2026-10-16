@@ -59,7 +59,12 @@ def sha256_hex(value: str | bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def add_todo(workspace: GoalWorkspace, text: str) -> JsonObject:
+def add_todo(
+    workspace: GoalWorkspace,
+    text: str,
+    *,
+    claimed_by: str | None = None,
+) -> JsonObject:
     return run_cli(
         workspace,
         "todo",
@@ -72,6 +77,7 @@ def add_todo(workspace: GoalWorkspace, text: str) -> JsonObject:
         text,
         "--task-class",
         "advancement_task",
+        *(("--claimed-by", claimed_by) if claimed_by else ()),
     )
 
 

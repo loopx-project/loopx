@@ -94,6 +94,18 @@ visibility limits, ordinary notices, current cadence floors and unchanged
 canonical waits/monitor clocks. Installed adoption and live host readback remain
 separate from this source repair.
 
+**S5/S11 long-horizon progress design.** The [research measurement refinement](long-horizon-harness-benchmark-research-program-v0.md#evidence-based-episode-evaluation-proposed-refinement)
+and [product reading journey](../../product/use-cases/auto-research/long-horizon-progress-design.md)
+connect native outcomes to research episodes, evidence and actual adoption.
+Research leads the method, baseline/window/cost rules and independent calibration;
+product refines one shared selection across the existing Goal/Live Team views.
+The next slices are read-only analysis with reproducible evidence bindings, then
+one packaged evidence-reading journey with source/access/recovery and comprehension
+checks. Keep design, scientific qualification, installed behavior and causal
+benefit separate. This proposal changes no stream priority, experiment budget,
+frozen treatment or scoring rule and must not block otherwise valid experiment
+preparation or the existing L1/R2 journey.
+
 ### Important Areas Outside RFCs and Their Owning Sources
 
 These directly determine whether a long-running team is usable. A directory or README provides an implementation/contract entry, not installed readiness; read availability from `loopx capability list/show` and the selected release.

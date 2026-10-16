@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from loopx.control_plane.runtime.status_projection_cache import write_status_projection_cache  # noqa: E402
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
 
 GOAL_ID = "status-projection-cache-fixture"
 AGENT_ID = "codex-main-control"
@@ -41,7 +42,8 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
         "## Objective\n\n"
         "Validate opt-in status projection cache behavior.\n\n"
         "## Next Action\n\n"
-        "- Exercise the status/quota projection cache.\n",
+        "- Exercise the status/quota projection cache.\n\n"
+        "## Agent Todo\n\n",
         encoding="utf-8",
     )
     public_doc.write_text("Public smoke fixture for status projection cache.\n", encoding="utf-8")
@@ -81,6 +83,7 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
         + "\n",
         encoding="utf-8",
     )
+    import_fixture_authority(registry_path, GOAL_ID)
     return registry_path, runtime, public_doc
 
 
@@ -258,6 +261,8 @@ def main() -> int:
             "agent",
             "--todo-id",
             initial_todo_id,
+            "--agent-id",
+            AGENT_ID,
             "--claimed-by",
             AGENT_ID,
             "--evidence",

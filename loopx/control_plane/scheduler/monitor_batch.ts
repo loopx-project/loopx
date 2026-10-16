@@ -53,8 +53,7 @@ export function normalizeMonitorPollFields(observation: unknown, intent: unknown
   return fields;
 }
 
-function planWriteback(input: MonitorBatchInput,
-  claimPolicy: "actor_owned" | "registered_peer_handoff" = "actor_owned") {
+function planWriteback(input: MonitorBatchInput) {
   const todos = input.todos;
   const observation = input.observation;
   const monitor = selectMonitorTodo(todos,
@@ -123,7 +122,7 @@ function planWriteback(input: MonitorBatchInput,
     const created = planCoordinationTodoCreate({goal_id: input.goal_id, operation_id: input.operation_id,
       actor_agent_id: actor, registered_agents: input.registered_agents, dry_run: input.dry_run,
       now: new Date(String(observation.generated_at)), todo}, plannedTodos,
-      input.read_model_schema ?? TODO_DOMAIN_READ_RECORD_SCHEMA, "role_text", claimPolicy);
+      input.read_model_schema ?? TODO_DOMAIN_READ_RECORD_SCHEMA, "role_text", "actor_owned");
     if (created.status !== "planned" && created.status !== "no_change") throw new EffectRuntimeRequestError(String(created.reason));
     const record = canonicalAuthorityObject(created.todo, "successor Todo");
     nextTodos.push({...record, todo: record.text, ok: true, dry_run: input.dry_run});
@@ -159,18 +158,17 @@ function normalizeBatchInput(raw: MonitorBatchInput): MonitorBatchInput {
   };
 }
 
-/** Pure fresh batch planning. Canonical and legacy callers own their receipts. */
+/** Pure fresh batch planning for canonical authority transactions. */
 export function planMonitorBatch(raw: MonitorBatchInput) {
   const input = normalizeBatchInput(raw);
   const todos = input.todos.map(todo => canonicalAuthorityObject(todo, "Monitor Todo snapshot item"));
   return planWriteback({...input, todos});
 }
 
-/** Public legacy adapter endpoint; the caller saves receipt and mutations in
- * the same atomic state-file replacement. */
-export function planLegacyMonitorBatch(value: unknown): JsonObject {
+/** Validate and replay one immutable pre-cutoff Markdown receipt. */
+export function replayLegacyMonitorBatch(value: unknown): JsonObject {
   try {
-    return planLegacyMonitorBatchRequest(value);
+    return replayLegacyMonitorBatchRequest(value);
   } catch (error) {
     if (error instanceof AuthorityStoreProtocolError) {
       throw new EffectRuntimeRequestError(error.message);
@@ -179,62 +177,65 @@ export function planLegacyMonitorBatch(value: unknown): JsonObject {
   }
 }
 
-function planLegacyMonitorBatchRequest(value: unknown): JsonObject {
-  const request = requireJsonObject(value, "legacy Monitor batch request");
-  if (request.schema_version !== MONITOR_BATCH_PLAN_REQUEST_SCHEMA || !Array.isArray(request.todos)) {
-    throw new EffectRuntimeRequestError("legacy Monitor batch request schema mismatch");
+function historicalReplayInput(request: JsonObject): MonitorBatchInput {
+  const actor = request.actor_agent_id;
+  if (actor !== null && typeof actor !== "string") {
+    throw new EffectRuntimeRequestError("actor_agent_id must be a string or null");
   }
-  const input = normalizeBatchInput(request as unknown as MonitorBatchInput);
+  return {
+    goal_id: requireAuthorityStoreId(request.goal_id, "goal id"),
+    operation_id: requireAuthorityStoreId(request.operation_id, "operation id"),
+    actor_agent_id: actor === null ? null : normalizeTodoAgent(actor, "actor_agent_id"),
+    registered_agents: [],
+    dry_run: requireBoolean(request.dry_run, "dry_run"),
+    ...normalizeMonitorPollFields(request.observation, request.intent),
+    todos: [],
+  };
+}
+
+function replayLegacyMonitorBatchRequest(value: unknown): JsonObject {
+  const request = requireJsonObject(value, "historical Monitor batch replay request");
+  if (request.schema_version !== MONITOR_BATCH_PLAN_REQUEST_SCHEMA ||
+      request.previous_receipt == null) {
+    throw new EffectRuntimeRequestError(
+      "historical Monitor batch replay requires an immutable previous receipt",
+    );
+  }
+  const input = historicalReplayInput(request);
   const hash = monitorPollRequestHash(input);
-  if (request.previous_receipt != null) {
-    const previous = canonicalAuthorityObject(request.previous_receipt, "Monitor batch receipt");
-    if (previous.schema_version !== MONITOR_BATCH_RECEIPT_SCHEMA || previous.goal_id !== input.goal_id ||
-        previous.operation_id !== input.operation_id || previous.request_sha256 !== hash) {
-      throw new EffectRuntimeRequestError("monitor effect identity is already bound: Monitor batch receipt identity or original request mismatch");
-    }
-    const writeback = canonicalAuthorityObject(previous.writeback, "Monitor batch receipt writeback");
-    const expectedRoles = (["agent", "user"] as const).filter(role => {
-      const successor = input.intent[role === "agent" ? "next_agent_todo" : "next_user_todo"];
-      return typeof successor === "string" && stripPythonWhitespace(successor).length > 0;
-    });
-    if (writeback.schema_version !== "monitor_poll_todo_writeback_v0" ||
-        writeback.goal_id !== input.goal_id || writeback.monitor_effect_id !== input.operation_id ||
-        (input.observation.todo_id != null && writeback.todo_id !== input.observation.todo_id) ||
-        writeback.result_hash !== input.observation.result_hash ||
-        writeback.material_change !== input.observation.material_change ||
-        writeback.last_checked_at !== input.observation.generated_at ||
-        writeback.dry_run !== input.dry_run ||
-        !Array.isArray(writeback.next_todos) || !Array.isArray(writeback.successor_receipts) ||
-        writeback.next_todos.length !== writeback.successor_receipts.length ||
-        writeback.next_todos.length !== expectedRoles.length) {
-      throw new EffectRuntimeRequestError("Monitor batch receipt writeback is malformed");
-    }
-    const successorIds = new Set<string>();
-    for (const [index, todo] of writeback.next_todos.entries()) {
-      const item = canonicalAuthorityObject(todo, "Monitor successor receipt");
-      const summary = canonicalAuthorityObject(writeback.successor_receipts[index], "Monitor successor summary");
-      if (typeof item.todo_id !== "string" || !item.todo_id.startsWith("todo_") ||
-          successorIds.has(item.todo_id) || item.todo_id !== summary.todo_id ||
-          item.role !== expectedRoles[index] || summary.role !== expectedRoles[index]) {
-        throw new EffectRuntimeRequestError("Monitor batch receipt successor identity is malformed");
-      }
-      successorIds.add(item.todo_id);
-    }
-    return {schema_version: MONITOR_BATCH_PLAN_RESULT_SCHEMA, mutations: [],
-      writeback: {...writeback, provider_replayed: true}, receipt: previous, replayed: true};
+  const previous = canonicalAuthorityObject(request.previous_receipt, "Monitor batch receipt");
+  if (previous.schema_version !== MONITOR_BATCH_RECEIPT_SCHEMA || previous.goal_id !== input.goal_id ||
+      previous.operation_id !== input.operation_id || previous.request_sha256 !== hash) {
+    throw new EffectRuntimeRequestError("monitor effect identity is already bound: Monitor batch receipt identity or original request mismatch");
   }
-  if (request.legacy_batch_version !== 1) {
-    throw new EffectRuntimeRequestError("legacy Monitor recovery needs reconciliation: preserve the pending receipt and inspect the original Monitor and successor Todos before retrying; frozen plan predates atomic batch receipts", "legacy_monitor_recovery_required");
+  const writeback = canonicalAuthorityObject(previous.writeback, "Monitor batch receipt writeback");
+  const expectedRoles = (["agent", "user"] as const).filter(role => {
+    const successor = input.intent[role === "agent" ? "next_agent_todo" : "next_user_todo"];
+    return typeof successor === "string" && stripPythonWhitespace(successor).length > 0;
+  });
+  if (writeback.schema_version !== "monitor_poll_todo_writeback_v0" ||
+      writeback.goal_id !== input.goal_id || writeback.monitor_effect_id !== input.operation_id ||
+      (input.observation.todo_id != null && writeback.todo_id !== input.observation.todo_id) ||
+      writeback.result_hash !== input.observation.result_hash ||
+      writeback.material_change !== input.observation.material_change ||
+      writeback.last_checked_at !== input.observation.generated_at ||
+      writeback.dry_run !== input.dry_run ||
+      !Array.isArray(writeback.next_todos) || !Array.isArray(writeback.successor_receipts) ||
+      writeback.next_todos.length !== writeback.successor_receipts.length ||
+      writeback.next_todos.length !== expectedRoles.length) {
+    throw new EffectRuntimeRequestError("Monitor batch receipt writeback is malformed");
   }
-  const todos = input.todos.map(todo => canonicalAuthorityObject(todo, "Monitor Todo snapshot item"));
-  if (todos.some(todo => todo.monitor_effect_id === input.operation_id)) {
-    throw new EffectRuntimeRequestError("Monitor effect already applied without its batch receipt; preserve the pending receipt and reconcile the original successor Todos", "legacy_monitor_recovery_required");
+  const successorIds = new Set<string>();
+  for (const [index, todo] of writeback.next_todos.entries()) {
+    const item = canonicalAuthorityObject(todo, "Monitor successor receipt");
+    const summary = canonicalAuthorityObject(writeback.successor_receipts[index], "Monitor successor summary");
+    if (typeof item.todo_id !== "string" || !item.todo_id.startsWith("todo_") ||
+        successorIds.has(item.todo_id) || item.todo_id !== summary.todo_id ||
+        item.role !== expectedRoles[index] || summary.role !== expectedRoles[index]) {
+      throw new EffectRuntimeRequestError("Monitor batch receipt successor identity is malformed");
+    }
+    successorIds.add(item.todo_id);
   }
-  // Legacy Monitor explicitly permits routing a successor to a registered peer.
-  // Canonical Monitor and ordinary Todo create keep their actor-owned claim rule.
-  const planned = planWriteback({...input, todos}, "registered_peer_handoff");
-  const receipt = {schema_version: MONITOR_BATCH_RECEIPT_SCHEMA, goal_id: input.goal_id,
-    operation_id: input.operation_id, request_sha256: hash, writeback: planned.writeback};
-  return {schema_version: MONITOR_BATCH_PLAN_RESULT_SCHEMA, mutations: planned.mutations,
-    writeback: planned.writeback, receipt, replayed: false};
+  return {schema_version: MONITOR_BATCH_PLAN_RESULT_SCHEMA, mutations: [],
+    writeback: {...writeback, provider_replayed: true}, receipt: previous, replayed: true};
 }

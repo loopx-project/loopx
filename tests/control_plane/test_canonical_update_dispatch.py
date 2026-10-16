@@ -23,10 +23,63 @@ from loopx.control_plane.effect_runtime import (
 from loopx.control_plane.todos import provider_update
 from loopx.entrypoint import main
 from loopx.control_plane.coordination.local_authority import (
+    CanonicalAuthorityRequired,
     LocalCoordinationAuthorityUnavailable,
     read_canonical_todos_if_promoted,
 )
-from loopx.todos import add_goal_todo, update_goal_todo
+from loopx.todos import add_goal_todo, complete_goal_todo, update_goal_todo
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("policy", ["primary_review", "review_handoff"])
+def test_imported_policy_requires_repair_before_copy_edit(tmp_path, monkeypatch, provider, policy):
+    from loopx.control_plane.testing.canary_harness import run_json_cli_result
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    root = tmp_path.resolve()
+    runtime, state, registry = root / "runtime", root / "state.md", root / "registry.json"
+    goal, target = "policy-repair", "todo_imported"
+    state.write_text("# Goal\n\n## Agent Todo\n\n- [ ] Imported work.\n"
+                     f"  <!-- loopx:todo todo_id={target} status=open continuation_policy={policy} -->\n")
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
+        "id": goal, "repo": str(root), "state_file": state.name,
+        "coordination": {"registered_agents": ["agent-a", "agent-b"]}}]}))
+    projection = build_todo_runtime_shadow_projection(goal_id=goal, handoff_mode="soft_claim", todos=[{
+        "schema_version": "todo_item_v0", "done": False,
+        "archive_state": "active", "source_section": "Agent Todo",
+        "todo_id": target, "text": "Imported work.", "role": "agent", "status": "open",
+        "task_class": "advancement_task", "removed_continuation_policy": policy,
+    }])
+    initialize_canonical_authority(runtime, goal, projection, state_path=state, provider=provider)
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal)
+    document = state.read_bytes()
+    prefix = ("todo", "update", "--goal-id", goal, "--todo-id", target, "--agent-id", "agent-a")
+    for edit in (("--text", "Unreviewed replacement."), ("--note", "Unreviewed annotation.")):
+        for preview in (("--dry-run",), ()):
+            code, rejected = run_json_cli_result(*prefix, *edit, *preview, registry_path=registry)
+            assert code == 1 and "repair it explicitly" in rejected["error"], rejected
+            assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal) == before
+            assert state.read_bytes() == document
+    code, repaired = run_json_cli_result(
+        *prefix, "--continuation-policy", "independent_handoff", "--excluded-agent", "agent-b",
+        "--update-operation-id", "explicit-repair", registry_path=registry)
+    assert code == 0 and repaired["status"] == "applied", repaired
+    readback = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal)
+    assert readback["source_authority"] == f"{provider}_v0"
+    todo = readback["todos"][0]
+    assert todo["continuation_policy"] == "independent_handoff"
+    assert todo["excluded_agents"] == ["agent-b"]
+    assert not todo.get("removed_continuation_policy")
+    assert f"continuation_policy={policy}" not in state.read_text()
+    assert repaired["projection_delivery"] != "pending", repaired
+    code, edited = run_json_cli_result(*prefix, "--note", "After repair.", registry_path=registry)
+    assert code == 0 and edited["status"] == "applied", edited
+    later = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal)
+    code, replay = run_json_cli_result(
+        *prefix, "--continuation-policy", "independent_handoff", "--excluded-agent", "agent-b",
+        "--update-operation-id", "explicit-repair", registry_path=registry)
+    assert code == 0 and replay["status"] == "replayed", replay
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal)["todos"] == later["todos"]
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -140,14 +193,12 @@ def update_workspace(tmp_path, monkeypatch, request):
     return registry, runtime, state, created["todo_id"]
 
 
-@pytest.fixture(params=[False, True], ids=["writer-present", "writer-absent"])
-def cli_update(tmp_path, monkeypatch, request, update_workspace):
+@pytest.fixture
+def cli_update(tmp_path, monkeypatch, update_workspace):
     package_root = tmp_path / "package"
     package = package_root / "loopx"
     shutil.copytree(Path(__file__).resolve().parents[2] / "loopx", package,
                     ignore=shutil.ignore_patterns("__pycache__"))
-    if request.param:
-        (package / "control_plane/todos/line_update.py").unlink()
     provenance = tmp_path / "cli-origin.txt"
     (package_root / "sitecustomize.py").write_text(
         "import importlib.util\nfrom pathlib import Path\n"
@@ -299,7 +350,10 @@ def test_completion_validation_second_dispatch_preserves_original_identity(
     assert caught.value.payload["recovery_command"][-1] == calls[0]["operation_id"]
 
 
-def test_unpromoted_facade_preserves_empty_edit_no_change(tmp_path):
+@pytest.mark.parametrize("dry_run", [False, True], ids=["execute", "dry-run"])
+def test_unpromoted_facade_rejects_create_and_update_without_writes(
+    tmp_path, dry_run,
+):
     project = tmp_path / "project"
     project.mkdir()
     state = project / "state.md"
@@ -308,11 +362,48 @@ def test_unpromoted_facade_preserves_empty_edit_no_change(tmp_path):
     registry.write_text(json.dumps({"schema_version": 1, "common_runtime_root": str(tmp_path / "runtime"),
         "goals": [{"id": "goal-a", "repo": str(project), "state_file": "state.md",
                    "coordination": {"registered_agents": ["agent-a"]}}]}))
-    created = add_goal_todo(registry_path=registry, goal_id="goal-a", role="agent",
-                            text="Keep legacy compatibility", agent_id="agent-a", note="Keep the note")
     before = state.read_bytes()
-    for intent in [{}, {"note": ""}, {"note": " \t\n"}]:
-        result = update_goal_todo(registry_path=registry, goal_id="goal-a", todo_id=created["todo_id"],
-                                 agent_id="agent-a", **intent)
-        assert result["ok"] and result["changed"] is False
-        assert state.read_bytes() == before
+    with pytest.raises(CanonicalAuthorityRequired) as create_error:
+        add_goal_todo(
+            registry_path=registry,
+            goal_id="goal-a",
+            role="agent",
+            text="Migrate before creating this Todo",
+            agent_id="agent-a",
+            dry_run=dry_run,
+        )
+    with pytest.raises(CanonicalAuthorityRequired) as update_error:
+        update_goal_todo(
+            registry_path=registry,
+            goal_id="goal-a",
+            todo_id="todo_existing",
+            note="Migrate before editing this Todo",
+            agent_id="agent-a",
+            dry_run=dry_run,
+        )
+    with pytest.raises(CanonicalAuthorityRequired) as terminal_error:
+        complete_goal_todo(
+            registry_path=registry,
+            goal_id="goal-a",
+            todo_id="todo_existing",
+            agent_id="agent-a",
+            evidence="Migrate before completing this Todo",
+            no_followup=True,
+            dry_run=dry_run,
+        )
+    for error, operation in (
+        (create_error.value, "todo_create"),
+        (update_error.value, "todo_update"),
+        (terminal_error.value, "todo_terminal"),
+    ):
+        assert error.code == "canonical_authority_required"
+        assert error.payload["operation"] == operation
+        assert error.payload["write_admitted"] is False
+        assert error.payload["decision_read_from_provider"] is False
+        assert error.payload["legacy_fallback_used"] is False
+        assert error.payload["recovery"] == {
+            "action": "migrate_goal_authority",
+            "backup_required": True,
+        }
+    assert state.read_bytes() == before
+    assert not (tmp_path / "runtime" / "authority").exists()

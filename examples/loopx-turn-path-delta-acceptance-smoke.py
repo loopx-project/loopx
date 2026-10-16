@@ -16,6 +16,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from loopx.cli import main as cli_main  # noqa: E402
+from loopx.control_plane.coordination.local_authority import (  # noqa: E402
+    read_canonical_todos_if_promoted,
+)
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
 
 
 GOAL_ID = "loopx-turn-path-delta-fixture"
@@ -112,6 +116,8 @@ request = json.load(sys.stdin)
 mode = sys.argv[1]
 marker = pathlib.Path({MARKER!r})
 marker.write_text(mode, encoding="utf-8")
+with marker.with_suffix(".calls").open("a", encoding="utf-8") as calls:
+    calls.write(mode + "\\n")
 material_packet = {{
     "agent_id": {AGENT_ID!r},
     "state": "active",
@@ -181,6 +187,8 @@ def _run_turn(
     workspace: Path,
     host: Path,
     mode: str,
+    expect_canonical_refusal: bool = False,
+    resume_turn_key: str | None = None,
 ) -> dict[str, Any]:
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
@@ -200,8 +208,10 @@ def _run_turn(
                 GOAL_ID,
                 "--agent-id",
                 AGENT_ID,
-                "--turn-instance-id",
-                f"path-delta-{mode}",
+                *(
+                    ["--resume-turn-key", resume_turn_key]
+                    if resume_turn_key else ["--turn-instance-id", f"path-delta-{mode}"]
+                ),
                 "--project",
                 str(workspace),
                 "--host-adapter-command-json",
@@ -215,6 +225,14 @@ def _run_turn(
             ]
         )
     payload = json.loads(output.getvalue())
+    if expect_canonical_refusal:
+        assert exit_code != 0, payload
+        assert payload["reason_code"] == "canonical_authority_required", payload
+        assert payload["write_admitted"] is False, payload
+        assert payload["journal_observation"]["recorded_effects"]["host_invoked"] is True, payload
+        assert payload["journal_observation"]["recorded_effects"]["quota_spent"] is False, payload
+        assert payload["journal_observation"]["recovery_decision"]["reinvoke_host"] is False, payload
+        return payload
     assert exit_code == 0, payload
     assert payload["status"] == "committed", payload
     assert payload["validation"]["status"] == "passed", payload
@@ -226,19 +244,44 @@ def _run_records(runtime: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in index.read_text(encoding="utf-8").splitlines()]
 
 
-def main() -> int:
-    with tempfile.TemporaryDirectory(prefix="loopx-turn-path-delta-") as directory:
+def assert_canonical_turn_path_delta(provider: str) -> None:
+    with tempfile.TemporaryDirectory(prefix=f"loopx-turn-path-delta-{provider}-") as directory:
         root = Path(directory)
         project, runtime, workspace, registry = _write_fixture(root)
         host = _write_host(root)
-        _run_turn(
+        state = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
+        source_bytes = state.read_bytes()
+        refused = _run_turn(
             registry=registry,
             runtime=runtime,
             project=project,
             workspace=workspace,
             host=host,
             mode="material",
+            expect_canonical_refusal=True,
         )
+        # The Host has returned, but no Todo write/spend is admitted. Import
+        # the complete stopped fixture and recover that original Turn.
+        assert state.read_bytes() == source_bytes
+        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID) is None
+        calls = (project / MARKER).with_suffix(".calls")
+        assert calls.read_text(encoding="utf-8").splitlines() == ["material"]
+        import_fixture_authority(registry, GOAL_ID, provider=provider)
+        original = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+        assert original is not None
+        assert original["source_authority"] == f"{provider}_v0", original
+        assert {item["todo_id"] for item in original["todos"]} == {TODO_ID}, original
+        recovered = _run_turn(
+            registry=registry,
+            runtime=runtime,
+            project=project,
+            workspace=workspace,
+            host=host,
+            mode="material",
+            resume_turn_key=refused["resume_turn_key"],
+        )
+        assert recovered["resume_turn_key"] == refused["resume_turn_key"], recovered
+        assert calls.read_text(encoding="utf-8").splitlines() == ["material"]
         _run_turn(
             registry=registry,
             runtime=runtime,
@@ -247,6 +290,19 @@ def main() -> int:
             host=host,
             mode="routine",
         )
+        assert calls.read_text(encoding="utf-8").splitlines() == ["material", "routine"]
+        canonical = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+        assert canonical is not None
+        assert canonical["source_authority"] == f"{provider}_v0", canonical
+        assert {item["todo_id"] for item in canonical["todos"]} == {TODO_ID}, canonical
+        before, after = original["todos"][0], canonical["todos"][0]
+        for field in ("todo_id", "text", "role", "status", "claimed_by",
+                      "task_class", "action_kind", "priority", "successor_todo_ids"):
+            assert after.get(field) == before.get(field), (field, before, after)
+        mutable_result_fields = {"note", "evidence", "updated_at", "last_actor_agent_id"}
+        assert {k: v for k, v in after.items() if k not in mutable_result_fields} == {
+            k: v for k, v in before.items() if k not in mutable_result_fields
+        }, (before, after)
 
         records = _run_records(runtime)
         material = next(
@@ -266,6 +322,10 @@ def main() -> int:
         assert "agent_vision" not in routine, routine
         assert routine["vision_checkpoint"]["decision"] == "unchanged_with_reason", routine
 
+
+def main() -> int:
+    for provider in ("file", "sqlite"):
+        assert_canonical_turn_path_delta(provider)
     print("loopx-turn-path-delta-acceptance-smoke ok")
     return 0
 

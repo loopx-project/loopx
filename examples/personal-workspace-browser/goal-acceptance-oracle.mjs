@@ -40,30 +40,37 @@ try {
   assert.equal(read().goal_acceptance_contract.enabled, false);
   await page.locator(".personal-goal-link", {hasText: "Multi Agent Projection"}).click();
   await page.getByRole("button", {name: "概览", exact: true}).click();
-  // The Agent does the technical preparation. The owner does not enter settings,
-  // inspect revisions, upload JSON or confirm the same facts in a second form.
-  cli("prepare", "--agent-id", "agent-a", "--document", resolve(root, "owner-contract.json"),
-    "--operation-id", "older-export-plan", "--execute");
-  const prepared = cli("prepare", "--agent-id", "agent-a", "--document", resolve(root, "owner-contract.json"),
-    "--operation-id", "prepare-export-check", "--execute");
+  // The admitted conversation tool prepares the plan through its real owner.
+  // The model is scripted; the owner does not repeat the facts in a JSON form.
+  const prepared = authority.prepared;
   assert.equal(prepared.executed, false);
+  assert.equal(prepared.proposal.normalized_parameters.prepared_by, "coordinator");
   assert.equal(read().goal_acceptance_contract.enabled, false, "preparation is not owner approval");
   const panel = page.locator(".delivery-acceptance-contract");
+  const resultStatus = text => panel.getByRole("status").filter({hasText: text});
   const adopt = panel.getByRole("button", {name: "采用并检查", exact: true});
   await adopt.waitFor();
-  await adopt.scrollIntoViewIfNeeded();
+  const ordinaryEntry = () => adopt.evaluate(node => {
+    const rect = node.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    return {inViewport: rect.top >= 0 && rect.bottom <= innerHeight && !!hit && node.contains(hit), targetSize: rect.height >= 44,
+      beforeWork: !!(node.compareDocumentPosition(document.querySelector(".goal-now")) & Node.DOCUMENT_POSITION_FOLLOWING)};
+  });
+  assert.equal(await panel.count(), 1, "Overview has one acceptance interaction, not a second controller after the work list");
+  assert.deepEqual(await ordinaryEntry(), {inViewport: true, beforeWork: true, targetSize: true}, "The prepared decision is discoverable before secondary work without scrolling");
   await mkdir(outputDir, {recursive: true});
   await page.screenshot({path: resolve(outputDir, "oracle-plan-desktop.png"), animations: "disabled"});
   await page.setViewportSize({width: 390, height: 844});
-  await adopt.scrollIntoViewIfNeeded();
+  assert.deepEqual(await ordinaryEntry(), {inViewport: true, beforeWork: true, targetSize: true}, "The phone ordinary path retains the same visible decision");
   await page.screenshot({path: resolve(outputDir, "oracle-plan-mobile.png"), animations: "disabled"});
   await page.setViewportSize({width: 1512, height: 982});
   let applyCount = 0;
   page.on("request", req => {if (req.method() === "POST" && /\/api\/actions\/[^/]+\/apply$/.test(new URL(req.url()).pathname)) applyCount++;});
   await adopt.focus(); await page.keyboard.press("Enter");
-  await panel.getByText("当前版本已核对", {exact: true}).waitFor();
+  await resultStatus("当前版本已核对").waitFor();
   assert.equal(applyCount, 1, "one owner action adopts and checks the prepared plan");
   assert.equal(read().goal_acceptance_contract.criteria[0].oracle.state, "current");
+  const firstOperation = read().goal_acceptance_contract.verification.operation_id;
   assert.equal(await panel.locator('input[type="file"]').isVisible(), false, "technical import is optional");
   await panel.scrollIntoViewIfNeeded();
   await page.screenshot({path: resolve(outputDir, "oracle-current-desktop.png"), animations: "disabled"});
@@ -75,17 +82,20 @@ try {
   const run = panel.getByRole("button", {name: "检查交付", exact: true});
   await writeFile(resolve(root, "project/result.txt"), "new version without verification");
   // Read-only observation invalidates the old green state without rerunning.
-  await panel.getByText("来源或版本已变化，请重新检查", {exact: true}).waitFor({timeout: 25000});
+  await resultStatus("来源或版本已变化，请重新检查").waitFor({timeout: 25000});
   assert.equal(await panel.getByText("产物检查通过", {exact: true}).count(), 0);
   const oldOperation = read().goal_acceptance_contract.verification.operation_id;
   assert.equal(applyCount, 1);
+  assert.equal(oldOperation, firstOperation, "readback does not execute a new check");
   await run.click();
-  await panel.getByText("检查失败；修复交付物后可再次检查", {exact: true}).waitFor();
+  await resultStatus("检查失败；修复交付物后可再次检查").waitFor();
   assert.notEqual(read().goal_acceptance_contract.verification.operation_id, oldOperation);
   await writeFile(resolve(root, "project/result.txt"), "usable export");
-  await run.click(); await panel.getByText("当前版本已核对", {exact: true}).waitFor();
+  await run.click(); await resultStatus("当前版本已核对").waitFor();
   // Advanced migration remains available; a rejected configuration cannot erase
   // the working contract. Recovery reads, rather than automatically executes.
+  const inspection = panel.locator(".delivery-check-inspection");
+  if (!await inspection.evaluate(node => node.open)) await inspection.locator("summary").first().click();
   await panel.getByText("高级配置与诊断", {exact: true}).click();
   const initial = read();
   const invalid = JSON.parse(await readFile(resolve(root, "owner-contract.json"), "utf8"));
@@ -100,11 +110,12 @@ try {
   await panel.getByRole("alert").getByRole("button", {name: "刷新结果", exact: true}).click();
   await panel.getByRole("button", {name: "停用检查", exact: true}).click();
   await panel.waitFor({state: "hidden"});
+  await page.getByRole("status").filter({hasText: "已停用检查，历史记录仍保留。"}).waitFor();
   assert.equal(read().goal_acceptance_contract.enabled, false);
   const expected = "Failed to load resource: the server responded with a status of 409 (Conflict)";
   const at = context.errors.indexOf(expected); if (at >= 0) context.errors.splice(at, 1);
   assert.deepEqual(context.errors.filter(value => !value.includes("404")), []);
-  console.log(JSON.stringify({status: "PASS", boundary: "Packaged UI with actual disposable SQLite/HTTP/CLI; Agent preparation is scripted, not live model or installed App evidence", checks: ["automatic prepared-plan discovery", "one contextual owner action", "no mandatory JSON/revision form", "exact native readback", "changed output clears green without execution", "failure/recovery", "advanced import rejection", "disable/default-off", "390px", "keyboard/reduced-motion"]}));
+  console.log(JSON.stringify({status: "PASS", boundary: "Packaged UI and admitted conversation tool with actual disposable SQLite/HTTP/CLI; model/tool transport is scripted, not live model or installed App evidence", checks: ["native conversation preparation without execution", "automatic prepared-plan discovery", "one contextual owner action", "no mandatory JSON/revision form", "exact native readback", "changed output clears green without execution", "failure/recovery", "advanced import rejection", "disable/default-off", "390px", "keyboard/reduced-motion"]}));
 } catch (error) {
   if (context?.page) {
     await mkdir(outputDir, {recursive: true});

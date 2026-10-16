@@ -15,7 +15,7 @@ from loopx.control_plane.todos.contract import format_todo_metadata_line
 from loopx.todos import list_goal_todos, update_goal_todo
 
 
-def fixture(tmp_path: Path, promoted: bool, provider: str = "file") -> tuple[Path, Path]:
+def source_fixture(tmp_path: Path) -> tuple[Path, Path]:
     project = tmp_path / "project"
     state = project / ".codex/goals/goal-a/ACTIVE_GOAL_STATE.md"
     state.parent.mkdir(parents=True)
@@ -37,18 +37,26 @@ def fixture(tmp_path: Path, promoted: bool, provider: str = "file") -> tuple[Pat
         "state_file": ".codex/goals/goal-a/ACTIVE_GOAL_STATE.md",
         "coordination": {"registered_agents": ["agent-a", "agent-b"]},
     }]}), encoding="utf-8")
-    if promoted:
-        todos = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
-        projection = build_todo_runtime_shadow_projection(goal_id="goal-a", todos=todos, handoff_mode="soft_claim")
-        initialize_canonical_authority(runtime, "goal-a", projection, state_path=state, provider=provider)
-        state.unlink()  # The update must neither require nor import a Markdown authority source.
     return registry, state
 
 
-def update(registry: Path, *args: str, ok: bool = True) -> dict:
+def fixture(tmp_path: Path, provider: str = "file") -> tuple[Path, Path]:
+    registry, state = source_fixture(tmp_path)
+    todos = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
+    projection = build_todo_runtime_shadow_projection(
+        goal_id="goal-a", todos=todos, handoff_mode="soft_claim",
+    )
+    initialize_canonical_authority(
+        tmp_path / "runtime", "goal-a", projection, state_path=state, provider=provider,
+    )
+    state.unlink()  # The update must neither require nor import a Markdown authority source.
+    return registry, state
+
+
+def update(registry: Path, *args: str, ok: bool = True, actor: str = "agent-a") -> dict:
     process = subprocess.run([
         sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry),
-        "todo", "update", "--goal-id", "goal-a", "--todo-id", "todo_target", "--agent-id", "agent-a", *args,
+        "todo", "update", "--goal-id", "goal-a", "--todo-id", "todo_target", "--agent-id", actor, *args,
     ], capture_output=True, text=True, timeout=45)
     result = json.loads(process.stdout)
     assert (process.returncode == 0) is ok, (result, process.stderr)
@@ -59,9 +67,160 @@ def records(registry: Path) -> dict[str, dict]:
     return {item["todo_id"]: item for item in list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]}
 
 
-@pytest.mark.parametrize("promoted", [False, True])
-def test_work_requirements_update_preserves_authority_and_supports_explicit_empty(tmp_path: Path, promoted: bool) -> None:
-    registry, _state = fixture(tmp_path, promoted)
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("claim_flag", [False, True])
+def test_cli_imported_completion_repairs_only_metadata(tmp_path, monkeypatch, provider, claim_flag):
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.control_plane.testing.canary_harness import run_json_cli, run_json_cli_result
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, state = source_fixture(tmp_path)
+    rows = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
+    imported = next(row for row in rows if row["todo_id"] == "todo_target")
+    imported.update(status="done", done=True, evidence="Original evidence", reason="Original reason",
+                    completed_at="2026-01-02T00:00:00Z", updated_at="2026-01-02T01:00:00Z",
+                    last_actor_agent_id="agent-b", completion_receipt_id="tcw_original")
+    projection = build_todo_runtime_shadow_projection(goal_id="goal-a", todos=rows, handoff_mode="soft_claim")
+    runtime = tmp_path / "runtime"
+    initialize_canonical_authority(runtime, "goal-a", projection, state_path=state, provider=provider)
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
+    source_before = state.read_bytes()
+    prefix = ("todo", "complete", "--goal-id", "goal-a", "--todo-id", "todo_target")
+    for actor, extra, code in [
+        ("agent-b", (), "claim_owner_mismatch"),
+        ("agent-a", ("--note", "A fresh annotation"), "invalid_todo_completion_transaction"),
+        ("agent-a", ("--evidence", "A fresh completion result"), "invalid_todo_completion_transaction"),
+        ("agent-a", ("--next-agent-todo", "Fresh successor work"), "invalid_todo_completion_transaction"),
+    ]:
+        returncode, rejected = run_json_cli_result(*prefix, "--agent-id", actor, *extra, registry_path=registry)
+        assert returncode == 1 and rejected["error_code"] == code, rejected
+        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == before
+        assert state.read_bytes() == source_before
+    repair = (*prefix, "--agent-id", "agent-a", *(("--claimed-by", "agent-a") if claim_flag else ()))
+    preview = run_json_cli(*repair, "--dry-run", registry_path=registry)
+    assert preview["dry_run"] is True, preview
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == before
+    assert state.read_bytes() == source_before
+    applied = run_json_cli(*repair, registry_path=registry)
+    assert applied["changed"] is True and applied["completion_policy"] is None, applied
+    original = next(row for row in before["todos"] if row["todo_id"] == "todo_target")
+    current = records(registry)["todo_target"]
+    assert {k: v for k, v in current.items() if k != "content_revision"} == {
+        **{k: v for k, v in original.items() if k != "content_revision"}, "completion_continuation": "active_goal",
+    }
+    run_json_cli("todo", "add", "--goal-id", "goal-a", "--role", "agent",
+                 "--text", "A later independent operation", registry_path=registry)
+    later = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
+    replay = run_json_cli(*repair, registry_path=registry)
+    assert replay["changed"] is False, replay
+    after = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
+    assert after["todos"] == later["todos"] and after["provider_revision"] == later["provider_revision"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("command", ["complete", "supersede"])
+def test_cli_same_title_terminal_successor_preserves_peers_and_replay(tmp_path, monkeypatch, provider, command):
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.control_plane.testing.canary_harness import run_json_cli, run_json_cli_result
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, state = fixture(tmp_path, provider)
+    runtime = tmp_path / "runtime"
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
+    prefix = ("todo", command, "--goal-id", "goal-a", "--todo-id", "todo_target")
+    flags = ("--evidence", "Synthetic accepted result", "--self-merged") if command == "complete" else (
+        "--reason", "Synthetic replacement of the accepted work")
+    for actor, title, code in (("agent-b", "Synthetic task", "claim_owner_mismatch"),
+                              ("agent-a", "Independent task", "todo_semantic_duplicate_conflict")):
+        result_code, rejected = run_json_cli_result(
+            *prefix, "--agent-id", actor, *flags, "--next-agent-todo", title,
+            "--next-claimed-by", "agent-a", registry_path=registry)
+        assert result_code == 1 and rejected["error_code"] == code, rejected
+        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == before
+        assert not state.exists()
+    terminal = (*prefix, "--agent-id", "agent-a", *flags,
+                "--next-agent-todo", "Synthetic task", "--next-claimed-by", "agent-a")
+    preview = run_json_cli(*terminal, "--dry-run", registry_path=registry)
+    assert preview["dry_run"] is True, preview
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == before
+    assert not state.exists()
+    applied = run_json_cli(*terminal, registry_path=registry)
+    assert applied["changed"] is True and applied["projection_delivery"] != "pending", applied
+    current = records(registry)
+    origin = current["todo_target"]
+    successor_id = origin["successor_todo_ids"][0]
+    assert successor_id not in {"todo_target", "todo_other"}
+    assert origin["status"] == "done"
+    assert current[successor_id]["text"] == "Synthetic task"
+    assert current[successor_id]["status"] == "open"
+    assert current["todo_other"]["status"] == "open"
+    if command == "complete":
+        assert current[successor_id]["unblocks_todo_id"] == "todo_target"
+    else:
+        assert origin["superseded_by"] == successor_id
+    run_json_cli("todo", "add", "--goal-id", "goal-a", "--role", "agent",
+                 "--text", "A later independently admitted Todo", registry_path=registry)
+    later = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
+    replay = run_json_cli(*terminal, registry_path=registry)
+    assert replay["changed"] is False, replay
+    after = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
+    assert after["todos"] == later["todos"] and after["provider_revision"] == later["provider_revision"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("edit,expected_actor", [
+    (["--evidence", "Synthetic planning validation"], "agent-a"),
+    (["--priority", "P2"], "agent-a"),
+    (["--clear-priority"], "agent-a"),
+    (["--note", "Owner context", "--clear-priority"], "agent-a"),
+    (["--note", "Peer correction", "--evidence", "Synthetic mixed validation"], "agent-b"),
+    (["--text", "Corrected task", "--evidence", "Synthetic mixed validation"], "agent-b"),
+])
+def test_delegated_cli_planning_preserves_actor_until_copy_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+    edit: list[str], expected_actor: str,
+) -> None:
+    # Preserve the supported audit contract on the canonical path; the retired
+    # Markdown writer and its mutation-authority fixture are not dependencies.
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, state = fixture(tmp_path, provider)
+    registration = json.loads(registry.read_text())
+    registration["goals"][0]["coordination"]["todo_lifecycle_authority"] = [{
+        "agent_id": "agent-b", "actions": ["update"], "requires_reason": True,
+    }]
+    registry.write_text(json.dumps(registration))
+    update(registry, "--note", "Owner context", "--priority", "P1",
+           "--update-operation-id", "owner-audit")
+    before = records(registry)
+    assert before["todo_target"]["last_actor_agent_id"] == "agent-a"
+    display = state.read_bytes()
+    attempt = [*edit, "--update-operation-id", "delegated-audit"]
+    rejected = update(registry, *attempt, actor="agent-b", ok=False)
+    assert rejected["error_code"] == "delegation_reason_required"
+    assert records(registry) == before
+    assert state.read_bytes() == display
+    attempt += ["--authority-reason", "Review the existing task"]
+    assert update(registry, *attempt, "--dry-run", actor="agent-b")["status"] == "planned"
+    assert records(registry) == before
+    assert state.read_bytes() == display
+    assert update(registry, *attempt, actor="agent-b")["status"] == "applied"
+    after = records(registry)
+    assert after["todo_target"]["last_actor_agent_id"] == expected_actor
+    assert after["todo_target"]["claimed_by"] == "agent-a"
+    assert after["todo_other"] == before["todo_other"]
+    display = state.read_bytes()
+    assert update(registry, *attempt, actor="agent-b")["status"] == "replayed"
+    assert records(registry) == after
+    assert state.read_bytes() == display
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_work_requirements_update_preserves_authority_and_supports_explicit_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, _state = fixture(tmp_path, provider)
     before = records(registry)
     result = update_goal_todo(
         registry_path=registry, goal_id="goal-a", todo_id="todo_target", agent_id="agent-a",
@@ -91,7 +250,7 @@ def test_work_requirements_update_preserves_authority_and_supports_explicit_empt
     assert cleared["task_repository"] == todo["task_repository"]
 
 
-@pytest.mark.parametrize("promoted", [False, True])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("intent", [
     {"required_capabilities": ["code_review", "bad/token"]},
     {"required_write_scopes": ["src/**", "../escape"]},
@@ -99,33 +258,37 @@ def test_work_requirements_update_preserves_authority_and_supports_explicit_empt
     {"task_repository": "user:password@example.com:project"},
     {"explore_result_node_refs": ["Node:alpha", "bad/ref"]},
 ])
-def test_invalid_work_requirement_is_not_silently_dropped(tmp_path: Path, promoted: bool, intent: dict) -> None:
-    registry, state = fixture(tmp_path, promoted)
+def test_invalid_work_requirement_is_not_silently_dropped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, intent: dict,
+) -> None:
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, state = fixture(tmp_path, provider)
     before = records(registry)
     with pytest.raises((ValueError, RuntimeError)):
         update_goal_todo(registry_path=registry, goal_id="goal-a", todo_id="todo_target",
                          agent_id="agent-a", text="Must not partially commit", **intent)
     assert records(registry) == before
-    if promoted:
-        assert not state.exists()
+    assert not state.exists()
 
 
-@pytest.mark.parametrize("promoted", [False, True])
-def test_cli_routes_work_requirements_without_display_dependency(tmp_path: Path, promoted: bool) -> None:
-    registry, state = fixture(tmp_path, promoted)
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_cli_routes_work_requirements_without_display_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, state = fixture(tmp_path, provider)
     args = ["--action-kind", "IMPLEMENT", "--task-domain", "code",
             "--task-repository", "https://github.com/example/project",
             "--required-capability", "Code-Review", "--target-capability", "Delivery",
-            "--required-write-scope", "src/**", "--explore-result-node-ref", "Node:alpha"]
-    if promoted:
-        args += ["--update-operation-id", "requirements-cli"]
+            "--required-write-scope", "src/**", "--explore-result-node-ref", "Node:alpha",
+            "--update-operation-id", "requirements-cli"]
     update(registry, *args, "--dry-run")
-    if promoted:
-        assert not state.exists()
+    assert not state.exists()
     update(registry, *args)
     assert records(registry)["todo_target"]["required_capabilities"] == ["code_review"]
-    if promoted:
-        assert update(registry, *args)["status"] == "replayed"
+    assert update(registry, *args)["status"] == "replayed"
     update(registry, "--clear-explore-result-node-refs")
     assert not records(registry)["todo_target"].get("explore_result_node_refs")
     before = records(registry)
@@ -133,7 +296,7 @@ def test_cli_routes_work_requirements_without_display_dependency(tmp_path: Path,
     assert records(registry) == before
 
 
-@pytest.mark.parametrize("promoted", [False, True])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize(("remote", "expected"), [
     ("https://github.com:443/example/project", "git:github.com/example/project"),
     ("ssh://git@github.com:22/example/project", "git:github.com/example/project"),
@@ -143,24 +306,27 @@ def test_cli_routes_work_requirements_without_display_dependency(tmp_path: Path,
     ("git://github.com:80/example/project", "git:github.com:80/example/project"),
     ("git://github.com:0/example/project", "git:github.com:0/example/project"),
 ])
-def test_cli_repository_ports_match_before_and_after_promotion(
-    tmp_path: Path, promoted: bool, remote: str, expected: str,
+def test_cli_repository_ports_match_across_canonical_providers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+    remote: str, expected: str,
 ) -> None:
-    registry, _state = fixture(tmp_path, promoted)
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, _state = fixture(tmp_path, provider)
     before = records(registry)
-    args = ["--task-repository", remote]
-    if promoted:
-        args += ["--update-operation-id", "repository-port-cli"]
+    args = [
+        "--task-repository", remote,
+        "--update-operation-id", "repository-port-cli",
+    ]
     update(registry, *args)
     after = records(registry)
     assert after["todo_target"]["task_repository"] == expected
     assert after["todo_other"] == before["todo_other"]
-    if promoted:
-        assert update(registry, *args)["status"] == "replayed"
-        assert records(registry) == after
+    assert update(registry, *args)["status"] == "replayed"
+    assert records(registry) == after
 
 
-@pytest.mark.parametrize("promoted", [False, True])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("surface", ["cli", "python_api"])
 @pytest.mark.parametrize(("label", "note", "expected_note"), [
     ("omitted", None, "Preserved note"),
@@ -168,18 +334,20 @@ def test_cli_repository_ports_match_before_and_after_promotion(
     ("unicode_whitespace", " \t\u2003\n", "Preserved note"),
     ("nonempty", "  Updated\u2003note  ", "Updated note"),
 ])
-def test_note_input_semantics_match_before_and_after_promotion(
-    tmp_path: Path, promoted: bool, surface: str, label: str,
+def test_note_input_semantics_match_across_canonical_providers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+    surface: str, label: str,
     note: str | None, expected_note: str,
 ) -> None:
-    registry, _state = fixture(tmp_path, promoted)
-    operation_id = f"note-{surface}-{label}" if promoted else None
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, _state = fixture(tmp_path, provider)
+    operation_id = f"note-{surface}-{label}"
     if surface == "cli":
         args = ["--text", "Corrected task"]
         if note is not None:
             args += ["--note", note]
-        if operation_id is not None:
-            args += ["--update-operation-id", operation_id]
+        args += ["--update-operation-id", operation_id]
         update(registry, *args)
     else:
         result = update_goal_todo(
@@ -194,7 +362,7 @@ def test_note_input_semantics_match_before_and_after_promotion(
 
 
 def test_promoted_v0_replay_uses_normalized_empty_note_identity(tmp_path: Path) -> None:
-    registry, _state = fixture(tmp_path, True)
+    registry, _state = fixture(tmp_path)
     base = ["--text", "Corrected task", "--update-operation-id", "note-v0-replay"]
     assert update(registry, *base)["status"] == "applied"
     assert update(registry, *base, "--note", "")["status"] == "replayed"
@@ -203,18 +371,20 @@ def test_promoted_v0_replay_uses_normalized_empty_note_identity(tmp_path: Path) 
     assert records(registry)["todo_target"]["note"] == "Preserved note"
 
 
-@pytest.mark.parametrize("promoted", [False, True])
-def test_public_cli_nonterminal_wait_update_and_clear(tmp_path: Path, promoted: bool) -> None:
-    registry, state = fixture(tmp_path, promoted)
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_public_cli_nonterminal_wait_update_and_clear(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, state = fixture(tmp_path, provider)
     before = records(registry)
     args = ["--status", "deferred", "--resume-when", "pr_merged:#123", "--reason", "Await upstream",
-            "--evidence", "Synthetic evidence", "--text", "  Corrected\u2003task  "]
-    if promoted:
-        args += ["--update-operation-id", "planning-attempt"]
+            "--evidence", "Synthetic evidence", "--text", "  Corrected\u2003task  ",
+            "--update-operation-id", "planning-attempt"]
     update(registry, *args, "--dry-run")
     assert records(registry) == before
-    if promoted:
-        assert not state.exists()
+    assert not state.exists()
     update(registry, *args)
     waiting = records(registry)
     todo = waiting["todo_target"]
@@ -225,11 +395,10 @@ def test_public_cli_nonterminal_wait_update_and_clear(tmp_path: Path, promoted: 
     assert todo["note"] == "Preserved note"
     assert todo["claimed_by"] == "agent-a"
     assert waiting["todo_other"] == before["todo_other"]
-    if promoted:
-        assert update(registry, *args)["status"] == "replayed"
-        update(registry, *args, "--note", "Changed retry", ok=False)
-        assert records(registry) == waiting
-        assert state.exists(), "accepted commit should drain its independent display projection"
+    assert update(registry, *args)["status"] == "replayed"
+    update(registry, *args, "--note", "Changed retry", ok=False)
+    assert records(registry) == waiting
+    assert state.exists(), "accepted commit should drain its independent display projection"
     update(registry, "--status", "open", "--clear-resume-when")
     resumed = records(registry)["todo_target"]
     assert resumed["status"] == "open" and resumed["done"] is False
@@ -242,7 +411,7 @@ def deferred_hard_lease_fixture(
 ) -> tuple[Path, Path]:
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, state = fixture(tmp_path, False)
+    registry, state = source_fixture(tmp_path)
     todos = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
     target = next(todo for todo in todos if todo["todo_id"] == "todo_target")
     target.update(status="deferred", done=True, resume_when="resume_at:2020-01-01T00:00:00Z")
@@ -261,7 +430,7 @@ def test_dependency_replan_uses_existing_inactive_lifecycle_then_fresh_lease(
 ) -> None:
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, state = fixture(tmp_path, False)
+    registry, state = source_fixture(tmp_path)
     todos = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
     target = next(todo for todo in todos if todo["todo_id"] == "todo_target")
     target.update(resume_when="todo_done:todo_other", successor_todo_ids=["todo_other"])
@@ -343,8 +512,9 @@ def test_dependency_replan_uses_existing_inactive_lifecycle_then_fresh_lease(
 def test_bound_user_action_metadata_through_real_cli(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
 ) -> None:
-    isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, state = fixture(tmp_path, False)
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, state = source_fixture(tmp_path)
     todos = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
     target = next(todo for todo in todos if todo["todo_id"] == "todo_target")
     target.pop("claimed_by")
@@ -408,18 +578,25 @@ def test_bound_user_action_metadata_through_real_cli(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_bound_user_action_leased_metadata_through_real_cli(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+@pytest.mark.parametrize("expired", [False, True])
+def test_bound_user_action_releases_retained_execution_before_administrative_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, expired: bool,
 ) -> None:
-    isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, state = fixture(tmp_path, False)
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, state = source_fixture(tmp_path)
     todos = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
     target = next(todo for todo in todos if todo["todo_id"] == "todo_target")
     target.pop("claimed_by")
     target.update(role="user", task_class="user_action", source_section="User Todo",
                   created_by="agent-a", bound_agent="agent-a")
+    retained = {"schema_version": "task_lease_v0", "goal_id": "goal-a", "todo_id": "todo_target",
+        "owner": "agent-a", "idempotency_key": "retained-copy", "status": "active", "version": 2,
+        "lease_epoch": 1, "write_scopes": [], "acquired_at": "2020-01-01T00:00:00Z",
+        "updated_at": "2020-01-01T00:00:00Z", "acquire_ttl_seconds": 600,
+        "expires_at": "2020-01-01T00:10:00Z" if expired else "2099-01-01T00:00:00Z"}
     projection = build_todo_runtime_shadow_projection(
-        goal_id="goal-a", todos=todos, handoff_mode="hard_lease",
+        goal_id="goal-a", todos=todos, handoff_mode="hard_lease", leases=[retained],
     )
     initialize_canonical_authority(tmp_path / "runtime", "goal-a", projection,
                                    state_path=state, provider=provider)
@@ -433,15 +610,26 @@ def test_bound_user_action_leased_metadata_through_real_cli(
         assert process.returncode == 0, process.stderr
         return json.loads(process.stdout)
 
-    acquired = lease("acquire", "--owner", "agent-a", "--idempotency-key", "copy-execution")
-    retained = acquired["lease"]
-    proof = ["--task-lease-idempotency-key", "copy-execution",
+    proof = ["--task-lease-idempotency-key", "retained-copy",
              "--task-lease-expected-version", str(retained["version"])]
     before = records(registry)
+    for supplied in ([], proof):
+        rejected = update(registry, "--role", "user", "--note", "Blocked administrative copy", *supplied, ok=False)
+        assert rejected["reason_code"] == "todo_not_executable"
+        assert rejected["recovery"]["action"] == "reconcile_lease_owner"
+        assert "acquire" not in rejected["recovery"]
+        assert records(registry) == before and not state.exists()
+    inspected = lease("inspect")
+    assert inspected["active"] is False
+    if not expired:
+        assert inspected["executor_constraint"]["reason"] == "todo_not_executable"
+    released = lease("release", "--owner", "agent-a", "--idempotency-key", "retained-copy",
+                     "--expected-version", str(retained["version"]))
+    revision = lease("inspect")["provider_revision"]
     args = ["--role", "user", "--text", "Reminder: disposition awaits user execution",
             "--note", "Delivery receipt only", "--evidence", "Synthetic delivery receipt",
-            "--update-operation-id", "leased-action-copy",
-            "--update-expected-provider-revision", acquired["provider_revision"], *proof]
+            "--update-operation-id", "administrative-action-copy",
+            "--update-expected-provider-revision", revision]
     assert update(registry, *args, "--dry-run")["status"] == "planned"
     assert records(registry) == before
     applied = update(registry, *args)
@@ -452,37 +640,33 @@ def test_bound_user_action_leased_metadata_through_real_cli(
     assert after["todo_target"]["evidence"] == "Synthetic delivery receipt"
     for field in ("role", "task_class", "status", "done", "created_by", "bound_agent", "claimed_by"):
         assert after["todo_target"].get(field) == before["todo_target"].get(field)
-    assert lease("inspect")["lease"] == retained
+    assert lease("inspect")["lease"] == released["lease"]
     assert update(registry, *args)["status"] == "replayed"
     assert update(registry, *args, "--note", "Conflicting retry", ok=False)["reason_code"] == "coordination_operation_identity_mismatch"
-    assert update(registry, "--role", "user", "--note", "Stale writer", *proof,
+    assert update(registry, "--role", "user", "--note", "Stale writer",
                   "--update-operation-id", "stale-copy",
-                  "--update-expected-provider-revision", acquired["provider_revision"], ok=False)["reason_code"] == "provider_revision_mismatch"
+                  "--update-expected-provider-revision", revision, ok=False)["reason_code"] == "provider_revision_mismatch"
     for attempt in (["--agent-id", "agent-b"], ["--status", "blocked"],
                     ["--required-capability", "shell"], ["--bound-agent", "agent-b"],
                     ["--task-lease-idempotency-key", "wrong-key"],
                     ["--task-lease-expected-version", "0"]):
-        update(registry, "--role", "user", "--note", "Refused edit", *proof, *attempt, ok=False)
+        rejected = update(registry, "--role", "user", "--note", "Refused edit", *attempt, ok=False)
+        if attempt == ["--agent-id", "agent-b"]:
+            assert rejected["reason_code"] == "bound_agent_mismatch"
     assert records(registry) == after
-    assert lease("inspect")["lease"] == retained
-    released = lease("release", "--owner", "agent-a", "--idempotency-key", "copy-execution",
-                     "--expected-version", str(retained["version"]))
+    assert lease("inspect")["lease"] == released["lease"]
     rejected = update(registry, "--role", "user", "--note", "Old execution", *proof, ok=False)
-    assert rejected["recovery"]["action"] == "acquire_fresh_lease"
+    assert rejected["recovery"]["action"] == "resolve_lifecycle_edit"
+    assert "acquire" not in rejected["recovery"]
     assert rejected["recovery"]["execution_authority_granted"] is False
     assert records(registry) == after
     # Historical success replays but grants no authority for a new operation.
     assert update(registry, *args)["status"] == "replayed"
-    fresh = lease("acquire", "--owner", "agent-a", "--idempotency-key", "next-copy-execution",
-                  "--expected-version", str(released["lease"]["version"]))
-    assert fresh["lease"]["lease_epoch"] == retained["lease_epoch"] + 1
     recovered = update(registry, "--role", "user", "--note", "Recovered metadata",
                        "--update-operation-id", "fresh-action-copy",
-                       "--update-expected-provider-revision", fresh["provider_revision"],
-                       "--task-lease-idempotency-key", "next-copy-execution",
-                       "--task-lease-expected-version", str(fresh["lease"]["version"]))
+                       "--update-expected-provider-revision", applied["provider_revision"])
     assert recovered["status"] == "applied"
-    assert lease("inspect")["lease"] == fresh["lease"]
+    assert lease("inspect")["lease"] == released["lease"]
     assert not records(registry)["todo_target"].get("claimed_by")
 
 
@@ -548,7 +732,7 @@ def test_promoted_hard_lease_deferred_todo_supersedes_through_real_cli(
     ["--task-class", "continuous_monitor"], ["--status", "blocked", "--agent-id", "agent-b"],
 ])
 def test_promoted_unsupported_or_unauthorized_update_never_falls_back(tmp_path: Path, args: list[str]) -> None:
-    registry, state = fixture(tmp_path, True)
+    registry, state = fixture(tmp_path)
     before = records(registry)
     update(registry, *args, ok=False)
     assert records(registry) == before
@@ -560,7 +744,7 @@ def test_promoted_unsupported_or_unauthorized_update_never_falls_back(tmp_path: 
     ("todo_target", "user", "Todo does not have the requested role"),
 ])
 def test_native_target_lookup_keeps_public_value_error(tmp_path: Path, todo_id: str, role: str, reason: str) -> None:
-    registry, state = fixture(tmp_path, True)
+    registry, state = fixture(tmp_path)
     before = records(registry)
     with pytest.raises(ValueError, match=reason):
         update_goal_todo(registry_path=registry, goal_id="goal-a", todo_id=todo_id,
@@ -569,7 +753,7 @@ def test_native_target_lookup_keeps_public_value_error(tmp_path: Path, todo_id: 
     assert not state.exists()
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("condition_kind", ["todo_done", "monitor_changed"])
 @pytest.mark.parametrize("satisfied", [False, True])
 def test_public_cli_external_wait_uses_current_successor_source(
@@ -577,7 +761,7 @@ def test_public_cli_external_wait_uses_current_successor_source(
 ) -> None:
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, state = fixture(tmp_path, False)
+    registry, state = source_fixture(tmp_path)
     items = list(records(registry).values())
     successor = next(item for item in items if item["todo_id"] == "todo_other")
     successor.update(claimed_by="agent-a", resume_when=f"{condition_kind}:todo_evidence",
@@ -594,24 +778,20 @@ def test_public_cli_external_wait_uses_current_successor_source(
          "task_class": "continuous_monitor", "claimed_by": "agent-a", "material_change_generation": 3,
          "cadence": "1h", "watch_only": "true"},
     ])
-    if provider == "legacy":
-        rows = []
-        for item in items:
-            metadata = {key: item[key] for key in ("todo_id", "status", "task_class", "claimed_by",
-                        "note", "resume_when", "resume_monitor_generation", "material_change_generation",
-                        "cadence", "watch_only") if item.get(key) is not None}
-            rows.append(f"- [{'x' if item['status'] == 'done' else ' '}] {item['text']}\n"
-                        + format_todo_metadata_line(**metadata))
-        state.write_text("# Goal\n\n## Agent Todo\n\n" + "\n".join(rows) + "\n", encoding="utf-8")
-    else:
-        projection = build_todo_runtime_shadow_projection(goal_id="goal-a", todos=items, handoff_mode="soft_claim")
-        initialize_canonical_authority(tmp_path / "runtime", "goal-a", projection, state_path=state, provider=provider)
-        state.unlink()
+    projection = build_todo_runtime_shadow_projection(
+        goal_id="goal-a", todos=items, handoff_mode="soft_claim",
+    )
+    initialize_canonical_authority(
+        tmp_path / "runtime", "goal-a", projection, state_path=state, provider=provider,
+    )
+    state.unlink()
     before = records(registry)
     assert before["todo_other"]["resume_ready"] is satisfied
-    args = ["--resume-when", "monitor_changed:todo_monitor", "--successor-todo-id", "todo_other"]
-    if provider != "legacy":
-        args += ["--update-operation-id", "source-satisfied-successor"]
+    args = [
+        "--resume-when", "monitor_changed:todo_monitor",
+        "--successor-todo-id", "todo_other",
+        "--update-operation-id", "source-satisfied-successor",
+    ]
     if not satisfied:
         source = list_goal_todos(registry_path=registry, goal_id="goal-a")
         display = state.read_bytes() if state.exists() else None
@@ -630,6 +810,5 @@ def test_public_cli_external_wait_uses_current_successor_source(
     assert after["todo_target"]["successor_todo_ids"] == ["todo_other"]
     assert after["todo_other"] == before["todo_other"]
     assert after["todo_other"]["resume_ready"] is True
-    if provider != "legacy":
-        assert update(registry, *args)["status"] == "replayed"
-        assert records(registry) == after
+    assert update(registry, *args)["status"] == "replayed"
+    assert records(registry) == after

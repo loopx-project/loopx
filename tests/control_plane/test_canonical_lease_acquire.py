@@ -3,14 +3,89 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 
 REPO = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("retained", [False, True])
+def test_user_action_cannot_grant_execution_and_retained_lease_can_be_released(
+    tmp_path, monkeypatch, provider, retained,
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    runtime, state, registry = tmp_path / "runtime", tmp_path / "state.md", tmp_path / "registry.json"
+    goal, target = "user-action-lease", "todo_user_action"
+    state.write_text("# Synthetic bound User action\n")
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
+        "id": goal, "repo": str(tmp_path), "state_file": state.name,
+        "coordination": {"registered_agents": ["agent-a", "agent-b"]},
+    }]}))
+    now = datetime.now(timezone.utc)
+    leases = [{"schema_version": "task_lease_v0", "goal_id": goal, "todo_id": target,
+        "owner": "agent-b", "idempotency_key": "retained-execution", "status": "active",
+        "version": 3, "lease_epoch": 2, "write_scopes": [], "acquire_ttl_seconds": 600,
+        "acquired_at": now.isoformat(), "updated_at": now.isoformat(),
+        "expires_at": (now + timedelta(minutes=10)).isoformat()}] if retained else []
+    projection = build_todo_runtime_shadow_projection(goal_id=goal, handoff_mode="hard_lease",
+        leases=leases, todos=[{"schema_version": "todo_item_v0", "todo_id": target,
+            "role": "user", "task_class": "user_action", "status": "open", "done": False,
+            "text": "Review the synthetic observation", "bound_agent": "agent-a",
+            "archive_state": "active", "source_section": "User Todo", "index": 1}])
+    initialize_canonical_authority(runtime, goal, projection, state_path=state, provider=provider)
+
+    def cli(*args, expected_exit=0):
+        child = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+            "--runtime-root", str(runtime), "--format", "json", *args,
+            "--goal-id", goal, "--todo-id", target], cwd=REPO,
+            capture_output=True, text=True, timeout=60, check=False)
+        assert child.returncode == expected_exit, child.stdout + child.stderr
+        return json.loads(child.stdout)
+
+    def current():
+        return read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal, include_leases=True)
+
+    before, display = current(), state.read_bytes()
+    rejected = cli("task-lease", "acquire", "--owner", "outsider", "--idempotency-key", "outsider", expected_exit=1)
+    assert rejected["error_code"] == "owner_not_registered"
+    for owner in ("agent-a", "agent-b"):
+        rejected = cli("task-lease", "acquire", "--owner", owner,
+            "--idempotency-key", "new-" + owner, "--expected-version", "3" if retained else "0", expected_exit=1)
+        assert rejected["error_code"] == "todo_not_executable"
+        assert current() == before and state.read_bytes() == display
+    inspected = cli("task-lease", "inspect")
+    assert inspected["active"] is False
+    if retained:
+        assert inspected["executor_constraint"] == {"effective": False, "reason": "todo_not_executable"}
+        proof = ("--owner", "agent-b", "--idempotency-key", "retained-execution", "--expected-version", "3")
+        for operation, extra in (("renew", ()), ("transfer", ("--new-owner", "agent-a", "--new-idempotency-key", "transfer-a"))):
+            rejected = cli("task-lease", operation, *proof, *extra, expected_exit=1)
+            assert rejected["error_code"] == "todo_not_executable"
+            assert current() == before and state.read_bytes() == display
+        released = cli("task-lease", "release", *proof)
+        assert released["lease"]["status"] == "released"
+        after_release = current()
+        replay = cli("task-lease", "release", *proof)
+        assert replay["idempotent"] is True and current() == after_release
+        assert replay["original_receipt"] == released["original_receipt"]
+    before_copy = current()
+    rejected = cli("todo", "update", "--agent-id", "agent-b", "--note", "Foreign copy", expected_exit=1)
+    assert rejected["reason_code"] == "bound_agent_mismatch" and current() == before_copy
+    assert cli("todo", "update", "--agent-id", "agent-a", "--note", "Bound administrative copy",
+        "--update-operation-id", "bound-copy", "--update-expected-provider-revision",
+        before_copy["provider_revision"])["ok"] is True
+    completion = ("todo", "complete", "--agent-id", "agent-a", "--decision-outcome", "cancel",
+        "--evidence", "The synthetic observation was withdrawn")
+    assert cli(*completion, "--dry-run")["ok"] is True
+    assert cli(*completion)["ok"] is True
+    assert cli("todo", "list")["todo"]["status"] == "done"
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

@@ -1,4 +1,4 @@
-"""Supported source leases retain readback without the historic mutation facade."""
+"""Historical source leases retain readback and exact cleanup without the facade."""
 
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ def test_source_lease_lifecycle_uses_retained_reader(
             "task-lease", action, "--todo-id", "todo_source", *args, success=success
         )
 
-    first = lease(
+    rejected = lease(
         "acquire",
         "--owner",
         "agent-a",
@@ -73,32 +73,34 @@ def test_source_lease_lifecycle_uses_retained_reader(
         "source-a",
         "--ttl-seconds",
         "600",
-        success=mode != "soft_claim",
+        success=False,
     )
-    if mode == "soft_claim":
-        assert not first["ok"] and first["error_code"] == "handoff_mode_forbids_lease"
-        assert lease("inspect")["lease"] is None
-        assert (w.state.read_bytes(), w.registry.read_bytes()) == original
-        return
+    assert not rejected["ok"]
+    assert rejected["error_code"] == "canonical_authority_required"
 
-    assert first["ok"] and first["acquired"] and first["lease"]["owner"] == "agent-a"
-    assert first["lease"]["version"] == first["lease"]["lease_epoch"] == 1
-    assert lease("inspect")["active"] is True
-    retry = lease(
-        "acquire",
-        "--owner",
-        "agent-a",
-        "--idempotency-key",
-        "source-a",
-        "--ttl-seconds",
-        "600",
+    lease_path = (
+        w.runtime / "goals" / w.goal / "task-leases" / "todo_source.json"
     )
-    assert retry["idempotent"] and retry["lease"] == first["lease"]
-    denied = lease(
-        "acquire", "--owner", "agent-b", "--idempotency-key", "other", success=False
-    )
-    assert not denied["ok"] and denied["error_code"] == "todo_lease_conflict"
-    renewed = lease(
+    lease_path.parent.mkdir(parents=True, exist_ok=True)
+    historical = {
+        "schema_version": "task_lease_v0",
+        "goal_id": w.goal,
+        "todo_id": "todo_source",
+        "status": "active",
+        "owner": "agent-a",
+        "idempotency_key": "source-a",
+        "write_scopes": [],
+        "acquire_ttl_seconds": 600,
+        "version": 1,
+        "lease_epoch": 1,
+        "acquired_at": "2026-09-01T00:00:00Z",
+        "updated_at": "2026-09-01T00:00:00Z",
+        "expires_at": "2099-01-01T00:00:00Z",
+    }
+    lease_path.write_text(json.dumps(historical))
+    assert lease("inspect")["lease"] == historical
+
+    renew = lease(
         "renew",
         "--owner",
         "agent-a",
@@ -106,58 +108,33 @@ def test_source_lease_lifecycle_uses_retained_reader(
         "source-a",
         "--expected-version",
         "1",
+        success=False,
     )
-    assert renewed["lease"]["version"] == 2 and renewed["lease"]["lease_epoch"] == 1
-    # The exact original renewal is receipt recovery, not a stale new write.
-    replay = lease(
-        "renew",
-        "--owner",
-        "agent-a",
-        "--idempotency-key",
-        "source-a",
-        "--expected-version",
-        "1",
-    )
-    assert replay["idempotent"] and replay["lease"] == renewed["lease"]
-    assert lease("inspect")["lease"] == renewed["lease"]
-    transferred = lease(
+    assert renew["error_code"] == "canonical_authority_required"
+    transfer = lease(
         "transfer",
         "--owner",
         "agent-a",
         "--idempotency-key",
         "source-a",
         "--expected-version",
-        "2",
+        "1",
         "--new-owner",
         "agent-b",
         "--new-idempotency-key",
         "source-b",
-    )
-    assert (
-        transferred["lease"]["version"] == 3
-        and transferred["lease"]["lease_epoch"] == 2
-    )
-    assert transferred["lease"]["owner"] == "agent-b"
-    stale = lease(
-        "renew",
-        "--owner",
-        "agent-b",
-        "--idempotency-key",
-        "source-b",
-        "--expected-version",
-        "2",
         success=False,
     )
-    assert not stale["ok"] and stale["error_code"] == "version_mismatch"
-    assert lease("inspect")["lease"] == transferred["lease"]
+    assert transfer["error_code"] == "canonical_authority_required"
+    assert lease("inspect")["lease"] == historical
+
     released = lease(
         "release",
-        "--owner",
-        "agent-b",
+        "--owner", "agent-a",
         "--idempotency-key",
-        "source-b",
+        "source-a",
         "--expected-version",
-        "3",
+        "1",
     )
     assert released["lease"]["status"] == "released"
     retained = lease("inspect")

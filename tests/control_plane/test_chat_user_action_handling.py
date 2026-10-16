@@ -15,11 +15,15 @@ from canonical_authority_fixture import initialize_canonical_authority, isolate_
 from test_todo_decision_scope_lifecycle import AGENT_ID, GOAL_ID, _write_fixture
 from loopx.chat_action_store import ChatActionStore
 from loopx.chat_actions import ChatActionService
+from loopx.control_plane.coordination.coordination_state_contract import (
+    TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION,
+    TODO_DOMAIN_RECORD_FIELDS,
+)
 from loopx.control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.todos import add_goal_todo, list_goal_todos
 
-PROVIDERS = [("legacy", "soft_claim"), ("file", "hard_lease"), ("sqlite", "soft_claim")]
+PROVIDERS = [("file", "hard_lease"), ("sqlite", "soft_claim")]
 
 
 def _goal(tmp_path: Path, monkeypatch, provider: str, handoff_mode: str):
@@ -27,21 +31,25 @@ def _goal(tmp_path: Path, monkeypatch, provider: str, handoff_mode: str):
     _, state, registry = _write_fixture(tmp_path)
     config = json.loads(registry.read_text())
     config["common_runtime_root"] = str(tmp_path / "runtime")
+    config["goals"][0]["coordination"]["handoff_mode"] = handoff_mode
     registry.write_text(json.dumps(config))
+    projection = build_todo_runtime_shadow_projection(
+        goal_id=GOAL_ID, handoff_mode=handoff_mode, todos=[],
+    )
+    projection["todo_read_model"] = {
+        **projection["todo_read_model"],
+        "schema_version": TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION,
+        "contract_fields": list(TODO_DOMAIN_RECORD_FIELDS),
+    }
+    initialize_canonical_authority(
+        tmp_path / "runtime", GOAL_ID, projection, state_path=state, provider=provider,
+    )
     target = add_goal_todo(registry_path=registry, goal_id=GOAL_ID, role="agent",
         text="Continue once the owner has created the sessions.", status="blocked",
         task_class="advancement_task", claimed_by=AGENT_ID)
     action = add_goal_todo(registry_path=registry, goal_id=GOAL_ID, role="user",
         text="Create the remaining role sessions in the desktop App.", task_class="user_action", bound_agent=AGENT_ID,
         unblocks_todo_id=target["todo_id"])
-    if provider != "legacy":
-        config["goals"][0]["coordination"]["handoff_mode"] = handoff_mode
-        registry.write_text(json.dumps(config))
-        projection = build_todo_runtime_shadow_projection(
-            goal_id=GOAL_ID, handoff_mode=handoff_mode,
-            todos=list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"])
-        initialize_canonical_authority(tmp_path / "runtime", GOAL_ID, projection,
-                                       state_path=state, provider=provider)
     service = ChatActionService(store=ChatActionStore(tmp_path / "actions"), registry_path=registry)
     return registry, service, target["todo_id"], action["todo_id"]
 

@@ -11,7 +11,7 @@ import {planLeaseClaimTransfer} from "./lease_claim_transfer.ts";
 import {decideTaskLeaseLifecycle, materializeTaskLeaseLifecycle,
   type TaskLeaseLifecycleDecisionOperation, type TaskLeaseLifecycleDecisionCommand} from "../work_items/task_lease_lifecycle_decision.ts";
 import {requireStringLiteral} from "../runtime_decode.ts";
-import {HANDOFF_MODES} from "./handoff_mode_policy.ts";
+import {HANDOFF_MODES, retiredHandoffModeRejection, HANDOFF_MODE_RETIRED_REASON} from "./handoff_mode_policy.ts";
 import {leaseEpoch, leaseIsActive, leaseVersion, normalizeAgent, normalizeGoalId,
   normalizeIdempotencyKey, normalizeOwner, normalizeTodoId,
   normalizeTtl, utcIsoformat, TaskLeaseAcquireError, type LeaseRecord} from "../work_items/task_lease_acquire.ts";
@@ -112,6 +112,9 @@ export async function executeCanonicalTaskLeaseLifecycle(store: AuthorityStore, 
       const current = await store.loadAuthority();
       if (current.status !== "loaded") throw new AuthorityStoreProtocolError("current lease authority unavailable");
       validateCoordinationTodoReadModel(current.head, input.goal_id);
+      const retired = retiredHandoffModeRejection(current.head.handoff_mode ?? "legacy");
+      if (retired !== null) return {...failed(retired, HANDOFF_MODE_RETIRED_REASON),
+        original_receipt: result.original_receipt};
       const dependency = todoExecutionDependencyRejection(
         indexCoordinationProjection(current.head, input.goal_id).todos, input.todo_id, input.now);
       return dependency === null ? result : {...failed(dependency.code, dependency.reason),
@@ -151,7 +154,9 @@ export async function executeCanonicalTaskLeaseLifecycle(store: AuthorityStore, 
         ...(lease.write_repository == null ? {} : {write_repository: String(lease.write_repository)}), acquire_ttl_seconds: null} : null,
       command});
     if (decision.outcome === "rejected" || decision.outcome === "conflict") {
-      return {...failed(decision.code, `canonical task lease ${input.operation} rejected: ${decision.code}`),
+      return {...failed(decision.code, decision.code === "handoff_mode_retired"
+        ? "Legacy ownership cannot renew or transfer execution; release retained leases and review handoff-mode plan-migration/migrate."
+        : `canonical task lease ${input.operation} rejected: ${decision.code}`),
         handoff_mode: mode, expected_version: input.expected_version, actual_version: leaseVersion(lease),
         ...(todo ? {todo_status: todo.status, claimed_by: todo.claimed_by ?? null, excluded_agents: excluded} : {})};
     }

@@ -38,9 +38,19 @@ source revision is newer. A provably newer runtime remains selected. Both local 
 artifact's identity before the workspace opens.
 
 The bundled runtime carries its Core package version from the archived wheel
-metadata. Main App build numbers (`0.0.0-main.…`) identify the native shell;
-they are not compared with CLI package versions. Older bundle metadata retains
-its previous shell-version fallback; this correction requires an App update.
+metadata. Native validation and ordering use Python's [PEP 440 version format](https://packaging.python.org/en/latest/specifications/version-specifiers/),
+including alpha, beta, release candidate, development, post-release and local
+versions. The original version string remains in the identity; parsing does not
+rewrite receipts or installation metadata. A stable package is newer than its
+same-base prerelease, so even an App-owned or installer-default fallback cannot
+downgrade it. Equal package versions still need source ancestry or the existing
+same-installation ownership rule. Invalid versions remain unavailable.
+
+Main App build numbers (`0.0.0-main.…`) identify the native shell; they are not
+compared with CLI package versions. Older bundle metadata retains its previous
+shell-version fallback. Only those historical Main shell versions use their
+release base for comparison; real Core prereleases keep their order. This
+correction requires an App update; updating the CLI alone cannot patch it.
 
 If the bundle is newer, or no selected CLI qualifies, the App prepares its
 bundled snapshot in its own data directory through the existing installer.
@@ -321,6 +331,14 @@ LOOPX_TEST_APP="/path/to/LoopX.app" cargo test --lib \
   real_release_backup_restores_damage_and_rejects_tampering -- --ignored
 LOOPX_TEST_SIGNED_ARCHIVE="/path/to/LoopX.app.tar.gz" cargo test \
   --test signed_bundle -- --ignored
+LOOPX_TEST_APP="/path/to/older/LoopX.app" \
+LOOPX_TEST_SIGNED_ARCHIVE="/path/to/LoopX.app.tar.gz" \
+LOOPX_TEST_INSTALL_PARENT="/Volumes/disposable-apfs-test-volume" cargo test --lib \
+  real_release_installs_on_another_volume_and_keeps_the_old_app -- --ignored
+LOOPX_TEST_APP="/path/to/older/LoopX.app" \
+LOOPX_TEST_SIGNED_ARCHIVE="/path/to/LoopX.app.tar.gz" \
+LOOPX_TEST_UNSUPPORTED_INSTALL_PARENT="/Volumes/disposable-hfs-test-volume" cargo test --lib \
+  real_release_keeps_old_app_when_volume_rejects_atomic_exchange -- --ignored
 ```
 
 The first check copies the signed App into temporary directories, then exercises
@@ -328,11 +346,34 @@ the production restore path after removing its executable, a sealed runtime
 resource, or the entire target bundle. It also rejects a tampered backup before
 journaling or replacement and checks that the source artifact remains intact.
 The second verifies the updater archive with the shipped public key and rejects
-modified bytes. Neither check launches the App or writes to an installed App or
-user data. These qualify the native recovery and signature boundaries; they do
+modified bytes. The third requires a writable disposable APFS volume separate
+from the system temporary directory. It copies the source App into a temporary
+directory there, installs a distinct update through the production filesystem
+adapter, and verifies both the replacement and retained previous App. It then
+restores the pre-install backup through the production recovery adapter on that
+same target, checking the old identity, executable and signature, and that the
+rollback journal callback ran before replacement. The fourth requires
+a writable disposable HFS+ volume and a source App distinct from the update
+archive. It first confirms that the filesystem rejects atomic directory exchange,
+then verifies that the production installer fails while the original App's
+identity, executable and signature remain intact. The extracted candidate also
+remains intact; no sequential replacement is accepted. These checks never
+launch the App or write to an installed App or user data. They qualify the native
+replacement, recovery and signature boundaries; they do
 not replace packaged UI checks of download failure, restart, or runtime handoff.
 
 ### Recover An Interrupted App Update
+
+On writable macOS installations, the signed update is extracted beside the
+installed App and its bundle integrity is verified before the same atomic
+exchange used by recovery. This also works when the App is on a different
+APFS volume from the system temporary directory. The previous App remains in
+the retained staging directory as well as the verified recovery backup. A
+failed extraction or exchange leaves the current App in place. Filesystems
+without atomic directory exchange, including HFS+, require manual App
+replacement; no delete-and-move fallback is used. Administrator-owned install
+directories retain the existing system authorization path. Windows installation
+and separately managed CLI selection are unchanged.
 
 If replacement leaves the App incomplete and a backup is available, the update
 panel exposes **Restore previous version** directly. Restore it, then choose

@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import select
 import subprocess
+import sys
 
 import pytest
 
@@ -22,12 +23,92 @@ from loopx.control_plane.coordination.coordination_state_contract_generated impo
 from loopx.control_plane.coordination.runtime_shadow import build_runtime_shadow_source_snapshot
 from loopx.control_plane.coordination.shadow_management import read_shadow_management_state
 from loopx.control_plane.effect_runtime import effect_runtime_result
-from tests.control_plane.shadow_e2e_fixture import ShadowWorkspace
-from tests.control_plane.test_shadow_management_e2e import (
-    REPO_ROOT, _bootstrap, _candidate, _cli, _workspace,
-)
 
 pytestmark = pytest.mark.stage2c_e2e
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _workspace(tmp_path: Path) -> tuple[Path, Path]:
+    runtime = tmp_path / "runtime"
+    goals = []
+    for goal_id in ("goal-a", "goal-b"):
+        repo = tmp_path / goal_id
+        repo.mkdir()
+        (repo / "ACTIVE_GOAL_STATE.md").write_text(
+            f"---\ngoal_id: {goal_id}\nhandoff_mode: hard_lease\n"
+            "updated_at: 2026-01-01T00:00:00+00:00\n---\n\n## Agent Todo\n\n"
+        )
+        goals.append({
+            "id": goal_id,
+            "status": "active",
+            "repo": str(repo),
+            "state_file": "ACTIVE_GOAL_STATE.md",
+            "coordination": {
+                "agent_model": "peer_v1",
+                "registered_agents": ["agent-a", "agent-b"],
+                "runtime_shadow": {
+                    "schema_version": "loopx_coordination_runtime_shadow_config_v0",
+                    "enabled": True,
+                    "provider": "file_v0",
+                },
+            },
+        })
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({
+        "common_runtime_root": str(runtime),
+        "goals": goals,
+    }))
+    return registry, runtime
+
+
+def _cli(
+    registry: Path,
+    runtime: Path,
+    *args: str,
+    success: bool = True,
+) -> dict:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "loopx.cli",
+            "--registry",
+            str(registry),
+            "--runtime-root",
+            str(runtime),
+            "--format",
+            "json",
+            *args,
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if success:
+        assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    return json.loads(result.stdout)
+
+
+def _candidate(runtime: Path, goal: str) -> Path:
+    digest = hashlib.sha256(goal.encode()).hexdigest()[:16]
+    return runtime / "authority-shadow" / "file-v0" / f"authority-store-{digest}.json"
+
+
+def _bootstrap(
+    registry: Path,
+    runtime: Path,
+    goal: str = "goal-a",
+) -> dict:
+    return _cli(
+        registry,
+        runtime,
+        "coordination-shadow",
+        "bootstrap",
+        "--goal-id",
+        goal,
+        "--execute",
+    )["bootstrap"]
 
 
 _CRASH_RPC = r"""
@@ -118,49 +199,6 @@ def _durable_files(root: Path) -> dict[str, bytes]:
         for path in root.rglob("*")
         if path.is_file() and not any(part.endswith(".lock") for part in path.parts)
     }
-
-
-@pytest.mark.parametrize("archive", ["candidate", "outbox"])
-def test_pending_rollback_checks_corrupted_archive_before_finishing_and_can_retry_exact_repair(
-    tmp_path: Path, archive: str,
-) -> None:
-    registry, runtime = _workspace(tmp_path)
-    first = _bootstrap(registry, runtime)
-    _bootstrap(registry, runtime, "goal-b")
-    _, state = _source(registry, runtime)
-    w = ShadowWorkspace(registry, runtime, state, "goal-a")
-    w.crash("before_commit", "todo", "add", "--role", "agent", "--text", "Pending retained mutation")
-    candidate, outbox = _candidate(runtime, "goal-a"), runtime / "authority-shadow/outbox/goal-a"
-    pending_bytes = _durable_files(outbox)
-    assert any(name.endswith(".prepared.json") for name in pending_bytes)
-    candidate_bytes, primary_bytes = candidate.read_bytes(), state.read_bytes()
-    request = _rollback_request(runtime, state, first["provider_revision"])
-    moved = _kill_rpc("rollback", request, candidate if archive == "candidate" else outbox)
-    archived = Path(moved["destination"])
-    damaged = archived if archive == "candidate" else next(archived.rglob("*.prepared.json"))
-    original = damaged.read_bytes()
-    damaged.write_bytes(original + b"\ncorrupted fixture archive")
-    before = _durable_files(runtime)
-    result = _cli(registry, runtime, "coordination-shadow", "rollback", "--goal-id", "goal-a",
-                  "--provider-revision", first["provider_revision"], "--execute", success=False)
-    assert result["ok"] is False, result
-    assert result["rollback"]["reason_code"] == f"rollback_{archive}_identity_mismatch", result
-    after = _durable_files(runtime)
-    journal = str((_management(runtime) / "state.json").relative_to(runtime))
-    # Recovery may persist the same verified phase in canonical JSON order;
-    # only representation may differ, never transition state or evidence bytes.
-    assert json.loads(after.pop(journal)) == json.loads(before.pop(journal))
-    assert after == before
-    assert state.read_bytes() == primary_bytes
-    assert read_shadow_management_state(runtime, "goal-a")["status"] == "rolling_back"
-    damaged.write_bytes(original)
-    recovered = _cli(registry, runtime, "coordination-shadow", "rollback", "--goal-id", "goal-a",
-                     "--provider-revision", first["provider_revision"], "--execute")["rollback"]
-    assert recovered["status"] == "recovered", recovered
-    assert Path(recovered["candidate_archive_path"]).read_bytes() == candidate_bytes
-    assert _durable_files(Path(recovered["outbox_archive_path"])) == pending_bytes
-    assert read_shadow_management_state(runtime, "goal-a")["status"] == "inactive"
-    assert state.read_bytes() == primary_bytes
 
 
 def test_changed_source_after_bootstrap_commit_requires_abort_before_new_baseline(tmp_path: Path) -> None:

@@ -15,10 +15,11 @@ type Input = {operation_id: string; ref: string; sha256: string; input_ref: stri
 type Node = {operation_id: string; accepted: boolean; artifacts: {ref: string; sha256: string}[]; inputs: Input[]};
 export const DELEGATION_RESULT_USE_MAX_OPERATIONS = 64;
 export const DELEGATION_RESULT_USE_MAX_DEPTH = 16;
+export const DELEGATION_RESULT_USE_MAX_SECONDS = 15;
 
 export function delegationResultUseLimits(): JsonObject {
   return {max_operations: DELEGATION_RESULT_USE_MAX_OPERATIONS,
-    max_depth: DELEGATION_RESULT_USE_MAX_DEPTH, max_seconds: 15};
+    max_depth: DELEGATION_RESULT_USE_MAX_DEPTH, max_seconds: DELEGATION_RESULT_USE_MAX_SECONDS};
 }
 
 function requireThat(value: unknown, message: string): asserts value {

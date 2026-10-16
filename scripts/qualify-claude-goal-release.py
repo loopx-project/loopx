@@ -28,6 +28,17 @@ ARK_ANTHROPIC_BASE = "https://ark.cn-beijing.volces.com/api/compatible"
 MANIFEST_ASSETS = {"assets/alpha.txt": b"alpha\n", "assets/nested/beta.bin": bytes(range(256))}
 
 
+def _replan_active_state() -> str:
+    return (
+        "---\nstatus: active\n---\n\n## Objective\n\nDeliver and validate TASK.md.\n\n"
+        "## Next Action\n\nVerify artifact integrity, beyond the completed filename inventory.\n\n"
+        "## User Todo\n\n## Agent Todo\n\n"
+        "- [ ] [P1] Inventory the regular asset filenames in manifest.json.\n"
+        "  <!-- loopx:todo todo_id=todo_inventory status=open task_class=advancement_task "
+        "action_kind=implement claimed_by=worker-a task_repository=git:example.com/ledger -->\n"
+    )
+
+
 def run_host(command: list[str], *, cwd: Path, env: dict, timeout: float) -> str:
     """Bound output memory and clean this test's process group, including on timeout."""
     with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
@@ -157,7 +168,10 @@ def setup_replan(root: Path) -> tuple[Path, Path, Path]:
     """A legitimately finished inventory stage, not fabricated Goal acceptance."""
     from loopx.goal_mode_mcp import GoalModeMCPConfig, GoalModeMCPControlPlane
 
-    project, runtime, launcher = shared.setup(root)
+    project, runtime, launcher = shared.setup(
+        root,
+        active_state_text=_replan_active_state(),
+    )
     assets = project / "assets"
     for name, content in MANIFEST_ASSETS.items():
         path = project / name
@@ -165,14 +179,6 @@ def setup_replan(root: Path) -> tuple[Path, Path, Path]:
         path.write_bytes(content)
     (project / "manifest.json").write_text(json.dumps(["assets/alpha.txt", "assets/nested/beta.bin"]))
     shutil.copyfile(REPO / "tests/fixtures/host_vision_replan/TASK.md", project / "TASK.md")
-    (project / "ACTIVE_GOAL_STATE.md").write_text(
-        "---\nstatus: active\n---\n\n## Objective\n\nDeliver and validate TASK.md.\n\n"
-        "## Next Action\n\nVerify artifact integrity, beyond the completed filename inventory.\n\n"
-        "## User Todo\n\n## Agent Todo\n\n"
-        "- [ ] [P1] Inventory the regular asset filenames in manifest.json.\n"
-        "  <!-- loopx:todo todo_id=todo_inventory status=open task_class=advancement_task "
-        "action_kind=implement claimed_by=worker-a task_repository=git:example.com/ledger -->\n",
-    )
     assert json.loads((project / "manifest.json").read_text()) == sorted(
         str(path.relative_to(project)) for path in assets.rglob("*") if path.is_file())
     control = GoalModeMCPControlPlane(GoalModeMCPConfig(server_name="fixture",

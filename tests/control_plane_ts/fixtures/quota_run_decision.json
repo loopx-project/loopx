@@ -1,0 +1,473 @@
+{
+  "base_facts": {
+    "normal_delivery_allowed": true,
+    "recovery_delivery_allowed": false,
+    "self_repair_allowed": false,
+    "repair_effective_action": "",
+    "state": "eligible",
+    "reason": "eligible",
+    "quota_focus_wait": false,
+    "capability_gate": null,
+    "capability_monitor_fallback": false,
+    "workspace_guard": null,
+    "automation_prompt_upgrade": null,
+    "automation_prompt_upgrade_required": false,
+    "replan_required": false,
+    "replan_applies": false,
+    "goal_health_ok": true,
+    "inbox_reply_due": false,
+    "inbox_material_review_due": false,
+    "terminal_no_followup": false,
+    "task_orchestration_contract": null
+  },
+  "base_result": {
+    "normal_delivery_allowed": true,
+    "recovery_delivery_allowed": false,
+    "self_repair_allowed": false,
+    "capability_repair_allowed": false,
+    "workspace_repair_allowed": false,
+    "should_run": true,
+    "effective_action": "normal_run",
+    "reason": "eligible",
+    "state": "eligible",
+    "quota_patch": {},
+    "replan_decision_allowed": false
+  },
+  "cases": [
+    {
+      "name": "ordinary delivery",
+      "facts": {},
+      "expected": {}
+    },
+    {
+      "name": "recovery precedes self repair",
+      "facts": {
+        "normal_delivery_allowed": false,
+        "recovery_delivery_allowed": true,
+        "self_repair_allowed": true
+      },
+      "expected": {
+        "normal_delivery_allowed": false,
+        "recovery_delivery_allowed": true,
+        "self_repair_allowed": true,
+        "effective_action": "outcome_floor_recovery"
+      }
+    },
+    {
+      "name": "self repair keeps its declared action",
+      "facts": {
+        "normal_delivery_allowed": false,
+        "self_repair_allowed": true,
+        "repair_effective_action": "control_plane_projection_repair"
+      },
+      "expected": {
+        "normal_delivery_allowed": false,
+        "self_repair_allowed": true,
+        "effective_action": "control_plane_projection_repair"
+      }
+    },
+    {
+      "name": "self repair retains the generic fallback",
+      "facts": {
+        "normal_delivery_allowed": false,
+        "self_repair_allowed": true
+      },
+      "expected": {
+        "normal_delivery_allowed": false,
+        "self_repair_allowed": true,
+        "effective_action": "control_plane_repair"
+      }
+    },
+    {
+      "name": "capability repair",
+      "facts": {
+        "capability_gate": {
+          "action": "repair_bridge",
+          "reason": "repair capability"
+        }
+      },
+      "expected": {
+        "normal_delivery_allowed": false,
+        "capability_repair_allowed": true,
+        "effective_action": "capability_bridge_repair",
+        "reason": "repair capability"
+      }
+    },
+    {
+      "name": "owner capability is not agent repair",
+      "facts": {
+        "capability_gate": {
+          "action": "ask_owner",
+          "reason": "owner needed"
+        }
+      },
+      "expected": {
+        "normal_delivery_allowed": false,
+        "should_run": false,
+        "effective_action": "quota_skip",
+        "reason": "owner needed"
+      }
+    },
+    {
+      "name": "monitor fallback retains delivery",
+      "facts": {
+        "capability_gate": {
+          "action": "skip",
+          "reason": "missing capability"
+        },
+        "capability_monitor_fallback": true
+      },
+      "expected": {}
+    },
+    {
+      "name": "workspace precedes capability repair",
+      "facts": {
+        "recovery_delivery_allowed": true,
+        "self_repair_allowed": true,
+        "capability_gate": {
+          "action": "repair_bridge",
+          "reason": "repair capability"
+        },
+        "workspace_guard": {
+          "reason": "workspace repair"
+        }
+      },
+      "expected": {
+        "normal_delivery_allowed": false,
+        "workspace_repair_allowed": true,
+        "effective_action": "agent_workspace_repair",
+        "reason": "workspace repair"
+      }
+    },
+    {
+      "name": "automation closes all repair lanes",
+      "facts": {
+        "recovery_delivery_allowed": true,
+        "self_repair_allowed": true,
+        "capability_gate": {
+          "action": "repair_bridge",
+          "reason": "repair capability"
+        },
+        "workspace_guard": {
+          "reason": "workspace repair"
+        },
+        "automation_prompt_upgrade_required": true,
+        "automation_prompt_upgrade": {
+          "reason": "refresh prompt identity"
+        }
+      },
+      "expected": {
+        "normal_delivery_allowed": false,
+        "should_run": false,
+        "effective_action": "automation_prompt_upgrade_required",
+        "reason": "refresh prompt identity"
+      }
+    },
+    {
+      "name": "replan precedes delivery",
+      "facts": {
+        "replan_required": true,
+        "replan_applies": true
+      },
+      "expected": {
+        "normal_delivery_allowed": false,
+        "replan_decision_allowed": true,
+        "effective_action": "autonomous_replan_required",
+        "reason": "autonomous replan obligation is selected before monitor quiet or agent-scope wait classification"
+      }
+    },
+    {
+      "name": "another peer does not acquire the replan",
+      "facts": {
+        "replan_required": true,
+        "replan_applies": false
+      },
+      "expected": {}
+    },
+    {
+      "name": "health withholds replan",
+      "facts": {
+        "normal_delivery_allowed": false,
+        "state": "blocked_health",
+        "goal_health_ok": false,
+        "replan_required": true,
+        "replan_applies": true
+      },
+      "expected": {
+        "normal_delivery_allowed": false,
+        "state": "blocked_health",
+        "should_run": false,
+        "effective_action": "blocked_health"
+      }
+    },
+    {
+      "name": "workspace withholds replan",
+      "facts": {
+        "workspace_guard": {
+          "reason": "workspace repair"
+        },
+        "replan_required": true,
+        "replan_applies": true
+      },
+      "expected": {
+        "normal_delivery_allowed": false,
+        "workspace_repair_allowed": true,
+        "effective_action": "agent_workspace_repair",
+        "reason": "workspace repair"
+      }
+    },
+    {
+      "name": "terminal closes delivery",
+      "facts": {
+        "terminal_no_followup": true
+      },
+      "expected": {
+        "normal_delivery_allowed": false,
+        "should_run": false,
+        "state": "terminal_no_followup",
+        "effective_action": "terminal_no_followup",
+        "reason": "validated closure evidence derives terminal no-follow-up from complete todo sources and an empty frontier; stop recurring automation until an explicit resume",
+        "quota_patch": {
+          "state": "terminal_no_followup",
+          "reason": "derived terminal no-follow-up is confirmed by complete todo sources and an empty frontier"
+        }
+      }
+    },
+    {
+      "name": "terminal precedes automation upgrade",
+      "facts": {
+        "terminal_no_followup": true,
+        "automation_prompt_upgrade_required": true,
+        "automation_prompt_upgrade": {
+          "reason": "refresh prompt identity"
+        }
+      },
+      "expected": {
+        "normal_delivery_allowed": false,
+        "should_run": false,
+        "state": "terminal_no_followup",
+        "effective_action": "terminal_no_followup",
+        "reason": "validated closure evidence derives terminal no-follow-up from complete todo sources and an empty frontier; stop recurring automation until an explicit resume",
+        "quota_patch": {
+          "state": "terminal_no_followup",
+          "reason": "derived terminal no-follow-up is confirmed by complete todo sources and an empty frontier"
+        }
+      }
+    },
+    {
+      "name": "reply suppresses replan",
+      "facts": {
+        "inbox_reply_due": true,
+        "replan_required": true,
+        "replan_applies": true
+      },
+      "expected": {
+        "effective_action": "lark_inbox_reply_due",
+        "reason": "a direct Lark question, bot mention, or verified reply to the bot is pending reply"
+      }
+    },
+    {
+      "name": "reply takes priority over material review",
+      "facts": {
+        "inbox_reply_due": true,
+        "inbox_material_review_due": true
+      },
+      "expected": {
+        "effective_action": "lark_inbox_reply_due",
+        "reason": "a direct Lark question, bot mention, or verified reply to the bot is pending reply"
+      }
+    },
+    {
+      "name": "nonterminal upgrade precedes reply",
+      "facts": {
+        "automation_prompt_upgrade_required": true,
+        "automation_prompt_upgrade": {
+          "reason": "refresh prompt identity"
+        },
+        "inbox_reply_due": true
+      },
+      "expected": {
+        "normal_delivery_allowed": false,
+        "should_run": false,
+        "effective_action": "automation_prompt_upgrade_required",
+        "reason": "refresh prompt identity"
+      }
+    },
+    {
+      "name": "terminal inbox exception retains its original source",
+      "facts": {
+        "normal_delivery_allowed": false,
+        "recovery_delivery_allowed": true,
+        "self_repair_allowed": true,
+        "workspace_guard": {
+          "reason": "workspace repair"
+        },
+        "terminal_no_followup": true,
+        "automation_prompt_upgrade_required": true,
+        "automation_prompt_upgrade": {
+          "reason": "refresh prompt identity"
+        },
+        "inbox_material_review_due": true
+      },
+      "expected": {
+        "effective_action": "operator_inbox_material_review_due",
+        "reason": "captured unaddressed operator-inbox material is pending bounded review"
+      }
+    },
+    {
+      "name": "adaptive coordinator",
+      "facts": {
+        "task_orchestration_contract": {
+          "execution_state": "ready",
+          "mode": "adaptive"
+        }
+      },
+      "expected": {
+        "effective_action": "coordinate_task_bundle",
+        "reason": "the task coordinator may use admitted child lanes before its own worker-lane delivery"
+      }
+    },
+    {
+      "name": "explicit coordinator defaults to ready",
+      "facts": {
+        "task_orchestration_contract": {
+          "execution_state": "",
+          "mode": ""
+        }
+      },
+      "expected": {
+        "effective_action": "coordinate_task_bundle",
+        "reason": "the explicitly selected task coordinator must activate or resume eligible peer lanes before doing its own worker-lane delivery"
+      }
+    },
+    {
+      "name": "waiting coordinator does not intercept work",
+      "facts": {
+        "task_orchestration_contract": {
+          "execution_state": "waiting",
+          "mode": "adaptive"
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "coordinator does not capture inbox work",
+      "facts": {
+        "task_orchestration_contract": {
+          "execution_state": "ready",
+          "mode": "adaptive"
+        },
+        "inbox_material_review_due": true
+      },
+      "expected": {
+        "effective_action": "operator_inbox_material_review_due",
+        "reason": "captured unaddressed operator-inbox material is pending bounded review"
+      }
+    },
+    {
+      "name": "closed lane operator_gate",
+      "facts": {
+        "normal_delivery_allowed": false,
+        "state": "operator_gate"
+      },
+      "expected": {
+        "normal_delivery_allowed": false,
+        "state": "operator_gate",
+        "should_run": false,
+        "effective_action": "operator_gate_notify"
+      }
+    },
+    {
+      "name": "closed lane blocked_health",
+      "facts": {
+        "normal_delivery_allowed": false,
+        "state": "blocked_health"
+      },
+      "expected": {
+        "normal_delivery_allowed": false,
+        "state": "blocked_health",
+        "should_run": false,
+        "effective_action": "blocked_health"
+      }
+    },
+    {
+      "name": "closed lane throttled",
+      "facts": {
+        "normal_delivery_allowed": false,
+        "state": "throttled"
+      },
+      "expected": {
+        "normal_delivery_allowed": false,
+        "state": "throttled",
+        "should_run": false,
+        "effective_action": "throttled_skip"
+      }
+    },
+    {
+      "name": "closed lane focus_wait",
+      "facts": {
+        "normal_delivery_allowed": false,
+        "state": "focus_wait"
+      },
+      "expected": {
+        "normal_delivery_allowed": false,
+        "state": "focus_wait",
+        "should_run": false,
+        "effective_action": "blocked_wait"
+      }
+    },
+    {
+      "name": "closed lane waiting",
+      "facts": {
+        "normal_delivery_allowed": false,
+        "state": "waiting"
+      },
+      "expected": {
+        "normal_delivery_allowed": false,
+        "state": "waiting",
+        "should_run": false,
+        "effective_action": "blocked_wait"
+      }
+    },
+    {
+      "name": "closed lane paused",
+      "facts": {
+        "normal_delivery_allowed": false,
+        "state": "paused"
+      },
+      "expected": {
+        "normal_delivery_allowed": false,
+        "state": "paused",
+        "should_run": false,
+        "effective_action": "quota_skip"
+      }
+    },
+    {
+      "name": "closed lane unrecognized",
+      "facts": {
+        "normal_delivery_allowed": false,
+        "state": "unrecognized"
+      },
+      "expected": {
+        "normal_delivery_allowed": false,
+        "state": "unrecognized",
+        "should_run": false,
+        "effective_action": "quota_skip"
+      }
+    },
+    {
+      "name": "focus wait fact remains effective for unknown state",
+      "facts": {
+        "normal_delivery_allowed": false,
+        "state": "unrecognized",
+        "quota_focus_wait": true
+      },
+      "expected": {
+        "normal_delivery_allowed": false,
+        "state": "unrecognized",
+        "should_run": false,
+        "effective_action": "blocked_wait"
+      }
+    }
+  ]
+}

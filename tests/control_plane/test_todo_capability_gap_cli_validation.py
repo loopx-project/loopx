@@ -3,6 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from canonical_authority_fixture import initialize_canonical_authority
+from loopx.control_plane.coordination.runtime_shadow import (
+    build_todo_runtime_shadow_projection,
+)
 from loopx.control_plane.testing.canary_harness import (
     run_json_cli,
     write_fixture_registry,
@@ -28,7 +32,10 @@ def _write_fixture(tmp_path: Path) -> Path:
         "## Objective\n\n"
         "Keep capability-gap lifecycle evidence coherent.\n\n"
         "## Next Action\n\n"
-        "- Close the validated capability gap.\n",
+        "- Close the validated capability gap.\n\n"
+        "## User Todo / Owner Review Reading Queue\n\n"
+        "## Agent Todo\n\n"
+        "## Completed Work Archive\n",
         encoding="utf-8",
     )
     write_fixture_registry(
@@ -45,6 +52,16 @@ def _write_fixture(tmp_path: Path) -> Path:
         "registered_agents": [AGENT_ID],
     }
     registry_path.write_text(json.dumps(payload), encoding="utf-8")
+    initialize_canonical_authority(
+        runtime,
+        GOAL_ID,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID,
+            handoff_mode="soft_claim",
+            todos=[],
+        ),
+        state_path=state_file,
+    )
     return registry_path
 
 
@@ -96,4 +113,3 @@ def test_todo_complete_records_fixed_capability_gap_with_completion(
     assert completed["status"] == "done", completed
     assert completed["capability_gap_event"]["status"] == "fixed", completed
     assert completed["capability_gap_event"]["event_kind"] == "capability_gap"
-

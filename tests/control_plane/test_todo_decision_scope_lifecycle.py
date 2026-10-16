@@ -5,6 +5,14 @@ from pathlib import Path
 
 import pytest
 
+from canonical_authority_fixture import initialize_canonical_authority
+from loopx.control_plane.coordination.coordination_state_contract import (
+    TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION,
+    TODO_DOMAIN_RECORD_FIELDS,
+)
+from loopx.control_plane.coordination.runtime_shadow import (
+    build_todo_runtime_shadow_projection,
+)
 from loopx.quota import build_quota_should_run
 from loopx.status import collect_status, parse_active_state_todos
 from loopx.todos import add_goal_todo, complete_goal_todo, supersede_goal_todo
@@ -62,6 +70,25 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
     return repo, state, registry
 
 
+def _canonical_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
+    repo, state, registry = _write_fixture(tmp_path)
+    config = json.loads(registry.read_text(encoding="utf-8"))
+    config["common_runtime_root"] = str(tmp_path / "runtime")
+    registry.write_text(json.dumps(config), encoding="utf-8")
+    projection = build_todo_runtime_shadow_projection(
+        goal_id=GOAL_ID, handoff_mode="soft_claim", todos=[],
+    )
+    projection["todo_read_model"] = {
+        **projection["todo_read_model"],
+        "schema_version": TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION,
+        "contract_fields": list(TODO_DOMAIN_RECORD_FIELDS),
+    }
+    initialize_canonical_authority(
+        tmp_path / "runtime", GOAL_ID, projection, state_path=state,
+    )
+    return repo, state, registry
+
+
 def _todo(state: Path, todo_id: str) -> dict:
     todos = parse_active_state_todos(state.read_text(encoding="utf-8"))
     return next(
@@ -105,7 +132,7 @@ def _add_target_and_gate(
 def test_completed_gate_consumes_scope_for_already_open_publication(
     tmp_path: Path,
 ) -> None:
-    repo, state, registry = _write_fixture(tmp_path)
+    repo, state, registry = _canonical_fixture(tmp_path)
     target, gate = _add_target_and_gate(
         registry,
         required_scopes=[PUBLISH_SCOPE],
@@ -116,6 +143,7 @@ def test_completed_gate_consumes_scope_for_already_open_publication(
         goal_id=GOAL_ID,
         todo_id=gate["todo_id"],
         role="user",
+        agent_id=AGENT_ID,
         decision_outcome="approve",
         evidence="owner approved the exact release publication",
     )
@@ -164,7 +192,7 @@ def test_completed_gate_consumes_scope_for_already_open_publication(
 def test_completed_broad_gate_projects_standing_authority_into_quota(
     tmp_path: Path,
 ) -> None:
-    repo, state, registry = _write_fixture(tmp_path)
+    repo, state, registry = _canonical_fixture(tmp_path)
     target = add_goal_todo(
         registry_path=registry,
         goal_id=GOAL_ID,
@@ -219,7 +247,7 @@ def test_completed_broad_gate_projects_standing_authority_into_quota(
 
 
 def test_completed_gate_consumes_only_covered_scope(tmp_path: Path) -> None:
-    _repo, state, registry = _write_fixture(tmp_path)
+    _repo, state, registry = _canonical_fixture(tmp_path)
     target, gate = _add_target_and_gate(
         registry,
         required_scopes=[PUBLISH_SCOPE, ANNOUNCE_SCOPE],
@@ -230,6 +258,7 @@ def test_completed_gate_consumes_only_covered_scope(tmp_path: Path) -> None:
         goal_id=GOAL_ID,
         todo_id=gate["todo_id"],
         role="user",
+        agent_id=AGENT_ID,
         decision_outcome="approve",
         evidence="owner approved publication only",
     )
@@ -250,7 +279,7 @@ def test_completed_gate_consumes_only_covered_scope(tmp_path: Path) -> None:
 
 
 def test_superseded_gate_does_not_consume_required_scope(tmp_path: Path) -> None:
-    _repo, state, registry = _write_fixture(tmp_path)
+    _repo, state, registry = _canonical_fixture(tmp_path)
     target, gate = _add_target_and_gate(
         registry,
         required_scopes=[PUBLISH_SCOPE],
@@ -286,7 +315,7 @@ def test_non_approval_gate_outcome_remains_a_durable_block(
     decision_outcome: str,
     unblock_state: str,
 ) -> None:
-    repo, state, registry = _write_fixture(tmp_path)
+    repo, state, registry = _canonical_fixture(tmp_path)
     target, gate = _add_target_and_gate(
         registry,
         required_scopes=[PRIVATE_READ_SCOPE],
@@ -299,6 +328,7 @@ def test_non_approval_gate_outcome_remains_a_durable_block(
         goal_id=GOAL_ID,
         todo_id=gate["todo_id"],
         role="user",
+        agent_id=AGENT_ID,
         decision_outcome=decision_outcome,
         evidence=f"owner recorded {decision_outcome} for the exact private read",
     )
@@ -339,32 +369,33 @@ def test_non_approval_gate_outcome_remains_a_durable_block(
     assert consistency is None or consistency["ok"] is True
 
 
-def test_user_gate_completion_requires_explicit_decision_outcome(
+def test_user_gate_completion_without_decision_closes_only_the_source(
     tmp_path: Path,
 ) -> None:
-    _repo, state, registry = _write_fixture(tmp_path)
+    _repo, state, registry = _canonical_fixture(tmp_path)
     target, gate = _add_target_and_gate(
         registry,
         required_scopes=[PRIVATE_READ_SCOPE],
         target_status="blocked",
         decision_scope=PRIVATE_READ_SCOPE,
     )
-    before = state.read_text(encoding="utf-8")
+    result = complete_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        todo_id=gate["todo_id"],
+        role="user",
+        agent_id=AGENT_ID,
+        evidence="Close the request without recording an owner decision",
+    )
 
-    with pytest.raises(
-        ValueError,
-        match="user_gate completion requires decision_outcome",
-    ):
-        complete_goal_todo(
-            registry_path=registry,
-            goal_id=GOAL_ID,
-            todo_id=gate["todo_id"],
-            role="user",
-            evidence="ambiguous completion must not grant authority",
-        )
-
-    assert state.read_text(encoding="utf-8") == before
-    assert _todo(state, target["todo_id"])["status"] == "blocked"
+    assert result.get("decision_outcome") is None
+    assert "decision_scope_resolution" not in result
+    assert _todo(state, gate["todo_id"])["status"] == "done"
+    current_target = _todo(state, target["todo_id"])
+    assert current_target["status"] == "blocked"
+    assert current_target["required_decision_scopes"][0]["scope_key"] == (
+        "restricted_material"
+    )
 
 
 def test_custom_gate_consumes_only_its_explicit_custom_requirement(tmp_path: Path) -> None:
@@ -372,7 +403,7 @@ def test_custom_gate_consumes_only_its_explicit_custom_requirement(tmp_path: Pat
     from contextlib import redirect_stdout
     from io import StringIO
 
-    _, state, registry = _write_fixture(tmp_path)
+    _, state, registry = _canonical_fixture(tmp_path)
     custom = "other:action:study_conflict_review"
     unrelated = "other:action:study_method_review"
     named = "public_claim:action:publish_study"
@@ -392,7 +423,8 @@ def test_custom_gate_consumes_only_its_explicit_custom_requirement(tmp_path: Pat
     gate = json.loads(output.getvalue())
     assert _todo(state, gate["todo_id"])["decision_scope"]["kind"] == "other"
     result = complete_goal_todo(registry_path=registry, goal_id=GOAL_ID,
-        todo_id=gate["todo_id"], role="user", decision_outcome="approve",
+        todo_id=gate["todo_id"], role="user", agent_id=AGENT_ID,
+        decision_outcome="approve",
         evidence="Owner approved the conflict-of-interest declaration only.")
     resolution = result["decision_scope_resolution"]
     assert [(scope["kind"], scope["scope_key"]) for scope in resolution["resolved_required_decision_scopes"]] == [

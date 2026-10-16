@@ -34,6 +34,7 @@ from ..control_plane.quota.error_codes import (
     CloseoutQueryUnavailableError,
     HeartbeatReceiptIdentityConflictError,
     QuotaCommandValidationError,
+    QuotaDecisionTransportError,
 )
 from ..control_plane.quota.heartbeat_receipt import (
     attach_uncommitted_heartbeat_receipt,
@@ -91,6 +92,7 @@ from .quota_context import (
 )
 from .quota_failure_report import (
     QUOTA_EVENT_KINDS,
+    quota_decision_transport_failure_payload,
     quota_failure_payload,
     quota_validation_failure_payload,
     should_log_quota,
@@ -457,9 +459,19 @@ def _emit_quota_result(
             started_at=usage_quota_started,
         )
     bind_capture_selection_transport(payload, args)
-    capture_decision(capture_directory, payload)
-    if payload.get("ok") is True:
-        handoff_decision(capture_directory, getattr(args, "decision_handoff_socket", None))
+    try:
+        capture_decision(capture_directory, payload)
+        if payload.get("ok") is True:
+            handoff_decision(capture_directory, getattr(args, "decision_handoff_socket", None))
+    except QuotaDecisionTransportError as exc:
+        # The guard already ran. Report that typed fact with the durable receipt
+        # and saved decision, never a new collection failure that could replace
+        # the capture (an inline reentry runs inside the caller's guard).
+        failure = quota_decision_transport_failure_payload(
+            args, payload, exc, capture_directory=capture_directory,
+        )
+        print_payload(failure, args.format, _quota_renderer(args))
+        return 1
     payload = _project_quota_cli_payload(
         payload, args, detail_sections,
         context.scheduler_context if context is not None else None,

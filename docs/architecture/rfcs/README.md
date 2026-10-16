@@ -434,12 +434,17 @@ failure leaves the generated files untouched.
     approval. No new authority, Todo field, lifetime usage or Lark parity.
 - [Live Team Workspace v0](live-team-workspace-v0.md)
   ([中文版](live-team-workspace-v0.zh-CN.md))
-  - **Delivery on `main`:** Design proposal only; no live team-stream qualification.
+  - **Delivery on `main`:** Partial: bounded team inspection and readable Goal Chat
+    results/comparison are shipped; live team streaming remains unqualified.
   - **Current boundary:** A command surface plus spatial research studio, evidence
     handoff motion, conclusion revision and replay. L1 requires one real
     objection→revision→acceptance→adoption journey with evidence and intervention/stop
     feedback in packaged UI; L2 requires original-coordinator two-cycle acceptance;
     L3 qualifies semantic zoom and display scale. No new scheduler or authority.
+    The proposed [long-horizon product reading journey](../../product/use-cases/auto-research/long-horizon-progress-design.md)
+    ([中文版](../../product/use-cases/auto-research/long-horizon-progress-design.zh-CN.md))
+    adds a one-selection evidence-reading target under this presentation owner;
+    research calibration and packaged qualification remain open, without delaying L1/R2.
 - [Human Attention Wishlist v0](human-attention-wishlist-v0.md)
   ([中文版](human-attention-wishlist-v0.zh-CN.md))
   - **Delivery on `main`:** Intentionally deferred.

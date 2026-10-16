@@ -100,3 +100,73 @@ def test_real_cli_export_uses_canonical_ownership(tmp_path, monkeypatch, provide
     assert all(item['active_leases'] == [] for item in found)
     assert all(item['coordination_observation']['source_authority'] == provider + '_v0' for item in found)
     assert state.read_bytes() == before
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+def test_real_cli_reports_native_lease_and_recovers_provider_without_legacy_fallback(tmp_path, provider):
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority, run_json_cli, run_json_cli_result
+    from test_goal_channel_hard_lease_visibility import _write_status_workspace
+
+    registry, repo, runtime = _write_status_workspace(tmp_path)
+    state = repo / 'ACTIVE_GOAL_STATE.md'
+    import_fixture_authority(registry, GOAL_ID, provider=provider)
+
+    def cli(*args):
+        return run_json_cli(*args, registry_path=registry, runtime_root=runtime)
+
+    cli('handoff-mode', 'set', '--goal-id', GOAL_ID, '--mode', 'hard_lease',
+        '--operation-id', 'channel-lease-fixture-policy')
+    task = cli('todo', 'add', '--goal-id', GOAL_ID, '--role', 'agent',
+        '--text', 'Observe the current canonical lease.', '--task-class', 'advancement_task',
+        '--claimed-by', 'agent-a')
+    lease = cli('task-lease', 'acquire', '--goal-id', GOAL_ID, '--todo-id', task['todo_id'],
+        '--owner', 'agent-a', '--idempotency-key', 'channel-lease-fixture', '--ttl-seconds', '600')
+    assert lease['acquired'] is True
+    original = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID, include_leases=True)
+    source, registry_bytes = state.read_bytes(), registry.read_bytes()
+    _write_active_lease(runtime, owner='stale-agent', todo_id=task['todo_id'])
+
+    def channel():
+        status = cli('status', '--goal-id', GOAL_ID)
+        items = status['attention_queue']['items']
+        item = next(row for row in items if row['goal_id'] == GOAL_ID)
+        return item['goal_channel_projection']
+
+    def assert_current(view):
+        assert view['coordination_observation']['source_authority'] == provider + '_v0'
+        assert view['coordination_authority'] == {'state': 'promoted'}
+        hard = [row for row in view['active_leases'] if row['status'] == 'hard_lease']
+        assert len(hard) == 1, view
+        assert hard[0]['todo_id'] == task['todo_id'] and hard[0]['owner_agent'] == 'agent-a', hard
+        assert hard[0]['lease_version'] == lease['lease']['version']
+        assert all(row.get('owner_agent') != 'stale-agent' for row in view['active_leases'])
+        assert view['truth_contract']['write_authority'] == 'none'
+
+    assert_current(channel())
+    state.unlink()
+    assert_current(channel())
+    assert not state.exists(), 'status must not reconstruct the display'
+    state.write_bytes(source)
+
+    authority, quarantine = runtime / 'authority', runtime / 'provider-quarantine'
+    authority.rename(quarantine)
+    try:
+        unavailable = build_goal_channel_projection(
+            goal_id=GOAL_ID, status_item=_status_item(claimed_by='stale-agent'), runtime_root=runtime,
+        )
+        assert unavailable['coordination_observation']['status'] == 'unavailable'
+        assert unavailable['coordination_authority'] == {'state': 'unavailable'}
+        assert unavailable['active_leases'] == []
+        assert unavailable['truth_contract']['write_authority'] == 'none'
+        code, rejected = run_json_cli_result('status', '--goal-id', GOAL_ID,
+            registry_path=registry, runtime_root=runtime)
+        assert code == 1 and rejected['ok'] is False, rejected
+        assert rejected['attention_queue']['items'][0]['status'] == 'status_collection_failed'
+        assert 'canonical Todo authority is unavailable' in rejected['error']
+        assert 'stale-agent' not in json.dumps(rejected)
+    finally:
+        quarantine.rename(authority)
+    assert_current(channel())
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID, include_leases=True) == original
+    assert state.read_bytes() == source and registry.read_bytes() == registry_bytes

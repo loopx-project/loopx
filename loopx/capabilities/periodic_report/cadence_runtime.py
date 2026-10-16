@@ -13,7 +13,8 @@ from ...history import load_registry
 from ...registry import find_registry_goal
 from .cadence_journal import admit_cadence_window, read_cadence_journal
 from .machine_defaults import (
-    resolve_goal_periodic_report_subscription, select_goal_periodic_report_executor,
+    resolve_active_goal_periodic_report_subscription,
+    select_goal_periodic_report_executor,
 )
 from .machine_store import read_periodic_report_machine_defaults
 
@@ -25,11 +26,9 @@ def periodic_report_cadence_hooks(
     if not agent_id:
         return ()
     goal = find_registry_goal(load_registry(registry_path), goal_id)
-    if not isinstance(goal, dict) or goal.get("status") in {"stopped", "paused", "archived"}:
-        return ()
-    subscription = resolve_goal_periodic_report_subscription(
+    subscription = resolve_active_goal_periodic_report_subscription(
         goal, read_periodic_report_machine_defaults(runtime_root))
-    if subscription.get("enabled") is not True or subscription.get("schedule") is None:
+    if subscription is None or subscription.get("schedule") is None:
         return ()
     # Prefer the frozen reporter for unfinished work. Registration reordering
     # must not make its recovery hook disappear or elect a second reporter.
@@ -50,7 +49,9 @@ def periodic_report_cadence_hooks(
         def resolve_current_subscription():
             nonlocal current_reporters
             current_goal = find_registry_goal(load_registry(registry_path), goal_id)
-            if not isinstance(current_goal, dict) or current_goal.get("status") in {"stopped", "paused", "archived"}:
+            current_subscription = resolve_active_goal_periodic_report_subscription(
+                current_goal, read_periodic_report_machine_defaults(runtime_root))
+            if current_subscription is None:
                 return None
             current_reporters = registered_agent_ids_for_goal(current_goal)
             if not current_reporters or agent_id not in current_reporters:
@@ -62,8 +63,7 @@ def periodic_report_cadence_hooks(
                 reporting_agent_id=reporter, eligible_agent_ids=current_reporters)
             if selected["selected_agent_id"] != agent_id:
                 return None
-            return resolve_goal_periodic_report_subscription(
-                current_goal, read_periodic_report_machine_defaults(runtime_root))
+            return current_subscription
 
         admission = admit_cadence_window(runtime_root=runtime_root, goal_id=goal_id,
             agent_id=agent_id, subscription=subscription, now=now or datetime.now(timezone.utc),

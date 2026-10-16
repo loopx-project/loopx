@@ -27,7 +27,7 @@ from test_quota_settlement_cli import (
 )
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("waiting", [False, True])
 def test_in_flight_turn_replay_preserves_open_todo_and_fresh_turn_admission(
     tmp_path: Path,
@@ -51,14 +51,13 @@ def test_in_flight_turn_replay_preserves_open_todo_and_fresh_turn_admission(
         listed = cli("todo", "list", "--goal-id", GOAL_ID)
         return next(item for item in listed["todos"] if item["todo_id"] == TODO_ID)
 
-    if provider != "legacy":
-        listed = cli("todo", "list", "--goal-id", GOAL_ID)
-        projection = build_todo_runtime_shadow_projection(
-            goal_id=GOAL_ID, todos=listed["todos"], handoff_mode="soft_claim",
-        )
-        initialize_canonical_authority(
-            runtime, GOAL_ID, projection, state_path=state, provider=provider,
-        )
+    listed = cli("todo", "list", "--goal-id", GOAL_ID)
+    projection = build_todo_runtime_shadow_projection(
+        goal_id=GOAL_ID, todos=listed["todos"], handoff_mode="soft_claim",
+    )
+    initialize_canonical_authority(
+        runtime, GOAL_ID, projection, state_path=state, provider=provider,
+    )
     before = todo()
     turn_id = f"inflight-{provider}-{waiting}"
     binding = ("--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", turn_id)

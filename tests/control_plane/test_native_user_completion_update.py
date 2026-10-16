@@ -22,15 +22,22 @@ def fixture(tmp_path: Path, provider: str, *, validation: str | None = None) -> 
     registry.write_text(json.dumps({"schema_version": 1, "common_runtime_root": str(tmp_path / "runtime"),
         "goals": [{"id": "goal-a", "status": "active", "repo": str(project), "state_file": state.name,
                    "coordination": {"registered_agents": ["agent-a"]}}]}), encoding="utf-8")
+    projection = build_todo_runtime_shadow_projection(
+        goal_id="goal-a", todos=[], handoff_mode="soft_claim"
+    )
+    initialize_canonical_authority(
+        tmp_path / "runtime",
+        "goal-a",
+        projection,
+        state_path=state,
+        provider=provider,
+    )
     dependent = add_goal_todo(registry_path=registry, goal_id="goal-a", role="agent",
         text="Continue after the observed outcome", task_class="advancement_task",
         status="blocked", claimed_by="agent-a")
     added = add_goal_todo(registry_path=registry, goal_id="goal-a", role="user",
         text="Record the observed outcome", task_class="user_action", validation_command=validation,
         unblocks_todo_id=dependent["todo_id"])
-    todos = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
-    projection = build_todo_runtime_shadow_projection(goal_id="goal-a", todos=todos, handoff_mode="soft_claim")
-    initialize_canonical_authority(tmp_path / "runtime", "goal-a", projection, state_path=state, provider=provider)
     return registry, state, str(added["todo_id"])
 
 

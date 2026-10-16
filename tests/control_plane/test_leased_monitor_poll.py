@@ -9,8 +9,11 @@ import pytest
 
 from canonical_authority_fixture import isolate_sqlite_runtime
 from test_native_monitor_poll import _canonical
-from test_monitor_followthrough_contract import GOAL_ID, AGENT_ID, _write_fixture, _add_monitor
-from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+from test_monitor_followthrough_contract import GOAL_ID, AGENT_ID, _write_fixture
+from loopx.control_plane.coordination.local_authority import (
+    CanonicalAuthorityRequired,
+    read_canonical_todos_if_promoted,
+)
 from loopx.control_plane.quota.error_codes import QuotaCommandValidationError
 from loopx.control_plane.quota.monitor_poll_lease_transport import current_monitor_lease_proof
 from loopx.control_plane.scheduler.monitor_poll_writeback import write_monitor_poll_todo_state
@@ -216,13 +219,20 @@ def test_old_observation_time_cannot_revive_expired_proof(tmp_path, monkeypatch,
     assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID) == before
 
 
-def test_explicit_proof_never_falls_back_to_legacy_writer(tmp_path):
-    registry, runtime, state = _write_fixture(tmp_path)
-    monitor = _add_monitor(registry, text="Observe public progress", target_key="watch", next_due_at="2000-01-01T00:00:00Z")
+def test_explicit_proof_requires_canonical_authority(tmp_path):
+    registry, runtime, state = _write_fixture(tmp_path, canonical=False)
+    state.write_text(
+        state.read_text(encoding="utf-8")
+        + "\n- [ ] [P1] Observe public progress.\n"
+        + "  <!-- loopx:todo todo_id=todo_unpromoted_monitor status=open "
+        + "task_class=continuous_monitor claimed_by=codex-quality-qualification "
+        + "target_key=watch cadence=1h next_due_at=2000-01-01T00:00:00Z -->\n",
+        encoding="utf-8",
+    )
     before = state.read_bytes()
-    with pytest.raises(ValueError, match="requires promoted canonical authority"):
+    with pytest.raises(CanonicalAuthorityRequired):
         write_monitor_poll_todo_state(registry_path=registry, runtime_root=runtime, goal_id=GOAL_ID,
-            execute=True, todo_id=monitor["todo_id"], agent_id=AGENT_ID,
+            execute=True, todo_id="todo_unpromoted_monitor", agent_id=AGENT_ID,
             generated_at="2026-09-01T00:00:00Z", result_hash="a", material_change=False,
             task_lease_idempotency_key=PROOF["idempotency_key"], task_lease_expected_version=3)
     assert state.read_bytes() == before

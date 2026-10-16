@@ -17,6 +17,8 @@ export const COORDINATION_MONITOR_POLL_REQUEST_SCHEMA = "loopx_coordination_moni
 export const COORDINATION_LEASED_MONITOR_POLL_REQUEST_SCHEMA = "loopx_coordination_monitor_poll_request_v1";
 export const COORDINATION_WITNESSED_MONITOR_POLL_REQUEST_SCHEMA = "loopx_coordination_monitor_poll_request_v2";
 export const COORDINATION_GUARDED_MONITOR_POLL_REQUEST_SCHEMA = "loopx_coordination_monitor_poll_request_v3";
+/** v4 can only recover an existing receipt; older runtimes reject its schema. */
+export const COORDINATION_MONITOR_RECEIPT_ONLY_REQUEST_SCHEMA = "loopx_coordination_monitor_poll_request_v4";
 export const COORDINATION_MONITOR_POLL_RESULT_SCHEMA = "loopx_coordination_monitor_poll_result_v0";
 const RECEIPT_SCHEMA = "loopx_coordination_monitor_poll_receipt_v0";
 
@@ -31,18 +33,38 @@ export interface CoordinationMonitorPollInput {
   lease_proof?: TaskLeaseProof | null;
   /** New auxiliary effects must qualify dependencies on the commit head. */
   gate_scope_guard?: boolean;
+  /** A damaged display cannot authorize a fresh canonical observation. */
+  receipt_only?: boolean;
   /** Authority clock supplied by the runtime, never observation.generated_at. */
   now?: Date;
 }
 
-function failure(reason_code: string, reason: string): JsonObject & {schema_version: typeof COORDINATION_MONITOR_POLL_RESULT_SCHEMA} {
-  return {schema_version: COORDINATION_MONITOR_POLL_RESULT_SCHEMA, status: "failed", changed: false, reason_code, reason};
+type CoordinationMonitorPollFailureKind = "decision_rejection" | "protocol_failure";
+
+function failure(
+  reason_code: string,
+  reason: string,
+  kind: CoordinationMonitorPollFailureKind = "protocol_failure",
+): JsonObject & {schema_version: typeof COORDINATION_MONITOR_POLL_RESULT_SCHEMA} {
+  return {schema_version: COORDINATION_MONITOR_POLL_RESULT_SCHEMA, status: "failed",
+    changed: false, failure_kind: kind, reason_code, reason};
+}
+
+function rejection(
+  reason_code: string,
+  reason: string,
+): JsonObject & {schema_version: typeof COORDINATION_MONITOR_POLL_RESULT_SCHEMA} {
+  return failure(reason_code, reason, "decision_rejection");
 }
 
 function monitorReceipt(input: CoordinationMonitorPollInput, hash: string) {
   return new CoordinationCommandReceipt({result_schema: COORDINATION_MONITOR_POLL_RESULT_SCHEMA,
     identity: {schema_version: RECEIPT_SCHEMA, goal_id: input.goal_id,
-      operation_id: input.operation_id, request_sha256: hash}, failure,
+      operation_id: input.operation_id, request_sha256: hash},
+    failure: (code, reason) => failure(code, reason,
+      code === "coordination_operation_identity_mismatch"
+        ? "decision_rejection"
+        : "protocol_failure"),
     decode(original, phase) {
       const writeback = canonicalAuthorityObject(original.writeback, "Monitor writeback");
       if (writeback.schema_version !== "monitor_poll_todo_writeback_v0" ||
@@ -70,6 +92,7 @@ function normalize(raw: CoordinationMonitorPollInput): NormalizedMonitorPollInpu
     dry_run: requireBoolean(raw.dry_run, "dry_run"),
     ...normalizeMonitorPollFields(raw.observation, raw.intent),
     gate_scope_guard: raw.gate_scope_guard == null ? false : requireBoolean(raw.gate_scope_guard, "gate_scope_guard"),
+    receipt_only: raw.receipt_only == null ? false : requireBoolean(raw.receipt_only, "receipt_only"),
     lease_proof: decodeTaskLeaseProof(raw.lease_proof), now: raw.now ?? new Date()};
   return input;
 }
@@ -96,13 +119,17 @@ export async function executeCoordinationMonitorPoll(store: AuthorityStore,
   authoritySourcesCurrent: AuthoritySourceCheck = uncheckedAuthoritySource): Promise<JsonObject> {
   let input: NormalizedMonitorPollInput;
   try { input = normalize(raw); }
-  catch (error) { return failure("invalid_monitor_poll_request", String(error)); }
+  catch (error) { return rejection("invalid_monitor_poll_request", String(error)); }
   // Original wire identity, before any normalization/default route inference.
   const hash = monitorPollRequestHash(input);
   const receipt = monitorReceipt(input, hash);
   const previous = await receipt.read(store);
   if (previous) return previous;
-  if (!await authoritySourcesCurrent()) return failure(AUTHORITY_SOURCE_CHANGED.code, AUTHORITY_SOURCE_CHANGED.reason);
+  if (input.receipt_only) return rejection("monitor_poll_original_receipt_required",
+    "Original Monitor receipt is unavailable; restore the historical source before retrying recovery");
+  if (!await authoritySourcesCurrent()) {
+    return rejection(AUTHORITY_SOURCE_CHANGED.code, AUTHORITY_SOURCE_CHANGED.reason);
+  }
   const observation = await receipt.observe(store);
   if (observation.kind === "receipt") return observation.result;
   const head = observation.authority;
@@ -112,11 +139,13 @@ export async function executeCoordinationMonitorPoll(store: AuthorityStore,
   catch (error) {
     // Receipt lookup succeeded and planning failed before commit. Only this
     // boundary can certify no effect; outages and commit failures cannot.
-    return {...failure("monitor_poll_rejected", error instanceof Error ? error.message : String(error)),
+    return {...rejection("monitor_poll_rejected", error instanceof Error ? error.message : String(error)),
       no_effect: {schema_version: "monitor_poll_no_effect_v0", goal_id: input.goal_id,
         operation_id: input.operation_id, request_sha256: hash}};
   }
-  if (!await authoritySourcesCurrent()) return failure(AUTHORITY_SOURCE_CHANGED.code, AUTHORITY_SOURCE_CHANGED.reason);
+  if (!await authoritySourcesCurrent()) {
+    return rejection(AUTHORITY_SOURCE_CHANGED.code, AUTHORITY_SOURCE_CHANGED.reason);
+  }
   if (input.dry_run) return {schema_version: COORDINATION_MONITOR_POLL_RESULT_SCHEMA,
     status: "planned", changed: true, writeback: plan.writeback, provider_revision: head.provider_revision};
   const commit = prepareCoordinationProjectionCommit({goal_id: input.goal_id, operation_id: input.operation_id,

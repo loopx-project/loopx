@@ -10,7 +10,7 @@ import socket
 import tempfile
 from pathlib import Path
 
-from ..control_plane.quota.error_codes import QuotaCommandValidationError
+from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.turn_driver.decision_capture import validate_handoff_socket
 
 
@@ -60,7 +60,7 @@ def capture_decision(directory: Path | None, payload: dict[str, object]) -> None
     try:
         write_decision_capture(directory / "decision.json", payload, publish=os.replace)
     except (OSError, ValueError) as exc:
-        raise RuntimeError(
+        raise QuotaDecisionTransportError(
             "Decision capture failed after guard evaluation; the Turn receipt may "
             "already exist. Do not treat this as missing admission or blindly rerun "
             f"the guard. Inspect the existing Turn receipt. Capture directory: {directory}"
@@ -119,7 +119,7 @@ def handoff_decision(directory: Path | None, socket_path: str | None) -> None:
         if path.read_bytes() != raw:
             raise ValueError("captured decision changed during handoff")
     except (OSError, ValueError) as exc:
-        raise RuntimeError(
+        raise QuotaDecisionTransportError(
             "Decision handoff failed after guard evaluation; inspect the original "
             f"Turn receipt and {path}. Do not blindly rerun the guard."
         ) from exc

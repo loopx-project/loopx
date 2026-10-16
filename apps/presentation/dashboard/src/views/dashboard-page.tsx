@@ -944,17 +944,16 @@ function buildPersonalHomeModel(
     const listedOpen = group?.items.filter((todo) => !todo.done).length ?? 0;
     const open = group?.open_count;
     const count = typeof open === "number" && Number.isSafeInteger(open) && open >= listedOpen ? open : null;
-    attentionSummaries.set(item.goal_id, {
-      blocking: count === null ? null : blocking ? count : 0,
-      optional: count === null ? null : blocking ? 0 : count,
-      coverage: count === null ? "unknown" : count > listedOpen ? "partial" : "complete",
-    });
-    return (group?.items ?? [])
-      .map((todo, todoOrder): PersonalNeedsYouItem & { sourceOrder: number; todoOrder: number; projectedDone: boolean } => ({
+    const projected = (group?.items ?? [])
+      .map((todo, todoOrder): PersonalNeedsYouItem & { sourceOrder: number; todoOrder: number; projectedDone: boolean } => {
+        const details = attentionDetailsFromSnapshot(todo, item.user_todos?.items ?? [], item.goal_id);
+        return {
         projectedDone: todo.done,
-        details: attentionDetailsFromSnapshot(todo, item.user_todos?.items ?? [], item.goal_id),
+        details,
         actionKind: todo.action_kind ?? null,
-        blocking,
+        // Explicit task classes own each row; the queue answer only covers
+        // legacy rows whose interaction was not supplied by the Todo owner.
+        blocking: details.interaction === "decision" || (details.interaction === "unknown" && blocking),
         goalId: item.goal_id,
         sourceOrder,
         taskClass: todo.task_class ?? null,
@@ -962,12 +961,23 @@ function buildPersonalHomeModel(
         todoId: todo.todo_id?.trim() || `${item.goal_id}:user:${todo.index}`,
         todoOrder,
         updatedAt: todo.updated_at ?? null,
-      }));
+      }; });
+    // The owner counts all open User Todos, not just gates. Queue-level
+    // waiting cannot classify unlisted rows in a mixed gate/action group.
+    // Complete classified rows qualify totals; a bounded read keeps unknown.
+    const blockingListed = projected.filter((todo) => !todo.projectedDone && todo.blocking).length;
+    const complete = count !== null && count === listedOpen;
+    attentionSummaries.set(item.goal_id, {
+      blocking: complete ? blockingListed : null,
+      optional: complete ? count - blockingListed : null,
+      coverage: count === null ? "unknown" : complete ? "complete" : "partial",
+    });
+    return projected;
   });
   const projectedUserTodos = attentionHistory.filter((todo) => !todo.projectedDone);
   const projectedGoalIds = new Set(projectedUserTodos.map((todo) => todo.goalId));
   for (const [goalId, summary] of attentionSummaries) {
-    if ((summary.blocking ?? 0) + (summary.optional ?? 0) > 0) projectedGoalIds.add(goalId);
+    if (summary.coverage === "partial" || (summary.blocking ?? 0) + (summary.optional ?? 0) > 0) projectedGoalIds.add(goalId);
   }
   const pendingOperatorGates = rows.flatMap((row, rowOrder) => {
     if (stoppedGoalIds.has(row.goal.id) || projectedGoalIds.has(row.goal.id) || !personalGoalHasPendingOperatorGate(row)) return [];
@@ -1208,6 +1218,7 @@ function PersonalGoalHome({
   onSelectWorkspace,
   onReconcileStatus,
   onRefresh,
+  onBackgroundRefresh,
   onRetryGoalArchive,
   payload,
   progress,
@@ -1233,6 +1244,7 @@ function PersonalGoalHome({
   selectedWorkspaceRef: string | null;
   onReconcileStatus: (options?: { invalidateGoalIds?: string[] }) => void | Promise<void>;
   onRefresh: (scope?: WorkspaceReadScope) => Promise<WorkspaceRefreshResult>;
+  onBackgroundRefresh?: () => void | Promise<void>;
   onRetryGoalArchive: () => void | Promise<void>;
   payload: StatusPayload;
   progress: WorkspaceProgress | null;
@@ -2988,6 +3000,7 @@ function PersonalGoalHome({
             setCapabilityRevision((revision) => revision + 1);
             return result;
           },
+          onBackgroundRefresh,
           onRetryResumeRun: retryManagerSession,
           onSelectAgent: chooseAgent,
           onSelectAgentModel: chooseAgentModel,
@@ -3520,7 +3533,7 @@ export function DashboardPage() {
         void navigate({search: current => "goalId" in current && current.goalId === goalId && current.statusUrl === statusUrl
           ? {...current, todo: todoId ?? undefined} : current});
       }}
-      selectedView={search.view === "conversation" ? "chat" : search.goalId ? search.view ?? "chat" : "overview"}
+      selectedView={search.view === "conversation" ? "chat" : search.goalId ? search.view ?? "overview" : "overview"}
       onSelectView={(view) => {
         void navigate({ search: current => ({ ...current, workAgent: undefined, view: view === "chat" ? "conversation" : view }) });
       }}
@@ -3553,6 +3566,7 @@ export function DashboardPage() {
           return { ok: false, error: formatStatusError(error) } as const;
         }
       }}
+      onBackgroundRefresh={() => loadFromUrl(source.kind === "url" ? source.label : (statusUrl || defaultGlobalStatusUrl), { background: true, readScope: "all", rejectOnError: true })}
       payload={payload}
       progress={progress}
       rows={goalRows}

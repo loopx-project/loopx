@@ -7,10 +7,18 @@ export interface LeaseEligibilityTodo {
   readonly status: string;
   readonly claimed_by: string | null;
   readonly excluded_agents: readonly string[];
+  readonly task_class?: string | null;
 }
 
 export type LeaseOwnerRejection = "todo_not_found" | "todo_not_open" | "invalid_owner" |
-  "owner_not_registered" | "owner_excluded_from_todo" | "owner_conflicts_with_claim";
+  "owner_not_registered" | "owner_excluded_from_todo" | "owner_conflicts_with_claim" | "todo_not_executable";
+
+/** User actions are administrative reminders. Retained lease history cannot
+ * turn them into executable work; exact release remains a separate operation. */
+export function leaseExecutionTargetRejection(todo: {readonly task_class?: unknown}):
+  "todo_not_executable" | null {
+  return todo.task_class === "user_action" ? "todo_not_executable" : null;
+}
 
 export function leaseOwnerRejection(todo: LeaseEligibilityTodo | null | undefined,
   owner: string | null, registered: readonly string[]): LeaseOwnerRejection | null {
@@ -20,7 +28,7 @@ export function leaseOwnerRejection(todo: LeaseEligibilityTodo | null | undefine
   if (!registered.includes(owner)) return "owner_not_registered";
   if (todo.excluded_agents.includes(owner)) return "owner_excluded_from_todo";
   if (todo.claimed_by && todo.claimed_by !== owner) return "owner_conflicts_with_claim";
-  return null;
+  return leaseExecutionTargetRejection(todo);
 }
 
 /** Diagnostics share the exact rejection precedence used by mutation admission. */
@@ -62,7 +70,8 @@ export function evaluateTaskLeaseOwnerEligibility(value: unknown) {
   let todo: LeaseEligibilityTodo | null = null;
   if (raw !== null) {
     if (typeof raw.status !== "string") throw new EffectRuntimeRequestError("todo.status must be a string");
-    todo = {status: raw.status, claimed_by: nullableString(raw.claimed_by, "todo.claimed_by"),
+    todo = {status: raw.status, task_class: nullableString(raw.task_class, "todo.task_class"),
+      claimed_by: nullableString(raw.claimed_by, "todo.claimed_by"),
       excluded_agents: strings(raw.excluded_agents, "todo.excluded_agents")};
   }
   const constraint = leaseOwnerConstraint(todo, nullableString(input.owner, "owner"),

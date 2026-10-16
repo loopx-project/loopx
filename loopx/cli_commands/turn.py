@@ -97,6 +97,16 @@ def handle_turn_command(
         if dsh_operation_module and not Path(dsh_operation_module).is_absolute():
             raise ValueError("--dsh-operation-module must be an absolute compiled module path")
         operation_tools = bool(getattr(args, "codex_operation_tools", False) or dsh_operation_module)
+        request_file = getattr(args, "operation_request_file", None)
+        request_sha256 = getattr(args, "operation_request_sha256", None)
+        if request_file is not None or request_sha256 is not None:
+            if not operation_tools:
+                raise ValueError("--operation-request-file requires an owned operation transport")
+            from ..control_plane.turn_driver.operation_requests import operation_request_source
+
+            operation_request_source(
+                Path(request_file) if request_file is not None else None, request_sha256,
+            )
         if getattr(args, "codex_confirmed_operation_id", None) and not operation_tools:
             raise ValueError(
                 "confirmed operation continuation requires the owned operation transport"

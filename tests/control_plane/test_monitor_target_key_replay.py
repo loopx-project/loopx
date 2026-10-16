@@ -9,19 +9,26 @@ from pathlib import Path
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.cli import main as cli_main
 from loopx.control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
-from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.scheduler.monitor_todo import monitor_todo_is_due
 from loopx.control_plane.scheduler.monitor_poll_writeback import write_monitor_poll_todo_state
 from loopx.control_plane.scheduler.provider_monitor_poll import poll_canonical_monitor_if_promoted
 from loopx.control_plane.quota import monitor_poll as monitor_runtime
 from loopx.control_plane.quota.accounting_admission import quota_accounting_admission
 from loopx.control_plane.testing.canary_harness import read_run_index
-from loopx.todos import add_goal_todo, list_goal_todos, update_goal_todo
-from test_monitor_poll_transaction_recovery import AGENT, GOAL, MONITOR_TARGET, REPO, _cli, _fixture, _poll_events
+from loopx.todos import add_goal_todo, update_goal_todo
+from monitor_poll_canonical_fixture import (
+    AGENT,
+    GOAL,
+    MONITOR_TARGET,
+    REPO,
+    _cli,
+    _fixture,
+    _poll_events,
+)
 
 _NULL_TODO_WRAPPER = """
 import hashlib, os, runpy, sys
@@ -88,14 +95,15 @@ def test_target_only_monitor_poll_replays_accepted_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, completion: str, material: bool,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, runtime, state, monitor, poll = _fixture(tmp_path)
+    registry, runtime, _state, monitor, poll = _fixture(
+        tmp_path,
+        provider=provider,
+    )
     other = add_goal_todo(registry_path=registry, goal_id=GOAL, role='agent',
         text='Observe a different public synthetic target', task_class='continuous_monitor', claimed_by=AGENT,
         monitor_metadata={'target_key': 'synthetic-other-target', 'cadence': '1h',
-                          'next_due_at': '2000-01-01T00:00:00+00:00', 'watch_only': 'true'})
-    todos = list_goal_todos(registry_path=registry, goal_id=GOAL)['todos']
-    initialize_canonical_authority(runtime, GOAL, build_todo_runtime_shadow_projection(
-        goal_id=GOAL, todos=todos, handoff_mode='soft_claim'), state_path=state, provider=provider)
+                          'next_due_at': '2000-01-01T00:00:00+00:00', 'watch_only': 'true'},
+        operation_id='synthetic-other-monitor')
     target_poll = _target_poll(poll, material=material)
     rc, first = _cli(registry, runtime, *target_poll,
                      fault='quota_commit' if completion == 'interrupted' else None)
@@ -149,14 +157,14 @@ def test_target_only_retry_rejects_changed_provider_actor(
     provider: str, completion: str,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, runtime, state, monitor, poll = _fixture(tmp_path)
+    registry, runtime, _state, monitor, poll = _fixture(
+        tmp_path,
+        provider=provider,
+    )
     peer = 'synthetic-registered-observer'
     data = json.loads(registry.read_text())
     data['goals'][0]['coordination']['registered_agents'].append(peer)
     registry.write_text(json.dumps(data))
-    todos = list_goal_todos(registry_path=registry, goal_id=GOAL)['todos']
-    initialize_canonical_authority(runtime, GOAL, build_todo_runtime_shadow_projection(
-        goal_id=GOAL, todos=todos, handoff_mode='soft_claim'), state_path=state, provider=provider)
     target_poll = _target_poll(poll, material=False)
     rc, original = _cli(registry, runtime, *target_poll,
         fault='quota_commit' if completion == 'interrupted' else None)
@@ -214,10 +222,10 @@ def test_target_only_concurrent_pending_retries_keep_one_observation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, competitor: str,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, runtime, state, monitor, poll = _fixture(tmp_path)
-    todos = list_goal_todos(registry_path=registry, goal_id=GOAL)['todos']
-    initialize_canonical_authority(runtime, GOAL, build_todo_runtime_shadow_projection(
-        goal_id=GOAL, todos=todos, handoff_mode='soft_claim'), state_path=state, provider=provider)
+    registry, runtime, _state, monitor, poll = _fixture(
+        tmp_path,
+        provider=provider,
+    )
     target_poll = _target_poll(poll, material=False)
     rc, interrupted = _cli(registry, runtime, *target_poll, fault='quota_commit')
     assert (rc, interrupted) == (73, None)
@@ -279,10 +287,10 @@ def test_target_only_new_observation_remains_rejected_when_not_due(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, runtime, state, monitor, poll = _fixture(tmp_path)
-    todos = list_goal_todos(registry_path=registry, goal_id=GOAL)['todos']
-    initialize_canonical_authority(runtime, GOAL, build_todo_runtime_shadow_projection(
-        goal_id=GOAL, todos=todos, handoff_mode='soft_claim'), state_path=state, provider=provider)
+    registry, runtime, _state, monitor, poll = _fixture(
+        tmp_path,
+        provider=provider,
+    )
     # Another legitimate business observation advances cadence without this
     # Turn accepting a quota poll. No historical quota receipt may be inferred.
     write_monitor_poll_todo_state(registry_path=registry, runtime_root=runtime, goal_id=GOAL,
@@ -307,10 +315,10 @@ def test_target_only_auxiliary_recovery_preserves_advancement_binding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, historical_null_todo: bool,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, runtime, state, monitor, poll = _fixture(tmp_path)
-    todos = list_goal_todos(registry_path=registry, goal_id=GOAL)['todos']
-    initialize_canonical_authority(runtime, GOAL, build_todo_runtime_shadow_projection(
-        goal_id=GOAL, todos=todos, handoff_mode='soft_claim'), state_path=state, provider=provider)
+    registry, runtime, _state, monitor, poll = _fixture(
+        tmp_path,
+        provider=provider,
+    )
     rc, original = _cli(registry, runtime, *_target_poll(poll, material=False))
     assert rc == 0, original
     rc, advancement = _cli(registry, runtime, 'todo', 'add', '--goal-id', GOAL, '--role', 'agent',
@@ -357,14 +365,14 @@ def test_target_recovery_hint_cannot_create_poll_after_no_effect_abort(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], provider: str,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, runtime, state, monitor, poll = _fixture(tmp_path)
+    registry, runtime, _state, monitor, poll = _fixture(
+        tmp_path,
+        provider=provider,
+    )
     peer = 'synthetic-registered-peer'
     data = json.loads(registry.read_text())
     data['goals'][0]['coordination']['registered_agents'].append(peer)
     registry.write_text(json.dumps(data))
-    todos = list_goal_todos(registry_path=registry, goal_id=GOAL)['todos']
-    initialize_canonical_authority(runtime, GOAL, build_todo_runtime_shadow_projection(
-        goal_id=GOAL, todos=todos, handoff_mode='soft_claim'), state_path=state, provider=provider)
     target_poll = _target_poll(poll, material=False)
     captured = {}
     native = monitor_runtime._native_result

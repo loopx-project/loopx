@@ -5,12 +5,15 @@ from pathlib import Path
 
 import pytest
 
+from canonical_authority_fixture import initialize_canonical_authority
+from loopx.control_plane.coordination.runtime_shadow import (
+    build_todo_runtime_shadow_projection,
+)
 from loopx.control_plane.testing.canary_harness import (
     run_json_cli,
     run_json_cli_result,
     write_fixture_registry,
 )
-from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
 
 
 GOAL_ID = "decision-scope-cli-validation"
@@ -34,7 +37,10 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
         "## Objective\n\n"
         "Keep decision-scope writes valid.\n\n"
         "## Next Action\n\n"
-        "- Validate the next todo write.\n",
+        "- Validate the next todo write.\n\n"
+        "## User Todo / Owner Review Reading Queue\n\n"
+        "## Agent Todo\n\n"
+        "## Completed Work Archive\n",
         encoding="utf-8",
     )
     write_fixture_registry(
@@ -44,6 +50,16 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
         goal_id=GOAL_ID,
         domain="decision-scope-cli-validation",
         adapter_kind="generic_project_goal_v0",
+    )
+    initialize_canonical_authority(
+        runtime,
+        GOAL_ID,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID,
+            handoff_mode="soft_claim",
+            todos=[],
+        ),
+        state_path=state_file,
     )
     return registry_path, state_file
 
@@ -102,9 +118,21 @@ def test_todo_update_can_narrow_global_gate_without_consuming_decision(
         registry_path=registry_path,
     )
 
-    assert updated["status"] == "open", updated
-    assert updated["blocks_agent"] == DELIVERY_AGENT, updated
-    assert updated["global_gate"] is None, updated
+    assert updated["status"] == "applied", updated
+    assert updated["source_authority"] == "file_v0", updated
+    assert updated["legacy_fallback_used"] is False, updated
+    readback = run_json_cli(
+        "todo",
+        "list",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        gate["todo_id"],
+        registry_path=registry_path,
+    )["todo"]
+    assert readback["status"] == "open", readback
+    assert readback["blocks_agent"] == DELIVERY_AGENT, readback
+    assert readback.get("global_gate") is None, readback
     state_text = state_file.read_text(encoding="utf-8")
     assert f"blocks_agent={DELIVERY_AGENT}" in state_text
     assert "global_gate=" not in state_text
@@ -361,20 +389,21 @@ def test_todo_complete_cli_applies_explicit_user_gate_outcome(
     )
 
     assert completed["decision_outcome"] == decision_outcome
-    events = load_rollout_events(
-        rollout_event_log_path(tmp_path / "runtime", GOAL_ID)
-    )
-    completion_event = next(
-        event
-        for event in reversed(events)
-        if event.get("event_kind") == "todo_complete"
-        and event.get("todo_id") == gate["todo_id"]
-    )
-    assert completion_event["details"]["task_class"] == "user_gate"
-    assert completion_event["details"]["decision_scope"] == (
-        "private_read:project:restricted_material"
-    )
-    assert completion_event["details"]["decision_outcome"] == decision_outcome
+    assert completed["source_authority"] == "file_v0"
+    assert completed["legacy_fallback_used"] is False
+    gate_readback = run_json_cli(
+        "todo",
+        "list",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        gate["todo_id"],
+        registry_path=registry_path,
+    )["todo"]
+    assert gate_readback["status"] == "done"
+    assert gate_readback["task_class"] == "user_gate"
+    assert gate_readback["decision_scope"]["scope_key"] == "restricted_material"
+    assert gate_readback["decision_outcome"] == decision_outcome
     target_readback = run_json_cli(
         "todo",
         "list",
@@ -394,7 +423,7 @@ def test_todo_complete_cli_applies_explicit_user_gate_outcome(
         )
 
 
-def test_todo_complete_cli_rejects_ambiguous_user_gate_completion(
+def test_todo_complete_cli_closes_user_gate_without_inventing_outcome(
     tmp_path: Path,
 ) -> None:
     registry_path, state_file = _write_fixture(tmp_path)
@@ -413,9 +442,7 @@ def test_todo_complete_cli_rejects_ambiguous_user_gate_completion(
         VALID_SCOPE,
         registry_path=registry_path,
     )
-    original = state_file.read_text(encoding="utf-8")
-
-    returncode, payload = run_json_cli_result(
+    completed = run_json_cli(
         "todo",
         "complete",
         "--goal-id",
@@ -429,6 +456,18 @@ def test_todo_complete_cli_rejects_ambiguous_user_gate_completion(
         registry_path=registry_path,
     )
 
-    assert returncode != 0
-    assert "user_gate completion requires decision_outcome" in payload["error"]
-    assert state_file.read_text(encoding="utf-8") == original
+    assert completed["status"] == "done"
+    assert "decision_outcome" not in completed
+    readback = run_json_cli(
+        "todo",
+        "list",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        gate["todo_id"],
+        registry_path=registry_path,
+    )["todo"]
+    assert readback["status"] == "done"
+    assert readback["decision_scope"]["scope_key"] == "release_route"
+    assert "decision_outcome" not in readback
+    assert gate["todo_id"] in state_file.read_text(encoding="utf-8")

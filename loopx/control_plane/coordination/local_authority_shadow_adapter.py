@@ -19,10 +19,8 @@ from .coordination_state_contract_generated import (
     LOCAL_AUTHORITY_SHADOW_COMMIT_ENTRY_RESULT_SCHEMA,
     LOCAL_AUTHORITY_SHADOW_READ_REQUEST_SCHEMA,
     LOCAL_AUTHORITY_SHADOW_READ_RESULT_SCHEMA,
-    LOCAL_AUTHORITY_SHADOW_TRANSACTION_EVIDENCE_SCHEMA,
 )
 from .configuration import resolve_coordination_runtime_shadow_config
-from .authority_source_capture import todo_partition_projector as todo_partition_projector
 from .shadow_management import shadow_management_state_path
 from .shadow_goal_scope import shadow_goal_scope
 from .local_authority_shadow_readback import (
@@ -44,9 +42,6 @@ from .local_authority_shadow_readback import (
 # behind instead of guessing.
 # ---------------------------------------------------------------------------
 
-LOCAL_AUTHORITY_SHADOW_EVIDENCE_SCHEMA_V1 = (
-    LOCAL_AUTHORITY_SHADOW_TRANSACTION_EVIDENCE_SCHEMA
-)
 INLINE_DRAIN_MAX_ENTRIES = 16
 INLINE_DRAIN_BUDGET_SECONDS = 2.0
 INLINE_DRAIN_LOCK_TIMEOUT_SECONDS = 0.25
@@ -190,91 +185,16 @@ def drain_local_authority_shadow_outbox(
         return result
 
 
-def capture_evidence(
-    *,
-    goal_id: str,
-    capture: outbox.CaptureOutcome,
-    drain: DrainResult | None,
-) -> dict[str, Any]:
-    """Evidence v1 attached to a writer payload: capture facts plus drain facts.
-
-    Every flag here is a measured fact of this write. ``source_candidate_compared``
-    and ``parity_verdict`` stay negative until the verify step exists.
-    """
-
-    if capture.failure is not None:
-        outcome = "capture_failed"
-        reason_code: str | None = str(capture.failure.get("reason_code"))
-    elif capture.entry_id is None:
-        outcome = "no_transaction"
-        reason_code = capture.skipped_reason
-    elif drain is None or drain.outcome == "drain_deferred":
-        outcome = "drain_deferred" if drain is not None else "pending"
-        reason_code = drain.reason_code if drain is not None else None
-    else:
-        settled = drain.entry_outcome(capture.entry_id)
-        if settled is None:
-            outcome = "pending"
-            reason_code = drain.reason_code
-        else:
-            outcome = str(settled["outcome"])
-            reason_code = settled.get("reason_code")
-    return {
-        "schema_version": LOCAL_AUTHORITY_SHADOW_EVIDENCE_SCHEMA_V1,
-        "outcome": outcome,
-        "reason_code": reason_code,
-        "goal_id": goal_id,
-        "entry": {
-            "entry_id": capture.entry_id,
-            "partition": capture.partition,
-            "seq": capture.seq,
-            "partition_digest": capture.partition_digest,
-            "source_bytes_digest": capture.source_bytes_digest,
-        },
-        "drain": None
-        if drain is None
-        else {
-            "outcome": drain.outcome,
-            "delivered": drain.delivered,
-            "replayed": drain.replayed,
-            "reclaimed_residue": drain.reclaimed_residue,
-            "pending_after": drain.pending_after,
-            "prepared_only_after": drain.prepared_only_after,
-            "stopped_at": drain.stopped_at,
-            "last_cursor": drain.last_cursor,
-            "provider_revision": drain.provider_revision,
-            "candidate_readback_verified": drain.candidate_readback_verified,
-        },
-        "capture_kind": "source_transaction_outbox",
-        # Both flags are measured facts of this write: they are true only when
-        # a prepared/committed entry was actually recorded for it. A disabled
-        # or unchanged capture recorded nothing and claims nothing.
-        "source_transaction_correlated": capture.recorded,
-        "durable_source_outbox": capture.recorded,
-        "source_candidate_compared": False,
-        "parity_verdict": "not_evaluated",
-        "primary_authority": "legacy_local",
-        "candidate_provider": "file",
-        "candidate_read_for_decision": False,
-        "provider_to_local_writes": False,
-        "primary_writeback_preserved": True,
-        "store_identity": drain.store_identity if drain is not None else None,
-    }
-
-
 __all__ = [
     "effective_runtime_root",
     "INLINE_DRAIN_BUDGET_SECONDS",
     "INLINE_DRAIN_LOCK_TIMEOUT_SECONDS",
     "INLINE_DRAIN_MAX_ENTRIES",
     "LOCAL_AUTHORITY_SHADOW_COMMIT_ENTRY_RESULT_SCHEMA",
-    "LOCAL_AUTHORITY_SHADOW_EVIDENCE_SCHEMA_V1",
     "LOCAL_AUTHORITY_SHADOW_READ_REQUEST_SCHEMA",
     "LOCAL_AUTHORITY_SHADOW_READ_RESULT_SCHEMA",
     "RETENTION_PRESSURE_BYTES",
     "DrainResult",
-    "capture_evidence",
-    "todo_partition_projector",
     "drain_local_authority_shadow_outbox",
     "local_authority_shadow_status",
     "read_local_authority_shadow",

@@ -33,6 +33,11 @@ from demo.multi_agent.role_successor import (  # noqa: E402
     apply_role_successor_todos,
 )
 from loopx.todos import add_goal_todo, complete_goal_todo  # noqa: E402
+from loopx.control_plane.coordination.local_authority import (  # noqa: E402
+    LocalCoordinationAuthorityUnavailable,
+    read_canonical_todos_if_promoted,
+)
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
 from loopx.control_plane.work_items.task_lease import (  # noqa: E402
     TaskLeaseError,
     acquire_task_lease,
@@ -173,7 +178,9 @@ def write_summary_state(path: Path) -> None:
     )
 
 
-def write_registry(path: Path, *, project: Path, state_file: Path, runtime_root: Path) -> None:
+def write_registry(
+    path: Path, *, project: Path, state_file: Path, runtime_root: Path, provider: str,
+) -> None:
     path.write_text(
         json.dumps(
             {
@@ -207,6 +214,7 @@ def write_registry(path: Path, *, project: Path, state_file: Path, runtime_root:
         + "\n",
         encoding="utf-8",
     )
+    import_fixture_authority(path, GOAL_ID, provider=provider)
 
 
 def append_real_fixture_evidence(*, registry: Path, runtime_root: Path, temp: Path) -> None:
@@ -317,7 +325,7 @@ def append_negative_fixture_evidence(
     assert_public_safe(appended)
 
 
-def main() -> int:
+def assert_seeded_worker_turns() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         temp = Path(temp_dir)
         supervisor = build_auto_research_demo_supervisor_plan(
@@ -533,7 +541,7 @@ def main() -> int:
         successors = seeded_failure_turn["successor_todos"]["successors"]
         assert len(successors) == 1, seeded_failure_turn
         assert successors[0]["action_kind"] == "propose_failure_successor", seeded_failure_turn
-        assert successors[0]["unblocks_todo_id"] == evaluator_seed["todo_id"], seeded_failure_turn
+        assert successors[0]["unblocks_todo_id"] == executor_seed["todo_id"], seeded_failure_turn
         assert seeded_failure_turn["completion"]["successor_todo_ids"] == [
             successors[0]["todo_id"]
         ], seeded_failure_turn
@@ -562,6 +570,9 @@ def main() -> int:
         )
         assert manual_lease["lease"] is None, manual_lease
 
+
+
+def assert_evidence_lineage(provider: str) -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         temp = Path(temp_dir)
         project = temp / "project"
@@ -570,7 +581,7 @@ def main() -> int:
         registry = temp / "registry.json"
         runtime_root = temp / "runtime"
         write_summary_state(state_file)
-        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root)
+        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root, provider=provider)
         summary_todo = add_goal_todo(
             registry_path=registry,
             goal_id=GOAL_ID,
@@ -618,6 +629,12 @@ def main() -> int:
         for successor_id in successor_ids:
             assert successor_id in state_text, state_text
         assert_public_safe(evaluator_summary)
+        canonical = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=GOAL_ID)
+        by_id = {row["todo_id"]: row for row in canonical["todos"]}
+        assert by_id[summary_todo_id]["status"] == "done", canonical
+        assert by_id[summary_todo_id]["claimed_by"] == EVALUATOR_AGENT_ID
+        assert by_id[successor_ids[0]]["claimed_by"] == CURATOR_AGENT_ID
+        assert by_id[successor_ids[0]]["unblocks_todo_id"] == summary_todo_id
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp = Path(temp_dir)
@@ -627,7 +644,7 @@ def main() -> int:
         registry = temp / "registry.json"
         runtime_root = temp / "runtime"
         write_summary_state(state_file)
-        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root)
+        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root, provider=provider)
         promotion_todo = add_goal_todo(
             registry_path=registry,
             goal_id=GOAL_ID,
@@ -732,7 +749,7 @@ def main() -> int:
         registry = temp / "registry.json"
         runtime_root = temp / "runtime"
         write_summary_state(state_file)
-        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root)
+        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root, provider=provider)
         first_failure_evidence = add_goal_todo(
             registry_path=registry,
             goal_id=GOAL_ID,
@@ -808,7 +825,7 @@ def main() -> int:
         registry = temp / "registry.json"
         runtime_root = temp / "runtime"
         write_summary_state(state_file)
-        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root)
+        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root, provider=provider)
         retry_evidence = add_goal_todo(
             registry_path=registry,
             goal_id=GOAL_ID,
@@ -892,7 +909,7 @@ def main() -> int:
         registry = temp / "registry.json"
         runtime_root = temp / "runtime"
         write_summary_state(state_file)
-        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root)
+        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root, provider=provider)
         self_referential_summary = add_goal_todo(
             registry_path=registry,
             goal_id=GOAL_ID,
@@ -948,7 +965,7 @@ def main() -> int:
         registry = temp / "registry.json"
         runtime_root = temp / "runtime"
         write_summary_state(state_file)
-        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root)
+        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root, provider=provider)
         positive_evidence = add_goal_todo(
             registry_path=registry,
             goal_id=GOAL_ID,
@@ -1069,7 +1086,7 @@ def main() -> int:
         registry = temp / "registry.json"
         runtime_root = temp / "runtime"
         write_summary_state(state_file)
-        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root)
+        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root, provider=provider)
         failure_evidence = add_goal_todo(
             registry_path=registry,
             goal_id=GOAL_ID,
@@ -1122,7 +1139,7 @@ def main() -> int:
             failure_turn["frontier"]["frontier"]["selected"]["unblocks_todo_id"]
             == failure_evidence["todo_id"]
         ), failure_turn
-        assert successors[0]["unblocks_todo_id"] == failure_review["todo_id"], failure_turn
+        assert successors[0]["unblocks_todo_id"] == failure_evidence["todo_id"], failure_turn
         assert failure_turn["completion"]["successor_todo_ids"] == [successors[0]["todo_id"]], failure_turn
         state_text = state_file.read_text(encoding="utf-8")
         assert f"todo_id={failure_review['todo_id']} status=done" in state_text, state_text
@@ -1153,7 +1170,7 @@ def main() -> int:
         registry = temp / "registry.json"
         runtime_root = temp / "runtime"
         write_summary_state(state_file)
-        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root)
+        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root, provider=provider)
         data_gap_evidence = add_goal_todo(
             registry_path=registry,
             goal_id=GOAL_ID,
@@ -1213,7 +1230,7 @@ def main() -> int:
         registry = temp / "registry.json"
         runtime_root = temp / "runtime"
         write_summary_state(state_file)
-        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root)
+        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root, provider=provider)
         retry_evidence = add_goal_todo(
             registry_path=registry,
             goal_id=GOAL_ID,
@@ -1268,7 +1285,7 @@ def main() -> int:
             retry_turn["evaluation_summary"]["failure_continuation"]["source_todo_id"]
             == retry_evidence["todo_id"]
         ), retry_turn
-        assert successors[0]["unblocks_todo_id"] == retry_review["todo_id"], retry_turn
+        assert successors[0]["unblocks_todo_id"] == retry_evidence["todo_id"], retry_turn
         assert retry_turn["completion"]["successor_todo_ids"] == [successors[0]["todo_id"]], retry_turn
         state_text = state_file.read_text(encoding="utf-8")
         assert f"todo_id={retry_review['todo_id']} status=done" in state_text, state_text
@@ -1282,7 +1299,7 @@ def main() -> int:
         registry = temp / "registry.json"
         runtime_root = temp / "runtime"
         write_summary_state(state_file)
-        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root)
+        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root, provider=provider)
         generic_todo = add_goal_todo(
             registry_path=registry,
             goal_id=GOAL_ID,
@@ -1324,7 +1341,7 @@ def main() -> int:
         registry = temp / "registry.json"
         runtime_root = temp / "runtime"
         write_summary_state(state_file)
-        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root)
+        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root, provider=provider)
         append_fixture_evidence(
             registry=registry,
             runtime_root=runtime_root,
@@ -1366,6 +1383,11 @@ def main() -> int:
         assert target_reached["frontier"]["frontier"]["selected"] is None, target_reached
         assert_public_safe(target_reached)
 
+    for historical_parent in (False, True):
+        assert_failure_successor_lineage(provider, historical_parent)
+
+
+def assert_failure_successor_lineage(provider: str, historical_parent: bool) -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         temp = Path(temp_dir)
         project = temp / "project"
@@ -1374,7 +1396,7 @@ def main() -> int:
         registry = temp / "registry.json"
         runtime_root = temp / "runtime"
         write_summary_state(state_file)
-        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root)
+        write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root, provider=provider)
         failure_evidence = add_goal_todo(
             registry_path=registry,
             goal_id=GOAL_ID,
@@ -1385,7 +1407,7 @@ def main() -> int:
             claimed_by=EXECUTOR_AGENT_ID,
             dry_run=False,
         )
-        add_goal_todo(
+        first_summary = add_goal_todo(
             registry_path=registry,
             goal_id=GOAL_ID,
             role="agent",
@@ -1396,7 +1418,7 @@ def main() -> int:
             unblocks_todo_id=failure_evidence["todo_id"],
             dry_run=False,
         )
-        add_goal_todo(
+        second_summary = add_goal_todo(
             registry_path=registry,
             goal_id=GOAL_ID,
             role="agent",
@@ -1417,6 +1439,21 @@ def main() -> int:
         workspace = project / "visible-workspace"
         workspace.mkdir()
 
+        if historical_parent:
+            # Seed the published pre-cutoff producer intent through native create;
+            # its parent must survive upgrade even when another summary retries.
+            historical = apply_role_successor_todos(registry_path=registry, goal_id=GOAL_ID,
+                source_todo_id=first_summary['todo_id'], text_source_todo_id=failure_evidence['todo_id'],
+                current_agent_id=EVALUATOR_AGENT_ID, role_id='evaluator_promoter',
+                action='summarize_evidence', execute=True,
+                successor_specs=[spec for spec in auto_research_successor_specs_for_action(
+                    role_id='evaluator_promoter', action='summarize_evidence')
+                    if spec['action_kind'] == 'propose_failure_successor'],
+                decision_summary={'failure_continuation': {'next_outcome': 'propose_failure_successor'}})
+            assert historical['successors'][0]['added'] is True
+        original = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=GOAL_ID)
+        original_source = next(row for row in original['todos'] if row['todo_id'] == failure_evidence['todo_id'])
+
         first_turn = run_worker_turn(
             registry=registry,
             runtime_root=runtime_root,
@@ -1432,6 +1469,56 @@ def main() -> int:
         first_successor_text = first_successors[0]["todo_command"]
         assert ".." not in first_successor_text, f"successor text contains ..: {first_successor_text!r}"
         assert_public_safe(first_turn)
+        first_snapshot = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=GOAL_ID)
+        successor_id = first_successors[0]['todo_id']
+        accepted = next(row for row in first_snapshot['todos'] if row['todo_id'] == successor_id)
+        assert accepted['unblocks_todo_id'] == (first_summary['todo_id'] if historical_parent else failure_evidence['todo_id'])
+
+        # An explicit attempt to rebind this existing successor remains illegal.
+        # The producer fix must not weaken the canonical duplicate-intent fence.
+        try:
+            add_goal_todo(registry_path=registry, goal_id=GOAL_ID, role='agent',
+                text=accepted['text'], task_class='advancement_task',
+                action_kind='propose_failure_successor', claimed_by=HYPOTHESIS_AGENT_ID,
+                unblocks_todo_id=second_summary['todo_id'], dry_run=False)
+        except LocalCoordinationAuthorityUnavailable as error:
+            assert error.code == 'todo_semantic_duplicate_conflict', error
+        else:
+            raise AssertionError('same-title successor must not acquire another source binding')
+        assert read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=GOAL_ID) == first_snapshot
+        if historical_parent:
+            from loopx.control_plane.testing.canary_harness import run_json_cli
+            run_json_cli('todo', 'archive-completed', '--goal-id', GOAL_ID, '--role', 'agent',
+                '--max-active-done', '0', '--execute',
+                registry_path=registry, runtime_root=runtime_root)
+
+        if historical_parent:
+            from unittest.mock import patch
+            from demo.auto_research import worker_runtime
+            observed_after_race = None
+
+            def concurrent_read(**kwargs):
+                nonlocal observed_after_race
+                snapshot = read_canonical_todos_if_promoted(**kwargs)
+                add_goal_todo(registry_path=registry, goal_id=GOAL_ID, role='agent',
+                    text='[P2] Independent concurrent planning work.', task_class='advancement_task',
+                    claimed_by=CURATOR_AGENT_ID, dry_run=False)
+                observed_after_race = read_canonical_todos_if_promoted(**kwargs)
+                return snapshot
+
+            # Intervene after a real read; both the update and CAS refusal use
+            # the real provider. No mock supplies the claimed postcondition.
+            with patch.object(worker_runtime, 'read_canonical_todos_if_promoted', concurrent_read):
+                try:
+                    run_auto_research_worker_turn(registry_path=registry,
+                        runtime_root_arg=str(runtime_root), goal_id=GOAL_ID,
+                        agent_id=EVALUATOR_AGENT_ID, workspace=workspace, execute=True,
+                        complete_selected_todo=True, lane_count=4, visible_lanes_accepted=True)
+                except LocalCoordinationAuthorityUnavailable as error:
+                    assert error.code == 'provider_revision_mismatch', error
+                else:
+                    raise AssertionError('stale historical-lineage proof must refuse')
+            assert read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=GOAL_ID) == observed_after_race
 
         second_turn = run_worker_turn(
             registry=registry,
@@ -1451,7 +1538,20 @@ def main() -> int:
             f"second successor should have the same todo_id, got: {second_successor['todo_id']}"
         )
         assert_public_safe(second_turn)
+        final = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=GOAL_ID)
+        rows = {row['todo_id']: row for row in final['todos']}
+        assert len(final['todos']) == len(original['todos']) + 1
+        assert rows[successor_id] == accepted
+        assert rows[failure_evidence['todo_id']] == original_source
+        for summary in (first_summary, second_summary):
+            stored = rows[summary['todo_id']]
+            assert stored['status'] == 'done' and stored['claimed_by'] == EVALUATOR_AGENT_ID
+            assert stored['successor_todo_ids'] == [successor_id]
 
+def main() -> int:
+    assert_seeded_worker_turns()
+    for provider in ("file", "sqlite"):
+        assert_evidence_lineage(provider)
     return 0
 
 

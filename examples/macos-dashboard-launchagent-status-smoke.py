@@ -388,10 +388,12 @@ def main() -> int:
             "#!/usr/bin/env bash\n"
             "if [[ \"$*\" == *\"--format json doctor\"* ]]; then\n"
             "  if [[ -n \"${FAKE_RUNTIME_IDENTITY:-}\" ]]; then\n"
-            "    printf '{\"service_runtime_identity\":%s}\\n' \"$FAKE_RUNTIME_IDENTITY\"\n"
+            "    printf '{\"service_runtime_identity\":%s,\"python\":{\"executable\":%s}}\\n' \"$FAKE_RUNTIME_IDENTITY\" "
+            + shlex.quote(json.dumps(sys.executable)) + "\n"
             "    exit 0\n"
             "  fi\n"
-            "  printf '%s\\n' '{\"release_manifest\":{\"manifest\":{\"release_id\":\"current-release\",\"package\":{\"version\":\"0.5.3\"},\"source\":{\"git_commit\":\"current-revision\"}}}}'\n"
+            "  printf '{\"release_manifest\":{\"manifest\":{\"release_id\":\"current-release\",\"package\":{\"version\":\"0.5.3\"},\"source\":{\"git_commit\":\"current-revision\"}}},\"python\":{\"executable\":%s}}\\n' "
+            + shlex.quote(json.dumps(sys.executable)) + "\n"
             "  exit 0\n"
             "fi\n"
             "echo loopx \"$@\"\n",
@@ -456,6 +458,12 @@ def main() -> int:
         assert f"export CODEX_HOME={(home / '.codex').resolve()};" in default_chat_plist, default_chat_plist
         assert "export LOOPX_PYTHON=" in default_plist, default_plist
         assert "export LOOPX_PYTHON=" in default_chat_plist, default_chat_plist
+        # The selected console distribution owns its interpreter; another
+        # Python version on PATH must not replace this current doctor fact.
+        for plist in (status_plist, chat_plist):
+            shell = plistlib.loads(plist.read_bytes())["ProgramArguments"][2]
+            words = [word.removesuffix(";") for word in shlex.split(shell)]
+            assert f"LOOPX_PYTHON={sys.executable}" in words, shell
         assert "/loopx --registry" in default_plist, default_plist
         assert "/loopx-canary" not in default_plist, default_plist
         assert not (home / "Library" / "LaunchAgents" / "com.loopx.dashboard.plist").exists(), "retired dashboard LaunchAgent should not be installed"

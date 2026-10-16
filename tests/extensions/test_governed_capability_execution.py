@@ -10,6 +10,7 @@ import pytest
 
 import loopx.extensions.governed_capability_execution as governed_execution
 from loopx import paths
+from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.effect_program import SettlementIdentity
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected
 from loopx.extensions.capability_admission import (
@@ -23,6 +24,7 @@ from loopx.extensions.governed_capability_execution import (
 )
 from loopx.extensions.runtime import install_extension
 from loopx.todos import list_goal_todos
+from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
 
 
 def test_default_governed_run_dir_follows_single_runtime_route(
@@ -218,6 +220,16 @@ integration_profile = "profile.json"
         capability_id="fixture-material-delivery",
         operations=["publish"],
         execute=True,
+    )
+    initialize_canonical_authority(
+        tmp_path / "runtime",
+        "fixture-goal",
+        build_todo_runtime_shadow_projection(
+            goal_id="fixture-goal",
+            todos=[],
+            handoff_mode="soft_claim",
+        ),
+        state_path=active_state,
     )
     return state_file, registry, call_log
 
