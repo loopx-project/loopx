@@ -112,6 +112,14 @@ target that topic. Admission feedback, streamed posts, terminal edits and receip
 recovery use the existing delivery path with `source_thread` placement. A revoked
 binding or unreadable source prevents later result delivery.
 
+A completed, target-frozen stop on a locally enabled group binding reads its two
+original provider messages while Core freshly resolves the binding and App
+identity. Both readonly observations must finish successfully before source,
+ancestry and root-mention validation can authorize delivery. Only that invocation
+reuses the verified identity; no observation is persisted or reused by a later
+verification. Changed bindings discard the buffered message observation; ordinary
+input, private conversations and unknown stop scope keep their existing paths.
+
 When an ordinary Codex topic has no active Turn, `/stop` also covers background
 commands left by completed Turns in that same canonical Session, even after a
 later answer. Core freezes the original Session and canonical candidate Turn

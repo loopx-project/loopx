@@ -121,6 +121,25 @@ class LarkPrivateConversations:
         messages = {item["message_id"]: item for item in items}
         return messages[message_id], messages[root_id]
 
+    def _completed_stop_root(self, record: Mapping[str, Any], binding: Mapping[str, Any]) -> str | None:
+        """Read scheduling only; fresh Core resolution still owns authorization."""
+        event = record["event"]
+        root = str(event.get("root_id") or event["message_id"])
+        path = self.core.root / f"{record['request_ref']}.json"
+        native = _read_json(path) if path.exists() else {}
+        if (binding.get("enabled") is True and binding.get("audience") == "group"
+                and binding.get("binding_id") == record["binding_id"]
+                and binding.get("transport_ref") == record["profile"]
+                and root != event["message_id"] and native.get("command") == "stop"
+                and native.get("status") == "command_completed" and native.get("target_recorded") is True
+                and native.get("binding_id") == record["binding_id"]
+                and native.get("source") == record["source"] == lark_private_source(
+                    provider_ref=binding["provider_ref"], event=event)
+                and identity_ref(binding["provider_ref"], event["message_id"])
+                == record["request_ref"] == native.get("request_ref")):
+            return root
+        return None
+
     def _source_message(self, record: dict[str, Any], *, selected: dict[str, Any] | None = None,
                         render_content: bool = True) -> Mapping[str, Any] | None:
         """Read the exact source under this App, then recheck the Core audience.
@@ -132,8 +151,30 @@ class LarkPrivateConversations:
         result: Mapping[str, Any]
         message: Mapping[str, Any] | None
         try:
+            prefetched = None
+            read_binding: Mapping[str, Any] | None = None
             if selected is None:
-                selected = self.bindings.resolve(binding_id=record["binding_id"], **record["source"])
+                # Only an existing, locally enabled binding and a completed,
+                # target-frozen Core stop can schedule these original two IDs.
+                # Buffer readonly IO while Core freshly verifies identity and
+                # authority; neither result is usable until both have joined.
+                if not render_content:
+                    read_binding = next((row for row in self.bindings.read()["bindings"]
+                                         if row.get("binding_id") == record["binding_id"]), {})
+                root = self._completed_stop_root(record, read_binding) if read_binding else None
+                if root:
+                    with ThreadPoolExecutor(max_workers=1) as reads:
+                        envelopes = reads.submit(self._completed_stop_sources,
+                                                 record["profile"], event["message_id"], root)
+                        selected = self.bindings.resolve(binding_id=record["binding_id"],
+                                                         include_observation=True, **record["source"])
+                        prefetched = envelopes.result()
+                    current = next((row for row in self.bindings.read()["bindings"]
+                                    if row.get("binding_id") == record["binding_id"]), None)
+                    if current != read_binding or current != selected["binding"]:
+                        return None  # Revocation/replacement while reads ran is not a delivery grant.
+                else:
+                    selected = self.bindings.resolve(binding_id=record["binding_id"], **record["source"])
             native_path = self.core.root / f"{record['request_ref']}.json"
             native = _read_json(native_path) if native_path.exists() else {}
             if native.get("agent_target"):
@@ -144,7 +185,9 @@ class LarkPrivateConversations:
                           "--as", "bot", "--no-reactions", "--format", "json"]))
 
             group = selected["binding"].get("audience") == "group"
-            observation = None
+            # Resolve has just verified this App for this invocation. Reuse
+            # that observation for mention checks, never across verifications.
+            observation = selected.get("observation")
             stop_root: Mapping[str, Any] | None = None
             completed_stop = False
             if group:
@@ -155,7 +198,6 @@ class LarkPrivateConversations:
                     # Admission already verified this exact App. Reuse only
                     # that call's ephemeral observation; Core still rechecks
                     # under its fences, and outbound verification stays fresh.
-                    observation = selected.get("observation")
                     # An untrusted event hint only changes read scheduling.
                     # Only authenticated provider text can select a control;
                     # ordinary input still needs its display projection.
@@ -188,25 +230,24 @@ class LarkPrivateConversations:
                     # Only batch IDs already fixed by a target-frozen Core stop.
                     # The current binding above still authorizes this read.
                     # Event hints alone keep the source-first lookup.
-                    completed_stop = (root_id != event["message_id"]
-                        and native.get("command") == "stop" and native.get("status") == "command_completed"
-                        and native.get("target_recorded") is True
-                        and native.get("binding_id") == record["binding_id"]
-                        and native.get("source") == record["source"] == lark_private_source(
-                            provider_ref=selected["binding"]["provider_ref"], event=event)
-                        and identity_ref(selected["binding"]["provider_ref"], event["message_id"])
-                        == record["request_ref"] == native.get("request_ref"))
-                    # Delivery still needs both fresh observations. Their IO
-                    # is independent; join it before checking ancestry and @.
+                    completed_stop = self._completed_stop_root(record, selected["binding"]) == root_id
+                    # Delivery reuses only its own binding observation. An
+                    # explicitly supplied selection without one still needs a
+                    # fresh identity; join that read before ancestry and @.
                     def sources() -> tuple[Mapping[str, Any] | None, Mapping[str, Any] | None]:
                         if completed_stop:
+                            if prefetched is not None and read_binding == selected["binding"]:
+                                return prefetched
                             return self._completed_stop_sources(record["profile"], event["message_id"], root_id)
                         return self._group_source_message(record["profile"], event["message_id"]), None
 
-                    with ThreadPoolExecutor(max_workers=2) as reads:
-                        envelopes = reads.submit(sources)
-                        identity = reads.submit(self.bindings.observe, record["profile"])
-                        (canonical, stop_root), observation = envelopes.result(), identity.result()
+                    if observation is not None:
+                        canonical, stop_root = sources()
+                    else:
+                        with ThreadPoolExecutor(max_workers=2) as reads:
+                            envelopes = reads.submit(sources)
+                            identity = reads.submit(self.bindings.observe, record["profile"])
+                            (canonical, stop_root), observation = envelopes.result(), identity.result()
                     result, message = {"returncode": 0 if canonical else 1}, canonical
             else:
                 result = rendered()
