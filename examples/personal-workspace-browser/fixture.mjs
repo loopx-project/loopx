@@ -500,6 +500,7 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
     hostThreadActivity: {},
     /** Scenario hook applied to every status payload after the shared fixture rules. */
     transformStatus: null,
+    directoryContract: null,
     answerForMessage: null,
     loopxModeRequests: [],
     get larkConnections() { return runtime.larkConnections; },
@@ -525,6 +526,8 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
         goals: [...state.goalActivationStates.entries()].map(([id, activation_state]) => ({
           activation_state, display_name: registeredNames.get(id) ?? id, id, registry_member: true,
         })),
+        // The real service states its source facts here too (a missing registry is a warning).
+        contract: state.directoryContract ?? { ok: true, summary: { errors: 0, warnings: 0, checks: 0 }, errors: [], warnings: [], checks: [] },
       }, status: 200 });
       return;
     }

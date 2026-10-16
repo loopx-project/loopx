@@ -360,6 +360,10 @@ def run_once(env: dict[str, str]) -> dict:
             from benchmark.runtime.sessions import BenchmarkSessionWake
 
             session_wake = BenchmarkSessionWake(env, execution, receipt)
+            if stage == "execute" and execution.mode == "heartbeat" and env.get("LOOPX_WARM_START"):
+                from benchmark.runtime.checkpoint_session_refresh import prepare_session_refresh
+
+                body = prepare_session_refresh(env, session_wake, wake) + body
         if stage == "execute" and execution.mode == "heartbeat" and env.get("LOOPX_CHECKPOINT_REQUEST"):
             from benchmark.runtime.checkpoint import capture_before_replan
 

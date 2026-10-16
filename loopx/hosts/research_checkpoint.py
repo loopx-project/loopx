@@ -398,6 +398,8 @@ def native_binding_participant(env, components, metadata):
         components = [*components, {"id": _participant_id(components, "source_session_binding"),
                                    "source_path": str(binding_path)}]
     metadata["session"] = {**metadata["session"], "session_profile_digest": source_wake.digest}
+    if source_wake.binding.get("checkpoint_context_refresh") is not None:
+        metadata["session"]["checkpoint_context_refresh"] = source_wake.binding["checkpoint_context_refresh"]
     return components, source_wake
 
 

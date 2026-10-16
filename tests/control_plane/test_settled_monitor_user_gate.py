@@ -5,13 +5,12 @@ import json
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.test_monitor_followthrough_contract import (
     AGENT_ID, GOAL_ID, _add_monitor, _write_fixture,
 )
-from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.testing.canary_harness import run_json_cli
-from loopx.todos import add_goal_todo, list_goal_todos
+from loopx.todos import add_goal_todo
 from loopx.control_plane.effect_program import ReceiptBoundMonitorPhase
 from loopx.control_plane.quota.should_run import build_quota_should_run
 from loopx.control_plane.testing.quota_fixtures import (
@@ -44,11 +43,11 @@ def test_incomplete_frontier_cannot_erase_settled_monitor_receipt():
     assert replay["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("material", [False, True])
 def test_scoped_gate_cannot_reopen_an_exact_settled_monitor(tmp_path, monkeypatch, provider, material):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, runtime, state = _write_fixture(tmp_path)
+    registry, runtime, _state = _write_fixture(tmp_path, provider=provider)
     gated = add_goal_todo(registry_path=registry, goal_id=GOAL_ID, role="agent",
         text="Work awaiting an owner decision", task_class="advancement_task",
         status="blocked", claimed_by=AGENT_ID, agent_id=AGENT_ID)
@@ -57,11 +56,6 @@ def test_scoped_gate_cannot_reopen_an_exact_settled_monitor(tmp_path, monkeypatc
         blocks_agent=AGENT_ID, unblocks_todo_id=gated["todo_id"], agent_id=AGENT_ID)
     monitor = _add_monitor(registry, text="Observe an independent public target",
         target_key="public-target", next_due_at="2000-01-01T00:00:00Z")
-    if provider != "legacy":
-        todos = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
-        projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID,
-            todos=todos, handoff_mode="soft_claim")
-        initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
     turn = "monitor-scoped-gate-turn"
     guard_args = ["quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--runtime-profile", "generic_cli", "--turn-instance-id", turn,

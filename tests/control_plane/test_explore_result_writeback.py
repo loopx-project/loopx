@@ -187,6 +187,10 @@ def test_partial_link_failure_replays_without_duplicate_or_primary_rollback(
 @pytest.mark.parametrize("case", ["disabled", "null", "invalid", "conflict", "off-without-result",
                                 "path-disabled", "path-missing", "path-no-evidence", "path-overflow"])
 def test_real_cli_inline_validation_precedes_primary_commit(tmp_path, case):
+    from canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import (
+        build_todo_runtime_shadow_projection,
+    )
     from tests.control_plane.test_quota_settlement_cli import (
         _write_fixture, _run_cli, GOAL_ID, AGENT_ID, TODO_ID, TURN_ID,
     )
@@ -195,6 +199,16 @@ def test_real_cli_inline_validation_precedes_primary_commit(tmp_path, case):
     config = json.loads(path.read_text())
     config["goals"][0]["explore_graph"] = {"enabled": case not in {"disabled", "off-without-result", "path-disabled"}}
     path.write_text(json.dumps(config))
+    todos = list_goal_todos(registry_path=path, goal_id=GOAL_ID)["todos"]
+    initialize_canonical_authority(
+        runtime,
+        GOAL_ID,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim"
+        ),
+        state_path=project / config["goals"][0]["state_file"],
+        provider="file",
+    )
     rc, claimed = _run_cli(path, runtime, "todo", "claim", "--goal-id", GOAL_ID,
                           "--todo-id", TODO_ID, "--agent-id", AGENT_ID,
                           "--claimed-by", AGENT_ID, cwd=project)
@@ -262,6 +276,11 @@ def test_real_cli_inline_validation_precedes_primary_commit(tmp_path, case):
 def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_retry(
     tmp_path, terminal, interrupted, source_mode, monkeypatch, capsys,
 ):
+    from canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import (
+        build_todo_runtime_shadow_projection,
+    )
+    from loopx.control_plane.work_items.task_lease import acquire_task_lease
     from tests.control_plane.test_quota_settlement_cli import (
         _write_fixture,
         _run_cli,
@@ -279,6 +298,42 @@ def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_r
         "explore_harness": {"enabled": True},
     }
     path.write_text(json.dumps(config))
+    todos = list_goal_todos(registry_path=path, goal_id=GOAL_ID)["todos"]
+    if source_mode == "linked_path_delta":
+        target = next(todo for todo in todos if todo["todo_id"] == TODO_ID)
+        target["explore_result_node_refs"] = [ATTACHMENT["node_id"]]
+        from loopx.capabilities.explore.result_log import (
+            append_explore_result_event, build_explore_node_event,
+        )
+        append_explore_result_event(explore_result_log_path(runtime, GOAL_ID),
+            build_explore_node_event(goal_id=GOAL_ID, node_id=ATTACHMENT["node_id"],
+                node_kind="question", title=ATTACHMENT["question"],
+                summary=ATTACHMENT["applicability"], status="open"))
+    initialize_canonical_authority(
+        runtime,
+        GOAL_ID,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID,
+            todos=todos,
+            handoff_mode="hard_lease" if terminal else "soft_claim",
+        ),
+        state_path=project / config["goals"][0]["state_file"],
+        provider="file",
+    )
+    terminal_proof = {}
+    if terminal:
+        lease = acquire_task_lease(
+            registry_path=path,
+            runtime_root=runtime,
+            goal_id=GOAL_ID,
+            todo_id=TODO_ID,
+            owner=AGENT_ID,
+            idempotency_key="cli-terminal-result",
+        )
+        terminal_proof = dict(
+            task_lease_idempotency_key="cli-terminal-result",
+            task_lease_expected_version=lease["lease"]["version"],
+        )
     rc, claimed = _run_cli(
         path,
         runtime,
@@ -295,47 +350,9 @@ def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_r
         cwd=project,
     )
     assert rc == 0, claimed
-    if source_mode == "linked_path_delta":
-        from loopx.capabilities.explore.result_log import (
-            append_explore_result_event, build_explore_node_event,
-        )
-        append_explore_result_event(explore_result_log_path(runtime, GOAL_ID),
-            build_explore_node_event(goal_id=GOAL_ID, node_id=ATTACHMENT["node_id"],
-                node_kind="question", title=ATTACHMENT["question"],
-                summary=ATTACHMENT["applicability"], status="open"))
-        update_goal_todo(registry_path=path, goal_id=GOAL_ID, todo_id=TODO_ID,
-            agent_id=AGENT_ID, explore_result_node_refs=[ATTACHMENT["node_id"]])
-    terminal_proof = {}
     if terminal:
-        from canonical_authority_fixture import initialize_canonical_authority
-        from loopx.control_plane.coordination.runtime_shadow import (
-            build_todo_runtime_shadow_projection,
-        )
-        from loopx.control_plane.work_items.task_lease import acquire_task_lease
         from loopx.todos import complete_goal_todo
 
-        todos = list_goal_todos(registry_path=path, goal_id=GOAL_ID)["todos"]
-        initialize_canonical_authority(
-            runtime,
-            GOAL_ID,
-            build_todo_runtime_shadow_projection(
-                goal_id=GOAL_ID, todos=todos, handoff_mode="hard_lease"
-            ),
-            state_path=project / config["goals"][0]["state_file"],
-            provider="file",
-        )
-        lease = acquire_task_lease(
-            registry_path=path,
-            runtime_root=runtime,
-            goal_id=GOAL_ID,
-            todo_id=TODO_ID,
-            owner=AGENT_ID,
-            idempotency_key="cli-terminal-result",
-        )
-        terminal_proof = dict(
-            task_lease_idempotency_key="cli-terminal-result",
-            task_lease_expected_version=lease["lease"]["version"],
-        )
     binding = (
         "--goal-id",
         GOAL_ID,
@@ -510,7 +527,7 @@ def test_canonical_delivery_keeps_existing_refs_and_receiver_reads_scoped_result
         records,
     )
 
-    path, _state = canonical_fixture(tmp_path, True, provider)
+    path, _state = canonical_fixture(tmp_path, provider)
     config = json.loads(path.read_text())
     config["goals"][0]["explore_graph"] = {"enabled": True}
     config["goals"][0]["spawn_policy"] = {
@@ -600,7 +617,7 @@ def test_completed_work_can_attach_evidence_without_reopening_or_changing_comple
     tmp_path, provider, mode
 ):
     from tests.control_plane.test_native_todo_planning_update import (
-        fixture as canonical_fixture,
+        source_fixture as canonical_source_fixture,
         records,
     )
     from canonical_authority_fixture import initialize_canonical_authority
@@ -613,7 +630,7 @@ def test_completed_work_can_attach_evidence_without_reopening_or_changing_comple
     from loopx.control_plane.work_items.task_lease import acquire_task_lease
     from loopx.todos import complete_goal_todo
 
-    path, state = canonical_fixture(tmp_path, False, provider)
+    path, state = canonical_source_fixture(tmp_path)
     config = json.loads(path.read_text())
     config["goals"][0]["explore_graph"] = {"enabled": True}
     path.write_text(json.dumps(config))
@@ -719,7 +736,7 @@ def test_hard_lease_is_required_for_new_delivery_but_not_successful_readback(
     tmp_path, provider
 ):
     from tests.control_plane.test_native_todo_planning_update import (
-        fixture as canonical_fixture,
+        source_fixture as canonical_source_fixture,
     )
     from canonical_authority_fixture import initialize_canonical_authority
     from loopx.control_plane.coordination.runtime_shadow import (
@@ -730,7 +747,7 @@ def test_hard_lease_is_required_for_new_delivery_but_not_successful_readback(
         release_task_lease,
     )
 
-    path, state = canonical_fixture(tmp_path, False, provider)
+    path, state = canonical_source_fixture(tmp_path)
     config = json.loads(path.read_text())
     config["goals"][0]["explore_graph"] = {"enabled": True}
     path.write_text(json.dumps(config))
@@ -784,6 +801,7 @@ def test_real_cli_open_capture_release_order_and_readback_replay(tmp_path, provi
     from canonical_authority_fixture import initialize_canonical_authority
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.control_plane.work_items.task_lease import acquire_task_lease
     from tests.control_plane.test_quota_settlement_cli import (
         _write_fixture, _run_cli, GOAL_ID, AGENT_ID, TODO_ID, TURN_ID,
     )
@@ -798,12 +816,17 @@ def test_real_cli_open_capture_release_order_and_readback_replay(tmp_path, provi
         assert rc == 0, packet
         return packet
 
+    source_todos = list_goal_todos(registry_path=path, goal_id=GOAL_ID)["todos"]
+    initialize_canonical_authority(runtime, GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=source_todos, handoff_mode="hard_lease"),
+        state_path=project / config["goals"][0]["state_file"], provider=provider)
+    acquire_task_lease(
+        registry_path=path, runtime_root=runtime, goal_id=GOAL_ID,
+        todo_id=TODO_ID, owner=AGENT_ID, idempotency_key="early-release",
+    )
     run("todo", "claim", "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
         "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID)
     todos = list_goal_todos(registry_path=path, goal_id=GOAL_ID)["todos"]
-    initialize_canonical_authority(runtime, GOAL_ID,
-        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos, handoff_mode="hard_lease"),
-        state_path=project / config["goals"][0]["state_file"], provider=provider)
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
     guard_command = ["quota", "should-run", "--codex-app", *binding,

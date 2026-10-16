@@ -208,8 +208,7 @@ def _public_contract_evidence() -> dict[tuple[str, str], set[str]]:
 
 
 def _review_outward_dependencies(edges, *, reviewed=REVIEWED_MAINTAINABILITY_EXCEPTIONS):
-    # Use the existing exact debt owner: the quarantined legacy writer retains
-    # its Explore completion guard until retirement. This is not a prefix waiver.
+    # Review exact edges: one exception must never waive a module prefix.
     findings = [
         {"id": f"dependency_debt:{source}->{target}", "category": "dependency_debt"}
         for source, target in sorted(edges)
@@ -237,35 +236,45 @@ def test_control_plane_has_no_unreviewed_outward_dependencies() -> None:
     )
 
 
+@pytest.fixture
+def reviewed_outward_edge():
+    # Synthetic review evidence keeps the checker covered after real debt exits.
+    edge = ("loopx.control_plane.fixture_bridge", "loopx.capabilities.fixture_owner")
+    key = f"dependency_debt:{edge[0]}->{edge[1]}"
+    return edge, key, {
+        key: {
+            "reason": "The fixture bridge retains its existing owner during migration.",
+            "retirement_plan": "Remove the bridge after migrating its final caller.",
+        },
+    }
+
+
 @pytest.mark.parametrize("edge", [
-    ("loopx.control_plane.todos.provider_update", "loopx.capabilities.explore.research_frontier"),
-    ("loopx.control_plane.todos.legacy_mutation_copy", "loopx.capabilities.explore.research_frontier"),
-    ("loopx.control_plane.todos.legacy_mutation", "loopx.capabilities.explore.research_frontier_extra"),
-    ("loopx.control_plane.todos.legacy_mutation", "loopx.capabilities.explore.research_frontier.child"),
-    ("loopx.control_plane.todos.legacy_mutation", "loopx.capabilities.issue_fix"),
+    ("loopx.control_plane.other_bridge", "loopx.capabilities.fixture_owner"),
+    ("loopx.control_plane.fixture_bridge_copy", "loopx.capabilities.fixture_owner"),
+    ("loopx.control_plane.fixture_bridge", "loopx.capabilities.fixture_owner_extra"),
+    ("loopx.control_plane.fixture_bridge", "loopx.capabilities.fixture_owner.child"),
+    ("loopx.control_plane.fixture_bridge", "loopx.capabilities.other_owner"),
 ])
-def test_reviewed_legacy_bridge_never_allows_another_outward_edge(edge):
-    legacy = ("loopx.control_plane.todos.legacy_mutation", "loopx.capabilities.explore.research_frontier")
-    key = f"dependency_debt:{legacy[0]}->{legacy[1]}"
-    reviewed = {key: REVIEWED_MAINTAINABILITY_EXCEPTIONS[key]}
-    assert _review_outward_dependencies({legacy}, reviewed=reviewed)["ok"]
-    report = _review_outward_dependencies({legacy, edge}, reviewed=reviewed)
+def test_reviewed_bridge_never_allows_another_outward_edge(edge, reviewed_outward_edge):
+    allowed, _, reviewed = reviewed_outward_edge
+    assert _review_outward_dependencies({allowed}, reviewed=reviewed)["ok"]
+    report = _review_outward_dependencies({allowed, edge}, reviewed=reviewed)
     assert not report["ok"] and report["unreviewed_count"] == 1
     assert report["unreviewed_findings"][0]["id"] == f"dependency_debt:{edge[0]}->{edge[1]}"
 
 
 @pytest.mark.parametrize("field", ["reason", "retirement_plan"])
-def test_outward_dependency_exception_requires_its_existing_review_evidence(field):
-    legacy = ("loopx.control_plane.todos.legacy_mutation", "loopx.capabilities.explore.research_frontier")
-    key = f"dependency_debt:{legacy[0]}->{legacy[1]}"
-    reviewed = {key: {**REVIEWED_MAINTAINABILITY_EXCEPTIONS[key], field: ""}}
-    report = _review_outward_dependencies({legacy}, reviewed=reviewed)
+def test_outward_dependency_exception_requires_its_review_evidence(field, reviewed_outward_edge):
+    edge, key, reviewed = reviewed_outward_edge
+    reviewed[key][field] = ""
+    report = _review_outward_dependencies({edge}, reviewed=reviewed)
     assert not report["ok"] and report["invalid_exception_count"] == 1
 
 
-def test_retired_outward_dependency_cannot_keep_a_stale_exception():
-    key = "dependency_debt:loopx.control_plane.todos.legacy_mutation->loopx.capabilities.explore.research_frontier"
-    report = _review_outward_dependencies(set(), reviewed={key: REVIEWED_MAINTAINABILITY_EXCEPTIONS[key]})
+def test_retired_outward_dependency_cannot_keep_a_stale_exception(reviewed_outward_edge):
+    _, _, reviewed = reviewed_outward_edge
+    report = _review_outward_dependencies(set(), reviewed=reviewed)
     assert not report["ok"] and report["stale_exception_count"] == 1
 
 

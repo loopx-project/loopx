@@ -234,9 +234,19 @@ def test_deadline_after_link_qualification_blocks_admission_and_adoption(tmp_pat
     qualify = module._ResultUseRead.qualify
     def expire_after_link(self, roots):
         result = qualify(self, roots)
-        elapsed[0] = 16
+        elapsed[0] = 14
         return result
     monkeypatch.setattr(module._ResultUseRead, "qualify", expire_after_link)
+    links, aggregate = module._dependency_observation(runner, {}, request)
+    assert aggregate["state"] == "current"
+    assert links[0]["state"] == "current"
+
+    def exceed_budget_after_link(self, roots):
+        result = qualify(self, roots)
+        elapsed[0] = 16
+        return result
+    monkeypatch.setattr(module._ResultUseRead, "qualify", exceed_budget_after_link)
+    elapsed[0] = 0
     links, aggregate = module._dependency_observation(runner, {}, request)
     assert aggregate["reason"] == "verification_budget_exhausted"
     assert links[0]["state"] == "unavailable"

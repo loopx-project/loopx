@@ -41,7 +41,8 @@ export function acceptanceRestoration(
       input.completion_validation_revision !== undefined) {
     return unavailable("Exact restoration supports only the prior text/wait; ask the owner to review and rebind other work changes");
   }
-  const candidate = prepareUpdatedTodo(todo, input, head).next;
+  const {monitor_observation: _absentObservation, ...restorationInput} = input;
+  const candidate = prepareUpdatedTodo(todo, restorationInput, head).next;
   const binding = state.bindings.find(item => item.todo_id === input.todo_id)!;
   if (goalAcceptanceTodoDigest(candidate) !== binding.todo_semantic_digest) {
     return unavailable("The supplied text/wait does not reconstruct the exact owner-confirmed declaration; ask the owner to review and rebind this Todo");

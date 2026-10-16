@@ -712,15 +712,50 @@ def test_cached_host_result_cannot_resume_after_goal_recreation(
     assert calls == {"writeback": 0, "spend": 0, "scheduler": 0}
 
 
-def test_host_result_requires_bounded_public_material_fields() -> None:
+@pytest.mark.parametrize("field", ["raw_trajectory", "agent_vision"])
+def test_host_result_requires_bounded_public_material_fields(field: str) -> None:
     plan = _plan()
     result = _host_result(plan)
-    result["raw_trajectory"] = "not allowed"
+    result[field] = "not allowed"
 
     validation = validate_loopx_turn_host_result(plan, result)
 
     assert validation["ok"] is False
     assert "unsupported host result fields" in " ".join(validation["errors"])
+
+
+@pytest.mark.parametrize("packet, expected_error", [
+    (None, "cached agent_vision must be a JSON object"),
+    ([], "cached agent_vision must be a JSON object"),
+    ("not an object", "cached agent_vision must be a JSON object"),
+    ({"vision_patch": {"acceptance_summary": "x" * 421}}, "acceptance_summary"),
+])
+def test_cached_host_result_revalidates_decoded_vision(
+    packet: object, expected_error: str,
+) -> None:
+    plan = _plan()
+    result = _host_result(plan)
+    result.update(result_kind="replan_required", path_delta_mode="material_replan",
+                  agent_vision=packet)
+    result.pop("vision_unchanged_reason", None)
+
+    validation = validate_loopx_turn_host_result(plan, result, from_journal=True)
+
+    assert validation["ok"] is False
+    assert expected_error in " ".join(validation["errors"])
+
+
+def test_cached_host_result_rejects_conflicting_vision_forms() -> None:
+    plan = _plan()
+    result = _host_result(plan)
+    result.update(result_kind="replan_required", path_delta_mode="material_replan",
+                  agent_vision={}, agent_vision_json="{}")
+    result.pop("vision_unchanged_reason", None)
+
+    validation = validate_loopx_turn_host_result(plan, result, from_journal=True)
+
+    assert validation["ok"] is False
+    assert "cached vision cannot carry both packet forms" in " ".join(validation["errors"])
 
 
 def test_child_receipt_schema_excludes_registered_peer_authority() -> None:

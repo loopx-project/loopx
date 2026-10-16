@@ -20,6 +20,11 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
+
 GOAL_ID = "adoption-main-control"
 USER_TODO = "[P1] Review the P0 owner-risk checklist before approving delivery."
 AGENT_TODO = "Run the read-only map dry-run after the operator approval is recorded."
@@ -86,7 +91,7 @@ def write_planned_fixture(root: Path) -> Path:
     return registry_path
 
 
-def run_cli(root: Path, registry_path: Path, *args: str) -> dict:
+def run_cli(root: Path, registry_path: Path, *args: str, check: bool = True) -> dict:
     result = subprocess.run(
         [
             sys.executable,
@@ -101,7 +106,7 @@ def run_cli(root: Path, registry_path: Path, *args: str) -> dict:
             *args,
         ],
         cwd=REPO_ROOT,
-        check=True,
+        check=check,
         text=True,
         capture_output=True,
     )
@@ -135,8 +140,8 @@ def attention_item(status_payload: dict) -> dict:
     return items[0]
 
 
-def main() -> int:
-    with tempfile.TemporaryDirectory(prefix="loopx-project-agent-adoption-") as tmp:
+def assert_adoption(provider: str) -> None:
+    with tempfile.TemporaryDirectory(prefix=f"loopx-project-agent-adoption-{provider}-") as tmp:
         root = Path(tmp)
         registry_path = write_planned_fixture(root)
         project = root / "project"
@@ -179,24 +184,31 @@ def main() -> int:
         assert first_quota["agent_todo_summary"]["open_count"] == 1, first_quota
         assert first_quota["selected_todo"]["text"] == AGENT_TODO, first_quota
 
-        todo_payload = run_cli(
-            root,
-            registry_path,
-            "todo",
-            "add",
-            "--goal-id",
-            GOAL_ID,
-            "--role",
-            "user",
-            "--task-class",
-            "user_gate",
-            "--global-gate",
-            "--text",
-            USER_TODO,
+        add_gate = (
+            "todo", "add", "--goal-id", GOAL_ID, "--role", "user",
+            "--task-class", "user_gate", "--global-gate", "--text", USER_TODO,
         )
+        state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+        before_state, before_registry = state.read_bytes(), registry_path.read_bytes()
+        refused = run_cli(root, registry_path, *add_gate, check=False)
+        assert refused["ok"] is False, refused
+        assert refused["error_code"] == "canonical_authority_required", refused
+        assert state.read_bytes() == before_state
+        assert registry_path.read_bytes() == before_registry
+        import_fixture_authority(registry_path, GOAL_ID, provider=provider)
+        imported = run_cli(root, registry_path, "todo", "list", "--goal-id", GOAL_ID)
+        assert imported["authority_read"]["source_authority"] == f"{provider}_v0", imported
+        assert imported["authority_read"]["legacy_fallback_used"] is False, imported
+        assert len(imported["todos"]) == 1, imported
+        original = imported["todos"][0]
+        assert original["text"] == AGENT_TODO and original["status"] == "open", original
+        todo_payload = run_cli(root, registry_path, *add_gate)
         assert todo_payload["ok"] is True, todo_payload
         assert todo_payload["added"] is True, todo_payload
-        assert todo_payload["section"] == "User Todo / Owner Review Reading Queue", todo_payload
+        gate_id = todo_payload["todo_id"]
+        gate = run_cli(root, registry_path, "todo", "list", "--goal-id", GOAL_ID,
+                       "--todo-id", gate_id)["todo"]
+        assert gate["text"] == USER_TODO and gate["global_gate"] is True, gate
 
         status_after_todo = run_cli(root, registry_path, "status", "--scan-root", str(project))
         item_after_todo = attention_item(status_after_todo)
@@ -267,6 +279,10 @@ def main() -> int:
         assert "不要从旧聊天或旧 packet 拼当前状态" in packet["project_agent_handoff"], packet
         assert "【用户本地 Gate 记录草稿】" not in packet["packet"], packet
 
+
+def main() -> int:
+    for provider in ("file", "sqlite"):
+        assert_adoption(provider)
     print("project-agent-adoption-smoke ok")
     return 0
 

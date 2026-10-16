@@ -819,12 +819,16 @@ def record_quota_monitor_poll_for_decision(
             agent_id=decision_agent_id,
             effect_id=effect_id,
         )
+    canonical_source = None
     if execute and (safe_todo_id or safe_target_key) and not use_current_task_lease:
-        from ..scheduler.provider_monitor_poll import (
-            require_monitor_poll_source_available,
+        from ..coordination.local_authority import (
+            read_canonical_todos_if_promoted,
         )
 
-        require_monitor_poll_source_available(
+        # Provider loss is not permission to recover from a historical source.
+        # None alone means the source is unmigrated; the original quota owner
+        # may still validate and settle its existing transaction below.
+        canonical_source = read_canonical_todos_if_promoted(
             runtime_root=runtime_root,
             goal_id=goal_id,
         )
@@ -934,6 +938,15 @@ def record_quota_monitor_poll_for_decision(
         # Validate explicit claim routing before quota reserves a pending effect.
         # Exact retries keep their frozen admission if registry membership changed.
         receipt_path = _monitor_poll_receipt_path(runtime_root, goal_id, effect_id)
+        if (execute and not use_current_task_lease and canonical_source is None
+                and not receipt_path.exists()):
+            from ..coordination.local_authority import require_canonical_authority
+
+            # This existence check only routes the original operation while
+            # holding quota admission. TypeScript validates its contents,
+            # fingerprint and frozen decision before replay or provider dispatch.
+            # Without it, refuse before creating a new pending reservation.
+            require_canonical_authority(goal_id=goal_id, operation="monitor_poll")
         if next_claimed_by and registry_path is not None and not receipt_path.exists():
             plan_todo_authoring_scope(
                 command="create", role="agent", goal_id=goal_id,
@@ -999,6 +1012,15 @@ def record_quota_monitor_poll_for_decision(
             ) as source_admission:
                 native, after_status = transact(source_admission)
     except ValueError as exc:
+        from ..coordination.local_authority import (
+            CanonicalAuthorityRequired,
+            LocalCoordinationAuthorityRejection,
+        )
+
+        if isinstance(exc, CanonicalAuthorityRequired):
+            # Moving fresh admission under the quota lock must preserve the
+            # public refusal type and its structured migration/no-write facts.
+            raise
         payload = failure(
             str(exc),
             include_capability_retry=(
@@ -1008,6 +1030,9 @@ def record_quota_monitor_poll_for_decision(
         )
         if isinstance(exc, _NativeMonitorPollRejected):
             payload["error_code"] = exc.diagnostic_code
+        else:
+            if isinstance(exc, LocalCoordinationAuthorityRejection):
+                payload["error_code"] = exc.code
         return payload
 
     if native.get("status") == "conflict":

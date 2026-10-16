@@ -4,36 +4,24 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted  # noqa: E402
+from loopx.control_plane.testing.canary_harness import import_fixture_authority, run_json_cli  # noqa: E402
+
 GOAL_ID = "dreaming-decision-fixture"
 
 
 def run_cli(*args: str, registry_path: Path, runtime: Path) -> dict:
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "loopx.cli",
-            "--registry",
-            str(registry_path),
-            "--runtime-root",
-            str(runtime),
-            "--format",
-            "json",
-            *args,
-        ],
-        cwd=REPO_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return json.loads(result.stdout)
+    return run_json_cli(*args, registry_path=registry_path, runtime_root=runtime,
+                        cwd=REPO_ROOT, include_returncode=False)
 
 
 def append_recorded_proposal(
@@ -86,7 +74,7 @@ def append_recorded_proposal(
         f.write(json.dumps(record, sort_keys=True) + "\n")
 
 
-def write_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
+def write_fixture(root: Path, provider: str) -> tuple[Path, Path, Path, Path]:
     project = root / "project"
     runtime = root / "runtime"
     state_file = f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
@@ -139,6 +127,7 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
         + "\n",
         encoding="utf-8",
     )
+    import_fixture_authority(registry_path, GOAL_ID, provider=provider)
     append_recorded_proposal(
         runs_dir,
         generated_at="2026-01-01T00:00:00+00:00",
@@ -162,9 +151,10 @@ def assert_no_quota_spend(runtime: Path) -> None:
     assert "quota_slot_spent" not in text, text
 
 
-def main() -> int:
+def assert_decisions(provider: str) -> None:
     with tempfile.TemporaryDirectory(prefix="loopx-dreaming-decision-") as tmp:
-        registry_path, runtime, state_path, index_path = write_fixture(Path(tmp))
+        registry_path, runtime, state_path, index_path = write_fixture(Path(tmp), provider)
+        original = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
 
         approve = run_cli(
             "dreaming",
@@ -200,6 +190,15 @@ def main() -> int:
         assert approve["side_effects"]["runtime_history_appended"] is True, approve
         assert approve["side_effects"]["quota_spent"] is False, approve
         assert_no_quota_spend(runtime)
+        approved = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+        assert approved['source_authority'] == provider + '_v0'
+        assert approved['decision_read_from_provider'] is True and approved['legacy_fallback_used'] is False
+        assert len(approved['todos']) == len(original['todos']) + 1
+        promoted = next(row for row in approved['todos'] if row['todo_id'] == todo_id)
+        assert promoted['text'] == '[P1] Implement the approved dreaming follow-up as normal delivery.'
+        assert promoted['status'] == 'open' and promoted['task_class'] == 'advancement_task'
+        original_ids = {row['todo_id'] for row in original['todos']}
+        assert [row for row in approved['todos'] if row['todo_id'] in original_ids] == original['todos']
 
         before_defer_state = state_path.read_text(encoding="utf-8")
         before_defer_index = index_path.read_text(encoding="utf-8")
@@ -228,6 +227,7 @@ def main() -> int:
         assert defer["side_effects"]["runtime_history_appended"] is True, defer
         assert defer["side_effects"]["quota_spent"] is False, defer
         assert state_path.read_text(encoding="utf-8") == before_defer_state
+        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID) == approved
         assert index_path.read_text(encoding="utf-8") != before_defer_index
         assert_no_quota_spend(runtime)
 
@@ -257,6 +257,12 @@ def main() -> int:
         assert reject["side_effects"]["quota_spent"] is False, reject
         assert state_path.read_text(encoding="utf-8") == before_reject_state
         assert index_path.read_text(encoding="utf-8") == before_reject_index
+        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID) == approved
+
+
+def main() -> int:
+    for provider in ('file', 'sqlite'):
+        assert_decisions(provider)
 
     print("dreaming-proposal-decision-smoke ok")
     return 0

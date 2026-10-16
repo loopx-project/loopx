@@ -1,7 +1,6 @@
 """Canonical callers must not load unpromoted Todo writers or capture producers."""
 from __future__ import annotations
 
-import ast
 import json
 import os
 from pathlib import Path
@@ -18,17 +17,15 @@ from test_quota_authority_settlement_journey import _source
 import test_quota_settlement_cli as settlement
 
 
-@pytest.mark.parametrize("module", ["mutation_api", "legacy_mutation"])
-def test_todo_mutation_import_does_not_load_status(module):
+def test_todo_mutation_import_does_not_load_status():
     result = subprocess.run(
         [sys.executable, "-c",
          "import importlib,sys;sys.modules['loopx.status']=None;"
-         f"owner=importlib.import_module('loopx.control_plane.todos.{module}');"
+         "owner=importlib.import_module('loopx.control_plane.todos.mutation_api');"
          "assert owner.ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE == 10"],
         cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=45,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-
 
 @pytest.fixture(scope="session")
 def retirement_wheel():
@@ -77,107 +74,27 @@ def isolated_todo_distribution(tmp_path, monkeypatch, request):
         # The packaged typed owner must be shipped, not borrowed from checkout.
         assert (package / "control_plane/todos/succession.ts").is_file()
         assert (package / "control_plane/effect_runtime_server.ts").is_file()
+    _assert_source_todo_writers_absent(package)
     return package, command
 
 
 @pytest.fixture
 def without_source_todo_writers(isolated_todo_distribution):
-    package, command = isolated_todo_distribution
-    _remove_source_todo_writers(package)
+    _package, command = isolated_todo_distribution
     return command
 
 
-def _remove_source_todo_writers(package):
-    (package / "control_plane/todos/line_update.py").unlink()
-    (package / "control_plane/todos/legacy_mutation.py").unlink(missing_ok=True)
-    capture_adapter = package / "control_plane/coordination/runtime_shadow_writer_adapter.py"
-    source = capture_adapter.read_text()
-    lines = source.splitlines(keepends=True)
-    producers = {"begin_todo_runtime_shadow_capture", "require_runtime_shadow_capture_prepared",
-                 "write_captured_todo_state", "settle_todo_runtime_shadow_capture"}
-    definitions = [node for node in ast.parse(source).body
-                   if isinstance(node, ast.FunctionDef) and node.name in producers]
-    assert {node.name for node in definitions} == producers
-    for node in reversed(definitions):
-        del lines[node.lineno - 1:node.end_lineno]
-    capture_adapter.write_text("".join(lines))
+def _assert_source_todo_writers_absent(package):
+    retired = (
+        "control_plane/todos/legacy_mutation.py",
+        "control_plane/todos/line_update.py",
+        "control_plane/scheduler/legacy_monitor_poll.py",
+        "control_plane/todos/handoff_mode_source.py",
+        "control_plane/coordination/runtime_shadow_writer_adapter.py",
+        "control_plane/coordination/handoff_mode_legacy_plan.ts",
+    )
+    assert all(not (package / relative).exists() for relative in retired)
 
-
-def _remove_monitor_source_modules(package):
-    (package / "control_plane/scheduler/legacy_monitor_poll.py").unlink()
-    for name in ("runtime_shadow", "runtime_shadow_writer_adapter",
-                 "local_authority_shadow_adapter", "local_authority_shadow_outbox"):
-        (package / f"control_plane/coordination/{name}.py").unlink()
-
-
-@pytest.mark.parametrize("window", ["before_commit", "after_commit"])
-@pytest.mark.parametrize("corrupt_cursor", [False, True], ids=["recover", "reject-unproved-cursor"])
-def test_pending_source_outbox_survives_producer_retirement(
-    tmp_path, isolated_todo_distribution, window, corrupt_cursor,
-):
-    from shadow_e2e_fixture import workspace
-
-    package, command = isolated_todo_distribution
-    w = workspace(tmp_path / "shadow", bootstrap=False)
-    w.command, w.cwd, w.package = tuple(command), tmp_path, package
-    assert w.cli("coordination-shadow", "bootstrap", "--execute")["bootstrap"]["status"] == "applied"
-    original = w.add("Already delivered source work")["todo_id"]
-    w.crash(window, "todo", "add", "--role", "agent", "--text", "Pending source work")
-
-    def history():
-        result = subprocess.run(
-            [sys.executable, "-S", "-c",
-             "import json,sys;from pathlib import Path;"
-             "from loopx.control_plane.coordination.local_authority_shadow_adapter "
-             "import read_local_authority_shadow;"
-             "print(json.dumps(read_local_authority_shadow(runtime_root=Path(sys.argv[1]),"
-             "goal_id=sys.argv[2],scan_limit=10000)))", str(w.runtime), w.goal],
-            cwd=tmp_path, capture_output=True, text=True, timeout=45,
-        )
-        assert result.returncode == 0, result.stdout + result.stderr
-        return json.loads(result.stdout)
-
-    before = history()
-    assert len(before["proof"]["transactions"]) == (2 if window == "before_commit" else 3)
-    assert original in {todo["todo_id"] for todo in before["head"]["todos"]}
-    # Use the existing partition owner rather than assuming its on-disk layout.
-    from loopx.control_plane.coordination.local_authority_shadow_outbox import partition_directory
-    directory = partition_directory(w.runtime, w.goal, "todos")
-    assert len(list(directory.glob("*.prepared.json"))) == 1
-    assert len(list(directory.glob("*.committed.json"))) == 1
-    source_bytes, registry_bytes = w.state.read_bytes(), w.registry.read_bytes()
-    _remove_source_todo_writers(package)
-
-    if corrupt_cursor:
-        cursor_path = directory / "drain-cursor.json"
-        cursor = json.loads(cursor_path.read_text())
-        cursor["last_partition_digest"] = "sha256:" + "f" * 64
-        cursor_path.write_text(json.dumps(cursor))
-        pending_bytes = {f.name: f.read_bytes() for f in directory.iterdir() if f.is_file()}
-        result = w.drain()
-        assert result["ok"] is False, result
-        assert result["reason_code"] == "outbox_cursor_unproved", result
-        assert {f.name: f.read_bytes() for f in directory.iterdir() if f.is_file()} == pending_bytes
-        assert history()["proof"]["transactions"] == before["proof"]["transactions"]
-    else:
-        result = w.drain()
-        assert result["ok"] is True, result
-        assert result["delivered"] == (1 if window == "before_commit" else 0)
-        assert result["replayed"] == (0 if window == "before_commit" else 1)
-        recovered = history()
-        transactions = recovered["proof"]["transactions"]
-        assert transactions[:len(before["proof"]["transactions"])] == before["proof"]["transactions"]
-        assert len(transactions) == 3
-        assert transactions[-1]["receipts"][0]["write_class"] == "todo_add"
-        assert transactions[-1]["receipts"][0]["seq"] == 2
-        assert {todo["text"] for todo in recovered["head"]["todos"]} == {
-            "[P1] Already delivered source work", "[P1] Pending source work"}
-        assert json.loads((directory / "drain-cursor.json").read_text())["last_seq"] == 2
-        assert sorted(f.name for f in directory.iterdir()) == ["drain-cursor.json"]
-        assert w.drain()["outcome"] == "nothing_pending"
-        assert history()["proof"]["transactions"] == transactions
-    assert w.state.read_bytes() == source_bytes
-    assert w.registry.read_bytes() == registry_bytes
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -257,7 +174,7 @@ def test_handoff_mode_without_source_todo_writers(tmp_path, provider, without_so
 
     def cli(*args, succeeds=True, override=False):
         result = subprocess.run(
-            [*without_source_todo_writers, "--format", "json", "--registry", str(registry),
+            [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry),
              *(["--runtime-root", str(runtime)] if override else []), *args, "--goal-id", "goal-a"],
             cwd=caller, capture_output=True, text=True, timeout=45,
         )
@@ -365,10 +282,16 @@ def test_new_goal_and_original_creation_recovery_without_source_todo_writers(tmp
 def test_leased_delivery_settlement_and_recovery_without_source_todo_writers(tmp_path, provider, without_source_todo_writers):
     project, runtime, registry, display, prefix = _source(
         tmp_path, provider=provider, handoff_mode="hard_lease",
-        extra=f"claimed_by={settlement.AGENT_ID}",
+        extra=(
+            f"claimed_by={settlement.AGENT_ID} "
+            "required_write_scopes=tests/**"
+        ),
     )
-    # The isolated package removes the writers; erase only the Todo display,
-    # not the Goal objective and constraints needed for delivery admission.
+    config = json.loads(registry.read_text())
+    config["goals"][0]["coordination"]["write_scope"] = ["tests/**"]
+    registry.write_text(json.dumps(config))
+    # Goal intent remains readable while the Markdown Todo display contributes
+    # no candidate or lease facts after canonical promotion.
     display.write_text(prefix)
 
     def run(*args, succeeds=True):
@@ -386,10 +309,6 @@ def test_leased_delivery_settlement_and_recovery_without_source_todo_writers(tmp
     def guard(turn):
         return run("quota", "should-run", *identity, "--codex-app", "--turn-instance-id", turn)
 
-    selected = guard(settlement.TURN_ID)
-    assert selected["decision"] == "run"
-    original = selected["heartbeat_receipt"]["settlement_identity"]
-    assert original["todo_id"] == settlement.TODO_ID
     update = ["todo", "update", *identity, "--note", "Canonical delivery retained"]
     rejected = run(*update, succeeds=False)
     assert rejected["error_code"] == "handoff_mode_requires_lease"
@@ -400,6 +319,10 @@ def test_leased_delivery_settlement_and_recovery_without_source_todo_writers(tmp
     assert acquired["acquired"] is True
     proof = ["--task-lease-idempotency-key", "delivery",
              "--task-lease-expected-version", str(acquired["lease"]["version"])]
+    selected = guard(settlement.TURN_ID)
+    assert selected["decision"] == "run"
+    original = selected["heartbeat_receipt"]["settlement_identity"]
+    assert original["todo_id"] == settlement.TODO_ID
     assert run(*update, *proof)["ok"] is True
     before = run("todo", "list", *identity)["todo"]
     assert before["note"] == "Canonical delivery retained"
@@ -454,104 +377,30 @@ def test_leased_delivery_settlement_and_recovery_without_source_todo_writers(tmp
     assert settlement._spend_run_count(runtime) == 1
 
 
-def test_explicit_source_writer_import_preserves_the_existing_seam(tmp_path):
+def test_retired_source_writer_modules_and_exports_are_absent():
     result = subprocess.run(
         [sys.executable, "-c", """
+import importlib.util
 import sys
-import sysconfig
 import loopx.todos as todos
-assert 'loopx.control_plane.todos.line_update' not in sys.modules
-assert 'loopx.control_plane.todos.legacy_mutation' not in sys.modules
-from loopx.todos import apply_todo_update_to_lines
-from loopx.control_plane.todos import line_update
-assert apply_todo_update_to_lines is line_update.apply_todo_update_to_lines
-for name in ('link_generated_successor_todo_ids', 'link_superseding_todo_id', 'upsert_todo_metadata'):
-    assert getattr(todos, name) is getattr(line_update, name)
-try:
-    getattr(todos, 'unknown_writer_export')
-except AttributeError:
-    pass
-else:
-    raise AssertionError('unknown export must remain unavailable')
+for module in (
+    'loopx.control_plane.todos.line_update',
+    'loopx.control_plane.todos.legacy_mutation',
+    'loopx.control_plane.scheduler.legacy_monitor_poll',
+    'loopx.control_plane.todos.handoff_mode_source',
+    'loopx.control_plane.coordination.runtime_shadow_writer_adapter',
+):
+    assert module not in sys.modules
+    assert importlib.util.find_spec(module) is None
+for name in (
+    'apply_todo_update_to_lines',
+    'link_generated_successor_todo_ids',
+    'link_superseding_todo_id',
+    'successor_add_kwargs',
+    'upsert_todo_metadata',
+):
+    assert not hasattr(todos, name)
 """],
         capture_output=True, text=True, timeout=45,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-
-
-@pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("material_change", [False, True])
-@pytest.mark.parametrize("source_writers_present", [False, True], ids=["absent", "present"])
-def test_monitor_recovery_with_source_writer_isolation(
-    tmp_path, request, provider, material_change, source_writers_present, isolated_todo_distribution,
-):
-    from test_leased_monitor_poll import LEASE, PROOF
-    from test_monitor_followthrough_contract import GOAL_ID, AGENT_ID
-    from test_native_monitor_poll import _canonical
-
-    _package, command = isolated_todo_distribution
-    if not source_writers_present:
-        command = request.getfixturevalue("without_source_todo_writers")
-        _remove_monitor_source_modules(_package)
-    registry, runtime, display, monitor = _canonical(
-        tmp_path, native=True, provider=provider, lease=LEASE,
-    )
-    display.unlink()
-
-    def cli(*args, succeeds=True):
-        result = subprocess.run(
-            [*command, "--format", "json",
-             "--registry", str(registry), "--runtime-root", str(runtime), *args],
-            cwd=tmp_path, capture_output=True, text=True, timeout=45,
-        )
-        assert (result.returncode == 0) is succeeds, result.stdout + result.stderr
-        return json.loads(result.stdout)
-
-    def current():
-        return cli("todo", "list", "--goal-id", GOAL_ID)
-
-    identity = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-                "--runtime-profile", "generic_cli", "--turn-instance-id", "monitor-retirement",
-                "--available-capability", "network", "--available-capability", "external_evidence_poll"]
-    guard = cli("quota", "should-run", *identity)
-    assert guard["selected_todo"]["todo_id"] == monitor["todo_id"]
-    before = current()
-    poll = ["quota", "monitor-poll", *identity, "--todo-id", monitor["todo_id"],
-            "--result-hash", "observed-revision", "--use-current-task-lease", "--execute"]
-    if material_change:
-        poll += ["--material-change", "--next-agent-todo", "Validate the observed revision",
-                 "--next-action-kind", "validate"]
-
-    # A missing provider must not use the display or create another authority.
-    backend = runtime / "authority" / f"{provider}-v0"
-    offline = backend.with_name(backend.name + "-offline")
-    backend.rename(offline)
-    try:
-        failed = cli(*poll, succeeds=False)
-        assert failed["ok"] is False
-        assert not backend.exists() and not display.exists()
-    finally:
-        offline.rename(backend)
-    assert current()["todos"] == before["todos"]
-
-    committed = cli(*poll)
-    assert committed["todo_writeback"]["lease_proof"] == PROOF
-    assert committed["todo_writeback"]["material_change_generation"] == int(material_change)
-    after = current()
-    assert len(after["todos"]) == len(before["todos"]) + int(material_change)
-    observed = next(t for t in after["todos"] if t["todo_id"] == monitor["todo_id"])
-    assert observed["result_hash"] == "observed-revision"
-    assert int(observed["consecutive_no_change"]) == int(not material_change)
-    assert display.exists()
-
-    # Recover the same observation after the execution lease is released.
-    assert cli("task-lease", "release", "--goal-id", GOAL_ID,
-               "--todo-id", monitor["todo_id"], "--owner", AGENT_ID,
-               "--idempotency-key", PROOF["idempotency_key"],
-               "--expected-version", str(PROOF["expected_version"]))["released"]
-    assert cli(*poll)["replayed"] is True
-    assert current()["todos"] == after["todos"]
-    rows = [json.loads(line) for line in
-            (runtime / "goals" / GOAL_ID / "runs/index.jsonl").read_text().splitlines()]
-    assert sum(row.get("classification") == "quota_monitor_poll" for row in rows) == 1
-    assert all(row.get("classification") != "quota_slot_spend" for row in rows)

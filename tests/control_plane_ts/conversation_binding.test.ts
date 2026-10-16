@@ -16,6 +16,20 @@ const current = {schema_version: "loopx_chat_conversation_bindings_v0", revision
 const request = {current, expected_revision: 0, operation: "configure", binding: row, observation,
   available_projects: [project]};
 
+test("an unfrozen recovered stop cannot borrow current cancellation scope", () => {
+  const request = {request_ref: "e".repeat(24), command: "stop"};
+  const current = {session_id: "new-session", active_turn_id: "new-active"};
+  assert.throws(() => planBoundConversationRequest({request, current_session: current,
+    recovering_request: true, background_turn_ids: ["new-background"]}), /original stop scope was not recorded/);
+  assert.equal(planBoundConversationRequest({request, current_session: current,
+    recovering_request: false}).turn_id, "new-active");
+  assert.deepEqual(planBoundConversationRequest({request: {...request, target_recorded: true,
+    session_id: "original", turn_id: null, background_turn_ids: ["old"]},
+    current_session: current, recovering_request: true, background_turn_ids: ["new-background"]}), {
+    operation: "stop", session_id: "original", turn_id: null,
+    background_turn_ids: ["old"], response_code: "stop_requested"});
+});
+
 test("group topics require an observed App membership and cannot inherit private recipients or portfolio", () => {
   const group = "1".repeat(24), topic = "2".repeat(24);
   const configure = {...request, binding: {...row, audience: "group", group_refs: [group]},
@@ -207,6 +221,28 @@ test("one App has one binding owner, and a context change cannot move an existin
   const other = {...project, project_ref: "f".repeat(24), workspace_path: "/authorized/other"};
   assert.throws(() => planConversationBinding({...request, current: next, expected_revision: 1,
     binding: {...row, project_ref: other.project_ref}, available_projects: [other]}), /new binding identity/);
+});
+
+test("Todo confirmation names a current Goal, preserves its owner and cannot start work", () => {
+  const context = {...project, kind: "bound_steward", audience: "bound_owner", grant: "portfolio_read",
+    goal_ids: ["maintenance"], binding_id: row.binding_id, source_ref: "e".repeat(24),
+    provider_ref: row.provider_ref, operator_ref: row.operator_ref};
+  const proposal = {action_kind: "todo.create", created_at: "2026-01-01T10:00:00Z",
+    context: {...context, kind: "manager", goal_id: "loopx-manager", expires_at: "2026-01-01T10:15:00Z"},
+    normalized_parameters: {goal_id: "maintenance", text: "Remember a feature", priority: "P2"}};
+  const request = {context, proposal, now: "2026-01-01T10:01:00Z", operation: "confirm"};
+  assert.equal(authorizeStewardCreation(request).authorized, true);
+  for (const change of [{goal_id: "foreign"}, {goal_id: undefined}, {start_execution: true}, {agent_id: "worker"}]) {
+    assert.throws(() => authorizeStewardCreation({...request,
+      proposal: {...proposal, normalized_parameters: {...proposal.normalized_parameters, ...change}}}), /Todo confirmation/);
+  }
+  for (const field of ["binding_id", "source_ref", "provider_ref", "operator_ref", "project_ref"]) {
+    assert.throws(() => authorizeStewardCreation({...request, context: {...context, [field]: "f".repeat(24)}}), /audience/);
+  }
+  for (const operation of ["stop", "resume"]) {
+    assert.throws(() => authorizeStewardCreation({...request, operation}), /cannot start/);
+  }
+  assert.throws(() => authorizeStewardCreation({...request, now: "2026-01-01T10:16:00Z"}), /expired/);
 });
 
 test("external project audience has its own Session identity without portfolio or peer scope", () => {

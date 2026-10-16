@@ -5,6 +5,7 @@ a no-effect qualification operation; it is never live financial authority.
 """
 
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -22,12 +23,14 @@ from loopx.control_plane.collaboration.operation_wake import (
 )
 from loopx.control_plane.turn_driver.codex_sessions import load_codex_cli_session
 from test_local_delegation import service as delegation_service, wait
+from tests.control_plane.test_dsh_operation_sdk import prepared_request_ref
 
 service = delegation_service
 
 
+@pytest.mark.parametrize("request_transport", ["inline", "frozen"])
 @pytest.mark.parametrize("original_owner", [False, True], ids=["peer", "original-owner"])
-def test_public_dsh_operation_entry_and_confirmed_callback(service, monkeypatch, original_owner):
+def test_public_dsh_operation_entry_and_confirmed_callback(service, monkeypatch, original_owner, request_transport):
     pytest.importorskip("deepseek_harness")
     module = os.environ.get("DSH_NATIVE_OPERATION_MODULE")
     runtime = os.environ.get("DSH_NATIVE_OPERATION_RUNTIME")
@@ -55,6 +58,10 @@ def test_public_dsh_operation_entry_and_confirmed_callback(service, monkeypatch,
         if index == 0:
             return {"action": "context"}
         if index == 1:
+            if request_transport == "frozen":
+                args = {"action": "prepare", "request": prepared_request_ref(responses[-1])}
+                assert len(json.dumps(args)) < 150
+                return args
             return {"action": "prepare", "request": intent}
         proposal = operation()
         if index == 4:
@@ -123,6 +130,11 @@ def test_public_dsh_operation_entry_and_confirmed_callback(service, monkeypatch,
         "--dsh-runtime-bin", runtime, "--dsh-home", str(root / "sdk-home"),
         "--dsh-cordis", str(patch), "--dsh-provider", "deepseek-official",
         "--dsh-model", "fixture-model", "--dsh-reasoning-effort", "high", "--dsh-max-tokens", "1024"]
+    if request_transport == "frozen":
+        source_file = root / "frozen-request.json"
+        source_file.write_text(json.dumps(intent))
+        binding["host_args"] += ["--operation-request-file", str(source_file),
+            "--operation-request-sha256", hashlib.sha256(source_file.read_bytes()).hexdigest()]
     runner.config.write_text(json.dumps(config))
     lineage = {"goal_id": runner.goal_id, "agent_id": binding["agent_id"], "todo_id": binding["todo_id"]}
     command = [sys.executable, "-m", "loopx.cli", "--registry", str(runner.registry),

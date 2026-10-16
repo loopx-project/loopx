@@ -4,7 +4,11 @@ import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts
 import {openLocalAuthorityStoreHandle, localAuthorityOpenFailure,
   type LocalAuthorityProviderDependencies} from "../coordination/local_authority_provider.ts";
 import {loadLegacyCoordinationWriterFence} from "../coordination/legacy_writer_fence.ts";
-import {withCanonicalWriter} from "../coordination/local_authority_write.ts";
+import {
+  canonicalWriteRouteFailure,
+  withCanonicalWriter,
+  type CanonicalBusinessWrite,
+} from "../coordination/local_authority_write.ts";
 import {ShadowManagementError} from "../coordination/shadow_management.ts";
 import {EffectRuntimeLockTimeoutError} from "../effect_runtime_errors.ts";
 import {executeCanonicalTaskLeaseLifecycle} from "../coordination/task_lease_lifecycle.ts";
@@ -27,23 +31,40 @@ export interface LocalTaskLeaseDependencies {
   authorityProvider?: LocalAuthorityProviderDependencies;
 }
 
+type CanonicalTaskLeaseBusinessOperation =
+  | "acquire"
+  | TaskLeaseLifecycleDecisionOperation;
+
+const TASK_LEASE_BUSINESS_WRITES = {
+  acquire: "task_lease_acquire",
+  renew: "task_lease_renew",
+  transfer: "task_lease_transfer",
+  release: "task_lease_release",
+} satisfies Record<CanonicalTaskLeaseBusinessOperation, CanonicalBusinessWrite>;
+
 /** The same local promotion/source fence surrounds acquire and maintenance. */
 export async function withCanonicalTaskLeaseAuthority(
-  request: {runtime_root: string; goal_id: string; operation: string;
+  request: {runtime_root: string; goal_id: string; operation: CanonicalTaskLeaseBusinessOperation;
     owner: string | null; idempotency_key: string | null; authority: AuthorityFacts | null},
   dependencies: LocalTaskLeaseDependencies,
   execute: (store: AuthorityStore, guards: {
     revalidate: () => Promise<void>; beforeCommit: (lease: JsonObject | null) => Promise<void>;
   }) => Promise<JsonObject>): Promise<JsonObject> {
   const root = request.runtime_root, goalId = request.goal_id;
-  const initialFence = await loadLegacyCoordinationWriterFence(root, goalId);
   const evidence: JsonObject = {source_authority: null, decision_read_from_provider: false, legacy_fallback_used: false};
   const rejected = (code: string, reason: string): JsonObject => ({status: "failed", changed: false,
     reason_code: code, reason, failure_stage: "validation", ...evidence});
-  if (initialFence.status === "missing") return rejected(`canonical_${request.operation}_fence_missing`, "canonical lease writer fence is missing; legacy fallback is forbidden");
-  if (initialFence.status === "failed") return rejected(initialFence.reason_code, initialFence.reason);
+  const businessWrite = TASK_LEASE_BUSINESS_WRITES[request.operation];
   try {
     return await withCanonicalWriter(root, goalId, false, async () => {
+      const initialFence = await loadLegacyCoordinationWriterFence(root, goalId);
+      if (initialFence.status !== "loaded") {
+        throw new TaskLeaseAcquireError(
+          "canonical lease writer fence changed; inspect authority before retrying",
+          `canonical_${request.operation}_fence_changed`,
+          {goal_id: goalId},
+        );
+      }
       const verifyFence = async () => {
         const current = await loadLegacyCoordinationWriterFence(root, goalId);
         if (current.status !== "loaded" || canonicalAuthoritySha256(current.fence) !== canonicalAuthoritySha256(initialFence.fence)) {
@@ -69,11 +90,12 @@ export async function withCanonicalTaskLeaseAuthority(
         await revalidate();
       }});
       return {...result, ...evidence};
-    });
+    }, {businessWrite});
   } catch (error) {
     if (error instanceof ShadowManagementError || error instanceof TaskLeaseAcquireError) return {...rejected(error.code, error.message), ...error.payload};
     if (error instanceof EffectRuntimeLockTimeoutError) return rejected("lock_acquire_timeout", "canonical lease maintenance lock timed out");
-    return {...rejected("canonical_lease_route_failed", error instanceof Error ? error.message : "canonical lease route failed"), ...localAuthorityOpenFailure(error)};
+    return {...rejected("canonical_lease_route_failed", error instanceof Error ? error.message : "canonical lease route failed"),
+      ...localAuthorityOpenFailure(error), ...canonicalWriteRouteFailure(error)};
   }
 }
 

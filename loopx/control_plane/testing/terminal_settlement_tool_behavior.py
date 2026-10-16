@@ -10,6 +10,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, cast
 
+from ..coordination.goal_storage_initialization import initialize_goal_storage_target
 from ...heartbeat_prompt import build_heartbeat_prompt
 from ...control_plane.todos.mutation_api import add_goal_todo, complete_goal_todo
 from ..quota.turn_envelope import quota_action_signature_document
@@ -41,7 +42,15 @@ TERMINAL_SETTLEMENT_REENTRY_TOOL_BEHAVIOR_MAX_CALLS = 5
 
 TERMINAL_SETTLEMENT_FIXTURE_GOAL_ID = "terminal-settlement-fixture"
 TERMINAL_SETTLEMENT_FIXTURE_AGENT_ID = "codex-terminal-settlement"
-TERMINAL_SETTLEMENT_FIXTURE_TODO_ID = "todo_terminal001"
+TERMINAL_SETTLEMENT_FIXTURE_TODO_OPERATION_ID = (
+    "terminal-settlement-fixture-todo"
+)
+TERMINAL_SETTLEMENT_FIXTURE_TODO_ID = (
+    "todo_"
+    + sha256(TERMINAL_SETTLEMENT_FIXTURE_TODO_OPERATION_ID.encode("utf-8")).hexdigest()[
+        :24
+    ]
+)
 TERMINAL_SETTLEMENT_FIXTURE_PROOF = "fixture/settlement-proof.json"
 TERMINAL_SETTLEMENT_FIXTURE_ACTION_TEXT = (
     f"Read `{TERMINAL_SETTLEMENT_FIXTURE_PROOF}`, verify the bounded delivery, "
@@ -101,6 +110,21 @@ class _QualificationState:
     spend_committed: bool = False
     receipt_steps: list[str] = field(default_factory=list)
     seen_clock: bool = False
+
+
+def _initialize_fixture_goal_storage(
+    *,
+    runtime_root: Path,
+    goal: Mapping[str, Any],
+    registry_path: Path,
+) -> None:
+    result = initialize_goal_storage_target(
+        runtime_root,
+        goal,
+        registry_path=registry_path,
+    )
+    if not isinstance(result, dict) or result.get("authority_initialized") is not True:
+        raise ValueError("fixture canonical authority initialization did not complete")
 
 
 def _build_fixture(root: Path) -> _TerminalSettlementFixture:
@@ -173,48 +197,70 @@ def _build_fixture(root: Path) -> _TerminalSettlementFixture:
         "Settle one final validated delivery without losing quota accounting.\n\n"
         "## Next Action\n\n"
         f"- {TERMINAL_SETTLEMENT_FIXTURE_ACTION_TEXT}\n\n"
+        "## User Todo / Owner Review Reading Queue\n\n"
         "## Agent Todo\n\n"
-        f"- [ ] [P0] {TERMINAL_SETTLEMENT_FIXTURE_ACTION_TEXT}\n"
-        "  <!-- loopx:todo "
-        f"todo_id={TERMINAL_SETTLEMENT_FIXTURE_TODO_ID} status=open "
-        "task_class=advancement_task action_kind=terminal_settlement_qualification "
-        f"claimed_by={TERMINAL_SETTLEMENT_FIXTURE_AGENT_ID} priority=P0 "
-        "task_repository=git%3Agithub.com%2Fexample%2Fterminal-settlement-fixture "
-        "continuation_policy=independent_handoff -->\n",
+        "\n",
         encoding="utf-8",
     )
+    goal = {
+        "id": TERMINAL_SETTLEMENT_FIXTURE_GOAL_ID,
+        "creation_operation_id": "goal-create:terminal-settlement-fixture",
+        "domain": "terminal-settlement-live-fixture",
+        "status": "active",
+        "repo": str(project_root),
+        "state_file": str(state_relative),
+        "adapter": {
+            "kind": "fixture_connected_delivery_v0",
+            "status": "connected-delivery",
+        },
+        "coordination": {
+            "registered_agents": [TERMINAL_SETTLEMENT_FIXTURE_AGENT_ID],
+            "agent_model": "peer_v1",
+            "storage_target": {
+                "schema_version": "loopx_new_goal_storage_target_v1",
+                "provider": "file",
+                "handoff_mode": "soft_claim",
+            },
+        },
+        "authority_sources": [],
+        "quota": {
+            "compute": 1.0,
+            "window_hours": 24,
+            "allowed_slots": 5,
+        },
+    }
     registry = {
         "schema_version": "0.1",
         "updated_at": "2026-08-16T00:00:00+08:00",
         "common_runtime_root": str(runtime_root),
-        "goals": [
-            {
-                "id": TERMINAL_SETTLEMENT_FIXTURE_GOAL_ID,
-                "domain": "terminal-settlement-live-fixture",
-                "status": "active",
-                "repo": str(project_root),
-                "state_file": str(state_relative),
-                "adapter": {
-                    "kind": "fixture_connected_delivery_v0",
-                    "status": "connected-delivery",
-                },
-                "coordination": {
-                    "registered_agents": [TERMINAL_SETTLEMENT_FIXTURE_AGENT_ID],
-                    "agent_model": "peer_v1",
-                },
-                "authority_sources": [],
-                "quota": {
-                    "compute": 1.0,
-                    "window_hours": 24,
-                    "allowed_slots": 5,
-                },
-            }
-        ],
+        "goals": [goal],
     }
     registry_text = json.dumps(registry, ensure_ascii=False, indent=2, sort_keys=True)
     for registry_path in (local_registry_path, global_registry_path):
         registry_path.parent.mkdir(parents=True, exist_ok=True)
         registry_path.write_text(registry_text + "\n", encoding="utf-8")
+    _initialize_fixture_goal_storage(
+        runtime_root=runtime_root,
+        goal=goal,
+        registry_path=global_registry_path,
+    )
+    created = add_goal_todo(
+        registry_path=global_registry_path,
+        goal_id=TERMINAL_SETTLEMENT_FIXTURE_GOAL_ID,
+        role="agent",
+        text=TERMINAL_SETTLEMENT_FIXTURE_ACTION_TEXT,
+        priority="P0",
+        task_class="advancement_task",
+        action_kind="terminal_settlement_qualification",
+        task_repository=(
+            "git:github.com/example/terminal-settlement-fixture"
+        ),
+        continuation_policy="independent_handoff",
+        claimed_by=TERMINAL_SETTLEMENT_FIXTURE_AGENT_ID,
+        operation_id=TERMINAL_SETTLEMENT_FIXTURE_TODO_OPERATION_ID,
+    )
+    if created.get("todo_id") != TERMINAL_SETTLEMENT_FIXTURE_TODO_ID:
+        raise ValueError("fixture canonical Todo identity drifted")
 
     prompt = build_heartbeat_prompt(
         goal_id=TERMINAL_SETTLEMENT_FIXTURE_GOAL_ID,
@@ -367,37 +413,40 @@ def _build_reentry_fixture(root: Path) -> _TerminalSettlementReentryFixture:
         "## Agent Todo\n\n",
         encoding="utf-8",
     )
+    goal = {
+        "id": TERMINAL_SETTLEMENT_REENTRY_FIXTURE_GOAL_ID,
+        "creation_operation_id": "goal-create:terminal-reentry-fixture",
+        "domain": "terminal-reentry-live-fixture",
+        "status": "active",
+        "repo": str(project_root),
+        "state_file": str(state_relative),
+        "adapter": {
+            "kind": "fixture_connected_delivery_v0",
+            "status": "connected-delivery",
+        },
+        "coordination": {
+            "registered_agents": [TERMINAL_SETTLEMENT_REENTRY_FIXTURE_AGENT_ID],
+            "agent_model": "peer_v1",
+            "storage_target": {
+                "schema_version": "loopx_new_goal_storage_target_v1",
+                "provider": "file",
+                "handoff_mode": "soft_claim",
+            },
+        },
+        "authority_sources": [],
+        "quota": {
+            "compute": 1.0,
+            "window_hours": 24,
+            "allowed_slots": 5,
+        },
+    }
     registry_path.write_text(
         json.dumps(
             {
                 "schema_version": "0.1",
                 "updated_at": "2026-08-23T00:00:00+08:00",
                 "common_runtime_root": str(runtime_root),
-                "goals": [
-                    {
-                        "id": TERMINAL_SETTLEMENT_REENTRY_FIXTURE_GOAL_ID,
-                        "domain": "terminal-reentry-live-fixture",
-                        "status": "active",
-                        "repo": str(project_root),
-                        "state_file": str(state_relative),
-                        "adapter": {
-                            "kind": "fixture_connected_delivery_v0",
-                            "status": "connected-delivery",
-                        },
-                        "coordination": {
-                            "registered_agents": [
-                                TERMINAL_SETTLEMENT_REENTRY_FIXTURE_AGENT_ID
-                            ],
-                            "agent_model": "peer_v1",
-                        },
-                        "authority_sources": [],
-                        "quota": {
-                            "compute": 1.0,
-                            "window_hours": 24,
-                            "allowed_slots": 5,
-                        },
-                    }
-                ],
+                "goals": [goal],
             },
             ensure_ascii=False,
             indent=2,
@@ -405,6 +454,11 @@ def _build_reentry_fixture(root: Path) -> _TerminalSettlementReentryFixture:
         )
         + "\n",
         encoding="utf-8",
+    )
+    _initialize_fixture_goal_storage(
+        runtime_root=runtime_root,
+        goal=goal,
+        registry_path=registry_path,
     )
     todos = [
         add_goal_todo(
@@ -414,6 +468,7 @@ def _build_reentry_fixture(root: Path) -> _TerminalSettlementReentryFixture:
             text=f"Validate terminal slice {index}.",
             task_class="advancement_task",
             claimed_by=TERMINAL_SETTLEMENT_REENTRY_FIXTURE_AGENT_ID,
+            operation_id=f"terminal-reentry-fixture-todo-{index}",
         )
         for index in (1, 2)
     ]
@@ -1090,7 +1145,6 @@ class DoubaoTerminalSettlementToolBehaviorActor:
                     )
                     if todo_id in state.settled_todo_ids:
                         raise ValueError("repeated_lifecycle_settlement")
-                    note = str(argument_value(tokens, "--note") or "").strip()
                     if (
                         expected_tokens is None
                         or argument_value(tokens, "--goal-id")
@@ -1105,8 +1159,7 @@ class DoubaoTerminalSettlementToolBehaviorActor:
                         or "--turn-instance-id" in tokens
                         or "--replan-obligation-id" in tokens
                         or "--no-follow-up" not in tokens
-                        or not note
-                        or note == "<public-safe no-follow-up rationale>"
+                        or "--note" in tokens
                     ):
                         raise ValueError("lifecycle_settlement_identity_mismatch")
                     payload = _execute_reentry_cli(tool_call.command, state=state)

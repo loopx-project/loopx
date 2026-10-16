@@ -1,5 +1,4 @@
 from __future__ import annotations
-from .effective_action import EffectiveAction
 
 from dataclasses import dataclass
 from typing import Any, TypedDict
@@ -7,9 +6,11 @@ from typing import Any, TypedDict
 from ...state_projection import actions_are_projection_aligned
 from ..goals.contract_health import project_contract_health_for_goal
 from ..goals.goal_frontier import (
-    autonomous_replan_decision_allowed,
+    autonomous_replan_is_required,
+    autonomous_replan_scope_decision,
     goal_frontier_is_terminal_no_followup,
 )
+from ..effect_runtime import effect_runtime_result
 from ..todos.contract import normalize_todo_claimed_by
 from ..work_items.work_lane import work_lane_contract_is_due_monitor_attempt
 
@@ -196,6 +197,11 @@ def refine_quota_recommended_action(
     return refined
 
 
+def _guard_strings(guard: dict[str, Any] | None, fields: tuple[str, ...]) -> dict[str, str] | None:
+    # Preserve the compatibility caller's Python string coercion, including whitespace.
+    return {field: str(guard.get(field) or "") for field in fields} if guard else None
+
+
 def resolve_quota_run_decision(
     *,
     normal_delivery_allowed: bool,
@@ -221,219 +227,36 @@ def resolve_quota_run_decision(
 ) -> QuotaRunDecision:
     """Apply the ordered final guards for one quota run decision."""
 
-    capability_repair_allowed = False
-    workspace_repair_allowed = False
-    inbox_priority_due = inbox_reply_due or inbox_material_review_due
-    if (
-        capability_gate
-        and capability_gate.get("action") != "run"
-        and not capability_monitor_fallback
-    ):
-        normal_delivery_allowed = False
-        recovery_delivery_allowed = False
-        if capability_gate.get("action") == "repair_bridge":
-            capability_repair_allowed = True
-            reason = str(
-                capability_gate.get("reason") or "capability bridge repair required"
-            )
-        else:
-            reason = str(
-                capability_gate.get("reason")
-                or "selected todo capability is unavailable"
-            )
-    if workspace_guard:
-        normal_delivery_allowed = False
-        recovery_delivery_allowed = False
-        self_repair_allowed = False
-        capability_repair_allowed = False
-        workspace_repair_allowed = True
-        reason = str(
-            workspace_guard.get("reason") or "agent workspace guard blocks delivery"
-        )
-    if automation_prompt_upgrade_required:
-        normal_delivery_allowed = False
-        recovery_delivery_allowed = False
-        self_repair_allowed = False
-        capability_repair_allowed = False
-        workspace_repair_allowed = False
-        reason = str(
-            (automation_prompt_upgrade or {}).get("reason")
-            or "identity-aware automation prompt upgrade is required"
-        )
-
-    should_run = bool(
-        normal_delivery_allowed
-        or recovery_delivery_allowed
-        or self_repair_allowed
-        or capability_repair_allowed
-        or workspace_repair_allowed
-    )
-    effective_action = quota_effective_action(
-        normal_delivery_allowed=normal_delivery_allowed,
-        recovery_delivery_allowed=recovery_delivery_allowed,
-        self_repair_allowed=self_repair_allowed,
-        capability_repair_allowed=capability_repair_allowed,
-        workspace_repair_allowed=workspace_repair_allowed,
-        stall_self_repair=stall_self_repair,
-        state=state,
-        quota=quota,
-    )
-    replan_decision_allowed = (
-        not inbox_priority_due
-        and autonomous_replan_decision_allowed(
-            replan_obligation=replan_obligation,
-            plan_ok=goal_health_ok,
-            workspace_blocked=bool(workspace_guard),
-            automation_prompt_upgrade_required=automation_prompt_upgrade_required,
-            agent_id=agent_frontier_id,
-            registered_agent_ids=registered_agent_ids,
-        )
-    )
-    if replan_decision_allowed:
-        normal_delivery_allowed = False
-        recovery_delivery_allowed = False
-        should_run = True
-        effective_action = EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED.value
-        reason = (
-            "autonomous replan obligation is selected before monitor quiet "
-            "or agent-scope wait classification"
-        )
-
-    terminal_no_followup = goal_frontier_is_terminal_no_followup(
-        projection=goal_frontier_projection
-    )
-    if terminal_no_followup and not inbox_priority_due:
-        quota = {
-            **quota,
-            "state": "terminal_no_followup",
-            "reason": (
-                "derived terminal no-follow-up is confirmed by complete todo "
-                "sources and an empty frontier"
-            ),
-        }
-        state = "terminal_no_followup"
-        normal_delivery_allowed = False
-        recovery_delivery_allowed = False
-        self_repair_allowed = False
-        capability_repair_allowed = False
-        workspace_repair_allowed = False
-        should_run = False
-        effective_action = EffectiveAction.TERMINAL_NO_FOLLOWUP.value
-        reason = (
-            "validated closure evidence derives terminal no-follow-up from "
-            "complete todo sources and an empty frontier; stop recurring "
-            "automation until an explicit resume"
-        )
-
-    if automation_prompt_upgrade_required and not terminal_no_followup:
-        should_run = False
-        effective_action = EffectiveAction.AUTOMATION_PROMPT_UPGRADE_REQUIRED.value
-    elif inbox_priority_due:
-        should_run = True
-        normal_delivery_allowed = True
-        recovery_delivery_allowed = False
-        self_repair_allowed = False
-        capability_repair_allowed = False
-        workspace_repair_allowed = False
-        if inbox_reply_due:
-            effective_action = EffectiveAction.LARK_INBOX_REPLY_DUE.value
-            reason = (
-                "a direct Lark question, bot mention, or verified reply to the bot "
-                "is pending reply"
-            )
-        else:
-            effective_action = EffectiveAction.OPERATOR_INBOX_MATERIAL_REVIEW_DUE.value
-            reason = (
-                "captured unaddressed operator-inbox material is pending bounded review"
-            )
-
-    effective_action, reason = _task_orchestration_effective_action(
-        task_orchestration_contract,
-        should_run=should_run,
-        normal_delivery_allowed=normal_delivery_allowed,
-        effective_action=effective_action,
-        reason=reason,
-    )
-    return QuotaRunDecision(
-        normal_delivery_allowed=normal_delivery_allowed,
-        recovery_delivery_allowed=recovery_delivery_allowed,
-        self_repair_allowed=self_repair_allowed,
-        capability_repair_allowed=capability_repair_allowed,
-        workspace_repair_allowed=workspace_repair_allowed,
-        should_run=should_run,
-        effective_action=effective_action,
-        reason=reason,
-        state=state,
-        quota=quota,
-        replan_decision_allowed=replan_decision_allowed,
-    )
-
-
-def quota_effective_action(
-    *,
-    normal_delivery_allowed: bool,
-    recovery_delivery_allowed: bool,
-    self_repair_allowed: bool,
-    capability_repair_allowed: bool,
-    workspace_repair_allowed: bool,
-    stall_self_repair: dict[str, Any] | None,
-    state: str,
-    quota: dict[str, Any],
-) -> str:
-    if normal_delivery_allowed:
-        return EffectiveAction.NORMAL_RUN.value
-    if recovery_delivery_allowed:
-        return EffectiveAction.OUTCOME_FLOOR_RECOVERY.value
-    if workspace_repair_allowed:
-        return EffectiveAction.AGENT_WORKSPACE_REPAIR.value
-    if self_repair_allowed:
-        repair_action = (
-            stall_self_repair.get("effective_action")
-            if isinstance(stall_self_repair, dict)
-            else None
-        )
-        return str(repair_action or EffectiveAction.CONTROL_PLANE_REPAIR.value)
-    if capability_repair_allowed:
-        return EffectiveAction.CAPABILITY_BRIDGE_REPAIR.value
-    if state == "operator_gate":
-        return EffectiveAction.OPERATOR_GATE_NOTIFY.value
-    if state == "blocked_health":
-        return EffectiveAction.BLOCKED_HEALTH.value
-    if state == "throttled":
-        return EffectiveAction.THROTTLED_SKIP.value
-    if state in {"focus_wait", "waiting"} or quota.get("focus_wait"):
-        return EffectiveAction.BLOCKED_WAIT.value
-    return EffectiveAction.QUOTA_SKIP.value
-
-
-def _task_orchestration_effective_action(
-    contract: dict[str, Any] | None,
-    *,
-    should_run: bool,
-    normal_delivery_allowed: bool,
-    effective_action: str,
-    reason: str,
-) -> tuple[str, str]:
-    if (
-        contract
-        and str(contract.get("execution_state") or "ready") == "ready"
-        and should_run
-        and normal_delivery_allowed
-        and effective_action == EffectiveAction.NORMAL_RUN.value
-    ):
-        if contract.get("mode") == "adaptive":
-            return (
-                EffectiveAction.COORDINATE_TASK_BUNDLE.value,
-                (
-                    "the task coordinator may use admitted child lanes before its "
-                    "own worker-lane delivery"
-                ),
-            )
-        return (
-            EffectiveAction.COORDINATE_TASK_BUNDLE.value,
-            (
-                "the explicitly selected task coordinator must activate or resume "
-                "eligible peer lanes before doing its own worker-lane delivery"
-            ),
-        )
-    return effective_action, reason
+    replan_required = autonomous_replan_is_required(replan_obligation)
+    # Scope evaluation can synthesize a legacy identity; preserve its lazy read boundary.
+    scope = autonomous_replan_scope_decision(
+        replan_obligation, agent_id=agent_frontier_id,
+        registered_agent_ids=registered_agent_ids,
+    ) if replan_required and not (inbox_reply_due or inbox_material_review_due) else {}
+    repair_action = (stall_self_repair.get("effective_action")
+        if isinstance(stall_self_repair, dict) else None)
+    result = effect_runtime_result("quota.run_decision", {
+        "normal_delivery_allowed": normal_delivery_allowed,
+        "recovery_delivery_allowed": recovery_delivery_allowed,
+        "self_repair_allowed": self_repair_allowed,
+        "repair_effective_action": str(repair_action or ""),
+        "state": state, "reason": reason,
+        "quota_focus_wait": bool(quota.get("focus_wait")),
+        "capability_gate": _guard_strings(capability_gate, ("action", "reason")),
+        "capability_monitor_fallback": bool(capability_monitor_fallback),
+        "workspace_guard": _guard_strings(workspace_guard, ("reason",)),
+        "automation_prompt_upgrade": _guard_strings(automation_prompt_upgrade, ("reason",)),
+        "automation_prompt_upgrade_required": automation_prompt_upgrade_required,
+        "replan_required": replan_required,
+        "replan_applies": bool(scope.get("applies")),
+        "goal_health_ok": goal_health_ok,
+        "inbox_reply_due": inbox_reply_due,
+        "inbox_material_review_due": inbox_material_review_due,
+        "terminal_no_followup": goal_frontier_is_terminal_no_followup(
+            projection=goal_frontier_projection),
+        "task_orchestration_contract": _guard_strings(
+            task_orchestration_contract, ("execution_state", "mode")),
+    })
+    patch = result.pop("quota_patch")
+    # Only typed edits cross the wire; preserve source numbers and unmodified metadata.
+    return QuotaRunDecision(quota={**quota, **patch} if patch else quota, **result)

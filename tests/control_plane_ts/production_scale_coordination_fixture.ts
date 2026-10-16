@@ -590,7 +590,7 @@ export function productionScaleCompletedMonitorFixture(goalId: string,
         status: retainedLease === "released" ? "released" : "active",
         ...(retainedLease === "expired" ? {expires_at: "2026-09-01T00:20:00Z"} : {}),
         ...(retainedLease === "released" ? {released_at: "2026-09-01T00:30:00Z"} : {})}]),
-    schema, {source_authority: "synthetic_production_scale_fixture", handoff_mode: retainedLease === "absent" ? "legacy" : "hard_lease"})};
+    schema, {source_authority: "synthetic_production_scale_fixture", handoff_mode: retainedLease === "absent" ? "soft_claim" : "hard_lease"})};
 }
 
 /** User decisions act on an exact dependent inside the full mixed graph.
@@ -661,7 +661,7 @@ export function productionScaleConsumerScopeFixture(goalId: string, schema: Auth
     text: "Review a synthetic result", source_section: "User Todo", index: 2000 + index, ...item}));
   return {...fixture, projection: authorityProjectionFixture(goalId,
     [...fixture.projection.todos as Record<string, unknown>[], ...extra],
-    fixture.projection.leases as Record<string, unknown>[], schema, {handoff_mode: "legacy"})};
+    fixture.projection.leases as Record<string, unknown>[], schema, {handoff_mode: "soft_claim"})};
 }
 
 /** Capability-owned bucket inside a full mixed graph, including a historical

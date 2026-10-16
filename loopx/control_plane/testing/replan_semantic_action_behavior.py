@@ -57,7 +57,10 @@ class _HostToolError(RuntimeError):
 
 _FIXTURE_GOAL_ID = "replan-semantic-action-fixture"
 _FIXTURE_AGENT_ID = "codex-replan-semantic-action"
-_FIXTURE_WORK_ITEM_ID = "todo-replan-semantic-action"
+_FIXTURE_WORK_ITEM_OPERATION_ID = "fixture-replan-semantic-monitor"
+_FIXTURE_WORK_ITEM_ID = (
+    "todo_" + sha256(_FIXTURE_WORK_ITEM_OPERATION_ID.encode()).hexdigest()[:24]
+)
 _FIXTURE_FRONTIER_FILE = "replan-frontier.json"
 _FIXTURE_SOURCE_FILE = "fixture/permission-config.json"
 _FIXTURE_NEW_SURFACE_ID = "surface-permission-config"
@@ -204,26 +207,11 @@ def _build_fixture(
             "refresh-state."
         )
     )
-    fixture_agent_todo = (
-        "- [ ] [P1-monitor] Observe the bounded fixture until its frontier "
-        "changes.\n"
-        "  <!-- loopx:todo "
-        f"todo_id={_FIXTURE_WORK_ITEM_ID} status=open "
-        "task_class=continuous_monitor action_kind=observe_fixture "
-        f"claimed_by={_FIXTURE_AGENT_ID} "
-        "target_key=replan-semantic-fixture "
-        "cadence=1d next_due_at=2999-01-01T00%3A00%3A00Z -->\n"
-    )
-    if required_vision:
-        fixture_agent_todo += (
-            "- [ ] [P0] Continue the peer-owned implementation.\n"
-            "  <!-- loopx:todo todo_id=todo_peer_implementation status=open "
-            "task_class=advancement_task claimed_by=codex-fixture-peer -->\n"
-        )
     state_path.write_text(
         "---\n"
         "status: active\n"
         "owner_mode: goal\n"
+        "handoff_mode: soft_claim\n"
         f'objective: "{fixture_objective}"\n'
         "updated_at: 2026-08-13T00:00:00+08:00\n"
         "---\n\n"
@@ -232,8 +220,7 @@ def _build_fixture(
         f"{fixture_objective}\n\n"
         "## Next Action\n\n"
         f"- {fixture_next_action}\n\n"
-        "## Agent Todo\n\n"
-        f"{fixture_agent_todo}",
+        "## Agent Todo\n",
         encoding="utf-8",
     )
     registry_goal: dict[str, Any] = {
@@ -249,6 +236,11 @@ def _build_fixture(
         "coordination": {
             "registered_agents": [_FIXTURE_AGENT_ID, "codex-fixture-peer"] if required_vision else [_FIXTURE_AGENT_ID],
             "agent_model": "peer_v1",
+            "storage_target": {
+                "schema_version": "loopx_new_goal_storage_target_v1",
+                "provider": "file",
+                "handoff_mode": "soft_claim",
+            },
             "agent_profiles": {
                 _FIXTURE_AGENT_ID: {
                     "schema_version": "agent_profile_v1",
@@ -269,6 +261,7 @@ def _build_fixture(
             "window_hours": 24,
             "allowed_slots": 5,
         },
+        "creation_operation_id": "goal-create:replan-semantic-action-fixture",
     }
     if composition_frontier:
         registry_goal["spawn_policy"] = {
@@ -284,6 +277,56 @@ def _build_fixture(
     for registry_path in (local_registry_path, global_registry_path):
         registry_path.parent.mkdir(parents=True, exist_ok=True)
         registry_path.write_text(registry_text + "\n", encoding="utf-8")
+
+    from ..coordination.goal_storage_initialization import (
+        initialize_goal_storage_target,
+    )
+    from ..todos.mutation_api import add_goal_todo
+
+    initialized = initialize_goal_storage_target(
+        runtime_root,
+        registry_goal,
+        registry_path=global_registry_path,
+    )
+    if not isinstance(initialized, dict) or (
+        initialized.get("authority_initialized") is not True
+        or initialized.get("legacy_fallback_used") is not False
+    ):
+        raise AssertionError("fixture did not initialize canonical File authority")
+    monitor = add_goal_todo(
+        registry_path=global_registry_path,
+        runtime_root_arg=str(runtime_root),
+        goal_id=_FIXTURE_GOAL_ID,
+        role="agent",
+        text="Observe the bounded fixture until its frontier changes.",
+        priority="P1",
+        task_class="continuous_monitor",
+        action_kind="observe_fixture",
+        claimed_by=_FIXTURE_AGENT_ID,
+        agent_id=_FIXTURE_AGENT_ID,
+        monitor_metadata={
+            "target_key": "replan-semantic-fixture",
+            "cadence": "1d",
+            "next_due_at": "2999-01-01T00:00:00Z",
+            "watch_only": "true",
+        },
+        operation_id=_FIXTURE_WORK_ITEM_OPERATION_ID,
+    )
+    if monitor.get("todo_id") != _FIXTURE_WORK_ITEM_ID:
+        raise AssertionError("fixture monitor identity is not deterministic")
+    if required_vision:
+        add_goal_todo(
+            registry_path=global_registry_path,
+            runtime_root_arg=str(runtime_root),
+            goal_id=_FIXTURE_GOAL_ID,
+            role="agent",
+            text="Continue the peer-owned implementation.",
+            priority="P0",
+            task_class="advancement_task",
+            claimed_by="codex-fixture-peer",
+            agent_id="codex-fixture-peer",
+            operation_id="fixture-replan-peer-implementation",
+        )
 
     runs_dir = runtime_root / "goals" / _FIXTURE_GOAL_ID / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
@@ -678,6 +721,7 @@ def _semantic_reentry_observation(
     packet: Mapping[str, Any],
     *,
     obligation_id: str,
+    result_class: str,
 ) -> dict[str, Any]:
     obligation = packet.get("autonomous_replan_obligation")
     if (
@@ -710,12 +754,29 @@ def _semantic_reentry_observation(
         and int(normalized_progress.get("agent_monitor_open_count") or 0) > 0
         and int(normalized_progress.get("agent_monitor_due_count") or 0) == 0
     )
-    if not future_monitor_wait:
+    terminal_coverage_exit = bool(
+        result_class in {
+            ProgressResultClass.EXPLORATION_EXHAUSTED.value,
+            ProgressResultClass.NO_FOLLOWUP.value,
+        }
+        and packet.get("effective_action") == EffectiveAction.MONITOR_QUIET_SKIP.value
+        and isinstance(frontier, Mapping)
+        and frontier.get("replan_required") is False
+        and isinstance(monitor_lanes, Mapping)
+        and monitor_lanes.get("present") is False
+        and isinstance(normalized_progress, Mapping)
+        and int(normalized_progress.get("agent_open_count") or 0) == 0
+    )
+    if not future_monitor_wait and not terminal_coverage_exit:
         raise ValueError("semantic_reentry_not_future_monitor_wait")
     return {
         "decision": packet.get("decision"),
         "effective_action": packet.get("effective_action"),
-        "replan_rule": "future_monitor_wait",
+        "replan_rule": (
+            "future_monitor_wait"
+            if future_monitor_wait
+            else "terminal_coverage_exhausted"
+        ),
         "replan_closed": True,
         "exited": True,
     }
@@ -1150,6 +1211,7 @@ def _handle_semantic_writeback(
         state.semantic_reentry_observation = _semantic_reentry_observation(
             reentry_packet,
             obligation_id=obligation_id,
+            result_class=result_class,
         )
         state.read_only_host_commands_executed = True
     return output

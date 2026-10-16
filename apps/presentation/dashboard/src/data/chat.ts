@@ -1,5 +1,5 @@
 import type {OracleEvidence} from "./goal-acceptance-observation";
-import { HANDOFF_MODES, EXECUTION_HANDOFF_MODES } from "../../../../../loopx/control_plane/coordination/handoff_mode_vocabulary.js";
+import { HANDOFF_MODES, EXECUTION_HANDOFF_MODES, type ExecutionHandoffMode } from "../../../../../loopx/control_plane/coordination/handoff_mode_vocabulary.js";
 import { normalizeGoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { parseTurnStep, type TurnStep } from "./turn-steps.js";
 import { z } from "zod";
@@ -220,6 +220,7 @@ export const chatCapabilitiesSchema = z.object({
 
 export const todoProposalSchema = z.object({
   kind: z.literal("todo"),
+  goal_id: z.string().min(1).optional(),
   text: z.string(),
   priority: z.enum(["P0", "P1", "P2"]),
   rationale: z.string(),
@@ -2472,7 +2473,7 @@ export const ownershipPreviewSchema = z.object({
 });
 export type GoalOwnership = z.infer<typeof goalOwnershipSchema>;
 export type OwnershipPreview = z.infer<typeof ownershipPreviewSchema>;
-export type ExecutionOwnershipMode = typeof EXECUTION_HANDOFF_MODES[number];
+export type ExecutionOwnershipMode = ExecutionHandoffMode;
 
 export async function fetchGoalOwnership(goalId: string) {
   return goalOwnershipSchema.parse(await requestJson<unknown>(`/api/chat/goal-ownership?${new URLSearchParams({goal_id: goalId})}`));

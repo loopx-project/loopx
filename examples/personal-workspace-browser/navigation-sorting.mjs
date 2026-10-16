@@ -159,6 +159,7 @@ export const navigationSortingScenario = {
       await page.getByRole("button", { name: /关闭详情/ }).click();
       pass(26, "Overview keeps direct decisions, explicit unknown usage and read failures; output provenance is one click away.");
       await page.locator(".personal-goal-link").filter({ hasText: "Progress Projection" }).click();
+      await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Tasks|任务)$/ }).click();
       await page.getByRole("button", { name: /^(Tasks|任务)$/, current: "page" }).waitFor({ state: "visible" });
       await page.locator(".personal-task-card", { hasText: "Deferred queue task" }).locator("button").first().click();
       const dateResumeDrawer = page.getByRole("dialog", { name: "Todo 详情" });
@@ -179,13 +180,13 @@ export const navigationSortingScenario = {
       pass(22, "Todo detail renders the shared typed date condition, ready state, and stable receipt id.");
 
       // A visit to another view or settings must not discard loaded task history.
-      const historyScroll = page.getByTestId("completed-task-lane").getByRole("region");
+      const historyScroll = page.locator('[data-goal-panel="tasks"]').getByTestId("completed-task-lane").getByRole("region");
       await page.waitForFunction(() => {
-        const lane = document.querySelector('[data-testid="completed-task-lane"] .personal-task-lane-scroll');
+        const lane = document.querySelector('[data-goal-panel="tasks"] [data-testid="completed-task-lane"] .personal-task-lane-scroll');
         return lane && lane.scrollHeight > lane.clientHeight + 740;
       });
       await historyScroll.evaluate(element => { element.scrollTop = 740; });
-      await page.waitForFunction(() => document.querySelector('[data-testid="completed-task-lane"] .personal-task-lane-scroll').scrollTop === 740);
+      await page.waitForFunction(() => document.querySelector('[data-goal-panel="tasks"] [data-testid="completed-task-lane"] .personal-task-lane-scroll').scrollTop === 740);
       const retainedHistory = await historyScroll.elementHandle();
       const goalViews = page.getByRole("navigation", { name: "Goal 视图" });
       for (const name of ["概览", "成果", "对话", "任务"]) {
@@ -203,6 +204,7 @@ export const navigationSortingScenario = {
         throw new Error("Settings return reset loaded task history");
       }
       await page.locator(".personal-goal-link", { hasText: "Multi Agent Projection" }).click();
+      await goalViews.getByRole("button", { name: "任务", exact: true }).click();
       const laneFilter = page.getByRole("combobox", { name: "按工作 Agent 筛选", exact: true });
       await laneFilter.selectOption("codex-older-lane");
       await goalViews.getByRole("button", { name: "概览", exact: true }).click();

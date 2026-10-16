@@ -400,6 +400,13 @@ def _normalize_proposals(
             continue
         if raw.get("kind") != "todo":
             continue
+        goal_id = raw.get("goal_id")
+        if goal_id is not None and (
+            not isinstance(goal_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9._-]{1,160}", goal_id)
+        ):
+            # Never turn an invalid explicit target into an unscoped proposal.
+            continue
         text = _compact_line(redact_local_paths(str(raw.get("text") or ""), protected_paths=protected_paths), limit=400)
         if not text:
             continue
@@ -413,6 +420,7 @@ def _normalize_proposals(
         proposals.append(
             {
                 "kind": "todo",
+                **({"goal_id": goal_id} if goal_id is not None else {}),
                 "text": text,
                 "priority": priority,
                 "rationale": rationale,
@@ -710,8 +718,8 @@ def _compact_todo_payload(payload: dict[str, Any], *, applied: bool) -> dict[str
 def _todo_preview_fingerprint(payload: dict[str, Any]) -> str:
     compact = _compact_todo_payload(payload, applied=False)
     if payload.get("decision_read_from_provider") is True:
-        # A create dry-run allocates a proposed operation identity without a
-        # write. Its random Todo id is not the reviewed intent or source head.
+        # Bind the transport operation to reviewed intent and provider head.
+        # The provider allocates Todo identity from that operation separately.
         compact["todo"].pop("todo_id")
     return _stable_digest(
         {
@@ -761,7 +769,7 @@ def _todo_no_write_receipt(
         "outcome": "preview_stale",
         "write_attempted": write_attempted,
         **({"current_preview_id": _todo_preview_fingerprint(current_preview)}
-            if not write_attempted else {}),
+            if not write_attempted and state_revision is None else {}),
         "state_revision": state_revision or _todo_revision(current_preview),
     }
     receipt["receipt_id"] = _stable_digest(receipt)
@@ -776,6 +784,7 @@ def _add_review_todo(
     priority: str | None = None,
     dry_run: bool,
     expected_provider_revision: str | None = None,
+    operation_id: str | None = None,
 ) -> dict[str, Any]:
     return add_goal_todo(
         registry_path=registry_path,
@@ -786,9 +795,39 @@ def _add_review_todo(
         task_class="advancement_task",
         action_kind=CHAT_TODO_ACTION_KIND,
         dry_run=dry_run,
+        **({"operation_id": operation_id} if operation_id is not None else {}),
         **({"expected_provider_revision": expected_provider_revision}
             if expected_provider_revision is not None else {}),
     )
+
+
+def _bound_todo_review_preview(
+    *, registry_path: Path, goal_id: str, text: str, priority: str | None,
+) -> dict[str, Any]:
+    payload = _add_review_todo(
+        registry_path=registry_path, goal_id=goal_id, text=text, priority=priority, dry_run=True,
+    )
+    if payload.get("decision_read_from_provider") is not True:
+        return payload
+    # Reuse the existing canonical operation contract instead of predicting a
+    # Todo id here. Both dry-runs are read-only; the second refuses a changed
+    # provider head. Confirmation uses this same operation and revision.
+    try:
+        return _add_review_todo(
+            registry_path=registry_path, goal_id=goal_id, text=text, priority=priority, dry_run=True,
+            operation_id="chat-todo:" + _todo_preview_fingerprint(payload),
+            expected_provider_revision=_todo_revision(payload),
+        )
+    except LocalCoordinationAuthorityUnavailable as exc:
+        if exc.code != "provider_revision_mismatch":
+            raise
+        raise TodoReviewPreviewConflict(
+            "stale todo preview; preview the proposal again before applying",
+            receipt=_todo_no_write_receipt(
+                goal_id=goal_id, current_preview=payload,
+                state_revision=exc.payload.get("current_provider_revision"),
+            ),
+        ) from exc
 
 
 def build_todo_review_preview(
@@ -798,12 +837,8 @@ def build_todo_review_preview(
     text: str,
     priority: str | None = None,
 ) -> dict[str, Any]:
-    payload = _add_review_todo(
-        registry_path=registry_path,
-        goal_id=goal_id,
-        text=text,
-        priority=priority,
-        dry_run=True,
+    payload = _bound_todo_review_preview(
+        registry_path=registry_path, goal_id=goal_id, text=text, priority=priority,
     )
     compact = _compact_todo_payload(payload, applied=False)
     compact["preview_id"] = _todo_preview_fingerprint(payload)
@@ -818,12 +853,8 @@ def apply_todo_review_preview(
     priority: str | None = None,
     preview_id: str,
 ) -> dict[str, Any]:
-    current_preview = _add_review_todo(
-        registry_path=registry_path,
-        goal_id=goal_id,
-        text=text,
-        priority=priority,
-        dry_run=True,
+    current_preview = _bound_todo_review_preview(
+        registry_path=registry_path, goal_id=goal_id, text=text, priority=priority,
     )
     if not preview_id or preview_id != _todo_preview_fingerprint(current_preview):
         raise TodoReviewPreviewConflict(
@@ -840,7 +871,8 @@ def apply_todo_review_preview(
             text=text,
             priority=priority,
             dry_run=False,
-            **({"expected_provider_revision": _todo_revision(current_preview)}
+            **({"expected_provider_revision": _todo_revision(current_preview),
+                "operation_id": current_preview["operation_id"]}
                 if current_preview.get("decision_read_from_provider") is True else {}),
         )
     except LocalCoordinationAuthorityUnavailable as exc:

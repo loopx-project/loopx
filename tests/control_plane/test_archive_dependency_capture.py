@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
-from test_runtime_shadow_bounded_e2e import workspace, enable, cli
 from loopx.control_plane.coordination.authority_source_capture import (
     build_runtime_shadow_source_snapshot, capture_todo_archive_dependencies,
 )
@@ -16,6 +15,23 @@ from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
 from loopx.control_plane.todos.completed_archive import archive_completed_todo_lines
 from loopx.control_plane.todos.todo_summary import structured_todo_item
 from loopx.control_plane.testing.canary_harness import run_json_cli_result
+
+
+def workspace(tmp_path: Path) -> tuple[Path, Path, Path]:
+    runtime = tmp_path / "runtime"
+    state = tmp_path / "ACTIVE_GOAL_STATE.md"
+    state.write_text("---\ngoal_id: goal-a\nhandoff_mode: legacy\n---\n")
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({
+        "common_runtime_root": str(runtime),
+        "goals": [{
+            "id": "goal-a",
+            "repo": str(tmp_path),
+            "state_file": state.name,
+            "coordination": {"registered_agents": ["agent-a"]},
+        }],
+    }))
+    return registry, runtime, state
 
 
 def row(todo_id: str, *, text: str = "Delivered result", metadata: str = "", marker: str = "x") -> str:
@@ -112,16 +128,3 @@ def test_complete_snapshot_and_real_provider_cli_keep_dependency_semantics(tmp_p
     assert code == 0, listed
     assert [r["todo_id"] for r in listed["todos"]] == ["todo_next"]
     assert not state.exists()
-
-
-def test_public_bootstrap_and_writer_outbox_share_legacy_archive_admission(tmp_path: Path):
-    registry, runtime, state = workspace(tmp_path)
-    state.write_text("---\ngoal_id: goal-a\nhandoff_mode: legacy\n---\n" + source_graph())
-    enable(registry)
-    boot = cli(registry, runtime, "coordination-shadow", "bootstrap", "--goal-id", "goal-a", "--execute")
-    assert boot["ok"] is True
-    write = cli(registry, runtime, "todo", "add", "--goal-id", "goal-a", "--role", "agent",
-        "--text", "New captured work", "--task-class", "advancement_task")
-    assert write["coordination_runtime_shadow"]["outcome"] == "delivered"
-    inspected = cli(registry, runtime, "coordination-shadow", "inspect", "--goal-id", "goal-a")
-    assert inspected["inspection"]["status"] == "matched", inspected

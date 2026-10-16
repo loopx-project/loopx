@@ -111,6 +111,27 @@ fn parse_like<T: std::str::FromStr>(_: &T, text: &str) -> Option<T> {
     text.parse().ok()
 }
 
+// Core package metadata uses PEP 440, independently of Tauri's SemVer shell.
+// Only historical Main shell versions have the old release-base comparison:
+// they were a fallback when bundles did not carry a wheel package_version.
+fn core_package_version(
+    package: &tauri::utils::PackageInfo,
+    text: &str,
+) -> Option<pep440_rs::Version> {
+    if let Ok(version) = text.parse::<pep440_rs::Version>() {
+        return Some(version);
+    }
+    let legacy = parse_like(&package.version, text)?;
+    if legacy.pre.as_str().split('.').next() != Some("main") {
+        return None;
+    }
+    Some(pep440_rs::Version::new([
+        legacy.major,
+        legacy.minor,
+        legacy.patch,
+    ]))
+}
+
 // The updater's Main build number is a shell version, not a Core version.
 // New bundles carry the wheel version from their exact archived source. Old
 // bundles retain their existing shell-version fallback for compatibility.
@@ -121,7 +142,7 @@ pub(crate) fn bundled_runtime_candidate(
     let version = match bundled.get("package_version") {
         Some(value) => value
             .as_str()
-            .filter(|text| parse_like(&package.version, text).is_some())
+            .filter(|text| core_package_version(package, text).is_some())
             .ok_or("runtime_bundle_invalid")?
             .to_owned(),
         None => package.version.to_string(),
@@ -134,14 +155,8 @@ fn compare_package_versions(
     installed: &Value,
     candidate: &Value,
 ) -> Option<std::cmp::Ordering> {
-    let mut left = parse_like(&package.version, installed["package_version"].as_str()?)?;
-    let mut right = parse_like(&package.version, candidate["package_version"].as_str()?)?;
-    // Core wheels carry the release base; main-channel shell prereleases do
-    // not make that same Core version older than the stable package string.
-    left.pre = Default::default();
-    left.build = Default::default();
-    right.pre = Default::default();
-    right.build = Default::default();
+    let left = core_package_version(package, installed["package_version"].as_str()?)?;
+    let right = core_package_version(package, candidate["package_version"].as_str()?)?;
     Some(left.cmp(&right))
 }
 
@@ -298,6 +313,128 @@ pub(crate) fn compare_official_commits(left: &str, right: &str) -> Option<std::c
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn core_versions_preserve_wheel_identity_and_reject_invalid_metadata() {
+        let package = tauri::utils::PackageInfo {
+            name: "LoopX".into(),
+            version: "0.0.0-main.42.1".parse().unwrap(),
+            authors: "contributors",
+            description: "desktop",
+            crate_name: "desktop",
+        };
+        for version in [
+            "1.4.2",
+            "2.0.0a1",
+            "2.0.0b2",
+            "2.0.0rc1",
+            "2.0.0.dev2",
+            "2.0.0.post1",
+            "2.0.0a1+local.2",
+            "1!2.0.0",
+            "2.0",
+        ] {
+            let bundle = json!({"package_version":version, "source_revision":"original"});
+            assert_eq!(
+                bundled_runtime_candidate(&package, &bundle).unwrap(),
+                bundle,
+                "accept the wheel format without rewriting identity: {version}"
+            );
+        }
+        for invalid in [
+            json!(null),
+            json!(42),
+            json!([]),
+            json!({}),
+            json!(""),
+            json!("invalid"),
+            json!("2.0.0a1junk"),
+            json!("2.0.0-unknown.1"),
+            json!("2.0.0+"),
+            json!("2.0.*"),
+            json!(">=2.0.0"),
+            json!("2.0.0min0"),
+            json!("2.0.0max0"),
+        ] {
+            assert_eq!(
+                bundled_runtime_candidate(&package, &json!({"package_version":invalid}))
+                    .unwrap_err(),
+                "runtime_bundle_invalid"
+            );
+        }
+    }
+
+    #[test]
+    fn core_version_order_keeps_prereleases_before_source_ancestry() {
+        use std::cmp::Ordering;
+        let package = tauri::utils::PackageInfo {
+            name: "LoopX".into(),
+            version: "0.0.0-main.42.1".parse().unwrap(),
+            authors: "contributors",
+            description: "desktop",
+            crate_name: "desktop",
+        };
+        let identity = |version: &str| {
+            json!({"package_version":version,
+            "source_revision":"same-source"})
+        };
+        for (older, newer) in [
+            ("1.4.2", "2.0.0a1"),
+            ("2.0.0.dev2", "2.0.0a1"),
+            ("2.0.0a1", "2.0.0a2"),
+            ("2.0.0a10", "2.0.0b1"),
+            ("2.0.0b2", "2.0.0rc1"),
+            ("2.0.0rc1", "2.0.0"),
+            ("2.0.0", "2.0.0.post1"),
+            ("2.0.0a1+local.2", "2.0.0a1+local.10"),
+        ] {
+            for (left, right, expected) in [
+                (older, newer, Ordering::Less),
+                (newer, older, Ordering::Greater),
+            ] {
+                assert_eq!(
+                    compare_runtimes(&package, &identity(left), &identity(right), |_, _| panic!(
+                        "different package versions need no ancestry lookup"
+                    )),
+                    Some(expected),
+                    "{left} vs {right}"
+                );
+            }
+            assert!(!prefer_current_bundle(
+                &package,
+                &identity(newer),
+                &identity(older),
+                true,
+                |_, _| panic!("same-owner fallback must not downgrade a newer package")
+            ));
+            assert!(!prefer_discovered_runtime(
+                &package,
+                &identity(newer),
+                &identity(older),
+                true,
+                |_, _| panic!("installer fallback must not downgrade a newer package")
+            ));
+        }
+        let current = json!({"package_version":"2.0.0a1", "source_revision":"current"});
+        let candidate = json!({"package_version":"2.0.0-alpha.1", "source_revision":"candidate"});
+        assert_eq!(
+            compare_runtimes(&package, &current, &candidate, |left, right| {
+                assert_eq!((left, right), ("current", "candidate"));
+                Some(Ordering::Greater)
+            }),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            compare_runtimes(&package, &current, &candidate, |_, _| None),
+            None
+        );
+        assert_eq!(
+            compare_runtimes(&package, &identity("invalid"), &current, |_, _| panic!(
+                "invalid version cannot authorize a source lookup"
+            )),
+            None
+        );
+    }
+
     #[test]
     fn main_shell_build_number_does_not_rank_the_bundled_core() {
         use std::cmp::Ordering;

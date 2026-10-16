@@ -8,11 +8,9 @@ separately so the standalone runner cannot report green while unverified.
 
 from __future__ import annotations
 
-import ast
 import json
 import os
 from collections.abc import Iterator
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -29,48 +27,8 @@ GATED_ROW_IDS = (
     "s2a.nokv_live_qualification",
     "s2b.postgresql_conformance_live",
 )
-PENDING_ONLY_ROW_ID = "s2c2.sustained_parity_soak"
-PENDING_ROW_IDS = (PENDING_ONLY_ROW_ID,)
 LOCAL_FILE_ROW_ID = "s0.native_file_conformance"
 FULL_LADDER_VARIABLE = "LOOPX_LADDER_FULL"
-# Rows whose assertions the in-repo CLI E2E suite already pins through the same
-# product path. The pytest job runs close to its time budget, so the default CI
-# projection keeps the rows that only the ladder exercises and defers these to
-# the example runner (or LOOPX_LADDER_FULL=1).
-# Rows the default CI projection skips, each named with the product-CLI E2E
-# test that pins the same assertions; a guard below fails when a twin is
-# renamed or deleted so the skip cannot outlive its coverage.
-CLI_E2E_TWIN_FILE = Path(__file__).with_name("test_local_authority_shadow_cli_e2e.py")
-CLI_E2E_COVERAGE = {
-    "s2c1.retired_observation_upgrade": "test_retired_setting_cannot_enable_capture_or_satisfy_bootstrap",
-}
-CLI_E2E_COVERED_ROW_IDS = tuple(CLI_E2E_COVERAGE)
-CLI_E2E_COVERAGE_REASON = (
-    "pinned by tests/control_plane/test_local_authority_shadow_cli_e2e.py; "
-    "run examples/shared-goal-authority-e2e/ladder.py or set LOOPX_LADDER_FULL=1"
-)
-# The Stage 2C parity half: every row below is executable through the public
-# CLI and the shadow management interfaces. They carry the ``stage2c_e2e``
-# marker so CI runs them in the stage2c correctness job with the other real
-# CLI, process-death and recovery suites instead of the pytest shards.
-STAGE_2C2_ROW_IDS = (
-    "s2c2.outbox_prepared_then_committed_entries",
-    "s2c2.drain_idempotent",
-    "s2c2.sigkill_between_primary_write_and_drain",
-    "s2c2.sigkill_mid_drain",
-    "s2c2.rollback_with_pending_entries",
-    "s2c2.parity_equal",
-    "s2c2.parity_divergent_detects_foreign_edit",
-    "s2c2.event_only_todo_source_holds",
-    "s2c2.migration_seeds_and_drains",
-    "s2c2.growth_measurement_gate",
-    "s2c2.archive_after_leased_completion_parity",
-)
-STAGE_2C2_POSIX_ONLY_ROW_IDS = (
-    "s2c2.sigkill_between_primary_write_and_drain",
-    "s2c2.sigkill_mid_drain",
-    "s2c2.rollback_with_pending_entries",
-)
 
 
 def _row_parameters() -> Iterator[object]:
@@ -81,15 +39,11 @@ def _row_parameters() -> Iterator[object]:
             marks.append(
                 pytest.mark.skipif(os.name == "nt", reason="requires POSIX cross-process flock and SIGKILL")
             )
-        if row.id in CLI_E2E_COVERED_ROW_IDS and not full_ladder:
-            marks.append(pytest.mark.skip(reason=CLI_E2E_COVERAGE_REASON))
         if row.stage == "0" and not full_ladder:
             marks.append(pytest.mark.skip(reason=(
                 "native provider suites run in npm run test:control-plane; "
                 "run the standalone ladder or set LOOPX_LADDER_FULL=1 for integrated evidence"
             )))
-        if row.stage == "2c2":
-            marks.append(pytest.mark.stage2c_e2e)
         yield pytest.param(row, id=row.id, marks=marks)
 
 
@@ -116,19 +70,11 @@ def test_ladder_row_passes_or_is_declared_unverified(
 
 def test_registry_vocabulary_and_pending_rows_are_declared_not_claimed() -> None:
     row_ids = [row.id for row in ladder.LADDER_ROWS]
-    assert set(CLI_E2E_COVERED_ROW_IDS) < set(row_ids)
     pending_ids = [row.id for row in ladder.PENDING_ROWS]
     assert len(set(row_ids)) == len(row_ids)
     assert set(row_ids).isdisjoint(pending_ids)
-    assert [row.id for row in ladder.LADDER_ROWS if row.stage == "2c2"] == list(STAGE_2C2_ROW_IDS)
-    assert pending_ids == list(PENDING_ROW_IDS)
-    assert {row.stage for row in ladder.LADDER_ROWS} == {"0", "1", "2a", "2b", "2c1", "2c2"}
-    assert {row.stage for row in ladder.PENDING_ROWS} == {"2c2"}
-    assert all("#3819" not in row.pending_until for row in ladder.PENDING_ROWS)
-    for row_id in STAGE_2C2_ROW_IDS:
-        row = ladder.row_by_id(row_id)
-        assert row.product_path == "real_cli" and row.gate == "deterministic"
-        assert row.posix_only is (row_id in STAGE_2C2_POSIX_ONLY_ROW_IDS)
+    assert pending_ids == []
+    assert {row.stage for row in ladder.LADDER_ROWS} == {"0", "1", "2a", "2b"}
     assert all(row.gate in ladder.GATES for row in ladder.LADDER_ROWS)
     assert all(row.product_path in ladder.PRODUCT_PATHS for row in ladder.LADDER_ROWS)
     with pytest.raises(ValueError):
@@ -238,9 +184,10 @@ def test_stage_2a_row_reports_specific_unverified_reasons_for_each_missing_input
     assert ladder.collect_bindings(inputs)["nokv_client_config_sha256"] is not None
 
 
-@pytest.mark.stage2c_e2e
-def test_stage_2c2_row_passes_when_the_ladder_root_is_reached_through_a_symlink(tmp_path: Path) -> None:
-    """macOS's default temp directory is a symlink; the shadow rows must not care (#4892)."""
+def test_stage_1_row_passes_when_the_ladder_root_is_reached_through_a_symlink(
+    tmp_path: Path,
+) -> None:
+    """macOS's default temp directory is a symlink; the CLI row must not care (#4892)."""
 
     real = tmp_path / "real-root"
     real.mkdir()
@@ -249,7 +196,7 @@ def test_stage_2c2_row_passes_when_the_ladder_root_is_reached_through_a_symlink(
         link.symlink_to(real, target_is_directory=True)
     except OSError as exc:
         pytest.skip(f"directory symlinks unavailable: {exc}")
-    row = ladder.row_by_id("s2c2.outbox_prepared_then_committed_entries")
+    row = ladder.row_by_id("s1.cli_document_decodes_through_ts_store")
     result = ladder.run_row(row, root=link, environ=os.environ)
     if result.status == "unverified":
         pytest.skip(f"unverified: {result.reason_code}")
@@ -273,21 +220,27 @@ def test_pending_rows_never_exit_green_without_allow_pending(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    pending_row_id = "future.canonical_soak"
+    monkeypatch.setattr(
+        ladder,
+        "PENDING_ROWS",
+        (ladder.PendingRow(pending_row_id, "1", "a separately owned canonical soak"),),
+    )
     for name in LIVE_ENVIRONMENT_VARIABLES:
         monkeypatch.delenv(name, raising=False)
     report_path = tmp_path / "report.json"
 
     # Pending-only selection: zero executions must not read as success.
-    assert ladder.main(["--row", PENDING_ONLY_ROW_ID, "--report-json", str(report_path)]) == 1
+    assert ladder.main(["--row", pending_row_id, "--report-json", str(report_path)]) == 1
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["summary"] == {"pass": 0, "fail": 0, "unverified": 0, "pending": 1, "executed": 0, "privacy_violations": 0}
     assert report["rows"] == []
-    assert report["pending"][0]["id"] == PENDING_ONLY_ROW_ID
+    assert report["pending"][0]["id"] == pending_row_id
     assert report["pending"][0]["status"] == "pending"
     assert report["exit_policy"]["exit_code"] == 1
     assert "pending rows (not verified):" in capsys.readouterr().err
 
-    assert ladder.main(["--row", PENDING_ONLY_ROW_ID, "--allow-pending", "--report-json", str(report_path)]) == 0
+    assert ladder.main(["--row", pending_row_id, "--allow-pending", "--report-json", str(report_path)]) == 0
     allowed = json.loads(report_path.read_text(encoding="utf-8"))
     assert allowed["exit_policy"] == {
         "allow_unverified": False,
@@ -298,19 +251,33 @@ def test_pending_rows_never_exit_green_without_allow_pending(
     assert allowed["summary"]["pending"] == 1
     capsys.readouterr()
 
-    # A stage whose only remaining declaration is pending behaves the same way;
-    # the executable 2c2 rows are removed from the registry for this check only.
+    # A stage whose only selected declaration is pending behaves the same way.
     with pytest.MonkeyPatch.context() as registry:
-        registry.setattr(ladder, "LADDER_ROWS", tuple(row for row in ladder.LADDER_ROWS if row.stage != "2c2"))
-        assert ladder.main(["--stage", "2c2", "--report-json", str(report_path)]) == 1
+        registry.setattr(ladder, "LADDER_ROWS", tuple(row for row in ladder.LADDER_ROWS if row.stage != "1"))
+        assert ladder.main(["--stage", "1", "--report-json", str(report_path)]) == 1
     capsys.readouterr()
 
     # Mixed selection: one executable pass does not excuse a pending obligation.
-    monkeypatch.setattr(ladder, "LADDER_ROWS", tuple(
-        replace(row, run=lambda _context: ladder.passed()) if row.id == LOCAL_FILE_ROW_ID else row
-        for row in ladder.LADDER_ROWS
-    ))
-    mixed = ["--row", LOCAL_FILE_ROW_ID, "--row", PENDING_ONLY_ROW_ID, "--report-json", str(report_path)]
+    local = ladder.row_by_id(LOCAL_FILE_ROW_ID)
+    monkeypatch.setattr(
+        ladder,
+        "LADDER_ROWS",
+        tuple(
+            ladder.LadderRow(
+                id=row.id,
+                stage=row.stage,
+                title=row.title,
+                product_path=row.product_path,
+                gate=row.gate,
+                posix_only=row.posix_only,
+                run=lambda _context: ladder.passed(),
+            )
+            if row is local
+            else row
+            for row in ladder.LADDER_ROWS
+        ),
+    )
+    mixed = ["--row", LOCAL_FILE_ROW_ID, "--row", pending_row_id, "--report-json", str(report_path)]
     assert ladder.main(mixed) == 1
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["summary"] == {"pass": 1, "fail": 0, "unverified": 0, "pending": 1, "executed": 1, "privacy_violations": 0}
@@ -319,11 +286,11 @@ def test_pending_rows_never_exit_green_without_allow_pending(
     capsys.readouterr()
 
     # List-only never claims verification: it prints the registry and exits 0.
-    assert ladder.main(["--list", "--row", PENDING_ONLY_ROW_ID]) == 0
+    assert ladder.main(["--list", "--row", pending_row_id]) == 0
     listing = json.loads(capsys.readouterr().out)
     assert listing["schema_version"] == ladder.LIST_SCHEMA
     assert listing["rows"] == []
-    assert [row["id"] for row in listing["pending"]] == [PENDING_ONLY_ROW_ID]
+    assert [row["id"] for row in listing["pending"]] == [pending_row_id]
     assert "exit_policy" not in listing
 
 
@@ -366,7 +333,7 @@ def test_privacy_scan_turns_leaks_into_failures(tmp_path: Path) -> None:
         "privacy_violations": 1,
     }
     assert report["exit_policy"]["exit_code"] == 1
-    assert {row["status"] for row in report["pending"]} == {"pending"}
+    assert report["pending"] == []
 
 
 def test_privacy_leak_confined_to_bindings_still_fails_the_run() -> None:
@@ -403,14 +370,6 @@ def test_privacy_leak_confined_to_bindings_still_fails_the_run() -> None:
     assert ladder.exit_code_for(report["summary"], allow_unverified=True, allow_pending=True) == 1
 
 
-def test_ci_projection_skips_only_rows_whose_cli_e2e_twin_still_exists() -> None:
-    tree = ast.parse(CLI_E2E_TWIN_FILE.read_text(encoding="utf-8"))
-    defined = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
-    for row_id, twin in CLI_E2E_COVERAGE.items():
-        ladder.row_by_id(row_id)
-        assert twin in defined, f"{row_id} is skipped by default but its twin {twin} no longer exists"
-
-
 def test_list_prints_rows_and_pending_declarations(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -420,11 +379,12 @@ def test_list_prints_rows_and_pending_declarations(
     assert [row["id"] for row in listing["pending"]] == [row.id for row in ladder.PENDING_ROWS]
     assert all(row["status"] == "pending" for row in listing["pending"])
 
-    assert ladder.main(["--list", "--stage", "2c2"]) == 0
+    assert ladder.main(["--list", "--stage", "1"]) == 0
     stage_listing = json.loads(capsys.readouterr().out)
-    assert [row["id"] for row in stage_listing["rows"]] == list(STAGE_2C2_ROW_IDS)
-    assert [row["id"] for row in stage_listing["pending"]] == list(PENDING_ROW_IDS)
-    assert {row["stage"] for row in stage_listing["pending"]} == {"2c2"}
+    assert [row["id"] for row in stage_listing["rows"]] == [
+        "s1.cli_document_decodes_through_ts_store"
+    ]
+    assert stage_listing["pending"] == []
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

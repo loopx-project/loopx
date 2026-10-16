@@ -133,10 +133,12 @@ This is the permanent Python presentation/legacy-input adapter described by the
 and [shared-authority RFC](../../architecture/rfcs/shared-goal-authority-state-provider-v0.md#next-delivery-and-parallel-provider-work).
 It adds no business rule, RPC, provider, or authority write. Post-cutover Todo
 consumers still read canonical state when Markdown is absent or malformed;
-rendering never imports Objective examples into that state. Before cutover,
-the existing legacy writer remains subject to its normal fence. Objective is
-independent Goal narrative, outside the Todo store and Todo-section recovery.
-Existing malformed documents are not automatically repaired.
+rendering never imports Objective examples into that state. For an unmigrated
+Goal, Markdown remains an inspection and reviewed-import source. Normal
+mutation fails with `canonical_authority_required`; no legacy writer fallback
+remains. Objective is independent Goal narrative, outside the Todo store and
+Todo-section recovery. Existing malformed documents are not automatically
+repaired.
 
 Markdown is not one undifferentiated database row. Agents generate and maintain
 both its structured sections and narrative through LoopX. The distinction is
@@ -147,8 +149,10 @@ canonical source can reconstruct it.
 
 The cutover is deliberately section-sized, not document-sized:
 
-- before promotion, Markdown remains the authority and writes use its existing
-  transaction boundary;
+- before reviewed import, Markdown remains the source for inspection and
+  backup. Normal Todo mutation and new lease acquisition are rejected. The
+  exact retained lease cleanup route can settle an existing grant without
+  creating a new one;
 - after promotion, the versioned Todo records live in the canonical provider
   head and Markdown's Todo section is a compatibility/workbench projection;
 - other generated sections remain in Markdown until their canonical ownership
@@ -156,9 +160,9 @@ The cutover is deliberately section-sized, not document-sized:
 - a provider outage after promotion fails closed and never makes stale
   Markdown authoritative again.
 
-The first write using this boundary is Todo claim. It exercises a complete
-provider-neutral TypeScript transaction while leaving the default local path
-unchanged. On promoted `hard_lease` authority, the same claim command may
+Todo claim was the first canonical write qualified through this boundary. It
+exercises a complete provider-neutral TypeScript transaction. On canonical
+`hard_lease` authority, the same claim command may
 supply a task-lease idempotency key and optional expected version so the claim,
 canonical lease, and durable receipt commit in one provider transaction; the
 write scopes come from the canonical Todo rather than caller input. After

@@ -13,6 +13,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from ...cli_runtime import _build_selected_parser, main
+from ...entrypoint import pin_utf8_stdio
 
 
 class _BoundedOutput(io.StringIO):
@@ -23,6 +24,7 @@ class _BoundedOutput(io.StringIO):
 
 
 def serve() -> None:
+    pin_utf8_stdio()
     bootstrap = argparse.ArgumentParser()
     bootstrap.add_argument("--registry", type=Path, required=True)
     bootstrap.add_argument("--runtime-root", type=Path, required=True)

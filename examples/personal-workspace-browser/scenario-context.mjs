@@ -59,6 +59,9 @@ export async function openWorkspacePage(
       coverageEntries.push(...await page.coverage.stopJSCoverage());
       coverageRunning = false;
     }
+    // A route handler still proxying a request when the page goes away must
+    // not surface as an uncaught rejection that takes the whole smoke down.
+    await page.unrouteAll({ behavior: "ignoreErrors" }).catch(() => {});
     await page.close();
     return coverageEntries;
   }

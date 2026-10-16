@@ -18,6 +18,8 @@ from demo.multi_agent.role_successor import (  # noqa: E402
     apply_role_successor_todos,
     first_successor_followup,
 )
+from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted  # noqa: E402
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
 
 
 GOAL_ID = "multi-agent-successor-smoke"
@@ -34,7 +36,8 @@ def write_minimal_state(path: Path) -> None:
                 "",
                 "## Agent Todo",
                 "",
-                "- [ ] [P0] Run source action. <!-- todo_id=todo_source123456 status=open task_class=advancement_task action_kind=run_dev_eval claimed_by=agent-a -->",
+                "- [ ] [P0] Run source action.",
+                "  <!-- loopx:todo todo_id=todo_source123456 status=open task_class=advancement_task action_kind=run_dev_eval claimed_by=agent-a -->",
                 "",
             ]
         ),
@@ -92,6 +95,9 @@ def main() -> int:
         runtime_root = root / "runtime"
         write_minimal_state(state_file)
         write_registry(registry, project=project, state_file=state_file, runtime_root=runtime_root)
+        import_fixture_authority(registry, GOAL_ID)
+        before = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=GOAL_ID)
+        display_before = state_file.read_bytes()
 
         preview = apply_role_successor_todos(
             registry_path=registry,
@@ -139,6 +145,8 @@ def main() -> int:
         )
         assert skipped["needed"] is False, skipped
         assert skipped["reason"] == "no_second_candidate", skipped
+        assert read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=GOAL_ID) == before
+        assert state_file.read_bytes() == display_before
 
         executed = apply_role_successor_todos(
             registry_path=registry,
@@ -158,6 +166,24 @@ def main() -> int:
         state_text = state_file.read_text(encoding="utf-8")
         assert "claimed_by=agent-b" in state_text, state_text
         assert f"unblocks_todo_id={SOURCE_TODO_ID}" in state_text, state_text
+        after = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=GOAL_ID)
+        assert after["source_authority"] == "file_v0", after
+        records = {todo["todo_id"]: todo for todo in after["todos"]}
+        assert len(records) == 2, records
+        assert records[added["todo_id"]]["claimed_by"] == "agent-b", records
+        assert records[added["todo_id"]]["unblocks_todo_id"] == SOURCE_TODO_ID, records
+        original_source = next(todo for todo in before["todos"] if todo["todo_id"] == SOURCE_TODO_ID)
+        assert records[SOURCE_TODO_ID] == original_source, records
+        replay = apply_role_successor_todos(
+            registry_path=registry, goal_id=GOAL_ID, source_todo_id=SOURCE_TODO_ID,
+            current_agent_id="agent-a", role_id="evidence_runner", action="run_dev_eval",
+            successor_specs=[successor_spec()], decision_summary={"dev_promotion_candidate_count": 1},
+            execute=True,
+        )
+        assert replay["successors"][0]["already_exists"] is True, replay
+        assert replay["successors"][0]["todo_id"] == added["todo_id"], replay
+        assert read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=GOAL_ID) == after
+        display_after = state_file.read_bytes()
 
         try:
             apply_role_successor_todos(
@@ -175,6 +201,8 @@ def main() -> int:
             assert "successor target_agent_id 'missing-agent' is not registered" in str(exc), exc
         else:
             raise AssertionError("missing successor target agent should fail closed")
+        assert read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=GOAL_ID) == after
+        assert state_file.read_bytes() == display_after
 
     print("multi-agent-role-successor-todos-smoke ok")
     return 0

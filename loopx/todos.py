@@ -23,7 +23,7 @@ from .control_plane.todos.path_resolution import (
     resolve_todo_state_path as resolve_todo_state_path,
 )
 
-# Preserve the existing import surface without loading unpromoted writer code.
+# Retain read and semantic compatibility imports without loading retired writers.
 _EXPORTS = {
     "add_goal_todo": "loopx.control_plane.todos.mutation_api",
     "update_goal_todo": "loopx.control_plane.todos.mutation_api",
@@ -97,12 +97,9 @@ _EXPORTS = {
     "todo_summaries_from_fields": "loopx.control_plane.todos.goal_todo_projection",
     "parse_todo_source": "loopx.control_plane.todos.active_state_todo_parser",
     "todo_monitor_metadata": "loopx.control_plane.todos",
-    "authorize_todo_lifecycle_mutation": "loopx.control_plane.todos.mutation_authority",
-    "todo_update_authority_action": "loopx.control_plane.todos.mutation_authority",
     "build_open_parent_successor_advisory": "loopx.control_plane.todos.succession_warning",
     "build_successor_intents": "loopx.control_plane.todos.successor_derivation",
     "derive_successor_proposals": "loopx.control_plane.todos.successor_derivation",
-    "successor_add_kwargs": "loopx.control_plane.todos.successor_derivation",
     "MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL": "loopx.control_plane.todos.todo_index",
     "normalize_new_todo": "loopx.control_plane.todos.text",
     "list_goal_todos": "loopx.control_plane.todos.list_readback",
@@ -112,32 +109,16 @@ _EXPORTS = {
     "require_completion_decision_outcome": "loopx.control_plane.todos.unblock_resume",
     "_attach_todo_write_correctness_dry_run_packet": "loopx.control_plane.todos.write_correctness",
     "require_user_todo_task_class": "loopx.control_plane.todos.authoring_scope",
-    "legacy_todo_write_transaction": "loopx.control_plane.coordination.legacy_writer_fence",
     "canonical_todo_items": "loopx.control_plane.coordination.local_authority",
     "canonical_todo_summary_fields": "loopx.control_plane.coordination.local_authority",
     "read_canonical_todos_if_promoted": "loopx.control_plane.coordination.local_authority",
     "resolve_todo_state_path": "loopx.control_plane.todos.path_resolution",
-    "provider_first_terminal_lifecycle": "loopx.control_plane.todos.provider_terminal_lifecycle",
     "goal_handoff_mode": "loopx.control_plane.todos.handoff_mode",
-    "enter_added_todo_ownership_handoff_gate": "loopx.control_plane.todos.handoff_mode",
-    "enter_todo_ownership_handoff_gate": "loopx.control_plane.todos.handoff_mode",
-    "resolve_todo_completion_handoff": "loopx.control_plane.todos.handoff_mode",
     "effective_runtime_root": "loopx.paths",
-    "enter_terminal_todo_lease_fence": "loopx.control_plane.work_items.task_lease",
-    "hold_task_lease_mutation_fence": "loopx.control_plane.work_items.task_lease",
-    "release_verified_task_lease_fence": "loopx.control_plane.work_items.task_lease",
     "supersede_goal_todo": "loopx.control_plane.todos.mutation_api",
     "archive_completed_todos": "loopx.control_plane.todos.mutation_api",
     "ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE": "loopx.control_plane.todos.mutation_api",
     "resolve_todo_state": "loopx.control_plane.todos.path_resolution",
-    "add_todo_to_lines": "loopx.control_plane.todos.legacy_mutation",
-    "_add_goal_todo_legacy": "loopx.control_plane.todos.legacy_mutation",
-    "_update_goal_todo_legacy": "loopx.control_plane.todos.legacy_mutation",
-    "_complete_goal_todo_legacy": "loopx.control_plane.todos.legacy_mutation",
-    "apply_todo_update_to_lines": "loopx.control_plane.todos.line_update",
-    "link_generated_successor_todo_ids": "loopx.control_plane.todos.line_update",
-    "link_superseding_todo_id": "loopx.control_plane.todos.line_update",
-    "upsert_todo_metadata": "loopx.control_plane.todos.line_update",
 }
 
 

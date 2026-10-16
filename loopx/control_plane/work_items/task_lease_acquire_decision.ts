@@ -1,8 +1,10 @@
+import {HANDOFF_MODES} from "../coordination/handoff_mode_vocabulary.ts";
 import {leaseWorkspace, sameLeaseWorkspace, sameLeaseCheckout, type LeaseWorkspace} from "./task_lease_workspace.ts";
 /** Shared acquire/reclaim admission. IO and durable receipts belong to callers. */
+import {retiredHandoffModeRejection} from "../coordination/handoff_mode_policy.ts";
 import {leaseOwnerRejection as ownerRejection} from "./task_lease_eligibility.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
-import {requireJsonObject} from "../runtime_decode.ts";
+import {requireJsonObject, requireStringLiteral} from "../runtime_decode.ts";
 import type {JsonObject} from "../effect_program.ts";
 import type {TodoFact, LeaseRecord} from "./task_lease_acquire.ts";
 import {normalizeTodoRepository} from "../todos/work_requirements.ts";
@@ -214,6 +216,7 @@ function decodeDecisionTodo(value: unknown): TodoFact | null {
   return {
     todo_id: stringValue(todo.todo_id, "todo.todo_id"),
     status: stringValue(todo.status, "todo.status"),
+    task_class: decisionNullableString(todo.task_class, "todo.task_class"),
     claimed_by: decisionNullableString(todo.claimed_by, "todo.claimed_by"),
     excluded_agents: decisionStringArray(todo.excluded_agents, "todo.excluded_agents"),
     task_repository: normalizeTodoRepository(todo.task_repository),
@@ -268,7 +271,7 @@ function decodeAcquireDecisionInput(value: unknown): AcquireDecisionInput {
     };
   });
   return {
-    handoff_mode: stringValue(input.handoff_mode, "handoff_mode"),
+    handoff_mode: requireStringLiteral(input.handoff_mode, HANDOFF_MODES, "handoff_mode"),
     registered_agents: decisionStringArray(
       input.registered_agents,
       "registered_agents",
@@ -341,6 +344,8 @@ export function decideTaskLeaseAcquire(input: AcquireDecisionInput): AcquireDeci
   if (rejection !== null) {
     return acquireDecisionResult("rejected", rejection);
   }
+  const retired = retiredHandoffModeRejection(input.handoff_mode);
+  if (retired !== null) return acquireDecisionResult("rejected", retired);
   const actualVersion = lease !== null && lease.present ? lease.version : 0;
   if (
     command.expected_version !== null && command.expected_version !== actualVersion

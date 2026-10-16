@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import pytest
+
 from loopx.bootstrap import (
     bootstrap_project,
     render_state_markdown,
     repair_missing_todo_source_sections,
+)
+from loopx.control_plane.coordination.local_authority import (
+    CanonicalAuthorityRequired,
 )
 from loopx.control_plane.goals.goal_frontier import (
     build_goal_frontier_projection_from_summaries,
@@ -97,11 +102,10 @@ def test_existing_state_migration_preserves_recognized_legacy_source_heading() -
     assert "## Agent Todo" in migrated
 
 
-def test_bootstrap_repairs_existing_state_todo_sources_in_place(tmp_path) -> None:
+def test_bootstrap_rejects_existing_markdown_only_state_without_rewriting(tmp_path) -> None:
     state_file = tmp_path / ".codex/goals/goal-terminal-test/ACTIVE_GOAL_STATE.md"
     state_file.parent.mkdir(parents=True)
-    state_file.write_text(
-        """\
+    original = """\
 # Active Goal State
 
 ## Objective
@@ -111,70 +115,41 @@ Preserve this existing state.
 ## Next Action
 
 - Continue.
-""",
-        encoding="utf-8",
-    )
+"""
+    state_file.write_text(original, encoding="utf-8")
+    registry_path = tmp_path / ".loopx/registry.json"
+    runtime_root = tmp_path / ".loopx-runtime"
 
-    result = bootstrap_project(
-        project=tmp_path,
-        registry_path=tmp_path / ".loopx/registry.json",
-        runtime_root=tmp_path / ".loopx-runtime",
-        goal_id="goal-terminal-test",
-        objective="Do not replace the existing objective.",
-        domain="issue-fix",
-        role="primary",
-        parent_goal_id=None,
-        state_file=state_file,
-        goal_doc=None,
-        adapter_kind="issue_fix_workflow_v0",
-        adapter_status="connected",
-        next_probe=None,
-        spawn_allowed=False,
-        max_children=0,
-        allowed_domains=[],
-        write_scope=[],
-        force=False,
-        dry_run=False,
-        sync_global=False,
-    )
+    with pytest.raises(CanonicalAuthorityRequired) as caught:
+        bootstrap_project(
+            project=tmp_path,
+            registry_path=registry_path,
+            runtime_root=runtime_root,
+            goal_id="goal-terminal-test",
+            objective="Do not replace the existing objective.",
+            domain="issue-fix",
+            role="primary",
+            parent_goal_id=None,
+            state_file=state_file,
+            goal_doc=None,
+            adapter_kind="issue_fix_workflow_v0",
+            adapter_status="connected",
+            next_probe=None,
+            spawn_allowed=False,
+            max_children=0,
+            allowed_domains=[],
+            write_scope=[],
+            force=False,
+            dry_run=False,
+            sync_global=False,
+        )
 
-    repaired = state_file.read_text(encoding="utf-8")
-    assert result["state_action"] == "kept-existing"
-    assert result["todo_source_migration"] == {
-        "schema_version": "todo_source_section_migration_v0",
-        "added_roles": ["user", "agent"],
-        "applied": True,
-    }
-    assert "Preserve this existing state." in repaired
-    assert "Do not replace the existing objective." not in repaired
-    assert "## User Todo / Owner Review Reading Queue" in repaired
-    assert "## Agent Todo" in repaired
-
-    second_result = bootstrap_project(
-        project=tmp_path,
-        registry_path=tmp_path / ".loopx/registry.json",
-        runtime_root=tmp_path / ".loopx-runtime",
-        goal_id="goal-terminal-test",
-        objective="Still do not replace the existing objective.",
-        domain="issue-fix",
-        role="primary",
-        parent_goal_id=None,
-        state_file=state_file,
-        goal_doc=None,
-        adapter_kind="issue_fix_workflow_v0",
-        adapter_status="connected",
-        next_probe=None,
-        spawn_allowed=False,
-        max_children=0,
-        allowed_domains=[],
-        write_scope=[],
-        force=False,
-        dry_run=False,
-        sync_global=False,
-    )
-
-    assert second_result["todo_source_migration"] is None
-    assert state_file.read_text(encoding="utf-8") == repaired
+    assert caught.value.code == "canonical_authority_required"
+    assert caught.value.payload["operation"] == "goal_create"
+    assert caught.value.payload["legacy_fallback_used"] is False
+    assert state_file.read_text(encoding="utf-8") == original
+    assert not registry_path.exists()
+    assert not runtime_root.exists()
 
 
 def test_agent_only_no_followup_closes_explicit_empty_user_source() -> None:

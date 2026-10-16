@@ -95,7 +95,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y zsh
 
       - name: Install smoke runtime dependencies
-        run: python -m pip install --disable-pip-version-check "jsonschema>=4.23,<5"
+        # Smokes use the declared test extra (including YAML workflow readers).
+        # Install this source for qualification outside the checkout as well.
+        run: python -m pip install --disable-pip-version-check --editable '.[test]'
 
       - name: Install locked TypeScript parser for semantic production checks
         run: npm ci --ignore-scripts

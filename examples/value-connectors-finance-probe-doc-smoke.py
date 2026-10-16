@@ -44,17 +44,30 @@ def main() -> int:
             "finance_market_snapshot",
         )
         assert completed.returncode == 0, completed.stderr
-        payload = json.loads(completed.stdout)
+        packet = json.loads(completed.stdout)
+        assert packet["ok"] is True, packet
         if command == "source-map":
-            migration = payload["source_profiles"][0]["migration"]
+            profiles = packet["source_profiles"]
         elif command == "install-check":
-            migration = payload["checks"][0]["migration"]
+            profiles = packet["checks"]
         else:
-            migration = payload
-        assert migration["status"] == "migrated_to_extension", payload
-        assert migration["replacement_extension_id"] == "loopx-finance-value-discovery", payload
-        assert migration["replacement_capability_id"] is None, payload
-        assert migration["truth_contract"]["legacy_connector_executes_finance"] is False, payload
+            profiles = None
+        if profiles is not None:
+            assert len(profiles) == 1, profiles
+            profile = profiles[0]
+            assert profile["connector_id"] == "finance_market_snapshot", profile
+            assert profile["status"] == "migrated_to_extension", profile
+            migration = profile["migration"]
+        else:
+            migration = packet
+        assert migration["schema_version"] == "value_connector_extension_migration_v0", migration
+        assert migration["status"] == "migrated_to_extension", migration
+        assert migration["replacement_extension_id"] == "loopx-finance-value-discovery", migration
+        assert migration["replacement_capability_id"] is None, migration
+        truth = migration["truth_contract"]
+        assert truth["legacy_connector_executes_finance"] is False, truth
+        assert truth["external_reads_performed"] is False, truth
+        assert truth["external_writes_performed"] is False, truth
 
     doc = " ".join(DOC.read_text(encoding="utf-8").lower().split())
     for marker in (

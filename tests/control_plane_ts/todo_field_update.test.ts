@@ -72,6 +72,11 @@ test("claim and removed-policy repair cannot evade the existing rules", () => {
     assert.throws(() => plan({claim_only: true}, todo), /repair it before claiming/);
     assert.throws(() => plan({continuation_policy: "independent_handoff", excluded_agents: []}, todo), /repair it explicitly/);
     assert.throws(() => plan({continuation_policy: "independent_handoff", excluded_agents: ["!!!"]}, todo), /repair it explicitly/);
+    for (const field of ["text", "note"]) {
+      assert.throws(() => plan({continuation_policy: "independent_handoff",
+        excluded_agents: ["agent-a"], [field]: "Bundled edit"}, todo),
+      /repair must be submitted without other Todo edits/);
+    }
     const repaired = plan({continuation_policy: "independent_handoff", excluded_agents: ["agent-a"]}, todo);
     assert.equal((repaired.metadata_updates as JsonObject).continuation_policy, "independent_handoff");
   }

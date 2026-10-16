@@ -4,6 +4,9 @@ import json
 from dataclasses import fields
 from pathlib import Path
 
+from loopx.control_plane.coordination.goal_storage_initialization import (
+    initialize_goal_storage_target,
+)
 from loopx.control_plane.todos.completion_policy import CompletionPolicy
 from loopx.control_plane.testing.canary_harness import (
     run_json_cli,
@@ -41,7 +44,27 @@ def test_completion_rejects_unknown_runtime_model_before_write(
         adapter_kind="harness_self_improvement",
         registered_agents=[AGENT_ID, "codex-main-control"],
         quota_allowed_slots=None,
+        extra_goal_fields={
+            "creation_operation_id": f"goal-create:{GOAL_ID}",
+            "coordination": {
+                "registered_agents": [AGENT_ID, "codex-main-control"],
+                "agent_model": "peer_v1",
+                "storage_target": {
+                    "schema_version": "loopx_new_goal_storage_target_v1",
+                    "provider": "file",
+                    "handoff_mode": "soft_claim",
+                },
+            },
+        },
     )
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    initialized = initialize_goal_storage_target(
+        runtime,
+        registry["goals"][0],
+        registry_path=registry_path,
+    )
+    assert initialized is not None
+    assert initialized["authority_initialized"] is True
     source = run_json_cli(
         "todo",
         "add",
@@ -55,7 +78,6 @@ def test_completion_rejects_unknown_runtime_model_before_write(
         AGENT_ID,
         registry_path=registry_path,
     )
-    registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["coordination"]["agent_model"] = "hierarchy_v2"
     registry_path.write_text(json.dumps(registry), encoding="utf-8")
     before = state_file.read_text(encoding="utf-8")

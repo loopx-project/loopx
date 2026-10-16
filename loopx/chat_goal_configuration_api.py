@@ -227,7 +227,7 @@ def _goal_capability_options(
         "coordination_runtime_shadow": {"enabled"},
         "lark_kanban_heartbeat_sync": {"enabled"},
         "periodic_report": {"enabled", "profile_preset", "route_ref", "timezone", "schedule"},
-        "reward_memory": {"config_path", "enabled_agents"},
+        "reward_memory": {"config_path", "enabled_agents", "agent_id", "enabled"},
     }
     if capability_id not in allowed:
         raise ValueError(f"Goal capability is read-only in Dashboard: {capability_id}")
@@ -270,9 +270,23 @@ def _goal_capability_options(
             or any(not isinstance(value, str) for value in enabled_agents)
         ):
             raise TypeError("reward_memory.enabled_agents must be a string list")
+        agent_id = config.get("agent_id")
+        if agent_id is not None and not isinstance(agent_id, str):
+            raise TypeError("reward_memory.agent_id must be a string")
+        agent_id = str(agent_id or "").strip() or None
+        enabled = config.get("enabled")
+        if "enabled" in config and not isinstance(enabled, bool):
+            raise TypeError("reward_memory.enabled must be boolean")
+        if agent_id and enabled is False:
+            if config_path or enabled_agents is not None:
+                raise ValueError("disabling one Agent accepts only agent_id and enabled=false")
+            return {"reward_memory_agent_id": agent_id, "clear_reward_memory_config": True}
+        if not agent_id and enabled is not None:
+            raise ValueError("reward_memory.enabled requires agent_id; use null to clear all bindings")
         return {
             "reward_memory_config": str(config_path or "").strip() or None,
             "reward_memory_agents": enabled_agents,
+            **({"reward_memory_agent_id": agent_id} if agent_id else {}),
         }
     if capability_id == "peer_task_coordination":
         return _peer_task_coordination_options(config)
@@ -411,6 +425,15 @@ class GoalConfigurationRequestMixin:
     def _goal_configuration_writer(self) -> GoalConfigurationWriter:
         return configure_goal_with_global_sync
 
+    @staticmethod
+    def _goal_configuration_readback_matches(
+        capability_id: str, actual: object, desired: object, applied: Mapping[str, Any]
+    ) -> bool:
+        if capability_id == "reward_memory" and isinstance(actual, Mapping) and isinstance(desired, Mapping):
+            from .capabilities.reward_memory.configuration import reward_memory_configuration_readback_matches
+            return reward_memory_configuration_readback_matches(actual, desired, applied)
+        return actual == desired
+
     def _goal_configuration_machine_namespaces(self) -> list[Mapping[str, Any]] | None:
         runtime_root = getattr(self.server, "runtime_root", None)
         if not isinstance(runtime_root, Path):
@@ -530,7 +553,9 @@ class GoalConfigurationRequestMixin:
             readback_configuration = _capability_entry(
                 readback_public, capability_id
             ).get("current")
-            readback_verified = readback_configuration == desired_configuration
+            readback_verified = self._goal_configuration_readback_matches(
+                capability_id, readback_configuration, desired_configuration, applied
+            )
         except Exception:  # noqa: BLE001 - retain the partial-write fact.
             readback_public = dict(desired_public)
             readback_configuration = None
@@ -582,14 +607,35 @@ class GoalConfigurationRequestMixin:
         applied: Mapping[str, Any],
         capability_id: str,
         desired_configuration: object,
+        desired_public: Mapping[str, Any],
         goal_id: str,
         plan: Mapping[str, Any],
     ) -> None:
-        readback_public = self._read_public_goal_configuration(goal_id)
-        readback_configuration = _capability_entry(readback_public, capability_id).get(
-            "current"
-        )
-        if readback_configuration != desired_configuration:
+        try:
+            readback_public = self._read_public_goal_configuration(goal_id)
+            readback_configuration = _capability_entry(readback_public, capability_id).get("current")
+            readback_verified = self._goal_configuration_readback_matches(
+                capability_id, readback_configuration, desired_configuration, applied
+            )
+        except Exception:
+            if capability_id != "reward_memory" or not applied.get("written"):
+                raise
+            self._send_partial_write_receipt(
+                applied={**applied, "error": "Memory configuration was written, but current readback is unavailable.",
+                    "recommended_action": "Reload the current Goal configuration before previewing another change."},
+                capability_id=capability_id, desired_configuration=desired_configuration,
+                desired_public=desired_public, goal_id=goal_id, plan=plan,
+            )
+            return
+        if not readback_verified:
+            if capability_id == "reward_memory" and applied.get("written"):
+                self._send_partial_write_receipt(
+                    applied={**applied, "error": "Configuration was written, but the memory binding readback did not verify.",
+                        "recommended_action": "Reload the current Goal configuration and inspect the binding before previewing another change."},
+                    capability_id=capability_id, desired_configuration=desired_configuration,
+                    desired_public=desired_public, goal_id=goal_id, plan=plan,
+                )
+                return
             raise RuntimeError("Goal configuration readback did not verify")
         self._send_json(
             {
@@ -666,6 +712,7 @@ class GoalConfigurationRequestMixin:
                 applied=applied,
                 capability_id=capability_id,
                 desired_configuration=desired_configuration,
+                desired_public=desired_public,
                 goal_id=goal_id,
                 plan=plan,
             )

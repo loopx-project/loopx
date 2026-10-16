@@ -182,3 +182,59 @@ def read_run_index(runtime_root: Path, goal_id: str) -> list[dict[str, Any]]:
         for line in index_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+
+
+def import_fixture_authority(registry_path: Path, goal_id: str, *, provider: str = "file") -> None:
+    """Import a disposable smoke's complete source through the real saved plan.
+
+    Fixture writers have finished before this call. Historical metadata stays
+    intact; normal writes afterwards use the selected canonical/soft-claim owner.
+    Existing unpromoted/refusal fixtures opt in explicitly, never by default.
+    """
+    from ...state_backup import build_state_backup_plan, execute_state_backup_plan
+
+    registry_path = registry_path.resolve()
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    goal = next(item for item in registry["goals"] if item["id"] == goal_id)
+    project = Path(goal["repo"]).resolve()
+    runtime = Path(registry["common_runtime_root"]).resolve()
+    # Bind the physical source consistently on hosts whose temp path is a link.
+    goal["repo"] = str(project)
+    state_file = Path(goal["state_file"]).expanduser()
+    if not state_file.is_absolute():
+        state_file = project / state_file
+    goal["state_file"] = str(state_file.resolve())
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    runtime.mkdir(parents=True, exist_ok=True)
+    backup = execute_state_backup_plan(build_state_backup_plan(
+        project=project, runtime_root=runtime,
+        output_dir=runtime.parent / "fixture-backups", backup_id=goal_id,
+        include_automations=False, include_skills=False,
+        include_registry_projects=False, registry_path=registry_path,
+    ))
+    assert backup["ok"], backup
+    prefix = ("coordination-shadow",)
+    identity = ("--goal-id", goal_id, "--operation-id", f"fixture-import:{goal_id}")
+    prepared = run_json_cli(
+        *prefix, "prepare-import", *identity,
+        "--backup-manifest", backup["manifest_path"],
+        "--provider", provider, "--target-handoff-mode", "soft_claim",
+        registry_path=registry_path, runtime_root=runtime,
+    )["cold_import"]
+    assert prepared["status"] == "prepared", prepared
+    # Read the saved carrier rather than manufacturing a digest/target.
+    plan = json.loads(Path(prepared["plan_path"]).read_text(encoding="utf-8"))
+    assert plan["plan_sha256"] == prepared["plan_sha256"], plan
+    applied = run_json_cli(
+        *prefix, "apply-import", *identity,
+        "--plan-sha256", prepared["plan_sha256"], "--writers-stopped", "--execute",
+        registry_path=registry_path, runtime_root=runtime,
+    )["cold_import"]
+    assert applied["status"] in {"applied", "recovered"}, applied
+    readback = run_json_cli(
+        "todo", "list", "--goal-id", goal_id,
+        registry_path=registry_path, runtime_root=runtime,
+    )["authority_read"]
+    assert readback["source_authority"] == f"{provider}_v0", readback
+    assert readback["decision_read_from_provider"] is True, readback
+    assert readback["legacy_fallback_used"] is False, readback

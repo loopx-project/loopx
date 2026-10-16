@@ -162,7 +162,8 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
             "agent_id": env["LOOPX_AGENT_ID"], "turn_instance_id": receipt["turn_id"],
         })
         from .checkpoint_continuation import restored_capture_gate
-        restore_gate = restored_capture_gate(env, intent.get("obligation_id"))
+        restore_gate = restored_capture_gate(env, intent.get("obligation_id"),
+            full_history=not request.get("native_session", False))
         receipt["checkpoint_restore"] = {k: v for k, v in restore_gate.items() if k != "instructions"}
         preloaded_body = restore_gate.get("instructions", "") + preloaded_body
         if not restore_gate["capture_allowed"]:
@@ -214,7 +215,8 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
                     "point_metadata": {**request["point_metadata"], "replan": intent,
                                        "capture_order": "before_model_replan_decision"}}
                 effective_request.pop("trigger")
-                capture_after_wake(env, prior, supplied_request=(effective_request, raw), pending_guard=guard_path)
+                capture_after_wake(env, prior, supplied_request=(effective_request, raw), pending_guard=guard_path,
+                                   restore_gate=restore_gate)
                 receipt["checkpoint"].update(prior["checkpoint"], phase="before_replan")
                 receipt["checkpoint"]["source_turn_id"] = prior["turn_id"]
     except Exception as error:
@@ -229,7 +231,8 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
 
 def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
                        supplied_request: tuple[dict[str, Any], bytes] | None = None,
-                       pending_guard: Path | None = None) -> None:
+                       pending_guard: Path | None = None,
+                       restore_gate: dict[str, Any] | None = None) -> None:
     request_path = env.get("LOOPX_CHECKPOINT_REQUEST")
     if not request_path:
         return  # Feature-off path performs no additional read or write.
@@ -258,7 +261,7 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
             request, raw = supplied_request
         if supplied_request is None:
             from .checkpoint_continuation import restored_capture_gate
-            restore_gate = restored_capture_gate(env)
+            restore_gate = restored_capture_gate(env, full_history=not request.get("native_session", False))
             if not restore_gate["capture_allowed"]:
                 receipt["checkpoint"]["reason"] = restore_gate["reason"]
                 return
@@ -329,14 +332,18 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
         with ExitStack() as readers:
             if request.get("native_session"):
                 from loopx.hosts.codex_checkpoint import native_checkpoint_reader, native_session_checkpoint
+                from .checkpoint_continuation import restored_capture_history
                 from .codex import Execution
                 from .sessions import BenchmarkSessionWake
 
                 session = receipt.get("session") or {}
                 components, source_wake = native_binding_participant(env, components, metadata)
+                native_options = restored_capture_history(env, restore_gate,
+                    session_id=session.get("session_id", ""))
                 reader = readers.enter_context(native_checkpoint_reader(env, timeout=max(.1, deadline - time.time())))
                 native = native_session_checkpoint(env, session.get("session_id", ""),
-                                                   timeout=max(.1, deadline - time.time()), transport=reader)
+                                                   timeout=max(.1, deadline - time.time()), transport=reader,
+                                                   **native_options)
                 # Native names identify provider files, not reserved artifact IDs.
                 # Allocate in the same namespace as caller and other participants;
                 # retain the provider observation unchanged for the stability reread.
@@ -357,8 +364,12 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
                 # in that gap must not be sealed under the earlier cursor. Re-read
                 # after the probe; capture's existing witness comparison then guards
                 # source writes during this recheck and through atomic publication.
+                if restored_capture_history(env, restore_gate,
+                        session_id=session.get("session_id", "")) != native_options:
+                    raise ValueError("restored capture source changed before sealing")
                 confirmed = native_session_checkpoint(env, session.get("session_id", ""),
-                                                      timeout=max(.1, deadline - time.time()), transport=reader)
+                                                      timeout=max(.1, deadline - time.time()), transport=reader,
+                                                      **native_options)
                 if confirmed != native:
                     raise ValueError("native checkpoint cursor or participant basis moved before sealing")
                 confirmed_wake = BenchmarkSessionWake(env, Execution(context="resume",

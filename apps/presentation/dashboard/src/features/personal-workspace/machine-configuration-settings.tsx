@@ -382,8 +382,8 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
             <section className="personal-capability-behavior-note">
               <ShieldCheck aria-hidden size={18} />
               <div><strong>{locale === "zh-CN" ? "仅影响此后创建的 Goal" : "Future Goals only"}</strong><p>{locale === "zh-CN"
-                ? "启用 canonical 创建后，新 Goal 直接建立权威存储，并采用所选执行策略；失败时须重试原创建操作。关闭时仅固定晋升后的目标存储。已有 Goal 的升级仍需备份、停止写入和结算租约；这里不授予工具权限。"
-                : "With canonical creation enabled, new Goals establish authority with the selected execution policy; retry the original operation after failure. Disabled only freezes the post-promotion target. Existing Goals still require backup, stopped writers and settled leases for upgrade; this setting grants no tool permissions."}</p></div>
+                ? "2.0 新建 Goal 必须启用 canonical 创建，并采用所选执行策略。旧的关闭设置不会自动改变；启用后再重试创建。已有 Goal 需备份、停止写入并导入；这里不迁移已有数据，也不授予工具权限。"
+                : "2.0 requires canonical creation with the selected execution policy. An older disabled setting is not changed automatically; enable it before retrying creation. Back up, stop writers and import existing Goals separately. This setting neither migrates existing data nor grants tool permissions."}</p></div>
             </section>
           ) : null}
 

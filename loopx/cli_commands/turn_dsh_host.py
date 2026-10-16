@@ -95,6 +95,9 @@ def build_dsh_operation_host_runner(
         "source_route": args.codex_operation_source_route_json,
         "confirmed_operation_id": args.codex_confirmed_operation_id,
         "goal_admission": goal_admission, "env": credential,
+        "operation_request_file": (Path(args.operation_request_file)
+            if getattr(args, "operation_request_file", None) else None),
+        "operation_request_sha256": getattr(args, "operation_request_sha256", None),
     }
 
     def run(request: Mapping[str, Any]) -> dict[str, Any]:

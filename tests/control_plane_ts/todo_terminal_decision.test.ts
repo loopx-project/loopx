@@ -17,7 +17,7 @@ function request(overrides: Record<string, unknown> = {}) {
   return {
     schema_version: COORDINATION_TODO_TERMINAL_DECISION_REQUEST_SCHEMA,
     command: "complete",
-    handoff_mode: "legacy",
+    handoff_mode: "soft_claim",
     registered_agents: ["agent-a", "agent-b"],
     lifecycle_grants: [],
     todo: {
@@ -104,10 +104,10 @@ test("explicit missing Todo is a typed refusal; missing or malformed wire fields
   }
 });
 
-test("snapshot admission preserves inactive holders and claim-neutral mutation effects", () => {
+test("current-policy admission preserves inactive holders and claim-neutral mutation effects", () => {
   const holder = {present: true, active: true, status: "active", owner: "agent-a",
     idempotency_key: "holder", version: 3, lease_epoch: 1, write_scopes: []};
-  for (const mode of ["legacy", "soft_claim", "hard_lease"]) {
+  for (const mode of ["soft_claim", "hard_lease"]) {
     for (const lease of [null, holder, {...holder, active: false, status: "expired"},
       {...holder, active: false, status: "released"}]) {
       const result = evaluateCoordinationTodoMutationDecision(mutation({handoff_mode: mode, lease}));
@@ -151,9 +151,9 @@ test("bound User action closure is administrative, not a fabricated execution le
     lease: {...lease, active: false, status: "expired"}}).next_lease?.status, "released");
 });
 
-test("update admission shares actor rules without inventing terminal effects", () => {
+test("current-policy update admission shares actor rules without inventing terminal effects", () => {
   const base = mutation({ todo: { ...request().todo as object, claimed_by: null } });
-  for (const mode of ["legacy", "soft_claim", "hard_lease"]) {
+  for (const mode of ["soft_claim", "hard_lease"]) {
     const edited = evaluateCoordinationTodoMutationDecision({ ...base, handoff_mode: mode });
     assert.equal(edited.outcome, "apply");
     assert.equal(edited.next_todo_status, "open");
@@ -439,4 +439,42 @@ test("hard-lease divergence and terminal replay fail closed in the established o
   assert.equal(replayed.outcome, "no_change");
   assert.equal(replayed.code, "terminal_replay");
   assert.equal(replayed.idempotent, true);
+});
+test("unneeded malformed delegation cannot block ordinary actor authority", () => {
+  for (const evaluate of [evaluateCoordinationTodoTerminalDecision, evaluateCoordinationTodoMutationDecision]) {
+    const build = evaluate === evaluateCoordinationTodoTerminalDecision ? request : mutation;
+    const invalid = [{agent_id: "agent-b", actions: [], requires_reason: true}];
+    const own = build({handoff_mode: "soft_claim", lifecycle_grants: invalid});
+    assert.equal(evaluate(own).outcome, "apply");
+    assert.equal(evaluate({...own, actor_agent_id: "unknown"}).code, "actor_not_registered");
+    assert.equal(evaluate({...own, todo: {...own.todo, excluded_agents: ["agent-a"]}}).code, "actor_excluded");
+    // This caller really needs delegation: malformed authority must fail closed.
+    assert.throws(() => evaluate({...own, actor_agent_id: "agent-b"}), /supported actions/);
+    const granted = {...own, actor_agent_id: "agent-b", authority_reason: "reviewed worker result",
+      lifecycle_grants: [{agent_id: "agent-b", actions: [own.authority_action]}]};
+    assert.equal(evaluate(granted).authority_mode, "delegated_orchestration_override");
+    assert.equal(evaluate({...granted, authority_reason: null}).code, "delegation_reason_required");
+    assert.throws(() => evaluate({...granted, lifecycle_grants: [
+      {agent_id: "agent-b", actions: [own.authority_action], requires_reason: null},
+    ]}), /requires_reason/);
+  }
+});
+
+test("retired legacy policy cannot authorize fresh lifecycle or execution proof", () => {
+  const lease = {present: true, active: true, status: "active", owner: "agent-a",
+    idempotency_key: "retained", version: 3, lease_epoch: 1, write_scopes: []};
+  for (const proof of [null, lease]) {
+    for (const command of ["claim", "update", "complete", "supersede"]) {
+      const terminal = command === "complete" || command === "supersede";
+      const build = terminal ? request : mutation;
+      const evaluate = terminal ? evaluateCoordinationTodoTerminalDecision : evaluateCoordinationTodoMutationDecision;
+      const result = evaluate(build({command, authority_action: command, handoff_mode: "legacy",
+        lease: proof, lease_idempotency_key: proof === null ? null : "retained",
+        lease_expected_version: proof === null ? null : 3}));
+      assert.equal(result.outcome, "rejected");
+      assert.equal(result.code, "handoff_mode_retired");
+      assert.equal(result.next_lease, null);
+      assert.equal(result.next_todo_status, null);
+    }
+  }
 });

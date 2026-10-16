@@ -15,6 +15,9 @@ from loopx.capabilities.manager_context import deliver, pending
 from loopx.control_plane.collaboration.peers import returns
 from loopx.capabilities.manager_context.roundtrip import drain
 from loopx.chat_store import ChatSessionStore
+from loopx.control_plane.coordination.goal_storage_initialization import (
+    initialize_goal_storage_target,
+)
 
 HERE = Path(__file__).resolve().parent
 GOAL = "allocation-demo"
@@ -173,6 +176,7 @@ def prepare(root):
         "goals": [
             {
                 "id": GOAL,
+                "creation_operation_id": f"goal-create:{GOAL}",
                 "domain": "synthetic-allocation",
                 "status": "active",
                 "repo": str(project),
@@ -183,11 +187,27 @@ def prepare(root):
                     "agent_model": "peer_v1",
                     "registered_agents": list(ACTORS),
                     "write_scope": ["**"],
+                    "storage_target": {
+                        "schema_version": "loopx_new_goal_storage_target_v1",
+                        "provider": "file",
+                        "handoff_mode": "soft_claim",
+                    },
                 },
             }
         ],
     }
-    write(root / "registry.json", registry)
+    registry_path = root / "registry.json"
+    write(registry_path, registry)
+    initialized = initialize_goal_storage_target(
+        root / "runtime",
+        registry["goals"][0],
+        registry_path=registry_path,
+    )
+    if not isinstance(initialized, dict) or (
+        initialized.get("authority_initialized") is not True
+        or initialized.get("legacy_fallback_used") is not False
+    ):
+        raise RuntimeError("demo canonical authority initialization failed")
     for actor in ACTORS:
         workspace = worker(root, actor)
         workspace.parent.mkdir(exist_ok=True)

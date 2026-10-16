@@ -3,10 +3,36 @@ from pathlib import Path
 
 import pytest
 
+from loopx.control_plane.coordination.authority_source_capture import (
+    build_runtime_shadow_source_snapshot,
+    todo_partition_projector,
+)
 from loopx.control_plane.testing.canary_harness import write_fixture_registry, run_json_cli_result
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos, parse_todo_source
 from loopx.control_plane.todos.goal_todo_projection import todo_summaries_from_fields
 from loopx.control_plane.todos.todo_summary import compact_evaluated_todo_group
+from loopx.history import load_registry
+from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
+
+
+def _initialize_source_authority(
+    *,
+    state: Path,
+    runtime: Path,
+    registry: Path,
+) -> dict:
+    goal = next(goal for goal in load_registry(registry)["goals"] if goal["id"] == "goal-a")
+    projection, _ = build_runtime_shadow_source_snapshot(
+        goal=goal,
+        runtime_root=runtime,
+        state_path=state,
+        registry_path=registry,
+    )
+    assert todo_partition_projector(goal, state_path=state)(
+        state.read_text(encoding="utf-8")
+    )["todos"] == projection["todos"]
+    initialize_canonical_authority(runtime, "goal-a", projection, state_path=state)
+    return projection
 
 
 @pytest.mark.parametrize("history_count", [0, 4096])
@@ -23,6 +49,7 @@ def test_public_list_preserves_completed_dependency_after_archive(tmp_path: Path
     write_fixture_registry(project=tmp_path, runtime_root=runtime, registry_path=registry, goal_id="goal-a",
         domain="long-history", adapter_kind="generic_project_goal_v0", state_file=str(state),
         registered_agents=["agent-a"], quota_allowed_slots=None)
+    _initialize_source_authority(state=state, runtime=runtime, registry=registry)
     code, archived = run_json_cli_result("todo", "archive-completed", "--goal-id", "goal-a",
         "--role", "agent", "--max-active-done", "0", "--execute", registry_path=registry, runtime_root=runtime)
     assert code == 0, archived
@@ -57,10 +84,6 @@ def test_display_cannot_bypass_full_source_resume_evaluation(condition: dict | N
 
 
 def test_capture_preserves_archived_dependency_for_real_canonical_cli_read(tmp_path: Path) -> None:
-    from loopx.history import load_registry
-    from loopx.control_plane.coordination.runtime_shadow import build_runtime_shadow_source_snapshot
-    from loopx.control_plane.coordination.local_authority_shadow_adapter import todo_partition_projector
-    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
     state, runtime, registry = tmp_path / "STATE.md", tmp_path / "runtime", tmp_path / "registry.json"
     state.write_text("# Goal\n\n## Agent Todo\n\n- [ ] Waiting work\n"
         "  <!-- loopx:todo todo_id=todo_waiting status=open task_class=advancement_task resume_when=todo_done:todo_history -->\n\n"
@@ -70,17 +93,16 @@ def test_capture_preserves_archived_dependency_for_real_canonical_cli_read(tmp_p
         domain="long-history", adapter_kind="generic_project_goal_v0", state_file=str(state),
         registered_agents=["agent-a"], quota_allowed_slots=None)
     original = state.read_bytes()
-    goal = next(goal for goal in load_registry(registry)["goals"] if goal["id"] == "goal-a")
-    projection, _ = build_runtime_shadow_source_snapshot(goal=goal, runtime_root=runtime,
-        state_path=state, registry_path=registry)
-    writer_projection = todo_partition_projector(goal, state_path=state)(state.read_text())
-    assert writer_projection["todos"] == projection["todos"]
+    projection = _initialize_source_authority(
+        state=state,
+        runtime=runtime,
+        registry=registry,
+    )
     assert state.read_bytes() == original
     records = {item["todo_id"]: item for item in projection["todos"]}
     assert records["todo_history"]["archive_state"] == "archive"
     assert records["todo_history"]["status"] == "done"
     assert records["todo_history"]["role"] == "agent"
-    initialize_canonical_authority(runtime, "goal-a", projection, state_path=state)
     state.unlink()
     code, result = run_json_cli_result("todo", "list", "--goal-id", "goal-a", "--role", "agent",
         "--todo-id", "todo_waiting", registry_path=registry, runtime_root=runtime)

@@ -240,8 +240,12 @@ def test_same_asset_name_different_bytes_cannot_overwrite_current(source, tmp_pa
 
 
 @pytest.mark.parametrize("checksum_valid", [True, False])
+@pytest.mark.parametrize(
+    ("target", "predecessor"),
+    [("v1.1.0", "v1.0.5"), ("v2.0.0a1", "v1.2.0")],
+)
 def test_release_predecessor_is_stable_older_and_checksum_verified(
-    tmp_path, monkeypatch, checksum_valid
+    tmp_path, monkeypatch, checksum_valid, target, predecessor
 ):
     def release(tag, *, draft=False, prerelease=False):
         return {
@@ -257,6 +261,7 @@ def test_release_predecessor_is_stable_older_and_checksum_verified(
             release("v1.0.5"),
             release("v1.1.0"),
             release("v1.2.0"),
+            release("v2.0.0"),
             release("v1.0.9", draft=True),
             release("v1.0.8", prerelease=True),
             release("desktop-main-123"),
@@ -290,13 +295,65 @@ def test_release_predecessor_is_stable_older_and_checksum_verified(
         ),
     )
     if checksum_valid:
-        builder.release_build("v1.1.0", "fixture/repository")
+        builder.release_build(target, "fixture/repository")
         assert builds == ["old code"]
     else:
         with pytest.raises(RuntimeError, match="checksum mismatch"):
-            builder.release_build("v1.1.0", "fixture/repository")
+            builder.release_build(target, "fixture/repository")
         assert builds == []
-    assert downloads == ["v1.0.5"]
+    assert downloads == [predecessor]
+
+
+def test_release_predecessor_supports_prerelease_target(monkeypatch):
+    releases = [[
+        {
+            "tag_name": "v1.4.0",
+            "draft": False,
+            "prerelease": False,
+            "assets": [{"name": "loopx-1.4.0-py3-none-any.whl"}],
+        },
+        {
+            "tag_name": "v2.0.0",
+            "draft": False,
+            "prerelease": False,
+            "assets": [{"name": "loopx-2.0.0-py3-none-any.whl"}],
+        },
+    ]]
+    monkeypatch.setattr(
+        builder.subprocess,
+        "check_output",
+        lambda *args, **kwargs: json.dumps(releases),
+    )
+    downloads = []
+
+    def download(command, **kwargs):
+        downloads.append(command[3])
+        directory = Path(command[command.index("--dir") + 1])
+        wheel = directory / "loopx-1.4.0-py3-none-any.whl"
+        with zipfile.ZipFile(wheel, "w") as archive:
+            archive.writestr(
+                "loopx/web/chat/index.html",
+                '<script src="/chat/assets/old.js"></script>',
+            )
+            archive.writestr("loopx/web/chat/assets/old.js", "old code")
+        (directory / "SHA256SUMS").write_text(
+            f"{builder.contract.digest(wheel)}  {wheel.name}\n"
+        )
+
+    monkeypatch.setattr(builder.subprocess, "run", download)
+    builds = []
+    monkeypatch.setattr(
+        builder,
+        "build",
+        lambda previous, **kwargs: builds.append(
+            (previous / "assets/old.js").read_text()
+        ),
+    )
+
+    builder.release_build("v2.0.0a1", "fixture/repository")
+
+    assert downloads == ["v1.4.0"]
+    assert builds == ["old code"]
 
 
 def test_windows_drive_paths_are_not_portable_bundle_names():

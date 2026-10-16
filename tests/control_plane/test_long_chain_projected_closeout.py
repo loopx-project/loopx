@@ -12,7 +12,7 @@ import pytest
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, SELECTED_REPLAN_TODO_ID, TURN_ID,
     _bind_selected_replan_guard, _configure_selected_todo_replan_fixture,
-    _projected_cli_args,
+    _initialize_fixture_authority, _projected_cli_args,
     _run_cli, _spend_run_count, _write_fixture,
 )
 
@@ -118,6 +118,7 @@ def test_projected_vision_replan_settles_without_a_meta_successor(
         f"todo_id={last_id} status=open task_class=advancement_task action_kind=validate",
     )
     state.write_text(source)
+    _initialize_fixture_authority(project, runtime)
 
     def call(*args):
         rc, result = _run_cli(registry, runtime, *args, cwd=project)

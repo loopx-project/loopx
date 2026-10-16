@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Canary the runtime handoff read path across status, quota, and review-packet."""
+"""Keep handoff history intact across fresh and rebuilt current-state routing."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def run_cli(
     return json.loads(result.stdout)
 
 
-def write_fixture(root: Path) -> tuple[Path, Path, Path]:
+def write_fixture(root: Path, *, stale_run: bool) -> tuple[Path, Path, Path]:
     project = root / "project"
     runtime_root = root / "runtime"
     state_file = f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
@@ -59,10 +59,15 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
     run_index = runtime_root / "goals" / GOAL_ID / "runs" / "index.jsonl"
 
     state_path.parent.mkdir(parents=True)
+    # Both timestamps use the run's timezone: the original fixture accidentally
+    # made its supposedly fresh run older than the state by four hours.
+    state_updated_at = (
+        "2026-07-05T05:00:00+08:00" if stale_run else "2026-07-05T00:00:00+08:00"
+    )
     state_path.write_text(
         "---\n"
         "status: active\n"
-        "updated_at: 2026-07-05T00:00:00+00:00\n"
+        f"updated_at: {state_updated_at}\n"
         "---\n\n"
         "# Runtime Handoff Status Read Path Fixture\n\n"
         "## Next Action\n\n"
@@ -193,6 +198,7 @@ def assert_status_read_path(
     project: Path,
     runtime_root: Path,
     registry_path: Path,
+    stale_run: bool,
 ) -> None:
     payload = run_cli(
         "status",
@@ -206,11 +212,17 @@ def assert_status_read_path(
         runtime_root=runtime_root,
     )
     item = status_item(payload)
-    assert item["status"] == "active_state_agent_todo", item
-    assert item["source"] == "active_state", item
+    if stale_run:
+        # A current Todo read replaces stale progress routing, never its history.
+        assert item["source"] == "active_state", item
+        assert item["status"] == "active_state_agent_todo", item
+        assert item["recommended_action"] == f"[P1] {TODO_TITLE}", item
+    else:
+        assert item["source"] == "latest_run", item
+        assert item["status"] == POST_HANDOFF_CLASSIFICATION, item
+        assert item["recommended_action"] == POST_HANDOFF_ACTION, item
     assert item.get("stale_latest_run_warning") is None, item
     assert item["waiting_on"] == "codex", item
-    assert item["recommended_action"] == f"[P1] {TODO_TITLE}", item
     assert item["project_asset"]["active_state_next_action"] == GOAL_NEXT_ACTION, item
     assert item["project_asset"]["latest_validation"]["classification"] == POST_HANDOFF_CLASSIFICATION, item
     assert item["project_asset"]["latest_validation"]["summary"] == POST_HANDOFF_ACTION, item
@@ -289,21 +301,27 @@ def assert_review_packet_handoff(
 
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="loopx-runtime-handoff-status-read-") as tmp:
-        project, runtime_root, registry_path = write_fixture(Path(tmp))
-        assert_status_read_path(
-            project=project,
-            runtime_root=runtime_root,
-            registry_path=registry_path,
-        )
-        assert_quota_read_path(
-            runtime_root=runtime_root,
-            registry_path=registry_path,
-        )
-        assert_review_packet_handoff(
-            project=project,
-            runtime_root=runtime_root,
-            registry_path=registry_path,
-        )
+        for stale_run in (False, True):
+            root = Path(tmp) / ("stale" if stale_run else "fresh")
+            project, runtime_root, registry_path = write_fixture(root, stale_run=stale_run)
+            files = [path for path in root.rglob("*") if path.is_file()]
+            before = {path: path.read_bytes() for path in files}
+            assert_status_read_path(
+                project=project,
+                runtime_root=runtime_root,
+                registry_path=registry_path,
+                stale_run=stale_run,
+            )
+            assert_quota_read_path(
+                runtime_root=runtime_root,
+                registry_path=registry_path,
+            )
+            assert_review_packet_handoff(
+                project=project,
+                runtime_root=runtime_root,
+                registry_path=registry_path,
+            )
+            assert {path: path.read_bytes() for path in files} == before
     print("runtime-handoff-status-read-path-smoke ok")
     return 0
 

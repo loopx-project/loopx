@@ -21,6 +21,9 @@ from pathlib import Path
 import pytest
 
 from loopx import slash_command_install
+from loopx.control_plane.coordination.goal_storage_initialization import (
+    initialize_goal_storage_target,
+)
 from loopx.goal_mode_mcp import GoalModeMCPControlPlane
 from loopx.kiro_cli_goal_mode import (
     KIRO_CLI_MCP_CONFIG_SUBPATH,
@@ -62,6 +65,7 @@ def _write_project(
                 "goals": [
                     {
                         "id": GOAL_ID,
+                        "creation_operation_id": f"goal-create:{GOAL_ID}",
                         "domain": "harness_self_improvement",
                         "status": "active",
                         "repo": str(project),
@@ -80,6 +84,11 @@ def _write_project(
                             # A different agent first: resolution must never
                             # fall back to registry order.
                             "registered_agents": [OTHER_AGENT_ID, AGENT_ID],
+                            "storage_target": {
+                                "schema_version": "loopx_new_goal_storage_target_v1",
+                                "provider": "file",
+                                "handoff_mode": "soft_claim",
+                            },
                             "thread_agent_bindings": (
                                 bindings
                                 if bindings is not None
@@ -98,6 +107,14 @@ def _write_project(
         ),
         encoding="utf-8",
     )
+    goal = json.loads(registry.read_text(encoding="utf-8"))["goals"][0]
+    initialized = initialize_goal_storage_target(
+        tmp_path / "runtime",
+        goal,
+        registry_path=registry,
+    )
+    assert initialized["authority_initialized"] is True
+    assert initialized["legacy_fallback_used"] is False
     return project, registry, state_file
 
 

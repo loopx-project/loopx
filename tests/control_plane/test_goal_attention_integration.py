@@ -66,18 +66,22 @@ def test_status_automatically_rebuilds_stale_run_routing(tmp_path, monkeypatch, 
         registry, runtime, state = promoted_create_fixture(tmp_path, provider=provider)
     else:
         registry, runtime, state = tmp_path / "registry.json", tmp_path / "runtime", tmp_path / "state.md"
-        state.write_text("# Goal\n\n## Agent Todo\n", encoding="utf-8")
+        # Historical Markdown remains readable, but no longer accepts fresh writes.
+        state.write_text("# Goal\n\n## Agent Todo\n\n"
+            "- [ ] Verify the current deliverable\n"
+            "  <!-- loopx:todo todo_id=historical-work status=open -->\n", encoding="utf-8")
         registry.write_text(json.dumps({"schema_version": 1, "common_runtime_root": str(runtime),
             "goals": [{"id": "goal-a", "repo": str(tmp_path), "state_file": str(state),
                 "coordination": {"registered_agents": ["agent-a"]}}]}), encoding="utf-8")
     config = json.loads(registry.read_text(encoding="utf-8"))
     config["goals"][0]["adapter"] = {"kind": "read_only_project_map_v0", "status": "connected-read-only"}
     registry.write_text(json.dumps(config), encoding="utf-8")
-    result = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json",
-        "--registry", str(registry), "todo", "add", "--goal-id", "goal-a", "--role", "agent",
-        "--text", "Verify the current deliverable", *(["--operation-id", "current-work"] if provider else [])],
-        capture_output=True, text=True, timeout=45)
-    assert result.returncode == 0, result.stdout + result.stderr
+    if provider:
+        result = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json",
+            "--registry", str(registry), "todo", "add", "--goal-id", "goal-a", "--role", "agent",
+            "--text", "Verify the current deliverable", "--operation-id", "current-work"],
+            capture_output=True, text=True, timeout=45)
+        assert result.returncode == 0, result.stdout + result.stderr
     state.write_text("---\nstatus: active\nupdated_at: 2026-10-15T09:00:00Z\n---\n\n"
         + state.read_text(encoding="utf-8"), encoding="utf-8")
     runs = runtime / "goals/goal-a/runs"
@@ -104,7 +108,10 @@ def test_status_automatically_rebuilds_stale_run_routing(tmp_path, monkeypatch, 
         else:
             assert item["source"] == "active_state"
             assert item["status"] == "active_state_agent_todo"
-            assert item["recommended_action"] == "[P1] Verify the current deliverable"
+            # Only the provider arm creates fresh work. Reading the historical
+            # unranked source must not apply a fresh-creation default.
+            expected = "[P1] Verify the current deliverable" if provider else "Verify the current deliverable"
+            assert item["recommended_action"] == expected
             assert item.get("stale_latest_run_warning") is None
         historical = status["run_history"]["goals"][0]["latest_status_run"]
         assert historical["generated_at"] == record["generated_at"]

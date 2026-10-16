@@ -24,7 +24,8 @@ def _adapter(controller: Any, session: dict[str, Any]) -> Any:
     return adapter
 
 
-def completed_background_turns(controller: Any, session_id: str) -> list[str]:
+def completed_turn_ids(controller: Any, session_id: str) -> list[str]:
+    """Canonical candidates only: never start/resume a native transport here."""
     with controller._session_adapter_lock(session_id):
         session = controller.store.load_session(session_id)
         if (not session or session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED
@@ -38,6 +39,21 @@ def completed_background_turns(controller: Any, session_id: str) -> list[str]:
             turn = controller.store.load_turn(session_id, turn_id)
             if turn and turn.get("status") in TERMINAL_TURN_STATES and turn.get("upstream_turn_id"):
                 identities[turn_id] = turn["upstream_turn_id"]
+        return list(identities)
+
+
+def completed_background_turns(controller: Any, session_id: str, turn_ids: list[str]) -> list[str]:
+    """Narrow an already frozen canonical set; later Turns are never eligible."""
+    with controller._session_adapter_lock(session_id):
+        session = controller.store.load_session(session_id)
+        if not session:
+            raise ValueError("the original background command Session is unavailable")
+        identities = {}
+        for turn_id in turn_ids:
+            turn = controller.store.load_turn(session_id, turn_id)
+            if not turn or turn.get("status") not in TERMINAL_TURN_STATES or not turn.get("upstream_turn_id"):
+                raise ValueError("the original completed command Turn is unavailable")
+            identities[turn_id] = turn["upstream_turn_id"]
         if not identities:
             return []
         adapter = _adapter(controller, session)

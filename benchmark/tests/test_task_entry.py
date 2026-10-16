@@ -41,17 +41,31 @@ def test_task_entry_defaults_to_planning_only_for_loopx_modes(mode):
 
 @pytest.fixture
 def planning_env(tmp_path):
+    from loopx.control_plane.coordination.runtime_shadow import (
+        build_todo_runtime_shadow_projection,
+    )
+    from tests.control_plane.canonical_authority_fixture import (
+        initialize_canonical_authority,
+    )
+
     project = tmp_path / "project"
     project.mkdir()
     task = tmp_path / "task.md"
     task.write_text("Repair the failure and preserve a regression test.\n")
     state = tmp_path / "state.md"
-    state.write_text("# Active Goal State\n\n## Agent Todos\n\n## User Todos\n")
+    state.write_text(
+        "# Active Goal State\n\n"
+        "## User Todo / Owner Review Reading Queue\n\n"
+        "## Agent Todo\n\n"
+        "## Completed Work Archive\n"
+    )
+    runtime = tmp_path / "runtime"
     registry = tmp_path / "registry.json"
     registry.write_text(
         json.dumps(
             {
                 "schema_version": "0.1",
+                "common_runtime_root": str(runtime),
                 "goals": [
                     {
                         "id": "planning-goal",
@@ -63,6 +77,15 @@ def planning_env(tmp_path):
                 ],
             }
         )
+    )
+    initialize_canonical_authority(
+        runtime,
+        "planning-goal",
+        build_todo_runtime_shadow_projection(
+            goal_id="planning-goal", todos=[], handoff_mode="soft_claim"
+        ),
+        state_path=state,
+        provider="file",
     )
     cli = tmp_path / "loopx"
     cli.write_text(
@@ -104,7 +127,7 @@ pathlib.Path(os.environ["CODEX_HOME"], "seen-argv.json").write_text(json.dumps(s
         "LOOPX_GOAL_ID": "planning-goal",
         "LOOPX_AGENT_ID": "planner",
         "LOOPX_REGISTRY": str(registry),
-        "LOOPX_RUNTIME_ROOT": str(tmp_path / "runtime"),
+        "LOOPX_RUNTIME_ROOT": str(runtime),
         "LOOPX_CLI": str(cli),
         "CODEX_BIN": str(binary),
         "LOOPX_PROJECT": str(project),

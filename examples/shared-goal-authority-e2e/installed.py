@@ -23,9 +23,9 @@ from typing import Any
 
 GOAL = "installed-authority-e2e"
 REQUIRED_STAGES = {
-    "installed_python_ts_json_resources", "real_baseline_bootstrap",
-    "three_mutations_one_receipt_each", "default_qualification_and_exact_candidate_read",
-    "rollback_inactive_write_new_lineage", "installed_fallback_dispatch",
+    "installed_python_ts_json_resources", "canonical_file_creation_and_binding",
+    "direct_canonical_mutations_and_replay", "independent_provider_history_and_receipts",
+    "legacy_shadow_bootstrap_rejected", "installed_fallback_dispatch",
 }
 
 
@@ -60,38 +60,52 @@ class InstalledQualification:
             "removed_environment_keys": sorted(removed), "node": str(self.node),
             "checkout_added_to_import_path": False}
 
-    def process(self, stage: str, argv: list[str], *, timeout: int = 60, parse_json: bool = True) -> Any:
+    def process(self, stage: str, argv: list[str], *, timeout: int = 60,
+                parse_json: bool = True, succeeds: bool = True) -> Any:
         started = time.monotonic()
         result = subprocess.run(argv, cwd=self.cwd, env=self.environment,
             text=True, capture_output=True, timeout=timeout, check=False)
         self.report["processes"].append({"stage": stage, "argv": argv, "returncode": result.returncode,
             "elapsed_seconds": round(time.monotonic() - started, 3),
             "stdout": result.stdout, "stderr": result.stderr})
-        require(result.returncode == 0, f"{stage} exited {result.returncode}: {result.stdout}\n{result.stderr}")
+        require((result.returncode == 0) is succeeds,
+            f"{stage} exited {result.returncode}: {result.stdout}\n{result.stderr}")
         return json.loads(result.stdout) if parse_json else result.stdout
 
     def checked(self, stage: str, **evidence: Any) -> None:
         self.report["checks"].append({"stage": stage, "status": "passed", **evidence})
 
-    def cli(self, stage: str, *args: str) -> dict[str, Any]:
+    def cli(self, stage: str, *args: str, succeeds: bool = True) -> dict[str, Any]:
         result = self.process(stage, [str(self.console), "--registry", str(self.registry),
-            "--runtime-root", str(self.runtime), "--format", "json", *args])
-        require(isinstance(result, dict) and result.get("ok") is True, f"{stage} did not return ok: {result}")
+            "--runtime-root", str(self.runtime), "--format", "json", *args],
+            succeeds=succeeds)
+        require(isinstance(result, dict) and (result.get("ok") is True) is succeeds,
+            f"{stage} returned an unexpected result: {result}")
         return result
 
-    def sdk_add(self, stage: str, text: str) -> dict[str, Any]:
+    def canonical_result(self, stage: str, value: dict[str, Any]) -> dict[str, Any]:
+        require(value.get("source_authority") == "file_v0", f"{stage} used another authority: {value}")
+        require(value.get("decision_read_from_provider") is True, f"{stage} did not read the provider")
+        require(value.get("legacy_fallback_used") is False, f"{stage} used a legacy fallback")
+        require("coordination_runtime_shadow" not in value, f"{stage} emitted retired shadow capture")
+        return value
+
+    def sdk_add(self, stage: str, text: str, operation_id: str,
+                *, added: bool) -> dict[str, Any]:
         code = """
 import json, sys
 from pathlib import Path
 from loopx.todos import add_goal_todo
 value = add_goal_todo(registry_path=Path(sys.argv[1]), runtime_root_arg=sys.argv[2],
-    goal_id=sys.argv[3], role='agent', text=sys.argv[4], task_class='advancement_task', action_kind='analyze')
+    goal_id=sys.argv[3], role='agent', text=sys.argv[4], task_class='advancement_task',
+    action_kind='analyze', operation_id=sys.argv[5])
 print(json.dumps(value))
 """
         value = self.process(stage, [str(self.python), "-I", "-c", code,
-            str(self.registry), str(self.runtime), GOAL, text])
-        require(value.get("ok") is True and value.get("added") is True, f"{stage} did not add one Todo")
-        return value
+            str(self.registry), str(self.runtime), GOAL, text, operation_id])
+        require(value.get("ok") is True and value.get("added") is added,
+            f"{stage} returned an unexpected add result: {value}")
+        return self.canonical_result(stage, value)
 
     def read_store(self, stage: str, package: Path) -> dict[str, Any]:
         module = package / "control_plane/coordination/file_authority_store.ts"
@@ -100,7 +114,7 @@ import {pathToFileURL} from 'node:url';
 import {join} from 'node:path';
 const [modulePath, root, goal] = process.argv.slice(1);
 const {FileAuthorityStore} = await import(pathToFileURL(modulePath).href);
-const store = new FileAuthorityStore(join(root, 'authority-shadow', 'file-v0'), goal, {existingOnly: true});
+const store = new FileAuthorityStore(join(root, 'authority', 'file-v0'), goal, {existingOnly: true});
 const head = await store.loadAuthority();
 const history = await store.scanCommitted(null, 100);
 console.log(JSON.stringify({module_path: modulePath, head, history}));
@@ -158,90 +172,117 @@ print(json.dumps(effect_runtime_result('goal.fallback_disposition.project', {
         require(fallback.get("kind") == "resolved", "empty fallback declarations must resolve")
         self.checked("installed_fallback_dispatch")
 
-        # This lifecycle qualifies pre-promotion capture. Explicitly retain the
-        # supported File target-only source instead of inheriting new-Goal
-        # canonical SQLite creation, which correctly fences legacy capture.
-        source_storage = {"schema_version": "loopx_goal_storage_defaults_v1",
-            "new_goal_provider": "file", "canonical_creation": False,
-            "new_goal_handoff_mode": "hard_lease"}
-        source_storage_path = self.cwd / "shadow-source-storage.json"
-        source_storage_path.write_text(json.dumps(source_storage), encoding="utf-8")
-        preview = self.cli("console_source_storage_preview", "machine-config", "preview",
-            "--namespace", "goal_storage", "--config-json", str(source_storage_path))
-        revision = preview.get("plan_revision")
-        require(isinstance(revision, str) and bool(revision), "source storage preview has no revision")
-        applied = self.cli("console_source_storage_apply", "machine-config", "apply",
-            "--namespace", "goal_storage", "--config-json", str(source_storage_path),
-            "--expected-plan-revision", revision, "--execute")
-        require(applied.get("readback_verified") is True
-            and applied["machine_configuration"]["namespaces"]["goal_storage"] == source_storage,
-            "target-only source configuration did not read back exactly")
+        storage_defaults = {"schema_version": "loopx_goal_storage_defaults_v1", "new_goal_provider": "file",
+            "canonical_creation": True, "new_goal_handoff_mode": "hard_lease"}
+        storage_defaults_path = self.cwd / "goal-storage-defaults.json"
+        storage_defaults_path.write_text(json.dumps(storage_defaults), encoding="utf-8")
+        storage_preview = self.cli("canonical_goal_storage_preview", "machine-config", "preview", "--namespace",
+            "goal_storage", "--config-json", str(storage_defaults_path))
+        self.cli("canonical_goal_storage_apply", "machine-config", "apply", "--namespace", "goal_storage",
+            "--config-json", str(storage_defaults_path), "--expected-plan-revision",
+            str(storage_preview["plan_revision"]), "--execute")
         created = self.cli("console_project_bootstrap", "bootstrap", "--project", str(self.project),
             "--goal-id", GOAL, "--objective", "Qualify installed authority transactions.",
             "--no-global-sync")
-        require(created.get("storage_target") == {
-            "schema_version": "loopx_new_goal_storage_target_v0", "provider": "file"},
-            "shadow source was not created with the target-only File contract")
-        selection = created["storage_selection"]
-        require(selection.get("provider") == "file" and selection.get("promotion_performed") is False
-            and "authority_initialized" not in selection,
-            "shadow source unexpectedly initialized canonical authority")
-        # Set configuration only, before shadow bootstrap creates the real binding.
-        registry = json.loads(self.registry.read_text())
-        goal = next(item for item in registry["goals"] if item["id"] == GOAL)
-        goal["coordination"].update({"agent_model": "peer_v1", "registered_agents": ["agent-a", "agent-b"],
-            "runtime_shadow": {"schema_version": "loopx_coordination_runtime_shadow_config_v0",
-                "enabled": True, "provider": "file_v0"}})
-        self.registry.write_text(json.dumps(registry))
-        boot = self.cli("console_shadow_bootstrap", "coordination-shadow", "bootstrap", "--goal-id", GOAL, "--execute")["bootstrap"]
-        require(boot.get("status") == "applied" and bool(boot.get("capture_lineage_id")), f"bootstrap not applied: {boot}")
-        self.checked("real_baseline_bootstrap", capture_lineage_id=boot["capture_lineage_id"])
+        selection = created.get("storage_selection")
+        require(isinstance(selection, dict), f"bootstrap omitted storage selection: {created}")
+        require(selection.get("provider") == "file"
+            and selection.get("handoff_mode") == "hard_lease"
+            and selection.get("authority_initialized") is True
+            and selection.get("legacy_fallback_used") is False,
+            f"bootstrap did not initialize canonical File authority: {selection}")
+        require((self.runtime / "authority" / "file-v0").is_dir(),
+            "bootstrap did not create the canonical File provider directory")
+        self.cli("console_configure_agents_and_shadow_rejection_probe", "configure-goal",
+            "--goal-id", GOAL, "--registered-agent", "agent-a", "--registered-agent", "agent-b",
+            "--coordination-runtime-shadow-file", "--execute")
+        self.checked("canonical_file_creation_and_binding",
+            provider=selection["provider"], provider_revision=selection["provider_revision"])
 
-        first = self.sdk_add("installed_python_todo_add", "First installed package mutation.")
-        require(first["coordination_runtime_shadow"]["outcome"] == "delivered", f"first Todo capture failed: {first}")
+        first_operation = "installed-todo-first"
+        first = self.sdk_add("installed_python_todo_add",
+            "First installed package mutation.", first_operation, added=True)
         lease = self.cli("console_native_lease_acquire", "task-lease", "acquire", "--goal-id", GOAL,
-            "--todo-id", first["todo_id"], "--owner", "agent-a", "--idempotency-key", "installed-lease-a", "--ttl-seconds", "600")
-        require(lease["coordination_runtime_shadow"]["outcome"] == "delivered", f"native lease capture failed: {lease}")
-        second = self.sdk_add("installed_python_second_todo_add", "Third installed package mutation.")
-        require(second["coordination_runtime_shadow"]["outcome"] == "delivered", f"second Todo capture failed: {second}")
-        drained = self.cli("console_drain", "authority-shadow", "drain", "--goal-id", GOAL)
-        require(drained.get("pending_after") == 0 and drained.get("prepared_only_after") == 0,
-            f"drain left unverified work: {drained}")
-        qualified = self.cli("console_qualify_default_policy", "coordination-shadow", "qualify", "--goal-id", GOAL)["qualification"]
-        require(qualified.get("status") == "qualified" and qualified.get("qualified") is True,
-            f"default policy was not qualified: {qualified}")
-        require(qualified["policy"]["minimum_operations"] == 3 and qualified["evidence"]["operation_count"] == 3,
-            "qualification did not prove exactly three real primary mutations under the default threshold")
-        candidate = self.cli("console_read_candidate", "coordination-shadow", "read-candidate", "--goal-id", GOAL,
-            "--todo-id", first["todo_id"])["read_candidate"]
-        require(candidate.get("status") == "matched" and candidate.get("read_candidate_qualified") is True,
-            f"candidate read was not qualified: {candidate}")
-        independent = self.read_store("independent_installed_native_readback", package)
-        require(independent["head"]["status"] == "loaded" and independent["history"]["status"] == "page", "independent provider read failed")
-        transactions = independent["history"]["transactions"]
-        require(len(transactions) == 4 and independent["head"]["cursor"] == "4", "primary writes did not map one-to-one to receipts")
-        require(all(len(tx["receipts"]) == 1 for tx in transactions[1:]), "a primary mutation has missing or duplicate receipts")
-        old_head = independent["head"]["head"]
-        require({first["todo_id"], second["todo_id"]}.issubset({item["todo_id"] for item in old_head["todos"]}), "native readback lost a Todo")
-        require(any(item["todo_id"] == first["todo_id"] and item["owner"] == "agent-a" for item in old_head["leases"]), "native readback lost the lease")
-        self.checked("three_mutations_one_receipt_each", mutation_count=3, cursor="4")
-        self.checked("default_qualification_and_exact_candidate_read", minimum_operations=3, todo_id=first["todo_id"])
+            "--todo-id", first["todo_id"], "--owner", "agent-a",
+            "--idempotency-key", "installed-lease-a", "--expected-version", "0",
+            "--ttl-seconds", "600")
+        self.canonical_result("console_native_lease_acquire", lease)
+        require(lease.get("acquired") is True and lease.get("idempotent") is False,
+            f"native lease was not acquired: {lease}")
+        second_operation = "installed-todo-second"
+        second = self.sdk_add("installed_python_second_todo_add",
+            "Second installed package mutation.", second_operation, added=True)
+        before_replay = self.cli("console_canonical_todo_list_before_replay",
+            "todo", "list", "--goal-id", GOAL)
+        self.canonical_result("console_canonical_todo_list_before_replay",
+            before_replay["authority_read"])
+        receipt_before = self.cli("console_exact_receipt_before_replay", "todo", "receipt",
+            "--goal-id", GOAL, "--operation-id", first_operation)
+        self.canonical_result("console_exact_receipt_before_replay", receipt_before)
+        require(receipt_before.get("status") == "found", f"Todo receipt missing: {receipt_before}")
 
-        rolled = self.cli("console_rollback", "coordination-shadow", "rollback", "--goal-id", GOAL,
-            "--provider-revision", independent["head"]["provider_revision"], "--execute")["rollback"]
-        require(rolled.get("status") == "applied", f"rollback not applied: {rolled}")
-        absent = self.read_store("independent_read_after_rollback", package)
-        require(absent["head"]["status"] == "missing", "rollback left an active candidate")
-        inactive = self.sdk_add("installed_python_inactive_primary_write", "Primary remains writable after rollback.")
-        require(inactive["coordination_runtime_shadow"]["reason_code"] == "bootstrap_required", "inactive write fabricated capture qualification")
-        require(not (self.runtime / "authority-shadow" / "outbox" / GOAL).exists(), "inactive write created outbox without a lineage")
-        again = self.cli("console_new_bootstrap", "coordination-shadow", "bootstrap", "--goal-id", GOAL, "--execute")["bootstrap"]
-        require(again.get("status") == "applied" and again.get("capture_lineage_id") != boot["capture_lineage_id"], "new baseline reused the retired lineage")
-        final = self.read_store("independent_new_baseline_readback", package)
-        require(final["head"]["status"] == "loaded" and final["head"]["cursor"] == "1", "new baseline has an invalid initial cursor")
-        require(inactive["todo_id"] in {item["todo_id"] for item in final["head"]["head"]["todos"]}, "new baseline omitted the inactive primary write")
-        require(len(final["history"]["transactions"]) == 1, "new baseline pretended to retain old mutation coverage")
-        self.checked("rollback_inactive_write_new_lineage", previous_lineage=boot["capture_lineage_id"], new_lineage=again["capture_lineage_id"])
+        replayed = self.sdk_add("installed_python_todo_add_exact_replay",
+            "First installed package mutation.", first_operation, added=False)
+        require(replayed.get("status") in {"replayed", "recovered"},
+            f"Todo retry did not replay its original operation: {replayed}")
+        lease_replay = self.cli("console_native_lease_acquire_exact_replay",
+            "task-lease", "acquire", "--goal-id", GOAL, "--todo-id", first["todo_id"],
+            "--owner", "agent-a", "--idempotency-key", "installed-lease-a",
+            "--expected-version", "0", "--ttl-seconds", "600")
+        self.canonical_result("console_native_lease_acquire_exact_replay", lease_replay)
+        require(lease_replay.get("idempotent") is True and lease_replay.get("acquired") is False,
+            f"lease retry did not replay its original operation: {lease_replay}")
+        after_replay = self.cli("console_canonical_todo_list_after_replay",
+            "todo", "list", "--goal-id", GOAL)
+        self.canonical_result("console_canonical_todo_list_after_replay",
+            after_replay["authority_read"])
+        require(after_replay["todos"] == before_replay["todos"]
+            and after_replay["authority_read"]["provider_revision"]
+            == before_replay["authority_read"]["provider_revision"],
+            "exact retries advanced or changed canonical Todo authority")
+        receipt_after = self.cli("console_exact_receipt_after_replay", "todo", "receipt",
+            "--goal-id", GOAL, "--operation-id", first_operation)
+        require(receipt_after == receipt_before, "exact retry changed its historical receipt")
+        self.checked("direct_canonical_mutations_and_replay",
+            todo_ids=[first["todo_id"], second["todo_id"]],
+            lease_version=lease["lease"]["version"],
+            provider_revision=after_replay["authority_read"]["provider_revision"])
+
+        independent = self.read_store("independent_installed_native_readback", package)
+        require(independent["head"]["status"] == "loaded"
+            and independent["history"]["status"] == "page",
+            "independent provider read failed")
+        transactions = independent["history"]["transactions"]
+        require(len(transactions) == 4 and independent["head"]["cursor"] == "4",
+            "canonical writes did not map one-to-one to provider transactions")
+        require(all(len(tx["receipts"]) == 1 for tx in transactions[1:]),
+            "a canonical business mutation has missing or duplicate receipts")
+        require({first_operation, second_operation}.issubset(
+            {tx["operation_id"] for tx in transactions}),
+            "provider history omitted an installed SDK operation")
+        head = independent["head"]["head"]
+        require({first["todo_id"], second["todo_id"]}.issubset(
+            {item["todo_id"] for item in head["todos"]}),
+            "native readback lost a Todo")
+        require(any(item["todo_id"] == first["todo_id"] and item["owner"] == "agent-a"
+            for item in head["leases"]), "native readback lost the lease")
+        self.checked("independent_provider_history_and_receipts",
+            transaction_count=len(transactions), cursor=independent["head"]["cursor"],
+            operation_ids=[tx["operation_id"] for tx in transactions])
+
+        rejected = self.cli("console_legacy_shadow_bootstrap_rejected",
+            "coordination-shadow", "bootstrap", "--goal-id", GOAL, "--execute",
+            succeeds=False)["bootstrap"]
+        require(rejected.get("status") == "failed"
+            and rejected.get("reason_code") == "legacy_authority_already_promoted",
+            f"legacy shadow bootstrap did not reject canonical authority: {rejected}")
+        final = self.read_store("independent_read_after_legacy_rejection", package)
+        require(final["head"]["provider_revision"] == independent["head"]["provider_revision"]
+            and final["history"] == independent["history"],
+            "rejected legacy bootstrap changed canonical authority")
+        self.checked("legacy_shadow_bootstrap_rejected",
+            reason_code=rejected["reason_code"],
+            provider_revision=final["head"]["provider_revision"])
 
 
 def main(argv: list[str] | None = None) -> int:

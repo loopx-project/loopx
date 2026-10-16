@@ -21,8 +21,8 @@ def write_turn_repair_update(
 
     ``runtime_root_arg`` is required on purpose: the Turn settlement must
     hand down the same ``--runtime-root`` override the dispatch resolved, so
-    the legacy writer fence and the todo mutex of a promotion cannot split
-    from the Turn writeback path.
+    the canonical provider route and its maintenance guard cannot split from
+    the Turn writeback path.
     """
 
     update_goal_todo(

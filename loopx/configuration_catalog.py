@@ -242,8 +242,8 @@ def build_goal_configuration_catalog(
                     "cutover to canonical local authority."
                 ),
                 "effect": (
-                    "Captures transaction-bound Todo and task-lease mutations in "
-                    "the file-v0 shadow used by parity qualification."
+                    "Retains inspection and bootstrap controls for pre-cutoff "
+                    "file-v0 shadow lineage; normal writes no longer feed it."
                 ),
                 "does_not": [
                     "promote the Goal or fence legacy writers",
@@ -631,6 +631,8 @@ def build_goal_configuration_catalog(
                 "default": {"enabled": False},
                 "current": {
                     "binding_status": reward_memory.get("binding_status"),
+                    "registered_agents": list(reward_memory.get("registered_agents") or []),
+                    "agent_bindings": list(reward_memory.get("agent_bindings") or []),
                     "effective_available": reward_memory.get("effective_available")
                     is True,
                     "desired_automation": dict(
@@ -688,22 +690,22 @@ def build_goal_configuration_catalog(
                         goal_id,
                         "--reward-memory-config",
                         "<ignored-reward-memory-config>",
-                        "--reward-memory-agent",
+                        "--reward-memory-agent-id",
                         "<agent-id>",
                     ),
                     "apply_enable": _configure_command(
                         goal_id,
                         "--reward-memory-config",
                         "<ignored-reward-memory-config>",
-                        "--reward-memory-agent",
+                        "--reward-memory-agent-id",
                         "<agent-id>",
                         execute=True,
                     ),
                     "preview_disable": _configure_command(
-                        goal_id, "--clear-reward-memory-config"
+                        goal_id, "--reward-memory-agent-id", "<agent-id>", "--clear-reward-memory-config"
                     ),
                     "apply_disable": _configure_command(
-                        goal_id, "--clear-reward-memory-config", execute=True
+                        goal_id, "--reward-memory-agent-id", "<agent-id>", "--clear-reward-memory-config", execute=True
                     ),
                     "verify": [
                         inspect_command,

@@ -139,6 +139,40 @@ artifact 校验和推理回调仍由模块提供。Hook 按配置的 corpus 顺�
 并输出 provider call telemetry 与 application receipt。Provider 或 application 失败时保留
 模块原始输出，而且永远不形成 user gate。
 
+### Agent 独立绑定
+
+用 `--reward-memory-agent-id AGENT` 选择一个已注册 Agent，再传入
+`--reward-memory-config .loopx/config/reward-memory/agent.json`。先 preview，
+再加 `--execute`；用 `reward-memory experiment-status --goal-id GOAL --agent-id AGENT`
+读回。它复用既有 provider preflight、全新 canary 写入与精确读回，私有配置仍须匹配唯一的
+Goal/Agent actor，不会替换共享绑定或其它 Agent 的路由。Goal 设置页提供相同的 Agent
+选择、启停、只写路径、锁定预览及当前状态读回。预览尚未完成的可写性验证与执行后的已验证
+观测不同；验收比较绑定声明和真实验证结果。来源已写入但读回失败时返回 partial write，
+应先重新读取当前配置，再决定是否需要其它变更。
+
+独立配置保存在 `control_plane.reward_memory.agent_bindings`。显式关闭、无效或漂移的绑定
+不会回退到共享 allowlist。用 `--reward-memory-agent-id AGENT --clear-reward-memory-config
+--execute` 只关闭该 Agent，并保留关闭声明；不删除 provider 内容，也不改变其它绑定。
+重新启用时提供它的私有配置文件；漂移后的重新验证仍使用同一个 Agent 参数，不手动补写 digest。
+同 Turn recall receipt 绑定不透明的配置 revision，待确认的 outcome 写入也不能迁移至新路由。
+自动 reconciliation 先按当前 binding 筛选，再应用每批一至三个事件的重试上限。其它绑定的
+含糊提交 journal 原样保留、不调用 Provider，也不占用当前路由的重试位置；恢复原绑定后
+仍可重试。`pending_count` 包括所有保留的 pending journal，`attempted_count` 只计当前绑定
+实际选中的重试。
+
+[设置示例：独立路由、缺少路径与窄屏读回](https://github.com/loopx-project/loopx/tree/main/loopx/capabilities/reward_memory/assets)
+使用公开安全的合成界面夹具；截图中的 Provider 观测是模拟值，不代表已安装记忆服务的资格。
+
+既有可重复参数 `--reward-memory-agent` 仍编辑共享 allowlist，不能与独立绑定参数混用；
+共享编辑保留独立绑定。不指定 Agent 的 `--clear-reward-memory-config` 会显式清除**全部**绑定。
+没有独立绑定的项目保留原来的默认关闭与共享配置行为。这不授予跨 Agent、执行或发布权限，
+也不证明记忆收益或额外宿主覆盖。
+
+启用前须确认所有调用该 Goal 的 LoopX runtime 都支持独立绑定；旧 runtime 会忽略新 map，
+仍解释共享 allowlist，无法执行单个 Agent 的关闭声明。不要混用新旧 reader。回退至旧版本
+前应先通过兼容 CLI、在 Goal owner 授权范围内关闭该能力；上述不指定 Agent 的清除命令会
+影响全部绑定，不能当成自动的单 Agent 回退。
+
 `automatic_ingest=true` 允许模块把一条已经提炼好的紧凑事件交给已配置 adapter 与 ingest
 corpus。精确 actor/project/surface/action scope 仍由 adapter 和 standing policy 校验；通用
 hook 只复用确定性的 candidate identity、activation、provider sync、精确读回与 ingest

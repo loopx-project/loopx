@@ -222,7 +222,9 @@ def test_calendar_reporter_replacement_uses_admitted_window_state(tmp_path, prep
         assert current["publication"] is None
 
 
-@pytest.mark.parametrize("change", ["reporter", "schedule", "disabled", "stopped"])
+@pytest.mark.parametrize(
+    "change", ["reporter", "schedule", "disabled", "stopped", "activation_stopped"]
+)
 def test_calendar_hook_rechecks_live_authority_after_construction(tmp_path, change):
     from datetime import datetime
     from loopx.control_plane.capability_hooks import dispatch_turn_start_hooks
@@ -241,8 +243,15 @@ def test_calendar_hook_rechecks_live_authority_after_construction(tmp_path, chan
         goal["control_plane"]["periodic_report"]["schedule"]["rrule"] = "FREQ=WEEKLY;BYDAY=FR;BYHOUR=17"
     elif change == "disabled":
         goal["control_plane"]["periodic_report"]["enabled"] = False
-    else:
+    elif change == "stopped":
         goal["status"] = "stopped"
+    else:
+        goal["activation"] = {
+            "schema_version": "loopx_goal_activation_v1",
+            "state": "stopped",
+            "updated_at": "2026-09-11T10:00:00Z",
+            "reason": "Owner stopped automatic work.",
+        }
     registry.write_text(json.dumps(config))
     dispatched = dispatch_turn_start_hooks(hooks)
     assert not dispatched["failures"]
@@ -257,10 +266,29 @@ def test_calendar_hook_rechecks_live_authority_after_construction(tmp_path, chan
         assert read_cadence_journal(runtime_root=runtime, goal_id=GOAL_ID)["window"]["agent_id"] == "replacement-peer"
 
 
-@pytest.mark.parametrize("status", ["stopped", "paused", "archived"])
-def test_inactive_goal_does_not_reactivate_an_admitted_report(tmp_path, status):
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("status", "stopped"),
+        ("status", "paused"),
+        ("status", "archived"),
+        (
+            "activation",
+            {
+                "schema_version": "loopx_goal_activation_v1",
+                "state": "stopped",
+                "updated_at": "2026-09-11T10:00:00Z",
+                "reason": "Owner stopped automatic work.",
+            },
+        ),
+    ],
+)
+def test_inactive_goal_does_not_reactivate_an_admitted_report(tmp_path, field, value):
     from datetime import datetime
-    from loopx.capabilities.periodic_report.cadence_runtime import extend_cadence_turn_start_dispatch
+    from loopx.capabilities.periodic_report.cadence_runtime import (
+        extend_cadence_turn_start_dispatch,
+        periodic_report_cadence_hooks,
+    )
     from loopx.capabilities.periodic_report.cadence_journal import read_cadence_journal
 
     registry, runtime = _calendar_fixture(tmp_path)
@@ -268,8 +296,9 @@ def test_inactive_goal_does_not_reactivate_an_admitted_report(tmp_path, status):
     extend_cadence_turn_start_dispatch({}, **kwargs, now=datetime.fromisoformat("2026-09-11T10:00:00+00:00"))
     original = read_cadence_journal(runtime_root=runtime, goal_id=GOAL_ID)
     config = json.loads(registry.read_text())
-    config["goals"][0]["status"] = status
+    config["goals"][0][field] = value
     registry.write_text(json.dumps(config))
+    assert periodic_report_cadence_hooks(**kwargs) == ()
     assert pending_periodic_report_intents(**kwargs) == []
     assert consume_pending_periodic_report_intent(**kwargs, execute=True)["status"] == "no_pending_intent"
     assert read_cadence_journal(runtime_root=runtime, goal_id=GOAL_ID) == original
@@ -404,13 +433,26 @@ def _intent() -> dict[str, object]:
     }
 
 
-def _fixture(tmp_path: Path) -> tuple[Path, Path]:
+def _fixture(
+    tmp_path: Path,
+    *,
+    finished_updated_at: str = "2026-08-30T09:00:00Z",
+    provider: str = "file",
+) -> tuple[Path, Path]:
+    from loopx.control_plane.coordination.runtime_shadow import (
+        build_todo_runtime_shadow_projection,
+    )
+    from loopx.todos import list_goal_todos
+    from tests.control_plane.canonical_authority_fixture import (
+        initialize_canonical_authority,
+    )
+
     project = tmp_path / "project"
     runtime = tmp_path / "runtime"
     state = project / "ACTIVE_GOAL_STATE.md"
     state.parent.mkdir(parents=True)
     state.write_text(
-        """---
+        f"""---
 status: active
 ---
 
@@ -421,7 +463,7 @@ status: active
 ## Agent Todo
 
 - [x] Finish the bounded analysis.
-  <!-- loopx:todo todo_id=todo_finished status=done task_class=advancement_task claimed_by=report-agent evidence=validated-analysis-outcome updated_at=2026-08-30T09:00:00Z -->
+  <!-- loopx:todo todo_id=todo_finished status=done task_class=advancement_task claimed_by=report-agent evidence=validated-analysis-outcome updated_at={finished_updated_at} -->
 """,
         encoding="utf-8",
     )
@@ -452,6 +494,16 @@ status: active
             }
         ),
         encoding="utf-8",
+    )
+    todos = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
+    initialize_canonical_authority(
+        runtime,
+        GOAL_ID,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim"
+        ),
+        state_path=state,
+        provider=provider,
     )
     sidecar_dir = runtime / "goals" / GOAL_ID / "post_writeback_hooks"
     sidecar_dir.mkdir(parents=True)
@@ -1821,14 +1873,8 @@ def test_consumption_reuses_the_exact_frozen_fact_request(tmp_path: Path) -> Non
 def test_consumption_derives_the_period_from_actual_report_facts(
     tmp_path: Path,
 ) -> None:
-    registry, runtime = _fixture(tmp_path)
-    state_path = registry.parent / "ACTIVE_GOAL_STATE.md"
-    state_path.write_text(
-        state_path.read_text(encoding="utf-8").replace(
-            "updated_at=2026-08-30T09:00:00Z",
-            "updated_at=2026-08-29T22:42:26+08:00",
-        ),
-        encoding="utf-8",
+    registry, runtime = _fixture(
+        tmp_path, finished_updated_at="2026-08-29T22:42:26+08:00"
     )
 
     required = consume_pending_periodic_report_intent(
@@ -1921,26 +1967,13 @@ def test_real_cli_editorial_fallback_reads_canonical_work_without_display(
     import subprocess
     import sys
     from tests.control_plane.canonical_authority_fixture import (
-        initialize_canonical_authority,
         isolate_sqlite_runtime,
-    )
-    from loopx.control_plane.coordination.runtime_shadow import (
-        build_todo_runtime_shadow_projection,
     )
 
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, runtime = _fixture(tmp_path)
+    registry, runtime = _fixture(tmp_path, provider=provider)
     state = registry.parent / "ACTIVE_GOAL_STATE.md"
-    records = parse_active_state_todos(state.read_text(), item_limit=None)[
-        "agent_todos"
-    ]["items"]
-    projection = build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID, todos=records, handoff_mode="soft_claim"
-    )
-    initialize_canonical_authority(
-        runtime, GOAL_ID, projection, state_path=state, provider=provider
-    )
     # A runtime override must route both intent IO and the Todo snapshot.
     config = json.loads(registry.read_text())
     config["common_runtime_root"] = str(tmp_path / "unused-runtime")

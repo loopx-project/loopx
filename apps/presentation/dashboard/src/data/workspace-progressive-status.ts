@@ -1,6 +1,14 @@
 import { z } from "zod";
 import { parseStatusPayload, type StatusPayload } from "./status";
 
+/** The source facts a discovery read can state without opening runtime state; older services omit it. */
+const directoryContractSchema = z.object({
+  ok: z.boolean(),
+  summary: z.object({ errors: z.number(), warnings: z.number(), checks: z.number() }),
+  errors: z.array(z.string()),
+  warnings: z.array(z.string()),
+  checks: z.array(z.string()).optional().default([]),
+});
 const directorySchema = z.object({
   ok: z.literal(true),
   schema_version: z.literal("loopx_workspace_directory_v1"),
@@ -11,6 +19,7 @@ const directorySchema = z.object({
     activation_state: z.enum(["active", "stopped"]),
     registry_member: z.literal(true),
   })),
+  contract: directoryContractSchema.optional(),
 });
 export type WorkspaceDirectory = z.infer<typeof directorySchema>;
 export type WorkspaceLoadError = "timeout" | "network" | "service" | "access" | "revision" | "scope" | "invalid";
@@ -87,7 +96,8 @@ export function directoryStatusPayload(directory: WorkspaceDirectory): StatusPay
   return parseStatusPayload({
     ok: true, registry: "", runtime_root: "", goal_count: directory.goals.length,
     run_count: 0, local_dashboard_api: {},
-    contract: { ok: true, summary: { errors: 0, warnings: 0, checks: 0 }, errors: [], warnings: [] },
+    // A fresh install's directory names its missing registry; the first-Goal home shows that reason.
+    contract: directory.contract ?? { ok: true, summary: { errors: 0, warnings: 0, checks: 0 }, errors: [], warnings: [] },
     attention_queue: { available: false, item_count: 0, needs_user_or_controller: 0,
       needs_codex: 0, watching_external_evidence: 0, items: [] },
     run_history: { available: false, goal_count: directory.goals.length, run_count: 0,

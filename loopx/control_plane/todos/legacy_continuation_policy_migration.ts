@@ -13,6 +13,12 @@ function existingAgent(value: unknown): string | null {
   }
 }
 
+function isPublicPlannerRepairDefault(field: string, value: unknown): boolean {
+  if (field === "clear_user_binding") return value === false;
+  return ["bound_agent", "goal_bound", "resume_when", "resume_monitor_generation"].includes(field) &&
+    value === null;
+}
+
 /** Recognize the retained legacy policy markers without authorizing a repair. */
 export function removedTodoContinuationPolicy(value: unknown): "primary_review" | "review_handoff" | null {
   const policy = stripPythonWhitespace(String(value ?? "")).toLowerCase();
@@ -42,6 +48,13 @@ export function validateLegacyContinuationPolicyRepair(
       prefix +
         "repair it explicitly with continuation_policy=independent_handoff and " +
         "excluded_agents=<author>",
+    );
+  }
+  if (Object.entries(intent).some(([field, value]) =>
+    field !== "continuation_policy" && field !== "excluded_agents" &&
+    !isPublicPlannerRepairDefault(field, value))) {
+    throw new EffectRuntimeRequestError(
+      prefix + "repair must be submitted without other Todo edits",
     );
   }
 }

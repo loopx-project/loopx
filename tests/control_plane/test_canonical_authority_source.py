@@ -10,6 +10,7 @@ from threading import Thread
 
 import pytest
 
+from canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.todos import add_goal_todo
 from loopx.chat_action_store import ChatActionStore
 from loopx.chat_actions import ChatActionService
@@ -19,8 +20,15 @@ from test_native_todo_planning_update import fixture, records
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("entrypoint", ["cli", "chat"])
-def test_completion_rejects_registration_revoked_by_real_validation(tmp_path: Path, provider: str, entrypoint: str):
-    registry, _state = fixture(tmp_path, True, provider)
+def test_completion_rejects_registration_revoked_by_real_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    entrypoint: str,
+) -> None:
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, _state = fixture(tmp_path, provider)
     marker = tmp_path / "validation-ran"
     # The validation is real and succeeds. It revokes this synthetic actor
     # between admission and commit; no mock supplies the postcondition.
@@ -68,10 +76,11 @@ def test_completion_rejects_registration_revoked_by_real_validation(tmp_path: Pa
                                headers={"Content-Type": "application/json"})
             response = connection.getresponse()
             payload = json.loads(response.read())
-            assert response.status == 400, payload
-            assert "authority registration changed" in payload["error"]
+            assert response.status == 409, payload
+            assert payload["error_code"] == "action_stale"
+            assert payload["write_attempted"] is False
             stored = store.load(proposal["proposal_id"])
-            assert stored["status"] == "failed"
+            assert stored["status"] == "stale"
             assert not stored.get("receipt"), "Chat must not report canonical success"
         finally:
             connection.close()

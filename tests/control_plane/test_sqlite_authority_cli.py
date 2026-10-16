@@ -143,8 +143,10 @@ def test_promotion_failure_evidence_survives_real_python_runtime(tmp_path, monke
     assert not list((runtime / "authority-transition").rglob("legacy-writer-fence-*.json"))
 
 
-@pytest.mark.parametrize("old_producers_present", [True, False])
-def test_new_default_goal_settles_once_and_returns_current_writes_to_file(tmp_path, monkeypatch, old_producers_present):
+@pytest.mark.parametrize("bridge_modules_present", [True, False])
+def test_new_default_goal_settles_once_and_returns_current_writes_to_file(
+    tmp_path, monkeypatch, bridge_modules_present,
+):
     """Join the shipped creation, ordinary work and reversible-exit owners."""
     from loopx.control_plane.effect_runtime import restart_effect_runtime
 
@@ -156,9 +158,12 @@ def test_new_default_goal_settles_once_and_returns_current_writes_to_file(tmp_pa
     package = Path(os.environ.get("LOOPX_COLD_IMPORT_PACKAGE", str(Path(__file__).resolve().parents[2] / "loopx")))
     receiver = tmp_path / "receiver"
     shutil.copytree(package, receiver / "loopx", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    if not old_producers_present:
-        for name in ("runtime_shadow.py", "runtime_shadow_writer_adapter.py",
-                     "local_authority_shadow_adapter.py", "local_authority_shadow_outbox.py"):
+    assert not (
+        receiver / "loopx/control_plane/coordination/runtime_shadow_writer_adapter.py"
+    ).exists()
+    if not bridge_modules_present:
+        for name in ("runtime_shadow.py", "local_authority_shadow_adapter.py",
+                     "local_authority_shadow_outbox.py"):
             (receiver / "loopx/control_plane/coordination" / name).unlink()
     # Isolated interpreter, real full entrypoint, and verified copied-package
     # provenance on every command; no fallback to the test runner's checkout.

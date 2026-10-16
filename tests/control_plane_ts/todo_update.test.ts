@@ -183,6 +183,7 @@ test("planning intent cannot smuggle terminal, decision or observation writes", 
     const before = await store.loadAuthority();
     const result = await executeCoordinationTodoUpdate(store, {...request, planning_intent});
     assert.equal(result.status, "failed", JSON.stringify(planning_intent));
+    assert.equal(result.failure_kind, "decision_rejection");
     assert.deepEqual(await store.loadAuthority(), before);
     assert.equal((await store.readReceipt(request.operation_id)).status, "missing");
   }
@@ -241,7 +242,7 @@ async function seeded(overrides: Record<string, unknown> = {}) {
   const records = [todo(overrides)];
   if (records[0]!.claimed_by === null) Reflect.deleteProperty(records[0]!, "claimed_by");
   await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
-    events: [], receipts: [], next_projection: {goal_id: "goal-a", todos: records, leases: [],
+    events: [], receipts: [], next_projection: {goal_id: "goal-a", handoff_mode: "soft_claim", todos: records, leases: [],
       todo_read_model: {schema_version: TODO_DOMAIN_READ_RECORD_SCHEMA, todo_count: 1,
         records_sha256: canonicalAuthoritySha256(records),
         contract_fields: [...TODO_DOMAIN_RECORD_CONTRACT.fields]}}});
@@ -251,6 +252,107 @@ async function seeded(overrides: Record<string, unknown> = {}) {
     dry_run: false, now: new Date("2026-09-05T23:00:00Z")};
   return {store, request};
 }
+
+test("imported removed policies reject copy edits and clear only after explicit repair", async () => {
+  for (const removed_continuation_policy of ["primary_review", "review_handoff"]) {
+    const {store, request} = await seeded({removed_continuation_policy});
+    const before = await store.loadAuthority();
+    for (const edit of [{patch: {text: "Unreviewed replacement"}, clear_fields: []},
+      {patch: {note: "Unreviewed annotation"}, clear_fields: []},
+      {patch: {}, clear_fields: ["note"]}]) {
+      for (const dry_run of [true, false]) {
+        const rejected = await executeCoordinationTodoUpdate(store, {...request, ...edit, dry_run});
+        assert.equal(rejected.status, "failed", JSON.stringify(rejected));
+        assert.match(String(rejected.reason), /repair it explicitly/);
+        assert.deepEqual(await store.loadAuthority(), before);
+        assert.equal((await store.readReceipt(request.operation_id)).status, "missing");
+      }
+    }
+    const repair = {...request, patch: {}, clear_fields: [], planning_intent: {
+      continuation_policy: "independent_handoff", excluded_agents: ["agent-b"],
+    }};
+    for (const edit of [{patch: {text: "Bundled replacement"}, clear_fields: []},
+      {patch: {note: "Bundled annotation"}, clear_fields: []},
+      {patch: {}, clear_fields: ["note"]}]) {
+      const rejected = await executeCoordinationTodoUpdate(store, {...repair, ...edit});
+      assert.equal(rejected.status, "failed", JSON.stringify(rejected));
+      assert.match(String(rejected.reason), /repair must be submitted without copy edits/);
+      assert.deepEqual(await store.loadAuthority(), before);
+      assert.equal((await store.readReceipt(request.operation_id)).status, "missing");
+    }
+    assert.equal((await executeCoordinationTodoUpdate(store, {...repair, dry_run: true})).status, "planned");
+    assert.deepEqual(await store.loadAuthority(), before);
+    assert.equal((await executeCoordinationTodoUpdate(store, repair)).status, "applied");
+    const repaired = await store.loadAuthority();
+    assert.equal(repaired.status, "loaded");
+    if (repaired.status !== "loaded") return;
+    const record = (repaired.head.todos as Record<string, unknown>[])[0]!;
+    assert.equal(record.removed_continuation_policy, undefined);
+    assert.equal(record.continuation_policy, "independent_handoff");
+    assert.deepEqual(record.excluded_agents, ["agent-b"]);
+    assert.equal((await executeCoordinationTodoUpdate(store, {...request, operation_id: "after-repair"})).status, "applied");
+    const later = await store.loadAuthority();
+    assert.equal((await executeCoordinationTodoUpdate(store, repair)).status, "replayed");
+    assert.deepEqual(await store.loadAuthority(), later);
+  }
+});
+
+test("provider-first update preserves typed external-wait rejection codes", async () => {
+  const {store, request} = await seeded({
+    todo_id: "todo_waiting",
+    task_class: "advancement_task",
+  });
+  const head = await store.loadAuthority();
+  assert.equal(head.status, "loaded");
+  if (head.status !== "loaded") return;
+  const records = [
+    todo({todo_id: "todo_fallback", task_class: "advancement_task"}),
+    todo({todo_id: "todo_monitor", task_class: "continuous_monitor",
+      material_change_generation: 2}),
+    ...head.head.todos,
+  ];
+  await store.commitAuthority({
+    operation_id: "seed-external-wait-dependencies",
+    expected_provider_revision: head.provider_revision,
+    events: [],
+    receipts: [],
+    next_projection: {
+      ...head.head,
+      todos: records,
+      todo_read_model: {
+        schema_version: TODO_DOMAIN_READ_RECORD_SCHEMA,
+        todo_count: records.length,
+        records_sha256: canonicalAuthoritySha256(records),
+        contract_fields: [...TODO_DOMAIN_RECORD_CONTRACT.fields],
+      },
+    },
+  });
+  const before = await store.loadAuthority();
+  const cases: readonly [string, Record<string, unknown>, string][] = [
+    ["reject-external-wait-status", {
+      status: "blocked",
+      resume_when: "monitor_changed:todo_monitor",
+      successor_todo_ids: ["todo_fallback"],
+    }, "external_wait_todo_status_must_remain_open"],
+    ["reject-external-wait-successor", {
+      resume_when: "monitor_changed:todo_monitor",
+      successor_todo_ids: [],
+    }, "external_wait_successor_required"],
+  ];
+  for (const [operationId, planningIntent, reasonCode] of cases) {
+    const result = await executeCoordinationTodoUpdate(store, {
+      ...request,
+      todo_id: "todo_waiting",
+      operation_id: operationId,
+      patch: {},
+      clear_fields: [],
+      planning_intent: planningIntent,
+    });
+    assert.equal(result.reason_code, reasonCode, JSON.stringify(result));
+    assert.deepEqual(await store.loadAuthority(), before);
+    assert.equal((await store.readReceipt(operationId)).status, "missing");
+  }
+});
 
 async function boundUserAction(overrides: Record<string, unknown> = {}, leases: Record<string, unknown>[] = []) {
   const {store, request} = await seeded({role: "user", task_class: "user_action",
@@ -301,16 +403,16 @@ test("user-action metadata exception retains actor, binding, class, lifecycle an
     {facts: {}, input: {actor_agent_id: "agent-b"}, code: "bound_agent_mismatch"},
     {facts: {}, input: {actor_agent_id: null}, code: "actor_not_registered"},
     {facts: {excluded_agents: ["agent-a"]}, input: {}, code: "actor_excluded"},
-    {facts: {bound_agent: null}, input: {}, code: "handoff_mode_requires_lease"},
+    {facts: {bound_agent: null}, input: {}, code: "todo_not_executable"},
     {facts: {task_class: "user_gate"}, input: {}, code: "handoff_mode_requires_lease"},
     {facts: {role: "agent", task_class: "advancement_task", claimed_by: "agent-a"},
       input: {expected_role: "agent"}, code: "handoff_mode_requires_lease"},
-    {facts: {status: "blocked"}, input: {}, code: "handoff_mode_requires_lease"},
-    {facts: {}, input: {planning_intent: {status: "blocked"}}, code: "handoff_mode_requires_lease"},
-    {facts: {}, input: {planning_intent: {required_capabilities: ["shell"]}}, code: "handoff_mode_requires_lease"},
+    {facts: {status: "blocked"}, input: {}, code: "todo_not_executable"},
+    {facts: {}, input: {planning_intent: {status: "blocked"}}, code: "todo_not_executable"},
+    {facts: {}, input: {planning_intent: {required_capabilities: ["shell"]}}, code: "todo_not_executable"},
     {facts: {}, input: {planning_intent: {bound_agent: "agent-b"}}, code: "handoff_mode_requires_lease"},
-    {facts: {}, input: {lease_idempotency_key: "supplied-proof", lease_expected_version: 1}, code: "handoff_mode_requires_lease"},
-    {facts: {}, input: {lease_expected_version: 1}, code: "handoff_mode_requires_lease"},
+    {facts: {}, input: {lease_idempotency_key: "supplied-proof", lease_expected_version: 1}, code: "todo_not_executable"},
+    {facts: {}, input: {lease_expected_version: 1}, code: "todo_not_executable"},
   ];
   for (const {facts, input, code} of cases) {
     const {store, request} = await boundUserAction(facts);
@@ -322,8 +424,8 @@ test("user-action metadata exception retains actor, binding, class, lifecycle an
   }
 });
 
-test("user-action copy edits never bypass retained active, expired or released lease lineage", async () => {
-  for (const status of ["active", "expired", "released"]) {
+test("user-action copy edits require retained active or expired executions to be released", async () => {
+  for (const status of ["active", "expired"]) {
     for (const owner of ["agent-a", "agent-b"]) {
       const lease = {todo_id: "todo_a", owner, status, idempotency_key: "retained-key",
         version: 2, lease_epoch: 1, write_scopes: [], expires_at: status === "expired"
@@ -338,14 +440,13 @@ test("user-action copy edits never bypass retained active, expired or released l
   }
 });
 
-test("bound user-action metadata consumes a current lease proof without a claim or lease mutation", async () => {
-  const lease = {todo_id: "todo_a", owner: "agent-a", status: "active", idempotency_key: "copy-key",
+test("bound user-action metadata preserves released history without consuming execution proof", async () => {
+  const lease = {todo_id: "todo_a", owner: "agent-a", status: "released", idempotency_key: "copy-key",
     version: 2, lease_epoch: 1, write_scopes: [], expires_at: "2026-09-06T00:00:00Z"};
   const {store, request} = await boundUserAction({}, [lease]);
   const before = await store.loadAuthority();
   if (before.status !== "loaded") assert.fail("missing fixture");
-  const edit = {...request, expected_provider_revision: before.provider_revision,
-    lease_idempotency_key: "copy-key", lease_expected_version: 2};
+  const edit = {...request, expected_provider_revision: before.provider_revision};
   assert.equal((await executeCoordinationTodoUpdate(store, {...edit, dry_run: true})).status, "planned");
   assert.deepEqual(await store.loadAuthority(), before);
   const applied = await executeCoordinationTodoUpdate(store, edit);
@@ -368,7 +469,7 @@ test("bound user-action metadata consumes a current lease proof without a claim 
   assert.deepEqual(await store.loadAuthority(), after);
 });
 
-test("a bound user-action lease proof authorizes copy only and retains all execution fences", async () => {
+test("a retained user-action lease proof cannot authorize a new copy or execution edit", async () => {
   const cases: {facts?: Record<string, unknown>; lease?: Record<string, unknown>;
     input?: Partial<CoordinationTodoUpdateInput>}[] = [
     {input: {actor_agent_id: "agent-b"}}, {input: {actor_agent_id: null}},
@@ -397,17 +498,19 @@ test("a bound user-action lease proof authorizes copy only and retains all execu
   }
 });
 
-test("bound user-action recovery points to its current proof or a fresh lease, never an agent claim", async () => {
+test("bound user-action recovery requires exact release and never recommends another lease", async () => {
   for (const state of ["active", "released", "expired"] as const) {
     const lease = {todo_id: "todo_a", owner: "agent-a", status: state === "released" ? "released" : "active",
       idempotency_key: "copy-key", version: 2, lease_epoch: 1, write_scopes: [],
       expires_at: state === "expired" ? "2026-09-05T22:00:00Z" : "2026-09-06T00:00:00Z"};
     const {store, request} = await boundUserAction({}, [lease]);
     const before = await store.loadAuthority();
-    const result = await executeCoordinationTodoUpdate(store, request);
+    const result = await executeCoordinationTodoUpdate(store, {...request,
+      lease_idempotency_key: "copy-key", lease_expected_version: 2});
     assert.equal(result.status, "failed");
     const recovery = result.recovery as Record<string, unknown>;
-    assert.equal(recovery.action, state === "active" ? "inspect_current_proof" : "acquire_fresh_lease");
+    assert.equal(recovery.action, state === "released" ? "resolve_lifecycle_edit" : "reconcile_lease_owner");
+    assert.equal(recovery.acquire, undefined);
     assert.equal(recovery.execution_authority_granted, false);
     assert.deepEqual(await store.loadAuthority(), before);
   }
@@ -850,6 +953,15 @@ test("retained execution fences distinguish recovery; soft released owner copy n
               expires_at: state === "expired" ? "2026-09-04T00:00:00Z" : "2026-09-06T00:00:00Z", write_scopes: []}]}});
         const before = await store.loadAuthority();
         const result = await executeCoordinationTodoUpdate(store, {...request, dry_run: true});
+        if (mode === "legacy") {
+          assert.equal(result.reason_code, "handoff_mode_retired");
+          assert.match(String(result.reason), /plan-migration\/migrate/);
+          assert.equal(result.recovery, undefined, "retired policy cannot offer executable proof or acquisition");
+          assert.equal(JSON.stringify(result).includes("private-execution-key"), false);
+          assert.deepEqual(await store.loadAuthority(), before);
+          assert.equal((await store.readReceipt(request.operation_id)).status, "missing");
+          continue;
+        }
         if (mode === "soft_claim" && state === "released" && owner === "agent-a") {
           assert.equal(result.status, "planned");
           assert.deepEqual(await store.loadAuthority(), before);
@@ -941,7 +1053,7 @@ test("recovery preserves stale-proof rejection and never offers foreign proof", 
     const head = await store.loadAuthority();
     if (head.status !== "loaded") assert.fail("missing fixture");
     await store.commitAuthority({operation_id: "lease", expected_provider_revision: head.provider_revision,
-      events: [], receipts: [], next_projection: {...head.head, handoff_mode: "legacy",
+      events: [], receipts: [], next_projection: {...head.head, handoff_mode: "hard_lease",
         leases: [{todo_id: "todo_a", owner: "agent-a", idempotency_key: "current-key",
           version: 4, lease_epoch: 1, status: "active", expires_at: "2026-09-06T00:00:00Z", write_scopes: []}]}});
     const before = await store.loadAuthority();
@@ -955,7 +1067,7 @@ test("recovery preserves stale-proof rejection and never offers foreign proof", 
   const head = await store.loadAuthority();
   if (head.status !== "loaded") assert.fail("missing fixture");
   await store.commitAuthority({operation_id: "foreign-lease", expected_provider_revision: head.provider_revision,
-    events: [], receipts: [], next_projection: {...head.head, handoff_mode: "legacy",
+    events: [], receipts: [], next_projection: {...head.head, handoff_mode: "hard_lease",
       leases: [{todo_id: "todo_a", owner: "agent-b", idempotency_key: "foreign-key",
         version: 3, lease_epoch: 1, status: "active", expires_at: "2026-09-06T00:00:00Z", write_scopes: []}]}});
   const before = await store.loadAuthority();
@@ -971,10 +1083,10 @@ test("recovery preserves stale-proof rejection and never offers foreign proof", 
 
 test("inactive history does not invent an executable lease acquisition", async () => {
   for (const [overrides, intent, mode, expected] of [
-    [{status: "blocked"}, {}, "legacy", "resolve_acquire_rejection"],
-    [{claimed_by: null}, {}, "legacy", "reconcile_lease_owner"],
-    [{}, {required_capabilities: ["code_review"]}, "legacy", "resolve_lifecycle_edit"],
-    [{}, {status: "blocked"}, "legacy", "resolve_lifecycle_edit"],
+    [{status: "blocked"}, {}, "hard_lease", "resolve_acquire_rejection"],
+    [{claimed_by: null}, {}, "hard_lease", "reconcile_lease_owner"],
+    [{}, {required_capabilities: ["code_review"]}, "hard_lease", "resolve_lifecycle_edit"],
+    [{}, {status: "blocked"}, "hard_lease", "resolve_lifecycle_edit"],
     [{status: "blocked"}, {}, "soft_claim", "resolve_acquire_rejection"],
   ] as const) {
     const {store, request} = await seeded(overrides);
@@ -1000,7 +1112,7 @@ for (const blocker of ["scope", "acceptance"]) test(`recovery respects ${blocker
   const other = todo({todo_id: "todo_other", claimed_by: "agent-b"});
   const todos = [...head.head.todos as Record<string, unknown>[], other];
   await store.commitAuthority({operation_id: "scope-conflict", expected_provider_revision: head.provider_revision,
-    events: [], receipts: [], next_projection: {...head.head, handoff_mode: "legacy", todos,
+    events: [], receipts: [], next_projection: {...head.head, handoff_mode: "hard_lease", todos,
       todo_read_model: {schema_version: TODO_DOMAIN_READ_RECORD_SCHEMA, todo_count: 2,
         records_sha256: canonicalAuthoritySha256(todos), contract_fields: [...TODO_DOMAIN_RECORD_CONTRACT.fields]},
       leases: [

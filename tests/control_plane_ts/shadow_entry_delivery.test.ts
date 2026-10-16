@@ -135,35 +135,6 @@ test("concurrent selectors get one commit and the same derived resolution", asyn
   assert.ok(results.every(r => r.resolution === "committed_proven_by_readback" && typeof r.partition_digest === "string"));
 });
 
-for (const state of ["committed", "abandoned", "foreign"] as const) {
-  test(`native lease capture recovers ${state} from full source bytes`, async t => {
-    const {beginLeaseOutboxEntry} = await import("../../loopx/control_plane/coordination/local_authority_shadow_outbox.ts");
-    const {requireShadowCaptureBinding} = await import("../../loopx/control_plane/coordination/shadow_management.ts");
-    const {LOCAL_AUTHORITY_SHADOW_COMMIT_ENTRY_REQUEST_SCHEMA: schema} = await import("../../loopx/control_plane/coordination/coordination_state_contract.generated.ts");
-    const f = await fixture(t), directory = join(f.root, "goals", "goal-a", "task-leases");
-    const lease = {schema_version: "task_lease_v0", goal_id: "goal-a", todo_id: "todo_one", owner: "agent-a",
-      version: 1, lease_epoch: 1, status: "active", updated_at: "2026-09-06T00:00:00Z"};
-    const capture = await beginLeaseOutboxEntry({runtime_root: f.root, goal_id: "goal-a", lease_directory: directory,
-      write_class: "task_lease_acquire", operation_id: "acquire-test", previous_lease: null, planned_lease: lease, active_todo_ids: null});
-    assert.equal(capture.failure, null);
-    const r = {schema_version: schema, runtime_root: f.root, goal_id: "goal-a", partition: "leases",
-      seq: capture.seq, entry_id: capture.entry_id, capture_lineage_id: (await requireShadowCaptureBinding(f.root, "goal-a")).capture_lineage_id,
-      prepared_sha256: "", committed_sha256: null};
-    r.prepared_sha256 = sha(await readFile(entryPath(r)));
-    if (state !== "abandoned") await writeFile(join(directory, "todo_one.json"),
-      `${JSON.stringify(state === "foreign" ? {...lease, owner: "agent-b"} : lease, null, 2)}\n`);
-    const before = await f.store.loadAuthority(), outcome = await deliverShadowEntry(r);
-    if (state === "foreign") {
-      assert.equal(outcome.reason_code, "source_transaction_unproved");
-      assert.deepEqual(await f.store.loadAuthority(), before);
-    } else {
-      assert.equal(outcome.outcome, "delivered", JSON.stringify(outcome));
-      assert.equal(outcome.resolution, state === "committed" ? "committed_proven_by_readback" : "abandoned");
-      assert.equal(outcome.no_op, state === "abandoned");
-    }
-  });
-}
-
 test("malformed UTF-8 is not silently repaired before JSON validation", async t => {
   const f = await fixture(t);
   const r = selection(await pendingEntry(f, 1, {handoff_mode: "hard_lease", todos: [todo()]}));

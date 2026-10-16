@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {evaluateTaskLeaseAcquireDecision} from "../../loopx/control_plane/work_items/task_lease_acquire_decision.ts";
-import {decideTaskLeaseLifecycle} from "../../loopx/control_plane/work_items/task_lease_lifecycle_decision.ts";
+import {decideTaskLeaseLifecycle, evaluateTaskLeaseLifecycleDecision} from "../../loopx/control_plane/work_items/task_lease_lifecycle_decision.ts";
 import {evaluateTaskLeaseOwnerEligibility, leaseOwnerRejection, type LeaseEligibilityTodo} from
   "../../loopx/control_plane/work_items/task_lease_eligibility.ts";
 import {productionScaleCoordinationFixture} from "./production_scale_coordination_fixture.ts";
@@ -42,6 +42,25 @@ test("release remains a fenced cleanup operation after owner eligibility is lost
   assert.equal(result.next_lease?.status, "released");
 });
 
+test("User actions cannot acquire, renew or transfer execution but retained leases can be released", () => {
+  const action = {...todo, task_class: "user_action", bound_agent: "agent-a"};
+  for (const owner of ["agent-a", "agent-b"]) {
+    assert.equal(evaluateTaskLeaseOwnerEligibility({todo: action, owner,
+      registered_agents: ["agent-a", "agent-b"]}).code, "todo_not_executable");
+    assert.equal(evaluateTaskLeaseAcquireDecision({...acquire(false), todo: action,
+      command: {...acquire(false).command, owner}}).code, "todo_not_executable");
+  }
+  for (const operation of ["renew", "transfer", "release"] as const) {
+    const result = evaluateTaskLeaseLifecycleDecision({handoff_mode: "hard_lease",
+      registered_agents: ["agent-a", "agent-b"], todo: action, lease,
+      command: {operation, owner: "agent-a", idempotency_key: "first", expected_version: 1,
+        ttl_seconds: operation === "release" ? null : 120,
+        new_owner: operation === "transfer" ? "agent-b" : null,
+        new_idempotency_key: operation === "transfer" ? "next" : null}});
+    assert.equal(result.code, operation === "release" ? "lease_release" : "todo_not_executable");
+  }
+});
+
 test("owner eligibility has one precedence across adapters and renewal", () => {
   const cases: {todo: LeaseEligibilityTodo | null; owner: string | null; agents: string[]; reason: string | null}[] = [
     {todo: null, owner: null, agents: [], reason: "todo_not_found"},
@@ -68,12 +87,13 @@ test("owner eligibility has one precedence across adapters and renewal", () => {
 
 test("production-scale history preserves independent claim, exclusion and terminal constraints", () => {
   const fixture = productionScaleCoordinationFixture("goal-scale-eligibility");
-  const records = fixture.projection.todos as {status: string; claimed_by?: string; excluded_agents?: string[]}[];
+  const records = fixture.projection.todos as {status: string; task_class?: string; claimed_by?: string; excluded_agents?: string[]}[];
   assert.ok(records.length > 400);
   for (const record of records) {
     const normalized = {...record, claimed_by: null, excluded_agents: []};
     const terminal = record.status !== "open";
-    assert.equal(leaseOwnerRejection(normalized, "agent-a", ["agent-a"]), terminal ? "todo_not_open" : null);
+    assert.equal(leaseOwnerRejection(normalized, "agent-a", ["agent-a"]), terminal ? "todo_not_open"
+      : record.task_class === "user_action" ? "todo_not_executable" : null);
     assert.equal(leaseOwnerRejection({...normalized, claimed_by: "agent-b"}, "agent-a", ["agent-a"]),
       terminal ? "todo_not_open" : "owner_conflicts_with_claim");
     assert.equal(leaseOwnerRejection({...normalized, excluded_agents: ["agent-a"]}, "agent-a", ["agent-a"]),
@@ -100,3 +120,12 @@ for (const generation of ["version", "lease_epoch"] as const) {
     assert.equal(result.code, "lease_generation_exhausted"); assert.equal(result.outcome, "rejected");
   });
 }
+
+test("lease decision wires accept only the registered historical/current policy vocabulary", () => {
+  for (const mode of ["future_policy", "hard_lease_extra", "Legacy", ""]) {
+    assert.throws(() => evaluateTaskLeaseAcquireDecision({...acquire(false), handoff_mode: mode}), /handoff_mode/);
+    assert.throws(() => evaluateTaskLeaseLifecycleDecision({handoff_mode: mode, registered_agents: ["agent-a"],
+      todo, lease, command: {operation: "renew", owner: "agent-a", idempotency_key: "first",
+        expected_version: 1, ttl_seconds: 120, new_owner: null, new_idempotency_key: null}}), /handoff_mode/);
+  }
+});

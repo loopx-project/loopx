@@ -1,4 +1,4 @@
-"""Default-off counterfactual: run unchanged against the pre-claim base too."""
+"""Unmigrated Goals cannot grant new Todo claim authority."""
 
 from __future__ import annotations
 
@@ -7,12 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from loopx.todos import add_goal_todo, list_goal_todos, update_goal_todo
+from loopx.control_plane.coordination.local_authority import CanonicalAuthorityRequired
+from loopx.todos import update_goal_todo
 
 
-@pytest.mark.parametrize("with_note", [False, True])
-def test_unpromoted_claim_retains_markdown_semantics(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, with_note: bool
+@pytest.mark.parametrize("dry_run", [False, True], ids=["execute", "dry-run"])
+def test_unpromoted_claim_requires_canonical_authority_before_writes(
+    tmp_path: Path, dry_run: bool,
 ) -> None:
     state = tmp_path / "ACTIVE_GOAL_STATE.md"
     state.write_text("# Goal\n\n## Agent Todo\n\n", encoding="utf-8")
@@ -25,35 +26,26 @@ def test_unpromoted_claim_retains_markdown_semantics(
                        "registered_agents": ["agent-a", "agent-b"],
                    }}],
     }), encoding="utf-8")
-    created = add_goal_todo(registry_path=registry, goal_id="goal-a", role="agent",
-                            text="Claim through the unchanged Markdown path")
-    monkeypatch.setattr(
-        "loopx.control_plane.coordination.local_authority.effect_runtime_result",
-        lambda *_args, **_kwargs: pytest.fail("unpromoted call must not enter provider runtime"),
-    )
-    request = dict(registry_path=registry, goal_id="goal-a", todo_id=created["todo_id"],
-                   claimed_by="agent-a", agent_id="agent-a", claim_only=True)
-    if with_note:
-        request["note"] = "legacy combined claim remains supported"
     before = state.read_bytes()
-    with pytest.raises(ValueError, match="requires promoted canonical authority"):
-        update_goal_todo(**request, claim_operation_id="explicit-retry")
+    with pytest.raises(CanonicalAuthorityRequired) as error:
+        update_goal_todo(
+            registry_path=registry,
+            goal_id="goal-a",
+            todo_id="todo_existing",
+            claimed_by="agent-a",
+            agent_id="agent-a",
+            claim_only=True,
+            claim_operation_id="explicit-retry",
+            dry_run=dry_run,
+        )
+    assert error.value.code == "canonical_authority_required"
+    assert error.value.payload["operation"] == "todo_claim"
+    assert error.value.payload["write_admitted"] is False
+    assert error.value.payload["decision_read_from_provider"] is False
+    assert error.value.payload["legacy_fallback_used"] is False
+    assert error.value.payload["recovery"] == {
+        "action": "migrate_goal_authority",
+        "backup_required": True,
+    }
     assert state.read_bytes() == before
-    preview = update_goal_todo(**request, dry_run=True)
-    assert preview["ok"] is True
-    assert preview["changed"] is True
-    assert state.read_bytes() == before
-    claimed = update_goal_todo(**request)
-    assert claimed["ok"] is True
-    assert claimed["changed"] is True
-    assert claimed["mutation_authority"]["command"] == "claim"
-    assert "source_authority" not in claimed
-    todos = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
-    todo = next(item for item in todos if item["todo_id"] == created["todo_id"])
-    assert todo["claimed_by"] == "agent-a"
-    if with_note:
-        assert todo["note"] == request["note"]
-    after = state.read_bytes()
-    assert update_goal_todo(**request)["changed"] is False
-    assert state.read_bytes() == after
-    assert not (runtime / "authority" / "file-v0").exists()
+    assert not (runtime / "authority").exists()

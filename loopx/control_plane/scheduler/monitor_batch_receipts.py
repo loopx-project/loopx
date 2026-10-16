@@ -38,7 +38,10 @@ def _read_receipt(text: str, operation_id: str) -> dict[str, Any] | None:
 
 def _plan(request: dict[str, Any], **facts: Any) -> dict[str, Any]:
     try:
-        result = effect_runtime_result("scheduler.monitor_batch.plan", {**request, **facts})
+        result = effect_runtime_result(
+            "scheduler.monitor_batch.replay",
+            {**request, **facts},
+        )
     except EffectRuntimeRejected as error:
         raise ValueError(str(error)) from error
     if not isinstance(result, dict) or result.get("schema_version") != "loopx_monitor_batch_plan_result_v0":

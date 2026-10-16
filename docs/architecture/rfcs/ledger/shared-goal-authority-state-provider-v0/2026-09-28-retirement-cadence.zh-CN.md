@@ -1,11 +1,31 @@
 # 合并后的本地权威退役节奏
 
-- 当前计划：2026-10-07，`06b6caa07`；历史核对基线：`ce3862e33`；采用后续核对：`71525ab90`，2026-09-28；[English](2026-09-28-retirement-cadence.md)。
+- 当前候选 checkpoint：2026-10-15，#6396 `5d29213d3`；历史 1.x 计划：2026-10-07，`06b6caa07`；历史核对基线：`ce3862e33`；采用后续核对：`71525ab90`，2026-09-28；[English](2026-09-28-retirement-cadence.md)。
 - Owner：总 roadmap R3/R4/R5/R6、shared authority D1–D3、TS 迁移 T0–T4。
 - 本记录替代 9 月 27 日 recovery、Host supervision 记录的**当前清单和估算**，
   不替代其历史验证结果。
 
-## 重新核对的基线
+<a id="current-candidate-checkpoint"></a>
+
+## 当前候选 checkpoint（2026-10-15）
+
+贡献者主导的 [#6396](https://github.com/loopx-project/loopx/pull/6396)，已评审 head
+`5d29213d3`，已实现 C1/T4 删除包，纳入 fork 补缺及
+[#6366 已吸收义务](../../../../reference/local-authority-provider-selection.md#retirement-proposal-reconciliation)。
+这是开放的 2.0 候选，不是已发布的兼容 1.x 基线。
+
+| 边界 | 候选现状 | 剩余工作／保留义务 |
+| --- | --- | --- |
+| 普通 Markdown mutation 与 capture producer | 废弃 writer 实现已不存在，包括 `todos/legacy_mutation.py`、`todos/line_update.py` 和 `runtime_shadow_writer_adapter.py`；canonical 创建／写入、team-plan、Monitor 及 lease caller 使用既有 typed owner。 | 集成并验证采用后的源码，不从历史表再创建 writer 删除任务；保留永久文档／显示 IO 及受支持的导入／恢复。 |
+| 所有权策略 | fresh 执行／配置目标为 `soft_claim`／`hard_lease`；typed runtime 准入及 proof inspect 拒绝 live `legacy` 执行。 | 历史三值解码、原回执、精确 release 与有备份的审核策略迁移保留；真实安装迁移及受影响 Host／App 消费者分别验证。 |
+| Source／outbox 恢复 | 普通 producer 退役不抹去 prepared／committed 历史。 | 保留原 receipt／cursor 恢复；删除 reader 前对账或明确处置未完成 outbox。存储转换不等于所有权迁移完成。 |
+| 采用与发布 | PR 按源码 revision 记录精确 head 评审及选定组合 tree 验证。 | 可回退核心开发者试用、自然 Host 使用、Goal-instance 生命周期／恢复及正式 D2／D3／默认资格沿用原 owner 与开放出口；保留失败／缺失项，mock、混合版本经过时间或 PR 合并都不能替代。 |
+
+新工作以本表及 [TS 当前交付边界](../../typescript-control-plane-migration-v0.zh-CN.md#当前交付边界2026-10-02)
+为准。下方具名历史记录保留原源码上的测量与依赖判断；“旧 writer 仍可达”
+只描述当时基线，不能再次派生候选已经实现的工作。
+
+## 历史核对基线
 
 | 已合并 | 不再计入剩余工作的内容 |
 | --- | --- |
@@ -25,11 +45,11 @@
 不等待无关云端或百 Agent 工作。
 
 **File 是默认 store factory，不等于所有新旧 Goal 默认以 File 为权威。**
-未晋升的 Markdown writer 仍可达。两个 Goal 迁移成功、或 File↔SQLite 传输成功，
+在这个历史基线上，未晋升的 Markdown writer 仍可达。两个 Goal 迁移成功、或 File↔SQLite 传输成功，
 都不能证明旧 writer 已没有消费者。本轮不再沿用“还剩 5–8 个 PR”；以下列出的是
 交付和验证边界，不承诺缺陷数量或合并数量。
 
-## 什么时候删、怎么删
+## 历史最后调用方清单与删除规则
 
 | 边界 | 真实可达的代码／调用方 | 最早删除条件及保留义务 |
 | --- | --- | --- |
@@ -109,10 +129,10 @@ Host IO；C1、D2 和发布默认采用仍是独立验收边界。
 
 <a id="当前收尾验证迁移与删除2026-10-02"></a>
 
-## 当前收尾：验证、迁移与删除（2026-10-07）
+## 历史收尾计划：验证、迁移与删除（2026-10-07）
 
 按 main `06b6caa07` 和所列已合并 PR 重新核对。本节是 **R5 / D1–D3 / T0–T4**
-的当前执行计划，替代旧 A–D 排期；历史测量仍只适用于原源码和负载。R6 单独推进。
+的当时执行计划，替代旧 A–D 排期；历史测量仍只适用于原源码和负载。R6 单独推进。
 存储格式、权威选择、所有权策略是三种不同迁移：有 SQLite 数据库，不代表新 Goal
 已经默认使用 canonical authority，也不代表 `legacy` handoff 策略已经退役。
 

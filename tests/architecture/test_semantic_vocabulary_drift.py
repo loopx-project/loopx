@@ -187,7 +187,7 @@ def test_registry_cannot_add_unanchored_output_selectors(name, metadata, selecti
     smoke = runpy.run_path(str(SMOKE))
     registry = copy.deepcopy(smoke['load_registry']())
     registry['vocabularies'][name].setdefault(metadata, {})[
-        'loopx/control_plane/quota/decision_summary.py::quota_effective_action'
+        'loopx/control_plane/quota/run_decision.ts::quotaEffectiveAction'
     ] = selection
     with pytest.raises(smoke['Drift'], match='anchored output evidence exactly'):
         smoke['check_coverage_floor'](registry)

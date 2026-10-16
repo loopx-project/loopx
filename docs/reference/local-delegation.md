@@ -1188,6 +1188,17 @@ for example, `committed` requires the full phase prefix. These are enforced
 checks, not guidance. `turn inspect-journal` reports a contradictory snapshot
 as `replay_blocked` with `journal_status_phase_mismatch`.
 
+With `--retry-failed-turn`, journal inspection selects the persisted session
+reader from the retained plan's host and binding scope, for both one-shot and
+`--watch` reads. A DSH Turn therefore checks its DSH binding rather than the
+operator's current default host. Missing or mismatched host/scope/owner bindings
+remain blocked; inspection reports a recovery plan with no execution effects.
+This does not retry a failed Turn or authorize a new host invocation.
+
+`--retry-failed-turn` 的单次及 `--watch` 检查均按原计划的 host 和绑定范围读取
+原会话，DSH 不再被当前默认 Codex reader 误报为会话缺失。缺失或 host、范围、
+owner 不匹配仍拒绝；诊断读回不执行重试，也不授予新的执行权限。
+
 A digest-named journal that cannot be read cannot safely be skipped as evidence
 of absence or uniqueness. This also holds when another matching file is readable.
 Non-journal sidecars and identifiable other Turns are ignored; duplicate exact
@@ -1374,6 +1385,66 @@ The existing Dashboard shows operation/host-start state through the shared
 frame, but does **not** edit this grant. Frontend grant editing and genuine
 original-source outcome delivery remain partial; synthetic startup tests do
 not establish an end-to-end user or trading loop.
+
+### Freeze an operator-authored operation request
+
+An owned Codex or DSH Turn can prepare an operator-authored immutable request
+without asking the model to reproduce the whole JSON object. This optional
+transport reuses `loopx_operation` and the canonical prepare service. It creates
+no actor, approval, budget, or execution authority.
+
+Keep one complete `operation.execute` preparation request in an operator-private
+file. Compute the SHA-256 of its exact UTF-8 bytes, then add both options to the
+existing `turn run-once` invocation:
+
+```sh
+request_sha=$(python3 -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$request_file")
+# request_file must be absolute. Retain the original Goal/Agent/Todo and host options.
+loopx turn run-once ... \
+  --operation-request-file "$request_file" \
+  --operation-request-sha256 "$request_sha"
+```
+
+This requires the existing `--codex-operation-tools` or
+`--host dsh --dsh-operation-module ...` opt-in. With neither file option set,
+the tool schema, inline prepare form and session profile remain unchanged.
+When configured, `context` returns `prepared_request.ref`; the model uses:
+
+```json
+{"action":"prepare","request":{"ref":"request-<exact-context-locator>"}}
+```
+
+Configured preparation refuses an inline replacement, extra fields, unknown
+locators and model-selected paths. The private handler resolves the locator
+**after** matching the actual native call's original arguments. DSH socket
+pairing is unchanged. The locator is bound to the current Turn, Goal instance,
+Agent, Todo, native Session and profile; it is not a transferable permission.
+Context exposes neither the file path nor its full payload. Inspect the
+canonical proposal to read the accepted terms.
+
+The host checks the hash before SDK startup and again when the authenticated
+prepare call resolves the file. Files are bounded to the operation transport's
+256 KiB frame limit and must contain strict JSON without duplicate keys or
+non-finite values. The existing prepare service still checks current Goal
+admission, terms, expiry and audience, injects its own executor, and writes the
+only canonical proposal. It does not infer human confirmation or allow domain
+effects. Duplicate preparation with the same unchanged request uses existing
+canonical idempotency; this does not authorize retrying a consumed or unknown
+external effect.
+
+For callback continuation, keep the original file bytes/hash and both options
+in the same operator-owned binding's `host_args`. The source hash and selected
+return audience enter the native profile. Changing content, audience, or
+removing the options from an existing bound Session requires the existing
+explicit fresh-context and new-approval path. Do not renew an expired request,
+reuse an old confirmation, or rewrite a failed Turn to apply the feature.
+Removing the options disables it for future fresh Sessions; preserve any file
+needed to reconcile an already prepared/confirmed operation.
+
+This is an operator CLI preparation option. Existing proposal/card readback
+uses the same canonical state; no new Dashboard file selector or grant editor
+is delivered. Genuine confirmation, automatic original-Session continuation,
+original-audience result return and domain utility remain separate acceptance.
 
 ### Continue the original operation owner
 

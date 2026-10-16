@@ -3,8 +3,17 @@
 `soft_claim` uses the Todo assignment; `hard_lease` also requires the existing
 execution lease fences. New `set` and migration intents accept these two modes.
 `legacy` remains a historical source for backed-up upgrades and original receipt
-recovery; new requests cannot select it, even as a no-op. Existing Goals are not
-silently changed, and creation/Host defaults remain unchanged in this stage.
+recovery; new requests cannot select it, even as a no-op. In the 2.0 candidate,
+fresh claim/update/terminal and Monitor admission, execution fences, acquisition
+and lease maintenance reject `legacy` with `handoff_mode_retired`. Inspection
+keeps the original lease record but reports it ineffective; an original acquire
+receipt cannot be presented as current execution proof. Exact release and original
+receipt recovery remain available. Delegation checks the typed inspection's
+`execution_policy.supported` before first launch and resuming a running operation,
+including retained records declaring that no lease was needed. This readback grants
+no execution authority; hard mode still needs its original claim/lease proof.
+Source-only lease inspection is historical: it cannot report an effective execution
+and no longer asks Python for a second full Todo projection. Existing Goals are not silently changed, and creation/Host defaults remain unchanged in this stage.
 This is an ownership policy, not a capability grant or a storage provider.
 
 The App's Task list and Task details use the same reviewed completion entry.
@@ -40,9 +49,9 @@ loopx --format json handoff-mode set --goal-id example-goal --mode soft_claim --
 loopx --format json handoff-mode set --goal-id example-goal --mode soft_claim --operation-id mode-change-1
 ```
 
-Before promotion, `show`/`set` use the existing frontmatter adapter and locks.
-After promotion they use the selected canonical provider, even when Markdown
-is stale or absent. Provider failure rejects the operation without fallback;
+Before import, `show` can inspect historical frontmatter; normal `set` requires
+canonical authority. Canonical operations use the selected provider even when
+Markdown is stale or absent. Provider failure rejects the operation without fallback;
 leftover lease files cannot override canonical records. Only frontmatter and
 compact ownership facts cross the legacy TS planning boundary; unrelated body,
 metadata, line endings and the final newline remain intact.
@@ -50,9 +59,9 @@ metadata, line endings and the final newline remain intact.
 A changed `set` requires no unfinished claimed active Todo and no time-active
 lease in the complete snapshot. Invalid expiry/schema cannot prove quiescence;
 concurrent work invalidates its CAS. Identical soft/hard mode is a no-op even
-with active work. Malformed legacy frontmatter can be repaired only when
-quiescent; duplicate fields or missing frontmatter reject, and malformed
-canonical state is never repaired through the legacy adapter.
+with active work. Historical malformed frontmatter must be resolved through the reviewed import
+boundary; it cannot create a normal writer fallback. Malformed canonical state
+is never repaired through that adapter.
 
 Canonical `--operation-id` binds Goal and target. Even an accepted no-op seals a
 receipt. Retry with the same ID/target recovers the original decision and never
@@ -61,8 +70,8 @@ restores an old mode over later work; changed intent needs a fresh ID.
 Malformed receipts reject. An original `set --mode legacy --operation-id <original-id>`
 request still reaches receipt recovery after upgrade, including after a later
 policy change. New legacy writes and dry-runs return `handoff_mode_retired`;
-`plan-migration` also refuses legacy as a target. The unpromoted writer does not
-promise durable operation replay.
+`plan-migration` also refuses legacy as a target. An unpromoted normal write returns `canonical_authority_required`; use the
+reviewed import before changing current policy.
 
 ## Migrate an assigned canonical Goal with a verified backup
 
@@ -127,16 +136,18 @@ unretained preview.
 CLI and App share registry validation and the same TS migration owner. Lark
 ordinary Todo/lease actions consume that canonical state; policy migration has
 no Lark editor in this stage. The capability editor does not own this policy. Migration does not
-qualify provider defaults, D1–D3, or PostgreSQL deployment. Complete Host lease
-lifecycles and migration of remaining legacy Goals precede legacy execution and
-last-caller Python retirement; historical import/receipt readers stay at their
-migration/recovery boundary.
+qualify provider defaults, D1–D3, or PostgreSQL deployment. Complete Host lease lifecycles, reviewed migration of remaining Goals and installed
+adoption remain release qualifications. The candidate's legacy execution cutoff
+is not evidence that those qualifications passed. Historical import/receipt
+readers stay at their migration/recovery boundary.
 
 ## 中文
 
 新增 `set` 和迁移只接受 `soft_claim`、`hard_lease`。legacy 仍可作为升级来源、
-历史回执恢复输入，不能再作为新请求的目标；已有 Goal 和创建／Host 默认值不被
-静默改写。soft 用于明确的单执行者，hard 用于本机并行 Agent／automation 和云端
+历史回执恢复输入，不能再作为新请求的目标；已有 Goal 和创建／Host 默认值不被静默改写。2.0 候选的 fresh
+claim／update／terminal、Monitor、执行 fence 及租约执行准入明确拒绝 legacy；
+inspect 保留原记录但报告无有效执行，旧 acquire 回执也不能换成当前 proof。
+精确 CAS release、历史原操作恢复及有备份的审核迁移继续可用。soft 用于明确的单执行者，hard 用于本机并行 Agent／automation 和云端
 共享；默认策略切换前还需验证 Host 的 acquire、renew、release 和阻塞结算。
 App 的任务列表和详情共用审核完成入口。终态 owner 要求租约或当前执行证明时，
 页面明确说明此调用方无法代为完成；负责 Agent 须从原执行提交当前证明，之后刷新
@@ -178,15 +189,17 @@ App 在 **Goal 设置 → 任务所有权** 复用同一操作：选择协作认
 
 CLI 与 App 共用注册信息校验和 TS 迁移 owner；飞书普通操作消费相同 canonical 状态，
 本阶段没有飞书策略编辑器，也不新建 capability 设置项。此批不关闭 provider 默认与
-D1–D3；先完成 Host 生命周期、
-逐 Goal 备份迁移，再删除 legacy 执行分支和无调用方的 Python 业务逻辑。旧格式解析
-只保留在迁移／历史回执恢复边界。
+D1–D3；候选已拒绝 legacy 正常执行，并不证明 Host 生命周期、逐 Goal 备份迁移
+及安装采用已经完成。旧格式解析只保留在迁移／历史回执恢复边界。
 
 ## Recover a canonical Todo edit with retained lease history
 
-A canonical Todo can retain a released or expired lease even in `legacy` mode.
-In `legacy` and `hard_lease`, that record preserves execution lineage: `todo update`
-still requires a current active owner proof. In `soft_claim`, an open agent Todo's
+A canonical Todo can retain a released or expired lease in historical `legacy`
+mode. That mode requires a reviewed migration before normal work, even with a
+retained active proof. Release the exact old execution first, then use the existing
+backup/plan/migrate flow; never acquire another legacy execution. In `hard_lease`,
+the retained record preserves execution lineage: `todo update` requires current
+active owner proof. In `soft_claim`, an open agent Todo's
 current claim owner may edit text/notes or clear those fields without proof when
 its retained lease is released and held by the same owner. The transaction keeps
 the lease, epoch and historical receipts unchanged and still checks actor,
@@ -202,6 +215,7 @@ under a fresh operation and current revision. Other execution fences remain:
 
 | Observation | Recovery |
 | --- | --- |
+| Historical `legacy` policy, with or without a retained lease | Release any retained execution using its exact CAS, then review and back up a migration to `soft_claim` or `hard_lease`. Historical acceptance grants no current execution. |
 | Active lease held by the current claim owner; missing/stale proof | Inspect the lease and retry using its current proof. Do not acquire a competing execution. |
 | Released/expired lease; current owner is eligible and acquisition passes the current mode, acceptance and scope checks | Inspect the version, acquire a short lease with a fresh key, update using the returned proof, then release it. |
 | Active foreign holder, divergent claim, or absent claim | Reconcile ownership through its lifecycle; never borrow another holder's proof. |
@@ -227,7 +241,8 @@ todo_done:<dependency-todo> --reason '<bounded cause>'` 暂停。此显式 wait 
 
 The recovery descriptor uses the standalone `loopx task-lease acquire` command.
 Combined `todo claim --task-lease-idempotency-key` is restricted to `hard_lease`
-and is not the recovery route for `legacy`. Acquire uses `--owner`, a **fresh**
+and is unavailable in historical `legacy` mode. After reviewed migration,
+acquire uses `--owner`, a **fresh**
 `--idempotency-key`, `--expected-version` from `task-lease inspect`, a bounded
 `--ttl-seconds`, and any projected `--write-scope` values. Retry the original
 update with `--task-lease-idempotency-key` and `--task-lease-expected-version`
@@ -241,8 +256,12 @@ the configured mode, promote a provider, or waive acceptance.
 
 ### 保留租约历史时的更新恢复
 
-canonical Todo 在 `legacy` 模式下也可能保留 released／expired lease。legacy 与
-hard_lease 仍要求当前有效 owner proof。soft_claim 下，open Agent Todo 的当前
+历史 `legacy` policy 即使保留 active lease，也不能执行新的 Todo mutation 或借原回执
+恢复当前执行资格。先按原 key／version 精确 release，再通过既有 plan／backup／migrate
+审核升级到 soft_claim 或 hard_lease；不改写旧回执、不丢弃 lease history，也不自动迁移活跃 Goal。
+
+canonical Todo 在历史 `legacy` 模式下也可能保留 released／expired lease，
+须先审核迁移；hard_lease 仍要求当前有效 owner proof。soft_claim 下，open Agent Todo 的当前
 claim owner 可不带 proof 编辑文本／备注或清空这些字段，前提是保留的 lease 已释放
 且同属本人。事务保留 lease、epoch 和原回执，仍核验 actor、excluded、bound 和
 provider CAS；这不授权 ownership、planning、工作要求或完成变更。未释放的 active
@@ -253,8 +272,8 @@ lease 即使自然过期，也不适用。显式旧 proof 或部分 proof 仍拒
 
 有效的本主租约应 inspect 后使用当前 proof 重试；已释放或过期的租约，只有当前
 claim owner 满足相同的 acquire 准入规则时，才提示“inspect version → 用新 key
-申请短 lease → 带新 proof 更新 → release”。legacy 必须用独立 `task-lease acquire`，
-不能用仅限 hard_lease 的合并式 claim+lease。
+申请短 lease → 带新 proof 更新 → release”。legacy 下独立 acquire 与合并式
+claim+lease 均不可执行，必须先审核迁移；合并式 claim+lease 仍仅限 hard_lease。
 
 异主有效 lease、claim 不一致、不允许执行的 Todo、验收阻塞或 scope
 冲突不会得到不可执行的 acquire 建议；修改已租用工作的要求或状态须走对应 lifecycle。

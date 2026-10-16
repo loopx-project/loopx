@@ -49,6 +49,8 @@ def test_captured_point_continues_with_fresh_authority(
     # Each variant uses its own fresh guest because the native fork retains
     # fixed captured workspace/home paths. The default variant stays unchanged.
     stride_continuation = os.environ.get("LOOPX_JOINT_RECEIVER_STRIDE") == "1"
+    fresh_context = os.environ.get("LOOPX_JOINT_RECEIVER_FRESH") == "1"
+    assert not fresh_context or stride_continuation, "Fresh-context qualification requires the completed current review"
     unit = Path(os.environ["LOOPX_JOINT_RECEIVER_POINT"])
     manifest = json.loads((unit / "checkpoint.json").read_bytes())
     digest, metadata = manifest["sha256"], manifest["point_metadata"]
@@ -92,13 +94,24 @@ def test_captured_point_continues_with_fresh_authority(
     original_runtime = Path(historical["common_runtime_root"])
     assert not original_runtime.exists()
     source_goal = metadata["loopx_state"]["goal_id"]
-    assert historical["goals"][0]["id"] == source_goal
+    # A later generation may retain an even older project-local registry.
+    # The source's separately sealed canonical registry owns its current Goal;
+    # neither registry becomes destination authority through workspace copying.
+    registry_basis = metadata["loopx_state"]
+    captured_registry = unit / "components" / registry_basis["registry_component_id"]
+    if registry_basis["registry_member_path"]:
+        captured_registry = captured_registry / registry_basis["registry_member_path"]
+    captured_registry_bytes = captured_registry.read_bytes()
+    assert hashlib.sha256(captured_registry_bytes).hexdigest() == registry_basis["registry_sha256"]
+    assert source_goal in {row["id"] for row in json.loads(captured_registry_bytes)["goals"]}
     assert (workspace / "evidence-6.json").read_bytes() == (source_workspace / "evidence-6.json").read_bytes()
     retained_object = workspace / ".git/objects/ab/retained-object"
     assert retained_object.read_text() == "Readonly source evidence"
     assert retained_object.stat().st_mode & 0o777 == 0o444
     registry, runtime = tmp_path / "registry.json", tmp_path / "runtime"
-    goal, agent, turn = "joint-receiver", "joint-researcher", "joint-work"
+    goal = os.environ.get("LOOPX_JOINT_RECEIVER_GOAL", "joint-receiver")
+    agent = os.environ.get("LOOPX_JOINT_RECEIVER_AGENT", "joint-researcher")
+    turn = "joint-work"
     prefix = [
         "--format",
         "json",
@@ -286,7 +299,15 @@ def test_captured_point_continues_with_fresh_authority(
     ]
     guard = cli("quota", "should-run", "--runtime-profile", "generic_cli", *binding)
     assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"]
-    _, branch, _, url, controller_files, grades = request.getfixturevalue("controllers")
+    external_path = os.environ.get("LOOPX_JOINT_RECEIVER_NATIVE")
+    external = json.loads(Path(external_path).read_bytes()) if external_path else None
+    if external:
+        # Operator credentials and the native bank stay outside the guest.
+        # Only this destination's public worker registration enters it.
+        assert fresh_context
+        url, fresh, grades = external["url"], external["activation"], []
+    else:
+        _, branch, _, url, controller_files, grades = request.getfixturevalue("controllers")
     capsule = unit / "components" / snapshot["native_capsule_component_id"]
     opportunity = json.loads((capsule / "checkpoint.json").read_bytes())[
         "point_metadata"
@@ -302,42 +323,50 @@ def test_captured_point_continues_with_fresh_authority(
             "Stride receiver qualification requires a captured pending cooldown"
         )
     phase = tmp_path / "phase-deadline"
-    fresh = restore(
-        controller_files[1],
-        root=capsule,
-        expected_sha256=snapshot["native_capsule_sha256"],
-        run_id="isolated-receiver",
-        phase_deadline_file=phase,
-    )
-    original_phase = phase.read_bytes()
-    replay_activation = restore(
-        controller_files[1],
-        root=capsule,
-        expected_sha256=snapshot["native_capsule_sha256"],
-        run_id="isolated-receiver",
-        phase_deadline_file=phase,
-        recover=True,
-    )
-    assert (
-        replay_activation == fresh
-        and not grades
-        and phase.read_bytes() == original_phase
-    )
+    if external:
+        phase.write_text(external["phase_deadline"])
+        original_phase = phase.read_bytes()
+        actual_phase = Path("/opt/loopx-benchmark/control/phase-deadline")
+        actual_phase.parent.mkdir(parents=True, exist_ok=True)
+        actual_phase.write_bytes(original_phase)
+    else:
+        fresh = restore(
+            controller_files[1],
+            root=capsule,
+            expected_sha256=snapshot["native_capsule_sha256"],
+            run_id="isolated-receiver",
+            phase_deadline_file=phase,
+        )
+        original_phase = phase.read_bytes()
+        replay_activation = restore(
+            controller_files[1],
+            root=capsule,
+            expected_sha256=snapshot["native_capsule_sha256"],
+            run_id="isolated-receiver",
+            phase_deadline_file=phase,
+            recover=True,
+        )
+        assert (
+            replay_activation == fresh
+            and not grades
+            and phase.read_bytes() == original_phase
+        )
     from benchmark.tests.test_checkpoint_controller import host_phase_command
 
     phase_shell = host_phase_command(tmp_path, monkeypatch).replace(
         "/opt/loopx-benchmark/control", str(tmp_path)
     )
-    (workspace / "judge.json").write_text(
+    judge = tmp_path / "judge.json"
+    judge.write_text(
         json.dumps({"url": url, "token": fresh["token"]})
     )
-    (workspace / "judge.json").chmod(0o600)
+    judge.chmod(0o600)
     script = workspace / "continue.py"
     if stride_continuation:
         script.write_text(
             """import json,requests
 from pathlib import Path
-b=json.loads(Path('judge.json').read_text()); url,submission_token=b['url'],b['token']
+b=json.loads(Path(JUDGE).read_text()); url,submission_token=b['url'],b['token']
 h=requests.get(url+'/api/v1/history',params={'token':submission_token},timeout=5).json()
 assert h['best_score']==7 and h['agent_submissions']==1
 assert Path('candidate.txt').read_text()==CAPTURED_CANDIDATE
@@ -345,7 +374,7 @@ source=json.loads(Path(CONTEXT).read_text())
 assert source
 Path('restoration-evidence.json').write_text(json.dumps({'code_unchanged':True,'public_incumbent':7,'consumed_submissions':1,'source_context_read':True}))
 print('Restored state verified; source code unchanged, incumbent and consumed opportunities retained.')
-""".replace("CAPTURED_CANDIDATE", repr(captured_candidate)).replace(
+""".replace("JUDGE", repr(str(judge))).replace("CAPTURED_CANDIDATE", repr(captured_candidate)).replace(
                 "CONTEXT", repr(adopted["artifact"])
             )
         )
@@ -353,7 +382,7 @@ print('Restored state verified; source code unchanged, incumbent and consumed op
         script.write_text(
             """import json,time,requests
 from pathlib import Path
-b=json.loads(Path('judge.json').read_text()); url,submission_token=b['url'],b['token']
+b=json.loads(Path(JUDGE).read_text()); url,submission_token=b['url'],b['token']
 h=requests.get(url+'/api/v1/history',params={'token':submission_token},timeout=5).json()
 assert h['best_score']==7 and h['agent_submissions']==1
 assert Path('candidate.txt').read_text()==CAPTURED_CANDIDATE
@@ -372,7 +401,7 @@ else:
   time.sleep(.01)
  assert result['status']=='completed'
  print('Retained candidate and public best 7 used; candidate 8 graded.')
-""".replace("EXPECTED_COOLDOWN_PENDING", repr(cooldown_pending)).replace(
+""".replace("JUDGE", repr(str(judge))).replace("EXPECTED_COOLDOWN_PENDING", repr(cooldown_pending)).replace(
                 "CAPTURED_CANDIDATE", repr(captured_candidate)
             )
         )
@@ -456,6 +485,9 @@ else:
     def run_native_work(current_guard, logs, purpose):
         logs.mkdir()
         wake = BenchmarkSessionWake(env, execution, {})
+        if fresh_context and env.get("LOOPX_WARM_START"):
+            from benchmark.runtime.checkpoint_session_refresh import prepare_session_refresh
+            purpose = prepare_session_refresh(env, wake, logs) + purpose
         command = native_command(env, execution, "execute", logs, wake)
         result = subprocess.run(
             [
@@ -474,7 +506,15 @@ else:
         )
         assert result.returncode == 0, result.stderr
         (logs / "stdout.jsonl").write_text(result.stdout)
+        if fresh_context and wake.checkpoint_refresh is not None:
+            # Lose the first observation reply after actual native work. The
+            # next Host recovers its original output, without another launch.
+            from benchmark.runtime.checkpoint_session_refresh import prepare_session_refresh
+            wake = BenchmarkSessionWake(env, execution, {})
+            prepare_session_refresh(env, wake, logs.with_name("not-launched"))
+            assert wake.session_id != admitted["session_id"]
         wake.observe(logs / "stdout.jsonl")
+        return wake
 
     try:
         run_native_work(
@@ -577,7 +617,7 @@ else:
             from benchmark.runtime.checkpoint_continuation import restored_capture_gate
             from benchmark.runtime.checkpoint_wake import CheckpointWake
 
-            wakes = tmp_path / "capture-logs" / "wakes"
+            wakes = Path("/logs/agent/wakes") if external else tmp_path / "capture-logs" / "wakes"
             (wakes / review_turn).mkdir(parents=True)
             executable = tmp_path / "loopx-cli"
             executable.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + ' -m loopx.cli "$@"\n')
@@ -747,6 +787,11 @@ else:
             )
             reopened = restored_capture_gate(env)
             assert reopened["capture_allowed"], reopened
+            if fresh_context:
+                from benchmark.runtime.checkpoint_continuation import restored_checkpoint_review
+                review_only = restored_checkpoint_review(env)
+                assert review_only["semantic_review_accepted"] and "capture_allowed" not in review_only
+                assert review_only["review_basis"]["identity"]["turn_instance_id"] == review_turn
             assert not reopened["instructions"]  # Do not repeat the historical packet after consumption.
             assert not restored_capture_gate(env, obligation["obligation_id"])["capture_allowed"]
             configured = cli(
@@ -754,12 +799,12 @@ else:
                 "--goal-id",
                 goal,
                 "--execution-replan-after-turns",
-                "6",
+                "1" if external else "6",
                 "--execute",
             )
             assert (
                 configured["after"]["execution_profile"]["replan_after_effective_turns"]
-                == 6
+                == (1 if external else 6)
             )
             larger = todo
             revision = cli("todo", "list", "--goal-id", goal, "--todo-id", todo)[
@@ -817,7 +862,7 @@ else:
                 """import json,requests
 from pathlib import Path
 assert Path('candidate.txt').read_text()==CAPTURED_CANDIDATE
-b=json.loads(Path('judge.json').read_text()); url,submission_token=b['url'],b['token']
+b=json.loads(Path(JUDGE).read_text()); url,submission_token=b['url'],b['token']
 for value in (9,10):
  Path('candidate.txt').write_text(str(value))
  assert int(Path('candidate.txt').read_text())==value
@@ -827,7 +872,7 @@ assert r.status_code==429
 h=requests.get(url+'/api/v1/history',params={'token':submission_token},timeout=5).json()
 assert h['agent_submissions']==1 and h['best_score']==7
 print('Current grow adopted: two complete candidates 9 and 10 validated; original cooldown and incumbent preserved.')
-    """.replace("CAPTURED_CANDIDATE", repr(captured_candidate))
+    """.replace("JUDGE", repr(str(judge))).replace("CAPTURED_CANDIDATE", repr(captured_candidate))
             )
             assert cooldown_pending, (
                 "This qualification specifically requires the captured pending cooldown."
@@ -835,7 +880,12 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
             provider_phase.update(
                 count=0, command=shlex.quote(sys.executable) + " grow.py"
             )
-            run_native_work(
+            if fresh_context:
+                warm = tmp_path / "warm-start.json"
+                warm.write_text(json.dumps({"sha256": digest, "goal_id": goal, "agent_id": agent,
+                    "fresh_after_replan": True}))
+                env.update(LOOPX_WARM_START=str(warm), LOOPX_ITERATION_CONTEXT="resume")
+            larger_wake = run_native_work(
                 next_guard,
                 tmp_path / "larger-work",
                 "Execute the current grow decision as one complete two-candidate experiment. Old guards are evidence only.",
@@ -855,11 +905,23 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
                 == v
                 for v in (9, 10)
             )
-            grown = native_session_checkpoint(env, admitted["session_id"], timeout=30)[
+            active_session_id = larger_wake.receipt["session"]["session_id"]
+            grown = native_session_checkpoint(env, active_session_id, timeout=30)[
                 "metadata"
             ]
-            assert grown["turn_ids"][:-2] == native["turn_ids"]
-            assert len(grown["turn_ids"]) == len(native["turn_ids"]) + 2
+            if fresh_context:
+                assert active_session_id != admitted["session_id"] and len(grown["turn_ids"]) == 1
+                assert "Completed current decision" in json.dumps(requests[2])
+                assert "Complete candidates 9 and 10" in json.dumps(requests[2])
+                assert larger_wake.binding["checkpoint_artifact_sha256"] == digest
+                from benchmark.runtime.checkpoint_session_refresh import prepare_session_refresh
+                replay = BenchmarkSessionWake(env, execution, {})
+                assert prepare_session_refresh(env, replay, tmp_path / "unlaunched-retry") == ""
+                assert replay.session_id == active_session_id
+                assert not (tmp_path / "unlaunched-retry").exists()
+            else:
+                assert grown["turn_ids"][:-2] == native["turn_ids"]
+                assert len(grown["turn_ids"]) == len(native["turn_ids"]) + 2
             work_vision = tmp_path / "larger-vision.json"
             work_vision.write_text(
                 json.dumps(
@@ -911,21 +973,22 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
                 "heartbeat",
                 "--execute",
             )
-            final = cli(
-                "quota",
-                "should-run",
-                "--goal-id",
-                goal,
-                "--agent-id",
-                agent,
-                "--turn-instance-id",
-                "joint-next-audit",
-                "--runtime-profile",
-                "generic_cli",
-                "--available-capability",
-                "shell",
-            )
-            assert final["interaction_contract"]["mode"] == "bounded_delivery"
+            if not external:
+                final = cli(
+                    "quota",
+                    "should-run",
+                    "--goal-id",
+                    goal,
+                    "--agent-id",
+                    agent,
+                    "--turn-instance-id",
+                    "joint-next-audit",
+                    "--runtime-profile",
+                    "generic_cli",
+                    "--available-capability",
+                    "shell",
+                )
+                assert final["interaction_contract"]["mode"] == "bounded_delivery"
             # The next genuinely new decision boundary can capture changed
             # research/code/native history, after actual useful continuation.
             # This partial point deliberately makes no evaluator qualification.
@@ -933,13 +996,45 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
             prior_wake.mkdir()
             (prior_wake / "receipt.json").write_text(json.dumps({"turn_id": next_turn,
                 "mode": "heartbeat", "stage": "execute", "ok": True,
-                "session": {"binding_scope": "agent", "action": "resume", "session_id": admitted["session_id"]}}))
-            cli("configure-goal", "--goal-id", goal, "--execution-replan-after-turns", "1", "--execute")
+                "session": {"binding_scope": "agent", "action": "resume", "session_id": active_session_id}}))
+            if not external:
+                cli("configure-goal", "--goal-id", goal, "--execution-replan-after-turns", "1", "--execute")
+            else:
+                declaration.write_text(json.dumps({"trigger": "fresh_replan", "destination": str(wakes.parent / "checkpoints"),
+                    "native_session": True, "loopx_state": True, "evaluation_opportunity": True, "controller_handoff": True,
+                    "components": [{"id": "task_workspace", "source_path": str(workspace)}], "point_metadata": {}}))
             boundary_turn = "joint-next-capture"
             (wakes / boundary_turn).mkdir()
             boundary = {"turn_id": boundary_turn, "mode": "heartbeat", "stage": "execute", "ok": False}
             capture_before_replan(env, boundary, "Current new decision contract.")
-            if boundary["checkpoint"].get("reason") == "no_fresh_replan":
+            (tmp_path / "automatic-capture.json").write_text(json.dumps(boundary))
+            assert boundary["checkpoint_restore"].get("native_continuation_cursor") == grown["completed_turn_id"], boundary
+            if external:
+                assert boundary["checkpoint"]["captured"], json.dumps(boundary, indent=2)
+                assert not boundary["checkpoint"]["research_point_qualified"]  # Artifact integrity is not scientific qualification.
+                published = Path(os.environ["LOOPX_JOINT_RECAPTURE_ROOT"])
+                matching = [p for p in published.iterdir() if p.is_dir() and (p / "checkpoint.json").exists()
+                    and json.loads((p / "checkpoint.json").read_bytes())["sha256"] == boundary["checkpoint"]["sha256"]]
+                assert len(matching) == 1, "The sealed reply must select exactly one immutable point"
+                recaptured = matching[0]
+                captured = json.loads((recaptured / "checkpoint.json").read_bytes())
+                cm = captured["point_metadata"]
+                assert cm["held_decision_component_id"] and cm["replan"]["obligation_id"] != obligation["obligation_id"]
+                assert cm["native_session"]["turn_ids"] == grown["turn_ids"]
+                assert (recaptured / "components/task_workspace/candidate.txt").read_text() == "10"
+                assert cm["session"]["checkpoint_context_refresh"]["checkpoint_sha256"] == digest
+                nested = recaptured / "components" / cm["worker_file_snapshot"]["native_capsule_component_id"]
+                native_point = json.loads((nested / "checkpoint.json").read_bytes())["point_metadata"]
+                assert (nested / "components/native_judge/incumbent.tar.gz").read_bytes() == b"7"
+                opportunity_after = native_point["native_reference"]["opportunity"]
+                assert {k: v for k, v in opportunity_after.items() if k != "remaining_cooldown_seconds"} == {k: v for k, v in opportunity.items() if k != "remaining_cooldown_seconds"}
+                assert opportunity_after["remaining_cooldown_seconds"] <= opportunity["remaining_cooldown_seconds"]
+                assert actual_phase.read_bytes() == original_phase
+                check = effect_runtime_result("runtime.checkpoint_artifacts", {
+                    "action": "verify", "root": str(recaptured), "expected_sha256": captured["sha256"]})
+                assert check["integrity_verified"] and not check["research_point_qualified"]
+                (tmp_path / "full-recapture.json").write_text(json.dumps(boundary["checkpoint"]))
+            elif boundary["checkpoint"].get("reason") == "no_fresh_replan":
                 # Capture eligibility does not manufacture a quota obligation.
                 # This source may not have another due review yet.
                 assert boundary["checkpoint_restore"]["capture_allowed"]
@@ -951,6 +1046,30 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
                 assert next_metadata["replan"]["obligation_id"] != obligation["obligation_id"]
                 assert next_metadata["held_decision_component_id"]
                 assert next_metadata["native_session"]["turn_ids"] == grown["turn_ids"]
+            if not external:
+                from benchmark.runtime.checkpoint import capture_after_wake
+                manual = wakes.parent / "checkpoints" / "refreshed-continuation"
+                manual_request = tmp_path / "manual-capture-request.json"
+                manual_request.write_text(json.dumps({"destination": str(manual), "native_session": True,
+                    "components": [{"id": "code", "source_path": str(candidate)}], "point_metadata": {}}))
+                capture_env = {**env, "LOOPX_CHECKPOINT_REQUEST": str(manual_request)}
+                completed = {"ok": True, "turn_id": next_turn, "mode": "heartbeat", "stage": "execute",
+                    "session": {"session_id": active_session_id, "binding_scope": "agent", "action": "resume"}}
+                capture_after_wake(capture_env, completed)
+                assert completed["checkpoint"]["captured"], completed
+                captured = json.loads((manual / "checkpoint.json").read_text())
+                assert captured["point_metadata"]["native_session"]["turn_ids"] == grown["turn_ids"]
+                if fresh_context:
+                    provenance = captured["point_metadata"]["session"]["checkpoint_context_refresh"]
+                    assert provenance["checkpoint_sha256"] == digest
+                    assert provenance["source_session_id"] == admitted["session_id"]
+                    assert provenance["session_id"] == active_session_id
+                assert (manual / "components/code").read_text() == "10"
+                verified_point = effect_runtime_result("runtime.checkpoint_artifacts", {
+                    "action": "verify", "root": str(manual), "expected_sha256": captured["sha256"]})
+                assert verified_point["integrity_verified"] and not verified_point["research_point_qualified"]
+                capture_after_wake(capture_env, completed)
+                assert completed["checkpoint"]["reason"] == "destination_already_present_no_replay"
         effect_runtime_result(
             "runtime.checkpoint_artifacts",
             {"action": "verify", "root": str(unit), "expected_sha256": digest},

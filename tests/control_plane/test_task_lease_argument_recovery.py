@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 GOAL, TODO = "lease-recovery", "todo_lease_recovery"
 
 
-@pytest.fixture(params=["legacy", "file", "sqlite"])
+@pytest.fixture(params=["file", "sqlite"])
 def lease_cli(tmp_path, monkeypatch, request):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime = tmp_path / "project with spaces", tmp_path / "runtime"
@@ -27,15 +27,14 @@ def lease_cli(tmp_path, monkeypatch, request):
         "id": GOAL, "repo": str(project), "state_file": state.name,
         "coordination": {"registered_agents": ["peer-a", "peer-b"]},
     }]}))
-    if request.param != "legacy":
-        initialize_canonical_authority(runtime, GOAL, build_todo_runtime_shadow_projection(
-            goal_id=GOAL, handoff_mode="hard_lease", leases=[], todos=[{
-                "schema_version": "todo_item_v0", "todo_id": TODO, "role": "agent",
-                "status": "open", "done": False, "text": "Verify a source artifact.",
-                "archive_state": "active", "source_section": "Agent Todo", "index": 1,
-                "task_class": "advancement_task", "claimed_by": "peer-a", "required_write_scopes": ["src/**"],
-            }]), state_path=state, provider=request.param)
-        state.unlink()
+    initialize_canonical_authority(runtime, GOAL, build_todo_runtime_shadow_projection(
+        goal_id=GOAL, handoff_mode="hard_lease", leases=[], todos=[{
+            "schema_version": "todo_item_v0", "todo_id": TODO, "role": "agent",
+            "status": "open", "done": False, "text": "Verify a source artifact.",
+            "archive_state": "active", "source_section": "Agent Todo", "index": 1,
+            "task_class": "advancement_task", "claimed_by": "peer-a", "required_write_scopes": ["src/**"],
+        }]), state_path=state, provider=request.param)
+    state.unlink()
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
 
     def run(args, code=0):
@@ -149,7 +148,7 @@ def test_recovery_preserves_routing_and_repeatable_string_values():
     assert recovered.new_idempotency_key is None
 
 
-def test_transfer_repair_retains_explicit_claim_handover(lease_cli, request):
+def test_transfer_repair_retains_explicit_claim_handover(lease_cli):
     run, action, _, _ = lease_cli
     before = run(action("inspect"))["lease"]
     rejected = run(action("transfer", "--owner", "peer-a", "--idempotency-key", "original",
@@ -161,19 +160,13 @@ def test_transfer_repair_retains_explicit_claim_handover(lease_cli, request):
     assert "--transfer-claim" in repaired
     assert repaired[repaired.index("--expected-version") + 1] == "1"
     assert run(action("inspect"))["lease"] == before
-    if request.node.callspec.params["lease_cli"] == "legacy":
-        # Syntax repair cannot make atomic claim transfer available on legacy files.
-        denied = run(repaired, code=1)
-        assert denied["ok"] is False and "recovery" not in denied
-        assert run(action("inspect"))["lease"] == before
-    else:
-        transferred = run(repaired)
-        assert transferred["lease"]["owner"] == transferred["claimed_by"] == "peer-b"
-        assert transferred["lease"]["version"] == 2
-        assert transferred["lease"]["write_scopes"] == ["src/**"]
-        released = run(action("release", "--owner", "peer-b", "--idempotency-key", "receiver",
-                              "--expected-version", "2"))
-        assert released["lease"]["status"] == "released"
+    transferred = run(repaired)
+    assert transferred["lease"]["owner"] == transferred["claimed_by"] == "peer-b"
+    assert transferred["lease"]["version"] == 2
+    assert transferred["lease"]["write_scopes"] == ["src/**"]
+    released = run(action("release", "--owner", "peer-b", "--idempotency-key", "receiver",
+                          "--expected-version", "2"))
+    assert released["lease"]["status"] == "released"
 
 
 def test_grammar_rejection_precedes_runtime_resolution(monkeypatch):
@@ -189,3 +182,147 @@ def test_grammar_rejection_precedes_runtime_resolution(monkeypatch):
                                     print_payload=lambda payload, *_: captured.append(payload)) == 1
     assert captured[0]["recovery"]["remove_flags"] == ["--write-worktree"]
     assert "canonical lease checks" in render_task_lease_markdown(captured[0])
+
+
+def _retained_lifecycle_cli(tmp_path: Path, operation: str):
+    """Restore fixed 1.x records; never invoke a retired writer to seed them."""
+    fixture = Path(__file__).parent / "fixtures" / "retained_lease_receipts_1x.json"
+    history = json.loads(fixture.read_text().replace("$ROOT", str(tmp_path)))["scenarios"]
+    scenario = history["original" if operation == "release" else operation]
+    runtime, state, registry = tmp_path / "runtime", tmp_path / "state.md", tmp_path / "registry.json"
+    state.write_text("# Historical Goal\n\n## Agent Todo\n\n")
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
+        "id": "goal-a", "repo": str(tmp_path), "state_file": state.name,
+        "coordination": {"registered_agents": ["agent-a", "agent-b"]},
+    }]}))
+    lease = runtime / "goals/goal-a/task-leases/todo_target.json"
+    receipt = None
+    for relative, value in scenario["files"].items():
+        path = runtime / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value))
+        if ".lifecycle-operations" in path.parts:
+            receipt = path
+
+    def run(**overrides):
+        request = {**scenario["request"], **overrides}
+        args = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+                "task-lease", operation, "--goal-id", "goal-a", "--todo-id", "todo_target",
+                "--owner", request["owner"], "--idempotency-key", request["idempotency_key"],
+                "--expected-version", str(request["expected_version"] if operation != "release" else 1)]
+        if operation != "release":
+            args += ["--ttl-seconds", str(request["ttl_seconds"])]
+        if operation == "transfer":
+            args += ["--new-owner", request["new_owner"], "--new-idempotency-key", request["new_idempotency_key"]]
+        if request.get("transfer_claim") is True:
+            args += ["--transfer-claim"]
+        completed = subprocess.run([sys.executable, "-m", "loopx.cli", *args], cwd=ROOT,
+                                   capture_output=True, text=True, timeout=90)
+        return completed.returncode, json.loads(completed.stdout)
+
+    return run, runtime, state, registry, lease, receipt, history
+
+
+@pytest.mark.parametrize("operation", ["renew", "transfer"])
+@pytest.mark.parametrize("receipt_state", ["prepared", "committed"])
+def test_retained_lifecycle_public_cli_recovers_only_the_original_effect(tmp_path, operation, receipt_state):
+    run, runtime, state, registry, lease, receipt, _history = _retained_lifecycle_cli(tmp_path, operation)
+    assert receipt is not None
+    original = json.loads(receipt.read_text())
+    receipt.write_text(json.dumps({**original, "state": receipt_state}))
+    source_before = {path: path.read_bytes() for path in (state, registry, lease)}
+    receipt_before = receipt.read_bytes()
+    rc, replay = run()
+    assert rc == 0 and replay["idempotent"] is True, replay
+    assert replay["lease"] == json.loads(source_before[lease])
+    assert replay["settlement"]["receipts"][-1]["status"] == "replayed"
+    assert {path: path.read_bytes() for path in source_before} == source_before
+    if receipt_state == "committed":
+        assert receipt.read_bytes() == receipt_before
+    else:
+        assert json.loads(receipt.read_text())["state"] == "committed"
+    repaired_receipt = receipt.read_bytes()
+    rc, again = run()
+    assert rc == 0 and again["lease"] == replay["lease"] and again["idempotent"] is True, again
+    assert receipt.read_bytes() == repaired_receipt
+    assert {path: path.read_bytes() for path in source_before} == source_before
+    assert not (runtime / "authority").exists()
+
+
+@pytest.mark.parametrize("operation", ["renew", "transfer"])
+@pytest.mark.parametrize("change", ["ttl", "owner", "key", "version", "later_generation", "corrupt_receipt", "prepared_without_effect", "missing_receipt"])
+def test_retained_lifecycle_public_cli_refuses_changes_and_fresh_source_work(tmp_path, operation, change):
+    run, runtime, state, registry, lease, receipt, history = _retained_lifecycle_cli(tmp_path, operation)
+    assert receipt is not None
+    overrides = {"ttl": {"ttl_seconds": 1200}, "owner": {"owner": "agent-b"},
+                 "key": {"idempotency_key": "another-execution"}, "version": {"expected_version": 2}}.get(change, {})
+    if change == "later_generation":
+        current = json.loads(lease.read_text())
+        lease.write_text(json.dumps({**current, "version": current["version"] + 1, "lease_epoch": current["lease_epoch"] + 1}))
+    elif change == "corrupt_receipt":
+        receipt.write_text("{invalid original receipt")
+    elif change == "prepared_without_effect":
+        original = json.loads(receipt.read_text())
+        receipt.write_text(json.dumps({**original, "state": "prepared"}))
+        lease.write_text(json.dumps(history["original"]["files"]["goals/goal-a/task-leases/todo_target.json"]))
+    elif change == "missing_receipt":
+        receipt.unlink()
+    before = {path: path.read_bytes() if path.exists() else None for path in (state, registry, lease, receipt)}
+    rc, rejected = run(**overrides)
+    assert rc != 0 and rejected["ok"] is False, rejected
+    if change in {"prepared_without_effect", "missing_receipt"}:
+        assert rejected["error_code"] == "canonical_authority_required", rejected
+        assert rejected["write_admitted"] is False and rejected["legacy_fallback_used"] is False
+    elif change == "ttl":
+        assert rejected["error_code"] == "idempotency_key_reuse", rejected
+    elif change == "later_generation":
+        assert rejected["error_code"] == "lifecycle_receipt_state_mismatch", rejected
+    assert {path: path.read_bytes() if path.exists() else None for path in before} == before
+    assert not (runtime / "authority").exists()
+
+
+@pytest.mark.parametrize("change", [{"new_owner": "agent-a"}, {"new_idempotency_key": "different-receiver"}, {"transfer_claim": True}])
+def test_retained_transfer_cli_cannot_change_the_receiver_or_add_claim_authority(tmp_path, change):
+    run, runtime, state, registry, lease, receipt, _history = _retained_lifecycle_cli(tmp_path, "transfer")
+    before = {path: path.read_bytes() for path in (state, registry, lease, receipt)}
+    rc, rejected = run(**change)
+    assert rc != 0 and rejected["ok"] is False, rejected
+    assert {path: path.read_bytes() for path in before} == before
+    assert not (runtime / "authority").exists()
+
+
+@pytest.mark.parametrize("operation", ["renew", "transfer"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_retained_lifecycle_cli_never_falls_back_after_selected_provider_loss(tmp_path, monkeypatch, operation, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    run, runtime, state, registry, lease, receipt, _history = _retained_lifecycle_cli(tmp_path, operation)
+    initialize_canonical_authority(runtime, "goal-a", build_todo_runtime_shadow_projection(
+        goal_id="goal-a", todos=[], leases=[], handoff_mode="hard_lease"), state_path=state, provider=provider)
+    backend = runtime / "authority" / f"{provider}-v0"
+    offline = backend.with_name(backend.name + "-offline")
+    backend.rename(offline)
+    before = {path: path.read_bytes() for path in (state, registry, lease, receipt)}
+    try:
+        rc, rejected = run()
+        assert rc != 0 and rejected["ok"] is False, rejected
+        assert rejected["legacy_fallback_used"] is False
+        assert {path: path.read_bytes() for path in before} == before
+        assert not backend.exists()
+    finally:
+        offline.rename(backend)
+
+
+def test_retained_expired_lease_public_release_still_settles_once(tmp_path):
+    run, runtime, state, registry, lease, _receipt, _history = _retained_lifecycle_cli(tmp_path, "release")
+    original = json.loads(lease.read_text())
+    before = {path: path.read_bytes() for path in (state, registry)}
+    rc, released = run()
+    assert rc == 0 and released["lease"]["status"] == "released", released
+    assert released["lease"]["owner"] == original["owner"]
+    assert released["lease"]["idempotency_key"] == original["idempotency_key"]
+    after = lease.read_bytes()
+    rc, replay = run()
+    assert rc == 0 and replay["idempotent"] is True and replay["lease"] == released["lease"], replay
+    assert lease.read_bytes() == after
+    assert {path: path.read_bytes() for path in before} == before
+    assert not (runtime / "authority").exists()

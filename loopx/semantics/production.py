@@ -318,13 +318,45 @@ def _probe_controller_domain(vocabulary: dict[str, Any]) -> list[Production]:
     return probe_controller_production() + probe_projection_production()
 
 
+def probe_quota_run_decision_production(vocabulary: dict[str, Any]) -> list[Production]:
+    """Adapt the fixed TypeScript classifier proof to the existing CI collector."""
+    if vocabulary.get('input_producer') != QUOTA_RUN_DECISION_SITE:
+        raise ValueError('effective_action: quota witness must name its anchored classifier')
+    root = Path(__file__).resolve().parents[2]
+    try:
+        completed = subprocess.run(
+            ['node', '--no-warnings', '--experimental-strip-types',
+             str(root / 'scripts/quota_run_decision_witness.mts')],
+            input=json.dumps({'values': vocabulary['values']}), capture_output=True,
+            text=True, encoding='utf-8', check=False, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ValueError('effective_action: quota native witness is unavailable') from error
+    if completed.returncode:
+        raise ValueError(f'effective_action: quota native witness failed: {completed.stderr[:300]}')
+    try:
+        observed = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise ValueError('effective_action: quota witness returned invalid JSON') from error
+    if (not isinstance(observed, dict) or observed.get('site') != QUOTA_RUN_DECISION_SITE
+            or type(observed.get('line')) is not int or observed['line'] < 1
+            or not isinstance(observed.get('actions'), list) or not observed['actions']
+            or any(not isinstance(action, str) or action not in vocabulary['values']
+                   for action in observed['actions'])):
+        raise ValueError('effective_action: quota witness returned invalid production evidence')
+    return [Production(QUOTA_RUN_DECISION_SITE, observed['line'], 'input_witness',
+                       frozenset({action}), False) for action in observed['actions']]
+
+
 # Executable input witnesses are fixed in code and selected only by the
 # registered ``input_producer`` site; registry data cannot import a callable.
 # Line of ``settlementIdentity`` in the tracked builder, so the witness row
 # points at the function it executed.
 SETTLEMENT_IDENTITY_LINE = 408
+QUOTA_RUN_DECISION_SITE = 'loopx/control_plane/quota/run_decision.ts::resolveQuotaRunDecision'
 
 INPUT_WITNESSES: dict[str, Callable[[dict[str, Any]], list[Production]]] = {
+    QUOTA_RUN_DECISION_SITE: probe_quota_run_decision_production,
     'loopx/control_plane/turn_driver/transaction.py::_result_kind': probe_turn_result_input_domain,
     'loopx/control_plane/turn_driver/loop_controller.py::decide_loop_disposition': _probe_controller_domain,
     'loopx/control_plane/effect_program.ts::settlementIdentity': probe_settlement_binding_production,

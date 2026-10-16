@@ -240,3 +240,125 @@ def test_project_list_survives_unreadable_goal_registry_while_creation_refuses(t
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_fresh_install_previews_its_first_goal_before_any_registry_exists(tmp_path):
+    # An installed LoopX has no registry until the first Goal is created, and
+    # the first-Goal home invites exactly that creation. The proposal must be
+    # reviewable then: the absent registry is a stable fact to fingerprint, a
+    # registry that appears afterwards reads as a change, and an unreadable
+    # registry still refuses.
+    project = tmp_path / "project"
+    project.mkdir()
+    registry = project / ".loopx" / "registry.json"
+    service = ChatActionService(store=ChatActionStore(tmp_path / "actions"),
+        registry_path=registry, workspace_roots=[project])
+
+    proposal = preview(service, "current", key="first")
+
+    assert proposal["action_kind"] == "goal.create"
+    assert proposal["workspace_binding"]["label"] == "project"
+    assert proposal["expected_state_fingerprint"] == "registry-absent"
+    assert service._registry_fingerprint() == "registry-absent", "still absent at apply time: the review stands"
+    registry.parent.mkdir()
+    registry.write_text(json.dumps({"schema_version": 1, "goals": []}))
+    assert service._registry_fingerprint() != "registry-absent", "a registry that appeared in between is a change"
+    service.registry_path = registry.parent  # a directory, not a file: unreadable, not absent
+    with pytest.raises(ValueError, match="registry is unavailable"):
+        service._registry_fingerprint()
+
+
+def test_first_creation_persists_under_the_serving_chat_runtime_root(tmp_path, monkeypatch):
+    # A fresh install has no registry, so a creation has no recorded runtime
+    # root to follow. It must persist where the serving Chat keeps its own
+    # state (its selected runtime root), never in the implicit default beside
+    # it; replaying the original operation keeps that root, and a registry
+    # that appears between preview and apply goes stale instead of applying.
+    import http.client
+    import runpy
+    import threading
+    from pathlib import Path
+
+    from loopx import paths
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    from loopx.chat_actions import goal_workspace_ref
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.chat_store import ChatSessionStore
+
+    implicit_default = tmp_path / "implicit-default"
+    monkeypatch.setattr(paths, "select_default_runtime_root", lambda: implicit_default)
+    selected = tmp_path / "selected-runtime"
+    project = tmp_path / "project"
+    project.mkdir()
+    registry = project / ".loopx" / "registry.json"
+    fixture = runpy.run_path(str(Path(__file__).resolve().parents[1] / "examples/loopx-chat-actions-smoke.py"))
+    sessions = ChatSessionStore(selected)
+    controller = fixture["FakeRuntimeController"](sessions)
+    controller.project_contexts = ChatProjectContexts([project])
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path, server.runtime_root, server.runtime_root_override = registry, selected, str(selected)
+    server.action_store = ChatActionStore(selected / "chat/actions")
+    server.action_service = ChatActionService(store=server.action_store, registry_path=registry,
+        chat_store=sessions, runtime_controller=controller, workspace_roots=[project],
+        runtime_root_override=str(selected))
+    server.chat_store, server.runtime_controller, server.verbose = sessions, controller, False
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def request(path, body=None):
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=30)
+        try:
+            connection.request("GET" if body is None else "POST", path,
+                None if body is None else json.dumps(body), {"Content-Type": "application/json"})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    def create(key, goal_id):
+        return {"action_kind": "goal.create", "summary": "Create a Goal", "idempotency_key": key,
+                "context": {"kind": "manager", "goal_id": None},
+                "normalized_parameters": {"goal_id": goal_id, "title": "First Goal", "objective": "Start here",
+                                          "agent_id": "codex", "workspace_ref": goal_workspace_ref(project)}}
+
+    def entries(root):
+        return sorted(str(path.relative_to(root)) for path in root.rglob("*")) if root.exists() else []
+
+    try:
+        assert not registry.exists()
+        status, previewed = request("/api/actions/preview", create("first", "goal-first"))
+        assert status == 201, previewed
+        assert previewed["proposal"]["expected_state_fingerprint"] == "registry-absent"
+        proposal_id = previewed["proposal"]["proposal_id"]
+        status, applied = request(f"/api/actions/{proposal_id}/apply", {})
+        assert status in {200, 202}, applied
+
+        recorded = json.loads(registry.read_text())
+        assert [goal["id"] for goal in recorded["goals"]] == ["goal-first"]
+        assert Path(str(recorded["common_runtime_root"])).resolve() == selected.resolve(), recorded
+        assert any("goal-first" in entry for entry in entries(selected)), "canonical Goal state lives under the selected root"
+        assert entries(implicit_default) == [], "nothing lands in the implicit default runtime root"
+
+        # Replaying the original operation keeps one Goal under the same root.
+        status, replayed = request(f"/api/actions/{proposal_id}/apply", {})
+        assert status in {200, 202, 409}, replayed
+        again = json.loads(registry.read_text())
+        assert [goal["id"] for goal in again["goals"]] == ["goal-first"]
+        assert Path(str(again["common_runtime_root"])).resolve() == selected.resolve()
+        assert entries(implicit_default) == []
+
+        # A registry that appears between preview and apply is a change: the
+        # proposal goes stale rather than creating against stale facts.
+        registry.unlink()
+        status, second = request("/api/actions/preview", create("second", "goal-second"))
+        assert status == 201, second
+        assert second["proposal"]["expected_state_fingerprint"] == "registry-absent"
+        registry.write_text(json.dumps(recorded), encoding="utf-8")
+        status, stale = request(f"/api/actions/{second['proposal']['proposal_id']}/apply", {})
+        assert stale["proposal"]["status"] != "applied", stale
+        assert [goal["id"] for goal in json.loads(registry.read_text())["goals"]] == ["goal-first"]
+        assert entries(implicit_default) == []
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()

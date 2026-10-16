@@ -18,6 +18,7 @@ if str(REPO_ROOT) not in sys.path:
 from loopx.capabilities.explore.todo_branch_plan import (  # noqa: E402
     build_explore_todo_branch_plan,
 )
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
 from loopx.control_plane.todos.contract import format_todo_metadata_line  # noqa: E402
 
 
@@ -51,7 +52,7 @@ def run_loopx(registry: Path, *args: str) -> dict[str, object]:
     return json.loads(completed.stdout)
 
 
-def write_fixture(root: Path) -> tuple[Path, Path]:
+def write_fixture(root: Path, provider: str) -> tuple[Path, Path]:
     project = root / "project"
     project.mkdir()
     state_file = project / "ACTIVE_GOAL_STATE.md"
@@ -84,10 +85,11 @@ def write_fixture(root: Path) -> tuple[Path, Path]:
         ),
         encoding="utf-8",
     )
+    import_fixture_authority(registry, GOAL_ID, provider=provider)
     return registry, state_file
 
 
-def check_todo_lifecycle() -> None:
+def check_todo_lifecycle(provider: str) -> None:
     try:
         format_todo_metadata_line(
             todo_id="todo_invalid123",
@@ -99,7 +101,7 @@ def check_todo_lifecycle() -> None:
         raise AssertionError("private path-shaped Explore node refs must fail closed")
 
     with tempfile.TemporaryDirectory(prefix="loopx-explore-todo-link-") as tmp:
-        registry, state_file = write_fixture(Path(tmp))
+        registry, state_file = write_fixture(Path(tmp), provider)
         added = run_loopx(
             registry,
             "todo",
@@ -118,7 +120,7 @@ def check_todo_lifecycle() -> None:
             "node_dead",
         )
         todo_id = str(added["todo_id"])
-        assert added["explore_result_node_refs"] == ["node_live", "node_dead"], added
+        assert added["todo"]["explore_result_node_refs"] == ["node_live", "node_dead"], added
 
         listed = run_loopx(
             registry,
@@ -148,6 +150,10 @@ def check_todo_lifecycle() -> None:
             "--no-follow-up",
         )
         assert completed["status"] == "done", completed
+        terminal = run_loopx(registry, "todo", "list", "--goal-id", GOAL_ID,
+                             "--todo-id", todo_id)["todo"]
+        assert terminal["status"] == "done"
+        assert terminal["explore_result_node_refs"] == ["node_live", "node_dead"]
         state_text = state_file.read_text(encoding="utf-8")
         assert "explore_result_node_refs=node_live%2Cnode_dead" in state_text, state_text
 
@@ -164,6 +170,11 @@ def check_todo_lifecycle() -> None:
         archived = state_file.read_text(encoding="utf-8")
         assert "Completed Work Archive" in archived, archived
         assert "explore_result_node_refs=node_live%2Cnode_dead" in archived, archived
+
+        archived_item = run_loopx(registry, "todo", "list", "--goal-id", GOAL_ID,
+                                  "--todo-id", todo_id)["todo"]
+        assert archived_item["archive_state"] == "archive", archived_item
+        assert archived_item["explore_result_node_refs"] == ["node_live", "node_dead"]
 
         second = run_loopx(
             registry,
@@ -197,7 +208,7 @@ def check_todo_lifecycle() -> None:
             "--todo-id",
             str(second["todo_id"]),
         )["todo"]
-        assert "explore_result_node_refs" not in cleared, cleared
+        assert cleared["explore_result_node_refs"] == [], cleared
 
 
 def check_planner_diagnostics() -> None:
@@ -283,7 +294,8 @@ def check_planner_diagnostics() -> None:
 
 
 def main() -> int:
-    check_todo_lifecycle()
+    for provider in ("file", "sqlite"):
+        check_todo_lifecycle(provider)
     check_planner_diagnostics()
     print("explore-todo-result-node-linkage-smoke ok")
     return 0

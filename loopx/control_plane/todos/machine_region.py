@@ -94,22 +94,35 @@ def find_todo_regions(lines: list[str], *, visible: frozenset[int] | None = None
         marked = index < len(lines) and lines[index].rstrip("\r\n") == todo_region_marker(role, "begin")
         if marked:
             index += 1
+        legacy_task_open = False
         while index < len(lines):
             content = lines[index].rstrip("\r\n")
             if content == todo_region_marker(role, "end") and marked:
                 break
             if TODO_REGION_PREFIX in content:
                 raise ValueError("nested, mismatched, or malformed Todo region marker")
+            task = TODO_TASK_PATTERN.match(content) is not None
+            legacy_continuation = (
+                not marked and legacy_task_open and content.startswith((" ", "\t"))
+            )
             generated = index in visible and (
                 not content.strip()
-                or TODO_TASK_PATTERN.match(content) is not None
+                or task
                 or parse_todo_metadata_line(content) is not None
                 or content.startswith("<!-- loopx:todo-section-projection-v0 ")
+                or legacy_continuation
             )
             if not generated:
                 if marked:
                     raise ValueError("non-generated content inside marked Todo region")
                 break
+            # Adopt the old writer's folded task as one block. A blank line
+            # closes that block so following indented narrative stays opaque;
+            # marked regions retain their stricter generated-only grammar.
+            if task:
+                legacy_task_open = True
+            elif not content.strip():
+                legacy_task_open = False
             index += 1
         if marked and index == len(lines):
             raise ValueError("unterminated Todo region")

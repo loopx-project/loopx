@@ -32,7 +32,7 @@ const installed = database ? installPostgreSqlAuthorityStoreSchema(database, `po
 test.after(async () => {await pool?.end();});
 
 type Provider = "legacy" | "file" | "sqlite" | "postgresql";
-async function fixture(t: test.TestContext, provider: Provider, schema: "native" | "legacy" = "native") {
+async function fixture(t: test.TestContext, provider: Provider, schema: "native" | "legacy" = "native", mode = "hard_lease") {
   const root = await mkdtemp(join(tmpdir(), "lease-inspect-")), goal = "inspect-goal";
   t.after(() => rm(root, {recursive: true, force: true}));
   const registry = join(root, "registry.json"), registryText = "synthetic registration source";
@@ -50,6 +50,8 @@ async function fixture(t: test.TestContext, provider: Provider, schema: "native"
     {name: "archived", todo: {archive_state: "archive"}, active: false, constraint: {effective: false, reason: "todo_not_found"}},
     {name: "orphan", todo: null, active: false, constraint: {effective: false, reason: "todo_not_found"}},
     {name: "closed", todo: {status: "done", done: true}, active: false, constraint: {effective: false, reason: "todo_not_open", todo_status: "done"}},
+    {name: "user-action", todo: {role: "user", task_class: "user_action", bound_agent: "agent-b"},
+      active: false, constraint: {effective: false, reason: "todo_not_executable"}},
     {name: "excluded", todo: {excluded_agents: ["agent-a"], claimed_by: "agent-b"}, active: false,
       constraint: {effective: false, reason: "owner_excluded_from_todo", excluded_agents: ["agent-a"]}},
     {name: "claim", todo: {claimed_by: "agent-b"}, active: false,
@@ -77,7 +79,7 @@ async function fixture(t: test.TestContext, provider: Provider, schema: "native"
     if (item.todo !== null) todos.push({...todo, todo_id: `todo_inspect_${item.name}`, ...item.todo});
     if (item.lease !== null) leases.push({...lease, todo_id: `todo_inspect_${item.name}`, expires_at: "2026-09-13T10:10:00Z", ...item.lease});
   }
-  const projection = authorityProjectionFixture(goal, todos, leases, schema, {handoff_mode: "hard_lease"});
+  const projection = authorityProjectionFixture(goal, todos, leases, schema, {handoff_mode: mode});
   const authority = {handoff_mode: "hard_lease", registered_agent_candidates: [fixture.registered_agents],
     todos: todos.filter(row => row.archive_state === "active"), todo_projection_error: null,
     source_receipts: [{source_id: "registry", path: registry, state: "file", sha256: createHash("sha256").update(registryText).digest("hex")}]};
@@ -132,8 +134,9 @@ for (const provider of ["legacy", "file", "sqlite", "postgresql"] as const) {
       for (const item of cases) {
         const result = await inspectTaskLease({...request, todo_id: `todo_inspect_${item.name}`}, {now: () => NOW, authorityProvider});
         assert.equal(result.ok, true, JSON.stringify(result));
-        assert.equal(result.active, item.active, item.name);
-        assert.deepEqual(result.executor_constraint, item.constraint, item.name);
+        assert.equal(result.active, provider === "legacy" ? false : item.active, item.name);
+        assert.deepEqual(result.executor_constraint, provider === "legacy"
+          ? {effective: false, reason: "canonical_authority_required"} : item.constraint, item.name);
         if (item.name === "repository-bound") assert.equal((result.lease as JsonObject).write_repository, "git:github.com/team/a");
         if (store && before?.status === "loaded") {
           assert.equal(result.source_authority, `${provider}_v0`);
@@ -170,13 +173,30 @@ for (const fault of ["registration", "route", "clock", "field"] as const) {
   });
 }
 
-test("legacy inspection preserves projection errors and rejects malformed active expiry", async t => {
+test("retained source inspection ignores retired Todo admission and validates the original lease", async t => {
   const {request, root, goal} = await fixture(t, "legacy");
   const unavailable = await inspectTaskLease({...request, authority: {...request.authority,
     todo_projection_error: {code: "todo_projection_unavailable", message: "source cannot be projected"}}}, {now: () => NOW});
   assert.equal(unavailable.active, false);
-  assert.deepEqual(unavailable.executor_constraint, {effective: false, reason: "todo_projection_unavailable"});
+  assert.deepEqual(unavailable.executor_constraint, {effective: false, reason: "canonical_authority_required"});
   const lease = {schema_version: "task_lease_v0", status: "active", owner: "agent-a", expires_at: "broken"};
   await writeFile(join(root, "goals", goal, "task-leases", `${request.todo_id}.json`), JSON.stringify(lease));
   assert.equal((await inspectTaskLease(request, {now: () => NOW})).error_code, "corrupt_lease");
 });
+
+for (const provider of ["file", "sqlite", "postgresql"] as const) {
+  test(`${provider} retired legacy policy reports retained leases without effective execution`,
+    {skip: (provider === "postgresql" && !pool) || (provider === "sqlite" && !sqliteQualified)}, async t => {
+      const {request, store, authorityProvider} = await fixture(t, provider, "native", "legacy");
+      const before = await store!.loadAuthority();
+      const result = await inspectTaskLease(request, {now: () => NOW, authorityProvider});
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.equal(result.handoff_mode, "legacy");
+      assert.equal(result.active, false);
+      assert.equal((result.execution_policy as JsonObject).supported, false);
+      assert.equal((result.execution_policy as JsonObject).execution_authority_granted, false);
+      assert.deepEqual(result.executor_constraint, {effective: false, reason: "handoff_mode_retired"});
+      assert.equal((result.lease as JsonObject).status, "active", "historical record is not rewritten");
+      assert.deepEqual(await store!.loadAuthority(), before);
+    });
+}

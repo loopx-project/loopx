@@ -105,6 +105,7 @@ async function fixture(): Promise<Fixture> {
     '---',
     'status: active-read-only',
     'owner_mode: goal',
+    'handoff_mode: soft_claim',
     'objective: "Validate one DSH continuation settlement."',
     'updated_at: 2026-01-01T00:00:00+00:00',
     '---',
@@ -152,6 +153,30 @@ async function fixture(): Promise<Fixture> {
       quota: { compute: 1, window_hours: 24, allowed_slots: 2 },
     }],
   }, null, 2)}\n`, 'utf8')
+  // The closeout journey starts on supported authority. Markdown remains a
+  // projection; this test must not depend on the retired ordinary writer.
+  const canonical = await runFile(await integrationPython, ['-c', [
+    'import sys',
+    'from pathlib import Path',
+    'sys.path.insert(0, str(Path(sys.argv[1]) / "tests/control_plane"))',
+    'from canonical_authority_fixture import initialize_canonical_authority',
+    'from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection',
+    'projection = build_todo_runtime_shadow_projection(',
+    '    goal_id=sys.argv[3], handoff_mode="soft_claim", todos=[{',
+    '        "schema_version": "todo_item_v0", "todo_id": sys.argv[5],',
+    '        "role": "agent", "status": "open", "done": False,',
+    '        "text": "[P1] Validate and settle the selected delivery.",',
+    '        "title": "Validate and settle the selected delivery.", "priority": "P1",',
+    '        "archive_state": "active", "source_section": "Agent Todo", "index": 1,',
+    '        "task_class": "advancement_task", "action_kind": "validate",',
+    '    }])',
+    'initialize_canonical_authority(Path(sys.argv[2]), sys.argv[3], projection,',
+    '    state_path=Path(sys.argv[4]), provider="file")',
+  ].join('\n'), repoRoot, runtime, goalId, state, todoId], {
+    cwd: repoRoot,
+    env: { ...process.env, PYTHONPATH: repoRoot },
+  })
+  expect(canonical.exitCode, canonical.stderr).toBe(0)
   expect((await runFile('git', ['init', '--quiet'], { cwd: project })).exitCode).toBe(0)
   expect((await runFile('git', [
     'remote', 'add', 'origin',

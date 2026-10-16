@@ -17,7 +17,11 @@ import * as mutations from "../../loopx/control_plane/coordination/local_authori
 import * as reads from "../../loopx/control_plane/coordination/local_authority_read.ts";
 const runtime = {...mutations, ...reads};
 import { qualifiedShadow, promotionRequest, engageFence } from "./local_promotion_fixture.ts";
-import { loadLegacyCoordinationWriterFence, legacyCoordinationWriterFencePath } from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
+import {
+  engageLegacyCoordinationWriterFence,
+  loadLegacyCoordinationWriterFence,
+  legacyCoordinationWriterFencePath,
+} from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
 import {acknowledgeLocalCoordinationTodoArchive, archiveLocalCoordinationTodos} from "../../loopx/control_plane/coordination/local_authority_runtime.ts";
 import {listLocalCoordinationTodos} from "../../loopx/control_plane/coordination/local_authority_read.ts";
 
@@ -40,6 +44,8 @@ for (const [fault, source, reason] of [
     assert.ok(store instanceof SqliteAuthorityStore);
     const identity = await store.storeIdentity();
     assert.equal(identity.status, "available"); if (identity.status !== "available") return;
+    const promotion = promotionRequest(directory, {}, "file:synthetic:1");
+    await engageFence(promotion);
     const markerName = (await readdir(join(directory, "authority"))).find(name => name.startsWith("provider-"))!;
     const marker = join(directory, "authority", markerName);
     if (fault === "database_missing") await rename(store.path, store.path + ".saved");
@@ -78,11 +84,8 @@ for (const [fault, source, reason] of [
         assert.deepEqual(await Promise.all([bytes(store.path), bytes(marker)]), before, name);
       }
     }
-    assert.equal((await loadLegacyCoordinationWriterFence(directory, "goal-a")).status, "missing");
     // Even an existing fence cannot be claimed as verified if opening fails
     // first. Its independent existence does not replace this call's readback.
-    const promotion = promotionRequest(directory, {}, "file:synthetic:1");
-    await engageFence(promotion);
     const fenced = await loadLegacyCoordinationWriterFence(directory, "goal-a");
     assert.equal(fenced.status, "loaded");
     const failedPromotion = await runtime.promoteLocalCoordinationAuthority(promotion);
@@ -347,11 +350,30 @@ test("SQLite archive acknowledgement retires the accepted attempt without changi
     await import("../../loopx/control_plane/coordination/coordination_projection.ts");
   const todos = [{schema_version: "todo_item_v0", todo_id: "done-a", role: "agent",
     status: "done", done: true, text: "Completed task", archive_state: "active", source_section: "Agent Todo"}];
+  const projection = {goal_id: "goal", handoff_mode: "soft_claim", todos, leases: [],
+    todo_read_model: {schema_version: TODO_CANONICAL_READ_RECORD_SCHEMA, todo_count: 1,
+      records_sha256: canonicalAuthoritySha256(todos), contract_fields: [...TODO_CANONICAL_READ_RECORD_FIELDS]}};
   const seed = await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
-    events: [], receipts: [], next_projection: {goal_id: "goal", handoff_mode: "soft_claim", todos, leases: [],
-      todo_read_model: {schema_version: TODO_CANONICAL_READ_RECORD_SCHEMA, todo_count: 1,
-        records_sha256: canonicalAuthoritySha256(todos), contract_fields: [...TODO_CANONICAL_READ_RECORD_FIELDS]}}});
+    events: [], receipts: [], next_projection: projection});
   assert.equal(seed.status, "applied"); if (seed.status !== "applied") return;
+  const statePath = join(directory, "ACTIVE_GOAL_STATE.md");
+  await writeFile(statePath, "# Synthetic archive source\n");
+  const fenced = await engageLegacyCoordinationWriterFence({
+    schema_version: "loopx_legacy_coordination_writer_fence_engage_request_v0",
+    runtime_root: directory,
+    goal_id: "goal",
+    state_path: statePath,
+    fence: {
+      schema_version: "loopx_legacy_coordination_writer_fence_v0",
+      state: "engaged",
+      goal_id: "goal",
+      fence_id: "archive-fixture",
+      source_version: "state:1",
+      source_projection_sha256: canonicalAuthoritySha256(projection),
+      expected_shadow_provider_revision: seed.provider_revision,
+    },
+  });
+  assert.equal(fenced.status, "applied");
   const archived = await archiveLocalCoordinationTodos({
     schema_version: "loopx_local_coordination_todo_archive_request_v0", runtime_root: directory,
     goal_id: "goal", role: "agent", max_active_done: 0, operation_id: "archive-a",

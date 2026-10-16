@@ -11,7 +11,10 @@ import urllib.request
 import pytest
 
 from loopx.control_plane.goals.legacy_event_source import (
-    RetiredTodoEventSourceError, require_no_legacy_todo_events,
+    require_no_legacy_todo_events,
+)
+from loopx.control_plane.coordination.local_authority import (
+    CanonicalAuthorityRequired,
 )
 from loopx.control_plane.testing.canary_harness import run_json_cli_result
 from loopx.control_plane.todos import completion_validation
@@ -59,28 +62,44 @@ def test_all_old_source_selectors_refuse_reads_and_writes_without_data_loss(tmp_
     registry = tmp_path / "registry.json"
     registry.write_text(json.dumps({"common_runtime_root": str(tmp_path / "runtime"), "goals": [goal]}))
     before = state.read_bytes(), old.read_bytes()
-    for args in [("todo", "list"),
-        ("shared-goal-alignment", "--agent-id", "agent-a", "--project", str(tmp_path)), ("todo", "add", "--text", "New work", "--role", "agent"),
-        ("todo", "complete", "--todo-id", "todo_existing", "--evidence", "validated")]:
+    for args in [
+        ("todo", "list"),
+        ("shared-goal-alignment", "--agent-id", "agent-a", "--project", str(tmp_path)),
+    ]:
         code, result = run_json_cli_result(*args, "--goal-id", goal["id"], registry_path=registry)
         assert code != 0 or result.get("ok") is False, result
         assert "legacy_todo_event_source_retired" in json.dumps(result), result
         assert (state.read_bytes(), old.read_bytes()) == before
+    for args in [
+        ("todo", "add", "--text", "New work", "--role", "agent"),
+        ("todo", "complete", "--todo-id", "todo_existing", "--evidence", "validated"),
+    ]:
+        code, result = run_json_cli_result(*args, "--goal-id", goal["id"], registry_path=registry)
+        assert code != 0 or result.get("ok") is False, result
+        assert result["error_code"] == "canonical_authority_required"
+        assert result["write_admitted"] is False
+        assert result["legacy_fallback_used"] is False
+        assert (state.read_bytes(), old.read_bytes()) == before
 
 
-def test_completion_rejects_before_any_validation_effect(tmp_path, monkeypatch):
+def test_completion_requires_canonical_authority_before_any_validation_effect(tmp_path, monkeypatch):
     state = tmp_path / "ACTIVE_GOAL_STATE.md"
     state.write_text("## Agent Todo\n- [ ] [P1] Work\n"
         "  <!-- loopx:todo todo_id=todo_existing status=open task_class=advancement_task -->\n")
-    state.with_name("events.jsonl").write_text("retired\n")
+    old = state.with_name("events.jsonl")
+    old.write_text("retired\n")
     registry = tmp_path / "registry.json"
     registry.write_text(json.dumps({"goals": [{"id": "retired-fixture", "repo": str(tmp_path), "state_file": state.name}]}))
     def forbidden(**kwargs):
         raise AssertionError("a retired source executed a completion effect")
     monkeypatch.setattr(completion_validation, "run_declared_completion_validation_effect", forbidden)
-    with pytest.raises(RetiredTodoEventSourceError):
+    before = state.read_bytes(), old.read_bytes()
+    with pytest.raises(CanonicalAuthorityRequired) as error:
         complete_goal_todo(registry_path=registry, goal_id="retired-fixture", todo_id="todo_existing",
             evidence="validated", no_followup=True)
+    assert error.value.code == "canonical_authority_required"
+    assert error.value.payload["operation"] == "todo_terminal"
+    assert (state.read_bytes(), old.read_bytes()) == before
 
 
 def test_empty_file_is_not_an_event_authority_and_is_preserved(tmp_path):
@@ -158,7 +177,9 @@ def test_retired_source_is_scoped_and_later_healthy_goal_remains_visible(tmp_pat
     code, mutation = run_json_cli_result("todo", "add", "--goal-id", "retired",
         "--role", "agent", "--text", "Must refuse", registry_path=registry)
     assert code != 0 or mutation.get("ok") is False
-    assert "legacy_todo_event_source_retired" in json.dumps(mutation)
+    assert mutation["error_code"] == "canonical_authority_required"
+    assert mutation["write_admitted"] is False
+    assert mutation["legacy_fallback_used"] is False
     assert old.read_bytes() == before
     old.unlink()  # Explicit owner recovery in a disposable synthetic fixture.
     code, recovered = run_json_cli_result("status", registry_path=registry)

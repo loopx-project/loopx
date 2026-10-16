@@ -1,7 +1,7 @@
-"""Split-root fence regressions for the monitor-poll and Turn writebacks.
+"""Split-root authority regressions for the monitor-poll and Turn writebacks.
 
-Each writeback uses its effective runtime root and also respects the authority
-of the registered source file. An override cannot bypass either source fence.
+Each writeback uses its effective runtime root. A write override must resolve
+to canonical authority instead of mutating the registered Markdown projection.
 """
 
 from __future__ import annotations
@@ -14,17 +14,15 @@ from typing import Any
 
 import pytest
 
+from canonical_authority_fixture import initialize_canonical_authority
 from loopx.cli import main
 from loopx.cli_commands.turn_todo_writeback import (
     write_turn_repair_update,
     write_turn_validated_completion,
 )
-from loopx.control_plane.coordination.legacy_writer_fence import (
-    LegacyCoordinationWriterFenced,
-    legacy_coordination_writer_fence_path,
-)
-from loopx.control_plane.coordination.local_authority import (
-    LocalCoordinationAuthorityUnavailable,
+from loopx.control_plane.coordination.local_authority import CanonicalAuthorityRequired
+from loopx.control_plane.coordination.runtime_shadow import (
+    build_todo_runtime_shadow_projection,
 )
 from loopx.control_plane.quota import monitor_poll
 from loopx.control_plane.scheduler.monitor_poll_writeback import (
@@ -36,7 +34,7 @@ AGENT_ID = "turn-writeback-author"
 ADVANCE_ID = "todo_splitroot_advance"
 MONITOR_ID = "todo_splitroot_monitor"
 OVERRIDE_POLL_HASH = "split-v2"
-LEGACY_POLL_HASH = "split-v1"
+INITIAL_POLL_HASH = "split-v1"
 REPOSITORY = Path(__file__).resolve().parents[2]
 
 
@@ -58,7 +56,7 @@ def _write_split_root_goal(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
         "  <!-- loopx:todo "
         f"todo_id={MONITOR_ID} status=open task_class=continuous_monitor "
         f"claimed_by={AGENT_ID} target_key=splitroot-review cadence=30m "
-        f"result_hash={LEGACY_POLL_HASH} material_change=false -->\n",
+        f"result_hash={INITIAL_POLL_HASH} material_change=false -->\n",
         encoding="utf-8",
     )
     runtime_registry = tmp_path / "registry-runtime"
@@ -91,27 +89,47 @@ def _write_split_root_goal(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     return registry, state, runtime_registry, runtime_override
 
 
-def _engage_fence_at(runtime_root: Path) -> None:
-    fence = legacy_coordination_writer_fence_path(
-        runtime_root=runtime_root,
-        goal_id=GOAL_ID,
-    )
-    fence.parent.mkdir(parents=True, exist_ok=True)
-    fence.write_text(
-        json.dumps({"state": "present", "engaged_by": "promotion"}),
-        encoding="utf-8",
-    )
-
-
-def _fence_check_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "loopx.control_plane.coordination.legacy_writer_fence."
-        "effect_runtime_result",
-        lambda *_args, **_kwargs: {
-            "status": "blocked",
-            "reason_code": "legacy_coordination_writer_fenced",
-            "authority_mode": "file_v0",
-        },
+def _initialize_canonical_override(runtime_root: Path, state: Path) -> None:
+    initialize_canonical_authority(
+        runtime_root,
+        GOAL_ID,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID,
+            handoff_mode="soft_claim",
+            todos=[
+                {
+                    "schema_version": "todo_item_v0",
+                    "todo_id": ADVANCE_ID,
+                    "role": "agent",
+                    "status": "open",
+                    "done": False,
+                    "text": "Advance the fenced writeback slice.",
+                    "archive_state": "active",
+                    "source_section": "Agent Todo",
+                    "index": 1,
+                    "task_class": "advancement_task",
+                    "claimed_by": AGENT_ID,
+                },
+                {
+                    "schema_version": "todo_item_v0",
+                    "todo_id": MONITOR_ID,
+                    "role": "agent",
+                    "status": "open",
+                    "done": False,
+                    "text": "Watch the fenced writeback channel.",
+                    "archive_state": "active",
+                    "source_section": "Agent Todo",
+                    "index": 2,
+                    "task_class": "continuous_monitor",
+                    "claimed_by": AGENT_ID,
+                    "target_key": "splitroot-review",
+                    "cadence": "30m",
+                    "result_hash": INITIAL_POLL_HASH,
+                    "material_change": False,
+                },
+            ],
+        ),
+        state_path=state,
     )
 
 
@@ -136,51 +154,26 @@ def _poll_kwargs(
 
 
 def test_monitor_poll_writeback_rejects_unavailable_canonical_override(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     registry, state, _runtime_registry, runtime_override = (
         _write_split_root_goal(tmp_path)
     )
-    _engage_fence_at(runtime_override)
-    _fence_check_blocks(monkeypatch)
     state_before = state.read_text(encoding="utf-8")
 
-    with pytest.raises(LocalCoordinationAuthorityUnavailable):
+    with pytest.raises(CanonicalAuthorityRequired) as error:
         write_monitor_poll_todo_state(**_poll_kwargs(registry, runtime_override))
 
-    assert LEGACY_POLL_HASH in state.read_text(encoding="utf-8")
+    assert error.value.code == "canonical_authority_required"
+    assert error.value.payload["operation"] == "monitor_poll"
+    assert INITIAL_POLL_HASH in state.read_text(encoding="utf-8")
     assert OVERRIDE_POLL_HASH not in state.read_text(encoding="utf-8")
     assert state.read_text(encoding="utf-8") == state_before
 
 
-def test_monitor_poll_writeback_blocks_when_the_registry_source_is_fenced(
-    tmp_path: Path,
-) -> None:
-    """An override shares the source state, so its original fence still applies."""
-
-    from loopx.control_plane.effect_runtime import effect_runtime_result
-
-    registry, state, runtime_registry, runtime_override = (
-        _write_split_root_goal(tmp_path)
-    )
-    before = state.read_bytes()
-    engaged = effect_runtime_result("coordination.local_authority.legacy_writer_fence.engage", {
-        "schema_version": "loopx_legacy_coordination_writer_fence_engage_request_v0",
-        "runtime_root": str(runtime_registry), "goal_id": GOAL_ID, "state_path": str(state),
-        "fence": {"schema_version": "loopx_legacy_coordination_writer_fence_v0", "state": "engaged",
-            "goal_id": GOAL_ID, "fence_id": "original-source", "source_version": "source:1",
-            "source_projection_sha256": "a" * 64, "expected_shadow_provider_revision": "file:1:aaaaaaaaaaaaaaaaaaaaaaaa"},
-    })
-    assert engaged["status"] == "applied", engaged
-    with pytest.raises(LegacyCoordinationWriterFenced) as error:
-        write_monitor_poll_todo_state(**_poll_kwargs(registry, runtime_override))
-    assert error.value.code == "legacy_coordination_writer_fenced"
-    assert state.read_bytes() == before
-
-
-def test_monitor_poll_writeback_allows_an_unfenced_runtime_override(tmp_path: Path) -> None:
+def test_monitor_poll_writeback_uses_canonical_runtime_override(tmp_path: Path) -> None:
     registry, state, _runtime_registry, runtime_override = _write_split_root_goal(tmp_path)
+    _initialize_canonical_override(runtime_override, state)
 
     receipt = write_monitor_poll_todo_state(
         **_poll_kwargs(registry, runtime_override)
@@ -193,7 +186,7 @@ def test_monitor_poll_writeback_allows_an_unfenced_runtime_override(tmp_path: Pa
     assert f"result_hash={OVERRIDE_POLL_HASH}" in active
 
 
-def test_quota_monitor_poll_provider_writeback_blocked_under_override_fence(
+def test_quota_monitor_poll_provider_writeback_requires_canonical_override(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -202,8 +195,6 @@ def test_quota_monitor_poll_provider_writeback_blocked_under_override_fence(
     registry, state, _runtime_registry, runtime_override = (
         _write_split_root_goal(tmp_path)
     )
-    _engage_fence_at(runtime_override)
-    _fence_check_blocks(monkeypatch)
 
     def native(_method: str, request: dict[str, Any]) -> dict[str, Any]:
         assert request["phase"] == "preflight"
@@ -229,7 +220,7 @@ def test_quota_monitor_poll_provider_writeback_blocked_under_override_fence(
         "agent_identity": {"agent_id": AGENT_ID},
     }
 
-    with pytest.raises(LocalCoordinationAuthorityUnavailable):
+    with pytest.raises(CanonicalAuthorityRequired) as error:
         monitor_poll.record_quota_monitor_poll_for_decision(
             before,
             {"runtime_root": str(runtime_override)},
@@ -243,6 +234,7 @@ def test_quota_monitor_poll_provider_writeback_blocked_under_override_fence(
             agent_id=AGENT_ID,
         )
 
+    assert error.value.code == "canonical_authority_required"
     assert OVERRIDE_POLL_HASH not in state.read_text(encoding="utf-8")
 
 
@@ -254,12 +246,14 @@ def test_quota_monitor_poll_cli_rejects_unavailable_canonical_before_collection(
     registry, state, _runtime_registry, runtime_override = (
         _write_split_root_goal(tmp_path)
     )
-    _engage_fence_at(runtime_override)
-    _fence_check_blocks(monkeypatch)
+    _initialize_canonical_override(runtime_override, state)
+    backend = runtime_override / "authority" / "file-v0"
+    offline = backend.with_name("file-v0-offline")
+    backend.rename(offline)
     before = state.read_bytes()
 
     def unexpected_collection(**_kwargs: Any) -> dict[str, Any]:
-        pytest.fail("fenced monitor write must be rejected before status collection")
+        pytest.fail("selected provider loss must be rejected before status collection")
 
     monkeypatch.setattr("loopx.cli_commands.quota.collect_status", unexpected_collection)
 
@@ -291,22 +285,21 @@ def test_quota_monitor_poll_cli_rejects_unavailable_canonical_before_collection(
 
     assert exit_code == 1
     payload = json.loads(capsys.readouterr().out)
-    assert payload["error_code"] == "local_authority_todo_list_unavailable"
-    assert payload["source_authority"] == "file_v0"
+    assert payload["error_code"] != "canonical_authority_required"
     assert payload["legacy_fallback_used"] is False
     assert state.read_bytes() == before
+    assert not backend.exists()
+    offline.rename(backend)
 
 
 @pytest.mark.parametrize("command", ["should-run", "monitor-poll"])
-def test_read_only_quota_still_collects_promoted_state(
-    command: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+def test_read_only_quota_still_collects_unmigrated_state(
+    command: str, tmp_path: Path,
 ) -> None:
     from loopx.cli import build_parser
     from loopx.cli_commands.quota_context import prepare_quota_command_context
 
     registry, _state, _registered_root, runtime_override = _write_split_root_goal(tmp_path)
-    _engage_fence_at(runtime_override)
-    _fence_check_blocks(monkeypatch)
     args = build_parser().parse_args([
         "quota", command, "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         *(["--todo-id", MONITOR_ID] if command == "monitor-poll" else []),
@@ -326,18 +319,15 @@ def test_read_only_quota_still_collects_promoted_state(
     assert context.status_payload["runtime_root"] == str(runtime_override)
 
 
-def test_turn_repair_update_blocked_when_override_root_is_fenced(
-    monkeypatch: pytest.MonkeyPatch,
+def test_turn_repair_update_blocked_without_canonical_override(
     tmp_path: Path,
 ) -> None:
     registry, state, runtime_registry, runtime_override = (
         _write_split_root_goal(tmp_path)
     )
-    _engage_fence_at(runtime_override)
-    _fence_check_blocks(monkeypatch)
     before = state.read_bytes()
 
-    with pytest.raises(LocalCoordinationAuthorityUnavailable) as error:
+    with pytest.raises(CanonicalAuthorityRequired) as error:
         write_turn_repair_update(
             registry_path=registry,
             runtime_root_arg=str(runtime_override),
@@ -348,40 +338,29 @@ def test_turn_repair_update_blocked_when_override_root_is_fenced(
             agent_id=AGENT_ID,
         )
 
-    assert error.value.code == "local_authority_todo_list_unavailable"
-    assert str(error.value) == "canonical Todo authority is unavailable"
-    assert error.value.payload == {
-        "schema_version": "loopx_coordination_todo_update_result_v0",
-        "status": "missing",
-        "changed": False,
-        "source_authority": "file_v0",
-        "decision_read_from_provider": True,
-        "legacy_fallback_used": False,
-        "recovery": {
-            "action": "restore_canonical_authority",
-            "runtime_root": str(runtime_override.resolve()),
-            "goal_id": GOAL_ID,
-            "legacy_markdown_fallback_allowed": False,
-            "retry_after": "canonical_provider_readback_loaded",
-        },
+    assert error.value.code == "canonical_authority_required"
+    assert error.value.payload["operation"] == "todo_update"
+    assert error.value.payload["write_admitted"] is False
+    assert error.value.payload["decision_read_from_provider"] is False
+    assert error.value.payload["legacy_fallback_used"] is False
+    assert error.value.payload["recovery"] == {
+        "action": "migrate_goal_authority",
+        "backup_required": True,
     }
     assert state.read_bytes() == before
     assert not (runtime_override / "authority").exists()
     assert not (runtime_registry / "authority").exists()
 
 
-def test_turn_validated_completion_blocked_when_override_root_is_fenced(
-    monkeypatch: pytest.MonkeyPatch,
+def test_turn_validated_completion_blocked_without_canonical_override(
     tmp_path: Path,
 ) -> None:
     registry, state, runtime_registry, runtime_override = (
         _write_split_root_goal(tmp_path)
     )
-    _engage_fence_at(runtime_override)
-    _fence_check_blocks(monkeypatch)
     before = state.read_bytes()
 
-    with pytest.raises(LocalCoordinationAuthorityUnavailable) as error:
+    with pytest.raises(CanonicalAuthorityRequired) as error:
         write_turn_validated_completion(
             registry_path=registry,
             runtime_root_arg=str(runtime_override),
@@ -393,20 +372,14 @@ def test_turn_validated_completion_blocked_when_override_root_is_fenced(
             agent_id=AGENT_ID,
         )
 
-    assert error.value.code == "local_authority_todo_list_unavailable"
-    assert error.value.payload == {
-        "schema_version": "loopx_local_coordination_todo_list_result_v0",
-        "status": "missing",
-        "source_authority": "file_v0",
-        "decision_read_from_provider": True,
-        "legacy_fallback_used": False,
-        "recovery": {
-            "action": "restore_canonical_authority",
-            "runtime_root": str(runtime_override.resolve()),
-            "goal_id": GOAL_ID,
-            "legacy_markdown_fallback_allowed": False,
-            "retry_after": "canonical_provider_readback_loaded",
-        },
+    assert error.value.code == "canonical_authority_required"
+    assert error.value.payload["operation"] == "todo_terminal"
+    assert error.value.payload["write_admitted"] is False
+    assert error.value.payload["decision_read_from_provider"] is False
+    assert error.value.payload["legacy_fallback_used"] is False
+    assert error.value.payload["recovery"] == {
+        "action": "migrate_goal_authority",
+        "backup_required": True,
     }
     assert state.read_bytes() == before
     assert not (runtime_override / "authority").exists()
@@ -448,10 +421,9 @@ def test_turn_validated_completion_blocked_when_override_root_is_fenced(
     )
     assert process.returncode == 1, process.stdout + process.stderr
     payload = json.loads(process.stdout)
-    assert payload["error_code"] == "local_authority_todo_list_unavailable"
-    assert payload["status"] == "missing"
-    assert payload["source_authority"] == "file_v0"
-    assert payload["decision_read_from_provider"] is True
+    assert payload["error_code"] == "canonical_authority_required"
+    assert payload["write_admitted"] is False
+    assert payload["decision_read_from_provider"] is False
     assert payload["legacy_fallback_used"] is False
     assert payload["recovery"] == error.value.payload["recovery"]
     assert state.read_bytes() == before
