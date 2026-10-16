@@ -173,6 +173,11 @@ superseded or out-of-scope sources cancel unsent notices. A local typed planner
 owns subject identity, meaningful-content changes and reopening generations;
 this is a local notification journal, not another Todo authority.
 
+Notices preserve the complete authored task text, explanation, reason and
+evidence. Structured decision scopes stay in canonical change detection and
+authority checks instead of appearing as protocol JSON in the human message.
+Presentation updates do not rewrite frozen intents or resend unchanged tasks.
+
 The existing four-worker outbound pool reserves at most one slot for bounded
 notification reconciliation only when a notification setting is enabled;
 the default-off path retains all four reply slots and performs no Todo scan.

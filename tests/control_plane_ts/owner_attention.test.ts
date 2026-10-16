@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {observeOwnerAttention, ownerAttentionHealth, ownerAttentionReferences, planOwnerAttention} from "../../loopx/control_plane/presentation/owner_attention.ts";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
+import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 
 const empty = () => ({schema_version: "lark_owner_attention_v0", revision: 0, enabled: true, initialized: false, subjects: [], outbox: []});
 const task = {todo_id: "todo_one", role: "user", status: "open", task_class: "user_action", text: "Inspect the preview"};
@@ -74,4 +75,41 @@ test("reference discovery and planning share active-subject semantics without a 
   const tasks = Array.from({length: 80}, (_, i) => ({...task, todo_id: `todo_${i}`}));
   const todos = [...tasks, {...task, todo_id: "todo_done", done: true}, {...task, role: "agent"}];
   assert.deepEqual(ownerAttentionReferences({goal_id: "alpha", todos}).todo_ids, tasks.map(row => row.todo_id));
+});
+
+const decision = {schema_version: "decision_scope_v0", kind: "direction", granularity: "action", scope_key: "preview"};
+const reviewTask = {...task, task_class: "user_gate", text: "Approve only the documented preview.",
+  note: "The proposal includes a keyboard-accessible preview.", reason: "Publication awaits your decision.",
+  evidence: "https://example.com/proposal", decision_scope: decision, required_decision_scopes: [decision]};
+
+test("owner notices retain authored terms while structured scopes remain identity inputs", () => {
+  const state = plan(plan(empty(), []), [reviewTask]);
+  const notice = rows(state)[0];
+  assert.equal(notice.body, ["待你处理 · alpha", reviewTask.text,
+    `说明：${reviewTask.note}`, `原因：${reviewTask.reason}`, `依据：${reviewTask.evidence}`,
+    "可在原管家对话中查看或答复这项待办。"].join("\n\n"));
+  const {text, note, reason, evidence, decision_scope, required_decision_scopes} = reviewTask;
+  assert.equal(notice.digest, canonicalAuthoritySha256({text, note, reason, evidence, decision_scope, required_decision_scopes}));
+  const changed = plan(state, [{...reviewTask, decision_scope: {...decision, scope_key: "another-preview"}}]);
+  assert.equal(rows(changed).length, 2, "scope-only changes remain meaningful for discovery");
+  assert.notEqual(rows(changed)[1].id, notice.id);
+  assert.notEqual(rows(changed)[1].digest, notice.digest);
+});
+
+test("readable rendering preserves legacy pending, unknown and delivered notices across restart", () => {
+  const state = plan(plan(empty(), []), [reviewTask]);
+  const notice = rows(state)[0];
+  // Persisted pre-upgrade bodies and intents are delivery facts, not templates
+  // to regenerate when presentation changes.
+  const legacyBody = `${reviewTask.text}\n\n决定范围：${JSON.stringify(decision)}`;
+  notice.body = legacyBody;
+  const observe = (s: JsonObject, event: string, extra = {}) =>
+    observeOwnerAttention({state: s, id: notice.id, event, now: 100, ...extra});
+  const started = observe(state, "write_started", {intent: {text: legacyBody, route: {source: "original"}}});
+  const unknown = observe(started, "write_observed", {message_id: "om_original"});
+  const delivered = observe(unknown, "readback_verified", {readback: {message_id: "om_original"}});
+  for (const persisted of [state, unknown, delivered]) {
+    const restored = plan(JSON.parse(JSON.stringify(persisted)), [reviewTask]);
+    assert.deepEqual(restored, persisted, "unchanged source cannot re-notify or rewrite an old intent");
+  }
 });

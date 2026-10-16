@@ -76,10 +76,10 @@ export function planOwnerAttention(input: JsonObject): JsonObject {
     if (state.initialized === true && changed) {
       const id = digest([row.key, generation, row.digest]);
       const terms = row.terms as JsonObject;
+      // Structured scopes remain identity/authority inputs, not operator copy.
       const body = [`待你处理 · ${row.goal_id}`, String(terms.text),
-        ...["note", "reason", "evidence", "decision_scope", "required_decision_scopes"].flatMap(key =>
-          terms[key] == null ? [] : [`${({note: "说明", reason: "原因", evidence: "依据",
-            decision_scope: "决定范围", required_decision_scopes: "决定范围"} as Record<string, string>)[key]}：${
+        ...["note", "reason", "evidence"].flatMap(key =>
+          terms[key] == null ? [] : [`${({note: "说明", reason: "原因", evidence: "依据"} as Record<string, string>)[key]}：${
             typeof terms[key] === "string" ? terms[key] : JSON.stringify(terms[key])}`]),
         "可在原管家对话中查看或答复这项待办。"].join("\n\n");
       outbox.push({id, key: row.key, generation, digest: row.digest, goal_id: row.goal_id,
