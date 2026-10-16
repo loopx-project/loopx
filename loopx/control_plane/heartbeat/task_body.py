@@ -677,9 +677,7 @@ Selection uses the saved `interaction_contract.cli_channel.selection_command`.
 Keep all supplied guard transport flags (--turn-envelope, --decision-output-root,
 and --decision-handoff-socket when present) on every fresh selection/repair/replan
 guard; each call saves its own immutable observation.
-Re-enter the guard after a Todo claim, settlement or state writeback, or when the
-saved decision's `scheduler` requires it; ordinary edits and validation runs inside
-the selected Todo's workspace continue under the current admission.
+After a workspace or state change, re-enter the guard before continuing work.
 
 ```sh
 LOOPX_TURN=<current_time_iso>
