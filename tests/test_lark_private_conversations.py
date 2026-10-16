@@ -305,7 +305,9 @@ def test_completion_during_processing_receipt_returns_final_without_stale_draft(
         assert transport.admit("notes-app", event)["status"] == "durably_accepted"
         row = transport.core.pending()[0]
         deadline = time.monotonic() + 5
-        while not ready.exists() and time.monotonic() < deadline:
+        # Native stdout and the persisted Turn are separate observations.
+        while time.monotonic() < deadline and (not ready.exists()
+                or store.load_turn(row["session_id"], row["turn_id"])["status"] != "running"):
             time.sleep(.01)
         assert ready.exists() and store.load_turn(row["session_id"], row["turn_id"])["status"] == "running"
         path = transport.root / f"{row['request_ref']}.json"
