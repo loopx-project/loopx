@@ -189,6 +189,14 @@ they are labelled as live observations. Looking back freezes insertion until
 the durable reader and the place to continue long output. Neither observed work
 nor its completion establishes Goal acceptance or a delivery receipt.
 
+Current visible messages and tools carry a small activity glyph rather than a
+repeated live-observation banner. It moves only for supported work observed in
+the original active Turn while following the live tail. Looking back makes the
+glyph still; completion, disconnection and switching Agents stop it. Reduced
+motion keeps the readable glyph and accessible state label without rotation.
+Source/update details are available on the Codex App label; input availability
+and failures remain visible. This treatment does not imply token streaming.
+
 Live observation sends only the versioned following/unfollowing broadcasts. It
 never starts, resumes, steers or interrupts a Turn, loads complete history, or
 answers approvals. It rejects another owner/thread, unsupported versions and
