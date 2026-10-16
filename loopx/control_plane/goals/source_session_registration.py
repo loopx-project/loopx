@@ -21,10 +21,9 @@ from ..runtime.time import now_local_iso
 from ..runtime.document_io import atomic_write_state_text
 from .source_session_registry_state import (
     GOAL_INSTANCE_ID,
-    alias_digest,
     canonical_digest,
     guard_path,
-    lifetime_root,
+    registration_journal_directory,
     require_goal_id,
     write_journal,
 )
@@ -80,12 +79,7 @@ def _journal_path(
     operation_id: str,
 ) -> Path:
     operation_digest = hashlib.sha256(operation_id.encode("utf-8")).hexdigest()
-    return (
-        lifetime_root(registry_path)
-        / "journals"
-        / alias_digest(goal_id)
-        / f"{operation_digest}.json"
-    )
+    return registration_journal_directory(registry_path, goal_id) / f"{operation_digest}.json"
 
 
 def _registration_journals(
@@ -93,7 +87,7 @@ def _registration_journals(
     *,
     goal_id: str,
 ) -> list[Path]:
-    directory = lifetime_root(registry_path) / "journals" / alias_digest(goal_id)
+    directory = registration_journal_directory(registry_path, goal_id)
     return sorted(directory.glob("*.json"))
 
 

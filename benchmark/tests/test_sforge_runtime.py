@@ -182,11 +182,11 @@ def test_checkpoint_request_reaches_sforge_worker_without_changing_default_profi
 
 @pytest.mark.parametrize("explicit,trigger,expected", [
     (False, None, None),
-    (False, "fresh_replan", "checkpoint_handoff"),
+    (False, "fresh_replan", None),
     (True, None, "explicit"),
     (True, "fresh_replan", "explicit"),
 ])
-def test_sforge_profile_uses_validated_checkpoint_trigger(tmp_path, monkeypatch, explicit, trigger, expected):
+def test_sforge_profile_does_not_enable_envelope_for_checkpoint(tmp_path, monkeypatch, explicit, trigger, expected):
     from types import SimpleNamespace
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")

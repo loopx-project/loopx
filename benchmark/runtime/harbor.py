@@ -145,15 +145,7 @@ class BenchmarkCodex(CodexOffline):
         super().__init__(*args, **kwargs)
 
     def _turn_envelope_receipt(self) -> dict:
-        """Project the effective TurnEnvelope setting, not only the explicit opt-in.
-
-        A checkpoint handoff socket makes the worker capture TurnEnvelope on
-        fresh_replan execute wakes; per-wake receipts remain authoritative.
-        """
-        return turn_envelope_receipt(
-            explicit=self.execution.turn_envelope, mode=self.execution.mode,
-            checkpoint_request=self._checkpoint_declaration,
-        )
+        return turn_envelope_receipt(explicit=self.execution.turn_envelope)
 
     def _planning_receipt(self) -> dict:
         return {"native_goal_continue": True} if self.native_goal_continue else {}

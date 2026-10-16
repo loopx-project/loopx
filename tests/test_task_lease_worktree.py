@@ -10,7 +10,7 @@ from loopx.cli import main as cli_main
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
 
-@pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="verified host identity currently supports macOS/Linux")
+@pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="worktree lease fixture requires symlinks; Windows needs Developer Mode")
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("origin,repository", [
     ("https://github.com/example/project.git", "git:github.com/example/project"),
