@@ -147,7 +147,7 @@ const content = {
         ["Research & evaluation", "LHTB × LoopX", "Compare five execution mechanisms across 46 long-horizon terminal tasks and inspect where recoverable state helps.", "Read the study"],
         ["Research · Chinese", "DeepSWE behavior discoveries", "Explore how domain hints affect implementation and validation in individual cases.", "Read the behavior analysis"],
         ["Research · Chinese", "DeepSWE × Sol", "Read the historical 113-task results, continuation mechanisms, and patch-delivery checks.", "Read the research brief"],
-        ["Cases", "All LoopX showcases", "Browse public cases, interactive walkthroughs, and their evidence boundaries.", "Browse all cases"],
+        ["Interactive research", "If you were there", "Make a choice for the Agent, then see three real research reversals and inspect their original records.", "Try the Time Machine"],
       ],
       developer: "Projection developer tools",
     },
@@ -266,7 +266,7 @@ const content = {
         ["研究与评测", "LHTB × LoopX", "对比五种执行机制在 46 个长程终端任务上的结果，观察可恢复状态在什么场景有效。", "阅读研究简报"],
         ["研究与评测", "DeepSWE 行为分析", "从具体案例观察领域提示如何影响实现选择与验证行为。", "阅读行为分析"],
         ["研究与评测", "DeepSWE × Sol", "解读 113 任务的历史结果、持续执行机制，以及补丁如何进入最终验收。", "阅读研究简报"],
-        ["案例", "完整案例目录", "浏览公开案例、交互式讲解及其证据边界。", "浏览全部案例"],
+        ["交互体验", "如果你在场", "先替 Agent 做一次选择，再看三个真实研究片段里的反转与原始记录。", "试试 LoopX 时光机"],
       ],
       developer: "开发者投影工具",
     },
@@ -1006,7 +1006,7 @@ export function App() {
                   `benchmarks/lhtb/${language === "zh" ? "?lang=zh" : ""}`,
                   "benchmarks/deepswe/behavior-discovery/",
                   "benchmarks/deepswe-sol/",
-                  `docs/showcases/index${language === "en" ? ".en" : ""}.html`,
+                  `lab/time-machine/${language === "zh" ? "?lang=zh" : ""}`,
                 ];
                 return (
                   <a className="learn-card resource-card" key={title} href={`${basePath}${paths[index]}`}>

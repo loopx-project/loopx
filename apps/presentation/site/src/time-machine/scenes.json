@@ -1,0 +1,170 @@
+[
+  {
+    "id": "portfolio",
+    "file": "portfolio.json",
+    "count": 76,
+    "sha256": "8966c1e8d37f38f410886d25bcddb939a47d3dd0f7e9aed7eee95925b4330fea",
+    "sourceHash": "b876dd7660e0aab19db717f60e86865494a74b8fa27b42a5a67ee295ef524397",
+    "evidenceId": "finding_5b6717a721136e001cd0cd18d38ac167431bbe265445e669bac92c72d990aef2",
+    "en": {
+      "label": "Portfolio",
+      "tag": "01 / A better-looking plan",
+      "question": "Local results improved.\nReplace the main strategy?",
+      "intro": "83 local paths and three standalone suites pass. Several local Sharpe metrics improve. Would you adopt this version?",
+      "choices": [
+        "Adopt this version",
+        "Check the native evaluation"
+      ],
+      "title": "The local good news did not survive the native evaluation.",
+      "body": "The solver recorded 13.84 for the new version, against 20.53 for retained V7. It restored V7 and kept the failed experiment as evidence for the next question.",
+      "metrics": [
+        [
+          "New version · recorded",
+          "13.84"
+        ],
+        [
+          "Retained V7 · recorded",
+          "20.53"
+        ]
+      ],
+      "lesson": "Progress must return to the original objective.",
+      "status": "Source label: refuted"
+    },
+    "zh": {
+      "label": "投资组合",
+      "tag": "01 / 看起来更好的方案",
+      "question": "本地表现更好了。\n要替换主方案吗？",
+      "intro": "83 条本地路径与三组独立测试通过，多个本地 Sharpe 指标也更好。轮到你决定是否采用。",
+      "choices": [
+        "采用这个版本",
+        "先看真实评估"
+      ],
+      "title": "局部的好消息，没有变成最终收益。",
+      "body": "原记录报告：新版本在原生评估中得到 13.84，保留版本是 20.53。Agent 恢复了旧版本，并保留这次失败带来的线索。",
+      "metrics": [
+        [
+          "新版本 · 原记录",
+          "13.84"
+        ],
+        [
+          "保留版本 · 原记录",
+          "20.53"
+        ]
+      ],
+      "lesson": "进展要回到原目标上验证。",
+      "status": "来源记录：否证"
+    }
+  },
+  {
+    "id": "graph",
+    "file": "graph.json",
+    "count": 134,
+    "sha256": "254a7644c725c2a8e6fde59e617aea739e92c22fa381673945f35af2f5a33f29",
+    "sourceHash": "b105de360ed7d015ae5d7bf96b545879e12507b1fc97eaeb5fb6fa2c0bbc00ab",
+    "evidenceId": "finding_b5860e437b2905fbc0b9db2bbdc3ba567783817eee67e0ecc433bf4e65c00b1a",
+    "en": {
+      "label": "Graph",
+      "tag": "02 / A tempting improvement",
+      "question": "Accuracy jumps.\nIs that success?",
+      "intro": "On two generated-graph comparisons: 41.2% → 85.0% and 61.9% → 88.2%. Is that enough to adopt the new approach?",
+      "choices": [
+        "Adopt the approach",
+        "Check its scope first"
+      ],
+      "title": "It answered one question. Others stayed open.",
+      "body": "The same record reports 32% more time on the independent-edge control, with accuracy unchanged there. Improvement in the native score remains unproven. A useful finding can retain its scope and uncertainty.",
+      "metrics": [
+        [
+          "Generated graph · one comparison",
+          "41.2 → 85.0%"
+        ],
+        [
+          "Independent-edge control · time",
+          "+32%"
+        ]
+      ],
+      "lesson": "A valuable finding can still carry an unknown.",
+      "status": "Source label: confirmed; native gain unproven"
+    },
+    "zh": {
+      "label": "图分类",
+      "tag": "02 / 一个诱人的提升",
+      "question": "准确率大幅提高。\n就算成功了吗？",
+      "intro": "生成图上的两个对照：41.2% → 85.0%，61.9% → 88.2%。这足够让你为新方案按下采用吗？",
+      "choices": [
+        "这次值得采用",
+        "再检查适用范围"
+      ],
+      "title": "它回答了一个问题，还没回答全部问题。",
+      "body": "原记录同时报告：独立边控制组的时间成本增加 32%；原生评分是否改善尚未证明。这条发现可以保留，但适用范围要跟着它一起留下。",
+      "metrics": [
+        [
+          "生成图 · 对照一",
+          "41.2 → 85.0%"
+        ],
+        [
+          "控制组 · 时间成本",
+          "+32%"
+        ]
+      ],
+      "lesson": "一个有价值的发现，可以同时带着未知。",
+      "status": "来源记录：确认；原生收益未证"
+    }
+  },
+  {
+    "id": "ad",
+    "file": "ad.json",
+    "count": 105,
+    "sha256": "e0b4f6f5c4adbfd81ba0bb81c188794b68c6d01fd25852904404e9de7f35086e",
+    "sourceHash": "de04b679e9f382b650e891e5c7dd7146bc690500435c511f107c9d24da4f4efa",
+    "evidenceId": "finding_c652328314cf9ac2757f85dfcbdb9907bb719cf1a1e36185926640694663a9f2",
+    "en": {
+      "label": "Ad placement",
+      "tag": "03 / After the first win",
+      "question": "The screening run won.\nRoll out the trick?",
+      "intro": "Give the highest-loss ads optimization priority. It sounds reasonable, and six screening seeds looked better too.",
+      "choices": [
+        "Roll out the ordering",
+        "Try fresh samples first"
+      ],
+      "title": "Fresh samples changed the first impression.",
+      "body": "High-loss-first ordering won screening but lost on the pooled score of 32 fresh seeds. The solver stopped adopting that ordering, kept its current best and moved to a new hypothesis.",
+      "metrics": [
+        [
+          "Screening · recorded",
+          "6 seeds"
+        ],
+        [
+          "Fresh samples · recorded",
+          "32 seeds"
+        ]
+      ],
+      "lesson": "Creativity includes letting go of a beautiful idea.",
+      "status": "Source label: tentative"
+    },
+    "zh": {
+      "label": "广告优化",
+      "tag": "03 / 第一次赢了以后",
+      "question": "小规模筛选赢了。\n要推广这个技巧吗？",
+      "intro": "让损失最大的广告先获得优化机会。这个直觉很合理，六个筛选种子上的表现也更好。",
+      "choices": [
+        "把它推广出去",
+        "换一批样本再看"
+      ],
+      "title": "新的一批样本，改写了第一印象。",
+      "body": "原记录报告：优先处理高损失广告的排序，在筛选中获胜，却在后续 32 个新种子的合并评分中退化。Agent 停止采用这个排序，保留当前方案，转向新的假设。",
+      "metrics": [
+        [
+          "筛选样本 · 原记录",
+          "6 个种子"
+        ],
+        [
+          "新样本 · 原记录",
+          "32 个种子"
+        ]
+      ],
+      "lesson": "创造力也包括：及时放下一个漂亮的想法。",
+      "status": "来源记录：暂定"
+    }
+  }
+]
