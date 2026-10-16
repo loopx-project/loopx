@@ -276,9 +276,7 @@ def _scan_archive(
             workspace_bytes = sum(path.stat().st_size for path in Path(temporary).iterdir())
     except (OSError, sqlite3.Error) as exc:
         if (getattr(exc, "errno", None) == errno.ENOSPC
-                or getattr(exc, "sqlite_errorcode", None) == getattr(sqlite3, "SQLITE_FULL", 13)
-                # Python 3.10 does not expose sqlite_errorcode.
-                or isinstance(exc, sqlite3.OperationalError) and str(exc) == "database or disk is full"):
+                or getattr(exc, "sqlite_errorcode", None) == sqlite3.SQLITE_FULL):
             available = shutil.disk_usage(workspace).free
             raise ColdSourceBackupError("cold_import_backup_workspace_capacity", available_bytes=available) from exc
         raise
