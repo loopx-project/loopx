@@ -19,7 +19,26 @@ import {withFileMutationLock} from "../effect_runtime_io.ts";
 import {legacyCoordinationTodoLockPath} from "../coordination/legacy_writer_lock_paths.ts";
 
 export const PLANNED_TRANSFER_GOAL_STAGE_SCHEMA = "loopx_planned_transfer_goal_stage_v0";
+export const PREPARATION_SCHEMA = "loopx_planned_transfer_authority_preparation_v0";
 const executeFile = promisify(execFile);
+
+export interface PlannedTransferMaterialIdentity extends JsonObject {
+  id: string; source_relative_path: string; sha256: string; bytes: number;
+}
+export interface ProtectedGoalMaterial extends PlannedTransferMaterialIdentity {path: string}
+
+/** One Goal-owned identity contract shared by encrypted metadata and stopped
+ * staging. The relative name is historical context, never a target write path.
+ * The custody reader separately bounds and verifies the actual file bytes. */
+export function decodePlannedTransferMaterial(raw: unknown, index: number): PlannedTransferMaterialIdentity {
+  const row = requireJsonObject(raw, "original Goal material");
+  if (!hasExactAuthorityKeys(row, ["id", "source_relative_path", "sha256", "bytes"]) ||
+      row.id !== (index + 2).toString(16).padStart(8, "0") || !BARE_SHA256_PATTERN.test(String(row.sha256)) ||
+      typeof row.bytes !== "number" || !Number.isSafeInteger(row.bytes) || row.bytes < 0 ||
+      typeof row.source_relative_path !== "string" || !row.source_relative_path || row.source_relative_path.startsWith("/") ||
+      row.source_relative_path.includes("\0") || row.source_relative_path.split("/").some(part => part === "" || part === "." || part === "..")) reject("Original Goal material identity is invalid");
+  return row as PlannedTransferMaterialIdentity;
+}
 
 function reject(message: string): never { throw new EffectRuntimeConflictError(message); }
 function absolute(value: unknown, label: string): string {
@@ -43,6 +62,7 @@ export interface PreparedGoalStage {
   statePath: string;
   contextPath: string;
   identity: JsonObject;
+  protectedArtifact?: {sha256: string; materials: ProtectedGoalMaterial[]; manifest: JsonObject; manifestPath: string};
 }
 
 /** Capture Goal intent through its actual registered source while the caller
@@ -90,7 +110,9 @@ export async function withVerifiedGoalTransferContext<T>(raw: unknown, rawWitnes
 /** Codec-decoded registry facts are supplied by the transaction-owning adapter.
  * This decision never serializes or mutates a project registry itself. */
 export function planPreparedGoalStage(value: JsonObject): PreparedGoalStage {
-  if (!hasExactAuthorityKeys(value, ["operation_id", "source_context", "archive_sha256", "target", "destination_registry"])) {
+  const protectedInput = value.protected_transport === undefined ? undefined : requireJsonObject(value.protected_transport, "verified protected transport");
+  if (!hasExactAuthorityKeys(value, ["operation_id", "source_context", "archive_sha256", "target", "destination_registry",
+      ...(protectedInput ? ["protected_transport"] : [])])) {
     reject("Goal transfer staging requires the complete original context and destination observation");
   }
   const operation = requireAuthorityStoreId(value.operation_id, "original transfer operation");
@@ -116,8 +138,27 @@ export function planPreparedGoalStage(value: JsonObject): PreparedGoalStage {
   }
   const directory = join(project, ".loopx", "goals", goalId);
   const statePath = join(directory, "ACTIVE_GOAL_STATE.md"), contextPath = join(directory, "TRANSFER_CONTEXT.json");
+  let protectedArtifact: PreparedGoalStage["protectedArtifact"];
+  if (protectedInput) {
+    if (!hasExactAuthorityKeys(protectedInput, ["artifact_sha256", "materials"]) ||
+        !BARE_SHA256_PATTERN.test(String(protectedInput.artifact_sha256)) || !Array.isArray(protectedInput.materials)) reject("Protected staging requires its authenticated material inventory");
+    const seen = new Set<string>();
+    const materials = protectedInput.materials.map((raw, index) => {
+      const row = requireJsonObject(raw, "protected material");
+      const {path, ...identity} = row;
+      const material = decodePlannedTransferMaterial(identity, index);
+      if (seen.has(material.source_relative_path)) reject("Protected staging material is duplicated");
+      absolute(path, "verified material path"); seen.add(material.source_relative_path);
+      return {...material, path: String(path)};
+    });
+    const manifest = {artifact_sha256: protectedInput.artifact_sha256,
+      materials: materials.map(({path: _path, ...row}) => row)};
+    protectedArtifact = {sha256: String(protectedInput.artifact_sha256), materials, manifest,
+      manifestPath: join(directory, "TRANSFER_MATERIALS.json")};
+  }
   const identity = {schema_version: PLANNED_TRANSFER_GOAL_STAGE_SCHEMA, goal_id: goalId, operation_id: operation,
-    source_context_sha256: canonicalAuthoritySha256(context), archive_sha256: value.archive_sha256, target};
+    source_context_sha256: canonicalAuthoritySha256(context), archive_sha256: value.archive_sha256, target,
+    ...(protectedArtifact ? {protected_transport: protectedArtifact.manifest} : {})};
   // Copy no adapter credentials, Host/session identity, machine capability
   // configuration, creation receipt or live membership into this registration.
   const goal: JsonObject = {id: goalId, status: "active", role: "controller", domain: "project-goal-control-plane",
@@ -127,7 +168,8 @@ export function planPreparedGoalStage(value: JsonObject): PreparedGoalStage {
     adapter: {kind: "generic_project_goal_v0", status: "connected"},
     spawn_policy: {mode: "default", allowed: false, max_children: 3, allowed_domains: []},
     coordination: {registered_agents: [], write_scope: [], requires_parent_approval: ["write", "publish", "production-action"]},
-    authority_sources: [{kind: "migration_report", path: contextPath, role: "original_transfer_context"}],
+    authority_sources: [{kind: "migration_report", path: contextPath, role: "original_transfer_context"},
+      ...(protectedArtifact ? [{kind: "migration_report", path: protectedArtifact.manifestPath, role: "original_transfer_materials"}] : [])],
     planned_transfer: {schema_version: PLANNED_TRANSFER_GOAL_STAGE_SCHEMA, operation_id: operation,
       identity_sha256: canonicalAuthoritySha256(identity), state: "staged", identity_continuity: "same_goal_read_only",
       fresh_admission_required: true}};
@@ -140,7 +182,7 @@ export function planPreparedGoalStage(value: JsonObject): PreparedGoalStage {
   if (matches.length > 1 || (matches.length === 1 && !canonicalAuthorityBytes(matches[0]).equals(canonicalAuthorityBytes(goal)))) {
     reject("Destination Goal is occupied or its staged registration changed; preserve it and recover the original transfer");
   }
-  return {goalId, operationId: operation, context, goal, statePath, contextPath, identity};
+  return {goalId, operationId: operation, context, goal, statePath, contextPath, identity, protectedArtifact};
 }
 
 export function stagedGoalRegistry(registry: JsonObject, plan: PreparedGoalStage, runtime: string): JsonObject {

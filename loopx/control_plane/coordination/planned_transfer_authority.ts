@@ -20,13 +20,14 @@ import {openLocalAuthorityStoreHandle, requireLocalAuthorityRuntimeRoot} from ".
 import {loadLegacyCoordinationWriterFence, preparePlannedTransferWriterFenceUnderLock,
   PLANNED_TRANSFER_WRITER_FENCE_SCHEMA} from "./legacy_writer_fence.ts";
 import {readShadowManagementState, shadowManagementDirectory, withShadowMaintenanceLock} from "./shadow_management.ts";
-import {withVerifiedGoalTransferContext} from "../goals/planned_transfer.ts";
+import {PREPARATION_SCHEMA, withVerifiedGoalTransferContext} from "../goals/planned_transfer.ts";
+import {reviewProtectedGoalTransferInputs, writeProtectedGoalTransfer} from "../goals/planned_transfer_payload.ts";
 import type {AuthorityStore} from "./authority_store.ts";
 import {newGoalCreationBinding} from "./new_goal_initialization.ts";
 import {readPromotionReceipt} from "./promotion_receipt.ts";
 import {NEW_GOAL_WRITER_FENCE_SCHEMA} from "./legacy_writer_fence.ts";
 
-export const PREPARATION_SCHEMA = "loopx_planned_transfer_authority_preparation_v0";
+export {PREPARATION_SCHEMA} from "../goals/planned_transfer.ts";
 const REGISTERED_SOURCE_PREVIEW_SCHEMA = "loopx_planned_transfer_source_preview_v0";
 
 function reject(message: string): never { throw new EffectRuntimeConflictError(message); }
@@ -119,9 +120,12 @@ export async function previewRegisteredAuthorityForPlannedTransfer(value: JsonOb
 export async function prepareAuthorityForPlannedTransfer(value: JsonObject): Promise<JsonObject> {
   const contextBound = value.source_context !== undefined;
   const registered = value.registered_source_preview_sha256 !== undefined;
+  const protectedExport = value.protected_transport !== undefined;
   if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id", "operation_id", "expected_provider_revision",
       "expected_writer_fence_sha256", "execute", ...(contextBound ? ["source_context", "registry_witness"] : []),
-      ...(registered ? ["registered_source_preview_sha256"] : [])]) || value.execute !== true || (registered && !contextBound) ||
+      ...(registered ? ["registered_source_preview_sha256"] : []),
+      ...(protectedExport ? ["protected_transport", "source_package_version"] : [])]) || value.execute !== true || (registered && !contextBound) ||
+      (protectedExport && !registered) ||
       typeof value.expected_writer_fence_sha256 !== "string" || !BARE_SHA256_PATTERN.test(value.expected_writer_fence_sha256)) {
     reject("Transfer authority preparation requires an explicit execution and the complete reviewed source identity");
   }
@@ -174,6 +178,7 @@ export async function prepareAuthorityForPlannedTransfer(value: JsonObject): Pro
         head, identity.store_identity, goal, operation);
       if (value.registered_source_preview_sha256 !== preview.preview_sha256) reject("Reviewed transfer source preview changed; review the current source without executing it");
     }
+    const protectedInputs = protectedExport ? await reviewProtectedGoalTransferInputs(value.protected_transport, context!, value.source_package_version) : undefined;
     await mkdir(directory, {recursive: true, mode: 0o700});
     await retain(pendingPath, preparation);
     await preparePlannedTransferWriterFenceUnderLock(root, goal, priorFence, {
@@ -199,7 +204,8 @@ export async function prepareAuthorityForPlannedTransfer(value: JsonObject): Pro
       ...(registered ? {original_registration_verified: true} : {}),
       host_drain_qualified: false, portable_artifact_qualified: false, execution_authority_granted: false};
     await retain(join(directory, "receipt.json"), result);
-    return result;
+    return protectedInputs ? {...result, protected_artifact: await writeProtectedGoalTransfer(protectedInputs,
+      result, context!, join(directory, "encrypted-export-key.json"))} : result;
     };
     return contextBound ? withVerifiedGoalTransferContext(value.source_context, value.registry_witness, goal, root, prepare) : prepare();
   });

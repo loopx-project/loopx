@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ... import __version__
 from ..effect_runtime import effect_runtime_result
 from ..projects.registry_codec import load_project_registry, project_registry_transaction
 
@@ -67,16 +68,66 @@ def prepare_registered_goal_transfer(
     admission are not established by a source authority fence. The complete
     product coordinator must keep those qualifications separate.
     """
+    result: dict[str, Any] = effect_runtime_result("coordination.planned_transfer.prepare_authority",
+        _registered_preparation_request(registry_path, goal_id, operation_id, expected_preview_sha256),
+        timeout=300.0, retry_safe=False)
+    return result
+
+
+def _registered_preparation_request(
+    registry_path: Path, goal_id: str, operation_id: str, expected_preview_sha256: str,
+) -> dict[str, Any]:
     context = read_goal_transfer_context(registry_path=registry_path, goal_id=goal_id)
     preview = preview_registered_goal_transfer(registry_path=registry_path, goal_id=goal_id, operation_id=operation_id)
     # The native execution compares this reviewed digest again under its actual
     # maintenance/source locks; a preview read here cannot waive stale inputs.
-    result: dict[str, Any] = effect_runtime_result("coordination.planned_transfer.prepare_authority", {
+    return {
         "runtime_root": context["source_context"]["runtime_root"], "goal_id": goal_id,
         "operation_id": operation_id, "expected_provider_revision": preview["provider_revision"],
         "expected_writer_fence_sha256": preview["original_writer_fence_sha256"],
         "registered_source_preview_sha256": expected_preview_sha256, "execute": True, **context,
-    }, timeout=300.0, retry_safe=False)
+    }
+
+
+def create_planned_transfer_recipient(*, destination: Path) -> dict[str, Any]:
+    """Keep the private key at the recipient; only its public descriptor returns."""
+    result: dict[str, Any] = effect_runtime_result("coordination.planned_transfer.create_recipient", {
+        "destination": str(destination.expanduser().absolute()), "execute": True,
+    }, timeout=60.0, retry_safe=False)
+    return result
+
+
+def export_registered_goal_transfer(
+    *, registry_path: Path, goal_id: str, operation_id: str, expected_preview_sha256: str,
+    recipient: dict[str, Any], destination: Path, materials: list[tuple[Path, str]],
+) -> dict[str, Any]:
+    """Pin original authority and selected bytes into a recipient-bound draft.
+
+    This internal composition still does not qualify source Host/effect drain,
+    material completeness, security review or destination admission. It avoids
+    exporting a raw runtime tree or treating source config as a current grant.
+    """
+    request = _registered_preparation_request(registry_path, goal_id, operation_id, expected_preview_sha256)
+    request.update(source_package_version=__version__, protected_transport={
+        "destination": str(destination.expanduser().absolute()), "recipient": recipient,
+        "materials": [{"path": str(path.expanduser().absolute()), "sha256": digest} for path, digest in materials],
+    })
+    result: dict[str, Any] = effect_runtime_result("coordination.planned_transfer.prepare_authority", request,
+        timeout=300.0, retry_safe=False)
+    return result
+
+
+def _protected_input(directory: Path, private_key: Path, expected_artifact_sha256: str) -> dict[str, Any]:
+    return {"directory": str(directory.expanduser().absolute()),
+        "private_key_path": str(private_key.expanduser().absolute()),
+        "expected_artifact_sha256": expected_artifact_sha256, "target_package_version": __version__}
+
+
+def preview_protected_goal_transfer(
+    *, directory: Path, private_key: Path, expected_artifact_sha256: str,
+) -> dict[str, Any]:
+    result: dict[str, Any] = effect_runtime_result("coordination.planned_transfer.preview_protected",
+        _protected_input(directory, private_key, expected_artifact_sha256), timeout=300.0, retry_safe=True)
     return result
 
 
@@ -96,6 +147,25 @@ def stage_prepared_goal_transfer(
     lock inversion with canonical writers. Interruption leaves the destination
     fenced; retry the same operation. No preimage is restored over new work.
     """
+    return _stage_goal_transfer("coordination.planned_transfer.stage_target", {
+        "source_preparation": source_preparation, "source_context": source_context,
+        "archive": str(archive.expanduser().absolute()),
+    }, project, runtime_root, provider)
+
+
+def stage_protected_goal_transfer(
+    *, directory: Path, private_key: Path, expected_artifact_sha256: str,
+    project: Path, runtime_root: Path, provider: str,
+) -> dict[str, Any]:
+    """Consume only destination-local protected input, remaining stopped."""
+    return _stage_goal_transfer("coordination.planned_transfer.stage_protected", {
+        "protected_input": _protected_input(directory, private_key, expected_artifact_sha256),
+    }, project, runtime_root, provider)
+
+
+def _stage_goal_transfer(
+    method: str, payload: dict[str, Any], project: Path, runtime_root: Path, provider: str,
+) -> dict[str, Any]:
     project, runtime_root = project.expanduser().absolute(), runtime_root.expanduser().absolute()
     registry_path = project / ".loopx" / "registry.json"
     # Mechanical filesystem validation precedes even the registry lock's IO.
@@ -108,9 +178,8 @@ def stage_prepared_goal_transfer(
     with project_registry_transaction(registry_path, operation="planned_transfer_stage_read", create=dict) as transaction:
         registry = transaction.payload_copy()
         witness = transaction.source_read_witness() if registry_path.exists() else {"path": str(registry_path), "sha256": None}
-    result: dict[str, Any] = effect_runtime_result("coordination.planned_transfer.stage_target", {
-        "source_preparation": source_preparation, "source_context": source_context,
-        "archive": str(archive.expanduser().absolute()), "target": target,
+    result: dict[str, Any] = effect_runtime_result(method, {
+        **payload, "target": target,
         "destination_registry": registry, "registry_witness": witness, "execute": True,
     }, timeout=300.0, retry_safe=False)
     # The typed Goal owner owns construction and conflict policy. The codec

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -19,8 +20,9 @@ from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError, effect_
 from loopx.control_plane.coordination.legacy_writer_fence import legacy_coordination_writer_fence_path
 from loopx.control_plane.coordination.local_authority_shadow_projection import canonical_bytes
 from loopx.control_plane.goals.planned_transfer_io import (
+    create_planned_transfer_recipient, export_registered_goal_transfer,
     prepare_registered_goal_transfer, preview_registered_goal_transfer,
-    read_goal_transfer_context, stage_prepared_goal_transfer,
+    preview_protected_goal_transfer, read_goal_transfer_context, stage_protected_goal_transfer,
 )
 from loopx.control_plane.projects.registry_codec import load_project_registry, project_registry_transaction
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
@@ -75,6 +77,7 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
             "--task-lease-expected-version", str(lease["version"]), "--note", note,
             "--update-operation-id", operation, "--execute", expected_code=expected_code)
 
+    hidden_source: list[tuple[Path, Path]] = []
     try:
         cli("bootstrap", "--project", str(project), "--goal-id", "report",
             "--objective", "Produce report.txt from input.txt", "--no-global-sync")
@@ -214,6 +217,20 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
             "expected_writer_fence_sha256": hashlib.sha256(canonical_bytes(original_fence)).hexdigest(),
             "registered_source_preview_sha256": preview["preview_sha256"],
             "execute": True, **read_goal_transfer_context(registry_path=global_registry, goal_id="report")}
+        recipient_root = tmp_path / "recipient"
+        recipient = create_planned_transfer_recipient(destination=recipient_root)
+        bundle = tmp_path / "source-export"
+        material_hash = hashlib.sha256((project / "input.txt").read_bytes()).hexdigest()
+        linked_input = project / "linked-input"
+        linked_input.symlink_to(project / "input.txt")
+        for invalid in [[(project / "input.txt", "0" * 64)], [(registry, material_hash)],
+                        [(machine, material_hash)], [(project / ".git/config", material_hash)],
+                        [(linked_input, material_hash)], [(project / "input.txt", material_hash)] * 2]:
+            with pytest.raises(EffectRuntimeRemoteError, match="material|linked ancestor"):
+                export_registered_goal_transfer(registry_path=global_registry, goal_id="report", operation_id="prepared-move",
+                    expected_preview_sha256=preview["preview_sha256"], recipient=recipient, destination=bundle, materials=invalid)
+            assert json.loads(legacy_coordination_writer_fence_path(runtime_root=runtime, goal_id="report").read_text()) == original_fence
+            assert not bundle.exists()
         prepared = prepare_registered_goal_transfer(registry_path=global_registry, goal_id="report", operation_id="prepared-move",
             expected_preview_sha256=preview["preview_sha256"])
         assert prepared["authority_write_fenced"] is True
@@ -253,6 +270,40 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
         original_goal = load_project_registry(registry)["goals"][0]
         source_state = project / original_goal["state_file"]
         context = request["source_context"]
+        exported = export_registered_goal_transfer(registry_path=global_registry, goal_id="report", operation_id="prepared-move",
+            expected_preview_sha256=preview["preview_sha256"], recipient=recipient, destination=bundle,
+            materials=[(project / "input.txt", material_hash)])
+        assert {key: value for key, value in exported.items() if key != "protected_artifact"} == prepared
+        protected = exported["protected_artifact"]
+        assert protected["material_count"] == 1 and protected["privacy_certified"] is False
+        assert protected["portable_migration_qualified"] is False
+        assert export_registered_goal_transfer(registry_path=global_registry, goal_id="report", operation_id="prepared-move",
+            expected_preview_sha256=preview["preview_sha256"], recipient=recipient, destination=bundle,
+            materials=[(project / "input.txt", material_hash)]) == exported
+        incoming = tmp_path / "target-local-container"
+        shutil.copytree(bundle, incoming)
+        shutil.rmtree(bundle)
+        source_state_bytes = source_state.read_bytes()
+        source_task = cli("todo", "list", "--goal-id", "report", "--todo-id", todo)["todo"]
+        # The target has no shared source registry, archive, private export key,
+        # original material or workspace. Only the encrypted directory travels.
+        restart_effect_runtime(wait_for_exit=True)
+        for path in (project, runtime):
+            hidden = path.with_name(path.name + "-source-unavailable")
+            path.rename(hidden)
+            hidden_source.append((path, hidden))
+        protected_input = dict(directory=incoming, private_key=recipient_root / "private-key.pem",
+            expected_artifact_sha256=protected["artifact_sha256"])
+        observed = preview_protected_goal_transfer(**protected_input)
+        assert observed["goal_id"] == "report" and observed["display_name"] == "Current original Goal"
+        assert observed["original_authority"] == prepared["authority_archive"]
+        assert observed["execution_authority_granted"] is False
+        assert observed["materials"] == [{"id": "00000002", "source_relative_path": "input.txt", "sha256": material_hash, "bytes": 6}]
+        with pytest.raises(EffectRuntimeRemoteError, match="same source and destination package version"):
+            effect_runtime_result("coordination.planned_transfer.preview_protected", {
+                "directory": str(incoming), "private_key_path": str(recipient_root / "private-key.pem"),
+                "expected_artifact_sha256": protected["artifact_sha256"], "target_package_version": "incompatible"},
+                timeout=60, retry_safe=False)
         for target_provider in ("file", "sqlite"):
             destination = tmp_path / f"target-{target_provider}"
             target_project, target_runtime = destination / "project", destination / "runtime"
@@ -260,8 +311,7 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
             if target_provider == "sqlite":
                 target_registry.parent.mkdir(parents=True)
                 target_registry.write_text(json.dumps(_strict({"schema_version": "0.1", "common_runtime_root": str(target_runtime), "goals": []})))
-            request = dict(source_preparation=prepared, source_context=context,
-                archive=Path(prepared["archive"]), project=target_project, runtime_root=target_runtime, provider=target_provider)
+            request = dict(**protected_input, project=target_project, runtime_root=target_runtime, provider=target_provider)
             if target_provider == "file":
                 # Inject a real registry edit after native staging but before
                 # codec publication. The owning CAS must preserve it, and the
@@ -280,14 +330,15 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
                 with monkeypatch.context() as interrupted:
                     interrupted.setattr(planned_transfer_io, "effect_runtime_result", concurrent_registry_edit)
                     with pytest.raises(ValueError, match="registry changed before publication"):
-                        stage_prepared_goal_transfer(**request)
+                        stage_protected_goal_transfer(**request)
                 concurrent = load_project_registry(target_registry)
                 assert concurrent["retained_local_note"] == "An unrelated edit must survive transfer recovery"
                 assert concurrent.get("goals", []) == []
-            staged = stage_prepared_goal_transfer(**request)
+            staged = stage_protected_goal_transfer(**request)
             assert staged["execution_authority_granted"] is False
             assert staged["target_is_active"] is False and staged["fresh_admission_required"] is True
             assert staged["authority_readback"]["status"] == "matched"
+            assert staged["material_readback_verified"] is True and staged["original_material_count"] == 1
             target_goal = load_project_registry(target_registry)["goals"][0]
             if target_provider == "sqlite":
                 assert json.loads(target_registry.read_text())[0]["minimum_writer_protocol"] == "goal_instance_v1"
@@ -298,7 +349,11 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
             assert "creation_operation_id" not in target_goal
             assert "storage_target" not in target_goal["coordination"]
             assert json.loads(Path(staged["original_context_path"]).read_text()) == context
-            assert (target_project / target_goal["state_file"]).read_bytes() == source_state.read_bytes()
+            assert (target_project / target_goal["state_file"]).read_bytes() == source_state_bytes
+            retained_material = (target_project / target_goal["state_file"]).parent / "transfer-materials/00000002"
+            assert retained_material.read_bytes() == b"6\n7\n8\n"
+            manifest = json.loads(Path(staged["original_material_manifest"]).read_text())
+            assert manifest == {"artifact_sha256": protected["artifact_sha256"], "materials": observed["materials"]}
 
             def target_cli(*arguments: str, expected_code: int = 0) -> dict:
                 result = subprocess.run([sys.executable, "-I", "-m", "loopx.cli", "--format", "json",
@@ -308,7 +363,7 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
                 return json.loads(result.stdout)
 
             target_task = target_cli("todo", "list", "--goal-id", "report", "--todo-id", todo)["todo"]
-            assert target_task == cli("todo", "list", "--goal-id", "report", "--todo-id", todo)["todo"]
+            assert target_task == source_task
             # The existing ordinary reconnect may read this registered Goal;
             # it must not mint a creation receipt or reset imported work to an
             # empty new Goal, even if a caller supplies creation-style inputs.
@@ -327,10 +382,25 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
                 "--write-scope", "report.txt", "--write-worktree", str(worktree), expected_code=1)["ok"] is False
             restart_effect_runtime(wait_for_exit=True)
             original_registry = target_registry.read_bytes()
-            assert stage_prepared_goal_transfer(**request) == staged
+            assert stage_protected_goal_transfer(**request) == staged
             assert target_registry.read_bytes() == original_registry
             assert target_cli("todo", "list", "--goal-id", "report", "--todo-id", todo)["todo"] == target_task
-            assert inspect()["provider_revision"] == released["provider_revision"]
-            assert cli("todo", "list", "--goal-id", "report", "--todo-id", todo)["todo"]["note"] == retained["note"]
+            retained_material.write_bytes(b"Later destination work must survive")
+            with pytest.raises(EffectRuntimeRemoteError, match="material is occupied or changed"):
+                stage_protected_goal_transfer(**request)
+            assert retained_material.read_bytes() == b"Later destination work must survive"
+            assert target_registry.read_bytes() == original_registry
+            retained_material.unlink()
+            with pytest.raises(EffectRuntimeRemoteError, match="material is missing"):
+                stage_protected_goal_transfer(**request)
+            assert not retained_material.exists()
+            assert target_registry.read_bytes() == original_registry
+        for path, hidden in reversed(hidden_source):
+            hidden.rename(path)
+        hidden_source.clear()
+        assert inspect()["provider_revision"] == released["provider_revision"]
+        assert cli("todo", "list", "--goal-id", "report", "--todo-id", todo)["todo"]["note"] == retained["note"]
     finally:
         restart_effect_runtime(wait_for_exit=True)
+        for path, hidden in reversed(hidden_source):
+            hidden.rename(path)
