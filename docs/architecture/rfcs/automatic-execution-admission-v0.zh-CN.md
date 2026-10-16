@@ -49,6 +49,8 @@ long-task cadence 是建议，不是用户约束。
 
 ## 5. 架构与状态
 
+### 一个决策 owner，职责分别归属
+
 | 边界 | 职责 | 不代表 |
 | --- | --- | --- |
 | Quota 配置 | 用户下限、修订版本、作用域继承 | 实际消费或权限 |
@@ -89,6 +91,16 @@ App 间隔编辑器中，选定目标并明确保存已展示的前后值，就�
 | 附着式交互 / 手动会话 | 显式手动意图；其余门禁保留 | 记录原因；自动续跑不能冒充手动 |
 
 App 必须显示目标和实际 schedule、应用失败。不支持该间隔时，应挂起受影响自动化，不能缩短间隔。
+Codex App 的 ACK 命令必须在宿主更新后重新读取匹配的 heartbeat；请求的 RRULE 和 hint
+中的旧观察不能认证本次更新。类型化 scheduler commit 在迁移、身份重置或持久化前，拒绝
+缺失或不匹配的当前观察。console 原生 follow-up 与 Python 兼容适配器遵守同一边界。
+Unix 和 PowerShell launcher 的 Codex host-match ACK 也经该入口取得新鲜读回；其他生成的
+follow-up 保留 Node 快路径。外层控制的写入在原生派发前仍受入口既有权限 guard 约束。
+原生 decoder 把 host-match 标记与捕获的 ACK 事实绑定，不能通过删掉标记绕过当前读回。
+其他 App adapter 提供自己的中立 current-RRULE 参数：显式不可用的观察清除旧事实，
+省略观察则保留其已绑定的观察，不从 Codex 元数据补齐缺失值。失败命令保留原 target/observed
+组合。真实 App API 更新和临时 File/SQLite Goal 上的读回，只验证该调度边界；经过的 timer
+唤醒、已安装 runtime 采用及模型启动前准入仍须独立验收。
 激活路径必须独立验收后才能宣传一键安全激活。模型内 guard 只能停止后续工作，不能撤销已消费的
 唤醒 token；仅修改 prompt 不等于强制执行。原生 `UserPromptSubmit` 是候选方案；自动化覆盖未验收前，
 调度建议模式不能宣称阻止所有过早模型启动。

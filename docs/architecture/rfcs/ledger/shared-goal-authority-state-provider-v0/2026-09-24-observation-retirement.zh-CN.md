@@ -37,7 +37,8 @@ SQLite 合格默认和所有旧 Goal 迁移不是同一验收范围。PostgreSQL
 [操作说明](../../../../reference/authority-observation-retirement.md)覆盖拒绝、清理、
 bootstrap 与回退。主 Todo/租约规则、来源校验、事件 hold 和活跃绑定不变。中英文
 设置中旧入口只读，旧客户端写入前拒绝；旧 RPC 保留 typed 拒绝入口。历史 codec/read
-保留，删除 Python 后采样/重试与 TS observation 提交。目录迁移结果明确不再 seed。
+保留，删除 Python 后采样/重试与 TS observation 提交。状态迁移保留响应字段并返回
+`retired/attempted=false`，明确不再 seed。
 
 验证真实 CLI bootstrap、旧配置/无配置的租约写入、非法配置清理、历史读回，以及
 主文件替换后 committed marker 前进程死亡的单次恢复。保留现有事务、fence 与配置

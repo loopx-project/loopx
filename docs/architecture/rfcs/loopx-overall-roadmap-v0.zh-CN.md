@@ -11,6 +11,11 @@
 
 **S2/S12 启动诊断检查点（2026-10-04）** 已移至[执行账本](ledger/loopx-overall-roadmap-v0/2026-10-04-s2-s12-startup-diagnostic.zh-CN.md)。
 
+[PR #4376](https://github.com/loopx-project/loopx/pull/4376) 的对话式准备已在 R1/GQ01
+下整合到既有 Chat draft 与已审阅 Goal 创建路径，见
+[吸收映射](app-conversation-and-async-inbox-v0.zh-CN.md#对话式目标准备吸收团队工作台提案)。
+没有采用其独立 workspace/executor；入口改进不代表 GQ01 执行/回传或 R2 小队验收完成。
+
 ## 1. 总目标与产品路线
 
 LoopX 的目标是让人用本地前端或 Lark 提出、修订和验收复杂目标，由持久管家协调多个拥有独立工作承诺的长程 LoopX Agent，在本地 managed 与云端 runtime 上持续完成可验证的工作。单 Agent 的长程可靠性是基础，多个 Agent 的协作、handoff、恢复和共享目标收敛是核心能力，百 Agent 规模是需要独立证明的系统资格。

@@ -1,6 +1,10 @@
 # Local default cutover: recovery audit and remaining delivery scopes
 
-- Historical recovery baseline: `157ab7b11`; current inventory: `70b3cca01`, 2026-09-27.
+- Latest rechecked baseline: `76ff7c73c`; historical recovery baseline:
+  `157ab7b11`, inventory `70b3cca01` on 2026-09-27. Historical sections retain
+  their original baseline.
+- Current counts follow the final local-provider-cutover table; historical
+  planning is not a countdown of remaining PRs.
 - Owner: overall roadmap #4574 R5/G2; shared authority D2/D3; TS T3/T4.
 - Supersedes the **current count**, not historical evidence, in the
   [September 24 reconciliation](2026-09-24-default-cutover-reconciliation.md).

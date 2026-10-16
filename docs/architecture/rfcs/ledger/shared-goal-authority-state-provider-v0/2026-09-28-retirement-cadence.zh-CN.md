@@ -644,6 +644,21 @@ OS 缓存，未控制其他进程负载，不代表 p95、provider 对比或完�
 全部保留。
 
 
+### Runtime 退役须排空已准入效果
+
+共享 TS Effect server 现独立于 TCP 连接统计 pending handler；空闲窗口在最后一个
+handler 及私有 response sink 完成后才开始。显式 shutdown 停止接受连接，等待已准入
+效果（含断连调用方），最后只删除自己的 locator。认证、请求预算、原 receipt 与调用方
+恢复不变，不增加 provider 或 Python 决策 owner。
+
+旧 close handler 可能在断连调用方写入仍等待真实 mutation lock 时退出。真实 server
+回归在空闲退役与显式 shutdown 下重现，用仍连接调用方作对照，同时验证并发 ping、
+认证拒绝、listener 关闭、持久写入读回和最终退役。替换 locator、重启及 File/SQLite
+archive crash/recovery 测试仍须保留。
+
+这只修复 R5/D2 recovery 的一个 S4/runtime-lifetime 依赖，不证明持续运行，不选择
+release 默认值，不增加冻结容量预算，也不授权删除 legacy writer。
+
 ### 委派完成阶段的原租约衔接
 
 #5436 的 TS Host 监督覆盖模型执行和 Turn 验证，最终 Todo 独立验收位于其后。

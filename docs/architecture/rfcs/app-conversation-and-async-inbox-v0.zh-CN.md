@@ -122,6 +122,49 @@ Material Lifecycle，也不证明项目 adapter 的 intake/ranking 已接通。
 降为只读后，入站受理及恢复重新核验授权。本机 Scope 只复用相同 typed 项目上下文；
 宿主授权变化时创建新会话，保留旧历史，拒绝在旧会话上执行新工作。
 
+`loopx chat --project-filesystem-scope workspace_only` 进一步将普通 Codex 项目 Session
+限制为工作区文件工具：拒绝根目录访问，只保留最小系统可执行文件读取，既有读写 grant
+只作用于选中工作区。关闭临时目录、shell 环境继承、login shell、web search 和工具
+网络访问。typed context 持久化该选择，变化后旧上下文不能复用；默认仍是可写的
+`host_default` scope。
+
+shell 只保留 `PATH`，禁用 shell profile snapshot，POSIX 使用固定最小系统搜索路径，
+同时过滤账户配置覆盖及继承变量。macOS 可信宿主可通过固定系统 `xcode-select` 选择
+标准 Command Line Tools/Xcode toolchain，将其 Git 目录前置并授予只读。由二进制到
+`/` 的每个路径都必须 canonical、root-owned、类型正确，且 group/other 和调用方均
+不可写，包括 ACL。容器不安全（含可写 `/Applications`）、toolchain 缺失或选择不支持
+时保留原 profile/搜索路径，不放开 toolchain 写入、根目录读取、账户环境或工具网络。
+真实探针不证明 Windows 执行合格。
+
+收窄 profile 关闭自动 skill catalog 注入和项目指令发现，Agent 可经有界文件工具读取
+工作区自己的 `AGENTS.md` 与 skills；普通项目 Session 保留原生发现。workspace-only
+原生 Session 使用私有 `HOME`/`CODEX_HOME`、最小进程环境及文件式原生凭据存储；
+新建与恢复均禁用有效 MCP server（包括 managed/项目配置）及原生 Apps connector。
+operator 的 `LOOPX_CHAT_PUBLIC_SOURCE_READ=on` 只准入匿名 `read_public_url`/
+`read_public_image`，并须原生工具显式批准；其他 MCP 不可用，关闭开关移除 reader，
+Apps 仍关闭。Core 按获授权工作区和 App/owner binding 派生 store identity；不同
+话题保留独立线程，不要求每条消息重新登录。`host_default` 保留账户原配置和认证。
+
+不把认证或对话历史复制到新 store，已有项目原生登录保留所选账户。否则，可信宿主有
+文件式原生 ChatGPT 登录时，adapter 仅经私有 app-server stdio 的
+[`chatgptAuthTokens`](https://learn.chatgpt.com/docs/app-server#3c-log-in-with-externally-managed-chatgpt-tokens-chatgptauthtokens)
+传递 access token 与账户标识。该实验模式只在进程内存持有 token，不写项目 store、
+模型 prompt、工具环境或命令行。未授权 token callback 要求宿主账户 store 刷新，并发
+callback 复用已轮换 token；账户不可用、store 无效或账户变化失败关闭并脱敏报错，恢复
+账户后可重试而无需重绑。此 adapter 不桥接 keyring-only 或 API-key 认证；可将
+`CODEX_HOME` 指向 Session 已记录 home，走原生独立登录。旧共享 home 的 workspace-only
+Session 不静默恢复/迁移，须显式选择隔离 home 的新 Session；普通 legacy Session 保留
+原 home 和精确原线程恢复。
+
+adapter 在新建和精确线程恢复时只发送 Core 所属 named permissions profile，不同时
+发送 legacy sandbox override。核验返回 profile 与唯一工作区根，后续 Turn 固定该
+profile；宿主不支持时拒绝，不 fallback 到更宽权限。此 scope 拒绝其他 executor，
+native helper 使用 canonical Codex executable，home symlink 无需另加读取 grant。
+这是文件系统工具边界，不是完整社区 Bot 隔离；不授权群受众、不清空历史、不隔离任意
+host dynamic tools，也不让含私有文件的 checkout 自动具备公开安全性。公开启用前仍须
+群准入、干净公开工作区、合格模型认证及真实隐私/交互验收；原生上下文隔离和文件探针
+通过只是前置证据。
+
 typed Core、HTTP 与原生宿主回归覆盖默认读写、明确只读、工作区身份、App 独立授权、
 旧会话拒绝和原线程恢复。既有源码证据记录了 Codex canary 编辑并读回合成笔记、
 保留原文且不创建 Goal；这项历史宿主/文件系统证据与本次合成协议回归分开，
@@ -424,6 +467,14 @@ App 找到合格的已有负责人，保留请求，展示对方真实判断，�
 - 一个获准驱动实际干活；纠偏和定向停止分别有接收方或运行时读回，传输 ACK 不够。
 - 原对话可打开草稿，刷新或更换会话后仍在；源码、打包前端、真实原生执行分别记录通过、失败、阻塞或未运行。
 
+既有对话 reader 还有一个有界 GQ02 companion：`view=agent_route` 通过共享 TS
+selector 与只读宿主 adapter 观察精确发现的 Goal/Agent，可跨归档历史定位唯一可读
+binding，无需用户复制 session 链接。未知或多个可读 binding 保持未解析，远端来源
+不可观测时明确不可用，不偷读本机宿主。管家与普通 Goal reader 共用该路径，不增加
+管家专属生命周期或执行驱动。验收使用真实隔离 host store，保持其不变；这只修复
+read-tool 缺口，不关闭原生派发、纠偏采用、定向停止或原路结果验收。安装态行为仍须
+维护者合并与 promotion 后验证。
+
 随后验收已有 G1：**“组个小队，核对现金流，把分歧查清楚。”**
 2–3 个真实 worker 消费版本化材料，独立指出期间或单位错误，采用修订后回传综合结论；
 第二轮修改输入，必须改变实际消费依据。对应 GQ05/GQ11–13，不新增里程碑或任务队列。
@@ -499,6 +550,12 @@ Dispatch 事件在准入范围内唤醒现有 driver，polling 修补缺口。In
 Chat/Lark 发送须等待前一结果核验送达；Peer 消费只确认已读的那条结果。
 在打包对话中验证重启、重复重试、前次发送不确定及精确 Goal 实例隔离。
 这是 R3/T1–T2 的结果连续性，不新增工作请求、权限、任务完成声明或管家专用队列。
+
+provider 暂时核验失败须与终态拒绝分开：共享 owner 先复核持久化发送事实与当前路由，
+保留原不确定结果并按退避恢复，不再次发送。显式撤权、路由丢失或 provider 必需 ACK
+缺失仍是终态 blocker。`source_session_v1` Goal 被重建后也一样：崩溃前持久化的
+attempt 沿原 GoalRef 与对话恢复，暂时核验失败退避且不重发，typed 终态阻塞保持停止。
+这只验证持久恢复边界，不证明真实 provider 可用性或完整 GQ09 旅程。
 
 已提交委派的恢复复用现有 typed collaboration lifecycle。原请求 Turn 失败、超时或
 被打断，不会取消已经进入接收方 Inbox 的工作。该 Turn 结束后，即使调用方没能保存

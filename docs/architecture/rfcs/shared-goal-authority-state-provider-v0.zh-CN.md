@@ -858,6 +858,39 @@ transition、claim/lease fencing、Turn admission、quota 语义、settlement �
 receipt 的含义。特别是，adapter 不得把 provider transaction result 重新解释为领域
 判断。
 
+Stage 1 TS 合同显式区分读取失败：已证明 head `missing` 不同于存储 `unavailable`；
+字节损坏或 lineage 无效是 `failed`。只有已证明不存在才允许 bootstrap。提交保留封闭
+结果 `applied | conflict | ambiguous | failed`；`ambiguous` 表示已尝试发布却无法从响应
+证明耐久性，须通过 `read_receipt` 和新鲜 head 读回对账。provider 异常或可读错误串
+从不构成提交证明。
+
+三种 adapter 用不同原生机制实现同一逻辑操作，不把它们当成可互换的数据库：
+
+| 事项 | File Stage 1 | NoKV Stage 2A | PostgreSQL Stage 2B |
+| --- | --- | --- | --- |
+| 条件 revision | 跨进程文档锁内比较 revision chain | compare-and-publish 携带路径 `generation` | 每 tenant/Goal head-row revision，在行锁或条件更新下检查 |
+| 原子 event/projection/receipt 提交 | 完整 journal 文档，文件 fsync、原子 rename、目录 fsync | 单个 generation-CAS envelope；在多记录协议合格前内嵌 receipt/scan 数据 | 一个 SQL 事务更新 head 并插入有序 event/receipt 行 |
+| operation 唯一性 | 保留 journal 拒绝重复 `operation_id` | CAS envelope 中的 authority receipt index | 唯一 `(tenant_id, goal_id, operation_id)` 约束，只作存储 fencing，不作领域判断 |
+| cursor | 文档局部单调递增 opaque string | 内嵌 journal cursor，仍待容量验收 | 在同一事务分配每 Goal 序号，不声称全局顺序 |
+| lineage | 持久目录 `store-identity` | workbench 与永不复用的 `workspace_incarnation_id` | 绑定 provider 部署的服务管理数据库 incarnation |
+| 信任边界 | 受信任嵌入式 LoopX 进程 | LoopX authority 持有的 NoKV 凭证 | 经认证的 tenant 作用域服务角色，Agent 不接收数据库表凭证 |
+
+PostgreSQL 的 `commit_authority` 是一个事务：锁定或条件更新 scoped head、核验预期
+provider revision、分配下一 scoped cursor、写入 transaction/event/receipt、更新
+projection head 后提交。任何写入前的连接失败是可证明的 `failed`；可能开始提交后的
+断连是 `ambiguous`，经唯一 operation 行与 receipt 读回对账。`READ COMMITTED` 配合
+显式 head 行锁/条件更新可以实现此合同；选择 `SERIALIZABLE` 是 adapter 决策，不能
+替代 LoopX CAS、operation identity 或 lease fencing。认证、tenant routing、audit、
+连接池耗尽、取消、超时与 failover 在服务边界均须失败关闭。
+
+NoKV 现有 `load` / `compare_and_put` 参考实现映射缺失、generation 冲突、不确定发布
+及 workbench incarnation lineage，尚未证明扩展的 event/receipt/cursor 服务合同。
+容量、保留、重启/恢复、可用性与 HA 合格前，`read_receipt` 与 `scan_committed` 只能
+读取单个 CAS envelope 内保留的 journal，不能静默映射为最终一致 listing API。
+File provider 因此是一致性证据，不是生产级事件存储。完整 journal 便于检查原子性和
+历史 receipt replay，代价是整文档增长；Stage 1 可接受的取舍不能直接成为 PostgreSQL
+物理 schema 或 NoKV 容量证明。
+
 ### 6.3 三个版本号不是一回事
 
 | 版本域 | Owner | 含义 | Consumer |
@@ -2100,6 +2133,24 @@ provider 合同与 file backend 已落地，第一个 Stage 2C 提交后 runtime
 shadow 读取决策，上述 migration、rollback、parity、read flip 与 legacy-writer fencing
 门禁仍然开放。
 
+### Deferred hard-lease 生命周期澄清（2026-09-23）
+
+上述终态租约门禁适用于处于 `open` 的执行型 Todo。`deferred` Todo 在等待期间本就
+无法取得 hard lease，若仍要求先持有租约才能离开等待态，负责人既不能恢复也不能
+终止该等待。对于已晋级的 `hard_lease` Goal，已注册且具备该 Todo 所有权的 Agent
+可以显式执行 `status=open` 加 `clear_resume_when`，或将该 deferred 等待标记为
+superseded；前提是没有仍在有效期内的租约，也未提交旧执行租约凭证。Provider CAS
+会把遗留的过期租约代际与 Todo 状态一并更新。重新打开不授予执行权限，下一次
+执行必须重新获取租约。`complete`、挤占有效租约、跨负责人修改及混入执行内容的
+更新仍受原有门禁约束。
+
+反向转换同样由当前 claim/lease 持有者凭有效证明，原子延期开放 Todo、写明等待及原因
+并释放当前执行代际，不混入工作内容或所有权修改。legacy 模式保留的租约 lineage
+也遵守此规则，重新打开要求无有效持有者。同一 TS owner 和 provider CAS 保留 receipt
+及重试。延期后的已注册 Todo/monitor 等待仍可按原 Turn 身份完成无扣额阻塞结算，见
+[因果收尾](../../reference/protocols/quota-blocked-causal-closeout-v0.md)。这只关闭 S3
+owner 等待生命周期缺口，不代表通用 shared amendment 或 SQLite 默认准入合格。
+
 ### 与分阶段交付的关系
 
 对应 #2787 评审结论中的五阶段计划：先在 characterization 阶段把今天的真实行为
@@ -2431,6 +2482,15 @@ Scoped fallback 的选择与门禁关系也已复用同一 TS decision owner，�
 D1–D3 与永久投影规划不变。
 
 **D1 — 资格化永久投影交付，可与 T1/T2 重叠推进。**
+
+周期报告 staging、live editorial fallback 与批准重试现共用一份 canonical-first Todo
+来源，frontier/progress 从同一完整求值 snapshot 选择，缺失/过期展示不能制造或隐藏工作。
+`capabilities/periodic_report_progress.ts` 拥有报告选择和拒绝重试排序，删除 Python
+选择/排序循环。带 offset 的时刻保留微秒，canonical 归档拒绝记录仍有效，显式 runtime-root
+同时作用于 intent 与 Todo IO；冻结 editorial 请求保留原 basis。见
+[操作与边界](../../../loopx/capabilities/periodic_report/README.md#todo-authority-and-report-retries)。
+这只关闭 T3/L5 的该消费者族，不代表 D1 永久展示新鲜度、D2 持久性、D3 整 Goal 资格或
+默认 provider 选择。当前核对清单继续区分代码缺口与资格验证工作。
 
 Todo 摘要现由一个 TS 批次决定范围、lanes、计数、claim 展示分配和收尾证明，删除
 Python 的重复汇总分支及分离的 lane／closure 内部调用。最近完成按真实完成时刻排序，

@@ -335,9 +335,9 @@ envelope 投影，Codex CLI 保持关闭隔离；这不代表安装态 heartbeat
 |---|---|---|
 | Goal/Agent/Todo 身份 | quota 选择及回执；envelope actor、selected Todo 和签名结算身份 | 捕获身份与写入时校验仍必要；展示身份不授予执行权 |
 | 完整要求 | Agent channel 权威 work context 与剩余必读；有效 Todo、验收及 scoped User 义务，完整 Goal 保留渐进式全文读取 | 注册 reader 在两种传输中满足当前任务读取；来源失败会阻止依赖它的交付，真实模型采用和打包宿主旅程仍待验收 |
-| 能力拒绝 | 既有 capability_gate_v0；短包保留原样 required/missing 与源中历史字段 | 修复事实遗漏，不改变就绪策略或能力开启 |
+| 能力拒绝 | 既有 quota `capability_gate_v0`；短包保留精确 `required`/`missing` 数组与源中历史字段 | 修复事实遗漏，不改变就绪策略或能力开启 |
 | 选择／claim／lease | selected Todo、action portfolio 及当前所属事务 | 短包归属不是新鲜 lease；保留捕获源并在所属写入入口复核 |
-| replan／Goal 收尾 | replan action packet、contract capsule 和 vision audit | 完整证据仍走有权限的详情；Todo 完成不证明 Goal 完成 |
+| replan／Goal 收尾 | replan action packet 与既有 TS capsule 保留完整、有序 audit 步骤/指导、当前 judge 及证据与非证明条件 | 同一捕获的 File/SQLite 决策验证条款保留与签名突变；完整证据仍走有权限的详情。宿主/模型采用仍开放；Todo 完成不证明 Goal 完成 |
 | 结算／scheduler | 完整 typed 结算计划及显式宿主调度投影；省略的调度 argv 引用同一捕获的完整决策 | 此投影退役未绑定的详情命令。实际宿主读回、过期写入拒绝与一次恢复仍待宿主采用验收 |
 | 可选 memory | 核验后的 boundary 参与事实及新鲜宿主绑定 | 关闭／recall／ingest／失效／provider 失败隔离持续保留；传输等价不是模型收益 |
 
@@ -346,6 +346,12 @@ envelope 投影，Codex CLI 保持关闭隔离；这不代表安装态 heartbeat
 不重写历史签名、不增覆盖版本、准入规则或 Python 策略。宿主 provider 失败和
 结算另有覆盖，仍不证明安装态 App 收敛或模型成本。以下三项继续按各自验收保持
 未完成；这份核对不授权批量删除剩余 Python IO adapter。
+
+接续 audit 投影还保留每个有序 closeout 步骤和完整当前 judge。旧 capsule 在签名前就
+遗漏这些字段，并把接续指导截成 48 字符。捕获的 File/SQLite 工作和 replan 路径现在
+保留这些条款，修改步骤、顺序或 judge 后拒绝签名等价。既有 8 KiB 诊断阈值不变，
+必需文本可以超出并警告。这只关闭传输遗漏，不代表三项收敛验收通过，也不授权退役仍
+活跃的 Python/host adapter。
 
 统一工作上下文现在由既有 TS interaction owner 选择并满足必读，注册的 Python
 adapter 核验来源，在普通 heartbeat/quota 与签名 envelope 中返回完整当前任务来源，
@@ -372,6 +378,14 @@ live 模型结果、App 采用或以下三项收敛验收完成。
 | 核对 heartbeat 与 TurnEnvelope 的执行和上下文要求 | 同一捕获的权威决策保留 actor/Goal/Todo、必读全文、claim/lease、选择、replan/收尾、带条件结算和 scheduler 所有权。删除渲染分支前列明遗漏与重复事实。覆盖可选能力关闭、仅 recall、仅 ingest、绑定失效和 provider 失败；私有详情只经有权限的引用访问。 |
 | 在真实宿主 renderer 采用同一 typed 投影 | heartbeat full/thin 与 Turn host 消费同一执行事实及同 Turn 捕获/详情入口；显式保留通知和 scheduler 的宿主传输。真实 File/SQLite CLI 与打包 Codex App 覆盖重入、来源丢失、必读前拒绝、迟到结果、backoff 和一次结算；补读不触发第二次准入。最后调用方迁移后才退役旧投影。 |
 | 核验上下文形态及迁移默认 | 将相同的正常、replan、等待/恢复与可选能力负载同时对照当前完整和短包路径，测量载荷/model token、详情 IO、延迟、资源增长、遗漏、决策与结果质量。数据丢失、重复效果、身份和结算错误保持硬约束；保留受支持的已保存 prompt/回执与可逆 rollout，根据证据再改预算或默认。 |
+
+原生 Turn detail 采用现持久化真实 `run-once` producer 的完整 observation，由既有 TS
+envelope owner 将 Host 请求绑定到它。真实 File/SQLite CLI 检查实际 subprocess 输入，
+改变 canonical Todo 来源，验证原详情、重试和无效果 replay；模型 provider 是协议
+fixture。只读规划与可选 quota capture 默认值不变，原生执行 Turn 现保留私有 capture
+证据。证据缺失或不匹配拒绝再次调用 Host；legacy 缓存结果恢复与终态读回保留原 receipt。
+这只关闭 producer 到 detail 的传输缺口。真实模型、打包 App/Lark、后续 authority 检查
+及其余收敛矩阵仍独立验收，本切片不退役任何 Python 投影。
 
 此前成本切片已复现回归预算缺口，不能归因于 fixture alias，也不授权删掉
 必需上下文。`aa87cc019` 与 `fc411c878` 使用相同公共 CLI fixture、临时 alias

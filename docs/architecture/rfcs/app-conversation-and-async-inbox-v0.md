@@ -270,6 +270,24 @@ resume. Earlier source evidence records a Codex canary editing and reading back 
 synthetic note while preserving prior text and creating no Goal. This historical
 host/filesystem evidence is separate from current synthetic-protocol regression
 checks and does not qualify live Lark, material intake or a release.
+Disconnecting a binding or replacing its identity, context or grant first
+publishes typed revocation, then reuses Core's exact-Turn interruption. Cancel
+that binding's queued work before stopping its active Turns, including topic
+and resumed Sessions; unrelated authorized work continues. History remains
+readable and unchanged-configuration retries do not interrupt execution. Never
+hold the authorization-publication lock while waiting for the host to stop or
+create another queue, scheduler or provider authority. An unconfirmed stop
+retains revocation and reports failure. Retrying disconnect with the old binding
+identity and current revision continues stop confirmation, including after a
+failed replacement. Settings projects pending/running targets from Core's
+persisted state, retains exact stop recovery across refresh and reload, and
+removes recovery only after Core confirms termination. It does not restore the
+grant or change the new binding and unrelated work. A claimed attached host
+still lacks push-stop support: report that limit, cancel its unclaimed external
+requests and preserve unrelated local Turns. Synthetic Codex/provider tests
+qualify source semantics; installed/live-host stop, physical command cancellation
+and community enablement remain separate acceptance.
+
 Committed same-claim replay is separate from new admission: after a lost response
 and target revocation, the original host can recover its committed receipt; new
 claims and external result publication remain denied. Current validation uses real
@@ -1135,3 +1153,27 @@ host media and file delivery remain separate gaps. Regression covers model-wire
 image input, unchanged Session, replay, durable restart and download-time
 revocation; live provider/model acceptance is reported separately. No new
 Session authority, queue, worker or feature toggle is introduced.
+
+### Lark progress-edit budget and final-result recovery
+
+Private conversations and steward commissions reuse persisted Turn events to
+edit one progress message; the Core terminal answer still owns the full result.
+Progress allows at most 12 edit attempts, persisted before the provider write.
+Unknown receipts consume the budget and restart does not reset it. This is a
+conservative transport limit, not Lark's maximum allowance. After exhaustion,
+retain Turn events and the allowance for a final edit and necessary close notice.
+
+Older long tasks may already have exhausted the provider quota. Only an explicit
+`230072` response plus fresh readback proving the target body absent allows
+retaining the rejected-edit proof and sending the complete result separately
+through the existing source-session, audience and idempotent-send path. Never
+mark an exhausted draft successfully closed, rerun the model or recreate the
+Session. Unknown errors, lost receipts and unavailable readback retain recovery
+without a blind resend. If the result is verified but reaction cleanup remains,
+recover only its original result proof without sending again.
+
+Regression covers budget persistence across restart, final-result retention,
+explicit quota refusal, unknown failure, lost post-write receipt, unavailable
+readback, recovery of older failed journals and two-App isolation. Live provider
+delivery remains separate. Model completion, material intake and an intermediate
+card cannot substitute for final-message readback.
