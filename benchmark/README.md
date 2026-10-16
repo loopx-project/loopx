@@ -874,6 +874,9 @@ runtime receipt 绑定摘要；programmatic adapter 也可指定已放入 guest 
 失败后，修复声明不得把后来的状态补记成同一原点。评测参与者使用上文明确的
 公开 SForge fork/pin 和 Python 3.12；普通 upstream 安装缺少该 seam 时明确
 拒绝。Codex 原生会话的真实分页/compaction 与隔离 fork 须单独验证。
+中途原生捕获将实际 TurnEnvelope 开关绑定到封存的 interrupted guard；
+关闭开关的普通 guard 可以捕获，恢复时模式不匹配仍拒绝。旧产物缺少该字段
+时保留其原有开启语义；这只是历史校验兼容，不会为当前运行启用 TurnEnvelope。
 评测机会及 incumbent 参与者也分配未占用的 ID，并在封存的
 `point_metadata.evaluation_opportunity` 中记录实际映射；无 incumbent 时对应值为 null。
 文件 witness 校验按该映射定位，不会把同名调用者文件误当原生候选。

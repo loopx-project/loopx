@@ -742,6 +742,7 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
                 native = manifest["point_metadata"]["native_session"]
                 assert "completed_turn_id" not in native
                 assert native["interrupted_guard"]["native_call_id"] == "call_midwake"
+                assert native["interrupted_guard"]["turn_envelope"] is False
                 assert native["interrupted_guard"]["decision_sha256"] == event["decision_sha256"]
                 # Reconstruct the earlier captured store after the source has
                 # already continued. Fixed guest paths require an isolated home;

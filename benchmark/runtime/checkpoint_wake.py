@@ -132,6 +132,7 @@ class CheckpointWake:
                          "registry": self.env["LOOPX_REGISTRY"], "runtime_root": self.env["LOOPX_RUNTIME_ROOT"],
                          "goal_id": self.env["LOOPX_GOAL_ID"], "agent_id": self.env["LOOPX_AGENT_ID"],
                          "turn_instance_id": held["quota"]["heartbeat_receipt"]["turn_instance_id"],
+                         "turn_envelope": self.receipt.get("turn_envelope", False),
                          "capture_root": str(self.capture_root), "socket_path": self.socket_path,
                          "decision_sha256": held["sha256"]}
                 reader = readers.enter_context(native_checkpoint_reader(self.env, timeout=max(.1, window - time.time())))

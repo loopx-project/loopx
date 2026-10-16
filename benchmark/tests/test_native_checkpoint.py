@@ -814,7 +814,8 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
         assert settled.progress["state"] == "settled"
 
 
-def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monkeypatch):
+@pytest.mark.parametrize("turn_envelope", [None, False, True], ids=["legacy", "ordinary", "envelope"])
+def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monkeypatch, turn_envelope):
     """A stopped command is eligible only at the declared pre-output boundary."""
     import copy
     import shlex
@@ -828,6 +829,10 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monk
             "--format", "json", "quota", "should-run", "--goal-id", "research", "--agent-id", "worker",
             "--turn-instance-id", "turn-1", "--turn-envelope", "--decision-output-root", guard["capture_root"],
             "--decision-handoff-socket", guard["socket_path"]]
+    if turn_envelope is not None:
+        guard["turn_envelope"] = turn_envelope
+    if turn_envelope is False:
+        argv.remove("--turn-envelope")
     command = shlex.join(["/bin/bash", "-lc", shlex.join(argv)])
     item = {"type": "commandExecution", "id": "guard-call", "command": command, "cwd": str(tmp_path),
             "status": "failed", "exitCode": 137, "aggregatedOutput": None}
@@ -845,6 +850,19 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monk
     rendered[-1]["items"][-1]["command"] = shlex.join(["/bin/bash", "-lc",
         "LOOPX_TURN=turn-1\n" + shlex.join(argv).replace("--turn-instance-id turn-1", '--turn-instance-id "${LOOPX_TURN:?}"')])
     _verify_interrupted_guard(rendered, guard)
+    # A caller cannot change the captured presentation/authority mode on restore.
+    opposite = list(argv)
+    if "--turn-envelope" in opposite:
+        opposite.remove("--turn-envelope")
+    else:
+        opposite.append("--turn-envelope")
+    changed = copy.deepcopy(turns)
+    changed[-1]["items"][-1]["command"] = shlex.join(["/bin/bash", "-lc", shlex.join(opposite)])
+    with pytest.raises(ValueError, match="routes or identity"):
+        _verify_interrupted_guard(changed, guard)
+    for invalid in [None, 0, 1, "false"]:
+        with pytest.raises(ValueError, match="must be boolean"):
+            _verify_interrupted_guard(turns, {**guard, "turn_envelope": invalid})
     variants = []
     for field, value in [("aggregatedOutput", "score already exposed"), ("cwd", "/elsewhere"),
                          ("status", "completed"), ("command", shlex.join(["/bin/bash", "-lc", shlex.join(argv) + "; touch later"]))]:
