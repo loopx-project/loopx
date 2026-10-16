@@ -51,6 +51,9 @@ provider 读回确认回复；发生没有 receipt 的不确定写入时不盲�
 时，同一请求内的别名检查与连接共用一次已验证身份观测。飞书 HTTP 组合位于
 extension，typed binding owner 继续保持 provider-neutral。
 
+绑定解析在 provider 身份观测后重读确切授权。观测期间撤销或替换该绑定会拒绝请求；
+其它绑定的修改不使当前绑定失效。typed owner 仍检查当前上下文，不跨次缓存身份核验。
+
 同一设置读模型也展示本机已安装 transport 的 Core binding。监听状态取确切宿主组合
 provider 的可选 `health_snapshot()`，返回仅含状态的观测；默认 profile 使用已有
 Lark listener 观测。该本地 hook 只读取缓存，不发起网络请求。仅投影已有监听标签
@@ -89,7 +92,9 @@ App 身份时，并行读取两条原 provider 消息。两项只读观测全部
 普通 Codex 话题空闲时，`/stop` 也覆盖同一原生 Session 中已完成 Turn 遗留的后台命令。
 Core 先在原请求日志固定 Session 与候选 Turn，原 listener 随即继续受理消息；现有
 回复工作池再恢复这条 prepared 请求，读取原生命令清单并取消原目标。恢复只能缩小
-固定候选，不能追停后来的 Turn 或新 Session。慢速或失败的原生控制不阻塞入站，
+固定候选，不能追停后来的 Turn 或新 Session。prepared 恢复复用受理路径在原请求与
+来源路由锁内的新鲜授权核验，不在等待锁前重复探测 provider；等待期间撤权即阻止
+控制和投递。慢速或失败的原生控制不阻塞入站，
 也不提前回复“已停止”；没有固定目标的旧请求保持未知，活跃 Turn 仍沿原确切中断路径。
 这只调整现有 IO 调度，不新增队列、消费者或完成状态；实际安装、停止时延与完整社区
 准出仍需分别验收。

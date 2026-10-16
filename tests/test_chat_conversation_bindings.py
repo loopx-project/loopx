@@ -259,6 +259,113 @@ def test_binding_observation_is_opt_in_fresh_and_never_part_of_the_context(ordin
     runtime.close()
 
 
+@pytest.mark.parametrize("group", [False, True])
+@pytest.mark.parametrize("change", ["revoke", "replace", "unrelated"])
+def test_binding_change_while_identity_is_observed_uses_current_grant(ordinary, monkeypatch, group, change):  # noqa: F811
+    from test_lark_private_conversations import connect, connect_group
+    from loopx.extensions.lark.conversation_identity import lark_private_source
+
+    store, runtime, provider, transport = (connect_group if group else connect)(ordinary)
+    bindings = transport.bindings
+    binding = transport._binding("notes-app")
+    event = provider.topic("grant-observation", "Read project") if group else provider.event("notes-app", "grant-observation", "Read project")
+    source = lark_private_source(provider_ref=binding["provider_ref"], event=event)
+    observe, armed = bindings.observe, True
+
+    def changed(profile, **kwargs):
+        nonlocal armed
+        result = observe(profile, **kwargs)
+        if armed:
+            armed = False
+            if change == "revoke":
+                bindings.disconnect(binding["binding_id"], expected_revision=bindings.read()["revision"])
+            else:
+                target = "steward-app" if change == "unrelated" else "notes-app"
+                if change == "replace":
+                    provider.profile_apps[target] = "cli_replaced_app"
+                bindings.configure(transport_ref=target, project_ref=binding["project_ref"],
+                    executor_endpoint_id="codex", audience="group" if group else None,
+                    group_refs=binding.get("group_refs"), available_group_refs=binding.get("group_refs"))
+        return result
+
+    monkeypatch.setattr(bindings, "observe", changed)
+    try:
+        if change == "unrelated":
+            selected = bindings.resolve(binding_id=binding["binding_id"], **source)
+            assert selected["binding"] == binding
+        else:
+            with pytest.raises(ValueError, match="binding|identity|authorized"):
+                bindings.resolve(binding_id=binding["binding_id"], **source)
+            assert not any(row["enabled"] and row["binding_id"] == binding["binding_id"]
+                           for row in bindings.read()["bindings"])
+        assert not store.list_sessions() and not provider.writes
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("revoke", [False, True])
+def test_prepared_stop_recovery_waits_for_route_fence_before_its_identity_probe(ordinary, monkeypatch, revoke):  # noqa: F811
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from test_chat_completed_background_stop import _completed_with_later_answer
+    from loopx.file_lock import exclusive_file_lock
+
+    store, runtime, provider, transport, root, first, wire = _completed_with_later_answer(ordinary, monkeypatch)
+    stop = provider.topic("fenced-recovery-stop", "/stop", root=root["message_id"])
+    transport.admit("notes-app", stop, defer_background_stop=True)
+    frozen = next(row for row in transport.core.pending() if row["command"] == "stop")
+    assert frozen["status"] == "prepared" and frozen["target_recorded"]
+    fence = transport.core.root / "source-fences" / f"{frozen['binding_id']}.{frozen['source']['source_ref']}.json"
+    started, observed = threading.Event(), threading.Event()
+    observe, finish = transport.bindings.observe, transport.core._finish_background_stop
+    before_native = []
+
+    def observing(*args, **kwargs):
+        observed.set()
+        return observe(*args, **kwargs)
+
+    def finishing(*args, **kwargs):
+        before_native.append(sum("auth" in call for call in provider.calls))
+        return finish(*args, **kwargs)
+
+    def recover():
+        started.set()
+        transport.core.recover(request_ref=frozen["request_ref"])
+
+    monkeypatch.setattr(transport.bindings, "observe", observing)
+    monkeypatch.setattr(transport.core, "_finish_background_stop", finishing)
+    provider.calls.clear()
+    writes_before = list(provider.writes)
+    receipts = {turn_id: store.load_turn(first["session_id"], turn_id)
+                for turn_id in frozen["background_turn_ids"]}
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with exclusive_file_lock(fence, operation="hold_original_source_route"):
+                future = pool.submit(recover)
+                assert started.wait(5)
+                assert not observed.wait(.1), "A pre-fence probe cannot authorize prepared recovery"
+                if revoke:
+                    transport.bindings.disconnect(frozen["binding_id"], expected_revision=transport.bindings.read()["revision"])
+            future.result(timeout=10)
+        current = transport.core.read_request(frozen["request_ref"])
+        if revoke:
+            assert current["status"] == "prepared" and current["background_turn_ids"] == frozen["background_turn_ids"]
+            assert not before_native and wire.children["owned"].poll() is None
+            assert provider.writes == writes_before
+        else:
+            assert before_native == [1], "The fenced admission already owns the fresh identity proof"
+            assert current["status"] == "command_completed" and current["background_turn_ids"] == [first["turn_id"]]
+            assert wire.children["owned"].poll() is not None
+            transport.reconcile()
+            assert sum("停止" in text for _, text in provider.writes) == 1
+        assert wire.children["unowned"].poll() is None
+        assert all(store.load_turn(first["session_id"], turn_id) == receipt
+                   for turn_id, receipt in receipts.items())
+    finally:
+        wire.close()
+        runtime.close()
+
+
 @pytest.mark.parametrize("resumed", [False, True])
 def test_group_disconnect_stops_running_and_queued_turns_without_stopping_other_session(ordinary, resumed):  # noqa: F811
     from test_lark_private_conversations import connect_group
