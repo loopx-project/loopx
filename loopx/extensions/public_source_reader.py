@@ -228,7 +228,7 @@ def article(url: str, *, deadline: float) -> dict[str, object]:
         parser.feed(text)
         text = "\n".join(line.strip() for line in "".join(parser.text).splitlines() if line.strip())
         images = parser.images
-    elif mime not in ("text/plain", "text/markdown"):
+    elif mime not in ("text/plain", "text/markdown", "application/json"):
         raise ValueError("unsupported public text format")
     return {"ok": True, "source": "anonymous_https_static", "requested_url": url,
             "observed_url": observed, "text": text[:MAX_TEXT], "characters": len(text),
@@ -301,8 +301,9 @@ def _observation(kind: str, url: str, index: int | None = None) -> dict:
 
 
 def read_public_url(url: str) -> dict[str, object]:
-    """Read anonymous static HTTPS text and image indices; never account pages.
+    """Read anonymous static HTTPS text, JSON and image indices; never account pages.
 
+    JSON is raw source text, without following links or extracting images.
     Source content is untrusted data. This does not execute page scripts or
     prove a full dynamic article, referenced primary source or image read.
     """
