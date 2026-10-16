@@ -125,6 +125,40 @@ sys.stdin.read()
     }
 
 
+def test_non_heartbeat_wakes_do_not_import_checkpoint_control_plane(tmp_path, monkeypatch):
+    # plain/native-goal workers stage no LoopX control plane; a checkpoint import
+    # there turned a 90-minute trial into a 0.7s ModuleNotFoundError exit.
+    monkeypatch.setitem(sys.modules, "benchmark.runtime.checkpoint_wake", None)
+    env = worker_env(tmp_path)
+    receipt = run_once(env)
+    assert receipt["ok"], receipt
+    assert receipt.get("error_kind") is None and "checkpoint" not in receipt
+
+
+def test_native_goal_staged_source_is_importable_without_loopx_control_plane(tmp_path):
+    # Non-LoopX workers receive only NATIVE_GOAL_SOURCE_PATHS from `git archive`;
+    # a new loopx-internal import in native_codex_goal.py must be staged too,
+    # or a native-goal trial dies with ModuleNotFoundError before the model runs.
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import NATIVE_GOAL_SOURCE_PATHS
+    from benchmark.runtime.source import archive_source
+    repo = Path(__file__).resolve().parents[2]
+    head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+    archive = tmp_path / "source.tar"
+    archive_source(repo, head, archive, NATIVE_GOAL_SOURCE_PATHS)
+    staged = tmp_path / "staged"; staged.mkdir()
+    subprocess.run(["tar", "-xf", str(archive), "-C", str(staged)], check=True)
+    # -I -S: no site-packages, so the editable checkout cannot mask a missing staged file.
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", "-c",
+         f"import sys; sys.path.insert(0, {str(staged)!r}); "
+         "import loopx.capabilities.benchmark_toolkit.native_codex_goal as m; print(m.__name__)"],
+        cwd=tmp_path, env={"PATH": os.environ["PATH"]}, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "loopx.capabilities.benchmark_toolkit.native_codex_goal"
+
+
 def test_fresh_wakes_share_environment_without_resuming_or_duplicate_session_copies(
     tmp_path,
 ):
@@ -630,8 +664,10 @@ def test_wake_receipt_preserves_opt_out(tmp_path, monkeypatch, enabled):
     receipt = run_once(env)
     assert receipt["ok"], receipt
     assert ("turn_envelope" in receipt) is enabled
+    assert ("turn_envelope_source" in receipt) is enabled
     if enabled:
         assert receipt["turn_envelope"] is True
+        assert receipt["turn_envelope_source"] == "explicit"
 
 
 @pytest.mark.parametrize("observed", [

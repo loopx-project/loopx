@@ -91,6 +91,7 @@ class SForgeWorker(CodexAgent):
                  task_objective: str | None = None,
                  task_entry: str | None = None,
                  turn_envelope: bool = False,
+                 feedback_first: bool = False,
                  replan_after_turns: int | None = None,
                  replan_after_todos: int | None = None,
                  stride_strategy: str | None = None,
@@ -166,6 +167,11 @@ class SForgeWorker(CodexAgent):
             raise ValueError("Unknown feedback mode")
         if feedback != "native" and feedback_prompt is None:
             raise ValueError("Restricted feedback requires its task wrapper")
+        if not isinstance(feedback_first, bool):
+            raise ValueError("feedback_first must be a boolean opt-in")
+        if feedback_first and (feedback != "native" or self.task_entry != "loopx-planned"):
+            raise ValueError("feedback_first requires native feedback and loopx-planned entry")
+        self.feedback_first = feedback_first
         if workspace_instructions is not None and (
             feedback != "native" or not workspace_instructions.strip()
             or feedback_prompt is None or not feedback_prompt.startswith(workspace_instructions)
@@ -254,6 +260,7 @@ class SForgeWorker(CodexAgent):
                 scheduler_timeout_sec=self.timeout_seconds,
                 task_entry=self.task_entry,
                 turn_envelope=self.turn_envelope,
+                planning_feedback_first=self.feedback_first,
                 replan_after_turns=self.replan_after_turns,
                 replan_after_todos=self.replan_after_todos,
                 stride_strategy=self.stride_strategy,
@@ -319,7 +326,8 @@ class SForgeWorker(CodexAgent):
             **({"planning_timeout_seconds": None}
                if self.task_entry == "loopx-planned" else {}),
             "stop_hook": self.profile == "official",
-            **({"turn_envelope": True} if self.turn_envelope else {}),
+            **(self.runtime._turn_envelope_receipt() if self.runtime is not None else {}),
+            **({"planning_feedback_first": True} if self.feedback_first else {}),
             "outer_resume": self.resume_cmd is not None,
             "explore_graph": self.profile == "heartbeat-explore",
             "explore_harness": self.profile == "heartbeat-explore",

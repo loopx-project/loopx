@@ -170,9 +170,41 @@ def test_checkpoint_request_reaches_sforge_worker_without_changing_default_profi
     profile = json.loads((tmp_path / "worker-profile.json").read_text())
     assert env.get("LOOPX_CHECKPOINT_REQUEST") == capture_path
     assert ("checkpoint_capture_enabled" in profile) is (capture_path is not None)
+    # The handoff socket enables TurnEnvelope capture; the profile must say so.
+    assert profile.get("turn_envelope") is (True if capture_path else None)
+    assert profile.get("turn_envelope_source") == ("checkpoint_handoff" if capture_path else None)
+    assert "LOOPX_TURN_ENVELOPE" not in env
     assert profile.get("checkpoint_capture_enabled") is (True if capture_path else None)
     with pytest.raises(ValueError, match="checkpoint_request_path"):
         SForgeWorker(config, profile="official", cwd="/task", checkpoint_request_path="/control/request.json")
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_feedback_first_is_a_planned_native_opt_in(tmp_path, monkeypatch, enabled):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+    async def installed(self, environment):
+        pass
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    config = SForgeConfig(agent_model="fixture", agent_effort="xhigh")
+    worker = SForgeWorker(config, profile="heartbeat-resume", cwd="/task", feedback_first=enabled)
+    worker.install_stop_hook(None, None, tmp_path, None)
+    env = worker.runtime._worker_env(cwd="/task")
+    profile = json.loads((tmp_path / "worker-profile.json").read_text())
+    assert env.get("LOOPX_PLANNING_FEEDBACK_FIRST") == ("1" if enabled else None)
+    assert profile.get("planning_feedback_first") is (True if enabled else None)
+    assert "turn_envelope" not in profile
+    for kwargs in ({"task_entry": "seeded-todo"},
+                   {"feedback": "best-only", "feedback_prompt": "wrapper"},
+                   {"profile": "official"}):
+        with pytest.raises(ValueError, match="feedback_first|loopx-planned"):
+            SForgeWorker(config, **{"profile": "heartbeat-resume", "cwd": "/task",
+                                    "feedback_first": True, **kwargs})
+    with pytest.raises(ValueError, match="boolean"):
+        SForgeWorker(config, profile="heartbeat-resume", cwd="/task", feedback_first="1")
 
 
 @pytest.mark.parametrize("profile,total,expected", [

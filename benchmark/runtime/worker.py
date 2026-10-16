@@ -269,6 +269,13 @@ def native_command(env, execution, stage, wake, session_wake):
     return command
 
 
+class _InertCheckpointWake:
+    """No checkpoint listener: plain, native-Goal, Turn and loopx-goal wakes."""
+
+    socket_path = None
+    listener = None
+
+
 def run_once(env: dict[str, str]) -> dict:
     if env.get("LOOPX_TURN_ENVELOPE", "0") not in {"0", "1"}:
         raise ValueError("LOOPX_TURN_ENVELOPE must be 0 or 1")
@@ -297,7 +304,8 @@ def run_once(env: dict[str, str]) -> dict:
         "mode": execution.mode,
         "context": execution.context,
         "task_entry": execution.task_entry,
-        **({"turn_envelope": True} if execution.turn_envelope else {}),
+        **({"turn_envelope": True, "turn_envelope_source": "explicit"}
+           if execution.turn_envelope else {}),
         "stage": stage,
         "home_scope": "trial",
         "ok": False,
@@ -338,9 +346,14 @@ def run_once(env: dict[str, str]) -> dict:
                 Path(env["LOOPX_MODEL_CATALOG"]) if env.get("LOOPX_MODEL_CATALOG") else None
             ),
         )
-        from benchmark.runtime.checkpoint_wake import CheckpointWake
+        if execution.mode == "heartbeat":
+            # Checkpoint capture needs the LoopX control plane, which only
+            # heartbeat workers stage; other modes must not import it.
+            from benchmark.runtime.checkpoint_wake import CheckpointWake
 
-        checkpoint_wake = checkpoint_context.enter_context(CheckpointWake(env, receipt))
+            checkpoint_wake = checkpoint_context.enter_context(CheckpointWake(env, receipt))
+        else:
+            checkpoint_wake = _InertCheckpointWake()
         body = "Finish the task."
         if stage == "plan":
             from benchmark.runtime.planning import render_planning_prompt, task_plan_packet
@@ -353,6 +366,11 @@ def run_once(env: dict[str, str]) -> dict:
         elif execution.mode in {"heartbeat", "loopx-goal"}:
             body = heartbeat_body(env, turn_id, native_goal=execution.native_goal,
                                   decision_handoff_socket=checkpoint_wake.socket_path)
+            if checkpoint_wake.socket_path is not None and not execution.turn_envelope:
+                # The handoff socket enables TurnEnvelope capture without the
+                # explicit opt-in; the receipt records the effective setting.
+                receipt["turn_envelope"] = True
+                receipt["turn_envelope_source"] = "checkpoint_handoff"
         elif execution.mode == "plain":
             body = Path(env["LOOPX_TASK_DOC"]).read_text(encoding="utf-8")
         session_wake = None

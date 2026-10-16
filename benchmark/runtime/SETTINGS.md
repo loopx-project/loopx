@@ -20,7 +20,8 @@ use matched repetitions to test its effect.
 | --- | --- | --- |
 | Task entry | LoopX modes: loopx-planned | Record planned or seeded for every arm |
 | Explore | Off in heartbeat-resume; on in heartbeat-explore | Keep resume as the reference |
-| Turn envelope | Off | Enable only in its ablation |
+| Turn envelope | Off; a checkpoint handoff enables capture on fresh_replan execute wakes and receipts record `turn_envelope_source: checkpoint_handoff` | Enable only in its ablation; read the effective receipt, not the opt-in flag |
+| Feedback-first planning | Off | `feedback_first: true` adds a host planning constraint: first Todo obtains one accepted native evaluation before extended local calibration (native feedback, loopx-planned only) |
 | Replan cadence | 6 settled effective work Turns | Use explicit completed-Todo cadence or another Turn count for ablation |
 | Iteration context | Harbor: fresh; EdgeBench heartbeat: resume | Freeze the provider and context within a comparison |
 | Evaluator feedback | EdgeBench: best-only (strict new-best snapshot notifications) | Native and blind remain explicit controls; freeze feedback mode for every comparison |
@@ -46,6 +47,7 @@ These are recommendations, not automatically launched experiments.
 | --- | --- | --- |
 | Reference | `--worker heartbeat-resume --task-entry loopx-planned --replan-after-turns 6` | Planned entry with effective-turn replanning |
 | Seeded | Replace only `--task-entry` with `seeded-todo` | Does initial task decomposition help? |
+| Feedback-first | Add `feedback_first: true` to the planned native reference | Does ordering one accepted external evaluation before local calibration shorten first feedback without extra submissions? |
 | Explore | Replace only `--worker` with `heartbeat-explore` | Are recorded evidence and subsequent route choices useful? |
 | Short envelope | Add `--turn-envelope` | Does progressive context loading reduce overhead without losing decisions? |
 | Todo cadence | Replace `--replan-after-turns 6` with `--replan-after-todos 3` | How do units and thresholds change interruptions? This is a combined ablation. |

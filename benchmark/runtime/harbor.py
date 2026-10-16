@@ -41,6 +41,15 @@ _GOAL_ID = "benchmark-goal"
 _AGENT_ID = "benchmark-agent"
 
 
+# Non-LoopX workers stage only these paths; keep this list closed over the
+# loopx-internal import closure of native_codex_goal.py (see the import test).
+NATIVE_GOAL_SOURCE_PATHS = (
+    "benchmark/runtime",
+    "loopx/capabilities/benchmark_toolkit/native_codex_goal.py",
+    "loopx/control_plane/turn_driver/codex_stdio.py",
+)
+
+
 class BenchmarkCodex(CodexOffline):
     """One independent LoopX control plane per Harbor trial."""
 
@@ -60,6 +69,7 @@ class BenchmarkCodex(CodexOffline):
         task_entry=None,
         planning_timeout_sec=None,
         turn_envelope=False,
+        planning_feedback_first=False,
         task_objective=None,
         goal_id=_GOAL_ID,
         agent_id=_AGENT_ID,
@@ -110,6 +120,11 @@ class BenchmarkCodex(CodexOffline):
                 raise ValueError("checkpoint_request_path requires a settled-work worker")
             from .checkpoint import normalize_checkpoint_request_path
             self.checkpoint_request_path = normalize_checkpoint_request_path(checkpoint_request_path)
+        if not isinstance(planning_feedback_first, bool):
+            raise ValueError("planning_feedback_first must be a boolean opt-in")
+        if planning_feedback_first and self.execution.task_entry != "loopx-planned":
+            raise ValueError("planning_feedback_first requires loopx-planned task entry")
+        self.planning_feedback_first = planning_feedback_first
         self.goal_id, self.agent_id = goal_id, agent_id
         self.defer_codex_home = defer_codex_home
         self._task_path = "/usr/local/bin:/usr/bin:/bin"
@@ -121,6 +136,21 @@ class BenchmarkCodex(CodexOffline):
         self.task_objective = (task_objective if task_objective is not None else
                               "Complete the current benchmark task through validated LoopX Todos.")
         super().__init__(*args, **kwargs)
+
+    def _turn_envelope_receipt(self) -> dict:
+        """Project the effective TurnEnvelope setting, not only the explicit opt-in.
+
+        A checkpoint handoff socket makes the worker capture TurnEnvelope on
+        fresh_replan execute wakes; per-wake receipts remain authoritative.
+        """
+        if self.execution.turn_envelope:
+            return {"turn_envelope": True, "turn_envelope_source": "explicit"}
+        if self.checkpoint_request_path is not None and self.execution.mode == "heartbeat":
+            return {"turn_envelope": True, "turn_envelope_source": "checkpoint_handoff"}
+        return {}
+
+    def _planning_receipt(self) -> dict:
+        return {"planning_feedback_first": True} if self.planning_feedback_first else {}
 
     def _replan_configuration(self) -> tuple[str, str, int]:
         # Transport existing Goal fields; the typed control plane owns counting.
@@ -152,9 +182,7 @@ class BenchmarkCodex(CodexOffline):
         self._runner_commit = runner_head
         with tempfile.TemporaryDirectory(prefix="benchmark-source-") as directory:
             archive = Path(directory) / "source.tar"
-            paths = () if self.execution.uses_loopx else (
-                "benchmark/runtime", "loopx/capabilities/benchmark_toolkit/native_codex_goal.py",
-            )
+            paths = () if self.execution.uses_loopx else NATIVE_GOAL_SOURCE_PATHS
             archive_source(source, head, archive, paths)
             await environment.upload_file(archive, f"{_ROOT}/source.tar")
             await self.exec_as_root(environment, command=(
@@ -300,7 +328,8 @@ class BenchmarkCodex(CodexOffline):
             "execution_mode": self.execution.mode,
             "iteration_context": self.execution.context,
             "task_entry": self.execution.task_entry,
-            **({"turn_envelope": True} if self.execution.turn_envelope else {}),
+            **self._turn_envelope_receipt(),
+            **self._planning_receipt(),
             "home_scope": "trial",
             "loopx_usage_ping_enabled": False,
             "login_shell_node_path": _BASH_ENV,
@@ -543,6 +572,7 @@ class BenchmarkCodex(CodexOffline):
                 **({"LOOPX_CHECKPOINT_REQUEST": self.checkpoint_request_path}
                    if self.checkpoint_request_path is not None else {}),
                 **({"LOOPX_TURN_ENVELOPE": "1"} if self.execution.turn_envelope else {}),
+                **({"LOOPX_PLANNING_FEEDBACK_FIRST": "1"} if self.planning_feedback_first else {}),
                 "LOOPX_ITERATION_CONTEXT": self.execution.context,
                 "LOOPX_CODEX_SANDBOX": self.execution.sandbox,
                 "LOOPX_VALIDATION_COMMAND_JSON": json.dumps(
@@ -654,7 +684,8 @@ class BenchmarkCodex(CodexOffline):
             "execution_mode": self.execution.mode,
             "iteration_context": self.execution.context,
             "task_entry": self.execution.task_entry,
-            **({"turn_envelope": True} if self.execution.turn_envelope else {}),
+            **self._turn_envelope_receipt(),
+            **self._planning_receipt(),
             "home_scope": "trial",
             **self._replan_receipt(),
             "benchmark_phase": self._phase_number,
