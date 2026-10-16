@@ -547,6 +547,9 @@ def test_envelope_rejects_incompatible_sforge_worker(profile):
     ("heartbeat-resume", ["--stride-strategy", "future_policy"]),
     ("official", ["--checkpoint-request", "missing.json"]),
     ("native-goal", ["--checkpoint-request", "missing.json"]),
+    ("official", ["--feedback-first"]),
+    ("heartbeat-resume", ["--feedback-first", "--task-entry", "seeded-todo"]),
+    ("heartbeat-resume", ["--feedback-first", "--feedback", "best-only"]),
 ])
 def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_path, profile, options):
     pytest.importorskip('sforge')
@@ -558,6 +561,21 @@ def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_pa
               '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999', *options])
     assert error.value.code == 2
     assert not (tmp_path / 'runs').exists()
+
+
+@pytest.mark.parametrize("entry", [[], ["--task-entry", "loopx-planned"]])
+def test_feedback_first_accepts_the_default_planned_entry(tmp_path, monkeypatch, entry):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.edgebench.run import main
+    monkeypatch.delenv("LOOPX_SRC_DIR", raising=False)
+    # Admission passes and the attempt directory is reserved; the run then stops
+    # at the first source pin, before any container or model call.
+    with pytest.raises(KeyError, match="LOOPX_SRC_DIR"):
+        main(["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
+              "--run-id", "admitted", "--worker", "heartbeat-resume", "--model", "fixture",
+              "--effort", "xhigh", "--judge-url", "http://127.0.0.1:9999", "--feedback-first", *entry])
+    assert (tmp_path / "runs" / "admitted" / "fixture").is_dir()
 
 
 @pytest.mark.parametrize("missing", ["controller", "declaration", "native_feedback"])

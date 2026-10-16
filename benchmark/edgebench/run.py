@@ -160,7 +160,8 @@ def main(argv=None):
         parser.error("--task-entry loopx-planned requires a heartbeat worker")
     if args.turn_envelope and args.worker not in {"heartbeat-resume", "heartbeat-explore"}:
         parser.error("--turn-envelope requires a heartbeat worker")
-    if args.feedback_first and (args.feedback != "native" or args.task_entry != "loopx-planned"
+    # Heartbeat workers default to loopx-planned; only the explicit ablation is incompatible.
+    if args.feedback_first and (args.feedback != "native" or args.task_entry == "seeded-todo"
                                 or not args.worker.startswith("heartbeat-")):
         parser.error("--feedback-first requires --feedback native, --task-entry loopx-planned and a heartbeat worker")
     if (args.replan_after_turns is not None or args.replan_after_todos is not None
