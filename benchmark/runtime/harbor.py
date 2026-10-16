@@ -70,7 +70,6 @@ class BenchmarkCodex(CodexOffline):
         task_entry=None,
         planning_timeout_sec=None,
         turn_envelope=False,
-        planning_feedback_first=False,
         native_goal_continue=False,
         task_objective=None,
         goal_id=_GOAL_ID,
@@ -128,11 +127,6 @@ class BenchmarkCodex(CodexOffline):
                 raise ValueError("checkpoint_request_path requires a settled-work worker")
             from .checkpoint import normalize_checkpoint_request_path
             self.checkpoint_request_path = normalize_checkpoint_request_path(checkpoint_request_path)
-        if not isinstance(planning_feedback_first, bool):
-            raise ValueError("planning_feedback_first must be a boolean opt-in")
-        if planning_feedback_first and self.execution.task_entry != "loopx-planned":
-            raise ValueError("planning_feedback_first requires loopx-planned task entry")
-        self.planning_feedback_first = planning_feedback_first
         if not isinstance(native_goal_continue, bool):
             raise ValueError("native_goal_continue must be a boolean opt-in")
         if native_goal_continue and not self.execution.native_goal:
@@ -162,8 +156,7 @@ class BenchmarkCodex(CodexOffline):
         )
 
     def _planning_receipt(self) -> dict:
-        return {**({"planning_feedback_first": True} if self.planning_feedback_first else {}),
-                **({"native_goal_continue": True} if self.native_goal_continue else {})}
+        return {"native_goal_continue": True} if self.native_goal_continue else {}
 
     def _replan_configuration(self) -> tuple[str, str, int]:
         # Transport existing Goal fields; the typed control plane owns counting.
@@ -585,7 +578,6 @@ class BenchmarkCodex(CodexOffline):
                 **({"LOOPX_CHECKPOINT_REQUEST": self.checkpoint_request_path}
                    if self.checkpoint_request_path is not None else {}),
                 **({"LOOPX_TURN_ENVELOPE": "1"} if self.execution.turn_envelope else {}),
-                **({"LOOPX_PLANNING_FEEDBACK_FIRST": "1"} if self.planning_feedback_first else {}),
                 **({"LOOPX_NATIVE_GOAL_CONTINUE": "1"} if self.native_goal_continue else {}),
                 "LOOPX_ITERATION_CONTEXT": self.execution.context,
                 "LOOPX_CODEX_SANDBOX": self.execution.sandbox,

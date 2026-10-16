@@ -238,31 +238,6 @@ def test_planning_window_uses_one_phase_deadline_and_preserves_packet(monkeypatc
     assert env == {"LOOPX_PHASE_DEADLINE_EPOCH": "1600"}
 
 
-def test_planning_feedback_first_is_an_explicit_host_constraint(monkeypatch):
-    from benchmark.runtime import planning
-
-    monkeypatch.setattr(planning, "time", SimpleNamespace(time=lambda: 1000.0))
-    packet = {"input_digest": "unchanged", "text": "task"}
-    off = planning.render_planning_prompt(packet, {"LOOPX_PLANNING_FEEDBACK_FIRST": "0"},
-                                          execution_reserve_seconds=160)
-    assert off == planning.render_planning_prompt(packet, {}, execution_reserve_seconds=160)
-    assert "feedback-first" not in off
-    env = {"LOOPX_PLANNING_FEEDBACK_FIRST": "1", "LOOPX_PHASE_DEADLINE_EPOCH": "1600"}
-    body = planning.render_planning_prompt(packet, env, execution_reserve_seconds=160)
-    assert body.startswith("$loopx\n\n")
-    assert "Host execution window:" in body
-    window_end = body.index("Host planning constraint (feedback-first)")
-    assert body.index("Remaining phase time") < window_end < body.index("Host-supplied planning checkpoint:")
-    assert "first runnable Todo must produce a minimal valid candidate" in body
-    assert "never resubmit an unchanged artifact" in body
-    assert "reconcile the returned public diagnostics" in body
-    assert "grants no extra submissions, time or authority" in body
-    assert json.loads(body.split("Host-supplied planning checkpoint:\n", 1)[1]) == packet
-    with pytest.raises(ValueError, match="LOOPX_PLANNING_FEEDBACK_FIRST"):
-        planning.render_planning_prompt(packet, {"LOOPX_PLANNING_FEEDBACK_FIRST": "yes"},
-                                        execution_reserve_seconds=160)
-
-
 @pytest.mark.parametrize("value", ["nan", "inf", "-inf", "0", "-1", "not-a-clock"])
 def test_planning_window_rejects_invalid_host_clock(value):
     from benchmark.runtime.planning import render_planning_prompt

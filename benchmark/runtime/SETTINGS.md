@@ -22,7 +22,6 @@ use matched repetitions to test its effect.
 | Explore | Off in heartbeat-resume; on in heartbeat-explore | Keep resume as the reference |
 | Turn envelope | Off; a checkpoint handoff enables capture on fresh_replan execute wakes and receipts record `turn_envelope_source: checkpoint_handoff` | Enable only in its ablation; read the effective receipt, not the opt-in flag |
 | Native-Goal continuation | Off: a native Goal that declares completion ends the worker; a Goal still active at the budget edge is recorded as `native_goal_outcome: budget_exhausted` with exit 0 | `native_goal_continue: true` / `--native-goal-continue` starts continuation Goals until 300 s before the budget edge (native-goal profile only) |
-| Feedback-first planning | Off | `feedback_first: true` adds a host planning constraint: first Todo obtains one accepted native evaluation before extended local calibration; later Todos keep a submission ledger, never resubmit unchanged artifacts, submit only improvements or stated hypothesis tests, and reconcile returned public diagnostics before refinement (native feedback, loopx-planned only) |
 | Replan cadence | 6 settled effective work Turns | Use explicit completed-Todo cadence or another Turn count for ablation |
 | Iteration context | Harbor: fresh; EdgeBench heartbeat: resume | Freeze the provider and context within a comparison |
 | Evaluator feedback | EdgeBench: best-only (strict new-best snapshot notifications) | Native and blind remain explicit controls; freeze feedback mode for every comparison |
@@ -48,7 +47,6 @@ These are recommendations, not automatically launched experiments.
 | --- | --- | --- |
 | Reference | `--worker heartbeat-resume --task-entry loopx-planned --replan-after-turns 6` | Planned entry with effective-turn replanning |
 | Seeded | Replace only `--task-entry` with `seeded-todo` | Does initial task decomposition help? |
-| Feedback-first | Add `feedback_first: true` to the planned native reference | Does ordering one accepted external evaluation before local calibration shorten first feedback without extra submissions? |
 | Explore | Replace only `--worker` with `heartbeat-explore` | Are recorded evidence and subsequent route choices useful? |
 | Short envelope | Add `--turn-envelope` | Does progressive context loading reduce overhead without losing decisions? |
 | Todo cadence | Replace `--replan-after-turns 6` with `--replan-after-todos 3` | How do units and thresholds change interruptions? This is a combined ablation. |
@@ -94,14 +92,6 @@ an equivalent Harbor kwargs switch. Keep the dataset, provider and validation
 configuration unchanged.
 
 ## Readback and interpretation
-
-`--feedback-first` is an opt-in for new native-feedback, planned heartbeat
-trials. The first runnable Todo must obtain an accepted evaluation of a minimal
-valid candidate; subsequent planning uses that feedback to check model
-conventions before extended refinement. It changes planning order, not the
-native score, submission allowance, cooldown, total budget or authority.
-Omit the flag to keep the unchanged planning prompt. It does not enable
-TurnEnvelope or relax the product's guard re-entry obligations.
 
 TurnEnvelope projections reuse the validated checkpoint declaration. An explicit
 opt-in records `turn_envelope_source=explicit`; a known `fresh_replan` declaration

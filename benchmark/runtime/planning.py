@@ -9,28 +9,8 @@ import time
 from pathlib import Path
 
 
-FEEDBACK_FIRST_RULE = (
-    "Host planning constraint (feedback-first): the task exposes an external "
-    "evaluator whose feedback is the only ground truth for hidden acceptance. "
-    "The first runnable Todo must produce a minimal valid candidate and obtain "
-    "one accepted external evaluation before extended local calibration, "
-    "validation or reporting work. Later Todos must use that feedback to check "
-    "the model's conventions and units before investing in refinement. "
-    "Submission discipline for every later Todo: keep a ledger of each "
-    "submitted artifact's hash and native result; never resubmit an unchanged "
-    "artifact; before using a submission slot, compare the candidate with the "
-    "best accepted one on the public hold-out and submit only an improvement or "
-    "a stated hypothesis test; after each accepted evaluation, reconcile the "
-    "returned public diagnostics with the local model before further refinement. "
-    "This orders work only; it grants no extra submissions, time or authority "
-    "and does not relax task acceptance.\n\n"
-)
-
-
 def render_planning_prompt(packet: dict, env: dict[str, str], *, execution_reserve_seconds: int) -> str:
     """Project caller-owned clocks without changing the product planning packet."""
-    if env.get("LOOPX_PLANNING_FEEDBACK_FIRST", "0") not in {"0", "1"}:
-        raise ValueError("LOOPX_PLANNING_FEEDBACK_FIRST must be 0 or 1")
     if "LOOPX_PLANNING_TIMEOUT_SEC" in env:
         raise ValueError(
             "Remove LOOPX_PLANNING_TIMEOUT_SEC; planning uses LOOPX_PHASE_DEADLINE_EPOCH"
@@ -58,8 +38,6 @@ def render_planning_prompt(packet: dict, env: dict[str, str], *, execution_reser
             "as work proceeds; the runtime still enforces its original limits. "
             "They grant no extra time or authority and do not relax task acceptance.\n\n"
         )
-    if env.get("LOOPX_PLANNING_FEEDBACK_FIRST") == "1":
-        prefix += FEEDBACK_FIRST_RULE
     return prefix + "Host-supplied planning checkpoint:\n" + json.dumps(packet, ensure_ascii=False)
 
 

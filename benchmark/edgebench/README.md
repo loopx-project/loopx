@@ -506,18 +506,3 @@ the truth of supplied policy metadata. The recorded task/source hashes do not
 prove that metadata matches the private task configuration; that provenance
 still needs operator review. This is an S11/E2 terminal-report repair, with no
 change to native scoring, integrity qualification, or study promotion.
-
-### Feedback-first planning and research notes
-
-For a separately authorized new native-feedback, planned heartbeat trial,
-`--feedback-first` asks the first runnable Todo to obtain an accepted evaluation
-of a minimal valid candidate before extended local calibration. Omit the flag
-for the unchanged planning prompt. Invalid worker/entry/feedback combinations
-are rejected before trial creation. This grants no extra rounds, time or
-authority and does not enable TurnEnvelope or relax product guard obligations.
-See [shared settings and readback](../runtime/SETTINGS.md#readback-and-interpretation).
-
-The [archived feedback-first observations](../../deprecate/benchmark-legacy/edgebench/feedback-first-observations-20261016.md)
-summarize bounded local and remote results, negative outcomes, operational
-failures and revision limits. This dated packet is inert, not a launch recipe
-or qualification of the current candidate's performance.

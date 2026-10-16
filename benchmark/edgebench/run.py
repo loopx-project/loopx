@@ -110,9 +110,6 @@ def main(argv=None):
     parser.add_argument("--native-goal-continue", action="store_true",
                         help="Opt-in: when a native Goal declares completion with budget left, start "
                              "continuation Goals until the budget edge (native-goal worker only)")
-    parser.add_argument("--feedback-first", action="store_true",
-                        help="Opt-in host planning constraint: obtain one accepted native "
-                             "evaluation before extended local calibration (native, loopx-planned)")
     parser.add_argument("--model", required=True)
     parser.add_argument("--effort", choices=("low", "medium", "high", "xhigh"), required=True)
     parser.add_argument("--timeout", type=int,
@@ -167,10 +164,6 @@ def main(argv=None):
         parser.error("--turn-envelope requires a heartbeat worker")
     if args.native_goal_continue and args.worker != "native-goal":
         parser.error("--native-goal-continue requires --worker native-goal")
-    # Heartbeat workers default to loopx-planned; only the explicit ablation is incompatible.
-    if args.feedback_first and (args.feedback != "native" or args.task_entry == "seeded-todo"
-                                or not args.worker.startswith("heartbeat-")):
-        parser.error("--feedback-first requires --feedback native, --task-entry loopx-planned and a heartbeat worker")
     if (args.replan_after_turns is not None or args.replan_after_todos is not None
             ) and not args.worker.startswith("heartbeat-"):
         parser.error("Replan cadence requires a heartbeat worker")
@@ -281,7 +274,6 @@ def main(argv=None):
                          task_objective=task_objective,
                          task_entry=args.task_entry,
                          turn_envelope=args.turn_envelope,
-                         feedback_first=args.feedback_first,
                          native_goal_continue=args.native_goal_continue,
                          replan_after_turns=args.replan_after_turns,
                          replan_after_todos=args.replan_after_todos,
@@ -341,7 +333,6 @@ def main(argv=None):
         **turn_envelope_receipt(explicit=args.turn_envelope,
             mode="heartbeat" if args.worker.startswith("heartbeat-") else "plain",
             checkpoint_request=declaration if checkpoint_request is not None else None),
-        **({"planning_feedback_first": True} if args.feedback_first else {}),
         **({"native_goal_continue": True} if args.native_goal_continue else {}),
         "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
         "feedback": args.feedback, "internet": task.internet,

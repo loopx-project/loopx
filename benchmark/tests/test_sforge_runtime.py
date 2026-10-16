@@ -212,34 +212,6 @@ def test_sforge_profile_uses_validated_checkpoint_trigger(tmp_path, monkeypatch,
 
 
 @pytest.mark.parametrize("enabled", [False, True])
-def test_feedback_first_is_a_planned_native_opt_in(tmp_path, monkeypatch, enabled):
-    pytest.importorskip("sforge")
-    pytest.importorskip("harbor")
-    from sforge.harness.config import SForgeConfig
-    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex
-    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
-    async def installed(self, environment):
-        pass
-    monkeypatch.setattr(BenchmarkCodex, "install", installed)
-    config = SForgeConfig(agent_model="fixture", agent_effort="xhigh")
-    worker = SForgeWorker(config, profile="heartbeat-resume", cwd="/task", feedback_first=enabled)
-    worker.install_stop_hook(None, None, tmp_path, None)
-    env = worker.runtime._worker_env(cwd="/task")
-    profile = json.loads((tmp_path / "worker-profile.json").read_text())
-    assert env.get("LOOPX_PLANNING_FEEDBACK_FIRST") == ("1" if enabled else None)
-    assert profile.get("planning_feedback_first") is (True if enabled else None)
-    assert "turn_envelope" not in profile
-    for kwargs in ({"task_entry": "seeded-todo"},
-                   {"feedback": "best-only", "feedback_prompt": "wrapper"},
-                   {"profile": "official"}):
-        with pytest.raises(ValueError, match="feedback_first|loopx-planned"):
-            SForgeWorker(config, **{"profile": "heartbeat-resume", "cwd": "/task",
-                                    "feedback_first": True, **kwargs})
-    with pytest.raises(ValueError, match="boolean"):
-        SForgeWorker(config, profile="heartbeat-resume", cwd="/task", feedback_first="1")
-
-
-@pytest.mark.parametrize("enabled", [False, True])
 def test_native_goal_continue_is_a_native_goal_opt_in(tmp_path, monkeypatch, enabled):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
@@ -570,9 +542,6 @@ def test_envelope_rejects_incompatible_sforge_worker(profile):
     ("heartbeat-resume", ["--stride-strategy", "future_policy"]),
     ("official", ["--checkpoint-request", "missing.json"]),
     ("native-goal", ["--checkpoint-request", "missing.json"]),
-    ("official", ["--feedback-first"]),
-    ("heartbeat-resume", ["--feedback-first", "--task-entry", "seeded-todo"]),
-    ("heartbeat-resume", ["--feedback-first", "--feedback", "best-only"]),
 ])
 def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_path, profile, options):
     pytest.importorskip('sforge')
@@ -584,21 +553,6 @@ def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_pa
               '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999', *options])
     assert error.value.code == 2
     assert not (tmp_path / 'runs').exists()
-
-
-@pytest.mark.parametrize("entry", [[], ["--task-entry", "loopx-planned"]])
-def test_feedback_first_accepts_the_default_planned_entry(tmp_path, monkeypatch, entry):
-    pytest.importorskip("sforge")
-    pytest.importorskip("harbor")
-    from benchmark.edgebench.run import main
-    monkeypatch.delenv("LOOPX_SRC_DIR", raising=False)
-    # Admission passes and the attempt directory is reserved; the run then stops
-    # at the first source pin, before any container or model call.
-    with pytest.raises(KeyError, match="LOOPX_SRC_DIR"):
-        main(["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
-              "--run-id", "admitted", "--worker", "heartbeat-resume", "--model", "fixture",
-              "--effort", "xhigh", "--judge-url", "http://127.0.0.1:9999", "--feedback-first", *entry])
-    assert (tmp_path / "runs" / "admitted" / "fixture").is_dir()
 
 
 @pytest.mark.parametrize("missing", ["controller", "declaration", "native_feedback"])
