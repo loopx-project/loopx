@@ -12,10 +12,12 @@ export const managedGoalResultsScenario = {
     let stale = false;
     let malformed = false;
     let reads = 0;
+    const readOrder = [];
     await page.route("**/api/chat/goal-results**", route => {
       const request = new URL(route.request().url());
       if (request.pathname.endsWith("/todo_lead-report")) {
         reads++;
+        readOrder.push("body");
         return stale
           ? route.fulfill({status: 409, json: {error: "acceptance changed"}})
           : route.fulfill({json: {
@@ -24,6 +26,7 @@ export const managedGoalResultsScenario = {
             text: "# Revised conclusion\n\n| Measure | Value |\n| --- | --- |\n| Free cash flow | 25 |\n",
           }});
       }
+      readOrder.push("inventory");
       if (malformed) return route.fulfill({json: {ok: true}});
       return route.fulfill({json: {
         ok: true, items: [{todo_id: "todo_lead-report", title: "Revised cash flow",
@@ -34,13 +37,17 @@ export const managedGoalResultsScenario = {
     try {
       assert.equal(reads, 0, "The directory must not read a Goal's report body");
       await page.locator(".personal-goal-link", {hasText: "Product Release"}).click();
+      // Overview and Files each own an exact acceptance read. Wait for the
+      // first surface before navigating; racing it must not decide the count.
       const overviewResults = page.getByRole("region", {name: "已验收的团队报告"});
       await overviewResults.getByRole("table").waitFor();
-      assert.equal(reads, 1, "The visible overview Results must exact-read the selected report");
+      assert.equal(reads, 1, "Overview must revalidate the selected body once");
+      assert.deepEqual(readOrder, ["inventory", "body"]);
       await page.getByRole("navigation", {name: "Goal 视图"}).getByRole("button", {name: "成果", exact: true}).click();
       const results = page.getByRole("region", {name: "已验收的团队报告"});
       await results.getByRole("table").waitFor();
-      assert.equal(reads, 2, "Opening Files must revalidate the body after its fresh inventory read");
+      assert.equal(reads, 2, "Files must independently revalidate the selected body once");
+      assert.deepEqual(readOrder, ["inventory", "body", "inventory", "body"]);
       assert.match(await results.textContent(), /Revised cash flow/);
       assert.equal(await results.locator("script,img").count(), 0);
       await page.screenshot({path: resolve(outputDir, "managed-goal-results-desktop.png"), animations: "disabled"});
