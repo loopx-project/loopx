@@ -174,7 +174,9 @@ owns subject identity, meaningful-content changes and reopening generations;
 this is a local notification journal, not another Todo authority.
 
 The existing four-worker outbound pool reserves at most one slot for bounded
-notification reconciliation. Each durable per-binding outbox has a process
+notification reconciliation only when a notification setting is enabled;
+the default-off path retains all four reply slots and performs no Todo scan.
+Each durable per-binding outbox has a process
 fence. Before each send, Core rechecks the exact steward, App, owner, current
 scope and original private-message provenance. Settings cannot supply another
 destination. A frozen intent precedes the provider write; the independent

@@ -106,7 +106,8 @@ class LarkGoalTopicRuntimeService:
                     paths = transport.pending_delivery_paths()
                     attempted = {path: count for path, count in attempted.items() if path in paths}
                     owner_attention = getattr(transport, "owner_attention", None)
-                    attention_ready = owner_attention is not None and attention is None and time.monotonic() >= attention_due
+                    attention_ready = (owner_attention is not None and attention is None
+                        and time.monotonic() >= attention_due and owner_attention.has_enabled())
                     for path in sorted(paths, key=lambda path: attempted.get(path, 0)):
                         if len(pending) + int(attention is not None or attention_ready) >= 4 or self._closed.is_set():
                             break

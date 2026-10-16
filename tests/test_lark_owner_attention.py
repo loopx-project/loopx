@@ -5,6 +5,7 @@ import subprocess
 import threading
 import time
 from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
@@ -80,6 +81,31 @@ def test_service_discovers_new_native_tasks_without_model_or_agent_poll(owner):
     finally:
         service._closed.set()
         worker.join(10)
+
+
+def test_disabled_notifications_preserve_all_four_existing_delivery_slots(owner, monkeypatch):
+    o = owner
+    entered, release = [], threading.Event()
+    def existing_reply(path):
+        entered.append(path)
+        release.wait(5)
+        return 0
+    monkeypatch.setattr(o.transport, "pending_delivery_paths", lambda: [Path(str(i)) for i in range(4)])
+    monkeypatch.setattr(o.transport, "reconcile_request", existing_reply)
+    monkeypatch.setattr(o.attention, "reconcile", lambda: pytest.fail("disabled notifications must not schedule a job"))
+    service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=o.store.root.parent,
+        runtime_controller=o.runtime, private_conversations=o.transport)
+    worker = threading.Thread(target=service._reconcile_private, daemon=True)
+    worker.start()
+    try:
+        deadline = time.monotonic() + 3
+        while len(entered) < 4 and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert len(entered) == 4, "disabled feature retains the pre-change outbound concurrency"
+    finally:
+        service._closed.set()
+        release.set()
+        worker.join(5)
 
 
 def test_restart_verifies_original_locator_and_never_resends(owner):

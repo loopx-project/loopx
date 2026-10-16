@@ -69,6 +69,18 @@ class LarkOwnerAttention:
         except (ValueError, OSError, KeyError, TypeError, RuntimeError):
             return {"available": False, "error_code": "notification_state_unavailable"}
 
+    def has_enabled(self) -> bool:
+        """A local setting alone activates work; installation never reserves IO."""
+        for path in self.root.glob("*.json"):
+            if not re.fullmatch(r"[a-f0-9]{24}", path.stem):
+                continue
+            try:
+                if self._read(path).get("enabled") is True:
+                    return True
+            except (ValueError, OSError, KeyError, TypeError):
+                continue
+        return False
+
     def _binding(self, binding_id: str, expected_revision: int | None = None) -> dict[str, Any]:
         current = self.transport.bindings.read()
         if expected_revision is not None and current["revision"] != expected_revision:
