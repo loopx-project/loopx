@@ -63,8 +63,18 @@ async function runConversation(browser, uncertain) {
       const entry = page.getByRole('button',{name:'与 worker 对话',exact:true});
       const owner = page.getByRole('region',{name:'Agent 工作会话',exact:true});
       // Recovery begins before a binding exists. Transient discovery failures
-      // must not require another user action; a permission denial must not spin.
-      for (const fault of ['network', 503, 403]) {
+      // must not require another user action; a permission denial or an
+      // unreadable success response must not spin.
+      const faults = [
+        {name:'network', abort:true},
+        {name:'json-503', status:503, json:true},
+        {name:'html-503', status:503, html:'<html><body>Service unavailable</body></html>'},
+        {name:'empty-503', status:503, html:''},
+        {name:'json-403', status:403, json:true, retryable:false},
+        {name:'text-403', status:403, html:'Owner access is required', retryable:false},
+        {name:'html-200', status:200, html:'<html><body>not the read API</body></html>', retryable:false},
+      ];
+      for (const fault of faults) {
         let failing = true, discoveryReads = 0;
         const discoveryFailure = async route => {
           const request = route.request();
@@ -72,22 +82,26 @@ async function runConversation(browser, uncertain) {
           if (request.method() !== 'GET' || endpoint.searchParams.has('agent_id')) return route.continue();
           discoveryReads++;
           if (!failing) return route.continue();
-          if (fault === 'network') return route.abort('failed');
-          return route.fulfill({status:fault,contentType:'application/json',body:JSON.stringify({ok:false,error:fault === 403 ? 'Owner access is required' : 'Temporary discovery outage'})});
+          if (fault.abort) return route.abort('failed');
+          return route.fulfill({status:fault.status,contentType:fault.json ? 'application/json' : 'text/html',
+            body:fault.json ? JSON.stringify({ok:false,error:fault.status === 403 ? 'Owner access is required' : 'Temporary discovery outage'}) : fault.html});
         };
         await page.route('**/api/chat/codex-attached?*',discoveryFailure);
         await entry.click();
         await owner.getByRole('alert').waitFor();
         assert.equal(await owner.getByRole('textbox').count(),0);
         failing = false;
-        if (fault === 403) {
-          const deniedReads = discoveryReads;
+        if (fault.retryable === false) {
+          const heldReads = discoveryReads;
           await page.waitForTimeout(1300);
-          assert.equal(discoveryReads,deniedReads,'Permission denial does not retry automatically');
+          assert.equal(discoveryReads,heldReads,`${fault.name} does not retry automatically`);
           await owner.getByRole('button',{name:'重新连接',exact:true}).click();
         }
-        await owner.getByText('Original result',{exact:true}).waitFor();
-        assert.ok(discoveryReads >= 2,'Recovery observes the original binding again');
+        // Name the response form on failure: a stuck page must say which fault
+        // kept discovery from reaching the original binding.
+        await owner.getByText('Original result',{exact:true}).waitFor()
+          .catch(error => {throw new Error(`${fault.name} left discovery unrecovered: ${error.message}`);});
+        assert.ok(discoveryReads >= 2,`${fault.name} recovery observes the original binding again`);
         assert.equal(new URL(page.url()).searchParams.get('workAgent'),'worker');
         assert.equal((await (await page.request.get(new URL('/fixture/inputs',url).href)).json()).count,0);
         await page.unroute('**/api/chat/codex-attached?*',discoveryFailure);

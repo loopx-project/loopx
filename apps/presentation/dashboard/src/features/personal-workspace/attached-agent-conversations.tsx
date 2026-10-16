@@ -13,10 +13,15 @@ class ConversationRequestError extends Error {
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, {...options, signal: AbortSignal.timeout(6_000)});
-  const value = await response.json();
-  if (!response.ok || value.ok !== true) throw new ConversationRequestError(
-    value.error || "Conversation unavailable",
-    response.status === 409 && value.input_not_submitted === true && typeof value.operation_id === "string" ? value.operation_id : undefined,
+  // Read the body as text first: a service failure can answer with an HTML or
+  // empty body, and the caller still needs the HTTP status to decide whether
+  // the read is retryable. Parsing first would surface a SyntaxError instead.
+  const body = await response.text();
+  let value: Record<string, unknown> | null = null;
+  try {value = body ? JSON.parse(body) as Record<string, unknown> : null;} catch {value = null;}
+  if (!response.ok || value?.ok !== true) throw new ConversationRequestError(
+    typeof value?.error === "string" && value.error ? value.error : "Conversation unavailable",
+    response.status === 409 && value?.input_not_submitted === true && typeof value?.operation_id === "string" ? value.operation_id : undefined,
     response.status,
   );
   return value as T;
