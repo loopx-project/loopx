@@ -747,3 +747,48 @@ def test_runner_cadence_persists_through_real_configure_goal(
     assert profile.get("stride_strategy", "off") == (strategy or "off")
     assert agent._replan_receipt() == {field: value, **({"stride_strategy": strategy}
                                                     if strategy is not None else {})}
+
+
+@pytest.mark.parametrize("context", ["fresh", "resume"])
+def test_execute_wake_receives_current_clock_after_planning(planning_env, context):
+    """Exercise the real worker/heartbeat CLI and capture its model transport input."""
+    env = planning_env | {"LOOPX_ITERATION_CONTEXT": context}
+    assert run_once(env)["ok"]
+    binary = Path(env["CODEX_BIN"])
+    binary.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, pathlib, sys\n"
+        "pathlib.Path(os.environ['CODEX_HOME'], 'execute-input.txt').write_text(sys.stdin.read())\n"
+        "print(json.dumps({'type': 'thread.started', 'thread_id': 'planning-fixture-session'}))\n"
+    )
+    before = Path(env["LOOPX_REGISTRY"]).with_name("state.md").read_bytes()
+    old_deadline = env["LOOPX_PHASE_DEADLINE_EPOCH"]
+    for offset in [900, 500]:
+        deadline = str(time.time() + offset)
+        current = env | {"LOOPX_TASK_STAGE": "execute",
+                         "LOOPX_PHASE_DEADLINE_EPOCH": deadline,
+                         "LOOPX_CODEX_TURN_TIMEOUT_SEC": "120"}
+        receipt = run_once(current)
+        assert receipt["ok"]
+        body = (Path(env["LOOPX_CODEX_HOME"]) / "execute-input.txt").read_text()
+        assert f"Absolute phase deadline: {deadline}" in body
+        assert old_deadline not in body
+        assert "Current wake execution limit: 120.0 seconds" in body
+        assert "Existing execution reserve: 160 seconds" in body
+        assert "does not reopen completed work" in body
+        assert "heartbeat-prompt" in body or "quota" in body
+        assert receipt["session"]["action"] == ("resume" if context == "resume" else "start_new")
+        assert "turn_envelope" not in receipt
+        assert current["LOOPX_PHASE_DEADLINE_EPOCH"] == deadline
+    # A current clock changes model context, never task or completion authority.
+    assert Path(env["LOOPX_REGISTRY"]).with_name("state.md").read_bytes() == before
+
+
+def test_execution_window_absence_and_shorter_wake_cap():
+    from benchmark.runtime.planning import render_host_window
+
+    assert render_host_window({}, execution_reserve_seconds=160) == ""
+    body = render_host_window({"LOOPX_PHASE_DEADLINE_EPOCH": "100"},
+                              execution_reserve_seconds=160, wake_timeout_seconds=12)
+    assert "Current wake execution limit: 12.0 seconds" in body
+    assert "Observed work window before that reserve: 0.0 seconds" in body

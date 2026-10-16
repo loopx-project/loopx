@@ -806,6 +806,16 @@ through an authorized controller read route. The destination file must be new,
 outside the artifact and native bank, and installed at the Host's existing
 phase-file route before starting its ordinary entry command.
 
+Heartbeat execution wakes now project the current caller-owned phase deadline,
+observation time, remaining window, existing reserve, and wake execution limit
+into model input. Planning and execution share the same renderer; a restored or
+fresh session need not infer its budget from the initial planning message.
+This changes heartbeat prompt context, not scoring, task acceptance, deadline
+accounting, TurnEnvelope settings, or terminal authority. Plain, native-Goal,
+Turn and loopx-goal execution inputs are unchanged. Without a phase clock the
+heartbeat input is unchanged. A restored terminal Goal still requires explicit
+resume through its owning contract; a newer clock alone does not reopen it.
+
 The sealed deadline and native capture timestamp determine the remainder; the
 receiver recomputes it. A point with two hours remaining keeps that duration
 after an eight-hour offline gap. It does not reuse the old absolute epoch or

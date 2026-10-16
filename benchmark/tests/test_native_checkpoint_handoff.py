@@ -700,11 +700,19 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
                    LOOPX_CODEX_HOME=str(tmp_path / "worker-home"), LOOPX_SHARED_SKILLS=str(skills),
                    MODEL_NAME="fixture", REASONING_EFFORT="high", OPENAI_BASE_URL=base_url,
                    OPENAI_API_KEY="synthetic-local-only", LOOPX_CODEX_TURN_TIMEOUT_SEC="60")
+        deadline = str(time.time() + 600)
+        env["LOOPX_PHASE_DEADLINE_EPOCH"] = deadline
         if capture != "off":
             env["LOOPX_CHECKPOINT_REQUEST"] = str(request)
         result = run_once(env)
         assert result["ok"] and not result["timed_out"], result
         assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+        # The real native transport sees the current clock after checkpoint
+        # preloading, while the unchanged guard retains decision authority.
+        worker_input = next(t for t in texts(requests[1]) if "quota should-run" in t and "```sh" in t)
+        assert f"Absolute phase deadline: {deadline}" in worker_input
+        assert "Current wake execution limit: 60.0 seconds" in worker_input
+        assert "does not reopen completed work" in worker_input
         if capture == "off":
             assert "checkpoint_handoffs" not in result
             assert "--decision-handoff-socket" not in guards[0]
