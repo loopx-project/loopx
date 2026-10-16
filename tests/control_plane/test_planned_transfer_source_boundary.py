@@ -22,7 +22,8 @@ from loopx.control_plane.coordination.local_authority_shadow_projection import c
 from loopx.control_plane.goals.planned_transfer_io import (
     create_planned_transfer_recipient, export_registered_goal_transfer,
     prepare_registered_goal_transfer, preview_registered_goal_transfer,
-    preview_protected_goal_transfer, read_goal_transfer_context, stage_protected_goal_transfer,
+    preview_protected_goal_transfer, preview_protected_goal_transfer_target,
+    read_goal_transfer_context, stage_protected_goal_transfer,
 )
 from loopx.control_plane.projects.registry_codec import load_project_registry, project_registry_transaction
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
@@ -304,6 +305,12 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
                 "directory": str(incoming), "private_key_path": str(recipient_root / "private-key.pem"),
                 "expected_artifact_sha256": protected["artifact_sha256"], "target_package_version": "incompatible"},
                 timeout=60, retry_safe=False)
+        retained_only = tmp_path / "retain-only"
+        legacy_stage = stage_protected_goal_transfer(**protected_input, project=retained_only / "project",
+            runtime_root=retained_only / "runtime", provider="file")
+        assert legacy_stage["authority_readback"]["status"] == "matched"
+        assert "workspace_materials_readback_verified" not in legacy_stage
+        assert not (retained_only / "project/input.txt").exists()
         for target_provider in ("file", "sqlite"):
             destination = tmp_path / f"target-{target_provider}"
             target_project, target_runtime = destination / "project", destination / "runtime"
@@ -311,8 +318,32 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
             if target_provider == "sqlite":
                 target_registry.parent.mkdir(parents=True)
                 target_registry.write_text(json.dumps(_strict({"schema_version": "0.1", "common_runtime_root": str(target_runtime), "goals": []})))
-            request = dict(**protected_input, project=target_project, runtime_root=target_runtime, provider=target_provider)
+            target_input = target_project / "input.txt"
+            before_input = None
+            if target_provider == "sqlite":
+                target_input.write_bytes(b"6\n7\n8\n")
+                before_input = target_input.stat()
+            target_request = dict(**protected_input, project=target_project, runtime_root=target_runtime, provider=target_provider)
+            target_review = preview_protected_goal_transfer_target(**target_request)
+            assert target_review["ready_for_workspace_staging"] is True
+            assert target_review["execution_authority_granted"] is False
+            assert target_review["materials"][0]["presence"] == ("matched" if before_input else "missing")
+            assert target_review["workspace_destinations"] == [{"id": "00000002", "relative_path": "input.txt"}]
+            request = dict(**target_request, expected_workspace_preview_sha256=target_review["reviewed_preview_sha256"])
             if target_provider == "file":
+                for path in ("../outside", ".loopx/registry.json", ".git/config"):
+                    with pytest.raises(EffectRuntimeRemoteError, match="destination|overlaps"):
+                        preview_protected_goal_transfer_target(**target_request, material_destinations={"00000002": path})
+                target_project.mkdir(parents=True, exist_ok=True)
+                target_input.write_bytes(b"A later destination file")
+                occupied = preview_protected_goal_transfer_target(**target_request)
+                assert occupied["ready_for_workspace_staging"] is False
+                assert occupied["materials"][0]["presence"] == "occupied"
+                with pytest.raises(EffectRuntimeRemoteError, match="preview changed"):
+                    stage_protected_goal_transfer(**request)
+                assert target_input.read_bytes() == b"A later destination file"
+                assert not target_registry.exists()
+                target_input.unlink()
                 # Inject a real registry edit after native staging but before
                 # codec publication. The owning CAS must preserve it, and the
                 # same operation must recover without another source export.
@@ -334,11 +365,21 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
                 concurrent = load_project_registry(target_registry)
                 assert concurrent["retained_local_note"] == "An unrelated edit must survive transfer recovery"
                 assert concurrent.get("goals", []) == []
+                resumed = preview_protected_goal_transfer_target(**target_request)
+                assert resumed["resuming_original_operation"] is True
+                assert resumed["reviewed_preview_sha256"] == request["expected_workspace_preview_sha256"]
+                assert resumed["preview_sha256"] != target_review["preview_sha256"]
             staged = stage_protected_goal_transfer(**request)
             assert staged["execution_authority_granted"] is False
             assert staged["target_is_active"] is False and staged["fresh_admission_required"] is True
             assert staged["authority_readback"]["status"] == "matched"
             assert staged["material_readback_verified"] is True and staged["original_material_count"] == 1
+            assert staged["workspace_materials_readback_verified"] is True
+            assert target_input.read_bytes() == b"6\n7\n8\n"
+            if before_input:
+                after_input = target_input.stat()
+                assert (after_input.st_ino, after_input.st_mode, after_input.st_mtime_ns) == (
+                    before_input.st_ino, before_input.st_mode, before_input.st_mtime_ns)
             target_goal = load_project_registry(target_registry)["goals"][0]
             if target_provider == "sqlite":
                 assert json.loads(target_registry.read_text())[0]["minimum_writer_protocol"] == "goal_instance_v1"
@@ -353,7 +394,9 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
             retained_material = (target_project / target_goal["state_file"]).parent / "transfer-materials/00000002"
             assert retained_material.read_bytes() == b"6\n7\n8\n"
             manifest = json.loads(Path(staged["original_material_manifest"]).read_text())
-            assert manifest == {"artifact_sha256": protected["artifact_sha256"], "materials": observed["materials"]}
+            assert manifest == {"artifact_sha256": protected["artifact_sha256"], "materials": observed["materials"],
+                "workspace_destinations": [{"id": "00000002", "relative_path": "input.txt"}]}
+            assert retained_material.stat().st_ino != target_input.stat().st_ino
 
             def target_cli(*arguments: str, expected_code: int = 0) -> dict:
                 result = subprocess.run([sys.executable, "-I", "-m", "loopx.cli", "--format", "json",
@@ -385,6 +428,20 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
             assert stage_protected_goal_transfer(**request) == staged
             assert target_registry.read_bytes() == original_registry
             assert target_cli("todo", "list", "--goal-id", "report", "--todo-id", todo)["todo"] == target_task
+            current_preview = preview_protected_goal_transfer_target(**target_request)
+            assert current_preview["resuming_original_operation"] is True
+            assert current_preview["reviewed_preview_sha256"] == request["expected_workspace_preview_sha256"]
+            target_input.write_bytes(b"Later workspace result must survive")
+            with pytest.raises(EffectRuntimeRemoteError, match="workspace material changed or is occupied"):
+                stage_protected_goal_transfer(**request)
+            assert target_input.read_bytes() == b"Later workspace result must survive"
+            assert retained_material.read_bytes() == b"6\n7\n8\n"
+            assert target_registry.read_bytes() == original_registry
+            target_input.unlink()
+            with pytest.raises(EffectRuntimeRemoteError, match="attempted workspace material is missing"):
+                stage_protected_goal_transfer(**request)
+            assert not target_input.exists()
+            assert target_registry.read_bytes() == original_registry
             retained_material.write_bytes(b"Later destination work must survive")
             with pytest.raises(EffectRuntimeRemoteError, match="material is occupied or changed"):
                 stage_protected_goal_transfer(**request)

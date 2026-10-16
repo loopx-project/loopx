@@ -156,28 +156,36 @@ def stage_prepared_goal_transfer(
 def stage_protected_goal_transfer(
     *, directory: Path, private_key: Path, expected_artifact_sha256: str,
     project: Path, runtime_root: Path, provider: str,
+    expected_workspace_preview_sha256: str | None = None,
+    material_destinations: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Consume only destination-local protected input, remaining stopped."""
-    return _stage_goal_transfer("coordination.planned_transfer.stage_protected", {
+    payload: dict[str, Any] = {"protected_input": _protected_input(directory, private_key, expected_artifact_sha256)}
+    if expected_workspace_preview_sha256 is not None or material_destinations is not None:
+        payload.update(workspace_mapping=material_destinations,
+            expected_workspace_preview_sha256=expected_workspace_preview_sha256)
+    return _stage_goal_transfer("coordination.planned_transfer.stage_protected", payload, project, runtime_root, provider)
+
+
+def preview_protected_goal_transfer_target(
+    *, directory: Path, private_key: Path, expected_artifact_sha256: str,
+    project: Path, runtime_root: Path, provider: str,
+    material_destinations: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Review actual target material paths; no authority or execution is admitted."""
+    _, target, registry, witness = _read_transfer_destination(project, runtime_root, provider)
+    result: dict[str, Any] = effect_runtime_result("coordination.planned_transfer.preview_target", {
         "protected_input": _protected_input(directory, private_key, expected_artifact_sha256),
-    }, project, runtime_root, provider)
+        "target": target, "destination_registry": registry, "registry_witness": witness,
+        "workspace_mapping": material_destinations,
+    }, timeout=300.0, retry_safe=True)
+    return result
 
 
 def _stage_goal_transfer(
     method: str, payload: dict[str, Any], project: Path, runtime_root: Path, provider: str,
 ) -> dict[str, Any]:
-    project, runtime_root = project.expanduser().absolute(), runtime_root.expanduser().absolute()
-    registry_path = project / ".loopx" / "registry.json"
-    # Mechanical filesystem validation precedes even the registry lock's IO.
-    # Do not follow a caller's linked destination into another project.
-    for path in (registry_path, runtime_root):
-        if path.resolve() != path:
-            raise ValueError("Planned transfer destination must use a physical normalized path")
-    target = {"runtime_root": str(runtime_root), "project": str(project),
-              "registry_path": str(registry_path), "provider": provider}
-    with project_registry_transaction(registry_path, operation="planned_transfer_stage_read", create=dict) as transaction:
-        registry = transaction.payload_copy()
-        witness = transaction.source_read_witness() if registry_path.exists() else {"path": str(registry_path), "sha256": None}
+    registry_path, target, registry, witness = _read_transfer_destination(project, runtime_root, provider)
     result: dict[str, Any] = effect_runtime_result(method, {
         **payload, "target": target,
         "destination_registry": registry, "registry_witness": witness, "execute": True,
@@ -192,6 +200,24 @@ def _stage_goal_transfer(
         if load_project_registry(registry_path) != proposed:
             raise ValueError("Planned transfer registry readback changed; recover the original operation")
         return {**result, "registry_readback_verified": True}
+
+
+def _read_transfer_destination(
+    project: Path, runtime_root: Path, provider: str,
+) -> tuple[Path, dict[str, Any], dict[str, Any], dict[str, Any]]:
+    project, runtime_root = project.expanduser().absolute(), runtime_root.expanduser().absolute()
+    registry_path = project / ".loopx" / "registry.json"
+    # Mechanical filesystem validation precedes even the registry lock's IO.
+    # Do not follow a caller's linked destination into another project.
+    for path in (registry_path, runtime_root):
+        if path.resolve() != path:
+            raise ValueError("Planned transfer destination must use a physical normalized path")
+    target = {"runtime_root": str(runtime_root), "project": str(project),
+              "registry_path": str(registry_path), "provider": provider}
+    with project_registry_transaction(registry_path, operation="planned_transfer_stage_read", create=dict) as transaction:
+        registry = transaction.payload_copy()
+        witness = transaction.source_read_witness() if registry_path.exists() else {"path": str(registry_path), "sha256": None}
+    return registry_path, target, registry, witness
 
 
 if __name__ == "__main__":

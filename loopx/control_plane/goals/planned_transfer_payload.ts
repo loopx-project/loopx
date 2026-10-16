@@ -34,6 +34,7 @@ export interface VerifiedGoalTransferPayload {
  * Materials are an explicit reviewed selection, not a completeness/privacy
  * certification. No machine root, registry inventory or Git metadata is swept. */
 export async function reviewProtectedGoalTransferInputs(raw: unknown, context: JsonObject, packageVersion: unknown) {
+  if (process.platform === "win32") reject("Protected source transfer requires the local POSIX profile before preparation");
   const transport = requireJsonObject(raw, "protected transfer request");
   if (!hasExactAuthorityKeys(transport, ["destination", "recipient", "materials"]) || !Array.isArray(transport.materials)) {
     reject("Protected transfer requires an explicit recipient, destination and reviewed materials");

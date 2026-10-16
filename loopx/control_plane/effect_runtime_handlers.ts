@@ -421,6 +421,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.planned_transfer.stage_target", lazyHandler(() => import("./coordination/planned_transfer_target.ts"), ({stageAuthorityForPlannedTransfer}) => stageAuthorityForPlannedTransfer)],
     ["coordination.planned_transfer.create_recipient", lazyHandler(() => import("./goals/planned_transfer_container.ts"), ({createPlannedTransferRecipient}) => createPlannedTransferRecipient)],
     ["coordination.planned_transfer.preview_protected", lazyHandler(() => import("./coordination/planned_transfer_target.ts"), ({previewProtectedGoalTransfer}) => previewProtectedGoalTransfer)],
+    ["coordination.planned_transfer.preview_target", lazyHandler(() => import("./coordination/planned_transfer_target.ts"), ({previewProtectedGoalTransferTarget}) => previewProtectedGoalTransferTarget)],
     ["coordination.planned_transfer.stage_protected", lazyHandler(() => import("./coordination/planned_transfer_target.ts"), ({stageProtectedGoalTransfer}) => stageProtectedGoalTransfer)],
     ["configuration.backup", lazyHandler(() => import("./configuration_backup.ts"), ({configurationBackupOperation}) => configurationBackupOperation)],
     ["runtime.checkpoint_artifacts", lazyHandler(() => import("./runtime/checkpoint_artifacts.ts"), ({checkpointArtifacts}) => checkpointArtifacts)],

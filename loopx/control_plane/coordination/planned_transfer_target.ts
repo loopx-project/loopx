@@ -9,7 +9,9 @@ import {durableWriteJson, atomicWriteText, withFileMutationLock} from "../effect
 import {EffectRuntimeConflictError} from "../effect_runtime_errors.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {planPreparedGoalStage, stagedGoalRegistry, type PreparedGoalStage} from "../goals/planned_transfer.ts";
-import {withVerifiedGoalTransferPayload} from "../goals/planned_transfer_payload.ts";
+import {withVerifiedGoalTransferPayload, type VerifiedGoalTransferPayload} from "../goals/planned_transfer_payload.ts";
+import {readGoalTransferWorkspaceReview, retainGoalTransferWorkspace, reviewGoalTransferWorkspace,
+  verifyGoalTransferWorkspaceReview} from "../goals/planned_transfer_workspace.ts";
 import {inspectTransferFile, requirePhysicalTransferPath} from "../goals/planned_transfer_container.ts";
 import {canonicalAuthorityBytes, canonicalAuthoritySha256, hasExactAuthorityKeys} from "./authority_store_codec.ts";
 import {verifyAuthorityArchive, restoreAuthorityArchive} from "./authority_archive.ts";
@@ -43,6 +45,46 @@ async function physicalAncestors(path: string): Promise<void> {
     if (current === parse(current).root) reject("Transfer destination has no physical parent");
     current = dirname(current);
   }
+}
+
+async function verifyDestinationRegistry(target: JsonObject, witness: JsonObject): Promise<void> {
+  if (!hasExactAuthorityKeys(witness, ["path", "sha256"]) || witness.path !== target.registry_path ||
+      (witness.sha256 !== null && typeof witness.sha256 !== "string")) reject("Invalid destination registry witness");
+  const bytes = await optionalBytes(String(witness.path));
+  const digest = bytes === null ? null : createHash("sha256").update(bytes).digest("hex");
+  if (digest !== witness.sha256) reject("Destination registry changed; retry through its original codec");
+}
+function targetOperationDirectory(root: string, plan: PreparedGoalStage): string {
+  return join(shadowManagementDirectory(root, plan.goalId), "planned-transfer-targets", canonicalAuthoritySha256(plan.operationId));
+}
+function protectedStageInput(value: JsonObject, payload: VerifiedGoalTransferPayload): JsonObject {
+  return {source_preparation: payload.preparation, source_context: payload.context, archive: payload.archive,
+    target: value.target, destination_registry: value.destination_registry, registry_witness: value.registry_witness,
+    execute: true, protected_transport: {artifact_sha256: payload.artifactSha256, materials: payload.materials},
+    ...(Object.hasOwn(value, "workspace_mapping") ? {workspace_mapping: value.workspace_mapping,
+      expected_workspace_preview_sha256: value.expected_workspace_preview_sha256} : {})};
+}
+
+/** A live target read, not a snapshot or grant. Execution rechecks it under
+ * native staging's locks; exclusive file creation also protects outside edits. */
+export async function previewProtectedGoalTransferTarget(value: JsonObject): Promise<JsonObject> {
+  if (!hasExactAuthorityKeys(value, ["protected_input", "target", "destination_registry", "registry_witness", "workspace_mapping"])) reject("Target preview requires the complete reviewed destination");
+  return withVerifiedGoalTransferPayload(requireJsonObject(value.protected_input, "protected input"), async payload => {
+    const plan = planPreparedGoalStage({operation_id: payload.preparation.operation_id, source_context: payload.context,
+      archive_sha256: requireJsonObject(payload.preparation.authority_archive, "original authority").archive_sha256,
+      target: value.target, destination_registry: value.destination_registry,
+      protected_transport: {artifact_sha256: payload.artifactSha256, materials: payload.materials}, workspace_mapping: value.workspace_mapping});
+    const target = requireJsonObject(value.target, "destination"), witness = requireJsonObject(value.registry_witness, "destination witness");
+    await physicalAncestors(String(target.runtime_root)); await physicalAncestors(String(target.project));
+    await verifyDestinationRegistry(target, witness);
+    const review = await reviewGoalTransferWorkspace(plan.workspaceMaterials!, payload.artifactSha256, target, witness);
+    const reviewed = await readGoalTransferWorkspaceReview(targetOperationDirectory(String(target.runtime_root), plan), plan.identity);
+    await verifyDestinationRegistry(target, witness);
+    const {ready, ...facts} = review;
+    return {...facts, ready_for_workspace_staging: ready, goal_id: plan.goalId, workspace_destinations: plan.workspaceMaterials!.destinations,
+      reviewed_preview_sha256: reviewed ?? review.preview_sha256, resuming_original_operation: reviewed !== null,
+      target_is_active: false, fresh_admission_required: true, execution_authority_granted: false};
+  });
 }
 
 async function retainProtectedMaterials(plan: PreparedGoalStage, pending: boolean, completed: boolean, execute: boolean): Promise<void> {
@@ -100,13 +142,12 @@ export async function previewProtectedGoalTransfer(value: JsonObject): Promise<J
 }
 
 export async function stageProtectedGoalTransfer(value: JsonObject): Promise<JsonObject> {
-  if (!hasExactAuthorityKeys(value, ["protected_input", "target", "destination_registry", "registry_witness", "execute"]) ||
+  const workspace = Object.hasOwn(value, "workspace_mapping");
+  if (!hasExactAuthorityKeys(value, ["protected_input", "target", "destination_registry", "registry_witness", "execute",
+      ...(workspace ? ["workspace_mapping", "expected_workspace_preview_sha256"] : [])]) ||
       value.execute !== true) reject("Protected staging requires an explicit destination operation");
   return withVerifiedGoalTransferPayload(requireJsonObject(value.protected_input, "protected transfer input"), async payload =>
-    stageAuthorityForPlannedTransfer({source_preparation: payload.preparation, source_context: payload.context,
-      archive: payload.archive, target: value.target, destination_registry: value.destination_registry,
-      registry_witness: value.registry_witness, execute: true,
-      protected_transport: {artifact_sha256: payload.artifactSha256, materials: payload.materials}}));
+    stageAuthorityForPlannedTransfer(protectedStageInput(value, payload)));
 }
 
 /** Maintenance/source/registry lock order matches the existing canonical owner.
@@ -115,8 +156,10 @@ export async function stageProtectedGoalTransfer(value: JsonObject): Promise<Jso
  * publication leaves a stopped destination that the same operation can recover. */
 export async function stageAuthorityForPlannedTransfer(value: JsonObject): Promise<JsonObject> {
   const protectedInput = value.protected_transport;
+  const workspaceRequested = Object.hasOwn(value, "workspace_mapping");
   if (!hasExactAuthorityKeys(value, ["source_preparation", "source_context", "archive", "target", "destination_registry", "registry_witness", "execute",
-      ...(protectedInput === undefined ? [] : ["protected_transport"])]) ||
+      ...(protectedInput === undefined ? [] : ["protected_transport"]),
+      ...(workspaceRequested ? ["workspace_mapping", "expected_workspace_preview_sha256"] : [])]) ||
       value.execute !== true || typeof value.archive !== "string") reject("Explicit complete Goal transfer staging is required");
   const prepared = requireJsonObject(value.source_preparation, "prepared original authority");
   if (prepared.schema_version !== PREPARATION_SCHEMA || prepared.authority_write_fenced !== true ||
@@ -124,17 +167,12 @@ export async function stageAuthorityForPlannedTransfer(value: JsonObject): Promi
   const summary = requireJsonObject(prepared.authority_archive, "prepared authority summary");
   const plan = planPreparedGoalStage({operation_id: prepared.operation_id, source_context: value.source_context,
     archive_sha256: summary.archive_sha256, target: value.target, destination_registry: value.destination_registry,
-    ...(protectedInput === undefined ? {} : {protected_transport: protectedInput})});
+    ...(protectedInput === undefined ? {} : {protected_transport: protectedInput}),
+    ...(workspaceRequested ? {workspace_mapping: value.workspace_mapping} : {})});
   if (prepared.goal_id !== plan.goalId || prepared.source_context_sha256 !== canonicalAuthoritySha256(plan.context)) reject("Prepared source and original Goal context differ");
   const target = value.target as JsonObject, root = target.runtime_root as string;
   const witness = requireJsonObject(value.registry_witness, "codec-validated destination witness");
-  if (!hasExactAuthorityKeys(witness, ["path", "sha256"]) || witness.path !== target.registry_path ||
-      (witness.sha256 !== null && typeof witness.sha256 !== "string")) reject("Invalid destination registry witness");
-  const verifyRegistry = async () => {
-    const bytes = await optionalBytes(String(witness.path));
-    const digest = bytes === null ? null : createHash("sha256").update(bytes).digest("hex");
-    if (digest !== witness.sha256) reject("Destination registry changed; retry staging through its original codec");
-  };
+  const verifyRegistry = () => verifyDestinationRegistry(target, witness);
   await verifyRegistry();
   await physicalAncestors(root); await physicalAncestors(String(target.project));
   const archive = await verifyAuthorityArchive(value.archive);
@@ -145,7 +183,7 @@ export async function stageAuthorityForPlannedTransfer(value: JsonObject): Promi
     await verifyRegistry();
     const managed = await readShadowManagementState(root, plan.goalId);
     if (managed && managed.status !== "inactive") reject("Destination shadow capture requires its original owner");
-    const directory = join(shadowManagementDirectory(root, plan.goalId), "planned-transfer-targets", canonicalAuthoritySha256(plan.operationId));
+    const directory = targetOperationDirectory(root, plan);
     await physicalAncestors(directory); await physicalAncestors(plan.statePath); await physicalAncestors(plan.contextPath);
     const pendingPath = join(directory, "preparation.json");
     const pending = await optionalBytes(pendingPath);
@@ -195,6 +233,11 @@ export async function stageAuthorityForPlannedTransfer(value: JsonObject): Promi
     if ((originalState && !originalState.equals(Buffer.from(String(plan.context.state_text)))) ||
         (originalContext && !same(JSON.parse(originalContext.toString("utf8")), plan.context))) reject("Destination Goal material is occupied or changed");
     await retainProtectedMaterials(plan, pending !== null, completed !== null, false);
+    if (plan.workspaceMaterials) {
+      const review = await reviewGoalTransferWorkspace(plan.workspaceMaterials, plan.protectedArtifact!.sha256, target, witness);
+      await verifyGoalTransferWorkspaceReview(plan.workspaceMaterials, review, directory, plan.identity,
+        value.expected_workspace_preview_sha256, completed !== null);
+    }
     await mkdir(directory, {recursive: true, mode: 0o700});
     await retainJson(pendingPath, plan.identity);
     const engaged = await engageLegacyCoordinationWriterFenceUnderLocks(root, plan.goalId, plan.statePath, fence);
@@ -203,6 +246,8 @@ export async function stageAuthorityForPlannedTransfer(value: JsonObject): Promi
     if (!originalState) await atomicWriteText(plan.statePath, String(plan.context.state_text));
     await retainJson(plan.contextPath, plan.context);
     await retainProtectedMaterials(plan, pending !== null, completed !== null, true);
+    if (plan.workspaceMaterials) await retainGoalTransferWorkspace(plan.workspaceMaterials, directory, plan.identity,
+      String(value.expected_workspace_preview_sha256));
     const Store = target.provider === "file" ? FileAuthorityStore : SqliteAuthorityStore;
     const store = new Store(paths[target.provider as "file" | "sqlite"], plan.goalId);
     const identity = await store.storeIdentity();
@@ -218,7 +263,9 @@ export async function stageAuthorityForPlannedTransfer(value: JsonObject): Promi
       target_is_active: false, fresh_admission_required: true, execution_authority_granted: false,
       ...(plan.protectedArtifact ? {artifact_sha256: plan.protectedArtifact.sha256,
         original_material_count: plan.protectedArtifact.materials.length, material_readback_verified: true,
-        original_material_manifest: plan.protectedArtifact.manifestPath} : {})};
+        original_material_manifest: plan.protectedArtifact.manifestPath} : {}),
+      ...(plan.workspaceMaterials ? {workspace_materials_readback_verified: true,
+        workspace_destinations: plan.workspaceMaterials.destinations} : {})};
     await retainJson(join(directory, "receipt.json"), result);
     return {...result, destination_registry: stagedGoalRegistry(value.destination_registry as JsonObject, plan, root),
       original_context_path: plan.contextPath};

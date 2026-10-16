@@ -17,6 +17,7 @@ import {canonicalAuthorityBytes, canonicalAuthoritySha256, hasExactAuthorityKeys
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {withFileMutationLock} from "../effect_runtime_io.ts";
 import {legacyCoordinationTodoLockPath} from "../coordination/legacy_writer_lock_paths.ts";
+import {planGoalTransferWorkspace, type GoalTransferWorkspacePlan} from "./planned_transfer_workspace.ts";
 
 export const PLANNED_TRANSFER_GOAL_STAGE_SCHEMA = "loopx_planned_transfer_goal_stage_v0";
 export const PREPARATION_SCHEMA = "loopx_planned_transfer_authority_preparation_v0";
@@ -63,6 +64,7 @@ export interface PreparedGoalStage {
   contextPath: string;
   identity: JsonObject;
   protectedArtifact?: {sha256: string; materials: ProtectedGoalMaterial[]; manifest: JsonObject; manifestPath: string};
+  workspaceMaterials?: GoalTransferWorkspacePlan;
 }
 
 /** Capture Goal intent through its actual registered source while the caller
@@ -111,8 +113,10 @@ export async function withVerifiedGoalTransferContext<T>(raw: unknown, rawWitnes
  * This decision never serializes or mutates a project registry itself. */
 export function planPreparedGoalStage(value: JsonObject): PreparedGoalStage {
   const protectedInput = value.protected_transport === undefined ? undefined : requireJsonObject(value.protected_transport, "verified protected transport");
+  const workspaceRequested = Object.hasOwn(value, "workspace_mapping");
   if (!hasExactAuthorityKeys(value, ["operation_id", "source_context", "archive_sha256", "target", "destination_registry",
-      ...(protectedInput ? ["protected_transport"] : [])])) {
+      ...(protectedInput ? ["protected_transport"] : []), ...(workspaceRequested ? ["workspace_mapping"] : [])]) ||
+      (workspaceRequested && !protectedInput)) {
     reject("Goal transfer staging requires the complete original context and destination observation");
   }
   const operation = requireAuthorityStoreId(value.operation_id, "original transfer operation");
@@ -139,6 +143,7 @@ export function planPreparedGoalStage(value: JsonObject): PreparedGoalStage {
   const directory = join(project, ".loopx", "goals", goalId);
   const statePath = join(directory, "ACTIVE_GOAL_STATE.md"), contextPath = join(directory, "TRANSFER_CONTEXT.json");
   let protectedArtifact: PreparedGoalStage["protectedArtifact"];
+  let workspaceMaterials: GoalTransferWorkspacePlan | undefined;
   if (protectedInput) {
     if (!hasExactAuthorityKeys(protectedInput, ["artifact_sha256", "materials"]) ||
         !BARE_SHA256_PATTERN.test(String(protectedInput.artifact_sha256)) || !Array.isArray(protectedInput.materials)) reject("Protected staging requires its authenticated material inventory");
@@ -153,8 +158,10 @@ export function planPreparedGoalStage(value: JsonObject): PreparedGoalStage {
     });
     const manifest = {artifact_sha256: protectedInput.artifact_sha256,
       materials: materials.map(({path: _path, ...row}) => row)};
+    if (workspaceRequested) workspaceMaterials = planGoalTransferWorkspace(project, root, materials, value.workspace_mapping);
     protectedArtifact = {sha256: String(protectedInput.artifact_sha256), materials, manifest,
       manifestPath: join(directory, "TRANSFER_MATERIALS.json")};
+    if (workspaceMaterials) protectedArtifact.manifest = {...manifest, workspace_destinations: workspaceMaterials.destinations};
   }
   const identity = {schema_version: PLANNED_TRANSFER_GOAL_STAGE_SCHEMA, goal_id: goalId, operation_id: operation,
     source_context_sha256: canonicalAuthoritySha256(context), archive_sha256: value.archive_sha256, target,
@@ -182,7 +189,7 @@ export function planPreparedGoalStage(value: JsonObject): PreparedGoalStage {
   if (matches.length > 1 || (matches.length === 1 && !canonicalAuthorityBytes(matches[0]).equals(canonicalAuthorityBytes(goal)))) {
     reject("Destination Goal is occupied or its staged registration changed; preserve it and recover the original transfer");
   }
-  return {goalId, operationId: operation, context, goal, statePath, contextPath, identity, protectedArtifact};
+  return {goalId, operationId: operation, context, goal, statePath, contextPath, identity, protectedArtifact, workspaceMaterials};
 }
 
 export function stagedGoalRegistry(registry: JsonObject, plan: PreparedGoalStage, runtime: string): JsonObject {
