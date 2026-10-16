@@ -359,12 +359,23 @@ def test_group_receipt_reuses_only_the_fresh_bindings_display_observation(ordina
     store, runtime, provider, transport = connect_group(ordinary)
     root = provider.topic("receipt-source", "Explain this project")
     observe = transport.bindings.observe
+    source_verified = transport._source_verified
+    checking_source, source_identity_observed = threading.Event(), threading.Event()
     calls = []
     def observed(profile, **kwargs):
         import sys
         calls.append(sys._getframe(1).f_code.co_name)
+        if checking_source.is_set():
+            source_identity_observed.set()
         return observe(profile, **kwargs)
+    def verified(record):
+        checking_source.set()
+        try:
+            return source_verified(record)
+        finally:
+            checking_source.clear()
     monkeypatch.setattr(transport.bindings, "observe", observed)
+    monkeypatch.setattr(transport, "_source_verified", verified)
     try:
         assert transport.admit("notes-app", root)["status"] == "durably_accepted"
         row = next(row for row in transport.core.pending() if row["message"] == root["content"])
@@ -372,7 +383,7 @@ def test_group_receipt_reuses_only_the_fresh_bindings_display_observation(ordina
         calls.clear()
         transport.reconcile()
         assert any(emoji == "Get" for _, _, emoji in provider.reaction_creates)
-        assert "resolve" in calls and "_source_message" in calls
+        assert "resolve" in calls and source_identity_observed.is_set()
         # Naming the Inbox adds no authentication request after the fresh
         # binding resolution. Actual outbound source validation still observes.
         assert "_inbox" not in calls
@@ -1014,6 +1025,58 @@ def test_group_outbound_source_verification_reads_fresh_envelopes_without_displa
         assert not transport._source_verified(record)
         assert not provider.writes
     finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("followup", [False, True])
+@pytest.mark.parametrize("identity_fails", [False, True])
+def test_group_outbound_joins_current_source_and_identity_before_root_read(ordinary, monkeypatch, followup, identity_fails):  # noqa: F811
+    _, runtime, provider, transport = connect_group(ordinary)
+    release_source = threading.Event()
+    try:
+        root = provider.topic("outbound-overlap-root", "/status")
+        event = provider.topic("outbound-overlap-follow", "/status", root=root["message_id"]) if followup else root
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        record = json.loads(next(transport.root.glob("*.json")).read_text())
+        provider.calls.clear()
+        source_started, identity_started = threading.Event(), threading.Event()
+        original_source = transport._group_source_message
+        original_observe = transport.bindings.observe
+
+        def source(profile, message_id):
+            if message_id == event["message_id"]:
+                source_started.set()
+                assert release_source.wait(timeout=3)
+            else:
+                assert release_source.is_set()  # Never read event-supplied ancestry early.
+            return original_source(profile, message_id)
+
+        def observe(*args, **kwargs):
+            if source_started.is_set():
+                identity_started.set()
+                if identity_fails:
+                    raise ValueError("current App identity unavailable")
+            return original_observe(*args, **kwargs)
+
+        monkeypatch.setattr(transport, "_group_source_message", source)
+        monkeypatch.setattr(transport.bindings, "observe", observe)
+        with ThreadPoolExecutor(max_workers=1) as caller:
+            pending = caller.submit(transport._source_verified, record)
+            try:
+                assert source_started.wait(timeout=2)
+                assert identity_started.wait(timeout=1)
+                assert not pending.done()  # Including identity failure, join the owned source read.
+                assert not any("GET" in args for args in provider.calls)
+            finally:
+                release_source.set()
+            assert pending.result(timeout=3) is not identity_fails
+        assert not any("+messages-mget" in args for args in provider.calls)
+        assert not provider.writes and not provider.reaction_creates
+        if identity_fails:
+            assert not any("GET" in args and args[args.index("GET") + 1].endswith(root["message_id"])
+                           for args in provider.calls if followup)
+    finally:
+        release_source.set()
         runtime.close()
 
 

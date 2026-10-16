@@ -847,6 +847,13 @@ records bounded cross-conversation dispatch and remaining replacement qualificat
 private DM onboarding, ordinary non-Goal chat, streaming and media remain
 unqualified until the pinned installed journey passes.
 
+Group reply source verification joins the fresh message envelope and App identity
+reads before checking the canonical topic root. This removes their serial IO
+dependency without caching either observation or reading event-supplied ancestry
+early. Root mentions, current grants and original reply receipts still gate each
+outbound operation. Source-check timing alone does not qualify ingress feedback,
+complete-answer latency or the installed realtime journey.
+
 **Product boundary:** the Bot is a realtime conversation entry, not another
 steward. Ordinary project chat and direct conversation with a selected existing
 Agent must remain useful without team decomposition or a new Goal/Todo. The

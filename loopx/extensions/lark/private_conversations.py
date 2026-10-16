@@ -136,7 +136,12 @@ class LarkPrivateConversations:
                         canonical, result, observation = current.result(), display.result(), identity.result()
                     message = _message(json_payload(result), event["message_id"])
                 else:
-                    canonical = self._group_source_message(record["profile"], event["message_id"])
+                    # Delivery still needs both fresh observations. Their IO
+                    # is independent; join it before checking ancestry and @.
+                    with ThreadPoolExecutor(max_workers=2) as reads:
+                        current = reads.submit(self._group_source_message, record["profile"], event["message_id"])
+                        identity = reads.submit(self.bindings.observe, record["profile"])
+                        canonical, observation = current.result(), identity.result()
                     result, message = {"returncode": 0 if canonical else 1}, canonical
             else:
                 result = rendered()
