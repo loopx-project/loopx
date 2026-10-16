@@ -78,6 +78,8 @@ export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
   const revision = useRef("");
   const history = useRef<{source: string; size: number} | null>(null);
   const transcript = useRef<HTMLDivElement>(null);
+  const readLocale = useRef(zh);
+  useEffect(() => {readLocale.current = zh;}, [zh]);
   const binding = agents.find(agent => agent.agent_id === selected);
   const awaitingReceipt = Boolean(submission?.status && submission.status !== "delivered");
   const cacheKey = binding ? `loopx-attached-input:${goalId}:${binding.binding_ref}` : "";
@@ -142,7 +144,15 @@ export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
         }
         setSnapshot(previous => ({...previous, ...next})); setError("");
         if (follow && following.current) requestAnimationFrame(() => transcript.current?.scrollTo({top: transcript.current.scrollHeight}));
-      } catch (failure) {if (current === generation.current) {setError(String(failure)); setSnapshot(null);}}
+      } catch (failure) {
+        if (current === generation.current) {
+          const interrupted = failure instanceof TypeError || (failure instanceof DOMException && failure.name === "TimeoutError");
+          setError(interrupted
+            ? (readLocale.current ? "暂时无法读取原会话。已读记录会保留，连接恢复后将自动更新。" : "The conversation is temporarily unavailable. Existing records are retained; updates resume when the connection recovers.")
+            : String(failure));
+          setSnapshot(null);
+        }
+      }
       finally {if (current === generation.current) timer = setTimeout(read, 1000);}
     }
     void read();
