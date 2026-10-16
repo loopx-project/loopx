@@ -57,6 +57,8 @@
 
 可靠性和成本限定上述四个视角，不能合并成一个进展总分。证据标记区分观察事实、模型解释和绑定版本的独立检查。解释须引用依据，允许弃权；有分歧就保留分歧，选中它不会将其晋升为事实。这些是展示区别，不是新的协议 enum。
 
+<a id="record-relationships-before-the-next-study"></a>
+
 ## 下一轮实验前先记录研究关系
 
 本细化基于[全历史提案 #6648](https://github.com/loopx-project/loopx/pull/6648) 的

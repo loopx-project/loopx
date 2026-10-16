@@ -481,7 +481,7 @@ Todo/replan/Explore 只有连接实际执行和外部产物后才用于机制解
 
 #### 新实验前的关系采集
 
-[采集与阅读切片](../../product/use-cases/auto-research/long-horizon-progress-design.zh-CN.md#下一轮实验前先记录研究关系)
+[采集与阅读切片](../../product/use-cases/auto-research/long-horizon-progress-design.zh-CN.md#record-relationships-before-the-next-study)
 基于 #6648 的全历史提案，不是已经完成资格验证的评估服务。复用普通 Explore
 结果回写及其可选关系，保留路线变化背后的证据。区分显式关系、parent 分组与推断
 分析；保留有意义的假设、实验及产物身份，不能只统计问题和 finding 数量。
