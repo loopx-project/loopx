@@ -80,6 +80,7 @@ export const researchHistoryScenario = {
       await history.getByRole("button", {name: "关系图", exact: true}).click();
       assert.equal(await history.locator(".research-history-edges g").count(), 3, "Only the three recorded typed edges use the solid relationship layer");
       assert.equal(await history.locator(".research-history-edges .is-grouping").count(), 12, "Parentage remains a distinct display relation");
+      await page.screenshot({path: resolve(outputDir, "research-history-recorded-overview.png"), animations: "disabled"});
       await history.getByRole("button", {name: /^EdgeBench · 长程研究与证据积累/}).click();
       await history.locator(".research-history-detail").waitFor();
       const selected = new URL(page.url()).searchParams.get("research_node");
@@ -88,6 +89,7 @@ export const researchHistoryScenario = {
       assert.equal(new URL(page.url()).searchParams.get("research_node"), selected);
       assert.match(await history.textContent(), /364 \/ 364/);
       await page.screenshot({path: resolve(outputDir, "research-history-recorded-desktop.png"), animations: "disabled"});
+      await history.screenshot({path: resolve(outputDir, "research-history-recorded-detail.png"), animations: "disabled"});
       unavailable = true;
       await history.getByRole("button", {name: "刷新记录", exact: true}).click();
       await history.getByRole("alert").waitFor();
