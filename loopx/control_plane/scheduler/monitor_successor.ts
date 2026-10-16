@@ -72,7 +72,9 @@ export function monitorSuccessorPriorities(input: JsonObject, defaultOmitted = f
     if (!supplied && (!defaultOmitted || !todo)) continue;
     if (!todo) throw new EffectRuntimeRequestError(`--next-${role}-priority requires --next-${role}-todo`);
     // The Todo owner validates values and conflicting legacy prefixes.
-    priorities[key] = planTodoCreationPriority({text: todo, ...(supplied ? {priority: input[key]} : {})}).priority;
+    const taskClass = role === "agent" ? "advancement_task" : text(input.next_user_task_class, "next_user_task_class");
+    priorities[key] = planTodoCreationPriority({text: todo, task_class: taskClass,
+      ...(supplied ? {priority: input[key]} : {})}).priority;
   }
   return priorities;
 }

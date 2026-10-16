@@ -70,6 +70,15 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         "--clear-execution-replan-after-turns", action="store_true",
         help="Remove the Goal effective-Turn override and restore device/default inheritance.",
     )
+    from argparse import BooleanOptionalAction
+    configure_goal_parser.add_argument(
+        "--execution-planning-horizon-goal", action=BooleanOptionalAction, default=None,
+        help="Include the full same-source Goal in preselection planning horizons. Default off; no selection or execution authority change.",
+    )
+    configure_goal_parser.add_argument(
+        "--clear-execution-planning-horizon-goal", action="store_true",
+        help="Remove the Goal horizon override and restore review-configuration inheritance.",
+    )
     from ..control_plane.work_items.stride_policy_codec import stride_strategy_options
     configure_goal_parser.add_argument(
         "--execution-stride-strategy", choices=stride_strategy_options(),

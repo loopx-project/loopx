@@ -12,6 +12,7 @@ import {decodeLocalAuthoritySelection, localAuthorityProviderPaths,
 import {sqliteAuthorityRuntime} from "./coordination/sqlite_runtime.ts";
 import {sqliteAuthorityPath} from "./coordination/sqlite_authority_store.ts";
 import {canonicalTodoCollection} from "./coordination/local_authority_read.ts";
+import {decodeAuthorityBackupCapture, inspectAuthorityBackup} from "./coordination/authority_backup.ts";
 import {STATE_RECOVERY_AUDIT_SCHEMA, decodeRecoveryMeasurements, decodeStateRecoveryAudit, isRecoveryDigest, recoveryGoalLabel,
   type RecoveryComponent, type RecoveryComponentState} from "./state_recovery_contract.ts";
 
@@ -36,6 +37,49 @@ function manifestCore(value: JsonObject): JsonObject {
   execution.archive_size_bytes = null;
   delete execution.archive_to_logical_ratio;
   return {...value, execution};
+}
+
+/** Optional v0 capture bindings; absence alone retains the legacy root. */
+function capturedRuntimeRoots(manifest: JsonObject): Map<string, string | null> | null {
+  if (manifest.registry_discovery == null) return null;
+  const discovery = requireJsonObject(manifest.registry_discovery, "registry discovery");
+  if (!Object.hasOwn(discovery, "goal_runtime_roots")) return null;
+  const roots = requireJsonObject(discovery.goal_runtime_roots, "captured Goal runtime roots");
+  check(Array.isArray(manifest.included), "backup_manifest_invalid");
+  const included = new Set(manifest.included.map(raw =>
+    requireJsonObject(raw, "included target").archive_path));
+  const result = new Map<string, string | null>();
+  for (const [goalId, root] of Object.entries(roots)) {
+    check(goalId.length > 0 && goalId.trim() === goalId, "backup_manifest_invalid");
+    if (root !== null) {
+      check(typeof root === "string" && !root.includes("\\") && !root.includes("\0") &&
+        !/^[A-Za-z]:/.test(root) && root.split("/").every(part => part && part !== "." && part !== "..") &&
+        included.has(root), "backup_manifest_invalid");
+    }
+    result.set(goalId, root);
+  }
+  return result;
+}
+
+function authorityCaptures(value: unknown, roots: Map<string, string | null> | null): Map<string, JsonObject> | null {
+  if (value === undefined || value === null) return null;
+  check(Array.isArray(value) && value.length <= MAX_GOALS, "authority_capture_inventory_invalid");
+  const rows = new Map<string, JsonObject>();
+  for (const raw of value) {
+    let row: JsonObject;
+    try { row = decodeAuthorityBackupCapture(raw); }
+    catch { throw new RecoveryInputError("authority_capture_invalid"); }
+    const goalId = String(row.goal_id);
+    check(!rows.has(goalId) && roots !== null && row.runtime_archive_path === (roots.get(goalId) ?? null),
+      "authority_capture_dependency_mismatch");
+    if (row.state === "readable") {
+      const archive = requireJsonObject(row.archive, "authority capture summary");
+      check(typeof archive.commits === "string" && /^[1-9]\d*$/.test(archive.commits) &&
+        BigInt(archive.commits) <= BigInt(MAX_COMMITS), "authority_history_capacity");
+    }
+    rows.set(goalId, row);
+  }
+  return rows;
 }
 
 function externalEvidence(request: JsonObject): {external: JsonObject; execution: JsonObject} {
@@ -77,6 +121,7 @@ export function verifyStateRecoveryManifest(value: unknown): JsonObject {
       "backup_schema_unsupported");
     check(canonicalAuthoritySha256(manifestCore(external)) === canonicalAuthoritySha256(manifestCore(embedded)),
       "manifest_disagreement");
+    const captures = authorityCaptures(execution.authority_captures, capturedRuntimeRoots(external));
     check(Array.isArray(request.files), "member_inventory_invalid");
     check(Number.isSafeInteger(request.sqlite_member_count) && Number(request.sqlite_member_count) >= 0
       && Number(request.sqlite_member_count) <= MAX_SQLITE_FILES, "sqlite_inventory_capacity");
@@ -87,6 +132,15 @@ export function verifyStateRecoveryManifest(value: unknown): JsonObject {
         && digest(file.sha256) && Number.isSafeInteger(file.size_bytes) && Number(file.size_bytes) >= 0,
       "member_inventory_invalid");
       observed.set(file.archive_path, file);
+    }
+    for (const row of captures?.values() ?? []) {
+      check(row.configuration_sha256 === (execution.configuration_backup as JsonObject)?.sha256,
+        "authority_capture_dependency_mismatch");
+      if (row.state !== "readable") continue;
+      // The native archive digest is its chained terminal seal, not a byte
+      // checksum. Member witnesses bind bytes; the archive owner checks its seal.
+      check(observed.has(String(row.archive_path)),
+        "authority_capture_member_mismatch");
     }
     const witnesses = execution.file_members;
     if (witnesses !== undefined) {
@@ -124,11 +178,15 @@ async function regular(path: string): Promise<void> {
   check(stat.isFile() && !stat.isSymbolicLink(), "owner_source_not_regular");
 }
 
-async function inspectGoal(root: string, goalId: string, standaloneSqlite: Set<string>): Promise<RecoveryComponent> {
+async function inspectGoal(root: string | null, goalId: string, standaloneSqlite: Set<string>): Promise<RecoveryComponent> {
   const id = `goal:${hash(goalId).slice(0, 20)}`;
-  const paths = localAuthorityProviderPaths(root, goalId);
   const goalFacts = recoveryGoalLabel(goalId) === null ? {} : {goal_id: goalId};
+  if (root === null) return component(id, "coordination_authority", "unknown", "authority_source_unavailable",
+    "inspect_captured_authority_with_owner", goalFacts, ["configuration"]);
+  const paths = localAuthorityProviderPaths(root, goalId);
   try {
+    const directory = await lstat(root);
+    check(directory.isDirectory() && !directory.isSymbolicLink(), "owner_source_not_regular");
     let selection: ReturnType<typeof decodeLocalAuthoritySelection> | null = null;
     try {
       await regular(paths.marker);
@@ -172,6 +230,7 @@ async function inspectGoal(root: string, goalId: string, standaloneSqlite: Set<s
     return component(id, "coordination_authority", "readable", "historical_head_and_history_readable",
       "review_goal_identity_before_adoption", {...goalFacts, provider: handle.provider,
         head_digest: canonicalAuthoritySha256(loaded.head), history_commits: count,
+        provider_revision: loaded.provider_revision, cursor: loaded.cursor,
         todo_count: collection.projection.todo_ids.length,
         historical_lease_count: collection.leaseIndex?.lease_todo_ids.length ?? 0}, ["configuration"]);
   } catch (error) {
@@ -188,6 +247,8 @@ async function inspectGoal(root: string, goalId: string, standaloneSqlite: Set<s
 async function auditOwners(value: unknown): Promise<JsonObject> {
   const started = performance.now();
   const request = requireJsonObject(value, "recovery owner audit");
+  const runtimeRoots = capturedRuntimeRoots(request);
+  const captures = authorityCaptures(request.authority_captures, runtimeRoots);
   const measurements = decodeRecoveryMeasurements({
     ...requireJsonObject(request.measurements, "host recovery measurements"), owner_read_ms: 0});
   const basis = requireJsonObject(request.verified, "verified recovery basis");
@@ -254,7 +315,31 @@ async function auditOwners(value: unknown): Promise<JsonObject> {
   if (configuration !== null) {
     const goals = (configuration.data as JsonObject).goals as JsonObject[];
     check(goals.length <= MAX_GOALS, "goal_inventory_capacity");
-    for (const goal of goals) components.push(await inspectGoal(join(dataRoot, "runtime-root"), String(goal.goal_id), ownerReadableSqlite));
+    const goalIds = new Set(goals.map(goal => String(goal.goal_id)));
+    check([...captures?.keys() ?? []].every(goalId => goalIds.has(goalId)), "authority_capture_goal_mismatch");
+    for (const goal of goals) {
+      const goalId = String(goal.goal_id);
+      if (captures !== null) {
+        const id = `goal:${hash(goalId).slice(0, 20)}`;
+        const goalFacts = recoveryGoalLabel(goalId) === null ? {} : {goal_id: goalId};
+        const capture = captures.get(goalId);
+        try {
+          check(capture?.state === "readable", "authority_capture_unavailable");
+          check(capture.configuration_sha256 === configuration.sha256, "authority_capture_dependency_mismatch");
+          const facts = await inspectAuthorityBackup(dataRoot, capture);
+          check(Number(facts.history_commits) <= MAX_COMMITS, "authority_history_capacity");
+          components.push(component(id, "coordination_authority", "readable", "historical_head_and_history_readable",
+            "review_goal_identity_before_adoption", {...goalFacts, ...facts}, ["configuration"]));
+        } catch (error) {
+          if (error instanceof RecoveryInputError && error.code === "authority_history_capacity") throw error;
+          components.push(component(id, "coordination_authority", "unknown", "authority_capture_unavailable",
+            "inspect_captured_authority_with_owner", goalFacts, ["configuration"]));
+        }
+        continue;
+      }
+      const root = runtimeRoots === null ? "runtime-root" : runtimeRoots.get(goalId);
+      components.push(await inspectGoal(root ? join(dataRoot, root) : null, goalId, ownerReadableSqlite));
+    }
   }
   // A v0 file inventory does not identify every session/effect/extension owner.
   // Retained bytes must not masquerade as a successful owner-local read.

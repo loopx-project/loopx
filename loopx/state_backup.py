@@ -6,7 +6,8 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import posixpath
 import re
 import shutil
 import tarfile
@@ -16,8 +17,20 @@ from typing import Any, Protocol
 from . import __version__
 from .paths import _is_redirected_path, select_default_runtime_root
 from .presentation.markdown import markdown_scalar
+from .registry import registry_goals
+from .materials import resolve_review_material_path
+from .control_plane.goals.source_session_registry_state import (
+    recreation_journal_directory,
+    registration_journal_directory,
+    turn_settlement_directory,
+)
 from .control_plane.effect_runtime import effect_runtime_result
+from .control_plane.projects.registry_codec import load_registry
 from .control_plane.runtime.document_io import fsync_state_directory
+from .control_plane.runtime.runtime_projection_route import (
+    _resolved_source_registry,
+    resolve_goal_source_runtime_route,
+)
 
 
 STATE_BACKUP_SCHEMA_VERSION = "loopx_state_backup_v0"
@@ -51,18 +64,6 @@ def _archive_segment(value: Any, *, fallback: str) -> str:
     compact = ARCHIVE_SEGMENT_PATTERN.sub("-", raw).strip("-._") or fallback
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
     return f"{compact[:48]}-{digest}"
-
-
-def _registry_goals(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"{path} must contain a JSON object")
-    goals = payload.get("goals")
-    if not isinstance(goals, list):
-        return []
-    return [goal for goal in goals if isinstance(goal, dict) and goal.get("id")]
 
 
 def _should_skip(path: Path, exclude_roots: list[Path]) -> bool:
@@ -134,18 +135,18 @@ def _discover_targets(
     include_skills: bool,
     include_registry_projects: bool,
     configuration_source_registry: Path,
+    source_snapshots: dict[Path, bytes | None],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str], dict[str, Any]]:
     targets: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
     warnings: list[str] = []
-    seen_sources: set[str] = set()
+    seen_sources: dict[str, str | None] = {}
     exclude_roots = [_resolved(output_dir)]
 
-    def add(key: str, source_path: Path, archive_path: str) -> None:
+    def add(key: str, source_path: Path, archive_path: str) -> str | None:
         source_key = str(_resolved(source_path))
         if source_key in seen_sources:
-            return
-        seen_sources.add(source_key)
+            return seen_sources[source_key]
         found, absent, target_warnings = _target(
             key=key,
             source_path=source_path.expanduser(),
@@ -157,6 +158,9 @@ def _discover_targets(
         if absent is not None:
             missing.append(absent)
         warnings.extend(target_warnings)
+        captured = archive_path if found is not None else None
+        seen_sources[source_key] = captured
+        return captured
 
     add("runtime_root", runtime_root, "runtime-root")
     # Import must bind the original registry bytes, even when its caller-owned
@@ -181,12 +185,14 @@ def _discover_targets(
     registry_active_state_included_count = 0
     registry_source_registry_count = 0
     registry_source_registry_included_count = 0
-    if include_registry_projects or discovery_registry.exists():
-        try:
-            goals = _registry_goals(discovery_registry)
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            goals = []
-            warnings.append(f"could not discover registry projects from {discovery_registry}: {exc}")
+    goal_runtime_roots: dict[str, str | None] = {}
+    try:
+        registry = load_registry(discovery_registry, source_snapshots=source_snapshots)
+        goals = registry_goals(registry)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        goals = []
+        warnings.append(f"could not discover registry projects from {discovery_registry}: {exc}")
+    if goals:
         if not include_registry_projects:
             goals = [
                 goal for goal in goals
@@ -197,8 +203,62 @@ def _discover_targets(
         for goal in goals:
             goal_id = str(goal.get("id") or "").strip()
             goal_segment = _archive_segment(goal_id, fallback="goal")
+            if goal_id in goal_runtime_roots:
+                raise ValueError("backup discovery requires unique Goal ids")
+            goal_runtime_roots[goal_id] = None
+            source_registry: Path | None = None
+            source_context_available = True
+            goal_runtime_root = runtime_root
+            if include_registry_projects:
+                try:
+                    # Reuse the same source route as configuration capture. A
+                    # cached global row cannot replace the source-owned Goal.
+                    source_registry = _resolved_source_registry(goal, registry_path=discovery_registry)
+                    route = resolve_goal_source_runtime_route(
+                        registry_path=discovery_registry, goal_id=goal_id, registry=registry,
+                        source_snapshots=source_snapshots,
+                    )
+                    source = Path(route["source_registry"])
+                    source_payload = load_registry(source, source_snapshots=source_snapshots)
+                    matches = [row for row in registry_goals(source_payload) if row.get("id") == goal_id]
+                    if len(matches) != 1:
+                        raise ValueError("backup requires exactly one source-owned Goal")
+                    goal = matches[0]
+                    if source_registry is not None:
+                        source_registry = source
+                    source_runtime = Path(route["source_runtime_root"])
+                    goal_runtime_root = source_runtime
+                    if source_runtime != runtime_root and not source_payload.get("common_runtime_root"):
+                        raise ValueError("external source runtime is undeclared; refusing implicit host-wide discovery")
+                    runtime_segment = hashlib.sha256(str(source_runtime).encode()).hexdigest()
+                    goal_runtime_roots[goal_id] = add(
+                        f"registry_runtime:{goal_id}", source_runtime, f"source-runtimes/{runtime_segment}",
+                    )
+                except (OSError, ValueError) as exc:
+                    source_context_available = False
+                    missing.append({"key": f"registry_runtime:{goal_id}", "source_path": "",
+                                    "reason": f"source runtime route unavailable: {exc}"})
+                    warnings.append(f"could not capture source runtime for {goal_id}: {exc}")
+            else:
+                # Project-scoped recovery keeps its explicitly selected runtime.
+                goal_runtime_roots[goal_id] = seen_sources.get(str(_resolved(runtime_root)))
             repo_text = str(goal.get("repo") or "").strip()
-            if not repo_text:
+            repo = _resolved(Path(repo_text)) if repo_text else None
+            source_registry_text = str(goal.get("source_registry") or "").strip()
+            if not include_registry_projects and source_registry_text:
+                source_registry = Path(source_registry_text).expanduser()
+                if not source_registry.is_absolute():
+                    source_registry = repo / source_registry if repo is not None else None
+            if source_registry is not None:
+                add(
+                    f"registry_source_registry:{goal_id}",
+                    source_registry,
+                    f"registry-goals/{goal_segment}/source-registry/{source_registry.name}",
+                )
+                registry_source_registry_count += 1
+                if source_registry.exists() or source_registry.is_symlink():
+                    registry_source_registry_included_count += 1
+            if repo is None:
                 missing.append(
                     {
                         "key": f"registry_project:{goal_id}",
@@ -207,7 +267,6 @@ def _discover_targets(
                     }
                 )
                 continue
-            repo = _resolved(Path(repo_text))
             registry_project_roots.add(str(repo))
             project_segment = _archive_segment(repo, fallback="project")
             if not repo.exists():
@@ -263,19 +322,46 @@ def _discover_targets(
                     }
                 )
 
-            source_registry_text = str(goal.get("source_registry") or "").strip()
-            if source_registry_text:
-                source_registry = Path(source_registry_text).expanduser()
-                if not source_registry.is_absolute():
-                    source_registry = repo / source_registry
-                add(
-                    f"registry_source_registry:{goal_id}",
-                    source_registry,
-                    f"registry-goals/{goal_segment}/source-registry/{source_registry.name}",
-                )
-                registry_source_registry_count += 1
-                if source_registry.exists() or source_registry.is_symlink():
-                    registry_source_registry_included_count += 1
+            # These are declared local Goal inputs, not recursively followed
+            # Markdown links or hash-only material registrations. The existing
+            # material owner retains its repo/state/runtime permission boundary.
+            declarations = goal.get("authority_sources")
+            for index, declaration in enumerate(
+                declarations if source_context_available and isinstance(declarations, list) else []
+            ):
+                if not isinstance(declaration, dict) or declaration.get("kind") != "goal_doc":
+                    continue
+                key = f"registry_goal_document:{goal_id}:{index}"
+                try:
+                    document = resolve_review_material_path(
+                        goal=goal, raw_path=str(declaration.get("path") or ""),
+                        runtime_root=goal_runtime_root, repo_relative=True,
+                    )
+                    if document.exists() and not document.is_file():
+                        raise ValueError("registered Goal document is not a regular file")
+                except (OSError, ValueError) as exc:
+                    missing.append({"key": key, "source_path": "",
+                                    "reason": f"registered Goal document unavailable: {exc}"})
+                    continue
+                add(key, document, f"registry-goals/{goal_segment}/documents/{index}.md")
+
+            # A source registry file does not contain its adjacent lifetime
+            # journals. Reuse the actual owners' Goal-scoped paths; never sweep
+            # the sibling root, copy another Goal, or initialize absent state.
+            lifetime_registry = (
+                source_registry if include_registry_projects and source_registry is not None
+                else discovery_registry
+            )
+            journal_directories = (
+                registration_journal_directory(lifetime_registry, goal_id),
+                recreation_journal_directory(lifetime_registry, goal_id),
+                turn_settlement_directory(lifetime_registry, goal_id),
+            ) if source_context_available else ()
+            for journal_directory in journal_directories:
+                if journal_directory.exists() or journal_directory.is_symlink():
+                    family = journal_directory.parent.name
+                    add(f"registry_lifetime:{goal_id}:{family}", journal_directory,
+                        f"registry-goals/{goal_segment}/lifetime/{family}")
 
     codex_home = _codex_home()
     if include_automations:
@@ -311,6 +397,7 @@ def _discover_targets(
         "source_registry_missing_count": (
             registry_source_registry_count - registry_source_registry_included_count
         ),
+        "goal_runtime_roots": goal_runtime_roots,
     }
     return targets, missing, warnings, discovery
 
@@ -327,7 +414,7 @@ def _sum_target_stats(targets: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def _target_category(key: str) -> str:
-    if key == "runtime_root":
+    if key == "runtime_root" or key.startswith("registry_runtime:"):
         return "runtime"
     if key.startswith("project_") or key.startswith("registry_project_"):
         return "project_state"
@@ -405,6 +492,8 @@ def build_state_backup_plan(
         resolved_runtime_root / "registry.global.json" if include_registry_projects
         else resolved_project / ".loopx/registry.json"
     )
+    source_snapshots: dict[Path, bytes | None] = {}
+    discovery_started_at = datetime.now(timezone.utc).isoformat()
     targets, missing, warnings, registry_discovery = _discover_targets(
         project=resolved_project,
         runtime_root=resolved_runtime_root,
@@ -413,7 +502,13 @@ def build_state_backup_plan(
         include_skills=include_skills,
         include_registry_projects=include_registry_projects,
         configuration_source_registry=configuration_source_registry,
+        source_snapshots=source_snapshots,
     )
+    registry_discovery["source_capture"] = {
+        "started_at": discovery_started_at,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "source_revisions": _source_revisions(source_snapshots, targets),
+    }
     total_stats = _sum_target_stats(targets)
     logical_source_bytes = total_stats["bytes"]
     return {
@@ -475,13 +570,13 @@ def build_scoped_state_backup_plan(
     missing: list[dict[str, Any]] = []
     warnings: list[str] = []
     seen_sources: set[str] = set()
-    for key, source, archive_path in sources:
+    for key, source, member_name in sources:
         source_key = str(_resolved(source))
         if source_key in seen_sources:
             continue
         seen_sources.add(source_key)
         found, absent, target_warnings = _target(key=key, source_path=source.expanduser(),
-            archive_path=archive_path, exclude_roots=exclude_roots)
+            archive_path=member_name, exclude_roots=exclude_roots)
         if found is not None:
             included.append(found)
         if absent is not None:
@@ -613,6 +708,71 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _source_revisions(
+    sources: dict[Path, bytes | None], included: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Freeze source hashes and their archive routes at the actual read boundary."""
+    result = []
+    for source, raw in sources.items():
+        paths = set()
+        for target in included:
+            path = Path(target["source_path"]).expanduser()
+            for root in {path.absolute(), _resolved(path)}:
+                try:
+                    relative = source.relative_to(root)
+                except ValueError:
+                    continue
+                paths.add(str(PurePosixPath(target["archive_path"]) / relative.as_posix()))
+        result.append({"source_path": str(source), "sha256": hashlib.sha256(raw).hexdigest()
+                       if raw is not None else None, "archive_paths": sorted(paths)})
+    return result
+
+
+def _copied_source_witnesses(
+    revisions: list[dict[str, Any]], members: list[dict[str, Any]],
+    archive_members: list[tarfile.TarInfo], *, source_kind: str,
+) -> list[dict[str, Any]]:
+    """Compare the actual decoded source bytes with every regular tar copy.
+
+    Saved aliases resolve to their regular copied-byte witnesses; at least one
+    is required. Equality is an IO check, not cross-owner capture qualification.
+    """
+    result = []
+    # Resolve only saved archive metadata. The live alias may already point at
+    # another included file whose bytes would otherwise pass independently.
+    link_targets: dict[str, set[str]] = {}
+    for member in archive_members:
+        if member.islnk():
+            linked_path = member.linkname
+        elif member.issym() and not PurePosixPath(member.linkname).is_absolute():
+            linked_path = posixpath.normpath(posixpath.join(posixpath.dirname(member.name), member.linkname))
+        else:
+            continue
+        link_targets.setdefault(member.name, set()).add(linked_path)
+    for revision in revisions:
+        paths = set(revision["archive_paths"])
+        sha256 = revision["sha256"]
+        if sha256 is None:
+            # A retained link is still a captured source, even though it has no
+            # separate regular-file byte witness of its own.
+            if any(member.name in paths for member in archive_members):
+                raise ValueError(f"backup {source_kind} source absence differs from copied bytes; retry the backup")
+            continue
+        pending = list(paths)
+        while pending:
+            for target_path in link_targets.get(pending.pop(), ()):
+                if target_path not in paths:
+                    paths.add(target_path)
+                    pending.append(target_path)
+        witnesses = [row for row in members if row["archive_path"] in paths]
+        if not witnesses:
+            raise ValueError(f"backup {source_kind} source has no copied bytes witness; include its regular source file")
+        if any(row["sha256"] != sha256 for row in witnesses):
+            raise ValueError(f"backup {source_kind} source differs from copied bytes; retry the backup")
+        result.extend(witnesses)
+    return result
+
+
 def _publish_backup_file(source: Path, destination: Path) -> None:
     """Create a new name, retaining exclusive creation on link-less filesystems."""
     try:
@@ -686,16 +846,56 @@ def execute_state_backup_plan(payload: dict[str, Any]) -> dict[str, Any]:
                 capture_configuration_backup,
                 verify_configuration_backup,
             )
+            source_snapshots: dict[Path, bytes | None] = {}
+            configuration_started_at = datetime.now(timezone.utc).isoformat()
             configuration = capture_configuration_backup(
                 registry_path=Path(payload["configuration_source_registry"]),
                 runtime_root=Path(payload["runtime_root"]),
                 goal_ids=payload.get("configuration_goal_ids"),
+                source_snapshots=source_snapshots if tar.record_file_members else None,
             )
+            if tar.record_file_members:
+                updated["execution"]["configuration_capture"] = {
+                    "started_at": configuration_started_at,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "source_revisions": _copied_source_witnesses(
+                        _source_revisions(source_snapshots, included), tar.file_members,
+                        tar.getmembers(), source_kind="configuration"),
+                }
+                # New ordinary plans bind the registry reads that selected
+                # documents, runtimes and journals. A later matching config
+                # capture cannot certify a stale discovery plan. Historical
+                # plans and explicit migration backups remain best-effort.
+                discovery_capture = payload.get("registry_discovery", {}).get("source_capture")
+                if discovery_capture is not None:
+                    updated["execution"]["discovery_source_revisions"] = _copied_source_witnesses(
+                        discovery_capture["source_revisions"], tar.file_members,
+                        tar.getmembers(), source_kind="discovery")
             configuration_bytes = json.dumps(configuration, ensure_ascii=False, indent=2).encode("utf-8")
             info = tarfile.TarInfo("configuration-backup.json")
             info.size, info.mode = len(configuration_bytes), 0o600
             tar.addfile(info, io.BytesIO(configuration_bytes))
             updated["execution"]["configuration_backup"] = verify_configuration_backup(configuration)
+            if tar.record_file_members and "goal_runtime_roots" in payload.get("registry_discovery", {}):
+                # Capture through the authority owner, not by decoding a store
+                # here. Raw roots remain a separate historical safety copy.
+                targets = {item["archive_path"]: item["source_path"] for item in included}
+                roots = payload["registry_discovery"]["goal_runtime_roots"]
+                captures = []
+                for goal in configuration["data"]["goals"]:
+                    goal_id = goal["goal_id"]
+                    root = roots.get(goal_id)
+                    capture = effect_runtime_result("coordination.authority_backup.capture", {
+                        "goal_id": goal_id, "runtime_root": str(_resolved(Path(targets[root]))) if root in targets else None,
+                        "destination": str(staging),
+                    }, timeout=300.0, retry_safe=False)
+                    capture["runtime_archive_path"] = root
+                    capture["configuration_sha256"] = configuration["sha256"]
+                    captures.append(capture)
+                    if capture["state"] == "readable":
+                        directory = str(PurePosixPath(capture["archive_path"]).parent)
+                        tar.add(staging / directory, arcname=directory)
+                updated["execution"]["authority_captures"] = captures
             updated["execution"]["sqlite_snapshots"] = [entry[1] for entry in snapshots.values()]
             # manifest.json is deliberately excluded: it contains this list.
             # The existing external archive checksum witnesses the whole tar.

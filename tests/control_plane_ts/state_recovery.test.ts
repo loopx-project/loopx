@@ -4,6 +4,7 @@ import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/a
 import {createEffectRuntimeHandlers, dispatchEffectRuntimeMethod} from "../../loopx/control_plane/effect_runtime_handlers.ts";
 import {verifyStateRecoveryArchive, verifyStateRecoveryManifest} from "../../loopx/control_plane/state_recovery.ts";
 import {decodeStateRecoveryAudit, STATE_RECOVERY_AUDIT_SCHEMA} from "../../loopx/control_plane/state_recovery_contract.ts";
+import {authorityBackupDirectory} from "../../loopx/control_plane/coordination/authority_backup.ts";
 
 const member = {archive_path: "runtime-root/retained", size_bytes: 1, sha256: "c".repeat(64)};
 function request() {
@@ -46,6 +47,63 @@ test("legacy absent member witnesses stay unqualified rather than becoming verif
   assert.equal(result.capture_profile, "legacy_best_effort");
 });
 
+test("captured runtime bindings are optional data and must name included inert roots", () => {
+  for (const root of ["runtime-root", null]) {
+    const input = request();
+    for (const manifest of [input.external_manifest, input.embedded_manifest]) {
+      Object.assign(manifest, {registry_discovery: {goal_runtime_roots: {"goal-a": root}},
+        included: [{archive_path: "runtime-root"}]});
+    }
+    const result = verifyStateRecoveryManifest(input);
+    assert.equal(result.ok, true);
+    assert.equal(result.execution_authority_granted, false);
+    assert.equal(JSON.stringify(result).includes("goal_runtime_roots"), false);
+  }
+  for (const root of ["/outside", "../outside", "runtime-root/../other", "runtime-root//other", "unlisted", 1, true]) {
+    const input = request();
+    for (const manifest of [input.external_manifest, input.embedded_manifest]) {
+      Object.assign(manifest, {registry_discovery: {goal_runtime_roots: {"goal-a": root}},
+        included: [{archive_path: "runtime-root"}]});
+    }
+    assert.equal(verifyStateRecoveryManifest(input).ok, false, String(root));
+  }
+});
+
+test("native capture metadata cannot change its Goal/configuration dependency or exceed the historical capacity", () => {
+  const original = request();
+  const path = `${authorityBackupDirectory("goal-a")}/authority.jsonl`;
+  const capture = {goal_id: "goal-a", state: "readable", runtime_archive_path: "runtime-root",
+    configuration_sha256: "d".repeat(64), started_at: "2026-10-15T00:00:00.000Z", completed_at: "2026-10-15T00:00:01.000Z",
+    archive_path: path, archive: {goal_id: "goal-a", commits: "1", archive_sha256: "e".repeat(64)},
+    dependencies: {selector_sha256: null, writer_fence_sha256: null}};
+  const artifact = {...member, archive_path: path};
+  original.files = [artifact];
+  for (const manifest of [original.external_manifest, original.embedded_manifest]) {
+    Object.assign(manifest, {registry_discovery: {goal_runtime_roots: {"goal-a": "runtime-root"}},
+      included: [{archive_path: "runtime-root"}]});
+    Object.assign(manifest.execution, {authority_captures: [capture], file_members: [artifact],
+      configuration_backup: {sha256: "d".repeat(64)}});
+  }
+  // The logical archive seal is deliberately different from the member byte
+  // digest: each has its own verifier and must never be substituted for the other.
+  assert.equal(verifyStateRecoveryManifest(original).ok, true);
+  for (const delta of [{runtime_archive_path: null}, {runtime_archive_path: "other"},
+    {configuration_sha256: "f".repeat(64)}, {completed_at: "2026-10-14T00:00:00.000Z"},
+    {archive_path: "../outside"}, {archive: {...capture.archive, commits: "20001"}}]) {
+    const input = structuredClone(original);
+    for (const manifest of [input.external_manifest, input.embedded_manifest]) {
+      Object.assign((manifest.execution as any).authority_captures[0], delta);
+    }
+    assert.equal(verifyStateRecoveryManifest(input).ok, false, JSON.stringify(delta));
+  }
+  const duplicate = structuredClone(original);
+  for (const manifest of [duplicate.external_manifest, duplicate.embedded_manifest]) {
+    (manifest.execution as any).authority_captures.push(capture);
+  }
+  assert.equal(verifyStateRecoveryManifest(duplicate).ok, false);
+  assert.equal(verifyStateRecoveryManifest({...original, files: []}).error_code, "authority_capture_member_mismatch");
+});
+
 function audit() {
   const body = {ok: true, schema_version: STATE_RECOVERY_AUDIT_SCHEMA,
     recovery_id: "e".repeat(64), status: "held", written: true, manifest_verified: true,
@@ -84,4 +142,23 @@ test("recorded measurements reject invalid values and absent historical measurem
       assert.throws(() => decodeStateRecoveryAudit({...input, measurements: {...measurements, [field]: value}}));
     }
   }
+});
+
+test("historical authority positions stay optional but supplied positions must agree with the inspected history", () => {
+  const input = audit();
+  input.components[0] = {...input.components[0], component_id: "goal:fixture",
+    owner_kind: "coordination_authority", facts: {history_commits: 2}};
+  assert.doesNotThrow(() => decodeStateRecoveryAudit(input));
+  const position = {provider_revision: `file:2:${"a".repeat(24)}`, cursor: "2"};
+  const positioned = (facts: Record<string, unknown>) => ({...input,
+    components: [{...input.components[0], facts: {history_commits: 2, ...facts}}]});
+  assert.doesNotThrow(() => decodeStateRecoveryAudit(positioned(position)));
+  for (const facts of [{provider_revision: position.provider_revision}, {cursor: "2"},
+    {...position, cursor: "3"}, {...position, cursor: "02"}, {...position, cursor: 2},
+    {...position, provider_revision: "/private/source"}, {...position, provider_revision: "a".repeat(129)}]) {
+    assert.throws(() => decodeStateRecoveryAudit(positioned(facts)));
+  }
+  const wrongOwner = positioned(position);
+  wrongOwner.components[0].owner_kind = "configuration";
+  assert.throws(() => decodeStateRecoveryAudit(wrongOwner));
 });

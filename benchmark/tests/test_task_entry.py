@@ -698,6 +698,8 @@ def test_sforge_planning_failed_host_has_no_execution_handoff(planning_env):
 
 @pytest.mark.parametrize("settings,field,value", [
     ({}, "replan_after_effective_turns", 6),
+    ({"planning_horizon_goal": True}, "replan_after_effective_turns", 6),
+    ({"planning_horizon_goal": False}, "replan_after_effective_turns", 6),
     ({"replan_after_turns": 2}, "replan_after_effective_turns", 2),
     ({"replan_after_todos": 3}, "replan_after_completed_todos", 3),
     ({"stride_strategy": "off"}, "replan_after_effective_turns", 6),
@@ -745,5 +747,8 @@ def test_runner_cadence_persists_through_real_configure_goal(
     assert other not in profile
     strategy = settings.get("stride_strategy")
     assert profile.get("stride_strategy", "off") == (strategy or "off")
-    assert agent._replan_receipt() == {field: value, **({"stride_strategy": strategy}
+    horizon = settings.get("planning_horizon_goal")
+    assert profile.get("planning_horizon_goal", False) == (horizon or False)
+    assert agent._replan_receipt() == {field: value,
+        **({"planning_horizon_goal": horizon} if horizon is not None else {}), **({"stride_strategy": strategy}
                                                     if strategy is not None else {})}

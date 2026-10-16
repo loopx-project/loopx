@@ -4,7 +4,7 @@
 - 替代 / 关闭：无
 - Proposed by：LoopX maintainers
 - Date：2026-08-15
-- Last revised：2026-10-15
+- Last revised：2026-10-16
 - Scope：LoopX 控制面核心从 Python 到 TypeScript 的增量、replacement-first
   迁移；不长期维护两份语义实现
 - Tracking issue：[#3225](https://github.com/loopx-project/loopx/issues/3225)
@@ -29,47 +29,49 @@ R1–R3 的 TS 消费者包括 App 产品路径，不只 CLI 结算。
 
 <a id="当前交付边界2026-10-02"></a>
 
-## 当前交付边界（2.0 候选，2026-10-15）
+## 当前交付边界（合入后，2026-10-16）
 
-贡献者主导的 [#6396](https://github.com/loopx-project/loopx/pull/6396)，
-已评审 head `5d29213d3`，承接 C1/T4 普通 Markdown writer 截止与 live `legacy`
-所有权策略退役，已纳入 fork 补缺及 #6366 中有价值的不变量和恢复检查，见
-[吸收清单](../../reference/local-authority-provider-selection.md#retirement-proposal-reconciliation)。
-候选已删除废弃 writer 实现及 capture producer；canonical mutation、创建、
-team-plan、Monitor 和 lease 消费者复用既有 typed owner。不能根据下方旧清单
-再次派生同样的删除工作。兼容的 1.x 线和仍开放的 2.0 提案是不同交付基线；
-本 checkpoint 不宣称截止行为已发布。
+贡献者主导的 [#6396](https://github.com/loopx-project/loopx/pull/6396) 已合入，
+主干提交为 `a4483aaece5bc74ec3f969fd067229487022401b`，最终 PR head 为
+`404433aee47d6efd92f26202eddbef67831f1036`，两者完整 tree 相同。C1/T4 普通
+Markdown writer 截止已包含 fork 补缺、原生 Core 版本修复及
+[#6366 有价值的义务](../../reference/local-authority-provider-selection.md#retirement-proposal-reconciliation)。
+Canonical 写入、创建、team-plan、Monitor 和 lease 消费者复用既有 typed owner。
+普通 writer／capture producer 删除已进入 main，不从旧清单再次派生删除任务。
+兼容的 1.4.2 已先发布；已落地的 `2.0.0a1` 源码边界不等于已发布 2.0 截止或
+默认资格完成。
 
-后续整合以正常双亲 merge 连接 `7c0215f26` 与冻结主干 `77d6b07fb`。
-吸收兼容的 1.4.2 修复时保留退役候选 `2.0.0a1`；仅保留相同源码的单亲
-snapshot 会丢失主干祖先关系，破坏上游 diff 的可评审性。新 canonical 创建
-同时保留结构化 P1 和兼容显示，原回执仍保持记录时的意图。producer 删除后，
-历史 outbox 恢复复用既有 native delivery／drain 反例；已释放 lease 的 cutover
-检查迁到有备份的 File／SQLite cold import，保留完整终态记录、后续 canonical
-工作与原导入回执重放，不重建 source writer。后续主干 revision 和安装后的
-Host 采用仍需分别验证其适用证据。
+新执行／配置目标共享从 `EXECUTION_HANDOFF_MODES`（`soft_claim`／`hard_lease`）
+派生的 `ExecutionHandoffMode`；历史 `HandoffMode` 和回执 codec 仍识别 `legacy`。
+typed 策略 owner 拒绝 fresh legacy 执行、acquire／维护及当前 proof 授权，包括
+delegation 启动／恢复；精确原操作恢复、release 及有备份的审核迁移保留。File 仍是 canonical provider；存储转换、策略迁移和 Goal 生命周期接纳
+是不同操作。本检查点不迁移任何活跃 Goal。
 
-新执行／配置目标统一使用 `ExecutionHandoffMode`，从既有
-`EXECUTION_HANDOFF_MODES`（`soft_claim`／`hard_lease`）派生；历史 `HandoffMode`
-及回执 codec 仍识别 `legacy`。typed 策略 owner 拒绝 fresh legacy 执行、
-acquire／维护及当前 proof 授权，包括 delegation 启动／恢复；历史原回执恢复、
-精确 release 与有备份的 plan／migrate 保留。存储转换和所有权迁移仍是不同操作；
-提案不自动迁移任何活跃 Goal。
+[合入后证据记录](https://github.com/loopx-project/loopx/pull/6396#issuecomment-6208115093)
+区分已执行源码与最终组合：原生修复源 `bf8372b1e` 和已吸收的 `286624b94` 完整
+tree 相同；后续 main 同步与自动合并结果相同，并包含 #6597 原生预览恢复修复。
+图／tree 等价不代表执行过最终组合。既有批准、真实 backend 结果、安装产物及
+失败／未测项继续保留原 revision 和适用边界。
 
-当前工作是候选集成与采用验证，不是再做 writer extraction：保留兼容 1.x 的
-升级／备份／恢复路线，完成有界可回退核心开发者试用及受影响的真实 Host／App
-旅程，保持正式 D2 的失败／缺失证据与发布默认资格开放。永久 Markdown 文档／
-显示 IO、历史 reader 及未完成的 receipt／outbox 处置仍需保留。转换演练通过
-不代表自然采用或 Goal-instance 退役完成。
+沿用[既有 R5 交付顺序](loopx-overall-roadmap-v0.zh-CN.md#post-6396-delivery-plan)：
 
-后续以[当前退役 ledger](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.zh-CN.md#current-candidate-checkpoint)
-为准。[精确 head 评审](https://github.com/loopx-project/loopx/pull/6396#pullrequestreview-5535116423)
-和[组合 tree 证据](https://github.com/loopx-project/loopx/pull/6396#issuecomment-6195855339)
-各自保留源码 revision，不认证未验证的后续 head／base、安装 cohort 或全部 RFC 验收。
+1. 在冻结的最终 main 源码和正常安装的 CLI／App／受影响 Host 上收尾 T4/C1、
+   D1 采用：完整数据、新旧 proof、原操作重试、中断、后写及可逆迁移。剩余 transport
+   按真实 caller 判断；native 进程内接管时删除废弃跨界，不新增逐字段 bridge。
+2. 通过既有 Goal／provider／effect owner 推进完整恢复 M2 捕获证据和 M3 受控接纳。
+   普通导入和可读的隔离备份不证明 Goal 生命周期或外部 effect 已重新激活。
+3. 独立继续既有 D2/D3：同负载完整命令成本、正式容量／经过时间证据及受支持发布
+   profile。新 Goal 的 SQLite／hard-lease 源码选择已经存在，应验证该行为，不重建
+   selector 或宣布未经资格化的默认值。
 
-### 历史 1.x 前置 checkpoint（截至 2026-10-12）
+永久 Markdown 文档／显示 IO、历史 reader 和未完成 receipt／outbox 处置仍是义务。
+只在最后真实 caller 退出，或明确兼容窗口结束并完成受影响真实路径验证时再删 adapter。
+当前归属见[退役 ledger](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.zh-CN.md#current-candidate-checkpoint)；
+下方具名历史证据不是新的任务队列。
 
-以下记录解释具名源码上的前置条件与验证。“writer 仍可达”及“下一次截止”
+### 历史 1.x 前置背景
+
+以下记录保留截至 2026-10-12 的具名源码前置条件与验证。“writer 仍可达”及“下一次截止”
 描述当时的 1.x 基线，不是上方候选仍未实现的工作。
 
 按 main `06b6caa07` 复核，#5413/#5466/#5283，以及创建、Host 停止、UI 历史

@@ -108,7 +108,11 @@ def register_quota_monitor_poll_request_arguments(
     for role in ("agent", "user"):
         quota_parser.add_argument(
             f"--next-{role}-priority", choices=["P0", "P1", "P2", "P3", "P4"],
-            help=f"Priority of --next-{role}-todo; defaults to P1, independently of the monitor.",
+            help=(
+                f"Priority of --next-{role}-todo; defaults independently of the monitor. "
+                + ("A user_gate defaults to P0 and user_action to P1."
+                   if role == "user" else "Agent advancement defaults to P1.")
+            ),
         )
 
 

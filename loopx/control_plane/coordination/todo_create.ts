@@ -143,6 +143,7 @@ function createCandidate(
   readModelSchema: unknown,
 ): JsonObject {
   const priority = planTodoCreationPriority({text: input.todo.text,
+    task_class: input.todo.task_class, status: input.todo.status,
     ...(Object.hasOwn(input.todo, "priority") ? {priority: input.todo.priority} : {})});
   const candidate: JsonObject = {
     ...input.todo,

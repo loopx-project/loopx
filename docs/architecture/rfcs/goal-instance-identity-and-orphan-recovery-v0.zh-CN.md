@@ -41,6 +41,22 @@ Lease 和全局 registry 的角色都不会成为新的 Goal authority。本 RFC
 自动清理所有外部 provider、自动选择 candidate，也不允许普通 bootstrap
 直接修改孤儿状态。
 
+### 合入后的恢复集成（2026-10-16）
+
+[#6396](https://github.com/loopx-project/loopx/pull/6396) 已在 2.0 tree 退役普通 legacy
+source writer，但不机械排除已安装旧二进制、global route 或 warm executor，也不
+解除本 RFC 的 activation hold。继续 [#5206](https://github.com/loopx-project/loopx/issues/5206)
+剩余 binding-owner 清单、commit fence 和外部 effect drain；复用已交付的 codec／
+source-session／quota owner，不从头重做。
+
+只将确实涉及的本地 profile 与完整恢复 M2/M3、[R5](loopx-overall-roadmap-v0.zh-CN.md#post-6396-delivery-plan)
+协调。Goal 生命周期、provider incarnation、执行／session generation 和 lease epoch
+仍是不同身份。由 Goal owner 冻结替代延续或新生命周期决定，再证明恢复后旧 A 不能
+写入、投递、扣额或结算同名 B。M4 孤儿处置保留 preview／backup／journal／retry
+边界；M5 只在本 profile 的 M2/M3 fence 通过后增加真实产品／peer 结果及原路返回。
+组件 fixture 可先于 activation，但不能认证它。已支持的普通创建／协作不等待全部
+服务 profile；本检查点不授予激活或恢复权限。
+
 ## 2. 问题与动机
 
 当前 `goal_id` 同时承担展示名称和持久身份。Goal 可能已从项目 registry

@@ -420,6 +420,7 @@ export function createEffectRuntimeHandlers(
     ["state.recovery.manifest.verify", lazyHandler(() => import("./state_recovery.ts"), ({verifyStateRecoveryManifest}) => verifyStateRecoveryManifest)],
     ["state.recovery.audit.readback", lazyHandler(() => import("./state_recovery.ts"), ({verifySavedStateRecoveryAudit}) => verifySavedStateRecoveryAudit)],
     ["coordination.sqlite_backup.snapshot", lazyHandler(() => import("./coordination/sqlite_backup.ts"), ({snapshotSqliteBackup}) => snapshotSqliteBackup)],
+    ["coordination.authority_backup.capture", lazyHandler(() => import("./coordination/authority_backup.ts"), ({captureAuthorityBackup}) => captureAuthorityBackup)],
     ["coordination.local_authority.new_goal_storage", lazyHandler(() => import("./coordination/local_authority_defaults.ts"), ({manageNewGoalStorage}) => manageNewGoalStorage)],
     ["coordination.local_authority.promotion_review", lazyHandler(() => Promise.all([import("./coordination/local_authority_runtime.ts"), import("./coordination/source_transfer.ts")]), ([{reviewLocalCoordinationAuthorityPromotion}, {withCoordinationSourceTransfer}]) => withCoordinationSourceTransfer("coordination.local_authority.promotion_review", reviewLocalCoordinationAuthorityPromotion))],
     ["coordination.local_authority.promotion_reviewed", lazyHandler(() => import("./coordination/local_authority_runtime.ts"), ({executeReviewedCoordinationPromotion}) => executeReviewedCoordinationPromotion)],
@@ -457,6 +458,10 @@ export function createEffectRuntimeHandlers(
     ["presentation.decision_notice.project", lazyHandler(() => import("./presentation/decision_notice.ts"), ({projectDecisionNotice}) => projectDecisionNotice)],
     ["presentation.decision_notice.validate_references", lazyHandler(() => import("./presentation/decision_notice.ts"), ({validateDecisionNoticeReferences}) => validateDecisionNoticeReferences)],
     ["presentation.goal_attention.project", lazyHandler(() => import("./presentation/goal_attention.ts"), ({projectGoalAttention}) => projectGoalAttention)],
+  ["presentation.owner_attention.plan", lazyHandler(() => import("./presentation/owner_attention.ts"), ({planOwnerAttention}) => planOwnerAttention)],
+  ["presentation.owner_attention.observe", lazyHandler(() => import("./presentation/owner_attention.ts"), ({observeOwnerAttention}) => observeOwnerAttention)],
+  ["presentation.owner_attention.health", lazyHandler(() => import("./presentation/owner_attention.ts"), ({ownerAttentionHealth}) => ownerAttentionHealth)],
+  ["presentation.owner_attention.references", lazyHandler(() => import("./presentation/owner_attention.ts"), ({ownerAttentionReferences}) => ownerAttentionReferences)],
     ["presentation.goal_attention.bound", lazyHandler(() => import("./presentation/goal_attention.ts"), ({boundGoalAttention}) => boundGoalAttention)],
     ["presentation.goal_attention.reconcile", lazyHandler(() => import("./presentation/goal_attention.ts"), ({reconcileGoalAttention}) => reconcileGoalAttention)],
     ["presentation.action_review_plan.compile", lazyHandler(() => import("./presentation/action_review_plan.ts"), ({compileActionReviewPlan}) => (params) =>

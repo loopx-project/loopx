@@ -153,6 +153,44 @@ worker planning workflow; do not overwrite the original receipt. This feature
 adds no periodic automation, forced wakeup, Todo priority or protected-operation
 permission. Existing private inbox records are retained when delivery is revoked.
 
+## Automatic owner task notifications
+
+An existing owner-only private steward can enable **Automatically notify new
+owner tasks** in Settings → Lark. This is an explicit, reversible notification
+setting; existing installations stay off until enabled. First enable baselines
+the current tasks without sending a historical burst. The ordinary steward
+service then discovers new and materially changed `user_action` / `user_gate`
+Todos in its current Goal scope, including subsequently registered Goals when
+the binding already authorizes all registered work. No Codex heartbeat, model
+Turn, hidden Goal, delegated worker or additional event consumer is involved.
+This notice grants no execution or decision authority and does not complete a
+Todo. Worker-result returns keep their separate existing delivery contract.
+
+Discovery reads every authorized Goal through the native Todo reader and
+restores exact source text before preparing a notice. A failed or incomplete
+read retains prior work; it cannot infer task removal. Completed, withdrawn,
+superseded or out-of-scope sources cancel unsent notices. A local typed planner
+owns subject identity, meaningful-content changes and reopening generations;
+this is a local notification journal, not another Todo authority.
+
+The existing four-worker outbound pool reserves at most one slot for bounded
+notification reconciliation only when a notification setting is enabled;
+the default-off path retains all four reply slots and performs no Todo scan.
+Each durable per-binding outbox has a process
+fence. Before each send, Core rechecks the exact steward, App, owner, current
+scope and original private-message provenance. Settings cannot supply another
+destination. A frozen intent precedes the provider write; the independent
+readback must match the exact message, App, private Chat and complete text.
+Restart recovers an existing locator by reading it. A create without a returned
+locator remains unconfirmed and is never blindly repeated; only a proven
+pre-spawn failure permits up to three bounded attempts. Oversized complete
+notices fail visibly instead of silently truncating decision terms.
+
+The setting and content-free pending/unconfirmed/failure health are read back
+in the same settings panel. Disable remains local even when provider auth is
+down, pauses delivery and retains all frozen receipts. Re-enable preserves
+those receipts and discovers changes since the previous successful snapshot.
+
 ## Scoped project conversations
 
 Local Goal Chat reuses this inbox and return path for members registered in that

@@ -14,7 +14,7 @@ from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_s
 ROOT = Path(__file__).resolve().parents[2]
 
 
-@pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="Native worktree host identity requires macOS or Linux")
+@pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="worktree lease fixture requires symlinks; Windows needs Developer Mode")
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_dependency_links_replay_and_recovery_preserve_real_lease_authority(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)

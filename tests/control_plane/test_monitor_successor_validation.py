@@ -48,7 +48,13 @@ def test_public_monitor_poll_accepts_repository_and_action_aliases(tmp_path):
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("explicit", [False, True])
-def test_monitor_priority_cli_and_readback(tmp_path, monkeypatch, provider, explicit):
+@pytest.mark.parametrize(("user_task_class", "default_user_priority"), [
+    ("user_action", "P1"),
+    ("user_gate", "P0"),
+])
+def test_monitor_priority_cli_and_readback(
+    tmp_path, monkeypatch, provider, explicit, user_task_class, default_user_priority,
+):
     from canonical_authority_fixture import isolate_sqlite_runtime
     from test_native_monitor_poll import _canonical
     from loopx.todos import update_goal_todo, list_goal_todos
@@ -62,10 +68,11 @@ def test_monitor_priority_cli_and_readback(tmp_path, monkeypatch, provider, expl
         "--agent-id", AGENT_ID, "--runtime-profile", "generic_cli",
         "--todo-id", monitor["todo_id"], "--result-hash", "priority-change", "--material-change",
         "--next-agent-todo", "Validate the transition", "--next-action-kind", "validate",
-        "--next-user-todo", "Review the result", "--next-user-task-class", "user_action",
+        "--next-user-todo", "Review the result", "--next-user-task-class", user_task_class,
         *flags, "--execute", registry_path=registry, runtime_root=runtime)
     writeback = result["todo_writeback"]
-    expected = {"agent": "P2", "user": "P3"} if explicit else {"agent": "P1", "user": "P1"}
+    expected = ({"agent": "P2", "user": "P3"} if explicit
+        else {"agent": "P1", "user": default_user_priority})
     for created, receipt in zip(writeback["next_todos"], writeback["successor_receipts"], strict=True):
         priority = expected[created["role"]]
         assert created["priority"] == receipt["priority"] == priority

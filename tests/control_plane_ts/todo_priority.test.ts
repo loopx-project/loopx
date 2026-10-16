@@ -77,6 +77,14 @@ test("canonical create defaults omission to P1, normalizes duplicates and respec
 
 test("creation defaults never override a declared prefix or explicit clearing", () => {
   assert.equal(planTodoCreationPriority({text: "Normal work"}).priority, "P1");
+  for (const intent of [
+    {text: "Owner decision", task_class: "user_gate"},
+    {text: "Route is blocked", task_class: "blocker"},
+    {text: "Waiting on a prerequisite", status: "blocked"},
+  ]) assert.equal(planTodoCreationPriority(intent).priority, "P0");
+  assert.equal(planTodoCreationPriority({
+    text: "Explicitly lower owner decision", task_class: "user_gate", priority: "P2",
+  }).priority, "P2");
   for (const priority of ["P0", "P1", "P2", "P3", "P4"]) {
     assert.equal(planTodoCreationPriority({text: "Normal work", priority}).priority, priority);
     assert.equal(planTodoCreationPriority({text: `[${priority}] Legacy work`}).priority, priority);

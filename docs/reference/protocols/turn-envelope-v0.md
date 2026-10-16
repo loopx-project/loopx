@@ -109,7 +109,8 @@ Turn ID. The returned Todo selection command retains the root and requested
 Other repair/replan guard commands still require the caller to retain those
 transport flags. A saved decision is not permission to skip revalidation.
 
-The heartbeat renderer can opt into the same transport:
+The heartbeat renderer can capture decisions while retaining its ordinary
+dispatcher and quota display:
 
 ```bash
 mkdir -m 700 ./private-decisions
@@ -118,13 +119,29 @@ loopx --format json heartbeat-prompt --thin --runtime-profile generic_cli \
   --decision-output-root ./private-decisions
 ```
 
-Execute its guard, read the short action/contract/writeback fields, and use
+Capture and display are independent. `--decision-output-root` saves complete
+decisions; `--decision-handoff-socket` optionally holds their output for a
+caller-owned checkpoint. Neither enables TurnEnvelope. This corrects the old
+renderer behavior where requesting capture also selected the short dispatcher.
+Existing capture callers that intentionally want the short view must now add
+`--turn-envelope` to `heartbeat-prompt`; the generated guard and thin regeneration
+command retain that explicit choice. Quota's existing explicit flag is unchanged.
+
+With that display opt-in, execute its guard, read the short action/contract/writeback fields, and use
 `detail_ref.full_decision` to read the **same invocation** when selection, replan,
 capability context or truncation requires detail. Replan history remains with the
 existing owner; this option neither invents another history store nor chooses a
 strategy. The renderer rejects full/compact/brief modes, missing Turn identity,
 native Goal-owned Turns and invalid roots. Stable bootstrap prompts cannot pin a
-Turn. Omit the capture option to return to the unchanged full-decision dispatcher.
+Turn. Omit `--turn-envelope` to use the ordinary dispatcher, including when
+checkpoint capture remains enabled. Captured files retain the full decision in
+both display modes.
+
+中文：捕获和模型输入投影独立。`--decision-output-root` 仅保存完整决策，
+`--decision-handoff-socket` 仅保留检查点交接；二者均不隐式开启 TurnEnvelope。
+此前捕获目录同时启用短包的行为已修正。需要短包的调用者须对
+`heartbeat-prompt` 显式传 `--turn-envelope`；省略该开关时仍使用普通输入，
+选择、结算、身份与完整私有捕获不变。旧运行的实际输入与设置不得追溯改写。
 
 This is Python filesystem/command transport under the existing quota/context
 owner, not a new capability or Python decision rule. The shared benchmark

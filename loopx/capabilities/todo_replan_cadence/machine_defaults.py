@@ -36,7 +36,7 @@ def normalize_replan_cadence_configuration(raw: Mapping[str, Any]) -> dict[str, 
             "count_unit": ReplanCadenceUnit.COMPLETED_TODOS.value,
             "count": normalize_completed_todo_replan_threshold(raw["completed_todos"]),
         }
-    if set(raw) not in ({"count_unit", "count"}, {"count_unit", "count", "stride_strategy"}):
+    if not {"count_unit", "count"} <= set(raw) or set(raw) - {"count_unit", "count", "stride_strategy", "planning_horizon_goal"}:
         raise ValueError("review cadence requires count_unit and count")
     try:
         unit = ReplanCadenceUnit(raw["count_unit"])
@@ -53,6 +53,10 @@ def normalize_replan_cadence_configuration(raw: Mapping[str, Any]) -> dict[str, 
     if "stride_strategy" in raw:
         from ...control_plane.work_items.stride_policy_codec import normalize_stride_strategy
         result["stride_strategy"] = normalize_stride_strategy(raw["stride_strategy"])
+    if "planning_horizon_goal" in raw:
+        if not isinstance(raw["planning_horizon_goal"], bool):
+            raise ValueError("planning_horizon_goal must be a boolean")
+        result["planning_horizon_goal"] = raw["planning_horizon_goal"]
     return result
 
 
@@ -74,6 +78,8 @@ def normalize_todo_replan_cadence_machine_defaults(
     expected = {"schema_version", "count_unit", "count"}
     if version == TODO_REPLAN_CADENCE_MACHINE_DEFAULTS_V2:
         expected.add("stride_strategy")
+        if "planning_horizon_goal" in raw:
+            expected.add("planning_horizon_goal")
     if set(raw) != expected:
         raise ValueError("review configuration fields do not match its schema version")
     return {
@@ -177,6 +183,8 @@ def apply_todo_replan_cadence_machine_default(
     profile[field] = cadence["count"]
     if "stride_strategy" not in profile and cadence.get("stride_strategy", "off") != "off":
         profile["stride_strategy"] = cadence["stride_strategy"]
+    if "planning_horizon_goal" not in profile and "planning_horizon_goal" in cadence:
+        profile["planning_horizon_goal"] = cadence["planning_horizon_goal"]
     projected["execution_profile"] = profile
     return projected
 

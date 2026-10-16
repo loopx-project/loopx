@@ -13,6 +13,7 @@ import {
 import { relationKey, todoRef, type PlanningInventoryRelation } from "./planning_relations.ts";
 
 import type { JsonObject } from "../effect_program.ts";
+import { projectCoreGoal } from "./replan_context.ts";
 
 export const PLANNING_HORIZON_SCHEMA_VERSION = "quota_planning_horizon_v0";
 export const PLANNING_HORIZON_REQUEST_SCHEMA_VERSION =
@@ -242,7 +243,8 @@ export function projectQuotaPlanningHorizon(value: unknown): JsonObject | null {
       item.todo_id !== selected.todo_id &&
       strategicContextStates.has(item.planning_state)
     );
-  if (!addsStrategicContext) {
+  const core = request.goal_facts === undefined ? null : projectCoreGoal(request.goal_facts);
+  if (!addsStrategicContext && core === null) {
     return null;
   }
   return {
@@ -251,6 +253,7 @@ export function projectQuotaPlanningHorizon(value: unknown): JsonObject | null {
     goal_id: goalId,
     agent_id: agentId,
     selected_todo_id: selected.todo_id,
+    ...(core === null ? {} : {core_goal: core}),
     selection_contract: {
       selected_todo_authority: "$.selected_todo",
       action_choice_authority: "$.action_portfolio",

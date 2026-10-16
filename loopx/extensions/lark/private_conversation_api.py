@@ -49,6 +49,8 @@ class PrivateConversationRequestMixin:
                 for item in bindings.agent_candidates(row["binding_id"])],
              "agent_targets": row.get("agent_targets", []),
              "listener_status": self._private_listener_status(row["transport_ref"], health),
+             **({"owner_attention": self.server.lark_private_conversations.owner_attention.health(row["binding_id"])}
+                if row["context_kind"] == "steward" and row.get("audience", "owner") == "owner" else {}),
              **deliveries.get(row["binding_id"], {"pending_count": 0, "recovery_count": 0})}
             for row in current["bindings"]],
             "stop_recoveries": [{**row,
@@ -126,5 +128,17 @@ class PrivateConversationRequestMixin:
                 session_id=body.get("session_id"), target_ref=body.get("target_ref"))
         except (ValueError, OSError, KeyError, StopIteration) as exc:
             self._send_error(str(exc), status=400)
+            return
+        self._private_conversations()
+
+    def _private_conversation_owner_notifications(self) -> None:
+        try:
+            body = self._read_json()
+            if set(body) != {"binding_id", "binding_revision", "revision", "enabled"}:
+                raise ValueError("select the current private steward notification setting")
+            self.server.lark_private_conversations.owner_attention.configure(**body)
+        except (ValueError, OSError, KeyError, TypeError, RuntimeError):
+            # Source/provider errors may contain private paths or credentials.
+            self._send_error("Notification settings could not be changed. Refresh the connection and verify the original private Chat.", status=400)
             return
         self._private_conversations()

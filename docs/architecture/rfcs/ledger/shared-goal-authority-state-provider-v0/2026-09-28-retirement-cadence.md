@@ -1,31 +1,37 @@
 # Local authority: retirement cadence after integration
 
-- Current candidate checkpoint: October 15, 2026, #6396 at `5d29213d3`; historical 1.x plan: October 7, 2026, `06b6caa07`; historical audit: `ce3862e33`; adoption follow-up: `71525ab90`, September 28, 2026; [中文](2026-09-28-retirement-cadence.zh-CN.md).
+- Current implementation checkpoint: October 16, 2026, #6396 landed at `a4483aaec`; historical 1.x plan: October 7, 2026, `06b6caa07`; historical audit: `ce3862e33`; adoption follow-up: `71525ab90`, September 28, 2026; [中文](2026-09-28-retirement-cadence.zh-CN.md).
 - Owners: overall roadmap R3/R4/R5/R6; shared authority D1–D3; TS migration T0–T4.
 - This replaces the **current inventory/estimates** in the September 27 recovery
   and Host-supervision ledgers, not their historical validation results.
 
 <a id="current-candidate-checkpoint"></a>
 
-## Current candidate checkpoint (2026-10-15)
+## Current implementation checkpoint (2026-10-16)
 
-The C1/T4 deletion package is implemented in contributor-led
-[#6396](https://github.com/loopx-project/loopx/pull/6396) at reviewed head
-`5d29213d3`, including the fork supplements and
-[absorbed #6366 obligations](../../../../reference/local-authority-provider-selection.md#retirement-proposal-reconciliation).
-This is an open 2.0 candidate, not the released additive 1.x baseline.
+Contributor-led [#6396](https://github.com/loopx-project/loopx/pull/6396) landed
+at `a4483aaec`, with the same complete tree as final PR head `404433aee`.
+The C1/T4 deletion package includes fork supplements, the native Core-version
+repair and [absorbed #6366 obligations](../../../../reference/local-authority-provider-selection.md#retirement-proposal-reconciliation).
+The compatible 1.4.2 release preceded it; the 2.0 cutoff is now on main, not a
+released-default or complete-adoption claim.
 
-| Boundary | Candidate fact | Remaining work / retained obligation |
+| Boundary | Landed fact | Remaining work / retained obligation |
 | --- | --- | --- |
-| Ordinary Markdown mutation and capture producers | Obsolete writer implementations, including `todos/legacy_mutation.py`, `todos/line_update.py` and `runtime_shadow_writer_adapter.py`, are absent. Canonical creation/mutation, team-plan, Monitor and lease callers use existing typed owners. | Integrate and qualify the adopted source; do not create another writer-deletion task from the historical table. Keep permanent document/display IO and supported import/recovery. |
-| Ownership policy | Fresh execution/configuration targets are `soft_claim` / `hard_lease`; typed runtime admission and proof inspection reject live `legacy` execution. | Historical three-value decoding, original receipts, exact release and reviewed backed-up policy migration remain. Qualify real installed migration and affected Host/App consumers separately. |
-| Source and outbox recovery | Normal producer retirement does not erase prepared/committed history. | Preserve original receipt/cursor recovery and reconcile or explicitly disposition outstanding outboxes before removing their readers. Storage conversion does not complete ownership migration. |
-| Adoption and release | Exact-head review and selected combined-tree validation are recorded with source revisions in the PR. | The reversible core-developer trial, natural Host use, Goal-instance lifetime/recovery and formal D2/D3/default evidence keep their existing owners and open exits. Retain failed/missing rows; mocks, elapsed mixed-version use or a PR merge cannot replace them. |
+| Ordinary Markdown mutation and capture producers | Obsolete writers and ordinary producers are removed; canonical creation/mutation, team-plan, Monitor and lease callers reuse existing typed owners. | Qualify final-main installed callers; do not repeat this deletion family. Keep permanent document IO and supported import/recovery. |
+| Ownership and historical recovery | Fresh execution/configuration accepts soft/hard; historical legacy codecs, exact release and original receipts remain. | Exercise affected installed Host/App paths, stale proofs, expired-but-unreleased leases and later-write preservation. Storage conversion is not lifetime adoption. |
+| Final combination | The post-#7 source and its installed repair have explicit tree/source mappings; later main merges match automatic trees and include #6597. | [Executed evidence](https://github.com/loopx-project/loopx/pull/6396#issuecomment-6208115093) stays pinned to its revisions. Graph equivalence and merge status do not certify an unexecuted final combination. |
+| Full backup and identity | M1 inert verification/readback exists; source/import history stays readable. | Existing complete-recovery M2/M3 and #5206 own capture consistency, lifetime/old-writer/effect drain and controlled adoption. Pending outboxes keep original receipt/cursor/disposition owners. |
+| Sustained/default qualification | New-Goal SQLite/hard-lease selection exists in source. | D2 retains formal volume/elapsed failures and missing rows; D3 and shared-authority 7.2 decide cohort versus released default separately. No cohort or soak starts here. |
 
-Use this table and the [TS current frontier](../../typescript-control-plane-migration-v0.md#current-delivery-frontier-2026-10-02)
-for new work. The dated records below preserve their original source-specific
-measurements and dependency decisions; claims that old writers are reachable
-refer to those earlier baselines and must not regenerate completed candidate work.
+Use [R5's post-merge sequence](../../loopx-overall-roadmap-v0.md#post-6396-delivery-plan)
+and the [TS current frontier](../../typescript-control-plane-migration-v0.md#current-delivery-frontier-2026-10-02)
+for new work. The dated records below retain their original measurements and
+dependency judgments. Statements that ordinary source writers are reachable
+refer to their older baselines, not unfinished implementation on current main.
+Retire further adapters only with actual last-caller/compatibility evidence;
+historical recovery and provider/OS IO are not unused merely because writer
+retirement landed.
 
 ## Historical reconciled baseline
 

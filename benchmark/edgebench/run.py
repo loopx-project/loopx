@@ -29,7 +29,6 @@ from benchmark.runtime.sforge_backend import RecordingDockerBackend
 from benchmark.runtime.source import source_pins
 from benchmark.edgebench.prompts import (
     blind_task_prompt, best_only_task_prompt, native_task_prompt, native_task_instructions,
-    native_task_objective,
 )
 from benchmark.edgebench.online_sampling import OnlineSampler
 from benchmark.edgebench.feedback import BestOnlyFeedback, FEEDBACK_MODES, validate_best_only
@@ -121,6 +120,8 @@ def main(argv=None):
                          help="Heartbeat default: 6 settled effective work Turns")
     cadence.add_argument("--replan-after-todos", type=int, choices=range(1, 6),
                          help="Explicit completed-Todo cadence ablation for heartbeat profiles")
+    parser.add_argument("--planning-horizon-goal", action=argparse.BooleanOptionalAction, default=None,
+                        help="Opt-in full Goal in preselection horizon; --no-planning-horizon-goal explicitly disables it")
     parser.add_argument("--stride-strategy", choices=stride_strategy_options(),
                         help="Explicit heartbeat Goal-review strategy; omitted keeps the ordinary off treatment")
     parser.add_argument("--checkpoint-controller-file", type=Path,
@@ -169,6 +170,8 @@ def main(argv=None):
         parser.error("Replan cadence requires a heartbeat worker")
     if args.stride_strategy is not None and not args.worker.startswith("heartbeat-"):
         parser.error("--stride-strategy requires a heartbeat worker")
+    if args.planning_horizon_goal is not None and not args.worker.startswith("heartbeat-"):
+        parser.error("--planning-horizon-goal requires a heartbeat worker")
     checkpoint_request = None
     if args.checkpoint_request is not None:
         if not args.worker.startswith("heartbeat-"):
@@ -233,7 +236,7 @@ def main(argv=None):
             selection=task.judge.selection, score_direction=task.judge.score_direction)
         feedback_prompt = native_task_prompt(task.work.agent_query, task.submit_paths, **native_policy)
         workspace_instructions = native_task_instructions(task.submit_paths, **native_policy)
-        task_objective = native_task_objective()
+        task_objective = task.work.agent_query
     config = SForgeConfig(
         agent_api_base_url=api_base_url, agent_api_key=api_key,
         agent_model=args.model, agent_effort=args.effort,
@@ -277,6 +280,7 @@ def main(argv=None):
                          native_goal_continue=args.native_goal_continue,
                          replan_after_turns=args.replan_after_turns,
                          replan_after_todos=args.replan_after_todos,
+                         planning_horizon_goal=args.planning_horizon_goal,
                          **({"stride_strategy": args.stride_strategy}
                             if args.stride_strategy is not None else {}),
                          **({"checkpoint_request": checkpoint_request}
@@ -330,9 +334,7 @@ def main(argv=None):
            if agent.task_entry == "loopx-planned" else {}),
         "model": args.model, "effort": args.effort, "timeout_seconds": args.timeout,
         "loopx_commit": pins[0], "runner_commit": pins[1],
-        **turn_envelope_receipt(explicit=args.turn_envelope,
-            mode="heartbeat" if args.worker.startswith("heartbeat-") else "plain",
-            checkpoint_request=declaration if checkpoint_request is not None else None),
+        **turn_envelope_receipt(explicit=args.turn_envelope),
         **({"native_goal_continue": True} if args.native_goal_continue else {}),
         "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
         "feedback": args.feedback, "internet": task.internet,
@@ -353,6 +355,8 @@ def main(argv=None):
            if agent.replan_after_turns is not None else {}),
         **({"replan_after_completed_todos": agent.replan_after_todos}
            if agent.replan_after_todos is not None else {}),
+        **({"planning_horizon_goal": args.planning_horizon_goal}
+           if args.planning_horizon_goal is not None else {}),
         **({"stride_strategy": args.stride_strategy}
            if args.stride_strategy is not None else {}),
         **({"checkpoint_request_sha256": hashlib.sha256(checkpoint_request).hexdigest()}

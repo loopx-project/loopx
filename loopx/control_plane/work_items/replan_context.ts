@@ -81,17 +81,17 @@ function repeatedAccounting(rows: JsonObject[]): Map<JsonObject, JsonObject> {
   return repeated;
 }
 
-function publicEvidenceRow(row: JsonObject): JsonObject {
-  const {observed_at: _time, _source_facts: _source, ...publicRow} = row;
-  return publicRow;
+function readableEvidenceRow(row: JsonObject): JsonObject {
+  const {observed_at: _time, _source_facts: _source, ...readableRow} = row;
+  return readableRow;
 }
 
 function evidenceFactsKey(row: JsonObject): string {
-  const {generated_at: _time, evidence_ref: _ref, ...facts} = publicEvidenceRow(row);
+  const {generated_at: _time, evidence_ref: _ref, ...facts} = readableEvidenceRow(row);
   return digest(facts);
 }
 
-function coreGoal(value: unknown): JsonObject {
+export function projectCoreGoal(value: unknown): JsonObject {
   const facts = value == null ? {} : requireJsonObject(value, "goal_facts");
   const active = facts.active_state_objective;
   const registered = facts.registry_objective;
@@ -102,7 +102,10 @@ function coreGoal(value: unknown): JsonObject {
   const acceptance = facts.acceptance_contract == null ? null
     : requireJsonObject(facts.acceptance_contract, "goal_acceptance_contract");
   return {objective, objective_source: active ? "active_state" : registered ? "registry" : null,
-    objective_missing: objective === null, acceptance_contract: acceptance};
+    objective_missing: objective === null, acceptance_contract: acceptance,
+    ...(facts.goal_read_action == null ? {} : {
+      read_action: requireNonEmptyString(facts.goal_read_action, "goal_facts.goal_read_action"),
+    })};
 }
 
 /** Qualify recorded bindings using the settlement owner, without settling work.
@@ -156,7 +159,7 @@ function recordedDecision(row: JsonObject): JsonObject | null {
   try { stride = normalizeRecordedStrideDecision(objectOrNull(source.agent_vision)?.stride_decision); }
   catch { return null; }
   const autonomous = objectOrNull(source.settlement_identity)?.schema_version === SCOPED_SETTLEMENT_IDENTITY_SCHEMA_VERSION;
-  const decision = {history_evidence_ref: "replan-evidence-" + digest(publicEvidenceRow(row)),
+  const decision = {history_evidence_ref: "replan-evidence-" + digest(readableEvidenceRow(row)),
     generated_at: row.generated_at, todo_id: autonomous ? null : row.todo_id, turn_instance_id: source.turn_instance_id,
     ...(autonomous ? {replan_obligation_id: source.replan_obligation_id} : {}),
     goal_ref: ref ? {goal_id: ref.goal_id, goal_instance_id: ref.goal_instance_id} : null,
@@ -203,7 +206,7 @@ function decisionFollowthrough(rows: JsonObject[], goalFacts: unknown, fromFullI
       !Number.isSafeInteger(objectOrNull(row._source_facts)?.history_position)).length,
     recorded_progress_count: observations.length,
     observations: observations.slice(0, 6).map(row => ({
-      evidence_ref: "replan-evidence-" + digest(publicEvidenceRow(row)),
+      evidence_ref: "replan-evidence-" + digest(readableEvidenceRow(row)),
       generated_at: row.generated_at, todo_id: row.todo_id,
       coverage_ref: (row.progress_observation as JsonObject).fingerprint,
     })),
@@ -299,12 +302,12 @@ export function projectReplanContext(value: unknown): JsonObject {
     }
   }
   rows.sort((a, b) => Number(b.observed_at) - Number(a.observed_at) ||
-    JSON.stringify(publicEvidenceRow(a)).localeCompare(JSON.stringify(publicEvidenceRow(b))));
+    JSON.stringify(readableEvidenceRow(a)).localeCompare(JSON.stringify(readableEvidenceRow(b))));
   const unique = new Map<string, JsonObject>();
   for (const row of rows) {
-    const publicRow = publicEvidenceRow(row);
-    const ref = "replan-evidence-" + digest(publicRow);
-    if (!unique.has(ref)) unique.set(ref, {...publicRow, evidence_ref: ref});
+    const readableRow = readableEvidenceRow(row);
+    const ref = "replan-evidence-" + digest(readableRow);
+    if (!unique.has(ref)) unique.set(ref, {...readableRow, evidence_ref: ref});
   }
   const evidence = [...unique.values()];
   if (request.operation === "resolve") {
@@ -388,7 +391,7 @@ export function projectReplanContext(value: unknown): JsonObject {
   const selectedCoverage = new Set(chosen.flatMap(({row}) => row.progress_observation
     ? [String((row.progress_observation as JsonObject).fingerprint)] : []));
   const ledger = [...coverage].filter(([key]) => selectedCoverage.has(key)).map(([, value]) => value);
-  const core = coreGoal(request.goal_facts);
+  const core = projectCoreGoal(request.goal_facts);
   const strideStrategy = normalizeStrideStrategy(request.stride_strategy);
   const exploreBasis = strideStrategy !== "off" ? projectStrideExploreBasis(request.explore_context, goal, agent) : null;
   const followthrough = agent && strideStrategy !== "off"

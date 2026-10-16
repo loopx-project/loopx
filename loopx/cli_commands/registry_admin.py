@@ -452,6 +452,8 @@ def handle_registry_admin_command(
                 execution_turn_granularity=args.execution_turn_granularity,
                 execution_replan_after_todos=args.execution_replan_after_todos,
                 execution_replan_after_turns=args.execution_replan_after_turns,
+                execution_planning_horizon_goal=args.execution_planning_horizon_goal,
+                clear_execution_planning_horizon_goal=args.clear_execution_planning_horizon_goal,
                 execution_stride_strategy=args.execution_stride_strategy,
                 clear_execution_stride_strategy=args.clear_execution_stride_strategy,
                 clear_execution_replan_after_turns=args.clear_execution_replan_after_turns,

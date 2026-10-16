@@ -56,10 +56,56 @@ paths outside conventional Goal directories. Relative routes resolve against
 the registered repository. The selected project's `.loopx/registry.json` owns
 this scope, even when `--registry` names another project. Other projects are not
 followed; default host-wide discovery continues to use the global registry.
+For global discovery, the existing canonical source route owns the Goal: relative
+`source_registry` values resolve against the global registry's parent, and the
+source registry supplies the current repository, full `state_file` and declared
+`common_runtime_root`. Distinct source runtimes are captured once and shared by
+their Goals. Review the dry-run paths before execution: this can include more
+private state than the shared runtime alone. An unavailable source or an
+undeclared external runtime remains missing; discovery does not copy an implicit
+host-wide default to fill that gap.
+
 Inspect `included`, `missing` and `warnings`: successful publication alone does
 not prove every registered source was reachable. Full-state copies retain raw
 Markdown history and runtime files; inert extraction does not import their
 leases, pending effects or historical receipts as new execution authority.
+
+Discovery uses the same registry reader as configuration capture. Legacy project
+objects and valid strict-v1 project envelopes both retain their declared external
+routes and the original registry bytes. A readable envelope's minimum writer
+protocol does not authorize a writer: backup only preserves data. Invalid
+envelopes and lifecycle-only `source_session_v1` project registries still refuse
+publication; global discovery registries remain object-only. This does not
+qualify lifecycle journals for capture or change the v0 consistency and recovery
+holds below.
+
+New v0 archives record `registry_discovery.goal_runtime_roots` as archive-relative
+capture bindings. Inert owner inspection reads each Goal from its captured source
+root. An absent Goal binding, an explicit null, a missing directory or a symlink
+root remains unknown; another runtime's same-named Goal is not a substitute.
+Bindings must name safe included roots. Historical archives without the entire
+binding map retain their original `runtime-root` readback. The map records capture
+location, not cross-owner consistency, complete owner coverage or activation
+eligibility.
+
+中文：状态发现与配置捕获复用同一个 registry reader；旧对象格式及有效 strict-v1
+项目信封均保存声明的外置路径及原始 registry 字节。可读信封的最低 writer 协议
+不授予写入权，备份只保留数据。无效信封和仅供生命周期操作的 `source_session_v1`
+项目仍拒绝发布，global registry 仍只接受对象。这不代表已完成生命周期日志捕获
+资格，也不改变下文 v0 的一致性限制与恢复 hold。
+
+全局发现沿用 canonical source 路由：相对 `source_registry` 以 global registry
+父目录为基准，当前仓库、完整 `state_file` 与显式 `common_runtime_root` 均来自
+源 registry；多个 Goal 共用的 runtime 只捕获一次。执行前检查 dry-run 路径，
+捕获范围可能比共享 runtime 更大，并包含私有状态。源不可达或外部 runtime 未声明
+时保留缺失，不擅自复制隐式主机默认目录。`--current-project-only` 仍保留所选
+runtime 及以注册仓库为基准的历史相对路径规则。
+
+新 v0 清单的 `registry_discovery.goal_runtime_roots` 只记录归档内的源位置，隔离
+读回按此定位；缺少 Goal 条目、null、目录缺失或根目录是符号链接均为 unknown，
+不能拿另一 runtime 的同名 Goal 代替。绑定必须指向安全且已列入清单的根路径。
+完全不含此映射的旧归档继续按 `runtime-root` 读回。映射不证明跨 owner 一致性、
+owner 完整覆盖或可激活性。
 
 Settings → Capability Center → **Configuration backup and recovery** offers
 download, file verification and isolated recovery through the same typed owner.
@@ -133,6 +179,90 @@ writers. A reviewed cold import still needs complete source discovery, writer
 and Host quiescence, lease/outbox disposition, immutable source/target binding,
 explicit confirmation and original-operation recovery. Neither this manifest
 nor configuration verification authorizes an import or a new execution grant.
+
+Full backups also compare the registry and stored machine-configuration bytes
+actually decoded into `configuration-backup.json` with every mapped regular tar
+copy. Missing witnesses or different bytes refuse publication; an owner-confirmed
+absence also refuses when the archive contains that source's earlier file.
+A revision mismatch reports
+`backup configuration source differs from copied bytes; retry the backup`.
+This tightens the earlier best-effort behavior that could publish older raw
+configuration beside a newer checkpoint, or claim absence beside an earlier
+file. Self-contained local aliases resolve through saved tar metadata to an
+included regular target witness; repointing a live symlink cannot select another
+saved target. A retained tar link also prevents a false absence. A later
+source-path reread cannot replace the snapshot witness: an
+A → B → A change must still be caught when the checkpoint used B. A malformed
+or unreadable machine source is not a confirmed absence. Unchanged sources
+retain the same configuration envelope and v0 archive format. The bounded
+migration backup keeps its existing source-owner witness contract. Older
+archives remain readable under the existing recovery holds.
+
+The private `execution.configuration_capture` records the configuration capture
+interval and matching member revisions, including routed registries and the
+stored machine configuration when present. These are configuration-owner IO
+facts; they do not establish a common point in time with authority, effects or
+other owners, or qualify the M2 `online` profile.
+
+中文：完整备份将配置 owner 实际解码的 registry 与 machine 配置字节，同每份
+映射的普通 tar 副本比较。缺少见证或字节不同就停止发布；owner 确认源不存在而
+归档仍保留其旧文件，也会拒绝。原先可能发布“旧原始配置 + 新 checkpoint”或把
+旧文件误作不存在的 best-effort 行为因此收紧。自包含链接复用归档内普通目标文件：
+硬链接与符号链接只按保存的 tar route 解析，live 链接改向不能重选别的见证；保留的
+tar 链接也不能
+被误判为不存在。比较的不是事后重读路径，所以配置
+使用 B 后即使源回退为 A 仍会拒绝。损坏或不可读的 machine 源不当作确认不存在。
+未变化来源、v0 格式和历史归档读回保持兼容；有界 migration backup 仍使用原
+source owner 的见证契约。私有 `execution.configuration_capture` 记录配置捕获
+区间与匹配成员 revision，包括外部 registry 和存在的 machine 配置；它不证明
+与 authority、effect 等其他 owner 的跨源同时刻，也不代表 M2 `online` 合格。
+
+New full-backup plans also bind the registry bytes used to discover documents,
+source runtimes and lifecycle journals. The private
+`registry_discovery.source_capture` freezes their read interval, hashes and
+archive routes; publication checks those hashes against the saved members.
+Changing a declaration after planning now reports
+`backup discovery source differs from copied bytes; retry the backup` instead of
+saving old dependencies beside a new registry. Rebuild the plan and retry with
+fresh output names. Any registry byte change can require a retry, including
+unrelated metadata. Routing and configuration decoding reuse the same immutable
+registry reads. Historical plans without this evidence remain readable, and
+migration-only backups retain their existing contract. This IO agreement does
+not freeze document contents or establish a complete recovery-set profile.
+
+中文：新完整备份计划还绑定发现文档、源 runtime 和生命周期日志时实际读取的
+registry 字节。私有 `registry_discovery.source_capture` 固定读取区间、哈希与
+归档路径，并在发布前核对已保存成员。计划后声明改变会拒绝发布，避免保存
+“旧依赖 + 新 registry”；应重新规划并以新输出名称重试。任意 registry 字节变化
+（包括无关 metadata）都可能要求重试；路由与配置解码复用同一不可变读取。
+历史计划和迁移专用备份保持原契约。这不冻结文档内容，也不使完整恢复集合格。
+
+Full-backup discovery also retains declared local `authority_sources` entries
+with `kind=goal_doc`, including documents outside conventional state directories.
+The existing material resolver confines reads to the selected Goal's repository,
+state and runtime roots; a missing or out-of-scope document is reported in the
+private missing-source inventory. A directory is not treated as a document.
+Global discovery uses the actual source-owned Goal declarations, not the cached
+shared row. Hash-only registrations and links inside document text are not
+permission to discover more files.
+
+For a registered Goal, discovery also retains existing registration, recreation
+and Turn-settlement directories beside its actual registry. The same lifetime
+path helpers are used by their existing writers. Discovery scopes these paths
+by Goal identity, does not sweep the sibling lifetime root or initialize absent
+state, and does not resume any restored journal. Full archives can consequently
+contain additional private source bytes; the migration-only backup is unchanged.
+These are raw, individually witnessed historical files. They establish neither
+an owner export, a consistent capture profile nor permission to reactivate.
+
+中文：完整备份新增保留已声明的本地 `kind=goal_doc` 文档，以及实际 registry
+旁按 Goal 身份定位的注册、重建和 Turn-settlement 目录。文档沿用既有材料解析器
+的 repo/state/runtime 读取边界；缺失或越界文档进入私有 missing 清单，目录不被
+当作文档。全局发现使用真实 source-owned Goal，不采用共享缓存行的材料声明；
+不会从哈希引用或正文链接继续抓取。生命周期目录复用实际 writer 的路径 owner，
+不扫描整个相邻目录，不创建不存在的状态，也不执行恢复日志。因此完整归档可能
+包含更多私有原始字节；有界 migration 备份不变。这些仍是各自见证的历史文件，
+不证明 owner export、一致性 profile 或再激活权限。
 
 ## Full-state recovery after cold import
 
@@ -214,14 +344,29 @@ pending external operation is resumed. This is the M1 inspection path in the
 [complete recovery RFC](../architecture/rfcs/complete-state-recovery-v0.md),
 not controlled reactivation.
 
-The following public synthetic scene uses a built wheel and the real File
-backend. Before this change, the entry only restored configuration snapshots.
-The new path reads the saved Goal work after its original source was removed;
-it does not register that Goal. The phone view is explicitly a historical report.
+Readable File/SQLite Goal components retain the `provider_revision` and `cursor`
+read from the captured authority after its complete head/history check. The JSON
+audit, CLI summary and the packaged view's existing **Verification details** show
+that historical checkpoint, even when the original source is unavailable or has
+later commits. Saved-report readback preserves the recorded position; older
+reports without it keep the checkpoint unknown. These are positions in the saved
+component, not producer capture intervals, a shared consistency point or current
+execution authority. Other owners and M2/M3 qualification remain unchanged.
+
+中文：可读 File/SQLite Goal 的报告保留隔离副本实际读取的存储版本和游标，
+可在 JSON、CLI 和原有“核对信息”中核对。来源之后的新提交不会成为这份备份的
+恢复位置；历史报告重读保留原值，旧报告缺少该信息时仍为未知。这只标识保存组件的
+历史检查点，不证明跨 owner 捕获一致性，也不授予继续执行的权限。
+
+These public synthetic scenes use the existing offline owners after source
+loss. The configuration and phone references use a built wheel and real File
+backend; the current desktop checkpoint view uses the packaged bundle and real
+SQLite backend. None registers the saved Goal. The phone view is explicitly a
+historical report, and checkpoint identifiers stay behind Verification details.
 
 | Before: configuration only | Inert full-archive inspection | Phone historical readback |
 | --- | --- | --- |
-| ![Configuration-only entry](images/state-recovery/before-configuration.png) | ![Inert backup audit](images/state-recovery/inert-audit-desktop.png) | ![Historical audit on phone](images/state-recovery/historical-audit-phone.png) |
+| ![Configuration-only entry](images/state-recovery/before-configuration.png) | ![Inert backup audit with its captured checkpoint](images/state-recovery/authority-checkpoint.png) | ![Historical audit on phone](images/state-recovery/historical-audit-phone.png) |
 
 Use **Previous inspections** after reloading to read the saved, digest-checked
 report. A historical report describes its recorded observation time; reading it
@@ -283,6 +428,52 @@ transport. These unchanged bounds are approved for local POSIX File/SQLite
 inert inspection by the [recorded maintainer decision](../architecture/rfcs/complete-state-recovery-v0.md#m1-capacity-default-decision).
 Compound worst cases and broader platforms/providers remain unqualified; no
 production SLO or merge authority follows from capacity consent.
+
+### Native authority capture in new full backups
+
+Ordinary full backups now also call the existing authority archive owner for
+each configuration-selected local Goal. The private `execution.authority_captures`
+rows bind the configuration checkpoint digest and captured runtime route to an
+actual capture interval, provider/store identity, revision, cursor and native
+history export. Selector and writer-fence bytes, including confirmed absence,
+travel beside that export with their byte digests. Missing authority is not
+initialized; a dependency or store-lineage change during export leaves that
+Goal's capture unknown. Ordinary concurrent appends may continue: the archive
+owner verifies the complete retained prefix at its captured cursor.
+
+Inspection prefers this owner export when the new rows are present. It verifies
+the full transition/receipt chain and reads the Goal/Todo model through the
+existing typed owners. A damaged or missing native capture stays unknown even
+when the earlier raw store copy is readable. An independent valid native export
+can remain readable when a raw database is unreadable; that database still has
+its own unknown storage finding and is never queried through restored views.
+Older v0 archives without these rows retain their existing raw-store inspection.
+Explicit migration-only backups keep their existing capture contract.
+
+After inert verification, the native artifact is at the row's `archive_path`
+under the new destination's `data/`. Its `archive.archive_sha256` is the native
+archive's chained seal, **not** the file byte checksum. Existing
+`authority-archive verify`, `restore` and `audit` can independently verify,
+restore to a new standalone store, and check every original receipt. Those
+operations grant no Goal, lease, session or effect admission; follow the
+[existing recovery contracts](../architecture/rfcs/complete-state-recovery-v0.md#relationship-to-existing-recovery-contracts)
+and owner cutover rules before live use.
+
+The additional logical export preserves the raw safety copy and consumes the
+same unchanged archive, history and verifier budgets. It is not a shared epoch
+with configuration, quota, session, scheduler, material or external-effect
+owners. Every audit remains `held` / `legacy_best_effort`; M2 profile
+qualification and M3 activation remain open. Rollback is to the earlier producer
+for future backups; already-created artifacts remain private inert data.
+
+新完整备份会通过既有 authority owner 保存各 Goal 的完整历史前缀，并绑定配置摘要、
+来源 runtime、实际捕获区间、provider/store 身份、revision、cursor，以及 selector 和
+writer fence 的原始字节或确认不存在。并发追加可继续；捕获中依赖或存储身份变化、
+来源缺失时保持 unknown，不会初始化来源。新格式优先检查原生导出，损坏时不会用较早
+的 raw copy 冒充成功；旧 v0 和专用迁移备份保留原有规则。导出可由现有
+`authority-archive verify` / `restore` / `audit` 独立核验和恢复到全新隔离 store，
+不会激活 Goal、租约、会话或外部操作。额外历史占用原有容量预算；跨 owner 一致性、
+M2 完整资格和 M3 执行准入仍未完成，报告继续保持 held。
 
 ### Choosing backup inspection or a research checkpoint
 

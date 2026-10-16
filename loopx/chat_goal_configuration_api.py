@@ -195,7 +195,7 @@ def _goal_capability_options(
         if capability_id == "periodic_report":
             return {"clear_periodic_report_configuration": True}
         if capability_id == "todo_replan_cadence":
-            return {"clear_execution_replan_after_todos": True, "clear_execution_replan_after_turns": True, "clear_execution_stride_strategy": True}
+            return {"clear_execution_replan_after_todos": True, "clear_execution_replan_after_turns": True, "clear_execution_stride_strategy": True, "clear_execution_planning_horizon_goal": True}
         if capability_id == "pull_request_review":
             return {"clear_pull_request_review_configuration": True}
         if capability_id == "change_quality_qualification":
@@ -208,7 +208,7 @@ def _goal_capability_options(
     config = dict(configuration)
     allowed: dict[str, set[str]] = {
         "goal_capability_organization": {"mode", "discovery_budget_minutes", "max_trials"},
-        "todo_replan_cadence": {"completed_todos", "count_unit", "count", "stride_strategy"},
+        "todo_replan_cadence": {"completed_todos", "count_unit", "count", "stride_strategy", "planning_horizon_goal"},
         "multi_subagent": {
             "enabled",
             "max_children",
@@ -244,19 +244,26 @@ def _goal_capability_options(
     if capability_id == "todo_replan_cadence":
         from .capabilities.todo_replan_cadence.machine_defaults import normalize_replan_cadence_configuration
         from .control_plane.work_items.stride_policy_codec import normalize_stride_strategy
-        if set(config) == {"stride_strategy"}:
+        horizon = {"clear_execution_planning_horizon_goal": True}
+        if "planning_horizon_goal" in config:
+            if not isinstance(config["planning_horizon_goal"], bool):
+                raise ValueError("planning_horizon_goal must be a boolean")
+            horizon = {"execution_planning_horizon_goal": config["planning_horizon_goal"]}
+        if config and set(config) <= {"stride_strategy", "planning_horizon_goal"}:
             # The capability editor submits the complete sparse value. Unlike
             # the CLI's single-field strategy patch, omission restores live
             # interval inheritance even when this Goal was previously pinned.
             return {
-                "execution_stride_strategy": normalize_stride_strategy(config["stride_strategy"]),
+                **horizon,
+                **({"execution_stride_strategy": normalize_stride_strategy(config["stride_strategy"])}
+                   if "stride_strategy" in config else {}),
                 "clear_execution_replan_after_turns": True,
                 "clear_execution_replan_after_todos": True,
             }
         cadence = normalize_replan_cadence_configuration(config)
         option = ("execution_replan_after_turns" if cadence["count_unit"] == "effective_turns"
                   else "execution_replan_after_todos")
-        return {option: cadence["count"], **({"execution_stride_strategy": cadence["stride_strategy"]}
+        return {option: cadence["count"], **horizon, **({"execution_stride_strategy": cadence["stride_strategy"]}
             if "stride_strategy" in cadence else {})}
     if capability_id == "periodic_report":
         return {"periodic_report_configuration": config}

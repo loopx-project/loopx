@@ -810,6 +810,8 @@ def _planning_projections(
         capability_gate=prepared.capability_gate,
         blocked_priority_fallback=prepared.blocked_priority_fallback,
         goal_frontier_projection=prepared.goal_frontier_projection,
+        source_status=prepared.status_payload,
+        planning_horizon_goal=(prepared.project_asset.get("execution_profile") or {}).get("planning_horizon_goal", False),
         replan_selection_context=(
             {
                 "has_turn_identity": bool(turn_instance_id),

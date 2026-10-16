@@ -379,8 +379,8 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
             </p> : null}
             {selected.effective_value_policy === "goal_stride_over_live_review_cadence" ? <p>
               {locale === "zh-CN"
-                ? `复盘周期沿用${selected.machine_current ? "设备" : "产品"}默认；步幅策略由本 Goal 设置。`
-                : `Review interval follows ${selected.machine_current ? "device" : "product"} defaults; this Goal sets the stride strategy.`}
+                ? `复盘周期沿用${selected.machine_current ? "设备" : "产品"}默认；规划选项由本 Goal 设置。`
+                : `Review interval follows ${selected.machine_current ? "device" : "product"} defaults; this Goal sets the planning options.`}
             </p> : null}
             <CapabilityConfigurationFields
               disabled={editorBusy}

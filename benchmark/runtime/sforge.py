@@ -95,6 +95,7 @@ class SForgeWorker(CodexAgent):
                  replan_after_turns: int | None = None,
                  replan_after_todos: int | None = None,
                  stride_strategy: str | None = None,
+                 planning_horizon_goal: bool | None = None,
                  checkpoint_request_path: str | None = None,
                  checkpoint_request: bytes | None = None,
                  warm_start=None):
@@ -143,6 +144,12 @@ class SForgeWorker(CodexAgent):
         if stride_strategy is not None:
             from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_strategy
             stride_strategy = normalize_stride_strategy(stride_strategy)
+        if planning_horizon_goal is not None:
+            if not isinstance(planning_horizon_goal, bool):
+                raise ValueError("planning_horizon_goal must be a boolean")
+            if not profile.startswith("heartbeat-"):
+                raise ValueError("planning_horizon_goal requires a heartbeat profile")
+        self.planning_horizon_goal = planning_horizon_goal
         self.stride_strategy = stride_strategy
         self.checkpoint_request_path = None
         self.checkpoint_request = checkpoint_request
@@ -179,9 +186,10 @@ class SForgeWorker(CodexAgent):
             raise ValueError("Workspace feedback instructions must match the native task wrapper")
         if task_objective is not None and (
             not isinstance(task_objective, str) or not task_objective.strip()
-            or workspace_instructions is None or task_objective not in workspace_instructions
+            or workspace_instructions is None or feedback_prompt is None
+            or task_objective not in feedback_prompt
         ):
-            raise ValueError("Task objective must occur in the native workspace instructions")
+            raise ValueError("Task objective must occur in the native task prompt")
         self.feedback = feedback
         self.feedback_prompt = feedback_prompt
         self.workspace_instructions = workspace_instructions
@@ -264,6 +272,7 @@ class SForgeWorker(CodexAgent):
                 replan_after_turns=self.replan_after_turns,
                 replan_after_todos=self.replan_after_todos,
                 stride_strategy=self.stride_strategy,
+                planning_horizon_goal=self.planning_horizon_goal,
                 checkpoint_request_path=self.checkpoint_request_path,
                 checkpoint_request=self.checkpoint_request,
                 task_objective=self.task_objective,

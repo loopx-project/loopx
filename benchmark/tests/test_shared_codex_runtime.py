@@ -651,10 +651,10 @@ def test_default_execution_has_no_independent_turn_deadline(tmp_path):
     (False, None, None),
     (True, None, "explicit"),
     (False, "after_wake", None),
-    (False, "fresh_replan", "checkpoint_handoff"),
+    (False, "fresh_replan", None),
     (True, "fresh_replan", "explicit"),
 ])
-def test_harbor_install_receipt_matches_actual_checkpoint_trigger(tmp_path, monkeypatch, enabled, trigger, expected):
+def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path, monkeypatch, enabled, trigger, expected):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex, CodexOffline
     from benchmark.runtime.checkpoint_wake import CheckpointWake
@@ -679,7 +679,7 @@ def test_harbor_install_receipt_matches_actual_checkpoint_trigger(tmp_path, monk
         # Real declaration parser and socket lifecycle, independent of the
         # metadata helper. Omitted trigger is legal after-wake capture.
         assert bool(wake.socket_path) is (trigger == "fresh_replan")
-        assert bool(enabled or wake.socket_path) is (expected is not None)
+        assert enabled is (expected is not None)
     commands = []
     command_envs = {}
     async def no_op(*args, **kwargs):
@@ -935,3 +935,34 @@ raise SystemExit(1)
         toolface.qualify_toolface(
             set(), codex_bin=fake, model="fixture-model", timeout_sec=30,
             extra_env={"FAKE_DIE": "1"})
+
+
+@pytest.mark.parametrize("requested,actual", [(True, False), (False, True), (None, True)])
+def test_horizon_setting_must_match_restored_goal_before_work(tmp_path, monkeypatch, requested, actual):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", planning_horizon_goal=requested)
+    async def prepared(*args, **kwargs):
+        return True
+    async def no_pending(**kwargs):
+        return SimpleNamespace(return_code=1)
+    async def wrong_setting(*args, **kwargs):
+        return {"after": {"execution_profile": {
+            "replan_after_effective_turns": 6, "planning_horizon_goal": actual,
+        }}}
+    monkeypatch.setattr(agent, "_registry_exists", prepared)
+    monkeypatch.setattr(agent, "_write_task_document", prepared)
+    monkeypatch.setattr(agent, "_loopx", wrong_setting)
+    with pytest.raises(RuntimeError, match="planning_horizon_goal readback mismatch"):
+        asyncio.run(agent._prepare_phase(SimpleNamespace(exec=no_pending), "Synthetic task", cwd=str(tmp_path)))
+
+
+@pytest.mark.parametrize("settings", [
+    {"planning_horizon_goal": "true"}, {"planning_horizon_goal": 1},
+    {"execution_mode": "plain", "planning_horizon_goal": False},
+])
+def test_horizon_setting_rejects_non_boolean_and_non_loopx_mode(tmp_path, settings):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+    with pytest.raises(ValueError, match="planning_horizon_goal"):
+        BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", **settings)

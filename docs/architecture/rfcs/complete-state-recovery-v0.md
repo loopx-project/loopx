@@ -42,6 +42,27 @@ remains partial for compound worst cases and broader platform/provider profiles.
 This checkpoint does not qualify M2/M3, live adoption, remote providers or the G1
 team journey. No original identity or receipt is rewritten.
 
+### Delivery after the writer cutoff (2026-10-16)
+
+The landed [R5/T4 cutoff](loopx-overall-roadmap-v0.md#post-6396-delivery-plan)
+provides a simpler current mutation owner, not a stronger capture profile or
+activation receipt. Reuse M1's verifier, safe extraction and readable audit.
+The next implementation is the existing M2 for one local File/SQLite profile:
+record required component-owner revisions and achieved capture consistency;
+exercise concurrent/quiescence/crash and downgrade cases, while v0 remains
+readable and incomplete audits remain held.
+
+Then deliver M3's one-Goal packaged recovery, reusing the Goal-lifetime work in
+[#5206](https://github.com/loopx-project/loopx/issues/5206). Before the drill,
+freeze owner support, source/destination fencing, the replacement/new-lifetime
+decision, effect disposition and RPO/RTO. Original operations, later writes and
+unsupported/unknown effects retain their owners; copied leases or provider
+identity cannot activate the destination. Return an independently accepted
+unfinished-work result through the initiating product entry, with recovered,
+lost/unknown work and human interventions recorded. Keep service and additional
+platform profiles with M4/M5. This coordination checkpoint implements no M2/M3
+behavior and starts no recovery or activation.
+
 ### First supported user outcome
 
 The first bounded user promise is recovery of one local Goal after its source
@@ -511,6 +532,99 @@ store-identity rotation before admission; Agents never receive database access.
 NoKV or another provider is unsupported until its profile independently proves
 the same logical contract. A generic filesystem copy cannot stand in for a
 provider profile.
+
+### Capture-owner inventory for the first local profile
+
+The source inventory below targets the first single-Goal File/SQLite profile.
+It identifies where M2 must obtain evidence; it does **not** certify that a
+particular backup contains every required component. An actual capture must
+resolve the selected Goal's routes and dependency closure, distinguish an
+owner-confirmed absence from an unreadable or unrecognized source, and retain
+unresolved required owners as holds. Optional installation does not make an
+active Goal dependency optional.
+
+| Mutable boundary and existing owner | Current capture/readback | Remaining capture or adoption evidence |
+| --- | --- | --- |
+| Registry routing and machine/Goal configuration: [configuration capture adapter](../../../loopx/capabilities/configuration_backup.py), [typed checkpoint envelope](../../../loopx/control_plane/configuration_backup.ts), [machine configuration store](../../../loopx/capabilities/machine_configuration/store.py) | Full backups compare the registry and stored machine-configuration bytes actually decoded by their owners with mapped copied-byte witnesses. Missing/differing copies, A → B → A and a captured absence beside an earlier copied file refuse publication. The private manifest records matching revisions and the configuration capture interval. | Bind authority and every other required owner to their own intervals and dependencies. Configuration-source agreement and a valid envelope do not prove cross-owner consistency. |
+| Goal narrative, vision and authority material references: registry-resolved active state, [vision checkpoint owner](../../../loopx/control_plane/goals/vision_checkpoint.ts) | Discovered active-state paths and declared local `kind=goal_doc` documents are copied through the existing material-root boundary. Hash-only registrations and document links are not recursively resolved. | Preserve the full Goal and revision-bound required artifacts, classify unavailable dependencies, and keep derived Markdown projections subordinate to their owners. |
+| Canonical work, leases and retained operation history: [local provider selection](../../../loopx/control_plane/coordination/local_authority_provider.ts), [authority archive owner](../../../loopx/control_plane/coordination/authority_archive.ts), [legacy writer fence](../../../loopx/control_plane/coordination/legacy_writer_fence.ts) | New ordinary full backups reuse the native retained-prefix export, bind configuration digest/runtime route, provider/store identity, revision/cursor and actual interval, and retain selector/fence byte witnesses. Inert inspection reads that export; older v0 archives retain raw File/SQLite readback. | Complete the selected Goal's required-owner closure and establish the declared cross-owner consistency profile. A valid local prefix cannot make historical leases valid or settle other owners. |
+| Quota accounting and Turn settlement: [accounting artifact transaction](../../../loopx/control_plane/quota/accounting_artifact_transaction.ts), [spend owner](../../../loopx/control_plane/quota/spend_commit.ts), [Turn journal commit](../../../loopx/control_plane/turn_driver/turn_journal_effects.ts) | Files under included runtime/project roots are retained; M1 does not reconcile their transaction lineage. | Capture committed receipts, indexes and in-flight journal inputs together with their exact settlement identity; let the original owner resolve replay or ambiguity without a second debit. |
+| Goal lifetime and session/execution binding: [source-session lifetime owner](../../../loopx/control_plane/goals/source_session_lifetime.ts), [Chat session lifecycle](../../../loopx/control_plane/goals/chat_session_lifecycle.ts), [execution identity](../../../loopx/control_plane/runtime/execution_identity.ts) | Existing Goal-scoped registration, recreation and Turn-settlement directories beside the actual registry are retained through their existing path owners. Native Host session stores outside those paths are not implicitly captured or adopted. | Resolve the actual entrypoint's owner, lifetime and generation. Prove stale executor exclusion and a qualified session recovery path before the original entrypoint can continue. |
+| Pending effects, delivery and derived projection outboxes: [source Turn effect gate](../../../loopx/control_plane/goals/source_session_lifetime.ts), [return-delivery classifier](../../../loopx/control_plane/collaboration/return_delivery.ts), [authority shadow outbox](../../../loopx/control_plane/coordination/local_authority_shadow_outbox.ts) | Included journals/outboxes are retained as bytes; neither their external outcome nor their replay eligibility is inferred. | Each owning effect/transport resolves committed, absent or unknown outcomes and exact receipts. Distinguish a derived projection from an external effect; an unknown external result stays held. |
+| Scheduler and optional Host automation: [scheduler state owner](../../../loopx/control_plane/scheduler/state_store.ts), [backup discovery](../../../loopx/state_backup.py) | Runtime scheduler files and explicitly included Codex automation/skill directories can be copied. A saved timer is not an observed active Host schedule. | Bind cadence/reset identity, reconcile actual Host state and exclude duplicate admission. Other Host/provider state needs its own explicit capture contract. |
+| Knowledge/artifacts, extension state and credentials: the selected Goal's material and provider owners, including [decision-context recovery](../../../loopx/capabilities/decision_context/capture_recovery.py) where applicable | Only discovered roots are included; a physical SQLite snapshot proves no semantic provider completeness. Credentials may be present in private raw bytes. | Enumerate actual required sources and provider versions; obtain their own export/verify evidence. Credential custody, rotation/revocation and external access remain with their owners; copied bytes grant no access. |
+
+The [source-session lifecycle path
+owner](../../../loopx/control_plane/goals/source_session_registry_state.py) now
+supplies the same registration, recreation and Turn-settlement directories to
+the writers and full-backup discovery. This closes the omission beside an
+external source registry, without sweeping other Goal directories or treating
+journal bytes as reconciled effects. Source-loss File/SQLite producer/verifier
+coverage retains those bytes and the declared local Goal document while keeping
+the audit inert and held. M2 still needs the complete required-owner closure,
+independent intervals/dependencies and actual material/provider exports; a
+hash-only registration is not captured source content.
+
+**Observed ordering counterexample and bounded refusal.** The earlier producer
+could copy raw registry A and later encode configuration B while every byte and
+configuration digest passed. The current full producer retains the exact source
+snapshots used for decoding, compares all mapped regular copies, and refuses
+publication when they differ or lack a witness. File/SQLite tests cover both a
+persistent change and A → B → A; a later live-path reread cannot prove this case.
+Routed sources and missing witnesses have separate negative coverage.
+
+The discovery-to-copy interval has a separate refusal: a registry declaration
+could previously change after planning, leaving the old selected document beside
+a new raw registry and a matching new configuration checkpoint. New full-backup
+plans retain the exact registry reads and freeze their archive routes; copied
+members must agree with those reads as well. Routing, discovery and configuration
+reuse the existing registry codec's immutable-read option. File/SQLite fixtures
+prove refusal, fresh-plan recovery and source-loss inert readback. This is a
+conservative byte-level check (even unrelated registry changes require retry),
+not a required-material export, shared owner epoch or M2 profile qualification.
+Historical plans and the scoped migration producer retain their prior contracts.
+
+The same rule covers the existing stored machine-configuration owner. Its exact
+read supplies the checkpoint and witness together, including confirmed absence;
+changed, newly created or removed configuration cannot contradict the raw copy.
+Unusable machine sources refuse capture rather than become an absent envelope.
+Self-contained local aliases reuse the included regular target witness; a retained
+tar link cannot masquerade as an owner-confirmed absence. Repointed aliases,
+including A → B → A, are compared through the saved route.
+This closes the configuration-source IO boundary, not the complete recovery
+set's owner closure or consistency profile.
+
+Historical v0 archives can still contain that combination. A legacy-archive
+fixture in [the recovery suite](../../../tests/test_state_recovery.py) deliberately
+retains earlier raw registry/work and later owner-verified configuration, without
+new capture claims. After the original sources disappear, M1 reads the earlier
+work and retains `held`, `legacy_best_effort`, `legacy_manifest_incomplete` and
+no execution authority. This preserves historical readback while tightening new
+publication; it does not qualify an `online` profile or the full M2 inventory.
+Retaining the lifecycle journals above does not authorize generic reads of the
+lifecycle-only `source_session_v1` profile, which remains refused.
+
+The first configuration/canonical pair now has actual owner content: the
+[backup composition](../../../loopx/control_plane/coordination/authority_backup.ts)
+reuses the retained-prefix archive and provider owners. It records each
+canonical capture interval and binds the configuration checkpoint digest,
+captured runtime, selector/fence byte witnesses, store identity, revision and
+cursor. Ordinary concurrent appends preserve the captured prefix; moved
+dependencies or missing authority do not become a successful canonical capture.
+Source-loss File/SQLite readback and standalone native restore/audit exercise
+the saved content, including the original operation receipts. Raw copies remain
+a separate historical safety copy; the extra logical export uses the same
+unchanged capacity bounds. Python owns filesystem/archive transport only.
+
+The next slice must resolve the selected Goal's remaining required-owner
+closure, beginning with quota/Turn settlement and lifetime/effect dependencies
+at the real entrypoint, and obtain their actual content exports with exact
+intervals and reconciliation identities. Do not add another capture-field-only
+stage or infer a common epoch from the configuration/canonical pair. The other
+inventory rows remain explicit holds until their owner evidence exists. M2's
+complete-inventory entry and profile-specific exits, M3 admission, Host
+qualification and the frozen RPO/RTO criteria stay open; this checkpoint neither
+adds a parallel coordinator nor changes their criteria.
 
 ### Implementation ownership and reuse evidence
 
