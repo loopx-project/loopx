@@ -231,6 +231,8 @@ def test_planning_feedback_first_is_an_explicit_host_constraint(monkeypatch):
     window_end = body.index("Host planning constraint (feedback-first)")
     assert body.index("Remaining phase time") < window_end < body.index("Host-supplied planning checkpoint:")
     assert "first runnable Todo must produce a minimal valid candidate" in body
+    assert "never resubmit an unchanged artifact" in body
+    assert "reconcile the returned public diagnostics" in body
     assert "grants no extra submissions, time or authority" in body
     assert json.loads(body.split("Host-supplied planning checkpoint:\n", 1)[1]) == packet
     with pytest.raises(ValueError, match="LOOPX_PLANNING_FEEDBACK_FIRST"):

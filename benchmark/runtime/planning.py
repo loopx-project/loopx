@@ -15,9 +15,15 @@ FEEDBACK_FIRST_RULE = (
     "The first runnable Todo must produce a minimal valid candidate and obtain "
     "one accepted external evaluation before extended local calibration, "
     "validation or reporting work. Later Todos must use that feedback to check "
-    "the model's conventions and units before investing in refinement. This "
-    "orders work only; it grants no extra submissions, time or authority and "
-    "does not relax task acceptance.\n\n"
+    "the model's conventions and units before investing in refinement. "
+    "Submission discipline for every later Todo: keep a ledger of each "
+    "submitted artifact's hash and native result; never resubmit an unchanged "
+    "artifact; before using a submission slot, compare the candidate with the "
+    "best accepted one on the public hold-out and submit only an improvement or "
+    "a stated hypothesis test; after each accepted evaluation, reconcile the "
+    "returned public diagnostics with the local model before further refinement. "
+    "This orders work only; it grants no extra submissions, time or authority "
+    "and does not relax task acceptance.\n\n"
 )
 
 

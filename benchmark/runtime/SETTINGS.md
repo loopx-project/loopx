@@ -21,7 +21,8 @@ use matched repetitions to test its effect.
 | Task entry | LoopX modes: loopx-planned | Record planned or seeded for every arm |
 | Explore | Off in heartbeat-resume; on in heartbeat-explore | Keep resume as the reference |
 | Turn envelope | Off; a checkpoint handoff enables capture on fresh_replan execute wakes and receipts record `turn_envelope_source: checkpoint_handoff` | Enable only in its ablation; read the effective receipt, not the opt-in flag |
-| Feedback-first planning | Off | `feedback_first: true` adds a host planning constraint: first Todo obtains one accepted native evaluation before extended local calibration (native feedback, loopx-planned only) |
+| Native-Goal continuation | Off: a native Goal that declares completion ends the worker; a Goal still active at the budget edge is recorded as `native_goal_outcome: budget_exhausted` with exit 0 | `native_goal_continue: true` / `--native-goal-continue` starts continuation Goals until 300 s before the budget edge (native-goal profile only) |
+| Feedback-first planning | Off | `feedback_first: true` adds a host planning constraint: first Todo obtains one accepted native evaluation before extended local calibration; later Todos keep a submission ledger, never resubmit unchanged artifacts, submit only improvements or stated hypothesis tests, and reconcile returned public diagnostics before refinement (native feedback, loopx-planned only) |
 | Replan cadence | 6 settled effective work Turns | Use explicit completed-Todo cadence or another Turn count for ablation |
 | Iteration context | Harbor: fresh; EdgeBench heartbeat: resume | Freeze the provider and context within a comparison |
 | Evaluator feedback | EdgeBench: best-only (strict new-best snapshot notifications) | Native and blind remain explicit controls; freeze feedback mode for every comparison |

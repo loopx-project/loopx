@@ -160,6 +160,35 @@ def test_native_goal_staged_source_is_importable_without_loopx_control_plane(tmp
     assert result.stdout.strip() == "loopx.capabilities.benchmark_toolkit.native_codex_goal"
 
 
+def test_native_goal_rounds_graceful_deadline_and_opt_in_continuation():
+    from benchmark.runtime.worker import native_goal_rounds
+    from loopx.capabilities.benchmark_toolkit.native_codex_goal import NativeGoalDeadlineExceeded
+    clock = [0.0]
+    def tick(seconds):
+        clock[0] += seconds
+    # Default: one Goal that declares completion ends the worker (no continuation).
+    calls = []
+    def one_round(suffix, timeout):
+        calls.append((suffix, timeout)); tick(100); return "complete"
+    assert native_goal_rounds(one_round, budget_seconds=1000, continue_after_complete=False, clock=lambda: clock[0]) == (1, "complete")
+    assert calls == [("", 1000)]
+    # Opt-in: completed Goals are followed by continuation Goals until the reserve.
+    clock[0] = 0; calls.clear()
+    def completing(suffix, timeout):
+        calls.append(suffix[:40]); tick(400); return "complete"
+    rounds, outcome = native_goal_rounds(completing, budget_seconds=1000, continue_after_complete=True, clock=lambda: clock[0], reserve_seconds=300)
+    assert (rounds, outcome) == (2, "complete")
+    assert calls[0] == "" and calls[1].startswith("\n\nContinuation 1")
+    # A Goal still active at the budget edge is normal exhaustion, not a failure.
+    clock[0] = 0
+    def never_ends(suffix, timeout):
+        raise NativeGoalDeadlineExceeded("goal_timeout_before_terminal")
+    assert native_goal_rounds(never_ends, budget_seconds=1000, continue_after_complete=True, clock=lambda: clock[0]) == (1, "budget_exhausted")
+    # A non-complete terminal status stops without continuation.
+    clock[0] = 0
+    assert native_goal_rounds(lambda s, t: "cancelled", budget_seconds=1000, continue_after_complete=True, clock=lambda: clock[0]) == (1, "stopped")
+
+
 def test_fresh_wakes_share_environment_without_resuming_or_duplicate_session_copies(
     tmp_path,
 ):

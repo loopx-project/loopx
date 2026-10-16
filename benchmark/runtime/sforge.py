@@ -92,6 +92,7 @@ class SForgeWorker(CodexAgent):
                  task_entry: str | None = None,
                  turn_envelope: bool = False,
                  feedback_first: bool = False,
+                 native_goal_continue: bool = False,
                  replan_after_turns: int | None = None,
                  replan_after_todos: int | None = None,
                  stride_strategy: str | None = None,
@@ -172,6 +173,11 @@ class SForgeWorker(CodexAgent):
         if feedback_first and (feedback != "native" or self.task_entry != "loopx-planned"):
             raise ValueError("feedback_first requires native feedback and loopx-planned entry")
         self.feedback_first = feedback_first
+        if not isinstance(native_goal_continue, bool):
+            raise ValueError("native_goal_continue must be a boolean opt-in")
+        if native_goal_continue and profile != "native-goal":
+            raise ValueError("native_goal_continue requires the native-goal profile")
+        self.native_goal_continue = native_goal_continue
         if workspace_instructions is not None and (
             feedback != "native" or not workspace_instructions.strip()
             or feedback_prompt is None or not feedback_prompt.startswith(workspace_instructions)
@@ -261,6 +267,7 @@ class SForgeWorker(CodexAgent):
                 task_entry=self.task_entry,
                 turn_envelope=self.turn_envelope,
                 planning_feedback_first=self.feedback_first,
+                native_goal_continue=self.native_goal_continue,
                 replan_after_turns=self.replan_after_turns,
                 replan_after_todos=self.replan_after_todos,
                 stride_strategy=self.stride_strategy,
@@ -329,6 +336,7 @@ class SForgeWorker(CodexAgent):
             "stop_hook": self.profile == "official",
             **(self.runtime._turn_envelope_receipt() if self.runtime is not None else {}),
             **({"planning_feedback_first": True} if self.feedback_first else {}),
+            **({"native_goal_continue": True} if self.native_goal_continue else {}),
             "outer_resume": self.resume_cmd is not None,
             "explore_graph": self.profile == "heartbeat-explore",
             "explore_harness": self.profile == "heartbeat-explore",

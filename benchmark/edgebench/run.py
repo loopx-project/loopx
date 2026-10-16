@@ -107,6 +107,9 @@ def main(argv=None):
                         help="New-run default: native public feedback; blind/best-only are explicit controls")
     parser.add_argument("--turn-envelope", action="store_true",
                         help="Opt-in short heartbeat context with same-invocation full captures")
+    parser.add_argument("--native-goal-continue", action="store_true",
+                        help="Opt-in: when a native Goal declares completion with budget left, start "
+                             "continuation Goals until the budget edge (native-goal worker only)")
     parser.add_argument("--feedback-first", action="store_true",
                         help="Opt-in host planning constraint: obtain one accepted native "
                              "evaluation before extended local calibration (native, loopx-planned)")
@@ -160,6 +163,8 @@ def main(argv=None):
         parser.error("--task-entry loopx-planned requires a heartbeat worker")
     if args.turn_envelope and args.worker not in {"heartbeat-resume", "heartbeat-explore"}:
         parser.error("--turn-envelope requires a heartbeat worker")
+    if args.native_goal_continue and args.worker != "native-goal":
+        parser.error("--native-goal-continue requires --worker native-goal")
     # Heartbeat workers default to loopx-planned; only the explicit ablation is incompatible.
     if args.feedback_first and (args.feedback != "native" or args.task_entry == "seeded-todo"
                                 or not args.worker.startswith("heartbeat-")):
@@ -273,6 +278,7 @@ def main(argv=None):
                          task_entry=args.task_entry,
                          turn_envelope=args.turn_envelope,
                          feedback_first=args.feedback_first,
+                         native_goal_continue=args.native_goal_continue,
                          replan_after_turns=args.replan_after_turns,
                          replan_after_todos=args.replan_after_todos,
                          **({"stride_strategy": args.stride_strategy}
@@ -332,6 +338,7 @@ def main(argv=None):
             mode="heartbeat" if args.worker.startswith("heartbeat-") else "plain",
             checkpoint_request=declaration if checkpoint_request is not None else None),
         **({"planning_feedback_first": True} if args.feedback_first else {}),
+        **({"native_goal_continue": True} if args.native_goal_continue else {}),
         "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
         "feedback": args.feedback, "internet": task.internet,
         "eval_interval": args.eval_interval, "submission_cooldown": args.submission_cooldown,

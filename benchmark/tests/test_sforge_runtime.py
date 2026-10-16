@@ -239,6 +239,29 @@ def test_feedback_first_is_a_planned_native_opt_in(tmp_path, monkeypatch, enable
         SForgeWorker(config, profile="heartbeat-resume", cwd="/task", feedback_first="1")
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_native_goal_continue_is_a_native_goal_opt_in(tmp_path, monkeypatch, enabled):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+    async def installed(self, environment):
+        pass
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    config = SForgeConfig(agent_model="fixture", agent_effort="xhigh")
+    worker = SForgeWorker(config, profile="native-goal", cwd="/task", native_goal_continue=enabled)
+    worker.install_stop_hook(None, None, tmp_path, None)
+    env = worker.runtime._worker_env(cwd="/task")
+    profile = json.loads((tmp_path / "worker-profile.json").read_text())
+    assert env.get("LOOPX_NATIVE_GOAL_CONTINUE") == ("1" if enabled else None)
+    assert profile.get("native_goal_continue") is (True if enabled else None)
+    with pytest.raises(ValueError, match="native-goal"):
+        SForgeWorker(config, profile="heartbeat-resume", cwd="/task", native_goal_continue=True)
+    with pytest.raises(ValueError, match="boolean"):
+        SForgeWorker(config, profile="native-goal", cwd="/task", native_goal_continue="1")
+
+
 @pytest.mark.parametrize("profile,total,expected", [
     ("native-goal", 64800, 64640), ("native-goal", 1800, 1640),
     ("heartbeat-resume", 64800, 64640), ("heartbeat-explore", 64800, 64640),

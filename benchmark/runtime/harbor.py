@@ -71,6 +71,7 @@ class BenchmarkCodex(CodexOffline):
         planning_timeout_sec=None,
         turn_envelope=False,
         planning_feedback_first=False,
+        native_goal_continue=False,
         task_objective=None,
         goal_id=_GOAL_ID,
         agent_id=_AGENT_ID,
@@ -132,6 +133,11 @@ class BenchmarkCodex(CodexOffline):
         if planning_feedback_first and self.execution.task_entry != "loopx-planned":
             raise ValueError("planning_feedback_first requires loopx-planned task entry")
         self.planning_feedback_first = planning_feedback_first
+        if not isinstance(native_goal_continue, bool):
+            raise ValueError("native_goal_continue must be a boolean opt-in")
+        if native_goal_continue and not self.execution.native_goal:
+            raise ValueError("native_goal_continue requires a native-Goal execution mode")
+        self.native_goal_continue = native_goal_continue
         self.goal_id, self.agent_id = goal_id, agent_id
         self.defer_codex_home = defer_codex_home
         self._task_path = "/usr/local/bin:/usr/bin:/bin"
@@ -156,7 +162,8 @@ class BenchmarkCodex(CodexOffline):
         )
 
     def _planning_receipt(self) -> dict:
-        return {"planning_feedback_first": True} if self.planning_feedback_first else {}
+        return {**({"planning_feedback_first": True} if self.planning_feedback_first else {}),
+                **({"native_goal_continue": True} if self.native_goal_continue else {})}
 
     def _replan_configuration(self) -> tuple[str, str, int]:
         # Transport existing Goal fields; the typed control plane owns counting.
@@ -579,6 +586,7 @@ class BenchmarkCodex(CodexOffline):
                    if self.checkpoint_request_path is not None else {}),
                 **({"LOOPX_TURN_ENVELOPE": "1"} if self.execution.turn_envelope else {}),
                 **({"LOOPX_PLANNING_FEEDBACK_FIRST": "1"} if self.planning_feedback_first else {}),
+                **({"LOOPX_NATIVE_GOAL_CONTINUE": "1"} if self.native_goal_continue else {}),
                 "LOOPX_ITERATION_CONTEXT": self.execution.context,
                 "LOOPX_CODEX_SANDBOX": self.execution.sandbox,
                 "LOOPX_VALIDATION_COMMAND_JSON": json.dumps(
