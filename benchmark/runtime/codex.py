@@ -67,6 +67,13 @@ class Execution:
         return self.mode in {"native-goal", "loopx-goal"}
 
 
+def turn_envelope_receipt(*, explicit: bool) -> dict:
+    """Record only the explicit display opt-in; checkpoint capture is independent."""
+    if explicit:
+        return {"turn_envelope": True, "turn_envelope_source": "explicit"}
+    return {}
+
+
 
 def validate_model_catalog(model_catalog: Path, model: str) -> dict:
     """Admit only catalog entries that keep Codex's function-tool surface.

@@ -45,6 +45,13 @@ fail before execution. Set it back to `false` for the next run to roll back;
 do not change a running trial's treatment. Captures contain private Goal context.
 Transport tests do not establish lower token cost or better model decisions.
 
+Checkpoint capture is independent of this display experiment. A `fresh_replan`
+declaration may establish a private capture/handoff socket while
+`turn_envelope` remains false: the worker keeps the ordinary dispatcher and quota
+input, and only an explicit true setting selects the short view. This replaces
+the earlier implicit activation by checkpoint handoff. Do not relabel older
+receipts or trajectories as feature-off; qualify their actual input separately.
+
 | Mode | Execution/continuation | LoopX skills and state |
 | --- | --- | --- |
 | `plain` | One Codex exec, native Goals disabled | Absent |

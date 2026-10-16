@@ -4,8 +4,15 @@ An already promoted File or SQLite Goal runs `task-lease acquire`, `renew`,
 `transfer` and `release` through TS-owned provider transactions. Fresh execution
 and expired/ineffective-holder takeover now use the complete canonical head;
 previously standalone acquire still entered the fenced legacy file writer.
-Unpromoted Goals retain their legacy wire and transaction. A provider selector
-does not promote a Goal or grant execution authority.
+Unpromoted Goals retain historical lease inspection, exact release and original
+receipt recovery. Fresh acquire, renew and transfer require reviewed import and
+return `canonical_authority_required` with backup-and-migrate recovery, including
+`transfer --transfer-claim`. A provider selector does not promote a Goal or grant
+execution authority.
+
+> **2.0 cutoff:** the capture-isolation section below records the pre-cutoff
+> migration stage, not an available Markdown write route. Retained receipts,
+> lease cleanup and pending outbox recovery do not authorize new execution.
 
 For a new execution on an open, eligible Todo with no prior lease:
 
@@ -88,9 +95,10 @@ if retained repository metadata differs for that physical checkout.
 Requests without a verified caller workspace retain ordinary exclusive scope
 checks, including against unknown legacy grants. Repository mismatch,
 redirected paths and a non-worktree root fail closed. Verified machine discovery
-currently supports macOS and Linux; other hosts retain ordinary leases. No
-workspace path or machine identifier is stored directly: only opaque digests
-and the existing public repository identity enter the private authority record.
+currently supports macOS, Linux and Windows; other hosts retain ordinary
+leases. No workspace path or machine identifier is stored directly: only
+opaque digests and the existing public repository identity enter the private
+authority record.
 
 Renewal preserves this identity. Acquire retries must use the same worktree,
 scopes and execution key; an alias resolving to the same worktree is valid.
@@ -165,6 +173,39 @@ The example assumes an active lease at version 3 and an unclaimed Todo or a Todo
 already assigned to the eligible receiver. Without `--transfer-claim`, transfer does not reassign the Todo
 claim. Neither form overrides an exclusion or widens write scopes. Use the actual readback
 versions, not these example numbers.
+
+### Ordinary task operations
+
+Use `todo update` for ordinary owner notes, evidence, priority, pause and resume.
+The canonical typed owner prepares current state and performs the authorized
+operation in one CAS; do not acquire a lease merely to edit a note. A pause can
+retire its current holder's lease atomically with note/evidence. Resume grants no
+execution; a new execution still uses this document's explicit lease lifecycle.
+See [Todo administrative and nonterminal updates](../project-agent-todo-contract.md#canonical-nonterminal-planning-updates).
+
+An explicit key/version remains a strict generation constraint. LoopX never
+silently replaces it, borrows a foreign holder or retries an ambiguous mutation
+as new work. Acquire, renew and transfer change execution authority and remain
+explicit. Every CLI lease refusal includes a routed `inspection.cli_args` command
+to read the actual holder/state/version; JSON and Markdown retain the original
+error. Parameter errors additionally explain missing and unsupported flags.
+Inspection is read-only and does not authorize the displayed lease's use.
+
+中文：普通本人任务的备注、证据、优先级、暂停和恢复直接使用 `todo update`，无需为改
+备注临时领租约。本人暂停可原子退休当前租约，恢复不授予执行。显式 key/version 仍是
+严格 generation 约束；不会自动替换、借用他人或把不确定提交作为新工作重试。
+领取、续期和转交执行权限仍须明确请求。所有 CLI lease 拒绝都提供带原路由的
+`inspection.cli_args`，可直接读取真实持有者、状态和版本；JSON/Markdown 保留原错误，
+参数错误另列缺失和冲突参数。读回不是使用凭证的授权。
+
+The synthetic deferred task below uses the same disposable canonical data in
+both views. The task detail now offers **Resume task** as its primary operation;
+completion proof is kept with completion. These compare source presentations,
+not an installed-App upgrade or a claim that a process stopped.
+
+| Previous task detail | Task detail with explicit resume |
+| --- | --- |
+| ![Deferred task with completion controls](../../apps/presentation/dashboard/smoke/assets/todo-lifecycle/before-deferred.png) | ![Deferred task with resume controls](../../apps/presentation/dashboard/smoke/assets/todo-lifecycle/after-deferred.png) |
 
 ### Action help and argument recovery
 
@@ -383,9 +424,12 @@ read the same task again: `resume_ready=true` allows acquisition under the usual
 owner/key/version checks. If the wait itself needs correction, use the existing
 authorized `todo update --resume-when ...` or `--clear-resume-when` operation;
 neither inspecting nor editing the wait grants execution authority.
-In hard-lease mode, ordinary edits still need an active execution proof. After
-release or expiry, use the existing narrow owner pause/reopen lifecycle, with a
-stable operation id, current provider revision and explicit reason:
+In hard-lease mode, execution-sensitive updates retain their active-proof or
+dedicated lifecycle admission. Ordinary owner text, note, evidence, reason and
+priority edits use the administrative provider-CAS path without acquiring a
+lease; see [administrative edits and explicit execution proof](../project-agent-todo-contract.md#administrative-edits-and-explicit-execution-proof).
+Correct an obsolete execution wait through the bounded owner pause/reopen
+lifecycle, with a stable operation id, current provider revision and explicit reason:
 
 ```bash
 loopx todo update --goal-id example-goal --todo-id todo_work --agent-id owner \
@@ -398,6 +442,7 @@ loopx todo update --goal-id example-goal --todo-id todo_work --agent-id owner \
 
 Read back between operations and acquire a fresh lease before executing. Do not
 attach an old lease proof or bundle ownership, text or work-requirement edits.
+Optional note/evidence may accompany each lifecycle step in its atomic update.
 
 在 canonical File、SQLite 和 PostgreSQL Goal 中，`todo_done` 和 `resume_at` 等待同时约束
 实际执行入口，而不只是候选任务展示。必须由真实前置 Todo 的 `done` 状态满足条件，
@@ -409,10 +454,12 @@ attach an old lease proof or bundle ownership, text or work-requirement edits.
 但有效 `active=false`。释放、历史完成读回、授权 supersede、普通分配和等待修复
 沿用原规则。前置任务正常完成或到达指定恢复时刻后，重新读回并按原 owner、key、
 version 规则继续执行。其他恢复条件及 governed amendment 的边界保持独立。
-hard-lease 普通编辑仍须提供有效执行 proof。租约释放或到期后，可按上面的既有窄范围
-流程，以明确理由、稳定操作 ID 和当前 provider revision 暂停并清除等待；读回后再用
-新 revision 明确重新打开，最后领取新租约。不能附带旧 proof、文案、归属或工作要求修改，
-也不能把暂停或重新打开当作执行授权。
+hard-lease 的执行敏感更新仍须有效执行 proof 或专属 lifecycle 准入；本人的普通说明、
+备注、证据、原因和优先级编辑走行政性 provider CAS，无需获取执行租约。
+修正过时等待时，可按上面的既有窄范围流程，以明确理由、稳定操作 ID 和当前
+provider revision 暂停并清除等待；读回后再用
+新 revision 明确重新打开，最后领取新租约。不能附带旧 proof、任务正文、归属或工作要求修改，
+也不能把暂停或重新打开当作执行授权；每步可原子附带备注和证据。
 
 A successful readback is still a point-in-time proof, not a lock over subsequent
 external effects. Execution must retain its existing mutation fences; this
@@ -505,7 +552,10 @@ not replace [D2 capacity and continuity qualification](sqlite-authority-store.md
 
 已 promoted 的 File/SQLite Goal，其 acquire、renew、transfer、release 现在使用
 同一 provider opening/source fence 与 TS 规则；新领取和失效持有者接管不再进入
-旧文件 writer。旧 wire 与未 promoted 路径保留，选择 provider 不构成 promotion。
+旧文件 writer。未迁移 Goal 只保留历史租约检查、精确释放与原回执恢复；新领取、
+续约和转交（包括 `--transfer-claim`）统一返回 `canonical_authority_required`
+及备份后迁移提示。选择 provider 不构成 promotion，也不授予执行权。下方 capture
+隔离章节保留退役前阶段的历史，不代表 2.0 仍支持 Markdown 普通写入。
 
 新执行按上面的 acquire 命令领取；没有旧 lease 时 expected-version 为 0，否则
 用 inspect 的当前版本及新的 execution key。领取/接管同时增加 version 和 epoch，

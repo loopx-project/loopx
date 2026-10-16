@@ -20,6 +20,7 @@ from ..control_plane.coordination.local_authority import (
 )
 from ..control_plane.effect_runtime import (
     EffectRuntimeHostPermissionError,
+    EffectRuntimeRemoteError,
     EffectRuntimeStartupError,
 )
 from ..control_plane.quota.effective_action import EffectiveAction
@@ -28,6 +29,7 @@ from ..control_plane.quota.error_codes import (
     HeartbeatReceiptIdentityConflictError,
     QuotaActionSelectionConflictError,
     QuotaCommandValidationError,
+    QuotaDecisionTransportError,
     QuotaIdentityPreconditionError,
     quota_error_code,
 )
@@ -115,13 +117,15 @@ def quota_failure_payload(
         }
 
     # A managed-runtime failure already carries a bounded, public-safe message
-    # (which method could not be reached and how long it was given), so publish
-    # it instead of a generic line the caller cannot act on.
+    # (which method could not be reached and how long it was given, or the typed
+    # TS owner's own refusal), so publish it instead of a generic line the caller
+    # cannot act on. Other exceptions may carry private paths: class name only.
     public_reason = (
         str(error)
         if isinstance(
             error,
-            (CloseoutQueryUnavailableError, HeartbeatReceiptIdentityConflictError, EffectRuntimeStartupError),
+            (CloseoutQueryUnavailableError, HeartbeatReceiptIdentityConflictError,
+             EffectRuntimeStartupError, EffectRuntimeRemoteError),
         )
         else "quota collection failed"
     )
@@ -141,6 +145,11 @@ def quota_failure_payload(
         **verbose_debug,
         **lock_timeout_fields,
     }
+    if payload["error_code"] == "quota_unexpected_collection_error":
+        payload["error_class"] = type(error).__name__
+        diagnostic_code = getattr(error, "diagnostic_code", None)
+        if isinstance(error, EffectRuntimeRemoteError) and isinstance(diagnostic_code, str):
+            payload["diagnostic_code"] = diagnostic_code
     if isinstance(error, HeartbeatReceiptIdentityConflictError):
         payload.update({
             "status": "heartbeat_receipt_identity_conflict",
@@ -256,6 +265,45 @@ def quota_failure_payload(
     return payload
 
 
+def quota_decision_transport_failure_payload(
+    args: argparse.Namespace,
+    committed: Mapping[str, object],
+    error: QuotaDecisionTransportError,
+    *,
+    capture_directory: Path | None,
+) -> dict[str, object]:
+    """Report a post-guard capture/handoff failure without a second guard.
+
+    The committed receipt and saved decision remain the evidence; the caller is
+    told to read them, not to rerun the guard or treat this as missing admission.
+    """
+    saved = capture_directory / "decision.json" if capture_directory is not None else None
+    payload: dict[str, object] = {
+        "ok": False,
+        "mode": args.quota_command,
+        "goal_id": args.goal_id,
+        "decision": "skip",
+        "should_run": False,
+        "error_code": error.error_code,
+        "reason": " ".join(str(error).split())[:500],
+        "state": "blocked_health",
+        "waiting_on": "codex",
+        "status": "decision_transport_failed",
+        "source": "quota",
+        "recommended_action": (
+            "The guard already ran. Read the saved decision and this Turn's receipt "
+            "instead of rerunning the guard. If the handoff endpoint belongs to an "
+            "ended Host wake, use the transport named by the current wake, or none."
+        ),
+    }
+    if saved is not None and saved.is_file():
+        payload["captured_decision"] = {"path": str(saved)}
+    for key in ("heartbeat_receipt", "rollout_event"):
+        if key in committed:
+            payload[key] = committed[key]
+    return payload
+
+
 def quota_validation_failure_payload(
     args: argparse.Namespace,
     exc: QuotaCommandValidationError,
@@ -301,6 +349,7 @@ def quota_validation_failure_payload(
 
 __all__ = [
     "QUOTA_EVENT_KINDS",
+    "quota_decision_transport_failure_payload",
     "quota_failure_payload",
     "quota_validation_failure_payload",
     "should_log_quota",

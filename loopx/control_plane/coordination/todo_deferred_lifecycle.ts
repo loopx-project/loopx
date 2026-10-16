@@ -7,14 +7,14 @@ import {canonicalTaskLease} from "./task_lease_state.ts";
 import {leaseIsActive, leaseVersion, leaseEpoch} from "../work_items/task_lease_acquire.ts";
 import {releasedTaskLeaseRecord} from "../work_items/task_lease_lifecycle_decision.ts";
 
-const REOPEN_FIELDS = new Set(["status", "clear_resume_when", "reason"]);
+const REOPEN_FIELDS = new Set(["status", "clear_resume_when", "reason", "evidence"]);
 
 export function isDeferredReopen(input: CoordinationTodoUpdateInput, todo: JsonObject): boolean {
   const intent = input.planning_intent ?? {};
   return todo.role === "agent" && todo.status === "deferred" &&
-    intent.status === "open" && intent.clear_resume_when === true &&
+    intent.status === "open" && intent.resume_when == null && intent.clear_resume_when !== false &&
     typeof todo.resume_when === "string" && Boolean(todo.resume_when) &&
-    Object.keys(input.patch).length === 0 && input.clear_fields.length === 0 &&
+    Object.keys(input.patch).every(field => field === "note") && input.clear_fields.length === 0 &&
     Object.keys(intent).every(field => REOPEN_FIELDS.has(field));
 }
 
@@ -25,8 +25,8 @@ export function isOwnerDeferral(input: CoordinationTodoUpdateInput, todo: JsonOb
   return todo.role === "agent" && todo.status === "open" && intent.status === "deferred" &&
     typeof intent.resume_when === "string" && Boolean(intent.resume_when.trim()) &&
     typeof intent.reason === "string" && Boolean(intent.reason.trim()) &&
-    Object.keys(input.patch).length === 0 && input.clear_fields.length === 0 &&
-    Object.keys(intent).every(field => ["status", "resume_when", "reason"].includes(field));
+    Object.keys(input.patch).every(field => field === "note") && input.clear_fields.length === 0 &&
+    Object.keys(intent).every(field => ["status", "resume_when", "reason", "evidence"].includes(field));
 }
 
 /** Actor, claim, exclusion and binding admission happens before this check.

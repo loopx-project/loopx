@@ -120,3 +120,21 @@ def test_redirected_original_output_cannot_recover_an_identity(tmp_path):
     with pytest.raises(ValueError, match="physical absolute"):
         subject.prepare_checkpoint_refresh(review, attempt, original)
     assert load_codex_cli_session(tmp_path, lineage=subject.lineage, session_scope="agent")["session_id"] == "original"
+
+
+def test_pre_replan_refresh_has_no_completed_decision_and_preserves_recovery(tmp_path):
+    from benchmark.runtime.checkpoint_continuation import retained_native_history
+    subject = session(tmp_path)
+    basis = {"decision_sha256": "d" * 64, "pending_replan": {"capture": True}}
+    original, retry = tmp_path / "original.jsonl", tmp_path / "retry.jsonl"
+    subject.prepare_checkpoint_refresh(None, tmp_path / "attempt.json", original, pre_replan_basis=basis)
+    observed(original, "fresh-before-review")
+    subject.prepare_checkpoint_refresh(None, tmp_path / "attempt.json", retry, pre_replan_basis=basis)
+    binding = load_codex_cli_session(tmp_path, lineage=subject.lineage, session_scope="agent")
+    assert binding["session_id"] == "fresh-before-review" and not retry.exists()
+    refresh = binding["checkpoint_context_refresh"]
+    assert "review_basis" not in refresh and refresh["pre_replan_basis"] == basis
+    assert retained_native_history(binding, {})["turn_ids"] == []
+    with pytest.raises(ValueError, match="exactly one"):
+        session(tmp_path / "invalid").prepare_checkpoint_refresh(basis, tmp_path / "both.json", retry,
+                                                               pre_replan_basis=basis)

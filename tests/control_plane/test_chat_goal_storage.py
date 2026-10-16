@@ -6,7 +6,7 @@ import threading
 
 import pytest
 
-from test_chat_cold_source_import import capture_present, cold_api  # noqa: F401 - shared real-server fixtures
+from test_chat_cold_source_import import cold_api, source_modules_present  # noqa: F401 - shared real-server fixtures
 
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.control_plane.coordination.local_authority import (

@@ -741,3 +741,87 @@ def test_real_docker_controller_export_import_and_next_grade(tmp_path, monkeypat
             app.state.judge._reaper_thread.join(timeout=1)
         client.images.remove(name + ".judge.fixture:fixture")
         client.close()
+
+
+def test_concurrent_same_point_imports_preserve_both_fresh_native_runs(controllers, tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from pathlib import Path
+
+    source, destination, first, second, files, grades = controllers
+    token = register(source, first, max_agent_submissions=3, submission_cooldown=0)
+    assert submit(first, token, 7).status_code == 200
+    unit = tmp_path / 'shared-point'
+    point = transport.capture(files[0], token=token, capture_id='b' * 32, destination=unit)
+    bank = destination.state.judge.config.log_dir / 'checkpoints'
+    target = bank / ('b' * 32)
+    reserved, release, staged_second = threading.Event(), threading.Event(), threading.Event()
+    original_mkdir = Path.mkdir
+    original_effect = transport.effect_runtime_result
+    counts = {'reserve': 0, 'stage': 0}
+    mutex = threading.Lock()
+
+    def mkdir(path, *args, **kwargs):
+        if path == target:
+            with mutex:
+                counts['reserve'] += 1
+                first_import = counts['reserve'] == 1
+            if first_import:
+                reserved.set()
+                assert release.wait(15), 'Test did not release first publisher'
+        return original_mkdir(path, *args, **kwargs)
+
+    def effect(method, params, **kwargs):
+        result = original_effect(method, params, **kwargs)
+        if params.get('action') == 'materialize':
+            with mutex:
+                counts['stage'] += 1
+                if counts['stage'] == 2:
+                    staged_second.set()
+        return result
+
+    monkeypatch.setattr(Path, 'mkdir', mkdir)
+    monkeypatch.setattr(transport, 'effect_runtime_result', effect)
+    def restore(run):
+        return transport.restore(files[1], root=unit, expected_sha256=point['sha256'], run_id=run)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        one = pool.submit(restore, 'branch-one')
+        try:
+            assert reserved.wait(15)
+            two = pool.submit(restore, 'branch-two')
+            assert staged_second.wait(15)
+            # Both have staged verified bytes. A competing publisher must wait,
+            # rather than create the destination while the first is reserving it.
+            time.sleep(.2)
+            assert not two.done()
+        finally:
+            release.set()
+        a, b = one.result(timeout=15), two.result(timeout=15)
+    assert a['token'] != b['token'] != token
+    assert counts['reserve'] == 1
+    for run in ('branch-one', 'branch-two'):
+        history = destination.state.judge.get_run_history(run, 'fixture')
+        assert history['best_score'] == 7 and history['agent_submissions'] == 1
+    assert len(grades) == 1
+    assert (target / 'incumbent.tar.gz').read_bytes() == b'7'
+
+
+def test_bank_import_contention_is_bounded_and_does_not_erase_the_lock(tmp_path):
+    target = tmp_path / ('e' * 32)
+    with transport._bank_import_lock(target, 1):
+        with pytest.raises(TimeoutError, match='Native bank import is busy'):
+            with transport._bank_import_lock(target, .03):
+                pytest.fail('Competing publication entered the lock')
+    assert not target.exists()
+    with transport._bank_import_lock(target, 1):
+        assert (tmp_path / ('.loopx-import-' + target.name + '.lock')).is_file()
+
+
+def test_bank_import_rejects_a_redirected_lock(tmp_path):
+    target = tmp_path / ('f' * 32)
+    foreign = tmp_path / 'foreign'
+    foreign.write_text('unchanged')
+    (tmp_path / ('.loopx-import-' + target.name + '.lock')).symlink_to(foreign)
+    with pytest.raises(OSError):
+        with transport._bank_import_lock(target, 1):
+            pytest.fail('Symlink lock accepted')
+    assert foreign.read_text() == 'unchanged' and not target.exists()

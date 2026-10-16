@@ -200,6 +200,7 @@ CONSUMER_MODULES = (
     "loopx.control_plane.todos.completion_validation_store",
     "loopx.control_plane.todos.machine_section_projection",
     "loopx.control_plane.turn_driver.codex_sessions",
+    "loopx.control_plane.turn_driver.operation_requests",
     "loopx.control_plane.work_items.governed_transition_proposal",
     "loopx.control_plane.work_items.progress_review_policy",
     "loopx.domain_packs.issue_fix",

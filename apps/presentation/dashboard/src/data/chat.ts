@@ -56,7 +56,7 @@ export {
   pendingGoalReviews,
   proposalReviewState,
   sessionInvalidatedByPayload,
-  selectAvailableChatAgent,
+  selectChatAgent,
   selectChatGoal,
   stewardPrompts,
   turnReplaySafeByPayload,
@@ -205,6 +205,10 @@ export const chatCapabilitiesSchema = z.object({
     source: z.string().optional(),
     tool_calls: z.boolean().optional(),
     trust_scope: z.string().optional(),
+    // Readiness: why an unavailable built-in runtime is unavailable and what it needs.
+    unavailable_reason: z.string().nullable().optional(),
+    executable: z.string().nullable().optional(),
+    environment_variable: z.string().nullable().optional(),
   })).optional(),
   lark_cli: z.object({
     available: z.boolean(),
@@ -2500,6 +2504,12 @@ const privateConversationSchema = z.object({
   goal_scope: z.enum(["all_registered", "selected"]).nullable().optional(),
   audience: z.enum(["owner", "group"]).default("owner"), group_count: z.number().int().default(0),
   pending_count: z.number().int(), recovery_count: z.number().int(),
+  owner_attention: z.discriminatedUnion("available", [
+    z.object({available: z.literal(true), enabled: z.boolean(), revision: z.number().int(),
+      last_checked_at: z.number().nullable(), error_code: z.string().nullable(),
+      pending_count: z.number().int(), unconfirmed_count: z.number().int(), failed_count: z.number().int()}),
+    z.object({available: z.literal(false), error_code: z.string()}),
+  ]).optional(),
   agent_candidates: z.array(privateAgentSessionSchema).default([]), agent_targets: z.array(privateAgentTargetSchema).default([]),
 });
 const privateConversationStopRecoverySchema = z.object({binding_id: z.string(), project_ref: z.string(),
@@ -2528,6 +2538,13 @@ export async function disconnectPrivateConversation(bindingId: string, revision:
 export async function changePrivateAgentTarget(bindingId: string, revision: number, target: {session_id: string} | {target_ref: string}) {
   return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations/agent-targets", {
     method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({binding_id: bindingId, revision, ...target}),
+  }));
+}
+
+export async function changeOwnerNotifications(bindingId: string, bindingRevision: number, revision: number, enabled: boolean) {
+  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations/owner-notifications", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({binding_id: bindingId, binding_revision: bindingRevision, revision, enabled}),
   }));
 }
 

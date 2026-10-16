@@ -343,3 +343,123 @@ def test_guided_turn_captures_the_minted_identity(tmp_path):
     minted = full["heartbeat_receipt"]["turn_instance_id"]
     assert minted.startswith("guided-start:")
     assert payload["heartbeat_receipt"]["turn_instance_id"] == minted
+
+
+def _replan_selection_hop(tmp_path, host):
+    """Commit a replan guard, then select a Todo on that Turn through a Host.
+
+    The real CLI, quota owner and TS checkpoint selector run unchanged; only
+    the Host side of the private socket is a synthetic test listener.
+    """
+    import hashlib
+    import socket
+    import tempfile
+    import threading
+    from pathlib import Path
+    from tests.control_plane.test_quota_settlement_cli import (
+        SELECTED_REPLAN_TODO_ID, _configure_selected_todo_replan_fixture,
+    )
+
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry)
+    common = ('--goal-id', GOAL_ID, '--agent-id', AGENT_ID, '--runtime-profile', 'generic_cli',
+              '--turn-instance-id', TURN_ID, '--available-capability', 'shell',
+              '--available-capability', 'filesystem_write')
+    code, guard = _run_cli(registry, runtime, 'quota', 'should-run', *common, cwd=project)
+    assert code == 0 and guard['effective_action'] == 'autonomous_replan_required', guard
+    assert guard['heartbeat_receipt']['status'] == 'committed'
+    capture_root = tmp_path / 'decisions'
+    capture_root.mkdir(mode=0o700)
+    observed = {}
+    with tempfile.TemporaryDirectory(prefix='quota-host-', dir='/tmp') as short:
+        endpoint = Path(short).resolve() / 'host.sock'
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(endpoint))
+            listener.listen(1)
+            listener.settimeout(60)
+
+            def serve():
+                channel, _ = listener.accept()
+                with channel:
+                    message = json.loads(channel.makefile('rb').readline())
+                    raw = Path(message['path']).read_bytes()
+                    assert hashlib.sha256(raw).hexdigest() == message['sha256']
+                    observed['decision'] = json.loads(raw)
+                    if host(observed):
+                        channel.sendall(json.dumps({'released': True, 'sha256': message['sha256']}).encode() + b'\n')
+
+            thread = threading.Thread(target=serve, daemon=True)
+            thread.start()
+            code, selected = _run_cli(
+                registry, runtime, 'quota', 'should-run', *common,
+                '--todo-id', SELECTED_REPLAN_TODO_ID, '--turn-envelope',
+                '--decision-output-root', str(capture_root),
+                '--decision-handoff-socket', str(endpoint), cwd=project)
+            thread.join(10)
+    return code, selected, observed, sorted(capture_root.glob('*/decision.json')), runtime
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='Unix local Host transport')
+def test_selection_hop_on_committed_replan_turn_returns_committed_result(tmp_path):
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+
+    def typed_host(observed):
+        # The Host consults the existing typed selector before releasing.
+        observed['intent'] = effect_runtime_result('runtime.checkpoint_artifacts', {
+            'action': 'select_replan', 'quota': observed['decision'], 'goal_id': GOAL_ID,
+            'agent_id': AGENT_ID, 'turn_instance_id': TURN_ID})
+        return True
+
+    code, selected, observed, saved, _ = _replan_selection_hop(tmp_path, typed_host)
+    assert observed['decision']['ok'] is True
+    assert observed['decision']['heartbeat_receipt']['status'] == 'upgraded'
+    # The binding hop is the same Turn's pending closeout, not a new point.
+    assert observed['intent'] == {'capture': False, 'reason': 'turn_closeout_pending',
+                                  'execution_authority_granted': False}
+    assert code == 0 and selected['ok'] is True, selected
+    assert selected['schema_version'] == 'loopx_turn_envelope_v0'
+    assert len(saved) == 1 and json.loads(saved[0].read_text()) == observed['decision']
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='Unix local Host transport')
+def test_refused_selection_handoff_is_typed_and_keeps_the_committed_capture(tmp_path):
+    code, selected, observed, saved, runtime = _replan_selection_hop(tmp_path, lambda _: False)
+    assert code == 1 and selected['ok'] is False
+    # Never a generic collection failure that replaces the original capture.
+    assert selected['error_code'] == 'quota_decision_transport_failed', selected
+    assert selected['status'] == 'decision_transport_failed'
+    assert 'Do not blindly rerun the guard' in selected['reason']
+    assert selected['heartbeat_receipt']['turn_instance_id'] == TURN_ID
+    assert len(saved) == 1 and selected['captured_decision'] == {'path': str(saved[0])}
+    assert json.loads(saved[0].read_text()) == observed['decision']
+    assert observed['decision']['ok'] is True
+    assert _heartbeat_receipt_count(runtime, TURN_ID) >= 1
+
+
+def test_ended_wake_handoff_endpoint_is_rejected_with_current_wake_remedy(tmp_path):
+    from loopx.control_plane.turn_driver.decision_capture import validate_handoff_socket
+
+    with pytest.raises(QuotaCommandValidationError) as raised:
+        validate_handoff_socket(str(tmp_path / 'ended-wake' / 'host.sock'))
+    message = str(raised.value)
+    assert message.startswith('invalid decision handoff socket')
+    assert 'No guard was run' in message and 'current' in message
+
+
+def test_unexpected_collection_failure_names_typed_runtime_cause_only():
+    from pathlib import Path
+    from loopx.cli_commands.quota_failure_report import quota_failure_payload
+    from loopx.control_plane.effect_runtime import EffectRuntimeInternalError
+
+    args = argparse.Namespace(quota_command='should-run', goal_id=GOAL_ID, verbose=False)
+    typed = quota_failure_payload(args, registry_path=Path('registry.json'), runtime_root_arg=None,
+        error=EffectRuntimeInternalError('Effect runtime handler failed unexpectedly',
+                                         diagnostic_code='unexpected_handler_error'))
+    assert typed['error_code'] == 'quota_unexpected_collection_error'
+    assert typed['reason'] == 'Effect runtime handler failed unexpectedly'
+    assert (typed['error_class'], typed['diagnostic_code']) == (
+        'EffectRuntimeInternalError', 'unexpected_handler_error')
+    private = quota_failure_payload(args, registry_path=Path('registry.json'), runtime_root_arg=None,
+        error=ValueError('/private/runtime/secret.json'))
+    assert private['reason'] == 'quota collection failed' and private['error_class'] == 'ValueError'
+    assert 'secret' not in json.dumps(private) and 'diagnostic_code' not in private

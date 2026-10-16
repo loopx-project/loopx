@@ -138,6 +138,22 @@ def test_global_todos_error_redacts_local_paths(tmp_path) -> None:
     assert "<local-path-redacted>" in payload["error"]
 
 
+def test_global_todos_error_survives_projection_runtime_failure(monkeypatch) -> None:
+    monkeypatch.setattr(
+        global_todos,
+        "seal_projection_envelope",
+        lambda **_: (_ for _ in ()).throw(RuntimeError("runtime unavailable")),
+    )
+
+    payload = global_todos.build_global_todos_error("status unavailable")
+
+    assert payload["ok"] is False
+    assert "projection_envelope" not in payload
+    assert "no projection envelope" in global_todos.render_global_todos_markdown(
+        payload
+    )
+
+
 def test_classifies_runnable_review_without_title_guessing(monkeypatch, tmp_path) -> None:
     quota = runnable_quota(
         "goal-review",

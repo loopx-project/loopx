@@ -4,6 +4,7 @@ import {chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, w
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {checkpointArtifacts} from "../../loopx/control_plane/runtime/checkpoint_artifacts.ts";
+import {EffectRuntimeRequestError} from "../../loopx/control_plane/effect_runtime_errors.ts";
 import {sqliteAuthorityRuntime} from "../../loopx/control_plane/coordination/sqlite_runtime.ts";
 
 async function fixture(t: test.TestContext) {
@@ -263,6 +264,32 @@ test("receipt-owned replan settlement returns to its original writer without adm
     ...quota.replan_action_packet, settlement_only: false}}}), /admitted identity/);
   assert.equal((await checkpointArtifacts({...request, quota: {...quota, replan_action_packet: {
     ...quota.replan_action_packet, decision: "replan_required", settlement_only: false}}})).capture, true);
+});
+
+test("the selection hop that binds a Todo is released as pending closeout, not an identity failure", async () => {
+  // Real-CLI shape: the agent selects a Todo on the Turn whose original guard
+  // owns the replan. The receipt view is "upgraded" with the new binding.
+  const id = "replan-0123456789abcdef", turn = "fixture-turn";
+  const identity = {goal_id: "fixture-goal", agent_id: "fixture-agent", turn_instance_id: turn,
+    todo_id: "todo_selected", effect_id: `fixture-goal:fixture-agent:todo_selected:${turn}`};
+  const quota = {ok: true, goal_id: "fixture-goal", effective_action: "autonomous_replan_required",
+    replan_action_packet: {schema_version: "replan_action_packet_v0", decision: "replan_required", obligation_id: id},
+    heartbeat_receipt: {status: "upgraded", turn_instance_id: turn, event_id: "fixture-event",
+      closeout_required: true, semantic_replan_obligation_id: id, settlement_identity: identity}};
+  const request = {action: "select_replan", quota, goal_id: "fixture-goal", agent_id: "fixture-agent", turn_instance_id: turn};
+  assert.deepEqual(await checkpointArtifacts(request), {
+    capture: false, reason: "turn_closeout_pending", execution_authority_granted: false,
+  });
+  // Statuses outside the durable receipt views stay refused, now as a typed
+  // request rejection whose reason survives the runtime boundary.
+  for (const status of ["pending", "failed", "uncommitted"]) {
+    await assert.rejects(checkpointArtifacts({...request, quota: {...quota, heartbeat_receipt: {
+      ...quota.heartbeat_receipt, status}}}),
+    (error: unknown) => error instanceof EffectRuntimeRequestError && /admitted identity/.test(error.message));
+  }
+  await assert.rejects(checkpointArtifacts({...request, quota: {...quota, heartbeat_receipt: {
+    ...quota.heartbeat_receipt, settlement_identity: {...identity, turn_instance_id: "another-turn"}}}}),
+  (error: unknown) => error instanceof EffectRuntimeRequestError);
 });
 
 test("committed semantic replan can capture before work selection without inventing settlement authority", async () => {

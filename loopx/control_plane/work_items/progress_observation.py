@@ -8,6 +8,7 @@ from typing import Any
 
 from ...turn_identity import normalize_turn_instance_id
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from .replan_semantics_codec import project_replan_semantics
 from ..goals.goal_vision_state import normalize_goal_vision_state
 from ..todos.contract import (
     normalize_todo_task_domain,
@@ -331,7 +332,7 @@ def replan_writeback_requirements(
 ) -> dict[str, Any]:
     """Adapt the shared typed discharge policy for CLI and host projection."""
     try:
-        result = effect_runtime_result("work_item.replan_semantics.project", {
+        result = project_replan_semantics({
             "operation": "requirements", "obligation": dict(obligation),
         })
     except EffectRuntimeRejected as exc:
@@ -350,7 +351,7 @@ def replan_successor_transition_allowed(
 ) -> bool:
     """Ask the typed owner whether a Todo transition can settle this review."""
     try:
-        result = effect_runtime_result("work_item.replan_semantics.project", {
+        result = project_replan_semantics({
             "operation": "transition_eligibility", "obligation": dict(obligation),
             "stride_strategy": stride_strategy,
         })
@@ -367,7 +368,7 @@ def guarded_replan_transition_delta(
 ) -> dict[str, Any] | None:
     """Adapt revalidated canonical receipts to the TS-owned exact Turn gate."""
     try:
-        result = effect_runtime_result("work_item.replan_semantics.project", {
+        result = project_replan_semantics({
             "operation": "turn_transition", "guard_scoped": guard_scoped,
             "selected_obligation_id": selected_obligation_id,
             "transition_candidates": transition_candidates,
@@ -482,7 +483,7 @@ def semantic_delta_from_writeback(
     if vision:
         vision["state"] = normalize_goal_vision_state(vision.get("state"))
     try:
-        result = effect_runtime_result("work_item.replan_semantics.project", {
+        result = project_replan_semantics({
             "operation": "qualify", "obligation": dict(obligation),
             "observation_delta": observation_delta, "agent_vision": vision,
         })

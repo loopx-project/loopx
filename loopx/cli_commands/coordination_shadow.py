@@ -125,7 +125,9 @@ def register_coordination_shadow_command(
             )
         if name == "prepare-import":
             action.add_argument("--operation-id", required=True)
-            action.add_argument("--backup-manifest", type=Path, required=True)
+            action.add_argument("--backup-manifest", type=Path,
+                help=("Existing private backup manifest. Omit to create or replay a scoped "
+                      "local-authority migration backup that excludes unrelated artifacts."))
             action.add_argument("--provider", choices=("file", "sqlite"), required=True)
             action.add_argument("--target-handoff-mode", choices=("soft_claim", "hard_lease"), required=True)
         if name in {"apply-import", "recover-import"}:
@@ -256,19 +258,29 @@ def handle_coordination_shadow_command(
                 "runtime_root": str(runtime_root.expanduser().absolute()), "goal_id": args.goal_id,
                 "operation_id": args.operation_id}
             if args.coordination_shadow_command == "prepare-import":
-                from ..control_plane.coordination.cold_source_backup import read_cold_source_backup
-                _, _, state_path = resolve_goal_state(registry=registry, goal_id=args.goal_id,
+                from ..control_plane.coordination.cold_source_backup import (
+                    create_cold_source_backup, read_cold_source_backup,
+                )
+                _, project, state_path = resolve_goal_state(registry=registry, goal_id=args.goal_id,
                     project_override=args.project, state_file_override=args.state_file)
                 projection, snapshot = build_runtime_shadow_source_snapshot(goal=goal,
                     runtime_root=runtime_root, state_path=state_path, registry_path=registry_path,
                     include_all_archived_todos=True)
+                source_paths = [
+                    Path(snapshot["state_path"]), Path(snapshot["registry_source"]["path"]),
+                    *(Path(item["path"]) for item in snapshot["evidence_files"]),
+                    runtime_root / "goals" / args.goal_id / "task-leases",
+                ]
+                source_backup = (read_cold_source_backup(args.backup_manifest,
+                    source_paths=source_paths,
+                    workspace=runtime_root / "authority-transition" / "migration-work" / args.goal_id)
+                    if args.backup_manifest is not None else
+                    create_cold_source_backup(project=Path(project), runtime_root=runtime_root,
+                        registry_path=registry_path.resolve(), goal_id=args.goal_id,
+                        operation_id=args.operation_id, source_paths=source_paths))
                 request.update(action="prepare", projection=projection, source_snapshot=snapshot,
                     target_handoff_mode=args.target_handoff_mode, target_provider=args.provider,
-                    source_backup=read_cold_source_backup(args.backup_manifest, source_paths=[
-                        Path(snapshot["state_path"]), Path(snapshot["registry_source"]["path"]),
-                        *(Path(item["path"]) for item in snapshot["evidence_files"]),
-                        runtime_root / "goals" / args.goal_id / "task-leases",
-                    ]))
+                    source_backup=source_backup)
             else:
                 request.update(action="apply" if args.coordination_shadow_command == "apply-import" else "recover",
                     expected_plan_sha256=args.plan_sha256)

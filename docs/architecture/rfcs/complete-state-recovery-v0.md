@@ -512,6 +512,77 @@ NoKV or another provider is unsupported until its profile independently proves
 the same logical contract. A generic filesystem copy cannot stand in for a
 provider profile.
 
+### Capture-owner inventory for the first local profile
+
+The source inventory below targets the first single-Goal File/SQLite profile.
+It identifies where M2 must obtain evidence; it does **not** certify that a
+particular backup contains every required component. An actual capture must
+resolve the selected Goal's routes and dependency closure, distinguish an
+owner-confirmed absence from an unreadable or unrecognized source, and retain
+unresolved required owners as holds. Optional installation does not make an
+active Goal dependency optional.
+
+| Mutable boundary and existing owner | Current capture/readback | Remaining capture or adoption evidence |
+| --- | --- | --- |
+| Registry routing and machine/Goal configuration: [configuration capture adapter](../../../loopx/capabilities/configuration_backup.py), [typed checkpoint envelope](../../../loopx/control_plane/configuration_backup.ts), [machine configuration store](../../../loopx/capabilities/machine_configuration/store.py) | Full backups compare the registry and stored machine-configuration bytes actually decoded by their owners with mapped copied-byte witnesses. Missing/differing copies, A → B → A and a captured absence beside an earlier copied file refuse publication. The private manifest records matching revisions and the configuration capture interval. | Bind authority and every other required owner to their own intervals and dependencies. Configuration-source agreement and a valid envelope do not prove cross-owner consistency. |
+| Goal narrative, vision and authority material references: registry-resolved active state, [vision checkpoint owner](../../../loopx/control_plane/goals/vision_checkpoint.ts) | Discovered active-state paths and declared local `kind=goal_doc` documents are copied through the existing material-root boundary. Hash-only registrations and document links are not recursively resolved. | Preserve the full Goal and revision-bound required artifacts, classify unavailable dependencies, and keep derived Markdown projections subordinate to their owners. |
+| Canonical work, leases and retained operation history: [local provider selection](../../../loopx/control_plane/coordination/local_authority_provider.ts), [authority archive owner](../../../loopx/control_plane/coordination/authority_archive.ts), [legacy writer fence](../../../loopx/control_plane/coordination/legacy_writer_fence.ts) | File head/history share an atomic envelope; SQLite uses the [existing physical snapshot owner](../../../loopx/control_plane/coordination/sqlite_backup.ts). M1 opens existing stores and verifies head/history without selecting a live destination. | Bind provider/store identity, selector, fence, revision and cursor; obtain an owner export or qualified snapshot. Component-local consistency cannot establish cross-owner consistency or make historical leases valid. |
+| Quota accounting and Turn settlement: [accounting artifact transaction](../../../loopx/control_plane/quota/accounting_artifact_transaction.ts), [spend owner](../../../loopx/control_plane/quota/spend_commit.ts), [Turn journal commit](../../../loopx/control_plane/turn_driver/turn_journal_effects.ts) | Files under included runtime/project roots are retained; M1 does not reconcile their transaction lineage. | Capture committed receipts, indexes and in-flight journal inputs together with their exact settlement identity; let the original owner resolve replay or ambiguity without a second debit. |
+| Goal lifetime and session/execution binding: [source-session lifetime owner](../../../loopx/control_plane/goals/source_session_lifetime.ts), [Chat session lifecycle](../../../loopx/control_plane/goals/chat_session_lifecycle.ts), [execution identity](../../../loopx/control_plane/runtime/execution_identity.ts) | Existing Goal-scoped registration, recreation and Turn-settlement directories beside the actual registry are retained through their existing path owners. Native Host session stores outside those paths are not implicitly captured or adopted. | Resolve the actual entrypoint's owner, lifetime and generation. Prove stale executor exclusion and a qualified session recovery path before the original entrypoint can continue. |
+| Pending effects, delivery and derived projection outboxes: [source Turn effect gate](../../../loopx/control_plane/goals/source_session_lifetime.ts), [return-delivery classifier](../../../loopx/control_plane/collaboration/return_delivery.ts), [authority shadow outbox](../../../loopx/control_plane/coordination/local_authority_shadow_outbox.ts) | Included journals/outboxes are retained as bytes; neither their external outcome nor their replay eligibility is inferred. | Each owning effect/transport resolves committed, absent or unknown outcomes and exact receipts. Distinguish a derived projection from an external effect; an unknown external result stays held. |
+| Scheduler and optional Host automation: [scheduler state owner](../../../loopx/control_plane/scheduler/state_store.ts), [backup discovery](../../../loopx/state_backup.py) | Runtime scheduler files and explicitly included Codex automation/skill directories can be copied. A saved timer is not an observed active Host schedule. | Bind cadence/reset identity, reconcile actual Host state and exclude duplicate admission. Other Host/provider state needs its own explicit capture contract. |
+| Knowledge/artifacts, extension state and credentials: the selected Goal's material and provider owners, including [decision-context recovery](../../../loopx/capabilities/decision_context/capture_recovery.py) where applicable | Only discovered roots are included; a physical SQLite snapshot proves no semantic provider completeness. Credentials may be present in private raw bytes. | Enumerate actual required sources and provider versions; obtain their own export/verify evidence. Credential custody, rotation/revocation and external access remain with their owners; copied bytes grant no access. |
+
+The [source-session lifecycle path
+owner](../../../loopx/control_plane/goals/source_session_registry_state.py) now
+supplies the same registration, recreation and Turn-settlement directories to
+the writers and full-backup discovery. This closes the omission beside an
+external source registry, without sweeping other Goal directories or treating
+journal bytes as reconciled effects. Source-loss File/SQLite producer/verifier
+coverage retains those bytes and the declared local Goal document while keeping
+the audit inert and held. M2 still needs the complete required-owner closure,
+independent intervals/dependencies and actual material/provider exports; a
+hash-only registration is not captured source content.
+
+**Observed ordering counterexample and bounded refusal.** The earlier producer
+could copy raw registry A and later encode configuration B while every byte and
+configuration digest passed. The current full producer retains the exact source
+snapshots used for decoding, compares all mapped regular copies, and refuses
+publication when they differ or lack a witness. File/SQLite tests cover both a
+persistent change and A → B → A; a later live-path reread cannot prove this case.
+Routed sources and missing witnesses have separate negative coverage.
+
+The same rule covers the existing stored machine-configuration owner. Its exact
+read supplies the checkpoint and witness together, including confirmed absence;
+changed, newly created or removed configuration cannot contradict the raw copy.
+Unusable machine sources refuse capture rather than become an absent envelope.
+Self-contained local aliases reuse the included regular target witness; a retained
+tar link cannot masquerade as an owner-confirmed absence. Repointed aliases,
+including A → B → A, are compared through the saved route.
+This closes the configuration-source IO boundary, not the complete recovery
+set's owner closure or consistency profile.
+
+Historical v0 archives can still contain that combination. A legacy-archive
+fixture in [the recovery suite](../../../tests/test_state_recovery.py) deliberately
+retains earlier raw registry/work and later owner-verified configuration, without
+new capture claims. After the original sources disappear, M1 reads the earlier
+work and retains `held`, `legacy_best_effort`, `legacy_manifest_incomplete` and
+no execution authority. This preserves historical readback while tightening new
+publication; it does not qualify an `online` profile or the full M2 inventory.
+Retaining the lifecycle journals above does not authorize generic reads of the
+lifecycle-only `source_session_v1` profile, which remains refused.
+
+The next implementation slice belongs to the existing backup/recovery workflow:
+resolve one Goal's required owner closure, capture configuration and canonical
+authority through those owners, and record their source intervals/dependencies
+before any profile can be qualified. Reuse the typed authority export/snapshot
+and configuration envelope; Python remains the filesystem/transport adapter.
+Exercise concurrent writes, a missing required owner and moved dependencies
+through the real producer and inert verifier. Other rows remain explicit holds
+until their owner evidence exists. M2's complete-inventory entry and
+profile-specific exits, M3 admission, and the frozen RPO/RTO criteria stay open;
+this inventory neither adds a parallel coordinator nor changes their criteria.
+
 ### Implementation ownership and reuse evidence
 
 M3 implementation records a decision-owner matrix before code is admitted. For

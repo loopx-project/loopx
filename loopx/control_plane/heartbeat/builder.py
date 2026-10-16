@@ -176,6 +176,7 @@ def _heartbeat_prompt_commands(
     turn_identity_arg: str,
     decision_output_root: Path | None,
     decision_handoff_socket: str | None,
+    turn_envelope: bool,
 ) -> dict[str, str | None]:
     quota_guard_command = render_quota_guard_command(
         goal_id,
@@ -279,9 +280,10 @@ def _heartbeat_prompt_commands(
         capture_arg = " --decision-output-root " + shlex.quote(str(decision_output_root))
         if decision_handoff_socket is not None:
             capture_arg += " --decision-handoff-socket " + shlex.quote(decision_handoff_socket)
+        display_arg = " --turn-envelope" if turn_envelope else ""
         for key in ("quota_guard_command", "task_body_quota_guard_command"):
-            commands[key] = str(commands[key]) + " --turn-envelope" + capture_arg
-        commands["thin_prompt_command"] = str(commands["thin_prompt_command"]) + capture_arg
+            commands[key] = str(commands[key]) + display_arg + capture_arg
+        commands["thin_prompt_command"] = str(commands["thin_prompt_command"]) + display_arg + capture_arg
     return commands
 
 
@@ -313,6 +315,7 @@ def build_heartbeat_prompt(
     reward_memory_enabled: bool = True,
     decision_output_root: str | Path | None = None,
     decision_handoff_socket: str | None = None,
+    turn_envelope: bool = False,
 ) -> dict[str, Any]:
     if not (full or compact or brief or thin):
         thin = True
@@ -376,6 +379,7 @@ def build_heartbeat_prompt(
         native_goal_host=native_goal_host,
         turn_instance_id=normalized_turn_instance_id,
         decision_handoff_socket=decision_handoff_socket,
+        turn_envelope=turn_envelope,
     )
     explicit_agent_scopes = normalize_agent_scopes(agent_scopes)
     if explicit_agent_scopes:
@@ -464,6 +468,7 @@ def build_heartbeat_prompt(
         turn_identity_arg=turn_identity_arg,
         decision_output_root=decision_output_root,
         decision_handoff_socket=decision_handoff_socket,
+        turn_envelope=turn_envelope,
     )
     cli_preflight = render_cli_preflight(cli_bin=cli_bin)
     task_body_renderer = _select_task_body_renderer(
@@ -499,13 +504,13 @@ def build_heartbeat_prompt(
         compact_prompt_command=str(commands["compact_prompt_command"]),
         brief_prompt_command=str(commands["brief_prompt_command"]),
         thin_prompt_command=str(commands["thin_prompt_command"]),
-        **({"captured_envelope": True} if decision_output_root is not None else {}),
+        **({"captured_envelope": True} if turn_envelope else {}),
         **reward_memory_rule_kwargs,
     )
     task_body = bind_exact_turn_settlement_task_body(
         task_body,
         turn_instance_id=normalized_turn_instance_id,
-        captured_envelope=decision_output_root is not None,
+        captured_envelope=turn_envelope,
     )
     if fine_grained:
         task_body = f"{task_body}\n\n{FINE_GRAINED_TURN_RULE}"

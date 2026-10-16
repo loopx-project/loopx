@@ -46,7 +46,7 @@ type ChatRouteCandidate = {
 };
 
 const capabilityAwareRoute = chatModel as unknown as {
-  selectAvailableChatAgent?: (
+  selectChatAgent?: (
     options: ChatRouteCandidate[],
     preferredAgentId: string | undefined,
     defaultAgentId: string,
@@ -54,7 +54,7 @@ const capabilityAwareRoute = chatModel as unknown as {
 };
 
 check(
-  typeof capabilityAwareRoute.selectAvailableChatAgent === "function",
+  typeof capabilityAwareRoute.selectChatAgent === "function",
   "Chat routing should expose stale-selection fallback",
 );
 
@@ -64,17 +64,25 @@ const routeOptions: ChatRouteCandidate[] = [
   { agentId: "status-only", available: true },
 ];
 check(
-  capabilityAwareRoute.selectAvailableChatAgent!(routeOptions, "registered-fixer", "codex").agentId === "codex",
+  capabilityAwareRoute.selectChatAgent!(routeOptions, "registered-fixer", "codex").agentId === "codex",
   "a persisted unavailable Agent should fall back to Codex",
 );
 check(
-  capabilityAwareRoute.selectAvailableChatAgent!(
+  capabilityAwareRoute.selectChatAgent!(
     routeOptions.map((option) => option.agentId === "codex" ? { ...option, available: false } : option),
     "registered-fixer",
     "status-only",
   ).agentId === "status-only",
   "Chat should fall back to status-only when no model adapter is available",
 );
+const unavailableProjectOptions = routeOptions.filter(option => option.agentId !== "status-only")
+  .map(option => ({ ...option, available: false }));
+const diagnosticRoute = capabilityAwareRoute.selectChatAgent!(unavailableProjectOptions, "registered-fixer", "codex");
+check(diagnosticRoute.agentId === "registered-fixer" && diagnosticRoute.available === false,
+  "An unavailable project keeps the preferred identity and its refusal, rather than crashing or granting execution");
+const missingPreferred = capabilityAwareRoute.selectChatAgent!(unavailableProjectOptions, "status-only", "status-only");
+check(missingPreferred.agentId === "codex" && missingPreferred.available === false,
+  "A project without status projection keeps an actual unavailable executor, never a fabricated readonly route");
 
 const fixture: ChatStatus = {
   ok: true,

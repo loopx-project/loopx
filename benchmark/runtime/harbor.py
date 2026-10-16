@@ -19,7 +19,7 @@ from harbor.utils.trajectory_utils import format_trajectory_json
 from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_strategy
 
 from .codex_offline import MODEL_CATALOG_REMOTE, CodexOffline, stage_portable_python
-from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution
+from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, turn_envelope_receipt
 from .layout import _ROOT, _SRC, _CONTROL, _CODEX_HOME
 
 
@@ -41,6 +41,15 @@ _GOAL_ID = "benchmark-goal"
 _AGENT_ID = "benchmark-agent"
 
 
+# Non-LoopX workers stage only these paths; keep this list closed over the
+# loopx-internal import closure of native_codex_goal.py (see the import test).
+NATIVE_GOAL_SOURCE_PATHS = (
+    "benchmark/runtime",
+    "loopx/capabilities/benchmark_toolkit/native_codex_goal.py",
+    "loopx/control_plane/turn_driver/codex_stdio.py",
+)
+
+
 class BenchmarkCodex(CodexOffline):
     """One independent LoopX control plane per Harbor trial."""
 
@@ -57,9 +66,11 @@ class BenchmarkCodex(CodexOffline):
         replan_after_turns=None,
         stride_strategy=None,
         checkpoint_request_path=None,
+        checkpoint_request=None,
         task_entry=None,
         planning_timeout_sec=None,
         turn_envelope=False,
+        native_goal_continue=False,
         task_objective=None,
         goal_id=_GOAL_ID,
         agent_id=_AGENT_ID,
@@ -105,11 +116,22 @@ class BenchmarkCodex(CodexOffline):
         self.stride_strategy = (normalize_stride_strategy(stride_strategy)
                                 if stride_strategy is not None else None)
         self.checkpoint_request_path = None
+        self._checkpoint_declaration = None
+        if checkpoint_request is not None:
+            if checkpoint_request_path is None:
+                raise ValueError("checkpoint_request requires its staged guest path")
+            from .checkpoint import parse_checkpoint_request
+            self._checkpoint_declaration = parse_checkpoint_request(checkpoint_request)
         if checkpoint_request_path is not None:
             if self.execution.mode not in {"heartbeat", "turn"}:
                 raise ValueError("checkpoint_request_path requires a settled-work worker")
             from .checkpoint import normalize_checkpoint_request_path
             self.checkpoint_request_path = normalize_checkpoint_request_path(checkpoint_request_path)
+        if not isinstance(native_goal_continue, bool):
+            raise ValueError("native_goal_continue must be a boolean opt-in")
+        if native_goal_continue and not self.execution.native_goal:
+            raise ValueError("native_goal_continue requires a native-Goal execution mode")
+        self.native_goal_continue = native_goal_continue
         self.goal_id, self.agent_id = goal_id, agent_id
         self.defer_codex_home = defer_codex_home
         self._task_path = "/usr/local/bin:/usr/bin:/bin"
@@ -121,6 +143,12 @@ class BenchmarkCodex(CodexOffline):
         self.task_objective = (task_objective if task_objective is not None else
                               "Complete the current benchmark task through validated LoopX Todos.")
         super().__init__(*args, **kwargs)
+
+    def _turn_envelope_receipt(self) -> dict:
+        return turn_envelope_receipt(explicit=self.execution.turn_envelope)
+
+    def _planning_receipt(self) -> dict:
+        return {"native_goal_continue": True} if self.native_goal_continue else {}
 
     def _replan_configuration(self) -> tuple[str, str, int]:
         # Transport existing Goal fields; the typed control plane owns counting.
@@ -152,9 +180,7 @@ class BenchmarkCodex(CodexOffline):
         self._runner_commit = runner_head
         with tempfile.TemporaryDirectory(prefix="benchmark-source-") as directory:
             archive = Path(directory) / "source.tar"
-            paths = () if self.execution.uses_loopx else (
-                "benchmark/runtime", "loopx/capabilities/benchmark_toolkit/native_codex_goal.py",
-            )
+            paths = () if self.execution.uses_loopx else NATIVE_GOAL_SOURCE_PATHS
             archive_source(source, head, archive, paths)
             await environment.upload_file(archive, f"{_ROOT}/source.tar")
             await self.exec_as_root(environment, command=(
@@ -300,7 +326,8 @@ class BenchmarkCodex(CodexOffline):
             "execution_mode": self.execution.mode,
             "iteration_context": self.execution.context,
             "task_entry": self.execution.task_entry,
-            **({"turn_envelope": True} if self.execution.turn_envelope else {}),
+            **self._turn_envelope_receipt(),
+            **self._planning_receipt(),
             "home_scope": "trial",
             "loopx_usage_ping_enabled": False,
             "login_shell_node_path": _BASH_ENV,
@@ -543,6 +570,7 @@ class BenchmarkCodex(CodexOffline):
                 **({"LOOPX_CHECKPOINT_REQUEST": self.checkpoint_request_path}
                    if self.checkpoint_request_path is not None else {}),
                 **({"LOOPX_TURN_ENVELOPE": "1"} if self.execution.turn_envelope else {}),
+                **({"LOOPX_NATIVE_GOAL_CONTINUE": "1"} if self.native_goal_continue else {}),
                 "LOOPX_ITERATION_CONTEXT": self.execution.context,
                 "LOOPX_CODEX_SANDBOX": self.execution.sandbox,
                 "LOOPX_VALIDATION_COMMAND_JSON": json.dumps(
@@ -654,7 +682,8 @@ class BenchmarkCodex(CodexOffline):
             "execution_mode": self.execution.mode,
             "iteration_context": self.execution.context,
             "task_entry": self.execution.task_entry,
-            **({"turn_envelope": True} if self.execution.turn_envelope else {}),
+            **self._turn_envelope_receipt(),
+            **self._planning_receipt(),
             "home_scope": "trial",
             **self._replan_receipt(),
             "benchmark_phase": self._phase_number,

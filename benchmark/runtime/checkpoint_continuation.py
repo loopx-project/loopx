@@ -19,9 +19,13 @@ def retained_native_history(binding, metadata):
     refresh = binding.get("checkpoint_context_refresh")
     if refresh is None:
         return metadata["native_session"]
+    review = refresh.get("review_basis")
+    pending = refresh.get("pre_replan_basis")
+    if ((review is None) == (pending is None) or
+            not (review or pending).get("decision_sha256")):
+        raise ValueError("checkpoint context refresh lacks one qualified boundary")
     if (refresh.get("checkpoint_sha256") != binding.get("checkpoint_artifact_sha256")
-            or refresh.get("session_id") != binding.get("session_id")
-            or not refresh.get("review_basis", {}).get("decision_sha256")):
+            or refresh.get("session_id") != binding.get("session_id")):
         raise ValueError("checkpoint context refresh provenance differs")
     return {"turn_ids": [], "visible_history_sha256": hashlib.sha256(b"[]").hexdigest()}
 

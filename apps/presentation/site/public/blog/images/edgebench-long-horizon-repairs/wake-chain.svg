@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 430" width="960" height="430" role="img" aria-labelledby="t" font-family="Geist,-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,&quot;PingFang SC&quot;,&quot;Noto Sans CJK SC&quot;,sans-serif">
+<title id="t">复盘点唤醒崩溃链与对应修复（#6601）</title><rect width="960" height="430" fill="#fafafa"/>
+<defs><marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#4d4d4d"/></marker></defs>
+<text x="20" y="32" fill="#171717" font-size="15" font-weight="600">复盘点唤醒崩溃链与对应修复（#6601）</text>
+<text x="20" y="66" fill="#8f8f8f" font-size="12" font-weight="600">修复前</text>
+<rect x="20" y="76" width="137" height="142" rx="6" fill="#fff" stroke="#ebebeb"/>
+<text x="30" y="98" fill="#8f8f8f" font-size="11">1</text>
+<text x="30" y="118" fill="#171717" font-size="12">宿主在复盘点捕获检</text>
+<text x="30" y="135" fill="#171717" font-size="12">查点</text>
+<path d="M157,147.0 l16,0" stroke="#4d4d4d" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+<rect x="177" y="76" width="137" height="142" rx="6" fill="#fff" stroke="#ebebeb"/>
+<text x="187" y="98" fill="#8f8f8f" font-size="11">2</text>
+<text x="187" y="118" fill="#171717" font-size="12">Agent 同一轮选择</text>
+<text x="187" y="135" fill="#171717" font-size="12">Todo；行内重新读取</text>
+<text x="187" y="152" fill="#171717" font-size="12">guard 回执</text>
+<path d="M314,147.0 l16,0" stroke="#4d4d4d" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+<rect x="334" y="76" width="137" height="142" rx="6" fill="#fff" stroke="#ebebeb"/>
+<text x="344" y="98" fill="#8f8f8f" font-size="11">3</text>
+<text x="344" y="118" fill="#171717" font-size="12">回执状态显示为</text>
+<text x="344" y="135" fill="#171717" font-size="12">upgraded</text>
+<path d="M471,147.0 l16,0" stroke="#4d4d4d" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+<rect x="491" y="76" width="137" height="142" rx="6" fill="#fff" stroke="#ebebeb"/>
+<text x="501" y="98" fill="#8f8f8f" font-size="11">4</text>
+<text x="501" y="118" fill="#171717" font-size="12">选择器只接受</text>
+<text x="501" y="135" fill="#171717" font-size="12">committed /</text>
+<text x="501" y="152" fill="#171717" font-size="12">replayed，抛出无类</text>
+<text x="501" y="169" fill="#171717" font-size="12">型错误</text>
+<path d="M628,147.0 l16,0" stroke="#4d4d4d" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+<rect x="648" y="76" width="137" height="142" rx="6" fill="#fff" stroke="#ebebeb"/>
+<text x="658" y="98" fill="#8f8f8f" font-size="11">5</text>
+<text x="658" y="118" fill="#171717" font-size="12">唤醒失败（内部运行</text>
+<text x="658" y="135" fill="#171717" font-size="12">时错误）；CLI 记为</text>
+<text x="658" y="152" fill="#171717" font-size="12">取数失败并覆盖已保</text>
+<text x="658" y="169" fill="#171717" font-size="12">存决策</text>
+<path d="M785,147.0 l16,0" stroke="#4d4d4d" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+<rect x="805" y="76" width="137" height="142" rx="6" fill="#fff" stroke="#ebebeb"/>
+<text x="815" y="98" fill="#8f8f8f" font-size="11">6</text>
+<text x="815" y="118" fill="#171717" font-size="12">下一次唤醒沿用已结</text>
+<text x="815" y="135" fill="#171717" font-size="12">束的 socket，再次失</text>
+<text x="815" y="152" fill="#171717" font-size="12">败</text>
+<text x="20" y="258" fill="#8f8f8f" font-size="12" font-weight="600">修复后</text>
+<path d="M481,218 L481,264" stroke="#2a78d6" stroke-width="1.5" fill="none"/>
+<rect x="334" y="270" width="294" height="60" rx="6" fill="#fff" stroke="#2a78d6"/>
+<text x="344" y="294" fill="#171717" font-size="12">接受 upgraded 作为已准入的回执视图；拒绝时保</text>
+<text x="344" y="312" fill="#171717" font-size="12">留原因</text>
+<path d="M716,218 L716,264" stroke="#2a78d6" stroke-width="1.5" fill="none"/>
+<rect x="648" y="270" width="137" height="96" rx="6" fill="#fff" stroke="#2a78d6"/>
+<text x="658" y="294" fill="#171717" font-size="12">guard 之后的传输失</text>
+<text x="658" y="312" fill="#171717" font-size="12">败返回已提交回执与</text>
+<text x="658" y="330" fill="#171717" font-size="12">已保存决策，不再覆</text>
+<text x="658" y="348" fill="#171717" font-size="12">盖</text>
+<path d="M874,218 L874,264" stroke="#2a78d6" stroke-width="1.5" fill="none"/>
+<rect x="805" y="270" width="137" height="78" rx="6" fill="#fff" stroke="#2a78d6"/>
+<text x="815" y="294" fill="#171717" font-size="12">过期 socket 明确报</text>
+<text x="815" y="312" fill="#171717" font-size="12">告：属于已结束的唤</text>
+<text x="815" y="330" fill="#171717" font-size="12">醒，guard 未运行</text>
+</svg>

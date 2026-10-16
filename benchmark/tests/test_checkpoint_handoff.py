@@ -102,6 +102,83 @@ def test_controller_completion_requires_finite_clocks(capture, phase):
         controller_completion_deadline(capture, phase)
 
 
+@pytest.mark.parametrize("hook", ["settled", "interrupted"])
+@pytest.mark.parametrize("phase_seconds", [None, 40, 20])
+def test_capture_preparation_uses_one_window_without_renewing_phase(tmp_path, monkeypatch, hook, phase_seconds):
+    """A mature witness may take >30s; that grants no new phase or retry clock."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from benchmark.runtime import checkpoint, checkpoint_wake
+
+    clock = [100.0]
+    timer = SimpleNamespace(time=lambda: clock[0], monotonic=lambda: clock[0])
+    monkeypatch.setattr(checkpoint, "time", timer)
+    monkeypatch.setattr(checkpoint_wake, "time", timer)
+    code = tmp_path / "code"
+    code.write_text("retained source")
+    env = {"LOOPX_CHECKPOINT_REQUEST": "explicit declaration", "LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes"),
+        "LOOPX_CLI": "loopx", "LOOPX_PROJECT": str(tmp_path),
+        "LOOPX_RUNTIME_ROOT": str(tmp_path / "runtime"), "LOOPX_REGISTRY": str(tmp_path / "registry"),
+        "LOOPX_GOAL_ID": "source", "LOOPX_AGENT_ID": "agent"}
+    if phase_seconds is not None:
+        env["LOOPX_PHASE_DEADLINE_EPOCH"] = str(100 + phase_seconds)
+    request = {"destination": str(tmp_path / "checkpoints" / "point"),
+        "components": [{"id": "code", "source_path": str(code)}], "point_metadata": {},
+        "controller_handoff": True, "loopx_state": True, "native_session": True, "evaluation_opportunity": True}
+    receipt = {"ok": True, "stage": "execute", "mode": "heartbeat", "turn_id": "turn",
+        "session": {"session_id": "native-session"}}
+    binding = SimpleNamespace(session_id="native-session", goal_ref="source", digest="profile")
+    monkeypatch.setattr(checkpoint, "research_participants", lambda env, components, *a: (components, {}))
+    monkeypatch.setattr(checkpoint, "verify_research_participants", lambda *a: None)
+    monkeypatch.setattr(checkpoint, "native_binding_participant", lambda env, components, *a: (components, binding))
+    monkeypatch.setattr("benchmark.runtime.sessions.BenchmarkSessionWake", lambda *a, **k: binding)
+    monkeypatch.setattr("benchmark.runtime.checkpoint_continuation.restored_capture_history", lambda *a, **k: {})
+    @contextmanager
+    def reader(*a, **k):
+        yield object()
+    monkeypatch.setattr("loopx.hosts.codex_checkpoint.native_checkpoint_reader", reader)
+    monkeypatch.setattr("loopx.hosts.codex_checkpoint.native_session_checkpoint",
+        lambda *a, **k: {"components": [], "metadata": {"store_members": []}})
+    deadlines = []
+    def artifact(method, params, **kwargs):
+        deadline = params["deadline_epoch_ms"] / 1000
+        deadlines.append(deadline)
+        if params["action"] == "probe":
+            clock[0] += 35  # Complete retained witness, rather than trimming history.
+        if clock[0] >= deadline:
+            raise TimeoutError("original capture window expired")
+        return {"source_sha256": "witness", "source_witness": {}, "sha256": "sealed-original"}
+    def controller(root, components, metadata, probe, deadline, **kwargs):
+        deadlines.append(deadline)
+        if clock[0] >= deadline:
+            raise TimeoutError("original capture window expired")
+        return {"sha256": "sealed-original"}
+    monkeypatch.setattr("benchmark.runtime.checkpoint_handoff.await_controller_capture", controller)
+    monkeypatch.setattr(checkpoint, "effect_runtime_result", artifact)
+    monkeypatch.setattr(checkpoint_wake, "effect_runtime_result", artifact)
+    if hook == "settled":
+        observed = SimpleNamespace(progress={"state": "settled"},
+            identity=SimpleNamespace(value=SimpleNamespace(effect_id="original-effect")))
+        monkeypatch.setattr(checkpoint, "read_heartbeat_settlement", lambda *a, **k: observed)
+        checkpoint.capture_after_wake(env, receipt, supplied_request=(request, b"declared"))
+        assert receipt["checkpoint"]["captured"] is (phase_seconds != 20)
+        assert receipt["ok"] is True  # An optional miss cannot replay successful work.
+    else:
+        wake = checkpoint_wake.CheckpointWake(env, receipt)
+        wake.request, wake.raw = request, b"declared"
+        held = {"intent": {"obligation_id": "replan-fixture"}, "sha256": "original-guard",
+            "path": code, "quota": {"heartbeat_receipt": {"turn_instance_id": "turn"}}}
+        phase = float("inf") if phase_seconds is None else 100 + phase_seconds
+        if phase_seconds == 20:
+            with pytest.raises(TimeoutError, match="original capture window"):
+                wake._capture(held, phase)
+        else:
+            assert wake._capture(held, phase)["sha256"] == "sealed-original"
+    expected = 190 if phase_seconds is None else 100 + phase_seconds
+    assert deadlines and all(deadline == expected for deadline in deadlines)
+    assert code.read_text() == "retained source"
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="Qualifies the Linux writer process group")
 @pytest.mark.parametrize("use_selector,closeout,settlement_only", [
     (False, False, False), (True, False, False), (True, True, False), (True, False, True),

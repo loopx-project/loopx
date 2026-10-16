@@ -464,3 +464,35 @@ test("lifecycle reconstruction restores completion order before its trigger boun
     guard_recorded_at: "2026-08-01T00:00:05Z", items: ties}).items as JsonObject[])
     .map(item => item.todo_id), ["todo_4", "todo_3", "todo_2", "todo_1"]);
 });
+
+
+test("pending lifecycle survives a new frontier without granting settlement or successor work", () => {
+  const agent = "synthetic-agent", id = "replan-1111111111111111";
+  const row = {todo_id: "todo_pending", status: "done", done: true,
+    task_class: "advancement_task", claimed_by: agent, last_actor_agent_id: agent,
+    completed_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-01T00:00:00Z",
+    completion_turn_key: "original-completion", completion_continuation: "active_goal"};
+  const original = {required: true, obligation_id: id, resolution_mode: "todo_lifecycle_settlement",
+    todo_actions: ["Settle the original completed Todo"],
+    triggers: [{kind: "completed_advancement_without_successor", todo_id: row.todo_id,
+      completion_turn_key: row.completion_turn_key, agent_id: agent}]};
+  const candidate = {obligation: original, source_obligation: original, lifecycle_settled: false,
+    guard_recorded_at: "2026-08-01T00:00:01Z", items: [row]};
+  const request = {operation: "receipt_bound_obligation", guard_scoped: true, replay_phase: "open",
+    selected_obligation_id: id, agent_id: agent,
+    current_obligation: {obligation_id: "replan-2222222222222222"}, transition_candidates: [candidate]};
+  const recovered = projectReplanSemantics(request).obligation as JsonObject;
+  assert.deepEqual(recovered, {...original, selection_binding: "heartbeat_receipt"});
+  assert.equal(projectReplanSemantics({operation: "qualify", obligation: recovered,
+    agent_vision: vision}).accepted, false);
+  for (const change of [{status: "open"}, {done: false}, {claimed_by: "peer"},
+    {last_actor_agent_id: "peer"}, {completion_turn_key: "changed"},
+    {completed_at: "2026-08-01T00:00:02Z"}, {successor_todo_ids: ["todo_new"]},
+    {superseded_by: "todo_new"}, {archive_state: "archived"}]) {
+    assert.throws(() => projectReplanSemantics({...request,
+      transition_candidates: [{...candidate, items: [{...row, ...change}]}]}), /identity conflicts/);
+  }
+  assert.throws(() => projectReplanSemantics({...request, guard_scoped: false}), /identity conflicts/);
+  assert.throws(() => projectReplanSemantics({...request,
+    transition_candidates: [{...candidate, lifecycle_settled: true}]}), /identity conflicts/);
+});

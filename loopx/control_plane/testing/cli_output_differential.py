@@ -754,6 +754,20 @@ def _authoring_input_migration(
             {"chars": 256, "utf8_bytes": 256, "lines": 0, "compact_payload_chars": 256}
         )
         reason = "Vision CLI authoring input added"
+    elif (surface in {"start_goal_guided", "start_goal_guided_command_pack_detail",
+                      "bootstrap_command_pack", "bootstrap_command_pack_message_only"}
+            and before.get("first_delivery_guidance") is False
+            and after.get("first_delivery_guidance") is True):
+        # Frozen 96-row fixture: +2,340 JSON chars, +3,496 for explicit
+        # command-pack detail, +578 Markdown. Keep all existing consumers and
+        # the full guidance; no additional lines or absolute budget increase.
+        chars = (
+            (3_600 if surface == "start_goal_guided_command_pack_detail" else 2_400)
+            if base.get("format") == "json" else 600
+        )
+        limits = {"chars": chars, "utf8_bytes": chars, "lines": 0,
+                  "compact_payload_chars": chars if base.get("format") == "json" else 0}
+        reason = "complete initial-delivery quality guidance added"
     return limits, [reason + "; bounded one-time growth"] if limits else []
 
 

@@ -1182,6 +1182,31 @@ it does not grant execution quota, spending, or provider authority.
    or promotion thresholds stay fixed for that result; revised thresholds belong
    to a new qualification, never a relabeled historical pass.
 
+The initial-delivery guidance change measured the same 96-row fixture at
+`f6cf9583794eb8c4cca41fa832a1c2f150059583` and
+`da01f996c820aad3bae85268963e64c6bbb19d7c`. The complete instruction adds
+2,340 JSON characters to guided start/bootstrap, 3,496 to explicit command-pack
+detail, and 578 to bootstrap Markdown, with no added lines. Existing planner,
+plan-prompt, guided-transaction and message consumers retain their contracts;
+removing a copy requires a caller migration. The instruction preserves strong
+feasible first quality, coherent implementation/validation, full-cost comparison,
+bounded diagnostic probes and existing acceptance/feedback/authority limits.
+Truncating those obligations to fit the old differential is not lossless.
+
+Only the observed absence-to-complete-guidance transition on those carriers gets
+2,400 / 3,600 / 600 character-and-byte allowances (60 / 104 / 22 headroom).
+The probe recognizes the complete frozen structured field or rendered Todo
+instruction, never a runtime permission or quality classification. Absolute
+ceilings, semantic fields, fixture scale, line limits and every other surface
+remain unchanged; an already-upgraded, missing or incomplete instruction gets no
+transition allowance. This qualifies the disclosed default guidance change,
+not a real model's adoption, benchmark improvement or additional execution quota.
+
+首次交付指引在同一 96 行负载上增加默认 JSON 2340、详情 JSON 3496、Markdown
+578 个字符，行数不变。保留现有消费者与完整质量、诊断和权限义务，仅对上述输出
+载体从缺失到完整指引的首次变化给予 2400/3600/600 的有界额度；绝对上限、语义、
+规模及后续增长检查不变。原失败保留；不据此声称模型采用、实验增益或额外执行权限。
+
 The latest qualification pins true main `e47e4507a` and merged candidate
 `3955d1c8b` on the same public fixture, with explicit per-probe source imports.
 It retains 1/36/18 Todos, 1/12/12 history records, complete command routes,

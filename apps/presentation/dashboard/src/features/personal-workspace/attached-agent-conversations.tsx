@@ -8,17 +8,42 @@ type Snapshot = {messages?: Message[]; before?: number | null; after?: number; h
 type Submission = {operation_id: string; text: string; status?: string};
 
 class ConversationRequestError extends Error {
-  constructor(message: string, readonly unsubmittedOperation?: string) {super(message);}
+  constructor(message: string, readonly unsubmittedOperation?: string, readonly httpStatus?: number) {super(message);}
 }
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, {...options, signal: AbortSignal.timeout(6_000)});
-  const value = await response.json();
-  if (!response.ok || value.ok !== true) throw new ConversationRequestError(
-    value.error || "Conversation unavailable",
-    response.status === 409 && value.input_not_submitted === true && typeof value.operation_id === "string" ? value.operation_id : undefined,
+  // Read the body as text first: a service failure can answer with an HTML or
+  // empty body, and the caller still needs the HTTP status to decide whether
+  // the read is retryable. Parsing first would surface a SyntaxError instead.
+  let body: string;
+  try {
+    body = await response.text();
+  } catch {
+    // The headers arrived, so the status is already known even though the body
+    // did not. Drop the status here and a stalled 503 body looks like a plain
+    // transport failure while a truncated 403 body looks retryable; the caller
+    // must classify on this status, not on how the body read failed.
+    throw new ConversationRequestError("Conversation unavailable", undefined, response.status);
+  }
+  let value: Record<string, unknown> | null = null;
+  try {value = body ? JSON.parse(body) as Record<string, unknown> : null;} catch {value = null;}
+  if (!response.ok || value?.ok !== true) throw new ConversationRequestError(
+    typeof value?.error === "string" && value.error ? value.error : "Conversation unavailable",
+    response.status === 409 && value?.input_not_submitted === true && typeof value?.operation_id === "string" ? value.operation_id : undefined,
+    response.status,
   );
   return value as T;
+}
+
+function interruptedRead(failure: unknown): boolean {
+  return failure instanceof TypeError || (failure instanceof DOMException && failure.name === "TimeoutError");
+}
+
+function readFailureMessage(failure: unknown, zh: boolean): string {
+  return interruptedRead(failure)
+    ? (zh ? "暂时无法读取原会话。已读记录会保留，连接恢复后将自动更新。" : "The conversation is temporarily unavailable. Existing records are retained; updates resume when the connection recovers.")
+    : String(failure);
 }
 
 // A bounded file window may contain only metadata. Advance without making the
@@ -78,6 +103,8 @@ export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
   const revision = useRef("");
   const history = useRef<{source: string; size: number} | null>(null);
   const transcript = useRef<HTMLDivElement>(null);
+  const readLocale = useRef(zh);
+  useEffect(() => {readLocale.current = zh;}, [zh]);
   const binding = agents.find(agent => agent.agent_id === selected);
   const awaitingReceipt = Boolean(submission?.status && submission.status !== "delivered");
   const cacheKey = binding ? `loopx-attached-input:${goalId}:${binding.binding_ref}` : "";
@@ -85,13 +112,22 @@ export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
 
   useEffect(() => {
     let active = true;
+    let timer: ReturnType<typeof setTimeout>;
     setAgents([]); setSelected(""); setMessages([]); setSnapshot(null); setError("");
     setDiscovering(true);
-    void request<{agents: Binding[]}>(`/api/chat/codex-attached?${new URLSearchParams({goal_id: goalId})}`)
-      .then(value => {if (active) {setAgents(value.agents); setSelected(targetAgentId);}})
-      .catch(failure => {if (active) setError(String(failure));})
-      .finally(() => {if (active) setDiscovering(false);});
-    return () => {active = false;};
+    async function discover() {
+      try {
+        const value = await request<{agents: Binding[]}>(`/api/chat/codex-attached?${new URLSearchParams({goal_id: goalId})}`);
+        if (active) {setAgents(value.agents); setSelected(targetAgentId); setError("");}
+      } catch (failure) {
+        if (active) {
+          setError(readFailureMessage(failure, readLocale.current));
+          if (interruptedRead(failure) || (failure instanceof ConversationRequestError && (failure.httpStatus ?? 0) >= 500)) timer = setTimeout(discover, 1000);
+        }
+      } finally {if (active) setDiscovering(false);}
+    }
+    void discover();
+    return () => {active = false; clearTimeout(timer);};
   }, [goalId, refresh, targetAgentId]);
 
   useEffect(() => {
@@ -142,7 +178,12 @@ export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
         }
         setSnapshot(previous => ({...previous, ...next})); setError("");
         if (follow && following.current) requestAnimationFrame(() => transcript.current?.scrollTo({top: transcript.current.scrollHeight}));
-      } catch (failure) {if (current === generation.current) {setError(String(failure)); setSnapshot(null);}}
+      } catch (failure) {
+        if (current === generation.current) {
+          setError(readFailureMessage(failure, readLocale.current));
+          setSnapshot(null);
+        }
+      }
       finally {if (current === generation.current) timer = setTimeout(read, 1000);}
     }
     void read();

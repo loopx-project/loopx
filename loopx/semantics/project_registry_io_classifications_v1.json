@@ -5,7 +5,6 @@
   "loopx/control_plane/goals/deletion_service.py::<module>._restore_locked_registry::direct_json_write:atomic_write_json#1": "global_registry_io",
   "loopx/control_plane/goals/deletion_service.py::<module>._write_deletion::direct_json_read:read_json#1": "global_registry_io",
   "loopx/control_plane/goals/deletion_service.py::<module>._write_locked_registry::direct_json_write:atomic_write_json#1": "global_registry_io",
-  "loopx/state_backup.py::<module>._registry_goals::direct_json_read:json.loads#1": "global_registry_io",
   "loopx/state_migration.py::<module>.legacy_registry_goal_ids::direct_json_read:read_json_object#1": "legacy_registry_source",
   "loopx/state_migration.py::<module>.migrate_legacy_state::direct_json_read:read_json_object#1": "legacy_registry_source"
 }

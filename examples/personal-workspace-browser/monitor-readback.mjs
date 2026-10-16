@@ -81,6 +81,12 @@ export const monitorReadbackScenario = {
           const context = await openWorkspacePage({ newPage: (options) => browser.newPage({ ...options, locale }) }, url, {
             collectCoverage, viewport: mobile ? { width: 390, height: 844 } : { width: 1512, height: 982 }, isMobile: mobile,
             beforeGoto: async (_api, page) => {
+              // The real status advertises this same owner's presentation
+              // reads; keep them on its disposable registry too.
+              await page.route((target) => ["/extension-presentation-surfaces", "/extension-projection"].includes(target.pathname), async (route) => {
+                const response = await fetchWorkspaceBackend(route, authority.url);
+                await route.fulfill({ response });
+              });
               await page.route("**/status.json*", async (route) => {
                 if (new URL(route.request().url()).pathname !== "/status.json") { await route.fallback(); return; }
                 const response = await fetchWorkspaceBackend(route, authority.url);

@@ -81,13 +81,13 @@ function repeatedAccounting(rows: JsonObject[]): Map<JsonObject, JsonObject> {
   return repeated;
 }
 
-function publicEvidenceRow(row: JsonObject): JsonObject {
-  const {observed_at: _time, _source_facts: _source, ...publicRow} = row;
-  return publicRow;
+function readableEvidenceRow(row: JsonObject): JsonObject {
+  const {observed_at: _time, _source_facts: _source, ...readableRow} = row;
+  return readableRow;
 }
 
 function evidenceFactsKey(row: JsonObject): string {
-  const {generated_at: _time, evidence_ref: _ref, ...facts} = publicEvidenceRow(row);
+  const {generated_at: _time, evidence_ref: _ref, ...facts} = readableEvidenceRow(row);
   return digest(facts);
 }
 
@@ -156,7 +156,7 @@ function recordedDecision(row: JsonObject): JsonObject | null {
   try { stride = normalizeRecordedStrideDecision(objectOrNull(source.agent_vision)?.stride_decision); }
   catch { return null; }
   const autonomous = objectOrNull(source.settlement_identity)?.schema_version === SCOPED_SETTLEMENT_IDENTITY_SCHEMA_VERSION;
-  const decision = {history_evidence_ref: "replan-evidence-" + digest(publicEvidenceRow(row)),
+  const decision = {history_evidence_ref: "replan-evidence-" + digest(readableEvidenceRow(row)),
     generated_at: row.generated_at, todo_id: autonomous ? null : row.todo_id, turn_instance_id: source.turn_instance_id,
     ...(autonomous ? {replan_obligation_id: source.replan_obligation_id} : {}),
     goal_ref: ref ? {goal_id: ref.goal_id, goal_instance_id: ref.goal_instance_id} : null,
@@ -203,7 +203,7 @@ function decisionFollowthrough(rows: JsonObject[], goalFacts: unknown, fromFullI
       !Number.isSafeInteger(objectOrNull(row._source_facts)?.history_position)).length,
     recorded_progress_count: observations.length,
     observations: observations.slice(0, 6).map(row => ({
-      evidence_ref: "replan-evidence-" + digest(publicEvidenceRow(row)),
+      evidence_ref: "replan-evidence-" + digest(readableEvidenceRow(row)),
       generated_at: row.generated_at, todo_id: row.todo_id,
       coverage_ref: (row.progress_observation as JsonObject).fingerprint,
     })),
@@ -299,12 +299,12 @@ export function projectReplanContext(value: unknown): JsonObject {
     }
   }
   rows.sort((a, b) => Number(b.observed_at) - Number(a.observed_at) ||
-    JSON.stringify(publicEvidenceRow(a)).localeCompare(JSON.stringify(publicEvidenceRow(b))));
+    JSON.stringify(readableEvidenceRow(a)).localeCompare(JSON.stringify(readableEvidenceRow(b))));
   const unique = new Map<string, JsonObject>();
   for (const row of rows) {
-    const publicRow = publicEvidenceRow(row);
-    const ref = "replan-evidence-" + digest(publicRow);
-    if (!unique.has(ref)) unique.set(ref, {...publicRow, evidence_ref: ref});
+    const readableRow = readableEvidenceRow(row);
+    const ref = "replan-evidence-" + digest(readableRow);
+    if (!unique.has(ref)) unique.set(ref, {...readableRow, evidence_ref: ref});
   }
   const evidence = [...unique.values()];
   if (request.operation === "resolve") {

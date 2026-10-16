@@ -333,12 +333,15 @@ test("a user-driven prompt pauses auto-resume and cancels the scheduled timer", 
   await fixture.activate("session-pause")
   await fixture.loop.settle("session-pause")
   assert.equal(fixture.scheduled.length, 1)
+  const notifyBefore = fixture.calls.notify
 
   await fixture.loop.userPrompt("session-pause", "change direction")
 
   const binding = await fixture.store.read("session-pause")
   assert.equal(binding.autoResume, false)
+  assert.equal(binding.pauseReason, "user_prompt")
   assert.equal(fixture.scheduled[0].cleared, true)
+  assert.equal(fixture.calls.notify, notifyBefore + 1)
 
   const probesBefore = fixture.calls.quota
   await fixture.loop.settle("session-pause")
@@ -357,6 +360,7 @@ test("an aborted Pi run pauses durably and cancels the scheduled timer", async (
 
   const binding = await fixture.store.read("session-abort")
   assert.equal(binding.autoResume, false)
+  assert.equal(binding.pauseReason, "aborted")
   assert.equal(fixture.scheduled[0].cleared, true)
 
   const probesBefore = fixture.calls.quota
@@ -365,6 +369,7 @@ test("an aborted Pi run pauses durably and cancels the scheduled timer", async (
 
   fixture.setDecision({ should_run: true, scheduler_hint: { action: "run_now" } })
   await fixture.loop.resume("session-abort")
+  assert.equal((await fixture.store.read("session-abort")).pauseReason, "")
   await fixture.loop.settle("session-abort")
   assert.equal(fixture.calls.quota, probesBefore + 1)
   assert.equal(fixture.calls.send, 1)
@@ -416,6 +421,30 @@ test("an injected follow-up prompt keeps auto-resume armed", async () => {
 
   const binding = await fixture.store.read("session-injected")
   assert.equal(binding.autoResume, true)
+})
+
+
+test("no caller flag exempts a foreign prompt from pausing auto-resume", async () => {
+  const fixture = harness(backoffDecision())
+  fixture.loop.bind("session-foreign-prompt", fixture.services)
+  await fixture.activate("session-foreign-prompt")
+  await fixture.loop.settle("session-foreign-prompt")
+  assert.equal(fixture.scheduled.length, 1)
+  const notifyBefore = fixture.calls.notify
+
+  // Pi compacts before it emits before_agent_start for a submitted prompt, so a
+  // prompt that follows a compaction is owner input, not host housekeeping. An
+  // option claiming a host origin must not turn it back into an armed
+  // continuation, and the pause must stay visible.
+  await fixture.loop.userPrompt("session-foreign-prompt", "## Goal\n- continue after compaction", {
+    hostGenerated: true,
+  })
+
+  const binding = await fixture.store.read("session-foreign-prompt")
+  assert.equal(binding.autoResume, false)
+  assert.equal(binding.pauseReason, "user_prompt")
+  assert.equal(fixture.scheduled[0].cleared, true)
+  assert.equal(fixture.calls.notify, notifyBefore + 1)
 })
 
 

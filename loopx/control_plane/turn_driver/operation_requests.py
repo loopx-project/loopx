@@ -12,8 +12,9 @@ import hashlib
 import json
 import math
 from pathlib import Path
-import re
 from typing import Any, Mapping
+
+from loopx.control_plane.content_digest import BARE_SHA256_PATTERN
 
 
 def request_reference_instruction(configured: bool) -> str:
@@ -101,7 +102,7 @@ def operation_request_source(
     if path is None and sha256 is None:
         return None
     if (path is None or not path.is_absolute() or not isinstance(sha256, str)
-            or re.fullmatch(r"[0-9a-f]{64}", sha256) is None):
+            or BARE_SHA256_PATTERN.fullmatch(sha256) is None):
         raise ValueError("frozen operation request requires an absolute file and SHA-256")
     source = OperationRequestSource(path, sha256)
     source.read()  # Fail before SDK startup; no file path/content enters errors.

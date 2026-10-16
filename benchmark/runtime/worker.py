@@ -67,6 +67,8 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
         root = Path(env["LOOPX_WAKE_LOG_DIR"]) / turn_id / "decisions"
         root.mkdir(mode=0o700, exist_ok=False)
         command += ["--decision-output-root", str(root)]
+        if env.get("LOOPX_TURN_ENVELOPE") == "1":
+            command += ["--turn-envelope"]
         if decision_handoff_socket is not None:
             command += ["--decision-handoff-socket", decision_handoff_socket]
     result = subprocess.run(
@@ -194,14 +196,53 @@ def turn_command(
     ]
 
 
+NATIVE_GOAL_CONTINUE_RESERVE_SECONDS = 300
+
+
+def native_goal_rounds(run_round, *, budget_seconds, continue_after_complete, clock=time.monotonic,
+                       reserve_seconds=NATIVE_GOAL_CONTINUE_RESERVE_SECONDS):
+    """Drive one native Goal and, when opted in, continuation Goals until the budget ends.
+
+    ``run_round(objective_suffix, timeout_sec)`` runs one Goal to a terminal status and
+    returns that status. Returns ``(rounds, outcome)`` where outcome is ``complete``,
+    ``budget_exhausted`` (a Goal was still active at the budget edge) or ``stopped``.
+    """
+    from loopx.capabilities.benchmark_toolkit.native_codex_goal import NativeGoalDeadlineExceeded
+
+    deadline = None if budget_seconds is None else clock() + budget_seconds
+    rounds = 0
+    suffix = ""
+    while True:
+        remaining = None if deadline is None else deadline - clock()
+        if remaining is not None and remaining <= 0:
+            return rounds, "budget_exhausted"
+        try:
+            status = run_round(suffix, remaining)
+        except NativeGoalDeadlineExceeded:
+            return rounds + 1, "budget_exhausted"
+        rounds += 1
+        if status != "complete" or not continue_after_complete:
+            return rounds, ("complete" if status == "complete" else "stopped")
+        remaining = None if deadline is None else deadline - clock()
+        if remaining is not None and remaining <= reserve_seconds:
+            return rounds, "complete"
+        suffix = (
+            f"\n\nContinuation {rounds}: the time budget is not exhausted "
+            f"({int(remaining) if remaining is not None else 'unbounded'} seconds remain). "
+            "The previous Goal declared completion; continue researching and improving the "
+            "best validated candidate with the remaining budget: pick the next useful "
+            "experiment, validate it, and submit only if it improves on the accepted best."
+        )
+
+
 def run_native_goal(
     env: dict[str, str], execution: Execution, body: str, receipt: dict, stderr
 ) -> None:
     from loopx.capabilities.benchmark_toolkit.native_codex_goal import (
         NativeGoalConfig,
-        NativeGoalDeadlineExceeded,
         StdioNativeGoalTransport,
         compact_native_goal_receipt,
+        refresh_native_goal_status,
         run_native_goal_until_terminal,
     )
 
@@ -212,11 +253,13 @@ def run_native_goal(
         )
 
         required_skills = NATIVE_CODEX_PROFILE_REQUIRED_SKILL_IDS
+    if env.get("LOOPX_NATIVE_GOAL_CONTINUE", "0") not in {"0", "1"}:
+        raise ValueError("LOOPX_NATIVE_GOAL_CONTINUE must be 0 or 1")
+    continue_after_complete = env.get("LOOPX_NATIVE_GOAL_CONTINUE") == "1"
 
     observed = []
-    config = NativeGoalConfig(
+    base = dict(
         cwd=env["LOOPX_PROJECT"],
-        objective=body,
         task_instruction=Path(env["LOOPX_TASK_DOC"]).read_text(encoding="utf-8"),
         model=env["MODEL_NAME"],
         effort=env["REASONING_EFFORT"],
@@ -228,16 +271,26 @@ def run_native_goal(
         [env["CODEX_BIN"], "app-server"], env=env, stdout=subprocess.PIPE, stderr=stderr
     ) as process:
         transport = StdioNativeGoalTransport(process, response_timeout_sec=120)
-        try:
-            run_native_goal_until_terminal(
-                transport,
-                config,
-                timeout_sec=execution.timeout_seconds,
-                on_turn_started=observed.append,
+
+        def run_round(suffix, timeout_sec):
+            turn = run_native_goal_until_terminal(
+                transport, NativeGoalConfig(objective=body + suffix, **base),
+                timeout_sec=timeout_sec, on_turn_started=observed.append,
             )
+            return turn.post_goal_status or refresh_native_goal_status(transport, turn)
+
+        try:
+            rounds, outcome = native_goal_rounds(
+                run_round, budget_seconds=execution.timeout_seconds,
+                continue_after_complete=continue_after_complete,
+            )
+            receipt["native_goal_rounds"] = rounds
+            receipt["native_goal_outcome"] = outcome
+            if outcome == "budget_exhausted":
+                # Reaching the budget with an active Goal is normal exhaustion for
+                # a native-Goal worker, not a runner failure.
+                receipt["budget_exhausted"] = True
             receipt["ok"] = True
-        except NativeGoalDeadlineExceeded:
-            receipt["timed_out"] = True
         finally:
             if observed:
                 receipt["native_goal"] = compact_native_goal_receipt(observed[0])
@@ -269,6 +322,13 @@ def native_command(env, execution, stage, wake, session_wake):
     return command
 
 
+class _InertCheckpointWake:
+    """No checkpoint listener: plain, native-Goal, Turn and loopx-goal wakes."""
+
+    socket_path = None
+    listener = None
+
+
 def run_once(env: dict[str, str]) -> dict:
     if env.get("LOOPX_TURN_ENVELOPE", "0") not in {"0", "1"}:
         raise ValueError("LOOPX_TURN_ENVELOPE must be 0 or 1")
@@ -297,7 +357,8 @@ def run_once(env: dict[str, str]) -> dict:
         "mode": execution.mode,
         "context": execution.context,
         "task_entry": execution.task_entry,
-        **({"turn_envelope": True} if execution.turn_envelope else {}),
+        **({"turn_envelope": True, "turn_envelope_source": "explicit"}
+           if execution.turn_envelope else {}),
         "stage": stage,
         "home_scope": "trial",
         "ok": False,
@@ -338,9 +399,14 @@ def run_once(env: dict[str, str]) -> dict:
                 Path(env["LOOPX_MODEL_CATALOG"]) if env.get("LOOPX_MODEL_CATALOG") else None
             ),
         )
-        from benchmark.runtime.checkpoint_wake import CheckpointWake
+        if execution.mode == "heartbeat":
+            # Checkpoint capture needs the LoopX control plane, which only
+            # heartbeat workers stage; other modes must not import it.
+            from benchmark.runtime.checkpoint_wake import CheckpointWake
 
-        checkpoint_wake = checkpoint_context.enter_context(CheckpointWake(env, receipt))
+            checkpoint_wake = checkpoint_context.enter_context(CheckpointWake(env, receipt))
+        else:
+            checkpoint_wake = _InertCheckpointWake()
         body = "Finish the task."
         if stage == "plan":
             from benchmark.runtime.planning import render_planning_prompt, task_plan_packet

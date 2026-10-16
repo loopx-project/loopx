@@ -322,6 +322,16 @@ def update_canonical_todo_if_promoted(
         request["observed_at"] = now_local()
         result = _dispatch_canonical_todo_update(request, registry_path=registry_path)
     if isinstance(result, dict):
+        # Preserve native recovery decisions and arguments, adding only the
+        # caller's exact transport route. A default-registry command could read
+        # an unrelated Goal when this call used an explicit registry/runtime.
+        recovery = result.get("recovery")
+        if isinstance(recovery, dict):
+            for step in ("inspect", "retry", "acquire", "release"):
+                descriptor = recovery.get(step)
+                if isinstance(descriptor, dict) and isinstance(descriptor.get("cli_args"), list):
+                    descriptor["cli_args"] = [f"--registry={registry_path}",
+                        f"--runtime-root={runtime_root}", "--format", "json", *descriptor["cli_args"]]
         raise_canonical_write_failure(
             result,
             goal_id=goal_id,

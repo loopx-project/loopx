@@ -217,14 +217,28 @@ def test_recovery_waits_for_inflight_capture_without_readmitting(ordinary, monke
         transport.reconcile()
         assert len(store.list_sessions()) == 1
         assert [m["text"] for m in store.messages(row["session_id"]) if m["role"] == "user"] == [event["content"]]
-        final = ("notes-app", result["response"]["message"])
-        assert provider.writes[-1] == final and provider.writes.count(final) == 1
+        delivered = read(path)
+        terminal = delivered["deliveries"]["terminal"]
+        assert delivered["status"] == "delivered" and terminal["verified"] is True
+        # A running Turn can create a draft before recovery returns. Terminal
+        # delivery then edits it; writes records creations, not current bodies.
+        final_ref = terminal["attempt"]["message_ref"]
+        final_message = provider.messages[final_ref]
+        content = json.loads(final_message["body"]["content"])
+        final_text = result["response"]["message"]
+        assert content["zh_cn"]["content"][0][0]["text"] == final_text
+        assert sum(message.get("body") == final_message["body"]
+                   for message in provider.messages.values()) == 1
         assert all(profile == "notes-app" for profile, _ in provider.writes)
         packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
         assert sum(packet["method"] == "turn/start" for packet in packets) == 1
         if group:
             assert provider.topic_writes[0][:2] == (event["chat_id"], event["message_id"])
+        visible_before = json.dumps(provider.messages, sort_keys=True)
+        writes_before = list(provider.writes)
         assert transport.reconcile() == 0
+        assert json.dumps(provider.messages, sort_keys=True) == visible_before
+        assert provider.writes == writes_before
     finally:
         release_core.set()
         runtime.close()
@@ -627,6 +641,105 @@ def test_group_mention_text_does_not_invent_a_control(ordinary, raw_text, identi
         runtime.close()
 
 
+@pytest.mark.parametrize("text,command", [("/stop", "stop"), ("/status", "status"),
+                                         ("/help", "help"), ("/new", "new")])
+@pytest.mark.parametrize("followup", [False, True])
+def test_group_control_does_not_require_display_service(ordinary, text, command, followup):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("canonical-control-root", "/help") if followup else None
+        event = provider.topic("canonical-control", text, root=root["message_id"] if root else None)
+
+        def unavailable_display(args, cwd=None, timeout=None):
+            if "+messages-mget" in args:
+                return {"returncode": 1, "stdout": '{"ok":false}'}
+            return provider(args, cwd, timeout)
+
+        transport.runner = unavailable_display
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        request = transport.core.pending()[0]
+        assert request["command"] == command and request["turn_id"] is None
+        assert store.list_sessions() == []
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        assert transport.core.pending()[0] == request
+        # Event hints cannot replace a fresh canonical read on the next attempt.
+        provider.messages[(root or event)["message_id"]]["mentions"] = []
+        assert transport.admit("notes-app", event)["status"] == "source_verification_failed"
+        assert not provider.writes
+    finally:
+        runtime.close()
+
+
+def test_group_old_rendered_control_keeps_exact_native_replay(ordinary):  # noqa: F811
+    _, runtime, provider, transport = connect_group(ordinary)
+    try:
+        event = provider.topic("old-rendered-control", "/stop")
+        message = provider.messages[event["message_id"]]
+        message.update(content="Earlier thread context\n/stop", body={"content": '{"text":"/stop"}'})
+        binding = transport._binding("notes-app")
+        source = lark_private_source(provider_ref=binding["provider_ref"], event=event)
+        request_ref = identity_ref(binding["provider_ref"], event["message_id"])
+        original = transport.core.admit(binding_id=binding["binding_id"], source=source,
+            request_ref=request_ref, message=message["content"], command="stop")
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        assert transport.core.read_request(request_ref) == original
+        assert any("+messages-mget" in args for args in provider.calls)
+    finally:
+        runtime.close()
+
+
+def test_group_control_hint_cannot_override_canonical_ordinary_text(ordinary):  # noqa: F811
+    _, runtime, provider, transport = connect_group(ordinary)
+    try:
+        event = provider.topic("forged-control-hint", "/stop")
+        provider.messages[event["message_id"]]["content"] = "Explain the public project"
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        request = transport.core.pending()[0]
+        assert request["command"] is None and request["message"] == "Explain the public project"
+        assert any("+messages-mget" in args for args in provider.calls)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("body", ["invalid json", "{}", '{"text":null}', '{"text":"  "}'])
+def test_group_display_cannot_supply_a_control_missing_from_canonical_text(ordinary, body):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        event = provider.topic("invalid-control-source", "/stop")
+        provider.messages[event["message_id"]]["body"] = {"content": body}
+        assert transport.admit("notes-app", event)["status"] == "source_verification_failed"
+        assert not transport.core.pending() and not store.list_sessions()
+        assert not list(transport.root.glob("*.json")) and not provider.writes
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("group", [False, True])
+@pytest.mark.parametrize("command", ["/stop", "/status", "/help", "/new"])
+def test_completed_control_reply_precedes_optional_received_reaction(ordinary, monkeypatch, group, command):  # noqa: F811
+    store, runtime, provider, transport = (connect_group if group else connect)(ordinary)
+    original = Provider.__call__
+    try:
+        def reaction_after_reply(self, args, cwd=None, timeout=None):
+            if "reactions" in args and "create" in args:
+                assert self.writes, "optional receipt feedback must not delay the control result"
+            return original(self, args, cwd, timeout)
+
+        monkeypatch.setattr(Provider, "__call__", reaction_after_reply)
+        event = provider.topic("control-order", command) if group else provider.event("notes-app", "control-order", command)
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        transport.reconcile()
+        record = json.loads(next(transport.root.glob("*.json")).read_text())
+        assert record["status"] == "delivered" and record["deliveries"]["terminal"]["verified"]
+        assert record["feedback"]["received"]["ok"]
+        assert len(provider.writes) == 1 and len(provider.reaction_creates) == 1
+        transport.reconcile()
+        assert len(provider.writes) == 1 and len(provider.reaction_creates) == 1
+        assert store.list_sessions() == []
+    finally:
+        runtime.close()
+
+
 def test_group_provenance_and_revocation_prevent_private_or_wrong_topic_delivery(ordinary):  # noqa: F811
     store, runtime, provider, transport = connect_group(ordinary)
     try:
@@ -758,10 +871,11 @@ def test_group_reply_uses_raw_ancestry_when_display_readback_omits_it(ordinary):
 
 
 @pytest.mark.parametrize("failure", ["unavailable", "code_error", "wrong_sender", "wrong_chat", "wrong_type", "wrong_root"])
-def test_group_raw_readback_failure_cannot_fall_back_to_display_authority(ordinary, failure):  # noqa: F811
+@pytest.mark.parametrize("control", [False, True])
+def test_group_raw_readback_failure_cannot_fall_back_to_display_authority(ordinary, failure, control):  # noqa: F811
     store, runtime, provider, transport = connect_group(ordinary)
     root = provider.topic("raw-root", "Explain this project")
-    reply = provider.topic("raw-reply", "Compare its configuration", root=root["message_id"])
+    reply = provider.topic("raw-reply", "/stop" if control else "Compare its configuration", root=root["message_id"])
 
     def conflicting_provider(args, cwd=None, timeout=None):
         result = provider(args, cwd, timeout)
@@ -1089,7 +1203,7 @@ def test_group_admission_source_reads_overlap_but_keep_rendered_model_input(ordi
         event = provider.topic("overlap-follow", "@notes-app Explain config", root=root["message_id"])
         provider.messages[event["message_id"]]["body"] = {
             "content": json.dumps({"text": "@_user_1 Explain config"})}
-        started = threading.Barrier(3)
+        started = threading.Barrier(2)
         source_reading = threading.Event()
         original_source = transport._source_message
         original_observe = transport.bindings.observe
@@ -1102,8 +1216,7 @@ def test_group_admission_source_reads_overlap_but_keep_rendered_model_input(ordi
                 source_reading.clear()
 
         def observe(*args, **kwargs):
-            if source_reading.is_set():
-                started.wait(timeout=2)
+            assert not source_reading.is_set(), "source rendering must reuse its admission identity"
             return original_observe(*args, **kwargs)
 
         def overlap(args, cwd=None, timeout=None):
@@ -1121,6 +1234,38 @@ def test_group_admission_source_reads_overlap_but_keep_rendered_model_input(ordi
         assert row["source"]["topic_ref"] == lark_private_source(
             provider_ref=identity_ref("cli_notes_app"), event=event)["topic_ref"]
         assert not provider.writes
+    finally:
+        runtime.close()
+
+
+def test_group_admission_identity_is_not_cached_between_requests(ordinary, monkeypatch):  # noqa: F811
+    _, runtime, provider, transport = connect_group(ordinary)
+    try:
+        observed = []
+        admission_thread = threading.get_ident()
+        original_observe = transport.bindings.observe
+
+        def observe(*args, **kwargs):
+            if threading.get_ident() == admission_thread:
+                observed.append(args[0])
+            return original_observe(*args, **kwargs)
+
+        monkeypatch.setattr(transport.bindings, "observe", observe)
+        event = provider.topic("fresh-preflight", "Explain the project")
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        # The admission preflight does not replace the Core owner's checks.
+        assert len(observed) > 1 and set(observed) == {"notes-app"}
+        first_request_observations = len(observed)
+        record = json.loads(next(transport.root.glob("*.json")).read_text())
+        assert "observation" not in record
+        assert "observation" not in transport.core.read_request(record["request_ref"])
+
+        provider.bot_ready = False
+        next_event = provider.topic("unavailable-next-preflight", "Explain config")
+        assert transport.admit("notes-app", next_event)["status"] == "audience_rejected"
+        assert observed == ["notes-app"] * (first_request_observations + 1)
+        assert len(list(transport.root.glob("*.json"))) == 1
+        assert not provider.writes and not provider.reaction_creates
     finally:
         runtime.close()
 

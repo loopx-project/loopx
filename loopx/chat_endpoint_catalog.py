@@ -67,6 +67,24 @@ def managed_host_capability(runtime_root: Path | None = None) -> dict[str, Any]:
     }
 
 
+def _executable_readiness(executable: str) -> dict[str, Any]:
+    """Live PATH probe for a CLI-backed endpoint, naming the missing command."""
+
+    if shutil.which(executable):
+        return {"available": True, "executable": executable}
+    return {"available": False, "executable": executable,
+            "unavailable_reason": "executable_not_found"}
+
+
+def _environment_readiness(variable: str) -> dict[str, Any]:
+    """Presence probe for an API-key endpoint, naming the unset variable."""
+
+    if os.environ.get(variable, "").strip():
+        return {"available": True, "environment_variable": variable}
+    return {"available": False, "environment_variable": variable,
+            "unavailable_reason": "api_key_not_set"}
+
+
 def builtin_chat_endpoints(
     *,
     codex_bin: str,
@@ -74,14 +92,20 @@ def builtin_chat_endpoints(
     kiro_cli_bin: str,
     runtime_root: Path | None = None,
 ) -> list[dict[str, Any]]:
-    """Return the built-in endpoints, managed host included."""
+    """Return the built-in endpoints, managed host included.
+
+    An unavailable built-in row names what is missing so the owner can repair
+    it in place: ``unavailable_reason`` is ``executable_not_found`` with the
+    probed ``executable``, or ``api_key_not_set`` with the ``environment_variable``.
+    Availability itself stays a live probe; nothing is installed or granted.
+    """
 
     return [
         {
             "agent_id": "codex",
             "display_name": "Codex",
             "adapter_kind": "codex_app_server",
-            "available": bool(shutil.which(codex_bin)),
+            **_executable_readiness(codex_bin),
             "streaming": True,
             "resume": True,
             "interrupt": True,
@@ -93,7 +117,7 @@ def builtin_chat_endpoints(
             "agent_id": "claude-code",
             "display_name": "Claude Code",
             "adapter_kind": "claude_code_cli",
-            "available": bool(shutil.which(claude_bin)),
+            **_executable_readiness(claude_bin),
             "streaming": True,
             "resume": True,
             "interrupt": True,
@@ -111,7 +135,7 @@ def builtin_chat_endpoints(
             "agent_id": KIRO_CLI_CHAT_AGENT_ID,
             "display_name": KIRO_CLI_CHAT_DISPLAY_NAME,
             "adapter_kind": KIRO_CLI_CHAT_ADAPTER_KIND,
-            "available": bool(shutil.which(kiro_cli_bin)),
+            **_executable_readiness(kiro_cli_bin),
             "streaming": True,
             "resume": True,
             "interrupt": True,
@@ -126,7 +150,7 @@ def builtin_chat_endpoints(
             "agent_id": "anthropic-api",
             "display_name": "Claude API",
             "adapter_kind": "anthropic_messages_api",
-            "available": bool(os.environ.get("ANTHROPIC_API_KEY", "").strip()),
+            **_environment_readiness("ANTHROPIC_API_KEY"),
             "streaming": False,
             "resume": True,
             "interrupt": False,
@@ -138,7 +162,7 @@ def builtin_chat_endpoints(
             "agent_id": "openai-api",
             "display_name": "OpenAI API",
             "adapter_kind": "openai_messages_api",
-            "available": bool(os.environ.get("OPENAI_API_KEY", "").strip()),
+            **_environment_readiness("OPENAI_API_KEY"),
             "streaming": False,
             "resume": True,
             "interrupt": False,

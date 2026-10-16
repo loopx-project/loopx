@@ -90,6 +90,14 @@ and check** once. A configured contract needs only **Check delivery**. The
 advanced JSON import remains available for technical migration; it is not a
 prerequisite for this path.
 
+The Overview places this interaction in its Direction brief, before work and
+result lists. The same acceptance readback supplies the objective, criteria and
+current check result; it is not a second overview controller. Desktop expands
+the check details, while phones fold them without hiding the required action,
+its command effect or failure feedback. Technical records and migration controls
+remain in that disclosure. A configured recheck is a quiet secondary control;
+a prepared plan retains its explicit **Use plan and check** decision.
+
 In an explicitly enabled Goal LoopX conversation whose native tool advertises
 `prepare_check`, the Agent can call `loopx_collaboration` with
 `action=prepare_check`, a stable `operation_id` and the existing acceptance
@@ -138,6 +146,9 @@ No-plan/default-off behavior remains unchanged, and no Lark action is introduced
 Goal、Agent 与运行目录由宿主固定，暂停、过期 Turn 或撤销配置后不能继续准备。
 旧原生线程的工具声明不会自动升级，也不会为新增工具替换未完成线程；未声明时保留 CLI
 准备路径。该入口不自动启用 LoopX、不配置或运行检查。
+概览将同一个交付检查交互放在“方向”正文中，先于工作和成果列表；目标、条件和当前结果
+使用同一验收读回。桌面展开检查细节，窄屏默认折叠条件、版本记录与高级迁移入口，但不折叠
+必需动作、命令影响或失败反馈。已有配置的重查使用次要按钮，待采用方案保留明确的采用决定。
 
 For advanced CLI configuration, inspect the current provider revision:
 
@@ -391,7 +402,9 @@ status 同时在独立的 `run_history.goals[].artifact_lifecycle` 和 Markdown 
 所有者可为已注册且**已提升到 canonical authority** 的 Goal 显式启用版本化验收合同。
 命令不会自动提升 provider，canonical 读取失败也不回退到旧 Markdown。
 三个明确决定是：目标与验收条件、现有推进任务与条件的关联、是否启用这项治理。
-合同归既有 Goal authority 所有，Dashboard 只读，不新增配置编辑器或 provider。
+合同归既有 Goal authority 所有，Dashboard 展示其检查结果，并通过同一 owner 执行授权操作；
+不新增独立配置 owner 或 provider。普通路径采用上方的 Agent 准备与原位检查，以下 CLI/JSON
+步骤保留给高级配置及迁移。
 
 在 Goal 的交付工作区先运行
 `loopx --format json goal-acceptance inspect --goal-id example-goal`，
@@ -615,8 +628,12 @@ Workspace discovery in this regression is synthetic; it does not establish
 installed-App adoption or the live L1 correction episode.
 
 
-Synthetic packaged views of the actual local-owner interaction (not an installed
-App or live team): prepared plan on [desktop](../../examples/personal-workspace-browser/oracle-controls-desktop.png)
-and [390px](../../examples/personal-workspace-browser/oracle-controls-mobile.png);
-current result on [desktop](../../examples/personal-workspace-browser/oracle-current-desktop.png)
-and [390px](../../examples/personal-workspace-browser/oracle-current-mobile.png).
+Packaged composition comparison on the canonical synthetic showcase workspace.
+The images illustrate placement and disclosure; the disposable SQLite regression
+above separately qualifies the operation. Neither proves installed-App adoption,
+model preparation or a complete one-round request.
+
+| View | Before | Contextual check |
+| --- | --- | --- |
+| Desktop | ![Earlier desktop](../../examples/personal-workspace-browser/check-overview-before-desktop.png) | ![Check in the Goal brief](../../examples/personal-workspace-browser/check-overview-desktop.png) |
+| 390px | ![Earlier phone](../../examples/personal-workspace-browser/check-overview-before-phone.png) | ![Phone check and folded details](../../examples/personal-workspace-browser/check-overview-phone.png) |

@@ -13,6 +13,11 @@ import time
 import uuid
 
 
+# One shared budget for explicitly enabled full controller capture, including complete
+# native/research preparation and the controller's live-source export. Mature
+# histories can exhaust 30 seconds before the writer barrier even starts. The
+# original phase still caps this clock; handoff/retries cannot renew it.
+CHECKPOINT_CAPTURE_SECONDS = 90
 CONTROLLER_SEAL_SECONDS = 30
 
 

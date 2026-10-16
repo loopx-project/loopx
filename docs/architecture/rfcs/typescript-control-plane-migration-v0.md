@@ -1613,10 +1613,18 @@ travel through a private, digest-bound local file reference. The same reducer
 checks all rows, lane-scoped ACKs and retry identities; neither the RPC budget
 nor a display window permits history truncation. Missing, altered or malformed
 snapshots fail before a decision, and the adapter removes temporary files on
-return or rejection. This repairs a T3/S2 settlement blocker and supplies S7/R7
+return or rejection. The replan semantic projection also uses the existing
+same-UID, digest-bound request/response snapshot channel for complete lifecycle
+and receipt-recovery facts. Its callers share one transport adapter; lifecycle,
+stride and receipt decisions remain in the same TypeScript owner. Ordinary RPCs
+retain their 2 MiB limit and local snapshots retain their 64 MiB bound. File/SQLite
+CLI recovery covers full facts above the wire budget, later independent work and
+user gates, durable refresh and replay, and exactly one quota debit. This repairs
+a T3/S2 settlement blocker and supplies S7/R7
 wire-growth evidence; it does not make full-history parsing constant-memory or
-qualify distributed execution. Cursor/checkpoint reduction remains a measured
-follow-up with complete-source parity, not a second Python policy. See the
+qualify installed-host adoption or distributed execution. Cursor/checkpoint
+reduction remains a measured follow-up with complete-source parity, not a second
+Python policy. See the
 [history decision evidence](ledger/typescript-control-plane-migration-v0/2026-09-22-replan-history-policy.md).
 
 **Checkpoint read-context transport.** A long-lived Goal can exceed the Effect
@@ -1926,12 +1934,12 @@ facade-exit condition in §4), TS gathers the facts directly and the adapter is
 deleted.
 
 Rollout. `status` (including `--goal-id` and projection-cache hits),
-`global-summary` and `global-gates` now carry the envelope. Every other
-`collect_status` caller receives the status envelope in its payload but does
-not yet emit its own. Next, in order: `global-todos` and `global-risks` (the
-same composition, one call each), `quota should-run`, `review-packet`, and
-Decision Context packets. A read model added to or migrated into TypeScript
-emits the envelope in the same PR; §6 makes this a promotion gate.
+`global-summary`, `global-gates`, `global-todos` and `global-risks` now carry
+the envelope. Every other `collect_status` caller receives the status envelope
+in its payload but does not yet emit its own. Next, in order: `quota
+should-run`, `review-packet`, and Decision Context packets. A read model added
+to or migrated into TypeScript emits the envelope in the same PR; §6 makes
+this a promotion gate.
 
 Consumers treat a missing envelope as unknown freshness, and disclose an
 alerting one before stating any conclusion that depends on it. Field
@@ -2003,7 +2011,7 @@ choice is now implemented rather than hypothetical.
 | Quota monitor-poll commit transaction | TypeScript owns monitor admission revalidation, target/event/result construction, effect replay/index CAS, provider intent, and repairable JSON/Markdown/index persistence | Python projects compact `should-run` facts, invokes the real Todo provider between at most two reductions, reloads legacy status, and holds the cross-writer index lock |
 | Runtime decoders ([#3443](https://github.com/loopx-project/loopx/pull/3443)) | Stable primitive decoding has one small shared module; domain decoders remain local | No larger schema framework is justified |
 | Transaction payoff ([#3464](https://github.com/loopx-project/loopx/pull/3464), [#3481](https://github.com/loopx-project/loopx/pull/3481), and Todo completion) | Turn settlement, quota delivery routing, and Todo completion each cross one coarse TS boundary; the Todo transaction owns identity, replay fencing, validation planning/result reduction, continuation/recovery, and completion metadata | Python still executes explicitly external providers and materializes legacy Markdown results; other domains still need their own bounded cutovers |
-| Projection envelope | TypeScript owns decoding of `loopx_projection_envelope_v0` and every freshness, alert, completeness and replay decision | Python gathers read facts for `status`, `global-summary` and `global-gates` until those projections migrate |
+| Projection envelope | TypeScript owns decoding of `loopx_projection_envelope_v0` and every freshness, alert, completeness and replay decision | Python gathers read facts for `status`, `global-summary`, `global-gates`, `global-todos` and `global-risks` until those projections migrate |
 | Promoted-authority Todo claim | TypeScript owns the provider-head read, lifecycle validation, complete-record update, hard-lease check, CAS, receipt, and readback-safe result for claims after authority promotion | Default local Markdown mode remains on the legacy writer; other Todo mutations and Markdown regeneration remain bounded follow-ups |
 
 The scheduler facade exit now includes its first bounded Stage 3 route. A

@@ -31,6 +31,7 @@ const LOCAL_SNAPSHOT_METHODS = new Set([
   "coordination.local_authority.todo_source",
   "todo.context.page",
   "work_item.context.project",
+  "work_item.replan_semantics.project",
   "goal.checkpoint_read_context.resolve",
   "goal.checkpoint_read_context.commit",
   "goal.checkpoint_read_context.inspect_replay",

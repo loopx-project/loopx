@@ -79,6 +79,15 @@ def validate_handoff_socket(value: str) -> Path:
                 path.parent.stat().st_mode & 0o077 or
                 path.stat().st_uid != os.getuid()):
             raise OSError("expected a same-user socket in a private physical directory")
+    except FileNotFoundError as exc:
+        # A resumed session can remember an earlier wake's private endpoint.
+        # Reject before any guard runs and name the current-wake remedy.
+        raise QuotaCommandValidationError(
+            "invalid decision handoff socket: the endpoint no longer exists; it belonged "
+            "to a Host wake that has ended. No guard was run. Rerun with the "
+            "--decision-output-root and --decision-handoff-socket named by the current "
+            "wake, or without both when the current wake names none"
+        ) from exc
     except OSError as exc:
         raise QuotaCommandValidationError(f"invalid decision handoff socket: {exc}") from exc
     return path

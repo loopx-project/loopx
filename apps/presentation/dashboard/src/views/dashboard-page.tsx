@@ -67,7 +67,7 @@ import {
   sendChatTurnStreaming,
   chatSessionQueuesFollowUps,
   chatSessionSupportsSteering,
-  selectAvailableChatAgent,
+  selectChatAgent,
   sessionInvalidatedByPayload,
   isTodoProposal,
   type ChatSessionSnapshot,
@@ -557,6 +557,9 @@ type PersonalAgentOption = {
   agentId: string;
   available: boolean;
   capability: string;
+  unavailableReason?: string | null;
+  executable?: string | null;
+  environmentVariable?: string | null;
   interrupt?: boolean;
   label: string;
   location?: string;
@@ -1270,6 +1273,9 @@ function PersonalGoalHome({
     streaming: boolean;
     tool_calls?: boolean;
     trust_scope?: string;
+    unavailable_reason?: string | null;
+    executable?: string | null;
+    environment_variable?: string | null;
   }>>([]);
   const [goalSubagentConfigurationEnabled, setGoalSubagentConfigurationEnabled] = useState(false);
   const [managerRuntime, setManagerRuntime] = useState<ManagerRuntimeSessionReadback | null>(null);
@@ -1348,7 +1354,10 @@ function PersonalGoalHome({
         location: agent.location,
         resume: agent.resume,
         source: agent.source,
-        statusLabel: agent.available ? "可用" : "需要配置",
+        statusLabel: agent.available ? t("agent.statusAvailable") : t("agent.statusNeedsSetup"),
+        unavailableReason: agent.unavailable_reason ?? null,
+        executable: agent.executable ?? null,
+        environmentVariable: agent.environment_variable ?? null,
         streaming: agent.streaming,
         toolCalls: agent.tool_calls,
         trustScope: agent.trust_scope,
@@ -1358,7 +1367,9 @@ function PersonalGoalHome({
         available: true,
         capability: personalAgentCapability("codex"),
         label: "Codex",
-        statusLabel: "正在检测",
+        // A placeholder while the catalog loads; readiness must not read it as a fact.
+        source: "detecting",
+        statusLabel: t("agent.statusDetecting"),
       }];
   // The status projection answers about Goals; a workspace conversation needs an executor.
   const agentOptions = [
@@ -1395,7 +1406,7 @@ function PersonalGoalHome({
   const [selectedAgents, setSelectedAgents] = useState<Record<string, string>>(readPersonalAgentSelections);
   const [selectedAgentModels, setSelectedAgentModels] = useState<Record<string, string>>({});
   const selectedAgentId = selectedAgents[contextId] ?? agentDefaultForContext(contextId);
-  const selectedAgent = selectAvailableChatAgent(agentOptions, selectedAgentId, defaultAgentId);
+  const selectedAgent = selectChatAgent(agentOptions, selectedAgentId, defaultAgentId);
   const [messagesByContext, setMessagesByContext] = useState<Record<string, PersonalManagerMessage[]>>({});
   const [runtimeBindings, setRuntimeBindings] = useState<Record<string, PersonalRuntimeBinding>>({});
   // Bound Sessions whose mode queues a message sent while a Turn runs, read
@@ -2164,8 +2175,9 @@ function PersonalGoalHome({
       ? model.goals.find((goal) => goal.goalId === targetContext.goalId) ?? null
       : null;
     const selectedRoute = route?.agentId
-      ? selectAvailableChatAgent(agentOptions, route.agentId, defaultAgentId)
+      ? selectChatAgent(agentOptions, route.agentId, defaultAgentId)
       : selectedAgent;
+    if (!selectedRoute.available) throw new Error(t("agent.workspaceUnavailable"));
     const targetQuestionModel = targetContextId === "manager"
       ? model
       : targetGoal
@@ -2771,7 +2783,10 @@ function PersonalGoalHome({
           streaming: agent.streaming,
           toolCalls: agent.toolCalls,
           trustScope: agent.trustScope,
-          workspaceCompatibility: agent.available ? "当前 Goal 写入前验证" : "不可用，需先修复 Endpoint",
+          unavailableReason: agent.unavailableReason,
+          executable: agent.executable,
+          environmentVariable: agent.environmentVariable,
+          workspaceCompatibility: agent.available ? t("agent.workspaceWriteVerified") : t("agent.workspaceUnavailable"),
         }))}
         callbacks={{
           onApplyAttention: (attention) => openGoalChat(attention.goalId),
@@ -3000,6 +3015,7 @@ function PersonalGoalHome({
             setCapabilityRevision((revision) => revision + 1);
             return result;
           },
+          onRecheckRuntimes: () => setCapabilityRevision((revision) => revision + 1),
           onBackgroundRefresh,
           onRetryResumeRun: retryManagerSession,
           onSelectAgent: chooseAgent,

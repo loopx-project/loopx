@@ -10,7 +10,9 @@ import pytest
 from examples import operation_action_fixtures as fixtures
 from loopx.control_plane.turn_driver.codex_operation_host import operation_tool_handler
 from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
-from loopx.control_plane.turn_driver.operation_requests import operation_request_source
+from loopx.control_plane.turn_driver.operation_requests import (
+    OperationRequestSource, operation_request_source,
+)
 from tests.control_plane.test_dsh_operation_connection import (
     DshOperationConnection, PROFILE, call, envelope, event, exchange, opened,
 )
@@ -172,6 +174,18 @@ def test_operator_file_requires_strict_bounded_json(tmp_path, raw):
     path.write_bytes(raw)
     with pytest.raises(ValueError):
         operation_request_source(path, hashlib.sha256(raw).hexdigest())
+
+
+@pytest.mark.parametrize("digest", [
+    "", "a" * 63, "a" * 65, "A" * 64, "g" * 64,
+    "sha256:" + "a" * 64, "a" * 64 + "\n", "\n" + "a" * 64,
+    "a" * 64 + " ", " " + "a" * 64, b"a" * 64, 64,
+])
+def test_invalid_digest_shape_is_refused_before_frozen_file_io(tmp_path, monkeypatch, digest):
+    monkeypatch.setattr(OperationRequestSource, "read",
+        lambda *_: pytest.fail("invalid digest must not read the frozen file"))
+    with pytest.raises(ValueError, match="requires an absolute file and SHA-256"):
+        operation_request_source(tmp_path / "request.json", digest)
 
 
 @pytest.mark.parametrize("path,digest", [(None, "a" * 64), ("relative.json", "a" * 64),

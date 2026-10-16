@@ -1151,38 +1151,41 @@ preserve both claim metadata and unrelated updates.
 The fifth verifies per-todo `required_capabilities`, including multiple P0/P1
 candidate selection, bridge repair, and owner-gated capability misses.
 
-### Lease-fenced canonical text/note updates
+### Administrative edits and explicit execution proof
 
-After explicit canonical-authority promotion, the active lease holder can edit
-`text` and `note` using the existing execution key and current lease version:
+On canonical `hard_lease` authority, a registered current owner can update task
+text, note, evidence, reason and priority without acquiring an execution lease:
 
 ```bash
 loopx todo update --goal-id <goal> --todo-id <todo> --agent-id <agent> \
-  --text 'Correct task description' --note 'Correction context' \
-  --task-lease-idempotency-key <execution-key> --task-lease-expected-version <version> \
+  --note 'Reviewed context' --evidence 'evidence:reviewed' \
   --update-operation-id <stable-update-id>
 ```
 
-Reuse the update id, execution proof and edit intent after a lost response.
-The original receipt can be replayed after lease expiry or transfer; it grants no
-current execution authority. Changed proof or edit intent with that id conflicts.
-Omitting the update id preserves a fresh id per CLI invocation. Preview writes
-nothing and does not consume the id. Updates preserve the lease exactly: they
-cannot acquire, renew, release or transfer it. Missing, stale or expired proof
-fails closed. These options do not enable promotion or a legacy Markdown fallback;
-legacy updates without the new options retain their existing behavior.
-An empty or Unicode-whitespace-only `--note` is an omitted note update and keeps
-the persisted note, before and after promotion. It never means clear; clearing a
-note requires a separate explicit contract.
+This changes the previous default that required an acquire/edit/release sequence
+for ordinary Agent metadata. The typed owner reads the current head and commits
+under provider CAS. The operation grants no execution, preserves retained lease
+history and cannot borrow another holder. Claims, exclusions, bindings, repository
+identity and reviewed source/revision checks still apply. Work requirements,
+dependencies, ownership, Monitor observations, validation and completion keep their
+own execution or lifecycle admission.
 
-显式切换到 canonical authority 后，当前租约持有者可使用执行 key 和当前租约版本
-修改 `text`／`note`。响应丢失后复用相同 `--update-operation-id`、凭证和修改内容；
-历史回执可在租约过期或转交后回放，但不授予当前执行权。相同 ID 搭配不同凭证或
-内容会冲突；省略 ID 则每次 CLI 调用生成新 ID。Preview 不写入、不消耗 ID。
-更新不获取、续期、释放或转交租约；缺失、陈旧或过期凭证拒绝。此入口不自动
-promotion，也不回退 Markdown；不带新选项的 legacy 更新保持原行为。
-空字符串或仅含 Unicode 空白的 `--note` 视为省略 note 更新，在 promotion 前后都保留
-已持久化 note；它不表示清空。清空 note 需要另行定义显式契约。
+Supplying either `--task-lease-idempotency-key` or `--task-lease-expected-version`
+opts into the existing strict execution fence. Supply both current values; stale,
+partial, expired or foreign proof is rejected, never silently refreshed or dropped.
+After a lost response, retry the same update ID, proof and edit intent. Historical
+receipt replay grants no current execution rights; changing that intent conflicts.
+Omitting the update ID creates a new ID per invocation. Preview writes nothing.
+An empty or Unicode-whitespace-only `--note` remains omission, never an implicit
+clear. Unsupported updates cannot fall back to Markdown or activate a provider.
+
+中文：canonical `hard_lease` 下，本人的普通任务说明、备注、证据、原因和优先级修改
+不再要求先领执行租约再释放；TS 在当前 provider CAS 中执行行政性编辑，保留租约历史，
+不授予执行权。注册、claim、排除、绑定、仓库与已审阅 revision 的约束不变，他人持有者
+不能被借用。工作要求、依赖、ownership、Monitor 观察、验证和完成仍走各自的准入。
+显式传入任一租约 proof 参数时仍严格检查两个参数及当前 generation；陈旧、部分、过期
+或他人 proof 不会被自动替换或忽略。响应丢失后沿用同一操作 ID 和意图恢复原回执；
+省略 ID 表示新的调用。空白 note 仍为省略；无隐式清空、Markdown fallback 或 provider 切换。
 
 ### Reviewed canonical edits and recovery
 
@@ -1289,29 +1292,43 @@ loopx todo list --goal-id <goal>
 Preview with `--dry-run` before the real attempt. A cleared resume condition also
 clears its generation fence; an omitted condition is retained. Empty successor
 arrays and explicit `no_followup=false` in API intent remain meaningful values.
-For a promoted hard-lease Agent Todo that the owner has paused, use a narrow
-nonterminal lifecycle edit after its execution lease has been released or has
-expired:
+For a promoted hard-lease Agent Todo, pause with one intent and optional
+context; the current holder does not need a separate release:
 
 ```bash
-loopx todo update --goal-id <goal> --todo-id <todo> --agent-id <owner-or-granted-controller> \
-  --status blocked --clear-resume-when --reason '<public-safe pause reason>' \
-  --update-operation-id <stable-pause-id> --update-expected-provider-revision <readback-revision>
+loopx todo update --goal-id <goal> --todo-id <todo> --agent-id <owner> \
+  --status blocked --reason 'Owner paused this task' --note 'Preserve original acceptance' \
+  --evidence 'evidence:owner-pause' --update-operation-id <stable-pause-id>
+loopx todo update --goal-id <goal> --todo-id <todo> --agent-id <owner> \
+  --status open --reason 'Owner explicitly resumed' --note 'Resume context' \
+  --update-operation-id <stable-resume-id>
 loopx todo list --goal-id <goal> --todo-id <todo> --role agent
 ```
 
-The same provider CAS blocks the Todo and retires only an inactive retained
-lease. An active lease must be released first. The edit grants no execution,
-does not complete validation or spend quota, and preserves claim and successor
-links. Reopening requires another explicit `--status open --clear-resume-when
---reason ...` operation and a fresh execution lease. Do not combine this
-transition with text, ownership, work requirements or a lease proof.
+One provider CAS records status, note/evidence and applicable lease retirement.
+Omitting a resume condition on this explicit pause/resume clears the previous wait
+and its derived observations; a typed condition on pause is preserved instead.
+Explicit `clear_resume_when=false` is not silently overridden. Deferral with a
+reason and typed `resume_when` uses the same atomic retirement; resuming it clears
+the wait and grants no execution. Paused/deferred work is not completed acceptance.
 
-已晋升的 hard-lease Agent Todo 如被 owner 暂停，应先确认旧执行租约已释放或到期，
-再以稳定操作 ID、读回的 provider revision 和明确原因执行上述窄范围状态更新。
-同一次 CAS 会把 Todo 标为 `blocked` 并退休非活跃租约，同时清除旧等待条件及其派生观察；
-它不会完成验收、扣额或授予新的执行权。活跃租约须先释放；恢复执行要明确改回 `open`
-并重新领取租约，不能把阻塞记录当作交付完成。
+The current holder's active lease can retire with its own pause. A different
+active holder, divergent active execution on an already paused Todo, stale explicit
+proof, changed reviewed revision or missing authority refuses before effects.
+A granted controller cannot silently retire another live holder. An explicit proof
+remains a generation constraint; it is never substituted with a current read.
+Text, ownership, work requirements and successor changes are separate operations.
+The existing App/Chat task controls use this same owner; blocked and deferred task
+details offer explicit resume, without requesting lease keys. Pausing changes
+future admission and fences old execution writes; it does not assert process exit.
+
+中文：暂停、暂缓及明确恢复支持备注和证据，与适用租约退休在同一 provider CAS 中提交；
+本人有效租约不再需要手动先释放。暂停/恢复未指定等待条件时，自动清除旧条件及派生观察；
+暂停明确指定合法条件则保留，显式 `clear_resume_when=false` 不会被覆盖。恢复不会启动
+执行；后续须重新准入。不同活跃持有者、已暂停任务上仍活跃的异常执行、陈旧显式 proof、
+已变化 revision 或缺权限均拒绝，不会借用他人凭证或静默接管。修改 text、ownership、
+工作要求和 successor 应单独操作。App/Chat 复用同一 owner，任务详情可明确恢复；
+暂停/暂缓不等于完成验收或已终止进程。
 
 Dependency validation sees the complete canonical inventory, not a hot-path
 summary or a Markdown buffer. A satisfied Monitor wait is not silently re-armed
@@ -1323,10 +1340,10 @@ legacy public planner; a combined raw text/note correction retains its establish
 copy-edit attribution behavior.
 
 Authority is unchanged: registered, non-excluded peers may edit unclaimed work
-without claiming it; another owner's claim is not writable. A lease-bearing edit
-requires current execution proof and preserves the entire lease. **Changing a
-leased Todo's status is unsupported** until status and lease effects can commit
-together. Monitor planning/observations, ownership, routing, capability fields
+without claiming it; another owner's claim is not writable. Ordinary owner copy
+edits and the bounded nonterminal transitions above prepare their state within
+the same CAS; explicit execution proof retains its strict fence. Monitor
+planning/observations, ownership, routing, capability fields
 and terminal operations are outside this update intent. Use the existing
 dedicated lifecycle operations where supported; no unsupported update falls
 back to Markdown. Missing display files do not block a canonical update; normal
@@ -1341,7 +1358,7 @@ inventory，不依赖摘要条数或 Markdown。补 evidence 不会重新设置�
 仅包含规划字段的更新保留既有 `last_actor_agent_id`，与 legacy public planner 一致；
 若同时包含 raw text/note 修正，则继续沿用既有文案修正的 actor 归属语义。
 权限不扩大：未 claim 的工作仍可由未被排除的注册 agent 修改，不能改写
-其他 owner 的工作。带租约的编辑须提供当前 proof，保持租约不变；**暂不支持改变
-带租约 Todo 的 status**。Monitor 规划/观察、ownership、routing、capability 与终态
+其他 owner 的工作。普通本人文案编辑与上述非终态变更在同一 CAS 中准备状态；
+显式执行 proof 仍严格校验。Monitor 规划/观察、ownership、routing、capability 与终态
 操作不在此 intent 内。缺失 display 不阻止 canonical 更新；提交后的正常投影恢复
 托管 Todo 展示。不支持的操作不会回退 Markdown，也不自动切换 provider 或 promotion。

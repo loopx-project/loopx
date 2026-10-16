@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -97,9 +98,25 @@ def test_public_claim_transfer_recipient_and_projection_recovery(tmp_path, monke
                        cwd=cli_repo, capture_output=True, text=True, timeout=30, check=True)
 
 
-def test_claim_transfer_never_emulates_a_legacy_two_write_handover(tmp_path):
+@pytest.mark.parametrize("handoff_mode", ["legacy", "soft_claim", "hard_lease"])
+@pytest.mark.parametrize("output_format", ["json", "markdown", None])
+def test_claim_transfer_never_emulates_a_legacy_two_write_handover(tmp_path, handoff_mode, output_format):
     registry = tmp_path / "registry.json"
     runtime = tmp_path / "runtime"
+    state = tmp_path / "state.md"
+    state.write_text(f"---\nhandoff_mode: {handoff_mode}\n---\n"
+                     "# Retained source\n\n## Agent Todo\n- [ ] Historical work <!-- todo_id=todo_example -->\n")
+    lease_path = runtime / "goals/example/task-leases/todo_example.json"
+    lease_path.parent.mkdir(parents=True)
+    now = datetime.now(UTC).replace(microsecond=0)
+    lease_path.write_text(json.dumps({
+        "schema_version": "task_lease_v0", "goal_id": "example", "todo_id": "todo_example",
+        "owner": "agent-a", "idempotency_key": "source-a", "version": 1, "lease_epoch": 1,
+        "status": "active", "write_scopes": ["src/**"],
+        "acquire_ttl_seconds": 600, "acquired_at": now.isoformat(), "updated_at": now.isoformat(),
+        "expires_at": (now + timedelta(minutes=10)).isoformat(),
+    }))
+    original_state, original_lease = state.read_bytes(), lease_path.read_bytes()
     registry.write_text(json.dumps({
         "common_runtime_root": str(runtime),
         "goals": [{
@@ -119,4 +136,23 @@ def test_claim_transfer_never_emulates_a_legacy_two_write_handover(tmp_path):
     assert caught.value.code == "canonical_authority_required"
     assert caught.value.payload["operation"] == "task_lease_transfer"
     assert caught.value.payload["write_admitted"] is False
-    assert not (runtime / "goals/example/task-leases/todo_example.json").exists()
+    child = subprocess.run([
+        sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+        *(["--format", output_format] if output_format is not None else []),
+        "task-lease", "transfer", "--goal-id", "example", "--todo-id", "todo_example",
+        "--owner", "agent-a", "--idempotency-key", "source-a", "--expected-version", "1",
+        "--new-owner", "agent-b", "--new-idempotency-key", "receiver-b", "--transfer-claim",
+    ], cwd=REPO, capture_output=True, text=True, timeout=60, check=False)
+    assert child.returncode == 1, child.stdout + child.stderr
+    assert "Traceback" not in child.stderr
+    if output_format == "json":
+        rejected = json.loads(child.stdout)
+        assert rejected["error_code"] == "canonical_authority_required"
+        assert rejected["write_admitted"] is False
+        assert rejected["recovery"] == {"action": "migrate_goal_authority", "backup_required": True}
+    else:
+        assert "canonical_authority_required" in child.stdout
+        assert "migrate_goal_authority" in child.stdout
+        assert "backup_required: `True`" in child.stdout
+    assert state.read_bytes() == original_state
+    assert lease_path.read_bytes() == original_lease

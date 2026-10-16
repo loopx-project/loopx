@@ -146,12 +146,21 @@ def _is_route_observation(path: Path) -> bool:
 
     if _is_redirected_path(path):
         return False
-    if path.name == GLOBAL_REGISTRY_FILENAME + ".lock":
-        return path.is_file()
-    # The native effect runtime locks every registry it writes through, so a
-    # mere lock file must not turn a default root into a second authority.
-    # Spelled here because file_lock imports this module.
-    if path.name == GLOBAL_REGISTRY_FILENAME + ".ts-effect.lock":
+    # Lock metadata beside the root's own global registry. The native effect
+    # runtime locks every registry it writes through, and the Windows holder
+    # record plus the timeout incident channel persist after release (see
+    # docs/reference/protocols/file-lock-acquisition-v0.md), so neither a
+    # later read nor an archive restored on another platform may read them
+    # back as a second authority. Spelled here because file_lock imports this
+    # module.
+    global_lock_name = GLOBAL_REGISTRY_FILENAME + ".lock"
+    if path.name in {
+        global_lock_name,
+        GLOBAL_REGISTRY_FILENAME + ".ts-effect.lock",
+        f"{global_lock_name}.holder",
+        f"{global_lock_name}.holder.json",
+        f"{global_lock_name}.incidents.jsonl",
+    }:
         return path.is_file()
     if path.name == "lark-consumers" and path.is_dir():
         import re

@@ -7,6 +7,7 @@ import signal
 import subprocess
 import tempfile
 import threading
+import time
 
 from contextlib import ExitStack
 from types import SimpleNamespace
@@ -50,6 +51,7 @@ with (
             patch.object(provider, "sys", SimpleNamespace(platform="darwin"))
         )
         fail_next_open = False
+        body_fault = None
 
         def open_spy(argv, **options):
             global fail_next_open
@@ -70,15 +72,39 @@ with (
 
         class Handler(ChatRequestHandler):
             def do_GET(self):
+                global body_fault
                 if self.path == "/fixture/opened":
                     self._send_json({"ok": True, "count": len(launches)})
                 elif self.path == "/fixture/inputs":
                     self._send_json({"ok": True, "count": len(_inputs)})
+                elif (body_fault and self.path.startswith("/api/chat/codex-attached?")
+                      and "agent_id=" not in self.path):
+                    # Headers first, then a body that never completes: the client
+                    # read limit aborts a stalled body, and a short close against
+                    # the declared length surfaces as a network error. Both keep
+                    # the status the response already carried.
+                    mode, body_fault = body_fault, None
+                    self.send_response(503 if mode == "timeout" else 403)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", "200")
+                    self.end_headers()
+                    self.wfile.write(b"<html><body>Service unavailable")
+                    self.wfile.flush()
+                    if mode == "timeout":
+                        time.sleep(7.5)
+                    self.close_connection = True
                 else:
                     super().do_GET()
 
             def do_POST(self):
-                global fail_next_open
+                global fail_next_open, body_fault
+                if self.path in {
+                    "/fixture/discovery-body-timeout",
+                    "/fixture/discovery-body-drop",
+                }:
+                    body_fault = "timeout" if self.path.endswith("timeout") else "drop"
+                    self._send_json({"ok": True})
+                    return
                 if self.path == "/fixture/work-records":
                     records = [
                         {

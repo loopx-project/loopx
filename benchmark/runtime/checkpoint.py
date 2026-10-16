@@ -20,6 +20,7 @@ from loopx.control_plane.quota.settlement import read_heartbeat_settlement
 from loopx.hosts.research_checkpoint import (
     _participant_id, native_binding_participant, research_participants, verify_research_participants,
 )
+from .checkpoint_handoff import CHECKPOINT_CAPTURE_SECONDS
 
 
 def normalize_checkpoint_request_path(value: str) -> str:
@@ -246,7 +247,8 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
     started = time.monotonic()
     try:
         phase_deadline = env.get("LOOPX_PHASE_DEADLINE_EPOCH")
-        deadline = time.time() + 30
+        window = CHECKPOINT_CAPTURE_SECONDS if supplied_request and supplied_request[0].get("controller_handoff") else 30
+        deadline = time.time() + window
         if phase_deadline is not None:
             original_deadline = float(phase_deadline)
             if not math.isfinite(original_deadline):

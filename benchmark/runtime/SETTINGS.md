@@ -20,7 +20,8 @@ use matched repetitions to test its effect.
 | --- | --- | --- |
 | Task entry | LoopX modes: loopx-planned | Record planned or seeded for every arm |
 | Explore | Off in heartbeat-resume; on in heartbeat-explore | Keep resume as the reference |
-| Turn envelope | Off | Enable only in its ablation |
+| Turn envelope | Off; a checkpoint handoff enables capture on fresh_replan execute wakes and receipts record `turn_envelope_source: checkpoint_handoff` | Enable only in its ablation; read the effective receipt, not the opt-in flag |
+| Native-Goal continuation | Off: a native Goal that declares completion ends the worker; a Goal still active at the budget edge is recorded as `native_goal_outcome: budget_exhausted` with exit 0 | `native_goal_continue: true` / `--native-goal-continue` starts continuation Goals until 300 s before the budget edge (native-goal profile only) |
 | Replan cadence | 6 settled effective work Turns | Use explicit completed-Todo cadence or another Turn count for ablation |
 | Iteration context | Harbor: fresh; EdgeBench heartbeat: resume | Freeze the provider and context within a comparison |
 | Evaluator feedback | EdgeBench: best-only (strict new-best snapshot notifications) | Native and blind remain explicit controls; freeze feedback mode for every comparison |
@@ -91,6 +92,16 @@ an equivalent Harbor kwargs switch. Keep the dataset, provider and validation
 configuration unchanged.
 
 ## Readback and interpretation
+
+TurnEnvelope projections reuse the validated checkpoint declaration. An explicit
+opt-in records `turn_envelope_source=explicit`; a known `fresh_replan` declaration
+for heartbeat records `checkpoint_handoff`. Omitting `trigger` means after-wake
+capture and does not imply TurnEnvelope. A programmatic guest path without
+declaration bytes records capture configuration only: it cannot prove a trigger.
+For the Harbor adapter, pass the same validated `checkpoint_request` bytes with
+their `checkpoint_request_path` when projecting that known configuration. SForge
+forwards the exact bytes it stages. The worker's individual wake receipt remains
+authoritative for an actual handoff socket, including declaration loss or failure.
 
 Inspect resolved runtime/profile receipts, installed source revisions and the
 first planning/seed checkpoint before scoring a treatment. Pin task, evaluator,

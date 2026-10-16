@@ -125,14 +125,27 @@ for (const provider of ["file", "sqlite", "postgresql"]) {
   });
 }
 
-test("leased preparation requires exact proof; context cannot inject operational proof", async t => {
-  const f = await fixture(t, "file");
+for (const provider of ["file", "sqlite", "postgresql"]) test(`${provider}: leased preparation requires exact proof; context cannot inject operational proof`,
+  {skip: provider === "postgresql" && !process.env.LOOPX_TEST_POSTGRES_URL ? "isolated PostgreSQL URL required" : false}, async t => {
+  const f = await fixture(t, provider);
+  const before = await loaded(f.store);
   for (const proof of [null, {...f.sourceProof, expected_version: 999}, {...f.sourceProof, idempotency_key: "wrong"}]) {
     assert.equal((await executeTodoContinuation(f.store, {...f.prepare, lease_proof: proof})).ok, false);
+    assert.deepEqual(await loaded(f.store), before);
+    assert.equal((await f.store.readReceipt("prepare")).status, "missing");
   }
   await assert.rejects(executeTodoContinuation(f.store, {...f.prepare, lease_proof: {idempotency_key: "partial"}}), /lease_proof/);
   await assert.rejects(executeTodoContinuation(f.store, {...f.prepare,
     context: {...f.prepare.context, lease_proof: f.sourceProof}}), /unknown context field/);
+  assert.equal((await f.store.readReceipt("prepare")).status, "missing");
+  const released = await executeCanonicalTaskLeaseLifecycle(f.store, {operation: "release", goal_id: f.base.goal_id,
+    todo_id: f.base.todo_id, owner: f.base.agent_id, idempotency_key: f.sourceProof.idempotency_key,
+    expected_version: f.sourceProof.expected_version, registered_agents: f.base.registered_agents, now: new Date()});
+  assert.equal(released.status, "applied", JSON.stringify(released));
+  const inactive = await loaded(f.store);
+  assert.equal((await executeTodoContinuation(f.store, {...f.prepare,
+    expected_provider_revision: inactive.provider_revision})).ok, false);
+  assert.deepEqual(await loaded(f.store), inactive);
   assert.equal((await f.store.readReceipt("prepare")).status, "missing");
 });
 
@@ -211,6 +224,15 @@ for (const provider of ["file", "sqlite"]) test(`${provider}: public CLI deliver
     "--task-lease-expected-version", String(f.sourceProof.expected_version)];
   const prepareArgs = [...sourceArgs, "--operation-id", "cli-prepare",
     "--expected-revision", String(f.prepare.expected_provider_revision), "--rationale", "Continue with the preserved decision"];
+  const beforePrepare = await loaded(f.store);
+  await assert.rejects(handoff("prepare", "agent-a", "source", prepareArgs.slice(sourceArgs.length)), error => {
+    const failure = error as Error & {code: number; stdout: string};
+    assert.equal(failure.code, 1);
+    assert.equal(JSON.parse(failure.stdout).ok, false);
+    return true;
+  });
+  assert.deepEqual(await loaded(f.store), beforePrepare);
+  assert.equal((await f.store.readReceipt("cli-prepare")).status, "missing");
   const pending = await handoff("prepare", "agent-a", "source", prepareArgs);
   assert.equal(pending.ok, true); // Missing local display declaration cannot erase the canonical write.
   assert.equal(pending.projection_delivery, "pending");

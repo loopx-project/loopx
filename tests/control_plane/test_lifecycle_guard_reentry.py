@@ -10,10 +10,13 @@ import pytest
 from test_replan_successor_guard_reentry import AGENT, GOAL, _fixture, _guard
 
 
+@pytest.mark.parametrize("new_work", ["after_closeout", "before_closeout", "bound_before_closeout"])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("later_user_gate", [False, True])
+@pytest.mark.parametrize("large_history", [False, True])
 def test_hidden_completed_source_recovers_its_original_guard_after_new_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, later_user_gate: bool,
+    large_history: bool, new_work: str,
 ) -> None:
     original_id = "todo_original_lifecycle"
     completion_key = "local_completion_" + sha256(
@@ -32,6 +35,7 @@ def test_hidden_completed_source_recovers_its_original_guard_after_new_work(
     # Enough newer terminal rows to move the original outside display budgets.
     recent = [{**completed, "todo_id": f"todo_later_{i}", "index": i + 2,
         "text": f"Accepted independent source {i}.", "no_followup": True,
+        "note": "Synthetic retained evidence. " + ("x" * 96_000 if large_history else ""),
         "completion_continuation": "no_followup", "completion_turn_key": f"later-{i}",
         "completed_at": "2026-08-02T00:00:00Z", "updated_at": "2026-08-02T00:00:00Z"}
         for i in range(24)]
@@ -52,15 +56,42 @@ def test_hidden_completed_source_recovers_its_original_guard_after_new_work(
     assert obligation["resolution_mode"] == "todo_lifecycle_settlement"
     assert [row["todo_id"] for row in obligation["triggers"]] == [original_id]
 
-    closed = call("todo", "complete", "--goal-id", GOAL, "--todo-id", original_id,
-        "--agent-id", AGENT, "--completion-identity-key", completion_key,
-        "--no-follow-up", "--note", "The finite maintenance outcome was independently accepted.")
-    assert closed["completion_recovery"] == "lifecycle_reentry_terminal_closeout"
-    # A later human request owns a different live frontier, not this old review.
-    later = call("todo", "add", "--goal-id", GOAL, "--role", "agent",
+    # Independent new work cannot discharge the admitted lifecycle.
+    def add_work():
+        return call("todo", "add", "--goal-id", GOAL, "--role", "agent",
         "--claimed-by", AGENT, "--text", "Validate the newly requested independent source.",
         "--task-class", "advancement_task", "--action-kind", "validate",
-        "--target-key", "new-independent-source")
+        "--target-key", "new-independent-source",
+        *(["--replan-obligation-id", obligation["obligation_id"]]
+          if new_work == "bound_before_closeout" else []))
+    later = None
+    if new_work != "after_closeout":
+        later = add_work()
+        for _ in range(2):
+            pending = _guard(call, turn)
+            assert pending["heartbeat_receipt"]["settlement_identity"] == identity
+            assert pending.get("selected_todo") is None
+            assert pending["autonomous_replan_obligation"]["resolution_mode"] == "todo_lifecycle_settlement"
+            assert pending["autonomous_replan_obligation"]["triggers"] == obligation["triggers"]
+        denied = call("quota", "spend-slot", "--goal-id", GOAL, "--agent-id", AGENT,
+            "--codex-app", "--turn-instance-id", turn, "--replan-obligation-id",
+            obligation["obligation_id"], "--source", "heartbeat", "--execute", expected_code=1)
+        assert denied.get("appended") is not True
+        rejected = call("refresh-state", "--goal-id", GOAL, "--agent-id", AGENT,
+            "--turn-instance-id", turn, "--replan-obligation-id", obligation["obligation_id"],
+            "--classification", "pending_lifecycle_review", "--delivery-batch-scale", "single_surface",
+            "--delivery-outcome", "outcome_progress", "--vision-unchanged-reason",
+            "Independent work exists but the original lifecycle is still pending.",
+            "--no-global-sync", "--suppress-external-sinks", expected_code=1)
+        assert rejected.get("ok") is not True
+
+    closed = call("todo", "complete", "--goal-id", GOAL, "--todo-id", original_id,
+        "--agent-id", AGENT, "--completion-identity-key", completion_key,
+        "--no-follow-up", "--reason", "The finite maintenance outcome was independently accepted.")
+    assert closed["completion_recovery"] == "lifecycle_reentry_terminal_closeout"
+    assert call("todo", "list", "--goal-id", GOAL, "--todo-id", original_id)["todo"]["note"] == completed["note"]
+    if later is None:
+        later = add_work()
     user_gate = None
     if later_user_gate:
         user_gate = call("todo", "add", "--goal-id", GOAL, "--role", "user",
@@ -73,6 +104,8 @@ def test_hidden_completed_source_recovers_its_original_guard_after_new_work(
     assert recovered["autonomous_replan_obligation"]["resolution_mode"] == "receipt_bound_replan_settlement"
     assert recovered["replan_action_packet"]["decision"] == "vision_outcome_checkpoint_required"
     assert recovered["replan_action_packet"]["semantic_delta"] is None
+    if large_history:
+        assert len(json.dumps(recent).encode()) > 2 * 1024 * 1024
     denied = call("quota", "spend-slot", "--goal-id", GOAL, "--agent-id", AGENT,
         "--codex-app", "--turn-instance-id", turn, "--replan-obligation-id",
         obligation["obligation_id"], "--source", "heartbeat", "--execute", expected_code=1)

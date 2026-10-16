@@ -38,8 +38,16 @@ def render_task_lease_markdown(payload: dict[str, object]) -> str:
         lines.append(f"- error: {payload.get('error')}")
     if payload.get("error_code"):
         lines.append(f"- error_code: `{payload.get('error_code')}`")
+    inspection = payload.get("inspection")
+    if isinstance(inspection, dict):
+        import shlex
+        lines.append(f"- inspect current state: `{shlex.join(['loopx', *inspection['cli_args']])}`")
+        lines.append(f"- {inspection['reason']}")
     recovery = payload.get("recovery")
-    if isinstance(recovery, dict):
+    if isinstance(recovery, dict) and payload.get("error_code") == "canonical_authority_required":
+        lines.append(f"- recovery: `{recovery['action']}`")
+        lines.append(f"- backup_required: `{recovery['backup_required']}`")
+    elif isinstance(recovery, dict):
         import shlex
         lines.append(f"- repair: `{shlex.join(['loopx', *recovery['cli_args']])}`")
         lines.append(f"- supply: `{', '.join(recovery['requires_flags']) or 'none'}`")
@@ -244,5 +252,16 @@ def handle_task_lease_command(
             "error": str(exc),
             "error_code": getattr(exc, "code", exc.__class__.__name__),
         }
+    if payload.get("ok") is not True:
+        # Presentation only: retain every native refusal and explicit proof.
+        # An exact read is useful for both grammar and semantic failures; it
+        # neither chooses another owner nor retries a mutation with new proof.
+        inspection_args = [f"--registry={registry_path}", "--format", "json"]
+        if runtime_root_arg is not None:
+            inspection_args.append(f"--runtime-root={runtime_root_arg}")
+        inspection_args.extend(["task-lease", "inspect", f"--goal-id={args.goal_id}", f"--todo-id={args.todo_id}"])
+        payload["inspection"] = {"cli_args": inspection_args,
+            "reason": "Read the current holder, state and version. Keep the original execution identity on retries; another holder requires an explicit handover, not borrowed proof.",
+            "execution_authority_granted": False}
     print_payload(payload, output_format(args), render_task_lease_markdown)
     return 0 if payload.get("ok") else 1

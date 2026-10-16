@@ -1,0 +1,216 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 990" width="960" height="990" role="img" aria-labelledby="title description" font-family="Geist,-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Noto Sans CJK SC',sans-serif">
+<title id="title">Local 90-minute best-score trajectories</title><desc id="description">71 scalar observations from 13 scored runs. Lines connect best-so-far scores at submission timestamps. Independent task scales; no fit or confidence bands. Two runs lack native final results.</desc>
+<rect width="960" height="990" fill="#fafafa"/>
+<text x="24" y="30" font-size="19" text-anchor="start" fill="#171717">90-minute local budget · best score so far · higher is better</text>
+<text x="24" y="65" font-size="17" text-anchor="start" fill="#171717">(a) Borden source inversion</text>
+<line x1="60" x2="425" y1="228.00" y2="228.00" stroke="#e5e5e5"/>
+<text x="51" y="233.00" font-size="14" text-anchor="end" fill="#4d4d4d">0</text>
+<line x1="60" x2="425" y1="193.50" y2="193.50" stroke="#e5e5e5"/>
+<text x="51" y="198.50" font-size="14" text-anchor="end" fill="#4d4d4d">30</text>
+<line x1="60" x2="425" y1="159.00" y2="159.00" stroke="#e5e5e5"/>
+<text x="51" y="164.00" font-size="14" text-anchor="end" fill="#4d4d4d">60</text>
+<line x1="60" x2="425" y1="124.50" y2="124.50" stroke="#e5e5e5"/>
+<text x="51" y="129.50" font-size="14" text-anchor="end" fill="#4d4d4d">90</text>
+<line x1="60" x2="425" y1="90.00" y2="90.00" stroke="#e5e5e5"/>
+<text x="51" y="95.00" font-size="14" text-anchor="end" fill="#4d4d4d">120</text>
+<text x="60.00" y="249" font-size="14" text-anchor="middle" fill="#4d4d4d">0</text>
+<text x="181.67" y="249" font-size="14" text-anchor="middle" fill="#4d4d4d">30</text>
+<text x="303.33" y="249" font-size="14" text-anchor="middle" fill="#4d4d4d">60</text>
+<text x="425.00" y="249" font-size="14" text-anchor="middle" fill="#4d4d4d">90</text>
+<line x1="60" x2="425" y1="228" y2="228" stroke="#a1a1a1"/>
+<text x="242.5" y="271" font-size="14" text-anchor="middle" fill="#4d4d4d">Minutes from native first record</text>
+<path d="M67.28,219.94 L129.54,219.73 L191.11,183.01 L252.46,157.34 L313.58,157.34 L379.29,102.65" fill="none" stroke="#2a78d6" stroke-width="2.4" stroke-linejoin="round"/>
+<circle cx="67.28" cy="219.94" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="129.54" cy="219.73" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="191.11" cy="183.01" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="252.46" cy="157.34" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="313.58" cy="157.34" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="379.29" cy="102.65" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<line x1="60" x2="83" y1="281" y2="281" stroke="#2a78d6" stroke-width="2.4"/>
+<circle cx="71.50" cy="281.00" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<text x="94" y="285" font-size="14" text-anchor="start" fill="#4d4d4d">Combined LoopX   109.000 ‡</text>
+<path d="M75.58,219.94 L136.58,167.31 L198.18,167.31 L260.01,152.79 L321.88,147.98 L400.59,147.98" fill="none" stroke="#eb6834" stroke-width="2.4" stroke-linejoin="round"/>
+<rect x="72.18" y="216.54" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="133.18" y="163.91" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="194.78" y="163.91" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="256.61" y="149.39" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="318.48" y="144.58" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="397.19" y="144.58" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<line x1="60" x2="83" y1="299" y2="299" stroke="#eb6834" stroke-width="2.4"/>
+<rect x="68.10" y="295.60" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<text x="94" y="303" font-size="14" text-anchor="start" fill="#4d4d4d">Native official   69.579</text>
+<text x="504" y="65" font-size="17" text-anchor="start" fill="#171717">(b) Integer compression codec</text>
+<line x1="540" x2="905" y1="228.00" y2="228.00" stroke="#e5e5e5"/>
+<text x="531" y="233.00" font-size="14" text-anchor="end" fill="#4d4d4d">0</text>
+<line x1="540" x2="905" y1="188.57" y2="188.57" stroke="#e5e5e5"/>
+<text x="531" y="193.57" font-size="14" text-anchor="end" fill="#4d4d4d">10</text>
+<line x1="540" x2="905" y1="149.14" y2="149.14" stroke="#e5e5e5"/>
+<text x="531" y="154.14" font-size="14" text-anchor="end" fill="#4d4d4d">20</text>
+<line x1="540" x2="905" y1="109.71" y2="109.71" stroke="#e5e5e5"/>
+<text x="531" y="114.71" font-size="14" text-anchor="end" fill="#4d4d4d">30</text>
+<text x="540.00" y="249" font-size="14" text-anchor="middle" fill="#4d4d4d">0</text>
+<text x="661.67" y="249" font-size="14" text-anchor="middle" fill="#4d4d4d">30</text>
+<text x="783.33" y="249" font-size="14" text-anchor="middle" fill="#4d4d4d">60</text>
+<text x="905.00" y="249" font-size="14" text-anchor="middle" fill="#4d4d4d">90</text>
+<line x1="540" x2="905" y1="228" y2="228" stroke="#a1a1a1"/>
+<text x="722.5" y="271" font-size="14" text-anchor="middle" fill="#4d4d4d">Minutes from native first record</text>
+<path d="M547.07,227.21 L609.07,191.65 L673.90,135.28 L735.79,135.28 L798.49,130.56 L867.30,130.56" fill="none" stroke="#2a78d6" stroke-width="2.4" stroke-linejoin="round"/>
+<circle cx="547.07" cy="227.21" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="609.07" cy="191.65" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="673.90" cy="135.28" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="735.79" cy="135.28" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="798.49" cy="130.56" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="867.30" cy="130.56" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<line x1="540" x2="563" y1="281" y2="281" stroke="#2a78d6" stroke-width="2.4"/>
+<circle cx="551.50" cy="281.00" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<text x="574" y="285" font-size="14" text-anchor="start" fill="#4d4d4d">Combined LoopX   24.714</text>
+<path d="M551.33,193.19 L614.71,143.37 L676.00,143.37 L738.29,143.37 L808.00,115.15 L872.75,115.15" fill="none" stroke="#eb6834" stroke-width="2.4" stroke-linejoin="round"/>
+<rect x="547.93" y="189.79" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="611.31" y="139.97" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="672.60" y="139.97" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="734.89" y="139.97" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="804.60" y="111.75" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="869.35" y="111.75" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<line x1="540" x2="563" y1="299" y2="299" stroke="#eb6834" stroke-width="2.4"/>
+<rect x="548.10" y="295.60" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<text x="574" y="303" font-size="14" text-anchor="start" fill="#4d4d4d">Native official   28.620</text>
+<path d="M554.14,193.28 L615.07,177.39 L676.52,177.39" fill="none" stroke="#505050" stroke-width="2.4" stroke-linejoin="round" stroke-dasharray="6 4"/>
+<path d="M554.14,188.88 l4.2,7.4 h-8.4 z" fill="#505050" stroke="#fafafa" stroke-width="1"/>
+<path d="M615.07,172.99 l4.2,7.4 h-8.4 z" fill="#505050" stroke="#fafafa" stroke-width="1"/>
+<path d="M676.52,172.99 l4.2,7.4 h-8.4 z" fill="#505050" stroke="#fafafa" stroke-width="1"/>
+<line x1="540" x2="563" y1="317" y2="317" stroke="#505050" stroke-width="2.4" stroke-dasharray="6 4"/>
+<path d="M551.50,312.60 l4.2,7.4 h-8.4 z" fill="#505050" stroke="#fafafa" stroke-width="1"/>
+<text x="574" y="321" font-size="14" text-anchor="start" fill="#4d4d4d">native-goal   12.836</text>
+<text x="24" y="385.00" font-size="17" text-anchor="start" fill="#171717">(c) Rust multicrate reconstruction</text>
+<line x1="60" x2="425" y1="548.00" y2="548.00" stroke="#e5e5e5"/>
+<text x="51" y="553.00" font-size="14" text-anchor="end" fill="#4d4d4d">0</text>
+<line x1="60" x2="425" y1="504.88" y2="504.88" stroke="#e5e5e5"/>
+<text x="51" y="509.88" font-size="14" text-anchor="end" fill="#4d4d4d">10</text>
+<line x1="60" x2="425" y1="461.75" y2="461.75" stroke="#e5e5e5"/>
+<text x="51" y="466.75" font-size="14" text-anchor="end" fill="#4d4d4d">20</text>
+<line x1="60" x2="425" y1="418.63" y2="418.63" stroke="#e5e5e5"/>
+<text x="51" y="423.63" font-size="14" text-anchor="end" fill="#4d4d4d">30</text>
+<text x="60.00" y="569.00" font-size="14" text-anchor="middle" fill="#4d4d4d">0</text>
+<text x="181.67" y="569.00" font-size="14" text-anchor="middle" fill="#4d4d4d">30</text>
+<text x="303.33" y="569.00" font-size="14" text-anchor="middle" fill="#4d4d4d">60</text>
+<text x="425.00" y="569.00" font-size="14" text-anchor="middle" fill="#4d4d4d">90</text>
+<line x1="60" x2="425" y1="548.00" y2="548.00" stroke="#a1a1a1"/>
+<text x="242.5" y="591.00" font-size="14" text-anchor="middle" fill="#4d4d4d">Minutes from native first record</text>
+<path d="M69.20,539.59 L184.59,449.37 L255.89,433.69 L317.85,433.69 L379.90,433.69" fill="none" stroke="#2a78d6" stroke-width="2.4" stroke-linejoin="round"/>
+<circle cx="69.20" cy="539.59" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="184.59" cy="449.37" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="255.89" cy="433.69" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="317.85" cy="433.69" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="379.90" cy="433.69" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<line x1="60" x2="83" y1="601.00" y2="601.00" stroke="#2a78d6" stroke-width="2.4"/>
+<circle cx="71.50" cy="601.00" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<text x="94" y="605.00" font-size="14" text-anchor="start" fill="#4d4d4d">Combined LoopX   26.506</text>
+<path d="M92.51,465.70 L161.46,448.98 L231.82,437.40 L293.62,433.30 L355.21,433.30" fill="none" stroke="#eb6834" stroke-width="2.4" stroke-linejoin="round"/>
+<rect x="89.11" y="462.30" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="158.06" y="445.58" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="228.42" y="434.00" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="290.22" y="429.90" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="351.81" y="429.90" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<line x1="60" x2="83" y1="619.00" y2="619.00" stroke="#eb6834" stroke-width="2.4"/>
+<rect x="68.10" y="615.60" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<text x="94" y="623.00" font-size="14" text-anchor="start" fill="#4d4d4d">Native official   26.597</text>
+<path d="M98.35,469.58 L203.62,448.98 L266.26,433.30 L329.09,433.30" fill="none" stroke="#505050" stroke-width="2.4" stroke-linejoin="round" stroke-dasharray="6 4"/>
+<path d="M98.35,465.18 l4.2,7.4 h-8.4 z" fill="#505050" stroke="#fafafa" stroke-width="1"/>
+<path d="M203.62,444.58 l4.2,7.4 h-8.4 z" fill="#505050" stroke="#fafafa" stroke-width="1"/>
+<path d="M266.26,428.90 l4.2,7.4 h-8.4 z" fill="#505050" stroke="#fafafa" stroke-width="1"/>
+<path d="M329.09,428.90 l4.2,7.4 h-8.4 z" fill="#505050" stroke="#fafafa" stroke-width="1"/>
+<line x1="60" x2="83" y1="637.00" y2="637.00" stroke="#505050" stroke-width="2.4" stroke-dasharray="6 4"/>
+<path d="M71.50,632.60 l4.2,7.4 h-8.4 z" fill="#505050" stroke="#fafafa" stroke-width="1"/>
+<text x="94" y="641.00" font-size="14" text-anchor="start" fill="#4d4d4d">native-goal   26.597 *</text>
+<text x="504" y="385.00" font-size="17" text-anchor="start" fill="#171717">(d) Jagua · first comparison</text>
+<line x1="540" x2="905" y1="548.00" y2="548.00" stroke="#e5e5e5"/>
+<text x="531" y="553.00" font-size="14" text-anchor="end" fill="#4d4d4d">0</text>
+<line x1="540" x2="905" y1="511.68" y2="511.68" stroke="#e5e5e5"/>
+<text x="531" y="516.68" font-size="14" text-anchor="end" fill="#4d4d4d">10</text>
+<line x1="540" x2="905" y1="475.37" y2="475.37" stroke="#e5e5e5"/>
+<text x="531" y="480.37" font-size="14" text-anchor="end" fill="#4d4d4d">20</text>
+<line x1="540" x2="905" y1="439.05" y2="439.05" stroke="#e5e5e5"/>
+<text x="531" y="444.05" font-size="14" text-anchor="end" fill="#4d4d4d">30</text>
+<text x="540.00" y="569.00" font-size="14" text-anchor="middle" fill="#4d4d4d">0</text>
+<text x="661.67" y="569.00" font-size="14" text-anchor="middle" fill="#4d4d4d">30</text>
+<text x="783.33" y="569.00" font-size="14" text-anchor="middle" fill="#4d4d4d">60</text>
+<text x="905.00" y="569.00" font-size="14" text-anchor="middle" fill="#4d4d4d">90</text>
+<line x1="540" x2="905" y1="548.00" y2="548.00" stroke="#a1a1a1"/>
+<text x="722.5" y="591.00" font-size="14" text-anchor="middle" fill="#4d4d4d">Minutes from native first record</text>
+<path d="M552.26,526.67 L614.66,473.51 L675.95,473.51 L738.01,473.51 L799.72,473.51 L863.69,465.73" fill="none" stroke="#2a78d6" stroke-width="2.4" stroke-linejoin="round"/>
+<circle cx="552.26" cy="526.67" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="614.66" cy="473.51" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="675.95" cy="473.51" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="738.01" cy="473.51" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="799.72" cy="473.51" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="863.69" cy="465.73" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<line x1="540" x2="563" y1="601.00" y2="601.00" stroke="#2a78d6" stroke-width="2.4"/>
+<circle cx="551.50" cy="601.00" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<text x="574" y="605.00" font-size="14" text-anchor="start" fill="#4d4d4d">Combined LoopX   22.655</text>
+<path d="M579.50,479.27 L642.52,446.73 L710.79,444.30 L772.84,444.30 L835.34,444.30 L903.84,444.30" fill="none" stroke="#eb6834" stroke-width="2.4" stroke-linejoin="round"/>
+<rect x="576.10" y="475.87" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="639.12" y="443.33" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="707.39" y="440.90" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="769.44" y="440.90" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="831.94" y="440.90" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="900.44" y="440.90" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<line x1="540" x2="563" y1="619.00" y2="619.00" stroke="#eb6834" stroke-width="2.4"/>
+<rect x="548.10" y="615.60" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<text x="574" y="623.00" font-size="14" text-anchor="start" fill="#4d4d4d">Native official   28.555</text>
+<path d="M557.73,449.34 L619.31,449.34 L680.99,449.34 L743.72,430.10 L805.71,430.10 L868.97,430.10" fill="none" stroke="#505050" stroke-width="2.4" stroke-linejoin="round" stroke-dasharray="6 4"/>
+<path d="M557.73,444.94 l4.2,7.4 h-8.4 z" fill="#505050" stroke="#fafafa" stroke-width="1"/>
+<path d="M619.31,444.94 l4.2,7.4 h-8.4 z" fill="#505050" stroke="#fafafa" stroke-width="1"/>
+<path d="M680.99,444.94 l4.2,7.4 h-8.4 z" fill="#505050" stroke="#fafafa" stroke-width="1"/>
+<path d="M743.72,425.70 l4.2,7.4 h-8.4 z" fill="#505050" stroke="#fafafa" stroke-width="1"/>
+<path d="M805.71,425.70 l4.2,7.4 h-8.4 z" fill="#505050" stroke="#fafafa" stroke-width="1"/>
+<path d="M868.97,425.70 l4.2,7.4 h-8.4 z" fill="#505050" stroke="#fafafa" stroke-width="1"/>
+<line x1="540" x2="563" y1="637.00" y2="637.00" stroke="#505050" stroke-width="2.4" stroke-dasharray="6 4"/>
+<path d="M551.50,632.60 l4.2,7.4 h-8.4 z" fill="#505050" stroke="#fafafa" stroke-width="1"/>
+<text x="574" y="641.00" font-size="14" text-anchor="start" fill="#4d4d4d">native-goal   32.464 *</text>
+<text x="24" y="705.00" font-size="17" text-anchor="start" fill="#171717">(e) Jagua · repeat comparison</text>
+<line x1="60" x2="425" y1="868.00" y2="868.00" stroke="#e5e5e5"/>
+<text x="51" y="873.00" font-size="14" text-anchor="end" fill="#4d4d4d">0</text>
+<line x1="60" x2="425" y1="824.88" y2="824.88" stroke="#e5e5e5"/>
+<text x="51" y="829.88" font-size="14" text-anchor="end" fill="#4d4d4d">10</text>
+<line x1="60" x2="425" y1="781.75" y2="781.75" stroke="#e5e5e5"/>
+<text x="51" y="786.75" font-size="14" text-anchor="end" fill="#4d4d4d">20</text>
+<line x1="60" x2="425" y1="738.63" y2="738.63" stroke="#e5e5e5"/>
+<text x="51" y="743.63" font-size="14" text-anchor="end" fill="#4d4d4d">30</text>
+<text x="60.00" y="889.00" font-size="14" text-anchor="middle" fill="#4d4d4d">0</text>
+<text x="181.67" y="889.00" font-size="14" text-anchor="middle" fill="#4d4d4d">30</text>
+<text x="303.33" y="889.00" font-size="14" text-anchor="middle" fill="#4d4d4d">60</text>
+<text x="425.00" y="889.00" font-size="14" text-anchor="middle" fill="#4d4d4d">90</text>
+<line x1="60" x2="425" y1="868.00" y2="868.00" stroke="#a1a1a1"/>
+<text x="242.5" y="911.00" font-size="14" text-anchor="middle" fill="#4d4d4d">Minutes from native first record</text>
+<path d="M69.95,849.92 L132.45,839.55 L193.87,836.60 L256.14,836.60 L317.54,834.71 L378.96,834.61" fill="none" stroke="#2a78d6" stroke-width="2.4" stroke-linejoin="round"/>
+<circle cx="69.95" cy="849.92" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="132.45" cy="839.55" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="193.87" cy="836.60" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="256.14" cy="836.60" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="317.54" cy="834.71" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<circle cx="378.96" cy="834.61" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<line x1="60" x2="83" y1="921.00" y2="921.00" stroke="#2a78d6" stroke-width="2.4"/>
+<circle cx="71.50" cy="921.00" r="3.8" fill="#2a78d6" stroke="#fafafa" stroke-width="1"/>
+<text x="94" y="925.00" font-size="14" text-anchor="start" fill="#4d4d4d">Combined LoopX   7.743</text>
+<path d="M78.03,780.48 L142.70,780.48 L211.06,780.48 L280.90,758.36 L349.12,753.58 L422.81,753.58" fill="none" stroke="#eb6834" stroke-width="2.4" stroke-linejoin="round"/>
+<rect x="74.63" y="777.08" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="139.30" y="777.08" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="207.66" y="777.08" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="277.50" y="754.96" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="345.72" y="750.18" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<rect x="419.41" y="750.18" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<line x1="60" x2="83" y1="939.00" y2="939.00" stroke="#eb6834" stroke-width="2.4"/>
+<rect x="68.10" y="935.60" width="6.8" height="6.8" fill="#eb6834" stroke="#fafafa" stroke-width="1"/>
+<text x="94" y="943.00" font-size="14" text-anchor="start" fill="#4d4d4d">Native official   26.532</text>
+<text x="514" y="715.00" font-size="18" text-anchor="start" fill="#171717">Reading the evidence</text>
+<text x="514" y="747.00" font-size="15" text-anchor="start" fill="#4d4d4d">13 scored runs; 71 submissions</text>
+<text x="514" y="769.00" font-size="15" text-anchor="start" fill="#4d4d4d">11 native finals; 2 runner failures (*)</text>
+<text x="514" y="791.00" font-size="15" text-anchor="start" fill="#4d4d4d">2 unscored startup failures excluded</text>
+<text x="514" y="813.00" font-size="15" text-anchor="start" fill="#4d4d4d">Lines end at the last submission.</text>
+<text x="514" y="835.00" font-size="15" text-anchor="start" fill="#4d4d4d">Points use submission time, not</text>
+<text x="514" y="857.00" font-size="15" text-anchor="start" fill="#4d4d4d">the time feedback became available.</text>
+<text x="514" y="879.00" font-size="15" text-anchor="start" fill="#4d4d4d">No fitted curve or confidence band.</text>
+<text x="514" y="901.00" font-size="15" text-anchor="start" fill="#4d4d4d">‡ 109 uses aggregate feedback inversion.</text>
+<text x="514" y="923.00" font-size="15" text-anchor="start" fill="#4d4d4d">Historical combined revisions only;</text>
+<text x="514" y="945.00" font-size="15" text-anchor="start" fill="#4d4d4d">not a test of the current repair head.</text>
+</svg>

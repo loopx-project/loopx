@@ -26,10 +26,23 @@ def authoring_input_observations(text: str) -> dict[str, bool]:
         "checkpoint-context is only for recovery after the original committed Turn writeback; "
         "follow its returned same-Turn recovery action, not a fresh-turn preflight."
     )
-    observed = {"complete_todo_readback": False, "vision_cli_authoring": False}
+    first_delivery_guidance = (
+        'Use the strongest feasible approach supported by current knowledge for the first '
+        'deliverable, including its necessary implementation and validation as a coherent '
+        'slice. Do not choose a deliberately weak placeholder merely to obtain earlier '
+        'feedback or declare progress. Compare first-result quality, latency and full cost; '
+        'neither immediate feedback nor indefinite preparation is the objective. Useful '
+        'diagnostic probes remain allowed under the existing acceptance, feedback and '
+        'authority limits; identify their purpose and do not substitute them for the requested'
+        ' deliverable.'
+    )
+    observed = {"complete_todo_readback": False, "vision_cli_authoring": False,
+                "first_delivery_guidance": False}
 
     def collect(value: Any) -> None:
         if isinstance(value, dict):
+            if value.get("first_delivery_guidance") == first_delivery_guidance:
+                observed["first_delivery_guidance"] = True
             if (value.get("id") == "read_back_authored_todos"
                     and value.get("kind") == "operator_or_agent_actions"
                     and value.get("purpose") == readback_purpose
@@ -47,6 +60,10 @@ def authoring_input_observations(text: str) -> dict[str, bool]:
     try:
         collect(json.loads(text))
     except json.JSONDecodeError:
+        observed["first_delivery_guidance"] = bool(re.search(
+            r"^3\. Todos: [^\n]*" + re.escape(first_delivery_guidance) + r"$",
+            text, re.MULTILINE,
+        ))
         # Existential across every rendered candidate: an earlier line whose purpose is
         # not exact must not mask a later complete instruction.
         rendered_candidates = re.finditer(

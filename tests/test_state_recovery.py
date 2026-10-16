@@ -51,6 +51,57 @@ def _backup(root: Path, provider: str | None = None) -> tuple[Path, Path]:
     return Path(result["archive_path"]), Path(result["manifest_path"])
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("restore_source", [False, True], ids=["persistent-change", "aba"])
+def test_backup_refuses_configuration_from_different_copied_registry_bytes(
+    tmp_path, monkeypatch, provider, restore_source,
+):
+    from loopx.capabilities import configuration_backup
+
+    original_add = tarfile.TarFile.add
+    original_capture = configuration_backup.capture_configuration_backup
+    copied = []
+
+    def after_copy(tar, source, *args, **kwargs):
+        result = original_add(tar, source, *args, **kwargs)
+        if kwargs.get("arcname") == "configuration/registry.source.json":
+            registry = tmp_path / "registry.json"
+            copied.append(registry.read_bytes())
+            value = json.loads(copied[0])
+            value["goals"][0]["description"] = "Different source revision"
+            registry.write_text(json.dumps(value))
+        return result
+
+    def after_capture(**kwargs):
+        checkpoint = original_capture(**kwargs)
+        if restore_source:
+            # Restore A only after the real source owner captured B. Comparing
+            # the live path after capture would miss this A -> B -> A change.
+            (tmp_path / "registry.json").write_bytes(copied[0])
+        return checkpoint
+
+    monkeypatch.setattr(tarfile.TarFile, "add", after_copy)
+    monkeypatch.setattr(configuration_backup, "capture_configuration_backup", after_capture)
+    with pytest.raises(ValueError, match="configuration source.*copied bytes"):
+        _backup(tmp_path, provider)
+    assert len(copied) == 1
+    assert not list((tmp_path / "backups").iterdir()), "a mixed backup pair must not be published"
+
+
+def test_backup_refuses_a_required_configuration_source_without_copied_bytes(tmp_path):
+    project, runtime, registry = tmp_path / "project", tmp_path / "runtime", tmp_path / "registry.json"
+    project.mkdir()
+    runtime.mkdir()
+    registry.write_text(json.dumps({"goals": []}))
+    plan = build_state_backup_plan(project=project, runtime_root=runtime, registry_path=registry,
+        output_dir=tmp_path / "backups", include_registry_projects=False,
+        include_automations=False, include_skills=False)
+    plan["included"] = [row for row in plan["included"] if row["key"] != "configuration_source_registry"]
+    with pytest.raises(ValueError, match="configuration source has no copied bytes witness"):
+        execute_state_backup_plan(plan)
+    assert not list((tmp_path / "backups").iterdir())
+
+
 def _rewrite(archive: Path, manifest: Path, extra: tarfile.TarInfo | None = None,
              body: bytes = b"", replacements: dict[str, bytes] | None = None) -> None:
     with tarfile.open(archive, "r:gz") as source:
@@ -67,6 +118,175 @@ def _rewrite(archive: Path, manifest: Path, extra: tarfile.TarInfo | None = None
     data["execution"]["archive_sha256"] = hashlib.sha256(archive.read_bytes()).hexdigest()
     data["execution"]["archive_size_bytes"] = archive.stat().st_size
     manifest.write_text(json.dumps(data))
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("owner", ["registry", "machine"])
+def test_legacy_mixed_revision_archive_remains_readable_and_inert(tmp_path, provider, owner):
+    from loopx.capabilities.configuration_backup import capture_configuration_backup, verify_configuration_backup
+
+    archive, manifest = _backup(tmp_path, provider)
+    registry = tmp_path / "registry.json"
+    if owner == "registry":
+        value = json.loads(registry.read_text())
+        value["goals"][0]["description"] = "Later configuration in a historical archive"
+        registry.write_text(json.dumps(value))
+    else:
+        machine = tmp_path / "runtime/machine/configuration.json"
+        machine.parent.mkdir(exist_ok=True)
+        machine.write_text(json.dumps({"schema_version": "loopx_machine_configuration_v0", "namespaces": {
+            "goal_storage": {"schema_version": "loopx_goal_storage_defaults_v0", "new_goal_provider": "sqlite"}}}))
+    later = capture_configuration_backup(registry_path=registry, runtime_root=tmp_path / "runtime")
+    content = json.dumps(later, ensure_ascii=False, indent=2).encode()
+    # Construct the supported historical v0 case deliberately. The current
+    # producer refuses it; its new provenance claims must not enter this fixture.
+    legacy = json.loads(manifest.read_text())
+    legacy["registry_discovery"].pop("goal_runtime_roots")
+    execution = legacy["execution"]
+    execution.pop("configuration_capture")
+    execution["configuration_backup"] = verify_configuration_backup(later)
+    execution["archive_sha256"] = execution["archive_size_bytes"] = None
+    execution.pop("archive_to_logical_ratio", None)
+    for row in execution["file_members"]:
+        if row["archive_path"] == "configuration-backup.json":
+            row.update(size_bytes=len(content), sha256=hashlib.sha256(content).hexdigest())
+    manifest.write_text(json.dumps(legacy))
+    _rewrite(archive, manifest, replacements={"configuration-backup.json": content,
+        "manifest.json": json.dumps(legacy).encode()})
+    with tarfile.open(archive) as saved:
+        earlier = json.load(saved.extractfile("configuration/registry.source.json"))
+    assert "description" not in earlier["goals"][0]
+    if owner == "machine":
+        assert later["data"]["machine_configuration"] is not None
+        with tarfile.open(archive) as saved:
+            assert "runtime-root/machine/configuration.json" not in saved.getnames()
+    for name in ("project", "runtime", "registry.json"):
+        (tmp_path / name).rename(tmp_path / f"unavailable-{name}")
+    audit = verify_state_backup(archive=archive, manifest=manifest, destination=tmp_path / "inert", execute=True)
+    [work] = [row for row in audit["components"] if row["owner_kind"] == "coordination_authority"]
+    assert work["state"] == "readable" and work["facts"]["todo_count"] == 1
+    assert work["facts"]["history_commits"] == 2
+    assert audit["manifest_verified"] is True and audit["file_witnesses_verified"] is True
+    assert audit["status"] == "held" and audit["capture_profile"] == "legacy_best_effort"
+    assert any(row["reason_code"] == "legacy_manifest_incomplete" for row in audit["findings"])
+    assert audit["activation_eligible"] is False and audit["execution_authority_granted"] is False
+
+
+def _global_source_backup(root: Path, provider: str) -> tuple[dict, dict[str, bytes]]:
+    registry, source_runtime, state = promoted_create_fixture(root / "host/canonical", provider=provider)
+    _, shared_runtime, _ = promoted_create_fixture(root / "host", provider="sqlite" if provider == "file" else "file")
+    for source, runtime, count in ((registry, source_runtime, 1), (root / "host/registry.json", shared_runtime, 3)):
+        for index in range(count):
+            code, result = _cli("--registry", source, "--runtime-root", runtime, "todo", "add",
+                "--goal-id", "goal-a", "--role", "agent", "--claimed-by", "agent-a",
+                "--operation-id", f"retained-{index}", "--text", f"Unfinished commitment {index}")
+            assert code == 0, result
+    current = registry.parent / "current-goal.md"
+    current.write_text(state.read_text() + "\n## Original commitments\nThe source-owned full Goal.\n")
+    payload = json.loads(registry.read_text())
+    payload["goals"][0]["state_file"] = "../current-goal.md"
+    registry.write_text(json.dumps(payload))
+    cached = {**payload["goals"][0], "state_file": ".codex/goals/goal-a/ACTIVE_GOAL_STATE.md",
+              "source_registry": "../canonical/registry.json"}
+    (shared_runtime / "registry.global.json").write_text(json.dumps({"registry_role": "global-local",
+        "common_runtime_root": str(shared_runtime), "goals": [cached]}))
+    wrong = registry.parent / "canonical/registry.json"
+    wrong.parent.mkdir()
+    wrong.write_bytes(b'{"wrong_repository_relative_copy": true}')
+    code, backup = _cli("--runtime-root", shared_runtime, "backup-state", "--project", state.parents[3],
+        "--output-dir", root / "backups", "--backup-id", "source", "--no-automations", "--no-skills", "--execute")
+    assert code == 0 and backup["ok"], backup
+    expected = {"registry": registry.read_bytes(), "goal": current.read_bytes(), "wrong": wrong.read_bytes()}
+    (root / "host").rename(root / "unavailable-host")
+    return backup, expected
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_global_backup_inspects_the_canonical_source_not_a_same_alias_shared_store(tmp_path, provider):
+    backup, expected = _global_source_backup(tmp_path, provider)
+    destination = tmp_path / "inert"
+    code, audit = _cli("backup-state", "verify", "--archive", backup["archive_path"],
+        "--manifest", backup["manifest_path"], "--destination", destination, "--execute")
+    assert code == 0, audit
+    [authority] = [row for row in audit["components"] if row["owner_kind"] == "coordination_authority"]
+    assert authority["state"] == "readable", authority
+    assert authority["facts"]["provider"] == provider
+    assert authority["facts"]["todo_count"] == 1 and authority["facts"]["history_commits"] == 2
+    assert audit["status"] == "held" and audit["activation_eligible"] is False
+    assert audit["execution_authority_granted"] is False
+    assert audit["workspace"] == {"isolation": "inert", "registered": False}
+    assert str(tmp_path) not in json.dumps(audit)
+    with tarfile.open(backup["archive_path"]) as archive:
+        files = [archive.extractfile(row).read() for row in archive if row.isfile()]
+    assert expected["goal"] in files and expected["registry"] in files
+    assert expected["wrong"] not in files
+    roots = backup["registry_discovery"]["goal_runtime_roots"]
+    assert roots["goal-a"] != "runtime-root"
+    assert (destination / "data" / roots["goal-a"]).is_dir()
+    assert not (destination / "registry.global.json").exists()
+
+
+def test_explicit_missing_source_bindings_never_fall_back_to_the_shared_store(tmp_path):
+    from loopx.control_plane.state_recovery_io import _audit_owners
+
+    backup, _ = _global_source_backup(tmp_path, "file")
+    destination = tmp_path / "inert"
+    audit = verify_state_backup(archive=Path(backup["archive_path"]), manifest=Path(backup["manifest_path"]),
+                                destination=destination, execute=True)
+    data = destination / "data"
+    sqlite_members = [path.relative_to(data).as_posix() for path in data.rglob("*.sqlite")]
+    request = {"data_root": str(data), "measurements": audit["measurements"],
+        "verified": {key: audit[key] for key in ("ok", "schema_version", "recovery_id", "backup", "file_count",
+            "file_witnesses_verified", "manifest_verified", "capture_profile", "execution_authority_granted")},
+        "sqlite_members": sqlite_members, "standalone_sqlite_members": sqlite_members,
+        "included": backup["included"]}
+    for roots in ({}, {"goal-a": None}):
+        result = _audit_owners({**request, "registry_discovery": {"goal_runtime_roots": roots}})
+        [authority] = [row for row in result["components"] if row["owner_kind"] == "coordination_authority"]
+        assert authority["state"] == "unknown", authority
+        assert result["execution_authority_granted"] is False
+    root = data / backup["registry_discovery"]["goal_runtime_roots"]["goal-a"]
+    root.rename(tmp_path / "unavailable-captured-source")
+    result = _audit_owners({**request, "registry_discovery": backup["registry_discovery"]})
+    [authority] = [row for row in result["components"] if row["owner_kind"] == "coordination_authority"]
+    assert authority["state"] == "unknown", authority
+    assert not root.exists()
+    root.symlink_to(data / "runtime-root", target_is_directory=True)
+    result = _audit_owners({**request, "registry_discovery": backup["registry_discovery"]})
+    [authority] = [row for row in result["components"] if row["owner_kind"] == "coordination_authority"]
+    assert authority["state"] == "unknown", authority
+    assert result["execution_authority_granted"] is False
+
+
+def test_unsafe_source_binding_is_refused_before_extracting_any_files(tmp_path):
+    archive, manifest = _backup(tmp_path)
+    external = json.loads(manifest.read_text())
+    with tarfile.open(archive) as source:
+        embedded = json.load(source.extractfile("manifest.json"))
+    for payload in (external, embedded):
+        payload["registry_discovery"]["goal_runtime_roots"] = {"goal-a": "../outside"}
+        payload["included"].append({"archive_path": "../outside"})
+    manifest.write_text(json.dumps(external))
+    _rewrite(archive, manifest, replacements={"manifest.json": json.dumps(embedded).encode()})
+    destination = tmp_path / "inert"
+    with pytest.raises(StateRecoveryError, match="backup_manifest_invalid"):
+        verify_state_backup(archive=archive, manifest=manifest, destination=destination, execute=True)
+    assert not destination.exists() and not (tmp_path / "outside").exists()
+
+
+def test_legacy_archive_without_source_bindings_keeps_original_runtime_readback(tmp_path):
+    archive, manifest = _backup(tmp_path, "file")
+    external = json.loads(manifest.read_text())
+    with tarfile.open(archive) as source:
+        embedded = json.load(source.extractfile("manifest.json"))
+    for payload in (external, embedded):
+        payload["registry_discovery"].pop("goal_runtime_roots", None)
+    manifest.write_text(json.dumps(external))
+    _rewrite(archive, manifest, replacements={"manifest.json": json.dumps(embedded).encode()})
+    audit = verify_state_backup(archive=archive, manifest=manifest, destination=tmp_path / "inert", execute=True)
+    [authority] = [row for row in audit["components"] if row["owner_kind"] == "coordination_authority"]
+    assert authority["state"] == "readable" and authority["facts"]["todo_count"] == 1
+    assert audit["status"] == "held" and audit["execution_authority_granted"] is False
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

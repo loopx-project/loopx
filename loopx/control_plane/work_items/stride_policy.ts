@@ -19,12 +19,17 @@ export function normalizeStrideStrategy(value: unknown): string {
 // result classifier, route ban or admission authority.
 const decisionValueReview = {
   work_slice: "Compare the complete cost and useful outcome of continuation with one feasible alternative. " +
+    "Assess the quality of the first deliverable and later gain beyond the retained best separately; " +
+    "recovering an avoidable initial quality deficit is not evidence of additional capability. " +
     "Name the observation that would change that choice, and size a complete experiment to obtain it. " +
     "A larger test count is not greater decision value; preserve unfinished decisive work rather than restart its setup.",
   route_distance: "Name the remaining authoritative goal gap, its limiting component and the plausible headroom. " +
+    "Keep the retained best artifact as the comparison anchor and check whether subsequent work actually implements the proposed mechanism change. " +
     "Compare a different approach that can affect that component. Distinguish an unexecuted intervention, failed transfer and insufficient route potential: they imply different next experiments. " +
     "A changed auxiliary mechanism alone does not show that it addresses the gap.",
   validation_scope: "Use evidence applicable to the limiting outcome and changed mechanism. " +
+    "Bind comparisons to the artifact version, input conditions and original budget, and distinguish when feedback became available from when work was submitted. " +
+    "Keep decision, execution and measured outcome separate; a saved snapshot is not proof of restoration or continued execution. " +
     "First establish that the intervention actually changes the relevant behavior; unchanged outcomes may require tracing its activation rather than a wider parameter sweep. " +
     "Choose a comparison or negative control that separates the surviving explanations, and state what each possible result would change. " +
     "Before a check vetoes further work, identify its source and protected goal: an original constraint or frozen study criterion, versus an agent-proposed candidate heuristic. " +

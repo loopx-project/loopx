@@ -37,7 +37,8 @@ from ..goals.goal_frontier import (
 )
 from ..quota.blocked_transition_notice import build_blocked_transition_notice
 from ..quota.error_codes import HeartbeatReceiptIdentityConflictError
-from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ..effect_runtime import EffectRuntimeRejected
+from ..work_items.replan_semantics_codec import project_replan_semantics
 from ..agents.capability_memory import resolve_agent_capabilities
 from ..quota.goal_boundary import (
     goal_boundary as _goal_boundary,
@@ -200,7 +201,7 @@ def _preserve_receipt_bound_replan_obligation(
     if not preserved_replan_id:
         return dict(replan_obligation) if replan_obligation is not None else None
     try:
-        result = effect_runtime_result("work_item.replan_semantics.project", {
+        result = project_replan_semantics({
             "operation": "receipt_bound_obligation",
             "current_obligation": dict(replan_obligation) if replan_obligation is not None else None,
             "selected_obligation_id": preserved_replan_id, "guard_scoped": guard_scoped,

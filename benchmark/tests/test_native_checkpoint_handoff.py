@@ -528,6 +528,10 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
         phase.update(kind="review", tool_sent=False)
         result = run_once({**env, "LOOPX_CHECKPOINT_REQUEST": str(request)})
         assert result["ok"] and result["checkpoint"]["captured"], result
+        assert "turn_envelope" not in prior and "turn_envelope_source" not in prior
+        assert "turn_envelope" not in result and "turn_envelope_source" not in result
+        assert 'Use TurnEnvelope:' not in json.dumps(requests[13])
+        assert 'interaction_contract' in guards[0] and 'action_signature' not in guards[0]
         assert result["checkpoint"]["phase"] == "before_replan"
         assert result["checkpoint"]["source_turn_id"] == prior["turn_id"]
         assert result["session"]["session_id"] == prior["session"]["session_id"]
@@ -707,6 +711,8 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
             assert not list(logs.glob("*/decisions"))
             return
         assert len(result["checkpoint_handoffs"]) == 1
+        assert '--turn-envelope' not in shlex.split(guards[0])
+        assert 'turn_envelope' not in result and 'turn_envelope_source' not in result
         event = result["checkpoint_handoffs"][0]
         if json.loads(request.read_text())["native_session"] and sys.platform == "darwin":
             # Unsupported native interruption is refused before any signal;

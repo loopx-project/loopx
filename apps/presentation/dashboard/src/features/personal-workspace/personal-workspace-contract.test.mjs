@@ -50,7 +50,8 @@ for (const operation of ["reassign", "block"]) {
 assert.match(drawer, /previewTodoTransition\(selection\.item, "defer"/, "Todo defer collects a resume condition before preview");
 assert.match(drawer, /resume_when:\s*resumeWhen/, "Todo defer sends its explicit resume condition");
 assert.doesNotMatch(drawer + page, /owner_resume/, "Personal Workspace never emits the unsupported owner_resume sentinel");
-assert.match(drawer, /previewTodoTransition\(selection\.item, "complete"/, "Todo complete is the primary drawer action");
+assert.match(drawer, /\["blocked", "deferred"\]\.includes\(selection\.item\.status/, "Paused Todos offer resume through the existing primary action");
+assert.match(drawer, /className="personal-primary-action" onClick=\{\(\) => void previewTodoTransition\(selection\.item, todoAwaitingResume \? "resume" : "complete"/, "The primary Todo action resumes paused work and completes open work through typed preview");
 assert.match(drawer, /actionKind: "todo\.create"/, "Todo successor uses the canonical create action");
 
 for (const field of ["evidence", "explanation"]) {
@@ -597,6 +598,19 @@ assert.match(page, /data-testid="personal-first-goal"/, "The home renders the fi
 assert.match(page, /onSuggestRequest\(t\(`home\.firstGoal\.example\./, "Example requests only fill the composer");
 assert.match(page, /personal-first-goal-diagnostics/, "Status source details stay in a collapsed disclosure");
 for (const key of ["home.firstGoal.title", "home.firstGoal.lead", "home.firstGoal.create", "home.health.contractFailed", "home.health.concerns"]) {
+  assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);
+}
+
+// Runtime readiness: the service's own reason fields drive the copy; the
+// read-only status projection and the loading placeholder never count as a
+// runtime; a re-check reads the catalog again and nothing is installed.
+const runtimeReadiness = source("./runtime-readiness.ts");
+assert.match(runtimeReadiness, /if \(agents\.length === 0\) return \{ kind: "detecting" \};/, "An empty catalog is detecting, not absence");
+assert.match(page, /agent\.adapterKind !== "status_projection" && agent\.source !== "detecting"/, "Readiness ignores the status projection and the loading placeholder");
+assert.match(dashboard, /onRecheckRuntimes: \(\) => setCapabilityRevision\(\(revision\) => revision \+ 1\)/, "Re-check re-reads the capabilities catalog");
+assert.match(dashboard, /source: "detecting",/, "The placeholder row is typed as detecting");
+assert.doesNotMatch(dashboard, /statusLabel: "正在检测"|"可用" : "需要配置"|当前 Goal 写入前验证/, "Agent status labels are localized");
+for (const key of ["readiness.noneTitle", "readiness.missingExecutable", "readiness.missingEnvironment", "readiness.selectedUnavailable", "readiness.recheck", "agent.statusDetecting"]) {
   assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);
 }
 

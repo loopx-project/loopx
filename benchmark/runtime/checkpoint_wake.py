@@ -18,6 +18,7 @@ from pathlib import Path
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
 from .checkpoint import _mark_replan_attempt, _participant_id, held_quota_decision, read_checkpoint_request
+from .checkpoint_handoff import CHECKPOINT_CAPTURE_SECONDS
 
 
 class CheckpointWake:
@@ -103,7 +104,8 @@ class CheckpointWake:
                     "decision_sha256": held["sha256"],
                     "capture_order": "after_native_interruption",
                     "writer_barrier": "owned_native_process_group_only"}
-        window = min(time.time() + 30, time.time() + deadline - time.monotonic())
+        capture_seconds = CHECKPOINT_CAPTURE_SECONDS if self.request.get("controller_handoff") else 30
+        window = min(time.time() + capture_seconds, time.time() + deadline - time.monotonic())
         if window <= time.time():
             raise TimeoutError("original wake budget expired before capture")
         components = list(self.request["components"])

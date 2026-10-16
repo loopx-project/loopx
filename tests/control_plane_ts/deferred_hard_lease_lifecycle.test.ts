@@ -122,7 +122,7 @@ for (const provider of ["file", "sqlite"] as const) {
       [{actor_agent_id: "agent-b"}, "update_owner_mismatch"],
       [{lease_idempotency_key: "old-execution", lease_expected_version: 3},
         "deferred_resume_execution_proof_not_allowed"],
-      [{patch: {note: "Bundled work"}}, "handoff_mode_lease_claim_divergence"],
+      [{patch: {note: "Bundled work"}}, "deferred_resume_active_lease"],
     ] as const) {
       const result = await executeCoordinationTodoUpdate(active, {...resume("rejected"), ...change});
       assert.equal(result.reason_code, code, JSON.stringify(result));
@@ -163,32 +163,35 @@ for (const provider of ["file", "sqlite"] as const) {
 
 for (const provider of ["file", "sqlite"] as const) {
   for (const mode of ["legacy", "hard_lease"] as const) {
-    test(`${provider}/${mode}: ${mode === "legacy" ? "retired policy rejects deferral with retained proof" : "owner deferral releases its grant atomically and can resume"}`,
+    test(`${provider}/${mode}: ${mode === "legacy" ? "retired policy rejects deferral with retained proof" : "owner deferral automatically retires its grant; explicit constraints remain fenced"}`,
       {skip: provider === "sqlite" && sqliteSkip}, async () => {
       const store = await seeded(provider, {status: "open", done: false},
         oldLease("active", "2026-09-06T00:00:00Z"));
       const seededHead = await read(store);
       await store.commitAuthority({operation_id: "set-mode", expected_provider_revision: seededHead.provider_revision,
         next_projection: {...seededHead.head, handoff_mode: mode}, events: [], receipts: []});
-      const input = {...resume("defer-owner"), lease_idempotency_key: "old-execution", lease_expected_version: 3,
+      const proof = {lease_idempotency_key: "old-execution", lease_expected_version: 3};
+      const input = {...resume("defer-owner"),
         planning_intent: {status: "deferred", resume_when: "todo_done:todo_dependency", reason: "Dependency is pending"}};
       const before = await read(store);
       if (mode === "legacy") {
         for (const dry_run of [true, false]) {
-          const rejected = await executeCoordinationTodoUpdate(store, {...input, dry_run});
+          const rejected = await executeCoordinationTodoUpdate(store, {...input, ...proof, dry_run});
           assert.equal(rejected.reason_code, "handoff_mode_retired");
           assert.deepEqual(await read(store), before);
           assert.equal((await store.readReceipt(input.operation_id)).status, "missing");
         }
         return;
       }
-      for (const change of [{lease_expected_version: 2}, {lease_idempotency_key: "foreign"},
-        {actor_agent_id: "agent-b"}, {lease_idempotency_key: null, lease_expected_version: null},
+      for (const change of [{...proof, lease_expected_version: 2}, {...proof, lease_idempotency_key: "foreign"},
+        {actor_agent_id: "agent-b"}, {lease_idempotency_key: "old-execution"},
         {patch: {text: "Changed work"}}, {planning_intent: {...input.planning_intent, completion_criteria: "New contract"}}]) {
         assert.equal((await executeCoordinationTodoUpdate(store, {...input, ...change})).status, "failed");
         assert.deepEqual(await read(store), before);
       }
       assert.equal((await executeCoordinationTodoUpdate(store, {...input, dry_run: true})).status, "planned");
+      assert.deepEqual(await read(store), before);
+      assert.equal((await executeCoordinationTodoUpdate(store, {...input, ...proof, dry_run: true})).status, "planned");
       assert.deepEqual(await read(store), before);
       const applied = await executeCoordinationTodoUpdate(store, input);
       assert.equal(applied.status, "applied", JSON.stringify(applied));
@@ -205,9 +208,11 @@ for (const provider of ["file", "sqlite"] as const) {
         planning_intent: {...input.planning_intent, reason: "Changed intent"}})).reason_code,
         "coordination_operation_identity_mismatch");
       assert.equal((await executeCoordinationTodoUpdate(store, resume("resume-after-wait"))).status, "applied");
-      const retry = await executeCoordinationTodoUpdate(store, {...input, operation_id: "defer-again"});
+      const retry = await executeCoordinationTodoUpdate(store, {...input, ...proof, operation_id: "defer-again"});
       assert.equal(retry.status, "failed");
-      assert.equal((retry.recovery as JsonObject).action, "acquire_fresh_lease");
+      assert.equal((retry.recovery as JsonObject).action, "inspect_current_proof");
+      assert.equal((retry.recovery as JsonObject).lease_state, "released");
+      assert.equal((retry.recovery as JsonObject).execution_authority_granted, false);
       assert.equal((await executeCoordinationTodoUpdate(store, {...resume("old-proof"),
         patch: {note: "Unauthorized execution"}, planning_intent: {},
         lease_idempotency_key: "old-execution", lease_expected_version: 3})).status, "failed");

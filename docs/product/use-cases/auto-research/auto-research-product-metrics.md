@@ -124,6 +124,36 @@ concrete, and valuable:
 Report both count and quality. One crisp promotion gate is better than three
 ambiguous approval pings.
 
+## Proposed episode-level process analysis
+
+The six definitions above remain unchanged. The proposed [research measurement
+method](../../../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md#evidence-based-episode-evaluation-proposed-refinement)
+adds a read-only analysis view over question/experiment/evidence/decision episodes,
+not a seventh qualified product metric or a composite progress score. Report
+native outcomes, information, discrimination, actual adoption, repetition and
+full cost/coverage separately. A useful-exploration fraction needs an explicit
+eligible population and independent coding; unknown population means no fraction,
+and unknown observations are not zero. Count- and resource-weighted views differ.
+Late/common windows and feedback availability are declared before outcome review.
+
+The existing Negative-Evidence Reuse definition includes communication and
+frontier-selection signals. It is not interchangeable with the proposed stricter
+**actual adoption** measure, which requires a version-bound artifact or behavior
+consequence after an opportunity to use the evidence. Citation, narration or
+visibility alone does not establish that consequence or downstream benefit.
+Neither missing LoopX metadata in a baseline nor a lack of subsequent opportunity
+proves no useful work or ignored evidence.
+
+Research may analyze permitted private evidence under its own contract; product
+extraction still consumes only authorized safe versioned projections with coverage.
+The Public-Safe Extraction boundary below is unchanged. No hidden evaluator
+material is eligible until both solver termination and completed scoring, and it
+never returns to solver feedback. The [product reading design](long-horizon-progress-design.md)
+connects the original curve to one selected episode and inline evidence, without
+another graph or ledger. Independent scientific coding/held-out judge calibration
+and packaged reading/comprehension remain separate open acceptance; no evaluator
+or UI is installed by this design.
+
 ## What Not To Use As Product Metrics
 
 Avoid metrics that mostly prove implementation activity:

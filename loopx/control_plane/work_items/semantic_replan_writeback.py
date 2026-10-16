@@ -351,7 +351,7 @@ def qualify_replan_writeback(
             # derived frontier obligation remains visible to the next guard.
             return None, transition_delta
     lifecycle = next((candidate for candidate in context.get("replan_transition_candidates", [])
-        if candidate.get("lifecycle_settled") is True and
+        if (candidate.get("source_obligation") or {}).get("resolution_mode") == "todo_lifecycle_settlement" and
         (candidate.get("obligation") or {}).get("obligation_id") == guard_semantic_replan_obligation_id), None)
     obligation = lifecycle["obligation"] if guard_scoped and lifecycle else context.get("replan_obligation")
     if not obligation and guard_scoped and guard_semantic_replan_obligation_id:

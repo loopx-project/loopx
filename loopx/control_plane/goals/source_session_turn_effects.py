@@ -20,11 +20,10 @@ from ..projects.registry_codec import (
 )
 from ..runtime.document_io import fsync_state_directory
 from .source_session_registry_state import (
-    alias_digest,
     canonical_digest,
     current_goal_ref,
     guard_path,
-    lifetime_root,
+    turn_settlement_directory,
     write_journal,
 )
 
@@ -85,16 +84,12 @@ class SourceTurnEffectDrainResult:
         return self.released_count > 0
 
 
-def _gate_root(registry_path: Path, goal_id: str) -> Path:
-    return lifetime_root(registry_path) / "turn-settlement" / alias_digest(goal_id)
-
-
 def source_turn_effect_gate_path(registry_path: Path, goal_id: str) -> Path:
-    return _gate_root(registry_path, goal_id) / "gate.json"
+    return turn_settlement_directory(registry_path, goal_id) / "gate.json"
 
 
 def _admission_directory(registry_path: Path, goal_id: str) -> Path:
-    return _gate_root(registry_path, goal_id) / "admissions"
+    return turn_settlement_directory(registry_path, goal_id) / "admissions"
 
 
 def _admission_path(
