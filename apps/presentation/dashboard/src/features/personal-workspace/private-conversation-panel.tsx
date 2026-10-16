@@ -1,6 +1,6 @@
 import {useEffect, useState} from "react";
 import {connectPrivateConversation, disconnectPrivateConversation, fetchPrivateConversations,
-  changePrivateAgentTarget, fetchChatProjects, fetchChatCapabilities, fetchLarkApps, fetchLarkGroupChats, type PrivateConversation,
+  changePrivateAgentTarget, changeOwnerNotifications, fetchChatProjects, fetchChatCapabilities, fetchLarkApps, fetchLarkGroupChats, type PrivateConversation,
   type ChatProject, type LarkApp, type PrivateConversationStopRecovery} from "../../data/chat";
 import {useWorkspaceI18n} from "./i18n";
 import "./private-conversation.css";
@@ -103,6 +103,21 @@ export function PrivateConversationPanel() {
       {row.audience === "group" ? <p>{zh ? `群话题助手 · 已授权 ${row.group_count} 个群 · 独立工作区隔离` : `Group topic assistant · ${row.group_count} authorized groups · Isolated workspace`}</p> : null}
       <p>{row.executor_endpoint_id} · {zh ? "监听状态" : "Listener"}: {listenerLabel(row.listener_status)}</p>
       <p>{zh ? `待处理或回复：${row.pending_count}` : `Pending execution or reply: ${row.pending_count}`}</p>
+      {row.context_kind === "steward" && row.audience === "owner" ? <div>
+        {row.owner_attention?.available ? <>
+          <label style={{display: "flex", alignItems: "center", gap: 8, minHeight: 44}}><input type="checkbox" style={{width: "auto", margin: 0, flexShrink: 0}} checked={row.owner_attention.enabled} disabled={busy}
+            onChange={event => {const setting = row.owner_attention; if (setting?.available) void act(() =>
+              changeOwnerNotifications(row.binding_id, revision, setting.revision, event.target.checked));}}/>
+            {zh ? "自动通知新的用户待办" : "Automatically notify new owner tasks"}</label>
+          <p>{zh ? "开启后，管家服务自动通知授权范围内新增或实质变更的用户待办，发到原本人私聊。首次开启保留现有待办，不补发历史通知。关闭后暂停发送，保留原回执。" : "The steward service sends new or materially changed owner tasks within its scope to the original owner private Chat. First enable keeps existing tasks without a historical burst. Disabling pauses delivery and retains receipts."}</p>
+          {row.owner_attention.enabled ? <p role="status">{row.owner_attention.error_code || row.owner_attention.failed_count > 0
+            ? (zh ? "通知暂未完成。请检查此 App 登录、授权工作与原私聊；原待办和回执仍保留，发送结果不明的通知不会重发。" : "Notifications need attention. Check this App login, authorized work and original Chat. Tasks and receipts are retained; ambiguous sends are not repeated.")
+            : row.owner_attention.last_checked_at === null ? (zh ? "等待首次后台检查" : "Waiting for the first background check")
+            : Date.now() / 1000 - row.owner_attention.last_checked_at > 120 ? (zh ? "后台检查尚未恢复，请确认管家服务正在运行。" : "Background checks have not resumed. Check that the steward service is running.")
+            : (zh ? `后台自动检查中 · 待发 ${row.owner_attention.pending_count}` : `Background checks active · ${row.owner_attention.pending_count} pending`)}</p> : null}
+          {row.owner_attention.unconfirmed_count > 0 ? <p role="status">{zh ? "有通知发送结果尚未确认；服务只恢复原回执，不重复发送。" : "A notification receipt is unconfirmed; the service recovers the original receipt without resending."}</p> : null}
+        </> : <p role="status">{zh ? "自动通知状态尚未确认，请刷新后重试。" : "Automatic notification state is unavailable. Refresh to retry."}</p>}
+      </div> : null}
       {row.recovery_count > 0 ? <p role="status">{zh ? "存在尚未确认的发送回执。服务会读取原回执恢复；不要重新发送同一任务。检查 App 登录、权限和原会话后刷新状态。" : "A send receipt is unconfirmed. The service reads the original receipt to recover; avoid resending the same task. Check this App login, permissions and original Session, then refresh status."}</p> : null}
       {!row.context_available ? <p role="alert">{zh ? "工作区授权已失效；请恢复原工作区或重新选择。旧会话不会移到其它工作区。" : "The workspace grant is unavailable. Restore the original workspace or select a new one; the old Session will not move."}</p> : null}
       {row.context_kind === "project" && row.audience !== "group" ? <PrivateAgentTargets row={row} revision={revision} zh={zh} busy={busy} act={act}/> : null}
