@@ -37,6 +37,7 @@ deepseek-harness = [
 ]
 test = [
   "distlib>=0.3.9,<1; sys_platform == 'win32'",
+  "docker==7.2.0",
   "resvg-py==0.5.0",
   "defusedxml==0.7.1",
   "pillow>=11,<13",
