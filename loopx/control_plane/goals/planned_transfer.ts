@@ -74,6 +74,7 @@ export async function withVerifiedGoalTransferContext<T>(raw: unknown, rawWitnes
       observed = requireJsonObject(JSON.parse(result.stdout), "registered context codec readback");
     } catch { reject("Registered Goal context codec readback is unavailable; preserve the original operation and retry through its installed source"); }
     if (observed.registry_profile !== null) reject("This source context profile requires the normal project registry; lifecycle-only adoption remains held");
+    if (observed.registry_role === "global-local") reject("A global registry is a read model; resolve the original project registration before transfer");
     if (!canonicalAuthorityBytes(observed.registry_witness).equals(canonicalAuthorityBytes(witness))) reject("Registered Goal context changed; review its original transfer");
     if (!canonicalAuthorityBytes(observed.source_context).equals(canonicalAuthorityBytes(context))) reject("Registered Goal intent differs from its reviewed transfer context");
   };

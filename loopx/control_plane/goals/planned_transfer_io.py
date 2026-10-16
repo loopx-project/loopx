@@ -30,13 +30,54 @@ def _read_goal_transfer_snapshot(*, registry_path: Path, goal_id: str) -> dict[s
             raise ValueError("Original Goal has no state route")
         return {"source_context": {"goal": goal, "state_text": state.read_bytes().decode("utf-8"),
             "runtime_root": registry["common_runtime_root"], "registry_path": str(registry_path)},
-            "registry_witness": witness, "registry_profile": registry.get("profile_id")}
+            "registry_witness": witness, "registry_profile": registry.get("profile_id"),
+            "registry_role": registry.get("registry_role")}
 
 
 def read_goal_transfer_context(*, registry_path: Path, goal_id: str) -> dict[str, Any]:
     """Read codec-validated source facts; only the native owner can pin them."""
-    snapshot = _read_goal_transfer_snapshot(registry_path=registry_path, goal_id=goal_id)
+    from ..runtime.runtime_projection_route import resolve_goal_source_runtime_route
+
+    route = resolve_goal_source_runtime_route(registry_path=registry_path, goal_id=goal_id)
+    snapshot = _read_goal_transfer_snapshot(registry_path=Path(route["source_registry"]), goal_id=goal_id)
     return {key: snapshot[key] for key in ("source_context", "registry_witness")}
+
+
+def preview_registered_goal_transfer(*, registry_path: Path, goal_id: str, operation_id: str) -> dict[str, Any]:
+    """Resolve the normal App/CLI source and let the native owner review it.
+
+    Do not use a runtime override to turn a global projection into source
+    authority. The exact original registration and creation receipt, current
+    provider revision, context and retained leases are checked by TypeScript.
+    """
+    context = read_goal_transfer_context(registry_path=registry_path, goal_id=goal_id)
+    result: dict[str, Any] = effect_runtime_result("coordination.planned_transfer.preview_source", {
+        "runtime_root": context["source_context"]["runtime_root"], "goal_id": goal_id,
+        "operation_id": operation_id, **context,
+    }, timeout=45.0, retry_safe=True)
+    return result
+
+
+def prepare_registered_goal_transfer(
+    *, registry_path: Path, goal_id: str, operation_id: str, expected_preview_sha256: str,
+) -> dict[str, Any]:
+    """Compose one reviewed source authority preparation, without user plumbing.
+
+    This is still pre-cutover: Host/effect/material custody and destination
+    admission are not established by a source authority fence. The complete
+    product coordinator must keep those qualifications separate.
+    """
+    context = read_goal_transfer_context(registry_path=registry_path, goal_id=goal_id)
+    preview = preview_registered_goal_transfer(registry_path=registry_path, goal_id=goal_id, operation_id=operation_id)
+    # The native execution compares this reviewed digest again under its actual
+    # maintenance/source locks; a preview read here cannot waive stale inputs.
+    result: dict[str, Any] = effect_runtime_result("coordination.planned_transfer.prepare_authority", {
+        "runtime_root": context["source_context"]["runtime_root"], "goal_id": goal_id,
+        "operation_id": operation_id, "expected_provider_revision": preview["provider_revision"],
+        "expected_writer_fence_sha256": preview["original_writer_fence_sha256"],
+        "registered_source_preview_sha256": expected_preview_sha256, "execute": True, **context,
+    }, timeout=300.0, retry_safe=False)
+    return result
 
 
 def stage_prepared_goal_transfer(

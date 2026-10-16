@@ -15,13 +15,18 @@ from pathlib import Path
 
 import pytest
 
-from loopx.control_plane.effect_runtime import effect_runtime_result, restart_effect_runtime
+from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError, effect_runtime_result, restart_effect_runtime
 from loopx.control_plane.coordination.legacy_writer_fence import legacy_coordination_writer_fence_path
 from loopx.control_plane.coordination.local_authority_shadow_projection import canonical_bytes
-from loopx.control_plane.goals.planned_transfer_io import read_goal_transfer_context, stage_prepared_goal_transfer
+from loopx.control_plane.goals.planned_transfer_io import (
+    prepare_registered_goal_transfer, preview_registered_goal_transfer,
+    read_goal_transfer_context, stage_prepared_goal_transfer,
+)
 from loopx.control_plane.projects.registry_codec import load_project_registry, project_registry_transaction
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.test_project_registry_codec import _strict
+from loopx.global_registry import sync_project_registry_to_global
+from loopx.paths import global_registry_path
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -91,6 +96,12 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
         lease = acquired["lease"]
         assert acquired["source_authority"] == f"{provider}_v0"
         assert inspect()["active"] is True
+        source_preview = preview_registered_goal_transfer(registry_path=registry, goal_id="report", operation_id="prepared-move")
+        assert source_preview["original_registration_verified"] is True
+        assert source_preview["ready_for_authority_preparation"] is False
+        assert source_preview["retained_leases"] == [lease]
+        assert source_preview["host_drain_qualified"] is False and source_preview["execution_authority_granted"] is False
+        assert inspect()["lease"] == lease
 
         # The accepted stop operation controls automatic advancement. It must
         # not silently revoke an admitted executor's lease or discard its work.
@@ -164,18 +175,57 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
             # Goal transfer must preserve its semantics without adopting the
             # separate lifecycle-only v2 source-session profile.
             registry.write_text(json.dumps(_strict(load_project_registry(registry))))
+        # The product caller can start at the normal shared App/CLI registry.
+        # It resolves the original project through the existing route owner;
+        # stale/sanitized global fields and the global runtime are not authority.
+        sync_project_registry_to_global(registry_path=registry, runtime_root_override=str(runtime), goal_id="report")
+        global_registry = global_registry_path(runtime)
+        global_bytes = global_registry.read_bytes()
+        projected = load_project_registry(global_registry)
+        projected["common_runtime_root"] = str(tmp_path / "unrelated-shared-runtime")
+        projected["goals"][0]["display_name"] = "Stale shared read model"
+        global_registry.write_text(json.dumps(projected))
+        assert read_goal_transfer_context(registry_path=global_registry, goal_id="report") == read_goal_transfer_context(registry_path=registry, goal_id="report")
+        preview = preview_registered_goal_transfer(registry_path=global_registry, goal_id="report", operation_id="prepared-move")
+        assert preview["ready_for_authority_preparation"] is True
+        assert preview["provider_revision"] == released["provider_revision"]
+        assert preview["original_writer_fence_sha256"] == hashlib.sha256(canonical_bytes(original_fence)).hexdigest()
+
+        # Same alias, same runtime and copied Goal metadata do not bind another
+        # registration to the original creation receipt. Source fencing must not
+        # occur on either this refusal or a stale reviewed source context.
+        copied_registry = tmp_path / "copied-registration.json"
+        copied_registry.write_bytes(registry.read_bytes())
+        with pytest.raises(EffectRuntimeRemoteError, match="original registered creation"):
+            preview_registered_goal_transfer(registry_path=copied_registry, goal_id="report", operation_id="prepared-move")
+        with project_registry_transaction(registry, operation="update_source_before_transfer") as tx:
+            changed = tx.payload_copy()
+            changed["goals"][0]["display_name"] = "Current original Goal"
+            tx.commit(changed)
+        with pytest.raises(EffectRuntimeRemoteError, match="preview changed"):
+            prepare_registered_goal_transfer(registry_path=global_registry, goal_id="report", operation_id="prepared-move",
+                expected_preview_sha256=preview["preview_sha256"])
+        assert json.loads(legacy_coordination_writer_fence_path(runtime_root=runtime, goal_id="report").read_text()) == original_fence
+        assert inspect()["provider_revision"] == released["provider_revision"]
+        preview = preview_registered_goal_transfer(registry_path=global_registry, goal_id="report", operation_id="prepared-move")
+        assert preview_registered_goal_transfer(registry_path=registry, goal_id="report", operation_id="prepared-move") == preview
         request = {"runtime_root": str(runtime), "goal_id": "report", "operation_id": "prepared-move",
             "expected_provider_revision": released["provider_revision"],
             "expected_writer_fence_sha256": hashlib.sha256(canonical_bytes(original_fence)).hexdigest(),
-            "execute": True, **read_goal_transfer_context(registry_path=registry, goal_id="report")}
-        prepared = effect_runtime_result("coordination.planned_transfer.prepare_authority", request,
-            timeout=45, retry_safe=False)
+            "registered_source_preview_sha256": preview["preview_sha256"],
+            "execute": True, **read_goal_transfer_context(registry_path=global_registry, goal_id="report")}
+        prepared = prepare_registered_goal_transfer(registry_path=global_registry, goal_id="report", operation_id="prepared-move",
+            expected_preview_sha256=preview["preview_sha256"])
         assert prepared["authority_write_fenced"] is True
+        assert prepared["original_registration_verified"] is True
         assert prepared["execution_authority_granted"] is False
         assert prepared["host_drain_qualified"] is False
         for cold in (False, True):
             if cold:
                 restart_effect_runtime(wait_for_exit=True)
+            assert preview_registered_goal_transfer(registry_path=global_registry, goal_id="report", operation_id="prepared-move") == preview
+            assert prepare_registered_goal_transfer(registry_path=global_registry, goal_id="report", operation_id="prepared-move",
+                expected_preview_sha256=preview["preview_sha256"]) == prepared
             assert effect_runtime_result("coordination.planned_transfer.prepare_authority", request,
                 timeout=45, retry_safe=False) == prepared
             rejected = update(f"prepared-write-{cold}", "Must not overwrite prepared work.", expected_code=1)
@@ -184,6 +234,18 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
                 "--owner", "agent-a", "--idempotency-key", f"fresh-after-preparation-{cold}",
                 "--write-scope", "report.txt", "--write-worktree", str(worktree), expected_code=1)
             assert "prepared for transfer" in acquired["error"]
+        # Broken global source routes fail instead of falling back to a shared
+        # empty store. Restore only this synthetic read model, never source data.
+        broken_projection = load_project_registry(global_registry)
+        broken_projection["goals"][0]["source_registry"] = str(tmp_path / "missing-source-registry.json")
+        global_registry.write_text(json.dumps(broken_projection))
+        with pytest.raises(ValueError, match="source_registry is missing"):
+            preview_registered_goal_transfer(registry_path=global_registry, goal_id="report", operation_id="prepared-move")
+        del broken_projection["goals"][0]["source_registry"]
+        global_registry.write_text(json.dumps(broken_projection))
+        with pytest.raises(EffectRuntimeRemoteError, match="global registry is a read model"):
+            preview_registered_goal_transfer(registry_path=global_registry, goal_id="report", operation_id="prepared-move")
+        global_registry.write_bytes(global_bytes)
 
         # Populated history enters the destination through its Goal staging
         # owner, never a new-Goal bootstrap. Ordinary target reads must see the
