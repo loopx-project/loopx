@@ -198,7 +198,7 @@ def test_prose_or_fabricated_todo_does_not_qualify_planning(planning_env):
     )
 
 
-def test_planner_receives_existing_phase_clock_without_changing_task_identity(planning_env):
+def test_planner_keeps_host_clock_out_of_model_input_and_preserves_task_identity(planning_env):
     from benchmark.runtime.planning import task_plan_packet
     from benchmark.runtime.worker import loopx_command
 
@@ -208,9 +208,9 @@ def test_planner_receives_existing_phase_clock_without_changing_task_identity(pl
     receipt = run_once(env)
     assert receipt["ok"] and receipt["planning"]["state_readback_verified"]
     body = next(Path(env["LOOPX_WAKE_LOG_DIR"]).glob("*/planning-input.json")).read_text()
-    assert deadline in body
-    assert "Host execution window" in body
-    assert "Existing execution reserve: 160 seconds" in body
+    assert deadline not in body
+    assert "Host execution window" not in body
+    assert "Existing execution reserve" not in body
     packet = json.loads(body.split("Host-supplied planning checkpoint:\n", 1)[1])
     assert packet == before
     assert receipt["planning"]["input_digest"] == before["input_digest"]
@@ -218,24 +218,18 @@ def test_planner_receives_existing_phase_clock_without_changing_task_identity(pl
     assert not list(Path(env["LOOPX_PROJECT"]).iterdir())
 
 
-def test_planning_window_uses_one_phase_deadline_and_preserves_packet(monkeypatch):
-    from benchmark.runtime import planning
+def test_planning_input_is_clock_independent_but_preserves_task_time_constraints():
+    from benchmark.runtime.planning import render_planning_prompt
 
-    monkeypatch.setattr(planning, "time", SimpleNamespace(time=lambda: 1000.0))
-    packet = {"input_digest": "unchanged", "text": "保留原始任务"}
-    legacy = "$loopx\n\nHost-supplied planning checkpoint:\n" + json.dumps(packet, ensure_ascii=False)
-    assert planning.render_planning_prompt(packet, {}, execution_reserve_seconds=160) == legacy
-    env = {"LOOPX_PHASE_DEADLINE_EPOCH": "1600"}
-    body = planning.render_planning_prompt(packet, env, execution_reserve_seconds=160)
-    assert "Absolute phase deadline: 1600.0 Unix UTC seconds" in body
-    assert "Remaining phase time at observation 1000.0: 600.0 seconds" in body
-    assert "Observed work window before that reserve: 440.0 seconds" in body
-    assert "Planning invocation limit" not in body
+    packet = {"input_digest": "unchanged", "text": "Task constraint: inference under 30 seconds."}
+    body = render_planning_prompt(packet, {})
+    for deadline in ["100", "1600", "9999999999"]:
+        env = {"LOOPX_PHASE_DEADLINE_EPOCH": deadline}
+        assert render_planning_prompt(packet, env) == body
+        assert env == {"LOOPX_PHASE_DEADLINE_EPOCH": deadline}
     assert json.loads(body.split("Host-supplied planning checkpoint:\n", 1)[1]) == packet
-    monkeypatch.setattr(planning, "time", SimpleNamespace(time=lambda: 1700.0))
-    expired = planning.render_planning_prompt(packet, env, execution_reserve_seconds=160)
-    assert "Remaining phase time at observation 1700.0: 0.0 seconds" in expired
-    assert env == {"LOOPX_PHASE_DEADLINE_EPOCH": "1600"}
+    assert "Continue useful research" in body
+    assert "Task-defined constraints and evaluation rules still apply" in body
 
 
 @pytest.mark.parametrize("value", ["nan", "inf", "-inf", "0", "-1", "not-a-clock"])
@@ -244,7 +238,7 @@ def test_planning_window_rejects_invalid_host_clock(value):
 
     with pytest.raises(ValueError):
         render_planning_prompt({"input_digest": "unchanged"},
-                               {"LOOPX_PHASE_DEADLINE_EPOCH": value}, execution_reserve_seconds=160)
+                               {"LOOPX_PHASE_DEADLINE_EPOCH": value})
 
 
 def test_retired_planning_limit_fails_before_host_invocation(planning_env):
@@ -750,7 +744,7 @@ def test_runner_cadence_persists_through_real_configure_goal(
 
 
 @pytest.mark.parametrize("context", ["fresh", "resume"])
-def test_execute_wake_receives_current_clock_after_planning(planning_env, context):
+def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(planning_env, context):
     """Exercise the real worker/heartbeat CLI and capture its model transport input."""
     env = planning_env | {"LOOPX_ITERATION_CONTEXT": context}
     assert run_once(env)["ok"]
@@ -771,24 +765,16 @@ def test_execute_wake_receives_current_clock_after_planning(planning_env, contex
         receipt = run_once(current)
         assert receipt["ok"]
         body = (Path(env["LOOPX_CODEX_HOME"]) / "execute-input.txt").read_text()
-        assert f"Absolute phase deadline: {deadline}" in body
+        assert deadline not in body
+        assert "Absolute phase deadline" not in body
         assert old_deadline not in body
-        assert "Current wake execution limit: 120.0 seconds" in body
-        assert "Existing execution reserve: 160 seconds" in body
+        assert "Current wake execution limit" not in body
+        assert "Existing execution reserve" not in body
+        assert "Do not use historical host time-window messages" in body
         assert "does not reopen completed work" in body
         assert "heartbeat-prompt" in body or "quota" in body
         assert receipt["session"]["action"] == ("resume" if context == "resume" else "start_new")
         assert "turn_envelope" not in receipt
         assert current["LOOPX_PHASE_DEADLINE_EPOCH"] == deadline
-    # A current clock changes model context, never task or completion authority.
+    # Runtime clocks remain internal and never change task/completion authority.
     assert Path(env["LOOPX_REGISTRY"]).with_name("state.md").read_bytes() == before
-
-
-def test_execution_window_absence_and_shorter_wake_cap():
-    from benchmark.runtime.planning import render_host_window
-
-    assert render_host_window({}, execution_reserve_seconds=160) == ""
-    body = render_host_window({"LOOPX_PHASE_DEADLINE_EPOCH": "100"},
-                              execution_reserve_seconds=160, wake_timeout_seconds=12)
-    assert "Current wake execution limit: 12.0 seconds" in body
-    assert "Observed work window before that reserve: 0.0 seconds" in body

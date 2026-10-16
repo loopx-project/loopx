@@ -707,11 +707,13 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
         result = run_once(env)
         assert result["ok"] and not result["timed_out"], result
         assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
-        # The real native transport sees the current clock after checkpoint
-        # preloading, while the unchanged guard retains decision authority.
+        # The real native transport receives continuation guidance after checkpoint
+        # preloading, while Host clocks and decision authority stay external.
         worker_input = next(t for t in texts(requests[1]) if "quota should-run" in t and "```sh" in t)
-        assert f"Absolute phase deadline: {deadline}" in worker_input
-        assert "Current wake execution limit: 60.0 seconds" in worker_input
+        assert deadline not in worker_input
+        assert "Absolute phase deadline" not in worker_input
+        assert "Current wake execution limit" not in worker_input
+        assert "Do not use historical host time-window messages" in worker_input
         assert "does not reopen completed work" in worker_input
         if capture == "off":
             assert "checkpoint_handoffs" not in result

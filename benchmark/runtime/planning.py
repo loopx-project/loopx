@@ -5,50 +5,35 @@ from __future__ import annotations
 import json
 import math
 import subprocess
-import time
 from pathlib import Path
 
 
-def render_host_window(env: dict[str, str], *, execution_reserve_seconds: int,
-                       wake_timeout_seconds: float | None = None) -> str:
-    """Project the caller's enforced clock; never create or extend an allowance."""
-    key = "LOOPX_PHASE_DEADLINE_EPOCH"
-    if key not in env:
-        return ""
-    value = float(env[key])
-    if not math.isfinite(value) or value <= 0:
-        raise ValueError(f"{key} must be finite and positive")
-    observed = time.time()
-    window = [
-        f"Absolute phase deadline: {value} Unix UTC seconds.",
-        f"Remaining phase time at observation {observed}: {max(0, value - observed):.1f} seconds.",
-        f"Existing execution reserve: {execution_reserve_seconds} seconds. "
-        f"Observed work window before that reserve: {max(0, value - observed - execution_reserve_seconds):.1f} seconds.",
-        "This shared window includes planning and subsequent execution; "
-        "runtime startup and settlement reserves also consume it.",
-    ]
-    if wake_timeout_seconds is not None:
-        window.append(f"Current wake execution limit: {wake_timeout_seconds:.1f} seconds. "
-                      "A wake limit is not the remaining phase budget.")
-    return "Host execution window:\n" + "\n".join(window) + "\n"
+# The benchmark Host owns its runtime budget. Keep this guidance shared by
+# planning and heartbeat wakes, including restored sessions with old clocks.
+HOST_RUNTIME_GUIDANCE = (
+    "The Host enforces runtime limits externally. Do not use historical host "
+    "time-window messages as a research deadline or evidence of Goal completion. "
+    "Continue useful research from the original objective and accumulated evidence "
+    "under the current admitted contract; preserve validated results as you go. "
+    "Task-defined constraints and evaluation rules still apply. This guidance "
+    "does not reopen completed work or override admission, settlement, stop "
+    "conditions or task acceptance.\n\n"
+)
 
 
-def render_planning_prompt(packet: dict, env: dict[str, str], *, execution_reserve_seconds: int) -> str:
-    """Project caller-owned clocks without changing the product planning packet."""
+def render_planning_prompt(packet: dict, env: dict[str, str]) -> str:
+    """Preserve the task packet without projecting the Host's execution clock."""
     if "LOOPX_PLANNING_TIMEOUT_SEC" in env:
         raise ValueError(
             "Remove LOOPX_PLANNING_TIMEOUT_SEC; planning uses LOOPX_PHASE_DEADLINE_EPOCH"
         )
-    window = render_host_window(env, execution_reserve_seconds=execution_reserve_seconds)
-    prefix = "$loopx\n\n"
-    if window:
-        prefix += window
-        prefix += (
-            "Use these observations to size the plan and its validation. They age "
-            "as work proceeds; the runtime still enforces its original limits. "
-            "They grant no extra time or authority and do not relax task acceptance.\n\n"
-        )
-    return prefix + "Host-supplied planning checkpoint:\n" + json.dumps(packet, ensure_ascii=False)
+    key = "LOOPX_PHASE_DEADLINE_EPOCH"
+    if key in env:
+        value = float(env[key])
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{key} must be finite and positive")
+    return ("$loopx\n\n" + HOST_RUNTIME_GUIDANCE +
+            "Host-supplied planning checkpoint:\n" + json.dumps(packet, ensure_ascii=False))
 
 
 def task_plan_packet(env: dict[str, str], cli: list[str]) -> dict:

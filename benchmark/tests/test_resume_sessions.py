@@ -300,9 +300,10 @@ def test_native_codex_resume_keeps_planning_history(tmp_path, monkeypatch):
         assert len(requests) == 2
         history = json.dumps(requests[1]["input"])
         assert "planning-input" in history and "planning-ack" in history
-        assert "Host execution window" in history
-        assert "Existing execution reserve: 160 seconds" in history
-        assert env["LOOPX_PHASE_DEADLINE_EPOCH"] in history
+        assert "Host execution window" not in history
+        assert "Existing execution reserve" not in history
+        assert env["LOOPX_PHASE_DEADLINE_EPOCH"] not in history
+        assert "Do not use historical host time-window messages" in history
         assert "Current Todo input." in history
         assert len(list((tmp_path / "logs/sessions").rglob("*.jsonl"))) == 1
     finally:

@@ -412,8 +412,7 @@ def run_once(env: dict[str, str]) -> dict:
             from benchmark.runtime.planning import render_planning_prompt, task_plan_packet
 
             planning_before = task_plan_packet(env, loopx_command(env))
-            body = render_planning_prompt(planning_before, env,
-                                          execution_reserve_seconds=PHASE_WORK_RESERVE_SECONDS)
+            body = render_planning_prompt(planning_before, env)
             (wake / "planning-input.json").write_text(body, encoding="utf-8")
             (wake / "planning-schema.json").write_text(json.dumps(planning_before["result_schema"]))
         elif execution.mode in {"heartbeat", "loopx-goal"}:
@@ -435,20 +434,11 @@ def run_once(env: dict[str, str]) -> dict:
 
             body = capture_before_replan(env, receipt, body)
         if stage == "execute" and execution.mode == "heartbeat":
-            from benchmark.runtime.planning import render_host_window
+            from benchmark.runtime.planning import HOST_RUNTIME_GUIDANCE
 
-            window = render_host_window(env, execution_reserve_seconds=PHASE_WORK_RESERVE_SECONDS,
-                                        wake_timeout_seconds=execution.timeout_seconds)
-            if window:
-                # Compose last so checkpoint preloading and fresh-session context
-                # both receive the current caller clock, not only the old plan.
-                body = window + (
-                    "This observation supersedes earlier host phase-window observations in session history. "
-                    "It ages as work proceeds and grants no extra time. It does not reopen completed work "
-                    "or override the current LoopX admission, settlement, stop conditions or task acceptance. "
-                    "Use the current admitted contract to decide what work remains; do not infer Goal "
-                    "completion from an expired historical clock.\n\n"
-                ) + body
+            # Compose last so checkpoint preloading and fresh-session context
+            # cannot leave a historical Host clock as the current instruction.
+            body = HOST_RUNTIME_GUIDANCE + body
         with (wake / "stderr.log").open("w") as stderr:
             if execution.native_goal and stage == "execute":
                 run_native_goal(env, execution, body, receipt, stderr)

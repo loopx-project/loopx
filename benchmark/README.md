@@ -806,15 +806,21 @@ through an authorized controller read route. The destination file must be new,
 outside the artifact and native bank, and installed at the Host's existing
 phase-file route before starting its ordinary entry command.
 
-Heartbeat execution wakes now project the current caller-owned phase deadline,
-observation time, remaining window, existing reserve, and wake execution limit
-into model input. Planning and execution share the same renderer; a restored or
-fresh session need not infer its budget from the initial planning message.
-This changes heartbeat prompt context, not scoring, task acceptance, deadline
-accounting, TurnEnvelope settings, or terminal authority. Plain, native-Goal,
-Turn and loopx-goal execution inputs are unchanged. Without a phase clock the
-heartbeat input is unchanged. A restored terminal Goal still requires explicit
-resume through its owning contract; a newer clock alone does not reopen it.
+Planning and heartbeat execution inputs no longer project the Host's deadline,
+remaining time, execution reserve or wake timeout to the model. The Host still
+enforces the same finite budget and retains clocks in runtime state and receipts.
+The model is guided to continue useful research from the original objective and
+evidence, preserving validated results along the way. Task-defined time constraints
+and evaluation cooldowns remain intact; this is not a general time-text filter.
+
+This changes model context, not scoring, task acceptance, deadline accounting,
+TurnEnvelope settings or terminal authority. Plain, native-Goal, Turn and
+loopx-goal execution inputs are unchanged. Existing session archives are not
+rewritten: a new heartbeat explains that historical Host time-window messages
+are not research deadlines or evidence of completion. A restored terminal Goal
+still requires explicit resume through its owning contract. This adapter change
+does not conceal clocks in accessible runtime files or guarantee model adoption;
+compare pinned attempts to measure behavioral and outcome effects.
 
 The sealed deadline and native capture timestamp determine the remainder; the
 receiver recomputes it. A point with two hours remaining keeps that duration
