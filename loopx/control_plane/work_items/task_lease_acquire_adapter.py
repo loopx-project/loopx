@@ -477,10 +477,9 @@ def execute_native_task_lease_lifecycle(
                 runtime_root=runtime_root, goal_id=goal_id
             )
         if transfer_claim and not canonical_lifecycle:
-            raise TaskLeaseError(
-                "atomic claim transfer requires canonical authority; inspect provider readiness first",
-                code="claim_transfer_requires_canonical_authority",
-            )
+            from ..coordination.local_authority import require_canonical_authority
+
+            require_canonical_authority(goal_id=goal_id, operation="task_lease_transfer")
         if registry_path is not None and needs_authority:
             authority = _canonical_lease_authority_facts(registry_path, goal_id)
         request: dict[str, Any] = {

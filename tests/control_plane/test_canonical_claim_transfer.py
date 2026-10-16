@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -97,9 +98,23 @@ def test_public_claim_transfer_recipient_and_projection_recovery(tmp_path, monke
                        cwd=cli_repo, capture_output=True, text=True, timeout=30, check=True)
 
 
-def test_claim_transfer_never_emulates_a_legacy_two_write_handover(tmp_path):
+@pytest.mark.parametrize("handoff_mode", ["legacy", "soft_claim", "hard_lease"])
+def test_claim_transfer_never_emulates_a_legacy_two_write_handover(tmp_path, handoff_mode):
     registry = tmp_path / "registry.json"
     runtime = tmp_path / "runtime"
+    state = tmp_path / "state.md"
+    state.write_text("# Retained source\n\n## Agent Todo\n- [ ] Historical work <!-- todo_id=todo_example -->\n")
+    lease_path = runtime / "goals/example/task-leases/todo_example.json"
+    lease_path.parent.mkdir(parents=True)
+    now = datetime.now(UTC).replace(microsecond=0)
+    lease_path.write_text(json.dumps({
+        "schema_version": "task_lease_v0", "goal_id": "example", "todo_id": "todo_example",
+        "owner": "agent-a", "idempotency_key": "source-a", "version": 1, "lease_epoch": 1,
+        "status": "active", "write_scopes": ["src/**"],
+        "acquire_ttl_seconds": 600, "acquired_at": now.isoformat(), "updated_at": now.isoformat(),
+        "expires_at": (now + timedelta(minutes=10)).isoformat(),
+    }))
+    original_state, original_lease = state.read_bytes(), lease_path.read_bytes()
     registry.write_text(json.dumps({
         "common_runtime_root": str(runtime),
         "goals": [{
@@ -109,6 +124,7 @@ def test_claim_transfer_never_emulates_a_legacy_two_write_handover(tmp_path):
             "coordination": {
                 "registered_agents": ["agent-a", "agent-b"],
                 "agent_model": "peer_v1",
+                "handoff_mode": handoff_mode,
             },
         }],
     }))
@@ -119,4 +135,16 @@ def test_claim_transfer_never_emulates_a_legacy_two_write_handover(tmp_path):
     assert caught.value.code == "canonical_authority_required"
     assert caught.value.payload["operation"] == "task_lease_transfer"
     assert caught.value.payload["write_admitted"] is False
-    assert not (runtime / "goals/example/task-leases/todo_example.json").exists()
+    child = subprocess.run([
+        sys.executable, "-m", "loopx.cli", "--registry", str(registry), "--format", "json",
+        "task-lease", "transfer", "--goal-id", "example", "--todo-id", "todo_example",
+        "--owner", "agent-a", "--idempotency-key", "source-a", "--expected-version", "1",
+        "--new-owner", "agent-b", "--new-idempotency-key", "receiver-b", "--transfer-claim",
+    ], cwd=REPO, capture_output=True, text=True, timeout=60, check=False)
+    assert child.returncode == 1, child.stdout + child.stderr
+    rejected = json.loads(child.stdout)
+    assert rejected["error_code"] == "canonical_authority_required"
+    assert rejected["write_admitted"] is False
+    assert rejected["recovery"] == {"action": "migrate_goal_authority", "backup_required": True}
+    assert state.read_bytes() == original_state
+    assert lease_path.read_bytes() == original_lease
