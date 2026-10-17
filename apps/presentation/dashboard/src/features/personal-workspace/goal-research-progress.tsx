@@ -36,7 +36,9 @@ export function ResearchProgress({pack: p, packs, selectedId, error, zh, onSelec
   const stamp = (s: string) => new Intl.DateTimeFormat(zh ? "zh-CN" : "en", {timeZone: "UTC", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false}).format(new Date(s));
   return <section className="research-progress" aria-label={zh ? "长程效果与用量" : "Long-horizon results and usage"}>
     <header><h3>{zh ? "研究效果判读" : "Research effectiveness"}</h3>{packs.length > 1 ? <label>{zh ? "评估范围" : "Evaluation scope"}<select value={selectedId} onChange={e => onSelect(e.target.value)}>{packs.map(pack => <option key={pack.pack_id} value={pack.pack_id}>{pack.title}</option>)}</select></label> : null}</header>
-    {error ? <p className="research-progress-warning" role="alert">{zh ? "无法核对本次来源；已显示的值仅为上次读回。" : "The source could not be refreshed. Displayed values are from the last readback."} {error}</p> : null}
+    {error ? <p className="research-progress-warning" role="alert">{p
+      ? (zh ? "无法核对本次来源；已显示的值仅为上次读回。" : "The source could not be refreshed. Displayed values are from the last readback.")
+      : (zh ? "所选来源暂不可读，未显示其他范围的结果。" : "The selected source could not be read. No result from another scope is shown.")} {error}</p> : null}
     {p ? <>
       <p className="research-progress-scope">{p.title} · {number(p.episode_count)} {zh ? "个固定研究片段" : "fixed episodes"} · {p.selection.exhaustive ? (zh ? "仅覆盖声明范围" : "Declared scope only") : (zh ? "目的抽样，不代表全程" : "Purposive sample, not the whole run")}</p>
       {p.applicability === "historical" ? <p className="research-progress-warning" role="status">{zh ? "历史分析：来源或方法已变化，不能当作当前判断。" : "Historical analysis: the source or method changed; these are not current judgments."}</p> : null}
@@ -106,6 +108,6 @@ export function ResearchProgress({pack: p, packs, selectedId, error, zh, onSelec
             <dt>{zh ? "覆盖边界" : "Coverage limits"}</dt><dd>{zh ? "仅本次完整捕获；继承前缀、设置、原生评测、操作者及后续未完成轮不包含。金额与全研究总成本未知。" : "This complete capture only. Inherited prefixes, setup, native evaluation, operator work and later incomplete Turns are excluded. Dollar and total study costs are unknown."}</dd>
           </dl></> : null}
       </details>
-    </> : <p role="status">{zh ? "正在核对此范围的分析来源…" : "Checking analysis sources for this scope…"}</p>}
+    </> : !error ? <p role="status">{zh ? "正在核对此范围的分析来源…" : "Checking analysis sources for this scope…"}</p> : null}
   </section>;
 }

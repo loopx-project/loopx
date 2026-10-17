@@ -58,13 +58,25 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     if (current === generation.current && sequence === readSequence.current && scope.current.goalId === goalId && scope.current.packId === packId && !signal?.aborted) {setSnapshot(value); setReadError(""); if (value.pack?.job?.status === "succeeded" || value.pack?.job?.status === "cancelled") setError("");}
     return value;
   }, [goalId, location.packId, zh]);
+  const applyLocation = useCallback((next: typeof location) => {
+    // Selection and browser history share one source transition. Invalidate
+    // pending reads/actions before a new scope can display the old snapshot.
+    if (scope.current.packId !== next.packId) {
+      generation.current++; readSequence.current++; submitting.current = false;
+      citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false);
+      setPending(false); setCancelPending(false); setError(""); setReadError("");
+      setSnapshot(previous => previous?.pack?.pack_id === next.packId ? previous : previous ? {...previous, pack: null} : null);
+    }
+    scope.current = {goalId, packId: next.packId};
+    setLocation(next);
+  }, [goalId]);
   useEffect(() => {
     generation.current++; submitting.current = false;
-    setLocation(locationFor(goalId)); setSnapshot(null); setError(""); setReadError(""); setPending(false);
-    const pop = () => setLocation(locationFor(goalId));
+    applyLocation(locationFor(goalId)); setSnapshot(null); setError(""); setReadError(""); setPending(false); setCancelPending(false);
+    const pop = () => applyLocation(locationFor(goalId));
     window.addEventListener("popstate", pop);
     return () => {generation.current++; citeGeneration.current++; window.removeEventListener("popstate", pop);};
-  }, [goalId]);
+  }, [goalId, applyLocation]);
   useEffect(() => {
     if (!active) return;
     const controller = new AbortController(); setLoading(true);
@@ -90,21 +102,13 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     return () => {stopped = true; clearTimeout(timer);};
   }, [active, location.open, pending, recordedRunning, read]);
   const navigate = (open: boolean, packId = location.packId, push = false) => {
-    const nextPack = packId;
-    if (scope.current.packId !== nextPack) {
-      generation.current++; readSequence.current++; submitting.current = false;
-      setPending(false); setCancelPending(false);
-      if (pack?.pack_id !== nextPack) {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false);}
-      setSnapshot(previous => previous?.pack?.pack_id === nextPack ? previous : previous ? {...previous, pack: null} : null);
-      scope.current = {goalId, packId: nextPack};
-    }
     const url = new URL(window.location.href);
     if (packId) {url.searchParams.set("research_pack", packId); url.searchParams.set("research_analysis_goal", goalId);}
     else {url.searchParams.delete("research_pack"); url.searchParams.delete("research_analysis_goal");}
     if (open) url.searchParams.set("research_analysis", goalId);
     else url.searchParams.delete("research_analysis");
     window.history[push ? "pushState" : "replaceState"](window.history.state, "", url);
-    setLocation({open, packId});
+    applyLocation({open, packId});
   };
   const show = () => {
     navigate(true, pack?.pack_id ?? location.packId, !location.open);

@@ -346,6 +346,19 @@ Choose a registered source, inspect its fixed scope and model request, then
 explicitly run or retry analysis. Reading, refreshing, switching sources and
 following citations never launches a job. Running work can be cancelled;
 changed or missing sources preserve the historical result with a visible warning.
+
+Browser back/forward applies the same source transition as the selector: a
+different pack clears the prior pack's judgments, costs and citation readback
+before loading. If that read fails, the selected source remains unavailable
+until retry; another pack's result is not displayed under its identity. A failed
+refresh of the same pack may retain its last readback with an explicit warning.
+
+![Selected source unavailable after browser history navigation](../development/assets/research-analysis/history-unavailable-mobile.png)
+
+Synthetic packaged recovery state: the selector names the requested source;
+another source's results are absent, and retry reads that same source without
+launching analysis.
+
 The existing toolkit owns registration, model admission, output validation,
 metrics and source-bound reuse; the browser cannot supply local paths, model
 settings or arbitrary commands. Native utility remains unknown without its

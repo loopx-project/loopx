@@ -88,6 +88,7 @@ export const researchHistoryScenario = {
     const pages = [];
     let unavailable = false;
     let analysisFixture = false, holdOldAnalysis = false, slowStarted, releaseOld, oldDelivered;
+    let unavailableAnalysis = false;
     let analysisWrites = 0;
     try {
       context = await openWorkspacePage(browser, url, {collectCoverage, beforeGoto: async (_, page) => {
@@ -102,7 +103,9 @@ export const researchHistoryScenario = {
 
           const selected = ["b", "c", "d"].find(id => query.get("pack_id") === id.repeat(64)) ?? "a";
           if (holdOldAnalysis && selected === "a") {slowStarted(); await new Promise(resolve => {releaseOld = resolve;});}
-          await route.fulfill({json: analysisReadback(selected)});
+          await route.fulfill(unavailableAnalysis && selected === "a"
+            ? {status: 503, json: {error: "Synthetic analysis read unavailable"}}
+            : {json: analysisReadback(selected)});
           if (holdOldAnalysis && selected === "a") oldDelivered();
         });
         // The document URL also contains ?statusUrl=/status.json. Only proxy
@@ -372,8 +375,43 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.match(await progress.innerText(), /历史捕获|historical/i);
       await page.reload({waitUntil: "networkidle"});
       await analysis.locator("header p").first().filter({hasText: /^Synthetic analysis B$/}).waitFor();
+      await page.setViewportSize({width: 390, height: 844});
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
       await page.screenshot({path: resolve(outputDir, "research-analysis-mobile.png"), animations: "disabled"});
+      // Browser history changes source identity too. While A is delayed or
+      // unavailable, B's interpretation/cost must not be shown under A's URL.
+      await page.evaluate(({goal, a, b}) => {
+        const url = new URL(location.href);
+        url.searchParams.set("research_analysis_goal", goal);
+        url.searchParams.set("research_pack", a);
+        history.replaceState(history.state, "", url);
+        url.searchParams.set("research_pack", b);
+        history.pushState(history.state, "", url);
+      }, {goal, a: "a".repeat(64), b: "b".repeat(64)});
+      const backStarted = new Promise(resolve => {slowStarted = resolve;});
+      const backDelivered = new Promise(resolve => {oldDelivered = resolve;});
+      holdOldAnalysis = unavailableAnalysis = true;
+      await page.goBack();
+      await backStarted;
+      try {
+        assert.equal(await progress.getByRole("combobox").inputValue(), "a".repeat(64));
+        assert.equal(await progress.locator(".research-effect-metrics").count(), 0,
+          "A pending history read cannot borrow the previously displayed pack's judgments");
+        assert.equal(await progress.locator(".research-progress-scope").count(), 0,
+          "The previous pack's displayed scope is cleared, while source options remain available");
+      } finally {releaseOld(); await backDelivered; holdOldAnalysis = false;}
+      await analysis.getByRole("alert").waitFor();
+      assert.equal(await progress.locator(".research-effect-metrics").count(), 0,
+        "A failed history read cannot retain another pack's judgments");
+      assert.equal(await progress.getByRole("status").count(), 0,
+        "An unavailable source is not an indefinitely loading source");
+      await progress.scrollIntoViewIfNeeded();
+      await page.screenshot({path: resolve(outputDir, "research-analysis-history-unavailable-mobile.png"), animations: "disabled"});
+      unavailableAnalysis = false;
+      await analysis.getByRole("button", {name: "重试读取", exact: true}).click();
+      await analysis.locator("header p").first().filter({hasText: /^Synthetic analysis A$/}).waitFor();
+      await page.goForward();
+      await analysis.locator("header p").first().filter({hasText: /^Synthetic analysis B$/}).waitFor();
       await analysis.press("Escape");
       await analysis.waitFor({state: "hidden"});
       assert.equal(await history.getByRole("button", {name: "查看分析", exact: true}).evaluate(button => button === document.activeElement), true);
