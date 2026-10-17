@@ -81,13 +81,9 @@ export async function readGoalTransferSnapshot(registry: string, goalId: string)
   } catch { reject("Registered Goal context codec readback is unavailable; preserve the original operation and retry through its installed source"); }
 }
 
-/** Capture Goal intent through its actual registered source while the caller
- * holds maintenance. Read the registered Goal through the existing Python
- * registry codec using the source-selected interpreter, never another registry
- * parser. Python owns codec/byte IO; Goal identity and profile decisions remain
- * here. The lifecycle-only profile cannot become a generic runtime grant. */
-export async function withVerifiedGoalTransferContext<T>(raw: unknown, rawWitness: unknown,
-  goalId: string, root: string, operation: (context: JsonObject, snapshot: JsonObject) => Promise<T>): Promise<T> {
+/** Python owns codec/byte IO; Goal identity and profile decisions stay in this
+ * single verifier for both nonmutating preflight and the locked capture. */
+function goalTransferContextVerification(raw: unknown, rawWitness: unknown, goalId: string, root: string) {
   const context = requireJsonObject(raw, "original Goal context");
   if (!hasExactAuthorityKeys(context, ["goal", "state_text", "runtime_root", "registry_path"]) ||
       context.runtime_root !== root || typeof context.state_text !== "string" || !context.state_text.trim()) reject("Complete registered Goal context is required");
@@ -106,6 +102,23 @@ export async function withVerifiedGoalTransferContext<T>(raw: unknown, rawWitnes
     if (!canonicalAuthorityBytes(observed.source_context).equals(canonicalAuthorityBytes(context))) reject("Registered Goal intent differs from its reviewed transfer context");
     return observed;
   };
+  return {context, state, registry, verify};
+}
+
+/** Reject an invalid registry route before a caller touches its alleged
+ * runtime. This observation grants no write authority; capture rechecks under
+ * the original locks, including a final check after the operation. */
+export async function checkGoalTransferSourceContext(raw: unknown, rawWitness: unknown,
+  goalId: string, root: string): Promise<void> {
+  await goalTransferContextVerification(raw, rawWitness, goalId, root).verify();
+}
+
+/** Capture Goal intent through its actual registered source while the caller
+ * holds maintenance. The lifecycle-only profile cannot become a generic runtime
+ * grant. Keep maintenance -> Todo -> state -> registry lock ordering intact. */
+export async function withVerifiedGoalTransferContext<T>(raw: unknown, rawWitness: unknown,
+  goalId: string, root: string, operation: (context: JsonObject, snapshot: JsonObject) => Promise<T>): Promise<T> {
+  const {context, state, registry, verify} = goalTransferContextVerification(raw, rawWitness, goalId, root);
   return withFileMutationLock(legacyCoordinationTodoLockPath(root, goalId), () =>
     withFileMutationLock(state, () => withFileMutationLock(registry, async () => {
       const snapshot = await verify();

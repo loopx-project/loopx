@@ -25,7 +25,8 @@ import {loadLegacyCoordinationWriterFence, preparePlannedTransferWriterFenceUnde
   PLANNED_TRANSFER_TASK_FENCE_SCHEMA,
   type PlannedTransferWriterFence} from "./legacy_writer_fence.ts";
 import {readShadowManagementState, shadowManagementDirectory, withShadowMaintenanceLock} from "./shadow_management.ts";
-import {PREPARATION_SCHEMA, readGoalTransferSnapshot, withVerifiedGoalTransferContext} from "../goals/planned_transfer.ts";
+import {PREPARATION_SCHEMA, checkGoalTransferSourceContext, readGoalTransferSnapshot,
+  withVerifiedGoalTransferContext} from "../goals/planned_transfer.ts";
 import {reviewProtectedGoalTransferInputs, writeProtectedGoalTransfer} from "../goals/planned_transfer_payload.ts";
 import type {AuthorityStore} from "./authority_store.ts";
 import {newGoalCreationBinding} from "./new_goal_initialization.ts";
@@ -193,7 +194,12 @@ export async function visitRegisteredTransferSource<T>(value: JsonObject, reques
   consume: (source: RegisteredTransferSource) => Promise<T>): Promise<T> {
   const root = requireLocalAuthorityRuntimeRoot(value.runtime_root);
   const goalId = requireAuthorityStoreId(value.goal_id, "source Goal id");
-  if (!(await stat(root)).isDirectory()) reject("Original source runtime is unavailable; restore it without reinitializing it");
+  await checkGoalTransferSourceContext(value.source_context, value.registry_witness, goalId, root);
+  const runtime = await stat(root).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT" || error.code === "ENOTDIR") return null;
+    throw error;
+  });
+  if (!runtime?.isDirectory()) reject("Original source runtime is unavailable; restore it without reinitializing it");
   return withShadowMaintenanceLock(root, goalId, () => withVerifiedGoalTransferContext(
     value.source_context, value.registry_witness, goalId, root, async (context, snapshot) => {
       const managed = await readShadowManagementState(root, goalId);

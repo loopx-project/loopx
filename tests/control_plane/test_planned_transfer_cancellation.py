@@ -114,6 +114,42 @@ def test_current_host_observation_preserves_checkpoint_source_bytes(source):
     assert mutex.read_bytes() == original
 
 
+@pytest.mark.parametrize("invalid_source", ["global_projection", "missing_runtime"])
+def test_source_preview_refuses_before_initializing_an_invalid_runtime(source, tmp_path, invalid_source):
+    """A broken source needs an owner action, not an empty replacement store."""
+    from loopx.control_plane.projects.registry_codec import load_project_registry
+
+    registry, runtime = source["registry"], source["runtime"]
+    original_fence = source["fence"].read_bytes()
+    hidden = tmp_path / "retained-source-runtime"
+    if invalid_source == "global_projection":
+        projection = load_project_registry(registry)
+        runtime = tmp_path / "absent-projection-runtime"
+        projection.update(registry_role="global-local", common_runtime_root=str(runtime))
+        for goal in projection["goals"]:
+            goal.pop("source_registry", None)
+        registry = tmp_path / "registry.global.json"
+        registry.write_text(json.dumps(projection))
+        message = "global registry is a read model"
+    else:
+        restart_effect_runtime(wait_for_exit=True)
+        runtime.rename(hidden)
+        message = "Original source runtime is unavailable"
+    original_registry = registry.read_bytes()
+    try:
+        with pytest.raises(EffectRuntimeRemoteError, match=message):
+            preview_registered_goal_transfer(registry_path=registry, goal_id="report", operation_id="move-invalid")
+        assert not runtime.exists()
+        assert registry.read_bytes() == original_registry
+    finally:
+        restart_effect_runtime(wait_for_exit=True)
+        if invalid_source == "missing_runtime":
+            if runtime.exists():
+                runtime.rename(tmp_path / "unexpected-runtime-initialization")
+            hidden.rename(runtime)
+    assert source["fence"].read_bytes() == original_fence
+
+
 def operation_directory(source: dict, operation: str) -> Path:
     return shadow_management_directory(source["runtime"], "report") / "planned-transfers" / hashlib.sha256(canonical_bytes(operation)).hexdigest()
 
