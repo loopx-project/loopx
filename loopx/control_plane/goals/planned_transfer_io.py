@@ -222,6 +222,17 @@ def inspect_staged_goal_transfer_history(
     return result
 
 
+def read_staged_goal_transfer_runs(
+    *, runtime_root: Path, goal_id: str, operation_id: str,
+) -> dict[str, Any]:
+    """Transport the Goal/accounting owners' verified historical projection."""
+    result: dict[str, Any] = effect_runtime_result("coordination.planned_transfer.read_target_runs", {
+        "runtime_root": str(runtime_root.expanduser().absolute()),
+        "goal_id": goal_id, "operation_id": operation_id,
+    }, timeout=300.0, retry_safe=True)
+    return result
+
+
 def preview_protected_goal_transfer_target(
     *, directory: Path, private_key: Path, expected_artifact_sha256: str,
     project: Path, runtime_root: Path, provider: str,

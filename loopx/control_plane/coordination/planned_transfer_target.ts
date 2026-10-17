@@ -25,6 +25,7 @@ import {readShadowManagementState, shadowManagementDirectory, withShadowMaintena
 import {decodeGoalTransferHistory, inspectGoalTransferHistory, readGoalTransferHistoryJson, retainGoalTransferHistory, type ProtectedGoalTransferHistory} from "../goals/planned_transfer_history.ts";
 import {PREPARATION_SCHEMA} from "./planned_transfer_authority.ts";
 import {legacyCoordinationTodoLockPath} from "./legacy_writer_lock_paths.ts";
+import {projectGoalQuotaHistoryForTransfer, readGoalQuotaHistoryForTransfer} from "../quota/accounting_artifact_transaction.ts";
 
 function reject(message: string): never { throw new EffectRuntimeConflictError(message); }
 function same(a: unknown, b: unknown): boolean { return canonicalAuthorityBytes(a).equals(canonicalAuthorityBytes(b)); }
@@ -243,6 +244,10 @@ export async function stageAuthorityForPlannedTransfer(value: JsonObject): Promi
       const priorAudit = await auditAuthorityArchive(value.archive as string, selected, archive.archive_sha256);
       if (priorAudit.status !== "matched") reject("Completed destination authority changed or is missing; use its recovery owner");
     }
+    const liveAccounting = await readGoalQuotaHistoryForTransfer(root, plan.goalId);
+    if (liveAccounting.closed !== true || (liveAccounting.files as JsonObject[]).length !== 0) {
+      reject("Destination runtime accounting is occupied; preserve its original owner before staging");
+    }
     // State/context are immutable original input, not authority reconstructed
     // from Markdown. No credential-bearing source config enters the live Goal.
     const originalState = await optionalBytes(plan.statePath), originalContext = await optionalBytes(plan.contextPath);
@@ -312,4 +317,46 @@ export async function inspectStagedGoalTransferHistory(value: JsonObject): Promi
   const manifest = decodeGoalTransferHistory(await readGoalTransferHistoryJson(join(directory, "runtime-history", "manifest.json")));
   if (manifest.goal_id !== goalId || canonicalAuthoritySha256(manifest) !== receipt.runtime_history_sha256) reject("Original staged runtime history identity changed");
   return inspectGoalTransferHistory(join(directory, "runtime-history"), manifest);
+}
+
+/** Ordinary history and same-effect quota replay consume the same verified
+ * original content before cutover. Never publish it into the live index or
+ * interpret retained transaction receipts as new destination write authority.
+ * This reader does not acquire maintenance after a caller's run-index lock;
+ * exact before/after observations reject a changing staged lineage instead. */
+export async function readStagedGoalTransferRuns(value: JsonObject): Promise<JsonObject> {
+  if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id", "operation_id"])) reject("Original staged accounting identity is required");
+  const root = await requirePhysicalTransferPath(value.runtime_root);
+  const goal = requireAuthorityStoreId(value.goal_id, "original transfer Goal");
+  const operation = requireAuthorityStoreId(value.operation_id, "original transfer operation");
+  if (/[\\/\0]/u.test(goal) || goal === "." || goal === "..") reject("Original transfer Goal must be one path segment");
+  const fence = await loadLegacyCoordinationWriterFence(root, goal);
+  if (fence.status !== "loaded" || fence.fence.schema_version !== PLANNED_TRANSFER_WRITER_FENCE_SCHEMA ||
+      fence.fence.role !== "target" || fence.fence.operation_id !== operation) reject("Original staged target accounting binding is unavailable");
+  const directory = join(shadowManagementDirectory(root, goal), "planned-transfer-targets", canonicalAuthoritySha256(operation));
+  const pending = await readGoalTransferHistoryJson(join(directory, "preparation.json"));
+  const receipt = await readGoalTransferHistoryJson(join(directory, "receipt.json"));
+  const registration = await readGoalTransferHistoryJson(join(directory, "registration.json"));
+  if (canonicalAuthoritySha256(pending) !== fence.fence.source_identity_sha256 || receipt.identity_sha256 !== fence.fence.source_identity_sha256 ||
+      registration.identity_sha256 !== receipt.identity_sha256 || pending.goal_id !== goal || pending.operation_id !== operation ||
+      requireJsonObject(pending.target, "staged target").runtime_root !== root ||
+      receipt.target_is_active !== false || receipt.execution_authority_granted !== false || receipt.runtime_accounting_adopted !== false) {
+    reject("Original staged target accounting identity changed");
+  }
+  await inspectStagedGoalTransferHistory(value);
+  const historyRoot = join(directory, "runtime-history");
+  const manifest = decodeGoalTransferHistory(await readGoalTransferHistoryJson(join(historyRoot, "manifest.json")));
+  const records = await projectGoalQuotaHistoryForTransfer(manifest.source_runtime_root, goal, historyRoot, manifest.quota_history);
+  const live = await readGoalQuotaHistoryForTransfer(root, goal);
+  if (live.closed !== true || (live.receipts as JsonObject[]).length !== 0) {
+    reject("Staged target contains unadopted live accounting; preserve it for recovery");
+  }
+  const after = await loadLegacyCoordinationWriterFence(root, goal);
+  if (!same(after, fence) || !same(receipt, await readGoalTransferHistoryJson(join(directory, "receipt.json")))) {
+    reject("Staged target accounting changed during readback");
+  }
+  return {records, raw_count: records.length, live_index_sha256: live.index_sha256,
+    provenance: {operation_id: operation, history_sha256: receipt.runtime_history_sha256,
+      original_index_sha256: manifest.quota_history.index_sha256, historical_only: true,
+      runtime_accounting_adopted: false, execution_authority_granted: false}};
 }

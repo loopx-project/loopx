@@ -326,6 +326,31 @@ migration together manually.
 外部操作已完成。File/SQLite 及冷启动回归只验证这些现有边界，不代表完整迁移
 已交付；这也不是要求用户手工拼接迁移步骤。
 
+The planned-transfer implementation under development retains original indexed
+run artifacts with the closed Turn and quota history. Ordinary destination
+history and same-effect spend replay read those verified local copies, including
+original spends and voids; an empty live destination index does not erase prior
+usage. Original receipt bodies and source addresses remain unchanged. Artifact
+addresses in the read model point to the retained local copies and carry their
+original paths separately. Missing, changed, linked or unbound history holds
+instead of reporting zero usage or repairing from the old source. Unrecognized
+or missing indexed source artifacts must be reconciled before preparation.
+Existing destination accounting also rejects staging before its Goal/provider
+is published; later accounting is preserved and requires its recovery owner.
+These are historical projections while the destination remains stopped; they
+do not adopt live accounting, configuration, credentials or execution authority.
+Final cutover, destination admission and the packaged continuation journey are
+still separate, unqualified parts of this implementation.
+
+中文：开发中的计划内迁移将原索引所指的运行产物与已结算 Turn、扣额和冲销
+历史一起保留。目标普通历史和同 effect 扣额重放读取经核验的本地产物，不能
+因为目标当前索引为空就丢掉已有用量。原 receipt 正文和源地址不改写；读模型
+提供本地保留地址，并另存原地址。历史缺失、改变、链接或绑定损坏时明确拒绝，
+不回报零用量、不从旧源修补；源端不支持或缺失的索引产物须先由原 owner 处理。
+目标已有账务时，在发布 Goal/provider 前拒绝导入；后写账务保留，交原 owner 恢复。
+目标仍停止，这些历史投影不授予当前扣额、配置、凭证或执行权限；最终切换、
+目标准入及打包后的继续工作旅程尚未资格化。
+
 ## Full-state recovery after cold import
 
 Keep the reviewed pre-import backup as well as a new full-state backup after

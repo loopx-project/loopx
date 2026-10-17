@@ -14,6 +14,8 @@ import {
 import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import {withGoalRuntimeWriter} from "../coordination/local_authority_write.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
+import {loadLegacyCoordinationWriterFence, PLANNED_TRANSFER_WRITER_FENCE_SCHEMA} from "../coordination/legacy_writer_fence.ts";
+import {shadowManagementDirectory} from "../coordination/shadow_management.ts";
 import {
   jsonObject,
   optionalNonEmptyString as optionalString,
@@ -524,10 +526,34 @@ export async function lookupQuotaAccountingReplay(
 }> {
   const lookup = async () => {
     const content = await readOptionalText(indexPath);
+    let records = parseQuotaAccountingIndex(content);
+    const runs = dirname(indexPath), goal = dirname(runs), goals = dirname(goal);
+    if (basename(runs) === "runs" && basename(goals) === "goals") {
+      const root = dirname(goals), goalId = basename(goal);
+      const fence = await loadLegacyCoordinationWriterFence(root, goalId);
+      let retainedTarget = false;
+      try {await lstat(join(shadowManagementDirectory(root, goalId), "planned-transfer-targets")); retainedTarget = true;}
+      catch (error) {if (!isNodeErrorCode(error, "ENOENT")) throw error;}
+      const targetFence = fence.status === "loaded" && fence.fence.schema_version === PLANNED_TRANSFER_WRITER_FENCE_SCHEMA && fence.fence.role === "target";
+      if (retainedTarget || targetFence) {
+        // Retained lineage without its fence is damaged state, not an absent
+        // old debit. Unrelated ordinary/legacy replay retains its prior rule.
+        if (!targetFence || fence.status !== "loaded") throw new EffectRuntimeRequestError("Original staged target accounting binding is unavailable");
+        // Goal owns the staged lineage. Its readback verifies original content
+        // through this accounting owner; it grants neither repair nor dispatch.
+        const {readStagedGoalTransferRuns} = await import("../coordination/planned_transfer_target.ts");
+        const original = await readStagedGoalTransferRuns({runtime_root: root, goal_id: goalId,
+          operation_id: fence.fence.operation_id});
+        if (original.live_index_sha256 !== (content === null ? null : sha256Bytes(Buffer.from(content)))) {
+          throw new EffectRuntimeRequestError("Staged target run index changed during quota replay");
+        }
+        records = [...original.records as JsonObject[], ...records];
+      }
+    }
     return {
       resolution: resolveQuotaAccountingEffect(
         kind,
-        parseQuotaAccountingIndex(content),
+        records,
         effectId,
         goalRef,
       ),
@@ -900,7 +926,7 @@ async function ensureReceiptArtifacts(
  * A prepared or incomplete debit/void must finish through its existing owner
  * before transfer; directory emptiness is not an external-effect certificate.
  */
-export async function readGoalQuotaHistoryForTransfer(root: string, goalId: string, retainedRoot = root): Promise<JsonObject> {
+async function loadGoalQuotaHistoryForTransfer(root: string, goalId: string, retainedRoot: string): Promise<{history: JsonObject; records: JsonObject[]}> {
   // Receipt bodies keep their original absolute addresses. A retained snapshot
   // is read only at the caller's private carrier root; no source path is opened
   // or rewritten, and this does not install a target accounting/admission grant.
@@ -929,6 +955,36 @@ export async function readGoalQuotaHistoryForTransfer(root: string, goalId: stri
   };
   const text = (bytes: Buffer | null) => bytes === null ? null : new TextDecoder("utf-8", {fatal: true}).decode(bytes);
   const indexBytes = await snapshot(index), records = parseQuotaAccountingIndex(text(indexBytes));
+  const projected: JsonObject[] = [];
+  let indexArtifactsClosed = true;
+  for (const record of records) {
+    if (record.goal_id !== goalId) throw new EffectRuntimeRequestError("Transfer run index belongs to another Goal");
+    const local = {...record};
+    // Every indexed artifact is needed by ordinary history/settlement readers,
+    // including delivery runs that are not debit/void transactions. Resolve
+    // only original owner-selected direct children, never arbitrary source IO.
+    for (const [field, extension] of [["json_path", ".json"], ["markdown_path", ".md"]] as const) {
+      const path = record[field];
+      if (typeof path !== "string" || dirname(path) !== originalRuns || resolve(path) !== path ||
+          !/^[0-9A-Za-z-]+\.(?:json|md)$/u.test(basename(path)) || extname(path) !== extension) {
+        throw new EffectRuntimeRequestError("Transfer run artifact address is outside its original owner");
+      }
+      const retainedPath = join(runs, basename(path)), bytes = await snapshot(retainedPath);
+      if (bytes === null) {indexArtifactsClosed = false; continue;}
+      if (extension === ".json") {
+        const body = requiredObject(JSON.parse(text(bytes)!), "original run artifact");
+        if (body.goal_id !== goalId || body.generated_at !== record.generated_at || body.classification !== record.classification) {
+          throw new EffectRuntimeRequestError("Original indexed run artifact identity differs");
+        }
+        // Reuse the existing ledger reducer without opening a retired source
+        // address later. This is an observed projection, not a rewritten row.
+        if (body.quota_event !== undefined) local.quota_event = body.quota_event;
+      }
+      local[`original_${field}`] = path;
+      local[field] = retainedPath;
+    }
+    projected.push(local);
+  }
   const receipts: JsonObject[] = [];
   const seen = new Set<string>();
   for (const kind of ["spend", "void"] as const) {
@@ -969,10 +1025,26 @@ export async function readGoalQuotaHistoryForTransfer(root: string, goalId: stri
       }
     }
   }
-  const facts = {closed: receipts.every(row => row.closed === true), receipts,
+  const facts = {closed: indexArtifactsClosed && receipts.every(row => row.closed === true), receipts,
     index_sha256: indexBytes === null ? null : sha256Bytes(indexBytes),
     files: [...files.values()].sort((a, b) => String(a.relative_path) < String(b.relative_path) ? -1 : 1)};
-  return {...facts, sha256: canonicalAuthoritySha256(facts)};
+  return {history: {...facts, sha256: canonicalAuthoritySha256(facts)}, records: projected};
+}
+
+export async function readGoalQuotaHistoryForTransfer(root: string, goalId: string, retainedRoot = root): Promise<JsonObject> {
+  return (await loadGoalQuotaHistoryForTransfer(root, goalId, retainedRoot)).history;
+}
+
+/** Original accounting and local artifact addresses, without active adoption.
+ * The expected inventory belongs to the authenticated transfer, not a caller's
+ * claim that an empty or damaged history means zero prior usage. */
+export async function projectGoalQuotaHistoryForTransfer(root: string, goalId: string, retainedRoot: string,
+  expected: JsonObject): Promise<JsonObject[]> {
+  const result = await loadGoalQuotaHistoryForTransfer(root, goalId, retainedRoot);
+  if (canonicalJson(result.history) !== canonicalJson(expected) || result.history.closed !== true) {
+    throw new EffectRuntimeRequestError("Original quota history changed or is incomplete");
+  }
+  return result.records;
 }
 
 export async function commitQuotaAccountingArtifactTransaction(
