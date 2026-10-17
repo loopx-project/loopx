@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -101,6 +102,27 @@ def test_loopx_refresh_tracks_new_vendor_version_and_rollback_follows_current_so
     )
     assert entry.is_symlink() and entry.resolve() == next_vendor
     assert "LoopX: continuing" not in (entry / "SKILL.md").read_text()
+
+
+def test_guidance_correction_refreshes_existing_install_without_version_bump(
+    host, monkeypatch
+):
+    _, vendor, _, entry, skills = host
+    upstream = (vendor / "SKILL.md").read_bytes()
+    current_policy = delivery._POLICY
+    # The old policy is a completed managed installation, not a user edit.
+    # Corrected guidance must replace it even when Ego and LoopX versions match.
+    with monkeypatch.context() as old:
+        old.setattr(delivery, "_POLICY", "\n\nPrevious managed continuation policy.\n")
+        assert workflow_skill_install(skills_dir=skills, execute=True)["ok"]
+    assert workflow_skill_install(skills_dir=skills)["ego_browser"]["status"] == "would_refresh"
+    result = workflow_skill_install(skills_dir=skills, execute=True)
+    assert result["ok"] and result["ego_browser"]["status"] == "refreshed"
+    assert (entry / "SKILL.md").read_text() == upstream.decode().rstrip() + current_policy
+    marker = json.loads((entry / ".loopx-ego-skill.json").read_text())
+    assert marker["policy_sha256"] == hashlib.sha256(current_policy.encode()).hexdigest()
+    assert workflow_skill_install(skills_dir=skills)["ego_browser"]["status"] == "unchanged"
+    assert (vendor / "SKILL.md").read_bytes() == upstream
 
 
 @pytest.mark.parametrize("uninstall", [False, True])

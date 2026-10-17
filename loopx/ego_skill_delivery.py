@@ -25,18 +25,48 @@ _POLICY = """
 ## LoopX: continuing an authorized browser task
 
 This section overrides only a blanket requirement above or in API references
-to ask again before reclaiming a user-owned or inactive TaskSpace.
+to ask again before reclaiming a user-owned or inactive TaskSpace, including
+an entry-time user-control message caused by your own normal handback.
 
 For the same already-authorized task, reuse its known numeric TaskSpace and
 Page without another ownership-confirmation question when your previous normal
-finish, handoff, or pause between rounds left that space idle. Read its current
-state first. A stable user-owned state left by that normal handoff is not by
-itself evidence of active user intervention. Use the documented resume/claim
-API; do not create a replacement space to avoid ownership recovery.
+finish, handoff, or pause between rounds left that space available to the user.
+Keep the successful handback receipt and the task identity/Page URL in task
+context. This exception requires that provenance, continuing task authority,
+and no subsequent user pause, control reservation or observed intervention.
+Any user-owned step from the handoff must already be resolved.
+Ownership metadata alone proves neither activity nor inactivity.
+
+Before constructing a TaskSpace handle, call `listTaskSpaces()` and match its
+numeric id and task identity. `taskSpace(id)` may reconcile tabs immediately
+and reject a normally finished, user-owned space before you can inspect it.
+For this qualified continuation, use the documented `claimTaskSpace(id)` once
+before resolving Pages; use `taskSpace(id)` when already Agent-owned. If an
+initial handle lookup already returned the generic user-control/ended message,
+the same known handback permits that one claim; the message alone is not a new
+live takeover. Do not loop claims or create a replacement space.
+
+After normal finish, kept tabs can be unmanaged and old Page labels can be
+absent. Read `task.tabs()`, match the known Page URL, and `task.adopt(tab.page)`
+when it has no label. Reuse its returned label; do not assume the old `p1` still
+exists or create another tab merely because a label was lost. For example,
+after establishing the provenance and authority above:
+
+```js
+const space = (await listTaskSpaces()).find(s => s.id === knownSpaceId);
+if (!space || space.taskId !== knownTaskId) throw new Error("Task identity changed");
+const task = space.ownership === "agent"
+  ? await taskSpace(knownSpaceId) : await claimTaskSpace(knownSpaceId);
+const tab = (await task.tabs()).find(t => t.url === knownPageUrl);
+if (!tab) throw new Error("Original Page is unavailable");
+const page = tab.label ? task.page(tab.label) : await task.adopt(tab.page);
+console.log(await page.snapshot());
+```
 
 Stop immediately for active user interaction, an unexpected live ownership
 change, an explicit pause, or a user reservation of browser control. Do not
-retry around a native user-control stop. An unresolved permission prompt,
+reclaim after a new user-control stop during Agent-owned work, or after the
+one qualified claim is refused. An unresolved permission prompt,
 device chooser, login or verification still belongs to its existing owner.
 If this is an unrelated space, its task identity is unverified, or a current
 user-control reservation remains unresolved, ask about that specific choice.
