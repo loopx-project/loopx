@@ -16,6 +16,11 @@ if str(REPO_ROOT) not in sys.path:
 
 import pytest  # noqa: E402
 
+from managed_effect_runtime_fixture import (  # noqa: E402
+    capture_disposable_effect_runtimes,
+    stop_disposable_effect_runtimes,
+)
+
 from loopx import paths  # noqa: E402
 from loopx.canary.runner import SMOKE_SUITE_CHOICES  # noqa: E402
 from loopx.semantics.production import NPM_DEV_DEPENDENCIES_MISSING  # noqa: E402
@@ -35,6 +40,20 @@ _DEFAULT_ROUTE_REFERENCES = (
     ("loopx.control_plane.runtime.local_state_migration", "LEGACY_RUNTIME_ROOT", (".codex", "loopx")),
 )
 _REAL_DEFAULT_ROUTES = (paths.DEFAULT_RUNTIME_ROOT, paths.LEGACY_RUNTIME_ROOT)
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_teardown(item):
+    temporary = item.funcargs.get("tmp_path")
+    captured = capture_disposable_effect_runtimes(temporary) if isinstance(temporary, Path) else []
+    try:
+        return (yield)
+    finally:
+        # Run after fixture finalizers and monkeypatch restoration, including
+        # failed tests. Ending a fixture must not leave its copied-source Node
+        # processes alive for the runtime's normal five-minute reuse window.
+        if isinstance(temporary, Path):
+            stop_disposable_effect_runtimes(temporary, captured)
 
 
 @pytest.fixture(scope="session", autouse=True)

@@ -1,5 +1,6 @@
 /** Benchmark-toolkit's observer sidecar; never a solver or native-score authority. */
 import {createHash} from 'node:crypto';
+import {BARE_SHA256_PATTERN} from '../content_digest.ts';
 import {EffectRuntimeRequestError} from '../effect_runtime_errors.ts';
 
 export const TRAJECTORY_METHOD = 'research-episodes-v2';
@@ -38,7 +39,7 @@ export function parseTrajectoryInput(raw: unknown): TrajectoryInput {
   const sources = list(x.sources, 'sources').map(rawSource => {
     const r = object(rawSource, 'source');
     const hash = str(r.artifact_sha256, 'artifact_sha256');
-    if (!/^[a-f0-9]{64}$/.test(hash)) throw new EffectRuntimeRequestError('artifact_sha256 must be a sha256 hex digest');
+    if (!BARE_SHA256_PATTERN.test(hash)) throw new EffectRuntimeRequestError('artifact_sha256 must be a sha256 hex digest');
     return {id: str(r.id, 'source.id'), artifact: str(r.artifact, 'artifact'), artifact_sha256: hash,
       first_line: integer(r.first_line, 'first_line', 1), text: str(r.text, 'source.text')};
   });

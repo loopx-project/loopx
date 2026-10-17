@@ -584,12 +584,20 @@ def test_receipt_case_collection_does_not_depend_on_the_collecting_process_clock
         "test_global_risks_discloses_unreadable_host_poll_receipts_and_recovers"
     )
     collections = []
-    for clock in ("2026-01-01T00:00:00Z", "2026-01-01T00:00:01Z"):
+    for index, clock in enumerate(("2026-01-01T00:00:00Z", "2026-01-01T00:00:01Z")):
+        # A collector must not observe routes created by its still-running
+        # parent test as writes to the collector's own default namespace.
+        home = tmp_path / f"collector-home-{index}"
+        temporary = tmp_path / f"collector-tmp-{index}"
+        home.mkdir()
+        temporary.mkdir()
         result = subprocess.run(
             [sys.executable, "-m", "pytest", target, "--collect-only", "-q",
              "-o", "addopts=", "-p", "receipt_collection_clock"],
             cwd=Path(__file__).resolve().parents[1],
             env={**os.environ, "LOOPX_RECEIPT_COLLECTION_CLOCK": clock,
+                 "HOME": str(home), "USERPROFILE": str(home),
+                 "TMPDIR": str(temporary), "TEMP": str(temporary), "TMP": str(temporary),
                  "PYTHONPATH": os.pathsep.join((str(tmp_path), os.environ.get("PYTHONPATH", "")))},
             capture_output=True, text=True, timeout=60,
         )

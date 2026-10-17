@@ -242,16 +242,21 @@ def test_native_completion_refuses_missing_result_and_accepts_exact_observation(
             from loopx.todos import update_goal_todo
             from loopx.capabilities.explore.composition_frontier import project_live_explore_composition_frontier
             from loopx.control_plane.work_items.semantic_replan_writeback import qualify_replan_writeback
-            from loopx.control_plane.work_items.task_lease import release_task_lease
-            with pytest.raises(LocalCoordinationAuthorityUnavailable, match="Release the active execution lease"):
+            before_pause = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal, include_leases=True)
+            with pytest.raises(LocalCoordinationAuthorityUnavailable):
                 update_goal_todo(registry_path=registry, goal_id=goal, todo_id="todo_joint", agent_id=agent,
-                    status="blocked", resume_when=f"todo_done:{blocker['todo_id']}", reason="Await the bounded dependency.")
-            released = release_task_lease(registry_path=registry, runtime_root=runtime, goal_id=goal,
-                todo_id="todo_joint", owner=agent, idempotency_key="native-research-proof",
-                expected_version=acquired["lease"]["version"])
-            assert released["ok"]
-            update_goal_todo(registry_path=registry, goal_id=goal, todo_id="todo_joint", agent_id=agent,
+                    status="blocked", resume_when=f"todo_done:{blocker['todo_id']}", reason="Await the bounded dependency.",
+                    task_lease_idempotency_key="native-research-proof",
+                    task_lease_expected_version=acquired["lease"]["version"] + 1)
+            assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal, include_leases=True) == before_pause
+            # The owner's proof-free pause retires its lease in the same CAS.
+            paused = update_goal_todo(registry_path=registry, goal_id=goal, todo_id="todo_joint", agent_id=agent,
                 status="blocked", resume_when=f"todo_done:{blocker['todo_id']}", reason="Await the bounded dependency.")
+            assert paused["blocked_lifecycle_transition"]["lease_retirement"] == "released"
+            retained = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal, include_leases=True)
+            old_execution = next(lease for lease in retained["leases"] if lease["todo_id"] == "todo_joint")
+            assert old_execution["status"] == "released"
+            assert old_execution["version"] == acquired["lease"]["version"]
             source = json.loads(registry.read_text())["goals"][0]
             def live_deferred():
                 return project_live_explore_composition_frontier(runtime_root=runtime, goal_id=goal,

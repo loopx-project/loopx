@@ -161,6 +161,7 @@ CONSUMER_MODULES = (
     "loopx.capabilities.benchmark_toolkit.integrity",
     "loopx.capabilities.benchmark_toolkit.runtime_continuity",
     "loopx.capabilities.benchmark_toolkit.study_projection",
+    "loopx.capabilities.benchmark_toolkit.trajectory_assessment_store",
     "loopx.capabilities.content_ops.item_lifecycle",
     "loopx.capabilities.deep_research.runtime",
     "loopx.capabilities.issue_fix.outcome_projection",

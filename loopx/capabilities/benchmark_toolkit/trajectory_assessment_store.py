@@ -10,8 +10,8 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
-import re
 
+from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from ...control_plane.effect_runtime import effect_runtime_result
 from ...file_lock import exclusive_file_lock
 from .trajectory_assessment import _digest, _write, execute, read_job, request_cancel
@@ -28,7 +28,7 @@ class PackUnavailable(ValueError):
 
 
 def _opaque(value: str) -> str:
-    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+    if not isinstance(value, str) or not BARE_SHA256_PATTERN.fullmatch(value):
         raise PackUnavailable("invalid_identifier")
     return value
 
@@ -88,7 +88,7 @@ def _index(owner: Path) -> dict:
     path = owner / "packs.json"
     if not path.exists():
         return {"default_pack_id": None, "pack_ids": []}
-    value = json.loads(path.read_text())
+    value = json.loads(path.read_text(encoding="utf-8"))
     for pack_id in value["pack_ids"]:
         _opaque(pack_id)
     if value["default_pack_id"] not in value["pack_ids"]:
@@ -107,7 +107,7 @@ def _resolve(
     path = owner / "packs" / f"{pack_id}.json"
     if path.is_symlink():
         raise PackUnavailable("invalid_registration")
-    record = json.loads(path.read_text())
+    record = json.loads(path.read_text(encoding="utf-8"))
     if (
         record["owner_goal_id"] != owner_goal_id
         or _pack_id(owner_goal_id, record) != pack_id
@@ -159,7 +159,7 @@ def register_pack(
     prepared = effect_runtime_result(
         "benchmark.trajectory.prepare",
         {
-            "input": json.loads(input_path.read_text()),
+            "input": json.loads(input_path.read_text(encoding="utf-8")),
             "config": config or DEFAULT_CONFIG,
         },
     )
@@ -180,7 +180,7 @@ def register_pack(
         index = _index(owner)
         path = owner / "packs" / f"{pack_id}.json"
         if path.exists():
-            if json.loads(path.read_text()) != record:
+            if json.loads(path.read_text(encoding="utf-8")) != record:
                 raise PackUnavailable("registration_conflict")
         else:
             _write(path, record)
@@ -286,7 +286,9 @@ def inspect_pack(
                     {
                         **prepared,
                         "output": json.loads(
-                            (directory / "model-output.json").read_text()
+                            (directory / "model-output.json").read_text(
+                                encoding="utf-8"
+                            )
                         ),
                     },
                 )

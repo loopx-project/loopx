@@ -27,6 +27,7 @@ import {
   fetchGoalChannelTargets,
   fetchLarkConnections,
   fetchLoopXMode,
+  loadTypedAction,
   previewTypedAction,
   setupGoalChannel,
   stewardPrompts,
@@ -1840,13 +1841,17 @@ export function PersonalWorkspacePage({
     options: {
       keepGoalSelected?: boolean;
       lifecycleProjection?: GoalLifecycleProjection;
-      presentation?: "drawer" | "feedback";
+      presentation?: "drawer" | "feedback" | "inline";
     } = {},
   ) {
-    if (proposal.reviewPlan && !proposal.reviewPlan.canApply) return;
+    if (proposal.reviewPlan && !proposal.reviewPlan.canApply) return proposal;
     if (proposal.actionKind === "team.plan" && proposal.status === "error"
-      && !proposal.reviewPlan?.retryOriginal) return;
-    const showDrawer = options.presentation !== "feedback";
+      && !proposal.reviewPlan?.retryOriginal) return proposal;
+    const matchesTodoTarget = (observed: TypedActionProposal) => proposal.actionKind !== "todo.update" || (
+      observed.normalized_parameters.goal_id === proposal.goalId
+      && (!proposal.sourceRequest || observed.normalized_parameters.todo_id === proposal.sourceRequest.normalizedParameters.todo_id)
+    );
+    const showDrawer = options.presentation !== "feedback" && options.presentation !== "inline";
     const inferredLifecycleChange = proposal.actionKind === "goal.lifecycle"
       && proposal.goalId
       && (proposal.lifecycleOperation === "stop" || proposal.lifecycleOperation === "resume")
@@ -1885,11 +1890,12 @@ export function PersonalWorkspacePage({
         if (proposal.actionKind === "todo.update") {
           void reconcileStatus(proposal.goalId ? [proposal.goalId] : undefined);
         }
-        return;
+        return applied;
       }
       const result = await applyTypedAction(proposal.previewId);
       if (result.proposal.proposal_id !== proposal.previewId
         || result.proposal.action_kind !== proposal.actionKind
+        || !matchesTodoTarget(result.proposal)
         || (proposal.actionKind === "goal.lifecycle" && (
           result.proposal.normalized_parameters.goal_id !== proposal.goalId
           || lifecycleOperationFor(result.proposal) !== proposal.lifecycleOperation
@@ -1904,7 +1910,7 @@ export function PersonalWorkspacePage({
         if (lifecycleChange) {
           callbacks.onGoalActivationStateChange?.(lifecycleChange.goalId, lifecycleChange.previous);
         }
-        setSelection({ item: applied, kind: "proposal" });
+        if (options.presentation !== "inline") setSelection({ item: applied, kind: "proposal" });
         setActionFeedback(
           result.proposal.status === "stale"
             ? t("feedback.stale")
@@ -1912,7 +1918,7 @@ export function PersonalWorkspacePage({
               ? t("proposal.teamPlan.retryUnavailable")
             : t(`actionReview.${applied.reviewPlan!.reason}`),
         );
-        return;
+        return applied;
       }
       setActionFeedback(t("feedback.completed", { title: applied.title }));
       // Keep the success receipt visible for reviewed actions. Direct actions
@@ -1929,6 +1935,7 @@ export function PersonalWorkspacePage({
       if (applied.actionKind === "goal.lifecycle" || applied.actionKind === "gate.resolve" || applied.actionKind === "todo.update") {
         void reconcileStatus(applied.goalId ? [applied.goalId] : undefined);
       }
+      return applied;
     } catch (error) {
       if (lifecycleChange) {
         callbacks.onGoalActivationStateChange?.(lifecycleChange.goalId, lifecycleChange.previous);
@@ -1955,13 +1962,13 @@ export function PersonalWorkspacePage({
         setProposals((current) => ({ ...current, [proposal.previewId]: gated }));
         // A newly discovered authority gate always deserves review, including
         // when the action started on the direct path.
-        setSelection({ item: gated, kind: "proposal" });
+        if (options.presentation !== "inline") setSelection({ item: gated, kind: "proposal" });
         setActionFeedback(t("feedback.gateRequired", { summary: gated.gate.summary }));
         if (proposal.actionKind === "goal.create" && proposal.goalId) {
           callbacks.onRefresh?.();
           selectGoal(proposal.goalId);
         }
-        return;
+        return gated;
       }
       const stale = error instanceof ChatApiError && isStaleActionFailure(error.payload);
       const readbackMismatch = error instanceof ChatApiError && error.payload.error_code === "action_response_mismatch";
@@ -1970,24 +1977,25 @@ export function PersonalWorkspacePage({
       const returned = error instanceof ChatApiError
         ? typedActionProposalSchema.safeParse(error.payload.proposal) : null;
       let stored = returned?.success ? returned.data : undefined;
-      if (!stored && ["team.plan", "goal.create"].includes(proposal.actionKind) && !readbackMismatch) {
+      if (!stored && ["team.plan", "goal.create", "todo.update"].includes(proposal.actionKind) && !readbackMismatch) {
         const readback = await actionReadback.refetch();
         // Query errors retain cached data; it cannot certify this attempt.
         if (readback.isSuccess) stored = readback.data?.find(item => item.proposal_id === proposal.previewId);
       }
       if (stored?.proposal_id === proposal.previewId && stored.action_kind === proposal.actionKind
-        && (!["team.plan", "goal.create"].includes(proposal.actionKind) || stored.normalized_parameters.goal_id === proposal.goalId)) {
+        && matchesTodoTarget(stored)
+        && (!["team.plan", "goal.create", "todo.update"].includes(proposal.actionKind) || stored.normalized_parameters.goal_id === proposal.goalId)) {
         await actionReadback.acceptProposal(stored);
         const observed = workspaceProposal(stored, t);
         const reconciled = { ...observed, errorMessage: observed.status === "error"
           ? error instanceof Error ? error.message : String(error) : undefined };
         setProposals(current => ({ ...current, [proposal.previewId]: reconciled }));
-        setSelection({ item: reconciled, kind: "proposal" });
+        if (options.presentation !== "inline") setSelection({ item: reconciled, kind: "proposal" });
         if (observed.reviewPlan?.creationProgress?.goalId) void callbacks.onRefresh?.();
         setActionFeedback(stored.status === "stale" ? t("feedback.stale")
           : observed.reviewPlan?.interaction === "completed" ? t("feedback.completed", { title: observed.title })
           : t("feedback.executionFailed", { error: error instanceof Error ? error.message : String(error) }));
-        return;
+        return reconciled;
       }
       const failed = {
         ...proposal,
@@ -1998,8 +2006,9 @@ export function PersonalWorkspacePage({
         status: (stale ? "stale" : "error") as "stale" | "error",
       };
       setProposals((current) => ({ ...current, [proposal.previewId]: failed }));
-      setSelection({ item: failed, kind: "proposal" });
+      if (options.presentation !== "inline") setSelection({ item: failed, kind: "proposal" });
       setActionFeedback(t("feedback.executionFailed", { error: failed.errorMessage }));
+      return failed;
     }
   }
 
@@ -2036,7 +2045,30 @@ export function PersonalWorkspacePage({
       else setSelectedGoalTab("files");
       callbacks.onOpenOutput?.(output);
     },
-    onApplyProposal: applyProposal,
+    onApplyProposal: async proposal => { await applyProposal(proposal); },
+    onSaveTodoRequirements: async (todo, text, basis, retry) => {
+      if (retry?.status === "applied") return retry;
+      let original = retry;
+      if (retry) {
+        const stored = await loadTypedAction(retry.previewId);
+        if (stored.action_kind !== "todo.update" || stored.normalized_parameters.goal_id !== todo.goalId
+          || stored.normalized_parameters.todo_id !== (todo.sourceTodoId ?? todo.todoId)
+          || stored.normalized_parameters.text !== text) {
+          throw new ChatApiError(t("actionReview.targetChanged"), {error_code: "action_response_mismatch"});
+        }
+        await actionReadback.acceptProposal(stored);
+        original = {...workspaceProposal(stored, t), sourceRequest: retry.sourceRequest};
+        if (original.status === "applied") return original;
+      }
+      const proposal = original ?? await createPreview({actionKind: "todo.update",
+        context: {goal_id: todo.goalId, kind: "todo", todo_id: todo.sourceTodoId ?? todo.todoId},
+        idempotencyKey: `workspace-todo-requirements-${todo.todoId}-${Date.now().toString(36)}`,
+        normalizedParameters: {goal_id: todo.goalId, todo_id: todo.sourceTodoId ?? todo.todoId,
+          ...(todo.claimedBy ? {agent_id: todo.claimedBy} : {}), operation: "edit", text, review_basis: basis},
+        summary: t("drawer.requirementsSave"),
+      }, {select: false});
+      return applyProposal(proposal, {presentation: "inline"});
+    },
     onExplainDecision: callbacks.onExplainDecision ?? ((attention) => draftAttentionMessage(attention, "explain")),
     onReplyToAttention: callbacks.onReplyToAttention ?? draftAttentionMessage,
     onCancelProposal: async (proposal) => {

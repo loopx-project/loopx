@@ -299,6 +299,9 @@ def test_real_backup_recovers_readable_authority_after_original_sources_disappea
     assert code == 0, captured
     captured_position = captured["authority_read"]
     assert captured_position["cursor"] == "2"
+    [capture] = json.loads(manifest.read_text())["execution"]["authority_captures"]
+    assert capture["archive"]["source_provider_revision"] == captured_position["provider_revision"]
+    assert capture["archive"]["commits"] == captured_position["cursor"]
     # A later real source commit must not become this backup's recovery point.
     code, later = _cli(*source_args, "todo", "add", "--goal-id", "goal-a", "--role", "agent",
                        "--claimed-by", "agent-a", "--operation-id", "after-backup",

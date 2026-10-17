@@ -192,7 +192,7 @@ export function registerNativePlanningUpdateConformance(provider: string, factor
     });
   }
 
-  test(`${provider}: production-scale planning edit preserves unrelated state and active lease`, async t => {
+  test(`${provider}: production-scale copy preserves execution; requirement revision retires only its own lease`, async t => {
     const {store} = await factory(t);
     const fixture = productionScaleCoordinationFixture("planning-scale");
     assert.equal((await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
@@ -218,7 +218,6 @@ export function registerNativePlanningUpdateConformance(provider: string, factor
     for (const [operation_id, change] of [
       ["partial-proof", {lease_idempotency_key: null}],
       ["status-change", {planning_intent: {status: "deferred", resume_when: "pr_merged:#123"}}],
-      ["requirements-change", {planning_intent: {required_write_scopes: ["new/**"]}}],
       ["wrong-owner", {actor_agent_id: "agent-b"}],
     ] as const) {
       const result = await executeCoordinationTodoUpdate(store, {...request, operation_id, ...change});
@@ -227,6 +226,17 @@ export function registerNativePlanningUpdateConformance(provider: string, factor
       assert.deepEqual(await head(store), after);
       assert.equal((await store.readReceipt(operation_id)).status, "missing");
     }
+    const revised = await executeCoordinationTodoUpdate(store, {...request, operation_id: "requirements-change",
+      planning_intent: {required_write_scopes: ["new/**"]}});
+    assert.equal(revised.status, "applied", JSON.stringify(revised));
+    assert.equal((revised.work_requirements_transition as JsonObject).execution_authority_granted, false);
+    const final = await head(store);
+    assert.deepEqual((final.head.todos as JsonObject[]).filter(todo => todo.todo_id !== request.todo_id),
+      records.filter(todo => todo.todo_id !== request.todo_id));
+    const leases = final.head.leases as JsonObject[];
+    assert.equal(leases.find(lease => lease.todo_id === request.todo_id)!.status, "released");
+    assert.deepEqual(leases.filter(lease => lease.todo_id !== request.todo_id),
+      (after.head.leases as JsonObject[]).filter(lease => lease.todo_id !== request.todo_id));
   });
 
   for (const native of [false, true]) test(`${provider}: update intent matrix preserves compatibility clears and user scope`, async t => {
