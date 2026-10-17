@@ -369,6 +369,11 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
       pending.push(read);
       failures.push({source: read.source ?? read.kind, command: read.command,
         error_code: "context_source_unavailable", instruction: "Recover source and rerun the guard; cached context cannot authorize work."});
+    } else if (content!.read_complete === false) {
+      // A registered private agenda makes unfinished work visible each Turn,
+      // but cannot fulfill the full source read or replace its requirements.
+      sources.push({...read, content: content!});
+      pending.push(read);
     } else if (read.source === "goal_state") {
       // This legacy document also contains other tasks and historical evidence.
       // Checking its availability does not fulfill model consumption; retain the
