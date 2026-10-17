@@ -819,3 +819,51 @@ def codex_hook_journey(tmp_path, worker, notify, allow_api):
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+def test_checkpoint_storage_policy_is_installed_in_real_worker(tmp_path, agent_image, monkeypatch):
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, SForgeEnvironment
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend
+    from benchmark.edgebench.prompts import native_task_instructions, checkpoint_research_instructions
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-unused-credential")
+    request = {"destination": "/logs/agent/checkpoints", "point_metadata": {},
+               "components": [{"id": "workspace", "source_path": "/task"}]}
+    policy = native_task_instructions(["solver.py"], submission_cooldown=3600,
+        eval_interval=0, internet=False, selection="score_first", score_direction="maximize")
+    policy += checkpoint_research_instructions(request, "/task")
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile="heartbeat-explore", cwd="/task", checkpoint_request=json.dumps(request).encode(),
+        workspace_instructions=policy, feedback_prompt=policy + "---\n\nOriginal acceptance.\n")
+    backend = RecordingDockerBackend(log_dir=tmp_path / "collected",
+        logger=logging.getLogger("storage-policy-smoke"), oauth_proxy=True)
+    handle = backend.create_container(agent_image.id, "storage-policy-" + uuid.uuid4().hex[:10],
+                                      cpu_limit=1, mem_limit="256m")
+    backend.start_container(handle)
+    try:
+        result = backend.exec_run(handle, ["sh", "-c",
+            "mkdir /task && printf 'Original task instructions.' > /task/AGENTS.md && chown -R agent:agent /task"], user="root")
+        assert result.exit_code == 0
+        worker.environment = SForgeEnvironment(backend, handle)
+        worker.log_dir = tmp_path
+        # Production prompt/AGENTS installation precedes the missing runtime
+        # guard. No bootstrap, native session or model is started by this test.
+        with pytest.raises(RuntimeError, match="installation hook"):
+            worker.format_run_cmd("/task/prompt.md")
+        agents = backend.exec_run(handle, ["cat", "/task/AGENTS.md"], user="agent")
+        prompt = backend.exec_run(handle, ["cat", "/task/prompt.md"], user="agent")
+        assert agents.exit_code == prompt.exit_code == 0
+        assert agents.output.startswith("Original task instructions.")
+        assert agents.output.endswith(policy)
+        assert prompt.output == worker.feedback_prompt
+        assert (tmp_path / "workspace-AGENTS.md").read_text() == agents.output
+        # Reapplying matching policy is idempotent; conflicting installed text
+        # fails before replacing the original task instructions.
+        worker._install_workspace_instructions()
+        worker.workspace_instructions += "Changed policy"
+        with pytest.raises(RuntimeError, match="conflicting or partial"):
+            worker._install_workspace_instructions()
+        assert backend.exec_run(handle, ["cat", "/task/AGENTS.md"], user="agent").output == agents.output
+    finally:
+        backend.cleanup_container(handle)
+        backend.client.close()

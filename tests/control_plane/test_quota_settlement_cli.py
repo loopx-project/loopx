@@ -1801,10 +1801,12 @@ def test_scheduler_cache_misses_after_goal_configuration_changes_without_run(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("large_history", [False, True])
 def test_typed_blocked_retry_with_peer_hard_lease(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     provider: str,
+    large_history: bool,
 ) -> None:
     """A peer's overlapping execution lease must not strand exact closeout."""
     from canonical_authority_fixture import (
@@ -1832,6 +1834,15 @@ def test_typed_blocked_retry_with_peer_hard_lease(
     todos = listed["todos"]
     for todo in todos:
         todo["required_write_scopes"] = ["src/**"]
+    if large_history:
+        # Complete authority remains large; display/prose bytes must not be
+        # retransmitted to the wait qualifier or removed from persisted Todos.
+        todos.extend({"todo_id": f"todo_history_{index:04d}", "role": "agent",
+                      "schema_version": "todo_item_v0", "done": True, "source_section": "Agent Todo",
+                      "status": "done", "task_class": "advancement_task", "archive_state": "active",
+                      "text": "Previously validated work.", "note": "Historical details. " * 500}
+                     for index in range(300))
+        assert len(json.dumps(todos).encode()) > 2 * 1024 * 1024
     projection = build_todo_runtime_shadow_projection(
         goal_id=GOAL_ID, todos=todos, handoff_mode="hard_lease", leases=[],
     )
@@ -1916,6 +1927,8 @@ def test_typed_blocked_retry_with_peer_hard_lease(
     assert not original.get("resume_when")
     assert original["completion_validation_required"] is True
     assert original["completion_validation_sha256"]
+    if large_history:
+        assert next(todo for todo in after["todos"] if todo["todo_id"] == "todo_history_0299")["note"] == todos[-1]["note"]
 
     next_rc, next_turn = _run_cli(
         registry_path, runtime, "quota", "should-run", "--codex-app",
@@ -1936,6 +1949,203 @@ def test_typed_blocked_retry_with_peer_hard_lease(
     assert pending["todo_id"] == TODO_ID
     assert pending["execution_authority_granted"] is False
     assert next_turn["scheduler_hint"]["app_automation"]["recommended_interval_minutes"] <= 5
+
+
+@pytest.mark.parametrize("kind", ["todo_done", "monitor_changed", "resume_at", "implicit", "monitor"])
+def test_blocked_wait_transports_complete_lifecycle_facts_without_prose(
+    kind: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.control_plane import effect_runtime
+    from loopx.control_plane.quota.blocked_retry import require_blocked_retry_wait
+
+    observed = "2026-01-01T00:00:00Z"
+    due = "2026-01-01T00:05:00Z"
+    waiting = {"todo_id": TODO_ID, "role": "agent", "status": "open",
+               "task_class": "advancement_task", "archive_state": "active",
+               "claimed_by": AGENT_ID, "note": "研究记录" * 250_000}
+    target = {"todo_id": ALTERNATIVE_TODO_ID, "role": "agent", "status": "open",
+              "task_class": "advancement_task", "archive_state": "active"}
+    if kind in {"todo_done", "monitor_changed", "resume_at"}:
+        resume = f"resume_at:{due}" if kind == "resume_at" else f"{kind}:{ALTERNATIVE_TODO_ID}"
+        waiting.update(resume_when=resume, resume_ready=False,
+                       resume_condition={"schema_version": "todo_resume_condition_v0", "kind": kind,
+                                         "resume_when": resume, "satisfied": False,
+                                         "target_todo_id": ALTERNATIVE_TODO_ID, "target_status": "open",
+                                         "target_task_class": "advancement_task", "target_archive_state": "active"})
+        if kind == "monitor_changed":
+            target.update(task_class="continuous_monitor", material_change_generation=7)
+            waiting["resume_monitor_generation"] = 7
+            waiting["resume_condition"].update(target_task_class="continuous_monitor",
+                                                material_change_generation=7, baseline_generation=7)
+    elif kind == "monitor":
+        waiting.update(task_class="continuous_monitor", last_checked_at=observed, next_due_at=due,
+                       result_hash="sha256:previous", material_change=False, material_change_generation=7,
+                       cadence="5m", expires_at="2026-01-02T00:00:00Z", watch_only=True)
+    source = {"agent_todos": {"items": [waiting, target]}, "user_todos": {"items": []}}
+    before = json.dumps(source, sort_keys=True)
+    invoke = effect_runtime._request_with_info
+    requests = []
+
+    def observe_request(info, **kwargs):
+        if kwargs["method"] == "quota.settlement.read":
+            requests.append(kwargs["params"])
+        return invoke(info, **kwargs)
+
+    monkeypatch.setattr(effect_runtime, "_request_with_info", observe_request)
+    result = require_blocked_retry_wait(source, todo_id=TODO_ID, observed_at=observed,
+                                       allow_turn_settlement_retry=kind == "implicit")
+    assert len(requests) == 1
+    assert len(json.dumps(requests[0]).encode()) < 4_096
+    assert {row["todo_id"] for row in requests[0]["todos"]} == {TODO_ID, ALTERNATIVE_TODO_ID}
+    assert json.dumps(source, sort_keys=True) == before
+    assert result["todo_id"] == TODO_ID
+    if kind in {"todo_done", "monitor_changed"}:
+        assert result["schema_version"] == "quota_blocked_causal_wait_v0"
+        assert result["target_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+        assert result["waiting_todo"]["resume_when"] == waiting["resume_when"]
+    elif kind == "monitor":
+        assert result["schema_version"] == "quota_monitor_unavailable_v0"
+        assert result["monitor_todo"] == {k: v for k, v in waiting.items() if k != "note"}
+    else:
+        assert result["schema_version"] == "quota_blocked_retry_v0"
+        assert result["due_at"] == due
+
+
+def test_settlement_read_snapshot_is_explicit_and_preserves_complete_facts() -> None:
+    from loopx.control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
+
+    request = {"schema_version": "loopx_quota_blocked_wait_request_v0",
+               "todos": [{"todo_id": TODO_ID, "role": "agent", "status": "open",
+                          "task_class": "advancement_task", "note": "Complete source. " * 150_000}],
+               "todo_id": TODO_ID, "observed_at": "2026-01-01T00:00:00Z",
+               "allow_turn_settlement_retry": True}
+    assert len(json.dumps(request).encode()) > 2 * 1024 * 1024
+    with pytest.raises(EffectRuntimeRejected, match="request is oversized"):
+        effect_runtime_result("quota.settlement.read", request)
+    result = effect_runtime_result("quota.settlement.read", request, large_local_snapshot=True)
+    assert result == {"schema_version": "quota_blocked_retry_v0", "source": "turn_settlement",
+                      "todo_id": TODO_ID, "resume_when": "resume_at:2026-01-01T00:05:00Z",
+                      "observed_at": "2026-01-01T00:00:00Z", "due_at": "2026-01-01T00:05:00Z"}
+    with pytest.raises(EffectRuntimeRejected, match="unavailable for this method"):
+        effect_runtime_result("runtime.ping", {}, large_local_snapshot=True)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_large_goal_preserves_bound_wait_recovery_and_once_only_settlement(
+    tmp_path: Path, provider: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    rc, listed = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
+    assert rc == 0, listed
+    history = [{"schema_version": "todo_item_v0", "todo_id": f"todo_history_{i:04d}",
+                "role": "agent", "status": "done", "done": True, "task_class": "advancement_task",
+                "archive_state": "active", "source_section": "Agent Todo",
+                "text": "Previously validated work.", "note": "Historical details. " * 500}
+               for i in range(300)]
+    source = [*listed["todos"], *history]
+    assert len(json.dumps(source).encode()) > 2 * 1024 * 1024
+    initialize_canonical_authority(runtime, GOAL_ID, build_todo_runtime_shadow_projection(
+        goal_id=GOAL_ID, todos=source, handoff_mode="soft_claim",
+    ), state_path=state, provider=provider)
+    guard_args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID)
+    binding = ("--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+               "--turn-instance-id", "turn-large-causal-original")
+    rc, guard = _run_cli(registry, runtime, *guard_args, *binding)
+    assert rc == 0 and guard["heartbeat_receipt"]["closeout_required"], guard
+    rc, wait = _run_cli(registry, runtime, "todo", "update", "--goal-id", GOAL_ID,
+                        "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+                        "--resume-when", f"todo_done:{ALTERNATIVE_TODO_ID}",
+                        "--successor-todo-id", ALTERNATIVE_TODO_ID)
+    assert rc == 0, json.dumps(wait)
+    # The receipt-bound recovery adapter and the blocked writeback adapter must
+    # consume the same complete dependency graph, not a display-sized prefix.
+    rc, recovery = _run_cli(registry, runtime, *guard_args, *binding)
+    assert rc == 0, recovery
+    assert recovery["unsettled_host_turn_recovery"]["repair"] == "blocked_writeback"
+    assert recovery["unsettled_host_turn_recovery"]["binding_id"] == TODO_ID
+    rc, foreign = _run_cli(registry, runtime, *guard_args, *binding[:-3],
+                           ALTERNATIVE_TODO_ID, *binding[-2:])
+    assert rc == 1 and foreign["error_code"] == "heartbeat_receipt_identity_conflict", foreign
+    refresh = ("refresh-state", "--goal-id", GOAL_ID, *binding,
+               "--classification", "large_causal_wait", "--delivery-batch-scale", "single_surface",
+               "--delivery-outcome", "outcome_gap", "--progress-result-class", "blocked",
+               "--progress-blocker-id", ALTERNATIVE_TODO_ID, "--progress-evidence-id", "evidence:pending-dependency",
+               "--no-global-sync", "--suppress-external-sinks")
+    for replay in (False, True):
+        rc, closed = _run_cli(registry, runtime, *refresh, cwd=project)
+        assert rc == 0, closed
+        assert closed["settlement_progress"]["closeout_kind"] == "typed_blocked_writeback_no_spend"
+        if replay:
+            assert closed["idempotent_replay"] is True
+    assert _classification_count(runtime, "large_causal_wait") == 1
+    assert _spend_run_count(runtime) == 0
+    successor = ("--agent-id", AGENT_ID, "--todo-id", ALTERNATIVE_TODO_ID,
+                 "--turn-instance-id", "turn-large-causal-successor")
+    rc, next_turn = _run_cli(registry, runtime, *guard_args, *successor)
+    assert rc == 0, next_turn
+    assert next_turn["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    rc, advanced = _run_cli(registry, runtime, "refresh-state", "--goal-id", GOAL_ID,
+                            *successor, "--classification", "large_goal_validated_progress",
+                            "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+                            "--delivery-boundary", "in_flight_continuation",
+                            "--no-global-sync", "--suppress-external-sinks", cwd=project)
+    assert rc == 0, advanced
+    spend = ("quota", "spend-slot", "--goal-id", GOAL_ID, *successor,
+             "--slots", "1", "--source", "heartbeat", "--execute")
+    for replay in (False, True):
+        rc, spent = _run_cli(registry, runtime, *spend)
+        assert rc == 0, spent
+        assert spent.get("idempotent_replay", False) is replay
+    assert _spend_run_count(runtime) == 1
+    rc, historical = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID,
+                              "--todo-id", history[-1]["todo_id"])
+    assert rc == 0 and historical["todo"]["note"] == history[-1]["note"], historical
+
+
+@pytest.mark.parametrize("invalid", ["cycle", "duplicate", "missing_target", "completed", "stale_generation"])
+def test_compact_blocked_wait_keeps_authority_rejections(invalid: str) -> None:
+    from loopx.control_plane.quota.blocked_retry import require_blocked_retry_wait
+
+    waiting = {"todo_id": TODO_ID, "role": "agent", "status": "open", "archive_state": "active",
+               "task_class": "advancement_task", "resume_when": f"todo_done:{ALTERNATIVE_TODO_ID}",
+               "resume_ready": False, "note": "Historical details. " * 150_000,
+               "resume_condition": {"schema_version": "todo_resume_condition_v0", "kind": "todo_done",
+                                    "resume_when": f"todo_done:{ALTERNATIVE_TODO_ID}", "satisfied": False,
+                                    "target_todo_id": ALTERNATIVE_TODO_ID, "target_status": "open",
+                                    "target_task_class": "advancement_task", "target_archive_state": "active"}}
+    target = {"todo_id": ALTERNATIVE_TODO_ID, "role": "agent", "status": "open",
+              "archive_state": "active", "task_class": "advancement_task"}
+    rows = [waiting, target]
+    if invalid == "cycle":
+        target["resume_when"] = "todo_done:todo_transitive"
+        rows.append({**target, "todo_id": "todo_transitive", "resume_when": f"todo_done:{TODO_ID}"})
+        error = "dependency cycle"
+    elif invalid == "duplicate":
+        rows.append(dict(waiting))
+        error = "same unfinished Todo"
+    elif invalid == "missing_target":
+        rows.pop()
+        error = "registered pending causal target"
+    elif invalid == "completed":
+        waiting["status"] = "done"
+        error = "same unfinished Todo"
+    else:
+        waiting.update(resume_when=f"monitor_changed:{ALTERNATIVE_TODO_ID}", resume_monitor_generation=7)
+        waiting["resume_condition"].update(kind="monitor_changed", resume_when=waiting["resume_when"],
+                                            target_task_class="continuous_monitor", baseline_generation=7,
+                                            material_change_generation=6)
+        target.update(task_class="continuous_monitor", material_change_generation=7)
+        error = "stale causal target generation"
+    with pytest.raises(ValueError, match=error):
+        require_blocked_retry_wait({"agent_todos": {"items": rows}}, todo_id=TODO_ID,
+                                   observed_at="2026-01-01T00:00:00Z")
 
 
 def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(

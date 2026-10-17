@@ -233,6 +233,66 @@ async function fixture(t: TestContext, provider: typeof providers[number]): Prom
 for (const provider of providers) {
   const options = {skip: (provider === "postgresql" && !process.env.LOOPX_TEST_POSTGRES_URL) ||
     (provider === "sqlite" && !sqliteQualified)};
+  test(`${provider}: a scoped reviewed plan survives unrelated progress with exact native replay`, options, async t => {
+    const store = await fixture(t, provider); await seed(store);
+    const doc = {...document(), scope: {kind: "selected_work", todo_ids: ["todo_first"]},
+      bindings: [{todo_id: "todo_first", criterion_ids: ["prerequisite"]}]};
+    const request = await configureRequest(store, {document: doc});
+    const before = await head(store);
+    const preview = await configureGoalAcceptance(store, {...request, dry_run: true});
+    assert.deepEqual(await head(store), before);
+    assert.equal(typeof preview.review_context_digest, "string");
+    await update(store, "todo_second", {text: "Changed independent work"});
+    await update(store, "todo_first", {note: "Observed progress"});
+    const stable = await head(store);
+    assert.equal((await configureGoalAcceptance(store, request)).reason_code, "goal_acceptance_provider_revision_mismatch",
+      "without explicit reviewed context, original CAS remains strict");
+    assert.deepEqual(await head(store), stable);
+    const reviewed = {...request, review_context_digest: preview.review_context_digest};
+    const applied = await configureGoalAcceptance(store, reviewed);
+    assert.equal(applied.status, "applied");
+    const committed = await head(store);
+    await update(store, "todo_second", {note: "Later unrelated observation"});
+    const replay = await configureGoalAcceptance(store, reviewed);
+    assert.equal(replay.status, "replayed");
+    assert.equal(replay.review_context_digest, applied.review_context_digest, "receipt retains the original configured context");
+    assert.notEqual((await head(store)).provider_revision, committed.provider_revision);
+    assert.equal((await configureGoalAcceptance(store, {...reviewed,
+      document: {...doc, objective: "Different approved effect"}})).reason_code, "coordination_operation_identity_mismatch");
+    await assert.rejects(() => configureGoalAcceptance(store, {...reviewed, operation_id: randomUUID(), actor_agent_id: "worker"}));
+  });
+  test(`${provider}: reviewed context retains exact CAS against a competing write`, options, async t => {
+    const store = await fixture(t, provider); await seed(store);
+    const request = await configureRequest(store);
+    const preview = await configureGoalAcceptance(store, {...request, dry_run: true});
+    const commit = store.commitAuthority.bind(store);
+    store.commitAuthority = async value => {
+      store.commitAuthority = commit;
+      await update(store, "todo_first", {note: "A competing commit after admission"});
+      return commit(value);
+    };
+    assert.equal((await configureGoalAcceptance(store, {...request,
+      review_context_digest: preview.review_context_digest})).status, "conflict");
+    assert.equal((await store.readReceipt(String(request.operation_id))).status, "missing");
+    assert.equal((await head(store)).head.goal_acceptance, undefined);
+  });
+  test(`${provider}: reviewed context rejects covered work and current-contract changes without effects`, options, async t => {
+    const store = await fixture(t, provider); await seed(store);
+    const request = await configureRequest(store);
+    const preview = await configureGoalAcceptance(store, {...request, dry_run: true});
+    await update(store, "todo_first", {text: "New covered requirements"});
+    const changed = await head(store);
+    assert.equal((await configureGoalAcceptance(store, {...request,
+      review_context_digest: preview.review_context_digest})).reason_code, "goal_acceptance_review_context_mismatch");
+    assert.deepEqual(await head(store), changed);
+    const next = await configureRequest(store);
+    const nextPreview = await configureGoalAcceptance(store, {...next, dry_run: true});
+    assert.equal((await configureGoalAcceptance(store, {...next, operation_id: randomUUID()})).status, "applied");
+    const configured = await head(store);
+    assert.equal((await configureGoalAcceptance(store, {...next,
+      review_context_digest: nextPreview.review_context_digest})).reason_code, "goal_acceptance_review_context_mismatch");
+    assert.deepEqual(await head(store), configured);
+  });
   test(`${provider}: optional oracle source and exact versions survive canonical commit and revoke on changed work`, options, async t => {
     const store = await fixture(t, provider); await seed(store);
     const doc = normalizeGoalAcceptanceDocument({scope: {kind: "selected_work", todo_ids: ["todo_first"]}, objective: "Check exact output", non_goals: [],

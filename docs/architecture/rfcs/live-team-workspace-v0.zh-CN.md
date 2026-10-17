@@ -251,7 +251,8 @@ episode/口径、基线、窗口/成本与校准；产品侧细化选择和证�
 
 关闭场景或订阅可回到列表 / Chat，不能中断成员工作。不得删除 journal、重绑
 session、提高历史 receipt 的语义强度或重置 provider。默认概览 / 导航变化
-必须在 commit/push 前完成仓库要求的具体首屏预览审批；对另一处文案精简的
+遵循仓库首屏证据规则：具体首屏放入 PR description，范围内普通细化复用既有方向，
+不再单独增加确认轮次；对另一处文案精简的
 批准不等于批准本场景。
 
 ## 9. 验收
@@ -373,7 +374,7 @@ V5 候选目标在实验前定稿：前台动态目标 60fps / 优雅降级底�
 | L0 设计与可追溯性 | 可交互合成研究、源审计、可执行验收计划 | 设计评审；V1/V3 概念检查；不声明 live | Presentation；丢弃原型，保留决策 |
 | L1 一次真实纠偏 | 看懂异议→修订→独立验收→请求方采用，可查证据、干预并使用范围准确的停止控制 | 第 9 节首个真实结果；真实前端 + CLI 的 V1/V2/V3/V6 和本过程 V7 | Collaboration / evidence / control owner + Chat/packaged UI；关闭场景不暗示工作停止 |
 | L2 持续研究 | 原投研 Agent 完成 V4，用户回放纠偏→采用→下一轮 | runtime 凭证 / 准入修复及可用 L1；逐 profile 资格化后 V4 | 既有 R2/R3 owner；停新准入、保留结果 |
-| L3 语义缩放与规模 | 子团队、来源 / 结论版本对比、实测 10/30/100 展示负载下的聚焦回放 | typed 谱系 producer 与 L2；V5/V7、批准首屏编排 | Presentation + evidence owner；降细节 / 回退 renderer |
+| L3 语义缩放与规模 | 子团队、来源 / 结论版本对比、实测 10/30/100 展示负载下的聚焦回放 | typed 谱系 producer 与 L2；V5/V7、PR description 中的首屏编排证据 | Presentation + evidence owner；降细节 / 回退 renderer |
 
 **工作尺度地图分线。** 语义缩放需要先有一个可缩放的整 Goal 工作视图。本分线只
 渲染既有的类型化 Todo 关系，与 L1 并行，不推进 L1、V4 或 G1：

@@ -49,6 +49,14 @@ canonical journal，并重新核验来源与 Core。扫描前清除提示，避�
 反复重排尚未完成的工作。File/Core 与原生协议 fixture 单独验证这一调度路径，
 不替代安装态服务、provider 延迟、完整停止回执及 Web 首次可见结果的验收。
 
+原生 Lark 新发送和回执恢复在单次操作内，由同一来源校验核验当前 App、确切
+profile/chat/message 及 Core grant，与既有回复编辑路径一致。观测到的 Bot 名称
+必须匹配 Inbox 元数据；改名时仍先停止发送，刷新元数据后再继续。校验等待全部
+来源读取完成，并在返回前重读确切绑定。丢失读回保留同一 attempt，重新校验但不
+重复发送。操作之间不缓存身份或 grant；旧 membership-only callback 继续独立验证
+发送身份。File/Core fixture 验证这一传输事务及读取期间撤权，不认证安装态 provider
+延迟、完整停止 SLA 或 Web 首次可见结果。
+
 源码 canary 已验证打包页面的桌面/窄屏、撤权拒绝与恢复、慢会话期间另一 App 完成、
 后续消息持久排队、exact stop，以及重启后原会话恢复和已确认回复不重复发送。
 这些是合成 provider/协议验收；真实原生 Codex 另行验证独立线程与上下文隔离。

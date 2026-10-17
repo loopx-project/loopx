@@ -69,6 +69,17 @@ Future callback repeatedly reschedules unfinished work. File/Core and native
 protocol fixtures qualify this scheduling path separately from installed service,
 provider latency, complete stop acknowledgement and first-visible Web results.
 
+Native Lark sends and receipt recovery use one operation-bound source verifier
+for the current App, exact profile/chat/message and Core grant, as existing
+reply edits already do. The observed Bot name must match the Inbox metadata;
+a rename still holds the first send while metadata refreshes. The verifier
+joins source reads and rechecks the exact binding before returning. A lost
+readback retains the same attempt and re-verifies without resending. No identity
+or grant is cached across operations, and legacy membership-only callbacks
+retain separate sender authentication. File/Core fixtures qualify this transport
+transaction, including late revocation; they do not qualify installed provider
+latency, the complete stop SLA or first-visible Web results.
+
 The packaged settings journey, source revocation/recovery, duplicate events,
 native queue/stop and two-App isolation have synthetic-provider regression and
 browser coverage. A native Codex source canary separately qualifies distinct

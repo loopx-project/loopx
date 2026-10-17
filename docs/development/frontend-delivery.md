@@ -90,8 +90,13 @@ Carry the same task through these steps:
 Public PR evidence should fit in the existing summary/validation: one short
 before/after journey, a screenshot or clip for the affected visual composition,
 and the state readback plus tested revision and limits. Keep private messages,
-local paths and raw run logs out. The existing public first-screen preview gate
-still applies; do not add user approvals for routine implementation decisions.
+local paths and raw run logs out. Put the first viewport directly in the PR
+description, including its source/build boundary and a preview link when
+available; evidence only in chat or a PR comment is insufficient. Follow
+[First-Screen Review Evidence](../../AGENTS.md#first-screen-review-evidence).
+Routine authorized refinements and new commits do not require another user
+confirmation; ask only for a missing consequential decision or an explicitly
+reserved presentation approval. Keep merge/install/release authority separate.
 
 For Goal workspace composition, render before and after on the synthetic
 showcase workspace (`LOOPX_PERSONAL_WORKSPACE_SCENARIO=goal-showcase node

@@ -7,6 +7,7 @@ preparation only validates a document and cannot configure or run it.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, TypedDict
 from uuid import uuid4
@@ -23,6 +24,32 @@ class _AcceptanceRoute(TypedDict):
     registry_path: Path
     runtime_root: str
     goal_id: str
+
+
+def _review_basis(fingerprint: str) -> dict[str, str]:
+    # Historical proposals stored only a provider revision. New fingerprints
+    # carry that original CAS plus the opaque context digest made by TS.
+    if not fingerprint.startswith("{"):
+        return {"provider_revision": fingerprint}
+    value = json.loads(fingerprint)
+    if (not isinstance(value, dict) or set(value) != {"provider_revision", "review_context_digest"}
+            or any(not isinstance(item, str) or not item for item in value.values())):
+        raise ValueError("The saved acceptance review basis is invalid")
+    return value
+
+
+def _saved_check(store: ChatActionStore, parameters: dict[str, Any],
+                 operation_id: str) -> dict[str, Any] | None:
+    """Recover a journaled intent, never refresh its basis or lifecycle."""
+    for proposal in store.list(goal_id=parameters["goal_id"], context_kind="goal"):
+        if proposal["idempotency_key"] != operation_id:
+            continue
+        if (proposal["action_kind"] != "goal.acceptance.check"
+                or proposal["context"] != {"kind": "goal", "goal_id": parameters["goal_id"]}
+                or proposal["normalized_parameters"] != parameters):
+            raise ActionConflictError("The operation belongs to another check request")
+        return proposal
+    return None
 
 
 def prepare_acceptance_check(*, registry_path: Path, runtime_root: str | None,
@@ -46,10 +73,26 @@ def prepare_acceptance_check(*, registry_path: Path, runtime_root: str | None,
                                 registry_path=registry_path)
     parameters = service._normalize("goal.acceptance.check", {
         "goal_id": goal_id, "document": document, "prepared_by": agent_id})
-    proposal = service.preview({"action_kind": "goal.acceptance.check",
-        "summary": str(document.get("objective") or "Check the delivery"),
-        "idempotency_key": operation_id, "context": {"kind": "goal", "goal_id": goal_id},
-        "normalized_parameters": parameters})
+    proposal = _saved_check(service.store, parameters, operation_id)
+    recovered = proposal is not None
+    if proposal is None:
+        try:
+            proposal = service.preview({"action_kind": "goal.acceptance.check",
+                "summary": str(document.get("objective") or "Check the delivery"),
+                "idempotency_key": operation_id, "context": {"kind": "goal", "goal_id": goal_id},
+                "normalized_parameters": parameters})
+        except ActionConflictError:
+            # Another caller may have persisted this intent while the current
+            # caller read a newer basis. Keep the winner's immutable preview.
+            proposal = _saved_check(service.store, parameters, operation_id)
+            if proposal is None:
+                raise
+            recovered = True
+    if recovered:
+        # A historical proposal cannot stand in for an unavailable or retired
+        # canonical Goal. Reading current authority does not refresh its basis.
+        inspect_goal_acceptance(registry_path=registry_path, runtime_root=str(root),
+                                goal_id=goal_id, agent_id=agent_id)
     return {"ok": True, "goal_id": goal_id, "prepared": True, "executed": False,
             "proposal": proposal}
 
@@ -73,7 +116,9 @@ class GoalAcceptanceActionMixin:
         )
         if preview.get("status") != "planned":
             raise ValueError("The current Goal cannot prepare this check plan")
-        return before["provider_revision"], preview
+        fingerprint = json.dumps({"provider_revision": before["provider_revision"],
+            "review_context_digest": preview["review_context_digest"]}, sort_keys=True, separators=(",", ":"))
+        return fingerprint, preview
 
     def _apply_acceptance_check(self, proposal_id: str) -> dict[str, Any]:
         # The existing generic start_apply is replayable. Serialize this host
@@ -91,13 +136,15 @@ class GoalAcceptanceActionMixin:
             configured = steps.get("acceptance_configured")
             operation_id = f"acceptance-check:{proposal_id}"
             if configured is None:
-                expected = proposal["expected_state_fingerprint"]
+                basis = _review_basis(proposal["expected_state_fingerprint"])
+                expected = basis["provider_revision"]
                 try:
                     # Its native idempotency receipt also recovers a lost
                     # configuration response before the Chat checkpoint.
                     saved = configure_goal_acceptance(
                         **route, document=parameters["document"],
                         expected_provider_revision=expected,
+                        review_context_digest=basis.get("review_context_digest"),
                         operation_id=f"acceptance-configure:{proposal_id}", execute=True,
                     )
                 except ValueError:
@@ -108,7 +155,9 @@ class GoalAcceptanceActionMixin:
                         return {"proposal": stored, "turn": None}
                     raise
                 configured = {"provider_revision": saved["provider_revision"],
-                    "digest": saved["goal_acceptance_contract"]["digest"]}
+                    "digest": saved["goal_acceptance_contract"]["digest"],
+                    **({"review_context_digest": saved["review_context_digest"]}
+                       if "review_context_digest" in saved else {})}
                 self.store.save_checkpoint(proposal_id, step="acceptance_configured", receipt=configured)
             current = inspect_goal_acceptance(**route)
             contract = current["goal_acceptance_contract"]
@@ -121,13 +170,18 @@ class GoalAcceptanceActionMixin:
                 result = {**public_goal_acceptance(current), "executed": True,
                           "checks_passed": all(row["passed"] for row in observed["results"])}
             else:
-                if (current["provider_revision"] != configured["provider_revision"]
-                        or contract.get("digest") != configured["digest"]):
+                expected = configured["provider_revision"]
+                if "review_context_digest" in configured:
+                    fingerprint, preview = self._acceptance_preview(parameters)
+                    if _review_basis(fingerprint).get("review_context_digest") != configured["review_context_digest"]:
+                        raise ActionConflictError("The check basis changed. Prepare a current plan before executing.")
+                    expected = preview["provider_revision"]
+                elif (current["provider_revision"] != expected or contract.get("digest") != configured["digest"]):
                     raise ActionConflictError("The check basis changed. Prepare a current plan before executing.")
                 self.store.save_checkpoint(proposal_id, step="acceptance_check_started",
                                            receipt={"operation_id": operation_id})
                 result = verify_goal_acceptance(**route, execute=True,
-                    expected_provider_revision=configured["provider_revision"], operation_id=operation_id)
+                    expected_provider_revision=expected, operation_id=operation_id)
             receipt = {"receipt_id": f"acceptance-{proposal_id}", "outcome": "acceptance_checked",
                 "projection_verified": True, "goal_id": parameters["goal_id"],
                 "operation_id": operation_id, "checks_passed": result["checks_passed"]}

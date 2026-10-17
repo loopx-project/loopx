@@ -362,7 +362,7 @@ def apply_receipt_bound_wait_recovery(
 ) -> bool:
     """Read full provider facts only when a replay lost its executable binding."""
     from ..todos.list_readback import list_goal_todos
-    from ..todos.resume_condition import compact_todo_resume_items
+    from .blocked_retry import compact_settlement_wait_todos
     from ..runtime.time import now_utc_iso
 
     source = list_goal_todos(
@@ -370,18 +370,14 @@ def apply_receipt_bound_wait_recovery(
     )
     # Keep transitive dependencies from this coherent read. A direct-target
     # slice loses longer cycles; compact facts keep prose out of the RPC.
-    bound: dict[str, Any] = next((row for row in source["todos"] if row.get("todo_id") == todo_id), {})
-    items = compact_todo_resume_items(source["todos"])
-    for row in items:
-        if row.get("todo_id") == todo_id:
-            row["resume_condition"] = bound.get("resume_condition")
+    items = compact_settlement_wait_todos(source["todos"], todo_id=todo_id)
     verdict = effect_runtime_result("quota.settlement.read", {
         "schema_version": "loopx_quota_receipt_bound_wait_request_v0",
         "todos": items, "todo_id": todo_id, "agent_id": agent_id,
         "turn_instance_id": turn_instance_id, "observed_at": now_utc_iso(),
         "monitor_phase": monitor_phase,
         "settlement_progress": settlement_progress,
-    })
+    }, large_local_snapshot=True)
     if verdict.get("status") == "none":
         return False
     if verdict.get("status") != "recovery_required":
