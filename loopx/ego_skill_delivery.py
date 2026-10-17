@@ -88,7 +88,22 @@ def ego_skill_mutation_paths(skills_dir: Path) -> list[Path]:
                 marker = None
             if isinstance(marker, dict) and marker.get("owner") == _OWNER:
                 entry = resolved
-    return [entry] if present(entry) else []
+    paths = [entry] if present(entry) else []
+    shared = Path.home() / ".agents/skills/ego-browser"
+    if default_root and paths and entry != shared and not entry.is_symlink():
+        try:
+            marker = json.loads((entry / _MARKER).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            marker = None
+        vendor = (Path.home() / ".local/share/ego/ego-skills").resolve()
+        if (
+            isinstance(marker, dict)
+            and marker.get("owner") == _OWNER
+            and shared.is_symlink()
+            and shared.resolve() == vendor
+        ):
+            paths.append(shared)
+    return paths
 
 
 def _remove(path: Path) -> None:
@@ -133,8 +148,38 @@ def reconcile_ego_browser_skill(
     entry = paths[0]
     if execute:
         with exclusive_file_lock(entry.parent / ".loopx-ego-skill"):
-            return _reconcile(entry, execute=True, uninstall=uninstall)
-    return _reconcile(entry, execute=False, uninstall=uninstall)
+            result = _reconcile(entry, execute=True, uninstall=uninstall)
+            if not uninstall and result.get("ready") and len(paths) > 1:
+                shared = paths[1]
+                vendor = (Path.home() / ".local/share/ego/ego-skills").resolve()
+                # A browser reinstall may restore its pristine shared link.
+                # Recheck before replacing it; custom aliases are never owned.
+                if shared.is_symlink() and shared.resolve() == vendor:
+                    with tempfile.TemporaryDirectory(
+                        prefix=".loopx-ego-alias-", dir=shared.parent
+                    ) as temporary:
+                        alias = Path(temporary) / "alias"
+                        alias.symlink_to(entry, target_is_directory=True)
+                        alias.replace(shared)
+                    result.update(
+                        status="refreshed",
+                        reason="Reconnected the upstream shared Ego link to its current managed host skill.",
+                    )
+                elif not shared.is_symlink() or shared.resolve() != entry.resolve():
+                    result.update(
+                        ready=False,
+                        status="preserved_unmanaged",
+                        reason="Shared Ego entry changed during refresh; its custom target was preserved.",
+                    )
+            return result
+    result = _reconcile(entry, execute=False, uninstall=uninstall)
+    if not uninstall and result.get("ready") and len(paths) > 1:
+        result.update(
+            ready=False,
+            status="would_refresh",
+            reason="Reconnect Ego's pristine shared link to the current managed host skill.",
+        )
+    return result
 
 
 def _reconcile(entry: Path, *, execute: bool, uninstall: bool) -> dict[str, Any]:

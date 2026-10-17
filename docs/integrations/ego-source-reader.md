@@ -36,6 +36,10 @@ and locally modified managed copies are preserved with an actionable message.
 An explicit nondefault `--skills-dir` never changes a shared host entry outside
 that scope. At the default personal root, the existing shared Ego entry and its
 LoopX-managed personal-profile alias are reused rather than duplicated.
+If an Ego reinstall resets the shared entry to its pristine upstream link while
+the managed personal copy remains, refresh reconnects that known link to the
+managed copy. Custom shared aliases remain untouched; Windows rollback includes
+both affected entries.
 
 `loopx workflow-skills --uninstall` removes unchanged LoopX workflow skills and
 restores an unchanged managed Ego copy to Ego's **current** upstream link.

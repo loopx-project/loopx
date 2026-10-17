@@ -303,3 +303,68 @@ def test_invalid_ego_preflight_stops_before_workflow_skill_mutation(host):
     assert not result["ok"] and result["ego_browser"]["status"] == "invalid_source"
     assert entry.is_symlink()
     assert not skills.exists()
+
+
+def _profile_copy_with_reset_shared_entry(host):
+    _, _, source, entry, skills = host
+    delivery.reconcile_ego_browser_skill(skills_dir=skills, execute=True)
+    managed = skills / "ego-browser"
+    managed.parent.mkdir(parents=True, exist_ok=True)
+    entry.replace(managed)
+    entry.symlink_to(source, target_is_directory=True)
+    return entry, managed, skills
+
+
+def test_refresh_reconnects_shared_entry_reset_by_browser_reinstall(host):
+    entry, managed, skills = _profile_copy_with_reset_shared_entry(host)
+    assert (
+        delivery.reconcile_ego_browser_skill(skills_dir=skills)["status"]
+        == "would_refresh"
+    )
+    assert (
+        delivery.reconcile_ego_browser_skill(skills_dir=skills, execute=True)["status"]
+        == "refreshed"
+    )
+    assert entry.resolve() == managed
+    assert (
+        "without another ownership-confirmation question"
+        in (entry / "SKILL.md").read_text()
+    )
+    assert (
+        delivery.reconcile_ego_browser_skill(skills_dir=skills)["status"] == "unchanged"
+    )
+
+
+def test_profile_refresh_preserves_custom_shared_alias(host):
+    home, _, _, _, _ = host
+    entry, _, skills = _profile_copy_with_reset_shared_entry(host)
+    custom = home / "custom-browser"
+    custom.mkdir()
+    (custom / "SKILL.md").write_text("Personal policy\n")
+    entry.unlink()
+    entry.symlink_to(custom, target_is_directory=True)
+    delivery.reconcile_ego_browser_skill(skills_dir=skills, execute=True)
+    assert entry.resolve() == custom
+    assert (entry / "SKILL.md").read_text() == "Personal policy\n"
+
+
+def test_windows_rollback_preserves_reset_shared_entry_and_managed_profile(
+    host, tmp_path
+):
+    from loopx import windows_install
+
+    entry, managed, skills = _profile_copy_with_reset_shared_entry(host)
+    source = host[2]
+    original = (managed / "SKILL.md").read_bytes()
+    paths = windows_install._skill_mutation_paths(skills)
+    assert entry in paths and managed in paths
+    backup = tmp_path / "alias-backup"
+    backup.mkdir()
+    snapshots = windows_install._snapshot_paths(paths, backup)
+    windows_install._install_skills(
+        Path(__file__).resolve().parents[1], skills, "2026-01-01T00:00:00Z"
+    )
+    assert entry.resolve() == managed
+    windows_install._restore_paths(snapshots)
+    assert entry.resolve() == source.resolve()
+    assert (managed / "SKILL.md").read_bytes() == original
