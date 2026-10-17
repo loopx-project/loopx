@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import {createHash} from "node:crypto";
+import {spawnSync} from "node:child_process";
 import {readFile} from "node:fs/promises";
 import test from "node:test";
 import {readPinnedCapture} from "../src/time-machine/records.ts";
+import {LOCAL_LOG_MAX_BYTES, LOCAL_LOG_MAX_RECORDS, LocalLogError, readLocalExploreLog, selectLocalLogEntries} from "../src/time-machine/local-log.ts";
 
 const scenes = JSON.parse(await readFile(new URL("../src/time-machine/scenes.json", import.meta.url)));
 const buffer = bytes => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
@@ -61,4 +63,83 @@ test("a record reader preserves append order rather than inventing historical st
   const rows = await readPinnedCapture(buffer(bytes), {...scenes[0], sha256: digest(bytes)});
   assert.deepEqual(rows, data.events);
   assert.equal(rows[0].recorded_at, "2030-01-01T00:00:00Z");
+});
+
+// Public synthetic v0 records: the oracle is the original event/append contract,
+// independent of the file adapter. Real native-builder bytes also enter the
+// packaged browser qualification; this fixture is not a research result.
+const localEvent = (extra = {}) => ({schema_version: "loopx_explore_result_event_v0", goal_id: "local-reader-example",
+  event_id: "question-open", result_id: "question", event_kind: "node", node_kind: "question", status: "open",
+  title: "合成问题 / Synthetic question", summary: "A question, not an experiment count.", recorded_at: "2026-01-01T00:00:00Z", ...extra});
+const localRows = () => [localEvent(),
+  localEvent({event_id: "early-negative", result_id: "finding", event_kind: "finding", node_id: "question", status: "refuted", title: "Counterevidence",
+    summary: "原始反例 <b>literal source text</b>", evidence_refs: ["artifact:input-v1"], recorded_at: "2026-01-01T04:00:00Z"}),
+  localEvent({event_id: "late-revision", result_id: "finding", event_kind: "finding", node_id: "question", status: "tentative", title: "Later revision",
+    summary: "The later input is still uncertain.", evidence_refs: ["artifact:input-v2"], recorded_at: "2026-01-01T18:00:00Z"}),
+  localEvent({event_id: "backfill", status: "exploring", recorded_at: "2026-01-01T03:00:00Z"}),
+  localEvent({event_id: "unattached", event_kind: "finding", result_id: "unattached", node_id: "missing", title: "Unattached finding", status: "refuted", recorded_at: "unknown"}),
+];
+const encoded = text => new TextEncoder().encode(text).buffer;
+const jsonl = rows => encoded(rows.map(row => JSON.stringify(row)).join("\n"));
+const issue = (code, line = null) => error => error instanceof LocalLogError && error.issue === code && error.line === line;
+
+test("local native-shaped JSONL retains the entire span, append corrections, negatives and unattached records", () => {
+  const rows = localRows();
+  rows[1].source_extra = {note: "Uninterpreted metadata remains inspectable"};
+  const log = readLocalExploreLog(encoded(`\n${rows.map(row => JSON.stringify(row)).join("\r\n\n")}\n`));
+  assert.deepEqual(log.entries.map(entry => entry.source), rows);
+  assert.deepEqual(log.entries.map(entry => entry.line), [2, 4, 6, 8, 10]);
+  assert.deepEqual(log.entries.map(entry => entry.event.summary), rows.map(row => row.summary));
+  assert.equal(log.timeline.end - log.timeline.start, 18 * 3_600_000);
+  assert.equal(log.history.nodes[0].latest.status, "exploring", "append order owns the latest node label");
+  assert.equal(log.history.nodes[0].revisions.some(row => row.status === "refuted"), true);
+  assert.equal(log.history.findings.some(row => row.result_id === "unattached"), true);
+  assert.equal(log.history.unknownTimeCount, 1);
+  assert.equal(log.history.edges.length, 0, "record-time adjacency is not a relationship");
+});
+
+test("local search and time/label filters preserve source order, exact labels and original text", () => {
+  const log = readLocalExploreLog(jsonl(localRows()));
+  assert.deepEqual(selectLocalLogEntries(log, " ARTIFACT:INPUT ", null, null).map(row => row.line), [2, 3]);
+  assert.equal(selectLocalLogEntries(log, "原始反例", "refuted", null)[0].event.summary, "原始反例 <b>literal source text</b>");
+  assert.deepEqual(selectLocalLogEntries(log, "", "refuted", null).map(row => row.line), [2, 5]);
+  assert.deepEqual(selectLocalLogEntries(log, "", null, 0).map(row => row.line), [1, 2, 4]);
+  assert.deepEqual(selectLocalLogEntries(log, "", null, 2).map(row => row.line), [3]);
+  assert.deepEqual(selectLocalLogEntries(log, "", null, "unknown").map(row => row.line), [5]);
+  assert.equal(selectLocalLogEntries(log, "absent text", null, null).length, 0);
+  const futureLabel = readLocalExploreLog(jsonl([localEvent({status: "all"})]));
+  assert.equal(selectLocalLogEntries(futureLabel, "", "all", null).length, 1, "a source label is data, not a reserved UI option");
+});
+
+test("bad local files are rejected as a whole, with a line when the fault belongs to one record", () => {
+  assert.throws(() => readLocalExploreLog(encoded("\n \r\n")), issue("empty"));
+  assert.throws(() => readLocalExploreLog(new Uint8Array([0xff]).buffer), issue("encoding"));
+  assert.throws(() => readLocalExploreLog(encoded(`${JSON.stringify(localEvent())}\n{broken`)), issue("json", 2));
+  for (const value of [null, [], 1, {}, localEvent({goal_id: ""}), localEvent({schema_version: "not-v0"}), localEvent({confidence: 2}), localEvent({evidence_refs: [123]})]) {
+    assert.throws(() => readLocalExploreLog(jsonl([value])), issue("record", 1));
+  }
+  assert.throws(() => readLocalExploreLog(jsonl([localEvent(), localEvent({goal_id: "another-goal"})])), issue("record", 2));
+  assert.throws(() => readLocalExploreLog(jsonl([localEvent(), localEvent({summary: "Conflicting event identity"})])), issue("identity"));
+  const repeated = readLocalExploreLog(jsonl([localEvent(), localEvent()]));
+  assert.equal(repeated.entries.length, 2, "identical source rows remain readable");
+  assert.equal(repeated.history.events.length, 1, "the existing common owner deduplicates only its display projection");
+});
+
+test("local browser bounds admit the full supported log and reject overflow rather than returning a prefix", () => {
+  assert.throws(() => readLocalExploreLog(new ArrayBuffer(LOCAL_LOG_MAX_BYTES + 1)), issue("size"));
+  const rows = Array.from({length: LOCAL_LOG_MAX_RECORDS}, (_, index) => localEvent({event_id: `event-${index}`, result_id: `node-${index}`}));
+  assert.equal(readLocalExploreLog(jsonl(rows)).entries.length, LOCAL_LOG_MAX_RECORDS);
+  assert.throws(() => readLocalExploreLog(jsonl([...rows, localEvent({event_id: "overflow"})])), issue("size"));
+});
+
+test("a byte-limit file of blank lines reports empty without a line-array memory explosion", () => {
+  const source = JSON.stringify(new URL("../src/time-machine/local-log.ts", import.meta.url).href);
+  const code = `import {readLocalExploreLog, LOCAL_LOG_MAX_BYTES, LocalLogError} from ${source};
+    const bytes = new Uint8Array(LOCAL_LOG_MAX_BYTES).fill(10);
+    try { readLocalExploreLog(bytes.buffer); process.exit(2); }
+    catch(error) { if (!(error instanceof LocalLogError) || error.issue !== "empty") throw error; }`;
+  // The child protects the test host; this is an intake regression, not a
+  // general browser-memory or latency promise for all supported records.
+  const result = spawnSync(process.execPath, ["--max-old-space-size=96", "--input-type=module", "-e", code], {encoding: "utf8", timeout: 5000});
+  assert.equal(result.status, 0, result.stderr || String(result.error ?? result.signal));
 });

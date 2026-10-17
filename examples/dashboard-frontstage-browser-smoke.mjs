@@ -118,6 +118,94 @@ async function assertTimeMachineJourney(page, lang) {
   await page.locator(".tm-choices button:not([disabled])").first().click();
   await page.locator(".tm-revealed").waitFor();
   assert.match(await page.locator(".tm-revealed").innerText(), /13\.84/);
+  await assertLocalTimeMachineLog(page, lang);
+}
+
+async function assertLocalTimeMachineLog(page, lang) {
+  const row = (extra = {}) => ({schema_version: "loopx_explore_result_event_v0", goal_id: "public-local-example",
+    event_id: "question", result_id: "question", event_kind: "node", node_kind: "question", status: "open",
+    title: "Synthetic question", summary: "Source text, not a scored result.", recorded_at: "2026-01-01T00:00:00Z", ...extra});
+  const negative = "Original counterevidence <b>literal, not HTML</b>";
+  const records = [row(), row({event_id: "early-negative", result_id: "finding", event_kind: "finding", node_id: "question", status: "refuted",
+    title: "Earlier counterevidence", summary: negative, evidence_refs: ["https://example.invalid/do-not-fetch-local-evidence"], recorded_at: "2026-01-01T04:00:00Z"}),
+    row({event_id: "revision", result_id: "finding", event_kind: "finding", node_id: "question", title: "Later tentative revision", status: "tentative", recorded_at: "2026-01-01T18:00:00Z"}),
+    row({event_id: "backfill", status: "exploring", recorded_at: "2026-01-01T03:00:00Z"}),
+    row({event_id: "unattached", result_id: "unattached", event_kind: "finding", node_id: "missing", title: "Unattached finding", status: "refuted", recorded_at: "unknown"})];
+  const file = (name, rows = records) => ({name, mimeType: "application/x-ndjson", buffer: Buffer.from(rows.map(row => JSON.stringify(row)).join("\n"))});
+  const input = page.locator("#tm-log-file");
+  await page.evaluate(() => {
+    window.__tmLocalAudit = {requests: [], writes: []};
+    const audit = window.__tmLocalAudit;
+    const fetch = window.fetch;
+    window.fetch = function (...args) { audit.requests.push(String(args[0])); return fetch.apply(this, args); };
+    const send = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function (...args) { audit.requests.push("xhr"); return send.apply(this, args); };
+    const beacon = navigator.sendBeacon.bind(navigator);
+    navigator.sendBeacon = (...args) => { audit.requests.push(String(args[0])); return beacon(...args); };
+    const set = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (...args) { audit.writes.push(String(args[0])); return set.apply(this, args); };
+    const open = indexedDB.open.bind(indexedDB);
+    indexedDB.open = (...args) => { audit.writes.push("indexedDB"); return open(...args); };
+  });
+  // The ordinary entry opens the actual browser file chooser, not a command-copy path.
+  const chooser = page.waitForEvent("filechooser");
+  await page.locator("#tm-open-log").focus();
+  await page.locator("#tm-open-log").press("Enter");
+  await (await chooser).setFiles(file("research.jsonl"));
+  await page.locator(".tm-log-reading").waitFor();
+  assert.equal(await page.locator(".tm-log-match strong").textContent(), "5");
+  assert.match(await page.locator(".tm-log-span").textContent(), /00:00.*18:00/);
+  assert.equal(await page.locator(".tm-revealed,.tm-metrics,.tm-source").count(), 0, "local bytes inherit no curated claim");
+  await page.locator("#tm-log-label").selectOption(JSON.stringify("refuted"));
+  assert.equal(await page.locator(".tm-log-match strong").textContent(), "2");
+  assert.equal(await page.locator(".tm-log-detail .tm-record-body").textContent(), negative);
+  assert.equal(await page.locator(".tm-record-body b").count(), 0);
+  await page.locator(".tm-log-source > summary").click();
+  assert.equal(await page.locator(".tm-log-source a").count(), 0, "external evidence references remain text");
+  await page.locator(".tm-log-source > summary").click();
+  await page.locator("#tm-log-search").fill("absent phrase");
+  assert.equal(await page.locator(".tm-log-reading").count(), 0, "no stale original when filters have no match");
+  await page.locator(".tm-log-match button").click();
+  assert.equal(await page.evaluate(() => document.activeElement.id), "tm-log-search");
+  await page.locator("#tm-log-time").selectOption("unknown");
+  assert.equal(await page.locator(".tm-log-match strong").textContent(), "1");
+  assert.equal(await page.locator(".tm-log-detail h2").textContent(), "Unattached finding");
+  await input.setInputFiles({name: "bad.jsonl", mimeType: "application/x-ndjson", buffer: Buffer.from(`${JSON.stringify(records[0])}\n{broken`)});
+  await page.locator(".tm-log-error [role=alert]").waitFor();
+  assert.match(await page.locator(".tm-log-error [role=alert]").textContent(), /2/);
+  assert.equal(await page.locator(".tm-log-reading").count(), 0);
+  await input.setInputFiles(file("research.jsonl"));
+  await page.locator(".tm-log-reading").waitFor();
+  await input.setInputFiles(file("research.jsonl"));
+  await page.locator(".tm-log-reading").waitFor();
+  await page.evaluate(() => {
+    const read = File.prototype.arrayBuffer;
+    File.prototype.arrayBuffer = function () {
+      if (this.name === "slow.jsonl") return new Promise((resolve, reject) => { window.__tmReleaseSlow = () => read.call(this).then(resolve, reject); });
+      return read.call(this);
+    };
+  });
+  await input.setInputFiles(file("slow.jsonl"));
+  await page.waitForFunction(() => typeof window.__tmReleaseSlow === "function");
+  await input.setInputFiles(file("newer.jsonl", [row({title: "New file only"})]));
+  await page.locator(".tm-log-reading").waitFor();
+  await page.evaluate(() => window.__tmReleaseSlow());
+  assert.equal(await page.locator(".tm-log-detail h2").textContent(), "New file only");
+  const structured = "Input revision: synthetic-v2 Applicability: this fixture only Observation: The new input refutes the earlier route. Interpretation: Outcome: continue\nretained:\n- original scope\nstopped:\n- the failed route";
+  await input.setInputFiles(file("structured.jsonl", [row({event_id: "structured", event_kind: "finding", status: "refuted", summary: structured})]));
+  await page.locator(".tm-log-observation").waitFor();
+  assert.equal(await page.locator(".tm-log-observation").textContent(), "The new input refutes the earlier route.");
+  assert.match(await page.locator(".tm-log-finding").textContent(), /this fixture only/);
+  await page.locator(".tm-log-finding > details > summary").click();
+  assert.equal(await page.locator(".tm-record-body").textContent(), structured, "structured reading does not replace the complete original text");
+  assert.deepEqual(await page.evaluate(() => window.__tmLocalAudit), {requests: [], writes: []});
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "local reader fits the viewport");
+  await page.locator(".tm-log-actions button").last().click();
+  await page.waitForFunction(() => document.activeElement.id === "tm-open-log");
+  await page.locator(".tm-revealed").waitFor();
+  assert.equal(await page.locator(".tm-log").count(), 0);
+  assert.match(await page.locator(".tm-revealed").innerText(), /13\.84/);
+  assert.equal(await page.locator("html").getAttribute("lang"), lang === "zh" ? "zh-CN" : "en");
 }
 
 let browser;
