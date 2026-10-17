@@ -154,6 +154,36 @@ def test_peer_advancement_does_not_suppress_current_monitor_streak_replan() -> N
     }
 
 
+def test_current_streak_keeps_eligibility_target_order_and_public_shape() -> None:
+    from copy import deepcopy
+    from loopx.control_plane.goals.goal_frontier import _monitor_no_change_streak_trigger
+
+    def item(todo_id, target, **fields):
+        return quota_todo_item(todo_id=todo_id, title="Observe a finite source.",
+            task_class="continuous_monitor", claimed_by=AGENT_ID,
+            target_key=target, consecutive_no_change="8", expires_at="2099-01-01T00:00:00Z",
+            **fields)
+
+    current = [item("todo_z", "z"), item("todo_a", "a")]
+    ignored = [
+        {**current[0], "todo_id": "todo_peer", "claimed_by": PEER_AGENT_ID, "consecutive_no_change": "99"},
+        {**current[0], "todo_id": "todo_unclaimed", "claimed_by": None, "consecutive_no_change": "99"},
+        {**current[0], "watch_only": "true", "consecutive_no_change": "99"},
+        {**current[0], "status": "blocked", "consecutive_no_change": "99"},
+        {**current[0], "done": True, "consecutive_no_change": "99"},
+        {**current[0], "task_class": "advancement_task", "consecutive_no_change": "99"},
+    ]
+    source = {"monitor_open_items": ignored + current}
+    before = deepcopy(source)
+    assert _monitor_no_change_streak_trigger(source, agent_id=AGENT_ID) == {
+        "kind": "monitor_no_change_streak", "section": "agent_todo_summary.monitor_open_items",
+        "text": "monitor a recorded 8 consecutive unchanged polls without selectable advancement",
+        "todo_id": "todo_a", "monitor_target_id": "a", "run_count": 8, "threshold": 5,
+        "agent_id": AGENT_ID,
+    }
+    assert source == before
+
+
 def test_watch_only_monitor_streak_does_not_create_replan_obligation() -> None:
     monitor = quota_todo_item(
         todo_id="todo_watch_only_monitor",
