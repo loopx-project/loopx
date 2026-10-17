@@ -29,6 +29,7 @@ from benchmark.runtime.sforge_backend import RecordingDockerBackend
 from benchmark.runtime.source import source_pins
 from benchmark.edgebench.prompts import (
     blind_task_prompt, best_only_task_prompt, native_task_prompt, native_task_instructions,
+    checkpoint_research_instructions,
 )
 from benchmark.edgebench.online_sampling import OnlineSampler
 from benchmark.edgebench.feedback import BestOnlyFeedback, FEEDBACK_MODES, validate_best_only
@@ -236,6 +237,12 @@ def main(argv=None):
             selection=task.judge.selection, score_direction=task.judge.score_direction)
         feedback_prompt = native_task_prompt(task.work.agent_query, task.submit_paths, **native_policy)
         workspace_instructions = native_task_instructions(task.submit_paths, **native_policy)
+        if checkpoint_request is not None:
+            research = checkpoint_research_instructions(declaration, task.cwd)
+            workspace_instructions += research
+            # Keep the exact policy prefix shared with AGENTS.md; the original
+            # task remains the separately owned Goal objective.
+            feedback_prompt = workspace_instructions + f"---\n\n{task.work.agent_query}\n"
         task_objective = task.work.agent_query
     config = SForgeConfig(
         agent_api_base_url=api_base_url, agent_api_key=api_key,

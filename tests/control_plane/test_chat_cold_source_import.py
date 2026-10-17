@@ -335,16 +335,24 @@ def test_registered_runtime_alias_retarget_rejects_without_import(cold_api, prov
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_app_enforces_lease_and_missing_provider_without_legacy_fallback(cold_api, provider):
+def test_app_copy_preserves_execution_and_provider_fences_without_legacy_fallback(cold_api, provider):
     call, read, state, _, runtime, _, _, _ = cold_api
     plan = prepare(call, provider)
     assert call("apply", {**carrier(plan), "writers_stopped": True})[1]["status"] == "applied"
     original_state, original_head = state.read_bytes(), read()
-    code, refused = call("/api/actions/preview", {
-        "action_kind": "todo.update", "summary": "An edit without execution proof",
+    code, preview = call("/api/actions/preview", {
+        "action_kind": "todo.update", "summary": "Review an administrative edit",
         "normalized_parameters": {"goal_id": "cold", "todo_id": "todo_current",
-            "operation": "edit", "text": "Forbidden edit", "agent_id": "agent-a"},
-        "context": {}, "idempotency_key": "missing-lease"})
+            "operation": "edit", "text": "Reviewed imported work", "agent_id": "agent-a"},
+        "context": {}, "idempotency_key": "administrative-copy"})
+    assert code == 201 and preview["proposal"]["status"] == "preview_ready", preview
+    assert read() == original_head and state.read_bytes() == original_state
+    # Import and copy preview do not authorize completion of the imported work.
+    code, refused = call("/api/actions/preview", {
+        "action_kind": "todo.update", "summary": "Completion without execution proof",
+        "normalized_parameters": {"goal_id": "cold", "todo_id": "todo_current",
+            "operation": "complete", "agent_id": "agent-a", "no_followup": True},
+        "context": {}, "idempotency_key": "missing-execution"})
     assert code == 400 and refused["error_code"] == "handoff_mode_requires_lease", refused
     assert read() == original_head and state.read_bytes() == original_state
     stores = list(runtime.rglob("authority-store-*.json" if provider == "file" else "authority-*.sqlite"))

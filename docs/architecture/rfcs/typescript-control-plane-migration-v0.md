@@ -1393,6 +1393,18 @@ reduction remains a measured follow-up with complete-source parity, not a second
 Python policy. See the
 [history decision evidence](ledger/typescript-control-plane-migration-v0/2026-09-22-replan-history-policy.md).
 
+Settlement wait adapters now share the existing resume-fact projection over the
+complete dependency graph, retaining the bound Todo's resume proof and Monitor
+clocks, hash and cadence. They do not retransmit unrelated Todo prose or truncate
+canonical records. Blocked writeback, receipt-bound wait recovery and ordinary
+`quota.settlement.read` readback explicitly reuse the same-UID, digest-bound
+private snapshot channel when needed; the 2 MiB wire and 64 MiB snapshot limits
+remain unchanged. The existing TS owner still qualifies dependencies, frozen
+observations, original Turn identity, blocked closeout without spending and
+once-only accounting. Isolated File/SQLite CLI validation covers a complete
+multi-MiB Goal and replay; source validation does not establish installed-host
+adoption or whole-Goal qualification.
+
 **Checkpoint read-context transport.** A long-lived Goal can exceed the Effect
 runtime's 2 MiB socket limit even when the original Turn receipt is small:
 complete shared Goal prose and archived Todo facts are part of the read basis,

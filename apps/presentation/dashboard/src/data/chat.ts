@@ -3,7 +3,7 @@ import { HANDOFF_MODES, EXECUTION_HANDOFF_MODES, type ExecutionHandoffMode } fro
 import { normalizeGoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { parseTurnStep, type TurnStep } from "./turn-steps.js";
 import { z } from "zod";
-import { actionSourceBasisSchema } from "./action-source-basis.js";
+import { actionSourceBasisSchema, todoUpdateSourceBasisSchema } from "./action-source-basis.js";
 
 import {
   todoApplyResultMatchesRequest,
@@ -651,6 +651,7 @@ export async function readTodoRequest(goalId: string, todoId: string, signal: Ab
   const result = z.object({
     ok: z.literal(true), goal_id: z.string(), todo_id: z.string(), text: z.string(),
     status: z.string(), archive_state: z.string(), updated_at: z.string().nullable(),
+    review_basis: todoUpdateSourceBasisSchema.optional(),
   }).parse(await requestJson<unknown>(`/api/chat/todo/detail?${query}`, {signal}));
   if (result.goal_id !== goalId || result.todo_id !== todoId) throw new Error("Task source changed");
   return result;

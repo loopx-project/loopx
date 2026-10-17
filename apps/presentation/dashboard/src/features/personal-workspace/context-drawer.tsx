@@ -651,7 +651,8 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                 {selection.item.priority ? <span>{selection.item.priority}</span> : null}
                 <span>{selection.item.taskClass === "advancement_task" ? t("drawer.taskAdvancement") : selection.item.taskClass ?? t("drawer.taskOrdinary")}</span>
               </div>
-              <TaskRequest todo={selection.item} local={!readOnly} />
+              <TaskRequest key={`${selection.item.goalId}:${selection.item.todoId}`} todo={selection.item} local={!readOnly}
+                onSave={!todoCompleted ? callbacks.onSaveTodoRequirements : undefined} />
               {selection.item.status === "blocked" ? <section aria-label={t("drawer.blockedReason")} className="personal-task-blocked-reason" data-recorded={selection.item.blockedReason ? "true" : "false"}>
                 <h4><AlertCircle size={14} />{t("drawer.blockedReason")}</h4>
                 <p>{selection.item.blockedReason ?? t("drawer.blockedReasonMissing")}</p>

@@ -277,10 +277,10 @@ def test_sqlite_companion_failure_cannot_publish_an_older_valid_database(
     request.write_text(json.dumps(payload))
     if fault == "transport":
         original = checkpoint_worker._archive
-        def unavailable(worker, remote, destination):
+        def unavailable(worker, remote, destination, **kwargs):
             if remote.endswith("-wal"):
                 raise APIError("Synthetic Docker archive transport failure")
-            return original(worker, remote, destination)
+            return original(worker, remote, destination, **kwargs)
         monkeypatch.setattr(checkpoint_worker, "_archive", unavailable)
     else:
         replacement = "p.symlink_to('/phase')" if fault == "symlink" else "p.mkdir()"
@@ -555,8 +555,8 @@ def test_capture_budget_is_shared_and_exhaustion_releases_writer(controllers, wr
     container, request = writer
     token = register(source, first)
     original = checkpoint_worker._archive_component
-    def slow_archive(*args):
-        copied = original(*args)
+    def slow_archive(*args, **kwargs):
+        copied = original(*args, **kwargs)
         time.sleep(2.1)
         return copied
     monkeypatch.setattr(checkpoint_worker, "_archive_component", slow_archive)
@@ -607,3 +607,127 @@ def test_persistent_mailbox_read_error_remains_visible(writer, tmp_path, monkeyp
     supervisor._run(container)
     assert len(reads) == 3 and isinstance(supervisor.failure, tarfile.ReadError)
     assert json.loads((tmp_path / "supervisor-failure.json").read_text()) == {"error_kind": "ReadError"}
+
+
+@pytest.mark.parametrize("stage", ["download", "file_copy"])
+def test_one_progressing_archive_expires_without_stranding_writer(
+        controllers, writer, tmp_path, monkeypatch, stage):
+    from contextlib import contextmanager
+    import requests
+    from benchmark.edgebench import checkpoint_worker as worker
+
+    source, _, first, _, files, grades = controllers
+    container, request = writer
+    token = register(source, first)
+    assert container.exec_run(["python", "-c",
+        "from pathlib import Path;Path('/data/payload').write_bytes(b'x'*(16*1024*1024))"]).exit_code == 0
+    before = counter(container)
+    progress, responses = [], []
+    original_get = type(container.client.api)._get
+    def observed_get(self, url, *args, **kwargs):
+        response = original_get(self, url, *args, **kwargs)
+        if "/archive" in url:
+            responses.append(response)
+            # The archive reader must not use Docker's process-stream helper,
+            # which deliberately changes this socket to an infinite timeout.
+            socket = self._get_raw_response_socket(response)
+            assert getattr(socket, "_sock", socket).gettimeout() is not None
+        return response
+    monkeypatch.setattr(type(container.client.api), "_get", observed_get)
+    if stage == "download":
+        original = requests.Response.iter_content
+        def progressing(response, *args, **kwargs):
+            if "/archive" not in response.url:
+                yield from original(response, *args, **kwargs)
+                return
+            for block in original(response, *args, **kwargs):
+                socket = container.client.api._get_raw_response_socket(response)
+                assert getattr(socket, "_sock", socket).gettimeout() is not None
+                progress.append(len(block))
+                time.sleep(.04)
+                yield block
+        monkeypatch.setattr(requests.Response, "iter_content", progressing)
+    else:
+        original = worker.tempfile.TemporaryFile
+        @contextmanager
+        def slow_file(**kwargs):
+            with original(**kwargs) as raw:
+                class SlowFile:
+                    def __getattr__(self, name):
+                        return getattr(raw, name)
+                    def read(self, size=-1):
+                        block = raw.read(size)
+                        if size > 512:
+                            progress.append(len(block))
+                            time.sleep(.01)
+                        return block
+                yield SlowFile()
+        monkeypatch.setattr(worker.tempfile, "TemporaryFile", slow_file)
+    responses.clear()
+    progress.clear()
+    started = time.monotonic()
+    unit = tmp_path / "expired"
+    try:
+        with pytest.raises(TimeoutError, match="capture window closed"):
+            capture_worker(files[0], token=token, capture_id="4" * 32,
+                destination=unit, request_file=request, timeout=3)
+        assert progress and sum(progress) < 16 * 1024 * 1024
+        assert time.monotonic() - started < 10, "one archive must stop before consuming its slow remainder"
+        assert all(response.raw.closed for response in responses)
+        container.reload()
+        assert container.attrs["State"]["Running"] and not container.attrs["State"]["Paused"]
+        assert not unit.exists() and not grades
+        bank = Path(json.loads(files[0].read_text())["bank_root"])
+        assert not (bank / ("4" * 32)).exists()
+        with pytest.raises(FileExistsError):
+            capture_worker(files[0], token=token, capture_id="4" * 32,
+                destination=tmp_path / "retry", request_file=request)
+    finally:
+        # Keep a failing characterization run safe too; no GC-based cleanup.
+        for response in responses:
+            response.close()
+        container.reload()
+        if container.attrs["State"]["Paused"]:
+            container.unpause()
+    # Observe the live writer only after the slowed archive reader is removed.
+    monkeypatch.setattr(type(container.client.api), "_get", original_get)
+    if stage == "download":
+        monkeypatch.setattr(requests.Response, "iter_content", original)
+    else:
+        monkeypatch.setattr(worker.tempfile, "TemporaryFile", original)
+    wait(lambda: counter(container) > before)
+
+
+def test_declared_directory_includes_research_created_after_declaration(controllers, writer, tmp_path):
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+    source, _, first, _, files, grades = controllers
+    container, request = writer
+    token = register(source, first)
+    # writer already declared /data. New artifacts need no new component IDs.
+    payload = json.loads(request.read_text())
+    assert payload["components"] == [{"id": "native_capsule", "source_path": "/data"}]
+    assert container.exec_run(["python", "-c", "from pathlib import Path; "
+        "p=Path('/data/research/new-method'); p.mkdir(parents=True); "
+        "(p/'candidate.py').write_text('candidate'); "
+        "(p/'negative.json').write_text('{\"accepted\": false}'); "
+        "Path('/outside-report.json').write_text('not declared')"]).exit_code == 0
+    unit = tmp_path / "directory-point"
+    result = capture_worker(files[0], token=token, capture_id="f" * 32,
+                           destination=unit, request_file=request)
+    assert result["integrity_verified"]
+    assert (unit / "components/native_capsule/research/new-method/candidate.py").read_text() == "candidate"
+    assert json.loads((unit / "components/native_capsule/research/new-method/negative.json").read_text()) == {"accepted": False}
+    assert not list(unit.rglob("outside-report.json"))
+    effect_runtime_result("runtime.checkpoint_artifacts", {"action": "verify", "root": str(unit),
+        "expected_sha256": result["sha256"]})
+    restored = tmp_path / "restored"
+    receipt = effect_runtime_result("runtime.checkpoint_artifacts", {
+        "action": "materialize", "root": str(unit),
+        "expected_sha256": result["sha256"], "destination": str(restored),
+    })
+    assert receipt["materialized"] and not receipt["activation_performed"]
+    research = restored / "components/native_capsule/research/new-method"
+    assert (research / "candidate.py").read_text() == "candidate"
+    assert json.loads((research / "negative.json").read_text()) == {"accepted": False}
+    assert not list(restored.rglob("outside-report.json"))
+    assert request.read_text() == json.dumps(payload) and not grades

@@ -279,8 +279,17 @@ def test_abandoned_capture_recovers_only_with_current_binding(ordinary, monkeypa
             assert result["status"] == "completed"
             transport.reconcile()
             assert len(store.list_sessions()) == 1
-            final = ("notes-app", result["response"]["message"])
-            assert provider.writes[-1] == final and provider.writes.count(final) == 1
+            delivered = json.loads(path.read_text())
+            terminal = delivered["deliveries"]["terminal"]
+            assert delivered["status"] == "delivered" and terminal["verified"] is True
+            # Recovery can finish a draft by editing its existing message.
+            # Provider-visible content, not creation history, proves the final.
+            final = provider.messages[terminal["attempt"]["message_ref"]]
+            assert final["chat_id"] == event["chat_id"]
+            assert final["sender"] == {"id": provider.profile_apps["notes-app"], "sender_type": "app"}
+            content = json.loads(final["body"]["content"])
+            assert content["zh_cn"]["content"][0][0]["text"] == result["response"]["message"]
+            assert sum(message.get("body") == final["body"] for message in provider.messages.values()) == 1
             assert all(profile == "notes-app" for profile, _ in provider.writes)
             assert [m["text"] for m in store.messages(row["session_id"]) if m["role"] == "user"] == [event["content"]]
             packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
@@ -387,10 +396,10 @@ def test_group_receipt_reuses_only_the_fresh_bindings_display_observation(ordina
         if checking_source.is_set():
             source_identity_observed.set()
         return observe(profile, **kwargs)
-    def verified(record):
+    def verified(record, **kwargs):
         checking_source.set()
         try:
-            return source_verified(record)
+            return source_verified(record, **kwargs)
         finally:
             checking_source.clear()
     monkeypatch.setattr(transport.bindings, "observe", observed)
@@ -1191,10 +1200,10 @@ def test_completed_stop_inbox_name_cannot_replace_fresh_source_checks(completed_
     entered, release = threading.Event(), threading.Event()
     original = transport._source_verified
 
-    def verify(row):
+    def verify(row, **kwargs):
         entered.set()
         assert release.wait(3)
-        return original(row)
+        return original(row, **kwargs)
 
     monkeypatch.setattr(transport, "_source_verified", verify)
     with ThreadPoolExecutor(max_workers=1) as workers:
@@ -1461,9 +1470,9 @@ def test_completed_stop_reply_worker_waits_for_both_reads_and_does_not_send_afte
     original_verify = transport._source_verified
     original_sources, original_observe = transport._completed_stop_sources, transport.bindings.observe
 
-    def verify(value):
+    def verify(value, **kwargs):
         checking_source.set()
-        return original_verify(value)
+        return original_verify(value, **kwargs)
 
     def sources(*args):
         source_started.set()

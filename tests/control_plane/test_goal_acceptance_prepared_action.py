@@ -10,6 +10,7 @@ import pytest
 from loopx.chat_actions import ChatActionService
 from loopx.chat_action_store import ActionConflictError, ChatActionStore
 from loopx.control_plane.goals import acceptance_actions
+from loopx.control_plane.testing.canary_harness import run_json_cli_result
 from test_goal_acceptance_cli import acceptance_goal as acceptance_goal
 
 
@@ -154,6 +155,96 @@ def test_conversation_check_returns_document_repair_context(conversation_check):
     assert not (project / "runs.txt").exists()
 
 
+@pytest.mark.parametrize("state", ["preview_ready", "applied", "cancelled"])
+def test_preparation_retry_recovers_original_state_after_progress(conversation_check, state):
+    project, cli, controller, _, _, call, _ = conversation_check
+    original = call()["proposal"]  # The reply may be lost after persistence.
+    store = ChatActionStore(project.parent / "runtime/chat/actions")
+    service = ChatActionService(store=store, registry_path=controller.registry_path)
+    if state == "applied":
+        original = service.apply(original["proposal_id"])["proposal"]
+    elif state == "cancelled":
+        original = service.cancel(original["proposal_id"])
+    code, updated = run_json_cli_result("todo", "update", "--goal-id", "goal-acceptance",
+        "--todo-id", "todo_export", "--agent-id", "agent-a", "--note", "Work is progressing",
+        registry_path=controller.registry_path, runtime_root=project.parent / "runtime")
+    assert code == 0, updated
+    authority, journal = cli("inspect")[1], store.path.read_bytes()
+    recovered = call()
+    assert recovered["ok"] is True and recovered["executed"] is False, recovered
+    assert recovered["proposal"] == original
+    assert cli("inspect")[1] == authority and store.path.read_bytes() == journal
+    if state == "applied":
+        assert (project / "runs.txt").read_text() == "x"
+    else:
+        assert not (project / "runs.txt").exists()
+    if state == "preview_ready":
+        applied = service.apply(original["proposal_id"])["proposal"]
+        assert call()["proposal"] == applied
+        assert service.apply(original["proposal_id"])["proposal"] == applied
+        assert (project / "runs.txt").read_text() == "x"
+
+
+def test_preparation_retry_does_not_return_another_preparers_plan(conversation_check):
+    project, cli, controller, _, plan, call, _ = conversation_check
+    original = call()["proposal"]
+    store = ChatActionStore(project.parent / "runtime/chat/actions")
+    authority, journal = cli("inspect")[1], store.path.read_bytes()
+    with pytest.raises(ActionConflictError):
+        acceptance_actions.prepare_acceptance_check(registry_path=controller.registry_path,
+            runtime_root=str(project.parent / "runtime"), goal_id="goal-acceptance",
+            agent_id="agent-a", document=plan, operation_id=original["idempotency_key"], execute=True)
+    assert cli("inspect")[1] == authority and store.path.read_bytes() == journal
+    assert not (project / "runs.txt").exists()
+
+
+def test_preparation_retry_does_not_replace_unavailable_authority(conversation_check, monkeypatch):
+    project, cli, _, _, _, call, _ = conversation_check
+    call()
+    store = ChatActionStore(project.parent / "runtime/chat/actions")
+    authority, journal = cli("inspect")[1], store.path.read_bytes()
+
+    def unavailable(**_kwargs):
+        raise ValueError("Goal acceptance authority is unavailable")
+
+    monkeypatch.setattr(acceptance_actions, "inspect_goal_acceptance", unavailable)
+    assert call()["error"] == "collaboration_request_rejected"
+    assert cli("inspect")[1] == authority and store.path.read_bytes() == journal
+    assert not (project / "runs.txt").exists()
+
+
+def test_prepare_recovers_competing_commit_with_a_newer_basis(conversation_check, monkeypatch):
+    project, cli, controller, _, _, call, _ = conversation_check
+    entered, proceed, requests = Event(), Event(), []
+    native_preview = ChatActionService.preview
+
+    def held_preview(service, request):
+        requests.append(request)
+        entered.set()
+        assert proceed.wait(20)
+        return native_preview(service, request)
+
+    monkeypatch.setattr(ChatActionService, "preview", held_preview)
+    store = ChatActionStore(project.parent / "runtime/chat/actions")
+    service = ChatActionService(store=store, registry_path=controller.registry_path)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(call)
+        try:
+            assert entered.wait(20)
+            winner = native_preview(service, requests[0])
+            code, updated = run_json_cli_result("todo", "update", "--goal-id", "goal-acceptance",
+                "--todo-id", "todo_export", "--agent-id", "agent-a", "--note", "Concurrent progress",
+                registry_path=controller.registry_path, runtime_root=project.parent / "runtime")
+            assert code == 0, updated
+            authority, journal = cli("inspect")[1], store.path.read_bytes()
+        finally:
+            proceed.set()
+        recovered = pending.result(timeout=20)
+    assert recovered["proposal"] == winner, recovered
+    assert cli("inspect")[1] == authority and store.path.read_bytes() == journal
+    assert not (project / "runs.txt").exists()
+
+
 def prepare(acceptance_goal):
     project, document, cli, _ = acceptance_goal
     raw = json.loads(document.read_text())
@@ -173,6 +264,97 @@ def prepare(acceptance_goal):
     service = ChatActionService(store=ChatActionStore(root / "runtime/chat/actions"),
                                 registry_path=root / "registry.json")
     return project, cli, service, result["proposal"]
+
+
+@pytest.mark.parametrize("change", ["selected_note", "unselected_work"])
+def test_reviewed_selected_plan_survives_unrelated_progress(acceptance_goal, change):
+    project, document, cli, run = acceptance_goal
+    raw = json.loads(document.read_text())
+    raw["scope"] = {"kind": "selected_work", "todo_ids": ["todo_export"]}
+    document.write_text(json.dumps(raw))
+    _, _, service, proposal = prepare(acceptance_goal)
+    if change == "selected_note":
+        code, result = run("todo", "update", "--goal-id", "goal-acceptance",
+            "--todo-id", "todo_export", "--agent-id", "agent-a", "--note", "Work is progressing")
+    else:
+        code, result = run("todo", "add", "--goal-id", "goal-acceptance", "--role", "agent",
+            "--text", "Independent work", "--action-kind", "implement", "--claimed-by", "agent-a")
+    assert code == 0, result
+    assert cli("inspect")[1]["goal_acceptance_contract"] == {"enabled": False}
+    assert not (project / "runs.txt").exists()
+    result = service.apply(proposal["proposal_id"])
+    assert result["proposal"]["status"] == "applied"
+    assert (project / "runs.txt").read_text() == "x"
+    assert service.apply(proposal["proposal_id"])["proposal"] == result["proposal"]
+    assert (project / "runs.txt").read_text() == "x"
+
+
+def test_historical_revision_only_plan_keeps_strict_admission(acceptance_goal):
+    project, _, _, run = acceptance_goal
+    _, _, service, proposal = prepare(acceptance_goal)
+    historical = service.store.create_preview(
+        **{key: proposal[key] for key in (
+            "action_kind", "summary", "normalized_parameters", "context",
+            "permission_classification", "validation_evidence", "available_transitions")},
+        expected_state_fingerprint=json.loads(proposal["expected_state_fingerprint"])["provider_revision"],
+        idempotency_key="historical-revision-only-plan",
+    )
+    code, result = run("todo", "update", "--goal-id", "goal-acceptance", "--todo-id", "todo_export",
+        "--agent-id", "agent-a", "--note", "Progress after a historical plan")
+    assert code == 0, result
+    assert service.apply(historical["proposal_id"])["proposal"]["status"] == "stale"
+    assert not (project / "runs.txt").exists()
+
+
+def test_reviewed_plan_rejects_changed_covered_work(acceptance_goal):
+    project, document, cli, run = acceptance_goal
+    _, _, service, proposal = prepare(acceptance_goal)
+    code, changed = run("todo", "update", "--goal-id", "goal-acceptance", "--todo-id", "todo_export",
+        "--agent-id", "agent-a", "--text", "Deliver a different export")
+    assert code == 0, changed
+    code, recovered = cli("prepare", "--agent-id", "agent-a", "--document", str(document),
+        "--operation-id", "prepare-check", "--execute")
+    assert code == 0 and recovered["proposal"] == proposal
+    assert service.apply(proposal["proposal_id"])["proposal"]["status"] == "stale"
+    code, recovered = cli("prepare", "--agent-id", "agent-a", "--document", str(document),
+        "--operation-id", "prepare-check", "--execute")
+    assert code == 0 and recovered["proposal"]["status"] == "stale"
+    assert not (project / "runs.txt").exists()
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_configuration_response_loss_keeps_its_original_review_basis(acceptance_goal, monkeypatch, changed):
+    project, document, cli, run = acceptance_goal
+    _, _, service, proposal = prepare(acceptance_goal)
+    original = service.store.save_checkpoint
+
+    def lost(*args, **kwargs):
+        if kwargs["step"] == "acceptance_configured":
+            raise RuntimeError("lost configured checkpoint")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(service.store, "save_checkpoint", lost)
+    with pytest.raises(RuntimeError, match="lost"):
+        service.apply(proposal["proposal_id"])
+    monkeypatch.setattr(service.store, "save_checkpoint", original)
+    if changed:
+        before = cli("inspect")[1]
+        code, result = cli("configure", "--document", str(document),
+            "--expected-provider-revision", before["provider_revision"],
+            "--operation-id", "new-owner-configuration", "--execute")
+    else:
+        code, result = run("todo", "update", "--goal-id", "goal-acceptance", "--todo-id", "todo_export",
+            "--agent-id", "agent-a", "--note", "Progress after the response was lost")
+    assert code == 0, result
+    if changed:
+        before = cli("inspect")[1]
+        with pytest.raises(ActionConflictError, match="basis changed"):
+            service.apply(proposal["proposal_id"])
+        assert cli("inspect")[1] == before
+        assert not (project / "runs.txt").exists()
+    else:
+        assert service.apply(proposal["proposal_id"])["proposal"]["status"] == "applied"
+        assert (project / "runs.txt").read_text() == "x"
 
 
 def test_agent_preparation_does_not_approve_or_execute(acceptance_goal):
@@ -245,6 +427,9 @@ def test_stale_prepared_plan_cannot_replace_new_owner_configuration(acceptance_g
         "--expected-provider-revision", before["provider_revision"],
         "--operation-id", "another-owner-change", "--execute")
     assert code == 0, configured
+    code, recovered = cli("prepare", "--agent-id", "agent-a", "--document", str(document),
+        "--operation-id", "prepare-check", "--execute")
+    assert code == 0 and recovered["proposal"] == proposal
     result = service.apply(proposal["proposal_id"])
     assert result["proposal"]["status"] == "stale"
     assert not (project / "runs.txt").exists()

@@ -47,7 +47,9 @@ export const researchHistoryScenario = {
     let unavailable = false;
     try {
       context = await openWorkspacePage(browser, url, {collectCoverage, beforeGoto: async (_, page) => {
-        await page.route("**/status.json*", async route => {
+        // The document URL also contains ?statusUrl=/status.json. Only proxy
+        // the status endpoint; navigation must reach the frontend server.
+        await page.route(url => url.pathname === "/status.json", async route => {
           const response = await fetchWorkspaceBackend(route, owner.base);
           assert.equal(response.status(), 200);
           await route.fulfill({response});
@@ -155,7 +157,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       const realOwner=owner; owner=collisionOwner;
       await realOwner.close();
       await page.setViewportSize({width:1280,height:900});
-      await page.goto(new URL(`/chat/?goalId=${goal}&view=overview&statusUrl=%2Fstatus.json`,url).href,{waitUntil:'networkidle'});
+      await page.goto(new URL(`?goalId=${goal}&view=overview&statusUrl=%2Fstatus.json`,url).href,{waitUntil:'networkidle'});
       await history.getByRole('status').filter({hasText:'11 / 11'}).waitFor();
       const target = await history.locator(".research-timeline-marker").first().evaluate(button => {
         const box = button.getBoundingClientRect(), dot = getComputedStyle(button, "::after");

@@ -107,11 +107,16 @@ def test_migrated_owner_cli_and_app_continue_without_rewriting_history(migrated_
     assert {k: snapshot()["todos"][0][k] for k in preserved} == preserved
     assert cli(*migration)["status"] == "replayed" and snapshot() == current
     assert registry.read_bytes() == registry_bytes
-    # Returning to hard lease restores its execution requirement; soft copy
-    # admission did not consume, replace or silently upgrade the retained grant.
+    # Ordinary owner copy stays administrative after policy migration; explicit
+    # execution proof still cannot consume or upgrade the released grant.
     plan = registry.parent / "hard-again.json"
     preview = cli("handoff-mode", "plan-migration", "--mode", "hard_lease", "--plan", plan)
     cli("handoff-mode", "migrate", "--plan", plan, "--plan-sha256", preview["plan_sha256"], "--execute")
     hard = snapshot()
-    assert cli(*edit, ok=False)["error_code"] == "handoff_mode_requires_lease"
-    assert snapshot() == hard
+    assert cli(*edit)["status"] == "applied"
+    copied = snapshot()
+    assert copied["leases"] == hard["leases"]
+    assert copied["todos"][0]["note"] == "CLI observation"
+    assert cli(*edit, "--task-lease-idempotency-key", "previous-execution",
+        "--task-lease-expected-version", str(lease["version"]), ok=False)["error_code"] == "handoff_mode_requires_lease"
+    assert snapshot() == copied

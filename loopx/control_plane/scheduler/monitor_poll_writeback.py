@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -42,16 +43,28 @@ def resolve_monitor_todo_item(
         for item in authority["todos"]
         if item.get("role") == "agent" and item.get("archive_state") != "archive"
     ]
+    # DTO only: selectMonitorTodo remains the rule owner. Preserve the complete
+    # candidate set, but keep prose/evidence and schedule fields in the source
+    # snapshot. The selected fact is mapped back to its complete original row.
+    fields = ("todo_id", "target_key", "status", "archive_state", "role", "task_class")
+    facts = [{key: item[key] for key in fields if key in item} for item in items]
     try:
         result = effect_runtime_result("scheduler.monitor_target.select", {
-            "schema_version": "loopx_monitor_target_request_v0", "items": items,
+            "schema_version": "loopx_monitor_target_request_v0", "items": facts,
             "todo_id": normalized_todo_id, "target_key": safe_target_key or None,
         })
     except EffectRuntimeRejected as exc:
+        # A source/transport outage is not a definitive target rejection.
+        # Due lookup catches ValueError for semantic misses only.
+        if exc.diagnostic_code != "invalid_request":
+            raise
         raise ValueError(str(exc)) from exc
     if not isinstance(result, dict) or result.get("schema_version") != "loopx_monitor_target_result_v0":
         raise TypeError("TypeScript Monitor target selection shape mismatch")
-    return result["todo"]
+    for item, fact in zip(items, facts, strict=True):
+        if fact == result.get("todo"):
+            return deepcopy(item)
+    raise TypeError("TypeScript Monitor target selection does not match its source snapshot")
 
 
 def write_monitor_poll_todo_state(

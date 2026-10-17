@@ -294,7 +294,9 @@ def test_migrated_hard_lease_can_write_settle_retry_and_continue(tmp_path, provi
     assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == cli.TODO_ID
     update = ("todo", "update", "--todo-id", cli.TODO_ID, "--agent-id", cli.AGENT_ID,
               "--text", "Continue after policy migration")
-    code, rejected = run(*update)
+    # A migrated owner may edit copy, but migration supplies no execution proof.
+    code, rejected = run(*update, "--task-lease-idempotency-key", "not-acquired",
+                         "--task-lease-expected-version", "1")
     assert code == 1 and rejected["error_code"] == "handoff_mode_requires_lease", rejected
 
     lease_key = "migrated-delivery"

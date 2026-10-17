@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
-import { outputDir } from "./fixture.mjs";
-import { openWorkspacePage } from "./scenario-context.mjs";
+import { outputDir, repoRoot } from "./fixture.mjs";
+import {spawn, execFile} from "node:child_process";
+import {mkdtemp, rm} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import {promisify} from "node:util";
+import {resolveTestPython} from "../../scripts/test-python.mjs";
+import { openWorkspacePage, fetchWorkspaceBackend } from "./scenario-context.mjs";
 
 export const taskInspectorReturnScenario = {
   id: "task-inspector-return",
@@ -130,6 +135,135 @@ export const taskInspectorReturnScenario = {
         coverageEntries.push(...await context.close());
       }
     }
-    return { coverageEntries, note: "The 988-character source survives a bounded 500-character status; failed/mismatched reads, retry and late selection responses are explicit on packaged desktop/390px. Pointer/Escape/Enter/close/More retain the opener with reduced motion; no authority or model write. Backend authority is qualified separately by the real File/SQLite HTTP+CLI tests." };
+    // Shipped editing reaches the same real source and typed write owner.
+    const root = await mkdtemp(resolve(tmpdir(), "loopx-task-editor-"));
+    const python = await resolveTestPython();
+    const backend = spawn(python, ["-u", resolve(repoRoot, "examples/personal-workspace-browser/goal-workspace-todo-backend.py"), root, "requirements"], {cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"]});
+    let backendError = "";
+    backend.stderr.on("data", bytes => { backendError += bytes; });
+    let editing;
+    try {
+      const info = await new Promise((resolveInfo, reject) => {
+        let data = "";
+        backend.stdout.on("data", bytes => {
+          data += bytes;
+          if (data.includes("\n")) { try {resolveInfo(JSON.parse(data.split("\n")[0]));} catch(error) {reject(error);} }
+        });
+        backend.once("exit", code => reject(new Error(`Task backend exited ${code}: ${backendError}`)));
+        backend.once("error", reject);
+      });
+      const endpoint = `http://127.0.0.1:${info.port}`;
+      let applyCount = 0;
+      editing = await openWorkspacePage(browser, url, {collectCoverage, beforeGoto: async (api, page) => {
+        api.transformStatus = payload => {
+          const queue = payload.attention_queue.items.find(item => item.goal_id === "progress-projection");
+          for (const source of [queue?.agent_todos, queue?.project_asset?.agent_todos]) {
+            for (const item of source?.items ?? []) if (item.todo_id === "todo-progress-full") { item.claimed_by = "agent-a"; item.todo_id = "todo_requirements_source"; }
+          }
+        };
+        await page.route("**/api/chat/todo/detail?*", async route => route.fulfill({response: await fetchWorkspaceBackend(route, endpoint)}));
+        await page.route("**/api/actions**", async route => {
+          if (new URL(route.request().url()).pathname.endsWith("/apply")) applyCount++;
+          await route.fulfill({response: await fetchWorkspaceBackend(route, endpoint)});
+        });
+      }});
+      const {page} = editing;
+      await page.emulateMedia({reducedMotion: "reduce"});
+      await page.locator(".personal-goal-link", {hasText: "Progress Projection"}).click();
+      await page.getByRole("navigation", {name: "Goal 视图"}).getByRole("button", {name: /^(Tasks|任务)$/}).click();
+      await page.locator(".personal-task-card", {hasText: "Full queue follow-up"}).locator(":scope > button").click();
+      const drawer = page.getByRole("dialog", {name: "Todo 详情"});
+      const read = async () => (await (await page.request.get(`${endpoint}/api/chat/todo/detail?goal_id=progress-projection&todo_id=todo_requirements_source`)).json());
+      const initial = await read();
+      assert.ok(initial.text?.indexOf("FINAL_ACCEPTANCE") > 500 && initial.review_basis, JSON.stringify(initial));
+      await drawer.getByRole("button", {name: "修改要求", exact: true}).click();
+      const field = drawer.getByRole("textbox", {name: "完整任务要求"});
+      assert.equal(await field.inputValue(), initial.text, "Editing must start from the exact source, never the 500-character list");
+      await drawer.getByRole("button", {name:"标记完成",exact:true}).waitFor({state:"hidden"});
+      const next = initial.text + " Keep the additional delivery condition.";
+      await field.fill(next);
+      await page.screenshot({path: resolve(outputDir, "task-requirements-edit-desktop.png"), animations: "disabled"});
+      await field.press("Tab");
+      await page.keyboard.press("Enter");
+      await drawer.getByRole("status").filter({hasText: "要求已保存并读回"}).waitFor();
+      await drawer.getByRole("button", {name:"标记完成",exact:true}).waitFor({state:"visible"});
+      assert.equal(applyCount, 1, "One save decision invokes the existing native action once");
+      assert.equal((await read()).text, next);
+      assert.equal(await page.locator('.personal-context-drawer[data-context-kind="proposal"]').count(), 0, "An ordinary edit must not require another approval form");
+      await page.setViewportSize({width:390,height:844});
+      await drawer.getByRole("button", {name: "修改要求", exact: true}).click();
+      assert.equal(await field.inputValue(), next);
+      await field.fill(next + " Preserve this draft after a concurrent update.");
+      // Same real CLI and canonical writer, an independent intervening write.
+      const changed = await promisify(execFile)(python, ["-m", "loopx.cli", "--registry", info.registry,
+        "--format", "json", "todo", "update", "--goal-id", "progress-projection", "--todo-id", "todo_requirements_source",
+        "--agent-id", "agent-a", "--note", "Concurrent progress"], {cwd: repoRoot});
+      assert.equal(JSON.parse(changed.stdout).ok, true);
+      await drawer.getByRole("button", {name:"保存要求",exact:true}).click();
+      await drawer.getByRole("alert").filter({hasText:"Task source changed"}).waitFor();
+      await page.screenshot({path: resolve(outputDir, "task-requirements-edit-mobile-conflict.png"), animations: "disabled"});
+      assert.equal(applyCount, 1, "A stale source must fail before apply");
+      assert.equal((await read()).text, next);
+      assert.match(await field.inputValue(), /Preserve this draft/);
+      await drawer.getByRole("button", {name:"读取当前要求并保留草稿",exact:true}).click();
+      await drawer.getByRole("alert").waitFor({state:"hidden"});
+      await drawer.getByRole("button", {name:"保存要求",exact:true}).click();
+      await drawer.getByRole("status").filter({hasText: "要求已保存并读回"}).waitFor();
+      assert.equal(applyCount, 2);
+      assert.equal((await read()).text, next + " Preserve this draft after a concurrent update.");
+      const afterConflict = (await read()).text;
+      await drawer.getByRole("button", {name:"修改要求",exact:true}).click();
+      await field.fill(afterConflict + " Recover the original committed response.");
+      let loseResponse = true;
+      await page.route("**/api/actions/*/apply", async route => {
+        if (!loseResponse) return route.fallback();
+        loseResponse = false;
+        applyCount++;
+        const committed = await fetchWorkspaceBackend(route, endpoint);
+        assert.equal(committed.ok(), true);
+        await route.abort("failed");
+      });
+      await drawer.getByRole("button", {name:"保存要求",exact:true}).click();
+      await drawer.getByRole("status").filter({hasText:"要求已保存并读回"}).waitFor();
+      assert.equal(applyCount, 3, "A lost successful reply is reconciled from the original journal without a second apply");
+      assert.equal((await read()).text, afterConflict + " Recover the original committed response.");
+
+      // If both the apply reply and journal read are lost, retain the original
+      // proposal. Retrying during the outage must never create/apply anew.
+      const beforeOutage = (await read()).text;
+      await drawer.getByRole("button", {name:"修改要求",exact:true}).click();
+      const outageDraft = beforeOutage + " Retain the operation throughout an outage.";
+      await field.fill(outageDraft);
+      loseResponse = true;
+      let journalUnavailable = true;
+      await page.route("**/api/actions**", async route => {
+        if (journalUnavailable && route.request().method() === "GET") return route.abort("failed");
+        return route.fallback();
+      });
+      await drawer.getByRole("button", {name:"保存要求",exact:true}).click();
+      await drawer.getByRole("alert").waitFor();
+      assert.equal(applyCount, 4);
+      assert.equal((await read()).text, outageDraft);
+      await drawer.getByRole("button", {name:"重试读回",exact:true}).click();
+      await drawer.getByRole("button", {name:"重试读回",exact:true}).waitFor({state:"visible"});
+      assert.equal(await field.inputValue(), outageDraft);
+      assert.equal(applyCount, 4, "An unavailable original journal must not trigger another apply");
+      journalUnavailable = false;
+      await drawer.getByRole("button", {name:"重试读回",exact:true}).click();
+      await drawer.getByRole("status").filter({hasText:"要求已保存并读回"}).waitFor();
+      assert.equal(applyCount, 4, "Reconnect reads the original committed receipt without a new operation");
+
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+      assert.equal(editing.api.turnRequests.length, 0);
+      assert.ok(editing.errors.every(error => /status of 400|net::ERR_FAILED/.test(error)), editing.errors.join(" | "));
+      await page.screenshot({path: resolve(outputDir, "task-requirements-edit-mobile.png"), animations: "disabled"});
+    } finally {
+      if (editing) coverageEntries.push(...await editing.close());
+      const exited = new Promise(resolveExit => backend.once("exit", resolveExit));
+      backend.kill("SIGTERM");
+      await exited;
+      await rm(root, {recursive:true,force:true});
+    }
+    return { coverageEntries, note: "The 988-character source survives a bounded 500-character status; failed/mismatched reads, retry and late selection responses are explicit on packaged desktop/390px. Pointer/Escape/Enter/close/More retain the opener with reduced motion. Editing uses a disposable real File authority and Chat HTTP owner: one save, retained concurrent-conflict draft and lost successful response recovery without another apply. Workspace navigation/status is synthetic. File/SQLite hard-lease semantics are qualified separately by HTTP+CLI tests; no active Goal or model execution." };
   },
 };

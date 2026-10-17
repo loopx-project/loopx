@@ -37,6 +37,7 @@ async function fixture(t: test.TestContext, provider: "file" | "sqlite" | "postg
     task_class: "advancement_task", task_repository: "git:github.com/example/project", required_write_scopes: ["src/**"], completion_validation_required: true};
   const lease = {schema_version: "task_lease_v0", goal_id: GOAL, todo_id: "todo_work", owner: "agent-a",
     idempotency_key: "execution", version: 7, lease_epoch: 3, write_scopes: ["src/**"],
+    write_repository: todo.task_repository,
     status: leaseState === "released" ? "released" : "active",
     expires_at: leaseState === "active" ? "2026-09-25T07:00:00Z" : "2026-09-25T05:00:00Z"};
   const seeded = await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
@@ -104,7 +105,6 @@ for (const provider of ["file", "sqlite", "postgresql"] as const) {
       {...input, expected_provider_revision: "stale:revision"},
       {...input, actor_agent_id: "agent-b"},
       {...input, actor_agent_id: "unknown"},
-      {...input, planning_intent: {required_write_scopes: ["other/**"]}},
     ]) {
       assert.equal((await executeCoordinationTodoUpdate(store, request)).status, "failed");
       assert.deepEqual(await head(store), before);
@@ -120,5 +120,188 @@ for (const provider of ["file", "sqlite", "postgresql"] as const) {
     const outcomes = await Promise.all(["one", "two"].map(operation_id => executeCoordinationTodoUpdate(store,
       {...input, operation_id, patch: {note: operation_id}, expected_provider_revision: before.provider_revision})));
     assert.equal(outcomes.filter(result => result.status === "applied").length, 1);
+  });
+  for (const state of [null, "active", "expired", "released"]) test(`${provider}: requirement revision retires old execution in the same commit (${state})`, options, async t => {
+    const {store, input, lease, todo} = await fixture(t, provider, state);
+    const revision = {...input, planning_intent: {required_write_scopes: ["src/**", "tests/**"],
+      required_capabilities: ["filesystem_write"], reason: "Include regression coverage"}};
+    const before = await head(store);
+    const planned = await executeCoordinationTodoUpdate(store, {...revision, dry_run: true});
+    assert.equal(planned.status, "planned", JSON.stringify(planned));
+    assert.deepEqual(await head(store), before);
+    const result = await executeCoordinationTodoUpdate(store, revision);
+    assert.equal(result.status, "applied", JSON.stringify(result));
+    const transition = result.work_requirements_transition as JsonObject;
+    assert.equal(transition.execution_authority_granted, false);
+    assert.equal(transition.next_execution, "acquire_fresh_lease");
+    assert.equal(transition.lease_retirement, state === null ? "absent" : state === "released" ? "already_released" : "released");
+    const after = await head(store);
+    const updated = (after.head.todos as JsonObject[])[0]!;
+    assert.deepEqual(updated.required_write_scopes, ["src/**", "tests/**"]);
+    assert.deepEqual(updated.required_capabilities, ["filesystem_write"]);
+    assert.equal(updated.text, todo.text);
+    assert.equal(updated.claimed_by, todo.claimed_by);
+    assert.equal(updated.status, "open");
+    assert.equal(updated.completion_validation_required, true);
+    const retained = (after.head.leases as JsonObject[])[0];
+    if (state === null) assert.equal(retained, undefined);
+    else {
+      assert.equal(retained!.status, "released");
+      for (const field of ["version", "lease_epoch", "idempotency_key", "write_scopes", "write_repository"] as const)
+        assert.deepEqual(retained![field], lease[field]);
+    }
+    const replay = await executeCoordinationTodoUpdate(store, revision);
+    assert.equal(replay.status, "replayed");
+    assert.deepEqual(replay.work_requirements_transition, transition);
+    assert.deepEqual(await head(store), after);
+    assert.equal((await executeCoordinationTodoUpdate(store, {...revision,
+      planning_intent: {required_write_scopes: ["changed/**"]}})).reason_code, "coordination_operation_identity_mismatch");
+    assert.deepEqual(await head(store), after);
+  });
+  test(`${provider}: identical requirements preserve the current grant; explicit valid proof may revise it`, options, async t => {
+    const {store, input} = await fixture(t, provider);
+    const same = {...input, planning_intent: {required_write_scopes: ["src/**"]}};
+    const before = await head(store);
+    const result = await executeCoordinationTodoUpdate(store, same);
+    assert.equal(result.status, "applied", JSON.stringify(result));
+    assert.equal(result.work_requirements_transition, undefined);
+    assert.deepEqual((await head(store)).head.leases, before.head.leases);
+    const changed = await executeCoordinationTodoUpdate(store, {...input, operation_id: "exact-proof",
+      planning_intent: {required_capabilities: ["filesystem_write"]},
+      lease_idempotency_key: "execution", lease_expected_version: 7});
+    assert.equal(changed.status, "applied", JSON.stringify(changed));
+    assert.equal(((await head(store)).head.leases as JsonObject[])[0]!.status, "released");
+  });
+  test(`${provider}: repository correction preserves history and subsequent owner administration`, options, async t => {
+    const {store, input, lease} = await fixture(t, provider);
+    const correction = {...input, operation_id: "repository-correction", patch: {},
+      planning_intent: {task_repository: "git:github.com/example/revised"}};
+    assert.equal((await executeCoordinationTodoUpdate(store, correction)).status, "applied");
+    const retired = (await head(store)).head.leases;
+    assert.deepEqual((retired as JsonObject[])[0], {...lease, status: "released",
+      released_at: NOW.toISOString().replace(".000Z", "Z"), updated_at: NOW.toISOString().replace(".000Z", "Z")});
+    const steps = [
+      {patch: {note: "Continue administration"}, planning_intent: {}},
+      {patch: {}, planning_intent: {required_write_scopes: ["tests/**"]}},
+      {patch: {}, planning_intent: {status: "blocked", reason: "Pause"}},
+      {patch: {}, planning_intent: {status: "open", reason: "Resume"}},
+      {patch: {}, planning_intent: {status: "deferred", reason: "Wait", resume_when: "resume_at:2099-01-01T00:00:00Z"}},
+      {patch: {}, planning_intent: {status: "open", reason: "Resume deferred work"}},
+      {patch: {}, planning_intent: {task_repository: "git:github.com/example/corrected"}},
+    ];
+    for (const [index, step] of steps.entries()) {
+      const request = {...input, ...step, operation_id: `continue-${index}`};
+      const before = await head(store);
+      assert.equal((await executeCoordinationTodoUpdate(store, {...request, dry_run: true})).status, "planned");
+      assert.deepEqual(await head(store), before);
+      const result = await executeCoordinationTodoUpdate(store, request);
+      assert.equal(result.status, "applied", JSON.stringify(result));
+      const after = await head(store);
+      assert.deepEqual(after.head.leases, retired);
+      assert.equal((await executeCoordinationTodoUpdate(store, request)).status, "replayed");
+      assert.deepEqual(await head(store), after);
+      for (const proof of [
+        {lease_idempotency_key: "execution", lease_expected_version: 7},
+        {lease_idempotency_key: "execution"},
+      ]) {
+        const refused = await executeCoordinationTodoUpdate(store, {...request, ...proof, operation_id: `old-proof-${index}`});
+        assert.equal(refused.status, "failed", JSON.stringify(refused));
+        assert.deepEqual(await head(store), after);
+      }
+    }
+    const final = (await head(store)).head.todos as JsonObject[];
+    assert.equal(final[0]!.task_repository, "git:github.com/example/corrected");
+    assert.equal(final[0]!.status, "open");
+    assert.equal(final[0]!.claimed_by, "agent-a");
+    assert.equal(final[0]!.completion_validation_required, true);
+    // Retrying the original correction reports history without undoing later work.
+    const beforeReplay = await head(store);
+    assert.equal((await executeCoordinationTodoUpdate(store, correction)).status, "replayed");
+    assert.deepEqual(await head(store), beforeReplay);
+  });
+  for (const boundary of ["active", "expired", "foreign", "corrupt", "excluded", "bound"] as const) {
+    test(`${provider}: released-history recovery cannot hide ${boundary} repository constraints`, options, async t => {
+      const {store, input, todo} = await fixture(t, provider,
+        boundary === "active" || boundary === "expired" ? boundary : "released");
+      const seeded = await head(store);
+      const current = {...todo, task_repository: "git:github.com/example/revised",
+        ...(boundary === "excluded" ? {excluded_agents: ["agent-a"]} : {}),
+        ...(boundary === "bound" ? {bound_agent: "agent-b"} : {})};
+      const leases = (seeded.head.leases as JsonObject[]).map(lease => ({...lease,
+        ...(boundary === "foreign" ? {owner: "agent-b"} : {}),
+        ...(boundary === "corrupt" ? {write_repository: "https://github.com/example/project.git"} : {})}));
+      assert.equal((await store.commitAuthority({operation_id: "retained-repository-state",
+        expected_provider_revision: seeded.provider_revision, events: [], receipts: [],
+        next_projection: {...seeded.head, todos: [current], leases,
+          todo_read_model: coordinationTodoReadModel([current], TODO_DOMAIN_READ_RECORD_SCHEMA)}})).status, "applied");
+      const before = await head(store);
+      for (const [index, step] of [
+        {patch: {note: "Cannot bypass holder"}, planning_intent: {}},
+        {patch: {}, planning_intent: {required_write_scopes: ["tests/**"]}},
+        {patch: {}, planning_intent: {status: "blocked", reason: "Pause"}},
+        {patch: {}, planning_intent: {status: "deferred", reason: "Wait", resume_when: "resume_at:2099-01-01T00:00:00Z"}},
+      ].entries()) {
+        const request = {...input, ...step, operation_id: `refuse-${index}`};
+        assert.equal((await executeCoordinationTodoUpdate(store, request)).status, "failed");
+        assert.deepEqual(await head(store), before);
+        assert.equal((await store.readReceipt(request.operation_id)).status, "missing");
+      }
+    });
+  }
+  test(`${provider}: requirement edits cannot heal stale proof, combine status/ownership, or bypass CAS`, options, async t => {
+    const {store, input} = await fixture(t, provider);
+    const revision = {...input, planning_intent: {required_capabilities: ["filesystem_write"]}};
+    const before = await head(store);
+    for (const request of [
+      {...revision, lease_idempotency_key: "stale", lease_expected_version: 7},
+      {...revision, lease_idempotency_key: "execution", lease_expected_version: 6},
+      {...revision, lease_idempotency_key: "execution"},
+      {...revision, lease_expected_version: 7},
+      {...revision, actor_agent_id: "agent-b"},
+      {...revision, actor_agent_id: "unknown"},
+      {...revision, planning_intent: {...revision.planning_intent, status: "blocked", reason: "Bundle"}},
+      {...revision, planning_intent: {...revision.planning_intent, claimed_by: "agent-b"}},
+      {...revision, expected_provider_revision: "stale:revision"},
+    ]) {
+      assert.equal((await executeCoordinationTodoUpdate(store, request)).status, "failed");
+      assert.deepEqual(await head(store), before);
+    }
+    const outcomes = await Promise.all(["one", "two"].map(operation_id => executeCoordinationTodoUpdate(store,
+      {...revision, operation_id, expected_provider_revision: before.provider_revision})));
+    assert.equal(outcomes.filter(result => result.status === "applied").length, 1);
+  });
+  for (const state of ["expired", "released"]) test(`${provider}: explicit ${state} proof is not converted into an administrative revision`, options, async t => {
+    const {store, input} = await fixture(t, provider, state);
+    const before = await head(store);
+    const result = await executeCoordinationTodoUpdate(store, {...input,
+      planning_intent: {required_capabilities: ["filesystem_write"]},
+      lease_idempotency_key: "execution", lease_expected_version: 7});
+    assert.equal(result.status, "failed", JSON.stringify(result));
+    assert.equal((result.recovery as JsonObject).action, "inspect_current_proof");
+    assert.deepEqual(await head(store), before);
+  });
+  test(`${provider}: registry revocation cannot leave revised work or a retired lease`, options, async t => {
+    const {store, input} = await fixture(t, provider);
+    const before = await head(store);
+    let reads = 0;
+    const result = await executeCoordinationTodoUpdate(store, {...input,
+      planning_intent: {required_write_scopes: ["other/**"]}}, async () => ++reads === 1);
+    assert.equal(result.reason_code, "authority_source_changed");
+    assert.deepEqual(await head(store), before);
+    assert.equal((await store.readReceipt(input.operation_id)).status, "missing");
+  });
+  for (const state of ["active", "expired", "released"]) test(`${provider}: a foreign ${state} holder cannot be retired by requirement editing`, options, async t => {
+    const {store, input} = await fixture(t, provider, state);
+    const seeded = await head(store);
+    await store.commitAuthority({operation_id: "foreign-holder", expected_provider_revision: seeded.provider_revision,
+      next_projection: {...seeded.head, leases: (seeded.head.leases as JsonObject[]).map(lease => ({...lease, owner: "agent-b"}))},
+      events: [], receipts: []});
+    const before = await head(store);
+    const result = await executeCoordinationTodoUpdate(store, {...input,
+      planning_intent: {required_write_scopes: ["other/**"]}});
+    assert.equal(result.reason_code, "lease_owner_mismatch", JSON.stringify(result));
+    assert.equal((result.recovery as JsonObject).owner_relation, "foreign_owner");
+    assert.equal((result.recovery as JsonObject).action, "reconcile_lease_owner");
+    assert.deepEqual(await head(store), before);
   });
 }

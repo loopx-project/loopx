@@ -7,6 +7,7 @@ import type { GoalAcceptanceObservation } from "../../data/goal-acceptance-obser
 import type { AttentionDetails } from "./attention-details";
 import type { WorkspaceLoadError, WorkspaceReadScope } from "../../data/workspace-progressive-status";
 import type { TodoItem } from "../../data/status";
+import type { TodoUpdateSourceBasis } from "../../data/action-source-basis";
 import { goalWorkKind, type GoalHostThreadActivity, type WorkspaceGoalExecution } from "./goal-activity";
 import { receiptRetryReadback } from "./monitor-readback";
 import type { DigestAttentionSummary } from "../../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
@@ -530,6 +531,7 @@ export type WorkspaceGoalArchiveLoadState =
   | { phase: "error"; error: string };
 
 export type PersonalWorkspaceCallbacks = {
+  onSaveTodoRequirements?: (todo: WorkspaceTodo, text: string, basis: TodoUpdateSourceBasis, retry?: WorkspaceActionPreview) => Promise<WorkspaceActionPreview>;
   onApplyProposal?: (proposal: WorkspaceActionPreview) => void | Promise<void>;
   onApplyAttention?: (attention: WorkspaceAttention) => void;
   onCancelProposal?: (proposal: WorkspaceActionPreview) => void;

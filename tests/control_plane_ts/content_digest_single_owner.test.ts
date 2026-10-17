@@ -95,6 +95,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/capabilities/explore_result_page.ts",
   "control_plane/capabilities/external_evidence.ts",
   "control_plane/capabilities/goal_capability_organization.ts",
+  "control_plane/capabilities/trajectory_assessment.ts",
   "control_plane/collaboration/chat_mode.ts",
   "control_plane/collaboration/delegation.ts",
   "control_plane/collaboration/delegation_result_use.ts",

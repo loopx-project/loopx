@@ -16,7 +16,7 @@ from loopx.chat_store import ChatSessionStore
 from loopx.control_plane.coordination.runtime_shadow import (
     build_todo_runtime_shadow_projection,
 )
-from loopx.control_plane.testing.canary_harness import write_fixture_registry
+from loopx.control_plane.testing.canary_harness import run_json_cli_result, write_fixture_registry
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests" / "control_plane"))
 from canonical_authority_fixture import initialize_canonical_authority
@@ -127,6 +127,17 @@ for operation in ("older-export-plan", "prepare-export-check"):
         "action": "prepare_check", "operation_id": operation, "document": document})
     if not prepared.get("ok"):
         raise RuntimeError(f"Conversation preparation failed: {prepared}")
+# Simulate a lost tool reply followed by ordinary progress. The original plan
+# must reach the existing owner action, rather than a newly prepared approval.
+code, progress = run_json_cli_result("todo", "update", "--goal-id", "multi-agent-projection",
+    "--todo-id", "todo_work", "--agent-id", "agent-a", "--note", "Work is progressing",
+    registry_path=registry, runtime_root=runtime)
+if code != 0:
+    raise RuntimeError(f"Fixture progress failed: {progress}")
+recovered = adapter.session.read_tool_handler(TOOL["name"], {
+    "action": "prepare_check", "operation_id": "prepare-export-check", "document": document})
+if recovered != prepared:
+    raise RuntimeError(f"The original check plan was not recovered: {recovered}")
 server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
 server.registry_path, server.runtime_root = registry, runtime
 server.runtime_root_override, server.verbose = str(runtime), False

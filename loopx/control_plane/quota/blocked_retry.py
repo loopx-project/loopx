@@ -6,12 +6,33 @@ from datetime import datetime
 from typing import Any
 
 from ..todos.contract import normalize_todo_id
+from ..todos.resume_condition import compact_todo_resume_items
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 
 BLOCKED_RETRY_SCHEMA_VERSION = "quota_blocked_retry_v0"
 MIN_RETRY_SECONDS = 60
 MAX_RETRY_SECONDS = 30 * 60
 TURN_SETTLEMENT_RETRY_SECONDS = 5 * 60
+
+
+def compact_settlement_wait_todos(
+    items: list[dict[str, Any]], *, todo_id: str,
+) -> list[dict[str, Any]]:
+    """Transport all dependency facts and the bound wait's frozen observation.
+
+    The TS blocked-wait owner needs the complete graph for cycle diagnosis,
+    but only the bound Todo's resume proof and Monitor clocks. Keep those
+    observations verbatim; prose and completion instructions are not inputs.
+    """
+    facts = compact_todo_resume_items(items)
+    bound_fields = (
+        "resume_condition", "last_checked_at", "next_due_at", "result_hash",
+        "material_change", "cadence", "expires_at", "watch_only",
+    )
+    for source, row in zip((item for item in items if item.get("todo_id")), facts):
+        if source.get("todo_id") == todo_id:
+            row.update({field: source[field] for field in bound_fields if field in source})
+    return facts
 
 
 def require_blocked_retry_wait(
@@ -30,11 +51,11 @@ def require_blocked_retry_wait(
     try:
         result = effect_runtime_result("quota.settlement.read", {
             "schema_version": "loopx_quota_blocked_wait_request_v0",
-            "todos": items,
+            "todos": compact_settlement_wait_todos(items, todo_id=todo_id),
             "todo_id": todo_id,
             "observed_at": observed_at,
             "allow_turn_settlement_retry": allow_turn_settlement_retry,
-        })
+        }, large_local_snapshot=True)
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from exc
     if not isinstance(result, dict):

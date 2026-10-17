@@ -368,8 +368,9 @@ def test_cold_import_recovery_preserves_later_canonical_writes(
         "--agent-id", "agent-a", "--note", "Work retained after migration",
         "--update-operation-id", "later-update",
         "--update-expected-provider-revision", before["authority_read"]["provider_revision"]]
-    # Importing source history grants no lease to mutate the imported work.
-    denied = run(*update, succeeds=False)
+    # Administrative copy is proof-free; import does not qualify explicit proof.
+    denied = run(*update, "--task-lease-idempotency-key", "not-acquired",
+        "--task-lease-expected-version", "1", succeeds=False)
     assert denied["error_code"] == "handoff_mode_requires_lease"
     assert listing()["todos"] == before["todos"]
     acquired = run("task-lease", "acquire", "--goal-id", "cold", "--todo-id", "todo_current",

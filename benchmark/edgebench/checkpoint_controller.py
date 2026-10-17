@@ -227,12 +227,12 @@ def capture(controller_file: Path, *, token: str, capture_id: str, destination: 
         components.append({"id": "host_phase_deadline", "source_path": str(phase_deadline_file)})
         metadata["host_phase_budget"] = _phase_budget(phase_raw, native)
     probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components},
-                                  timeout=_remaining(deadline), retry_safe=False)
+                                  timeout=_remaining(deadline), retry_safe=False, large_local_snapshot=True)
     result = effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "capture", "components": components, "destination": str(destination),
         "expected_source_sha256": probe["source_sha256"],
         "point_metadata": metadata,
-    }, timeout=_remaining(deadline), retry_safe=False)
+    }, timeout=_remaining(deadline), retry_safe=False, large_local_snapshot=True)
     # Bind the actually copied bytes, not merely a prior source observation.
     _bound_bank(destination / "components/native_judge", reference)
     if phase_raw is not None and (destination / "components/host_phase_deadline").read_bytes() != phase_raw:
@@ -291,7 +291,7 @@ def restore(controller_file: Path, *, root: Path, expected_sha256: str, run_id: 
     controller = _controller(controller_file)
     root = _physical(root)
     effect_runtime_result("runtime.checkpoint_artifacts", {
-        "action": "verify", "root": str(root), "expected_sha256": expected_sha256})
+        "action": "verify", "root": str(root), "expected_sha256": expected_sha256}, large_local_snapshot=True)
     manifest = json.loads((root / "checkpoint.json").read_bytes())
     expected_components = ["native_judge"]
     if phase_deadline_file is not None:
@@ -336,7 +336,7 @@ def restore(controller_file: Path, *, root: Path, expected_sha256: str, run_id: 
             effect_runtime_result("runtime.checkpoint_artifacts", {
                 "action": "materialize", "root": str(root), "expected_sha256": expected_sha256,
                 "destination": str(stage / "unit"),
-            }, retry_safe=False)
+            }, retry_safe=False, large_local_snapshot=True)
             imported = stage / "unit/components/native_judge"
             _bound_bank(imported, reference)
             with _bank_import_lock(target, timeout):
