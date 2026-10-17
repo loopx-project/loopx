@@ -223,9 +223,10 @@ export async function readLocalGoalTransferContinuation(decision: JsonObject): P
       return {target_task_admitted: false, target_runtime_admitted: false, work: null};
     }
     const admission = await requireLocalGoalTransferAdmission(root, goal, fence.fence);
-    if (fence.fence.schema_version === PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA) await readReviewedTransferContext(admission);
     if (!same(admission.decision, decision)) reject("Original destination admission differs from source-final");
-    const snapshot = await readGoalTransferSnapshot(String(target.registry_path), goal);
+    const snapshot = fence.fence.schema_version === PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA
+      ? (await readReviewedTransferContext(admission, "readback")).snapshot
+      : await readGoalTransferSnapshot(String(target.registry_path), goal);
       const opened = await openLocalAuthorityStoreHandle(root, goal, {}, {existingOnly: true});
       const head = await opened.store.loadAuthority();
       if (head.status !== "loaded") reject("Original destination work is unavailable");
@@ -245,7 +246,8 @@ export async function readLocalGoalTransferContinuation(decision: JsonObject): P
           !same(snapshot, await readGoalTransferSnapshot(String(target.registry_path), goal))) {
         reject("Original destination changed during readback; retry its current state");
       }
-      return {target_task_admitted: true, target_runtime_admitted: fence.fence.schema_version === PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA, work: {objective: snapshot.state_objective, requirements: context.state_text,
+      return {target_task_admitted: true, target_runtime_admitted: fence.fence.schema_version === PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA,
+        target_activation_state: snapshot.activation_state, work: {objective: snapshot.state_objective, requirements: context.state_text,
         agents: coordination.registered_agents, todos: index.todo_ids.map(id => index.todos.get(id)!)}};
 }
 

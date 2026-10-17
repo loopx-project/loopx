@@ -55,7 +55,9 @@ export function GoalTransferSettings({goalId}: {goalId: string}) {
       : (zh ? "取消决定已记录；源环境已有后续状态，请读取当前状态。" : "Cancellation is recorded. The source has later state; read its current status.")}</p> : null}
     {cutoverRecorded ? <p role="status">{zh ? "本次切换已接受，源环境保持停写。" : "This switch was accepted. Source writes remain closed."}</p> : null}
     {view ? <>
-      <p>{view.local_cutover ? (view.local_cutover.target_runtime_admitted
+      <p>{view.local_cutover ? (view.local_cutover.target_activation_state === "stopped"
+        ? (zh ? "目标 Goal 已停止，仍可查看原任务结果。恢复该 Goal 后才可继续执行。" : "The destination Goal is stopped. Original work remains readable; resume that Goal before continuing execution.")
+        : view.local_cutover.target_runtime_admitted
         ? (zh ? "目标环境已取得新的本地执行准入，可用审阅过的上下文继续原任务。下方为当前目标结果；完整迁移流程仍待验证。" : "The destination has new local execution admission and can continue the original work with reviewed context. Current destination results appear below; the complete migration flow still needs qualification.")
         : view.local_cutover.target_task_admitted
         ? (zh ? "源环境已停止写入，目标可重新领取原任务的本地租约。下方为目标任务状态；Host 续办仍待验证。" : "Source writes are closed. The destination can acquire a fresh local lease for the original task. Status below comes from the destination; Host continuation still needs qualification.")

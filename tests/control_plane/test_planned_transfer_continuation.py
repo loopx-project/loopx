@@ -199,9 +199,29 @@ def test_current_binding_or_context_failure_cannot_start_a_host(source: dict, tm
         "--agent-id", "foreign" if fault == "agent" else "agent-a", "--todo-id",
         "todo_foreign" if fault == "todo" else source["todo"], expected_code=1)
     assert failed["ok"] is False
+    if fault == "context":
+        assert target["cli"]("goal-transfer", "inspect", "--goal-id", "report", expected_code=1)["ok"] is False
+        assert source["cli"]("goal-transfer", "inspect", "--goal-id", "report", expected_code=1)["ok"] is False
     assert not (target["runtime"] / "goals/report/turn-sessions").exists()
     assert not (target["project"] / "report.txt").exists()
     if fault == "registration":
+        # Stopping execution must not hide original work or its result. The
+        # same current registration/context checks still guard this read.
+        restart_effect_runtime(wait_for_exit=True)
+        observed = target["cli"]("goal-transfer", "inspect", "--goal-id", "report")
+        assert observed["local_cutover"]["target_activation_state"] == "stopped"
+        assert any(row["todo_id"] == source["todo"] for row in observed["work"]["todos"])
+        assert source["cli"]("goal-transfer", "inspect", "--goal-id", "report")["work"] == observed["work"]
+        server, thread, call = _http(target)
+        try:
+            assert call({"action": "inspect", "goal_id": "report"}) == (200, observed)
+        finally:
+            server.shutdown()
+            thread.join(5)
+            server.server_close()
+        with pytest.raises((ValueError, EffectRuntimeRemoteError)):
+            FirstPartyHostGoalAdmission.for_plan(registry_path=target["registry"], goal_id="report", planned_goal_ref=None).require_current()
+        assert not (target["runtime"] / "goals/report/turn-sessions").exists()
         # A stop denies Host work but cannot lock the ordinary Goal owner out
         # of resume. A new explanatory reason is metadata, not a new grant.
         with project_registry_transaction(target["registry"], operation="resume-current-Goal") as transaction:
@@ -209,3 +229,4 @@ def test_current_binding_or_context_failure_cannot_start_a_host(source: dict, tm
             payload["goals"][0]["activation"].update(state="active", reason="Owner resumed this Goal")
             transaction.commit(payload)
         FirstPartyHostGoalAdmission.for_plan(registry_path=target["registry"], goal_id="report", planned_goal_ref=None).require_current()
+        assert target["cli"]("goal-transfer", "inspect", "--goal-id", "report")["local_cutover"]["target_activation_state"] == "active"

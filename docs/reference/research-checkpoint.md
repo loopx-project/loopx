@@ -165,6 +165,11 @@ offers a current-state read. The complete installed migration flow remains
 unqualified, including automatic active-work drain and necessary configuration,
 dependency and credential rebinding.
 
+Stopping the admitted destination Goal keeps original work and results readable
+in this entry. New Host/runtime execution remains stopped until the existing
+Goal lifecycle owner resumes it; viewing a result does not renew admission.
+Ordinary Todo management keeps its existing owner rules.
+
 For a governed CLI Turn with an explicit Todo and `--turn-instance-id`, retrying
 that same identity now reads the original journal before rebuilding a live plan.
 A changed plan hash cannot allocate a second canonical journal for the same

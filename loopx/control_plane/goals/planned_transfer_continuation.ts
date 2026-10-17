@@ -40,7 +40,8 @@ export function planReviewedTransferContinuation(mode: unknown, original: JsonOb
  * The physical runtime/store binding is checked by the existing cutover owner.
  * Stopping, revoking or redirecting this Goal immediately stops Host admission;
  * a harmless display-name change and unrelated Goals do not invalidate it. */
-export async function readReviewedTransferContext(receipt: JsonObject): Promise<{snapshot: JsonObject; context: JsonObject; materials: JsonObject}> {
+export async function readReviewedTransferContext(receipt: JsonObject,
+  purpose: "execution" | "readback" = "execution"): Promise<{snapshot: JsonObject; context: JsonObject; materials: JsonObject}> {
   const decision = requireJsonObject(receipt.decision, "original cutover decision");
   const continuation = requireJsonObject(decision.continuation, "reviewed continuation admission");
   const admitted = requireJsonObject(receipt.goal, "admitted Goal");
@@ -50,7 +51,11 @@ export async function readReviewedTransferContext(receipt: JsonObject): Promise<
   }
   const snapshot = await readGoalTransferSnapshot(String(receipt.target_registry_path), String(decision.goal_id));
   const current = requireJsonObject(requireJsonObject(snapshot.source_context, "current Goal context").goal, "current Goal");
-  if (snapshot.registry_profile !== null || snapshot.registry_role === "global-local" || snapshot.activation_state !== "active" ||
+  // Readback observes the existing Goal activation owner; it cannot mint an
+  // execution grant. Host/runtime and admission retain the strict default.
+  const activationAllowed = snapshot.activation_state === "active" ||
+    (purpose === "readback" && snapshot.activation_state === "stopped");
+  if (snapshot.registry_profile !== null || snapshot.registry_role === "global-local" || !activationAllowed ||
       ["id", "repo", "state_file", "planned_transfer", "goal_instance_id", "creation_operation_id", "status",
         "domain", "role", "spawn_policy", "coordination", "guards", "execution_profile", "authority_sources"]
         .some(key => !same(current[key] ?? null, admitted[key] ?? null))) {
@@ -122,6 +127,7 @@ export async function inspectAdmittedGoalTransferDestination(value: JsonObject):
     source_state: "cutover_recorded", operation_id: fence.fence.operation_id,
     authority_preparation_ready: false, cancel_available: false, continuation_available: false,
     local_cutover: {source_final: true, target_task_admitted: current.target_task_admitted,
-      target_runtime_admitted: current.target_runtime_admitted}, work: current.work,
+      target_runtime_admitted: current.target_runtime_admitted,
+      ...(current.target_activation_state ? {target_activation_state: current.target_activation_state} : {})}, work: current.work,
     holds: [{code: "transfer_journey_incomplete", owner: "goal_transfer"}]};
 }
