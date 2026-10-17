@@ -987,12 +987,16 @@ def handle_loopx_request(handler, session_id: str, *, apply: bool = False) -> No
     try:
         if not handler._require_loopback_origin():
             return
-        session = handler.server.chat_store.load_session(session_id)
+        route = getattr(handler, "_goal_chat_routes", None)
+        routes = route() if route else None
+        controller = routes.for_session(session_id, execute=apply) if routes else handler.server.runtime_controller
+        store = routes.store_for(controller) if routes else controller.store
+        session = store.load_session(session_id)
         if not session:
             raise ValueError("conversation unavailable")
-        service = handler.server.runtime_controller.loopx_mode
+        service = controller.loopx_mode
         if apply:
-            context = handler._session_context(session)
+            context = handler._session_context(session, **({"controller": controller} if route else {}))
             result = service.apply(session_id, handler._read_json(), work_dir=context["project"],
                                    objective=str(context["objective"] or context["title"]))
         else:
