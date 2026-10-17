@@ -7,6 +7,14 @@ import pytest
 from test_chat_ordinary_project import ordinary  # noqa: F401, F811
 from test_native_steward_private import steward  # noqa: F401
 from loopx.capabilities.native_chat.conversation_bindings import ChatConversationBindings
+from loopx.extensions.lark.conversation_identity import identity_ref
+
+
+def _request_for_event(transport, event):
+    binding = transport._binding("notes-app")
+    return transport.core.read_request(
+        identity_ref(binding["provider_ref"], event["message_id"])
+    )
 
 
 def _wait_for_native_turn(store, session_id, turn_id):
@@ -137,7 +145,7 @@ def _listener_background_stop_journey(fixture, monkeypatch, failure, *, owner=Fa
         newer_event = event("newer-during-background-stop", "wait for interrupt")
         accepted = callers.submit(admit, "notes-app", newer_event)
         assert accepted.result(timeout=5)["status"] == "durably_accepted"
-        newer = next(r for r in transport.core.pending() if r["message"] == newer_event["content"])
+        newer = _request_for_event(transport, newer_event)
         assert newer["session_id"] == sid
         assert store.load_turn(sid, newer["turn_id"])["status"] in {"queued", "starting", "running"}
         assert newer["turn_id"] not in frozen["background_turn_ids"]
@@ -374,12 +382,12 @@ def test_group_disconnect_stops_running_and_queued_turns_without_stopping_other_
     workspace = ordinary[-1]
     root = provider.topic("root", "first request" if resumed else "wait for interrupt")
     assert transport.admit("notes-app", root)["status"] == "durably_accepted"
-    first = next(row for row in transport.core.pending() if row["message"] == root["content"])
+    first = _request_for_event(transport, root)
     if resumed:
         runtime.wait_for_turn(session_id=first["session_id"], turn_id=first["turn_id"], timeout_sec=10)
         followup = provider.topic("running", "wait for interrupt", root=root["message_id"])
         assert transport.admit("notes-app", followup)["status"] == "durably_accepted"
-        active = next(row for row in transport.core.pending() if row["message"] == followup["content"])
+        active = _request_for_event(transport, followup)
         assert active["session_id"] == first["session_id"]
     else:
         active = first
@@ -387,7 +395,7 @@ def test_group_disconnect_stops_running_and_queued_turns_without_stopping_other_
     _wait_for_native_turn(store, sid, tid)
     queued_event = provider.topic("queued", "must never run", root=root["message_id"])
     assert transport.admit("notes-app", queued_event)["status"] == "durably_accepted"
-    queued = next(row for row in transport.core.pending() if row["message"] == queued_event["content"])
+    queued = _request_for_event(transport, queued_event)
     assert store.load_turn(sid, queued["turn_id"])["status"] == "queued"
     peer, _ = runtime.open_session(goal_id=None, agent_id="codex", work_dir=workspace,
         objective="", mode="new", project_ref=ordinary[2].available()[0]["project_ref"])
