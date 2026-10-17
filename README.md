@@ -16,16 +16,18 @@ The open, local-first control plane for long-horizon agents and personal agent t
 <a href="docs/assets/personal-workspace/loopx-dashboard-launch.mp4"><img src="docs/assets/personal-workspace/workspace-hero.webp" alt="LoopX Personal Agent Workspace: a Work map showing task dependencies, responsible agents, progress and decisions waiting for the owner" width="960"></a><br>
 <sub>Source-built App on an authored <a href="demo/workspace/README.md">Workspace stories replay</a>; no live Agent execution · <a href="docs/assets/personal-workspace/loopx-dashboard-launch.mp4">watch the 32-second walkthrough</a></sub>
 
-**Start in Codex App in two steps.** Install once:
+**Start in Codex App in two steps.** 
+
+1. Install once:
 
 ```bash
 python3 -m pip install --upgrade loopx && loopx workflow-skills --install
 ```
 
-Restart Codex App, then type this in a thread opened on your project:
+2. In Codex App:
 
 ```text
-$loopx fix the open PR review feedback and keep the patch reviewable
+@loopx [your goal]
 ```
 
 <sub>LoopX connects the project, plans the work as Todos and sets up the heartbeat that keeps it moving. Claude Code uses <code>/loopx &lt;complex task&gt;</code> · <a href="#try-loopx">other Agent hosts</a></sub>
