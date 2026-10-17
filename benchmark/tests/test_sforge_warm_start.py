@@ -188,7 +188,7 @@ def test_staging_preserves_sealed_modes(point, monkeypatch, tmp_path):
         async def exec(self, command, **kwargs):
             commands.append(command)
             return SimpleNamespace(return_code=0)
-    asyncio.run(start.stage(Environment(), str(workspace)))
+    assert asyncio.run(start.stage(Environment(), str(workspace))) == []
     assert "chmod -R" not in commands[0]
     effect_runtime_result("runtime.checkpoint_artifacts", {"action": "verify", "root": str(control / "restored-point"),
         "expected_sha256": start.sha256})
@@ -300,6 +300,7 @@ def research_point(point, tmp_path, monkeypatch, request):
         research.chmod(0o600)
     else:
         research.mkdir()
+        research.chmod(0o700)
         (research / "candidate.py").write_text("def predict(x): return x * 7\n")
         (research / "observations.json").write_text('[2, 3, 5]')
         (research / "candidate.py").chmod(0o600)
@@ -409,8 +410,9 @@ def test_research_copy_mismatch_is_an_unusable_attempt(research_point, monkeypat
     assert workspace.with_name("workspace.before-checkpoint").is_dir()
 
 
+@pytest.mark.parametrize("research_point", ["directory", "file"], indirect=True)
 def test_research_selection_survives_staging(research_point, monkeypatch, tmp_path):
-    start, workspace, _ = research_point
+    start, workspace, research = research_point
     control = tmp_path / "control"
     control.mkdir()
     monkeypatch.setattr(warm, "_CONTROL", str(control))
@@ -421,7 +423,7 @@ def test_research_selection_survives_staging(research_point, monkeypatch, tmp_pa
             shutil.copyfile(source, target)
         async def exec(self, command, **kwargs):
             return SimpleNamespace(return_code=0)
-    asyncio.run(start.stage(Environment(), str(workspace)))
+    assert asyncio.run(start.stage(Environment(), str(workspace))) == [str(research)]
     declaration = json.loads((control / "warm-start.json").read_bytes())
     assert declaration["research_component_ids"] == ["experiments"]
 

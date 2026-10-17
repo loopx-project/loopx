@@ -1,6 +1,18 @@
 import { localizedAttentionAge, useWorkspaceI18n } from "./i18n";
 import { MarkdownText } from "./markdown";
 import type { WorkspaceAttention } from "./personal-workspace-model";
+import type { AttentionDetails } from "./attention-details";
+
+/** Display canonical provenance without choosing an action's authorized actor. */
+export function AttentionProvenance({ detail }: { detail?: AttentionDetails }) {
+  const { t } = useWorkspaceI18n();
+  const replyAgent = detail?.boundAgent ?? detail?.blocksAgent;
+  return <>
+    <span>{t(detail?.createdBy ? "attentionDetail.requestedBy" : "attentionDetail.requesterUnknown", { agent: detail?.createdBy ?? "" })}</span>
+    {replyAgent && replyAgent !== detail?.createdBy
+      ? <span>{t("attentionDetail.replyTo", { agent: replyAgent })}</span> : null}
+  </>;
+}
 
 export function AttentionDetailCard({ item, successor, onSelect }: {
   item: WorkspaceAttention;
@@ -16,6 +28,7 @@ export function AttentionDetailCard({ item, successor, onSelect }: {
       <span>{t(`attentionDetail.${lifecycle}`)}</span>
       {item.priority ? <span>{item.priority}</span> : null}
       {age ? <span>{t("tasks.waitingAge", { age })}</span> : null}
+      <AttentionProvenance detail={detail} />
     </div>
     <h3>{t(detail?.requestText ? "attentionDetail.request" : "attentionDetail.summary")}</h3>
     {detail?.requestText ? <MarkdownText text={detail.requestText} /> : <>

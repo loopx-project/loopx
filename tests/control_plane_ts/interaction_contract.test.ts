@@ -403,3 +403,14 @@ test("scoped override preserves admission context without selecting new work", a
   assert.throws(() => projectScopedOverride({override, selected_todo: {text: "No identity"},
     interaction_contract: interaction}), /selected_todo.todo_id/);
 });
+
+
+test("an inline unfinished agenda cannot fulfill the full Inbox read", () => {
+  const read = {kind: "operator_inbox", command: "loopx manager-inbox read", hook_id: "manager.context_inbox"};
+  const content = {ok: true, read_complete: false, unfinished_delegations: {items: [{request_id: "pending"}]}};
+  const result = projectInteractionWorkContext({required_reads: [read], source_results: [{command: read.command, content}]});
+  assert.deepEqual(result.required_reads, [read]);
+  const context = result.work_context as JsonObject;
+  assert.equal(context.complete, true);
+  assert.deepEqual((context.sources as JsonObject[])[0].content, content);
+});

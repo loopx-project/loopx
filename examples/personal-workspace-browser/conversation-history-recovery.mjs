@@ -289,8 +289,9 @@ export const conversationHistoryRecoveryScenario = {
       await page.getByText("接着昨天的做。", { exact: true }).waitFor({ state: "visible" });
       assert.equal(await page.getByText("接着昨天的做。", { exact: true }).count(), 1, "Rehydration must not duplicate the user's accepted request");
       assert.equal(api.turnRequests.length, 1, "Returning to the conversation must not repeat work");
-      await page.getByRole("combobox", { name: "选择聊天 Runtime", exact: true }).click();
-      await page.getByRole("option", { name: "仅查状态", exact: true }).click();
+      const statusOnly = page.getByRole("button", { name: "仅查状态 · 不调用模型", exact: true });
+      if (await statusOnly.getAttribute("aria-pressed") !== "true") await statusOnly.click();
+      assert.equal(await statusOnly.getAttribute("aria-pressed"), "true");
       await page.getByLabel("向 LoopX 发送消息").fill("只看当前状态。");
       const projectionSaved = page.waitForResponse(response => new URL(response.url()).pathname === "/api/chat/projection-messages" && response.status() === 201);
       await page.getByRole("button", { name: "发送", exact: true }).click();

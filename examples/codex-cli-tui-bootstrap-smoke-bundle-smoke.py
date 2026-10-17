@@ -185,10 +185,10 @@ def main() -> None:
         assert "Fresh Repo Install Repair" not in message_only, message_only
         assert "loopx-project.github.io/loopx/install.sh" in message_only, message_only
         assert "python3 -m pip install --upgrade loopx" in message_only, message_only
-        assert "/goal <thin task_body>" in message_only, message_only
+        assert "/goal <loader task_body>" in message_only, message_only
         assert "quota should-run" in message_only, message_only
         assert "refresh-state --goal-id public-fresh-codex-cli-goal" in message_only, message_only
-        assert "quota spend-slot" in message_only, message_only
+        assert "settlement_plan.ordered_steps" in message_only, message_only
         assert "raw Codex transcripts" in message_only, message_only
 
         markdown = run(

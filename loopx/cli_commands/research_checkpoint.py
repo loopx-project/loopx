@@ -53,7 +53,7 @@ def handle_research_checkpoint(args: argparse.Namespace, *, registry_path: Path,
                      "operation_id", "expected_revision", "lease_key", "lease_version")
         if args.operation == "verify":
             result = effect_runtime_result("runtime.checkpoint_artifacts", {
-                "action": "verify", "root": str(args.root), "expected_sha256": args.expected_sha256})
+                "action": "verify", "root": str(args.root), "expected_sha256": args.expected_sha256}, large_local_snapshot=True)
         elif not args.execute:
             result = {"dry_run": True, "operation": args.operation, "execution_authority_granted": False,
                 "next_action": "Review the explicit source/destination and use --execute for this operation."}

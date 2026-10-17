@@ -31,6 +31,10 @@ def parse_vision_todo_delta_entries(entries: Any) -> list[tuple[str, str]]:
         if not isinstance(value, str):
             continue
         action, separator, raw_todo_id = value.strip().partition(":")
+        # Identity text cannot be shortened into a different existing Todo.
+        # Historical descriptive deltas remain readable but do not create links.
+        if len(raw_todo_id.strip()) > VISION_TODO_DELTA_ID_LIMIT:
+            continue
         todo_id = (
             _compact_projection_text(raw_todo_id, limit=VISION_TODO_DELTA_ID_LIMIT)
             or ""

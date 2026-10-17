@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -22,6 +21,9 @@ from .chat_manager import (
 )
 from .chat_coordination import PROJECT_COORDINATION_GUIDANCE, PROJECT_CONTEXT_VERSION, apply_context_handoff
 from .capabilities.native_chat import codex_context, project_context as project_context_policy
+from .capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+from .capabilities.native_chat.machine_defaults import codex_profile_home, load_codex_chat_defaults
+from .capabilities.native_chat.turn_release import TurnReleaseWakeup
 from .control_plane.collaboration import conversation_scope
 from .capabilities.manager_runtime import (
     load_bound_manager_runtime_profile, manager_runtime_session_fields,
@@ -34,7 +36,7 @@ from .capabilities.manager_context.team_plan import (
 from .capabilities.steward_executor import load_effective_steward_executor_defaults
 from .capabilities.steward_executor import allocation as alloc
 from .chat_acp import ACPStdioAdapter
-from .chat_agent import CodexChatAgentError, CodexChatAgentSession, CodexChatTimeoutError, agent_endpoint_error
+from .chat_agent import CodexChatAgentError, CodexChatTimeoutError, agent_endpoint_error
 from .chat_codex_goal import (
     CodexGoalDriver,
     UPSTREAM_MODE as CODEX_GOAL_CHAT_MODE,
@@ -59,6 +61,7 @@ from .chat_store import (
     utc_now,
 )
 from .chat_providers import ClaudeCodeAdapter, codex_model_options, direct_model_from_environment
+from .capabilities.native_chat.model_settings import normalize_agent_reasoning_effort
 from .attached_session import (
     enqueue_attached_agent_turn,
     require_current_attached_session,
@@ -104,112 +107,6 @@ class ChatRuntimeAdapter(Protocol):
     def interrupt_turn(self, turn_id: str | None = None) -> None: ...
     def close_session(self) -> None: ...
     def healthcheck(self) -> bool: ...
-
-
-@dataclass
-class CodexAppServerAdapter:
-    session: CodexChatAgentSession
-    goal_driver: CodexGoalDriver | None = None
-
-    @property
-    def upstream_thread_id(self) -> str:
-        return self.session.thread_id
-
-    @classmethod
-    def start(
-        cls,
-        *,
-        codex_bin: str,
-        work_dir: Path,
-        goal_id: str | None,
-        objective: str,
-        resume_thread_id: str | None = None,
-        startup_timeout_sec: float = 30.0,
-        idle_timeout_sec: float = 180.0,
-        hard_timeout_sec: float = 900.0,
-        execution_mode: bool = False,
-        runtime_profile: str = "restricted",
-        sandbox: str | None = None,
-        project_context: dict[str, str] | None = None,
-        codex_home: Path | None = None,
-        model: str | None = None,
-        reasoning_effort: str | None = None,
-        dynamic_tools: list[dict[str, Any]] | None = None,
-    ) -> "CodexAppServerAdapter":
-        retry_timeout = bool(resume_thread_id)
-        while True:
-            try:
-                return cls(
-                    CodexChatAgentSession.start(
-                        codex_bin=codex_bin,
-                        work_dir=work_dir,
-                        goal_id=goal_id,
-                        objective=objective,
-                        response_timeout_sec=startup_timeout_sec,
-                        idle_timeout_sec=idle_timeout_sec,
-                        hard_timeout_sec=hard_timeout_sec,
-                        execution_mode=execution_mode,
-                        runtime_profile=runtime_profile,
-                        sandbox=sandbox,
-                        project_context=project_context,
-                        resume_thread_id=resume_thread_id,
-                        codex_home=codex_home,
-                        model=model,
-                        reasoning_effort=reasoning_effort,
-                        dynamic_tools=dynamic_tools,
-                    )
-                )
-            except CodexChatTimeoutError as exc:
-                if not retry_timeout or exc.error_code != "response_timeout":
-                    raise
-                # start() has closed the failed process; no Turn was dispatched.
-                # Retry the same known thread once, never an unknown thread/start
-                # effect, a host gate or a request that has already begun.
-                retry_timeout = False
-                logging.getLogger(__name__).warning(
-                    "Codex resumed-session startup timed out; retrying once before Turn dispatch"
-                )
-
-    def capabilities(self) -> dict[str, Any]:
-        return {
-            "adapter_kind": "codex_app_server",
-            "streaming": True,
-            "resume": True,
-            "interrupt": True,
-            "steering": True,
-        }
-
-    def start_turn(self, message: str, event_sink: EventSink) -> dict[str, Any]:
-        return self.session.send(message, on_event=event_sink)
-
-    def steer_turn(self, message: str, expected_turn_id: str) -> str:
-        return self.session.steer(message, expected_turn_id=expected_turn_id)
-
-    def start_turn_with_attachments(
-        self,
-        message: str,
-        event_sink: EventSink,
-        attachments: list[AttachmentPayload],
-    ) -> dict[str, Any]:
-        return self.session.send(message, attachments=attachments, on_event=event_sink)
-
-    def interrupt_turn(self, turn_id: str | None = None) -> None:
-        driver = self.goal_driver
-        if driver is not None:
-            driver.pause()
-            return
-        self.session.interrupt(turn_id)
-
-    def close_session(self) -> None:
-        try:
-            driver = self.goal_driver
-            if driver is not None:
-                driver.pause()
-        finally:
-            self.session.close()
-
-    def healthcheck(self) -> bool:
-        return self.session.process.poll() is None
 
 
 class _TurnEventBuffer:
@@ -347,6 +244,7 @@ class ChatRuntimeController:
         self.cancelled_turns: set[tuple[str, str]] = set()
         self.turn_event_buffers: dict[tuple[str, str], _TurnEventBuffer] = {}
         self.turn_done_events: dict[tuple[str, str], threading.Event] = {}
+        self.turn_release_wakeup = TurnReleaseWakeup()
         self.lock = threading.RLock()
         self.session_open_locks: dict[tuple[str, str, str], threading.Lock] = {}
         self.session_adapter_locks: dict[str, threading.Lock] = {}
@@ -391,7 +289,8 @@ class ChatRuntimeController:
         )
         return [*builtins, *(endpoint.public_summary() for endpoint in self.endpoint_registry.list())]
 
-    def inspect_agent_model_options(self, agent_id: str, *, work_dir: Path) -> dict[str, Any]:
+    def inspect_agent_model_options(self, agent_id: str, *, work_dir: Path, goal_id: str | None = None,
+                                    agent_model_id: str | None = None) -> dict[str, Any]:
         """Read model choices from one selected, available ACP endpoint.
 
         This is intentionally not a PATH scan: the controller launches only an
@@ -402,7 +301,13 @@ class ChatRuntimeController:
         if capability is None or not capability.get("available"):
             raise agent_endpoint_error(agent_id, reason=str((capability or {}).get("unavailable_reason") or ""))
         if agent_id == "codex":
-            return {"agent_id": agent_id, "model": codex_model_options(self.codex_bin), "supported": True}
+            defaults = load_codex_chat_defaults(self.coordination_runtime_root) if goal_id else {}
+            home = codex_profile_home(self.codex_home, defaults)
+            models = codex_model_options(self.codex_bin, codex_home=home)
+            if models is None:
+                raise CodexChatAgentError("The selected Codex account did not return model choices. Check Chat account settings, then retry; existing conversations are unchanged.",
+                                          error_code="provider_unavailable", gate=None)
+            return {"agent_id": agent_id, "model": models, "supported": True}
         if agent_id == "claude-code":
             return {
                 "agent_id": agent_id,
@@ -423,11 +328,27 @@ class ChatRuntimeController:
             work_dir=work_dir,
             goal_id=None,
             objective="",
+            agent_config={"model": agent_model_id} if agent_model_id else None,
         )
         try:
-            return {"agent_id": agent_id, "model": adapter.model_options(), "supported": True}
+            return {"agent_id": agent_id, "model": adapter.model_options(),
+                    "reasoning_effort": adapter.reasoning_options(), "supported": True}
         finally:
             adapter.close_session()
+
+    @staticmethod
+    def _observed_model_settings(adapter: ChatRuntimeAdapter, requested_effort: str | None = None,
+                                 requested_model: str | None = None) -> dict[str, Any]:
+        settings = adapter.model_settings if isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter)) else {}
+        if requested_model and isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter)) and adapter.current_model_id != requested_model:
+            raise CodexChatAgentError("The Agent did not confirm the requested model; no message was sent.",
+                                      error_code="unsupported_configuration", gate=None)
+        if requested_effort and settings.get("agent_reasoning_effort") != requested_effort:
+            raise CodexChatAgentError(
+                "The Agent did not confirm the requested reasoning effort; no message was sent.",
+                error_code="unsupported_configuration", gate=None,
+            )
+        return settings
 
     @staticmethod
     def _managed_upstream_mode(session: dict[str, Any]) -> str:
@@ -477,6 +398,7 @@ class ChatRuntimeController:
         executor_model: Mapping[str, str | None] | None = None,
         project_context: dict[str, str] | None = None,
         agent_config: dict[str, str] | None = None,
+        codex_home_override: Path | None = None,
     ) -> ChatRuntimeAdapter:
         if project_context is not None:
             project_context_policy.validate_project_native_executor(agent_id, project_context)
@@ -521,9 +443,11 @@ class ChatRuntimeController:
             )
             if agent_config and agent_config.get("model"):
                 model_config = {**model_config, "model": agent_config["model"]}
+            if agent_config:
+                model_config = {**model_config, **{key: agent_config[key] for key in ("reasoning_effort", "service_tier") if agent_config.get(key)}}
             return CodexAppServerAdapter.start(
                 codex_bin=self.codex_bin,
-                codex_home=self.codex_home,
+                codex_home=codex_home_override or self.codex_home,
                 work_dir=work_dir,
                 goal_id=goal_id,
                 objective=self._session_objective(
@@ -548,6 +472,7 @@ class ChatRuntimeController:
                 project_context=project_context,
                 model=model_config.get("model"),
                 reasoning_effort=model_config.get("reasoning_effort"),
+                service_tier=model_config.get("service_tier"),
                 dynamic_tools=(
                     [READ_TOOL] if goal_id == MANAGER_AGENT_GOAL_ID
                     else [CONTEXT_READ_TOOL, *([COLLABORATION_TOOL] if loopx_tools else [])]
@@ -641,10 +566,19 @@ class ChatRuntimeController:
         conversation_binding_id: str | None = None,
         source_context: dict[str, Any] | None = None,
         agent_model_id: str | None = None,
+        agent_reasoning_effort: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         if agent_model_id:
             agent_model_id = normalize_agent_model_id(agent_model_id)
         capability = next((item for item in self.capabilities() if item["agent_id"] == agent_id), None)
+        if capability and capability.get("available") and agent_model_id and agent_id not in {"codex", "claude-code"} and capability.get("adapter_kind") != "acp":
+            raise CodexChatAgentError("This Agent does not offer model selection.",
+                                      error_code="unsupported_configuration", gate=None)
+        if agent_reasoning_effort is not None:
+            agent_reasoning_effort = normalize_agent_reasoning_effort(agent_reasoning_effort)
+            if capability and capability.get("available") and agent_id != "codex" and capability.get("adapter_kind") != "acp":
+                raise CodexChatAgentError("This Agent does not offer reasoning choices.",
+                                          error_code="unsupported_configuration", gate=None)
         if mode not in {"resume_latest", "new"}:
             raise ValueError("mode must be resume_latest or new")
         selected_channel = channel_id or f"goal.{goal_id}"
@@ -709,6 +643,10 @@ class ChatRuntimeController:
                 )
                 if strict_profile:
                     if mode == "resume_latest" and exact_attached is not None:
+                        if ((agent_reasoning_effort and exact_attached.get("agent_reasoning_effort") != agent_reasoning_effort)
+                            or (agent_model_id and exact_attached.get("agent_model_id") != agent_model_id)):
+                            raise CodexChatAgentError("Change attached conversation settings in its original host.",
+                                                      error_code="unsupported_configuration", gate=None)
                         return exact_attached, True
                     raise CodexChatAgentError(
                         "Managed Chat execution is not qualified for the "
@@ -728,13 +666,32 @@ class ChatRuntimeController:
                     latest = None
                 if latest is not None and goal_instance_id is not None and latest.get("goal_instance_id") != goal_instance_id:
                     latest = None
+                if latest is not None and (latest.get("active_turn_id") or latest.get("upstream_mode") == CODEX_GOAL_CHAT_MODE or latest.get("session_mode") == CHAT_SESSION_MODE_ATTACHED):
+                    if ((agent_reasoning_effort and latest.get("agent_reasoning_effort") != agent_reasoning_effort)
+                        or (agent_model_id and latest.get("agent_model_id") != agent_model_id)):
+                        raise CodexChatAgentError("The existing execution keeps its settings. Change the next conversation after it finishes, or use its original host.",
+                                                  error_code="unsupported_configuration", gate=None)
                 if latest is not None and agent_model_id and latest.get("agent_model_id") != agent_model_id:
                     # A model is a session binding for ACP.  Never silently
                     # retarget an existing conversation when the user chose a
                     # different one; a new session makes that boundary visible.
                     latest = None
+                if latest is not None and agent_reasoning_effort and latest.get("agent_reasoning_effort") != agent_reasoning_effort:
+                    latest = None
                 if latest is not None and latest.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
                     return latest, True
+            codex_defaults = {}
+            selected_codex_home = self.codex_home
+            if (agent_id == "codex" and goal_id != MANAGER_AGENT_GOAL_ID
+                and conversation_scope({"channel_id": selected_channel, "goal_id": goal_id})["kind"] == "owner_goal"
+                and not (latest and (latest.get("active_turn_id") or latest.get("upstream_mode") == CODEX_GOAL_CHAT_MODE))):
+                codex_defaults = load_codex_chat_defaults(self.coordination_runtime_root)
+                selected_codex_home = codex_profile_home(self.codex_home, codex_defaults)
+                if latest is not None and (latest.get("codex_chat_configuration") or {}) != codex_defaults:
+                    # New defaults get a new ordinary Session. Resolve them only
+                    # after attached, active and Agent Loop bindings are preserved;
+                    # even an unavailable new profile cannot interrupt that work.
+                    latest = None
             if capability is None:
                 raise agent_endpoint_error(agent_id)
             if not capability["available"]:
@@ -755,9 +712,13 @@ class ChatRuntimeController:
                 manager_runtime=manager_runtime,
                 project_context=project_context,
                 executor_model=alloc.manager_executor_model(manager_executor_allocation),
-                agent_config={"model": agent_model_id} if agent_model_id else None,
+                agent_config={**{key: value for key, value in codex_defaults.items() if value is not None},
+                              **({"model": agent_model_id} if agent_model_id else {}),
+                              **({"reasoning_effort": agent_reasoning_effort} if agent_reasoning_effort else {})} or None,
+                codex_home_override=selected_codex_home,
             )
             try:
+                observed_settings = self._observed_model_settings(adapter, agent_reasoning_effort, agent_model_id)
                 persisted = self.store.create_session(
                     goal_id=goal_id,
                     goal_instance_id=goal_instance_id,
@@ -767,10 +728,14 @@ class ChatRuntimeController:
                     upstream_thread_id=adapter.upstream_thread_id,
                     upstream_mode="chat" if agent_id == "codex" else "default",
                     channel_id=selected_channel,
-                    codex_home=str(codex_context.home_for_project(self.codex_home, project_context)) if agent_id == "codex" else None,
+                    codex_home=str(codex_context.home_for_project(selected_codex_home, project_context)) if agent_id == "codex" else None,
                     project_context=project_context,
                     steward_context=steward_context,
-                    agent_model_id=adapter.current_model_id if isinstance(adapter, ACPStdioAdapter) else agent_model_id,
+                    agent_model_id=adapter.current_model_id if isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter)) else None,
+                    requested_agent_model_id=agent_model_id,
+                    requested_agent_reasoning_effort=agent_reasoning_effort,
+                    codex_chat_configuration=codex_defaults or None,
+                    **observed_settings,
                 )
             except Exception:
                 adapter.close_session()
@@ -798,7 +763,7 @@ class ChatRuntimeController:
     def _check_codex_home(self, session: dict[str, Any]) -> None:
         if session.get("agent_id") != "codex" or session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
             return
-        codex_context.require_session_home(self.codex_home, session)
+        codex_context.require_session_home(codex_profile_home(self.codex_home, session.get("codex_chat_configuration") or {}), session)
 
     def _ensure_adapter(
         self,
@@ -1006,8 +971,19 @@ class ChatRuntimeController:
                     if model_allocation is not None else alloc.restored_executor_model(session)),
                 manager_runtime=manager_runtime,
                 project_context=session.get("project_context"),
-                agent_config={"model": str(session["agent_model_id"])} if session.get("agent_model_id") else None,
+                agent_config={**(session.get("codex_chat_configuration") or {}), **({"model": requested_model} if (requested_model := (
+                    session.get("requested_agent_model_id", session.get("agent_model_id"))
+                    if session.get("agent_id") == "codex" else session.get("agent_model_id")
+                )) else {}), **({"reasoning_effort": session["requested_agent_reasoning_effort"]}
+                               if session.get("requested_agent_reasoning_effort") else {})} or None,
+                codex_home_override=codex_profile_home(self.codex_home, session.get("codex_chat_configuration") or {}),
             )
+            try:
+                observed_settings = self._observed_model_settings(adapter, session.get("requested_agent_reasoning_effort"),
+                                                                  session.get("requested_agent_model_id"))
+            except Exception:
+                adapter.close_session()
+                raise
             if session.get("upstream_mode") == CODEX_GOAL_CHAT_MODE:
                 try:
                     if not isinstance(adapter, CodexAppServerAdapter):
@@ -1032,8 +1008,9 @@ class ChatRuntimeController:
         with self.lock:
             self.adapters[session_id] = adapter
         try:
-            if isinstance(adapter, ACPStdioAdapter):
-                self.store.update_session(session_id, agent_model_id=adapter.current_model_id)
+            if isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter)):
+                self.store.update_session(session_id, agent_model_id=adapter.current_model_id,
+                    **observed_settings)
             if session.get("agent_id") == "codex" and session.get("codex_home") is None:
                 # A legacy session is bound only after successful upstream resume,
                 # not when a service happens to start in a new environment.
@@ -1197,6 +1174,7 @@ class ChatRuntimeController:
                 if self.turn_done_events.get(key) is done_event:
                     self.turn_done_events.pop(key, None)
             done_event.set()
+            self.turn_release_wakeup.notify()
             raise
         return True
 
@@ -1541,6 +1519,7 @@ class ChatRuntimeController:
             )
         finally:
             done_event.set()
+            self.turn_release_wakeup.notify()
             if owns_done_event:
                 with self.lock:
                     if self.turn_done_events.get(key) is done_event:
@@ -1596,6 +1575,7 @@ class ChatRuntimeController:
                     pass
         finally:
             done_event.set()
+            self.turn_release_wakeup.notify()
             with self.lock:
                 if self.turn_done_events.get(key) is done_event:
                     self.turn_done_events.pop(key, None)
@@ -1649,7 +1629,8 @@ class ChatRuntimeController:
                     upstream_turn_id=payload["upstream_turn_id"],
                 )
             if kind == "agent.model_config":
-                self.store.update_session(session_id, agent_model_id=payload.get("model_id"))
+                self.store.update_session(session_id, agent_model_id=payload.get("model_id"),
+                    **({"agent_reasoning_effort": payload["agent_reasoning_effort"]} if "agent_reasoning_effort" in payload else {}))
                 return
             with self.lock:
                 if (session_id, turn_id) in self.cancelled_turns:

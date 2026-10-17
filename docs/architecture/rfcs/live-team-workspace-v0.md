@@ -311,8 +311,9 @@ owners, with explicit history gaps if durable events do not exist.
 Disable the scene or stop its subscription to return to list/chat without
 interrupting member work. Do not delete journals, rebind sessions, rewrite
 historical receipt strength or reset provider state. Default Overview/navigation
-changes require the repository's concrete first-screen preview approval before
-commit/push; approval of an unrelated copy edit does not approve this scene.
+changes follow the repository first-screen evidence rule: put the concrete
+viewport in the PR description and reuse scoped direction for ordinary
+refinements; approval of an unrelated copy edit does not approve this scene.
 
 ## 9. Acceptance
 
@@ -542,7 +543,7 @@ The [near-term local-agent launch](loopx-overall-roadmap-v0.md#near-term-local-a
 | L0 Design and traceability | Interactive synthetic study, source audit and executable acceptance plan | Design review; V1/V3 concept checks; no live claim | Presentation; discard prototype, retain decisions |
 | L1 One real correction | Objection→revision→independent acceptance→requester adoption is understandable, with evidence, intervention and accurately scoped stop controls | Section 9 first live outcome; V1/V2/V3/V6 and episode-level V7 through real frontend + CLI | Collaboration/evidence/control owners + Chat/packaged UI; disable scene without implying work stopped |
 | L2 Continuous research | Original research Agent completes V4 and the user replays correction→adoption→next cycle | Runtime credential/admission repairs and usable L1; qualify each host profile, then V4 | Existing R2/R3 owners; stop new admission and retain results |
-| L3 Semantic zoom and scale | Subteams, source/conclusion version comparison and focused replay at measured 10/30/100 display load | Typed lineage producers and L2; V5/V7 and approved first-screen composition | Presentation + evidence owner; reduce detail/revert renderer |
+| L3 Semantic zoom and scale | Subteams, source/conclusion version comparison and focused replay at measured 10/30/100 display load | Typed lineage producers and L2; V5/V7 and first-screen composition evidence in the PR description | Presentation + evidence owner; reduce detail/revert renderer |
 
 **Work-scale map track.** Semantic zoom needs a whole-Goal Work view to zoom
 from. This track renders existing typed Todo relations only. It runs beside L1

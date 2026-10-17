@@ -188,6 +188,47 @@ Agent 使用的召回原文；嵌套 retrieval receipt 保持 public-safe，只�
 provider-safe 摘要、分数与哈希引用。每个召回 item 都标记为
 `untrusted_advisory`，不得当作指令执行。
 
+Goal 工作区将既有能力归到 **能力中心 → 记忆与资料**：**资料召回**为当前问题临时
+检索材料；**经验学习**保存 Agent 绑定，并单独管理旧版共享绑定；**素材与风格**
+读取带来源署名的表达素材。OpenViking、BM25 是检索实现，不是额外的记忆开关。
+明确的 Agent 偏好仍保留完整当前版本的生命周期，与排名后的参考材料分开。
+
+选择 **资料召回**，导入现有私有 profile JSON，
+复用其中启用的 Agent 与 provider scope，输入问题后选择 **召回证据**。导入只检查
+原生 activation 规则，不访问 provider。Profile 经有界 POST body 发送给本机 Chat
+服务，不写临时 profile 文件，也不新增持久化 Goal 配置；只有发起召回时，查询才会
+发送给所选 provider。
+
+启用控件只改变本页副本。选择 **清除临时配置与结果**、离开“记忆与资料”、切换目标 Goal 或刷新页面，即
+移除副本与结果，原 profile 不变。Goal/Agent activation、请求边界、provider 选择
+和排序与 CLI 复用同一 owner。停用、无效或不匹配的 profile 不会调用 provider。
+召回失败会清空旧结果并显示原生状态；恢复 provider 或语料后可重试。可选检索控件
+允许调整本次 scope 或结果数。原生分数只适用于该 provider 内的排序，不能跨 provider
+比较或当作置信度。本页不启用自动采集、宿主 hook、Reward Memory 绑定、证据结算或
+执行权限。用途之间切换会保留临时配置、问题和已完成的结果；停用检索面板时取消
+尚未完成的召回。召回原文仍是私有、不可信的参考材料，不是公开产物或已验证决策。
+
+![打包工作区使用合成 BM25 证据完成召回](assets/workspace-recall.zh.png?raw=true)
+
+在 **经验学习** 中先选择已注册 Agent，再预览持久绑定的变更。重新读取和应用
+配置后保留所选 Agent，切换 Goal 时重置；旧版共享绑定有独立选项。读回中的
+自动召回、自动写回表示配置值，实际执行这两条路径仍需各自验证。
+
+![合成 Agent 的独立经验配置与关闭状态](assets/workspace-experience.zh.png?raw=true)
+
+源码构建的工作区，使用合成本地证据展示交互；不表示生产采用或检索质量结论。
+
+<details>
+<summary>Scope 恢复与窄屏交互</summary>
+
+本次 scope 错误时返回 `scope_mismatch`，不会保留旧结果。在检索控件中恢复语料的
+scope 后重试即可，原 profile 不变。窄屏仍使用同一原生召回入口。
+
+![Scope 不匹配时清空结果](assets/workspace-recall.scope-error.zh.png?raw=true)
+![窄屏通过原生入口召回](assets/workspace-recall.narrow.en.png?raw=true)
+
+</details>
+
 保持该 profile 启用，并不意味着 Obelisk 会变成 LoopX 的必需依赖。如果指定的
 extension 尚未安装、已禁用，或缺少当前有效的 doctor 证明，召回仍会正常退出，
 返回 `status=unavailable` 和类型化的 `provider_readiness` 回执，并且不会执行

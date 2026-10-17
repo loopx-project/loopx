@@ -305,7 +305,7 @@ def _fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: st
     deadline = time.monotonic() + timeout
     effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "verify", "root": str(unit), "expected_sha256": expected_sha256,
-    }, timeout=timeout)
+    }, timeout=timeout, large_local_snapshot=True)
     manifest = json.loads((unit / "checkpoint.json").read_text(encoding="utf-8"))
     native = manifest["point_metadata"]["native_session"]
     if native.get("interrupted_guard") is not None:
@@ -319,7 +319,7 @@ def _fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: st
         intent = effect_runtime_result("runtime.checkpoint_artifacts", {
             "action": "select_replan", "quota": json.loads(raw), "goal_id": guard["goal_id"],
             "agent_id": guard["agent_id"], "turn_instance_id": guard["turn_instance_id"],
-        }, timeout=max(.1, deadline - time.monotonic()))
+        }, timeout=max(.1, deadline - time.monotonic()), large_local_snapshot=True)
         if not intent["capture"] or intent != manifest["point_metadata"].get("replan"):
             raise ValueError("interrupted checkpoint original replan binding differs")
     home = Path(env["CODEX_HOME"])
@@ -412,7 +412,8 @@ def _fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: st
             attempt = {"basis": basis, "source_thread_ids": sorted(inventory)}
             # Persist before dispatch. Partial preparation is not a license to
             # fork again; a missing outcome stays explicitly unresolved.
-            with os.fdopen(os.open(attempt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as file:
+            with os.fdopen(os.open(attempt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w",
+                           encoding="utf-8") as file:
                 json.dump(attempt, file, sort_keys=True)
                 file.flush()
                 os.fsync(file.fileno())
@@ -465,7 +466,7 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
     deadline = time.monotonic() + timeout
     effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "verify", "root": str(unit), "expected_sha256": expected_sha256,
-    }, timeout=timeout)
+    }, timeout=timeout, large_local_snapshot=True)
     metadata = json.loads((unit / "checkpoint.json").read_bytes())["point_metadata"]
     source_profile = (metadata.get("session") or {}).get("session_profile_digest")
     from loopx.control_plane.content_digest import BARE_SHA256_PATTERN

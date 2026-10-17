@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shlex
@@ -9,8 +8,12 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from ...file_lock import exclusive_cross_runtime_file_lock
 from ...history import load_registry
 from ...materials import find_registry_goal, goal_state_path
+from ...paths import resolve_runtime_root
+from ...control_plane.effect_runtime import effect_runtime_result
+from ...control_plane.reward_memory import reward_memory_goal_policy
 
 from ...control_plane.coordination.local_authority import (
     read_canonical_todos_if_promoted,
@@ -20,6 +23,7 @@ from ...control_plane.todos.completion_validation import (
     resolve_private_completion_validation_declaration,
 )
 from ...control_plane.todos.completion_validation_projection import (
+    completion_validation_declaration_sha256,
     project_completion_validation_authority,
 )
 from .outcome_lifecycle import (
@@ -27,6 +31,7 @@ from .outcome_lifecycle import (
     _identity_token,
     _reflection,
     _reflection_digest,
+    _validated_reflection_evidence,
     _write_sidecar,
     run_configured_turn_outcome_ingest,
 )
@@ -99,6 +104,25 @@ def _candidate_base(
         "host_wiring": "codex_app_refresh_stage",
         "fail_open": True,
     }
+
+
+def _candidate_binding(
+    *, registry_path: Path, identity: Mapping[str, Any], digest: str,
+    declaration: dict[str, Any] | None, previous: Mapping[str, Any] | None,
+    revalidating: bool,
+) -> dict[str, Any]:
+    goal = find_registry_goal(load_registry(registry_path), str(identity["goal_id"]))
+    if goal is None:
+        raise ValueError("Codex App reward memory Goal is unavailable")
+    return dict(effect_runtime_result("reward_memory.app_outcome.bind", {
+        "identity": dict(identity), "reflection_digest": digest,
+        "policy": reward_memory_goal_policy(goal, agent_id=str(identity["agent_id"])),
+        "validation_declaration_sha256": (
+            completion_validation_declaration_sha256(declaration) if declaration else None
+        ),
+        "previous": dict(previous) if previous is not None else None,
+        "revalidating": revalidating,
+    }))
 
 
 def _canonical_todo(
@@ -253,6 +277,7 @@ def _run_reflection_validator(
     expected_refs = reflection.get("evidence_refs")
     if (
         not isinstance(validation, Mapping)
+        or not isinstance(expected_refs, list)
         or set(validation) - allowed
         or validation.get("schema_version") != REFLECTION_VALIDATION_SCHEMA_VERSION
         or validation.get("status") != "validated"
@@ -321,12 +346,10 @@ def stage_codex_app_turn_outcome_candidate(
             ),
         )
     digest = _reflection_digest(reflection_json)
-    candidate_id = "app:" + hashlib.sha256(
-        (
-            f"{goal_id}\n{agent_id}\n{todo_id}\n{turn_instance_id}\n"
-            f"{effect_id}\n{digest}"
-        ).encode("utf-8")
-    ).hexdigest()[:20]
+    identity = {"goal_id": goal_id, "agent_id": agent_id, "todo_id": todo_id,
+                "turn_instance_id": turn_instance_id, "effect_id": effect_id}
+    key = effect_runtime_result("reward_memory.app_outcome.identity", {"identity": identity})
+    candidate_id = str(key["candidate_id"])
     declaration = _validation_declaration(
         registry_path=registry_path,
         runtime_root=runtime_root,
@@ -334,95 +357,73 @@ def stage_codex_app_turn_outcome_candidate(
         todo_id=todo_id,
         state_file=state_file,
     )
-    validation_request = {
-        "schema_version": REFLECTION_VALIDATION_REQUEST_SCHEMA_VERSION,
-        "goal_id": goal_id,
-        "agent_id": agent_id,
-        "todo_id": todo_id,
-        "turn_instance_id": turn_instance_id,
-        "effect_id": effect_id,
-        "reflection": reflection,
-        "reflection_digest": digest,
-    }
-    validation = (
-        _run_reflection_validator(
-            declaration=declaration,
-            workspace=validation_workspace,
-            request=validation_request,
-            reflection=reflection,
-            reflection_digest=digest,
-        )
-        if declaration is not None
-        else {
-            "ok": False,
-            "status": "unavailable",
-            "validator_kind": "none",
-            "summary": "Todo has no caller-declared validation command",
-            "exit_code": None,
-        }
-    )
     path = codex_app_outcome_candidate_sidecar_path(
-        _goal_repo(registry_path, goal_id),
-        goal_id=goal_id,
-        agent_id=agent_id,
-        candidate_id=candidate_id,
+        _goal_repo(registry_path, goal_id), goal_id=goal_id,
+        agent_id=agent_id, candidate_id=candidate_id,
     )
-    previous = _load_candidate_sidecar(path)
-    if previous is not None and previous.get("schema_version") != (
-        CODEX_APP_OUTCOME_SIDECAR_SCHEMA_VERSION
-    ):
-        raise ValueError("Codex App reward memory candidate sidecar is invalid")
-    sidecar = {
-        "schema_version": CODEX_APP_OUTCOME_SIDECAR_SCHEMA_VERSION,
-        "goal_id": goal_id,
-        "agent_id": agent_id,
-        "todo_id": todo_id,
-        "turn_instance_id": turn_instance_id,
-        "effect_id": effect_id,
-        "candidate_id": candidate_id,
-        "reflection": reflection,
-        "reflection_digest": digest,
-        "task_validation": validation,
-        "observed_at": observed_at,
-        "raw_content_captured": False,
-    }
-    if previous is not None:
-        for field in (
-            "goal_id",
-            "agent_id",
-            "todo_id",
-            "turn_instance_id",
-            "effect_id",
-            "candidate_id",
-            "reflection",
-            "reflection_digest",
+    with exclusive_cross_runtime_file_lock(path, operation="app_outcome_stage"):
+        previous = _load_candidate_sidecar(path)
+        if previous is not None and (
+            previous.get("schema_version") != CODEX_APP_OUTCOME_SIDECAR_SCHEMA_VERSION
+            or previous.get("reflection") != reflection
         ):
-            if previous.get(field) != sidecar[field]:
-                raise ValueError("Codex App reward memory candidate identity mismatch")
-        previous_validation = previous.get("task_validation")
-        if (
-            isinstance(previous_validation, Mapping)
-            and previous_validation.get("ok") is True
-        ):
-            validation = dict(previous_validation)
-        elif validation.get("ok") is True:
-            _write_sidecar(path, sidecar)
-    else:
+            raise ValueError("Codex App reward memory candidate identity mismatch")
+        binding = _candidate_binding(
+            registry_path=registry_path, identity=identity, digest=digest,
+            declaration=declaration, previous=previous, revalidating=True,
+        )
+        validation_request = {
+            "schema_version": REFLECTION_VALIDATION_REQUEST_SCHEMA_VERSION,
+            "goal_id": goal_id,
+            "agent_id": agent_id,
+            "todo_id": todo_id,
+            "turn_instance_id": turn_instance_id,
+            "effect_id": effect_id,
+            "reflection": reflection,
+            "reflection_digest": digest,
+        }
+        validation = (
+            _run_reflection_validator(
+                declaration=declaration,
+                workspace=validation_workspace,
+                request=validation_request,
+                reflection=reflection,
+                reflection_digest=digest,
+            )
+            if declaration is not None
+            else {
+                "ok": False,
+                "status": "unavailable",
+                "validator_kind": "none",
+                "summary": "Todo has no caller-declared validation command",
+                "exit_code": None,
+            }
+        )
+        sidecar = {
+            "schema_version": CODEX_APP_OUTCOME_SIDECAR_SCHEMA_VERSION,
+            **binding,
+            "reflection": reflection,
+            "task_validation": validation,
+            "observed_at": previous.get("observed_at", observed_at) if previous else observed_at,
+            "raw_content_captured": False,
+        }
+        # Always keep the current independent result; an older passed invocation
+        # cannot mask a failed or changed validator on an explicit refresh retry.
         _write_sidecar(path, sidecar)
-    validation_bound = validation.get("ok") is True
-    return _candidate_base(
-        goal_id=goal_id,
-        agent_id=agent_id,
-        status=("validation_bound" if validation_bound else "awaiting_evidence_validation"),
-        reason_code=(
-            None if validation_bound else "reflection_not_bound_to_independent_validation"
-        ),
-    ) | {
-        "candidate_id": candidate_id,
-        "reflection_digest": digest,
-        "validation_bound": validation_bound,
-        "sidecar_receipt_reused": previous is not None,
-    }
+        validation_bound = validation.get("ok") is True
+        return _candidate_base(
+            goal_id=goal_id,
+            agent_id=agent_id,
+            status=("validation_bound" if validation_bound else "awaiting_evidence_validation"),
+            reason_code=(
+                None if validation_bound else "reflection_not_bound_to_independent_validation"
+            ),
+        ) | {
+            "candidate_id": candidate_id,
+            "reflection_digest": digest,
+            "validation_bound": validation_bound,
+            "sidecar_receipt_reused": previous is not None,
+        }
 
 
 def run_staged_codex_app_turn_outcome_ingest(
@@ -433,58 +434,77 @@ def run_staged_codex_app_turn_outcome_ingest(
     todo_id: str,
     turn_instance_id: str,
     effect_id: str,
-    candidate_id: str,
+    candidate_id: str | None,
     writeback_appended: bool,
     spend_appended: bool,
-) -> dict[str, Any]:
+    runtime_root: Path | None = None,
+) -> dict[str, Any] | None:
     """Finalize one staged App reflection after exact writeback+spend readback."""
 
+    identity = {"goal_id": goal_id, "agent_id": agent_id, "todo_id": todo_id,
+                "turn_instance_id": turn_instance_id, "effect_id": effect_id}
+    key = effect_runtime_result("reward_memory.app_outcome.identity", {"identity": identity})
     path = codex_app_outcome_candidate_sidecar_path(
         _goal_repo(registry_path, goal_id),
         goal_id=goal_id,
         agent_id=agent_id,
-        candidate_id=candidate_id,
+        candidate_id=str(key["candidate_id"]),
     )
-    value = _load_candidate_sidecar(path)
-    if value is None or value.get("schema_version") != (
-        CODEX_APP_OUTCOME_SIDECAR_SCHEMA_VERSION
-    ):
-        raise ValueError("Codex App reward memory candidate sidecar is unavailable")
-    for field, expected in {
-        "goal_id": goal_id,
-        "agent_id": agent_id,
-        "todo_id": todo_id,
-        "turn_instance_id": turn_instance_id,
-        "effect_id": effect_id,
-        "candidate_id": candidate_id,
-    }.items():
-        if value.get(field) != expected:
-            raise ValueError("Codex App reward memory candidate identity mismatch")
-    reflection = value.get("reflection")
-    if not isinstance(reflection, Mapping):
-        raise ValueError("Codex App reward memory candidate reflection is invalid")
-    receipt = run_configured_turn_outcome_ingest(
-        registry_path=registry_path,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        turn_key=effect_id,
-        host_result={
-            "reward_memory_reflection_json": json.dumps(
-                reflection,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-        },
-        settlement_evidence={
+    if not path.exists() and candidate_id:
+        # Legacy metadata is an exact lookup only, never a directory scan. A
+        # missing binding stamp fails closed below; it cannot acquire authority.
+        path = codex_app_outcome_candidate_sidecar_path(
+            _goal_repo(registry_path, goal_id), goal_id=goal_id,
+            agent_id=agent_id, candidate_id=candidate_id,
+        )
+    if not path.exists() and not candidate_id:
+        return None
+    with exclusive_cross_runtime_file_lock(path, operation="app_outcome_finalize"):
+        value = _load_candidate_sidecar(path)
+        if value is None or value.get("schema_version") != (
+            CODEX_APP_OUTCOME_SIDECAR_SCHEMA_VERSION
+        ):
+            raise ValueError("Codex App reward memory candidate sidecar is unavailable")
+        reflection = value.get("reflection")
+        if not isinstance(reflection, Mapping):
+            raise ValueError("Codex App reward memory candidate reflection is invalid")
+        serialized = json.dumps(reflection, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        declaration = _validation_declaration(
+            registry_path=registry_path,
+            runtime_root=runtime_root or resolve_runtime_root(load_registry(registry_path), None, registry_path=registry_path),
+            goal_id=goal_id, todo_id=todo_id, state_file=Path(),
+        )
+        _candidate_binding(
+            registry_path=registry_path, identity=identity,
+            digest=_reflection_digest(serialized), declaration=declaration,
+            previous=value, revalidating=False,
+        )
+        settlement_evidence = {
             "schema_version": "turn_post_settlement_evidence_v0",
             "task_validation": dict(value.get("task_validation") or {}),
             "writeback": {"ok": writeback_appended, "appended": writeback_appended},
             "quota_spend": {"ok": spend_appended, "appended": spend_appended},
-        },
-        observed_at=str(value.get("observed_at") or "") or None,
-    )
-    return receipt | {"host_wiring": "codex_app_refresh_spend_post_settlement"}
+        }
+        if _validated_reflection_evidence(
+            reflection_json=serialized, reflection=reflection,
+            settlement_evidence=settlement_evidence,
+        ) is None:
+            return _candidate_base(
+                goal_id=goal_id, agent_id=agent_id, status="evidence_validation_required",
+                reason_code="reflection_not_bound_to_independent_validation",
+            ) | {"host_wiring": "codex_app_refresh_spend_post_settlement"}
+        receipt = run_configured_turn_outcome_ingest(
+            registry_path=registry_path,
+            goal_id=goal_id,
+            agent_id=agent_id,
+            turn_key=effect_id,
+            host_result={
+                "reward_memory_reflection_json": serialized
+            },
+            settlement_evidence=settlement_evidence,
+            observed_at=str(value.get("observed_at") or "") or None,
+        )
+        return receipt | {"host_wiring": "codex_app_refresh_spend_post_settlement"}
 
 
 def stage_codex_app_turn_outcome_candidate_fail_open(
@@ -503,7 +523,7 @@ def stage_codex_app_turn_outcome_candidate_fail_open(
 
 def run_staged_codex_app_turn_outcome_ingest_fail_open(
     **kwargs: Any,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     try:
         return run_staged_codex_app_turn_outcome_ingest(**kwargs)
     except (OSError, RuntimeError, TypeError, ValueError):

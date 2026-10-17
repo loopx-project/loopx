@@ -250,8 +250,8 @@ already exists, reuse it and do not create or overwrite a goal or the active obj
 is not connected, prefer `loopx connect`, and use `loopx bootstrap` only when
 project state clearly needs initialization. Ensure `.loopx/`, `.loopx/goals/`,
 and `.local/` are ignored. Keep me in this TUI, do not use hidden headless
-execution. After the project is connected, generate the thin heartbeat prompt
-and set the current Codex CLI task body with `/goal <thin task_body>`. Then
+execution. After the project is connected, generate the host-specific bootstrap loader with `heartbeat-prompt --bootstrap --thin --runtime-profile codex_cli`
+and set the current Codex CLI task body with `/goal <loader task_body>`. Then
 stop and report the active state id, current user gate, top agent todo, and
 next safe action.
 ```
@@ -262,10 +262,17 @@ show the current state id, concrete user gate if one exists, top user todo if
 any, top agent todo, and next safe action before longer delivery work. The
 setup turn should not spend quota for delivery unless the user explicitly asks
 it to do delivery in the setup turn. The agent should still generate
-`heartbeat-prompt --thin` and install that body into the surface during setup:
-Codex CLI gets `/goal <thin task_body>`, while Codex App gets a heartbeat
+`heartbeat-prompt --bootstrap --thin --runtime-profile codex_cli` and install that body into the surface during setup:
+Codex CLI gets `/goal <loader task_body>`, while Codex App gets a heartbeat
 automation body that starts at 3 minutes and then follows
 `scheduler_hint`.
+
+The CLI loader binds `codex_cli`; App automation uses its own
+`heartbeat-prompt --bootstrap --thin --codex-app` loader. Each loads current
+instructions on entry. Never reuse the CLI guard for an App wake, freeze a Turn
+identity, or save today's execution body as the permanent prompt. Apply a new
+loader through the authorized host update and read it back; source changes alone
+do not migrate existing automations. Existing authority and cadence floors remain.
 
 Once `loopx` is installed, generate a stricter repo-specific setup
 message:
@@ -277,7 +284,7 @@ loopx codex-cli-bootstrap-message --project . --goal-id <goal-id>
 Keep that as the preferred interactive path: the human watches and steers in
 Codex CLI TUI, while LoopX owns quota/status/todos/gates/writeback. The
 generated packet also shows the no-clone install-repair command, the
-post-bootstrap thin prompt generation command, and a transcript-free validation
+host-specific bootstrap loader commands, and a transcript-free validation
 checklist, so a fresh repo path can be reviewed without touching raw Codex
 session data.
 

@@ -7,6 +7,10 @@ machine configuration, receipts) as UTF-8, so on such a host one non-ASCII
 character either raises `UnicodeDecodeError` on read or writes bytes the next
 UTF-8 reader cannot decode.
 
+`os.fdopen()` is the same text-mode API reached through a descriptor, and the
+shipped runtime already pins UTF-8 on the sites that use it deliberately, so it
+is checked here too.
+
 #4338, #4942 and #4997 fixed the reported sites. This guard keeps the class from
 returning, next to `test_runtime_subprocess_utf8.py`, which does the same for
 text-mode subprocess reads.
@@ -29,6 +33,10 @@ ALLOWED_ENCODINGS = frozenset({"utf-8", "utf-8-sig"})
 # errors)`. A positional codec must be recognised, or the guard would report a
 # call that does pin UTF-8.
 _PATH_HELPER_ENCODING_INDEX = {"read_text": 0, "write_text": 1}
+
+# `os.fdopen(fd, mode, buffering, encoding, ...)` puts `encoding` third, while
+# `open`/`os.fdopen` both take `mode` second.
+_FDOPEN_ENCODING_INDEX = 3
 
 
 def _is_codec_name(value: str) -> bool:
@@ -69,6 +77,8 @@ def _pinned_encoding(node: ast.Call, attribute: str | None) -> str | None:
         return None
     if attribute is not None:
         index = _PATH_HELPER_ENCODING_INDEX.get(attribute)
+        if index is None and attribute == "fdopen":
+            index = _FDOPEN_ENCODING_INDEX
         if index is not None and len(node.args) > index:
             argument = node.args[index]
             if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
@@ -76,8 +86,18 @@ def _pinned_encoding(node: ast.Call, attribute: str | None) -> str | None:
     return None
 
 
+def _is_fdopen(node: ast.Call) -> bool:
+    """Whether the call is `os.fdopen(...)`, the descriptor form of text `open()`."""
+
+    if isinstance(node.func, ast.Attribute):
+        return (node.func.attr == "fdopen"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "os")
+    return isinstance(node.func, ast.Name) and node.func.id == "fdopen"
+
+
 def _opens_in_text_mode(node: ast.Call) -> bool:
-    """Whether a builtin `open()` call is not provably binary."""
+    """Whether an `open()`/`fdopen()` call is not provably binary."""
 
     mode: str | None = None
     if len(node.args) >= 2:
@@ -114,11 +134,12 @@ def _text_io_calls_without_utf8_encoding(package_root: Path | None = None) -> li
             attribute = node.func.attr if isinstance(node.func, ast.Attribute) else None
             is_path_helper = attribute in _PATH_HELPER_ENCODING_INDEX and _is_path_helper(node, attribute)
             is_builtin_open = isinstance(node.func, ast.Name) and node.func.id == "open"
-            if not (is_path_helper or is_builtin_open):
+            is_fdopen = _is_fdopen(node)
+            if not (is_path_helper or is_builtin_open or is_fdopen):
                 continue
-            if is_builtin_open and not _opens_in_text_mode(node):
+            if (is_builtin_open or is_fdopen) and not _opens_in_text_mode(node):
                 continue
-            if _pinned_encoding(node, attribute) in ALLOWED_ENCODINGS:
+            if _pinned_encoding(node, "fdopen" if is_fdopen else attribute) in ALLOWED_ENCODINGS:
                 continue
             offenders.append(f"{path.relative_to(root.parent)}:{node.lineno}")
     return offenders
@@ -131,7 +152,7 @@ def test_shipped_runtime_pins_utf8_for_every_text_file_read_and_write() -> None:
 
 
 def test_guard_reports_missing_and_non_utf8_codecs(tmp_path: Path) -> None:
-    """The guard covers a wrong explicit codec and builtin `open`, not only a missing keyword."""
+    """The guard covers a wrong explicit codec and `open`/`fdopen`, not only a missing keyword."""
 
     package = tmp_path / "loopx"
     package.mkdir()
@@ -149,11 +170,15 @@ def test_guard_reports_missing_and_non_utf8_codecs(tmp_path: Path) -> None:
         "    open(path, encoding='utf-8')\n"
         "    open(path, 'rb')\n"
         "    open(path)\n"
-        "    installed.read_text('INSTALLER')\n",
+        "    installed.read_text('INSTALLER')\n"
+        "    os.fdopen(fd, 'w')\n"
+        "    os.fdopen(fd, 'wb')\n"
+        "    os.fdopen(fd, 'w', encoding='utf-8')\n"
+        "    os.fdopen(fd, 'w', 0, 'utf-8')\n",
         encoding="utf-8",
     )
 
     offenders = _text_io_calls_without_utf8_encoding(package)
 
     # Line 14 is a keyed lookup on a non-path object: same method name, not file I/O.
-    assert [entry.rsplit(":", 1)[-1] for entry in offenders] == ["5", "6", "7", "13"]
+    assert [entry.rsplit(":", 1)[-1] for entry in offenders] == ["5", "6", "7", "13", "15"]

@@ -7,9 +7,13 @@ import {
 } from "../runtime_decode.ts";
 import { projectTodoResumePlanning } from "../todos/resume_planning.ts";
 
+export const PROGRESS_RESULT_CLASSES = [
+  "advanced", "unchanged", "blocked", "exploration_exhausted", "no_followup",
+] as const;
+
 interface Progress {
   fingerprint: string;
-  result: "advanced" | "unchanged" | "blocked" | "exploration_exhausted" | "no_followup";
+  result: typeof PROGRESS_RESULT_CLASSES[number];
   payload: JsonObject;
 }
 interface Monitor {
@@ -102,7 +106,7 @@ function decodeProgress(value: unknown): Progress | null {
   return {
     payload, fingerprint: requireNonEmptyString(payload.fingerprint, "fingerprint"),
     result: requireStringLiteral(payload.result_class,
-      ["advanced", "unchanged", "blocked", "exploration_exhausted", "no_followup"], "result_class"),
+      PROGRESS_RESULT_CLASSES, "result_class"),
   };
 }
 function decode(value: unknown): Request {

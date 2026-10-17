@@ -387,3 +387,69 @@ def test_workspace_policy_cannot_drift_from_feedback_mode_or_startup(
         SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
             profile="official", cwd="/task", feedback=feedback,
             feedback_prompt=prompt, workspace_instructions=instructions)
+
+
+def test_native_prompt_upload_is_readable_regardless_of_launcher_umask(tmp_path, monkeypatch):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker
+
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/private-credential")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    prompt = native_task_prompt("Complete the supplied task.", ["solver.py"],
+        submission_cooldown=3600, eval_interval=0, internet=False,
+        selection="pass_rate_first", score_direction="maximize")
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+                         profile="heartbeat-resume", cwd=str(workspace), feedback_prompt=prompt,
+                         feedback="native", workspace_instructions=None, task_objective=None)
+    worker.backend = SimpleNamespace(start_feedback=lambda handle: None)
+    worker.handle = "worker-handle"
+    worker.log_dir = tmp_path
+    remote = tmp_path / "remote-prompt.md"
+    modes = []
+
+    class Environment:
+        async def upload_file(self, source, target):
+            # The native copy keeps the host mode; record what the agent would see.
+            modes.append(Path(source).stat().st_mode & 0o777)
+            Path(target).write_text(Path(source).read_text())
+
+        async def exec(self, command):
+            result = subprocess.run(["/bin/bash", "-c", command], capture_output=True, text=True)
+            return SimpleNamespace(return_code=result.returncode, stdout=result.stdout)
+
+    async def prepare(environment, text, **kwargs):
+        return None
+
+    worker.environment = Environment()
+    worker.runtime = SimpleNamespace(
+        goal_id="fixture-goal", execution=SimpleNamespace(uses_loopx=True),
+        _prepare_phase=prepare, _write_task_document=prepare, _worker_env=lambda **kwargs: {},
+    )
+    monkeypatch.setattr("benchmark.runtime.sforge.worker_command", lambda *a, **kw: ["worker"])
+    previous = os.umask(0o077)
+    try:
+        worker.format_run_cmd(str(remote), internet=False)
+    finally:
+        os.umask(previous)
+    assert modes == [0o644]
+    assert remote.read_text() == prompt
+
+
+@pytest.mark.parametrize("source,covered", [
+    ("/task", True), ("/home/workspace", True),
+    ("/home/workspace/task/solver.py", False), ("/home/workspace/task-other", False),
+])
+def test_checkpoint_guidance_distinguishes_directory_from_file_coverage(source, covered):
+    from benchmark.edgebench.prompts import checkpoint_research_instructions
+    workspace = "/task" if source == "/task" else "/home/workspace/task"
+    text = checkpoint_research_instructions(
+        {"components": [{"id": "code", "source_path": source}]}, workspace)
+    assert ("includes this task workspace" in text) is covered
+    assert ("does not cover the whole task workspace" in text) is not covered
+    assert "negative results" in text and "workspace-relative references" in text
+    assert "external file does not preserve its bytes" in text
+    assert "does not change submitted files" in text
+    assert source not in text  # Do not echo arbitrary private capture roots.

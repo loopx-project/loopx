@@ -64,7 +64,7 @@ def _restored_context(env, current_obligation_id=None, *, verify_native, include
     unit = Path(source)
     manifest = effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "read_basis", "root": str(unit), "expected_sha256": sha,
-    })
+    }, large_local_snapshot=True)
     # Admission already verified all artifact bytes. Here only the immutable
     # declaration, original pending packet and native history are inputs; do
     # not rehash large code/incumbent archives on every ordinary work wake.
@@ -86,13 +86,13 @@ def _restored_context(env, current_obligation_id=None, *, verify_native, include
             "action": "select_replan", "quota": packet,
             "goal_id": metadata["loopx_state"]["goal_id"], "agent_id": metadata["loopx_state"]["agent_id"],
             "turn_instance_id": packet["heartbeat_receipt"]["turn_instance_id"],
-        })
+        }, large_local_snapshot=True)
         if intent != pending or intent.get("capture") is not True:
             raise ValueError("restored original replan binding differs")
     result = effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "restore_capture", **lineage, "checkpoint_sha256": sha,
         "current_obligation_id": current_obligation_id, "review": None,
-    })
+    }, large_local_snapshot=True)
     # Existing saved preflights are discovery only. Each candidate is resolved
     # through the canonical current-Goal settlement owner, never copied logs.
     for guard_path in sorted(Path(env["LOOPX_WAKE_LOG_DIR"]).glob("*/checkpoint-start-guard.json"), reverse=True):
@@ -111,7 +111,7 @@ def _restored_context(env, current_obligation_id=None, *, verify_native, include
                 "semantic_replan_guard": observed.semantic_replan_guard,
             },
             **({"include_review_basis": True} if include_review_basis else {}),
-        })
+        }, large_local_snapshot=True)
         if result["capture_allowed"]:
             # Qualification happens before launching this wake's model. A
             # current receipt alone cannot stand in for native continuation.
@@ -161,6 +161,6 @@ def restored_capture_history(env, preflight, *, session_id):
         raise ValueError("restored capture requires its admitted session and completed cursor")
     manifest = effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "read_basis", "root": binding["checkpoint_artifact_root"], "expected_sha256": sha,
-    })
+    }, large_local_snapshot=True)
     return {"retained_history": retained_native_history(binding, manifest["point_metadata"]),
             "required_completed_turn_id": cursor}

@@ -200,24 +200,6 @@ def typed_progress_repeat_trigger(
     )
 
 
-def _has_new_terminal_coverage(
-    current: Mapping[str, Any],
-    prior: Mapping[str, Any] | None,
-) -> bool:
-    """Compare terminal coverage semantics without treating proof churn as novelty."""
-
-    if prior is None:
-        return True
-    result_class = current["result_class"]
-    if result_class != prior.get("result_class"):
-        return True
-    if current.get("coverage_scope_id") != prior.get("coverage_scope_id"):
-        return True
-    if result_class == ProgressResultClass.EXPLORATION_EXHAUSTED.value:
-        return current.get("coverage_complete") != prior.get("coverage_complete")
-    return False
-
-
 def _normalized_window(
     window: Iterable[Mapping[str, Any]] | None,
 ) -> list[dict[str, Any]]:
@@ -232,99 +214,6 @@ def _normalized_window(
         except (KeyError, TypeError, ValueError):
             continue
     return normalized
-
-
-def semantic_progress_delta(
-    observation: Mapping[str, Any] | None,
-    *,
-    baseline: Mapping[str, Any] | None,
-    window: Iterable[Mapping[str, Any]] | None = None,
-) -> dict[str, Any]:
-    """Qualify a typed observation as a replan-closing semantic delta.
-
-    `baseline` is the observation the delta kinds are computed against.
-    `window` lists every typed observation already claimed while the
-    obligation formed; the codec reports novelty facts against the whole
-    window so an outcome owner can refuse a replayed claim.
-    """
-
-    if not isinstance(observation, Mapping):
-        return {"accepted": False, "reason": "typed progress observation missing"}
-    current = normalize_progress_observation(observation)
-    prior = (
-        normalize_progress_observation(baseline)
-        if isinstance(baseline, Mapping)
-        else None
-    )
-    claimed = _normalized_window(window)
-    result_class = current["result_class"]
-    delta_kinds: list[str] = []
-    if result_class == ProgressResultClass.ADVANCED.value:
-        dimension_delta_names = {
-            "surface_id": "new_surface",
-            "hypothesis_id": "new_hypothesis",
-            "probe_kind": "new_probe_family",
-        }
-        if current.get("evidence_ids"):
-            for field, delta_kind in dimension_delta_names.items():
-                value = current.get(field)
-                if value and (prior is None or value != prior.get(field)):
-                    delta_kinds.append(delta_kind)
-    elif result_class == ProgressResultClass.BLOCKED.value:
-        blocker_id = current.get("blocker_id")
-        if (
-            blocker_id
-            and current.get("evidence_ids")
-            and (prior is None or blocker_id != prior.get("blocker_id"))
-        ):
-            delta_kinds.append("new_concrete_blocker")
-    elif result_class == ProgressResultClass.EXPLORATION_EXHAUSTED.value:
-        if (
-            current.get("coverage_complete") is True
-            and current.get("coverage_scope_id")
-            and current.get("evidence_ids")
-            and _has_new_terminal_coverage(current, prior)
-        ):
-            delta_kinds.append("coverage_backed_exploration_exhausted")
-    elif result_class == ProgressResultClass.NO_FOLLOWUP.value:
-        if (
-            current.get("coverage_scope_id")
-            and current.get("evidence_ids")
-            and _has_new_terminal_coverage(current, prior)
-        ):
-            delta_kinds.append("coverage_backed_no_followup")
-    # Novelty facts are computed here against the baseline and every claim in
-    # the obligation window; which obligation sources require them behind a
-    # renamed surface, hypothesis or probe family is decided by the TypeScript
-    # outcome owner (work_item.replan_semantics).
-    known_evidence: set[str] = set(prior.get("evidence_ids") or []) if prior else set()
-    known_fingerprints: set[str] = {prior["fingerprint"]} if prior else set()
-    for item in claimed:
-        known_evidence.update(item.get("evidence_ids") or [])
-        known_fingerprints.add(item["fingerprint"])
-    evidence_novel = bool(set(current.get("evidence_ids") or []) - known_evidence)
-    observation_repeated = current["fingerprint"] in known_fingerprints
-    blocker_repeated = bool(current.get("blocker_id")) and any(
-        item.get("result_class") == ProgressResultClass.BLOCKED.value
-        and item.get("blocker_id") == current.get("blocker_id")
-        for item in ([prior] if prior else []) + claimed
-    )
-    return {
-        "schema_version": "replan_semantic_delta_v0",
-        "accepted": bool(delta_kinds),
-        "delta_kinds": delta_kinds,
-        "evidence_novel": evidence_novel,
-        "observation_repeated": observation_repeated,
-        "blocker_repeated": blocker_repeated,
-        "window_size": len(claimed),
-        "observation_fingerprint": current["fingerprint"],
-        "baseline_fingerprint": prior.get("fingerprint") if prior else None,
-        "reason": (
-            "typed observation changes the replan frontier"
-            if delta_kinds
-            else "typed observation does not change an accepted semantic dimension"
-        ),
-    }
 
 
 def replan_writeback_requirements(
@@ -430,6 +319,9 @@ def semantic_delta_from_writeback(
     vision path, can contribute outcomes.
     """
 
+    # The same source serves novelty and cited-outcome replay; consume an
+    # iterable once without reopening or modifying its authority store.
+    runs = list(history_runs) if history_runs is not None else None
     baseline = obligation.get("progress_baseline")
     if not isinstance(baseline, Mapping):
         baseline = next(
@@ -462,30 +354,41 @@ def semantic_delta_from_writeback(
     claimed = list(window) if isinstance(window, list) else []
     if isinstance(coverage, list):
         claimed.extend(coverage)
-    if history_runs is not None and context is not None:
+    if runs is not None and context is not None:
         from .replan_context_codec import replan_evidence_rows
 
         # The readable context has a display budget; admission does not forget
         # an older claim merely because it was omitted from that display.
         claimed.extend(
             row["progress_observation"]
-            for row in replan_evidence_rows(history_runs, goal_id=context["goal_id"], agent_id=context["agent_id"])
+            for row in replan_evidence_rows(runs, goal_id=context["goal_id"], agent_id=context["agent_id"])
             if row["progress_observation"] is not None
         )
     elif context is not None and context.get("coverage_truncated"):
         raise ValueError("replan writeback requires the complete evidence history when coverage is truncated")
-    observation_delta = semantic_progress_delta(
-        progress_observation,
-        baseline=baseline if isinstance(baseline, Mapping) else None,
-        window=claimed,
-    )
+    progress_source = None
+    if isinstance(progress_observation, Mapping):
+        progress_source = {
+            "current": normalize_progress_observation(progress_observation),
+            "baseline": normalize_progress_observation(baseline) if isinstance(baseline, Mapping) else None,
+            "window": _normalized_window(claimed),
+        }
     vision = dict(agent_vision) if isinstance(agent_vision, Mapping) else {}
     if vision:
         vision["state"] = normalize_goal_vision_state(vision.get("state"))
+    source_review = None
+    stride = vision.get("stride_decision")
+    review = stride.get("previous_review") if isinstance(stride, Mapping) else None
+    if (runs is not None and context is not None and context.get("stride_strategy") != "off"
+            and context.get("decision_followthrough") and isinstance(review, Mapping)):
+        from .replan_context_codec import replay_stride_review_evidence
+
+        source_review = replay_stride_review_evidence(context=context, review=review, runs=runs)
     try:
         result = project_replan_semantics({
             "operation": "qualify", "obligation": dict(obligation),
-            "observation_delta": observation_delta, "agent_vision": vision,
+            "progress_source": progress_source, "agent_vision": vision,
+            **({"stride_review_evidence": source_review} if source_review is not None else {}),
         })
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None
@@ -504,6 +407,7 @@ def build_replan_context(
     stride_strategy: str = "off",
     explore_context: Mapping[str, Any] | None = None,
     goal_acceptance_contract: Mapping[str, Any] | None = None,
+    todo_items: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     from .replan_context_codec import project_replan_context
 
@@ -512,6 +416,7 @@ def build_replan_context(
         runs=newest_first_runs, obligation=obligation, source_status=source_status,
         goal_acceptance_contract=goal_acceptance_contract, stride_strategy=stride_strategy,
         history_newest_first=True, explore_context=explore_context,
+        todo_items=todo_items,
     )
 
 

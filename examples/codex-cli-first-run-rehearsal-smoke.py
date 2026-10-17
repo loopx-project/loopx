@@ -94,12 +94,12 @@ def assert_cli_surfaces_align() -> None:
     assert message.startswith("Install and connect LoopX for this repo"), message
     assert not message.startswith("/goal "), message
     assert "setup/bootstrap instruction" in normalized, message
-    assert "/goal <thin task_body>" in normalized, message
+    assert "/goal <loader task_body>" in normalized, message
     assert "python3 -m pip install --upgrade loopx" in normalized, message
     assert "workflow-skills --install" in normalized, message
     assert "Codex CLI TUI" in normalized, message
     assert "quota should-run" in normalized, message
-    assert "quota spend-slot" in normalized, message
+    assert "settlement_plan.ordered_steps" in normalized, message
     assert "raw Codex transcripts" in normalized, message
 
     bundle = run_cli(

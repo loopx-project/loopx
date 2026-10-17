@@ -123,6 +123,7 @@ def prepare_codex_home(
     skills: Path | None,
     web_search: str = "disabled",
     model_catalog: Path | None = None,
+    model_catalog_destination: Path | None = None,
 ) -> None:
     """Materialize fixed inputs once; never delete sessions between iterations.
 
@@ -139,6 +140,9 @@ def prepare_codex_home(
     real client send ``tools: []``) are rejected before a trial; qualify a
     pinned binary/catalog pair at the first-request boundary with
     ``benchmark.runtime.toolface`` before relying on the rendered tools.
+    Host-side installers may set ``model_catalog_destination`` to the absolute
+    guest path where those validated catalog bytes are staged. It affects only
+    rendering; the host source must still pass the same validation.
     """
     if not model or not effort:
         raise ValueError("model and effort are required")
@@ -152,6 +156,10 @@ def prepare_codex_home(
         raise ValueError("unsupported web_search setting")
     if model_catalog is not None:
         validate_model_catalog(model_catalog, model)
+    if model_catalog_destination is not None and (
+        model_catalog is None or not model_catalog_destination.is_absolute()
+    ):
+        raise ValueError("catalog destination requires a validated catalog and an absolute guest path")
     home.mkdir(parents=True, exist_ok=True)
     settings = "\n".join(
         [
@@ -161,7 +169,7 @@ def prepare_codex_home(
         + (
             # Codex resolves this path from its own working directory, not the
             # caller's; a relative path validates here yet silently fails there.
-            [f"model_catalog_json = {json.dumps(str(model_catalog.resolve()))}"]
+            [f"model_catalog_json = {json.dumps(str(model_catalog_destination or model_catalog.resolve()))}"]
             if model_catalog is not None
             else []
         )

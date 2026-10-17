@@ -817,6 +817,11 @@ def _continuation_instruction_migration(
         # Complete stop/correction rollout: thin +154, brief +163, compact +215.
         if migrated("stop"):
             chars = 224
+        if migrated("authorized_delivery"):
+            # Same public fixture: thin +427 body chars plus generator policy
+            # text in brief; retain authority/recovery clauses. Once present,
+            # ordinary growth limits resume; no new line or shape allowance.
+            chars += 512
     if not chars:
         return {}, []
     return {

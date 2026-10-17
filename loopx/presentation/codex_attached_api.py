@@ -169,16 +169,19 @@ class CodexAttachedRequestMixin:
                     current_binding(self._codex_goal(goal_id), agent_id, expected)
                     emit(pending)
                     previous, pending, emitted_at = pending["records"], None, now
-                elif now - emitted_at >= 1:
+                elif now - emitted_at >= 0.5:
+                    # An unchanged but busy native stream still needs HTTP
+                    # writes to notice a departed reader. Two probes per
+                    # second bound TCP's possible first successful close write.
                     http.wfile.write(b": observing\n\n")
                     http.wfile.flush()
                     emitted_at = now
-        except DesktopProtocolError:
-            emit({"kind": "unavailable", "retry": False})
-        except DesktopUnavailable:
-            emit({"kind": "unavailable", "retry": True})
-        except (ValueError, KeyError, TypeError):
-            emit({"kind": "unavailable", "retry": False})
+        except (DesktopUnavailable, ValueError, KeyError, TypeError) as error:
+            try:
+                emit({"kind": "unavailable", "retry": isinstance(error, DesktopUnavailable)
+                      and not isinstance(error, DesktopProtocolError)})
+            except OSError:
+                pass  # A departed HTTP reader cannot receive an error packet.
         except (BrokenPipeError, ConnectionResetError, OSError):
             return
         finally:

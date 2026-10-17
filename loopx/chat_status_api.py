@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import errno
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -24,6 +23,7 @@ from .control_plane.effect_runtime import (
     EffectRuntimePermanentIOError,
     EffectRuntimeRemoteError,
     EffectRuntimeStartupError,
+    effect_runtime_request_scope,
 )
 from .control_plane.runtime.public_safety import (
     public_safe_compact_text,
@@ -36,6 +36,8 @@ from .control_plane.todos.contract import (
     todo_done_for_status,
 )
 from .control_plane.work_items.task_graph import build_goal_task_map
+from .control_plane.projection_envelope_facts import seal_projection_envelope, source_fact
+from .control_plane.runtime.time import now_utc_iso
 from .feedback import validate_goal_id
 from .history import load_registry
 from .control_plane.projects.registry_codec import load_project_registry
@@ -52,6 +54,7 @@ from .control_plane.todos.list_readback import list_goal_todos
 
 def _goal_task_map(server: Any, goal_id: str) -> dict[str, Any] | None:
     runtime_root = server.runtime_root_override
+    source_read_at = now_utc_iso()
     try:
         listed = list_goal_todos(
             registry_path=server.registry_path,
@@ -71,6 +74,7 @@ def _goal_task_map(server: Any, goal_id: str) -> dict[str, Any] | None:
         todo_done_for_status=todo_done_for_status,
         todo_status_open=TODO_STATUS_OPEN,
         monitor_task_class=TODO_TASK_CLASS_MONITOR,
+        source_read_at=source_read_at,
     )
 
 
@@ -159,7 +163,8 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
         raise NotImplementedError
 
     def _delivery_review(self) -> None:
-        self._status(delivery_review=True)
+        with effect_runtime_request_scope():
+            self._status(delivery_review=True)
 
     def _status(self, *, delivery_review: bool = False) -> None:
         query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
@@ -275,12 +280,31 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
                              if row.get("goal_id") == goal_id), {})
                 goal = next((row for row in projection.get("run_history", {}).get("goals", [])
                              if row.get("id") == goal_id), {})
+                goal_map = _goal_task_map(self.server, goal_id)
+                observed_at = now_utc_iso()
+                components = [item.get("task_graph_projection"), goal_map, goal.get("acceptance_observation")]
+                upstream = [value for value in [projection.get("projection_envelope"),
+                    goal_map.get("projection_envelope") if goal_map else None] if isinstance(value, dict)]
+                sources = []
+                if not isinstance(projection.get("projection_envelope"), dict):
+                    sources.append(source_fact("status", read_status="not_read"))
+                if goal_map is None:
+                    sources.append(source_fact("goal_todos", read_status="unreadable"))
+                missing = sum(value is None for value in components)
+                envelope = seal_projection_envelope(
+                    projection="delivery_review", observed_at=observed_at,
+                    sources=sources, upstream=upstream,
+                    coverage={"scope": "selected_goal_delivery", "expected_count": 3,
+                        "included_count": 3 - missing,
+                        "omitted": [{"reason": "unavailable_components", "count": missing}] if missing else []},
+                )
                 projection = {
                     "ok": True,
                     "goal_id": goal_id,
-                    "observed_at": datetime.now(timezone.utc).isoformat(),
+                    "observed_at": observed_at,
+                    "projection_envelope": envelope,
                     "graph": item.get("task_graph_projection"),
-                    "goal_map": _goal_task_map(self.server, goal_id),
+                    "goal_map": goal_map,
                     "acceptance": goal.get("acceptance_observation"),
                 }
                 validate_public_safe_value(projection)

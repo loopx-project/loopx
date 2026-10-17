@@ -204,9 +204,9 @@ def _retry_error_details(error: Any) -> dict[str, Any]:
 def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
     """Project only the app-server's typed error, never its arbitrary prose."""
     info = error.get("codexErrorInfo") if isinstance(error, dict) else None
-    # Some app-server versions wrap an HTTP error as JSON in `message` while
-    # reporting codexErrorInfo=other. Only the structured HTTP status/type is
-    # used here; the nested message may contain private request details.
+    # Some Responses providers return a structured error without an HTTP
+    # status. The typed error still identifies a rejected request; arbitrary
+    # nested prose may contain private request details and is never projected.
     if info == "other" and isinstance(error.get("message"), str):
         try:
             upstream = json.loads(error["message"])
@@ -214,7 +214,9 @@ def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
             upstream = None
         if (
             isinstance(upstream, dict)
-            and upstream.get("status") == 400
+            and ("status" not in upstream or (
+                type(upstream["status"]) is int and upstream["status"] == 400
+            ))
             and isinstance(upstream.get("error"), dict)
             and upstream["error"].get("type") == "invalid_request_error"
         ):
@@ -224,7 +226,7 @@ def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
                 error_code="upstream_invalid_request",
                 gate=_host_tool_gate(
                     summary,
-                    "检查管家选择的模型、Codex CLI 与当前账户是否兼容，再重试。",
+                    "在设置中核对所选模型与 Codex 账户、服务商配置是否匹配，再重试；本次请求不会自动重放。",
                 ),
             )
     # App-server v2 exposes camel-case discriminators. Unknown/new variants
@@ -483,7 +485,7 @@ def _turn_prompt(
         "You are the execution agent for a confirmed LoopX Task. Work only from the project root. "
         "Execute the operator task now. Inspect the repository, edit files, and run focused validation as needed. "
         "Use the existing branch and worktree. Commit or push only when the operator task explicitly requests it. "
-        "Keep changes bounded to the confirmed Task and stop at any permission, identity, or destructive-operation gate. "
+        "Keep changes bounded to the confirmed Task; do not cross a permission, identity, or destructive-operation gate. "
         if execution_mode
         else "You are the project assistant inside LoopX Chat. Execute the owner's explicit workspace requests using the project's AGENTS.md and applicable skills. "
         if project_work
@@ -534,6 +536,8 @@ def _turn_prompt(
             "Read applicable skills and reuse unchanged instruction reads; stop unrelated discovery when the requested facts have sufficient evidence. "
             "Inspect the implementation when documentation is insufficient, conflicts with the selected version, or the operator requests source verification. "
             "Answer directly with the needed version and source references. Explicit requests to change or execute project work still follow their existing authorized workflow. "
+            "When advising which tools or workflows to use, explain the decision-relevant setup and maintenance effort, recurring execution or scheduling costs, and limits. "
+            "Ground these tradeoffs in available evidence; state material unknowns rather than inventing prices or savings. "
             if not execution_mode else ""
         )
         + (
@@ -551,10 +555,13 @@ def _turn_prompt(
             "For a Todo proposal include goal_id from the verified Goal directory alongside kind='todo', text, priority and rationale. "
             "If the intended Goal is unresolved, resolve it from authorized context or ask one focused question; never infer a durable target from whichever Goal the UI happens to show. "
             "A Todo preview is not a recorded task; the host supplies its actual confirmation route. Do not invent a command or claim the write occurred. "
-            if not project_work else ""
+            if not project_work and not execution_mode else ""
         )
         + protected_action_contract
         + (
+        "For this confirmed Task, keep proposals=[], goal_draft=null and context_handoff=null. "
+        "Complete the authorized Task here; do not replace it with a new Goal, delegation or configuration preview. "
+        if execution_mode else
         "Resolve the request from this conversation and authorized project context. Use applicable skills and permitted tools to read sources and complete the requested work. "
         "Batch independent reads or commands when useful; preserve dependent validation and project authority gates. "
         "Verify the requested source coverage before claiming completion. When the answer depends on a figure, screenshot or chart, inspect its actual pixels with a permitted image/browser tool; captions, OCR and SVG source alone are incomplete visual evidence. "
@@ -596,13 +603,14 @@ def _turn_prompt(
         "A complete draft goes directly to the existing typed creation preview with one explicit apply. Do not ask the user to confirm the same intent in prose first; optional edits remain available. No new authorization or second executor follows from a draft. "
         )
         + (WORK_RESULT_VERIFICATION_INSTRUCTION
-           if project_work or direct_work else "Never claim the change has been written without a verified control-plane receipt. ")
+           if execution_mode or project_work or direct_work else "Never claim the change has been written without a verified control-plane receipt. ")
         +
-        "If you encounter an identity, approval, or host-tool gate, stop and describe it in gate. "
+        "For an identity, approval, or host-tool gate, stop only actions that depend on the missing authority or tool and describe the unresolved gate in gate. "
+        "Continue independent authorized work while honoring explicit user and host stops. End the request only when no independent authorized work remains or such a stop applies; never claim the gated action completed. "
         "Reply in Chinese unless the operator asks for another language. Keep proposals bounded and reviewable. "
         "Do not expose chain-of-thought, tool narration, intended steps, or scratch work. "
         "First write the complete operator-facing answer as safe Markdown text. Give a simple question a direct sourced answer; for a complex task, lead with the judgment and then explain the material evidence, comparisons, decisions and limitations at useful depth. "
-        "Use short sentences or lines so the answer can stream. Avoid gratuitous headings, boilerplate, raw ID inventories and more than five actionable items. "
+        "Use short sentences or lines so the answer can stream. Avoid gratuitous headings, boilerplate and raw ID inventories. Preserve all requested results; group related items without imposing an arbitrary item limit. "
         "Do not emit executable HTML. The complete answer must stay in this conversation, even when a separate report artifact also exists. "
         "Then append exactly one machine-readable envelope with message set to the empty string: the transport reuses the visible answer before the opening tag. Do not repeat the answer in JSON. This envelope is hidden protocol metadata and is required even for ordinary questions or exact-wording replies; user formatting instructions govern the visible answer, not omission of this metadata. "
         "protected_action must be null or an object shaped as "
@@ -632,7 +640,10 @@ class CodexChatAgentSession:
     permissions_profile: str | None = None
     project_context: dict[str, str] | None = None
     model: str | None = None
+    resolved_model: str | None = None
     reasoning_effort: str | None = None
+    resolved_reasoning_effort: str | None = None
+    service_tier: str | None = None
     response_timeout_sec: float = 30.0
     idle_timeout_sec: float = 180.0
     hard_timeout_sec: float | None = 900.0
@@ -978,7 +989,16 @@ class CodexChatAgentSession:
                     "Codex did not apply the requested conversation reasoning effort."
                 )
             session.model = thread_result.get("model") or model
+            session.resolved_model = thread_result.get("model")
             session.reasoning_effort = thread_result.get("reasoningEffort") or reasoning_effort
+            session.resolved_reasoning_effort = thread_result.get("reasoningEffort")
+            session.service_tier = thread_result.get("serviceTier")
+            requested_tier = (host_config or {}).get("service_tier")
+            # Native Fast mode may report its equivalent API tier, priority.
+            if requested_tier and session.service_tier not in {None, requested_tier} and not (
+                requested_tier == "fast" and session.service_tier == "priority"
+            ):
+                raise session._runtime_error(f"Codex did not apply the requested conversation service tier (reported {session.service_tier}).")
             session.thread_id = _extract_id(thread_result, "thread", "threadId")
             if permissions_profile:
                 active = thread_result.get("activePermissionProfile")
@@ -1362,12 +1382,41 @@ class CodexChatAgentSession:
 
     def background_turn_ids(self, turn_ids: list[str]) -> list[str]:
         """Observe live terminals owned by the supplied canonical native Turns."""
+        candidates = list(dict.fromkeys(turn_ids))
+        if not candidates:
+            return []
         deadline = time.monotonic() + self.response_timeout_sec
         live_items = {terminal["itemId"] for terminal in self._background_terminals(deadline)}
         if not live_items:
             return []
-        return [turn_id for turn_id in dict.fromkeys(turn_ids)
-                if live_items & self._command_item_ids(turn_id, deadline)]
+        # The native endpoint can return all items in this exact thread. Scan
+        # its complete pagination once instead of one round trip per historical
+        # Turn; newer/foreign Turns never enter the frozen candidate set.
+        owners: dict[str, str] = {}
+        commands: dict[str, set[str]] = {turn_id: set() for turn_id in candidates}
+        for entry in self._control_items("thread/items/list", {}, deadline):
+            turn_id, item = entry.get("turnId"), entry.get("item")
+            if not isinstance(turn_id, str) or not turn_id or not isinstance(item, dict):
+                raise self._runtime_error("Codex returned an unbound thread item.")
+            if item.get("type") == "commandExecution":
+                item_id = item.get("id")
+                if not isinstance(item_id, str) or not item_id:
+                    raise self._runtime_error("Codex returned an unbound command item.")
+                if item_id in owners and owners[item_id] != turn_id:
+                    raise self._runtime_error("Codex returned conflicting command ownership.")
+                owners[item_id] = turn_id
+                if turn_id in commands:
+                    commands[turn_id].add(item_id)
+        # RPC dispatch can observe command events omitted by native history.
+        # Keep their existing exact thread/Turn proof, within this observation.
+        with self._command_items_lock:
+            for turn_id, items in commands.items():
+                for item_id in self._command_items.get(turn_id, set()):
+                    if item_id in owners and owners[item_id] != turn_id:
+                        raise self._runtime_error("Codex returned conflicting command ownership.")
+                    owners[item_id] = turn_id
+                    items.add(item_id)
+        return [turn_id for turn_id in candidates if live_items & commands[turn_id]]
 
     def _command_item_ids(self, turn_id: str, deadline: float) -> set[str]:
         with self._command_items_lock:

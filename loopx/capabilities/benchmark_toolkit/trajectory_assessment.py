@@ -33,7 +33,9 @@ def _result_proof(directory: Path, prepared: dict[str, Any]) -> dict[str, str]:
 
 def _write(path: Path, value: Any) -> None:
     temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+    temporary.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     temporary.replace(path)
 
 
@@ -43,14 +45,14 @@ def prepare(
     return effect_runtime_result(
         "benchmark.trajectory.prepare",
         {
-            "input": json.loads(input_path.read_text()),
+            "input": json.loads(input_path.read_text(encoding="utf-8")),
             "config": {"model": model, "effort": effort, "service_tier": service_tier},
         },
     )
 
 
 def read_job(directory: Path) -> dict[str, Any]:
-    receipt = json.loads((directory / "receipt.json").read_text())
+    receipt = json.loads((directory / "receipt.json").read_text(encoding="utf-8"))
     if receipt.get("schema_version") != "trajectory_assessment_job_v1":
         raise ValueError("Unsupported trajectory assessment receipt")
     return receipt
@@ -106,7 +108,9 @@ def execute(
                     {
                         **prepared,
                         "output": json.loads(
-                            (directory / "model-output.json").read_text()
+                            (directory / "model-output.json").read_text(
+                                encoding="utf-8"
+                            )
                         ),
                     },
                 )
@@ -138,7 +142,7 @@ def execute(
         (directory / "cancel.request").unlink(missing_ok=True)
         _write(directory / "input.json", prepared["input"])
         _write(directory / "output-schema.json", prepared["output_schema"])
-        (directory / "prompt.txt").write_text(prepared["prompt"])
+        (directory / "prompt.txt").write_text(prepared["prompt"], encoding="utf-8")
         config = prepared["config"]
         command = [
             codex,
@@ -186,9 +190,9 @@ def execute(
         }
         _write(directory / "receipt.json", receipt)
         with (
-            (directory / "prompt.txt").open() as prompt,
-            (directory / "events.jsonl").open("w") as events,
-            (directory / "stderr.txt").open("w") as errors,
+            (directory / "prompt.txt").open(encoding="utf-8") as prompt,
+            (directory / "events.jsonl").open("w", encoding="utf-8") as events,
+            (directory / "stderr.txt").open("w", encoding="utf-8") as errors,
         ):
             process = subprocess.Popen(
                 command,
@@ -197,6 +201,7 @@ def execute(
                 stdout=events,
                 stderr=errors,
                 text=True,
+                encoding="utf-8",
             )
             receipt["process_id"] = process.pid
             _write(directory / "receipt.json", receipt)
@@ -220,7 +225,9 @@ def execute(
                 raise ValueError(
                     f"Codex exited {process.returncode}; inspect stderr.txt and events.jsonl"
                 )
-            output = json.loads((directory / "model-output.json").read_text())
+            output = json.loads(
+                (directory / "model-output.json").read_text(encoding="utf-8")
+            )
             result = effect_runtime_result(
                 "benchmark.trajectory.qualify", {**prepared, "output": output}
             )
@@ -228,7 +235,9 @@ def execute(
             receipt.update(
                 status="succeeded", ok=True, **_result_proof(directory, prepared)
             )
-        for line in (directory / "events.jsonl").read_text().splitlines():
+        for line in (
+            (directory / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        ):
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:

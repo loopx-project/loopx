@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+import pytest
+
 from loopx.capabilities.pr_review_queue import (
     DEFAULT_REVIEW_PRIORITY,
     PullRequestReviewPriority,
@@ -42,6 +44,25 @@ def _action_kind(item: dict[str, object]) -> str | None:
     return materialize_review_execution(
         item, fresh_audit_exact_heads=set()
     )["review_action_kind"]
+
+
+@pytest.mark.parametrize("state,draft,reason", [
+    ("OPEN", True, "Draft"),
+    ("CLOSED", False, "closed"),
+    ("UNKNOWN", False, "lifecycle"),
+])
+def test_inventory_instruction_does_not_invent_a_review_conclusion(state, draft, reason):
+    from loopx.pr_review import render_pr_review_markdown
+
+    item = _concluded_item(state=state, draft=draft, conclusion={"valid": False})
+    execution = materialize_review_execution(item, fresh_audit_exact_heads=set())
+    assert execution["review_action_kind"] is None
+    assert execution["review_plan"] is None and execution["evidence_commands"] == []
+    assert reason in execution["review_goal"]
+    assert "existing exact-head conclusion" not in execution["review_goal"]
+    rendered = render_pr_review_markdown({"ok": True, "pull_requests": [item | execution]})
+    assert execution["review_goal"] in rendered
+    assert "read back the existing conclusion" not in rendered
 
 
 def _pr(

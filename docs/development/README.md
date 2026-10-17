@@ -94,3 +94,136 @@ issue or regression
 
 通常闭环为：问题或回归 -> 确定性刻画 -> 聚焦实现 -> 单测与 durable smoke ->
 catalog 选择的 canary -> 敏感变更 owner review -> 必要时观察发布结果。
+
+## Engineering Scope And Refactoring
+
+Before adding a module, protocol field, CLI option, fixture or abstraction,
+apply the scope-fit review below. During development and again before approval
+or merge, apply the bounded refactoring pass. These are engineering decisions
+within the accepted task, not additional user-approval gates.
+
+### Bounded Future-Facing Refactoring
+
+During development and again before approving or merging each PR, explicitly
+ask whether the touched behavior or its adjacent owning boundary has a small,
+related, behavior-preserving refactor that would make the next likely product
+or control-plane change easier. Prefer removing duplicate authority,
+strengthening typed contracts, narrowing module ownership, and retiring
+obsolete compatibility seams over adding speculative frameworks. For
+control-plane work, keep state-machine and effect authority in the typed
+TypeScript boundary when that is the established owner; Python may adapt or
+bridge that contract, but must not silently recreate a second source of truth.
+
+Apply the refactor in the current PR when it shares the same domain or change
+reason, remains locally reviewable and reversible, and is covered by
+characterization or parity validation; it need not be strictly required for
+the immediate fix. Do not use this principle to justify broad migration or
+unrelated cleanup. When the valuable related refactor is larger than a bounded
+companion change, record a focused follow-up instead. PR review and merge notes
+should state whether this future-facing pass was applied, deferred, or found
+unnecessary, with the concrete boundary considered.
+
+### Scope-Fit Review
+
+Before adding a new module, builder, protocol field, CLI option, fixture, smoke
+section, or abstraction, pass a scope-fit review:
+
+- Identify the shipped behavior, active call site, or explicit compatibility
+  contract that needs it. If the value is only an uncommitted future runner, a
+  design note, or a hypothetical extension with no validation contract, keep the
+  design in docs or todo state until the real call site appears.
+- Prefer a cohesive behavior-preserving seam. For example, let the ledger first
+  recognize one compact public-safe row shape before adding a dedicated
+  benchmark-specific builder, arm constants, or wide field-level smoke. Do not
+  split so narrowly that reviewers must reconstruct one logical behavior from
+  several dependent PRs.
+- Design tests from semantics, not observed output. Independently review the
+  intended invariant and legal or illegal transitions before testing the
+  implementation. Never derive expected results from the implementation under
+  test or its current output; characterization fixtures are non-authoritative,
+  and contradictions require rule repair plus negative or mutation coverage.
+- Characterize before moving code. For status, quota, review-packet, scheduler,
+  monitor, and handoff behavior, add or extend parity fixtures first, then
+  extract the proven rule or cohesive rule group.
+- Reuse existing repository patterns and bounded contexts. Add code where its
+  change reason belongs, such as `control_plane/runtime`, `control_plane/quota`,
+  or `control_plane/todos`; do not create generic sink directories or helper
+  layers just because several files share a similar shape.
+- Treat large or hot files as warning signals. When a change would grow an
+  already oversized module, first look for a narrow read model, domain helper,
+  or bounded-context home. For internal module moves, update active call sites
+  and delete the old entry point; leave a compatibility wrapper only when a
+  real external import, persisted state, CLI/API contract, or migration window
+  requires it.
+- Distinguish duplicate knowledge from duplicate-looking code. Collapse shared
+  state rules, protocol semantics, serialization contracts, and lifecycle
+  invariants; avoid a parameter-heavy abstraction when two callers merely look
+  similar but will evolve for different reasons.
+- Keep smokes thin and durable. They should prove shipped behavior, boundary
+  enforcement, and regression contracts, not every incidental field produced by
+  a temporary builder. Large smokes are a prompt to move reusable logic into
+  product modules or to narrow the assertion surface.
+- Make illegal states hard to express. For status, quota, scheduler, monitor,
+  todo, and handoff flows, prefer explicit enums, schemas, and transition
+  helpers over scattered booleans and prose-only assumptions.
+- State-classification and delivery-semantics rules belong in typed enums,
+  schemas, or transition helpers. Substring denylists and prose heuristics must
+  carry a documented reason and a typed follow-up; PR review must flag them
+  with the concrete false-positive/negative risk.
+- Core control-plane obligations and error text must stay domain-neutral. Do
+  not put product- or benchmark-specific wording (for example "product
+  advancement") into generic work-lane, quota, todo, or settlement contracts;
+  prefer goal-agnostic phrasing.
+- Default behavior changes must be disclosed: rename the smoke that encoded the
+  old default, update docs/release notes, and name the affected lanes.
+  "Guidance" versus machine-enforced obligations (such as `must_attempt_work`)
+  must be explicit in the contract, not inferred from prose.
+- Fail fast with actionable context at input, config, permission, and state
+  boundaries, but do not replace clear control flow with broad exception
+  plumbing or silent fallback.
+- Ship right-sized, reversible batches. A PR should be theme-unified, locally
+  validated, and reviewable as a complete stage package. A few hundred to
+  roughly one or two thousand lines can be appropriate when the diff is cohesive
+  and avoids hidden future scaffolding; a 30-line PR can still be too small if it
+  leaves behavior split across follow-up PRs. Separate characterization/parity
+  fixtures, mechanical moves, behavior changes, and cleanup when that makes
+  review and rollback clearer.
+- Keep public PRs concise and current-purpose focused. Future extension points
+  are allowed when they reduce near-term churn, preserve compatibility, or
+  define a real contract that is documented and tested. Do not bundle
+  private/local experiment scaffolding, diagnostic run dumps, unused speculative
+  plumbing, or long background narratives with the code path needed by the
+  current behavior.
+- Compress rather than append. For docs, fixtures, dashboards, and examples,
+  replace or retire stale material when adding new current truth; do not let
+  canonical surfaces accumulate multiple versions of the same conclusion.
+
+Use this checklist to delete, defer, or right-size code as actively as you add
+it. A PR that removes an unused abstraction, narrows a smoke to the real
+contract, or moves a rule into the right bounded context is often more valuable
+than one that adds a larger framework around the same behavior.
+
+## Agent Instruction Loading And Maintenance
+
+The repository shares one policy entry: `AGENTS.md` for Codex and the explicit
+`@AGENTS.md` import in `CLAUDE.md` for Claude Code. Keep the import single-source;
+a prose request to read the file does not ensure startup loading. Do not eagerly
+import the detailed procedures: read their linked owner when its task applies.
+
+Codex's default `project_doc_max_bytes` is 32 KiB across discovered instructions.
+The root regression checks that this file fits, but ancestor instructions, nested
+files and user overrides still require a host-specific loading check. Claude's
+import/discovery settings have different semantics; 32 KiB is not a universal
+Claude limit. Inspect actual startup context after changing the entry or its
+alias, and distinguish assembled text from model compliance and live effects.
+Existing sessions may retain an older copy.
+
+Run `uv run --extra test python -m pytest -q tests/test_repository_instruction_delivery.py`
+for root size, shared import, local routes and existing inbound anchors. Review
+a moved obligation clause by clause: owner, modality, scope, order, exceptions,
+evidence provenance, continuation and stop conditions. A link test or shorter
+file does not establish equivalence. Keep operational rules in their existing
+owners rather than adding another parallel policy collection.
+
+Design sources and the disposition of the earlier proposal are recorded in
+[the instruction/skill/prompt study](../research/2026-10-17-agent-instruction-skill-prompt-guidance.md).

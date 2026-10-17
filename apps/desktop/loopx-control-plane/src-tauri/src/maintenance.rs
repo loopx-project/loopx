@@ -229,6 +229,25 @@ impl Maintenance {
             }
         }
     }
+
+    // Recovering an already-qualified private child does not select/install a
+    // runtime or change the update transaction. In particular a failed Check
+    // or a pending available update must remain visible while services heal.
+    fn recover_connected<T>(&self, recover: impl FnOnce() -> T) -> Option<T> {
+        if self.busy.load(Ordering::Acquire)
+            || self.incomplete_app_installation.load(Ordering::Acquire)
+        {
+            return None;
+        }
+        let _guard = self.supervision.try_lock().ok()?;
+        if self.busy.load(Ordering::Acquire)
+            || self.incomplete_app_installation.load(Ordering::Acquire)
+            || self.snapshot.lock().unwrap()["phase"] == "restart_required"
+        {
+            return None;
+        }
+        Some(recover())
+    }
 }
 struct BusyGuard<'a>(&'a AtomicBool);
 impl Drop for BusyGuard<'_> {
@@ -678,9 +697,10 @@ fn runtime_state_publishes_own_phase(error: &str) -> bool {
 }
 
 fn resume_runtime(app: &AppHandle) -> Result<crate::services::SelectedRuntime, String> {
+    use crate::runtime_ancestry::compare_official_commits;
     use crate::runtime_selection::{
-        compare_official_commits, is_private_runtime, prefer_current_bundle,
-        prefer_discovered_runtime, same_release_installation, Selection,
+        is_private_runtime, prefer_current_bundle, prefer_discovered_runtime,
+        same_release_installation, Selection,
     };
     let mut selection = crate::runtime_selection::selected(app)?;
     let mut installed = crate::services::runtime_identity_for_executable(&selection.executable);
@@ -880,6 +900,19 @@ pub fn start_services(
 
 pub fn reconnect_requested(app: &AppHandle) -> bool {
     app.state::<Maintenance>().snapshot.lock().unwrap()["phase"] == "connecting"
+}
+
+pub fn recover_services(
+    app: &AppHandle,
+    services: &mut crate::services::ServiceSet,
+    endpoints: &crate::service_endpoints::ServiceEndpoints,
+) {
+    let result = app
+        .state::<Maintenance>()
+        .recover_connected(|| services.recover_exited(endpoints, Instant::now()));
+    if let Some(Err(error)) = result {
+        eprintln!("LoopX owned service recovery deferred: {error}");
+    }
 }
 
 #[cfg(test)]
@@ -1479,6 +1512,49 @@ mod tests {
             None
         );
         assert_eq!(state.snapshot.lock().unwrap()["phase"], "restart_required");
+    }
+
+    #[test]
+    fn connected_child_recovery_preserves_update_failure_and_available_choice() {
+        let state = Maintenance::default();
+        let failure = state.publish_manual_failure("update_network_failed", "stable");
+        assert_eq!(state.recover_connected(|| "recovered"), Some("recovered"));
+        assert_eq!(state.status_snapshot(), failure);
+        assert_eq!(*state.last_failure.lock().unwrap(), failure);
+        assert!(state.manual_failure_pending.load(Ordering::Acquire));
+        let available = state.publish("available", json!({"version":"1.4.2"}));
+        assert_eq!(state.recover_connected(|| true), Some(true));
+        assert_eq!(state.status_snapshot(), available);
+    }
+
+    #[test]
+    fn connected_child_recovery_cannot_race_maintenance_or_restart_damaged_app() {
+        let state = Maintenance::default();
+        let manual = state.acquire().unwrap();
+        assert_eq!(
+            state.recover_connected(|| panic!("manual action owns supervision")),
+            None::<()>
+        );
+        drop(manual);
+        let automatic = state.supervision.try_lock().unwrap();
+        assert_eq!(
+            state.recover_connected(|| panic!("automatic action owns supervision")),
+            None::<()>
+        );
+        drop(automatic);
+        state.publish("restart_required", json!({}));
+        assert_eq!(
+            state.recover_connected(|| panic!("replacement requires restart")),
+            None::<()>
+        );
+        state.publish("ready", json!({}));
+        state
+            .incomplete_app_installation
+            .store(true, Ordering::Release);
+        assert_eq!(
+            state.recover_connected(|| panic!("damaged App must not restart services")),
+            None::<()>
+        );
     }
 
     #[test]

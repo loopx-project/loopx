@@ -122,6 +122,7 @@ impl std::error::Error for ServiceError {}
 
 struct OwnedService {
     child: GroupChild,
+    kind: ServiceKind,
 }
 
 impl OwnedService {
@@ -133,12 +134,15 @@ impl OwnedService {
 
 pub struct ServiceSet {
     owned: Vec<OwnedService>,
+    runtime: SelectedRuntime,
+    last_recovery_attempt: Option<Instant>,
     /// True when a stale LoopX service was restarted so the running frontend
     /// was transparently moved onto the current installed release.
     pub healed: bool,
 }
 
 /// Freeze one selected artifact for both concurrently started services.
+#[derive(Clone)]
 pub(crate) struct SelectedRuntime {
     pub executable: String,
     pub identity: Option<serde_json::Value>,
@@ -150,19 +154,27 @@ impl ServiceSet {
         endpoints: &ServiceEndpoints,
         progress: impl Fn(&[ServiceKind]) + Sync,
     ) -> Result<Self, ServiceError> {
-        Self::collect(connect_all(
-            SERVICE_KINDS,
-            |kind| connect(kind, runtime, endpoints),
-            progress,
-        ))
+        Self::collect(
+            connect_all(
+                SERVICE_KINDS,
+                |kind| connect(kind, runtime, endpoints),
+                progress,
+            ),
+            runtime.clone(),
+        )
     }
 
     /// Fold finished connection attempts into one owned set. Every outcome
     /// surrenders its child here, so a set that fails still stops the
     /// processes its successful peers started.
-    fn collect(outcomes: [ServiceOutcome; SERVICE_KINDS.len()]) -> Result<Self, ServiceError> {
+    fn collect(
+        outcomes: [ServiceOutcome; SERVICE_KINDS.len()],
+        runtime: SelectedRuntime,
+    ) -> Result<Self, ServiceError> {
         let mut services = Self {
             owned: Vec::new(),
+            runtime,
+            last_recovery_attempt: None,
             healed: false,
         };
         let mut failure = None;
@@ -180,6 +192,55 @@ impl ServiceSet {
             }
             None => Ok(services),
         }
+    }
+
+    /// Recover only this window's exited private children. Keep its qualified
+    /// artifact, ports and healthy peer; never infer ownership from a listener.
+    pub(crate) fn recover_exited(
+        &mut self,
+        endpoints: &ServiceEndpoints,
+        now: Instant,
+    ) -> Result<bool, ServiceError> {
+        if !endpoints.isolated
+            || self
+                .last_recovery_attempt
+                .is_some_and(|at| now.duration_since(at) < Duration::from_secs(2))
+        {
+            return Ok(false);
+        }
+        let mut recovered = false;
+        for service in &mut self.owned {
+            // Observe the direct child, not arbitrary worker descendants in
+            // its process group. An unknown wait result grants no restart.
+            let exited = match service.child.inner().try_wait() {
+                Ok(status) => status.is_some(),
+                Err(error) => {
+                    self.last_recovery_attempt = Some(now);
+                    return Err(ServiceError(error.to_string()));
+                }
+            };
+            if !exited {
+                continue;
+            }
+            self.last_recovery_attempt = Some(now);
+            service.stop();
+            let mut replacement = None;
+            let result = connect_owned_service(
+                service.kind,
+                endpoints.port(service.kind),
+                &self.runtime,
+                &mut replacement,
+            );
+            if let Err(error) = result {
+                if let Some(mut failed) = replacement {
+                    failed.stop();
+                }
+                return Err(error);
+            }
+            *service = replacement.expect("successful private start owns its child");
+            recovered = true;
+        }
+        Ok(recovered)
     }
 
     pub fn stop(&mut self) {
@@ -273,6 +334,13 @@ fn connect_owned_service(
     }
     let mut command = Command::new(&runtime.executable);
     configure_runtime_environment(&mut command);
+    if matches!(kind, ServiceKind::Chat) {
+        configure_codex_chat_home(
+            &mut command,
+            env::var_os("HOME"),
+            env::var_os("LOOPX_CHAT_CODEX_HOME"),
+        );
+    }
     command
         .args(kind.command_args_on_port(port))
         .stdin(Stdio::null())
@@ -284,7 +352,7 @@ fn connect_owned_service(
             kind.label()
         ))
     })?;
-    *owned = Some(OwnedService { child });
+    *owned = Some(OwnedService { child, kind });
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     while Instant::now() < deadline {
         let child = &mut owned.as_mut().expect("owned service").child;
@@ -403,6 +471,13 @@ fn connect_service(
 
     let mut command = Command::new(executable);
     configure_runtime_environment(&mut command);
+    if matches!(kind, ServiceKind::Chat) {
+        configure_codex_chat_home(
+            &mut command,
+            env::var_os("HOME"),
+            env::var_os("LOOPX_CHAT_CODEX_HOME"),
+        );
+    }
     command
         .args(kind.command_args())
         .stdin(Stdio::null())
@@ -414,7 +489,7 @@ fn connect_service(
             kind.label()
         ))
     })?;
-    *owned = Some(OwnedService { child });
+    *owned = Some(OwnedService { child, kind });
 
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     while Instant::now() < deadline {
@@ -765,6 +840,21 @@ pub(crate) fn configure_runtime_environment(command: &mut Command) {
         "PATH",
         runtime_search_path(env::var_os("HOME"), env::var_os("PATH")),
     );
+}
+
+// A desktop Chat service has its own account binding. An unrelated terminal's
+// CODEX_HOME must not pair the selected GPT model with another provider. CLI
+// launches retain their environment semantics; explicit Chat overrides win.
+fn configure_codex_chat_home(
+    command: &mut Command,
+    home: Option<std::ffi::OsString>,
+    chat_home: Option<std::ffi::OsString>,
+) {
+    if let Some(selected) = chat_home.filter(|value| !value.is_empty()) {
+        command.env("LOOPX_CHAT_CODEX_HOME", selected);
+    } else if let Some(home) = home.filter(|value| !value.is_empty()) {
+        command.env("LOOPX_CHAT_CODEX_HOME", PathBuf::from(home).join(".codex"));
+    }
 }
 
 fn runtime_search_path(
@@ -1143,6 +1233,35 @@ fn classify_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_chat_account_default_and_explicit_override_are_independent_of_caller_home() {
+        let user_home = PathBuf::from("synthetic-user-home");
+        for chat_home in [None, Some(std::ffi::OsString::new())] {
+            let mut command = Command::new("synthetic-loopx");
+            command.env("CODEX_HOME", "different-provider-home");
+            configure_codex_chat_home(&mut command, Some(user_home.clone().into()), chat_home);
+            assert!(command
+                .get_envs()
+                .any(|(key, value)| key == "LOOPX_CHAT_CODEX_HOME"
+                    && value == Some(user_home.join(".codex").as_os_str())));
+            assert!(command.get_envs().any(|(key, value)| key == "CODEX_HOME"
+                && value == Some(std::ffi::OsStr::new("different-provider-home"))));
+        }
+        let mut command = Command::new("synthetic-loopx");
+        configure_codex_chat_home(
+            &mut command,
+            Some(user_home.into()),
+            Some("selected-chat-home".into()),
+        );
+        assert!(command
+            .get_envs()
+            .any(|(key, value)| key == "LOOPX_CHAT_CODEX_HOME"
+                && value == Some(std::ffi::OsStr::new("selected-chat-home"))));
+        let mut command = Command::new("synthetic-loopx");
+        configure_codex_chat_home(&mut command, None, None);
+        assert_eq!(command.get_envs().count(), 0);
+    }
     #[test]
     fn package_identity_requires_core_installation_qualification() {
         let identity = serde_json::json!({"schema_version":"loopx_runtime_identity_v1",
@@ -1567,3 +1686,7 @@ mod tests {
 #[cfg(test)]
 #[path = "services_tests.rs"]
 mod supervisor_tests;
+
+#[cfg(all(test, unix))]
+#[path = "services_real_runtime_tests.rs"]
+mod real_runtime_tests;

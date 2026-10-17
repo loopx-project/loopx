@@ -23,7 +23,6 @@ from heartbeat_prompt_fixtures import (  # noqa: E402
     REPO_ROOT,
     assert_interface_budget_payload,
     assert_no_project_specific_prompt_leaks,
-    assert_ordered,
     assert_prompt_budget,
     normalized,
 )
@@ -57,7 +56,7 @@ def user_output_policy(task_body: str, *, mode: str) -> dict[str, str]:
         assert "Only if `user_channel.notify=NOTIFY`" in body
         assert "repair the projection internally and stay quiet" in body
         assert "notify only under `NOTIFY`" in body
-        assert "Return compactly under `interaction_contract.user_channel.notify`" in body
+        assert "Follow the user-channel rule above" in body
         # No bare report directives outside NOTIFY condition
         assert "and report compactly" not in body, (
             "full: bare 'and report compactly' (old form outside NOTIFY)"
@@ -94,16 +93,10 @@ def assert_sole_notification_authority(task_body: str, *, mode: str) -> None:
     assert "unchanged->truthful --vision-unchanged-reason" in body, mode
 
     if mode == "full":
-        assert (
-            "once. Only if `user_channel.notify=NOTIFY`: report the result compactly; "
-            "if `user_todo_summary.open_count > 0`, include those todos; if none exists, "
-            "report the gate. Under `DONT_NOTIFY`, stay quiet after the safe-bypass work."
-        ) in body, body
-        assert (
-            "state/board/ledger, add todos if needed, then spend once after validation. "
-            "Only if `user_channel.notify=NOTIFY`: report the new evidence. Under "
-            "`DONT_NOTIFY`, stay quiet."
-        ) in body, body
+        assert "Under `NOTIFY`, report the result and open user todos, or the gate if none." in body
+        assert "Under `DONT_NOTIFY`, stay quiet after the work." in body
+        assert "Report new evidence only under `NOTIFY`." in body
+        assert "exact monitor settlement never refreshes/spends" in body
         return
 
     if mode == "compact":
@@ -111,7 +104,7 @@ def assert_sole_notification_authority(task_body: str, *, mode: str) -> None:
             "Only under `NOTIFY`, `state=operator_gate`/"
             "`notify_user_on_open_todo=true` permit concrete blocker-push; else quiet."
         ) in body, body
-        assert "Return only under `user_channel.notify=NOTIFY`; otherwise stay quiet." in body
+        assert "Follow the output policy above." in body
         return
 
     if mode == "brief":
@@ -345,9 +338,11 @@ def main() -> int:
         task_body = str(prompt_payload["task_body"])
         progress_refresh = str(prompt_payload["progress_refresh_state_command"])
         quota_spend = str(prompt_payload["quota_spend_command"])
-        state_only_refresh = str(prompt_payload["refresh_state_command"])
-        assert task_body.index(progress_refresh) < task_body.index(quota_spend), prompt_label
-        assert task_body.index(quota_spend) < task_body.rindex(state_only_refresh), prompt_label
+        assert progress_refresh not in task_body, prompt_label
+        assert quota_spend not in task_body, prompt_label
+        assert "settlement_plan.ordered_steps" in task_body, prompt_label
+        assert "next_cli_actions" in task_body, prompt_label
+        assert "actual outcomes" in task_body, prompt_label
     assert len(str(compact_payload["task_body"])) < len(str(payload["task_body"])), (
         len(str(compact_payload["task_body"])),
         len(str(payload["task_body"])),
@@ -468,27 +463,23 @@ def main() -> int:
         "else quiet."
     ) in compact_task
     for phrase in (
-        "Compact policy: registry/state/adapter/`goal_boundary`",
         "Detail:",
         "loopx heartbeat-prompt --full --goal-id public-heartbeat-goal --active-state /tmp/public-heartbeat-goal/ACTIVE_GOAL_STATE.md",
         'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id public-heartbeat-goal',
         "state=operator_gate",
         "notify_user_on_open_todo=true",
-        "`user_channel.notify=NOTIFY`",
+        "external=`NOTIFY`; quiet=`DONT_NOTIFY`",
         "concrete blocker-push",
         "else quiet",
         "safe_bypass_allowed=true",
         "safe_bypass_kind=outcome_floor_recovery",
         "receipts do not self-stop",
-        "ranker/cross-domain evidence artifact",
-        "one read-only poll",
+        "evidence artifact or blocker recovery",
+        "one allowed read-only poll",
         "heartbeat_recommendation",
         "task_orchestration_contract",
         "spawn admitted child lanes",
         "goal_boundary",
-        "delivery_batch_scale",
-        "delivery_outcome",
-        "post_handoff_outcome_gap_streak",
         "handoff_delivery_contract",
         "Legacy/raw fallback is not owner/gate/stop authority",
         "run_first_read_only_map",
@@ -499,11 +490,10 @@ def main() -> int:
         "Gate only the affected path; continue independent allowed work",
         "loopx todo add --goal-id public-heartbeat-goal --role user --task-class user_gate|user_action",
         "owner todos and `--role agent` for agent todos, not prose",
-        "Done->successor; final->refresh/spend/no-follow-up",
-        'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota spend-slot --goal-id public-heartbeat-goal --slots 1 --source heartbeat --execute',
-        "Account actual class/scale/outcome",
-        "once unpiped; never retry",
-        "Optional state-only post-spend",
+        "Todo done≠Turn settled; no invented successor/--no-follow-up",
+        "actual class/scale/outcome, no defaults",
+        "Accountable progress precedes its spend",
+        "post-spend refresh is state-only",
         "No spend for quiet skips",
     ):
         assert phrase in compact_task, phrase
@@ -611,7 +601,7 @@ def main() -> int:
         "re-enter guard",
         "`agent_read_required`",
         "drain/read/triage before work; settle/ACK",
-        "P0 blocked: safe P1/P2; monitor quiet/no-spend",
+        "P0 blocked: admitted P1/P2; no wait spend",
         "No learning queue unless asked",
         "Destructive Git/production requires explicit authorization",
     ):
@@ -657,29 +647,29 @@ def main() -> int:
         'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id public-heartbeat-goal',
         "`user_channel.notify` controls OUTPUT only: NOTIFY=show; DONT_NOTIFY=no output",
         "Due/peer work is not a user prompt",
-        "Todo acceptance is not settlement",
+        "Todo done≠Turn settled",
         "Missing NOTIFY action:",
         "user Todo unprojected",
         "follow user channel",
         "monitor_quiet_skip",
         "records receipt/stall",
-        "retry the same id",
-        "one read-only poll",
+        "Retry a failed receipt with its same id",
+        "one allowed read-only poll",
         "Outcome-floor recovery",
         "evidence or blocker",
         "status --limit 3",
         "review-packet --handoff-only",
         "heartbeat_recommendation.agent_must_attempt",
         "obey quota authority/outcome/handoff",
-        "After validated delivery",
+        "do/verify authorized work",
         "execution_obligation.must_attempt_work",
-        "interaction_contract.cli_channel.settlement_plan.ordered_steps",
-        "exact identity/effect order",
-        "never old refresh/spend",
-        "Finish only on terminal no-follow-up",
-        "Do not spend for quiet skips, preflight failures, blocker-push questions",
+        "settlement_plan.ordered_steps",
+        "preserve exact identities/effect ids",
+        "Never reconstruct static refresh/spend",
+        "Finish Goal only on terminal no-follow-up",
+        "Do not spend for quiet skips, preflight failures, blocker-only turns",
         "No learning queue unless asked.",
-        "No permission asks in a trusted session.",
+        "Reuse existing authorization for the current action",
     ):
         assert phrase in brief_task, phrase
     for command_key in ("quota_spend_command", "refresh_state_command", "progress_refresh_state_command"):
@@ -712,8 +702,8 @@ def main() -> int:
         "Admitted work: settlement_plan even if artifacts unchanged",
         "unchanged->truthful --vision-unchanged-reason",
         "re-enter guard",
-        "P0 blocked: safe P1/P2",
-        "monitor quiet/no-spend",
+        "P0 blocked: admitted P1/P2",
+        "no wait spend",
         "No learning queue unless asked",
         "Destructive Git/production requires explicit authorization",
     ):
@@ -739,284 +729,37 @@ def main() -> int:
     generated = str(payload["task_body"])
     compact_generated = normalized(generated)
 
-    must_have = (
-        "<ACTIVE_GOAL_STATE_PATH>",
-        "<GOAL_ID>",
-        'export PATH="$HOME/.local/bin:$PATH"',
-        'install_script="$HOME/loopx/scripts/install-local.sh"',
-        "loopx doctor >/dev/null",
-        'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id <GOAL_ID>',
-        "project non-basic capabilities that are actually present",
-        "without guessing capabilities the host does not have",
-        "All generic heartbeat and native Goal bodies match the user's current language",
-        "fall back to English when no user language is available",
-        "do not mix languages unless the user asks or a scoped capability requires bilingual",
-        "Capability-specific bilingual contracts remain authoritative",
-        "If that preflight still fails",
-        "should_run=false",
-        "state=operator_gate",
-        "gate_prompt",
-        "operator_question",
-        "user_todo_summary",
-        "user_todo_summary.open_count > 0",
-        "never say \"no new user action\"",
-        "Treat `interaction_contract.user_channel.notify` as the final notification signal",
-        "When it is `NOTIFY`",
-        "even when `action_required=false`",
-        "`user_todo_summary.open_count=0`",
-        "`non_blocking=true`",
-        "non-blocking means the agent may continue independent work",
-        'Never say only "owner gate"',
-        "Only when `notify=DONT_NOTIFY`",
-        '"no user action required" in the user\'s language',
-        "specific user Todo is not projected; repair LoopX state projection",
-        "NOTIFY",
-        "notify_user_on_open_todo=true",
-        "blocker-push opportunity",
-        "open_todo_notification_policy=repeat_until_resolved",
-        "state=focus_wait",
-        "waiting_on=external_evidence",
-        "listing at most three first_open_items",
-        "open_todo_notify_reason",
-        "done, defer/not now, or a new evidence link/date/conclusion",
-        "no spend",
-        "safe_bypass_allowed=true",
-        "gate blocks only the gated delivery path",
-        "one bounded safe-bypass step",
-        "include the projected user actions or todos concretely",
-        "LOOPX_TURN",
-        "<current_time_iso>",
-        "idempotent receipt for every turn",
-        "Do not append a second manual monitor poll",
-        "delivery edits",
-        "unchanged monitor-only receipts are not self-stop signals",
-        "safe_bypass_kind=outcome_floor_recovery",
-        "ranker/cross-domain evidence artifact",
-        "explicitly a monitor",
-        "status/log/metric/marker surfaces",
-        "New eval/fail/complete/blocker",
-        "state/board/ledger",
-        "Still do not launch/stop/restart/sync/design code",
-        "DONT_NOTIFY",
-        "should_run=true",
-        "When you inspect current LoopX routing",
-        "attention_queue.items",
-        "project_asset are authoritative",
-        "raw queue fields are not owner/gate/stop authority",
-        "run_history.latest_runs as evidence and drill-down only",
-        "do not decide whether a gate is pending or approved from latest runs alone",
-        "goal_boundary",
-        "Stop for an open user/owner todo only when it belongs to this goal's guard payload or current project asset",
-        "Dependency or sibling-goal todos found in `attention_queue.items` should be recorded as dependency blockers",
-        "must not consume the whole eligible turn",
-        "choose a gate-independent P0/P1/P2 candidate for this goal when one exists",
-        "then use the blocker-push pattern above",
-        "do not append quota spend",
-        "heartbeat_recommendation",
-        "recommended_mode=run_first_read_only_map",
-        "real read-only map",
-        "read_only_project_map result",
-        "recommended_mode=mapped_noop_if_unchanged",
-        "stop_if_unchanged=true",
-        "no new user instruction, owner evidence, agent todo, stale source, or safe handoff",
-        "return quiet `DONT_NOTIFY`: do not run, edit, or spend",
-        "Check `delivery_batch_scale`, `delivery_outcome`,",
-        "repeated-small or surface-only loops",
-        "Run a short steering audit when new evidence or a projected review warrants",
-        "compare relevant alternatives without a fixed candidate count",
-        "apply a continuation check",
-        "keep compute quota separate from focus quota",
-        "Include a product bottleneck lens",
-        "user experience, agent capability, evidence quality, adapter readiness, or priority-rule gaps",
-        "promote one concrete bottleneck candidate when it should outrank the nearest local TODO",
-        "Run the no-progress self-repair check against current evidence",
-        "autonomous_replan_obligation",
-        "must_attempt_work=true",
-        "replan_action_packet",
-        "Wake counts do not authorize replan or self-pause",
-        "with original settlement still owed",
-        "Choose scope-bounded work toward a verifiable result",
-        "a focused correction can also be sufficient",
-        "obey budgets, explicit stops, settlement and replan requirements",
-        "Stay inside goal_boundary when present",
-        "Public-safe repo publication is not an operator gate by itself",
-        "commit, push, and PR creation may proceed autonomously after validation",
-        "clean public/private boundary scan",
-        "private or company-internal material, credentials, destructive git operations, production actions",
-        "Run validation proportionate to the change and risk",
-        "Write back changed files, validation, critic, and next action",
-        "Plan/top todo/route changes need todo/Next Action writeback",
-        "If a user/owner todo appears",
-        "do not hide it in prose",
-        "loopx todo add --goal-id <GOAL_ID> --role user --task-class user_gate",
-        "loopx todo add --goal-id <GOAL_ID> --role user --task-class user_action",
-        "Use `--role agent` for project-agent follow-up work",
-        "docs/project-agent-todo-contract.md",
-        'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota spend-slot --goal-id <GOAL_ID> --todo-id <SELECTED_TODO_ID> --slots 1 --source heartbeat --execute',
-        "loopx refresh-state --goal-id <GOAL_ID>",
-        "--classification <PUBLIC_SAFE_PROGRESS_CLASSIFICATION>",
-        "--delivery-batch-scale <ACTUAL_DELIVERY_BATCH_SCALE>",
-        "--delivery-outcome <ACTUAL_DELIVERY_OUTCOME>",
-        "Never default or upgrade smaller/preparatory work",
-        "append exactly one",
-        "If spend output is ambiguous, verify with read-only quota status; never rerun.",
-        "Do not append spend for quiet should_run=false skips, preflight failures, pure dry-run previews, or duplicate accounting attempts",
-        "safe_bypass_allowed=true and you actually completed a bounded safe-bypass step",
-        "safe_bypass_kind=outcome_floor_recovery",
-        "ranker/cross-domain evidence artifact",
-        "Return a compact final report",
-    )
+    # Public docs route persistent setup to the live generator, rather than
+    # duplicating an executable settlement recipe that can drift independently.
     compact_doc = normalized(doc)
-    for phrase in must_have:
-        assert phrase in compact_doc, phrase
-    assert "if absent say" not in compact_doc, compact_doc
     for phrase in (
-        'export PATH="$HOME/.local/bin:$PATH"',
-        'install_script="$HOME/loopx/scripts/install-local.sh"',
-        "loopx doctor >/dev/null",
-        'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id public-heartbeat-goal',
-        "If that preflight still fails",
-        "should_run=false",
-        "state=operator_gate",
-        "gate_prompt",
-        "operator_question",
-        "user_todo_summary",
-        "user_todo_summary.open_count > 0",
-        "never say \"no new user action\"",
-        "Language=user; fallback=English; mix only if asked/scoped-bilingual",
-        "`interaction_contract.user_channel.notify` controls output",
-        "`should_run`/due monitor/other-agent todos are not user prompts",
-        "Only under NOTIFY, `action_required` without an action",
-        "specific user Todo is not projected",
-        "repair LoopX state projection",
-        "repair the projection internally and stay quiet",
-        "NOTIFY",
-        "notify_user_on_open_todo=true",
-        "blocker-push",
-        "open_todo_notification_policy=repeat_until_resolved",
-        "user_gate_notification_cooldown.notification_suppressed=true",
-        "reminder window/change",
-        "open_todo_notify_reason",
-        "No delivery/spend",
-        "safe_bypass_allowed=true",
-        "gate blocks only the gated delivery path",
-        "one bounded safe-bypass step",
-        "include those todos",
-        "LOOPX_TURN",
-        "--turn-instance-id",
-        "receipt/stall is written",
-        "On receipt write failure",
-        "No edits/spend",
-        "receipts do not self-stop",
-        "explicitly a monitor",
-        "status/log/metric/marker surfaces",
-        "New eval/fail/complete/blocker",
-        "state/board/ledger",
-        "Still do not launch/stop/restart/sync/design code",
-        "DONT_NOTIFY",
-        "When you inspect current LoopX routing",
-        "attention_queue.items",
-        "project_asset` are authoritative",
-        "raw queue fields are not owner/gate/stop authority",
-        "run_history.latest_runs` as evidence and drill-down only",
-        "do not decide whether a gate is pending or approved from latest runs alone",
-        "goal_boundary",
-        "then use the blocker-push pattern above",
-        "no spend",
-        "heartbeat_recommendation",
-        "recommended_mode=run_first_read_only_map",
-        "run its `command` as a real read-only map",
-        "read_only_project_map` result",
-        "recommended_mode=mapped_noop_if_unchanged",
-        "stop_if_unchanged=true",
-        "no new user instruction, owner evidence, agent todo, stale source, or safe handoff",
-        "return quiet `DONT_NOTIFY`: do not run, edit, or spend",
-        "Check `delivery_batch_scale`, `delivery_outcome`,",
-        "repeated-small or surface-only loops",
-        "Run a short steering audit when new evidence or a projected review warrants",
-        "compare relevant alternatives without a fixed candidate count",
-        "apply a continuation check",
-        "keep compute quota separate from focus quota",
-        "Include a product bottleneck lens",
-        "user experience, agent capability, evidence quality, adapter readiness, or priority-rule gaps",
-        "promote one concrete bottleneck candidate when it should outrank the nearest local TODO",
-        "Run the no-progress self-repair check",
-        "autonomous_replan_obligation",
-        "must_attempt_work=true",
-        "replan_action_packet",
-        "Wake counts do not authorize replan or self-pause",
-        "with original settlement still owed",
-        "Read agent_channel.work_context and required_reads (or envelope) before work",
-        "Size by task/evidence/risk within authority/budget, not ops/files/wakes",
-        "calls/writeback ≠ completion. Correct locally; obey projected replan/stop, never wake counts",
-        "a focused correction may suffice",
-        "Stay inside `goal_boundary` when present",
-        "Follow user authority and repository rules",
-        "publish public-safe evidence",
+        "--bootstrap --thin --codex-app",
+        "install its `task_body` through the authorized host automation API",
+        "Read back the saved prompt and status",
+        "settlement_plan.ordered_steps", "next_cli_actions",
+        "existing saved prompts need the ordinary",
+    ):
+        assert phrase.lower() in compact_doc.lower(), phrase
+    for stale in ("ranker/cross-domain evidence artifact", "<SELECTED_TODO_ID>",
+                  "No permission asks in a trusted session"):
+        assert stale not in doc, stale
+    for phrase in (
+        "Only if `user_channel.notify=NOTIFY`", "repair the projection internally",
+        "safe_bypass_allowed=true", "gate blocks only the gated delivery path",
+        "monitor_quiet_skip", "On receipt write failure, retry same id",
+        "exact monitor settlement never refreshes/spends",
+        "required_reads (or envelope) before work", "negative cases and readback",
+        "preserve evidence and next action for recovery/resume",
+        "autonomous_replan_obligation", "with original settlement still owed",
+        "settlement_plan.ordered_steps", "next_cli_actions",
+        "Accountable progress precedes its spend", "Never reconstruct static refresh/spend",
+        "ambiguous effects need readback/recovery, not blind retry",
+        "Reuse existing authorization for the current action",
         "Destructive Git/production requires explicit authorization",
-        "Plan/top todo/route changes need todo/Next Action writeback",
-        "If a user/owner todo appears",
-        "loopx todo add --goal-id public-heartbeat-goal --role user --task-class user_gate",
-        "loopx todo add --goal-id public-heartbeat-goal --role user --task-class user_action",
-        "docs/project-agent-todo-contract.md",
-        'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota spend-slot --goal-id public-heartbeat-goal --slots 1 --source heartbeat --execute',
-        "loopx refresh-state --goal-id public-heartbeat-goal",
-        "--classification <PUBLIC_SAFE_PROGRESS_CLASSIFICATION>",
-        "--delivery-batch-scale <ACTUAL_DELIVERY_BATCH_SCALE>",
-        "--delivery-outcome <ACTUAL_DELIVERY_OUTCOME>",
-        "never default or upgrade to `multi_surface` / `outcome_progress`",
-        "Spend consumes this causal record",
-        "Do not append spend for quiet `should_run=false` skips",
-        "safe_bypass_kind=outcome_floor_recovery",
-        "ranker/cross-domain evidence artifact",
     ):
         assert phrase in compact_generated, phrase
-    assert "if absent say" not in compact_generated, compact_generated
-    assert "Only if action_required=true/open_count>0" not in compact_generated, compact_generated
-    assert "If false/0, allow quiet/no-user-todo" not in compact_generated, compact_generated
-
-    assert_ordered(
-        doc[doc.index("Before spending delivery compute, first make the LoopX CLI reachable"):],
-        (
-            "Before spending delivery compute, first make the LoopX CLI reachable",
-            'export PATH="$HOME/.local/bin:$PATH"',
-            "loopx doctor >/dev/null",
-            'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id <GOAL_ID>',
-            "If that preflight still fails",
-            "If the result says should_run=false",
-            "state=operator_gate",
-            "gate_prompt",
-            "notify_user_on_open_todo=true",
-            "blocker-push opportunity",
-            "open_todo_notification_policy=repeat_until_resolved",
-            "safe_bypass_allowed=true",
-            "explicitly a monitor",
-            "status/log/metric/marker surfaces",
-            "New eval/fail/complete/blocker",
-            "If the result says should_run=true",
-            "When you inspect current LoopX routing",
-            "attention_queue.items",
-            "run_history.latest_runs",
-            "Also inspect goal_boundary",
-            "then use the blocker-push pattern above",
-            "execution_obligation",
-            "heartbeat_recommendation.notify is only the user-notification policy",
-            "not an execution gate",
-            "must_attempt_work=true",
-            "recommended_mode=run_first_read_only_map",
-            "recommended_mode=mapped_noop_if_unchanged",
-            "Run a short steering audit when new evidence or a projected review warrants",
-            "Include a product bottleneck lens",
-            "Run the no-progress self-repair check against current evidence",
-            "Choose scope-bounded work toward a verifiable result",
-            "Public-safe repo publication is not an operator gate by itself",
-            "Run validation proportionate to the change and risk",
-            "loopx refresh-state --goal-id <GOAL_ID>",
-            'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota spend-slot --goal-id <GOAL_ID> --todo-id <SELECTED_TODO_ID> --slots 1 --source heartbeat --execute',
-            "If the dashboard or controller needs a state-only update after spend",
-            "Return a compact final report",
-        ),
-    )
+    assert "ranker/cross-domain" not in generated
+    assert "trusted session" not in generated
 
     getting_started = GETTING_STARTED.read_text(encoding="utf-8")
     assert "docs/guides/getting-started.md" in readme, readme
@@ -1034,7 +777,7 @@ def main() -> int:
     assert "safe-bypass or self-repair hints" in getting_started, getting_started
     assert "../heartbeat-automation-prompt.md" in getting_started, getting_started
     assert "execution_obligation" in doc, doc
-    assert "Create a heartbeat automation starting at 3 minutes" in doc, doc
+    assert "The default onboarding cadence\nstarts at 3 minutes" in doc, doc
     assert "quota should-run.scheduler_hint" in doc, doc
     assert "automation_update" in doc, doc
     assert "scheduler_hint.app_automation.stateful_backoff" in doc, doc
@@ -1075,53 +818,99 @@ def main() -> int:
     assert "Visible goal text" in doc, doc
     assert "heartbeat automation task body" in doc, doc
     assert "LoopX is not an autonomous production controller" in readme, readme
-    assert "loopx heartbeat-prompt" in project_skill, project_skill
-    assert "--bootstrap --thin --codex-app" in project_skill, project_skill
-    assert "thin/compact/brief/full execution body" in project_skill, project_skill
-    assert "goal_boundary" in project_skill, project_skill
-    assert "smoke" in project_skill and "contract" in project_skill, project_skill
-    assert "Set Up Recurring Heartbeats" in project_skill, project_skill
-    assert "visible goal text short" in project_skill, project_skill
-    assert "refresh-state" in project_skill and "spend" in project_skill, project_skill
+    assert "Read the matching procedure" in project_skill, project_skill
+    for reference in ("heartbeat-hosts.md", "autonomous-execution.md"):
+        assert f"references/{reference}" in project_skill, reference
+    heartbeat_skill = (PROJECT_SKILL.parent / "references/heartbeat-hosts.md").read_text(encoding="utf-8")
+    autonomous_skill = (PROJECT_SKILL.parent / "references/autonomous-execution.md").read_text(encoding="utf-8")
+    assert "loopx heartbeat-prompt" in heartbeat_skill, heartbeat_skill
+    assert "--bootstrap --thin --codex-app" in heartbeat_skill, heartbeat_skill
+    assert "thin/compact/brief/full execution body" in heartbeat_skill, heartbeat_skill
+    assert "goal_boundary" in heartbeat_skill, heartbeat_skill
+    assert "smoke" in heartbeat_skill and "contract" in heartbeat_skill, heartbeat_skill
+    assert "Set Up Recurring Heartbeats" in heartbeat_skill, heartbeat_skill
+    assert "visible goal text short" in heartbeat_skill, heartbeat_skill
+    assert "refresh-state" in autonomous_skill and "spend" in autonomous_skill, autonomous_skill
     assert "--classification <PUBLIC_SAFE_PROGRESS_CLASSIFICATION>" in project_skill, project_skill
     assert "--delivery-batch-scale <ACTUAL_DELIVERY_BATCH_SCALE>" in project_skill, project_skill
     assert "--delivery-outcome <ACTUAL_DELIVERY_OUTCOME>" in project_skill, project_skill
-    assert "Never default or upgrade a smaller/preparatory turn" in normalized(project_skill), project_skill
-    assert "do not infer scale/outcome from the classification name" in normalized(project_skill), project_skill
-    assert "no-progress self-repair guard" in project_skill, project_skill
-    assert "Wake counts alone never authorize replan or self-pause" in normalized(project_skill), project_skill
-    assert "one idempotent receipt on every heartbeat" in normalized(project_skill), project_skill
-    assert "retry with the same turn id" in normalized(project_skill), project_skill
-    assert "unchanged monitor-only polls are liveness-preserving no-ops" in normalized(project_skill), project_skill
-    assert "Routine public repo publication is a boundary decision" in project_skill, project_skill
-    assert "Do not reintroduce a user gate for public-safe publication itself" in project_skill, project_skill
-    assert "notify_user_on_open_todo=true" in project_skill, project_skill
-    assert "open_todo_notification_policy=repeat_until_resolved" in project_skill, project_skill
-    assert "blocker-push `NOTIFY`" in project_skill, project_skill
-    assert "sibling-goal todos" in project_skill, project_skill
-    assert "must not consume the whole eligible turn" in project_skill, project_skill
-    assert "heartbeat_recommendation" in project_skill, project_skill
-    assert "execution_obligation" in project_skill, project_skill
-    assert "scheduler_hint" in project_skill, project_skill
-    assert "automation_update" in project_skill, project_skill
-    assert "scheduler_hint.app_automation.stateful_backoff" in project_skill, project_skill
-    assert "scheduler_hint.action=stop_until_explicit_resume" in project_skill, project_skill
-    assert "host_action=pause_or_delete_current_heartbeat" in project_skill, project_skill
-    assert "apply_needed=true" in project_skill, project_skill
-    assert "app_automation.ack_hint.cli_args" in project_skill, project_skill
-    assert "quota scheduler-ack-current" in project_skill, project_skill
-    assert "scheduler_hint.app_automation.failure_hint.cli_args" in project_skill, project_skill
-    assert "recommended_rrule" in project_skill, project_skill
-    normalized_project_skill = normalized(project_skill)
-    assert "Attempt the host update at most once per hint and turn" in normalized_project_skill, project_skill
-    assert "do not retry or ACK" in normalized_project_skill, project_skill
-    assert "suppress the exact repeat" in normalized_project_skill, project_skill
-    assert "must_attempt_work=true" in project_skill, project_skill
-    assert "not an execution gate" in normalized(project_skill), project_skill
-    assert "mapped_noop_if_unchanged" in project_skill, project_skill
-    assert "legacy/raw fallback" in project_skill, project_skill
-    assert "do not infer" in project_skill, project_skill
-    assert "reason to paste one-off control logic into the scheduler" in project_skill, project_skill
+    assert "Never default or upgrade a smaller/preparatory turn" in normalized(autonomous_skill), autonomous_skill
+    assert "do not infer scale/outcome from the classification name" in normalized(autonomous_skill), autonomous_skill
+    assert "no-progress self-repair guard" in heartbeat_skill, heartbeat_skill
+    assert "Wake counts alone never authorize replan or self-pause" in normalized(heartbeat_skill), heartbeat_skill
+    assert "one idempotent receipt on every heartbeat" in normalized(autonomous_skill), autonomous_skill
+    assert "retry with the same turn id" in normalized(autonomous_skill), autonomous_skill
+    assert "unchanged monitor-only polls are liveness-preserving no-ops" in normalized(autonomous_skill).lower(), autonomous_skill
+    assert "Routine public repo publication is a boundary decision" in autonomous_skill, autonomous_skill
+    assert "Do not reintroduce a user gate for public-safe publication itself" in normalized(heartbeat_skill), heartbeat_skill
+    assert "notify_user_on_open_todo=true" in heartbeat_skill, heartbeat_skill
+    assert "open_todo_notification_policy=repeat_until_resolved" in heartbeat_skill, heartbeat_skill
+    for phrase in (
+        "`user_todo_blocker_push` lane with no admitted work does no delivery or spend",
+        "`bounded_delivery_with_user_notice` or an admitted safe bypass still requires "
+        "its work and current settlement.",
+    ):
+        assert phrase in normalized(heartbeat_skill), phrase
+    assert "sibling-goal todos" in autonomous_skill, autonomous_skill
+    assert "must not consume the whole eligible turn" in autonomous_skill, autonomous_skill
+    assert "heartbeat_recommendation" in heartbeat_skill, heartbeat_skill
+    assert "execution_obligation" in heartbeat_skill, heartbeat_skill
+    assert "scheduler_hint" in heartbeat_skill, heartbeat_skill
+    assert "automation_update" in heartbeat_skill, heartbeat_skill
+    assert "scheduler_hint.app_automation.stateful_backoff" in heartbeat_skill, heartbeat_skill
+    assert "scheduler_hint.action=stop_until_explicit_resume" in heartbeat_skill, heartbeat_skill
+    assert "host_action=pause_or_delete_current_heartbeat" in heartbeat_skill, heartbeat_skill
+    assert "apply_needed=true" in heartbeat_skill, heartbeat_skill
+    assert "app_automation.ack_hint.cli_args" in heartbeat_skill, heartbeat_skill
+    assert "quota scheduler-ack-current" in heartbeat_skill, heartbeat_skill
+    assert "scheduler_hint.app_automation.failure_hint.cli_args" in heartbeat_skill, heartbeat_skill
+    assert "recommended_rrule" in heartbeat_skill, heartbeat_skill
+    assert "Attempt the host update at most once per hint and turn" in normalized(heartbeat_skill), heartbeat_skill
+    assert "do not retry or ACK" in normalized(heartbeat_skill), heartbeat_skill
+    assert "suppress the exact repeat" in normalized(heartbeat_skill), heartbeat_skill
+    assert "must_attempt_work=true" in heartbeat_skill, heartbeat_skill
+    assert "not an execution gate" in normalized(heartbeat_skill), heartbeat_skill
+    assert "mapped_noop_if_unchanged" in heartbeat_skill, heartbeat_skill
+    assert "legacy/raw fallback" in autonomous_skill, autonomous_skill
+    assert "do not infer" in autonomous_skill, autonomous_skill
+    assert "reason to paste one-off control logic into the scheduler" in heartbeat_skill, heartbeat_skill
+
+    # These procedures must route current decisions, not retain competing static policy.
+    normalized_autonomous = normalized(autonomous_skill)
+    for phrase in (
+        "without a fixed candidate count",
+        "interaction_contract.cli_channel.settlement_plan.ordered_steps",
+        "next_cli_actions",
+        "Do not reconstruct static refresh/spend commands",
+        "The absence of an adapter run or an unchanged artifact does not waive settlement",
+        "Only setup metadata work with no admitted delivery",
+        "State-only refresh cannot replace accountable writeback",
+        "never append another accountable progress record after spend",
+        "an auxiliary poll does not replace admitted work",
+        "Do not invent a successor or no-follow-up declaration",
+        "An old chat, trust setting, status or review command does not grant new execution authority",
+    ):
+        assert phrase in normalized_autonomous, phrase
+    for obsolete_rule in (
+        "list at least three", "without producing a new adapter run",
+        "Spend exactly once only after", "append one quota spend event",
+    ):
+        assert obsolete_rule not in normalized_autonomous, obsolete_rule
+    start_skill = (PROJECT_SKILL.parent / "references/start-and-connect.md").read_text(encoding="utf-8")
+    assert "only when the current guard admits and selects it" in normalized(start_skill)
+    assert "connection alone does not admit the map" in normalized(heartbeat_skill)
+    assert ".loopx/goals/<goal-id>/ACTIVE_GOAL_STATE.md" in project_skill
+    assert "default `~/.loopx`" in project_skill
+    assert "legacy compatibility paths, not defaults" in normalized(project_skill)
+    assert '$HOME/.codex/loopx/registry.global.json' not in project_skill
+    assert "If `should_run=false`, do not begin delivery" in normalized(project_skill)
+    assert "Execute projected monitor, recovery and owed settlement actions" in normalized(project_skill)
+    assert "authorized private reads and recovery may continue" in normalized_autonomous
+    assert "Stop for private or company-internal material" not in autonomous_skill
+    for procedure in (project_skill, autonomous_skill, heartbeat_skill):
+        assert "current terminal/recovery contract" in normalized(procedure)
+        assert "must not override an explicit no-spend stop" in normalized(procedure)
+        assert "retain unsettled state and do not claim settlement is complete" in normalized(procedure)
 
     cli_registry = (ACTIVE_STATE.parent / "registry.json").resolve()
     cli_json = subprocess.run(

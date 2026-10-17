@@ -396,10 +396,27 @@ flowchart LR
 | `Projection gap` | Missing concrete todo, stale route, conflicting source, or collapsed user/agent channel. | Repair the source or projection builder before relying on it. |
 | `Write API` | Todo update, gate decision, refresh-state, monitor poll, spend, scheduler ack, or event append. | Append durable facts; do not mutate the sink as truth. |
 
-This machine protects the public/private boundary: a projection may render
-public-safe summaries and evidence refs, but it must not become a dependency on
-private raw docs, transcripts, credentials, local paths, benchmark logs, or
-unredacted connector payloads.
+Build operator-facing sinks from LoopX's public-safe state and projection
+surfaces: todo projections, quota/status contracts, frontstage projections,
+compact run-history events, public-safe evidence pointers and redacted source
+warnings. A generic sink must not depend on the shape of a project-private
+document, planning file, non-public wiki, raw transcript, local path, benchmark
+logs or connector payload. First convert a valuable source into a bounded
+projection with stable ids, source labels, evidence and explicit gates; then
+render that projection.
+
+Public or multi-user sinks consume redacted public-safe evidence. An explicitly
+owner-only operator board may synchronize private planning evidence when the
+user authorizes that boundary, but should still scope rows by `agent_id` and avoid
+credentials or secrets unless the user explicitly requests a credential-handling
+workflow. A display sink does not gain write or publication authority from the
+data it can read.
+
+Projection sinks should preserve row lineage as data rather than ad hoc prose.
+When rows supersede, migrate or retire earlier display rows, use fields such as
+`row_lifecycle`, `supersedes`, `superseded_by`, `source_id` and compact migration
+audit evidence. The sink may render lineage in existing evidence/history fields;
+understanding a row's change must not require reading a project-private document.
 
 ## 8. Agent Onboarding / Automation Enablement Machine
 

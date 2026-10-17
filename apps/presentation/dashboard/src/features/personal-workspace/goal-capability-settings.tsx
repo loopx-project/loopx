@@ -15,10 +15,12 @@ import { useWorkspaceI18n } from "./i18n";
 import { CapabilityConfigurationFields } from "./capability-configuration-fields";
 import { withReportScheduleTimezone } from "./periodic-report-schedule-field";
 import { localizeCapability, localizedCapabilityFieldCopy } from "./capability-localization";
-import { orderCapabilitiesForPresentation, canEditCapability, CapabilityCatalogNavigation, CapabilityConfigurationSummary, CapabilityDetailHeader, CapabilityEditorStatus } from "./capability-workbench";
+import { orderCapabilitiesForPresentation, canEditCapability, CapabilityCatalogNavigation, CapabilityConfigurationSummary, CapabilityDetailHeader, CapabilityEditorStatus, CapabilityConfigurationHelp } from "./capability-workbench";
 import { GoalAutoNotifyToggle } from "./notification-settings-panel";
 import { ContentReferenceWorkbench } from "./content-reference-workbench";
+import { DecisionContextWorkbench } from "./decision-context-workbench";
 import { rewardMemoryBindingStatus, rewardMemoryScopeDraft, rewardMemoryWriteValue } from "./reward-memory-settings";
+import {isMemoryCapability, memorySettingsTitle, MemorySettingsHeader} from "./memory-settings";
 import type { PersonalWorkspaceCallbacks, WorkspaceGoalNotification } from "./personal-workspace-model";
 
 type CapabilityCatalogProps = Readonly<{
@@ -80,6 +82,9 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
   const [error, setError] = useState<string | null>(null);
   const [editorMode, setEditorMode] = useState<"guided" | "json">("guided");
   const [jsonDraft, setJsonDraft] = useState("");
+  // Preserve the inspected Agent across fresh readbacks, never across Goals.
+  // Config paths and mutation previews still reset from the native snapshot.
+  const memoryScope = useRef({goalId, agentId: ""});
   const parsedJson = useMemo(() => selected
     ? parseEditableCapabilityJson(selected.configuration_editor, jsonDraft) : null, [selected, jsonDraft]);
   const jsonValid = editorMode === "guided" || parsedJson !== null;
@@ -97,6 +102,8 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
         selected?.configuration_editor ?? { fields: [] },
         selected?.capability_id === "todo_replan_cadence"
           ? goalReplanCadenceEditorValue(selected.current, selected.effective_configuration?.configuration)
+          : selected?.capability_id === "reward_memory"
+            ? rewardMemoryScopeDraft(selected.current, memoryScope.current.goalId === goalId ? memoryScope.current.agentId : "")
           : current,
         selected?.default,
       ),
@@ -105,7 +112,7 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
       preview: null,
     });
     setError(null);
-  }, [selected]);
+  }, [selected, goalId]);
 
   async function preview(configuration: Record<string, unknown> | null) {
     if (!selected || loading || mutation.busy || !jsonValid) return;
@@ -149,6 +156,9 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
 
   function changeDraft(key: string, value: unknown) {
     if (loading || mutation.busy) return;
+    if (selected?.capability_id === "reward_memory" && key === "agent_id") {
+      memoryScope.current = {goalId, agentId: typeof value === "string" ? value : ""};
+    }
     setMutation((current) => ({
       ...current,
       draft: selected?.capability_id === "periodic_report"
@@ -166,6 +176,9 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
     if (!selected || loading || mutation.busy) return;
     setJsonDraft(text);
     const parsed = parseEditableCapabilityJson(selected.configuration_editor, text);
+    if (selected.capability_id === "reward_memory" && parsed) {
+      memoryScope.current = {goalId, agentId: typeof parsed.agent_id === "string" ? parsed.agent_id : ""};
+    }
     setMutation((current) => ({ ...current, preview: null, draft: parsed
       ? projectEditableCapabilityConfiguration(selected.configuration_editor, parsed,
         selected.capability_id === "todo_replan_cadence" ? undefined : selected.default)
@@ -271,6 +284,7 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
   // A refreshed observation can replace `selected` and reset local mutation
   // state. The existing catalog read still owns admission until it settles.
   const editorBusy = loading || Boolean(busy);
+  const memorySelected = selected ? isMemoryCapability(selected.capability_id) : false;
 
   if (!selected || !localizedSelected) {
     return <p className="personal-capability-empty">{t("capabilities.empty")}</p>;
@@ -280,6 +294,8 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
   const editorAvailable = canEditCapability(localizedSelected, "goal");
   const readOnlyReason = localizedSelected.configuration_editor.read_only_reason
     ?? (!supportsGoal ? t("capabilities.machineOnly") : t("capabilities.previewOnly"));
+  const memoryAgents = Array.isArray(selected.current?.registered_agents)
+    ? selected.current.registered_agents.filter((value): value is string => typeof value === "string") : [];
 
   async function createPreview() {
     if (!localizedSelected || !editorAvailable || editorBusy || !jsonValid) return;
@@ -303,9 +319,20 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
         t={t}
       />
 
-      <article aria-label={localizedSelected.display_name} className="personal-capability-detail" tabIndex={0}>
-        {localizedSelected.capability_id === "content_ops" ? <h2>{localizedSelected.display_name}</h2> : <CapabilityDetailHeader capability={selected} locale={locale}
+      <article aria-label={memorySelected ? memorySettingsTitle(locale) : localizedSelected.display_name} className="personal-capability-detail" tabIndex={0}>
+        {memorySelected ? <MemorySettingsHeader capabilities={orderedCapabilities} locale={locale}
+          selectedId={selected.capability_id} onSelect={setSelectedCapabilityId}
+          onRefresh={() => void onApplied()} disabled={editorBusy} /> : <CapabilityDetailHeader capability={selected} locale={locale}
           source={localizedSelected.effective_configuration?.source} />}
+        {memorySelected && orderedCapabilities.some(item => item.capability_id === "decision_context") ? <section
+          aria-labelledby="memory-purpose-decision_context" hidden={selected.capability_id !== "decision_context"}
+          id="memory-panel-decision_context" role="tabpanel" tabIndex={0}>
+          <DecisionContextWorkbench key={goalId} goalId={goalId} active={selected.capability_id === "decision_context"} />
+        </section> : null}
+        <section hidden={selected.capability_id === "decision_context"}
+          id={memorySelected && selected.capability_id !== "decision_context" ? `memory-panel-${selected.capability_id}` : undefined}
+          aria-labelledby={memorySelected && selected.capability_id !== "decision_context" ? `memory-purpose-${selected.capability_id}` : undefined}
+          role={memorySelected && selected.capability_id !== "decision_context" ? "tabpanel" : undefined}>
         {localizedSelected.capability_id === "content_ops" ? <ContentReferenceWorkbench key={goalId} /> : <CapabilityEditorStatus available={editorAvailable} t={t}
           description={readOnlyReason} />}
 
@@ -375,8 +402,20 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
           ) : null}
           {editorMode === "guided" ? <section className="personal-capability-field-summary">
             {selected.capability_id === "reward_memory" ? <p>
-              {locale === "zh-CN" ? "选择 Agent 后只修改该 Agent；留空编辑共享绑定。关闭单个 Agent 不影响其它绑定。" : "Select an Agent to change only its binding. Leave blank for the shared binding. Disabling one Agent preserves the others."}
+              {locale === "zh-CN" ? "只修改所选作用范围。关闭单个 Agent 不影响其它 Agent 或旧版共享绑定。" : "Only the selected scope changes. Disabling one Agent preserves sibling and legacy shared bindings."}
             </p> : null}
+            {selected.capability_id === "reward_memory" ? <label className="personal-memory-agent">
+              <span>{locale === "zh-CN" ? "经验作用范围" : "Experience scope"}</span>
+              <select aria-label={locale === "zh-CN" ? "经验作用范围" : "Experience scope"}
+                value={typeof draft.agent_id === "string" ? draft.agent_id : ""}
+                disabled={editorBusy} onChange={event => changeDraft("agent_id", event.target.value)}>
+                <option value="">{locale === "zh-CN" ? "旧版共享绑定" : "Legacy shared binding"}</option>
+                {memoryAgents.map(agent => <option key={agent} value={agent}>{agent}</option>)}
+                {typeof draft.agent_id === "string" && draft.agent_id && !memoryAgents.includes(draft.agent_id)
+                  ? <option value={draft.agent_id} disabled>{draft.agent_id} · {locale === "zh-CN" ? "未注册" : "not registered"}</option> : null}
+              </select>
+              {!memoryAgents.length ? <small>{locale === "zh-CN" ? "当前 Goal 尚无已注册 Agent。" : "No registered Agents in this Goal."}</small> : null}
+            </label> : null}
             {selected.effective_value_policy === "goal_stride_over_live_review_cadence" ? <p>
               {locale === "zh-CN"
                 ? `复盘周期沿用${selected.machine_current ? "设备" : "产品"}默认；规划选项由本 Goal 设置。`
@@ -387,7 +426,7 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
               copy={localizedCapabilityFieldCopy(locale, localizedSelected.capability_id)}
               editor={localizedSelected.configuration_editor}
               omitKeys={selected.capability_id === "reward_memory"
-                ? draft.agent_id ? ["enabled_agents", ...(draft.enabled === false ? ["config_path"] : [])] : ["enabled"]
+                ? ["agent_id", ...(draft.agent_id ? ["enabled_agents", ...(draft.enabled === false ? ["config_path"] : [])] : ["enabled"])]
                 : []}
               onChange={changeDraft}
               value={draft}
@@ -400,14 +439,19 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
             {!jsonValid ? <span className="personal-machine-validation" role="alert">{t("capabilities.jsonInvalid")}</span> : null}
           </label>}
         </> : null}
-        {selected.capability_id === "reward_memory" && Array.isArray(selected.current?.agent_bindings) ? <section className="personal-capability-observation" aria-label={locale === "zh-CN" ? "Agent 记忆绑定读回" : "Agent memory binding readback"}>
-          <h3>{locale === "zh-CN" ? "Agent 绑定" : "Agent bindings"}</h3>
+        {selected.capability_id === "reward_memory" && selected.current?.binding_status === "unbound" ? <p className="personal-memory-unbound" role="status">{locale === "zh-CN" ? "当前没有启用的经验配置。" : "No experience configuration is currently enabled."}</p> : null}
+        {selected.capability_id === "reward_memory" && Array.isArray(selected.current?.agent_bindings) && selected.current.agent_bindings.length > 0 ? <section className="personal-capability-observation" aria-label={locale === "zh-CN" ? "Agent 记忆绑定读回" : "Agent memory binding readback"}>
+          <h3>{locale === "zh-CN" ? "Agent 经验配置" : "Agent experience configuration"}</h3>
           {(selected.current.agent_bindings as Record<string, unknown>[]).map((binding) => <p key={String(binding.agent_id)}>
-            <strong>{String(binding.agent_id)}</strong>{" · "}{binding.binding_source === "agent"
+            <button type="button" disabled={!editorAvailable || editorBusy || editorMode === "json"}
+              onClick={() => changeDraft("agent_id", String(binding.agent_id))}>{String(binding.agent_id)}</button>{" · "}{binding.binding_source === "agent"
               ? locale === "zh-CN" ? "独立绑定" : "Independent binding"
-              : locale === "zh-CN" ? "共享绑定" : "Shared binding"}{" · "}{rewardMemoryBindingStatus(binding.status, locale === "zh-CN")}
+              : locale === "zh-CN" ? "旧版共享绑定" : "Legacy shared binding"}{" · "}{rewardMemoryBindingStatus(binding.status, locale === "zh-CN")}
+            <br /><small>{locale === "zh-CN" ? "自动召回设置" : "Automatic recall setting"}: {binding.automatic_recall === true ? (locale === "zh-CN" ? "开启" : "on") : binding.automatic_recall === false ? (locale === "zh-CN" ? "关闭" : "off") : "—"}{" · "}
+              {locale === "zh-CN" ? "自动写回设置" : "Automatic writeback setting"}: {binding.automatic_ingest === true ? (locale === "zh-CN" ? "开启" : "on") : binding.automatic_ingest === false ? (locale === "zh-CN" ? "关闭" : "off") : "—"}</small>
           </p>)}
         </section> : null}
+        {selected.capability_id === "reward_memory" ? <CapabilityConfigurationHelp capability={selected} locale={locale} /> : null}
         <CapabilityMutationFeedback mutationError={mutationError} onApplied={onApplied} partialWrite={partialWrite} preview={preview} />
         {editorAvailable ? (
           <footer className="personal-capability-actions">
@@ -424,10 +468,11 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
             </button>
           </footer>
         ) : null}
-        {localizedSelected.capability_id !== "content_ops" ? <CapabilityConfigurationSummary key={selected.capability_id} values={[
+        {!["content_ops", "decision_context"].includes(localizedSelected.capability_id) ? <CapabilityConfigurationSummary key={selected.capability_id} values={[
           { label: t("capabilities.goalValue"), value: localizedSelected.current },
           { label: t(localizedSelected.machine_current ? "capabilities.machineValue" : "capabilities.defaultValue"), value: localizedSelected.machine_current ?? localizedSelected.default },
         ]} t={t} /> : null}
+        </section>
       </article>
     </div>
   );

@@ -190,6 +190,13 @@ def test_real_chat_http_catalog_and_machine_write_boundary(tmp_path: Path) -> No
     ("namespace", "invalid_configuration", "replacement", "private_marker"),
     [
         (
+            "codex_chat",
+            {"schema_version": "codex_chat_machine_defaults_v0", "codex_profile": "/private-invalid-profile"},
+            {"schema_version": "codex_chat_machine_defaults_v0", "codex_profile": "codex-gpt",
+             "model": "gpt-6.1-sol", "reasoning_effort": "high", "service_tier": "fast"},
+            "/private-invalid-profile",
+        ),
+        (
             "manager_runtime",
             {
                 "schema_version": "manager_runtime_profile_v0",
@@ -333,6 +340,7 @@ def test_inspection_lists_registered_namespaces_without_local_refs(
     assert response["status"] == "absent"
     assert response["available_namespaces"] == [
         "change_quality_qualification",
+        "codex_chat",
         "goal_storage",
         "manager_runtime",
         "periodic_report",
@@ -435,7 +443,7 @@ def test_machine_catalog_discovers_goal_features_without_granting_machine_writes
     )
     # Machine-only capabilities are the ones a Goal cannot override: the
     # manager profile, steward executor and creation-time storage target.
-    assert set(machine) - {"manager_runtime", "steward_executor", "goal_storage"} == {
+    assert set(machine) - {"manager_runtime", "steward_executor", "goal_storage", "codex_chat"} == {
         feature["feature_id"] for feature in goal["features"]
     }
     assert machine["pull_request_review"]["available_scopes"] == ["machine", "goal"]
@@ -451,7 +459,7 @@ def test_machine_catalog_discovers_goal_features_without_granting_machine_writes
     for capability_id, item in machine.items():
         assert "current" not in item
         assert "commands" not in item
-        if capability_id in {"manager_runtime", "steward_executor", "goal_storage"}:
+        if capability_id in {"manager_runtime", "steward_executor", "goal_storage", "codex_chat"}:
             assert item["available_scopes"] == ["machine"]
             assert item["machine_namespace"] == capability_id
             assert item["configuration_editor"]["writable_scopes"] == ["machine"]

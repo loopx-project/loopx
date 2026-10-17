@@ -46,6 +46,23 @@ describe('runJsonCommand', () => {
     expect(command.prefix).toEqual(['-m', 'loopx.cli'])
   })
 
+  it('tries the python name a python.org Windows PATH registers for the module fallback', async () => {
+    const attempted: string[] = []
+    const resolved = await resolveLoopXCommand({
+      env: { LOOPX_BIN: '' },
+      runner: async (file, args) => {
+        attempted.push(`${file} ${args.join(' ')}`)
+        if (file === 'python') return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
+        throw new LoopXCliError('missing', 'missing', false)
+      },
+    })
+
+    expect(attempted).toContain('python3 -m loopx.cli --version')
+    expect(resolved.file).toBe('python')
+    expect(resolved.prefix).toEqual(['-m', 'loopx.cli'])
+    expect(resolved.skillCommand).toBe('python -m loopx.cli')
+  })
+
   it('keeps a configured LoopX executable as one quoted shell word', async () => {
     const configured = '/opt/Loop X/loopx'
     const resolved = await resolveLoopXCommand({

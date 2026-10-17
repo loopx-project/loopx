@@ -654,6 +654,16 @@ M0 盘点真实字段和 producer；以下是迁移验收底线，不代表已�
 
 使用现有服务恢复和 receipt pump，不为每类请求创建管家业务 automation。配置/故障通过已有 CLI、capability settings、管家对话展示。诊断区分模型失败、工具/策略拒绝、状态冲突、接收方不可达、格式/传输失败。
 
+**Provider 配置拒绝：** 结构化 Responses `invalid_request_error` 的 JSON 包装即使
+省略 HTTP 状态，仍应识别为请求拒绝；冲突或格式错误的状态不能建立该分类。
+Chat 提示核对模型、账号和 provider，不发布上游原文，也不自动重放请求。
+桌面自己启动的 Chat 默认使用标准 Codex 目录，除非显式指定专用 Chat override，
+避免无关终端的 provider 配置替换默认账号。CLI 与 LaunchAgent 的目录优先级、
+原 Session 身份、显式 Runtime 选择及 provider 权限仍归已有 owner。
+模型发现与执行读取同一原生目录。引导设置中切换执行器会清空原模型/档位覆盖，
+由已有 backend 解析默认值；持久变更仍须通过原来的预览与应用。
+这一有界修复不代表持续运行或所有 provider/model 组合已资格化。
+
 **回合绑定的 steering（A23）：** 浏览器保存、派发和重放全过程保持请求指定的
 Session、精确 Turn、不变文本与 ingress 身份。当前前端发送前要求持久重试信息
 回读成功，存储不可用时保留可编辑草稿。投递未知时沿原目标重试，确认未送达则

@@ -1082,11 +1082,10 @@ test("recovery preserves stale-proof rejection and never offers foreign proof", 
   assert.deepEqual(await store.loadAuthority(), before);
 });
 
-test("inactive history does not invent an executable lease acquisition", async () => {
+test("inactive history keeps unsupported lifecycle edits fenced without inventing acquisition", async () => {
   for (const [overrides, intent, mode, expected] of [
     [{status: "blocked"}, {unblocks_todo_id: "todo_other"}, "hard_lease", "resolve_acquire_rejection"],
     [{claimed_by: null}, {unblocks_todo_id: "todo_other"}, "hard_lease", "reconcile_lease_owner"],
-    [{}, {required_capabilities: ["code_review"]}, "hard_lease", "resolve_lifecycle_edit"],
     [{}, {status: "blocked"}, "hard_lease", "resolve_lifecycle_edit"],
     [{status: "blocked"}, {}, "soft_claim", "resolve_acquire_rejection"],
   ] as const) {

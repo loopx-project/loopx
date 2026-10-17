@@ -93,6 +93,30 @@ def test_periodic_review_obligation_reuses_the_same_preflight_contract() -> None
     assert "host-projected coverage ledger" in action
 
 
+def test_replan_guidance_preserves_authorized_private_work_and_scopes_missing_authority() -> None:
+    obligation = _obligation([{
+        "kind": "periodic_review_due", "section": "run_history",
+        "text": "Review the authorized private analysis and proposed public delivery.",
+    }])
+    stop = obligation["stop_condition"]
+    assert "stop only the affected path" in stop
+    assert "existing user authority" in stop
+    assert "do not expose credentials" in stop
+    assert "private material beyond that authority" in stop
+    assert "honoring explicit stops" in stop
+    assert "Continue independent authorized replan work" in stop
+    assert "destructive git" in stop and "production actions" in stop
+    assert "stop if the replan requires private material" not in stop
+    decision = next(item for item in obligation["todo_actions"] if item["action"] == "ask_decision")
+    assert "authorized goal scope" in decision["text"]
+    assert "benchmark family" not in decision["text"]
+    assert "resource budget" in decision["text"] and "protected scope" in decision["text"]
+    # The guidance does not change admission, triggers or the typed writeback owner.
+    assert obligation["required"] is True
+    assert obligation["triggers"][0]["kind"] == "periodic_review_due"
+    assert obligation["replan_novelty_policy"]["writeback"] == "typed_semantic_delta"
+
+
 def test_aligned_repeat_until_closed_guidance_keeps_novelty_hint() -> None:
     obligation = _obligation(
         [

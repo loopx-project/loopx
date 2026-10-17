@@ -1,5 +1,7 @@
 /** Benchmark-toolkit's observer sidecar; never a solver or native-score authority. */
 import {createHash} from 'node:crypto';
+import {projectTrajectoryNativeOutcomes} from './trajectory_native_outcomes.ts';
+import {BARE_SHA256_PATTERN} from '../content_digest.ts';
 import {EffectRuntimeRequestError} from '../effect_runtime_errors.ts';
 
 export const TRAJECTORY_METHOD = 'research-episodes-v2';
@@ -38,7 +40,7 @@ export function parseTrajectoryInput(raw: unknown): TrajectoryInput {
   const sources = list(x.sources, 'sources').map(rawSource => {
     const r = object(rawSource, 'source');
     const hash = str(r.artifact_sha256, 'artifact_sha256');
-    if (!/^[a-f0-9]{64}$/.test(hash)) throw new EffectRuntimeRequestError('artifact_sha256 must be a sha256 hex digest');
+    if (!BARE_SHA256_PATTERN.test(hash)) throw new EffectRuntimeRequestError('artifact_sha256 must be a sha256 hex digest');
     return {id: str(r.id, 'source.id'), artifact: str(r.artifact, 'artifact'), artifact_sha256: hash,
       first_line: integer(r.first_line, 'first_line', 1), text: str(r.text, 'source.text')};
   });
@@ -93,6 +95,7 @@ export function prepareTrajectoryAssessment(params: Record<string, unknown>) {
   const analysis_key = createHash('sha256').update(JSON.stringify({method: TRAJECTORY_METHOD, rubric: RUBRIC, input, config: configIdentity})).digest('hex');
   const numberedSources = input.sources.map(s => ({...s, text: s.text.split('\n').map((line, n) => `${s.first_line+n}: ${line}`).join('\n')}));
   return {analysis_key, method_version: TRAJECTORY_METHOD, config: configIdentity, input,
+    ...(params.native_outcomes === undefined ? {} : {native_outcomes: projectTrajectoryNativeOutcomes(params.native_outcomes, input)}),
     prompt: `${RUBRIC}\n\nEvidence pack:\n${JSON.stringify({...input, sources: numberedSources})}`, output_schema: TRAJECTORY_OUTPUT_SCHEMA};
 }
 export function qualifyTrajectoryAssessment(params: Record<string, unknown>): TrajectoryAssessment {

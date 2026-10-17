@@ -225,6 +225,12 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install --disable-pip-version-check -e ".[test]"
 
+      - name: Check repository invariants before long tests
+        run: >-
+          python -m pytest -q --no-cov
+          tests/test_stage2c_dependency_lock.py
+          tests/architecture/test_top_level_module_budget.py
+
       - name: Verify file authority on the core runtime
         run: >-
           node --no-warnings --experimental-strip-types --test

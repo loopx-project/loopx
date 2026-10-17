@@ -8,8 +8,25 @@ import subprocess
 from pathlib import Path
 
 
+_RESEARCH_PLANNING_GUIDANCE = (
+    "Before an expensive implementation, check the declared interface, units, scale "
+    "and other decision-critical assumptions against the available task material. "
+    "Compare a feasible alternative with the strongest available starting point; "
+    "preserve that reference while testing a replacement. Use a cheap discriminating "
+    "check when it can resolve the choice, then budget enough work for the selected "
+    "complete experiment. An informative negative experiment can complete its own "
+    "Todo without satisfying the broader goal. Keep evaluation readiness separate "
+    "from evidence for replacing the best artifact; neither creates a new acceptance "
+    "document or permission requirement."
+)
+
+
 def render_planning_prompt(packet: dict, env: dict[str, str]) -> str:
-    """Preserve the task packet without projecting the Host's execution clock."""
+    """Compose benchmark-only research guidance without changing the Core packet.
+
+    The worker calls this only for its explicit loopx-planned task entry. Core
+    Goal/CLI planning and plain native benchmark workers do not use this wrapper.
+    """
     if "LOOPX_PLANNING_TIMEOUT_SEC" in env:
         raise ValueError(
             "Remove LOOPX_PLANNING_TIMEOUT_SEC; planning uses LOOPX_PHASE_DEADLINE_EPOCH"
@@ -19,7 +36,8 @@ def render_planning_prompt(packet: dict, env: dict[str, str]) -> str:
         value = float(env[key])
         if not math.isfinite(value) or value <= 0:
             raise ValueError(f"{key} must be finite and positive")
-    return "$loopx\n\nHost-supplied planning checkpoint:\n" + json.dumps(packet, ensure_ascii=False)
+    return ("$loopx\n\nBenchmark research planning guidance:\n" + _RESEARCH_PLANNING_GUIDANCE
+            + "\n\nHost-supplied planning checkpoint:\n" + json.dumps(packet, ensure_ascii=False))
 
 
 def task_plan_packet(env: dict[str, str], cli: list[str]) -> dict:

@@ -33,3 +33,13 @@ assert.deepEqual(conversationOrder([otherSession, working]).map(i => i.id), ["wo
 const finished = {...working, message: {...working.message, pending: false, createdAt: "2026-10-01T02:00:03Z"}};
 assert.deepEqual(conversationOrder([finished, correction, request]).map(i => i.id), ["request", "correction", "working"], "The stored completion follows its correction");
 console.log("Conversation request, work and correction order passed");
+
+const completedBeforeReadback = {...working, message: {...working.message, pending: false}};
+assert.deepEqual(conversationOrder([completedBeforeReadback, correction, request]).map(i => i.id),
+  ["request", "correction", "working"], "A short completed reply without its stored timestamp cannot precede the request or steering instruction");
+const storedCommentary = {...completedBeforeReadback, message: {...completedBeforeReadback.message, sourceMessageId: "stored-commentary", createdAt: "2026-10-01T02:00:00.100Z"}};
+assert.deepEqual(conversationOrder([storedCommentary, correction, request]).map(i=>i.id),
+  ["request", "working", "correction"], "Stored commentary keeps its actual order rather than moving behind later instructions");
+
+const queuedReply = {id: "queued-reply", kind: "message", message: {id:"queued-reply", role:"assistant", pending:false, sourceSessionId:"one", sourceTurnId:"queued-turn", createdAt:"2026-10-01T02:00:00.500Z", endedAt:Date.parse("2026-10-01T02:00:02Z"), text:"done"}};
+assert.deepEqual(conversationOrder([queuedReply, correction]).map(i=>i.id), ["correction", "queued-reply"], "Before stored readback, a completed queued reply uses its observed end rather than preparation time");

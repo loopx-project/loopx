@@ -14,6 +14,25 @@ const output = () => ({assessments:[
   {episode_id:'e2',metric:'information_gain',verdict:'unknown',reason:'No valid measurement',citations:[]}],limitations:['Synthetic contract test, not evaluator calibration']});
 const prepared = () => prepareTrajectoryAssessment({input:input(), config});
 
+test('artifact digests retain the exact bare SHA-256 boundary', () => {
+  for (const hash of ['0'.repeat(64), '0123456789abcdef'.repeat(4), 'f'.repeat(64)]) {
+    const x = input(); x.sources[0]!.artifact_sha256 = hash;
+    assert.equal(prepareTrajectoryAssessment({input:x, config}).input.sources[0]!.artifact_sha256, hash);
+  }
+  for (const hash of ['a'.repeat(63), 'a'.repeat(65), 'A'.repeat(64), 'g'.repeat(64),
+    'sha256:' + 'a'.repeat(64), ' ' + 'a'.repeat(64), 'a'.repeat(64) + ' ',
+    '\n' + 'a'.repeat(64), 'a'.repeat(64) + '\n', 'a'.repeat(64) + '\r\n']) {
+    const x = input(); x.sources[0]!.artifact_sha256 = hash;
+    assert.throws(() => prepareTrajectoryAssessment({input:x, config}),
+      {message:'artifact_sha256 must be a sha256 hex digest'});
+  }
+  for (const hash of [null, undefined, true, 64, {}, [], '', ' ', 'a'.repeat(64) + '\0']) {
+    const x = input(); Object.assign(x.sources[0]!, {artifact_sha256:hash});
+    assert.throws(() => prepareTrajectoryAssessment({input:x, config}),
+      {message:'artifact_sha256 must be nonempty text'});
+  }
+});
+
 test('known denominator retains unknown and produces missing-data bounds, not a confidence interval', () => {
   const result=qualifyTrajectoryAssessment({...prepared(),output:output()});
   assert.deepEqual(result.metrics.find(m=>m.metric==='information_gain'),{metric:'information_gain',yes:1,no:0,unknown:1,eligible:2,assessed_fraction:.5,missing_data_bounds:[.5,1]});
@@ -49,4 +68,31 @@ test('purposeful samples cannot assert exhaustive coverage; unknown population s
   x.selection.exhaustive=false;const p=prepareTrajectoryAssessment({input:x,config});
   assert.equal(qualifyTrajectoryAssessment({...p,output:output()}).selection.population_episodes,null);
   x.selection.population_episodes=1;assert.throws(()=>prepareTrajectoryAssessment({input:x,config}),/population smaller/);
+});
+
+test('artifact digests retain bare lowercase syntax, original bytes and error semantics', () => {
+  // Bare SHA-256 is exactly 64 lowercase hex characters, without normalization.
+  for (const digest of ['a'.repeat(64), '0123456789abcdef'.repeat(4)]) {
+    const x=input(); x.sources[0]!.artifact_sha256=digest;
+    assert.equal(prepareTrajectoryAssessment({input:x,config}).input.sources[0]!.artifact_sha256,digest);
+  }
+  for (const [digest,message] of [
+    ['A'.repeat(64),'artifact_sha256 must be a sha256 hex digest'],
+    ['sha256:'+'a'.repeat(64),'artifact_sha256 must be a sha256 hex digest'],
+    ['a'.repeat(63),'artifact_sha256 must be a sha256 hex digest'],
+    ['a'.repeat(65),'artifact_sha256 must be a sha256 hex digest'],
+    ['g'+'a'.repeat(63),'artifact_sha256 must be a sha256 hex digest'],
+    [' '+'a'.repeat(64),'artifact_sha256 must be a sha256 hex digest'],
+    ['a'.repeat(64)+' ','artifact_sha256 must be a sha256 hex digest'],
+    ['a'.repeat(64)+'\n','artifact_sha256 must be a sha256 hex digest'],
+    ['a'.repeat(64)+'\r\n','artifact_sha256 must be a sha256 hex digest'],
+    ['a'.repeat(64)+'\n\n','artifact_sha256 must be a sha256 hex digest'],
+    ['', 'artifact_sha256 must be nonempty text'],
+    [null, 'artifact_sha256 must be nonempty text'],
+    [64, 'artifact_sha256 must be nonempty text'],
+    ['a'.repeat(64)+'\0', 'artifact_sha256 must be nonempty text'],
+  ] as [unknown,string][]) {
+    const x=input() as unknown as {sources: Record<string,unknown>[]}; x.sources[0]!.artifact_sha256=digest;
+    assert.throws(()=>prepareTrajectoryAssessment({input:x,config}), error => error instanceof Error && error.message === message);
+  }
 });

@@ -21,6 +21,7 @@ from sforge.harness.run_agent import run_agent
 from sforge.harness.task_spec import make_task_spec
 
 from benchmark.runtime.codex import TASK_ENTRIES, turn_envelope_receipt
+from loopx.reasoning_effort import REASONING_EFFORTS
 from loopx.control_plane.work_items.stride_policy_codec import stride_strategy_options
 from benchmark.runtime.sforge import (
     DEFAULT_TIMEOUT_SECONDS, PROFILES, SForgeWorker,
@@ -29,6 +30,7 @@ from benchmark.runtime.sforge_backend import RecordingDockerBackend
 from benchmark.runtime.source import source_pins
 from benchmark.edgebench.prompts import (
     blind_task_prompt, best_only_task_prompt, native_task_prompt, native_task_instructions,
+    checkpoint_research_instructions,
 )
 from benchmark.edgebench.online_sampling import OnlineSampler
 from benchmark.edgebench.feedback import BestOnlyFeedback, FEEDBACK_MODES, validate_best_only
@@ -110,7 +112,7 @@ def main(argv=None):
                         help="Opt-in: when a native Goal declares completion with budget left, start "
                              "continuation Goals until the budget edge (native-goal worker only)")
     parser.add_argument("--model", required=True)
-    parser.add_argument("--effort", choices=("low", "medium", "high", "xhigh"), required=True)
+    parser.add_argument("--effort", choices=REASONING_EFFORTS, required=True)
     parser.add_argument("--timeout", type=int,
                         help="Total trial seconds; task-defaults.json overrides the 18h fallback")
     parser.add_argument("--task-entry", choices=TASK_ENTRIES,
@@ -236,6 +238,12 @@ def main(argv=None):
             selection=task.judge.selection, score_direction=task.judge.score_direction)
         feedback_prompt = native_task_prompt(task.work.agent_query, task.submit_paths, **native_policy)
         workspace_instructions = native_task_instructions(task.submit_paths, **native_policy)
+        if checkpoint_request is not None:
+            research = checkpoint_research_instructions(declaration, task.cwd)
+            workspace_instructions += research
+            # Keep the exact policy prefix shared with AGENTS.md; the original
+            # task remains the separately owned Goal objective.
+            feedback_prompt = workspace_instructions + f"---\n\n{task.work.agent_query}\n"
         task_objective = task.work.agent_query
     config = SForgeConfig(
         agent_api_base_url=api_base_url, agent_api_key=api_key,

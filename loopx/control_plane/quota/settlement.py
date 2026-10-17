@@ -378,6 +378,7 @@ def read_heartbeat_settlement(
                         else {}
                     ),
                 },
+                large_local_snapshot=True,
             )
         except EffectRuntimeRejected as exc:
             raise ValueError(str(exc)) from None

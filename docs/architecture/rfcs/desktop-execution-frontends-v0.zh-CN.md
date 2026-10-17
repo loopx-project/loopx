@@ -248,6 +248,26 @@ Agent 分类或转发消息。绑定不硬编码到 Codex：该 Agent 的执行�
 `loopx_collaboration_status_v0` 可以提供有用的只读卡片，但它不是核心抽象。
 核心对象是 Agent 级的前端连接和收敛后的工作会话。
 
+托管 Goal Chat 的可观察性切片将执行器身份、已解析模型与显式模型选择分开。
+用户请求及确认视图保留 canonical Agent 作者；历史缺失作者保持未知。
+仅呈现宿主明确公开的推理摘要，隐藏历史原始推理。这是现有 Chat 路径的有界
+修正，不证明 attached 宿主或 Lark 交互已完整对等。默认行为与来源契约见
+[投影边界](../../integrations/session-runtime-control-plane-adapter.md#projection-boundary)。
+
+共享管家头部在 390px 下保留已知、未知模型的可读观察。可选模型菜单在视口内展开，
+进入页面不启动目录发现。浏览器拒绝存储时，composer 草稿仍可编辑；从未派发的尝试
+不会变成投递未确认。已获资格的重试仍保留原 Session、Turn 与 ingress。
+这些打包页面与隔离原生检查不代表安装宿主已经采用。
+
+挂接 Codex 记录也让对话优先于连续工具事件。自然滚动在有界源窗口内向前/向后
+分页，保留阅读锚点，仅在末尾回到缓冲的实时观察。工具详情、来源缺口和已观察
+失败仍可访问。已知原生文本块在正文分页前解码，长 Unicode 结果可完整读取。
+即使正文需分页，折叠的工作过程也提示已记录的 shell 非零退出码；不从退出码或
+文字推断任务失败或验收。未知文本块元数据仍保留为源 JSON，疑似凭据内容继续隐藏。
+此处改变呈现，不改变原会话输入/审批权限，也不替代尚未完成的
+provider 与安装宿主资格验证。
+
+
 ## Agent 级外部连接器模型
 
 Lark 群入口和 Lark 文档评论是一个 provider-neutral 连接器边界的两个实例。
@@ -782,7 +802,7 @@ App 更新仍能操作；在用户应用更新或有意选择其他恢复前，�
 
 #4547/#4548/#4552 已交付团队预览确认 UI、打包资源及 browser fixture，不再把确认入口列为未实现。按[统一路线](loopx-overall-roadmap-v0.zh-CN.md) R1 补语义一致的 partial/gap/stale 回读，R2 验 worker 实际执行，R3 验自动回报和重启恢复。现有确认 fixture 不能证明 Lark 端完整闭环。
 
-前端/Lark 消费同一 proposal、receipt 和 audience projection；运行状态不能由计划已确认推断。每个实现批次含 packaged frontend 的实际交互和 Lark 适用路径验收，或明确说明未验收。涉及首屏/主 CTA 的实现继续先展示具体预览并获批准；本次仅更新 RFC，不修改 UI。
+前端/Lark 消费同一 proposal、receipt 和 audience projection；运行状态不能由计划已确认推断。每个实现批次含 packaged frontend 的实际交互和 Lark 适用路径验收，或明确说明未验收。涉及首屏/主 CTA 的实现遵循仓库首屏证据规则：具体首屏放入 PR description，复用既有范围内的设计方向，不为普通细化再增加一轮确认；本次仅更新 RFC，不修改 UI。
 
 ## 交付切片
 
@@ -855,6 +875,13 @@ Overview owner 入口一次导航打开精确 Agent，无需再次选择；bindi
 稳定页面复用既有原生 provider 和权限。这缩短了本机 Overview 路径；其余工作会话整合
 仍须与在 Codex App 选择原对话比较，覆盖目标发现、纠正和结果读回。传输成功不证明
 任务路径更短、独立验收或 G1 完成。
+
+普通托管对话只使用一个 composer，承接新消息与精确 Turn 追加指令。时间线及概览回执中的
+“调整本轮”只聚焦该输入框，不再打开第二个编辑器。草稿按对话隔离；旧版行内草稿迁移时
+保留原 Session、Turn 与 ingress 身份。投递未确认时，刷新或原回合结束后仍重试原 Turn；
+只有确认未送达才可取得新 ingress。浏览器存储失败时保留草稿并拒绝未经持久读回的投递。
+不支持 steering 的执行器仅显示中断，不展示追加入口。此呈现修改不为上述挂接 Desktop
+provider 新增忙碌回合输入能力。
 
 ### 切片 C：托管参考垂直
 

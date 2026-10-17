@@ -4,6 +4,7 @@ import { requireBoolean, requireInteger, requireJsonObject, requireNonEmptyStrin
   requireStringArray } from "../runtime_decode.ts";
 import { projectRelations, todoRef, type PlanningInventoryRelation,
   type PlanningRelationSource } from "./planning_relations.ts";
+import { PROJECTION_ENVELOPE_SEAL_REQUEST, sealProjectionEnvelope } from "../projection_envelope.ts";
 
 export const TASK_GRAPH_TOPOLOGY_REQUEST = "task_graph_topology_request_v0";
 export const TASK_GRAPH_TOPOLOGY_RESULT = "task_graph_topology_result_v0";
@@ -210,5 +211,68 @@ export function projectGoalTaskGraphTopology(value: unknown): JsonObject {
       cycle_edge_count: cycleEdges.size,
       topology_complete: !sourceTruncated && omitted === 0 && missing.size === 0 && cycleEdges.size === 0,
     },
+  };
+}
+
+export const GOAL_TASK_MAP_REQUEST = "goal_task_map_request_v0";
+export const GOAL_TASK_MAP_RESULT = "goal_task_map_result_v0";
+const GOAL_TASK_MAP_MAX_NODES = 120;
+
+function goalMapNode(facts: JsonObject, depth: number): JsonObject {
+  const gate = requireBoolean(facts.is_user, "goal map row.is_user");
+  const monitor = requireBoolean(facts.is_monitor, "goal map row.is_monitor");
+  return {
+    kind: gate ? "gate" : monitor ? "monitor" : "deliverable",
+    depth, refs: { todo_ids: [facts.todo_id] },
+  };
+}
+
+/** Source and display codecs stay with the caller; native owns map composition. */
+export function projectGoalTaskMap(value: unknown): JsonObject {
+  const request = requireJsonObject(value, "goal task map request");
+  if (request.schema_version !== GOAL_TASK_MAP_REQUEST) {
+    throw new EffectRuntimeRequestError("Goal task map request schema mismatch");
+  }
+  if (typeof request.goal_id !== "string") throw new EffectRuntimeRequestError("goal_id must be a string");
+  const sourceTruncated = requireBoolean(request.source_truncated, "source_truncated");
+  const topology = projectGoalTaskGraphTopology({
+    schema_version: TASK_GRAPH_GOAL_TOPOLOGY_REQUEST, items: request.items,
+    node_limit: GOAL_TASK_MAP_MAX_NODES, source_truncated: sourceTruncated,
+  });
+  const rows = request.items as JsonObject[];
+  const byId = new Map(rows.map(facts => [facts.todo_id as string, facts]));
+  const entries = topology.nodes as { todo_id: string; depth: number }[];
+  const nodes = entries.map(entry => goalMapNode(byId.get(entry.todo_id)!, entry.depth));
+  const indices = new Map(entries.map((entry, index) => [entry.todo_id, index]));
+  const edges = topology.edges as GraphEdge[];
+  const facts = requireJsonObject(request.read_facts, "goal map read facts");
+  const sourceCount = requireInteger(facts.source_count, "goal map source_count");
+  if (sourceCount < rows.length) throw new EffectRuntimeRequestError("goal map source count is incomplete");
+  const limits = topology.completeness as JsonObject;
+  const omitted = [
+    {reason: "unrenderable_todos", count: sourceCount - rows.length},
+    {reason: "map_node_limit", count: Number(limits.omitted_node_count)},
+    {reason: "unresolved_map_relations", count: Number(limits.missing_endpoint_count) + Number(limits.cycle_edge_count)},
+  ].filter(value => value.count > 0);
+  const envelope = sealProjectionEnvelope({
+    schema_version: PROJECTION_ENVELOPE_SEAL_REQUEST, projection: "goal_task_map",
+    observed_at: facts.observed_at,
+    sources: [{source_id: "goal_todos", read_status: facts.source_read_at == null ? "not_read" : "read",
+      last_read_at: facts.source_read_at, item_count: sourceCount}],
+    coverage: {scope: "goal_task_map", expected_count: sourceTruncated ? null : sourceCount,
+      included_count: nodes.length, omitted, shown_count: nodes.length, available_count: sourceCount},
+  });
+  return {
+    schema_version: GOAL_TASK_MAP_RESULT,
+    projection: {
+      schema_version: "goal_task_map_v0", mode: "read_only", goal_id: request.goal_id,
+      limits: topology.completeness, nodes,
+      projection_envelope: envelope,
+      edges: edges.map(edge => ({ relation: edge.relation, enforcement: edge.enforcement, reason: edge.reason })),
+    },
+    node_identity_prefixes: nodes.map(node => node.kind === "gate" ? "node_gate" : "node_todo"),
+    node_metadata_fields: nodes.map(node => node.kind === "gate" ? [] : ["owner_agent", "task_domain"]),
+    edge_identities: edges.map(edge => ({ from_node_index: indices.get(edge.from_todo_id)!,
+      to_node_index: indices.get(edge.to_todo_id)!, source_relation: edge.source_relation })),
   };
 }

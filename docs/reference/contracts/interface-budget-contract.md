@@ -54,7 +54,7 @@ for the richer generator packet; neither is the recurring Agent hot path.
 
 The heartbeat envelope ceiling covers the unbound and representative agent/scope-bound
 Codex App thin fixtures. Its 5,400-character JSON ceiling remains independent of
-the **3,200-character thin task body**, 4,000-character native Goal body,
+the **3,600-character thin task body**, 4,000-character native Goal body,
 structural limits, and emitted CLI ceilings. These are presentation regression
 budgets, not external host limits, token counts, execution quota, or permission.
 
@@ -535,3 +535,22 @@ CLI 同负载差分另测得 JSON 增加 2,801 字符、102 行、1,910 个紧�
 其 task-graph 显式变体的 none → v0 获得一次 3,000 JSON 字符／字节、110 行、
 2,048 紧凑字符余量；Markdown 余量为 192 字符／224 字节和三行。该迁移必须评审。
 未知 schema、反向迁移、其他表面和后续 v0 增长使用普通预算，绝对上限保持不变。
+
+### Current-contract delivery prompt allowance
+
+The instruction-coherence change keeps action-specific authorization, sustained
+integration/negative-case/readback work and exact current settlement/recovery in
+all heartbeat modes. On the same supported 320-character scope plus capability
+fixture, normalized thin body cost is 3,172 → 3,599 characters. The thin body
+ceiling is 3,600; CLI JSON/Markdown ceilings are 3,900/5,800 (previously
+3,400/5,250), against measured 3,651/5,579 on the same public fixture.
+The registered-profile brief body grows from 4,447 to 4,675, with a 4,800
+ceiling (previously 4,600). Full/compact remove duplicated static recipes; no host execution quota, authority,
+line, key or reward-memory allowance changes. Oversized custom inputs still fail.
+
+The existing differential observer recognizes the complete reviewed old→new
+instruction transition only on thin/brief/compact carriers, allowing at most 512
+characters once. Missing clauses, unrelated surfaces and later new→new growth
+retain ordinary gates. This is cost attribution, not admission logic or proof of
+semantic equivalence. The PR's clause review and current-path validation remain
+necessary; deleting an obligation cannot earn this allowance.

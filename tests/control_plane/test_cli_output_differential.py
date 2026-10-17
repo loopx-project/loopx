@@ -112,6 +112,9 @@ def test_authoring_growth_is_bounded_one_time_and_surface_scoped(
     ("heartbeat_prompt_compact", "markdown", ["stop"], 215),
     ("heartbeat_prompt_brief", "markdown", ["stop"], 163),
     ("heartbeat_prompt_thin", "json", ["stop"], 154),
+    ("heartbeat_prompt_thin", "json", ["authorized_delivery"], 405),
+    ("heartbeat_prompt_thin", "markdown", ["authorized_delivery"], 405),
+    ("heartbeat_prompt_brief", "json", ["authorized_delivery"], 280),
 ])
 def test_continuation_growth_requires_observed_transition_and_bounds(surface, fmt, clauses, growth):
     from loopx.control_plane.testing.cli_output_differential import _compare_row
@@ -1476,3 +1479,24 @@ def test_first_delivery_growth_requires_every_reviewed_instruction():
             assert not authoring_input_observations(render(guidance.replace(clause, "")))["first_delivery_guidance"]
     assert not authoring_input_observations(json.dumps({"note": guidance}))["first_delivery_guidance"]
     assert not authoring_input_observations("note: " + guidance)["first_delivery_guidance"]
+
+
+def test_delivery_guidance_cost_observation_cannot_qualify_partial_or_repeated_change():
+    from loopx.control_plane.testing.cli_output_semantics import continuation_instruction_observations
+
+    old = "calls/writeback ≠ completion. Correct locally; obey projected replan/stop, never wake counts."
+    clauses = [
+        "Reuse existing authorization for the current action; ask only for missing necessary authority.",
+        "Continue through integration, negative cases and readback while feasible; preserve evidence and next action for recovery/resume.",
+        "Settle with current settlement_plan.ordered_steps, else next_cli_actions; preserve exact identities/effect ids and actual outcomes. Never reconstruct static refresh/spend; ambiguous effects need readback/recovery, not blind retry.",
+    ]
+    for render in (lambda value: value, lambda value: json.dumps({"task_body": value})):
+        before = continuation_instruction_observations(render(old))
+        after = continuation_instruction_observations(render(old + " " + " ".join(clauses)))
+        assert before["authorized_delivery_before"] and not before["authorized_delivery_after"]
+        assert after["authorized_delivery_after"] and not after["authorized_delivery_before"]
+        for removed in range(len(clauses)):
+            partial = continuation_instruction_observations(render(old + " " + " ".join(
+                clause for i, clause in enumerate(clauses) if i != removed)))
+            assert not partial["authorized_delivery_after"]
+            assert not partial["authorized_delivery_before"]

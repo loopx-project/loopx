@@ -411,6 +411,7 @@ class ChatActionNormalizationMixin:
                     "no_followup",
                     "task_lease_idempotency_key",
                     "task_lease_expected_version",
+                    "review_basis",
                 },
             )
             goal_id = _opaque(values.get("goal_id"), field="goal_id")
@@ -432,8 +433,19 @@ class ChatActionNormalizationMixin:
                     "todo.update operation must be edit, reassign, block, defer, complete, or successor"
                 )
             result["operation"] = operation
+            if "review_basis" in values:
+                basis = values["review_basis"]
+                if (operation != "edit" or not values.get("text") or not isinstance(basis, dict)
+                        or set(basis) != {"schema_version", "provider_revision", "source_authority", "registry_sha256"}
+                        or basis.get("schema_version") != "loopx_chat_canonical_update_basis_v0"
+                        or any(not isinstance(x, str) or not x for x in basis.values())
+                        or not BARE_SHA256_PATTERN.fullmatch(basis["registry_sha256"])):
+                    raise ValueError("Task edit requires its complete current source basis")
+                result["review_basis"] = dict(basis)
             if values.get("text"):
-                result["text"] = _text(values["text"], field="text", limit=400)
+                # Source-bound requirements use the existing journal's 8,000
+                # character envelope, never the 400-character quick-action copy.
+                result["text"] = _text(values["text"], field="text", limit=8000 if "review_basis" in result else 400)
             if values.get("status"):
                 status = str(values["status"]).strip().lower()
                 if status not in {"open", "blocked", "deferred"}:

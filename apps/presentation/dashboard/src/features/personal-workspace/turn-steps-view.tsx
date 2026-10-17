@@ -41,7 +41,7 @@ export function currentTurnStepText(steps: readonly TurnStep[] | undefined, zh: 
   const step = [...(steps ?? [])].reverse().find(item => item.state === "running");
   if (!step) return null;
   const ongoing = ONGOING[zh ? "zh" : "en"][verbKey(step)];
-  if (step.kind === "reasoning") return step.title ? `${ongoing}${zh ? "：" : ": "}${step.title}` : ongoing;
+  if (step.kind === "reasoning") return zh ? "正在处理" : "Working";
   return `${ongoing} ${step.title}`.trim();
 }
 
@@ -53,7 +53,8 @@ function stepDetail(step: TurnStep) {
 }
 
 function StepRow({ step, zh, live }: { step: TurnStep; zh: boolean; live: boolean }) {
-  const detail = stepDetail(step);
+  const publicReasoning = step.kind !== "reasoning" || step.reasoning_summary === true;
+  const detail = publicReasoning ? stepDetail(step) : undefined;
   const verbs = VERBS[zh ? "zh" : "en"];
   const meta = [
     step.state === "running" ? (live ? (zh ? "进行中" : "Running") : (zh ? "未结束" : "Not finished")) : null,
@@ -63,8 +64,10 @@ function StepRow({ step, zh, live }: { step: TurnStep; zh: boolean; live: boolea
   ].filter(Boolean).join(" · ");
   const head = <>
     <span className="personal-turn-step-icon">{icon(step)}</span>
-    <span className="personal-turn-step-verb">{verbs[verbKey(step)]}</span>
-    {step.title ? <span className={step.kind === "reasoning" ? "personal-turn-step-title" : "personal-turn-step-title is-code"}>{step.title}</span> : null}
+    <span className="personal-turn-step-verb">{step.kind === "reasoning"
+      ? (step.reasoning_summary ? (zh ? "推理摘要" : "Reasoning summary") : (zh ? "处理" : "Processing"))
+      : verbs[verbKey(step)]}</span>
+    {publicReasoning && step.title ? <span className={step.kind === "reasoning" ? "personal-turn-step-title" : "personal-turn-step-title is-code"}>{step.title}</span> : null}
     {meta ? <span className="personal-turn-step-meta">{meta}</span> : null}
   </>;
   return <li className="personal-turn-step" data-kind={step.kind} data-state={step.state}>

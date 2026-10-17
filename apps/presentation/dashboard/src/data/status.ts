@@ -88,6 +88,8 @@ export const todoItemSchema = z.object({
   watch_only: z.union([z.boolean(), z.string()]).optional().nullable(),
   task_domain: z.string().optional().nullable(),
   action_kind: z.string().optional().nullable(),
+  // Canonical author provenance, distinct from the Agent authorized to reply.
+  created_by: z.string().optional().nullable(),
   claimed_by: z.string().optional().nullable(),
   required_capabilities: z.array(z.string()).optional(),
   note: z.string().optional().nullable(),
@@ -537,6 +539,7 @@ export const runRecordSchema = z.object({
 });
 
 export const runGoalSchema = z.object({
+  goal_objective: z.string().nullable().optional().catch(null),
   zcode_goal_eligible_agent_ids: z.array(z.string()).optional().default([]).catch([]),
   acceptance_observation: goalAcceptanceObservationSchema.optional().nullable().catch(null),
   id: z.string(),

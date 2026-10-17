@@ -306,6 +306,34 @@ attach, detach, channel selection, freshness, and reconnect actions.
 not the core abstraction. The core objects are the Agent-scoped frontend
 connection and the converged working session.
 
+Managed Goal Chat's observability slice keeps executor identity, resolved model
+and explicit model choice separate. User requests retain their canonical Agent
+author in the request and confirmation views; legacy authors remain unknown.
+Only explicitly public reasoning summaries are presented, with historical raw
+reasoning withheld. These are bounded corrections to the existing Chat path,
+not evidence of complete attached-host or Lark interaction parity. See the
+[projection boundary](../../integrations/session-runtime-control-plane-adapter.md#projection-boundary)
+for the changed defaults and provenance contract.
+
+The shared steward header keeps both known and unknown model observations
+readable at 390px. Optional model choices open within the viewport and do not
+start catalog discovery on entry. A browser-storage refusal keeps the composer
+draft editable; an attempt that was never dispatched cannot become an uncertain
+delivery. Qualified retries still preserve their original Session, Turn and ingress.
+These packaged and isolated-native checks do not qualify installed-host adoption.
+
+The attached Codex reader also gives dialogue priority over consecutive tool
+events. Natural scrolling pages its bounded source window in both directions,
+preserves the reading anchor and returns to buffered live observations only at
+the tail. Tool details, source gaps and observed failures remain accessible.
+Known native text blocks are readable before content pagination, including
+long Unicode results. Folded activity names recorded nonzero shell exit codes
+even when the result body is paged; it never infers task failure or acceptance
+from an exit code or prose. Unknown block metadata remains available as source
+JSON and credential-shaped content remains withheld.
+This changes presentation, not the original-session input/approval authority or
+the outstanding provider and installed-host qualification.
+
 ## Agent-scoped external Connector model
 
 Lark group ingress and Lark document comments are two instances of one
@@ -966,7 +994,7 @@ bootstrap acceptance, Agent execution acceptance, or signed-release readiness.
 
 #4547/#4548/#4552 delivered team-preview confirmation UI, packaged resources and a browser fixture; the confirmation entry is no longer unimplemented. Follow [roadmap](loopx-overall-roadmap-v0.md) R1 for semantically accurate partial/gap/stale readback, R2 for actual worker execution and R3 for automatic return/restart recovery. The confirmation fixture does not prove the complete Lark loop.
 
-Frontend/Lark consume the same proposal, receipt and audience projection; confirmed plans cannot imply execution. Every implementation includes real packaged-frontend interaction and applicable Lark qualification, or explicitly names the untested surface. First-viewport/primary-CTA implementation changes still require concrete preview approval. This revision edits RFCs only, not UI.
+Frontend/Lark consume the same proposal, receipt and audience projection; confirmed plans cannot imply execution. Every implementation includes real packaged-frontend interaction and applicable Lark qualification, or explicitly names the untested surface. First-viewport/primary-CTA implementation follows the repository first-screen evidence rule: include the concrete viewport in the PR description and reuse existing scoped direction without a routine confirmation round. This revision edits RFCs only, not UI.
 
 ## Delivery slices
 
@@ -1060,6 +1088,16 @@ local overview path; evaluate the remaining working-session acceptance
 integration against selecting the original conversation in Codex App, including
 target discovery, correction and result readback; transport success alone does
 not establish a shorter task path, independent acceptance or G1 completion.
+
+The ordinary managed conversation has one shared composer for new messages and
+exact-turn instructions. “Adjust turn” focuses it in both the timeline and the
+overview receipt, without opening a second editor. Drafts remain scoped to their
+conversation; legacy inline drafts migrate without changing Session, Turn or
+ingress identity. Unknown delivery retries its original Turn after reload or
+completion, while confirmed non-delivery can obtain a new ingress. Browser
+storage failure retains the draft and refuses an unqualified dispatch. Unsupported
+executors expose interruption without advertising steering. This presentation
+change does not add busy-turn input to the attached Desktop provider above.
 
 ### Slice C: managed reference vertical
 

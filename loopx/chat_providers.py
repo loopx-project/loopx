@@ -22,14 +22,15 @@ EventSink = Callable[[str, dict[str, Any]], None]
 _PRIVATE_PARTS = {".git", ".env", ".ssh", ".aws", ".config", "node_modules"}
 
 
-def codex_model_options(codex_bin: str) -> dict[str, Any] | None:
-    """Project the local Codex catalog without exposing its instructions."""
+def codex_model_options(codex_bin: str, *, codex_home: Path | None = None) -> dict[str, Any] | None:
+    """Read the selected account's catalog without exposing its instructions."""
     executable = codex_bin if Path(codex_bin).is_absolute() else shutil.which(codex_bin)
     if not executable:
         return None
     try:
         result = subprocess.run(
             [str(executable), "debug", "models"],
+            env={**os.environ, **({"CODEX_HOME": str(codex_home)} if codex_home is not None else {})},
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=True, encoding="utf-8", errors="replace", timeout=15, check=False,
         )
@@ -40,14 +41,22 @@ def codex_model_options(codex_bin: str) -> dict[str, Any] | None:
     if not isinstance(rows, list):
         return None
     options = [
-        {"value": slug, "label": " ".join(str(row.get("display_name") or slug).split())[:100]}
+        {"value": slug, "label": " ".join(str(row.get("display_name") or slug).split())[:100],
+         **({"reasoning_efforts": efforts} if (efforts := [
+             entry["effort"] for entry in (row["supported_reasoning_levels"] if isinstance(row.get("supported_reasoning_levels"), list) else [])
+             if isinstance(entry, dict) and isinstance(entry.get("effort"), str)
+             and entry["effort"].strip() and len(entry["effort"]) <= 160
+             and not any(ord(character) < 32 for character in entry["effort"])
+         ]) else {})}
         for row in rows
         if isinstance(row, dict)
         and isinstance((slug := str(row.get("slug") or "").strip()), str)
         and slug and len(slug) <= 160
         and str(row.get("visibility") or "list") == "list"
     ]
-    return {"id": "model", "label": "Model", "selected": options[0]["value"] if options else "", "options": options} if options else None
+    # Catalog order is neither the effective workspace default nor the model
+    # resolved for an existing conversation. Only native Session readback is current.
+    return {"id": "model", "label": "Model", "selected": "", "options": options} if options else None
 
 
 def _read_only_tools(provider: str) -> list[dict[str, Any]]:

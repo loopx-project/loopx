@@ -132,6 +132,17 @@ queries, and distinguish provider latency from full caller wall time. Include
 an unanswerable query; irrelevant candidates cannot establish answer correctness.
 The local experiment report does not measure outcome utility or grant activation.
 
+The Goal Capability Center's **Decision evidence recall** workbench is a
+transient caller of this same port. Its local-only HTTP adapter accepts an
+explicit profile object and a bounded query in a POST body. Inspection reuses
+profile activation without provider access; recall reuses the existing native
+one-off scope, request bounds and advisory receipt. It creates no profile file,
+durable binding, cursor or settlement. Neither imported provider configuration
+nor the private query is echoed into the public receipt. Page-local controls
+do not change the original profile or enroll another Agent. Clearing or leaving
+the page removes its profile and hits; provider recovery uses the same native
+retry path. This UI transport is not another provider or decision owner.
+
 Hook placement remains capability-owned: `agent-turn-recall` uses the admitted
 Todo situation and qualified Reward Memory corpus; Semantic Preference delivers
 explicit corrections; Decision Context rebases current materials. Verified

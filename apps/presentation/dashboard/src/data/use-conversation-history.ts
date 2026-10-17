@@ -26,7 +26,6 @@ export function useConversationHistory({ agentId, currentAgentId, channelId, goa
   const scope = JSON.stringify([agentId ?? null, currentAgentId, channelId, goalId ?? null]);
   const [state, setState] = useState<HistoryState | null>(null);
   const retryRead = useRef<(() => void) | null>(null);
-  const retry = useCallback(() => retryRead.current?.(), []);
   const cached = useRef<{ scope: string; history: ChatHistory } | null>(null);
   const refreshGeneration = useRef(0);
   const cachedHistory = (forScope: string) => cached.current?.scope === forScope ? cached.current.history : null;
@@ -39,7 +38,15 @@ export function useConversationHistory({ agentId, currentAgentId, channelId, goa
   const refresh = useCallback(async () => {
     const { agentId, channelId, goalId, scope } = params.current;
     const generation = ++refreshGeneration.current;
-    const loaded = await fetchChatHistory({ agentId, channelId, goalId });
+    let loaded: ChatHistory;
+    try {
+      loaded = await fetchChatHistory({ agentId, channelId, goalId });
+    } catch (error) {
+      if (params.current.scope === scope && generation === refreshGeneration.current) {
+        setState({ scope, history: cachedHistory(scope), reading: false, failed: true });
+      }
+      throw error;
+    }
     // The caller may still need its completed read, but a conversation that
     // was left while it waited no longer owns this hook's visible history.
     if (params.current.scope !== scope || generation !== refreshGeneration.current) return loaded;
@@ -47,6 +54,14 @@ export function useConversationHistory({ agentId, currentAgentId, channelId, goa
     setState({ scope, history: loaded, reading: false, failed: false });
     return loaded;
   }, []);
+  const retry = useCallback(() => {
+    if (state?.scope === params.current.scope && state.failed) {
+      // A failed refresh may hide new records in an already cached Session.
+      // Re-read that snapshot rather than retrying only missing older history.
+      setState({ ...state, reading: true });
+      void refresh().catch(() => {});
+    } else retryRead.current?.();
+  }, [state, refresh]);
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;

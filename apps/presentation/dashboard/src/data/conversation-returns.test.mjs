@@ -87,3 +87,14 @@ assert.equal(recoveredInstructions.find(row => row.text === "Chinese first").sou
 assert.equal(recoveredInstructions.find(row => row.text === "Do not publish").sourceMessageId, "instruction-2");
 assert.equal(reconcileConversationHistory(recoveredInstructions, withInstructions, createHistory), recoveredInstructions);
 console.log("conversation-returns: passed (session isolation, late return, deduplication, transport uncertainty, stream preservation and continued revision observation)");
+// A fast history read may add the stored queue row before its HTTP receipt
+// hydrates the original bubble. Both now carry the same canonical identity.
+const queueRace = [
+  {sourceSessionId: "current", sourceTurnId: "same-turn", role: "user", text: "queued"},
+  {sourceSessionId: "current", sourceTurnId: "same-turn", sourceMessageId: "user-message", role: "user", text: "queued"},
+];
+const queueReadback = reconcileConversationHistory(queueRace, [storedRoles[0]], createHistory);
+assert.equal(queueReadback.length, 1, "Queue admission/history races retain exactly one canonical user message");
+assert.equal(queueReadback[0].sourceMessageId, "user-message");
+const crossSession = [...queueReadback, {...queueReadback[0], sourceSessionId: "different"}];
+assert.equal(reconcileConversationHistory(crossSession, [storedRoles[0]], createHistory).length, 2, "Message ids are scoped to their original Session");

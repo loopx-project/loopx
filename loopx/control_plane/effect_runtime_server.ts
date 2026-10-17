@@ -1,6 +1,6 @@
 import { writeSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
-import { type FileHandle } from "node:fs/promises";
+import { realpath, type FileHandle } from "node:fs/promises";
 
 import type { JsonObject } from "./effect_program.ts";
 import {
@@ -28,16 +28,21 @@ const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
 const MAX_INLINE_RESPONSE_BYTES = 2 * 1024 * 1024;
 // Explicit opt-in: ordinary effects retain the 2 MiB request/response wire.
 const LOCAL_SNAPSHOT_METHODS = new Set([
+  "collaboration.delegation.inventory_page",
+  "benchmark.trajectory.codex-usage",
   "coordination.local_authority.todo_source",
   "todo.context.page",
   "work_item.context.project",
+  "work_item.task_graph.goal_topology",
   "work_item.replan_semantics.project",
+  "quota.settlement.read",
   "goal.checkpoint_read_context.resolve",
   "goal.checkpoint_read_context.commit",
   "goal.checkpoint_read_context.inspect_replay",
   "performance_diagnosis.inspect",
   "state.recovery.archive.verify",
   "state.recovery.manifest.verify",
+  "runtime.checkpoint_artifacts",
 ]);
 const DEFAULT_IDLE_MS = 5 * 60 * 1_000;
 // Bounds for LOOPX_EFFECT_RUNTIME_IDLE_MS. The upper bound is the largest
@@ -107,6 +112,7 @@ function parseIdleMs(raw: string | undefined): number {
 }
 
 const infoPath = parseArg("--info");
+let publishedInfoPath: string | undefined;
 const fingerprint = parseArg("--fingerprint");
 const token = requiredString(process.env.LOOPX_EFFECT_RUNTIME_TOKEN, "runtime token");
 const idleMs = parseIdleMs(process.env.LOOPX_EFFECT_RUNTIME_IDLE_MS);
@@ -118,6 +124,7 @@ let resolvePublication: () => void;
 const publicationReady = new Promise<void>((resolve) => { resolvePublication = resolve; });
 const handlers = createEffectRuntimeHandlers({
   fingerprint,
+  get infoPath() { return publishedInfoPath; },
   requestShutdown: () => {
     shutdownRequested = true;
   },
@@ -302,6 +309,10 @@ server.listen(0, "127.0.0.1", async () => {
         // serving a goal is not necessarily the one the caller resolves from PATH.
         runtime_identity: sqliteRuntimeIdentity(),
       });
+      // Freeze the native publication namespace while it exists. Test cleanup
+      // may observe it after the fixture directory was removed; a copied
+      // locator's contents cannot rewrite this authenticated boot observation.
+      publishedInfoPath = await realpath(infoPath);
     });
     publicationComplete = true;
     resolvePublication();

@@ -406,14 +406,18 @@ def test_interrupted_capture_keeps_reader_through_publication_and_cleans_up(tmp_
         assert params["expected_source_sha256"] == "witness"
         return {"sha256": "sealed"}
     monkeypatch.setattr("benchmark.runtime.checkpoint_wake.effect_runtime_result", artifact)
+    # Bind one monotonic phase before deriving its wall-clock upper bound.
+    # Starting a second five-second phase at the call can add scheduler delay
+    # and incorrectly look like the implementation extended the original one.
+    capture_deadline = time.monotonic() + 5
     phase_deadline = time.time() + 5
     if fault:
         with pytest.raises(ValueError, match="failure|cursor moved|source changed"):
-            hook._capture(held, time.monotonic() + 5)
+            hook._capture(held, capture_deadline)
         assert events[-1] == "closed"
         assert ("capture" in events) is (fault == "capture")
     else:
-        assert hook._capture(held, time.monotonic() + 5)["sha256"] == "sealed"
+        assert hook._capture(held, capture_deadline)["sha256"] == "sealed"
         assert events == ["open", "read", "probe", "read", "capture", "closed"]
 
 
@@ -441,7 +445,8 @@ def test_restored_capture_cannot_drop_its_preflight_basis(tmp_path, monkeypatch,
         gate["capture_allowed"] = False
     reads = []
     monkeypatch.setattr(continuation, "load_codex_cli_session", lambda *a, **k: binding)
-    def basis(method, request):
+    def basis(method, request, *, large_local_snapshot):
+        assert large_local_snapshot is True
         assert request == {"action": "read_basis", "root": str(tmp_path / "point"), "expected_sha256": "a" * 64}
         reads.append(True)
         return {"point_metadata": {"native_session": native}}
@@ -482,3 +487,135 @@ def test_preflight_defers_history_only_when_capture_will_verify_it(tmp_path, mon
     assert checkpoint.capture_before_replan(env, receipt, "current work").endswith("current work")
     assert observed == [not native_participant]
     assert receipt["checkpoint"]["reason"] == "no_fresh_replan"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Requires the Host Unix rendezvous")
+@pytest.mark.parametrize("capture_root_state", ["present", "missing", "symlink"])
+def test_refused_handoff_keeps_original_wake_running(tmp_path, monkeypatch, capture_root_state):
+    """A resumed session reusing an earlier wake's capture root is refused, not fatal.
+
+    The refused packet is neither released nor captured; the same source keeps
+    using the private endpoint and exits on its own. The receipt keeps a bounded
+    reason instead of only an exception class.
+    """
+    import socket
+    import tempfile
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import benchmark.runtime.worker as worker
+    from benchmark.runtime.checkpoint_wake import CheckpointWake
+
+    wakes = tmp_path / "wakes"
+    current = wakes / "wake-current" / "decisions"
+    earlier = wakes / "wake-earlier" / "decisions" / "decision-earlier"
+    current.parent.mkdir(parents=True)
+    if capture_root_state == "present":
+        current.mkdir(mode=0o700)
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    if capture_root_state == "symlink":
+        current.symlink_to(foreign, target_is_directory=True)
+    earlier.mkdir(parents=True)
+    released = current / "decision-current"
+    packets = {}
+    for name, directory in (("earlier", earlier), ("current", released)):
+        raw = json.dumps({"ok": False, "goal_id": "source", "error_code": "fixture"}).encode()
+        if name == "earlier":
+            (directory / "decision.json").write_bytes(raw)
+        packets[name] = {"path": str(directory / "decision.json"), "sha256": hashlib.sha256(raw).hexdigest()}
+    project = tmp_path / "project"
+    project.mkdir()
+    env = {**os.environ, "LOOPX_WAKE_LOG_DIR": str(wakes), "LOOPX_GOAL_ID": "source",
+           "LOOPX_AGENT_ID": "agent", "LOOPX_PROJECT": str(project)}
+    with tempfile.TemporaryDirectory(prefix="refused-", dir="/tmp") as short:
+        address = str(Path(short).resolve() / "host.sock")
+        code = (
+            "import json,socket,sys; from pathlib import Path\n"
+            "def call(message):\n"
+            "    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:\n"
+            f"        s.connect({address!r}); s.sendall(json.dumps(message).encode()+b'\\n')\n"
+            "        return s.makefile('rb').readline()\n"
+            f"assert call({packets['earlier']!r}) == b''\n"
+            f"current = Path({str(current)!r})\n"
+            "if current.is_symlink(): current.unlink()\n"
+            f"Path({str(released)!r}).mkdir(parents=True)\n"
+            f"Path({packets['current']['path']!r}).write_bytes({raw!r})\n"
+            f"assert json.loads(call({packets['current']!r}))['released'] is True\n"
+            "Path('continued').write_text('source continued')\n")
+        monkeypatch.setattr(worker, "native_command", lambda *args: [sys.executable, "-c", code])
+        wake = CheckpointWake(env, {"turn_id": "wake-current", "mode": "heartbeat", "stage": "execute"})
+        wake.capture_root = current
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(address)
+            listener.listen(1)
+            wake.listener = listener
+            with (tmp_path / "stdout").open("w") as stdout, (tmp_path / "stderr").open("w") as stderr:
+                assert wake.run(SimpleNamespace(), "body", tmp_path, None, stdout, stderr, 2) == 0
+    assert (project / "continued").read_text() == "source continued"
+    [event] = wake.receipt["checkpoint_handoffs"]
+    assert event["captured"] is False and event["released"] is False
+    expected = "FileNotFoundError" if capture_root_state == "missing" else "ValueError"
+    assert event["error_kind"] == expected
+    assert (earlier / "decision.json").read_bytes() == raw
+    assert not list(foreign.iterdir())  # Refusal cannot write through a foreign root.
+
+
+def test_wake_receipt_error_tail_is_bounded_message():
+    from benchmark.runtime.worker import _error_tail
+
+    tail = _error_tail(ValueError("decision handoff must reference\nthis Host's capture root " + "x" * 900))
+    assert tail["error_kind"] == "ValueError"
+    assert tail["error"].startswith("decision handoff must reference this Host's capture root")
+    assert len(tail["error"]) == 500 and "\n" not in tail["error"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Requires the Host Unix rendezvous")
+def test_accept_failure_is_not_retried_as_a_refused_packet(tmp_path, monkeypatch):
+    import errno
+    import socket
+    import tempfile
+    from contextlib import contextmanager
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import benchmark.runtime.worker as worker
+    from benchmark.runtime.checkpoint_wake import CheckpointWake
+
+    processes, accepts = [], []
+    owned_child = worker.child_process
+
+    @contextmanager
+    def record_child(*args, **kwargs):
+        with owned_child(*args, **kwargs) as process:
+            processes.append(process)
+            yield process
+
+    monkeypatch.setattr(worker, "child_process", record_child)
+    env = {**os.environ, "LOOPX_PROJECT": str(tmp_path), "LOOPX_WAKE_LOG_DIR": str(tmp_path),
+           "LOOPX_GOAL_ID": "source", "LOOPX_AGENT_ID": "agent"}
+    wake = CheckpointWake(env, {"turn_id": "turn", "mode": "heartbeat", "stage": "execute"})
+    with tempfile.TemporaryDirectory(prefix="accept-failure-", dir="/tmp") as short:
+        address = str(Path(short).resolve() / "host.sock")
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(address)
+            listener.listen(1)
+
+            class UnavailableListener:
+                def fileno(self):
+                    return listener.fileno()
+
+                def accept(self):
+                    accepts.append(True)
+                    raise OSError(errno.EMFILE, "file descriptor capacity exhausted")
+
+            wake.listener = UnavailableListener()
+            code = ("import socket; s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); "
+                    f"s.connect({address!r}); s.sendall(b'{{}}\\n'); s.recv(1)")
+            monkeypatch.setattr(worker, "native_command", lambda *args: [sys.executable, "-c", code])
+            with (tmp_path / "out").open("w") as stdout, (tmp_path / "err").open("w") as stderr:
+                with pytest.raises(OSError, match="capacity exhausted"):
+                    wake.run(SimpleNamespace(), "body", tmp_path, None, stdout, stderr, 1)
+    assert len(accepts) == 1
+    assert "checkpoint_handoffs" not in wake.receipt
+    assert len(processes) == 1 and processes[0].poll() is not None

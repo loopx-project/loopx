@@ -92,8 +92,11 @@ Owner-facing state follows four rules:
 Review realistic populated, quiet, blocked, and unavailable states on desktop
 and mobile. Show before/after views, name what earns attention and what was
 consolidated, and verify keyboard access and return to the original context.
-Record this in the PR's visual evidence section. The repository first-screen
-preview approval gate still applies.
+Put the actual first viewport directly in the PR description's visual evidence
+section, with its revision and data/build boundary. Follow the repository's
+[First-Screen Review Evidence](../../AGENTS.md#first-screen-review-evidence):
+ordinary authorized work reuses prior direction without another user approval;
+refresh evidence when the visible result changes.
 
 Review proportions as well as typography. Within a workspace view, align the
 greeting, summaries, work list, and composer to one content frame. An overview

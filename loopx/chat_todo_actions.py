@@ -30,6 +30,8 @@ class ChatTodoActionMixin:
     ) -> dict[str, Any]:
         goal_id = str(parameters["goal_id"])
         operation = str(parameters.get("operation") or "edit")
+        if parameters.get("review_basis") is not None and parameters["review_basis"] != basis:
+            raise ValueError("The Task source changed. Reload its complete requirements before saving.")
         # Transport only caller-supplied proof. The terminal owner revalidates
         # the execution; a lease read or a Todo claim is never substitute proof.
         proof = {key: parameters[key] for key in (

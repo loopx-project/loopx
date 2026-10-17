@@ -76,7 +76,7 @@ def test_captured_point_continues_with_fresh_authority(
     verified = effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "materialize", "root": str(unit), "expected_sha256": digest,
         "destination": str(materialized),
-    })
+    }, large_local_snapshot=True)
     assert verified["materialized"] and not verified["activation_performed"]
     source_workspace = materialized / "components" / roots[0]["id"]
     assert source_workspace.is_dir()
@@ -1003,7 +1003,7 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
                 assert opportunity_after["remaining_cooldown_seconds"] <= opportunity["remaining_cooldown_seconds"]
                 assert actual_phase.read_bytes() == original_phase
                 check = effect_runtime_result("runtime.checkpoint_artifacts", {
-                    "action": "verify", "root": str(recaptured), "expected_sha256": captured["sha256"]})
+                    "action": "verify", "root": str(recaptured), "expected_sha256": captured["sha256"]}, large_local_snapshot=True)
                 assert check["integrity_verified"] and not check["research_point_qualified"]
                 (tmp_path / "full-recapture.json").write_text(json.dumps(boundary["checkpoint"]))
             elif boundary["checkpoint"].get("reason") == "no_fresh_replan":
@@ -1033,13 +1033,13 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
                 assert captured["point_metadata"]["native_session"]["turn_ids"] == grown["turn_ids"]
                 assert (manual / "components/code").read_text() == "10"
                 verified_point = effect_runtime_result("runtime.checkpoint_artifacts", {
-                    "action": "verify", "root": str(manual), "expected_sha256": captured["sha256"]})
+                    "action": "verify", "root": str(manual), "expected_sha256": captured["sha256"]}, large_local_snapshot=True)
                 assert verified_point["integrity_verified"] and not verified_point["research_point_qualified"]
                 capture_after_wake(capture_env, completed)
                 assert completed["checkpoint"]["reason"] == "destination_already_present_no_replay"
         effect_runtime_result(
             "runtime.checkpoint_artifacts",
-            {"action": "verify", "root": str(unit), "expected_sha256": digest},
+            {"action": "verify", "root": str(unit), "expected_sha256": digest}, large_local_snapshot=True,
         )
         assert (
             hashlib.sha256(

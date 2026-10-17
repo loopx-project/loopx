@@ -70,6 +70,49 @@ def test_shared_static_safety_and_exception_routing_survive_thinning(profile):
     assert "only the affected path" in body
 
 
+@pytest.mark.parametrize("mode", ["full", "compact", "brief", "thin"])
+def test_heartbeat_modes_use_current_settlement_and_scoped_authority(mode):
+    packet = build_heartbeat_prompt(
+        goal_id="contract-fixture", agent_id="worker-a",
+        registered_agents=["worker-a"], runtime_profile="codex_app_heartbeat",
+        **{mode: True},
+    )
+    body = packet["task_body"]
+    assert "settlement_plan.ordered_steps" in body
+    assert "next_cli_actions" in body
+    assert packet["quota_spend_command"] not in body
+    assert packet["progress_refresh_state_command"] not in body
+    assert "existing authorization" in body
+    assert "trusted session" not in body and "host session is already trusted" not in body
+    assert "readback" in body and "recovery" in body
+    assert "negative cases" in body
+    assert packet["interface_budget"]["within_budget"]
+
+
+def test_first_connect_persists_host_specific_loaders(tmp_path):
+    from loopx.project_prompt import build_codex_cli_bootstrap_message
+    import shlex
+
+    packet = build_codex_cli_bootstrap_message(
+        project=tmp_path / "workspace", goal_id="fixture", agent_id="worker-a", cli_bin="loopx",
+    )
+    native = shlex.split(packet["heartbeat_prompt_json_command"])
+    app = shlex.split(packet["codex_app_heartbeat_prompt_json_command"])
+    for command in (native, app):
+        assert "--bootstrap" in command
+        assert "--turn-instance-id" not in command
+    assert "codex_cli" in native
+    assert "--codex-app" in app
+    assert "codex_cli" not in app
+    assert "Codex App heartbeat automation" in app
+    assert "--codex-app" in shlex.split(packet["codex_app_quota_guard_command"])
+    assert "codex_cli" not in shlex.split(packet["codex_app_quota_guard_command"])
+    assert packet["codex_app_quota_guard_command"] in packet["message"]
+    assert "settlement_plan.ordered_steps" in packet["message"]
+    assert packet["progress_refresh_command"] not in packet["message"]
+    assert packet["quota_spend_command"] not in packet["message"]
+
+
 @pytest.mark.parametrize("shell", ["bash", "zsh"])
 def test_emitted_heartbeat_bootstrap_expands_turn_before_real_guard(shell, tmp_path):
     executable = shutil.which(shell)

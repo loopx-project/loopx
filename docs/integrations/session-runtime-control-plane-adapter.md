@@ -50,6 +50,26 @@ Resume and submit reject a different home before starting an upstream process
 or modifying a turn. Legacy sessions acquire the binding only after successful
 upstream restoration; startup alone neither rebinds nor copies their history.
 
+Desktop-owned Chat processes explicitly default `LOOPX_CHAT_CODEX_HOME` to
+`~/.codex`, independently of the launching terminal's `CODEX_HOME`. An explicit
+`LOOPX_CHAT_CODEX_HOME` still selects another native account configuration.
+Direct CLI launches and existing LaunchAgents retain their documented
+precedence. Switching the service home requires a new conversation; existing
+threads remain bound to their original store. The steward defaults to Codex/GPT;
+DeepSeek Harness remains an explicit Runtime choice with its own SDK and
+operator credential, rather than sending GPT model names to a DeepSeek provider.
+Model discovery uses the same captured native home as execution. The guided
+steward editor clears model/effort overrides when changing executor, and labels
+empty values as Runtime defaults; the existing preview/apply owns the write.
+
+中文：桌面自己启动的 Chat 默认固定到 `~/.codex`，不再继承启动终端的
+`CODEX_HOME`；显式 `LOOPX_CHAT_CODEX_HOME` 仍可选择其它原生账号配置。
+直接 CLI 和已有 LaunchAgent 的优先级不变。换目录需要新对话，旧线程保持原存储绑定。
+管家默认 Codex/GPT；DeepSeek Harness 是可选 Runtime，单独检查 SDK 与 operator
+凭据，不把 GPT 模型名发给 DeepSeek provider。
+模型发现与执行共用启动时固定的原生目录。引导表单切换执行器会清空模型与档位覆盖，
+空值明确表示 Runtime 默认值；写入仍归原有预览/应用流程。
+
 The macOS LaunchAgent installer preserves an existing binding on upgrade,
 including older shell-export plists. Use `LOOPX_CHAT_CODEX_HOME` explicitly when
 installing a deliberately different host profile. A later ambient `CODEX_HOME`
@@ -95,6 +115,87 @@ This avoids a second event store. If the host says a session completed and
 LoopX says a goal is still blocked, the projection must explain the
 reconcile rule: missing gate, missing validation, failed outcome, stale
 artifact, or human decision not yet recorded.
+
+For managed Codex conversations, `agent_model_id` reports the model resolved
+by the bound app-server Session. The executor name and model catalog order do
+not establish that identity. A missing readback stays explicitly unavailable;
+the catalog's first model is never shown as current. The private Session keeps
+the requested model separately, so observing a default does not pin it on
+restart. An explicit model change still creates a distinct Session and preserves
+the old conversation.
+
+Open **Settings → Conversations and models** (or the Goal header's settings
+button) to configure machine defaults for ordinary Codex Goal conversations.
+The `codex_chat` namespace separately stores an existing native profile alias,
+model, reasoning effort and service tier. For example `codex-gpt`,
+`gpt-6.1-sol`, `high`, `fast` are four settings, not a composite model name.
+The form uses the existing machine preview/apply/readback/rollback transaction;
+the same namespace is available through `loopx machine-config`. Clear the fields
+or remove this namespace to restore service defaults. Credentials and global
+Codex configuration remain with their original native owner. Missing or
+ambiguous profiles and unsupported native settings fail visibly.
+
+Changed defaults create a distinct ordinary Session at the next idle open;
+existing history stays addressable. Active Turns, exact Session resumes,
+attached Agents, task workers and an already started Agent Loop retain their
+original identity. The header separates **New conversation model/reasoning**
+choices from the current Session readback. Its compact model control keeps the
+observed model and settings visible. Without a model observation it offers
+settings, with the missing-model explanation inside the disclosure rather than
+a permanent unknown-model label. Opening it shows the complete observation
+and optional new-conversation choices in place. Native catalog discovery begins
+when those choices are opened, rather than while reading an overview or typing
+an ordinary message. Closing or changing the executor cancels that read; retry
+remains explicit, and catalog failures do not replace the observed model.
+The same disclosure links to the existing ordinary-conversation defaults editor;
+the header does not need a second model-settings button. Refresh failures remain
+visible; successful status refreshes are announced without another header label.
+Effort and tier appear only when the native host reports
+them; Fast may be returned as `priority`. Model selection does not enable a
+LoopX Agent Loop: its separate settings own coordinator identity, token
+allowance and member bindings, and its start control remains explicit.
+
+Ordinary Goal/project conversations can choose an advertised reasoning effort
+alongside the model. Codex choices come from the selected account's model
+catalog, separately for each model. ACP choices use the host's
+[`thought_level` configuration category](https://agentclientprotocol.com/protocol/v1/session-config-options),
+and model selection is applied before reading its dependent options. An absent
+option is unavailable, never a guessed list of levels. Status-only answers are
+a separate read mode, not an executor or a model choice. Unknown actual models
+remain status text and never become a model option; catalog failure has a retry and
+does not claim to refresh the current model.
+
+An explicit pick applies when opening the next distinct ordinary conversation;
+it does not rewrite, interrupt or merge the previous conversation. The existing
+steward configuration editor remains its configuration owner. Clients can pass
+optional `agent_reasoning_effort` to `POST /api/chat/sessions` alongside
+`agent_model_id`; omitting it keeps existing defaults. The private Session
+retains the requested effort separately from the observed value, including
+after restart. Native start/resume and the subsequent prompt must retain the
+choice. Unsupported or unconfirmed explicit settings fail before a prompt is
+dispatched or a new LoopX Session is published. Attached hosts and running
+Agent Loops keep their own settings; a conflicting resume request is refused.
+Changing a choice neither runs a model prompt nor changes global native config.
+
+This reasoning-selector increment has isolated HTTP/File-store and native
+stdio qualification. Packaged visual/interaction, installed provider adoption
+and the shared original Lark conversation retain their separate acceptance;
+source transport tests do not certify those journeys.
+
+Managed Chat now displays only explicit public reasoning summaries, labelled
+**Reasoning summary**, inside the work-step disclosure. Raw `reasoning/textDelta`
+and completed reasoning content are excluded from presentation; the primary
+status remains **Working**. This changes the former raw-content fallback.
+Historical SSE replay also withholds unqualified reasoning text without
+rewriting the saved events. Commands, tools, public answers and step timing
+remain available. A provider's readable summary is not its hidden reasoning.
+
+User request cards and their confirmation show canonical `created_by` as the
+requesting Agent, separately from `bound_agent` / `blocks_agent` as the reply
+recipient. Missing author provenance is stated explicitly; the recipient never
+stands in for the author or gains authority from this display. Full request
+content is used when drafting a reply or asking for an explanation, preserving
+trailing conditions and URLs that compact card labels may omit.
 
 ## Experimental owner-local Codex App conversations
 
@@ -145,7 +246,15 @@ establishes task acceptance. Native record positions order and deduplicate pages
 bursts larger than a page between observations and incomplete appends. Older and
 newer pages remain reachable when the visible window reaches 300 records.
 Looking back pauses automatic insertion; new activity is disclosed without
-moving the reader. Source and content fingerprints reject stale detail reads;
+moving the reader. Scrolling up loads older history; scrolling down through the
+current window loads newer history and resumes live updates at the tail. No
+history paging buttons are required. The reader anchors the visible source
+record while extending or trimming its bounded window. Consecutive tool and
+activity records share a collapsed work-activity disclosure, while user and
+Agent messages remain primary. Expanding it retains original order, complete
+record access and explicit interruption/error or unavailable-record notices;
+record counts do not imply tool success or task completion.
+Source and content fingerprints reject stale detail reads;
 history replacement resets the visible window instead of mixing conversations.
 An interrupted or timed-out history read keeps the records already displayed
 and explains that updates resume automatically when the connection recovers.
@@ -173,7 +282,11 @@ Pages contain at most 100 records and scan approximately 2 MiB, allowing a whole
 larger record at a boundary. The reader skips up to eight metadata-only windows
 per read gesture or observation; it stops on visible work, the source boundary,
 a changed source or navigation away. Exhausting that bounded burst leaves the
-history controls available; it never scans the full rollout without a bound. Detail responses carry up to 24,000 characters.
+next scroll able to continue; it never scans the full rollout in one unbounded
+request. Short pages fill automatically from earlier history within the
+300-record window, without treating that automatic fill as a reader pause.
+Detail responses
+carry up to 24,000 characters.
 Records above the 8 MiB reader limit, malformed records and unsupported response
 types retain an explicit unavailable position. Non-text attachments are disclosed
 as unavailable. These limits remain coverage gaps, not a claim of complete native
@@ -185,7 +298,7 @@ saved records is **not token streaming**. When the original host is connected an
 not observed idle, the Agent page also subscribes to that exact owner's live
 state. Unfinished visible assistant text and supported tool work update in place;
 they are labelled as live observations. Looking back freezes insertion until
-**Back to latest**. Completion removes the transient row; saved history remains
+the reader scrolls back to the latest records. Completion removes the transient row; saved history remains
 the durable reader and the place to continue long output. Neither observed work
 nor its completion establishes Goal acceptance or a delivery receipt.
 
@@ -436,3 +549,51 @@ The integration is valuable if it improves:
 - time from "task is blocked" to "the right owner sees the blocker".
 
 These metrics are goal-control metrics, not model-quality scores.
+
+### Conversation presentation example
+
+The packaged Goal Chat separates executor, observed model, speed and reasoning;
+approval cards name the requesting Agent. This synthetic example illustrates
+presentation only: no model Turn or real approval is executed. Attached history
+keeps conversation primary and groups tool records without discarding errors.
+
+Ordinary managed Chat has one composer. Enter sends; while a Turn is running,
+it queues the message for the next Turn in the same Session. Shift+Enter inserts
+a newline. Command+Enter explicitly steers the current Turn when the executor
+supports it, and sends normally when idle. Input-method candidate confirmation
+does not send. The adjustment shortcut focuses this same composer. Attached
+Sessions and LoopX mode retain their existing delivery rules.
+
+The browser requests FIFO delivery with `delivery: "queue"` on
+`POST /api/chat/sessions/{session_id}/turns`, retaining `client_turn_id` and image
+attachments for an uncertain receipt. The existing Session queue owns ordering
+and duplicate suppression; acceptance is not execution or completion. Omitting
+`delivery` preserves direct submission and its busy rejection. Full queues and
+pre-admission context failures report non-delivery so the original draft can be
+edited safely. A refused browser-storage write leaves the draft editable in the
+composer, without recording an uncertain delivery for an attempt that was never
+dispatched. A genuinely uncertain request still retries its exact durable identity.
+This does not widen project grants or authorize another Session.
+
+Queued acknowledgements do not show execution duration or completion. Short
+answers and steering instructions reconcile their canonical message identities
+and timestamps as well as long answers; an admission/history race cannot add
+a second copy. Before readback, a terminal work row uses its observed completion
+rather than its preparation time. Refresh preserves the same conversation order.
+If a confirmed instruction's history refresh fails, the existing history notice
+offers a read-only retry, including cached Sessions that may contain new records.
+Delivery remains confirmed; retrying history never resubmits the instruction.
+
+![Goal Chat model and request provenance](../development/assets/chat-observability/first-screen.png)
+
+![Attached conversation and folded work activity](../development/assets/chat-observability/attached-history.png)
+
+The shared steward header also retains readable title and runtime diagnostics
+when the actual model is unknown. These packaged synthetic views exercise both
+390px states; the optional Goal model menu stays within the viewport.
+
+| Model unavailable | Native observation available |
+| --- | --- |
+| ![Steward with unknown model](../development/assets/chat-observability/manager-unknown-phone.png) | ![Steward with known model](../development/assets/chat-observability/manager-known-phone.png) |
+
+![Optional model choices on a phone](../development/assets/chat-observability/goal-model-menu-phone.png)

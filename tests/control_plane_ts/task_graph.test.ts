@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { projectGoalTaskGraphTopology, projectTaskGraphTopology, TASK_GRAPH_GOAL_TOPOLOGY_REQUEST,
+import { GOAL_TASK_MAP_REQUEST, projectGoalTaskMap, projectGoalTaskGraphTopology, projectTaskGraphTopology, TASK_GRAPH_GOAL_TOPOLOGY_REQUEST,
   TASK_GRAPH_TOPOLOGY_REQUEST } from "../../loopx/control_plane/work_items/task_graph.ts";
 import { projectRelations, todoRef } from "../../loopx/control_plane/work_items/planning_relations.ts";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
@@ -183,4 +183,131 @@ test("production-scale canonical fixture supports mixed ancestry without changin
   assert.deepEqual(new Set((result.edges as JsonObject[]).map(e => e.enforcement)),
     new Set(["lineage_only", "typed_condition"]));
   assert.equal(JSON.stringify(fixture.projection), before);
+});
+
+const mapRow = (todo_id: string, extra: JsonObject = {}): JsonObject => ({
+  ...row(todo_id, {done: false}), is_user: false, is_monitor: false, ...extra,
+});
+function goalMap(items: JsonObject[], extra: JsonObject = {}): JsonObject {
+  return projectGoalTaskMap({schema_version: GOAL_TASK_MAP_REQUEST, goal_id: "goal_test",
+    source_truncated: false, items,
+    read_facts: {observed_at: "2026-10-01T00:00:00Z", source_read_at: "2026-10-01T00:00:00Z",
+      source_count: items.length}, ...extra});
+}
+const mapProjection = (response: JsonObject) => response.projection as JsonObject;
+
+test("goal map composes topology and materialization instructions without emitting source-only facts", () => {
+  const response = goalMap([
+    mapRow("todo_gate", {is_user: true, is_monitor: true, title: "\uFEFF", state: null, owner_agent: [],
+      task_domain: {}, unblocks_todo_id: "todo_work"}),
+    mapRow("todo_work", {title: {}, state: "invented", owner_agent: {},
+      task_domain: [], private_notes: "must not escape"}),
+    mapRow("todo_monitor", {is_monitor: true}),
+  ], {goal_id: " \uFEFFgoal_test\uFEFF "});
+  const envelope = mapProjection(response).projection_envelope as JsonObject;
+  assert.equal(envelope.fresh, true);
+  assert.equal(envelope.complete, true);
+  const legacy = structuredClone(response);
+  delete (legacy.projection as JsonObject).projection_envelope;
+  assert.deepEqual(legacy, {
+    schema_version: "goal_task_map_result_v0",
+    projection: {
+      schema_version: "goal_task_map_v0", mode: "read_only", goal_id: " \uFEFFgoal_test\uFEFF ",
+      limits: {node_limit: 120, emitted_node_count: 3, omitted_node_count: 0, source_truncated: false,
+        missing_endpoint_count: 0, cycle_edge_count: 0, topology_complete: true},
+      nodes: [
+        {kind: "gate", depth: 0, refs: {todo_ids: ["todo_gate"]}},
+        {kind: "deliverable", depth: 1, refs: {todo_ids: ["todo_work"]}},
+        {kind: "monitor", depth: 0, refs: {todo_ids: ["todo_monitor"]}},
+      ],
+      edges: [{relation: "depends_on", enforcement: "typed_lifecycle",
+        reason: "Work has a typed lifecycle dependency on the linked unblocking Todo."}],
+    },
+    node_identity_prefixes: ["node_gate", "node_todo", "node_todo"],
+    node_metadata_fields: [[], ["owner_agent", "task_domain"], ["owner_agent", "task_domain"]],
+    edge_identities: [{from_node_index: 1, to_node_index: 0, source_relation: "unblocks"}],
+  });
+});
+
+test("goal map refuses duplicate canonical render-fact IDs", () => {
+  assert.throws(() => goalMap([
+    mapRow("todo_same", {is_user: true}), mapRow("todo_same"),
+  ]), /Duplicate/);
+});
+
+test("goal map returns a complete empty map and preserves an empty Goal ID", () => {
+  const response = goalMap([], {goal_id: ""});
+  assert.equal((mapProjection(response).projection_envelope as JsonObject).complete, true);
+  delete (response.projection as JsonObject).projection_envelope;
+  assert.deepEqual(response, {
+    schema_version: "goal_task_map_result_v0",
+    projection: {schema_version: "goal_task_map_v0", mode: "read_only", goal_id: "",
+      limits: {node_limit: 120, emitted_node_count: 0, omitted_node_count: 0, source_truncated: false,
+        missing_endpoint_count: 0, cycle_edge_count: 0, topology_complete: true}, nodes: [], edges: []},
+    node_identity_prefixes: [], node_metadata_fields: [], edge_identities: [],
+  });
+});
+
+test("goal map seals source age, unknown reads and unrenderable source coverage in the existing owner", () => {
+  const facts = {observed_at: "2026-10-01T00:06:00Z", source_read_at: "2026-10-01T00:00:00Z", source_count: 2};
+  const envelope = mapProjection(goalMap([mapRow("todo_visible")], {read_facts: facts})).projection_envelope as JsonObject;
+  assert.equal(envelope.fresh, false);
+  assert.equal(envelope.complete, false);
+  assert.deepEqual((envelope.coverage as JsonObject).omitted,
+    [{reason: "unrenderable_todos", count: 1, refs: []}]);
+  const unknown = mapProjection(goalMap([], {read_facts: {...facts, source_read_at: null, source_count: 0}})).projection_envelope as JsonObject;
+  assert.equal(unknown.fresh, false);
+  assert.equal((unknown.sources as JsonObject[])[0]!.read_status, "not_read");
+  assert.throws(() => goalMap([mapRow("todo_visible")], {read_facts: {...facts, source_count: 0}}), /source count/);
+});
+
+test("goal map carries missing endpoints, source truncation and dependency cycles into limits", () => {
+  const response = goalMap([
+    mapRow("todo_alpha", {resume_when: "todo_done:todo_beta"}),
+    mapRow("todo_beta", {resume_when: "todo_done:todo_alpha"}),
+    mapRow("todo_gamma", {resume_when: "todo_done:todo_filtered"}),
+  ], {source_truncated: true});
+  const projection = mapProjection(response);
+  assert.deepEqual(projection.limits, {node_limit: 120, emitted_node_count: 3, omitted_node_count: 0,
+    source_truncated: true, missing_endpoint_count: 1, cycle_edge_count: 1, topology_complete: false});
+  assert.deepEqual((projection.nodes as JsonObject[]).map(node => node.depth), [1, 0, 0]);
+  assert.deepEqual(response.edge_identities, [
+    {from_node_index: 0, to_node_index: 1, source_relation: "resumes_when"},
+    {from_node_index: 1, to_node_index: 0, source_relation: "resumes_when"},
+  ]);
+});
+
+test("goal map admits active work and direct prerequisites before filling the 120-node cap", () => {
+  const response = goalMap([
+    ...Array.from({length: 121}, (_, index) => mapRow(`todo_old_${index}`, {done: true})),
+    mapRow("todo_open", {resume_when: "todo_done:todo_old_120"}), mapRow("todo_other"),
+  ]);
+  const projection = mapProjection(response);
+  const ids = (projection.nodes as JsonObject[]).map(node => (node.refs as JsonObject).todo_ids);
+  assert.equal(ids.length, 120);
+  assert.deepEqual(ids.slice(116), [["todo_old_116"], ["todo_old_120"], ["todo_open"], ["todo_other"]]);
+  assert.deepEqual(projection.limits, {node_limit: 120, emitted_node_count: 120, omitted_node_count: 3,
+    source_truncated: false, missing_endpoint_count: 0, cycle_edge_count: 0, topology_complete: false});
+  assert.deepEqual(response.edge_identities,
+    [{from_node_index: 118, to_node_index: 117, source_relation: "resumes_when"}]);
+});
+
+test("goal map decodes node-kind facts after admission", () => {
+  const response = goalMap([
+    ...Array.from({length: 120}, (_, index) => mapRow(`todo_active_${index}`)),
+    mapRow("todo_omitted", {done: true, is_user: "invalid", is_monitor: []}),
+  ]);
+  assert.equal((mapProjection(response).limits as JsonObject).omitted_node_count, 1);
+});
+
+test("goal map rejects malformed wire types at each consumed boundary", () => {
+  for (const extra of [{schema_version: "unknown"}, {goal_id: null}, {source_truncated: "false"}, {items: {}}]) {
+    assert.throws(() => goalMap([], extra));
+  }
+  assert.throws(() => projectGoalTaskMap({schema_version: GOAL_TASK_MAP_REQUEST,
+    goal_id: "goal_test", source_truncated: false, items: [null]}), /object/);
+  for (const extra of [{todo_id: 1}, {todo_id: null}, {todo_id: ""}, {todo_id: undefined},
+    {done: "false"}, {successor_todo_ids: [1]}, {unblocks_todo_id: true}, {is_user: "false"}, {is_monitor: 0}]) {
+    assert.throws(() => goalMap([mapRow("todo_invalid", extra)]));
+  }
 });

@@ -52,6 +52,7 @@ from .chat_manager import (
 from .chat_session_open import open_chat_session
 from .chat_ssh_source_api import SshSourceRequestMixin
 from .chat_store import ChatSessionStore, normalize_agent_model_id
+from .capabilities.native_chat.model_settings import normalize_agent_reasoning_effort
 from .extensions.lark.private_conversation_api import PrivateConversationRequestMixin, PRIVATE_CONVERSATIONS_PATH
 from .extensions.lark.conversation_identity import observe_lark_conversation_identity
 from .extensions.lark.private_conversations import LarkPrivateConversations
@@ -98,6 +99,7 @@ from .extensions.runtime import (
 from .history import load_registry
 from .chat_completed_todos import CompletedTodoPages, CompletedTodoRequestMixin
 from .presentation.explore_results_api import ExploreResultsRequestMixin
+from .presentation.research_analysis_api import RESEARCH_ANALYSIS_PATH, ResearchAnalysisRequestMixin
 from .chat_todo_detail import TodoDetailRequestMixin
 from .kiro_cli_goal_mode import KIRO_CLI_BIN
 from .paths import resolve_runtime_root
@@ -488,6 +490,7 @@ class ChatRequestHandler(
     PrivateConversationRequestMixin,
     CompletedTodoRequestMixin,
     ExploreResultsRequestMixin,
+    ResearchAnalysisRequestMixin,
     TodoDetailRequestMixin,
     AttachedSessionRequestMixin,
     SshSourceRequestMixin,
@@ -624,7 +627,7 @@ class ChatRequestHandler(
     def _create_session(self) -> None:
         try:
             body = self._read_json()
-            unknown = set(body) - {"goal_id", "agent_id", "agent_model_id", "mode", "context_kind", "project_ref"}
+            unknown = set(body) - {"goal_id", "agent_id", "agent_model_id", "agent_reasoning_effort", "mode", "context_kind", "project_ref"}
             if unknown:
                 raise ValueError("unknown session field")
             goal_id = _compact_text(body.get("goal_id"), limit=160) or self.server.selected_goal_id or ""
@@ -635,6 +638,8 @@ class ChatRequestHandler(
             requested_endpoint = _compact_text(body.get("agent_id"), limit=80)
             model_value = body.get("agent_model_id")
             requested_model = normalize_agent_model_id(model_value) if model_value not in (None, "") else None
+            requested_effort = (normalize_agent_reasoning_effort(body["agent_reasoning_effort"])
+                                if body.get("agent_reasoning_effort") is not None else None)
             mode = _compact_text(body.get("mode"), limit=40) or "resume_latest"
             context_kind = _compact_text(body.get("context_kind"), limit=40) or "goal"
             if context_kind not in {"goal", "manager", "project"}:
@@ -675,6 +680,7 @@ class ChatRequestHandler(
                 mode=mode,
                 requested_endpoint=requested_endpoint,
                 agent_model_id=requested_model,
+                **({"agent_reasoning_effort": requested_effort} if requested_effort is not None else {}),
                 **({"project_ref": project_ref} if context_kind == "project" else {}),
             )
         except CodexChatAgentError as exc:
@@ -702,16 +708,21 @@ class ChatRequestHandler(
     def _agent_model_options(self) -> None:
         try:
             body = self._read_json()
-            if set(body) != {"agent_id"}:
+            if "agent_id" not in body or set(body) - {"agent_id", "goal_id", "agent_model_id"}:
                 raise ValueError("agent_id is required")
             agent_id = _compact_text(body.get("agent_id"), limit=80)
             if not agent_id:
                 raise ValueError("agent_id is required")
+            goal_id = _compact_text(body.get("goal_id"), limit=160) or None
+            if goal_id:
+                self._registry_and_goal(goal_id)
+            requested_model = normalize_agent_model_id(body["agent_model_id"]) if body.get("agent_model_id") is not None else None
             # Discovery is deliberately bounded to a selected, known endpoint.
             # It opens no persisted LoopX Chat session and exposes no command or
             # local workspace data to the browser.
             result = self.server.runtime_controller.inspect_agent_model_options(
-                agent_id, work_dir=Path.cwd()
+                agent_id, work_dir=Path.cwd(), **({"goal_id": goal_id} if goal_id else {}),
+                **({"agent_model_id": requested_model} if requested_model else {}),
             )
         except CodexChatAgentError as exc:
             self._send_error(str(exc), status=424, gate=exc.gate, error_code=exc.error_code)
@@ -781,12 +792,15 @@ class ChatRequestHandler(
                 status=404,
                 session_invalidated=True,
                 turn_replay_safe=True,
+                delivery_state="not_delivered",
             )
             return
         try:
             body = self._read_json(max_bytes=CHAT_TURN_MAX_BODY_BYTES)
-            if set(body) - {"message", "client_turn_id", "attachments"}:
+            if set(body) - {"message", "client_turn_id", "attachments", "delivery"}:
                 raise ValueError("unknown turn field")
+            if body.get("delivery") not in (None, "queue"):
+                raise ValueError("delivery must be queue when supplied")
             validate_chat_turn_envelope(body)
             message = str(body.get("message") or "").strip()
             if not message:
@@ -799,13 +813,21 @@ class ChatRequestHandler(
         try:
             context = self._session_context(session)
             runtime_objective = str(context["objective"] or context["title"])
-            turn, created = self.server.runtime_controller.submit_turn(
+        except (ValueError, KeyError) as exc:
+            # No Turn has been admitted when its owning context cannot resolve.
+            self._send_error(str(exc), turn_replay_safe=True, delivery_state="not_delivered")
+            return
+        try:
+            submit = (self.server.runtime_controller.enqueue_turn if body.get("delivery") == "queue"
+                      else self.server.runtime_controller.submit_turn)
+            turn, created = submit(
                 session_id=session_id,
                 client_turn_id=client_turn_id,
                 message=message,
                 attachments=attachments,
                 work_dir=context["project"],
                 objective=runtime_objective,
+                **({"origin": "web"} if body.get("delivery") == "queue" else {}),
             )
             if body.get("client_turn_id"):
                 turn_id = str(turn["turn_id"])
@@ -855,6 +877,10 @@ class ChatRequestHandler(
             )
             return
         except RuntimeError as exc:
+            if str(exc) == "session_queue_full":
+                self._send_error("Session queue is full; the message was not accepted.", status=429,
+                                 error_code="session_queue_full", delivery_state="not_delivered", turn_replay_safe=True)
+                return
             self._send_json(
                 {
                     "ok": False,
@@ -906,6 +932,8 @@ class ChatRequestHandler(
         )
 
     def _turn_events(self, session_id: str, turn_id: str) -> None:
+        from .presentation.codex_activity import public_activity_event
+
         if self.server.chat_store.load_turn(session_id, turn_id) is None:
             self._send_error("chat turn was not found", status=404)
             return
@@ -935,6 +963,7 @@ class ChatRequestHandler(
                 events = self.server.chat_store.events_after(session_id, turn_id, cursor)
                 for event in events:
                     cursor = str(event["event_id"])
+                    event = public_activity_event(event)
                     data = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
                     self.wfile.write(
                         f"id: {cursor}\nevent: {event['kind']}\ndata: {data}\n\n".encode("utf-8")
@@ -1525,6 +1554,8 @@ class ChatRequestHandler(
             "/api/chat/completed-todos": self._completed_todos,
             "/api/chat/goal-results": self._goal_results,
             "/api/chat/explore-results": self._explore_results,
+            RESEARCH_ANALYSIS_PATH: self._research_analysis_read,
+            RESEARCH_ANALYSIS_PATH + "/citation": self._research_analysis_read,
             CHAT_SESSIONS_PATH: self._list_sessions,
             CHAT_ACTIONS_PATH: self._action_list,
             CHAT_GOAL_CONTEXTS_PATH: self._goal_contexts,
@@ -1572,6 +1603,8 @@ class ChatRequestHandler(
         if self._dispatch_zcode_goal(path, apply=True):
             return
         post_dispatch = {
+            RESEARCH_ANALYSIS_PATH: self._research_analysis_write,
+            RESEARCH_ANALYSIS_PATH + "/cancel": self._research_analysis_write,
             CHAT_SESSIONS_PATH: self._create_session,
             CHAT_AGENT_MODEL_OPTIONS_PATH: self._agent_model_options,
             CHAT_ATTACH_SESSION_PATH: self._attach_session,

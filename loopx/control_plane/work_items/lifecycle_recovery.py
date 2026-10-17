@@ -1,7 +1,7 @@
 """Adapt canonical lifecycle facts to the existing typed replan owner."""
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from .replan_semantics_codec import project_replan_semantics
@@ -42,6 +42,7 @@ def attach_receipt_replan_context(
     stride_strategy: str,
     explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None,
     goal_acceptance_contract: Mapping[str, Any] | None,
+    todo_items: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Contextualize pending receipt actions without borrowing a new frontier."""
     from .progress_observation import build_replan_context
@@ -53,12 +54,14 @@ def attach_receipt_replan_context(
         obligations.append(pending["source_obligation"])
     if not obligations:
         return current
+    todos = list(todo_items) if todo_items is not None else None
     explore_context = explore_reader(goal_id, agent_id) if stride_strategy != "off" and explore_reader else None
     for obligation in obligations:
         obligation["replan_context"] = build_replan_context(
             obligation, goal_id=goal_id, agent_id=agent_id, newest_first_runs=(),
             source_status=source_status, stride_strategy=stride_strategy,
             explore_context=explore_context, goal_acceptance_contract=goal_acceptance_contract,
+            todo_items=todos,
         )
     if pending:
         pending["obligation"]["replan_context"] = pending["source_obligation"]["replan_context"]

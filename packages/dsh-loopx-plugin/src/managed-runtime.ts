@@ -45,9 +45,16 @@ export function pluginPythonCandidates(
     }
   }
   // Preserve python3-first behavior; callers still probe the actual version/pip.
-  return ['python3', ...[...discovered]
+  // `python` is a bare last-resort name, not a PATH scan result: a python.org
+  // Windows install registers `python.exe`, and the host's `python3` name can be
+  // the WindowsApps alias that never starts Python. The same fallback pair is
+  // used by the Claude Code adapter installer
+  // (loopx/claude_goal_mode/scripts/install.py), and the callers above still
+  // reject an interpreter that fails the version/pip probe.
+  const discoveredNames = [...discovered]
     .sort(([nameA, minorA], [nameB, minorB]) => minorB - minorA || nameA.localeCompare(nameB))
-    .map(([name]) => name)]
+    .map(([name]) => name)
+  return ['python3', ...discoveredNames, 'python']
 }
 
 export function pluginAgentsHome(options: LoopXRuntimeOptions): string {

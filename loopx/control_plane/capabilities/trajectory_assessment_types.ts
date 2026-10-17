@@ -29,3 +29,15 @@ export interface TrajectoryAssessment {
     assessed_fraction: number | null; missing_data_bounds: [number, number] | null}>;
   limitations: string[];
 }
+
+/** Provider-observed facts, separate from inferred episode judgments. */
+export interface TrajectorySolverUsage {
+  session_id: string; method: 'codex_complete_session_counters_v1';
+  start: string; end: string; completed_turns: number; counter_observations: number;
+  input_tokens: number; cached_input_tokens: number; uncached_input_tokens: number; output_tokens: number;
+  elapsed_seconds: number; turn_elapsed_seconds: number;
+  turns: Array<{turn_id: string; start: string; end: string; first_line: number; last_line: number;
+    elapsed_seconds: number; usage: {input_tokens: number; cached_input_tokens: number;
+      uncached_input_tokens: number; output_tokens: number}}>;
+  limitations: string[];
+}

@@ -26,3 +26,16 @@ export function leaseRepositoryRejection(todo: {task_repository?: unknown} | nul
   return current !== null && frozen.toLowerCase() === current.toLowerCase()
     ? null : "lease_repository_divergence";
 }
+
+/** A released owner's grant is immutable history during inert administration.
+ * Actor/claim admission and any explicit execution proof are checked by the
+ * caller. Execution, foreign history and unreleased drift keep the strict fence. */
+export function ownerAdministrativeRepositoryRejection(
+  todo: {task_repository?: unknown; claimed_by?: unknown},
+  lease: {write_repository?: unknown; status?: unknown; owner?: unknown},
+  actorAgentId: string | null,
+): string | null {
+  const rejection = leaseRepositoryRejection(todo, lease); // Validate history before any exception.
+  return rejection !== null && lease.status === "released" && actorAgentId !== null &&
+    lease.owner === actorAgentId && todo.claimed_by === actorAgentId ? null : rejection;
+}

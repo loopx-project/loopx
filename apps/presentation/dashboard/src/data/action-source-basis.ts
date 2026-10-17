@@ -9,8 +9,10 @@ const todoBasis = {
 
 // Decode existing backend contracts; effect authority and stale-source checks
 // remain in ChatActionService and the owning Todo/Goal services.
+export const todoUpdateSourceBasisSchema = z.object({ schema_version: z.literal("loopx_chat_canonical_update_basis_v0"), ...todoBasis });
+export type TodoUpdateSourceBasis = z.infer<typeof todoUpdateSourceBasisSchema>;
 export const actionSourceBasisSchema = z.discriminatedUnion("schema_version", [
-  z.object({ schema_version: z.literal("loopx_chat_canonical_update_basis_v0"), ...todoBasis }),
+  todoUpdateSourceBasisSchema,
   z.object({ schema_version: z.literal("loopx_chat_canonical_terminal_basis_v0"), ...todoBasis }),
   z.object({
     schema_version: z.literal("loopx_goal_lifecycle_source_basis_v1"),

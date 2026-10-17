@@ -102,7 +102,8 @@ export function GoalLoopXMode({sessionId, onPrepare, onExecute, onChange}: {
     {(error || readError) && !panel ? <p className="personal-composer-error" role="alert">{error || readError}</p> : null}
     <dialog className="goal-loopx-dialog" ref={dialog} aria-labelledby="goal-loopx-dialog-title" onClose={() => setPanel(null)} onClick={event => {if (event.target === event.currentTarget) setPanel(null);}}>
       {panel ? <div className="goal-loopx-dialog-content">
-        <header><h2 id="goal-loopx-dialog-title">{panel === "team" ? (zh ? "团队执行情况" : "Team execution") : (zh ? "运行设置" : "Execution settings")}</h2><button type="button" autoFocus aria-label={zh ? "关闭" : "Close"} onClick={() => setPanel(null)}><X size={18}/></button></header>
+        <header><h2 id="goal-loopx-dialog-title">{panel === "team" ? (zh ? "团队执行情况" : "Team execution") : (zh ? "Agent Loop 运行设置" : "Agent Loop settings")}</h2><button type="button" autoFocus aria-label={zh ? "关闭" : "Close"} onClick={() => setPanel(null)}><X size={18}/></button></header>
+        {panel === "settings" ? <p>{zh ? "对话执行器、当前模型和推理强度见页面上方。这里管理持续推进 Goal 的协调身份、额度和成员绑定；保存设置不会自动开启 Agent Loop。" : "The conversation executor, current model and reasoning effort appear above. These settings manage the Goal coordinator, allowance and member bindings; saving does not start the Agent Loop."}</p> : null}
         {error || readError ? <p className="personal-composer-error" role="alert">{error || readError}</p> : null}
         {panel === "team" && sessionId && !readError ? <GoalTeamWork key={`${sessionId}:${snapshot?.settings.agent_id}:${snapshot?.settings.execution_config}`} sessionId={sessionId} members={snapshot?.members ?? []} zh={zh} canMessage={active && !snapshot?.paused && !readError} ingress={snapshot?.ingress ?? []}/> : null}
         {panel === "team" ? <div className="goal-team-control">

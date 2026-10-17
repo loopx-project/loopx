@@ -168,8 +168,10 @@ def main() -> None:
     module_source = MODULE.read_text(encoding="utf-8")
     init_source = INIT.read_text(encoding="utf-8")
     project_skill = PROJECT_SKILL.read_text(encoding="utf-8")
-    reward_skill = project_skill.split("## Record Human Reward", 1)[1].split(
-        "## Multi-Project Status", 1
+    require("references/handoff-and-feedback.md" in project_skill, "reward procedure must be routed from skill")
+    handoff = PROJECT_SKILL.parent / "references/handoff-and-feedback.md"
+    reward_skill = handoff.read_text(encoding="utf-8").split("## Record Human Reward", 1)[1].split(
+        "## Capability Context And Child Models", 1
     )[0]
 
     for marker in (

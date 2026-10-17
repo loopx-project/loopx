@@ -1,6 +1,7 @@
 import {useEffect, useId, useMemo, useRef, useState} from "react";
 import {defaultParseSearch} from "@tanstack/react-router";
-import {ArrowLeft, Circle, FlaskConical, GitBranch, RefreshCw, Sparkles} from "lucide-react";
+import {ArrowLeft, Circle, FlaskConical, GitBranch, RefreshCw} from "lucide-react";
+import {ResearchAnalysisButton, ResearchAnalysisPanel, ResearchAnalysisScope, ResearchProgressSummary, useResearchAnalysis} from "./goal-research-analysis";
 import {buildExploreTimeline, parseExploreFindingSections} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
 import {GoalResearchTimeline} from "./goal-research-timeline";
 import {requestJson} from "../../data/chat";
@@ -25,6 +26,7 @@ const selectedFromUrl = (goal: string): Selection => {
 /** An effect-free history consumer. Its source is Explore, not raw sessions or
  * a judge. All recorded updates survive; unsupported analysis stays unavailable. */
 export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0}: {goalId: string; active: boolean; zh: boolean; refreshRevision?: number}) {
+  const analysis = useResearchAnalysis(goalId, active, zh);
   const [read, setRead] = useState<Read>({events: [], total: null, complete: false});
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
@@ -43,7 +45,6 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0}: {
     title: "研究历程", loading: "正在读取完整记录", reading: "读取中", refresh: "刷新记录",
     all: "回到全图", scope: "Explore 已记录历史", coverage: "其他来源覆盖、尝试发生时序尚未核验",
     partial: "历史尚未完整载入", failure: "无法继续读取历史。已读记录保留；请重试。",
-    analysis: "深度分析", unavailable: "尚未接入轨迹评测；浏览历史不会调用 Agent。",
     time: "记录时间（本地）", unknown: "时间未记录", records: "条记录", evidence: "已记录依据",
     interpretation: "独立检查与实际采用尚未核验", versions: "来源与版本引用", updates: "历史记录",
     changes: "次记录", findings: "条结论", links: "显式关联", missing: "部分关联的来源节点尚未记录",
@@ -52,7 +53,6 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0}: {
     title: "Research history", loading: "Reading the full recorded history", reading: "Reading", refresh: "Refresh history",
     all: "Whole graph", scope: "Recorded Explore history", coverage: "Other-source coverage and attempt-time coverage are unverified",
     partial: "History is not fully loaded", failure: "Cannot continue reading history. Loaded records remain; retry.",
-    analysis: "Deep analysis", unavailable: "Trajectory assessment is not connected. Reading history never invokes an Agent.",
     time: "Recorded time (local)", unknown: "Time not recorded", records: "records", evidence: "Recorded evidence",
     interpretation: "Independent checking and actual adoption are unverified", versions: "Source and version references", updates: "History",
     changes: "records", findings: "findings", links: "Explicit relationships", missing: "Some linked source nodes are not recorded",
@@ -165,20 +165,23 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0}: {
     });
   };
   const choose = (id: string, focus = true) => select({nodes: id ? [id] : [], day: null}, focus);
-  if (!busy && !error && !read.events.length) return null;
+  if (!busy && !error && !read.events.length && !analysis.pack && !analysis.snapshot?.catalog.packs.length) return null;
   return <section className="research-history" aria-label={copy.title} aria-busy={busy}>
     <header className="research-history-heading"><div><h2>{copy.title}</h2>
       <p>{copy.scope}{value?.startAt ? <> · {copy.time} <time>{timeLabel(value.startAt)}</time> — <time>{timeLabel(value.endAt)}</time></> : null}</p></div>
       <div className="research-history-controls">
         {selection.nodes.length || selection.day !== null ? <button type="button" onClick={() => {choose("", false); graph.current?.focus();}}><ArrowLeft size={14} aria-hidden/>{copy.all}</button> : null}
         <div className="research-lens" role="group" aria-label={zh ? "视图" : "View"}>{(["timeline", "graph"] as const).map(item => <button key={item} type="button" aria-pressed={lens === item} onClick={() => chooseLens(item)}>{item === "timeline" ? (zh ? "时间线" : "Timeline") : (zh ? "关系图" : "Graph")}</button>)}</div>
-        <button type="button" disabled title={copy.unavailable} aria-describedby={`${presentationId}-analysis`}><Sparkles size={14} aria-hidden/>{copy.analysis}</button>
+        <ResearchAnalysisButton analysis={analysis}/>
         <button type="button" aria-label={copy.refresh} disabled={busy} onClick={() => setRevision(n => n + 1)}><RefreshCw size={15} aria-hidden/></button>
       </div></header>
     <p className="research-history-coverage" role="status">{busy ? `${copy.reading} ${loaded}${read.total ? ` / ${read.total}` : ""}`
       : read.total === null ? (zh ? "来源尚未读到" : "Source has not been read")
         : `${read.events.length} / ${read.total} ${copy.records}${read.complete ? "" : ` · ${copy.partial}`}`} · {copy.coverage}</p>
     {error || history.error ? <p role="alert" className="research-history-error">{copy.failure} <small>{error || history.error}</small></p> : null}
+    <ResearchAnalysisScope analysis={analysis}/>
+    <ResearchProgressSummary analysis={analysis}/>
+    <ResearchAnalysisPanel analysis={analysis}/>
     {busy && !read.events.length ? <div className="research-history-loading" role="status">{copy.loading}…</div> : null}
     {value?.nodes.length ? <div className={`research-history-layout${selected || selectedMembers?.length ? " has-selection" : ""}`}>
       {lens === "timeline" && timeline ? <div className="research-history-canvas is-timeline" ref={graph} tabIndex={-1}>
@@ -249,6 +252,5 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0}: {
       {recordsOpen ? <><ol className="research-history-records">{value.events.slice(0, recordLimit).map(event => <li key={event.event_id}><time>{timeLabel(event.recorded_at)}</time><span>{event.title} · {stateLabel(event.status)}{event.summary ? ` — ${event.summary}` : ""}</span>{event.parent_id ? <code>{copy.group}: {event.parent_id}</code> : null}{event.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}{event.run_id ? <code>{event.run_id}</code> : null}</li>)}</ol>
         {recordLimit < value.events.length ? <button type="button" onClick={() => setRecordLimit(n => n + 50)}>{zh ? "继续展开记录" : "Show more records"} · {Math.min(recordLimit, value.events.length)} / {value.events.length}</button> : null}</> : null}
     </details> : null}
-    <p className="research-history-note" id={`${presentationId}-analysis`}>{copy.unavailable}</p>
   </section>;
 }

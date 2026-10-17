@@ -2,8 +2,9 @@ import {useDeliveryReview} from "./delivery-review-state";
 import {useGoalWorkspaceDigest} from "./goal-masthead";
 import { goalCreateRequest, goalCreationAgentId } from "./goal-create-request";
 import { todoCompletionPreviewFeedback, todoCompletionProofRequired } from "./todo-completion-feedback";
-import { readSteeringRequest, retainSteeringRequest, retireSteeringRequest } from "./steering-recovery";
+import { readSteeringRequest, retainSteeringRequest, retireSteeringRequest, legacySteeringRequests, restoreLegacySteeringRequest } from "./steering-recovery";
 import { useConversationInputState } from "./use-conversation-input-state";
+import { composerKeyAction } from "./composer-keyboard";
 import type { ConversationHistoryStatus } from "../../data/use-conversation-history";
 import { GoalDraftCard } from "./goal-draft-card";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
@@ -27,6 +28,7 @@ import {
   fetchGoalChannelTargets,
   fetchLarkConnections,
   fetchLoopXMode,
+  loadTypedAction,
   previewTypedAction,
   setupGoalChannel,
   stewardPrompts,
@@ -385,7 +387,7 @@ function ManagerConversationTray({
   onSuggestReply,
   onOpenConversation,
   onInterruptTurn,
-  onSteerTurn,
+  onAdjustTurn,
   onCancelPreparation,
   title,
 }: {
@@ -397,7 +399,7 @@ function ManagerConversationTray({
   onSuggestReply?: (text: string) => void;
   onOpenConversation: () => void;
   onInterruptTurn?: (turnId: string) => Promise<void>;
-  onSteerTurn?: (turnId: string, text: string, ingressId: string) => Promise<void>;
+  onAdjustTurn?: (turnId: string) => void;
   onCancelPreparation?: () => void;
   title?: string;
 }) {
@@ -456,7 +458,7 @@ function ManagerConversationTray({
             <strong>{message.role === "user" ? t("common.you") : message.agentLabel ?? agentLabel ?? t("header.manager")}</strong>
             <div className="personal-manager-conversation-bubble">
               {message.role === "user" ? <p>{message.text}</p> : <MarkdownText text={message.text} />}
-              {message.role === "assistant" ? <MessageActivity message={message} onInterruptTurn={onInterruptTurn} onSteerTurn={onSteerTurn} onCancelPreparation={onCancelPreparation} /> : null}
+              {message.role === "assistant" ? <MessageActivity message={message} onInterruptTurn={onInterruptTurn} onAdjustTurn={onAdjustTurn} onCancelPreparation={onCancelPreparation} /> : null}
               {message.role === "assistant" && !message.pending && message.goalDraft ? <GoalDraftCard draftId={`${message.sourceSessionId ?? ""}:${message.id}`} draft={message.goalDraft} onReview={onReviewGoalDraft} onSuggest={onSuggestReply}/> : null}
               <CollaborationCard request={message.collaboration} />
               <ReturnDeliveryStatus delivery={message.returnDelivery} />
@@ -778,6 +780,7 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
         : proposal.summary;
   return {
     actionKind: proposal.action_kind,
+    todoId: typeof proposal.normalized_parameters.todo_id === "string" ? proposal.normalized_parameters.todo_id : undefined,
     reviewPlan,
     fields: proposal.action_kind === "operation.execute"
       ? operationProposalFields(proposal, reviewPlan, t)
@@ -917,6 +920,8 @@ export function PersonalWorkspacePage({
   typedActionsRevision = 0,
   selectedAgentId: controlledAgentId,
   selectedAgentModelId,
+  selectedAgentModelReadback,
+  selectedAgentReasoningEffort,
   selectedGoalId: controlledGoalId,
   statusSourceControl,
   serviceNotice,
@@ -946,6 +951,8 @@ export function PersonalWorkspacePage({
   typedActionsRevision?: number;
   selectedAgentId?: string;
   selectedAgentModelId?: string;
+  selectedAgentModelReadback?: import("../../data/chat").ChatSessionSummary;
+  selectedAgentReasoningEffort?: string;
   selectedGoalId?: string | null;
   statusSourceControl?: StatusSourceControl;
   serviceNotice?: ReactNode;
@@ -1033,6 +1040,7 @@ export function PersonalWorkspacePage({
   const followConversationRef = useRef(true);
   const [showLatestMessage, setShowLatestMessage] = useState(false);
   const settingsReturnFocusRef = useRef<HTMLElement | null>(null);
+  const settingsFromModelMenuRef = useRef(false);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const lifecyclePendingGoalIdsRef = useRef(new Set<string>());
   const quickCompletingTodoIdsRef = useRef(new Set<string>());
@@ -1104,13 +1112,15 @@ export function PersonalWorkspacePage({
     suggestReply(composerPrefill.text);
   }, [composerPrefill, selectedGoalId]);
   function draftAttentionMessage(attention: WorkspaceAttention, intent: "reply" | "explain") {
-    const task = attention.text.length > 120 ? `${attention.text.slice(0, 119)}…` : attention.text;
+    // A display summary is not a usable reply context: it may cut through a URL.
+    const task = attention.details?.requestText ?? attention.text;
     const key = intent === "reply" ? "drawer.attentionReplyPrefill"
       : attention.details?.interaction === "decision" ? "drawer.decisionExplainPrefill" : "drawer.attentionExplainPrefill";
     if (attention.goalId !== selectedGoalId) selectGoal(attention.goalId, "chat");
     openGoalConversation();
     setSelection(null);
-    setComposerPrefill({ goalId: attention.goalId, text: t(key, { task }) });
+    const reference = attention.details?.todoIdentified ? `\n\nTodo: ${attention.todoId}` : "";
+    setComposerPrefill({ goalId: attention.goalId, text: t(key, { task }) + reference });
   }
   // The steward prompt set is owned by the client model; the quick-prompt row
   // reuses it so one affordance answers "what now / what blocks / what is proven".
@@ -1141,15 +1151,18 @@ export function PersonalWorkspacePage({
     [workspaceGoals],
   );
   const selectedGoal = workspaceGoals.find((goal) => goal.goalId === selectedGoalId) ?? null;
-  function openSettings(target: Extract<WorkspaceDrawerSelection, { kind: "settings" }>) {
+  function openSettings(target: Extract<WorkspaceDrawerSelection, { kind: "settings" }>, returnToModel = false) {
     settingsReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    settingsFromModelMenuRef.current = returnToModel;
     setMobileSidebarOpen(false);
     setSelection(target);
   }
   function closeSettings() {
     setSelection(null);
     window.requestAnimationFrame(() => {
-      const target = settingsReturnFocusRef.current;
+      const target = settingsFromModelMenuRef.current
+        ? document.querySelector<HTMLElement>(".personal-chat-model-menu > summary")
+        : settingsReturnFocusRef.current;
       if (target?.isConnected && target.getClientRects().length) target.focus({ preventScroll: true });
       else document.querySelector<HTMLElement>(".personal-mobile-menu")?.focus({ preventScroll: true });
     });
@@ -1253,8 +1266,9 @@ export function PersonalWorkspacePage({
       setGoalConversationReceiptVisible(true);
     }
   }, [goalMessages, selectedGoal, selectedGoalTab]);
-  // One composer for both conversations. Running managed Codex work receives
-  // exact-turn instructions; attached hosts and LoopX mode keep their queues.
+  // One composer; ordinary sends queue, while Command+Enter explicitly steers.
+  const composingRef = useRef(false);
+  useEffect(() => { composingRef.current = false; }, [composerDraftKey]);
   const loopxDeliveryOpen = Boolean(conversationSessionId && loopxMode?.session_id === conversationSessionId
     && loopxMode?.enabled && loopxMode.active_turn_id);
   const runningMessage = managerMessages.find((message) => message.pending && Boolean(message.sourceTurnId)
@@ -1262,11 +1276,39 @@ export function PersonalWorkspacePage({
   const conversationTurnRunning = !loopxDeliveryOpen && !conversationQueuesFollowUps && Boolean(runningMessage);
   const steeringTurnId = conversationTurnRunning && conversationSupportsSteering && !readOnly
     && callbacks.onSteerConversationTurn ? runningMessage?.sourceTurnId : undefined;
-  const composerBlocked = steering || (!steeringTurnId && (sending || conversationTurnRunning));
+  const queueTurnId = conversationTurnRunning && !readOnly && callbacks.onQueueConversationTurn
+    ? runningMessage?.sourceTurnId : undefined;
+  const legacyDrafts = conversationSessionId ? legacySteeringRequests(conversationSessionId) : [];
+  function restoreLegacyDraft(key: string) {
+    if (composer.trim() || !conversationSessionId) return;
+    const restored = restoreLegacySteeringRequest(composerDraftKey, key, conversationSessionId);
+    if (restored) setComposer(restored.text);
+  }
+  useEffect(() => {
+    if (!conversationSessionId) return;
+    const recovered = readSteeringRequest(composerDraftKey);
+    if (recovered?.sessionId === conversationSessionId && (!composer || composer === recovered.text)) {
+      if (!composer) setComposer(recovered.text);
+      if (!imageAttachments.length && recovered.delivery === "queue" && recovered.attachments?.length) setImageAttachments(recovered.attachments);
+    }
+    else if (!composer && legacyDrafts[0]) restoreLegacyDraft(legacyDrafts[0][0]);
+    // Recover only on conversation entry; clearing a draft must stay cleared.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [composerDraftKey, conversationSessionId]);
+  const retainedSteering = readSteeringRequest(composerDraftKey);
+  const retryingSteering = retainedSteering && retainedSteering.sessionId === conversationSessionId
+    && retainedSteering.text.trim() === composer.trim() ? retainedSteering : undefined;
+  const composerBlocked = steering || (!(retryingSteering || queueTurnId) && (sending || conversationTurnRunning));
   const quickPromptBlocked = steering || sending || conversationTurnRunning;
   // The Goal overview is for reading; its composer folds to one line until asked for.
   const [overviewComposerOpen, setOverviewComposerOpen] = useState(false);
   useEffect(() => setOverviewComposerOpen(false), [selectedGoalId, selectedGoalTab]);
+  function focusTurnComposer(turnId: string) {
+    if (turnId !== steeringTurnId) return;
+    setOverviewComposerOpen(true);
+    composerRef.current?.focus();
+    composerRef.current?.scrollIntoView({ block: "nearest" });
+  }
   const composerCollapsed = Boolean(selectedGoal) && selectedGoalTab === "overview" && !overviewComposerOpen
     && !composer.trim() && !actionDraft && !imageAttachments.length && !imageAttachmentError && !sending && !conversationTurnRunning;
   const managerChatItems = useMemo(
@@ -1840,13 +1882,17 @@ export function PersonalWorkspacePage({
     options: {
       keepGoalSelected?: boolean;
       lifecycleProjection?: GoalLifecycleProjection;
-      presentation?: "drawer" | "feedback";
+      presentation?: "drawer" | "feedback" | "inline";
     } = {},
   ) {
-    if (proposal.reviewPlan && !proposal.reviewPlan.canApply) return;
+    if (proposal.reviewPlan && !proposal.reviewPlan.canApply) return proposal;
     if (proposal.actionKind === "team.plan" && proposal.status === "error"
-      && !proposal.reviewPlan?.retryOriginal) return;
-    const showDrawer = options.presentation !== "feedback";
+      && !proposal.reviewPlan?.retryOriginal) return proposal;
+    const matchesTodoTarget = (observed: TypedActionProposal) => proposal.actionKind !== "todo.update" || (
+      observed.normalized_parameters.goal_id === proposal.goalId
+      && (!proposal.sourceRequest || observed.normalized_parameters.todo_id === proposal.sourceRequest.normalizedParameters.todo_id)
+    );
+    const showDrawer = options.presentation !== "feedback" && options.presentation !== "inline";
     const inferredLifecycleChange = proposal.actionKind === "goal.lifecycle"
       && proposal.goalId
       && (proposal.lifecycleOperation === "stop" || proposal.lifecycleOperation === "resume")
@@ -1885,11 +1931,12 @@ export function PersonalWorkspacePage({
         if (proposal.actionKind === "todo.update") {
           void reconcileStatus(proposal.goalId ? [proposal.goalId] : undefined);
         }
-        return;
+        return applied;
       }
       const result = await applyTypedAction(proposal.previewId);
       if (result.proposal.proposal_id !== proposal.previewId
         || result.proposal.action_kind !== proposal.actionKind
+        || !matchesTodoTarget(result.proposal)
         || (proposal.actionKind === "goal.lifecycle" && (
           result.proposal.normalized_parameters.goal_id !== proposal.goalId
           || lifecycleOperationFor(result.proposal) !== proposal.lifecycleOperation
@@ -1904,7 +1951,7 @@ export function PersonalWorkspacePage({
         if (lifecycleChange) {
           callbacks.onGoalActivationStateChange?.(lifecycleChange.goalId, lifecycleChange.previous);
         }
-        setSelection({ item: applied, kind: "proposal" });
+        if (options.presentation !== "inline") setSelection({ item: applied, kind: "proposal" });
         setActionFeedback(
           result.proposal.status === "stale"
             ? t("feedback.stale")
@@ -1912,7 +1959,7 @@ export function PersonalWorkspacePage({
               ? t("proposal.teamPlan.retryUnavailable")
             : t(`actionReview.${applied.reviewPlan!.reason}`),
         );
-        return;
+        return applied;
       }
       setActionFeedback(t("feedback.completed", { title: applied.title }));
       // Keep the success receipt visible for reviewed actions. Direct actions
@@ -1929,6 +1976,7 @@ export function PersonalWorkspacePage({
       if (applied.actionKind === "goal.lifecycle" || applied.actionKind === "gate.resolve" || applied.actionKind === "todo.update") {
         void reconcileStatus(applied.goalId ? [applied.goalId] : undefined);
       }
+      return applied;
     } catch (error) {
       if (lifecycleChange) {
         callbacks.onGoalActivationStateChange?.(lifecycleChange.goalId, lifecycleChange.previous);
@@ -1955,13 +2003,13 @@ export function PersonalWorkspacePage({
         setProposals((current) => ({ ...current, [proposal.previewId]: gated }));
         // A newly discovered authority gate always deserves review, including
         // when the action started on the direct path.
-        setSelection({ item: gated, kind: "proposal" });
+        if (options.presentation !== "inline") setSelection({ item: gated, kind: "proposal" });
         setActionFeedback(t("feedback.gateRequired", { summary: gated.gate.summary }));
         if (proposal.actionKind === "goal.create" && proposal.goalId) {
           callbacks.onRefresh?.();
           selectGoal(proposal.goalId);
         }
-        return;
+        return gated;
       }
       const stale = error instanceof ChatApiError && isStaleActionFailure(error.payload);
       const readbackMismatch = error instanceof ChatApiError && error.payload.error_code === "action_response_mismatch";
@@ -1970,24 +2018,25 @@ export function PersonalWorkspacePage({
       const returned = error instanceof ChatApiError
         ? typedActionProposalSchema.safeParse(error.payload.proposal) : null;
       let stored = returned?.success ? returned.data : undefined;
-      if (!stored && ["team.plan", "goal.create"].includes(proposal.actionKind) && !readbackMismatch) {
+      if (!stored && ["team.plan", "goal.create", "todo.update"].includes(proposal.actionKind) && !readbackMismatch) {
         const readback = await actionReadback.refetch();
         // Query errors retain cached data; it cannot certify this attempt.
         if (readback.isSuccess) stored = readback.data?.find(item => item.proposal_id === proposal.previewId);
       }
       if (stored?.proposal_id === proposal.previewId && stored.action_kind === proposal.actionKind
-        && (!["team.plan", "goal.create"].includes(proposal.actionKind) || stored.normalized_parameters.goal_id === proposal.goalId)) {
+        && matchesTodoTarget(stored)
+        && (!["team.plan", "goal.create", "todo.update"].includes(proposal.actionKind) || stored.normalized_parameters.goal_id === proposal.goalId)) {
         await actionReadback.acceptProposal(stored);
         const observed = workspaceProposal(stored, t);
         const reconciled = { ...observed, errorMessage: observed.status === "error"
           ? error instanceof Error ? error.message : String(error) : undefined };
         setProposals(current => ({ ...current, [proposal.previewId]: reconciled }));
-        setSelection({ item: reconciled, kind: "proposal" });
+        if (options.presentation !== "inline") setSelection({ item: reconciled, kind: "proposal" });
         if (observed.reviewPlan?.creationProgress?.goalId) void callbacks.onRefresh?.();
         setActionFeedback(stored.status === "stale" ? t("feedback.stale")
           : observed.reviewPlan?.interaction === "completed" ? t("feedback.completed", { title: observed.title })
           : t("feedback.executionFailed", { error: error instanceof Error ? error.message : String(error) }));
-        return;
+        return reconciled;
       }
       const failed = {
         ...proposal,
@@ -1998,8 +2047,9 @@ export function PersonalWorkspacePage({
         status: (stale ? "stale" : "error") as "stale" | "error",
       };
       setProposals((current) => ({ ...current, [proposal.previewId]: failed }));
-      setSelection({ item: failed, kind: "proposal" });
+      if (options.presentation !== "inline") setSelection({ item: failed, kind: "proposal" });
       setActionFeedback(t("feedback.executionFailed", { error: failed.errorMessage }));
+      return failed;
     }
   }
 
@@ -2036,7 +2086,30 @@ export function PersonalWorkspacePage({
       else setSelectedGoalTab("files");
       callbacks.onOpenOutput?.(output);
     },
-    onApplyProposal: applyProposal,
+    onApplyProposal: async proposal => { await applyProposal(proposal); },
+    onSaveTodoRequirements: async (todo, text, basis, retry) => {
+      if (retry?.status === "applied") return retry;
+      let original = retry;
+      if (retry) {
+        const stored = await loadTypedAction(retry.previewId);
+        if (stored.action_kind !== "todo.update" || stored.normalized_parameters.goal_id !== todo.goalId
+          || stored.normalized_parameters.todo_id !== (todo.sourceTodoId ?? todo.todoId)
+          || stored.normalized_parameters.text !== text) {
+          throw new ChatApiError(t("actionReview.targetChanged"), {error_code: "action_response_mismatch"});
+        }
+        await actionReadback.acceptProposal(stored);
+        original = {...workspaceProposal(stored, t), sourceRequest: retry.sourceRequest};
+        if (original.status === "applied") return original;
+      }
+      const proposal = original ?? await createPreview({actionKind: "todo.update",
+        context: {goal_id: todo.goalId, kind: "todo", todo_id: todo.sourceTodoId ?? todo.todoId},
+        idempotencyKey: `workspace-todo-requirements-${todo.todoId}-${Date.now().toString(36)}`,
+        normalizedParameters: {goal_id: todo.goalId, todo_id: todo.sourceTodoId ?? todo.todoId,
+          ...(todo.claimedBy ? {agent_id: todo.claimedBy} : {}), operation: "edit", text, review_basis: basis},
+        summary: t("drawer.requirementsSave"),
+      }, {select: false});
+      return applyProposal(proposal, {presentation: "inline"});
+    },
     onExplainDecision: callbacks.onExplainDecision ?? ((attention) => draftAttentionMessage(attention, "explain")),
     onReplyToAttention: callbacks.onReplyToAttention ?? draftAttentionMessage,
     onCancelProposal: async (proposal) => {
@@ -2198,14 +2271,47 @@ export function PersonalWorkspacePage({
     selectGoal(item.goalId, "overview");
   }
 
-  async function sendMessage(messageOverride?: string) {
+  async function sendMessage(messageOverride?: string, intent: "send" | "steer" = "send") {
     const pendingImages = messageOverride ? [] : imageAttachments;
     const message = (messageOverride ?? composer).trim() || (pendingImages.length ? t("composer.imageAnalysisPrompt") : "");
     if (!message || composerBlocked || conversationHistoryState?.sendBlocked) return;
     const previousSteering = readSteeringRequest(composerDraftKey);
-    const retry = previousSteering && previousSteering.sessionId === conversationSessionId && previousSteering.text === message
+    const retry = previousSteering && previousSteering.sessionId === conversationSessionId && previousSteering.text.trim() === message
       ? previousSteering : undefined;
-    if ((retry || steeringTurnId) && conversationSessionId && callbacks.onSteerConversationTurn) {
+    if (previousSteering && !retry && previousSteering.sessionId === conversationSessionId) {
+      setActionFeedback(locale === "zh-CN" ? "上条投递尚未确认，请先恢复原文重试。当前草稿已保留。" : "The previous delivery is unconfirmed. Restore its text to retry; this draft is retained.");
+      return;
+    }
+    const queue = retry?.delivery === "queue" || (!retry && intent === "send" && Boolean(queueTurnId));
+    if (queue && conversationSessionId && callbacks.onQueueConversationTurn) {
+      if (retry && JSON.stringify(pendingImages) !== JSON.stringify(retry.attachments ?? [])) {
+        setImageAttachmentError(locale === "zh-CN" ? "待确认消息的图片不能替换；原请求与当前图片已保留。" : "Unconfirmed images cannot be replaced. Original request and current images retained.");
+        return;
+      }
+      const request = retry ?? { sessionId: conversationSessionId, turnId: queueTurnId!, text: message,
+        id: crypto.randomUUID(), delivery: "queue" as const, attachments: pendingImages };
+      if (!retainSteeringRequest(composerDraftKey, request)) {
+        setActionFeedback(t("feedback.steeringStorageUnavailable"));
+        return;
+      }
+      setSteering(true);
+      setActionFeedback(null);
+      try {
+        await callbacks.onQueueConversationTurn(conversationKey, request.sessionId, request.text, request.id, request.attachments);
+        retireSteeringRequest(composerDraftKey, request.id);
+        if (!messageOverride) {
+          setComposer("", composer);
+          const acceptedImages = new Set(request.attachments?.map(image => image.id));
+          setImageAttachments(current => current.filter(image => !acceptedImages.has(image.id)));
+        }
+        setActionFeedback(locale === "zh-CN" ? "已排队，将在当前回合结束后处理。" : "Queued for the next turn.");
+      } catch (error) {
+        if (error instanceof ChatApiError && error.payload.delivery_state === "not_delivered") retireSteeringRequest(composerDraftKey, request.id);
+        setActionFeedback(error instanceof Error ? error.message : t("feedback.sendGenericError"));
+      } finally { setSteering(false); }
+      return;
+    }
+    if ((retry || (intent === "steer" && steeringTurnId)) && conversationSessionId && callbacks.onSteerConversationTurn) {
       if (pendingImages.length) {
         setImageAttachmentError(locale === "zh-CN" ? "本轮追加指令暂不支持图片，图片和草稿已保留。" : "This turn accepts text instructions only. Images and draft retained.");
         return;
@@ -2231,6 +2337,10 @@ export function PersonalWorkspacePage({
         }
         setActionFeedback(error instanceof Error ? error.message : t("feedback.sendGenericError"));
       } finally { setSteering(false); }
+      return;
+    }
+    if (intent === "steer" && conversationTurnRunning) {
+      setActionFeedback(locale === "zh-CN" ? "此执行器不支持本轮纠偏；可按 Enter 排队，草稿已保留。" : "This executor cannot steer this turn. Press Enter to queue; draft retained.");
       return;
     }
     if (sending) return;
@@ -2583,6 +2693,7 @@ export function PersonalWorkspacePage({
             onOpenGoalDetails={selectedGoal ? () => setSelection({ kind: "goal", item: selectedGoal }) : undefined}
             onOpenGoalCapabilities={selectedGoal && !readOnly ? () => openSettings({ goalId: selectedGoal.goalId, kind: "settings", tab: "capabilities" }) : undefined}
             onOpenManagerSettings={!readOnly ? () => openSettings({ kind: "settings", tab: "steward" }) : undefined}
+            onOpenConversationSettings={!readOnly ? () => openSettings({kind: "settings", tab: "conversation"}, true) : undefined}
             onRefresh={callbacks.onRefresh ? () => void refreshWorkspace() : undefined}
             onOpenNavigation={() => setMobileSidebarOpen(true)}
             onOpenManagerChat={() => {
@@ -2595,6 +2706,7 @@ export function PersonalWorkspacePage({
             }}
             onSelectAgent={selectAgent}
             onSelectAgentModel={(modelId) => callbacks.onSelectAgentModel?.(selectedAgentId, modelId)}
+            onSelectAgentReasoningEffort={(effort) => callbacks.onSelectAgentReasoningEffort?.(selectedAgentId, effort)}
             onReturnManagerHome={() => {
               if (selectedWorkspaceRef) workspaceConversations?.onSelect(null);
               setSelectedGoalTab("overview");
@@ -2603,6 +2715,8 @@ export function PersonalWorkspacePage({
             }}
             selectedAgentId={selectedAgentId}
             selectedAgentModelId={selectedAgentModelId}
+            selectedAgentModelReadback={selectedAgentModelReadback}
+            selectedAgentReasoningEffort={selectedAgentReasoningEffort}
             refreshState={refreshState}
             readOnlySourceLabel={readOnly ? statusSourceControl?.activeSource.label : undefined}
             selectedGoal={selectedGoal}
@@ -2682,9 +2796,7 @@ export function PersonalWorkspacePage({
                       />
                     ) : null}
                     <ChannelTimeline onReviewGoalDraft={readOnly ? undefined : reviewGoalDraft} onSuggestReply={readOnly ? undefined : suggestReply} items={visibleTimelineItems} onSelect={setSelection} selectedGoal={selectedGoal}
-                      onSteerTurn={!readOnly && callbacks.onSteerConversationTurn
-                        ? (turnId, text, ingressId) => callbacks.onSteerConversationTurn!(selectedGoal.goalId, turnId, text, ingressId)
-                        : undefined}
+                      onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}
                       onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation
                         ? () => callbacks.onCancelConversationPreparation!(selectedGoal.goalId) : undefined}
                       onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn
@@ -2702,9 +2814,7 @@ export function PersonalWorkspacePage({
               <ChannelTimeline emptyState={workspaceTitle ? { title: workspaceTitle, description: t("workspace.empty") } : undefined} onReviewGoalDraft={readOnly ? undefined : reviewGoalDraft} onSuggestReply={readOnly ? undefined : suggestReply}
                 items={selectedWorkspaceRef ? managerChatItems.filter((item) => item.kind === "message") : managerChatItems}
                 onSelect={setSelection} selectedGoal={null} showManagerTeamResults={!selectedWorkspaceRef}
-                onSteerTurn={!readOnly && callbacks.onSteerConversationTurn
-                  ? (turnId, text, ingressId) => callbacks.onSteerConversationTurn!(conversationKey, turnId, text, ingressId)
-                  : undefined}
+                onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}
                 onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation
                   ? () => callbacks.onCancelConversationPreparation!(conversationKey) : undefined}
                 onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn
@@ -2740,7 +2850,7 @@ export function PersonalWorkspacePage({
               <ManagerConversationTray onReviewGoalDraft={reviewGoalDraft} onSuggestReply={suggestReply}
                 onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation ? () => callbacks.onCancelConversationPreparation!("manager") : undefined}
                 onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn ? (turnId) => callbacks.onInterruptConversationTurn!("manager", turnId) : undefined}
-                onSteerTurn={!readOnly && callbacks.onSteerConversationTurn ? (turnId, text, ingressId) => callbacks.onSteerConversationTurn!("manager", turnId, text, ingressId) : undefined}
+                onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}
                 messages={managerMessages}
                 onClose={() => setManagerConversationReceiptVisible(false)}
                 onOpenConversation={() => {
@@ -2753,7 +2863,7 @@ export function PersonalWorkspacePage({
                 agentLabel={selectedAgentLabel}
                 onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation ? () => callbacks.onCancelConversationPreparation!(selectedGoal.goalId) : undefined}
                 onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn ? (turnId) => callbacks.onInterruptConversationTurn!(selectedGoal.goalId, turnId) : undefined}
-                onSteerTurn={!readOnly && callbacks.onSteerConversationTurn ? (turnId, text, ingressId) => callbacks.onSteerConversationTurn!(selectedGoal.goalId, turnId, text, ingressId) : undefined}
+                onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}
                 messages={goalMessages}
                 onClose={() => setGoalConversationReceiptVisible(false)}
                 onDraftTask={selectedGoalTab === "tasks" ? (reply) => {
@@ -2806,8 +2916,23 @@ export function PersonalWorkspacePage({
                 <a href={runtimeSetupGuideUrl} rel="noreferrer" target="_blank">{t("readiness.guide")}</a>
               </p>
             ) : null}
-            {conversationTurnRunning ? <p className="personal-composer-status" role="status">{steeringTurnId
-              ? (locale === "zh-CN" ? "本轮进行中 · 发消息可调整当前工作" : "Turn in progress · send instructions to adjust this work")
+            {legacyDrafts.length ? <details className="personal-legacy-steering-drafts">
+            <summary>{locale === "zh-CN" ? `旧版保留的调整草稿 · ${legacyDrafts.length}` : `Retained drafts · ${legacyDrafts.length}`}</summary>
+            {legacyDrafts.map(([key, request]) => <div key={key}><p>{request.text}</p>
+              <button type="button" disabled={Boolean(composer.trim()) || Boolean(retainedSteering && retainedSteering.id !== request.id)} onClick={() => restoreLegacyDraft(key)}>
+                {locale === "zh-CN" ? "恢复到输入框" : "Restore to composer"}
+              </button></div>)}
+            <small>{locale === "zh-CN" ? "先处理待确认指令并清空输入框后恢复；重试仍发往原回合。" : "Resolve pending instructions and clear the composer to restore. Retries keep their original turn."}</small>
+          </details> : null}
+          {retainedSteering && retainedSteering.sessionId === conversationSessionId && !retryingSteering && !composer.trim() ? <button type="button"
+            onClick={() => { setComposer(retainedSteering.text); if (retainedSteering.delivery === "queue") setImageAttachments(retainedSteering.attachments ?? []); }}>
+            {retainedSteering.delivery === "queue" ? (locale === "zh-CN" ? "恢复未确认的消息" : "Restore unconfirmed message")
+              : (locale === "zh-CN" ? "恢复未确认的追加指令" : "Restore unconfirmed instructions")}</button> : null}
+          {retryingSteering && retryingSteering.turnId !== steeringTurnId ? <p className="personal-composer-status" role="status">{locale === "zh-CN"
+            ? "上次投递尚未确认，发送将重试原请求。"
+            : "The previous delivery is unconfirmed. Send retries the original request."}</p> : null}
+          {conversationTurnRunning ? <p className="personal-composer-status" role="status">{queueTurnId
+              ? (locale === "zh-CN" ? "本轮进行中 · 新消息将在下一轮处理" : "Turn in progress · new messages queue for the next turn")
               : t("composer.turnRunning")}</p> : null}
             <div
               className="personal-channel-composer"
@@ -2826,25 +2951,30 @@ export function PersonalWorkspacePage({
               <button
                 aria-label={t("composer.addImage")}
                 className="personal-composer-attach"
-                disabled={sending || imageAttachments.length >= maxImageAttachmentCount}
+                disabled={steering || (sending && !queueTurnId) || imageAttachments.length >= maxImageAttachmentCount}
                 onClick={() => imageInputRef.current?.click()}
                 title={t("composer.attachImageHint")}
                 type="button"
               >
                 <Paperclip size={17} />
               </button>
-              <input accept="image/png,image/jpeg,image/webp,image/gif" aria-label={t("composer.imagePicker")} className="personal-composer-file-input" disabled={sending || imageAttachments.length >= maxImageAttachmentCount} multiple onChange={(event) => void selectImages(event.target.files)} ref={imageInputRef} type="file" />
+              <input accept="image/png,image/jpeg,image/webp,image/gif" aria-label={t("composer.imagePicker")} className="personal-composer-file-input" disabled={steering || (sending && !queueTurnId) || imageAttachments.length >= maxImageAttachmentCount} multiple onChange={(event) => void selectImages(event.target.files)} ref={imageInputRef} type="file" />
               <textarea
+                id="personal-conversation-composer"
                 aria-label={t("composer.sendMessage")}
                 onChange={(event) => setComposer(event.target.value)}
+                onCompositionStart={() => { composingRef.current = true; }}
+                onCompositionEnd={() => { composingRef.current = false; }}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  const action = composerKeyAction({ ...event, isComposing: event.nativeEvent.isComposing,
+                    keyCode: event.nativeEvent.keyCode }, composingRef.current);
+                  if (action) {
                     event.preventDefault();
-                    void sendMessage();
+                    void sendMessage(undefined, action);
                   }
                 }}
                 onPaste={handleComposerPaste}
-                placeholder={sending ? (locale === "zh-CN" ? "可以先写下后续问题…" : "Draft your next message…") : selectedGoal ? t("composer.goalPlaceholder", { goal: selectedGoal.title }) : workspaceTitle ? t("workspace.placeholder", { workspace: workspaceTitle }) : t("composer.managerPlaceholder")}
+                placeholder={locale === "zh-CN" ? "输入消息…" : "Write a message…"}
                 ref={composerRef}
                 autoFocus={overviewComposerOpen && selectedGoalTab === "overview"}
                 rows={1}
@@ -2853,9 +2983,10 @@ export function PersonalWorkspacePage({
               <button aria-label={t("composer.send")} disabled={(!composer.trim() && imageAttachments.length === 0) || composerBlocked || workspaceUnavailable || conversationHistoryState?.sendBlocked} onClick={() => void sendMessage()} title={t("composer.sendMessageHint")} type="button"><Send size={18} /></button>
             </div>
             {conversationOpen ? <div className="personal-composer-hint">{steering
-              ? (locale === "zh-CN" ? "正在发送本轮追加指令…" : "Sending instructions for this turn…")
+              ? (locale === "zh-CN" ? "正在发送…" : "Sending…")
+              : queueTurnId ? (locale === "zh-CN" ? `Enter 排队 · Shift+Enter 换行${steeringTurnId ? " · Command+Enter 调整本轮" : ""}` : `Enter to queue · Shift+Enter for a new line${steeringTurnId ? " · Command+Enter to steer" : ""}`)
               : sending && !steeringTurnId
-              ? (locale === "zh-CN" ? "正在回复 · 修改当前任务请使用“调整本轮”" : "Reply in progress · use Adjust turn to change the current task")
+              ? (locale === "zh-CN" ? "正在回复 · 可以先保留后续消息草稿" : "Reply in progress · you can draft a follow-up message")
               : (locale === "zh-CN" ? "Enter 发送 · Shift+Enter 换行" : "Enter to send · Shift+Enter for a new line")}</div> : null}
             </> : null}
             </>}
