@@ -610,12 +610,16 @@ class ChatExternalConversations:
                 # delivering their pending response; do not add an idle probe.
                 if row["status"] == "command_completed" and not row.get("commission_adoption_pending"):
                     continue
-                self.bindings.resolve(binding_id=row["binding_id"], **row["source"])
                 if row["status"] == "prepared":
+                    # Admission resolves current authority after both request
+                    # and route fences. A separate pre-fence network probe
+                    # neither authorizes recovery nor needs to precede it.
                     self.admit(binding_id=row["binding_id"], source=row["source"], request_ref=row["request_ref"],
                                message=row["message"], command=row["command"],
                                attachments=row.get("attachments"), origin=row.get("origin", "lark"))
-                elif row["status"] == "command_queued":
+                    continue
+                self.bindings.resolve(binding_id=row["binding_id"], **row["source"])
+                if row["status"] == "command_queued":
                     self._run_steward_action(row)
                 elif row["status"] == "accepted":
                     if row.get("agent_target"):

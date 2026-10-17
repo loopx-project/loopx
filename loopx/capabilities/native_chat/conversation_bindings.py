@@ -183,10 +183,17 @@ class ChatConversationBindings:
         row = next((item for item in current.get("bindings", []) if item.get("binding_id") == binding_id), None)
         if row is None:
             raise ValueError("conversation binding is no longer authorized")
+        observation = dict(self.observe(row["transport_ref"]))
+        # Provider verification can wait on IO. It cannot authorize a binding
+        # that was revoked or replaced while that observation was in flight.
+        # Unrelated binding changes do not invalidate this exact source.
+        current = self.read()
+        if next((item for item in current.get("bindings", [])
+                 if item.get("binding_id") == binding_id), None) != row:
+            raise ValueError("conversation binding changed during identity verification")
         registry_scope = {}
         if row.get("goal_scope") == "all_registered":
             registry_scope["available_goal_ids"] = self.goal_scope_ids(row)
-        observation = dict(self.observe(row["transport_ref"]))
         selected = self._core("collaboration.conversation.bound_context", {
             "current": current, "binding_id": binding_id, "source_ref": source_ref, "sender_ref": sender_ref,
             "private_human_message": private_human_message, "observation": observation,

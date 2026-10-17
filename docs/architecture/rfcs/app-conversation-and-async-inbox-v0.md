@@ -72,6 +72,11 @@ without private bindings do not add provider authentication; configured aliases
 reuse one request-scoped verified identity observation. Lark HTTP composition
 resides in the extension, while the typed binding owner remains provider-neutral.
 
+Binding resolution rereads the exact grant after provider identity observation.
+Revoking or replacing that binding during the observation rejects the request;
+an unrelated binding edit does not invalidate it. The typed owner still checks
+the current context, with no identity cache shared across verification calls.
+
 The same Settings read model includes Core bindings for locally installed
 conversation transports. Listener status comes from the exact host-composed
 provider's optional `health_snapshot()` returning a content-free `status`, or
@@ -128,7 +133,10 @@ transport resume can fail. Native observation may only narrow that frozen set;
 a retry cannot add later completed/active Turns or switch to a newer Session.
 The existing Lark listener returns after this durable freeze; its existing reply
 workers recover the prepared request to observe and cancel native background
-commands. Slow or unavailable native control therefore does not hold inbound
+commands. Prepared recovery uses admission's fresh authority check inside both
+the request and source-route fences, without a duplicate provider probe before
+waiting for those fences. Revocation while waiting prevents control and delivery.
+Slow or unavailable native control therefore does not hold inbound
 admission. This is scheduling only: it introduces no queue or completion state,
 does not defer an active Turn's exact interrupt, and sends no successful stop
 reply until native control and the original delivery checks have succeeded.
