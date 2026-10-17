@@ -102,7 +102,7 @@ read back its state and unchanged head, and refresh the review packet. Drafts
 are excluded from the review queue, so waiting for a review before marking one
 ready creates a deadlock. A reviewer must still obey the packet's action
 authority and may not mark another author's Draft ready without authorization.
-Keep exact-head review, required validation, first-screen approval and explicit
+Keep exact-head review, required validation, first-screen evidence and explicit
 merge authorization as their separate gates.
 
 ### DCO Sign-Off
@@ -278,20 +278,34 @@ the validator's explicit bilingual no-change declarations. Never treat the
 existence of a checklist, a release PR draft, or architecture-only capability
 copy as proof that the final release body is usable.
 
-## First-Screen Review Gate
+## First-Screen Review Evidence
 
-Treat the first visible screen of public product surfaces as owner-reviewed
-presentation, not as ordinary copy. Before committing, pushing, or self-merging
-changes that alter the first viewport, hero block, primary CTA, or opening
-navigation of README, hosted frontstage, showcase index pages, product home
-pages, or similarly prominent public entry points, show the user a preview
-first and wait for approval.
+Treat the first visible screen of public product surfaces as reviewable product
+presentation. For authorized work within the requested outcome and existing
+product/design contract, do not add a separate user-confirmation round before commit,
+push or PR submission merely because the first viewport, hero, primary CTA or
+opening navigation changes. Reuse prior scoped approval; a new commit or a
+routine refinement does not invalidate it.
 
-The preview should be concrete enough to judge the presentation: provide the
-local URL and, when the surface is visual HTML, a screenshot or browser view of
-the first viewport. Do not move the review gate into a PR comment, todo note, or
-final summary after the fact. It must happen before the public first-screen
-change is finalized.
+Before submitting or updating the PR, inspect the actual first viewport and put
+its screenshot or browser capture directly in the PR description's visual
+evidence section. Include a useful before/after comparison for an existing
+surface, affected desktop/narrow views, and a working preview link when one is
+available. Identify the tested revision and whether the data and surface are
+synthetic, a prototype, packaged or installed. Use public-safe evidence; keep
+private messages, paths and live operating context out. A screenshot only in
+chat, a PR comment, a Todo note or the final report does not satisfy this rule.
+Refresh the evidence when the visible result materially changes, without
+requesting another approval for the same authorized direction.
+
+Ask only for a genuinely missing consequential decision, work outside the
+accepted scope, or an explicit user instruction reserving presentation approval.
+Do not infer such a reservation from a first-screen change alone. Name the
+specific unresolved choice and continue independent authorized work. This
+presentation evidence rule does not grant merge, installation, release, paid
+execution or sensitive-data publication authority. Existing approval records
+remain historical evidence; older prose that merely repeats the blanket
+first-screen confirmation requirement follows this current rule.
 
 ## Product Delivery Completeness
 
