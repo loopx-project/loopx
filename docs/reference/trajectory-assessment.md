@@ -189,3 +189,186 @@ and historical states, inline source return and packaged frontend/backend
 readback. Present the key finding and uncertainty first, episode decisions next,
 and citations/method/cost on demand. CLI success alone does not complete that
 journey or qualify the model assessor.
+
+## Measured solver session cost (optional)
+
+### Native outcome readback (optional, separate from analyzer judgments)
+
+The trusted provider/Agent may add `--native-outcomes-json native-outcomes.json`
+to the existing `benchmark trajectory-pack-register` operation. The file is
+relative to its already authorized `--source-root`; the renderer cannot register
+paths or invent measurements. Reading it does not execute analysis or change a
+solver, evaluator, retained archive or study board. Omitting it preserves the
+previous pack identity and response shape.
+
+The provider-exported JSON has this local diagnostic contract:
+
+```json
+{
+  "schema_version": "trajectory_native_outcomes_v1",
+  "scope": {"goal_id":"solver", "case_id":"case", "run_id":"run", "revision":"fixed", "window":"declared capture"},
+  "start": "2026-01-01T00:00:00Z",
+  "end": "2026-01-01T00:10:00Z",
+  "complete": true,
+  "metric": {"name":"error", "unit":"points", "higher_is_better":false},
+  "retained_result_id": "result-1",
+  "samples": [{
+    "submission_index":1, "result_id":"result-1", "candidate_ref":"candidate-a",
+    "submitted_at":"2026-01-01T00:01:00Z", "observed_at":"2026-01-01T00:02:00Z",
+    "valid":true, "value":2,
+    "citation":{"source_id":"native-source", "first_line":1, "last_line":1}
+  }]
+}
+```
+
+Every scope field must equal the registered assessment input. Source IDs and
+line ranges must belong to that input; measurement/candidate IDs are opaque.
+UTC timestamps must name real calendar instants (including leap-day validity),
+not dates that a JavaScript parser silently normalizes into another window.
+The source must contain provider-recorded released outcomes, not assessor
+ratings or hidden evaluator material. The input curator/provider remains
+responsible for the claim's truth and validity. `complete` declares prefix
+coverage, not official integrity or score countability. A complete prefix has
+contiguous submission indices starting at one. An invalid record uses
+`valid:false,value:null`; zero is a valid measured value, never a missing value.
+`retained_result_id:null` means retention is unknown, not that the mathematically
+best value was adopted.
+
+The existing typed benchmark-toolkit prepare owner returns a separate bounded
+`native_outcomes` projection: first valid submission-one value when the prefix
+is complete, best valid measurement within the capture under the explicit native
+metric direction, provider-selected retained result, and final valid submission.
+These are distinct: delayed feedback does not promote an older submission to
+the final candidate, and a better measured score does not override retention or
+guardrails. No generic score, monetary estimate or causal benefit is derived.
+The original analysis key/model input is unchanged; native capture provenance
+instead versions the pack identity. Changed/unavailable files leave historical
+captured values visible with their warning, rather than borrowing another pack.
+
+The existing Goal research source disclosure renders those facts and opens only
+their bound original citations, even before model analysis exists. Solver
+capture, native outcome and analyzed-episode windows remain separate. The cost
+disclosure also shows the current analysis attempt's observed receipt usage;
+earlier failures, native evaluation, recovery, operator costs and unmeasured
+windows are not silently combined into a full-study bill. This does not complete
+threshold-cost, gain-area, matched-study or scientific qualification.
+
+Synthetic packaged native readback (not benchmark findings):
+
+![Native outcome source disclosure](../development/assets/research-analysis/native-outcomes-desktop.png)
+
+[Narrow-screen source disclosure](../development/assets/research-analysis/native-outcomes-mobile.png).
+The existing six-judgment first viewport is unchanged; these facts live in its
+existing source disclosure, with costs in their separate disclosure.
+
+### Solver capture registration
+
+A trusted pack curator can bind a **complete captured Codex session** separately
+from the model evidence. The existing register command accepts:
+
+```sh
+loopx benchmark trajectory-pack-register --goal-id OWNER_GOAL \
+  --input-json evidence-pack.json --source-root authorized-capture \
+  --title "Case · observation window" \
+  --usage-jsonl solver-session.jsonl --usage-session-id EXPECTED_SESSION_ID \
+  --format json
+```
+
+The capture path is relative to `source-root`, under the same containment rules.
+The expected session ID must be supplied with it. Registration reads the original
+file, verifies one unforked session with complete measured Turns, and retains its
+hash and a deterministic numeric projection. It never sends the session text to
+the analysis model. It does not execute, resume or change the solver.
+
+`solver_usage.projection` is returned by existing discovery and pack inspection,
+without a model call. It includes actual first/last event times, per-Turn source
+lines, input, cached input, uncached input and output tokens. Codex cumulative
+counter observations are differenced across Turns; summing the cumulative
+`turn.completed` snapshots would charge earlier work repeatedly. Cached input is
+part of input, and reasoning is part of output, not another additive cost.
+
+Complete counter histories use the existing private local snapshot transport
+when they exceed the ordinary 2 MiB RPC wire. Only this explicitly allowed
+method opts in; reduced snapshots retain the 64 MiB ceiling and digest checks.
+Oversized captures fail explicitly rather than dropping earlier Turns.
+
+This adapter deliberately rejects missing prefixes/counter gaps, resets, wrong
+session IDs, forked sessions, unmatched or unmeasured completions and a capture
+ending inside a Turn. Unsupported captures are not zero-cost sessions. The
+current adapter does not combine donor and continuation sessions. A curator must
+verify that the session belongs to the selected run; identity and hash checks do
+not independently establish that scientific association.
+
+The projection's own event window can differ from the curated episode window.
+`elapsed_seconds` spans its first Turn start to its last completion;
+`turn_elapsed_seconds` sums those non-overlapping timestamp intervals, excluding
+between-Turn gaps. Both include model/tool/orchestration time and are neither CPU
+usage nor token-generation time. They deliberately use event timestamps rather
+than mixing in provider-rounded `duration_ms`. Dollar, evaluator and inherited
+study costs remain unknown; no token price or waste fraction is inferred.
+
+Usage facts have their own provenance and applicability. A changed or missing
+capture leaves the captured values visible as historical, while unrelated model
+evidence retains its existing availability. Changing a bound capture produces a
+new pack ID but does not invalidate a reusable assessment of unchanged evidence.
+The source binding and projection are covered by that ID. Omit both options to
+retain the previous registration identity and response shape. To stop using this
+projection, register/select a pack without the optional capture; no solver change
+or destructive removal of historical evidence is necessary.
+
+Ownership stays with `benchmark-toolkit`: this built-in provider adapter produces
+a read-only observation-window diagnostic. The existing quota Codex reader owns
+live cumulative observations and idempotent ledger booking; it intentionally
+accepts partial active sessions and does not validate complete per-Turn windows.
+This diagnostic neither books usage nor replaces that authority. Python performs
+file containment and counter-only transport; TypeScript owns window validation
+and reduction, and the browser-safe assessment types expose the result.
+
+This is the measured-cost producer for the existing research workbench. Its
+HTTP consumer can read the same inspection field; numerical presentation and the
+full packaged user journey remain a companion acceptance. No new renderer path
+or command input, model execution permission, score authority or default analysis
+is introduced.
+
+## Goal workspace reader
+
+The Goal overview offers **Deep analysis** beside the recorded Explore history.
+The primary summary displays the existing six process judgments, each with
+its yes/eligible, no and unknown counts. An eligible denominator of zero is
+N/A, and missing analysis stays unanalysed. One metric disclosure shows the
+bound episode, explanation and citations; original source reads reuse the
+same reader as detailed analysis. Coverage and missing-data bounds come from
+the assessment owner, not a frontend score. Avoidable repetition has the
+opposite interpretation to a useful positive observation. Costs are optional
+secondary context. These are not native outcome magnitudes or a total score.
+
+Choose a registered source, inspect its fixed scope and model request, then
+explicitly run or retry analysis. Reading, refreshing, switching sources and
+following citations never launches a job. Running work can be cancelled;
+changed or missing sources preserve the historical result with a visible warning.
+
+Browser back/forward applies the same source transition as the selector: a
+different pack clears the prior pack's judgments, costs and citation readback
+before loading. If that read fails, the selected source remains unavailable
+until retry; another pack's result is not displayed under its identity. A failed
+refresh of the same pack may retain its last readback with an explicit warning.
+
+![Selected source unavailable after browser history navigation](../development/assets/research-analysis/history-unavailable-mobile.png)
+
+Synthetic packaged recovery state: the selector names the requested source;
+another source's results are absent, and retry reads that same source without
+launching analysis.
+
+The existing toolkit owns registration, model admission, output validation,
+metrics and source-bound reuse; the browser cannot supply local paths, model
+settings or arbitrary commands. Native utility remains unknown without its
+measured projection. Agent judgments are uncalibrated and do not establish
+scientific gains or a whole-run success rate.
+
+The synthetic packaged example below illustrates the reader and its scope
+controls; its numbers are test data, not benchmark findings. Real registered
+checkpoint reads are qualified separately from this presentation example.
+
+![Goal overview with registered trajectory analysis](../development/assets/research-analysis/first-screen.png)
+
+![Scoped interpretation and usage reader](../development/assets/research-analysis/summary.png)

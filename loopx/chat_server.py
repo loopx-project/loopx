@@ -98,6 +98,7 @@ from .extensions.runtime import (
 from .history import load_registry
 from .chat_completed_todos import CompletedTodoPages, CompletedTodoRequestMixin
 from .presentation.explore_results_api import ExploreResultsRequestMixin
+from .presentation.research_analysis_api import RESEARCH_ANALYSIS_PATH, ResearchAnalysisRequestMixin
 from .chat_todo_detail import TodoDetailRequestMixin
 from .kiro_cli_goal_mode import KIRO_CLI_BIN
 from .paths import resolve_runtime_root
@@ -488,6 +489,7 @@ class ChatRequestHandler(
     PrivateConversationRequestMixin,
     CompletedTodoRequestMixin,
     ExploreResultsRequestMixin,
+    ResearchAnalysisRequestMixin,
     TodoDetailRequestMixin,
     AttachedSessionRequestMixin,
     SshSourceRequestMixin,
@@ -1525,6 +1527,8 @@ class ChatRequestHandler(
             "/api/chat/completed-todos": self._completed_todos,
             "/api/chat/goal-results": self._goal_results,
             "/api/chat/explore-results": self._explore_results,
+            RESEARCH_ANALYSIS_PATH: self._research_analysis_read,
+            RESEARCH_ANALYSIS_PATH + "/citation": self._research_analysis_read,
             CHAT_SESSIONS_PATH: self._list_sessions,
             CHAT_ACTIONS_PATH: self._action_list,
             CHAT_GOAL_CONTEXTS_PATH: self._goal_contexts,
@@ -1572,6 +1576,8 @@ class ChatRequestHandler(
         if self._dispatch_zcode_goal(path, apply=True):
             return
         post_dispatch = {
+            RESEARCH_ANALYSIS_PATH: self._research_analysis_write,
+            RESEARCH_ANALYSIS_PATH + "/cancel": self._research_analysis_write,
             CHAT_SESSIONS_PATH: self._create_session,
             CHAT_AGENT_MODEL_OPTIONS_PATH: self._agent_model_options,
             CHAT_ATTACH_SESSION_PATH: self._attach_session,

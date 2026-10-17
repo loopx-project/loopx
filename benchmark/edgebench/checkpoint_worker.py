@@ -64,7 +64,22 @@ def _guest_path(value: str) -> PurePosixPath:
     return path
 
 
-def _archive(container, remote: str, destination: Path) -> Path:
+class _ArchiveReader:
+    """Check the shared clock during tar headers and large-file copy reads."""
+    def __init__(self, raw, deadline):
+        self.raw, self.deadline = raw, deadline
+
+    def __getattr__(self, name):
+        return getattr(self.raw, name)
+
+    def read(self, *args):
+        _remaining(self.deadline)
+        block = self.raw.read(*args)
+        _remaining(self.deadline)
+        return block
+
+
+def _archive(container, remote: str, destination: Path, *, deadline: float | None = None) -> Path:
     """Read through the daemon, rejecting links/devices and archive traversal.
 
     Docker's archive reader works while paused, unlike exec-based file readers.
@@ -72,13 +87,20 @@ def _archive(container, remote: str, destination: Path) -> Path:
     """
     from docker.utils import decode_json_header
 
+    def check():
+        if deadline is not None:
+            _remaining(deadline)
+
+    check()
     # The SDK's get_archive hides its Response behind a lazy generator. Closing
     # that generator alone need not close an unread HTTP body. Own the response
     # so every early exit releases the daemon reader before writer cleanup.
     api = container.client.api
     response = api._get(api._url("/containers/{0}/archive", container.id),
-        params={"path": remote}, stream=True, headers={"Accept-Encoding": "identity"})
+        params={"path": remote}, stream=True, headers={"Accept-Encoding": "identity"},
+        **({"timeout": _remaining(deadline)} if deadline is not None else {}))
     with closing(response):
+        check()
         api._raise_for_status(response)
         stat = decode_json_header(response.headers["x-docker-container-path-stat"])
         if stat.get("linkTarget"):
@@ -87,32 +109,48 @@ def _archive(container, remote: str, destination: Path) -> Path:
         # The explicitly provisioned export volume owns both the raw transfer
         # and extracted files; a full ambient /tmp must not defeat that choice.
         with tempfile.TemporaryFile(dir=destination) as raw:
-            for chunk in api._stream_raw_result(response, 2 * 1024 * 1024, False):
+            # _stream_raw_result is Docker's long-running-process reader: it
+            # disables socket timeouts. Archive IO must keep the request's read
+            # timeout as well as check the shared absolute clock on progress.
+            for chunk in response.iter_content(64 * 1024, decode_unicode=False):
+                check()
                 raw.write(chunk)
+            check()
             raw.seek(0)
-            with tarfile.open(fileobj=raw) as archive:
-                members = archive.getmembers()
+            with tarfile.open(fileobj=_ArchiveReader(raw, deadline) if deadline is not None else raw) as archive:
+                members = []
                 root = PurePosixPath(remote).name
                 names = set()
-                for member in members:
+                for member in archive:
+                    check()
                     path = PurePosixPath(member.name)
                     if (path.is_absolute() or ".." in path.parts or not path.parts or
                             path.parts[0] != root or str(path) in names or
                             not (member.isfile() or member.isdir())):
                         raise ValueError("Worker archive contains undeclared, linked or special members")
                     names.add(str(path))
-                archive.extractall(destination, members=members, filter="data")
+                    members.append(member)
+
+                def filtered(member, path):
+                    check()
+                    result = tarfile.data_filter(member, path)
+                    check()
+                    return result
+
+                archive.extractall(destination, members=members, filter=filtered)
                 # The data filter intentionally drops directory modes. This is a
                 # private raw transport witness, so restore only ordinary permission
                 # bits after safe extraction; never restore owners or special bits.
                 # Otherwise a private 0700 authority directory becomes 0755 and a
                 # matching frozen source is falsely rejected as having changed.
                 for member in sorted(members, key=lambda entry: len(PurePosixPath(entry.name).parts), reverse=True):
+                    check()
                     (destination / member.name).chmod(member.mode & 0o777)
+    check()
     return _physical(destination / root)
 
 
-def _archive_component(container, remote: str, destination: Path) -> Path:
+def _archive_component(container, remote: str, destination: Path, *, deadline: float | None = None) -> Path:
     """Transport a standalone SQLite participant's committed storage too.
 
     A paused process can still have committed data only in its WAL. Reading
@@ -123,7 +161,7 @@ def _archive_component(container, remote: str, destination: Path) -> Path:
     """
     from docker.errors import NotFound
 
-    copied = _archive(container, remote, destination)
+    copied = _archive(container, remote, destination, deadline=deadline)
     if not copied.is_file():
         return copied
     with copied.open("rb") as source:
@@ -135,7 +173,7 @@ def _archive_component(container, remote: str, destination: Path) -> Path:
     for suffix in ("-wal", "-journal"):
         with tempfile.TemporaryDirectory(prefix=".sqlite-transport-", dir=destination) as stage:
             try:
-                companion = _archive(container, remote + suffix, Path(stage) / "member")
+                companion = _archive(container, remote + suffix, Path(stage) / "member", deadline=deadline)
             except NotFound:
                 continue
             if not companion.is_file():
@@ -220,7 +258,7 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                     if not container.attrs["State"]["Paused"]:
                         raise RuntimeError("Worker writer barrier was not established")
                     if "handoff" in request:
-                        held = _archive(container, request["handoff"]["source_path"], stage / "held")
+                        held = _archive(container, request["handoff"]["source_path"], stage / "held", deadline=deadline)
                         raw = held.read_bytes()
                         if hashlib.sha256(raw).hexdigest() != request["handoff"]["sha256"]:
                             raise ValueError("Worker handoff changed before its writer barrier")
@@ -235,7 +273,7 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                         deadline = min(deadline, time.monotonic() + prepared["deadline_epoch"] - time.time())
                     for entry in request["components"]:
                         client.api.timeout = _remaining(deadline)
-                        copied = _archive_component(container, entry["source_path"], stage / "workers" / entry["id"])
+                        copied = _archive_component(container, entry["source_path"], stage / "workers" / entry["id"], deadline=deadline)
                         components.append({"id": entry["id"], "source_path": str(copied)})
                     if prepared is not None:
                         observed = effect_runtime_result("runtime.checkpoint_artifacts", {
@@ -251,7 +289,7 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                             raise ValueError("Worker source changed after native/research preparation: " + ", ".join(changed))
                         if time.time() >= prepared["deadline_epoch"]:
                             raise TimeoutError("Worker handoff expired before evaluator capture")
-                    phase = _archive(container, request["phase_deadline_path"], stage / "phase")
+                    phase = _archive(container, request["phase_deadline_path"], stage / "phase", deadline=deadline)
                     native = capture(controller_file, token=token, capture_id=capture_id,
                         destination=stage / "native", timeout=_remaining(deadline), phase_deadline_file=phase)
                     container.reload()

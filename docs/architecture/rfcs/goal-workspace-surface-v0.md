@@ -457,10 +457,49 @@ scientific scoring. The toolkit's
 is a compact native Goal lifecycle projection, initially for DeepSWE, not a
 complete research graph or quality assessment. The existing experiment board
 owns native runs, comparability and integrity; its counts do not prove research
-progress. A general deep-research evaluation service, product assessment-sidecar
-schema and calibrated model rubric are not implemented. Initial integration
-can consume the research owner's permitted, versioned analysis artifacts;
-these existing producers must not be relabeled as the missing service.
+progress. The opt-in [trajectory assessment producer](../../reference/trajectory-assessment.md)
+now owns a versioned input and result sidecar, source-bound fixed-pack registration,
+execution, cancellation and historical readback. The workspace consumes that same
+owner through its existing local Chat transport. It does not implement a general
+research evaluation service or independently calibrated rubric.
+
+The current product slice discovers a trusted host's registered pack for the
+selected owner Goal. Its title names the actual case and episode window before
+the single explicit analysis request; a matching result opens without another
+model call. The owner Goal, analyzed solver/run and fixed episode need not be the
+same history and must remain distinguishable. Unregistered cases are unavailable;
+automatic whole-run segmentation is not implemented. Ordinary users never prepare
+JSON paths or select an executable. Registration is a host/CLI preparation step,
+not a renderer operation or a grant of new source access.
+
+Results have three reading levels: the main question and original-objective
+benefit gap; the episode's benefit-test and evidence-adoption explanations;
+then optional individual judgments, original cited lines, method, coverage and
+separate analysis usage. A useful diagnostic prerequisite can coexist with an
+unperformed native utility test. There is no all-green quality summary or total
+score. Unknown population, uncalibrated model interpretation and historical
+applicability stay explicit. Closing, reopening and refreshing preserve the
+Goal-scoped selected pack without launching work. A stored running receipt is
+not presented as proof of current model activity.
+
+The numerical reading proposal reuses the same pack selection without opening or
+executing analysis. The toolkit's optional complete-session usage projection
+supplies the capture window, completed Turns, elapsed and within-Turn time,
+uncached/cached input and output. The first reading level names the window and
+excluded study costs; input already includes cache, and output already includes
+reasoning. A changed or missing capture retains historical values with an explicit
+warning, independently of assessment applicability. A pack without this producer
+shows unmeasured values, not zero. Case selection keeps the analysis panel closed
+when it was closed and remains available while the selected source is loading.
+
+Existing versioned assessment counts are a separate, optional reading level:
+yes/eligible, no and unknown for each criterion, with no combined score and no
+percentage when eligible is zero. They describe the selected sample, not the whole
+run or independent calibration. Native incumbent/best/final values, threshold
+time/cost, gain area and late marginal gain remain unavailable until the same
+owner supplies comparable source-bound facts. Neither the browser nor model prose
+may substitute for that producer. Packaged integration must distinguish this
+partial numerical journey from native-outcome qualification and installed adoption.
 
 Product and research must reconcile these existing producer/consumer facts
 before choosing a runtime schema; this table is an integration requirement,
@@ -675,6 +714,36 @@ including refresh and narrow screens, without altering the real captures.
 This is partial V11 evidence, not installed delivery or a completed V12 service.
 The static Lark example discloses its route/decision excerpt limits; it does not
 qualify the complete interactive history journey.
+
+**Checkpoint 2026-10-17 (V12 fixed-pack workspace integration, proposed).**
+The packaged workspace connects the registered-source producer to an explicit
+analysis action, cancellation, retry and cited result reading. Reading or
+refreshing an existing result never requests execution. All six analyzer-defined
+process judgments are primary: goal alignment, benefit testing, discrimination,
+information gain, evidence adoption and avoidable repetition. Each shows its
+producer-owned yes/eligible, no and unknown counts; zero eligibility is N/A.
+One optional disclosure reveals the episode, reason and citation; the shared
+reader opens original source lines. Method, result identity and scope remain
+inspectable. Usage and cost are secondary. Utility testing does not imply positive
+utility, and finding repetition is not a positive result; there is no total score. Disposable real-HTTP/process checks cover duplicate
+requests, cancellation, failed retry, owner isolation and changed sources;
+packaged browser checks cover selection races, reload, keyboard and narrow
+screens. A separately authorized real model journey exercises the same entry
+and reuses its completed job on refresh. This is proposed fixed-scope V12
+integration, not installed delivery, automatic preparation of arbitrary runs,
+independent scientific calibration or completion of V12. Host registration
+remains preparation outside the ordinary reading journey. CLI preparation uses
+the producer's existing interface; no new interactive Lark path is qualified.
+
+The follow-up native-readback proposal extends that same trusted registration
+with an optional provider outcome capture, scoped to the exact case/run/revision.
+The existing source disclosure separates first submission, best valid in capture,
+native-retained and final valid values, with original citations and historical/
+partial/unknown states. Submission order, not feedback arrival, identifies the
+candidate. This is not another scorer or automatic solver feedback. Captured
+solver usage and the current analysis attempt's receipt stay separate; full-study
+cost and causal benefit remain unknown. No first-viewport/hero/CTA change is
+introduced; six uncalibrated process judgments retain their existing role.
 
 ## 12. Open decisions
 

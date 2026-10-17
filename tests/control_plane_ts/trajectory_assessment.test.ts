@@ -69,3 +69,30 @@ test('purposeful samples cannot assert exhaustive coverage; unknown population s
   assert.equal(qualifyTrajectoryAssessment({...p,output:output()}).selection.population_episodes,null);
   x.selection.population_episodes=1;assert.throws(()=>prepareTrajectoryAssessment({input:x,config}),/population smaller/);
 });
+
+test('artifact digests retain bare lowercase syntax, original bytes and error semantics', () => {
+  // Bare SHA-256 is exactly 64 lowercase hex characters, without normalization.
+  for (const digest of ['a'.repeat(64), '0123456789abcdef'.repeat(4)]) {
+    const x=input(); x.sources[0]!.artifact_sha256=digest;
+    assert.equal(prepareTrajectoryAssessment({input:x,config}).input.sources[0]!.artifact_sha256,digest);
+  }
+  for (const [digest,message] of [
+    ['A'.repeat(64),'artifact_sha256 must be a sha256 hex digest'],
+    ['sha256:'+'a'.repeat(64),'artifact_sha256 must be a sha256 hex digest'],
+    ['a'.repeat(63),'artifact_sha256 must be a sha256 hex digest'],
+    ['a'.repeat(65),'artifact_sha256 must be a sha256 hex digest'],
+    ['g'+'a'.repeat(63),'artifact_sha256 must be a sha256 hex digest'],
+    [' '+'a'.repeat(64),'artifact_sha256 must be a sha256 hex digest'],
+    ['a'.repeat(64)+' ','artifact_sha256 must be a sha256 hex digest'],
+    ['a'.repeat(64)+'\n','artifact_sha256 must be a sha256 hex digest'],
+    ['a'.repeat(64)+'\r\n','artifact_sha256 must be a sha256 hex digest'],
+    ['a'.repeat(64)+'\n\n','artifact_sha256 must be a sha256 hex digest'],
+    ['', 'artifact_sha256 must be nonempty text'],
+    [null, 'artifact_sha256 must be nonempty text'],
+    [64, 'artifact_sha256 must be nonempty text'],
+    ['a'.repeat(64)+'\0', 'artifact_sha256 must be nonempty text'],
+  ] as [unknown,string][]) {
+    const x=input() as unknown as {sources: Record<string,unknown>[]}; x.sources[0]!.artifact_sha256=digest;
+    assert.throws(()=>prepareTrajectoryAssessment({input:x,config}), error => error instanceof Error && error.message === message);
+  }
+});

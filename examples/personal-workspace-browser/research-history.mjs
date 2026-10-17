@@ -8,6 +8,48 @@ import {resolveTestPython} from "../../scripts/test-python.mjs";
 import {outputDir, repoRoot} from "./fixture.mjs";
 import {fetchWorkspaceBackend, openWorkspacePage} from "./scenario-context.mjs";
 
+// Presentation-only race fixture; the HTTP/process authority is tested in
+// tests/presentation/test_research_analysis_api.py. No model is dispatched here.
+function analysisReadback(selected = "a") {
+  const scope = {goal_id: "synthetic-solver", case_id: "synthetic-case", run_id: "synthetic-run", revision: "fixed", window: "fixed synthetic sample"};
+  const selection = {rule: "Synthetic purpose sample", population_episodes: null, exhaustive: false};
+  const config = {model: "fixture", effort: "max", service_tier: "unknown"};
+  const packs = ["a", "b", "c", "d"].map(id => ({pack_id: id.repeat(64), title: `Synthetic analysis ${id.toUpperCase()}`, scope, selection, config,
+    episode_count: id === "c" ? 1 : 2, source_count: 1, analysis_key: (id === "c" ? "e" : "c").repeat(64), method_version: "research-episodes-v2", availability: "available", reason_code: null}));
+  const snapshot = {ok: true, catalog: {availability: "available", reason_code: null, default_pack_id: packs[0].pack_id, packs}, pack: {
+    ...packs[selected === "d" ? 3 : selected === "c" ? 2 : selected === "b" ? 1 : 0], objective: "Measure actual utility", applicability: "current",
+    ...(selected === "c" ? {} : {solver_usage: {artifact: "capture.jsonl", artifact_sha256: "d".repeat(64), applicability: selected === "b" ? "historical" : "current", reason_code: selected === "b" ? "source_changed" : null,
+      projection: {session_id: "synthetic-session", method: "codex_complete_session_counters_v1", start: "2026-01-01T00:00:00Z", end: "2026-01-01T00:01:01Z", completed_turns: 1, counter_observations: 1,
+        input_tokens: 1100, cached_input_tokens: 1000, uncached_input_tokens: 100, output_tokens: 20, elapsed_seconds: 61, turn_elapsed_seconds: 61,
+        turns: [{turn_id: "synthetic-turn", start: "2026-01-01T00:00:00Z", end: "2026-01-01T00:01:01Z", first_line: 2, last_line: 3, elapsed_seconds: 61, usage: {input_tokens: 1100, cached_input_tokens: 1000, uncached_input_tokens: 100, output_tokens: 20}}], limitations: []}}}),
+    episodes: selected === "c" ? [{id: "episode", question: "Is this experiment discriminative?", source_ids: ["source"], eligible_metrics: ["discrimination"]}]
+      : [{id: "episode", question: "Does a useful diagnosis prove original-objective utility?", source_ids: ["source"], eligible_metrics: ["goal_alignment", "benefit_test", "discrimination", "information_gain", "evidence_adoption", "redundancy"]}, {id: "uncertain", question: "Was the later decision informed by this evidence?", source_ids: ["source"], eligible_metrics: ["evidence_adoption"]}],
+    ...(["a", "b", "d"].includes(selected) ? {native_outcomes: {artifact: "native-outcomes.json", artifact_sha256: "9".repeat(64),
+      applicability: selected === "b" ? "historical" : "current", reason_code: selected === "b" ? "source_changed" : null,
+      projection: {method: "source_bound_native_outcomes_v1", scope, start: "2026-01-01T00:00:00Z", end: "2026-01-01T00:10:00Z",
+        complete: true, metric: {name: "error", unit: "points", higher_is_better: false}, sample_count: 3, valid_count: 2,
+        ...Object.fromEntries(["initial", "best_valid", "retained", "final_valid"].map(key => [key, {submission_index: key === "initial" ? 1 : 3,
+          result_id: key === "initial" ? "native-initial" : "native-final", candidate_ref: key === "initial" ? "candidate-first" : "candidate-retained",
+          submitted_at: "2026-01-01T00:01:00Z", observed_at: "2026-01-01T00:02:00Z", value: key === "initial" ? 7 : 3,
+          citation: {source_id: "source", first_line: 1, last_line: 2}}])), limitations: []}}} : {}),
+    job: {status: "succeeded", attempt: 2, analysis_wall_seconds: 12, usage: {input_tokens: 30, output_tokens: 4}, config},
+    result: {schema_version: "trajectory_assessment_v1", method_version: "research-episodes-v2", analysis_key: (selected === "c" ? "e" : "c").repeat(64), scope, selection,
+      calibration: "uncalibrated_model", evidence_manifest: [{id: "source", artifact: "facts.txt", artifact_sha256: "f".repeat(64), first_line: 1}], limitations: ["Synthetic presentation fixture; not a scientific result"],
+      metrics: [...(selected === "c" ? [{metric: "benefit_test", yes: 0, no: 0, unknown: 0, eligible: 0, assessed_fraction: null, missing_data_bounds: null}, {metric: "discrimination", yes: 0, no: 0, unknown: 1, eligible: 1, assessed_fraction: 0, missing_data_bounds: [0, 1]}]
+        : [{metric: "benefit_test", yes: 0, no: 1, unknown: 0, eligible: 1, assessed_fraction: 1, missing_data_bounds: [0, 0]}, {metric: "evidence_adoption", yes: 1, no: 0, unknown: 1, eligible: 2, assessed_fraction: .5, missing_data_bounds: [.5, 1]}]),
+        ...["goal_alignment", "information_gain", "redundancy", selected === "c" ? "evidence_adoption" : "discrimination"].map(metric => selected === "c" ? ({metric, yes: 0, no: 0, unknown: 0, eligible: 0, assessed_fraction: null, missing_data_bounds: null}) : ({metric, yes: metric === "redundancy" ? 0 : 1, no: metric === "redundancy" ? 1 : 0, unknown: 0, eligible: 1, assessed_fraction: 1, missing_data_bounds: metric === "redundancy" ? [0, 0] : [1, 1]}))],
+      assessments: selected === "c" ? [{episode_id: "episode", metric: "discrimination", verdict: "unknown", reason: "Available evidence cannot separate the explanations.", citations: []}]
+        : [{episode_id: "episode", metric: "benefit_test", verdict: "no", reason: "The diagnostic changed, but original-objective utility was not tested.", citations: [{source_id: "source", first_line: 1, last_line: 2}]}, {episode_id: "episode", metric: "evidence_adoption", verdict: "yes", reason: "A later decision explicitly used this evidence.", citations: [{source_id: "source", first_line: 1, last_line: 2}]}, {episode_id: "uncertain", metric: "evidence_adoption", verdict: "unknown", reason: "The later decision is not observed.", citations: []}, ...[
+          {metric: 'goal_alignment', verdict: 'yes', reason: 'Synthetic evidence ties the intervention to the stated bottleneck.'},
+          {metric: 'discrimination', verdict: 'yes', reason: 'Synthetic control separates the competing explanations.'},
+          {metric: 'information_gain', verdict: 'yes', reason: 'Synthetic evidence resolves the declared uncertainty.'},
+          {metric: 'redundancy', verdict: 'no', reason: 'Synthetic evidence records a new question rather than repeating a settled result.'}
+        ].map(item => ({...item, episode_id: 'episode', citations: [{source_id: 'source', first_line: 1, last_line: 2}]}))]},
+  }};
+  if (selected === "d") {snapshot.pack.result = null; snapshot.pack.job = null;}
+  return snapshot;
+}
+
 async function startHistoryOwner(fixture) {
   const child = spawn(resolveTestPython(), ["-u", "examples/personal-workspace-browser/research-history-backend.py", ...(fixture ? ["--fixture", fixture] : [])],
     {cwd: repoRoot, env: {...process.env, LOOPX_USAGE_PING: "0"}, stdio: ["ignore", "pipe", "pipe"]});
@@ -41,12 +83,31 @@ export const researchHistoryScenario = {
   async run({browser, collectCoverage, url}) {
     const capture = JSON.parse(await readFile(resolve(repoRoot, "apps/presentation/dashboard/src/data/fixtures/edgebench-research-history.json")));
     let owner = await startHistoryOwner();
-    let collisionOwner, temporary;
+    let collisionOwner, emptyOwner, temporary;
     let context;
     const pages = [];
     let unavailable = false;
+    let analysisFixture = false, holdOldAnalysis = false, slowStarted, releaseOld, oldDelivered;
+    let unavailableAnalysis = false;
+    let analysisWrites = 0;
     try {
       context = await openWorkspacePage(browser, url, {collectCoverage, beforeGoto: async (_, page) => {
+        await page.route("**/api/chat/research-analysis**", async route => {
+          if (route.request().method() !== "GET") {analysisWrites++; return route.fulfill({status: 403, json: {error: "Read-only presentation fixture"}});}
+          if (!analysisFixture) return route.fulfill({json: {ok: true, catalog: {availability: "unavailable", reason_code: "no_available_pack", default_pack_id: null, packs: []}, pack: null}});
+          const query = new URL(route.request().url()).searchParams;
+          if (new URL(route.request().url()).pathname.endsWith('/citation')) return route.fulfill({json: {
+            source_id: 'source', first_line: 1, last_line: 2, artifact: 'facts.txt', applicability: 'current',
+            text: 'Synthetic original evidence.\nDiagnostic measurements do not test native utility.'
+          }});
+
+          const selected = ["b", "c", "d"].find(id => query.get("pack_id") === id.repeat(64)) ?? "a";
+          if (holdOldAnalysis && selected === "a") {slowStarted(); await new Promise(resolve => {releaseOld = resolve;});}
+          await route.fulfill(unavailableAnalysis && selected === "a"
+            ? {status: 503, json: {error: "Synthetic analysis read unavailable"}}
+            : {json: analysisReadback(selected)});
+          if (holdOldAnalysis && selected === "a") oldDelivered();
+        });
         // The document URL also contains ?statusUrl=/status.json. Only proxy
         // the status endpoint; navigation must reach the frontend server.
         await page.route(url => url.pathname === "/status.json", async route => {
@@ -241,6 +302,152 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await page.emulateMedia({reducedMotion: "reduce"});
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
       await page.screenshot({path: resolve(outputDir, "research-history-recorded-mobile.png"), animations: "disabled"});
+      // Same Goal, different packs with the same analysis key: an old poll
+      // must not replace the newly selected pack or its interpretation.
+      analysisFixture = true;
+      await page.reload({waitUntil: "networkidle"});
+      const progress = history.getByRole("region", {name: "长程效果与用量", exact: true});
+      await progress.locator(".research-progress-scope").filter({hasText: "Synthetic analysis A"}).waitFor();
+      const effects = progress.locator('.research-effect-metrics');
+      await effects.waitFor();
+      assert.equal(await effects.locator('details').count(), 6, 'All six analyzer metrics are primary without opening analysis or cost details');
+      assert.equal(await progress.locator('.research-usage').evaluate(e => e.open), false, 'Cost is secondary by default');
+      const benefitMetric = effects.locator('[data-metric="benefit_test"]');
+      assert.match(await benefitMetric.innerText(), /0 \/ 1/);
+      assert.match(await benefitMetric.innerText(), /尚未检验收益/);
+      await benefitMetric.locator('summary').click();
+      assert.match(await benefitMetric.innerText(), /original-objective utility was not tested/);
+      assert.match(await effects.locator('[data-metric="evidence_adoption"]').innerText(), /未知 1/);
+
+      assert.equal(await history.getByRole("region", {name: "轨迹深度分析", exact: true}).count(), 0, "Expanding existing effects never opens or executes model analysis");
+      await benefitMetric.getByRole('button', {name: /source.*行 1–2/}).click();
+      const citedOriginal = history.getByRole('region', {name: '引用原文', exact: true});
+      await citedOriginal.waitFor();
+      assert.match(await citedOriginal.innerText(), /Diagnostic measurements do not test native utility/);
+      await citedOriginal.press('Escape');
+      await history.getByRole('button', {name: '关闭分析', exact: true}).click();
+      await progress.locator('.research-usage > summary').click();
+      assert.equal(await progress.getByText("100", {exact: true}).count(), 1, "Uncached input is shown without charging cache twice");
+      assert.match(await progress.innerText(), /1,?100.*1,?000/s);
+      assert.match(await progress.innerText(), /30.*4.*tokens/s, "Analysis attempt cost is distinct from solver usage");
+      assert.match(await progress.innerText(), /更早失败.*恢复.*评测/s);
+      await progress.locator('.research-usage > summary').click();
+      const basis = progress.locator('.research-progress-basis');
+      await basis.locator('summary').click();
+      assert.match(await basis.innerText(), /首次提交.*7.*candidate-first/s);
+      assert.match(await basis.innerText(), /原生保留结果.*3.*candidate-retained/s);
+      await basis.getByRole('button', {name: '查看原始证据', exact: true}).first().scrollIntoViewIfNeeded();
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'Native details remain readable on a narrow screen');
+      await page.screenshot({path: resolve(outputDir, "research-native-outcomes-mobile.png"), animations: "disabled"});
+      await page.setViewportSize({width:1280,height:900});
+      await page.screenshot({path: resolve(outputDir, "research-native-outcomes-desktop.png"), animations: "disabled"});
+      await basis.getByRole('button', {name: '查看原始证据', exact: true}).first().click();
+      await citedOriginal.waitFor();
+      assert.match(await citedOriginal.innerText(), /Synthetic original evidence/);
+      await citedOriginal.press('Escape');
+      await history.getByRole('button', {name: '关闭分析', exact: true}).click();
+      await basis.locator('summary').click();
+      await benefitMetric.locator('summary').click();
+      assert.match(await progress.innerText(), /0 \/ 1/);
+      assert.match(await progress.innerText(), /1 \/ 2/);
+      await page.setViewportSize({width:1280,height:900});
+      await page.evaluate(() => {for (const e of document.querySelectorAll('*')) if(e.scrollTop) e.scrollTop=0;});
+      await page.screenshot({path: resolve(outputDir, "research-analysis-first-screen.png"), animations: "disabled"});
+      await progress.screenshot({path: resolve(outputDir, "research-analysis-summary.png"), animations: "disabled"});
+
+      await history.getByRole("button", {name: "查看分析", exact: true}).click();
+      const analysis = history.getByRole("region", {name: "轨迹深度分析", exact: true});
+      await analysis.locator("header p").first().filter({hasText: /^Synthetic analysis A$/}).waitFor();
+      assert.match(await analysis.innerText(), /原目标收益|original-objective/);
+      assert.match(await analysis.innerText(), /utility was not tested/);
+      const started = new Promise(resolve => {slowStarted = resolve;});
+      const delivered = new Promise(resolve => {oldDelivered = resolve;});
+      holdOldAnalysis = true;
+      await analysis.getByRole("button", {name: "刷新分析结果", exact: true}).click();
+      await started;
+      await progress.getByRole("combobox").focus();
+      await progress.getByRole("combobox").selectOption("b".repeat(64));
+      await analysis.locator("header p").first().filter({hasText: /^Synthetic analysis B$/}).waitFor();
+      assert.equal(await progress.getByRole("combobox").evaluate(select => select === document.activeElement), true, "The source selector keeps keyboard focus across loading");
+      releaseOld(); await delivered; holdOldAnalysis = false;
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.equal(await analysis.locator("header p").first().textContent(), "Synthetic analysis B", "A delayed same-Goal read cannot undo a pack selection");
+      assert.match(await progress.innerText(), /历史捕获|historical/i);
+      await page.reload({waitUntil: "networkidle"});
+      await analysis.locator("header p").first().filter({hasText: /^Synthetic analysis B$/}).waitFor();
+      await page.setViewportSize({width: 390, height: 844});
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      await page.screenshot({path: resolve(outputDir, "research-analysis-mobile.png"), animations: "disabled"});
+      // Browser history changes source identity too. While A is delayed or
+      // unavailable, B's interpretation/cost must not be shown under A's URL.
+      await page.evaluate(({goal, a, b}) => {
+        const url = new URL(location.href);
+        url.searchParams.set("research_analysis_goal", goal);
+        url.searchParams.set("research_pack", a);
+        history.replaceState(history.state, "", url);
+        url.searchParams.set("research_pack", b);
+        history.pushState(history.state, "", url);
+      }, {goal, a: "a".repeat(64), b: "b".repeat(64)});
+      const backStarted = new Promise(resolve => {slowStarted = resolve;});
+      const backDelivered = new Promise(resolve => {oldDelivered = resolve;});
+      holdOldAnalysis = unavailableAnalysis = true;
+      await page.goBack();
+      await backStarted;
+      try {
+        assert.equal(await progress.getByRole("combobox").inputValue(), "a".repeat(64));
+        assert.equal(await progress.locator(".research-effect-metrics").count(), 0,
+          "A pending history read cannot borrow the previously displayed pack's judgments");
+        assert.equal(await progress.locator(".research-progress-scope").count(), 0,
+          "The previous pack's displayed scope is cleared, while source options remain available");
+      } finally {releaseOld(); await backDelivered; holdOldAnalysis = false;}
+      await analysis.getByRole("alert").waitFor();
+      assert.equal(await progress.locator(".research-effect-metrics").count(), 0,
+        "A failed history read cannot retain another pack's judgments");
+      assert.equal(await progress.getByRole("status").count(), 0,
+        "An unavailable source is not an indefinitely loading source");
+      await progress.scrollIntoViewIfNeeded();
+      await page.screenshot({path: resolve(outputDir, "research-analysis-history-unavailable-mobile.png"), animations: "disabled"});
+      unavailableAnalysis = false;
+      await analysis.getByRole("button", {name: "重试读取", exact: true}).click();
+      await analysis.locator("header p").first().filter({hasText: /^Synthetic analysis A$/}).waitFor();
+      await page.goForward();
+      await analysis.locator("header p").first().filter({hasText: /^Synthetic analysis B$/}).waitFor();
+      await analysis.press("Escape");
+      await analysis.waitFor({state: "hidden"});
+      assert.equal(await history.getByRole("button", {name: "查看分析", exact: true}).evaluate(button => button === document.activeElement), true);
+      await progress.getByRole("combobox").focus();
+      await progress.getByRole("combobox").selectOption("c".repeat(64));
+      await progress.locator(".research-progress-scope").filter({hasText: "Synthetic analysis C"}).waitFor();
+      assert.match(await progress.innerText(), /尚无完整用量捕获|No complete usage/);
+      assert.equal(await analysis.count(), 0, "Changing a factual scope preserves the closed analysis panel");
+      assert.match(await progress.innerText(), /不适用|N\/A/);
+      assert.doesNotMatch(await progress.innerText(), /0%/);
+      await history.getByRole("button", {name: "查看分析", exact: true}).click();
+      await analysis.locator("header p").first().filter({hasText: /^Synthetic analysis C$/}).waitFor();
+      await analysis.press('Escape');
+      await progress.getByRole('combobox').selectOption('d'.repeat(64));
+      await progress.locator('.research-progress-scope').filter({hasText:'Synthetic analysis D'}).waitFor();
+      assert.match(await progress.innerText(), /此范围尚无分析器判读/);
+      assert.equal(await progress.locator('.research-effect-metrics').count(), 0, 'An unanalysed cost pack never borrows another pack’s judgments');
+      assert.equal(await analysis.count(), 0, 'Choosing an unanalysed source never requests analysis');
+      await basis.locator('summary').click();
+      assert.match(await basis.innerText(), /原生保留结果.*candidate-retained/s, 'Native facts do not require an analyzer result');
+      const nativeCitation = basis.getByRole('button', {name: '查看原始证据', exact: true}).first();
+      await nativeCitation.focus(); await nativeCitation.press('Enter');
+      await citedOriginal.waitFor();
+      await citedOriginal.press('Escape');
+      await history.getByRole('button', {name: '关闭分析', exact: true}).click();
+      await basis.locator('summary').click();
+      // Analysis sources do not require an Explore log. The real read-only
+      // backend must keep their measurements discoverable with zero events.
+      const emptyFixture = resolve(temporary, "empty.json");
+      await writeFile(emptyFixture, JSON.stringify({goal_id: goal, display_name: "Synthetic empty Explore history", events: []}));
+      emptyOwner = await startHistoryOwner(emptyFixture);
+      const previousOwner = owner; owner = emptyOwner; await previousOwner.close();
+      await page.reload({waitUntil: "networkidle"});
+      await history.getByRole("status").filter({hasText: "0 / 0"}).waitFor();
+      await progress.locator(".research-progress-scope").filter({hasText: "Synthetic analysis D"}).waitFor();
+      assert.equal(analysisWrites, 0, "Cached, reload, switch and keyboard reading never request execution");
       assert.equal(api.turnRequests.length, 0, "Reading the graph cannot start an Agent");
       return {note: "Three unchanged real checkpoint histories through production HTTP + packaged UI; per-Goal complete pagination, genuine negative evidence, no invented edges, reload/back/forward, mobile and failed refresh. Separate synthetic coincident-target regression; no benchmark qualification or model dispatch.",
         coverageEntries: await context.close()};
@@ -248,6 +455,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       if (context && !context.page.isClosed()) await context.close();
       await owner.close();
       if(collisionOwner && collisionOwner!==owner) await collisionOwner.close();
+      if(emptyOwner && emptyOwner!==owner) await emptyOwner.close();
       if(temporary) await rm(temporary,{recursive:true,force:true});
     }
   },
