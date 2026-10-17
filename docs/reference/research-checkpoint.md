@@ -285,14 +285,28 @@ owner. Exact reads and edits share that destination's registry/provider revision
 old source previews become stale. A lost edit response recovers the original
 canonical operation without applying it twice. An unavailable destination refuses
 instead of reading or writing the old source. Creating a Task with automatic
-execution from this entry refuses before creation until session/runtime routing
-is qualified; the ordinary Task form creates without starting execution.
+execution from this entry refuses before creation until its Task execution/Host
+path is qualified; the ordinary Task form creates without starting execution.
 
-This workspace adoption covers selected status, delivery review, activation and
-ordinary Task interaction. Goal Chat/session binding, decision and monitor flows,
-deletion and sustained original-task execution still need their own integration.
-It does not redirect source CLI
-commands or executors. The full installed-profile and 120-second acceptance
+The original Goal Chat entry opens a fresh Session in the verified destination's
+normal Chat store and controller. It reads current Goal/Task facts there and
+keeps its upstream thread when the Chat service restarts. Repeating the same
+message identity reads its original Turn instead of dispatching another one.
+Previous source conversations remain readable as non-resumable history; send,
+queue, resume, attach and close requests cannot reuse them as destination
+authority. Target disconnection refuses without falling back to the source.
+Goal Stop permits history/status readback but rejects new Host messages. The
+existing per-Turn interrupt and Session close use the destination controller.
+Manager and ordinary project conversations retain their existing routes.
+
+This workspace adoption covers selected status, delivery review, activation,
+ordinary Task interaction and the owner-local Goal Chat route. Conversation
+tests use a scripted upstream adapter over real File/SQLite and HTTP/Turn
+owners; they do not qualify a live Codex Host. Normal non-editable package
+checks cover the existing status-only conversation and unavailable-Host path,
+without model inference. Decision and monitor flows, deletion and sustained
+original-task execution still need their own integration. It does not redirect
+source CLI commands or executors. The full installed-profile and 120-second acceptance
 remain unqualified.
 
 中文：已准入的本地迁移也会让原 Goal 主视图和交付评审读取真实目标。目标停止时，
@@ -301,9 +315,17 @@ remain unqualified.
 原有行为保持。原任务入口也会从目标读取完整要求，并复用目标 Todo owner 创建、
 编辑、暂停或恢复任务；详情与编辑绑定同一 registry/provider revision，旧源预览
 失效。编辑响应丢失后重试恢复原操作，不重复写入；目标不可用时不读写旧源。普通
-创建表单不启动执行；附带自动执行的创建请求在写入前拒绝，等待会话与运行时接通。
-当前仍需接通 Goal 对话和会话、审批与监控、删除及原任务持续执行；旧 CLI 与执行器
-不自动重定向，完整安装迁移及 120 秒验收仍未通过。
+创建表单不启动执行；附带自动执行的创建请求在写入前拒绝，等待其 Task 执行与 Host
+路径接通并通过验收。
+原 Goal 对话入口会在经核验的目标端创建独立新会话，读取当前目标与任务；服务重启
+后仍恢复目标端同一个线程，相同消息身份不会重复派发。旧源会话保留为不可恢复的
+历史，不可借发送、排队、恢复、挂接或关闭请求取得目标权限。目标断开时拒绝请求，
+不回退旧源；停止目标后仍可读历史和只读状态，但不接受新的 Host 消息。回合中断与
+会话关闭作用于目标控制器，管家及普通项目会话保持原路由。对话测试的上游适配器是
+脚本化替身，底层 File/SQLite、HTTP 与 Turn owner 为真实路径；正常非 editable 包
+验证只读状态对话及 Host 不可用路径，未进行模型推理，不宣称真实 Codex Host 验收。
+审批与监控、删除及原任务持续执行仍未完成；旧 CLI 与执行器不自动重定向，完整安装
+迁移及 120 秒验收仍未通过。
 
 ![Original Task requirements saved through the admitted local destination in the normal packaged App](assets/agent-transfer-task-edit.png)
 
