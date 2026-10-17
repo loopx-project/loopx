@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -12,7 +13,11 @@ from unittest.mock import Mock
 import pytest
 
 import loopx.extensions.process_runtime as process_runtime
-from loopx.extensions.process_runtime import run_capped_process, terminate_process_tree
+from loopx.extensions.process_runtime import (
+    remove_owned_tree,
+    run_capped_process,
+    terminate_process_tree,
+)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process-group regression")
@@ -423,3 +428,113 @@ def test_no_execution_deadline_preserves_completion_and_output_budget():
         stdin=b"", timeout_seconds=None, output_limit_bytes=1024,
     )
     assert limited.failure_kind == "response_too_large"
+
+
+def test_remove_owned_tree_removes_a_read_only_member(tmp_path: Path) -> None:
+    # Git marks every loose object it writes read-only, and Windows refuses to
+    # unlink a read-only file, which stranded the whole fixture root.
+    object_directory = tmp_path / ".git" / "objects" / "39"
+    object_directory.mkdir(parents=True)
+    object_file = object_directory / "6a2d80dac5ee96f7f8e1b120f2358ae0fcda"
+    object_file.write_bytes(b"blob")
+    os.chmod(object_file, stat.S_IREAD)
+
+    remove_owned_tree(tmp_path)
+
+    assert not tmp_path.exists()
+
+
+def _write_read_only_fixture(root: Path) -> Path:
+    """A git-shaped read-only object, the member the Windows pass rewrites."""
+    root.mkdir()
+    fixture = root / "object"
+    fixture.write_bytes(b"blob")
+    os.chmod(fixture, stat.S_IREAD)
+    return fixture
+
+
+def _assert_linked_target_untouched(target: Path, fixture: Path) -> None:
+    assert target.is_dir()
+    assert fixture.read_bytes() == b"blob"
+    assert os.stat(fixture).st_mode & stat.S_IWRITE == 0
+
+
+def test_remove_owned_tree_refuses_a_symlinked_root_without_touching_its_target(
+    tmp_path: Path,
+) -> None:
+    # os.walk starts at the root even when it is a link, so the Windows
+    # attribute pass would chmod the link target before shutil.rmtree refused
+    # the link. The rejection has to happen while the target is still untouched.
+    target = tmp_path / "external"
+    fixture = _write_read_only_fixture(target)
+    root = tmp_path / "owned-root"
+    try:
+        root.symlink_to(target, target_is_directory=True)
+    except (NotImplementedError, OSError) as error:
+        pytest.skip(f"cannot create a directory symlink: {error}")
+
+    with pytest.raises(OSError, match="linked tree root"):
+        remove_owned_tree(root)
+
+    assert root.is_symlink()
+    _assert_linked_target_untouched(target, fixture)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction regression")
+def test_remove_owned_tree_refuses_a_junction_root_without_touching_its_target(
+    tmp_path: Path,
+) -> None:
+    # Junctions are not symlinks, so os.path.islink misses them and os.walk
+    # descends into the target; they are the unprivileged Windows equivalent of
+    # the directory-symlink root the guard must refuse.
+    target = tmp_path / "external"
+    fixture = _write_read_only_fixture(target)
+    root = tmp_path / "owned-root"
+    created = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(root), str(target)],
+        capture_output=True, text=True, check=False,
+    )
+    assert created.returncode == 0, created.stderr or created.stdout
+
+    with pytest.raises(OSError, match="linked tree root"):
+        remove_owned_tree(root)
+
+    assert os.path.isdir(root)
+    _assert_linked_target_untouched(target, fixture)
+
+
+def test_remove_owned_tree_never_clears_a_shared_hard_link_attribute(
+    tmp_path: Path,
+) -> None:
+    # git clone --local hard-links loose objects, so a read-only clone object is
+    # the same file as the source object. The Windows attribute pass must not
+    # clear its read-only bit: that would change a file outside the owned
+    # fixture, and a successful removal would hide the side effect.
+    source = tmp_path / "source"
+    source.mkdir()
+    source_object = source / "object"
+    source_object.write_bytes(b"blob")
+    os.chmod(source_object, stat.S_IREAD)
+    owned = tmp_path / "owned"
+    owned.mkdir()
+    try:
+        os.link(source_object, owned / "object")
+    except (NotImplementedError, OSError) as error:
+        pytest.skip(f"cannot create a hard link: {error}")
+    assert os.stat(source_object).st_nlink == 2
+
+    if os.name == "nt":
+        # Fail closed: this directory entry cannot be removed without changing
+        # the shared file, so the fixture is retained and the caller reports
+        # cleanup failure instead of mutating another owner's object.
+        with pytest.raises(OSError):
+            remove_owned_tree(owned)
+        assert owned.exists()
+    else:
+        # POSIX unlinks the read-only directory entry without touching the
+        # inode or its other link.
+        remove_owned_tree(owned)
+        assert not owned.exists()
+
+    assert source_object.read_bytes() == b"blob"
+    assert os.stat(source_object).st_mode & stat.S_IWRITE == 0
