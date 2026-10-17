@@ -23,6 +23,16 @@ Python-owned projections do so through `loopx/control_plane/projection_envelope_
 | `loopx global-gates` | `global_gates` | `global` |
 | `loopx global-todos` | `global_todos` | `global` |
 | `loopx global-risks` | `global_risks` | `global` |
+| Goal task map in delivery review | `goal_task_map` | `goal_task_map` |
+| `GET /api/chat/delivery-review` | `delivery_review` | `selected_goal_delivery` |
+
+The Goal map seals actual Todo-read time and source/display omissions in its
+existing native composition. Its envelope does not certify task acceptance or
+execution readiness. The outer review inherits both the status and map sources;
+an unreadable map remains `null` and alerts without hiding healthy components.
+Unknown or truncated source scope cannot certify complete coverage. The shipped
+reader displays these flags, preserves them in exports and uses the existing
+refresh operation. Older responses without the envelope show unknown coverage.
 
 Other read models adopt the envelope in the order listed in the RFC; until
 then they carry no freshness guarantee and consumer rule 1 below applies.
