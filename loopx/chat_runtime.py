@@ -1547,10 +1547,11 @@ class ChatRuntimeController:
         path = self.store.turn_execution_lock_path(session_id, turn_id)
         if lock_holder_liveness(path)[0] != LOCK_HOLDER_DEAD:
             return
-        # Claim the same kernel lock before changing state: a replacement that
-        # already owns execution wins, including in another Chat service.
-        with try_exclusive_file_lock(path, agent_id="loopx-chat", operation="recover_chat_turn") as ownership:
-            if ownership is None:
+        # Take the execution fence without consuming its death evidence, so
+        # dependency failures remain retryable. Recheck under the fence: a
+        # replacement may have changed the holder since the first liveness read.
+        with try_exclusive_file_lock(path, preserve_holder=True) as ownership:
+            if ownership is None or lock_holder_liveness(path)[0] != LOCK_HOLDER_DEAD:
                 return
             session = self.store.load_session(session_id)
             turn = self.store.load_turn(session_id, turn_id)

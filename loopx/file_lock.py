@@ -685,11 +685,15 @@ def try_exclusive_file_lock(
     *,
     agent_id: str | None = None,
     operation: str | None = None,
+    preserve_holder: bool = False,
 ) -> Iterator[Path | None]:
     """Try once to hold a sibling lock file for single-flight work.
 
     ``None`` means another process already owns the lock. POSIX uses ``flock``;
     Windows uses the standard-library ``msvcrt`` byte-range lock.
+    Non-executing recovery can preserve the previous holder record while
+    taking the same kernel fence, so a failed recovery does not consume proof
+    of the original executor's death. Other callers retain normal recording.
     """
 
     lock_path = _lock_path(path)
@@ -710,20 +714,22 @@ def try_exclusive_file_lock(
             policy=LockAcquisitionPolicy.SINGLE_FLIGHT,
         )
         try:
-            _persist_holder_record(
-                lock_file,
-                lock_path=lock_path,
-                holder_path=holder_path,
-                record=record,
-            )
+            if not preserve_holder:
+                _persist_holder_record(
+                    lock_file,
+                    lock_path=lock_path,
+                    holder_path=holder_path,
+                    record=record,
+                )
             yield lock_path
         finally:
-            _mark_released(
-                lock_file,
-                lock_path=lock_path,
-                holder_path=holder_path,
-                record=record,
-            )
+            if not preserve_holder:
+                _mark_released(
+                    lock_file,
+                    lock_path=lock_path,
+                    holder_path=holder_path,
+                    record=record,
+                )
             _release_kernel_lock(lock_file)
 
 
