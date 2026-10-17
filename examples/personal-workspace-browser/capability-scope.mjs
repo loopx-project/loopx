@@ -109,11 +109,15 @@ export const capabilityScopeScenario = {
       ]);
       await reloadMemory();
       await page.getByRole("tab", {name: "经验学习", exact: true}).click();
-      await page.getByRole("region", {name: "Agent 记忆绑定读回", exact: true}).getByText(/独立绑定.*可用/u).waitFor();
+      await page.getByRole("combobox", {name: "经验作用范围", exact: true}).selectOption("writer");
+      const memoryReadback = page.getByRole("region", {name: "Agent 记忆绑定读回", exact: true});
+      await memoryReadback.getByText(/独立绑定.*可用/u).waitFor();
+      await memoryReadback.scrollIntoViewIfNeeded();
       if (await page.locator(".personal-memory-unbound").count()) throw new Error("An available Agent route is contradicted by a Goal-wide empty claim");
       await page.screenshot({path: resolve(outputDir, "capability-memory-available-desktop.png"), animations: "disabled"});
       await page.setViewportSize({width: 390, height: 844});
-      await page.getByRole("combobox", {name: "经验作用范围", exact: true}).scrollIntoViewIfNeeded();
+      await catalog.getByRole("button", {name: "记忆与资料", exact: true}).scrollIntoViewIfNeeded();
+      await memoryReadback.scrollIntoViewIfNeeded();
       await page.screenshot({path: resolve(outputDir, "capability-memory-available-mobile.png"), animations: "disabled"});
       if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)) throw new Error("Memory scope overflows the narrow viewport");
       await page.setViewportSize({width: 1512, height: 982});
@@ -123,7 +127,7 @@ export const capabilityScopeScenario = {
       await page.locator(".personal-memory-unbound").waitFor({state: "visible"});
       api.goalMemoryConfigurations.set("research-monitor", {...memory, effective_available: undefined, agent_bindings: []});
       await reloadMemory();
-      if (await page.locator(".personal-memory-unbound").count()) throw new Error("Unknown availability was presented as an empty Goal");
+      await page.locator(".personal-memory-unbound").waitFor({state: "hidden"});
       await defaults.check();
       await page.getByRole("navigation", { name: "机器能力目录" }).waitFor();
       if (await page.locator(".personal-capability-preview").count()) throw new Error("A Goal preview crossed into device defaults");
