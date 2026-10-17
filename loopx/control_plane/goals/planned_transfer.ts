@@ -67,6 +67,20 @@ export interface PreparedGoalStage {
   workspaceMaterials?: GoalTransferWorkspacePlan;
 }
 
+/** Fixed codec IO, shared with recovery at the retained original route. A
+ * cancellation readback must not rediscover or repair a later registration. */
+export async function readGoalTransferSnapshot(registry: string, goalId: string): Promise<JsonObject> {
+  const python = process.env.LOOPX_EFFECT_RUNTIME_PYTHON;
+  if (!python || !isAbsolute(python) || python.includes("\0")) reject("Registered Goal context requires the source-selected Python codec adapter");
+  try {
+    const result = await executeFile(python, ["-m", "loopx.control_plane.goals.planned_transfer_io", registry, goalId], {
+      env: {...process.env, PYTHONPATH: fileURLToPath(new URL("../../../", import.meta.url))},
+      timeout: 30_000, maxBuffer: 16 * 1024 * 1024,
+    });
+    return requireJsonObject(JSON.parse(result.stdout), "registered context codec readback");
+  } catch { reject("Registered Goal context codec readback is unavailable; preserve the original operation and retry through its installed source"); }
+}
+
 /** Capture Goal intent through its actual registered source while the caller
  * holds maintenance. Read the registered Goal through the existing Python
  * registry codec using the source-selected interpreter, never another registry
@@ -85,16 +99,7 @@ export async function withVerifiedGoalTransferContext<T>(raw: unknown, rawWitnes
   if (!hasExactAuthorityKeys(witness, ["path", "sha256"]) || witness.path !== registry ||
       typeof witness.sha256 !== "string" || !BARE_SHA256_PATTERN.test(witness.sha256) || state === registry) reject("Invalid registered Goal context witness");
   const verify = async () => {
-    const python = process.env.LOOPX_EFFECT_RUNTIME_PYTHON;
-    if (!python || !isAbsolute(python) || python.includes("\0")) reject("Registered Goal context requires the source-selected Python codec adapter");
-    let observed: JsonObject;
-    try {
-      const result = await executeFile(python, ["-m", "loopx.control_plane.goals.planned_transfer_io", registry, goalId], {
-        env: {...process.env, PYTHONPATH: fileURLToPath(new URL("../../../", import.meta.url))},
-        timeout: 30_000, maxBuffer: 16 * 1024 * 1024,
-      });
-      observed = requireJsonObject(JSON.parse(result.stdout), "registered context codec readback");
-    } catch { reject("Registered Goal context codec readback is unavailable; preserve the original operation and retry through its installed source"); }
+    const observed = await readGoalTransferSnapshot(registry, goalId);
     if (observed.registry_profile !== null) reject("This source context profile requires the normal project registry; lifecycle-only adoption remains held");
     if (observed.registry_role === "global-local") reject("A global registry is a read model; resolve the original project registration before transfer");
     if (!canonicalAuthorityBytes(observed.registry_witness).equals(canonicalAuthorityBytes(witness))) reject("Registered Goal context changed; review its original transfer");

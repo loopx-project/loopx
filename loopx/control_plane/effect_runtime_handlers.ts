@@ -418,6 +418,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.authority_archive.manage", lazyHandler(() => import("./coordination/local_authority_archive.ts"), ({manageLocalAuthorityArchive}) => manageLocalAuthorityArchive)],
     ["coordination.planned_transfer.preview_source", lazyHandler(() => import("./coordination/planned_transfer_authority.ts"), ({previewRegisteredAuthorityForPlannedTransfer}) => previewRegisteredAuthorityForPlannedTransfer)],
     ["coordination.planned_transfer.prepare_authority", lazyHandler(() => import("./coordination/planned_transfer_authority.ts"), ({prepareAuthorityForPlannedTransfer}) => prepareAuthorityForPlannedTransfer)],
+    ["coordination.planned_transfer.cancel_source_preparation", lazyHandler(() => import("./coordination/planned_transfer_authority.ts"), ({cancelSourcePreparation}) => cancelSourcePreparation)],
     ["coordination.planned_transfer.registry_write_check", lazyHandler(() => import("./coordination/planned_transfer_authority.ts"), ({checkPlannedTransferRegistryWrite}) => checkPlannedTransferRegistryWrite)],
     ["coordination.planned_transfer.runtime_write_check", lazyHandler(() => import("./coordination/local_authority_write.ts"), ({checkGoalRuntimeWrite}) => checkGoalRuntimeWrite)],
     ["coordination.planned_transfer.stage_target", lazyHandler(() => import("./coordination/planned_transfer_target.ts"), ({stageAuthorityForPlannedTransfer}) => stageAuthorityForPlannedTransfer)],

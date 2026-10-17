@@ -230,6 +230,30 @@ export async function preparePlannedTransferWriterFenceUnderLock(root: string, g
   });
 }
 
+/** Preparation-only cancellation after the Goal owner durably records its
+ * decision under maintenance/source locks. Restore the exact qualified normal
+ * source fence, never remove a fence or manufacture a new creation grant. */
+export async function restorePlannedTransferWriterFenceUnderLock(root: string, goalId: string,
+  prepared: PlannedTransferWriterFence, prior: JsonObject): Promise<void> {
+  decodeLegacyCoordinationWriterFence(prepared);
+  decodeLegacyCoordinationWriterFence(prior);
+  if (prepared.goal_id !== goalId || prepared.schema_version !== PLANNED_TRANSFER_WRITER_FENCE_SCHEMA ||
+      prepared.role !== "source" || prior.goal_id !== goalId || prior.schema_version !== NEW_GOAL_WRITER_FENCE_SCHEMA ||
+      prior.creation_completed !== true) throw new Error("Invalid source preparation cancellation fence");
+  const path = legacyCoordinationWriterFencePath(root, goalId);
+  await withFileMutationLock(path, async () => {
+    const current = await loadLegacyCoordinationWriterFence(root, goalId);
+    if (current.status !== "loaded") throw new Error("Original source writer fence is unavailable");
+    if (canonicalAuthorityBytes(current.fence).equals(canonicalAuthorityBytes(prior))) return;
+    if (!canonicalAuthorityBytes(current.fence).equals(canonicalAuthorityBytes(prepared))) throw new Error("Source writer fence changed before cancellation");
+    await atomicWriteJson(path, prior);
+    const after = await loadLegacyCoordinationWriterFence(root, goalId);
+    if (after.status !== "loaded" || !canonicalAuthorityBytes(after.fence).equals(canonicalAuthorityBytes(prior))) {
+      throw new Error("Cancelled source writer fence readback failed");
+    }
+  });
+}
+
 export async function loadLegacyCoordinationWriterFence(
   root: string,
   goalId: string,

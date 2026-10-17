@@ -100,6 +100,20 @@ def prepare_registered_goal_transfer(
     return result
 
 
+def cancel_prepared_goal_transfer(*, runtime_root: Path, goal_id: str, operation_id: str) -> dict[str, Any]:
+    """Recover the retained pre-cutover operation, without rediscovering a route.
+
+    These fields are lookup addresses, not source proof. The native Goal owner
+    loads the original preparation, registry context and fence. Retried readback
+    must preserve later registration changes and never issue a target grant.
+    """
+    result: dict[str, Any] = effect_runtime_result("coordination.planned_transfer.cancel_source_preparation", {
+        "runtime_root": str(runtime_root.expanduser().absolute()), "goal_id": goal_id,
+        "operation_id": operation_id, "execute": True,
+    }, timeout=60.0, retry_safe=False)
+    return result
+
+
 def _registered_preparation_request(
     registry_path: Path, goal_id: str, operation_id: str, expected_preview_sha256: str,
 ) -> dict[str, Any]:

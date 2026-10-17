@@ -15,24 +15,29 @@ import {requireJsonObject} from "../runtime_decode.ts";
 import {canonicalAuthorityBytes, canonicalAuthoritySha256, hasExactAuthorityKeys, requireAuthorityStoreId} from "./authority_store_codec.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {exportAuthorityArchive, verifyAuthorityArchive, type AuthorityArchiveSummary} from "./authority_archive.ts";
+import {AUTHORITY_ARCHIVE_SCHEMA} from "./authority_archive_read.ts";
 import {indexCoordinationProjection} from "./coordination_projection.ts";
 import {canonicalTaskLease} from "./task_lease_state.ts";
 import {openLocalAuthorityStoreHandle, requireLocalAuthorityRuntimeRoot} from "./local_authority_provider.ts";
 import {loadLegacyCoordinationWriterFence, preparePlannedTransferWriterFenceUnderLock,
-  PLANNED_TRANSFER_WRITER_FENCE_SCHEMA} from "./legacy_writer_fence.ts";
+  restorePlannedTransferWriterFenceUnderLock, PLANNED_TRANSFER_WRITER_FENCE_SCHEMA,
+  type PlannedTransferWriterFence} from "./legacy_writer_fence.ts";
 import {readShadowManagementState, shadowManagementDirectory, withShadowMaintenanceLock} from "./shadow_management.ts";
-import {PREPARATION_SCHEMA, withVerifiedGoalTransferContext} from "../goals/planned_transfer.ts";
+import {PREPARATION_SCHEMA, readGoalTransferSnapshot, withVerifiedGoalTransferContext} from "../goals/planned_transfer.ts";
 import {reviewProtectedGoalTransferInputs, writeProtectedGoalTransfer} from "../goals/planned_transfer_payload.ts";
 import type {AuthorityStore} from "./authority_store.ts";
 import {newGoalCreationBinding} from "./new_goal_initialization.ts";
 import {readPromotionReceipt} from "./promotion_receipt.ts";
 import {NEW_GOAL_WRITER_FENCE_SCHEMA} from "./legacy_writer_fence.ts";
-import {readGoalTurnHistoryForTransfer} from "../turn_driver/turn_journal_query.ts";
-import {goalTransferHistory} from "../goals/planned_transfer_history.ts";
+import {readGoalTurnHistoryForTransfer, readGoalTurnJournalsForTransfer} from "../turn_driver/turn_journal_query.ts";
+import {goalTransferHistory, readGoalTransferHistoryJson} from "../goals/planned_transfer_history.ts";
 import {readGoalQuotaHistoryForTransfer} from "../quota/accounting_artifact_transaction.ts";
 
 export {PREPARATION_SCHEMA} from "../goals/planned_transfer.ts";
 const REGISTERED_SOURCE_PREVIEW_SCHEMA = "loopx_planned_transfer_source_preview_v0";
+// Local to this Goal-owned preparation protocol; no destination grant or new
+// runtime lifecycle vocabulary is introduced by this retained decision.
+const CANCELLATION_SCHEMA = "loopx_planned_transfer_source_cancellation_v0";
 
 /** The codec calls while holding its original registry transaction. Ordinary
  * metadata can no longer reopen, remove or redirect a prepared Goal. Changes
@@ -88,7 +93,7 @@ export async function checkPlannedTransferRegistryWrite(value: JsonObject): Prom
 function reject(message: string): never { throw new EffectRuntimeConflictError(message); }
 function same(a: unknown, b: unknown): boolean { return canonicalAuthorityBytes(a).equals(canonicalAuthorityBytes(b)); }
 async function optionalJson(path: string): Promise<JsonObject | null> {
-  try { return requireJsonObject(JSON.parse(await readFile(path, "utf8")), "transfer preparation"); }
+  try { return await readGoalTransferHistoryJson(path); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
 }
 async function retain(path: string, value: JsonObject): Promise<void> {
@@ -107,9 +112,8 @@ async function retain(path: string, value: JsonObject): Promise<void> {
  * Imported/legacy origins need their own original-registration qualification;
  * the lower-level archive/preparation owners remain available without claiming it.
  */
-async function registeredSourcePreview(context: JsonObject, originalFence: JsonObject,
-  store: AuthorityStore, provider: string, head: {head: JsonObject; cursor: string; provider_revision: string},
-  storeIdentity: string, goalId: string, operationId: string): Promise<JsonObject> {
+async function requireRegisteredSourceOrigin(context: JsonObject, originalFence: JsonObject,
+  store: AuthorityStore, goalId: string): Promise<void> {
   const goal = requireJsonObject(context.goal, "original registered Goal");
   if (goal.status !== "active") reject("Transfer requires the current registered Goal; recover its original lifecycle before preparing a move");
   const coordination = requireJsonObject(goal.coordination, "original Goal coordination");
@@ -124,6 +128,12 @@ async function registeredSourcePreview(context: JsonObject, originalFence: JsonO
       !(await readPromotionReceipt(store, binding.identity)).matched) {
     reject("Transfer source differs from its original registered creation and retained receipt; repair that source without recreating it");
   }
+}
+
+async function registeredSourcePreview(context: JsonObject, originalFence: JsonObject,
+  store: AuthorityStore, provider: string, head: {head: JsonObject; cursor: string; provider_revision: string},
+  storeIdentity: string, goalId: string, operationId: string): Promise<JsonObject> {
+  await requireRegisteredSourceOrigin(context, originalFence, store, goalId);
   const index = indexCoordinationProjection(head.head, goalId);
   const retainedLeases = [...index.leases].map(([todo, lease]) => canonicalTaskLease(lease, goalId, todo))
     .filter(lease => lease.status !== "released");
@@ -149,6 +159,7 @@ export async function previewRegisteredAuthorityForPlannedTransfer(value: JsonOb
   const operationId = requireAuthorityStoreId(value.operation_id, "transfer operation id");
   return withShadowMaintenanceLock(root, goalId, () => withVerifiedGoalTransferContext(
     value.source_context, value.registry_witness, goalId, root, async context => {
+      await requireUncancelledPreparation(join(shadowManagementDirectory(root, goalId), "planned-transfers", canonicalAuthoritySha256(operationId)));
       const managed = await readShadowManagementState(root, goalId);
       if (managed && managed.status !== "inactive") reject("Source capture requires disposition before transfer preview");
       const current = await loadLegacyCoordinationWriterFence(root, goalId);
@@ -196,6 +207,7 @@ export async function prepareAuthorityForPlannedTransfer(value: JsonObject): Pro
     expected_writer_fence_sha256: value.expected_writer_fence_sha256};
   const directory = join(shadowManagementDirectory(root, goal), "planned-transfers", canonicalAuthoritySha256(operation));
   return withShadowMaintenanceLock(root, goal, async () => {
+    await requireUncancelledPreparation(directory);
     const prepare = async (context?: JsonObject) => {
     const managed = await readShadowManagementState(root, goal);
     if (managed && managed.status !== "inactive") reject("Source capture requires disposition before planned transfer");
@@ -233,8 +245,7 @@ export async function prepareAuthorityForPlannedTransfer(value: JsonObject): Pro
       if (!same(pending, {...facts, original_writer_fence: priorFence})) reject("Transfer source or original operation changed");
       // A carrier is written before the fence, so an interrupted first call may
       // still find the exact original fence. Neither case permits other bytes.
-      const expectedFence = {schema_version: PLANNED_TRANSFER_WRITER_FENCE_SCHEMA, state: "engaged", goal_id: goal,
-        role: "source", fence_id: `planned-transfer:${operation}`, operation_id: operation, source_identity_sha256: canonicalAuthoritySha256(pending)};
+      const expectedFence = sourcePreparationFence(goal, operation, pending);
       if (!same(current.fence, priorFence) && !same(current.fence, expectedFence)) reject("Source writer fence changed during transfer preparation");
     } else {
       if (current.fence.schema_version === PLANNED_TRANSFER_WRITER_FENCE_SCHEMA) reject("Source is already prepared by another transfer operation");
@@ -250,11 +261,7 @@ export async function prepareAuthorityForPlannedTransfer(value: JsonObject): Pro
     const protectedInputs = protectedExport ? await reviewProtectedGoalTransferInputs(value.protected_transport, context!, value.source_package_version) : undefined;
     await mkdir(directory, {recursive: true, mode: 0o700});
     await retain(pendingPath, preparation);
-    await preparePlannedTransferWriterFenceUnderLock(root, goal, priorFence, {
-      schema_version: PLANNED_TRANSFER_WRITER_FENCE_SCHEMA, state: "engaged", goal_id: goal,
-      role: "source", fence_id: `planned-transfer:${operation}`, operation_id: operation,
-      source_identity_sha256: canonicalAuthoritySha256(preparation),
-    });
+    await preparePlannedTransferWriterFenceUnderLock(root, goal, priorFence, sourcePreparationFence(goal, operation, preparation));
     // Export reuses the native retained-journal owner and its independent audit.
     // The fence stays closed on every error, including interrupted publication.
     const archive = join(directory, "authority.ndjson");
@@ -278,5 +285,107 @@ export async function prepareAuthorityForPlannedTransfer(value: JsonObject): Pro
       result, context!, join(directory, "encrypted-export-key.json"))} : result;
     };
     return contextBound ? withVerifiedGoalTransferContext(value.source_context, value.registry_witness, goal, root, prepare) : prepare();
+  });
+}
+
+function sourcePreparationFence(goal: string, operation: string, pending: JsonObject): PlannedTransferWriterFence {
+  return {schema_version: PLANNED_TRANSFER_WRITER_FENCE_SCHEMA, state: "engaged", goal_id: goal,
+    role: "source", fence_id: `planned-transfer:${operation}`, operation_id: operation,
+    source_identity_sha256: canonicalAuthoritySha256(pending)};
+}
+
+async function requireUncancelledPreparation(directory: string): Promise<void> {
+  if (await optionalJson(join(directory, "cancelled.json"))) reject("This source preparation was cancelled; review a new transfer operation");
+}
+
+/** Abandon only a qualified, unchanged local preparation. There is no cutover
+ * grant in this protocol. Future cutover must be mutually exclusive with this
+ * decision under the same maintenance owner; a preparation receipt alone must
+ * never authorize a destination.
+ *
+ * Retain the cancellation BEFORE restoring the original fence. Cold recovery
+ * may finish that exact CAS, but a historical retry never rewinds later source
+ * work, a different transfer, registry metadata, receipts or provider history.
+ */
+export async function cancelSourcePreparation(value: JsonObject): Promise<JsonObject> {
+  if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id", "operation_id", "execute"]) || value.execute !== true) {
+    reject("Source preparation cancellation requires its original address and explicit execution");
+  }
+  const root = requireLocalAuthorityRuntimeRoot(value.runtime_root);
+  const goal = requireAuthorityStoreId(value.goal_id, "source Goal id"), operation = requireAuthorityStoreId(value.operation_id, "transfer operation id");
+  const directory = join(shadowManagementDirectory(root, goal), "planned-transfers", canonicalAuthoritySha256(operation));
+  return withShadowMaintenanceLock(root, goal, async () => {
+    const pending = await optionalJson(join(directory, "preparation.json"));
+    if (!pending || pending.schema_version !== PREPARATION_SCHEMA || !hasExactAuthorityKeys(pending,
+        ["schema_version", "request", "source_provider", "source_store_identity", "source_cursor", "source_projection_sha256",
+          "source_turn_history", "source_quota_history", "source_context", "source_context_sha256", "original_writer_fence"])) {
+      reject("Cancellation requires the retained original registered source preparation");
+    }
+    const request = requireJsonObject(pending.request, "original preparation request");
+    const context = requireJsonObject(pending.source_context, "original registered source context");
+    const prior = requireJsonObject(pending.original_writer_fence, "original source fence");
+    if (!hasExactAuthorityKeys(request, ["goal_id", "operation_id", "expected_provider_revision", "expected_writer_fence_sha256"]) ||
+        request.goal_id !== goal || request.operation_id !== operation || context.runtime_root !== root ||
+        pending.source_context_sha256 !== canonicalAuthoritySha256(context) || request.expected_writer_fence_sha256 !== canonicalAuthoritySha256(prior)) {
+      reject("Cancellation source identity differs from its original preparation");
+    }
+    const receipt = await optionalJson(join(directory, "receipt.json"));
+    if (receipt && (!hasExactAuthorityKeys(receipt, ["schema_version", "operation_id", "goal_id", "authority_write_fenced",
+        "authority_archive", "archive", "runtime_history", "source_context_sha256", "original_registration_verified",
+        "host_drain_qualified", "portable_artifact_qualified", "execution_authority_granted"]) ||
+        receipt.schema_version !== PREPARATION_SCHEMA || receipt.operation_id !== operation || receipt.goal_id !== goal ||
+        receipt.authority_write_fenced !== true || receipt.original_registration_verified !== true ||
+        receipt.source_context_sha256 !== pending.source_context_sha256 || receipt.host_drain_qualified !== false ||
+        receipt.portable_artifact_qualified !== false || receipt.execution_authority_granted !== false)) {
+      reject("Cancellation requires a registered preparation-only receipt; preserve any later transfer phase");
+    }
+    if (receipt) {
+      const archive = requireJsonObject(receipt.authority_archive, "original preparation archive identity");
+      if (!hasExactAuthorityKeys(archive, ["schema_version", "goal_id", "source_provider", "source_store_identity",
+          "source_provider_revision", "commits", "projection_sha256", "archive_sha256"]) ||
+          archive.schema_version !== AUTHORITY_ARCHIVE_SCHEMA || archive.goal_id !== goal || archive.source_provider !== pending.source_provider ||
+          archive.source_store_identity !== pending.source_store_identity || archive.source_provider_revision !== request.expected_provider_revision ||
+          archive.commits !== pending.source_cursor || archive.projection_sha256 !== pending.source_projection_sha256 ||
+          !BARE_SHA256_PATTERN.test(String(archive.archive_sha256)) || receipt.archive !== join(directory, "authority.ndjson") ||
+          !same(receipt.runtime_history, goalTransferHistory(root, goal,
+            requireJsonObject(pending.source_turn_history, "original Turn history"), requireJsonObject(pending.source_quota_history, "original quota history")))) {
+        reject("Preparation receipt differs from its original source identity; preserve the original operation");
+      }
+    }
+    // Missing receipt is an interrupted preparation, not a completed move.
+    // Its native pending identity and current source fence still have to match.
+    const decision = {schema_version: CANCELLATION_SCHEMA, goal_id: goal, operation_id: operation,
+      source_preparation_sha256: canonicalAuthoritySha256(pending),
+      source_receipt_sha256: receipt ? canonicalAuthoritySha256(receipt) : null,
+      original_writer_fence_sha256: canonicalAuthoritySha256(prior), preparation_cancelled: true, execution_authority_granted: false};
+    const retained = await optionalJson(join(directory, "cancelled.json"));
+    if (retained && !same(retained, decision)) reject("Original source cancellation decision changed; preserve its original operation");
+    const prepared = sourcePreparationFence(goal, operation, pending);
+    const current = await loadLegacyCoordinationWriterFence(root, goal);
+    const readback = async () => {
+      const observed = await loadLegacyCoordinationWriterFence(root, goal);
+      return {decision, readback: {writer_fence: observed,
+        original_writer_fence_restored: observed.status === "loaded" && same(observed.fence, prior)}};
+    };
+    if (retained && (current.status !== "loaded" || !same(current.fence, prepared))) return readback();
+    if (current.status !== "loaded" || !same(current.fence, prepared)) reject("Source is not owned by this prepared operation; cancellation cannot replace its writer fence");
+    const snapshot = await readGoalTransferSnapshot(String(context.registry_path), goal);
+    return withVerifiedGoalTransferContext(context, snapshot.registry_witness, goal, root, async () => {
+      const managed = await readShadowManagementState(root, goal);
+      if (managed && managed.status !== "inactive") reject("Source capture requires disposition before preparation cancellation");
+      const opened = await openLocalAuthorityStoreHandle(root, goal, {}, {existingOnly: true});
+      const head = await opened.store.loadAuthority(), identity = await opened.store.storeIdentity();
+      if ((opened.provider !== "file" && opened.provider !== "sqlite") || opened.provider !== pending.source_provider ||
+          head.status !== "loaded" || identity.status !== "available" || identity.store_identity !== pending.source_store_identity ||
+          head.provider_revision !== request.expected_provider_revision || head.cursor !== pending.source_cursor ||
+          canonicalAuthoritySha256(head.head) !== pending.source_projection_sha256) reject("Prepared source authority changed; cancellation must not restore over later work");
+      await requireRegisteredSourceOrigin(context, prior, opened.store, goal);
+      const turns = await readGoalTurnJournalsForTransfer(root, goal), originalTurns = requireJsonObject(pending.source_turn_history, "original Turn history");
+      if (!same(turns, {turns: originalTurns.turns, files: originalTurns.files, closed: originalTurns.closed}) ||
+          !same(await readGoalQuotaHistoryForTransfer(root, goal), pending.source_quota_history)) reject("Prepared source settlement history changed; recover its original owner before cancellation");
+      await retain(join(directory, "cancelled.json"), decision);
+      await restorePlannedTransferWriterFenceUnderLock(root, goal, prepared, prior);
+      return readback();
+    });
   });
 }

@@ -8,7 +8,7 @@ import {promisify} from "node:util";
 import {fileURLToPath} from "node:url";
 import test, {type TestContext} from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
-import {prepareAuthorityForPlannedTransfer as prepare} from "../../loopx/control_plane/coordination/planned_transfer_authority.ts";
+import {prepareAuthorityForPlannedTransfer as prepare, cancelSourcePreparation} from "../../loopx/control_plane/coordination/planned_transfer_authority.ts";
 import {stageAuthorityForPlannedTransfer as stage} from "../../loopx/control_plane/coordination/planned_transfer_target.ts";
 import {localAuthorityProviderPaths, selectLocalAuthorityTarget, openLocalAuthorityStoreHandle} from "../../loopx/control_plane/coordination/local_authority_provider.ts";
 import {withFileMutationLock, acquireFileMutationLock, mutationLockOwner, releaseFileMutationLock} from "../../loopx/control_plane/effect_runtime_io.ts";
@@ -436,6 +436,9 @@ for (const provider of ["file", "sqlite"] as const) {
     assert.deepEqual(await f.store.loadAuthority(), before, "preparation must not change native history or original receipts");
     const originalFence = await readFile(f.fencePath);
     const originalReceipt = await readFile(join(f.directory, "receipt.json"));
+    await assert.rejects(cancelSourcePreparation({runtime_root: f.root, goal_id: "goal-a", operation_id: "move-original", execute: true}),
+      /retained original registered source preparation/, "an archive-only import has no qualified normal-source cancellation grant");
+    assert.deepEqual(await readFile(f.fencePath), originalFence);
     assert.deepEqual(await prepare(f.request), prepared);
     assert.deepEqual(await readFile(f.fencePath), originalFence);
     assert.deepEqual(await readFile(join(f.directory, "receipt.json")), originalReceipt);
