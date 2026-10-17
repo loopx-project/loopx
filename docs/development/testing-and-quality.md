@@ -389,6 +389,14 @@ it differs from the live server before dispatching expensive work. Stop only
 that isolated runtime after its requests settle, retaining the same temporary
 environment for shutdown; never restart a live server as test cleanup.
 
+Automatic test cleanup must verify namespace ownership as well as PID/token
+identity. An ordinary copy of a valid locator inside a test directory is not
+permission to stop its original server. The private authenticated `runtime.ping`
+reports the physical locator path frozen at publication; compare it with the
+exact disposable locator before requesting shutdown, including when pytest has
+already removed the fixture directory. Missing provenance remains unknown and
+cannot authorize cleanup. This observation is not a Goal or execution grant.
+
 Process isolation still shares machine resources. Run matched timing arms
 sequentially without overlapping builds or recovery work. If interference is
 discovered, retain failures and durable-receipt evidence, mark latency samples

@@ -228,7 +228,13 @@ def test_planning_input_is_clock_independent_but_preserves_task_time_constraints
         assert render_planning_prompt(packet, env) == body
         assert env == {"LOOPX_PHASE_DEADLINE_EPOCH": deadline}
     assert json.loads(body.split("Host-supplied planning checkpoint:\n", 1)[1]) == packet
-    assert body == "$loopx\n\nHost-supplied planning checkpoint:\n" + json.dumps(packet, ensure_ascii=False)
+    assert body.startswith("$loopx\n\nBenchmark research planning guidance:\n")
+    assert "declared interface, units, scale" in body
+    assert "preserve that reference while testing a replacement" in body
+    assert "negative experiment can complete its own Todo" in body
+    assert "neither creates a new acceptance document or permission requirement" in body
+    assert "Host deadline" not in body and "remaining" not in body
+    assert packet == {"input_digest": "unchanged", "text": "Task constraint: inference under 30 seconds."}
 
 
 @pytest.mark.parametrize("value", ["nan", "inf", "-inf", "0", "-1", "not-a-clock"])
@@ -745,6 +751,58 @@ def test_runner_cadence_persists_through_real_configure_goal(
     assert agent._replan_receipt() == {field: value,
         **({"planning_horizon_goal": horizon} if horizon is not None else {}), **({"stride_strategy": strategy}
                                                     if strategy is not None else {})}
+
+
+def test_sforge_planning_entry_retries_a_dropped_planning_wake_within_budget(planning_env, monkeypatch):
+    import benchmark.runtime.sforge_entry as entry
+
+    real = entry.run_once
+    seen = []
+
+    def flaky(env):
+        seen.append(env["LOOPX_TASK_STAGE"])
+        if len(seen) == 1:
+            # The native process died without a plan or a harness error.
+            return {"ok": False, "timed_out": False, "return_code": 1}
+        return real(env)
+
+    monkeypatch.setattr(entry, "run_once", flaky)
+    env = planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 600)}
+    assert entry.prepare_entry(env)
+    assert seen == ["plan", "plan"]
+    attempts = json.loads(Path(env["LOOPX_PLANNING_RESULT"]).with_name("planning-attempts.json").read_text())
+    assert [a["ok"] for a in attempts] == [False, True]
+    assert attempts[0]["return_code"] == 1
+    assert len(list(Path(env["LOOPX_WAKE_LOG_DIR"]).glob("*/receipt.json"))) == 1
+
+
+@pytest.mark.parametrize("receipt", [
+    {"ok": False, "timed_out": True, "return_code": 124},
+    {"ok": False, "timed_out": False, "return_code": 1, "error_kind": "ValueError"},
+    {"ok": False, "timed_out": False, "return_code": 0},
+])
+def test_sforge_planning_entry_does_not_retry_timeouts_or_harness_failures(planning_env, monkeypatch, receipt):
+    import benchmark.runtime.sforge_entry as entry
+
+    calls = []
+    monkeypatch.setattr(entry, "run_once", lambda env: calls.append(env["LOOPX_TASK_STAGE"]) or dict(receipt))
+    env = planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 600)}
+    with pytest.raises(RuntimeError, match="Planning failed"):
+        entry.prepare_entry(env)
+    assert calls == ["plan"]
+    attempts = json.loads(Path(env["LOOPX_PLANNING_RESULT"]).with_name("planning-attempts.json").read_text())
+    assert len(attempts) == 1 and attempts[0]["ok"] is False
+
+
+def test_sforge_planning_entry_stops_retrying_after_the_attempt_limit(planning_env, monkeypatch):
+    import benchmark.runtime.sforge_entry as entry
+
+    calls = []
+    monkeypatch.setattr(entry, "run_once", lambda env: calls.append(1) or {"ok": False, "timed_out": False, "return_code": 1})
+    env = planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 600)}
+    with pytest.raises(RuntimeError, match="Planning failed"):
+        entry.prepare_entry(env)
+    assert len(calls) == entry.PLANNING_WAKE_ATTEMPTS
 
 
 @pytest.mark.parametrize("context", ["fresh", "resume"])

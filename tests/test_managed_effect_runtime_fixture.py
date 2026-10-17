@@ -10,7 +10,7 @@ import textwrap
 
 import pytest
 
-from managed_effect_runtime_fixture import stop_disposable_effect_runtimes
+from managed_effect_runtime_fixture import capture_disposable_effect_runtimes, stop_disposable_effect_runtimes
 from loopx.control_plane import effect_runtime
 
 
@@ -133,8 +133,41 @@ def test_cleanup_does_not_hide_an_unfinished_shutdown(tmp_path, monkeypatch):
         "pid": 123, "fingerprint": fingerprint,
     })
     monkeypatch.setattr(effect_runtime, "_request_with_info", lambda *_a, **_k: {
-        "result": {"ready": True, "pid": 123, "fingerprint": fingerprint},
+        "result": {"ready": True, "pid": 123, "fingerprint": fingerprint,
+                   "info_path": str(locator.resolve())},
     })
     monkeypatch.setattr(effect_runtime, "_stop_effect_runtime", lambda *_a, **_k: {"stopped": False})
     with pytest.raises(AssertionError, match="Disposable runtime did not exit"):
         stop_disposable_effect_runtimes(tmp_path)
+
+
+@pytest.mark.parametrize("removed", [False, True])
+def test_regular_locator_copy_cannot_authorize_foreign_runtime_shutdown(tmp_path, monkeypatch, removed):
+    foreign, owned = tmp_path / "foreign", tmp_path / "owned"
+    foreign.mkdir()
+    owned.mkdir()
+    with monkeypatch.context() as isolated:
+        isolated.setattr(effect_runtime.tempfile, "tempdir", str(foreign))
+        effect_runtime.effect_runtime_result("runtime.ping", {})
+        locator = effect_runtime._runtime_info_path(effect_runtime._runtime_fingerprint())
+        info = json.loads(locator.read_text(encoding="utf-8"))
+        try:
+            copied = owned / locator.parent.name / locator.name
+            copied.parent.mkdir()
+            # Even a claimed publication path in the untrusted JSON is not
+            # proof of where the authenticated server originally published.
+            copied.write_text(json.dumps({**info, "info_path": str(copied)}), encoding="utf-8")
+            captured = capture_disposable_effect_runtimes(owned)
+            assert len(captured) == 1 and not copied.is_symlink()
+            if removed:
+                copied.unlink()
+                copied.parent.rmdir()
+                owned.rmdir()
+            stop_disposable_effect_runtimes(owned, captured if removed else None)
+            # Do not use normal ping: it could restart a killed server and
+            # obscure the original runtime's loss.
+            response = effect_runtime._request_with_info(info, request_id="foreign-survives",
+                method="runtime.ping", params={}, timeout=2)
+            assert response["result"]["pid"] == info["pid"]
+        finally:
+            effect_runtime._stop_effect_runtime(locator, info, timeout=5, wait_for_process_exit=True)

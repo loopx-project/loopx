@@ -203,25 +203,42 @@ class CheckpointWake:
                         raise subprocess.TimeoutExpired(command, timeout)
                     if not select.select([self.listener], [], [], min(.1, remaining))[0]:
                         continue
-                    with held_quota_decision(self.listener, self.capture_root,
-                            goal_id=self.env["LOOPX_GOAL_ID"], agent_id=self.env["LOOPX_AGENT_ID"],
-                            turn_instance_id=None, native_process=process,
-                            interrupt_timeout=min(10, remaining), interrupt_when=self._first_replan,
-                            deadline=deadline) as held:
-                        if "native_process_return_code" not in held:
-                            continue
-                        stdout.flush()
-                        session_wake.observe(wake / "stdout.jsonl")
-                        event = {"obligation_id": held["intent"]["obligation_id"],
-                                 "decision_path": str(held["path"]), "decision_sha256": held["sha256"],
-                                 "captured": False, "research_point_qualified": False}
-                        self.receipt.setdefault("checkpoint_handoffs", []).append(event)
+                    # Only a consumed request can be refused and retried.
+                    # Accept failures belong to the Host, not the packet.
+                    with self.listener.accept()[0] as channel:
+                        entered = False
                         try:
-                            event.update(self._capture(held, deadline), captured=True)
+                            with held_quota_decision(self.listener, self.capture_root,
+                                    goal_id=self.env["LOOPX_GOAL_ID"], agent_id=self.env["LOOPX_AGENT_ID"],
+                                    turn_instance_id=None, native_process=process,
+                                    interrupt_timeout=min(10, remaining), interrupt_when=self._first_replan,
+                                    deadline=deadline, accepted_channel=channel) as held:
+                                entered = True
+                                if "native_process_return_code" not in held:
+                                    continue
+                                stdout.flush()
+                                session_wake.observe(wake / "stdout.jsonl")
+                                event = {"obligation_id": held["intent"]["obligation_id"],
+                                         "decision_path": str(held["path"]), "decision_sha256": held["sha256"],
+                                         "captured": False, "research_point_qualified": False}
+                                self.receipt.setdefault("checkpoint_handoffs", []).append(event)
+                                try:
+                                    event.update(self._capture(held, deadline), captured=True)
+                                except Exception as error:
+                                    # A missed optional point cannot discard the original
+                                    # committed guard or turn a later retry into its capture.
+                                    event.update(error_kind=type(error).__name__, error=str(error)[:500])
                         except Exception as error:
-                            # A missed optional point cannot discard the original
-                            # committed guard or turn a later retry into its capture.
-                            event.update(error_kind=type(error).__name__, error=str(error)[:500])
+                            # A refused handoff (unparseable, outside this wake's capture
+                            # root, or rejected by the typed selector) is neither released
+                            # nor captured; its caller already reports a typed transport
+                            # failure. The uninterrupted original wake keeps running.
+                            if entered or process.poll() is not None:
+                                raise
+                            self.receipt.setdefault("checkpoint_handoffs", []).append({
+                                "captured": False, "research_point_qualified": False, "released": False,
+                                "error_kind": type(error).__name__, "error": str(error)[:500]})
+                            continue
                     continuation = held.get("continuation_body")
                     if continuation is not None:
                         break

@@ -329,6 +329,11 @@ class _InertCheckpointWake:
     listener = None
 
 
+def _error_tail(exc: BaseException) -> dict[str, str]:
+    """Private wake evidence: the class plus a bounded message, never a traceback."""
+    return {"error_kind": type(exc).__name__, "error": " ".join(str(exc).split())[:500]}
+
+
 def run_once(env: dict[str, str]) -> dict:
     if env.get("LOOPX_TURN_ENVELOPE", "0") not in {"0", "1"}:
         raise ValueError("LOOPX_TURN_ENVELOPE must be 0 or 1")
@@ -501,7 +506,7 @@ def run_once(env: dict[str, str]) -> dict:
         receipt["timed_out"] = True
     except BaseException as exc:
         receipt["ok"] = False
-        receipt["error_kind"] = type(exc).__name__
+        receipt.update(_error_tail(exc))
         raise
     finally:
         checkpoint_context.close()
@@ -509,7 +514,7 @@ def run_once(env: dict[str, str]) -> dict:
             if session_wake is not None:
                 session_wake.observe(wake / "stdout.jsonl")
         except BaseException as exc:
-            receipt.update(ok=False, error_kind=type(exc).__name__)
+            receipt.update(ok=False, **_error_tail(exc))
             raise
         finally:
             if env.get("LOOPX_CHECKPOINT_REQUEST"):

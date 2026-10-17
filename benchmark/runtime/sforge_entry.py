@@ -13,6 +13,17 @@ import time
 from .planning import task_plan_packet, validate_plan_readback
 from .worker import PHASE_WORK_RESERVE_SECONDS, loopx_command, run_once
 
+# One planning wake whose native process exits non-zero without a harness
+# error or a validated plan (a dropped model stream, a failed turn) must not
+# strand the whole trial before execution. Retry within the same phase budget.
+PLANNING_WAKE_ATTEMPTS = 3
+
+
+def _retryable_planning_wake(receipt: dict) -> bool:
+    return (receipt.get("ok") is not True and receipt.get("timed_out") is not True
+            and "error_kind" not in receipt and "planning" not in receipt
+            and receipt.get("return_code") not in (None, 0))
+
 
 def prepare_entry(env: dict[str, str]) -> bool:
     """Reuse a qualified initial plan; execution still requires ordinary quota."""
@@ -48,7 +59,17 @@ def prepare_entry(env: dict[str, str]) -> bool:
     # Native SForge owns one absolute trial deadline for planning and execution.
     # Do not inherit a separate planning cap from the shared worker environment.
     planning_env.pop("LOOPX_PLANNING_TIMEOUT_SEC", None)
-    receipt = run_once(planning_env)
+    attempts = []
+    for attempt in range(1, PLANNING_WAKE_ATTEMPTS + 1):
+        receipt = run_once(planning_env)
+        attempts.append({"attempt": attempt, "ok": receipt.get("ok") is True,
+                         "timed_out": receipt.get("timed_out") is True,
+                         "return_code": receipt.get("return_code"),
+                         **({"error_kind": receipt["error_kind"]} if "error_kind" in receipt else {})})
+        remaining = float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time()
+        if not _retryable_planning_wake(receipt) or remaining <= PHASE_WORK_RESERVE_SECONDS:
+            break
+    path.with_name("planning-attempts.json").write_text(json.dumps(attempts))
     if receipt.get("ok") is not True:
         raise RuntimeError("Planning failed; execution was not started")
     entry = receipt.get("planning") or {}

@@ -355,6 +355,10 @@ class SForgeWorker(CodexAgent):
             with tempfile.TemporaryDirectory(prefix="benchmark-prompt-") as directory:
                 prompt = Path(directory) / "task.md"
                 prompt.write_text(self.feedback_prompt)
+                # The native copy preserves the host mode and lands root-owned.
+                # The container's agent user must read the prompt whatever
+                # umask the launcher runs under.
+                prompt.chmod(0o644)
                 asyncio.run(self.environment.upload_file(prompt, prompt_path))
             # Native run_agent saved the pre-override wrapper. Keep its visible
             # prompt artifact aligned with what all five workers actually read.

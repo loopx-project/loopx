@@ -402,7 +402,7 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   const reviewMismatch = strideDecision && structuredReview
     ? periodicStrideReview && strideDecision.reference_context_id !== context.context_id
       ? "Stride decision must reference the delivered due-review context."
-      : strideReviewMismatch(strideDecision, context)
+      : strideReviewMismatch(strideDecision, context, request.stride_review_evidence)
     : null;
   let outcomes = strings(observation.delta_kinds);
   if (outcomes.some(value => (CAPABILITY_OUTCOMES as readonly string[]).includes(value))) {

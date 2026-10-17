@@ -173,9 +173,9 @@ function recordedDecision(row: JsonObject): JsonObject | null {
  * Append order belongs to the captured history, not timestamps or prose. A
  * progress observation proves neither execution nor scientific improvement.
  */
-function decisionFollowthrough(rows: JsonObject[], goalFacts: unknown, fromFullIndex: boolean): JsonObject | null {
+function orderedDecisionRows(rows: JsonObject[], goalFacts: unknown): JsonObject[] {
   const currentRef = objectOrNull(objectOrNull(goalFacts)?.goal_ref);
-  const scoped = rows.filter(row => {
+  return rows.filter(row => {
     const source = objectOrNull(row._source_facts);
     const ref = objectOrNull(source?.goal_ref);
     return source && Number.isSafeInteger(source.history_position) &&
@@ -184,6 +184,110 @@ function decisionFollowthrough(rows: JsonObject[], goalFacts: unknown, fromFullI
         ref?.goal_instance_id === currentRef.goal_instance_id));
   }).sort((a, b) => Number(objectOrNull(b._source_facts)!.history_position) -
     Number(objectOrNull(a._source_facts)!.history_position));
+}
+
+function plannedTodoIds(source: JsonObject): string[] {
+  // todo_delta predates typed work links and permits descriptive text. A
+  // legacy description remains unresolved; it must not poison later reads.
+  const declared = Array.isArray(source.planned_todo_ids) ? source.planned_todo_ids : [];
+  return [...new Set(declared.filter((id): id is string => typeof id === "string" && ID.test(id)))];
+}
+
+function observationTodo(row: JsonObject): unknown {
+  const work = objectOrNull(row.progress_observation)?.work_item_id;
+  return work == null ? row.todo_id : row.todo_id == null || row.todo_id === work ? work : null;
+}
+
+/** Recover the result -> decision -> subsequent work relation from the existing
+ * source history. A citation alone does not consume a result, and no extra
+ * ledger or execution authority is created. These are recorded associations,
+ * not certification that a candidate ran or improved the Goal. */
+function workResultUse(scoped: JsonObject[]): JsonObject | null {
+  const pending = new Map<string, JsonObject>();
+  const origin = new Map<string, string>();
+  const proposed = new Map<string, {decision: string; results: string[]}>();
+  const followed: JsonObject[] = [];
+  const seen = new Set<string>();
+  for (const row of [...scoped].reverse()) {
+    const source = objectOrNull(row._source_facts)!;
+    if (source.quota_spend_commit) continue;
+    if (acceptedDecisionSource(row)) {
+      const decision = recordedDecision(row);
+      if (!decision) { origin.clear(); proposed.clear(); continue; }
+      const id = String(decision.evidence_ref), targets = plannedTodoIds(source);
+      const path = decision.path_delta as JsonObject;
+      const review = objectOrNull(objectOrNull(decision.stride_decision)?.previous_review);
+      const refs = [...(path.evidence_refs as string[]),
+        ...(Array.isArray(review?.evidence_refs) ? review.evidence_refs as string[] : [])]
+        .filter(ref => pending.has(ref));
+      for (const todo of targets) {
+        origin.set(todo, id);
+        // A newer plan for the same work replaces its unexecuted proposal,
+        // not the source evidence still waiting for attributable followthrough.
+        proposed.delete(todo);
+        if (refs.length) proposed.set(todo, {decision: id, results: [...new Set(refs)]});
+      }
+      continue;
+    }
+    const todo = String(observationTodo(row));
+    if (!origin.has(todo)) continue;
+    const ref = "replan-evidence-" + digest(readableEvidenceRow(row));
+    if (seen.has(ref)) continue;
+    seen.add(ref);
+    const adoption = proposed.get(todo);
+    if (adoption) {
+      for (const result of adoption.results) if (pending.delete(result)) followed.push({
+        result_evidence_ref: result, decision_ref: adoption.decision,
+        work_todo_id: todo, work_evidence_ref: ref});
+      proposed.delete(todo);
+    }
+    if (!pending.has(ref)) pending.set(ref, {evidence_ref: ref, todo_id: todo,
+      source_decision_ref: origin.get(todo), generated_at: row.generated_at});
+  }
+  if (!pending.size && !followed.length) return null;
+  const unresolved = [...pending.values()].reverse(), visible = unresolved.slice(0, 6);
+  return {unresolved_count: unresolved.length, omitted_unresolved_count: unresolved.length - visible.length,
+    unresolved: visible, recorded_followthrough_count: followed.length,
+    recorded_followthrough: followed.slice(-6).reverse(),
+    omitted_followthrough_count: Math.max(0, followed.length - 6),
+    guidance: "Resolve unresolved evidence even when a newer review has occurred. A cited result stays unresolved until later recorded work is linked through that decision's declared Todo. " +
+      "Recorded followthrough is an attributable history relation, not verified execution, applicability to a current candidate, or Goal gain. " +
+      "Check the provider's exact candidate/input/result revision before adopting an outcome; retain valid negative and inconclusive evidence. Existing authority, stopping and settlement rules remain unchanged."};
+}
+
+/** Resolve only the cited refs against full scoped source facts at writeback.
+ * Display limits never decide evidence eligibility. Ordinary work rows do not
+ * need an optional typed progress attachment to remain attributable. */
+function reviewEvidence(rows: JsonObject[], request: JsonObject): JsonObject {
+  const scoped = orderedDecisionRows(rows, request.goal_facts);
+  const previous = scoped.find(acceptedDecisionSource);
+  const decision = previous ? recordedDecision(previous) : null;
+  if (!decision || decision.evidence_ref !== request.previous_decision_ref) {
+    throw new EffectRuntimeRequestError("previous decision changed; refresh replan context before reviewing its outcome");
+  }
+  const refs = request.evidence_refs;
+  if (!Array.isArray(refs) || refs.length > 3 || new Set(refs).size !== refs.length) {
+    throw new EffectRuntimeRequestError("previous review accepts at most three distinct evidence references");
+  }
+  for (const ref of refs) identifier(ref, "review evidence reference");
+  const source = objectOrNull(previous!._source_facts)!;
+  const targets = new Set(plannedTodoIds(source));
+  const citations = refs.map(ref => {
+    const matches = scoped.filter(row => "replan-evidence-" + digest(readableEvidenceRow(row)) === ref
+      || (objectOrNull(row.progress_observation)?.evidence_ids as unknown[] | undefined)?.includes(ref));
+    const subsequent = matches.filter(row => {
+      const facts = objectOrNull(row._source_facts)!;
+      return Number(facts.history_position) > Number(source.history_position) && !facts.quota_spend_commit;
+    });
+    return {evidence_ref: ref, available: matches.length > 0, subsequent: subsequent.length > 0,
+      declared_work: subsequent.some(row => targets.has(String(observationTodo(row))))};
+  });
+  return {previous_decision_ref: decision.evidence_ref, has_declared_work: targets.size > 0, citations};
+}
+
+function decisionFollowthrough(rows: JsonObject[], goalFacts: unknown, fromFullIndex: boolean,
+  todoItems: unknown): JsonObject | null {
+  const scoped = orderedDecisionRows(rows, goalFacts);
   const previous = scoped.find(acceptedDecisionSource);
   if (!previous) return null;
   // Do not fall back to an older decision when the latest basis is corrupt.
@@ -191,31 +295,122 @@ function decisionFollowthrough(rows: JsonObject[], goalFacts: unknown, fromFullI
   if (!decision) return null;
   const source = objectOrNull(previous._source_facts)!;
   const subsequent = new Map<string, JsonObject>();
+  const ordinary = new Map<string, JsonObject>();
+  const declared = Array.isArray(source.planned_todo_ids) ? source.planned_todo_ids : [];
+  const todoIds = plannedTodoIds(source);
+  const targets = new Set(todoIds);
   for (const row of scoped) {
     const facts = objectOrNull(row._source_facts)!;
-    if (Number(facts.history_position) <= Number(source.history_position) || !row.progress_observation) continue;
+    if (Number(facts.history_position) <= Number(source.history_position) || facts.quota_spend_commit) continue;
+    if (!row.progress_observation) {
+      if (targets.has(String(observationTodo(row)))) {
+        const ref = "replan-evidence-" + digest(readableEvidenceRow(row));
+        if (!ordinary.has(ref)) ordinary.set(ref, {evidence_ref: ref,
+          generated_at: row.generated_at, todo_id: row.todo_id});
+      }
+      continue;
+    }
     const progress = row.progress_observation as JsonObject;
     if (!subsequent.has(String(progress.fingerprint))) subsequent.set(String(progress.fingerprint), row);
   }
   // The complete denominator is retained even when the review details are capped.
   const observations = [...subsequent.values()];
+  const ordinaryEvidence = [...ordinary.values()];
+  const visibleOrdinary = ordinaryEvidence.slice(0, 6);
+  const resultUse = workResultUse(scoped);
+  const todos = todoItems == null ? [] : objects(todoItems, "Todo source");
+  const plannedWork = todoIds.slice(0, 6).map(todoId => {
+    const matched = todos.filter(todo => todo.todo_id === todoId && todo.role === "agent"
+      && (todo.goal_id == null || todo.goal_id === previous.goal_id));
+    if (matched.length > 1) throw new EffectRuntimeRequestError("planned Todo source identity is ambiguous");
+    const current = matched[0];
+    return {todo_id: todoId,
+      current: current ? Object.fromEntries(["status", "claimed_by", "task_class", "action_kind"]
+        .filter(key => Object.hasOwn(current, key)).map(key => [key, current[key]])) : null,
+      observation_refs: observations.filter(row => observationTodo(row) === todoId)
+        .slice(0, 6).map(row => "replan-evidence-" + digest(readableEvidenceRow(row))),
+      ...(ordinaryEvidence.length ? {ordinary_evidence_refs: visibleOrdinary
+        .filter(row => row.todo_id === todoId).map(row => row.evidence_ref)} : {})};
+  });
+  // Keep relevant experiment observations in the small visible window even
+  // when newer unrelated work would otherwise crowd them out.
+  const linkedRefs = new Set(plannedWork.flatMap(work => work.observation_refs));
+  const visible = [...observations.filter(row => linkedRefs.has("replan-evidence-" + digest(readableEvidenceRow(row)))),
+    ...observations.filter(row => !linkedRefs.has("replan-evidence-" + digest(readableEvidenceRow(row))))].slice(0, 6);
+  const visibleRefs = new Set(visible.map(row => "replan-evidence-" + digest(readableEvidenceRow(row))));
+  for (const work of plannedWork) work.observation_refs = work.observation_refs.filter(ref => visibleRefs.has(ref));
   return {
     previous_decision: decision,
     source_history_complete: fromFullIndex,
     unsequenced_progress_count: rows.filter(row => row.progress_observation &&
       !Number.isSafeInteger(objectOrNull(row._source_facts)?.history_position)).length,
     recorded_progress_count: observations.length,
-    observations: observations.slice(0, 6).map(row => ({
+    observations: visible.map(row => ({
       evidence_ref: "replan-evidence-" + digest(readableEvidenceRow(row)),
       generated_at: row.generated_at, todo_id: row.todo_id,
       coverage_ref: (row.progress_observation as JsonObject).fingerprint,
     })),
     omitted_observation_count: Math.max(0, observations.length - 6),
+    // Ordinary writebacks are source evidence, never fabricated typed progress.
+    // Keep existing progress counts and historical reference identities intact.
+    ...(ordinaryEvidence.length ? {ordinary_work: {recorded_count: ordinaryEvidence.length,
+      omitted_count: ordinaryEvidence.length - visibleOrdinary.length, evidence: visibleOrdinary}} : {}),
+    ...(resultUse ? {work_result_use: resultUse} : {}),
+    todo_source_available: todoItems != null,
+    planned_work: plannedWork,
+    omitted_planned_work_count: Math.max(0, todoIds.length - plannedWork.length),
+    unresolved_planned_work_count: declared.filter(id => typeof id !== "string" || !ID.test(id)).length,
     execution_and_goal_gain: "unknown",
     guidance: "Compare the previous path decision with subsequent work and authoritative outcomes. " +
       "Recorded progress and changed identifiers do not prove execution, a new mechanism, or goal gain. " +
+      "Use planned_work to compare declared Todo targets with their current state and subsequent observations. " +
+      (ordinaryEvidence.length ? "Ordinary declared-work evidence is returned separately in ordinary_work; resolve its references before reviewing outcomes. " : "") +
+      "A missing row or observation is unknown, not proof of non-execution; a done Todo does not certify objective gain. " +
+      "Cited evidence is replayed against full scoped history at writeback; this display is not an eligibility boundary. " +
       "Resolve evidence before deciding what to retain, change, or test next.",
   };
+}
+
+function ordinaryWorkEvidence(follow: JsonObject): JsonObject[] {
+  if (follow.ordinary_work === undefined) return [];
+  const ordinary = requireJsonObject(follow.ordinary_work, "ordinary work");
+  const evidence = objects(ordinary.evidence, "ordinary work evidence");
+  if (evidence.length > 6 || ["recorded_count", "omitted_count"].some(key =>
+    !Number.isSafeInteger(ordinary[key]) || Number(ordinary[key]) < 0) ||
+    Number(ordinary.recorded_count) !== evidence.length + Number(ordinary.omitted_count)) {
+    throw new EffectRuntimeRequestError("ordinary work requires bounded evidence and complete counts");
+  }
+  const refs = evidence.map(row => {
+    identifier(row.todo_id, "ordinary work Todo");
+    requireNonEmptyString(row.generated_at, "ordinary work generated_at");
+    if (Object.hasOwn(row, "coverage_ref")) throw new EffectRuntimeRequestError("ordinary work cannot claim typed progress coverage");
+    return identifier(row.evidence_ref, "ordinary work evidence reference");
+  });
+  if (new Set(refs).size !== refs.length) throw new EffectRuntimeRequestError("ordinary work evidence must be distinct");
+  return evidence;
+}
+
+function validateWorkResultUse(follow: JsonObject): void {
+  if (follow.work_result_use === undefined) return;
+  const use = requireJsonObject(follow.work_result_use, "work result use");
+  const pending = objects(use.unresolved, "unresolved work evidence");
+  const links = objects(use.recorded_followthrough, "recorded work followthrough");
+  if (["unresolved_count", "omitted_unresolved_count", "recorded_followthrough_count", "omitted_followthrough_count"]
+    .some(key => !Number.isSafeInteger(use[key]) || Number(use[key]) < 0)
+    || pending.length > 6 || links.length > 6
+    || Number(use.unresolved_count) !== pending.length + Number(use.omitted_unresolved_count)
+    || Number(use.recorded_followthrough_count) !== links.length + Number(use.omitted_followthrough_count)) {
+    throw new EffectRuntimeRequestError("work result use requires bounded source relations and complete counts");
+  }
+  for (const row of pending) {
+    for (const key of ["evidence_ref", "todo_id", "source_decision_ref"]) identifier(row[key], key);
+    requireNonEmptyString(row.generated_at, "unresolved generated_at");
+  }
+  for (const row of links) for (const key of ["result_evidence_ref", "decision_ref", "work_todo_id", "work_evidence_ref"]) identifier(row[key], key);
+  if (new Set(pending.map(row => row.evidence_ref)).size !== pending.length
+    || new Set(links.map(row => row.result_evidence_ref)).size !== links.length) {
+    throw new EffectRuntimeRequestError("work result use requires distinct source results");
+  }
 }
 
 export function validateReplanContext(value: unknown): JsonObject {
@@ -248,6 +443,8 @@ export function validateReplanContext(value: unknown): JsonObject {
       throw new EffectRuntimeRequestError("decision followthrough requires the enabled strategy and unknown utility");
     }
     const observations = objects(follow.observations, "decision_followthrough.observations");
+    validateWorkResultUse(follow);
+    const ordinary = ordinaryWorkEvidence(follow);
     if (observations.length > 6 || typeof follow.source_history_complete !== "boolean" ||
         ["recorded_progress_count", "omitted_observation_count", "unsequenced_progress_count"].some(
           key => !Number.isSafeInteger(follow[key]) || Number(follow[key]) < 0) ||
@@ -264,6 +461,32 @@ export function validateReplanContext(value: unknown): JsonObject {
     }
     normalizeGoalPathDelta(previous.path_delta);
     normalizeRecordedStrideDecision(previous.stride_decision);
+    if (follow.planned_work !== undefined) {
+      const work = objects(follow.planned_work, "planned work");
+      const ids = work.map(row => identifier(row.todo_id, "planned Todo identity"));
+      const refs = new Set(observations.map(row => row.evidence_ref));
+      if (work.length > 6 || new Set(ids).size !== ids.length || typeof follow.todo_source_available !== "boolean"
+        || !Number.isSafeInteger(follow.omitted_planned_work_count) || Number(follow.omitted_planned_work_count) < 0) {
+        throw new EffectRuntimeRequestError("invalid planned work followthrough");
+      }
+      for (const row of work) {
+        if (!Array.isArray(row.observation_refs) || row.observation_refs.some(ref => !refs.has(ref))) {
+          throw new EffectRuntimeRequestError("planned work requires delivered subsequent observations");
+        }
+        if (follow.ordinary_work !== undefined && (!Array.isArray(row.ordinary_evidence_refs) ||
+          row.ordinary_evidence_refs.some(ref => !ordinary.some(evidence =>
+            evidence.evidence_ref === ref && evidence.todo_id === row.todo_id)))) {
+          throw new EffectRuntimeRequestError("planned ordinary work requires its delivered source evidence");
+        }
+        if (row.current !== null) {
+          const current = requireJsonObject(row.current, "planned work current state");
+          if (!follow.todo_source_available || Object.entries(current).some(([key, value]) =>
+            !["status", "claimed_by", "task_class", "action_kind"].includes(key) || value !== null && typeof value !== "string")) {
+            throw new EffectRuntimeRequestError("planned work current state requires available canonical facts");
+          }
+        }
+      }
+    }
   }
   return context;
 }
@@ -275,7 +498,7 @@ export async function projectReplanContextSnapshot(value: unknown): Promise<Json
 export function projectReplanContext(value: unknown): JsonObject {
   const request = requireJsonObject(value, "replan context request");
   if (request.operation === "validate") return validateReplanContext(request.context);
-  if (request.operation !== "project" && request.operation !== "resolve") {
+  if (request.operation !== "project" && request.operation !== "resolve" && request.operation !== "review_evidence") {
     throw new EffectRuntimeRequestError("unsupported replan context operation");
   }
   const goal = identifier(request.goal_id, "goal_id");
@@ -300,6 +523,10 @@ export function projectReplanContext(value: unknown): JsonObject {
       }
       identifier(progress.fingerprint, "progress_observation.fingerprint");
     }
+  }
+  if (request.operation === "review_evidence") {
+    if (!agent) throw new EffectRuntimeRequestError("review evidence requires agent_id");
+    return reviewEvidence(rows, request);
   }
   rows.sort((a, b) => Number(b.observed_at) - Number(a.observed_at) ||
     JSON.stringify(readableEvidenceRow(a)).localeCompare(JSON.stringify(readableEvidenceRow(b))));
@@ -395,7 +622,7 @@ export function projectReplanContext(value: unknown): JsonObject {
   const strideStrategy = normalizeStrideStrategy(request.stride_strategy);
   const exploreBasis = strideStrategy !== "off" ? projectStrideExploreBasis(request.explore_context, goal, agent) : null;
   const followthrough = agent && strideStrategy !== "off"
-    ? decisionFollowthrough(rows, request.goal_facts, request.from_full_index === true) : null;
+    ? decisionFollowthrough(rows, request.goal_facts, request.from_full_index === true, request.todo_items) : null;
   const contextId = "replan-context-" + digest({goal, agent, obligationId, core, ledger, shown, frontier,
     ...(strideStrategy !== "off" ? {stride_strategy: strideStrategy} : {}),
     ...(followthrough ? {decision_followthrough: followthrough} : {}),

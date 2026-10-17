@@ -28,6 +28,9 @@ def capture_disposable_effect_runtimes(root: Path) -> list[tuple[Path, str]]:
 def stop_disposable_effect_runtimes(
     root: Path, captured: list[tuple[Path, str]] | None = None,
 ) -> None:
+    if root.is_symlink():
+        return
+    owned_root = root.resolve()
     records = dict.fromkeys([*(captured or []), *capture_disposable_effect_runtimes(root)])
     if not records:
         return
@@ -36,6 +39,8 @@ def stop_disposable_effect_runtimes(
     # are restored; the authenticated ping still verifies the exact live owner.
     with tempfile.TemporaryDirectory(prefix="loopx-test-runtime-cleanup-") as scratch:
         for locator, raw in records:
+            if locator.is_symlink() or not locator.resolve().is_relative_to(owned_root):
+                continue
             validation_file = Path(scratch) / locator.name
             validation_file.write_text(raw, encoding="utf-8")
             info = effect_runtime._read_info(validation_file, fingerprint=None)
@@ -51,6 +56,12 @@ def stop_disposable_effect_runtimes(
             ping = response.get("result")
             if (not isinstance(ping, dict) or ping.get("ready") is not True or ping.get("pid") != info["pid"]
                     or ping.get("fingerprint") != info["fingerprint"]):
+                continue
+            # Authentication proves identity, not namespace ownership. Require
+            # the server's frozen physical publication path, never a path
+            # claimed by copied JSON. Unknown/older servers remain untouched.
+            published = ping.get("info_path")
+            if not isinstance(published, str) or Path(published) != locator.resolve():
                 continue
             result = effect_runtime._stop_effect_runtime(
                 locator, info, timeout=5, wait_for_process_exit=True,

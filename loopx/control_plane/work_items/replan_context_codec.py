@@ -91,10 +91,18 @@ def replan_evidence_rows(runs: Iterable[Mapping[str, Any]], *, goal_id: str, age
             # and orders subsequent observations. Do not classify research
             # progress or infer adoption from prose in this transport codec.
             if include_decisions:
+                from ..goals.goal_vision_read_model import parse_vision_todo_delta_entries
+
                 if history_newest_first is not None:
                     source["history_position"] = newest_position - position if newest_position is not None else position
                 source["goal_ref"] = run.get("goal_ref")
                 source["agent_vision"] = run.get("agent_vision")
+                vision = run.get("agent_vision")
+                source["planned_todo_ids"] = list(dict.fromkeys(
+                    todo_id for _, todo_id in parse_vision_todo_delta_entries(
+                        vision.get("todo_delta") if isinstance(vision, Mapping) else None
+                    )
+                ))
                 source["autonomous_replan_ack"] = run.get("autonomous_replan_ack")
                 source["replan_obligation_id"] = run.get("replan_obligation_id")
             for key, fields in (("settlement_identity", (
@@ -154,6 +162,7 @@ def project_replan_context(
     stride_strategy: str = "off",
     explore_context: Mapping[str, Any] | None = None,
     history_newest_first: bool | None = None,
+    todo_items: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     from .replan_history_codec import project_replan_request
     from .stride_policy_codec import normalize_stride_strategy
@@ -176,6 +185,11 @@ def project_replan_context(
                 include_decisions=strategy != "off" or bool(evidence_ref and evidence_ref.startswith("replan-decision-")),
                 history_newest_first=history_newest_first),
             "stride_strategy": strategy,
+            # Canonical caller-owned facts only. TypeScript joins the declared
+            # work with the accepted decision and causally later observations.
+            **({"todo_items": [{key: item[key] for key in (
+                "todo_id", "goal_id", "role", "status", "claimed_by", "task_class", "action_kind",
+            ) if key in item} for item in todo_items]} if strategy != "off" and todo_items is not None else {}),
             **({"explore_context": explore_context} if explore_context is not None else {}),
             "evidence_ref": evidence_ref,
             "read_prefix": shlex.join(prefix),
@@ -191,5 +205,25 @@ def validate_replan_context(context: Any) -> dict[str, Any]:
         return effect_runtime_result("work_item.replan_context.project", {
             "operation": "validate", "context": context,
         })
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from None
+
+
+def replay_stride_review_evidence(
+    *, context: Mapping[str, Any], review: Mapping[str, Any], runs: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Transport complete existing history; return only the cited source facts."""
+    from .replan_history_codec import project_replan_request
+
+    previous = context["decision_followthrough"]["previous_decision"]
+    try:
+        return project_replan_request({
+            "operation": "review_evidence", "obligation": None, "goal_id": context["goal_id"],
+            "agent_id": context["agent_id"], "previous_decision_ref": previous["evidence_ref"],
+            "evidence_refs": review.get("evidence_refs", []),
+            "goal_facts": {"goal_ref": previous.get("goal_ref")},
+            "rows": replan_evidence_rows(runs, goal_id=context["goal_id"], agent_id=context["agent_id"],
+                include_decisions=True, history_newest_first=True),
+        }, method="work_item.replan_context")
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None

@@ -719,6 +719,14 @@ Omit the controller file and `controller_handoff` on a new run to disable automa
 controller capture; removing the checkpoint request disables capture entirely.
 Existing artifacts remain inert, and the source trial is not restarted by disabling it.
 
+The native handoff accepts and reads one bounded request before validating its
+physical capture root. A missing or symlinked root closes that connection;
+the original source can correct its path and continue through the same listener.
+The refusal neither captures nor releases the old packet and does not renew the
+original wake deadline. The transport does not create or follow a foreign root.
+Host failures before a connection is accepted remain execution failures. They
+are not packet refusals and cannot enter the source-preserving retry loop.
+
 To reproduce **joint source capture and both fresh-guest receivers**, use
 [`qualify_checkpoint_joint.py`](tests/qualify_checkpoint_joint.py) from the current
 clean dedicated LoopX checkout; keep it frozen for the whole command. Run the
@@ -831,6 +839,21 @@ restore boundary, and a terminal Goal still requires explicit resume. This PR
 prevents new planning-clock injection; it does not qualify old-archive recovery
 or claim improved model behavior or scores.
 
+Only the explicit `loopx-planned` benchmark worker adds research-planning
+guidance around the unchanged product planning packet: check decision-critical
+assumptions, compare with and retain the strongest available reference, and keep
+an informative negative experiment separate from Goal completion. This is a
+provider planning treatment, not new default Core/CLI guidance or a checkpoint
+requirement. Ordinary Goal entry, seeded work and official native workers do not
+use this wrapper. Pin this provider revision when comparing runs; the guidance
+does not establish model adoption, initial-quality parity or long-horizon gain.
+
+仅显式 `loopx-planned` benchmark worker 在未修改的产品规划 packet 外附加研究
+指引：核对关键假设、对照并保留最强起点、区分有信息量的负实验与 Goal 完成。
+这是 provider 规划处理，不是 Core/CLI 默认指引或 checkpoint 要求。普通 Goal、
+预置任务和 official 原生 worker 不使用此包装；对比运行须固定 provider revision。
+这些指引不证明模型采用、首次质量持平或长程收益。
+
 The sealed deadline and native capture timestamp determine the remainder; the
 receiver recomputes it. A point with two hours remaining keeps that duration
 after an eight-hour offline gap. It does not reuse the old absolute epoch or
@@ -935,6 +958,11 @@ worker 保留原 guard，controller 暂停全部容器写入者，核对仍有�
 文件 witness，再封存原生评测机会、incumbent 及剩余预算。源变化、过期或失去
 交接会拒绝；可恢复的捕获失败不取消原研究，也不得改用稍后的状态。解除暂停后，
 源会话继续使用原 packet 和 deadline。
+原生交接先接收并读取一条有界请求，再校验捕获根目录的物理路径。目录缺失或为
+符号链接时关闭该连接，原来源可纠正路径后经同一监听器继续；拒绝不捕获、不释放
+旧 packet，不延长原 wake 截止时间，也不创建或跟随外来根目录。
+连接尚未接收时的 Host 故障仍是执行失败，不是一次 packet 拒绝，不进入保留
+来源的请求重试循环。
 显式开启的两处完整 controller 捕获 hook 共用 90 秒窗口（原为 30 秒），覆盖完整原生/研究上下文
 准备、一致性复核与 live-source 捕获，并受原试验 phase 截止时间约束。controller
 沿用同一个绝对截止时间；解除暂停后，只能在原 phase 内再用至多 30 秒封存静态副本。

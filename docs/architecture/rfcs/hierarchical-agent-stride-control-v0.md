@@ -759,8 +759,65 @@ these facts do not change the admitted context/basis identity. Changed source
 requires rereading within the original Turn. Page coordinates persist with the
 decision into subsequent review; node-filtered/planner detail routes remain
 outside this bounded citation path. No separate receipt store is introduced.
-These are provenance and proposal-shape obligations, not automatic proof that
-research was executed or useful. Ordinary Todo/Next Action carries admitted work.
+The enabled review also carries the prior decision's existing `todo_delta`
+targets in `decision_followthrough.planned_work`: current canonical status and
+claim, plus references to causally later observations of that exact work item.
+Legacy descriptive Todo deltas remain readable with unresolved linkage; an
+overlong reference is never truncated into a different Todo identity.
+Missing Todo sources and omitted work remain explicit; a missing observation
+does not prove non-execution, and Todo completion does not prove objective gain.
+Related observations survive unrelated recent activity in the bounded window.
+The same bounded followthrough is included in `stride_control` so compact Host
+envelopes expose it without requiring another full-context read. Historical
+decision identities and off-mode output remain unchanged.
+
+The next-review input also exposes causally later ordinary writebacks for the
+declared work in `ordinary_work`, with per-Todo `ordinary_evidence_refs`. Its
+six-record detail window retains total/omitted counts and stable history reads;
+it does not fabricate a typed-progress fingerprint or increase progress counts.
+This closes a source-readback gap where legal evidence could qualify a writeback
+but was absent from the decision-followthrough input. Real File/SQLite CLI
+coverage uses the returned reference to read a worse candidate result, retain
+the incumbent, and author the next comparison through the existing Todo/replan
+owners. Late corrections, replay, scope and negative outcomes remain separate
+from model judgment. This is not complete M3 provider/product qualification or
+evidence of research utility; the §11 actual-provider/adoption journey remains.
+
+The same source now retains unresolved declared-work evidence across later
+reviews. A citation becomes a recorded followthrough relation only after its
+decision's declared Todo has a subsequent material writeback; citations or Todo
+creation alone do not consume the result. Replay and replaced unexecuted plans
+preserve the original evidence without a second ledger. Real File/SQLite CLI
+coverage executes isolated candidate/probe processes, reads their artifacts,
+authors the next comparison, and reads that relation at another review. The
+consumer is scripted: native Host/model adoption, candidate applicability and
+scientific utility remain independent, unqualified parts of §11.
+
+Outcome claims require at least one subsequent observation; earlier evidence
+can still be cited for comparison. Writeback replays up to three cited references
+against the complete scoped history through the existing typed replan owner.
+Neither the six-row followthrough display nor the main evidence display limits
+eligibility. Ordinary work rows remain usable without optional typed-progress
+attachments, while accounting-only rows cannot establish execution. Execution
+or gain claims for declared work must cite that work's subsequent observation,
+not another Todo's activity. This
+is a provenance check, not a quality threshold or an automatic truth verdict.
+An executed negative experiment remains a legal outcome. Planning guidance uses
+existing `todo_delta` action/id entries to connect `next_probe` with real Todo
+work, preserves unfinished useful experiments and separates informative
+evaluation from adopting a replacement artifact. No mandatory new proposal
+field, acceptance document, spawn permission or score gate is introduced.
+Ordinary Todo/Next Action still carries admitted work. Real File/SQLite CLI
+qualification covers a decision, selected successor execution, negative evidence,
+next-review readback and rejection/recovery of a claim citing only old evidence;
+model adoption and score or cost benefits remain unqualified.
+
+The benchmark's explicit `loopx-planned` provider adds assumption checks and
+incumbent/negative-experiment guidance around the unchanged planning packet.
+Generic Goal/CLI first-delivery guidance remains the mainline contract; these
+benchmark-specific additions are not installed as Core defaults or checkpoint
+requirements. This provider treatment must be revision-pinned in comparisons;
+it does not establish initial-quality parity or long-horizon research gain.
 
 The activation vocabulary and existing Goal/device editor stay unchanged; no
 second selectable strategy or policy database is added. Off retains ordinary
@@ -824,6 +881,11 @@ after-wake hook alone cannot implement this ordering. The replan and Host owners
 must provide that handoff without an extra model call or work settlement. If the
 boundary cannot be qualified, record the missed point and continue under the
 existing execution contract; do not substitute a later state for that node.
+The benchmark handoff consumes the bounded request before validating the physical
+capture root. A missing or aliased root closes that connection, allowing the same
+source to correct its path and continue without replaying or capturing the refused
+packet. Real socket/process cases cover present, missing and symlinked roots;
+they do not qualify a complete research checkpoint or extend the original deadline.
 Measure capture time and storage per node before choosing compression, shared
 immutable members or retention limits. Retention must preserve declared study
 points and their branches rather than silently selecting favorable outcomes.

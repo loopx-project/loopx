@@ -602,6 +602,9 @@ def test_receipt_case_collection_does_not_depend_on_the_collecting_process_clock
             capture_output=True, text=True, timeout=60,
         )
         assert result.returncode == 0, result.stdout + result.stderr
+        # Isolation must not hide a collector that actually writes a default.
+        assert not (home / ".loopx").exists()
+        assert not (home / ".codex" / "loopx").exists()
         nodeids = [line for line in result.stdout.splitlines() if line.startswith(target + "[")]
         assert len(nodeids) == len(set(nodeids)) == 6
         collections.append(nodeids)

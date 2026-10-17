@@ -1755,7 +1755,7 @@ def build_goal_frontier_projection_context_from_status(
     replan_obligation = attach_receipt_replan_context(
         replan_obligation, lifecycle_candidate, goal_id=goal_id, agent_id=agent_id,
         source_status=status_payload, stride_strategy=stride_strategy,
-        explore_reader=replan_explore_reader,
+        explore_reader=replan_explore_reader, todo_items=agent_todo_source_items,
         goal_acceptance_contract=(agent_todo_summary or {}).get("goal_acceptance_contract"),
     )
 

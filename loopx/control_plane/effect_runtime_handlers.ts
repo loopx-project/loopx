@@ -54,6 +54,8 @@ function lazyHandler<Module>(
 
 export interface EffectRuntimeHandlerContext {
   fingerprint: string;
+  /** Physical publication path observed by the managed server, not its caller. */
+  readonly infoPath?: string;
   requestShutdown: () => void;
 }
 
@@ -248,7 +250,8 @@ export function createEffectRuntimeHandlers(
   return new Map<string, EffectRuntimeHandler>([
     [
       "runtime.ping",
-      () => ({ ready: true, pid: process.pid, fingerprint: context.fingerprint }),
+      () => ({ ready: true, pid: process.pid, fingerprint: context.fingerprint,
+        ...(context.infoPath === undefined ? {} : {info_path: context.infoPath}) }),
     ],
     [
       "runtime.shutdown",
