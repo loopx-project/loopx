@@ -44,7 +44,7 @@ from .chat_codex_goal import (
 from .chat_dsh import DshChatAdapter
 from .chat_endpoint_catalog import builtin_chat_endpoints
 from .chat_endpoints import AgentEndpointRegistry
-from .chat_turn_release import TurnReleaseWakeup
+from .capabilities.native_chat.turn_release import TurnReleaseWakeup
 from .control_plane.turn_driver.host_binding import MANAGED_TURN_HOST
 from .control_plane.turn_driver.execution_profile import managed_execution_profile
 from .kiro_cli_goal_mode import (
