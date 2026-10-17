@@ -575,18 +575,27 @@ fn a_failed_service_set_stops_the_child_its_peer_started() {
     let child = command.group_spawn().expect("spawn owned service fixture");
     let pid = child.id();
 
-    let Err(error) = ServiceSet::collect([
-        ServiceOutcome {
-            owned: Some(OwnedService { child }),
-            healed: false,
-            result: Ok(()),
+    let Err(error) = ServiceSet::collect(
+        [
+            ServiceOutcome {
+                owned: Some(OwnedService {
+                    child,
+                    kind: ServiceKind::Status,
+                }),
+                healed: false,
+                result: Ok(()),
+            },
+            ServiceOutcome {
+                owned: None,
+                healed: false,
+                result: Err(ServiceError("LoopX chat did not become ready".into())),
+            },
+        ],
+        SelectedRuntime {
+            executable: "unused".into(),
+            identity: None,
         },
-        ServiceOutcome {
-            owned: None,
-            healed: false,
-            result: Err(ServiceError("LoopX chat did not become ready".into())),
-        },
-    ]) else {
+    ) else {
         panic!("a failed peer must fail the whole set");
     };
     assert!(error.to_string().contains("did not become ready"));
@@ -606,4 +615,170 @@ fn a_failed_service_set_stops_the_child_its_peer_started() {
         thread::sleep(Duration::from_millis(20));
     }
     assert!(!alive, "owned service {pid} outlived the failed set");
+}
+
+#[cfg(unix)]
+static PRIVATE_RECOVERY_FIXTURE: Mutex<()> = Mutex::new(());
+
+#[cfg(unix)]
+fn private_recovery_fixture() -> (tempfile::TempDir, SelectedRuntime, ServiceEndpoints) {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let executable = root.path().join("loopx");
+    let identity = serde_json::json!({"schema_version":"loopx_runtime_identity_v1",
+        "package_version":"1.4.1","release_id":"fixture","source_revision":"1".repeat(40)});
+    fs::write(&executable, format!(r#"#!/usr/bin/env python3
+import json, socket, sys
+kind = sys.argv[1]
+port = int(sys.argv[sys.argv.index('--port') + 1])
+payload = {{'runtime_identity': json.loads({identity:?})}}
+if kind == 'chat':
+    payload['schema_version'] = 'loopx_chat_capabilities_v1'
+else:
+    payload.update(source='serve-status', readiness={{'schema_version':'loopx_status_readiness_v0','state':'ready','reason':'registry_readable'}})
+body = json.dumps(payload).encode()
+server = socket.socket()
+server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+server.bind(('127.0.0.1', port))
+server.listen(8)
+while True:
+    connection, _ = server.accept()
+    connection.recv(65536)
+    connection.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: ' + str(len(body)).encode() + b'\r\nConnection: close\r\n\r\n' + body)
+    connection.close()
+"#, identity=identity.to_string())).unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+    (
+        root,
+        SelectedRuntime {
+            executable: executable.to_string_lossy().into_owned(),
+            identity: Some(identity),
+        },
+        ServiceEndpoints::allocate(true).unwrap(),
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn exited_private_children_recover_individually_with_the_frozen_identity() {
+    let _fixture = PRIVATE_RECOVERY_FIXTURE.lock().unwrap();
+    let (_root, runtime, endpoints) = private_recovery_fixture();
+    let mut services = ServiceSet::start(&runtime, &endpoints, |_| {}).unwrap();
+    assert!(!services.recover_exited(&endpoints, Instant::now()).unwrap());
+    for kind in SERVICE_KINDS {
+        let peer = services
+            .owned
+            .iter()
+            .find(|s| s.kind != kind)
+            .unwrap()
+            .child
+            .id();
+        let failed = services.owned.iter_mut().find(|s| s.kind == kind).unwrap();
+        let old = failed.child.id();
+        failed.child.inner().kill().unwrap();
+        failed.child.inner().wait().unwrap();
+        services.last_recovery_attempt = None;
+        assert!(services.recover_exited(&endpoints, Instant::now()).unwrap());
+        assert_ne!(
+            services
+                .owned
+                .iter()
+                .find(|s| s.kind == kind)
+                .unwrap()
+                .child
+                .id(),
+            old
+        );
+        assert_eq!(
+            services
+                .owned
+                .iter()
+                .find(|s| s.kind != kind)
+                .unwrap()
+                .child
+                .id(),
+            peer
+        );
+        assert_eq!(
+            probe_on_port(kind, endpoints.port(kind), runtime.identity.as_ref()),
+            Probe::Matching
+        );
+        assert_eq!(services.runtime.executable, runtime.executable);
+        assert_eq!(services.runtime.identity, runtime.identity);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn private_recovery_keeps_foreign_listeners_and_healthy_peers_and_bounds_retry() {
+    let _fixture = PRIVATE_RECOVERY_FIXTURE.lock().unwrap();
+    let (_root, runtime, endpoints) = private_recovery_fixture();
+    let mut services = ServiceSet::start(&runtime, &endpoints, |_| {}).unwrap();
+    let peer = services
+        .owned
+        .iter()
+        .find(|s| s.kind == ServiceKind::Status)
+        .unwrap()
+        .child
+        .id();
+    let failed = services
+        .owned
+        .iter_mut()
+        .find(|s| s.kind == ServiceKind::Chat)
+        .unwrap();
+    failed.child.inner().kill().unwrap();
+    failed.child.inner().wait().unwrap();
+    let listener =
+        std::net::TcpListener::bind(("127.0.0.1", endpoints.port(ServiceKind::Chat))).unwrap();
+    let now = Instant::now();
+    let error = services.recover_exited(&endpoints, now).unwrap_err();
+    assert!(error.to_string().contains("already occupied"));
+    assert!(TcpStream::connect(listener.local_addr().unwrap()).is_ok());
+    assert_eq!(
+        services
+            .owned
+            .iter()
+            .find(|s| s.kind == ServiceKind::Status)
+            .unwrap()
+            .child
+            .id(),
+        peer
+    );
+    drop(listener);
+    assert!(!services
+        .recover_exited(&endpoints, now + Duration::from_secs(1))
+        .unwrap());
+    assert!(services
+        .recover_exited(&endpoints, now + Duration::from_secs(3))
+        .unwrap());
+    assert_eq!(
+        probe_on_port(
+            ServiceKind::Chat,
+            endpoints.port(ServiceKind::Chat),
+            runtime.identity.as_ref()
+        ),
+        Probe::Matching
+    );
+}
+
+#[test]
+fn private_recovery_cannot_start_an_unowned_or_development_service() {
+    let mut services = ServiceSet::collect(
+        SERVICE_KINDS.map(|_| ServiceOutcome {
+            owned: None,
+            healed: false,
+            result: Ok(()),
+        }),
+        SelectedRuntime {
+            executable: "must-not-run".into(),
+            identity: None,
+        },
+    )
+    .unwrap();
+    assert!(!services
+        .recover_exited(&ServiceEndpoints::allocate(true).unwrap(), Instant::now())
+        .unwrap());
+    assert!(!services
+        .recover_exited(&ServiceEndpoints::allocate(false).unwrap(), Instant::now())
+        .unwrap());
 }
