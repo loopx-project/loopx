@@ -629,6 +629,7 @@ export function createEffectRuntimeHandlers(
     ["collaboration.conversation.reply_context", lazyHandler(() => import("./collaboration/conversation_reply_context.ts"), ({projectConversationReplyContext}) => projectConversationReplyContext)],
     ["chat.turn.accept", lazyHandler(() => import("./turn_driver/chat_turn_acceptance.ts"), ({planChatTurnAcceptance}) => planChatTurnAcceptance)],
     ["chat.turn.execution_allowed", lazyHandler(() => import("./turn_driver/chat_turn_acceptance.ts"), ({mayContinueChatTurn}) => mayContinueChatTurn)],
+    ["chat.turn.recovery_allowed", lazyHandler(() => import("./turn_driver/chat_turn_acceptance.ts"), ({mayRecoverChatTurn}) => mayRecoverChatTurn)],
     ["collaboration.delegation.observe", lazyHandler(() => import("./collaboration/delegation.ts"), ({transitionDelegationObservation}) => transitionDelegationObservation)],
     ["collaboration.delegation.observe_wake", lazyHandler(() => import("./collaboration/delegation.ts"), ({decideDelegationWakeObservation}) => decideDelegationWakeObservation)],
     ["collaboration.delegation.recover_validated_settlement", lazyHandler(() => import("./collaboration/delegation.ts"), ({recoverValidatedDelegationSettlement}) => recoverValidatedDelegationSettlement)],

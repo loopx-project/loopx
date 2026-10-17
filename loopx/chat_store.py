@@ -231,6 +231,9 @@ class ChatSessionStore(ChatIngressStore):
     def _turn_path(self, session_id: str, turn_id: str) -> Path:
         return self._session_dir(session_id) / "turns" / f"{_opaque_id(turn_id, field='turn_id')}.json"
 
+    def turn_execution_lock_path(self, session_id: str, turn_id: str) -> Path:
+        return self._turn_path(session_id, turn_id).with_suffix(".execution")
+
     def _event_path(self, session_id: str, turn_id: str) -> Path:
         return self._session_dir(session_id) / "turns" / f"{_opaque_id(turn_id, field='turn_id')}.events.jsonl"
 

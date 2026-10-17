@@ -48,6 +48,8 @@ from .chat_endpoint_catalog import builtin_chat_endpoints
 from .chat_endpoints import AgentEndpointRegistry
 from .control_plane.turn_driver.host_binding import MANAGED_TURN_HOST
 from .control_plane.turn_driver.execution_profile import managed_execution_profile
+from .control_plane.chat_turn_acceptance import managed_turn_recovery_allowed
+from .file_lock import LOCK_HOLDER_DEAD, lock_holder_liveness, try_exclusive_file_lock
 from .kiro_cli_goal_mode import (
     KIRO_CLI_BIN,
     KIRO_CLI_CHAT_AGENT_ID,
@@ -55,6 +57,7 @@ from .kiro_cli_goal_mode import (
 )
 from .chat_store import (
     CHAT_SESSION_MODE_ATTACHED,
+    CHAT_SESSION_MODE_MANAGED,
     TERMINAL_TURN_STATES,
     ChatSessionStore,
     normalize_agent_model_id,
@@ -92,6 +95,12 @@ AttachmentPayload = dict[str, Any]
 # so the remaining budget survives restart/compaction.
 TRANSPORT_RETRY_MAX_RETRIES = 3
 TRANSPORT_RETRY_BACKOFF_SECONDS = 2.0
+
+SERVER_RESTARTED_MESSAGE = (
+    "LoopX Chat restarted before this turn finished. "
+    "Your conversation is saved; this turn was not retried automatically. "
+    "You can continue with a follow-up in this session."
+)
 
 
 class ChatTurnAcceptanceUnavailableError(Exception):
@@ -898,9 +907,7 @@ class ChatRuntimeController:
                     expected_statuses={"queued", "starting", "running", "interrupting"},
                     status="failed",
                     error_code="server_restarted",
-                    error=("LoopX Chat restarted before this turn finished. "
-                           "Your conversation is saved; this turn was not retried automatically. "
-                           "You can continue with a follow-up in this session."),
+                    error=SERVER_RESTARTED_MESSAGE,
                     completed_at=utc_now(),
                 )
                 if failed is not None:
@@ -1525,6 +1532,37 @@ class ChatRuntimeController:
                     if self.turn_done_events.get(key) is done_event:
                         self.turn_done_events.pop(key, None)
 
+    def recover_exited_turn(self, session_id: str, turn_id: str | None = None) -> None:
+        """Reconcile a killed local worker without starting a provider or replay.
+
+        The execution lock records its host and PID for the worker's lifetime.
+        No record, a live/foreign holder, or an attached host proves no loss.
+        """
+        session = self.store.load_session(session_id)
+        if not session:
+            return
+        turn_id = turn_id or session.get("active_turn_id")
+        if not turn_id:
+            return
+        path = self.store.turn_execution_lock_path(session_id, turn_id)
+        if lock_holder_liveness(path)[0] != LOCK_HOLDER_DEAD:
+            return
+        # Claim the same kernel lock before changing state: a replacement that
+        # already owns execution wins, including in another Chat service.
+        with try_exclusive_file_lock(path, agent_id="loopx-chat", operation="recover_chat_turn") as ownership:
+            if ownership is None:
+                return
+            session = self.store.load_session(session_id)
+            turn = self.store.load_turn(session_id, turn_id)
+            if managed_turn_recovery_allowed(
+                session, turn, managed=bool(session and session.get("session_mode") == CHAT_SESSION_MODE_MANAGED),
+                owner_dead=True,
+            ):
+                self._fail_turn(
+                    session_id, turn_id, "server_restarted", SERVER_RESTARTED_MESSAGE,
+                    status="failed", expected_statuses={"starting", "running", "interrupting"},
+                )
+
     def _run_turn(
         self,
         *,
@@ -1549,30 +1587,36 @@ class ChatRuntimeController:
         # back here rather than left holding the key, which would make every
         # later dispatch of this same Turn a silent no-op.
         try:
-            started_turn = self.store.update_turn(
-                session_id,
-                turn_id,
-                expected_statuses={"queued"},
-                status="starting",
-                started_at=utc_now(),
-            )
-            if started_turn is None:
-                with self.lock:
-                    self.cancelled_turns.discard(key)
-                return
-            from .control_plane.effect_runtime import effect_runtime_request_scope
+            with try_exclusive_file_lock(
+                self.store.turn_execution_lock_path(session_id, turn_id),
+                agent_id="loopx-chat", operation="execute_chat_turn",
+            ) as ownership:
+                if ownership is None:
+                    return
+                started_turn = self.store.update_turn(
+                    session_id,
+                    turn_id,
+                    expected_statuses={"queued"},
+                    status="starting",
+                    started_at=utc_now(),
+                )
+                if started_turn is None:
+                    with self.lock:
+                        self.cancelled_turns.discard(key)
+                    return
+                from .control_plane.effect_runtime import effect_runtime_request_scope
 
-            # Reuse one code revision across this worker's typed decisions.
-            # This caches no Session, Turn or authority facts: each checkpoint
-            # still reads current state, including after a long provider wait.
-            with effect_runtime_request_scope():
-                retry_binding: dict[str, str] = {}
-                while self._run_started_turn(
-                    session_id=session_id, turn_id=turn_id, message=message,
-                    attachments=attachments, adapter=adapter,
-                    loopx_execution=loopx_execution, retry_binding=retry_binding,
-                ):
-                    pass
+                # Reuse one code revision across this worker's typed decisions.
+                # This caches no Session, Turn or authority facts: each checkpoint
+                # still reads current state, including after a long provider wait.
+                with effect_runtime_request_scope():
+                    retry_binding: dict[str, str] = {}
+                    while self._run_started_turn(
+                        session_id=session_id, turn_id=turn_id, message=message,
+                        attachments=attachments, adapter=adapter,
+                        loopx_execution=loopx_execution, retry_binding=retry_binding,
+                    ):
+                        pass
         finally:
             done_event.set()
             self.turn_release_wakeup.notify()

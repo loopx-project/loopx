@@ -191,6 +191,23 @@ def managed_turn_execution_allowed(
     return _required_bool(result, "allowed")
 
 
+def managed_turn_recovery_allowed(
+    session: dict[str, Any] | None, turn: dict[str, Any] | None,
+    *, managed: bool, owner_dead: bool,
+) -> bool:
+    """Project process observations to the same typed Turn lifecycle owner."""
+    result = effect_runtime_result("chat.turn.recovery_allowed", {
+        "session": ({"status": session.get("status"),
+                     "active_turn_id": session.get("active_turn_id")}
+                    if session is not None else None),
+        "turn": ({"turn_id": turn.get("turn_id"), "status": turn.get("status")}
+                 if turn is not None else None),
+        "managed": managed,
+        "owner_dead": owner_dead,
+    })
+    return _required_bool(result, "allowed")
+
+
 def _raise_rejection(result: dict[str, Any]) -> None:
     code = result.get("code")
     if code in {"session_not_found", "session_closed"}:
