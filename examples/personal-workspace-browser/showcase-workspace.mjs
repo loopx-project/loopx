@@ -139,7 +139,9 @@ export async function installShowcaseWorkspace(api, page, state) {
       if (workspaceNames[goal.id]) goal.display_name = workspaceNames[goal.id];
     }
     const goal = fixture.run_history.goals.find((item) => item.id === goalId);
-    if (goal) Object.assign(goal, { display_name: title, acceptance_observation: acceptance });
+    if (goal) Object.assign(goal, { display_name: title,
+      goal_objective: "Move legacy billing exports onto the ledger service.",
+      acceptance_observation: acceptance });
     const queueItem = fixture.attention_queue.items.find((item) => item.goal_id === goalId);
     if (queueItem) {
       const items = [...openTodos, deferredTodo, ...recentDone];
