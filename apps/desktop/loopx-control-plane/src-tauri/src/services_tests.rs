@@ -678,6 +678,11 @@ fn exited_private_children_recover_individually_with_the_frozen_identity() {
         failed.child.inner().kill().unwrap();
         failed.child.inner().wait().unwrap();
         services.last_recovery_attempt = None;
+        let mut development = endpoints;
+        development.isolated = false;
+        assert!(!services
+            .recover_exited(&development, Instant::now())
+            .unwrap());
         assert!(services.recover_exited(&endpoints, Instant::now()).unwrap());
         assert_ne!(
             services

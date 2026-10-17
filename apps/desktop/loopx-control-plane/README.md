@@ -303,19 +303,23 @@ restricted to loopback CORS and the existing preview/apply authority boundary.
 
 ## Coexistence With `loopx dashboard`
 
-The desktop shell and `loopx dashboard` share the same loopback services on
-`8766` and `8767`, and both entry points reuse an already-running matching
-LoopX service:
+The packaged App allocates its own private Status and Chat endpoints for each
+window. `loopx dashboard` keeps its CLI endpoints on `8766` and `8767`; either
+entrypoint can run without adopting or stopping the other's listeners. Vite
+development retains those CLI ports and its qualified-service reuse path.
 
-- Start `loopx dashboard` first, then open the desktop shell: the shell keeps
-  using the running status and Chat services and only opens the native window.
-- Start the desktop shell first, then run `loopx dashboard`: the command
-  detects the matching LoopX Chat service, prints its URL, and opens the
-  browser/PWA route without starting a second server.
+The packaged App watches its own direct service children. When one exits, it
+restarts that service on the same private endpoint with the same qualified
+runtime and identity, keeping the healthy peer running. Recovery attempts are
+at least two seconds apart. An occupied endpoint fails closed and is retried;
+the intervening listener is never adopted or stopped. A live but unresponsive
+child is outside this exit-recovery path.
 
-Either order works. Closing the desktop window stops only the service process
-groups it started; a Chat service started by `loopx dashboard` keeps running
-until that command is stopped.
+Recovery keeps an update check's error or available-update choice visible. It
+waits during maintenance and after an App replacement requires restart or leaves
+the App incomplete. The native shell sends no conversation input or replay;
+persisted Session and Turn recovery remain owned by Core. Closing the App stops
+only its own service process groups.
 
 ## Prerequisites
 
@@ -338,6 +342,24 @@ npm run dev
 ```
 
 ## Validation
+
+For a process-exit drill, use a separately identified packaged QA App whose
+launcher fixes a disposable empty registry and `LOOPX_USAGE_PING=0` before any
+Core command. Keep its qualified Core artifact immutable across baseline and
+candidate runs. Deny public network access only in that launcher, check for
+updates through the actual App, then terminate its exact owned Chat and Status
+children separately. Read back both HTTP identities, unchanged peer PID, exact
+registry, retained Session and update failure, then normal quit/reopen cleanup.
+Never substitute an installed App, real Goal or shared listener as a fixture.
+This qualifies child-exit recovery, not an interrupted model Turn, an
+unresponsive process, a signed update installation or cross-OS operation.
+
+This empty-registry macOS QA capture follows separate real Chat and Status
+process exits. Both services recovered while the failed network update check
+stayed visible. It uses a separately frozen installed Core; it is not a
+single-revision release or official installation qualification.
+
+![Packaged QA after private service recovery, retaining the failed update check](docs/assets/native-service-recovery-qa.jpg)
 
 ```bash
 cd apps/desktop/loopx-control-plane/src-tauri
