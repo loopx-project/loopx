@@ -37,37 +37,15 @@ from ...control_plane.collaboration.inbox import (
     result_paths,
     inspect_result_identity,
     prior_result_delivered,
+    DELIVERY_STATUSES as DELIVERY_STATUSES,
+    DELIVERY_ERRORS as DELIVERY_ERRORS,
+    reply_status as reply_status,
 )
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from ...control_plane.collaboration.source_chat_observation import original_delivery_facts
 from ...chat import ChatMessagePayloadConflictError
 
-DELIVERY_STATUSES = {
-    "admitted",
-    "queued",
-    "retry_pending",
-    "verification_required",
-    "delivered",
-    "superseded",
-    "explicit_unverified",
-}
 EXACT_DELIVERY_ADMISSION_SECONDS = 60
-DELIVERY_ERRORS = {
-    "provider_delivery_unverified",
-    "provider_locator_unavailable",
-    "provider_verifier_unavailable",
-    "provider_verification_unavailable",
-    "provider_delivery_intent_conflict",
-    "provider_message_missing",
-    "provider_delivery_mismatch",
-    "return_authorization_unavailable",
-    "original_route_unavailable",
-    "initial_delivery_receipt_unavailable",
-    "original_route_or_return_delivery_unavailable",
-    "delivery_state_unreadable",
-    "return_transport_unavailable",
-    "manager_return_payload_conflict",
-}
 
 class ReturnResolutionBlocked(ValueError, RuntimeError):
     """A return cannot be resolved; ``reason`` is the provider-neutral code.
@@ -296,45 +274,6 @@ def report(
             else "queued_for_original_conversation"
         ),
     }
-
-
-def reply_status(root, row):
-    result = []
-    for path in result_paths(_root(root) / "replies" / row["request_id"]):
-        phase = "decision" if path.stem == "decision" or path.stem.startswith("decision-") else "conclusion"
-        state_path = path.with_name(path.stem + ".delivery.json")
-        try:
-            reply = _read(path)
-            state = _read(state_path) if state_path.exists() else {}
-        except (OSError, ValueError):
-            result.append({
-                "phase": phase, "status": "explicit_unverified",
-                **({"result_key": path.stem} if path.stem != phase else {}),
-                "created_at": None, "delivered_at": None,
-                "error": "delivery_state_unreadable",
-            })
-            continue
-        status = state.get("status", "queued")
-        error = state.get("error")
-        if status not in DELIVERY_STATUSES:
-            status, error = "explicit_unverified", "delivery_state_unreadable"
-        elif error is not None and error not in DELIVERY_ERRORS:
-            status, error = "explicit_unverified", "delivery_state_unreadable"
-        delivered_at = state.get("delivered_at")
-        if not isinstance(delivered_at, str) or len(delivered_at) > 80:
-            delivered_at = None
-        item = {
-            "phase": phase,
-            **({"result_key": path.stem} if path.stem != phase else {}),
-            "status": status,
-            "created_at": reply.get("created_at"),
-            "delivered_at": delivered_at,
-            "error": error,
-        }
-        if state.get("verification") == "reconciled_after_restart":
-            item["verification"] = "reconciled_after_restart"
-        result.append(item)
-    return result
 
 
 def project_chat_return_deliveries(root, session_id, messages):
