@@ -381,9 +381,49 @@ duplicate confirmation retain that decision; later source work is preserved.
 The CLI counterpart is `goal-transfer cancel --goal-id GOAL --operation-id
 OPERATION --execute`. A recorded cancellation whose follow-up read failed
 remains recorded; retry the read instead of treating it as an uncommitted move.
-These entries expose current holds. Destination admission and original-task
-continuation remain unavailable; this source recovery is not a completed Agent
-migration or a qualification of installed/cross-machine operation.
+These entries expose current holds. The complete Settings migration journey is
+still unavailable. A separate development CLI profile now coordinates a local
+cutover between a prepared source and its already staged destination. Both
+original local registry/runtime routes must remain reachable until admission:
+
+```sh
+loopx --registry .loopx/registry.json goal-transfer cutover-preview \
+  --goal-id GOAL --operation-id OPERATION \
+  --destination-registry ../destination/.loopx/registry.json
+
+# Confirm the returned exact preview_sha256 once.
+loopx --registry .loopx/registry.json goal-transfer cutover \
+  --goal-id GOAL --operation-id OPERATION \
+  --destination-registry ../destination/.loopx/registry.json \
+  --expected-preview-sha256 REVIEWED_SHA256 --execute
+```
+
+The native Goal owner verifies the original File/SQLite history, protected
+staging, mapped material bytes and single-Agent local Task configuration. Extra
+capability, parent-Goal, Host or credential bindings remain held for their
+owners. It records the source-final decision under the same lock as cancellation,
+publishes only the exact destination registration through its existing codec,
+then issues a distinct native **Task and accounting** admission. Host/session/
+effect execution remains closed; this receipt is not an Agent runtime grant.
+It never forges a new-Goal creation receipt or installs an old lease/session. The destination must acquire
+a fresh lease for the **original Todo id**. Original quota history remains the
+basis for new work and duplicate-effect lookup; old receipts are unchanged.
+
+Before source-final, cancellation can restore the unchanged source. After
+source-final, cancellation refuses: retry the **same operation and preview** to
+finish destination admission. A lost response or later destination work never
+authorizes rewriting its registry or restoring the source. Source Settings and
+`goal-transfer inspect` read current destination Todo status and evidence references after cutover;
+an unavailable destination fails the read instead of displaying a cached success.
+Source preparation binds its observed OS installation; destination Task admission
+also binds its original physical runtime. A copied receipt or recreated runtime
+does not re-admit writes.
+Provider/policy replacement and a further transfer still require their owning
+lineage qualification. This is a source-online local Task continuation profile,
+not portable cross-machine authorization or complete installed Agent migration.
+Portable custody/security, required configuration/session dependencies, automatic
+preparation, the complete Settings interaction and installed qualification remain
+open. Existing ordinary Goals and their provider defaults retain their behavior.
 
 中文：开发中的 Goal 设置 / 能力中心新增“迁移 Agent”，与 `goal-transfer inspect
 --goal-id GOAL` 共用原生 owner，读取原任务全文、归档和关系及当前准备状态。
@@ -391,8 +431,19 @@ migration or a qualification of installed/cross-machine operation.
 不要求本人找 runtime 路径、修改 registry 或拼接多套命令。已准备的源端可在原处
 “取消迁移准备”，记录原取消决定并读回源写入边界；冷启动、重复确认和后写均保留。
 取消已记录但后续读取失败时，重试读取，不把已提交决定说成未发生。
-目标准入和原任务在目标续办仍未接通，当前显示明确 hold；这只是源端读回和恢复，
-不是完整迁移、正常安装态或跨机资格。
+开发中的 shared CLI 另有本地 `cutover-preview` / `cutover`：对已准备的源及已暂存的
+目标预览后，用准确摘要确认一次。原生 Goal owner 对账原 File/SQLite 历史、受保护的
+暂存内容、材料映射和单 Agent 本地任务配置；额外能力、父 Goal、Host 或凭证绑定仍由
+原 owner 处理。源最终决定和取消互斥；目标经原 registry codec 读回后取得本地 Task/记账
+准入，Host/session/effect 执行仍关闭，这不是 Agent runtime 的完整准入。
+不伪造新 Goal 创建收据、不沿用旧 lease/session。目标为原 Todo 重新取得 lease；原账、
+原 effect 去重和收据保持有效。源最终决定之前可取消，之后仅同操作向前恢复；重复确认
+不覆盖目标后写。原设置和 `inspect` 从目标读取原任务状态和证据引用，目标失联则明确报错；
+引用本身不代表已在此处读取产物字节或完成原 Goal 验收。
+源准备绑定原 OS 安装身份，目标任务准入还绑定原物理 runtime；复制收据或重建目录不获新写权限。
+此路径在准入前要求两个原本地环境均可达；不是跨机授权令牌。再次迁移和 provider/
+策略替换仍待原谱系 owner 资格。自动准备、完整设置交互、必要配置/session 依赖、
+安全封装和正常安装态资格仍未闭，不能据此宣称完整 Agent 迁移已交付。
 
 ## Full-state recovery after cold import
 

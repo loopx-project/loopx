@@ -1,7 +1,7 @@
 import {withFileMutationLock} from "../effect_runtime_io.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeConflictError} from "../effect_runtime_errors.ts";
-import {loadLegacyCoordinationWriterFence, PLANNED_TRANSFER_WRITER_FENCE_SCHEMA} from "./legacy_writer_fence.ts";
+import {loadLegacyCoordinationWriterFence, PLANNED_TRANSFER_WRITER_FENCE_SCHEMA, PLANNED_TRANSFER_TASK_FENCE_SCHEMA} from "./legacy_writer_fence.ts";
 import {requireShadowPrimaryWriteAllowed, shadowMaintenanceLockPath, withShadowMaintenanceLock} from "./shadow_management.ts";
 import {requireLocalAuthorityRuntimeRoot} from "./local_authority_provider.ts";
 import {hasExactAuthorityKeys, requireAuthorityStoreId} from "./authority_store_codec.ts";
@@ -66,13 +66,23 @@ interface CanonicalWriterOptions {
  * Ordinary missing/promotion fences preserve their existing runtime behavior.
  */
 export async function withGoalRuntimeWriter<T>(root: string, goalId: string,
-  write: () => Promise<T>, borrowedMaintenance?: unknown): Promise<T> {
+  write: () => Promise<T>, borrowedMaintenance?: unknown, purpose: "runtime" | "quota_accounting" = "runtime"): Promise<T> {
   return withShadowMaintenanceLock(root, goalId, async () => {
     const fence = await loadLegacyCoordinationWriterFence(root, goalId);
     if (fence.status === "failed") throw new EffectRuntimeConflictError(fence.reason, "canonical_authority_fence_invalid");
     if (fence.status === "loaded" && fence.fence.schema_version === PLANNED_TRANSFER_WRITER_FENCE_SCHEMA) {
       throw new EffectRuntimeConflictError(`Goal runtime is prepared for transfer ${fence.fence.operation_id}; recover that original operation`,
         "canonical_authority_transfer_prepared");
+    }
+    if (fence.status === "loaded" && fence.fence.schema_version === PLANNED_TRANSFER_TASK_FENCE_SCHEMA) {
+      const {requireLocalTaskTransferAdmission} = await import("../goals/planned_transfer_cutover.ts");
+      await requireLocalTaskTransferAdmission(root, goalId, fence.fence);
+      // This partial profile admits native Tasks and their accounting only.
+      // Host/session/effect callers cannot select the quota-owned purpose in
+      // their RPC payload. Whole-Agent continuation needs its actual owners.
+      if (purpose !== "quota_accounting") {
+        throw new EffectRuntimeConflictError("Local Task transfer has no Host/session/effect admission; qualify the original Goal runtime before continuing a Host");
+      }
     }
     return write();
   }, borrowedMaintenance);
@@ -115,6 +125,13 @@ export async function requireCanonicalBusinessWrite(
     throw new CanonicalWriteRouteError("canonical_authority_transfer_prepared", goalId, operation,
       `Authority is prepared for transfer ${fence.fence.operation_id}; recover that operation before retrying`);
   }
+  if (fence.status === "loaded" && fence.fence.schema_version === PLANNED_TRANSFER_TASK_FENCE_SCHEMA) {
+    const {requireLocalTaskTransferAdmission} = await import("../goals/planned_transfer_cutover.ts");
+    await requireLocalTaskTransferAdmission(root, goalId, fence.fence);
+    if (operation === "authority_maintenance" || operation === "handoff_mode_set" || operation === "goal_create") {
+      throw new EffectRuntimeConflictError("Local Task transfer admission does not cover provider/policy replacement; use its owning lineage recovery");
+    }
+  }
 }
 
 /** Canonical command writers share the maintenance guard; provider CAS owns state. */
@@ -136,6 +153,11 @@ export async function withCanonicalWriter<T>(
       if (fence.status === "loaded" && fence.fence.schema_version === PLANNED_TRANSFER_WRITER_FENCE_SCHEMA) {
         throw new CanonicalWriteRouteError("canonical_authority_transfer_prepared", goalId, "authority_maintenance",
           `Authority is prepared for transfer ${fence.fence.operation_id}; recover that operation before retrying`);
+      }
+      if (fence.status === "loaded" && fence.fence.schema_version === PLANNED_TRANSFER_TASK_FENCE_SCHEMA) {
+        const {requireLocalTaskTransferAdmission} = await import("../goals/planned_transfer_cutover.ts");
+        await requireLocalTaskTransferAdmission(root, goalId, fence.fence);
+        throw new EffectRuntimeConflictError("Local Task transfer admission does not cover provider/policy replacement; use its owning lineage recovery");
       }
     }
     return await write();

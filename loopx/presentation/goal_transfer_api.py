@@ -37,5 +37,5 @@ class GoalTransferRequestMixin:
                     goal_id=body["goal_id"], operation_id=body["operation_id"])}
             self._send_json(result)
         except Exception:
-            self._send_error("The original Agent transfer is unavailable. Retry its current source; no destination admission was issued.",
+            self._send_error("The original transfer state is unavailable. Retry the same operation; recorded decisions and destination work are preserved.",
                 status=400, error_code="goal_transfer_unavailable")

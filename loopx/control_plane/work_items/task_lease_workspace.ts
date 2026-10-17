@@ -99,6 +99,14 @@ async function machineIdentity(): Promise<string | undefined> {
   return undefined;
 }
 
+/** Reuse the same OS-installation identity for local Goal admission. The
+ * digest is an observation, not a transferable credential or execution grant. */
+export async function observeLocalWorkspaceHostIdentity(): Promise<string> {
+  const machine = await machineIdentity();
+  if (!machine) throw new LeaseWorktreeObservationError("host identity unavailable for worktree isolation");
+  return digest(machine);
+}
+
 export async function observeLeaseWorktree(path: string, overlaps: (path: string) => boolean): Promise<LeaseWorkspace> {
   if (!isAbsolute(path)) throw new LeaseWorktreeObservationError("worktree observation requires an absolute caller path");
   const cwd = await realpath(path);
@@ -147,7 +155,5 @@ export async function observeLeaseWorktree(path: string, overlaps: (path: string
   // Private local paths are not persisted. Filesystem inode identity collapses
   // symlink/case aliases; a recreated directory gets a new identity.
   const key = async (p: string) => {const s = await stat(p); return digest(`${s.dev}:${s.ino}`);};
-  const machine = await machineIdentity();
-  if (!machine) throw new LeaseWorktreeObservationError("host identity unavailable for worktree isolation");
-  return {host: digest(machine), common_directory: await key(common), worktree: await key(root), repository};
+  return {host: await observeLocalWorkspaceHostIdentity(), common_directory: await key(common), worktree: await key(root), repository};
 }

@@ -18,11 +18,12 @@ export function GoalTransferSettings({goalId}: {goalId: string}) {
     turn_or_host_unsettled: zh ? "原执行或 Host 进程尚未确认结束。" : "Original work or Host processes are not confirmed settled.",
     quota_unsettled: zh ? "原执行扣额尚未结算。" : "Original accounting still needs settlement.",
     destination_admission_unavailable: zh ? "目标环境的执行准入及原任务续办尚未接通，当前不能完成迁移。" : "Destination admission and original-task continuation are not connected yet. Moving this Agent is unavailable.",
+    transfer_journey_incomplete: zh ? "此处可读取本地切换、原任务状态和证据引用；完整迁移流程与安装环境验证仍在开发中。" : "Local cutover, original-task status and evidence references can be read here. The complete migration flow and installed-environment validation are still in development.",
   };
 
   async function perform(cancel = false) {
     if (inFlight.current) return;
-    inFlight.current = true; setBusy(true); setError("");
+    inFlight.current = true; setBusy(true); setError(""); setView(null);
     try {
       if (cancel && view?.operation_id) {
         const result = await cancelGoalTransfer(goalId, view.operation_id);
@@ -46,7 +47,10 @@ export function GoalTransferSettings({goalId}: {goalId: string}) {
       ? (zh ? "准备已取消，源环境的原写入边界已恢复。" : "Preparation cancelled. The original source write boundary is restored.")
       : (zh ? "取消决定已记录；源环境已有后续状态，请读取当前状态。" : "Cancellation is recorded. The source has later state; read its current status.")}</p> : null}
     {view ? <>
-      <p>{view.source_state === "prepared"
+      <p>{view.local_cutover ? (view.local_cutover.target_task_admitted
+        ? (zh ? "源环境已停止写入，目标可重新领取原任务的本地租约。下方为目标任务状态；Host 续办仍待验证。" : "Source writes are closed. The destination can acquire a fresh local lease for the original task. Status below comes from the destination; Host continuation still needs qualification.")
+        : (zh ? "切换决定已记录，源环境保持停写；目标尚待同一次操作恢复任务准入。" : "Cutover is recorded and source writes remain closed. Recover the same operation to finish destination Task admission."))
+        : view.source_state === "prepared"
         ? (zh ? "源环境已准备迁移，当前停止写入。" : "The source is prepared for transfer and rejects writes.")
         : (zh ? "源环境可供检查；尚未切换到目标环境。" : "The source is available for inspection. No destination cutover has occurred.")}</p>
       <p>{view.work.objective}</p>
@@ -54,7 +58,12 @@ export function GoalTransferSettings({goalId}: {goalId: string}) {
       <details>
         <summary>{zh ? "原工作" : "Original work"} · {view.work.todos.length}</summary>
         {view.work.agents.length ? <p>{view.work.agents.join(" · ")}</p> : null}
-        <ul>{view.work.todos.map(todo => <li key={todo.todo_id}>{todo.text}</li>)}</ul>
+        <ul>{view.work.todos.map(todo => <li key={todo.todo_id}>{todo.text} · {zh
+          ? ({open: "待完成", done: "已完成", blocked: "受阻", deferred: "已推迟"} as Record<string, string>)[todo.status] ?? todo.status
+          : todo.status}
+          {todo.note ? <p>{todo.note}</p> : null}
+          {todo.evidence ? <p>{zh ? "证据引用：" : "Evidence reference: "}{todo.evidence}</p> : null}
+        </li>)}</ul>
       </details>
       {view.cancel_available && view.operation_id ? <>
         <p>{zh ? "取消本次准备，恢复源环境的原写入边界，以便重新领取并继续原任务。" : "Cancel this preparation to restore source writes so the original tasks can be claimed and continued."}</p>

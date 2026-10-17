@@ -104,6 +104,42 @@ def cancel_registered_goal_transfer(*, registry_path: Path, goal_id: str, operat
         goal_id=goal_id, operation_id=operation_id)
 
 
+def local_goal_transfer_cutover(
+    *, registry_path: Path, goal_id: str, operation_id: str, destination_registry: Path,
+    expected_preview_sha256: str | None = None,
+) -> dict[str, Any]:
+    """One source-online local cutover; native owners decide every transition.
+
+    No copied receipt authorizes this call. Both local registrations must be
+    readable through their actual codec. A final source decision has no reverse
+    compensation; same-operation recovery preserves the stopped destination.
+    """
+    context = read_goal_transfer_context(registry_path=registry_path, goal_id=goal_id)
+    destination_registry = destination_registry.expanduser().absolute()
+    snapshot = _read_goal_transfer_snapshot(registry_path=destination_registry, goal_id=goal_id)
+    before = load_registry(destination_registry)
+    request: dict[str, Any] = {"source": {**context, "runtime_root": context["source_context"]["runtime_root"],
+        "goal_id": goal_id, "operation_id": operation_id}, "target_snapshot": snapshot, "target_registry": before}
+    if expected_preview_sha256 is not None:
+        request.update(execute=True, expected_preview_sha256=expected_preview_sha256)
+    result: dict[str, Any] = effect_runtime_result("coordination.planned_transfer.plan_local_cutover", request,
+        timeout=300.0, retry_safe=False)
+    proposed = result.pop("destination_registry")
+    if expected_preview_sha256 is None:
+        return {"ok": True, **result}
+    if result.pop("publish_registry"):
+        with project_registry_transaction(destination_registry, operation="planned_transfer_admission_publish") as transaction:
+            if transaction.payload_copy() != before:
+                raise ValueError("Destination registry changed after source-final; retry the original cutover without reverting later work")
+            transaction.commit(proposed)
+            if load_registry(destination_registry) != proposed:
+                raise ValueError("Target admission registration readback failed; recover the same cutover")
+    admitted: dict[str, Any] = effect_runtime_result("coordination.planned_transfer.finish_local_cutover", {
+        "runtime_root": snapshot["source_context"]["runtime_root"], "goal_id": goal_id, "operation_id": operation_id,
+    }, timeout=300.0, retry_safe=False)
+    return {"ok": True, **result, **admitted, "registry_readback_verified": True}
+
+
 def prepare_registered_goal_transfer(
     *, registry_path: Path, goal_id: str, operation_id: str, expected_preview_sha256: str,
 ) -> dict[str, Any]:

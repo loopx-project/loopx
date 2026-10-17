@@ -5,4 +5,5 @@ export type GoalTransferHoldCode =
   | "retained_leases"
   | "turn_or_host_unsettled"
   | "quota_unsettled"
-  | "destination_admission_unavailable";
+  | "destination_admission_unavailable"
+  | "transfer_journey_incomplete";

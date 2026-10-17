@@ -14,7 +14,7 @@ import {
 import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import {withGoalRuntimeWriter} from "../coordination/local_authority_write.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
-import {loadLegacyCoordinationWriterFence, PLANNED_TRANSFER_WRITER_FENCE_SCHEMA} from "../coordination/legacy_writer_fence.ts";
+import {loadLegacyCoordinationWriterFence, PLANNED_TRANSFER_WRITER_FENCE_SCHEMA, PLANNED_TRANSFER_TASK_FENCE_SCHEMA} from "../coordination/legacy_writer_fence.ts";
 import {shadowManagementDirectory} from "../coordination/shadow_management.ts";
 import {
   jsonObject,
@@ -534,7 +534,8 @@ export async function lookupQuotaAccountingReplay(
       let retainedTarget = false;
       try {await lstat(join(shadowManagementDirectory(root, goalId), "planned-transfer-targets")); retainedTarget = true;}
       catch (error) {if (!isNodeErrorCode(error, "ENOENT")) throw error;}
-      const targetFence = fence.status === "loaded" && fence.fence.schema_version === PLANNED_TRANSFER_WRITER_FENCE_SCHEMA && fence.fence.role === "target";
+      const targetFence = fence.status === "loaded" && ((fence.fence.schema_version === PLANNED_TRANSFER_WRITER_FENCE_SCHEMA && fence.fence.role === "target") ||
+        fence.fence.schema_version === PLANNED_TRANSFER_TASK_FENCE_SCHEMA);
       if (retainedTarget || targetFence) {
         // Retained lineage without its fence is damaged state, not an absent
         // old debit. Unrelated ordinary/legacy replay retains its prior rule.
@@ -1197,7 +1198,7 @@ export async function commitQuotaAccountingArtifactTransaction(
   const lockedCommit = () => request.indexLockHeld ? commit() : withFileMutationLock(indexPath, commit);
   const goal = dirname(request.runsDir), goals = dirname(goal);
   if (basename(request.runsDir) === "runs" && basename(goals) === "goals") {
-    return withGoalRuntimeWriter(dirname(goals), basename(goal), lockedCommit, request.maintenanceLock);
+    return withGoalRuntimeWriter(dirname(goals), basename(goal), lockedCommit, request.maintenanceLock, "quota_accounting");
   }
   if (request.maintenanceLock !== undefined) throw new EffectRuntimeRequestError("Quota maintenance handoff requires its canonical runtime route");
   return lockedCommit();

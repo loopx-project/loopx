@@ -20,7 +20,7 @@ import {FileAuthorityStore} from "./file_authority_store.ts";
 import {SqliteAuthorityStore} from "./sqlite_authority_store.ts";
 import {localAuthorityProviderPaths, publishLocalAuthoritySelection} from "./local_authority_provider.ts";
 import {engageLegacyCoordinationWriterFenceUnderLocks, loadLegacyCoordinationWriterFence,
-  PLANNED_TRANSFER_WRITER_FENCE_SCHEMA, type PlannedTransferWriterFence} from "./legacy_writer_fence.ts";
+  PLANNED_TRANSFER_WRITER_FENCE_SCHEMA, PLANNED_TRANSFER_TASK_FENCE_SCHEMA, type PlannedTransferWriterFence} from "./legacy_writer_fence.ts";
 import {readShadowManagementState, shadowManagementDirectory, withShadowMaintenanceLock} from "./shadow_management.ts";
 import {decodeGoalTransferHistory, inspectGoalTransferHistory, readGoalTransferHistoryJson, retainGoalTransferHistory, type ProtectedGoalTransferHistory} from "../goals/planned_transfer_history.ts";
 import {PREPARATION_SCHEMA} from "./planned_transfer_authority.ts";
@@ -263,6 +263,7 @@ export async function stageAuthorityForPlannedTransfer(value: JsonObject): Promi
     }
     await mkdir(directory, {recursive: true, mode: 0o700});
     await retainJson(pendingPath, plan.identity);
+    await retainJson(join(directory, "source-preparation.json"), prepared);
     await retainJson(join(directory, "registration.json"), {identity_sha256: canonicalAuthoritySha256(plan.identity),
       registry_path: witness.path, goal: plan.goal});
     const engaged = await engageLegacyCoordinationWriterFenceUnderLocks(root, plan.goalId, plan.statePath, fence);
@@ -331,8 +332,15 @@ export async function readStagedGoalTransferRuns(value: JsonObject): Promise<Jso
   const operation = requireAuthorityStoreId(value.operation_id, "original transfer operation");
   if (/[\\/\0]/u.test(goal) || goal === "." || goal === "..") reject("Original transfer Goal must be one path segment");
   const fence = await loadLegacyCoordinationWriterFence(root, goal);
-  if (fence.status !== "loaded" || fence.fence.schema_version !== PLANNED_TRANSFER_WRITER_FENCE_SCHEMA ||
-      fence.fence.role !== "target" || fence.fence.operation_id !== operation) reject("Original staged target accounting binding is unavailable");
+  const admitted = fence.status === "loaded" && fence.fence.schema_version === PLANNED_TRANSFER_TASK_FENCE_SCHEMA;
+  if (fence.status !== "loaded" || fence.fence.operation_id !== operation ||
+      (!admitted && (fence.fence.schema_version !== PLANNED_TRANSFER_WRITER_FENCE_SCHEMA || fence.fence.role !== "target"))) {
+    reject("Original staged target accounting binding is unavailable");
+  }
+  if (admitted) {
+    const {requireLocalTaskTransferAdmission} = await import("../goals/planned_transfer_cutover.ts");
+    await requireLocalTaskTransferAdmission(root, goal, fence.fence);
+  }
   const directory = join(shadowManagementDirectory(root, goal), "planned-transfer-targets", canonicalAuthoritySha256(operation));
   const pending = await readGoalTransferHistoryJson(join(directory, "preparation.json"));
   const receipt = await readGoalTransferHistoryJson(join(directory, "receipt.json"));
@@ -348,7 +356,7 @@ export async function readStagedGoalTransferRuns(value: JsonObject): Promise<Jso
   const manifest = decodeGoalTransferHistory(await readGoalTransferHistoryJson(join(historyRoot, "manifest.json")));
   const records = await projectGoalQuotaHistoryForTransfer(manifest.source_runtime_root, goal, historyRoot, manifest.quota_history);
   const live = await readGoalQuotaHistoryForTransfer(root, goal);
-  if (live.closed !== true || (live.receipts as JsonObject[]).length !== 0) {
+  if (!admitted && (live.closed !== true || (live.receipts as JsonObject[]).length !== 0)) {
     reject("Staged target contains unadopted live accounting; preserve it for recovery");
   }
   const after = await loadLegacyCoordinationWriterFence(root, goal);
@@ -357,6 +365,6 @@ export async function readStagedGoalTransferRuns(value: JsonObject): Promise<Jso
   }
   return {records, raw_count: records.length, live_index_sha256: live.index_sha256,
     provenance: {operation_id: operation, history_sha256: receipt.runtime_history_sha256,
-      original_index_sha256: manifest.quota_history.index_sha256, historical_only: true,
-      runtime_accounting_adopted: false, execution_authority_granted: false}};
+      original_index_sha256: manifest.quota_history.index_sha256, historical_only: !admitted,
+      runtime_accounting_adopted: admitted, execution_authority_granted: false}};
 }

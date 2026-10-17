@@ -41,6 +41,9 @@ export const COLD_SOURCE_IMPORT_WRITER_FENCE_SCHEMA = "loopx_cold_source_import_
  * Older decoders reject this schema rather than treating retained history as a
  * fresh execution grant. The role is part of the exact persisted binding. */
 export const PLANNED_TRANSFER_WRITER_FENCE_SCHEMA = "loopx_planned_transfer_writer_fence_v0";
+/** Native Task/accounting admission after a final source decision. Host,
+ * session and effect execution remain held. This is not new-Goal creation. */
+export const PLANNED_TRANSFER_TASK_FENCE_SCHEMA = "loopx_planned_transfer_task_fence_v0";
 export interface PlannedTransferWriterFence extends JsonObject {
   schema_version: typeof PLANNED_TRANSFER_WRITER_FENCE_SCHEMA;
   state: "engaged";
@@ -123,6 +126,15 @@ export function legacyCoordinationWriterFencePath(root: string, goalId: string):
 
 export function decodeLegacyCoordinationWriterFence(value: unknown): JsonObject {
   const fence = canonicalAuthorityObject(value, "legacy coordination writer fence");
+  if (fence.schema_version === PLANNED_TRANSFER_TASK_FENCE_SCHEMA) {
+    if (fence.state !== "engaged" || !hasExactAuthorityKeys(fence,
+        ["schema_version", "state", "goal_id", "fence_id", "operation_id", "source_identity_sha256", "task_admission_sha256", "store_identity"]) ||
+        !BARE_SHA256_PATTERN.test(String(fence.source_identity_sha256)) || !BARE_SHA256_PATTERN.test(String(fence.task_admission_sha256))) {
+      throw new Error("Invalid planned transfer admission fence");
+    }
+    for (const key of ["goal_id", "fence_id", "operation_id", "store_identity"]) requireAuthorityStoreId(fence[key], key);
+    return fence;
+  }
   if (fence.schema_version === PLANNED_TRANSFER_WRITER_FENCE_SCHEMA) {
     if (fence.state !== "engaged" || !hasExactAuthorityKeys(fence,
         ["schema_version", "state", "goal_id", "fence_id", "operation_id", "source_identity_sha256", "role"]) ||
@@ -250,6 +262,32 @@ export async function restorePlannedTransferWriterFenceUnderLock(root: string, g
     const after = await loadLegacyCoordinationWriterFence(root, goalId);
     if (after.status !== "loaded" || !canonicalAuthorityBytes(after.fence).equals(canonicalAuthorityBytes(prior))) {
       throw new Error("Cancelled source writer fence readback failed");
+    }
+  });
+}
+
+/** The Goal cutover owner holds maintenance and has read back its registry and
+ * durable admission. Only the exact stopped target may enter this lineage. */
+export async function admitPlannedTransferTaskWriterUnderLock(root: string, goalId: string,
+  prepared: JsonObject, admitted: JsonObject): Promise<void> {
+  decodeLegacyCoordinationWriterFence(prepared); decodeLegacyCoordinationWriterFence(admitted);
+  if (prepared.schema_version !== PLANNED_TRANSFER_WRITER_FENCE_SCHEMA || prepared.role !== "target" ||
+      admitted.schema_version !== PLANNED_TRANSFER_TASK_FENCE_SCHEMA || prepared.goal_id !== goalId || admitted.goal_id !== goalId ||
+      prepared.operation_id !== admitted.operation_id || prepared.source_identity_sha256 !== admitted.source_identity_sha256) {
+    throw new Error("Invalid planned target admission transition");
+  }
+  const path = legacyCoordinationWriterFencePath(root, goalId);
+  await withFileMutationLock(path, async () => {
+    const current = await loadLegacyCoordinationWriterFence(root, goalId);
+    if (current.status !== "loaded") throw new Error("Prepared target writer fence is unavailable");
+    if (canonicalAuthorityBytes(current.fence).equals(canonicalAuthorityBytes(admitted))) return;
+    if (!canonicalAuthorityBytes(current.fence).equals(canonicalAuthorityBytes(prepared))) throw new Error("Prepared target writer fence changed");
+    // Durable publication is the last step, after source-final, registry and
+    // admission readback. An interrupted earlier step remains write-closed.
+    await atomicWriteJson(path, admitted);
+    const after = await loadLegacyCoordinationWriterFence(root, goalId);
+    if (after.status !== "loaded" || !canonicalAuthorityBytes(after.fence).equals(canonicalAuthorityBytes(admitted))) {
+      throw new Error("Target admission fence readback failed");
     }
   });
 }
