@@ -12,7 +12,7 @@ from typing import Any
 
 from ... import __version__
 from ..effect_runtime import effect_runtime_result
-from ..projects.registry_codec import load_project_registry, project_registry_transaction
+from ..projects.registry_codec import load_registry, project_registry_transaction
 
 
 def require_goal_transfer_registry_write(
@@ -48,7 +48,7 @@ def _read_goal_transfer_snapshot(*, registry_path: Path, goal_id: str) -> dict[s
 
     registry_path = registry_path.expanduser().resolve()
     with authority_registry_source(registry_path) as witness:
-        registry = load_project_registry(registry_path)
+        registry = load_registry(registry_path)
         goal = find_registry_goal(registry, goal_id)
         if goal is None:
             raise ValueError("Original Goal is not registered")
@@ -263,7 +263,7 @@ def _stage_goal_transfer(
         if transaction.payload_copy() != registry:
             raise ValueError("Destination registry changed before publication; retry the original transfer without reverting later work")
         transaction.commit(proposed)
-        if load_project_registry(registry_path) != proposed:
+        if load_registry(registry_path) != proposed:
             raise ValueError("Planned transfer registry readback changed; recover the original operation")
         return {**result, "registry_readback_verified": True}
 

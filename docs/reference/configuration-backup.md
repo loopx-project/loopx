@@ -351,6 +351,21 @@ still separate, unqualified parts of this implementation.
 目标仍停止，这些历史投影不授予当前扣额、配置、凭证或执行权限；最终切换、
 目标准入及打包后的继续工作旅程尚未资格化。
 
+Registry compensation in this implementation also obeys the prepared Goal
+owner. A transaction cannot restore an old registration after releasing its
+lock or overwrite unrecognized later bytes. Ordinary compensation within the
+original transaction still restores its exact prior bytes and format. If a
+staged destination registration was published but its readback failed, a
+refused compensation preserves that stopped route and reports recovery of the
+original operation. Cold retry uses the retained operation; it does not delete
+the route, reopen the source, or admit destination execution.
+
+中文：开发中的 registry 补偿也服从原 prepared Goal owner：事务释放锁后不能用
+旧对象恢复注册信息，也不能覆盖无法识别的后写字节。原事务内的普通补偿仍恢复
+准确原字节及格式。目标停止注册已发布而读回失败时，若 owner 拒绝补偿，就保留
+停止的目标路由，明确要求恢复原 operation；冷启动重试复用它，不删除路由、
+不重开源端，也不授予目标执行权限。
+
 ## Full-state recovery after cold import
 
 Keep the reviewed pre-import backup as well as a new full-state backup after

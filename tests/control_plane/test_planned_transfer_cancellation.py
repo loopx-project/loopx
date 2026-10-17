@@ -27,6 +27,7 @@ from loopx.control_plane.goals.planned_transfer_io import (
     read_goal_transfer_context, stage_prepared_goal_transfer,
 )
 from loopx.control_plane.projects.registry_codec import project_registry_transaction
+from loopx.control_plane.projects import registry_codec
 from loopx.control_plane.quota.spend_commit import record_quota_slot_spend_from_preview, replay_quota_spend_by_effect_ref
 from loopx.control_plane.turn_driver.codex_sessions import _session_path, _store_codex_cli_session
 from loopx.file_lock import exclusive_cross_runtime_file_lock
@@ -108,6 +109,79 @@ def operation_directory(source: dict, operation: str) -> Path:
 
 def cancel(source: dict, operation: str = "move-a") -> dict:
     return cancel_prepared_goal_transfer(runtime_root=source["runtime"], goal_id="report", operation_id=operation)
+
+
+def test_old_registry_compensation_cannot_replace_a_prepared_source(source: dict) -> None:
+    registry = source["registry"]
+    with project_registry_transaction(registry, operation="old_compensation") as old:
+        pass
+    with project_registry_transaction(registry, operation="reviewed_source_name") as current:
+        payload = current.payload_copy()
+        payload["goals"][0]["display_name"] = "Reviewed source before transfer"
+        current.commit(payload)
+    preview = preview_registered_goal_transfer(registry_path=registry, goal_id="report", operation_id="move-a")
+    prepare_registered_goal_transfer(registry_path=registry, goal_id="report", operation_id="move-a",
+        expected_preview_sha256=preview["preview_sha256"])
+    before = registry.read_bytes(), source["fence"].read_bytes()
+    with pytest.raises(RuntimeError, match="closed"):
+        old.restore()
+    assert (registry.read_bytes(), source["fence"].read_bytes()) == before
+    # The Goal is prepared, not the whole registry. Compensation of an
+    # unrelated change remains legal under the original codec transaction.
+    with project_registry_transaction(registry, operation="unrelated_compensation") as tx:
+        tx.commit({**tx.payload_copy(), "local_display_note": "unrelated"})
+        tx.restore()
+    assert (registry.read_bytes(), source["fence"].read_bytes()) == before
+    assert cancel(source)["readback"]["original_writer_fence_restored"] is True
+    assert registry.read_bytes() == before[0]
+    lease = source["acquire"]("continue-after-rejected-compensation")["lease"]
+    source["release"](lease)
+
+
+def test_target_registration_readback_failure_retains_the_prepared_route_for_cold_retry(
+    source: dict, tmp_path: Path, monkeypatch,
+) -> None:
+    snapshot = read_goal_transfer_context(registry_path=source["registry"], goal_id="report")
+    preview = preview_registered_goal_transfer(registry_path=source["registry"], goal_id="report", operation_id="move-a")
+    prepared = prepare_registered_goal_transfer(registry_path=source["registry"], goal_id="report", operation_id="move-a",
+        expected_preview_sha256=preview["preview_sha256"])
+    project, runtime = tmp_path / "target-project", tmp_path / "target-runtime"
+    registry = project / ".loopx/registry.json"
+    real_read = registry_codec._read_document
+    failed = False
+
+    def fail_publication_readback(path: Path):
+        nonlocal failed
+        if path == registry and not failed:
+            failed = True
+            raise OSError("interrupted target registration readback")
+        return real_read(path)
+
+    monkeypatch.setattr(registry_codec, "_read_document", fail_publication_readback)
+
+    def stage():
+        return stage_prepared_goal_transfer(source_preparation=prepared, source_context=snapshot["source_context"],
+            archive=Path(prepared["archive"]), project=project, runtime_root=runtime, provider=source["provider"])
+
+    with pytest.raises(registry_codec.ProjectRegistryRestoreError) as failure:
+        stage()
+    assert failed and "prepared for transfer" in str(failure.value.__cause__)
+    # The native prepared owner, not an earlier Python preimage, determines
+    # which registration may remain. Its stopped route is recoverable in place.
+    retained = registry.read_bytes()
+    assert registry_codec.load_project_registry(registry)["goals"][0]["activation"]["state"] == "stopped"
+    fence = legacy_coordination_writer_fence_path(runtime_root=runtime, goal_id="report")
+    retained_fence = fence.read_bytes()
+    restart_effect_runtime(wait_for_exit=True)
+    recovered = stage()
+    assert recovered["registry_readback_verified"] is True
+    assert recovered["target_is_active"] is False and recovered["execution_authority_granted"] is False
+    assert registry.read_bytes() == retained and fence.read_bytes() == retained_fence
+    with pytest.raises(EffectRuntimeRemoteError, match="prepared for transfer"):
+        FirstPartyHostGoalAdmission.for_plan(registry_path=registry, goal_id="report", planned_goal_ref=None).require_current()
+    assert cancel(source)["readback"]["original_writer_fence_restored"] is True
+    lease = source["acquire"]("continue-after-target-registration-failure")["lease"]
+    source["release"](lease)
 
 
 def test_failed_outbound_publication_can_resume_the_original_source(source: dict, tmp_path: Path) -> None:
