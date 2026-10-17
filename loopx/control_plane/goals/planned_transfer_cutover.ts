@@ -27,7 +27,8 @@ import {requirePhysicalTransferPath, inspectTransferFile} from "./planned_transf
 import {decodePlannedTransferMaterial, readGoalTransferSnapshot, withVerifiedGoalTransferContext} from "./planned_transfer.ts";
 import {localTransferGoalConfiguration, localTransferGoalDocuments, localTransferMappedGoalDocuments,
   requireLocalTransferTaskBindings, planReviewedTransferContinuation, readReviewedTransferContext} from "./planned_transfer_continuation.ts";
-import {planGoalTransferWorkspace} from "./planned_transfer_workspace.ts";
+import {planGoalTransferWorkspace, planGoalTransferRepository, prepareGoalTransferExecutionWorkspace,
+  readGoalTransferExecutionWorkspace} from "./planned_transfer_workspace.ts";
 import {observeLocalWorkspaceHostIdentity} from "../work_items/task_lease_workspace.ts";
 import {reviewGoalTransferMaterialInputs} from "./planned_transfer_payload.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
@@ -83,7 +84,7 @@ export async function planLocalGoalTransferPreparation(value: JsonObject): Promi
     }
     let entries: string[] = [];
     try {entries = await readdir(destination);} catch (error) {if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;}
-    if (entries.some(name => !["recipient", "portable", "workspace", "runtime"].includes(name))) reject("Local destination is occupied; preserve it and choose another directory");
+    if (entries.some(name => !["recipient", "portable", "workspace", "runtime", "agent-workspace"].includes(name))) reject("Local destination is occupied; preserve it and choose another directory");
     const materials: JsonObject[] = [];
     for (const path of rawMaterials) {
       const physical = await requirePhysicalTransferPath(path);
@@ -93,12 +94,19 @@ export async function planLocalGoalTransferPreparation(value: JsonObject): Promi
       const physical = await requirePhysicalTransferPath(resolve(String(goal.repo), String(document.path)));
       if (!materials.some(row => row.path === physical)) materials.push({path: physical, sha256: (await inspectTransferFile(physical)).sha256});
     }
+    const repository = await planGoalTransferRepository(goal, source.projection,
+      materials.map(row => relative(String(goal.repo), String(row.path))));
+    if (repository && entries.includes("agent-workspace") && source.preparedOperation !== value.operation_id) reject("Destination execution workspace is occupied; preserve the source and destination");
+    for (const file of repository?.files ?? []) {
+      const physical = await requirePhysicalTransferPath(resolve(String(goal.repo), file.path));
+      if (!materials.some(row => row.path === physical)) materials.push({path: physical, sha256: (await inspectTransferFile(physical)).sha256});
+    }
     const reviewed = await reviewGoalTransferMaterialInputs(materials, source.context);
     // Discover reserved/colliding destinations before any source fence or key
     // directory is published, using the same workspace placement owner.
     planGoalTransferWorkspace(join(destination, "workspace"), join(destination, "runtime"),
       reviewed.materials.map((row, index) => ({...decodePlannedTransferMaterial(row, index), path: String(materials[index]!.path)})), null);
-    return {source_preview_sha256: source.preview.preview_sha256, provider: source.preview.provider, materials,
+    return {source_preview_sha256: source.preview.preview_sha256, provider: source.preview.provider, materials, repository,
       project: join(destination, "workspace"), runtime_root: join(destination, "runtime"),
       recipient_directory: join(destination, "recipient"), artifact_directory: join(destination, "portable")};
   });
@@ -125,7 +133,23 @@ export async function readRegisteredLocalCutoverReview(value: JsonObject): Promi
 }
 
 export async function retainLocalGoalTransferCutoverReview(value: JsonObject): Promise<JsonObject> {
-  const plan = await planLocalGoalTransferCutover(value);
+  const {execution_repository: repository, ...request} = value;
+  if (repository != null) {
+    const before = await planLocalGoalTransferCutover(request);
+    if (before.source_final === true) reject("Original cutover is final; do not recreate its execution workspace");
+    const decision = requireJsonObject(before.decision, "original cutover"), target = requireJsonObject(decision.target, "staged target");
+    const source = requireJsonObject(request.source, "original source");
+    const context = requireJsonObject(requireJsonObject(request.target_snapshot, "target snapshot").source_context, "target context");
+    const directory = operationDirectory(String(target.runtime_root), String(decision.goal_id), String(decision.operation_id), false);
+    await withShadowMaintenanceLock(String(target.runtime_root), String(decision.goal_id), async () => {
+      const staged = await readGoalTransferHistoryJson(join(directory, "preparation.json"));
+      await prepareGoalTransferExecutionWorkspace(directory,
+        requireJsonObject(requireJsonObject(source.source_context, "original context").goal, "original Goal"),
+        requireJsonObject(repository, "reviewed source repository"), requireJsonObject(staged.protected_transport, "staged materials"),
+        context, requireJsonObject(requireJsonObject(request.target_snapshot, "target snapshot").registry_witness, "target witness"));
+    });
+  }
+  const plan = await planLocalGoalTransferCutover(request);
   const decision = requireJsonObject(plan.decision, "reviewed original cutover"), target = requireJsonObject(decision.target, "reviewed destination");
   if (decision.profile !== "source_online_local_runtime_v0") reject("Product confirmation requires reviewed original-work continuation");
   const source = requireJsonObject(value.source, "original source");
@@ -330,8 +354,20 @@ export async function planLocalGoalTransferCutover(value: JsonObject): Promise<J
             !same(await readGoalTransferHistoryJson(resolve(String(target.project), ".loopx", "goals", goal, "TRANSFER_MATERIALS.json")), materials)) {
           reject("Original destination review context changed before source-final");
         }
-        const continuation = planReviewedTransferContinuation(value.continuation, requireJsonObject(current.context.goal, "original Goal"), current.context, current.preview, materials);
         const originalGoal = requireJsonObject(current.context.goal, "original Goal");
+        const continuation = planReviewedTransferContinuation(value.continuation, originalGoal, current.context, current.preview, materials);
+        const executionWorkspace = await readGoalTransferExecutionWorkspace(directory, materials);
+        if (executionWorkspace) {
+          const repository = await planGoalTransferRepository(originalGoal, current.projection,
+            (materials.materials as JsonObject[]).map(row => String(row.source_relative_path)));
+          if (!repository || !same(repository, executionWorkspace.repository)) reject("Original source repository changed after preparation; preserve its new work and use source cancellation");
+          for (const row of materials.materials as JsonObject[]) {
+            if (repository.files.some(file => file.path === row.source_relative_path)) continue;
+            const path = await requirePhysicalTransferPath(resolve(String(originalGoal.repo), String(row.source_relative_path)));
+            if (!same(await inspectTransferFile(path), {sha256: row.sha256, bytes: row.bytes})) reject("Original source input changed after preparation; preserve it and use source cancellation");
+          }
+        }
+        if (continuation && executionWorkspace) continuation.execution_workspace = executionWorkspace;
         const admittedGoal = localAdmittedGoal(originalGoal, targetGoal, continuation, materials);
         requireLocalTransferTaskBindings(originalGoal, current.projection);
         const decision = {schema_version: CUTOVER_SCHEMA, goal_id: goal, operation_id: operation, source_runtime_root: root,

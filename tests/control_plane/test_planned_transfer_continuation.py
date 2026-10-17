@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import subprocess
 import sys
 from time import perf_counter
 from pathlib import Path
@@ -20,7 +21,7 @@ from loopx.control_plane.projects.registry_codec import project_registry_transac
 from loopx.control_plane.turn_driver.codex_sessions import select_codex_cli_session
 from loopx.history import collect_history
 from tests.control_plane.test_planned_transfer_cancellation import source as source_fixture
-from tests.control_plane.test_planned_transfer_cutover import OPERATION, _staged, _target_worktree
+from tests.control_plane.test_planned_transfer_cutover import OPERATION, _staged
 from tests.control_plane.test_planned_transfer_operation import _http
 from tests.control_plane.test_planned_transfer_product import _goal_document, _prepared
 
@@ -73,7 +74,9 @@ def test_real_fresh_native_turn_finishes_original_work_and_recovers_without_reex
         server.shutdown()
         thread.join(5)
         server.server_close()
-    worktree = _target_worktree(target, material_paths=("input.txt", "requirements/GOAL.md"))
+    context = target["cli"]("goal-transfer", "context", "--goal-id", "report",
+        "--agent-id", "agent-a", "--todo-id", source["todo"])["context"]
+    worktree = Path(context["execution_workspace"])
     lease = target["cli"]("task-lease", "acquire", "--goal-id", "report", "--todo-id", source["todo"],
         "--owner", "agent-a", "--idempotency-key", "new-target-native-work", "--write-scope", "report.txt",
         "--write-worktree", str(worktree))["lease"]
@@ -138,9 +141,18 @@ def test_real_fresh_native_turn_finishes_original_work_and_recovers_without_reex
         assert (worktree / "report.txt").read_bytes() == b"21\n"
         current = target["cli"]("todo", "list", "--goal-id", "report", "--todo-id", source["todo"])["todo"]
         assert current["text"] == original["text"] and current["required_write_scopes"] == original["required_write_scopes"]
+        # A real accepted output may become a later repository commit. The
+        # original transfer review must not reset that branch or restore inputs.
+        subprocess.run(["git", "-C", str(worktree), "add", "report.txt"], check=True)
+        subprocess.run(["git", "-C", str(worktree), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.org",
+            "commit", "-qsm", "Accepted original report"], check=True)
         target["cli"]("todo", "complete", "--goal-id", "report", "--todo-id", source["todo"], "--agent-id", "agent-a",
             "--task-lease-idempotency-key", lease["idempotency_key"], "--task-lease-expected-version", str(lease["version"]),
             "--evidence", "report.txt", "--note", "Original result independently accepted as 21")
+        review = prepared["prepared_cutover"]
+        source["cli"]("goal-transfer", "confirm", "--goal-id", "report", "--operation-id", OPERATION,
+            "--expected-preview-sha256", review["preview_sha256"], "--execute")
+        assert (worktree / "report.txt").read_bytes() == b"21\n" and len(calls) == count
         observed = source["cli"]("goal-transfer", "inspect", "--goal-id", "report")
         assert next(row for row in observed["work"]["todos"] if row["todo_id"] == source["todo"])["done"] is True
         assert observed["continuation_available"] is False  # Full installed journey remains unqualified.

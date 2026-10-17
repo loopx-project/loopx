@@ -192,6 +192,7 @@ def prepare_local_goal_transfer(*, registry_path: Path, goal_id: str, operation_
     stage_protected_goal_transfer(**target, expected_workspace_preview_sha256=workspace["reviewed_preview_sha256"])
     request, _, _ = _local_cutover_request(registry_path, goal_id, operation_id,
         Path(plan["project"]) / ".loopx/registry.json", "reviewed_context")
+    request["execution_repository"] = plan["repository"]
     effect_runtime_result("coordination.planned_transfer.retain_local_cutover_review", request,
         timeout=300.0, retry_safe=False)
     return inspect_registered_goal_transfer(registry_path=registry_path, goal_id=goal_id)

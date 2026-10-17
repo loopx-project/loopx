@@ -15,6 +15,7 @@ import {openLocalAuthorityStoreHandle, requireLocalAuthorityRuntimeRoot} from ".
 import {indexCoordinationProjection} from "../coordination/coordination_projection.ts";
 import {readGoalTransferSnapshot, checkGoalTransferSourceContext} from "./planned_transfer.ts";
 import {readGoalTransferHistoryJson} from "./planned_transfer_history.ts";
+import {verifyGoalTransferExecutionWorkspace} from "./planned_transfer_workspace.ts";
 
 function reject(message: string): never {throw new EffectRuntimeConflictError(message);}
 function same(a: unknown, b: unknown): boolean {return canonicalAuthorityBytes(a).equals(canonicalAuthorityBytes(b));}
@@ -158,6 +159,8 @@ export async function readGoalTransferHostContext(value: JsonObject): Promise<Js
   const {snapshot, context, materials: manifest} = await readReviewedTransferContext(admission);
   const continuation = requireJsonObject(requireJsonObject(admission.decision, "cutover").continuation, "continuation");
   if (continuation.agent_id !== agent) reject("Reviewed continuation belongs to another Agent");
+  const execution = continuation.execution_workspace == null ? null : requireJsonObject(continuation.execution_workspace, "original execution workspace");
+  if (execution) await verifyGoalTransferExecutionWorkspace(execution, manifest, false);
   const opened = await openLocalAuthorityStoreHandle(root, goal, {}, {existingOnly: true});
   const head = await opened.store.loadAuthority();
   if (head.status !== "loaded") reject("Current original work is unavailable");
@@ -178,6 +181,7 @@ export async function readGoalTransferHostContext(value: JsonObject): Promise<Js
   return {context: {kind: "reviewed_context", goal_id: goal, agent_id: agent,
     requirements: context.state_text, original_goal: context.goal,
     current_goal: requireJsonObject(snapshot.source_context, "current context").goal, selected_todo: selected,
+    ...(execution ? {execution_workspace: execution.path} : {}),
     todos: index.todo_ids.map(id => index.todos.get(id)!), materials, original_accounting: history.provenance,
     source_sessions_adopted: false, credentials_adopted: false,
     guidance: "Continue the original work using current Task/lease and Host authority. Read required Goal documents through current_goal and the reviewed destination material paths; original_goal retains historical source references. Historical decisions and receipts grant no execution permission."}};

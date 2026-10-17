@@ -160,6 +160,25 @@ the original context and receipts retain their historical source paths. The
 native continuation context supplies `current_goal` for current document reads.
 Later destination edits survive retries of the original confirmation.
 
+When unfinished Tasks name one Git repository, local preparation verifies its
+actual origin and clean tracked snapshot before fencing the source. Its tracked
+files join the protected material inventory; selected inputs and the primary
+Goal document keep their reviewed mappings. Preparation builds a separate local
+repository and an independent `codex/` worktree with those files. It uses the
+pinned source commit without checkout filters or source hooks/configuration.
+Unselected untracked and ignored files remain outside this snapshot.
+The native continuation context provides `execution_workspace` for the existing
+Task/lease and Turn entrypoints. Changed execution inputs or repository identity
+refuse the final confirmation and retain source cancellation. After confirmation,
+ordinary destination writes survive retries. This removes manual Git setup from
+the local continuation path; responsible-Agent dispatch, required credential
+rebinding and cross-machine repository delivery still need their owning journey.
+The original Task's recorded workspace must also be available and match that
+snapshot. A divergent Agent branch, local edits, uncarried working files or
+unknown workspace mapping hold before preparation. A clean canonical checkout
+must not silently replace unfinished work in the Agent's actual checkout;
+capturing that working state remains part of the complete migration gap.
+
 The local configuration and required-Task capability checks run before source
 preparation as well as at final cutover. Missing, unsafe or unmapped documents,
 unsupported capability configuration and required capabilities outside this
