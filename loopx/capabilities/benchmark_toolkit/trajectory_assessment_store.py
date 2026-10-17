@@ -45,13 +45,16 @@ def _owner(runtime_root: Path, owner_goal_id: str) -> Path:
 
 
 def _pack_id(owner_goal_id: str, record: dict) -> str:
-    return _digest(
-        {
-            "owner_goal_id": owner_goal_id,
-            "analysis_key": record["analysis_key"],
-            "title": record["title"],
-        }
-    )
+    identity = {
+        "owner_goal_id": owner_goal_id,
+        "analysis_key": record["analysis_key"],
+        "title": record["title"],
+    }
+    if "solver_usage" in record:
+        identity["solver_usage"] = record["solver_usage"]
+    if "native_outcomes" in record:
+        identity["native_outcomes"] = record["native_outcomes"]
+    return _digest(identity)
 
 
 def _prepared(record: dict) -> dict:
@@ -62,18 +65,8 @@ def _prepared(record: dict) -> dict:
 
 
 def _verify_sources(record: dict) -> None:
-    root = Path(record["source_root"]).resolve(strict=True)
     for source in record["input"]["sources"]:
-        relative = PurePosixPath(source["artifact"])
-        if (
-            relative.is_absolute()
-            or ".." in relative.parts
-            or "\\" in source["artifact"]
-        ):
-            raise PackUnavailable("invalid_source_path")
-        path = (root / str(relative)).resolve(strict=True)
-        if not path.is_relative_to(root) or not path.is_file():
-            raise PackUnavailable("invalid_source_path")
+        path = _source_path(Path(record["source_root"]), source["artifact"])
         data = path.read_bytes()
         if hashlib.sha256(data).hexdigest() != source["artifact_sha256"]:
             raise PackUnavailable("source_changed")
@@ -82,6 +75,97 @@ def _verify_sources(record: dict) -> None:
         count = len(source["text"].split("\n"))
         if "\n".join(lines[start : start + count]) != source["text"]:
             raise PackUnavailable("excerpt_mismatch")
+
+
+def _source_path(source_root: Path, artifact: str) -> Path:
+    relative = PurePosixPath(artifact)
+    if relative.is_absolute() or ".." in relative.parts or "\\" in artifact:
+        raise PackUnavailable("invalid_source_path")
+    root = source_root.resolve(strict=True)
+    path = (root / str(relative)).resolve(strict=True)
+    if not path.is_relative_to(root) or not path.is_file():
+        raise PackUnavailable("invalid_source_path")
+    return path
+
+
+def _usage_capture(source_root: Path, artifact: str, session_id: str) -> dict:
+    data = _source_path(source_root, artifact).read_bytes()
+    events = []
+    # Transport only the provider's counter/lifecycle fields, not model text,
+    # account metadata or tool outputs. TS owns all accounting decisions.
+    for line_number, line in enumerate(data.decode("utf-8").splitlines(), 1):
+        event = json.loads(line)
+        if not isinstance(event, dict):
+            raise ValueError("Usage capture contains a non-object event")
+        payload = event.get("payload") or {}
+        if not isinstance(payload, dict):
+            raise ValueError("Usage capture contains a non-object payload")
+        if event.get("type") == "session_meta":
+            payload = {k: payload[k] for k in ("id", "forked_from_id") if k in payload}
+        elif event.get("type") == "event_msg" and payload.get("type") in {
+            "task_started",
+            "task_complete",
+            "token_count",
+        }:
+            payload = {
+                k: payload[k] for k in ("type", "turn_id", "info") if k in payload
+            }
+            if isinstance(payload.get("info"), dict):
+                payload["info"] = {
+                    name: {
+                        key: value[key]
+                        for key in (
+                            "input_tokens",
+                            "cached_input_tokens",
+                            "output_tokens",
+                        )
+                        if key in value
+                    }
+                    if isinstance(value, dict)
+                    else value
+                    for name in ("total_token_usage", "last_token_usage")
+                    if (value := payload["info"].get(name)) is not None
+                }
+        else:
+            continue
+        events.append(
+            {
+                "line": line_number,
+                "type": event["type"],
+                "timestamp": event.get("timestamp"),
+                "payload": payload,
+            }
+        )
+    projection = effect_runtime_result(
+        "benchmark.trajectory.codex-usage",
+        {"events": events, "session_id": session_id},
+        large_local_snapshot=True,
+    )
+    return {
+        "artifact": artifact,
+        "artifact_sha256": hashlib.sha256(data).hexdigest(),
+        "projection": projection,
+    }
+
+
+def _captured_view(record: dict, field: str) -> dict | None:
+    captured = record.get(field)
+    if captured is None:
+        return None
+    reason = None
+    try:
+        data = _source_path(
+            Path(record["source_root"]), captured["artifact"]
+        ).read_bytes()
+        if hashlib.sha256(data).hexdigest() != captured["artifact_sha256"]:
+            reason = "source_changed"
+    except (OSError, ValueError):
+        reason = "source_unavailable"
+    return {
+        **captured,
+        "applicability": "historical" if reason else "current",
+        "reason_code": reason,
+    }
 
 
 def _index(owner: Path) -> dict:
@@ -141,6 +225,7 @@ def _summary(record: dict, reason: str | None) -> dict:
         "config": record["config"],
         "availability": "unavailable" if reason else "available",
         "reason_code": reason,
+        **({field: _captured_view(record, field) for field in ("solver_usage", "native_outcomes") if field in record}),
     }
 
 
@@ -152,6 +237,9 @@ def register_pack(
     source_root: Path,
     title: str,
     config: dict | None = None,
+    usage_jsonl: str | None = None,
+    usage_session_id: str | None = None,
+    native_outcomes_json: str | None = None,
 ) -> dict:
     """Trusted operator only; no HTTP/renderer path-registration endpoint."""
     if not title.strip():
@@ -173,6 +261,25 @@ def register_pack(
         },
     }
     _verify_sources(record)
+    if (usage_jsonl is None) != (usage_session_id is None):
+        raise ValueError(
+            "Usage capture and expected session identity must be supplied together"
+        )
+    if usage_jsonl is not None:
+        record["solver_usage"] = _usage_capture(
+            source_root, usage_jsonl, usage_session_id
+        )
+    if native_outcomes_json is not None:
+        data = _source_path(source_root, native_outcomes_json).read_bytes()
+        measured = effect_runtime_result("benchmark.trajectory.prepare", {
+            "input": record["input"], "config": record["config"],
+            "native_outcomes": json.loads(data),
+        })["native_outcomes"]
+        record["native_outcomes"] = {
+            "artifact": native_outcomes_json,
+            "artifact_sha256": hashlib.sha256(data).hexdigest(),
+            "projection": measured,
+        }
     owner = _owner(runtime_root, owner_goal_id)
     (owner / "packs").mkdir(parents=True, exist_ok=True, mode=0o700)
     pack_id = _pack_id(owner_goal_id, record)
@@ -354,12 +461,15 @@ def read_citation(
         runtime_root=runtime_root, owner_goal_id=owner_goal_id, pack_id=pack_id
     )
     result = view["result"]
-    if result is None or not any(
+    citations = [c for a in (result or {}).get("assessments", []) for c in a["citations"]]
+    native = (view.get("native_outcomes") or {}).get("projection") or {}
+    native_citations = [native[key]["citation"] for key in ("initial", "best_valid", "retained", "final_valid") if native.get(key)]
+    requested = {"source_id": source_id, "first_line": first_line, "last_line": last_line}
+    if not any(
         c["source_id"] == source_id
         and c["first_line"] == first_line
         and c["last_line"] == last_line
-        for a in result["assessments"]
-        for c in a["citations"]
+        for c in [*citations, *native_citations]
     ):
         raise PackUnavailable("citation_not_in_result")
     source = next(s for s in record["input"]["sources"] if s["id"] == source_id)
@@ -374,5 +484,6 @@ def read_citation(
                 first_line - source["first_line"] : last_line - source["first_line"] + 1
             ]
         ),
-        "applicability": view["applicability"],
+        "applicability": "historical" if requested in native_citations
+        and view["native_outcomes"]["applicability"] == "historical" else view["applicability"],
     }

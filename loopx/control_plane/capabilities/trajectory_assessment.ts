@@ -1,5 +1,6 @@
 /** Benchmark-toolkit's observer sidecar; never a solver or native-score authority. */
 import {createHash} from 'node:crypto';
+import {projectTrajectoryNativeOutcomes} from './trajectory_native_outcomes.ts';
 import {BARE_SHA256_PATTERN} from '../content_digest.ts';
 import {EffectRuntimeRequestError} from '../effect_runtime_errors.ts';
 
@@ -94,6 +95,7 @@ export function prepareTrajectoryAssessment(params: Record<string, unknown>) {
   const analysis_key = createHash('sha256').update(JSON.stringify({method: TRAJECTORY_METHOD, rubric: RUBRIC, input, config: configIdentity})).digest('hex');
   const numberedSources = input.sources.map(s => ({...s, text: s.text.split('\n').map((line, n) => `${s.first_line+n}: ${line}`).join('\n')}));
   return {analysis_key, method_version: TRAJECTORY_METHOD, config: configIdentity, input,
+    ...(params.native_outcomes === undefined ? {} : {native_outcomes: projectTrajectoryNativeOutcomes(params.native_outcomes, input)}),
     prompt: `${RUBRIC}\n\nEvidence pack:\n${JSON.stringify({...input, sources: numberedSources})}`, output_schema: TRAJECTORY_OUTPUT_SCHEMA};
 }
 export function qualifyTrajectoryAssessment(params: Record<string, unknown>): TrajectoryAssessment {

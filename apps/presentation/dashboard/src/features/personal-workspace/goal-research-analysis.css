@@ -1,0 +1,44 @@
+.research-analysis { margin-block: 16px; padding: 24px; border: 1px solid var(--pw-line); border-radius: 12px; min-width: 0; color: var(--pw-text); background: var(--pw-bg); font-size: var(--text-body); line-height: var(--leading-prose); overflow-wrap: anywhere; }
+.research-analysis > header, .analysis-source > header { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.analysis-header-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.research-analysis h3 { font-size: var(--text-heading); font-weight: 600; margin: 0; }
+.research-analysis h4 { font-size: var(--text-lead); font-weight: 600; line-height: 1.5; margin: 0 0 8px; }
+.research-analysis p { margin: 8px 0; }
+.research-analysis header p, .analysis-scope, .analysis-boundary, .research-analysis small, .analysis-method, .analysis-finding > span { color: var(--pw-muted); font-size: var(--text-caption); }
+.research-analysis button, .research-analysis select { font: inherit; color: inherit; border: 1px solid var(--pw-line); background: var(--pw-bg); border-radius: 6px; min-height: 44px; padding: 8px 12px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; }
+.research-analysis button:disabled { opacity: .5; cursor: not-allowed; }
+.research-analysis button.analysis-primary { color: var(--pw-bg); background: var(--pw-text); border-color: var(--pw-text); }
+.analysis-pack-choice { display: flex; align-items: center; gap: 12px; margin-block: 16px; }
+.analysis-pack-choice select { min-width: 0; max-width: 100%; }
+.analysis-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-block: 16px; }
+.analysis-actions p { display: flex; align-items: center; gap: 8px; }
+.analysis-actions small { flex-basis: 100%; }
+.analysis-warning { border-inline-start: 2px solid var(--pw-caution); padding-inline-start: 12px; }
+.analysis-error { color: var(--pw-red); }
+.analysis-finding { border-block-start: 1px solid var(--pw-line); padding-block: 20px 8px; margin-top: 20px; max-width: 76ch; }
+.analysis-finding h4 { margin-top: 8px; }
+.analysis-episode { padding-block: 16px; max-width: 90ch; }
+.analysis-episode-context { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-block: 20px; }
+.analysis-episode-context strong, .analysis-episode-context small { display: block; }
+.analysis-episode-context strong { font-weight: 500; }
+.analysis-evidence-details > summary { cursor: pointer; min-height: 44px; }
+.analysis-judgments { border-top: 1px solid var(--pw-line); }
+.analysis-judgments details { border-bottom: 1px solid var(--pw-line); }
+.analysis-judgments summary { min-height: 48px; padding-block: 10px; cursor: pointer; display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.analysis-judgments summary strong { font-weight: 500; }
+.analysis-judgments summary span { color: var(--pw-muted); font-size: var(--text-caption); }
+.analysis-judgments details > p, .analysis-citations { margin: 4px 0 12px; }
+.analysis-question { color: var(--pw-muted); font-size: var(--text-caption); }
+.analysis-citations { display: flex; flex-wrap: wrap; gap: 8px; }
+.analysis-citations button { font-size: var(--text-caption); }
+.analysis-source { border: 1px solid var(--pw-line); border-radius: 8px; padding: 16px; margin-block: 16px; }
+.analysis-source p { font-size: var(--text-caption); color: var(--pw-muted); }
+.analysis-source pre { font-family: var(--font-mono); font-size: var(--text-caption); line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }
+.analysis-method { border-block-start: 1px solid var(--pw-line); margin-top: 16px; padding-top: 12px; }
+.analysis-method summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--pw-text); }
+.analysis-method dl { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 8px 16px; }
+.analysis-method dd { margin: 0; color: var(--pw-text); }
+.analysis-spin { animation: analysis-request-spin 1s linear infinite; }
+@keyframes analysis-request-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .analysis-spin { animation: none; } }
+@media (max-width: 640px) { .research-analysis { padding: 16px; } .analysis-episode-context { grid-template-columns: 1fr; gap: 12px; } .analysis-method dl { grid-template-columns: 1fr; gap: 2px; } .analysis-method dd { margin-bottom: 8px; } .analysis-pack-choice { flex-direction: column; align-items: stretch; } }
