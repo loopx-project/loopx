@@ -56,6 +56,19 @@ Lark queued notices describe the observed queue state without claiming that an
 earlier request is running: the first Turn can also await its native claim.
 Recovery retains an already persisted notice's exact text and provider intent.
 
+The existing four-slot reply pool wakes after private admission returns and
+after a local Turn worker exits, including preparation failure. These in-process
+Event hints carry no content or delivery authority and perform no provider IO;
+the scanner still reads the canonical journals and rechecks the source and Core.
+It clears the hint before discovery so arrivals during a scan remain visible to
+the following wait. Shutdown wakes that wait and unregisters the runtime hint.
+The one-second recovery poll, bounded pool, request fairness and thirty-second
+owner-notification cadence remain; custom controllers without the hook still poll.
+An occupied worker may still defer a request until a later scan. No completed-
+Future callback repeatedly reschedules unfinished work. File/Core and native
+protocol fixtures qualify this scheduling path separately from installed service,
+provider latency, complete stop acknowledgement and first-visible Web results.
+
 The packaged settings journey, source revocation/recovery, duplicate events,
 native queue/stop and two-App isolation have synthetic-provider regression and
 browser coverage. A native Codex source canary separately qualifies distinct
