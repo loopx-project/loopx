@@ -1659,6 +1659,12 @@ transaction 要和 matched durability baseline 比较，而不是套用 2 ms ker
 不达标，或用更快的 microbenchmark 隐藏 tail regression，都是 owner review gate，
 不能静默放宽。
 
+默认交付将上述性能门槛用于实际发布的默认 profile，当前新建本地 Goal 为 SQLite。
+File 性能单独判断：仅 File 未达标须披露，但不阻塞其它条件已合格的默认 SQLite
+交付；明确宣称 File 性能结果仍须取得 File 资格。受影响支持后端的正确性、持久化、
+authority、数据完整性和恢复要求保持。在既有评审证据声明 profile；维护者修订资格
+范围时保留历史失败和冻结实验标准，见[验证规则](../../development/testing-and-quality.md#default-provider-performance-qualification--默认-provider-性能资格)。
+
 ## 7. 安装、升级与回滚
 
 迁移不能要求用户管理服务。Python 过渡版本要求 Node.js 22.18.0 或更新版本，
@@ -1748,6 +1754,10 @@ TS 摘要批次；Python 保留旧格式解码、公开字段筛选及渲染。�
 公开 `todo_summary_v0` 和持久记录不变；完整来源的关系求值先于筛选，来源完整性不被
 查询命中情况覆盖。见[语义及回滚](../../reference/todo-work-counts.md)。这是 T3/L5 的
 共享读取边界推进，不替代 D2/D3 或 provider 默认切换。
+
+上述共享读取边界仍须通过真实 File/SQLite 入口的功能等价验证；完整 CLI 性能
+按 §6 的默认 SQLite profile 及明确附加目标判断。减少 crossing 不能替代尾延迟
+解释，也不代表 writer／备份／默认 provider 退役已完成。
 
 fresh 公共边界扫描继续归现有专门 Python regex／Host IO owner。
 Characterization 已覆盖全部十一种 `splitlines` 分隔符、Unicode regex 折叠、

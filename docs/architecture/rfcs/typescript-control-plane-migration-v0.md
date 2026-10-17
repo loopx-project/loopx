@@ -2256,6 +2256,15 @@ matched durability baseline rather than the 2 ms kernel budget. A miss, or a
 tail regression hidden by a faster microbenchmark, is an owner review gate and
 cannot be silently relaxed.
 
+Default delivery applies these performance gates to the shipped default profile,
+currently SQLite for new local Goals. File performance is separate: disclose a
+File-only miss without blocking an otherwise qualified default SQLite delivery.
+Explicit File performance claims still require File qualification. Correctness,
+durability, authority, data integrity and recovery remain required for every
+affected supported backend. Declare the profile in existing review evidence;
+preserve historical failures and frozen experiment criteria when a maintainer
+changes the qualification scope. See the [validation rule](../../development/testing-and-quality.md#default-provider-performance-qualification--默认-provider-性能资格).
+
 ## 7. Install, upgrade, and rollback
 
 The migration must not ask users to manage a service. The Python-transition
@@ -2388,9 +2397,10 @@ exact diagnostic floors for wait, fallback and replan readers. One Goal-context
 reduction shares fresh counts with its nested helpers, while standalone calls
 remain fresh. Python retains fact/result codecs and original row identity;
 there is no persisted cache, new packet field or changed execution authority.
-The same real File/SQLite entrypoints must qualify functional parity and the
-original full-CLI cost gate together. Fewer crossings alone do not explain a
-whole-CLI tail regression or complete writer/backup/default-provider retirement.
+The same real File/SQLite entrypoints must qualify functional parity; full-CLI
+performance follows the default SQLite profile and explicit additional targets
+in §6. Fewer crossings alone do not explain a whole-CLI tail regression or
+complete writer/backup/default-provider retirement.
 
 Fresh public-boundary scanning retains its specialized Python regex / Host IO
 owner. Characterization covers all eleven `splitlines`
