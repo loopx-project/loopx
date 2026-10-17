@@ -95,6 +95,18 @@ class ProtectedActionGate(ActionConflictError):
         super().__init__(self.gate["summary"])
 
 
+class _AgentUnavailableError(ValueError):
+    """Availability refusal from the existing endpoint eligibility owner.
+
+    Tool, trust and workspace admission failures remain ordinary ValueErrors;
+    callers must not infer this narrower condition from their message text.
+    """
+
+    def __init__(self, message: str, *, capability: Mapping[str, Any] | None = None) -> None:
+        self.capability = dict(capability) if capability is not None else None
+        super().__init__(message)
+
+
 def _opaque(value: Any, *, field: str) -> str:
     token = str(value or "").strip()
     if not _OPAQUE_ID.fullmatch(token):
@@ -319,6 +331,38 @@ class ChatActionService(
             raise ValueError("the active LoopX registry is unavailable") from exc
         return hashlib.sha256(content).hexdigest()
 
+    def _creation_agent_eligibility(
+        self, agent_id: str, *, project: Path | None = None
+    ) -> dict[str, Any]:
+        """Availability refusal for a Goal's first Agent becomes a typed gate.
+
+        A fresh install often has no usable Agent yet. The owner who clicks
+        "Create a Goal" needs the reason in their own language and the way to
+        fix it, not a protocol sentence: the preview answers with a gate that
+        names the Agent and, when the catalog states it, why it is unavailable.
+        Nothing is written and nothing is granted; a working Agent still goes
+        through the same eligibility check.
+        """
+
+        try:
+            return self._agent_eligibility(agent_id, project=project)
+        except _AgentUnavailableError as exc:
+            row = exc.capability
+            gate: dict[str, Any] = {
+                "kind": "agent_unavailable",
+                "agent_id": agent_id,
+                "registered": row is not None,
+                "summary": f"The selected Agent ({agent_id}) is not available to start this Goal.",
+                "next_action": "Resolve the reported availability issue, then preview this request again.",
+                "detail": str(exc),
+            }
+            if row is not None:
+                for field in ("unavailable_reason", "executable", "environment_variable"):
+                    value = row.get(field)
+                    if isinstance(value, str) and value:
+                        gate[field] = value
+            raise ProtectedActionGate("goal.create", gate=gate) from exc
+
     def _agent_eligibility(
         self,
         agent_id: str,
@@ -345,9 +389,9 @@ class ChatActionService(
             None,
         )
         if row is None:
-            raise ValueError("selected Agent endpoint is not registered")
+            raise _AgentUnavailableError("selected Agent endpoint is not registered")
         if row.get("available") is not True:
-            raise ValueError("selected Agent endpoint is not healthy")
+            raise _AgentUnavailableError("selected Agent endpoint is not healthy", capability=row)
         if requires_tools and row.get("tool_calls") is not True:
             raise ValueError("selected Agent endpoint cannot execute Goal tools")
         if str(row.get("trust_scope") or "") not in {"read_only", "workspace_write"}:
@@ -1210,7 +1254,7 @@ class ChatActionService(
                 }
             )
             agent_id = str(normalized.get("agent_id") or "codex")
-            eligibility = self._agent_eligibility(agent_id, project=project)
+            eligibility = self._creation_agent_eligibility(agent_id, project=project)
             workspace_binding = self._goal_workspace_binding(
                 project, source_goal, requested_ref=str(normalized.get("workspace_ref") or "current")
             )

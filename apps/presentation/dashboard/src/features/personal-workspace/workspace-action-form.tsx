@@ -42,6 +42,7 @@ export function WorkspaceActionForm({ draft, workspaceGoals = [], workspaceProje
   const dialog = useRef<HTMLDialogElement>(null);
   const headingId = useId();
   const submitting = useRef(false);
+  const goalRequest = useRef<{ content: string; operationId: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [objective, setObjective] = useState(draft.text ?? "");
@@ -78,8 +79,10 @@ export function WorkspaceActionForm({ draft, workspaceGoals = [], workspaceProje
     setError("");
     try {
       if (draft.kind === "goal") {
+        const content = JSON.stringify([objective, completion, boundary, permission, workspaceRef, draft.agentId, draft.goalId, locale]);
+        if (goalRequest.current?.content !== content) goalRequest.current = { content, operationId: crypto.randomUUID() };
         await onPreview(goalCreateRequest({ objective, completion, boundary, permission, workspaceRef,
-          agentId: draft.agentId, contextGoalId: draft.goalId }, t));
+          agentId: draft.agentId, contextGoalId: draft.goalId, operationId: goalRequest.current.operationId }, t));
         onClose();
         return;
       }

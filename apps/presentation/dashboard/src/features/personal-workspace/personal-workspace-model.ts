@@ -350,6 +350,8 @@ export type WorkspaceActionPreview = {
   // See proposal-recency.ts.
   createdAt?: string;
   previewId: string;
+  /** False for a refused preview held only in this page; no stored action exists to read back. */
+  persisted?: boolean;
   regeneratedFrom?: string | null;
   primaryLabel?: string;
   errorMessage?: string;

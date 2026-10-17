@@ -445,6 +445,9 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
     failNextGoalSubagentResponse: false,
     failNextLifecyclePreview: false,
     failNextActionPreview: false,
+    // When set, the next action preview answers with this typed gate (409), as
+    // the real service does for a refusal that writes nothing.
+    nextActionPreviewGate: null,
     failNextStatusRequest: false,
     /** When set, every status read answers this HTTP status until cleared: a source that cannot be projected. */
     statusFailure: null,
@@ -1901,6 +1904,17 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
           contentType: "application/json",
           json: { error: "Action preview temporarily unavailable", error_code: "preview_unavailable", ok: false },
           status: 503,
+        });
+        return;
+      }
+      if (state.nextActionPreviewGate) {
+        const gate = state.nextActionPreviewGate;
+        state.nextActionPreviewGate = null;
+        state.actionPreviews.push({ ...body, gated: gate.kind });
+        await route.fulfill({
+          contentType: "application/json",
+          json: { ok: false, schema_version: "loopx_chat_action_preview_gate_v1", error: "This preview needs an explicit public-safe selection.", error_code: "action_preview_gate", gate, write_attempted: false },
+          status: 409,
         });
         return;
       }

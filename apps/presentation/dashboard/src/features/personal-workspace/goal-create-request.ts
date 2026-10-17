@@ -1,7 +1,15 @@
 import type { WorkspaceTranslate } from "./i18n";
-import type { WorkspaceActionPreviewRequest } from "./personal-workspace-model";
+import type { WorkspaceActionPreviewRequest, WorkspaceAgentOption } from "./personal-workspace-model";
 
 type GoalContent = { objective: string; completion: string; boundary: string };
+
+/** A read-only conversation projection cannot be the first Goal's executor. */
+export function goalCreationAgentId(selectedId: string, agents: readonly WorkspaceAgentOption[]): string {
+  const selected = agents.find((agent) => agent.agentId === selectedId);
+  if (selected?.adapterKind !== "status_projection") return selectedId;
+  const executors = agents.filter((agent) => agent.adapterKind !== "status_projection");
+  return executors.find((agent) => agent.available)?.agentId ?? executors[0]?.agentId ?? selectedId;
+}
 
 export function goalCreateContent(input: GoalContent, t: WorkspaceTranslate) {
   const objective = input.objective.trim();
