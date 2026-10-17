@@ -607,3 +607,38 @@ def test_persistent_mailbox_read_error_remains_visible(writer, tmp_path, monkeyp
     supervisor._run(container)
     assert len(reads) == 3 and isinstance(supervisor.failure, tarfile.ReadError)
     assert json.loads((tmp_path / "supervisor-failure.json").read_text()) == {"error_kind": "ReadError"}
+
+
+def test_declared_directory_includes_research_created_after_declaration(controllers, writer, tmp_path):
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+    source, _, first, _, files, grades = controllers
+    container, request = writer
+    token = register(source, first)
+    # writer already declared /data. New artifacts need no new component IDs.
+    payload = json.loads(request.read_text())
+    assert payload["components"] == [{"id": "native_capsule", "source_path": "/data"}]
+    assert container.exec_run(["python", "-c", "from pathlib import Path; "
+        "p=Path('/data/research/new-method'); p.mkdir(parents=True); "
+        "(p/'candidate.py').write_text('candidate'); "
+        "(p/'negative.json').write_text('{\"accepted\": false}'); "
+        "Path('/outside-report.json').write_text('not declared')"]).exit_code == 0
+    unit = tmp_path / "directory-point"
+    result = capture_worker(files[0], token=token, capture_id="f" * 32,
+                           destination=unit, request_file=request)
+    assert result["integrity_verified"]
+    assert (unit / "components/native_capsule/research/new-method/candidate.py").read_text() == "candidate"
+    assert json.loads((unit / "components/native_capsule/research/new-method/negative.json").read_text()) == {"accepted": False}
+    assert not list(unit.rglob("outside-report.json"))
+    effect_runtime_result("runtime.checkpoint_artifacts", {"action": "verify", "root": str(unit),
+        "expected_sha256": result["sha256"]})
+    restored = tmp_path / "restored"
+    receipt = effect_runtime_result("runtime.checkpoint_artifacts", {
+        "action": "materialize", "root": str(unit),
+        "expected_sha256": result["sha256"], "destination": str(restored),
+    })
+    assert receipt["materialized"] and not receipt["activation_performed"]
+    research = restored / "components/native_capsule/research/new-method"
+    assert (research / "candidate.py").read_text() == "candidate"
+    assert json.loads((research / "negative.json").read_text()) == {"accepted": False}
+    assert not list(restored.rglob("outside-report.json"))
+    assert request.read_text() == json.dumps(payload) and not grades

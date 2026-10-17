@@ -55,6 +55,20 @@ explicitly materialize their selected research components; the
 [SForge warm transport](../../benchmark/README.md#explicit-warm-worker-composition-qualification-in-progress)
 provides that selection for its data paths.
 
+For new checkpoint-enabled native EdgeBench runs, the startup prompt and workspace
+`AGENTS.md` now tell the solver to keep reusable research artifacts in a task
+workspace subdirectory, including local inputs and negative results. The prompt
+states whether the supplied declaration covers that workspace. A declared
+directory includes files created later; an explicit file list does not grow
+when a conversation or report mentions another path. Capture-disabled prompts
+are unchanged. This is storage guidance, not an enforced completeness check.
+
+For new donors, declare the task workspace directory before launch. For existing
+runs, preserve their frozen instructions and source; use a newly qualified
+attempt when adopting this guidance. Previously external artifacts still need
+explicit capture and receiver validation. Do not rewrite an old point using
+later live files or claim that the new guidance repairs missing historical bytes.
+
 Verify the returned digest before preparing a receiver:
 
 ```sh
