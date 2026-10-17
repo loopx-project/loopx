@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { deliveryReviewMarkdown, filterReviewNodes, parseDeliveryReview, reviewCoverageIncomplete } from "../node_modules/.cache/delivery-review/data/delivery-review.js";
+import { deliveryReviewMarkdown, deliveryReviewWarning, filterReviewNodes, parseDeliveryReview, reviewCoverageIncomplete } from "../node_modules/.cache/delivery-review/data/delivery-review.js";
 import { deliveryReviewCopy } from "../node_modules/.cache/delivery-review/features/personal-workspace/delivery-review-copy.js";
 
 const snapshot = {
@@ -23,6 +23,23 @@ const snapshot = {
   },
 };
 const before = JSON.stringify(snapshot);
+const envelope = {
+  schema_version: "loopx_projection_envelope_v0", projection: "delivery_review",
+  observed_at: snapshot.observed_at, served_at: snapshot.observed_at, fresh: true, complete: true,
+  alert: false, alert_reasons: [], sources: [{source_id: "goal_todos", last_read_at: snapshot.observed_at, status: "fresh"}],
+  coverage: {scope: "selected_goal_delivery", expected_count: 3, included_count: 3, omitted: []},
+};
+for (const copy of Object.values(deliveryReviewCopy)) {
+  assert.equal(deliveryReviewWarning(parseDeliveryReview(snapshot, "review-demo"), copy), copy.sourceUnknown);
+  const current = parseDeliveryReview({...snapshot, projection_envelope: envelope}, "review-demo");
+  assert.equal(deliveryReviewWarning(current, copy), null);
+  const stale = parseDeliveryReview({...snapshot, projection_envelope: {...envelope, fresh: false, alert: true}}, "review-demo");
+  assert.equal(deliveryReviewWarning(stale, copy), copy.sourceWarning);
+  assert.ok(deliveryReviewMarkdown(stale, copy).includes('"fresh": false'));
+  assert.equal(deliveryReviewWarning({...current, projection_envelope: {...envelope, complete: false}}, copy), copy.coverageWarning);
+}
+assert.throws(() => parseDeliveryReview({...snapshot, projection_envelope: {...envelope, projection: "status"}}, "review-demo"));
+assert.throws(() => parseDeliveryReview({...snapshot, projection_envelope: {...envelope, fresh: "true"}}, "review-demo"));
 const parsed = parseDeliveryReview(snapshot, "review-demo");
 const graph = parsed.graph;
 assert.equal(graph.edges.length, 4, "Parallel lineage and dependency edges must survive");

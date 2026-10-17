@@ -181,7 +181,11 @@ def main() -> int:
             assert overlap["contained_target_count"] >= 4, overlap
             assert overlap["logical_bytes"] > 0, overlap
             assert overlap["unique_source_bytes_estimate"] < summary["logical_source_bytes"], overlap
-            assert plan["registry_discovery"] == {
+            discovery = plan["registry_discovery"]
+            source_capture = discovery["source_capture"]
+            assert {
+                key: value for key, value in discovery.items() if key != "source_capture"
+            } == {
                 "enabled": True,
                 "global_registry": str((runtime / "registry.global.json").resolve()),
                 "goal_count": 3,
@@ -196,6 +200,20 @@ def main() -> int:
                 "source_registry_missing_count": 0,
                 "goal_runtime_roots": {goal_id: "runtime-root" for goal_id in ("fixture", "remote", "missing-project")},
             }, plan
+            captured_sources = {
+                str(Path(item["source_path"]).resolve()): item
+                for item in source_capture["source_revisions"]
+            }
+            assert set(captured_sources) == {
+                str((runtime / "registry.global.json").resolve()),
+                str((project / ".loopx" / "registry.json").resolve()),
+                str((root / "remote-project" / ".loopx" / "registry.json").resolve()),
+            }, source_capture
+            assert all(
+                len(str(item["sha256"])) == 64 and item["archive_paths"]
+                for item in captured_sources.values()
+            ), source_capture
+            assert source_capture["started_at"] <= source_capture["completed_at"], source_capture
             assert any(
                 item.get("key") == "registry_project:missing-project"
                 for item in plan["missing"]

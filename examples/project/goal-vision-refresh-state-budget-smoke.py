@@ -635,7 +635,10 @@ def assert_vision_budget(provider: str) -> None:
         assert len(canonical["todos"]) == len(original["todos"]) + 1
         rows = {row["todo_id"]: row for row in canonical["todos"]}
         assert rows[created["todo_id"]]["claimed_by"] == AGENT_ID
-        assert rows[created["todo_id"]]["text"] == create_args["text"]
+        # New agent work defaults to P1 (#6539), so the canonical text carries
+        # the declared priority prefix while the title keeps the authored text.
+        assert rows[created["todo_id"]]["text"] == "[P1] " + create_args["text"]
+        assert rows[created["todo_id"]]["title"] == create_args["text"]
         for row in original["todos"]:
             assert rows[row["todo_id"]] == row
         local_next_action = "/Users/example/private/raw-task-note"
